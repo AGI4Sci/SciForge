@@ -16,6 +16,10 @@ import { createRuntimeModuleDispatcher, type RuntimeModuleDispatcher } from '../
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
 import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import {
+  createComputerUseNativeRouteStream,
+  type ComputerUseNativeRouteInput,
+} from './computer-use-native-route.js';
+import {
   defaultSubagentTranscriptRoot,
   prepareRuntimeSubagentInjection,
   SUBAGENT_MCP_SERVER_NAME,
@@ -48,6 +52,7 @@ export interface CodexAppServerJsonRpcClientOptions {
   ephemeral?: boolean;
   serviceName?: string;
   dispatcher?: RuntimeModuleDispatcher;
+  computerUseNativeRouteRunner?: (input: ComputerUseNativeRouteInput) => CodexAppServerTurnStream | undefined | Promise<CodexAppServerTurnStream | undefined>;
   transcriptRoot?: string;
   clientInfo?: {
     name: string;
@@ -82,6 +87,7 @@ export function createCodexAppServerClient(options: CodexAppServerJsonRpcClientO
 
 export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
   private readonly activeSessions = new Map<string, CodexAppServerJsonRpcSession>();
+  private readonly activeNativeTurns = new Map<string, AbortController>();
 
   constructor(private readonly options: CodexAppServerJsonRpcClientOptions = {}) {}
 
@@ -98,6 +104,34 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     const approvalPolicy = this.options.approvalPolicy ?? approvalPolicyFromEnv(baseEnv) ?? 'never';
     const commandId = request.commandId;
     const attemptId = request.attemptId;
+    const nativeAbort = new AbortController();
+    const abortNativeRoute = () => nativeAbort.abort();
+    if (request.abortSignal?.aborted) nativeAbort.abort();
+    else request.abortSignal?.addEventListener('abort', abortNativeRoute, { once: true });
+    const nativeRouteRunner = this.options.computerUseNativeRouteRunner ?? createComputerUseNativeRouteStream;
+    const nativeRouteStream = await nativeRouteRunner({
+      request: {
+        ...request,
+        abortSignal: nativeAbort.signal,
+      },
+      workspace: config.workspace,
+      provider: config.provider,
+      model: config.model,
+      profile: config.profile,
+      abortSignal: nativeAbort.signal,
+    });
+    if (nativeRouteStream) {
+      const nativeTurnId = nativeRouteStream.turnId ?? commandId;
+      this.activeNativeTurns.set(nativeTurnId, nativeAbort);
+      return {
+        ...nativeRouteStream,
+        turnId: nativeTurnId,
+        events: cleanupAsyncIterable(nativeRouteStream.events, () => {
+          this.activeNativeTurns.delete(nativeTurnId);
+        }),
+      };
+    }
+    request.abortSignal?.removeEventListener('abort', abortNativeRoute);
     const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(request.guiExtension, {
       commandId,
       attemptId,
@@ -206,6 +240,12 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
   }
 
   async cancelTurn(request: { threadId?: string; turnId: string }): Promise<void> {
+    const nativeTurn = this.activeNativeTurns.get(request.turnId);
+    if (nativeTurn) {
+      nativeTurn.abort();
+      this.activeNativeTurns.delete(request.turnId);
+      return;
+    }
     const session = this.activeSessions.get(request.turnId);
     if (!session || !request.threadId) return;
     await session.interruptTurn(request.threadId, request.turnId);
@@ -651,6 +691,14 @@ function guiExtensionOptions(
 
 function appServerConfigArgs(args: string[]): string[] {
   return args.flatMap((arg) => (arg === '--config' ? ['-c'] : [arg]));
+}
+
+async function* cleanupAsyncIterable<T>(iterable: AsyncIterable<T>, cleanup: () => void): AsyncIterable<T> {
+  try {
+    for await (const value of iterable) yield value;
+  } finally {
+    cleanup();
+  }
 }
 
 function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {

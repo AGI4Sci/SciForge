@@ -8,15 +8,16 @@ import type { AgentStreamEvent, SciForgeConfig } from '../../domain';
 import type { SupportedLocale } from '../../i18n';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
 import { chatText } from './chatI18n';
+import { splitFinalMessagePresentation } from './finalMessagePresentation';
 
 export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[], locale?: SupportedLocale) {
   const latestEventLine = latestRunningEvent(streamEvents);
   const latestWorklogLine = formatProgressHeadline(
     latestUserFacingProgressModel(streamEvents),
-    isTransportProgressText(latestEventLine) ? undefined : latestEventLine,
+    isTransportProgressText(latestEventLine) || isRuntimeDiagnosticProgressText(latestEventLine) ? undefined : latestEventLine,
     locale,
   );
-  if (assistantDraft) return normalizeAssistantProseForDisplay(assistantDraft);
+  if (assistantDraft) return runningDraftContentForDisplay(assistantDraft, locale);
   if (latestWorklogLine) return latestWorklogLine;
   if (streamEvents.some(isRuntimeAuditOnlyEvent)) {
     return chatText(locale, { 'zh-CN': '正在等待工作区活动。', 'en-US': 'Waiting for workspace activity.' });
@@ -25,12 +26,61 @@ export function runningMessageContentFromStream(assistantDraft: string, streamEv
   return chatText(locale, { 'zh-CN': '正在连接工作区活动。', 'en-US': 'Connecting to workspace activity.' });
 }
 
+function runningDraftContentForDisplay(assistantDraft: string, locale?: SupportedLocale) {
+  if (looksLikeDenseLocalPathDraft(assistantDraft)) {
+    return chatText(locale, {
+      'zh-CN': '正在整理工作区上下文。详细活动已折叠在过程记录中。',
+      'en-US': 'Organizing workspace context. Detailed activity is folded into the process log.',
+    });
+  }
+  const presentation = splitFinalMessagePresentation(assistantDraft);
+  const content = presentation.primaryContent.trim();
+  if (presentation.auditSections.length && looksLikeFoldedAuditFallback(content)) {
+    return chatText(locale, {
+      'zh-CN': '正在整理工作区上下文。详细活动已折叠在过程记录中。',
+      'en-US': 'Organizing workspace context. Detailed activity is folded into the process log.',
+    });
+  }
+  return content || normalizeAssistantProseForDisplay(assistantDraft);
+}
+
+function looksLikeFoldedAuditFallback(content: string) {
+  return /^(?:The answer references project context|The task returned additional details|The task returned (?:Process|Details)|The task did not finish)\b/i.test(content);
+}
+
+function looksLikeDenseLocalPathDraft(content: string) {
+  const text = content.replace(/\r\n?/g, '\n').trim();
+  if (!text) return false;
+  const localPathMatches = text.match(/(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\/[^\s"'`<>]+/g) ?? [];
+  const redactedPathMatches = text.match(/\[(?:local-path|redacted-path)\]\/[^\s"'`<>]+/gi) ?? [];
+  const pathCount = localPathMatches.length + redactedPathMatches.length;
+  if (pathCount < 4) return false;
+  const withoutPaths = text
+    .replace(/(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\/[^\s"'`<>]+/g, ' ')
+    .replace(/\[(?:local-path|redacted-path)\]\/[^\s"'`<>]+/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return withoutPaths.length < 80 || pathCount >= 8;
+}
+
 function latestUserFacingProgressModel(events: AgentStreamEvent[]) {
   for (const event of [...events].reverse()) {
     const model = progressModelFromEvent(event);
-    if (model && !isTransportProgressModel(model)) return model;
+    if (model && !isTransportProgressModel(model)) return sanitizeUserFacingProgressModel(model);
   }
   return undefined;
+}
+
+function sanitizeUserFacingProgressModel(model: ProcessProgressModel): ProcessProgressModel {
+  const next = { ...model };
+  if (next.lastEvent && isRuntimeDiagnosticProgressText(`${next.lastEvent.label} ${next.lastEvent.detail}`)) {
+    next.lastEvent = undefined;
+  }
+  if (/backend[-_\s]?waiting|silent[-_\s]?stream/i.test(next.reason ?? '')
+    && /workspace activity|工作区活动/i.test(`${next.title} ${next.waitingFor ?? ''}`)) {
+    next.nextStep = undefined;
+  }
+  return next;
 }
 
 function isTransportProgressModel(model: ProcessProgressModel) {
@@ -56,6 +106,13 @@ function isTransportProgressText(value: string | undefined) {
   return /\b(?:codex app-server|rich-client|backend event|backend progress|http stream)\b/.test(text)
     || /(?:app-server|rich-client).*(?:事件|首个|下一条|正在等|等待|运行|启动)/i.test(text)
     || /(?:下一条|首个).*(?:rich-client|backend|后端).*(?:事件|event)/i.test(text);
+}
+
+function isRuntimeDiagnosticProgressText(value: string | undefined) {
+  const text = value ?? '';
+  return /\bcodex runtime\b/i.test(text) && /\b(?:provider|model|profile|workspace|runtime)\b/i.test(text)
+    || /\b(?:provider|model|profile)\s+[\w./:-]+/i.test(text) && /\/(?:Applications|Users|Volumes|private|var|tmp)\//.test(text)
+    || /\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s"'`<>]+/.test(text) && /\b(?:workspace|runtime|codex)\b/i.test(text);
 }
 
 export function runReadiness({
@@ -109,6 +166,14 @@ export function runReadiness({
       message: blockingRuntime.message,
     };
   }
+  const runtimeNotice = runtimeReadinessNotice(runtimeHealth, locale);
+  if (runtimeNotice) {
+    return {
+      ok: true,
+      severity: runtimeNotice.severity,
+      message: runtimeNotice.message,
+    };
+  }
   const providerNotice = providerReadinessNoticeFromConfig(config);
   if (!providerNotice.ready) {
     return {
@@ -133,16 +198,6 @@ export function runReadiness({
 export function runtimeReadinessIssue(runtimeHealth?: RuntimeHealthItem[], locale?: SupportedLocale) {
   if (!runtimeHealth?.length) return undefined;
   const required = runtimeHealth.filter((item) => item.id === 'workspace' || item.id === 'codex-runtime');
-  const checking = required.find((item) => item.status === 'checking');
-  if (checking) {
-    return {
-      severity: 'info' as const,
-      message: chatText(locale, {
-        'zh-CN': `正在检查 ${checking.label}：${checking.detail}。请稍后再发送。`,
-        'en-US': `Checking ${checking.label}: ${checking.detail}. Please wait before sending.`,
-      }),
-    };
-  }
   const blocked = required.find((item) => item.status === 'offline' || item.status === 'not-configured');
   if (!blocked) return undefined;
   const action = blocked.recoverAction ? ` ${blocked.recoverAction}` : '';
@@ -151,6 +206,20 @@ export function runtimeReadinessIssue(runtimeHealth?: RuntimeHealthItem[], local
     message: chatText(locale, {
       'zh-CN': `${blocked.label} 尚未就绪：${blocked.detail}.${action}`,
       'en-US': `${blocked.label} is not ready: ${blocked.detail}.${action}`,
+    }),
+  };
+}
+
+export function runtimeReadinessNotice(runtimeHealth?: RuntimeHealthItem[], locale?: SupportedLocale) {
+  if (!runtimeHealth?.length) return undefined;
+  const required = runtimeHealth.filter((item) => item.id === 'workspace' || item.id === 'codex-runtime');
+  const checking = required.find((item) => item.status === 'checking');
+  if (!checking) return undefined;
+  return {
+    severity: 'info' as const,
+    message: chatText(locale, {
+      'zh-CN': `正在检查 ${checking.label}：${checking.detail}。可以先发送；若服务不可用会在运行中提示修复。`,
+      'en-US': `Checking ${checking.label}: ${checking.detail}. You can send now; SciForge will surface a repair hint if the service is unavailable.`,
     }),
   };
 }

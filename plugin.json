@@ -1,0 +1,51 @@
+{
+  "name": "sciforge-computer-use",
+  "version": "0.1.0",
+  "description": "Repo-local SciForge Computer Use plugin wrapper for Codex app-server and CLI discovery.",
+  "author": {
+    "name": "SciForge"
+  },
+  "license": "UNLICENSED",
+  "keywords": ["computer-use", "mcp", "sciforge", "desktop-automation"],
+  "skills": "./packages/actions/computer-use/skills/",
+  "interface": {
+    "displayName": "SciForge Computer Use",
+    "shortDescription": "Refs-first local Computer Use primitives",
+    "longDescription": "Exposes a narrow Codex-style Computer Use MCP surface that forwards to the package-local scheduler, evidence, replay, and validator contracts.",
+    "developerName": "SciForge",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Use SciForge Computer Use only through scoped, refs-first MCP tools."
+    ],
+    "brandColor": "#2563EB"
+  },
+  "mcp": "./.mcp.json",
+  "sciforge": {
+    "providerId": "sciforge.computer-use",
+    "actionProviderManifest": "./packages/actions/computer-use/action-provider.manifest.json",
+    "publicTools": [
+      "get_app_state",
+      "observe",
+      "click",
+      "type_text",
+      "scroll",
+      "press_key",
+      "propose_action",
+      "execute_scoped_action",
+      "get_replay_refs"
+    ],
+    "forbiddenPublicParameters": [
+      "providerRoute",
+      "guiPrivateState",
+      "schedulerInternals",
+      "executorAdapterRef",
+      "leaseId",
+      "leaseScope",
+      "globalX",
+      "globalY"
+    ],
+    "diagnosticOnlyUntilHostBound": true,
+    "userAcceptanceEligible": false
+  }
+}

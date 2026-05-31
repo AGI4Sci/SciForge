@@ -117,6 +117,7 @@ test('project switch mid-hydrate keeps stale sessions under previous workspace p
 
 test('peer sidebar session targets skip current workspace path', () => {
   const sharedWriter = 'http://127.0.0.1:26201';
+  const peerWriter = 'http://127.0.0.1:26202';
   const config = {
     ...defaultSciForgeConfig,
     workspacePath: mainPath,
@@ -124,7 +125,30 @@ test('peer sidebar session targets skip current workspace path', () => {
     peerInstances: [{
       name: 'repair',
       appUrl: 'http://127.0.0.1:27301',
-      workspaceWriterUrl: 'http://127.0.0.1:26202',
+      workspaceWriterUrl: peerWriter,
+      workspacePath: peerPath,
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }],
+  };
+
+  assert.deepEqual(peerSidebarProjectSessionTargets(config), [{
+    path: peerPath,
+    writerBaseUrl: peerWriter,
+  }]);
+});
+
+test('peer sidebar session targets fall back to shared writer when peer writer is blank', () => {
+  const sharedWriter = 'http://127.0.0.1:26201';
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: mainPath,
+    workspaceWriterBaseUrl: sharedWriter,
+    peerInstances: [{
+      name: 'repair',
+      appUrl: 'http://127.0.0.1:27301',
+      workspaceWriterUrl: '   ',
       workspacePath: peerPath,
       role: 'peer' as const,
       trustLevel: 'readonly' as const,

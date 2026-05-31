@@ -1,0 +1,64 @@
+{
+  "round": 21,
+  "capturedAt": "2026-05-31",
+  "scope": "Cursor Agent-like sidebar New Agent, Delete draft, Archive, Delete, Restore, and search-result restore behavior",
+  "userFinding": "Existing sidebar buttons and interactions must be fully implemented; Archive and Delete had visible controls but did not reliably mutate chat state.",
+  "cursorAgentBaseline": {
+    "tool": "Computer Use",
+    "observed": [
+      "Cursor Agent keeps historical chats visible in the current repository after New Agent.",
+      "Completed chat rows expose Pin and Archive actions.",
+      "Draft chat rows expose Pin and Discard actions.",
+      "Opening a search or row target selects the concrete chat rather than only a generic agent."
+    ]
+  },
+  "sciforgeImplementation": [
+    "SciForgeApp now passes workspace archivedSessions into the sidebar so hidden archived/deleted rows and retained history share the same project/search model.",
+    "Sidebar action guards were split into archivable and discardable checks: Archive remains activity-based, while Delete can remove the active draft.",
+    "Search result de-duplication now keys by scenarioId, sessionId, and threadState so archived/deleted results are not duplicated when both project groups and archivedSessions are present.",
+    "Search results continue to carry sanitized project-target refs and concrete session/thread state, then reuse openSidebarThread for active, retained, archived, and deleted sessions."
+  ],
+  "liveBrowserEvidence": {
+    "tool": "Playwright against local SciForge dev UI",
+    "url": "http://127.0.0.1:5173/?page=workbench&scenarioId=literature-evidence-review",
+    "isolation": "Fresh Microsoft Edge context with seeded localStorage and stubbed Workspace Writer responses for /api/sciforge/config and /api/sciforge/workspace/snapshot.",
+    "actions": [
+      "Initial completed chat row showed one Archive button and one Delete button.",
+      "Clicked New Agent; the previous completed chat stayed visible and one New chat draft row appeared.",
+      "Clicked Delete on the New chat draft; the draft row disappeared and the previous chat remained visible.",
+      "Clicked Archive on the previous chat; it disappeared from the main list and appeared as one Archived chat search result.",
+      "Clicked the Archived chat search result; the previous chat restored to the main list.",
+      "Clicked Delete on the restored active chat; it disappeared from the main list and appeared as one Deleted chat search result.",
+      "Clicked the Deleted chat search result; the chat restored to the main list."
+    ],
+    "observedCounts": {
+      "initial": { "oldRows": 1, "newRows": 0, "archiveButton": 1, "deleteButton": 1 },
+      "afterNewAgent": { "oldRows": 1, "draftRows": 1, "draftDeleteButtons": 1 },
+      "afterDraftDelete": { "oldRows": 1, "draftRows": 0 },
+      "afterArchive": { "oldRows": 0, "searchResults": ["Live archive delete testArchived chat"] },
+      "afterArchiveRestore": { "oldRows": 1 },
+      "afterActiveDelete": { "oldRows": 0, "searchResults": ["Live archive delete test\uff08\u5df2\u5220\u9664\uff09Deleted chat"] },
+      "afterDeleteRestore": { "oldRows": 1 },
+      "finalWriterActiveSession": "active-live-thread",
+      "finalWriterArchivedCount": 0
+    }
+  },
+  "verification": [
+    {
+      "command": "node --import tsx --test src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx",
+      "result": "passed, 44 tests"
+    },
+    {
+      "command": "npm run typecheck --silent",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "remainingRisk": [
+    "Broader parity still needs continued coverage of cross-project switching, project removal, layout/sort menus, and settings archive management against Cursor Agent.",
+    "The in-app Browser connection timed out during this round, so destructive verification used an isolated Playwright Edge context instead of the Codex in-app Browser surface."
+  ]
+}

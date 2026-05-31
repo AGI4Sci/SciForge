@@ -1,6 +1,10 @@
 import { scenarios } from '../../data';
-import type { SciForgeSession, ScenarioInstanceId } from '../../domain';
+import type { SciForgeSession, SciForgeWorkspaceState, ScenarioInstanceId } from '../../domain';
+import { isRetainedHistorySession } from '../../workspace/sessionWorkspace';
+import { sessionActivityScore } from '../../sessionStore';
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
+
+type SidebarWorkspaceChatState = Pick<SciForgeWorkspaceState, 'sessionsByScenario' | 'archivedSessions'>;
 
 export function updateDraftRecord(
   current: Record<ScenarioInstanceId, string>,
@@ -22,6 +26,7 @@ export function buildArchivedSessionsByScenario(archivedSessions: SciForgeSessio
   }, {} as Record<ScenarioInstanceId, SciForgeSession[]>);
 
   for (const session of archivedSessions) {
+    if (isRetainedHistorySession(session)) continue;
     grouped[session.scenarioId] = [...(grouped[session.scenarioId] ?? []), session];
   }
 
@@ -36,6 +41,41 @@ export function buildArchivedSessionCountsByScenario(
   return Object.fromEntries(
     Object.entries(archivedSessionsByScenario).map(([scenarioId, sessions]) => [scenarioId, sessions.length]),
   ) as Record<ScenarioInstanceId, number>;
+}
+
+export function workspaceHasArchivableSidebarChats(state: SidebarWorkspaceChatState): boolean {
+  return Object.values(state.sessionsByScenario).some((session) => session && sessionActivityScore(session) > 0)
+    || (state.archivedSessions ?? []).some((session) => isRetainedHistorySession(session) && sessionActivityScore(session) > 0);
+}
+
+export function workspaceHasArchivableSidebarChat(
+  state: SidebarWorkspaceChatState,
+  scenarioId: ScenarioInstanceId,
+  sessionId: string,
+): boolean {
+  const active = state.sessionsByScenario[scenarioId];
+  if (active?.sessionId === sessionId && sessionActivityScore(active) > 0) return true;
+  return (state.archivedSessions ?? []).some((session) => (
+    session.scenarioId === scenarioId
+      && session.sessionId === sessionId
+      && isRetainedHistorySession(session)
+      && sessionActivityScore(session) > 0
+  ));
+}
+
+export function workspaceCanDiscardSidebarChat(
+  state: SidebarWorkspaceChatState,
+  scenarioId: ScenarioInstanceId,
+  sessionId: string,
+): boolean {
+  const active = state.sessionsByScenario[scenarioId];
+  if (active?.sessionId === sessionId) return true;
+  return (state.archivedSessions ?? []).some((session) => (
+    session.scenarioId === scenarioId
+      && session.sessionId === sessionId
+      && isRetainedHistorySession(session)
+      && sessionActivityScore(session) > 0
+  ));
 }
 
 export function defaultPublishedRuntimeComponentIds(

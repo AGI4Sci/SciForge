@@ -63,7 +63,9 @@ const artifactRef: ObjectReference = {
 
 const session: ObjectReferenceSessionLike = { artifacts: [artifact] };
 assert.equal(artifactForObjectReference(artifactRef, session)?.id, 'artifact-1');
+assert.equal(artifactForObjectReference({ ...artifactRef, ref: 'artifact::artifact-1' }, session)?.id, 'artifact-1');
 assert.equal(pathForObjectReference(artifactRef, session), 'results/table.csv');
+assert.equal(pathForObjectReference({ ...artifactRef, ref: 'artifact::artifact-1' }, session), 'results/table.csv');
 assert.equal(referenceToPreviewTarget(artifactRef, session).status, 'resolved');
 assert.equal(artifactReferenceKind(artifact, 'data-table', 1), 'file');
 assert.equal(normalizeWorkspacePath('/tmp/workspace///'), '/tmp/workspace');

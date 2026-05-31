@@ -34,7 +34,10 @@ type ContentBlock = {
 export function splitFinalMessagePresentation(content: string, resultPresentation?: unknown): FinalMessagePresentation {
   const structured = structuredResultPresentation(resultPresentation);
   if (structured) return presentationFromResultContract(structured, content);
-  const blocks = parseContentBlocks(content);
+  const displayContent = foldLeadingInlineRawDiagnostic(
+    normalizeFinalMessageMarkdownInput(stripLeadingAssistantScratchpad(content)),
+  );
+  const blocks = parseContentBlocks(displayContent);
   const primary: string[] = [];
   const auditSections: FinalMessageAuditSection[] = [];
   let activeAuditHeading = '';
@@ -75,6 +78,182 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
     summary: auditSectionsSummary(auditSections),
   };
 }
+
+function normalizeFinalMessageMarkdownInput(content: string) {
+  const lines = content.replace(/\r\n?/g, '\n').split('\n');
+  const output: string[] = [];
+  let inFence = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      output.push(line);
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      output.push(line);
+      continue;
+    }
+    output.push(...repairMarkdownHeadingLine(line));
+  }
+
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function repairMarkdownHeadingLine(line: string) {
+  const repaired = line
+    .replace(/(^|\n)(#{1,6})(?!#)([^\s#])/g, '$1$2 $3')
+    .replace(/([^\s#])\s+(#{1,6})(?!#)\s*([^\s#])/g, '$1\n\n$2 $3')
+    .replace(/([。！？.!?；;：:])\s*(#{1,6})(?!#)\s*([^\s#])/g, '$1\n\n$2 $3');
+  return repaired.split('\n').flatMap((part) => repairInlineFenceLine(part).flatMap((linePart) => repairRunOnHeadingLine(linePart)));
+}
+
+function repairRunOnHeadingLine(line: string) {
+  const match = line.match(/^(#{1,6}\s+)(.+)$/);
+  if (!match) return [line];
+  const marker = match[1];
+  const text = match[2].trim();
+  const inlineFenceIndex = text.indexOf('```');
+  if (inlineFenceIndex > 0) {
+    return [
+      `${marker}${text.slice(0, inlineFenceIndex).trim()}`,
+      ...repairInlineFenceLine(text.slice(inlineFenceIndex)),
+    ].filter(Boolean);
+  }
+  const cue = text.match(new RegExp(`^(${USER_FACING_SECTION_CUES.join('|')})(?:[-:：]?\\s*)?(.{4,})$`));
+  if (cue?.[1] && cue[2]) return [`${marker}${cue[1]}`, cue[2].replace(/^[-:：]\s*/, '').trim()];
+
+  const splitIndex = runOnHeadingSplitIndex(text);
+  if (splitIndex === undefined) return [`${marker}${text}`];
+  return [`${marker}${text.slice(0, splitIndex).trim()}`, text.slice(splitIndex).trim()].filter(Boolean);
+}
+
+function runOnHeadingSplitIndex(text: string) {
+  const bodyStart = '(?:GUI|T\\s+UI|TUI|UI|API|AgentServer|Computer Use|Cursor|SciForge|它|这|如果|所以|我|你|The|This)';
+  const keywordTitle = text.match(new RegExp(`^(.{2,90}?(?:路径|职责|架构图|流程|方案|原因|结论|答案|建议|要点|实现|验证|风险|总结|核心理念|独特性|架构特性|典型用途|使用方式|设计原则|注意事项|下一步))\\s+(?=${bodyStart}\\b)`));
+  if (keywordTitle?.[1]) return keywordTitle[1].length;
+  const numberedTitle = text.match(new RegExp(`^((?:\\d+\\s*️⃣|\\d+[.)]|[一二三四五六七八九十]+[、.])\\s*.{2,72}?)\\s+(?=${bodyStart}\\b)`));
+  if (numberedTitle?.[1]) return numberedTitle[1].length;
+  return undefined;
+}
+
+function repairInlineFenceLine(line: string): string[] {
+  const fenceIndex = line.indexOf('```');
+  if (fenceIndex < 0) return [line];
+  const before = line.slice(0, fenceIndex).trimEnd();
+  const afterOpen = line.slice(fenceIndex + 3);
+  const closeIndex = afterOpen.indexOf('```');
+  if (closeIndex < 0) return [before, '```', afterOpen.trim()].filter(Boolean);
+  const code = afterOpen.slice(0, closeIndex).trim();
+  const after = afterOpen.slice(closeIndex + 3).trim();
+  return [
+    before,
+    '```',
+    code,
+    '```',
+    ...repairMarkdownHeadingLine(after),
+  ].filter(Boolean);
+}
+
+function stripLeadingAssistantScratchpad(content: string) {
+  const text = content.replace(/\r\n?/g, '\n').trim();
+  if (!looksLikeLeadingScratchpad(text)) return content;
+  const cueIndex = firstUserFacingAnswerCueIndex(text);
+  if (cueIndex === undefined || cueIndex < 8) return content;
+  const candidate = text.slice(cueIndex).replace(/^[\s。！？.!?；;：:，,]+/, '').trim();
+  return candidate.length >= 12 ? candidate : content;
+}
+
+function foldLeadingInlineRawDiagnostic(content: string) {
+  const text = content.trim();
+  const split = leadingInlineRawDiagnosticSplit(text);
+  if (!split) return content;
+  return [split.answer, '## Execution audit', split.diagnostic].filter(Boolean).join('\n\n');
+}
+
+function leadingInlineRawDiagnosticSplit(text: string): { diagnostic: string; answer: string } | undefined {
+  if (!looksLikeInlineRawDiagnosticPrefix(text)) return undefined;
+  const cue = inlineUserFacingAnswerCue(text);
+  if (!cue || cue.index < 80) return undefined;
+  const diagnostic = text.slice(0, cue.index).trim();
+  const answer = text.slice(cue.index).trim();
+  if (!diagnostic || answer.length < 4) return undefined;
+  return { diagnostic, answer };
+}
+
+function looksLikeInlineRawDiagnosticPrefix(text: string) {
+  const prefix = text.slice(0, 2400);
+  return /"schemaVersion"\s*:|"id"\s*:\s*"session-conflict-|session-conflict-|ordering-conflict|expectedBaseRevision|actualBaseRevision|recoverableActions|conflictingFields/.test(prefix)
+    && /[{}[\]"]/.test(prefix);
+}
+
+function inlineUserFacingAnswerCue(text: string): { index: number } | undefined {
+  const patterns = [
+    /(?:[}\]]\s*)(?:否|是)[，,。]/,
+    /(?:[}\]]\s*)(?:不需要|应该|可以|结论|答案|建议)[:：，,。]?/,
+    /(?:[}\]]\s*)\*\*(?:结论|答案|建议|要点)/,
+  ];
+  const matches = patterns
+    .map((pattern) => {
+      const match = pattern.exec(text);
+      if (!match) return undefined;
+      const leading = match[0].match(/^[}\]\s]+/)?.[0].length ?? 0;
+      return { index: match.index + leading };
+    })
+    .filter((match): match is { index: number } => Boolean(match));
+  return matches.sort((left, right) => left.index - right.index)[0];
+}
+
+function looksLikeLeadingScratchpad(text: string) {
+  return /^(?:让我|我先|先看|我来|先了解|Let me|I(?:'ll| will| need to)|Now let me|Checking|Reading|Searched|Read)\b/i.test(text)
+    || /^(?:让我|我先|先看|我来|先了解)/.test(text);
+}
+
+function firstUserFacingAnswerCueIndex(text: string) {
+  const cues = [
+    /好问题[，。,]/,
+    /(?:^|[\n。！？.!?]\s*)(?:是|否)[，。,]/,
+    /我(?:通读|看完|检查|梳理|确认|理解)了/,
+    /(?:^|[\n。！？.!?]\s*)(?:结论|答案|简短结论|建议|要分两种|不需要|应该|可以)\b/,
+    /(?:^|[\s\n。！？.!?]\s*)[A-Za-z][A-Za-z0-9_.-]{1,48}\s*(?:是|是一|=|:|：)/,
+    /(?:^|[\s\n。！？.!?]\s*)\*\*[A-Za-z][A-Za-z0-9_.-]{1,48}\*\*\s*(?:是|是一|=|:|：)/,
+    /(?:^|[\n。！？.!?]\s*)\*\*(?:结论|答案|建议|要点)/,
+    /(?:^|[\n。！？.!?]\s*)#{1,6}\s*(?:结论|答案|建议|要点)/,
+  ];
+  const matches = cues
+    .map((pattern) => {
+      const match = pattern.exec(text);
+      return match ? { index: match.index, text: match[0] } : undefined;
+    })
+    .filter((match): match is { index: number; text: string } => Boolean(match));
+  if (!matches.length) return undefined;
+  const first = matches.sort((left, right) => left.index - right.index)[0];
+  const leadingPunctuation = first.text.match(/^[\n。！？.!?\s]+/)?.[0].length ?? 0;
+  return first.index + leadingPunctuation;
+}
+
+const USER_FACING_SECTION_CUES = [
+  '结论',
+  '答案',
+  '建议',
+  '要点',
+  '流程',
+  '原因',
+  '改法',
+  '实现',
+  '验证',
+  '风险',
+  '总结',
+  '核心理念',
+  '独特性',
+  '架构特性',
+  '典型用途',
+  '使用方式',
+  '设计原则',
+  '注意事项',
+  '下一步',
+];
 
 function structuredResultPresentation(value: unknown): ResultPresentationContractLike | undefined {
   if (!isRecord(value)) return undefined;

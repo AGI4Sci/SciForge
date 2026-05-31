@@ -1,0 +1,29 @@
+{
+  "name": "@sciforge-ui/virtual-screen-viewer",
+  "version": "1.0.0",
+  "description": "Presentation-only virtual screen viewer for Computer Use display sessions.",
+  "type": "module",
+  "private": false,
+  "main": "./render.tsx",
+  "types": "./render.tsx",
+  "files": [
+    "README.md",
+    "package.json",
+    "manifest.ts",
+    "render.tsx",
+    "fixtures"
+  ],
+  "exports": {
+    ".": "./manifest.ts",
+    "./manifest": "./manifest.ts",
+    "./README.md": "./README.md",
+    "./render": "./render.tsx",
+    "./fixtures/basic": "./fixtures/basic.ts",
+    "./fixtures/empty": "./fixtures/empty.ts",
+    "./fixtures/selection": "./fixtures/selection.ts"
+  },
+  "peerDependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0",
+    "react": "^19.2.5"
+  }
+}

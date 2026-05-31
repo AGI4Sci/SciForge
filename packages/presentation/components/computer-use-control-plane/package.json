@@ -1,0 +1,31 @@
+{
+  "name": "@sciforge-ui/computer-use-control-plane",
+  "version": "1.0.0",
+  "description": "Presentation-only Computer Use user-control-plane renderer for SciForge GUI.",
+  "type": "module",
+  "private": false,
+  "main": "./render.tsx",
+  "types": "./render.tsx",
+  "files": [
+    "README.md",
+    "package.json",
+    "manifest.ts",
+    "contract.ts",
+    "render.tsx",
+    "fixtures"
+  ],
+  "exports": {
+    ".": "./manifest.ts",
+    "./manifest": "./manifest.ts",
+    "./README.md": "./README.md",
+    "./contract": "./contract.ts",
+    "./render": "./render.tsx",
+    "./fixtures/basic": "./fixtures/basic.ts",
+    "./fixtures/empty": "./fixtures/empty.ts",
+    "./fixtures/selection": "./fixtures/selection.ts"
+  },
+  "peerDependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0",
+    "react": "^19.2.5"
+  }
+}

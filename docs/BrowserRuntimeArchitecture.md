@@ -1,6 +1,6 @@
 # Built-in Browser Runtime Architecture
 
-最后更新：2026-05-24
+最后更新：2026-05-31
 
 ## 结论
 
@@ -35,6 +35,19 @@ SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser`
 | 协作层 | 线程状态、审批流、审计日志、上下文打包、feedback inbox、代码 diff 和验证证据。 | `/browser ...` 命令、annotation record、refs-first trace、approval gate。 |
 
 调试也按这三层定位：页面是否加载是运行时问题；元素 ref 是否解析是能力层问题；审批、上下文和证据是否进入线程是协作层问题。
+
+## Package 拆分和 TUI-GUI 边界
+
+浏览器能力不能把 UI 组件、provider adapter 和共享 schema 放在同一个 owner 下。当前拆分如下：
+
+| 模块 | Owner | 允许内容 | 禁止内容 |
+|---|---|---|---|
+| `@sciforge-ui/runtime-contract/browser-runtime` | shared contract | `BrowserRuntimeSession/Tab/Command/Snapshot/Trace/StableRef/PageQuery`、risk/page-query/stable-ref 等纯函数 | Playwright、MCP client、React、iframe、workspace IO、provider route |
+| `packages/observe/web` | TUI capability | `browser_runtime` manifest、Playwright MCP wrapper、provider availability、TUI-facing provider adapter | React renderer、右侧结果区布局、GUI state、provider 选择以外的 GUI 控件 |
+| `packages/presentation/components/browser-workbench` | GUI presentation | 右侧 browser projection renderer、tabs/snapshot/log refs、terminal-equivalent command events、host-declared preview | provider routing、页面动作执行、跨域 DOM/console/network 读取、截图 base64/完整 DOM 保存 |
+| `src/ui/**` host 装配层 | GUI host | 将按钮/表单翻译成 `/browser ...` 文本、装配 Browser page、连接反馈收件箱和结果区 placement | import `@sciforge-observe/web/browser-runtime`、直接调用 Playwright/MCP/provider、判断网页任务完成 |
+
+Cursor Agent 右侧结果区的对齐目标不是把 browser、terminal、file viewer 都塞进一个 React 页面，而是把它们变成可组合 presentation modules：`browser-workbench`、`terminal-session-viewer`、`workspace-file-viewer`。TUI 通过 `module.invoke({ moduleId: 'gui', intent: 'present' })` 或 UI manifest slot 选择 presentation；GUI 模块只发出 view-local events 或终端等价文本。
 
 ## 边界
 
@@ -309,8 +322,8 @@ M3 之前要建立 30-50 个固定 browser regression tasks，每个任务包含
 
 ## 后续路线
 
-1. 把 `browser_runtime` 接入 Codex GUI extension resource tree，例如 `/gui/browser/sessions.json`。
+1. 把 `browser_runtime` 接入 Codex GUI extension resource tree，例如 `/gui/browser/sessions.json`，resource 内容只包含 projection/ref 摘要。
 2. 将 Browser Workbench 的 `/browser ...` 命令直接接入 TUI/Codex command executor，而不是只复制命令。
-3. 为 Runtime Codex 暴露 `/browser` slash command 或 MCP tool。
+3. 为 Runtime Codex 暴露 `/browser` slash command 或 MCP tool，并把高风险动作统一落到 approval request。
 4. 增加 live acceptance：用 Codex in-app browser 打开 SciForge 内置 Browser Workbench，完成 `open -> annotate -> snapshot command -> scroll command -> inspect same-origin state`。
 5. 如果未来需要真正突破 iframe 限制，应在桌面壳里实现 Electron `WebContentsView`/独立 Chromium surface；Web GUI 不应伪装成具备这种权限。

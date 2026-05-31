@@ -18,6 +18,15 @@ import {
 import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/runtime-contract/events';
 import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary, runtimeTextLooksAuditOnly } from '../../runtimeAuditEvents';
 import { joinAssistantTextFragments } from '../../assistantText';
+import {
+  COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
+  COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
+  COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
+  computerUseControlPlaneDisplayedRefs,
+  hasComputerUseControlPlanePresentation,
+  normalizeComputerUseControlPlanePayload,
+  type ComputerUseControlPlanePayload,
+} from '../../../../../packages/presentation/components';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -306,6 +315,11 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
     ...(presentation.ref ? [presentation.ref] : []),
     ...(presentation.displayedRefs ?? []),
   ]);
+  const controlPlane = computerUseControlPlaneResultBundle(presentation.controlPlane, commandId);
+  const projectedArtifactRefs = uniqueStrings([
+    ...artifactRefs,
+    ...(controlPlane.artifact ? [`artifact:${controlPlane.artifact.id}`] : []),
+  ]);
   const artifacts = artifactRefs.map((ref) => ({
     ref,
     label: ref === presentation.ref ? (presentation.title ?? refLabel(ref)) : refLabel(ref),
@@ -323,9 +337,12 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         visibleAnswer: {
           status: visibleAnswerStatusForGuiPresent(presentation),
           text: presentation.text,
-          artifactRefs,
+          artifactRefs: projectedArtifactRefs,
         },
-        artifacts,
+        artifacts: controlPlane.artifact ? [
+          ...artifacts,
+          { ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE },
+        ] : artifacts,
         executionProcess: [{
           eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
           type: 'GuiPresent',
@@ -344,6 +361,10 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
       message: presentation.text,
       guiPresentation: presentation,
     },
+    ...(controlPlane.artifact ? {
+      artifacts: [...recordList(result.artifacts), controlPlane.artifact],
+      uiManifest: [...recordList(result.uiManifest), controlPlane.slot],
+    } : {}),
   };
 }
 
@@ -374,6 +395,14 @@ function withGuiAskUserRuntimeResult(
     label: refLabel(ref),
     mime: refMime(ref),
   }));
+  const controlPlane = computerUseControlPlaneResultBundle(
+    askUser.controlPlane ?? presentation?.controlPlane,
+    commandId,
+  );
+  const projectedArtifacts = controlPlane.artifact ? [
+    ...artifacts,
+    { ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE },
+  ] : artifacts;
   const executionProcess = [
     presentation ? {
       eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
@@ -401,11 +430,11 @@ function withGuiAskUserRuntimeResult(
         visibleAnswer: {
           status: 'needs-human',
           text: askUser.text,
-          artifactRefs: artifacts.map((artifact) => artifact.ref),
+          artifactRefs: projectedArtifacts.map((artifact) => artifact.ref),
           confirmationStatus: 'needs-confirmation',
           liveAcceptanceEligible: true,
         },
-        artifacts,
+        artifacts: projectedArtifacts,
         executionProcess,
         recoverActions: [],
         verificationState: {
@@ -424,6 +453,10 @@ function withGuiAskUserRuntimeResult(
       guiPresentation: presentation,
       guiAskUser: askUser,
     },
+    ...(controlPlane.artifact ? {
+      artifacts: [...recordList(result.artifacts), controlPlane.artifact],
+      uiManifest: [...recordList(result.uiManifest), controlPlane.slot],
+    } : {}),
   };
 }
 
@@ -529,6 +562,7 @@ function guiPresentationFromEvent(event: Record<string, unknown>, result: Record
     status: asString(nested.status) ?? asString(event.status),
     displayedRefs: asStringArray(nested.displayedRefs),
     placement: isRecord(nested.placement) ? nested.placement : undefined,
+    controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
     provider: asString(event.provider) ?? asString(result.provider),
@@ -571,6 +605,7 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     relatedRefs,
     displayedRefs: relatedRefs,
     placement: isRecord(nested.placement) ? nested.placement : undefined,
+    controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
     provider: asString(event.provider) ?? asString(result.provider),
@@ -608,6 +643,7 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
     const payload = isRecord(action.payload) ? action.payload : {};
     if (port === 'gui.present') {
       const summary = computerUseSummaryFromPresentationPayload(payload);
+      const controlPlane = computerUseControlPlaneFromActionPayload(payload);
       guiPresent = {
         ...common,
         type: 'gui_present',
@@ -626,6 +662,7 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
             title: asString(payload.title) ?? 'Computer Use result',
             status: asString(payload.status),
             hint: 'markdown',
+            controlPlane,
           },
         },
       };
@@ -653,6 +690,8 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
 }
 
 function computerUseSummaryFromPresentationPayload(payload: Record<string, unknown>) {
+  const controlPlane = computerUseControlPlaneFromActionPayload(payload);
+  const controlPlaneRefs = computerUseControlPlaneDisplayedRefs(controlPlane);
   const artifactRefs = asStringArray(payload.artifactRefs) ?? [];
   const blockedManifestRefs = asStringArray(payload.blockedManifestRefs) ?? [];
   const repairHintRefs = asStringArray(payload.repairHintRefs) ?? [];
@@ -700,6 +739,7 @@ function computerUseSummaryFromPresentationPayload(payload: Record<string, unkno
     ...confirmedRequestRefs,
     ...approvalDecisionRefs,
     ...sourceApprovalRefs,
+    ...controlPlaneRefs,
     ...completionGradeDiagnosticRefs,
     ...producerDiagnosticRefs,
     ...acceptanceManifestRefs,
@@ -711,6 +751,8 @@ function computerUseSummaryFromPresentationPayload(payload: Record<string, unkno
     '## Computer Use result',
     asString(payload.status) ? `Status: \`${asString(payload.status)}\`` : undefined,
     asString(payload.message),
+    controlPlane ? `User control plane: status \`${controlPlane.status ?? 'unknown'}\`${controlPlane.approvalMode ? `, approval \`${controlPlane.approvalMode}\`` : ''}.` : undefined,
+    controlPlaneRefs.length ? ['User control refs:', ...controlPlaneRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
     completedWithoutFinalArtifact
       ? 'Completion diagnostic: completed status did not include a visible final artifact ref, so completion remains fail-closed.'
       : undefined,
@@ -743,10 +785,69 @@ function isComputerUseControlEvidenceRef(ref: string) {
     || /^(?:artifact|audit|workEvidence|EU):/i.test(ref);
 }
 
+function computerUseControlPlaneFromActionPayload(
+  payload: Record<string, unknown>,
+  approvalRequest?: Record<string, unknown>,
+): ComputerUseControlPlanePayload | undefined {
+  const approvalRef = approvalRefFromRequest(approvalRequest);
+  const approvalRequestRef = asString(payload.approvalRequestRef)
+    ?? asString(payload.approval_request_ref)
+    ?? (asStringArray(payload.approvalRequestRefs) ?? [])[0];
+  const normalized = normalizeComputerUseControlPlanePayload({
+    ...payload,
+    approvalRef: asString(payload.approvalRef) ?? asString(payload.approval_ref) ?? approvalRef,
+    approvalRequestRef,
+    approvalMode: asString(payload.approvalMode) ?? asString(payload.approval_mode) ?? (approvalRef ? 'required' : undefined),
+    status: asString(payload.status) ?? (approvalRef ? 'needs-confirmation' : undefined),
+  });
+  return hasComputerUseControlPlanePresentation(normalized) ? normalized : undefined;
+}
+
+function computerUseControlPlaneResultBundle(value: unknown, commandId: string | undefined): {
+  artifact?: Record<string, unknown>;
+  slot?: Record<string, unknown>;
+} {
+  const payload = normalizeComputerUseControlPlanePayload(value);
+  if (!payload) return {};
+  const id = `computer-use-control-plane-${safeRefSegment(commandId ?? payload.sessionPermissionRef ?? payload.stopRef ?? 'current')}`;
+  const artifact = {
+    id,
+    type: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
+    producerScenario: 'computer-use',
+    schemaVersion: COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
+    metadata: {
+      title: 'Computer Use controls',
+      presentationRole: 'supporting-evidence',
+      producer: 'gui.presentation',
+    },
+    data: payload,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role: 'supporting-evidence',
+      declaredMediaType: 'application/vnd.sciforge.computer-use-control-plane+json',
+      declaredExtension: '.json',
+      contentShape: 'external-ref',
+      readableRef: `artifact:${id}`,
+      previewPolicy: 'inline',
+    },
+  };
+  return {
+    artifact,
+    slot: {
+      componentId: COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
+      title: 'Computer Use controls',
+      artifactRef: id,
+      priority: -5,
+    },
+  };
+}
+
 function computerUseAskUserFromAction(payload: Record<string, unknown>) {
   const approvalRequest = isRecord(payload.approvalRequest) ? payload.approvalRequest : {};
   const relatedRefs = uniqueStrings(asStringArray(payload.relatedRefs) ?? []);
   const approvalId = approvalRefFromRequest(approvalRequest);
+  const controlPlane = computerUseControlPlaneFromActionPayload(payload, approvalRequest);
   const choices = approvalId ? [
     { label: 'Approve', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalId)}`, style: 'primary' },
     { label: 'Cancel', commandText: `/computer-use reject --approval-ref ${quoteCommandArg(approvalId)}`, style: 'secondary' },
@@ -767,6 +868,7 @@ function computerUseAskUserFromAction(payload: Record<string, unknown>) {
     approvalRequest,
     relatedRefs,
     displayedRefs: relatedRefs,
+    controlPlane,
   };
 }
 
@@ -889,6 +991,14 @@ function refMime(ref: string) {
 
 function quoteCommandArg(value: string) {
   return JSON.stringify(value);
+}
+
+function safeRefSegment(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 72) || 'current';
 }
 
 function isTerminalEquivalentCommandText(commandText: string) {

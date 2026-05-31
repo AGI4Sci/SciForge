@@ -72,6 +72,9 @@ export const CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES: readonly CuNextLiveAcceptanceTa
 
 const taskRulesById = new Map(CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES.map((rule) => [rule.taskId, rule]));
 const shortcutClaimKinds = new Set(['dom', 'playwright', 'accessibility', 'generated-file-only']);
+const domAxHintClaimKinds = new Set(['dom', 'playwright', 'accessibility']);
+const browserRuntimeDomAxObservationSchema = 'sciforge.computer-use.browser-runtime-dom-ax-observation.v1';
+const forbiddenLegacyBackendPattern = /\b(?:docker|no-?vnc|novnc|vnc|rdp|container)\b/i;
 const markerAliases: Record<CuNextLiveAcceptanceMarkerKind, readonly string[]> = {
   'briefing-deck': ['briefing-deck', 'briefingdeck', 'deck-briefing', 'literature-briefing-deck'],
   'chart-report': ['chart-report', 'chartreport', 'spreadsheet-chart-report'],
@@ -120,6 +123,12 @@ export function validateCuNextLiveAcceptanceTaskEvidence(
     issues.push(...validateRequiredRefs(evidence, mapping));
   }
   issues.push(...validateLiveDisqualifiers(evidence));
+  issues.push(...validateComputerUseProvenanceAndReplay(evidence));
+  issues.push(...validateUserControlRefs(evidence));
+  issues.push(...validateObserveBeforeMutateRefs(evidence));
+  issues.push(...validateBrowserRuntimeObservationHints(evidence));
+  issues.push(...validatePlatformSidecarIsolationReport(evidence));
+  issues.push(...validateProductPathClassification(evidence));
 
   const markerValidation = rule
     ? validateTaskMarker(evidence, rule, input.refRecords)
@@ -158,6 +167,19 @@ function validationResult(
   const requiredRefs = !issues.some((issue) => (
     issue.id === 'missing-required-ref'
     || issue.id === 'missing-required-evidence-claim'
+    || issue.id === 'missing-screen-identity'
+    || issue.id === 'missing-actor-cursor-provenance'
+    || issue.id === 'missing-executor-lease-scope'
+    || issue.id === 'missing-action-causality'
+    || issue.id === 'missing-native-multi-screen-actor-cursor'
+    || issue.id === 'missing-native-queue-semantics'
+    || issue.id === 'missing-browser-runtime-observation-hint'
+    || issue.id === 'invalid-browser-runtime-observation-hint'
+    || issue.id === 'missing-user-control-ref'
+    || issue.id === 'missing-observe-before-mutate-ref'
+    || issue.id === 'missing-platform-sidecar-isolation'
+    || issue.id === 'invalid-platform-sidecar-isolation'
+    || issue.id === 'invalid-product-path-classification'
     || issue.id === 'invalid-live-acceptance-status'
   ));
   const disqualifiersClean = !issues.some((issue) => issue.id.startsWith('forbidden-'));
@@ -499,14 +521,690 @@ function validateLiveDisqualifiers(evidence: Record<string, unknown>): CuNextLiv
     asRecord(evidence.antiShortcutGuard)?.status === 'failed'
     || rejectedClaims.length > 0
     || evidence.automationSubstituteUsed === true
-    || evidenceClaims.some((claim) => shortcutClaimKinds.has(String(claim.kind ?? '').toLowerCase()))
+    || evidenceClaims.some((claim) => (
+      shortcutClaimKinds.has(String(claim.kind ?? '').toLowerCase())
+      && !isAllowedDomAxObservationHintClaim(claim)
+    ))
   ) {
     issues.push({
       id: 'forbidden-shortcut-substitute',
-      reason: 'DOM, Playwright, accessibility, generated-file-only, or automation substitute claims cannot satisfy CU-NEXT live acceptance.',
+      reason: 'DOM, Playwright, accessibility, generated-file-only, or automation substitute claims cannot satisfy CU-NEXT live acceptance; DOM/AX/Playwright may appear only as refs-first observe-before-mutate or grounding hints.',
     });
   }
 
+  return issues;
+}
+
+function validateComputerUseProvenanceAndReplay(
+  evidence: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const screenRecords = computerUseScreenRecords(evidence);
+  const screenIds = uniqueStrings(screenRecords.map((screen) => stringValue(screen.screenId)).filter(isNonEmptyString));
+  const displayGroupId = stringValue(evidence.displayGroupId)
+    ?? stringValue(asRecord(evidence.virtualDisplayGroup)?.displayGroupId)
+    ?? stringValue(asRecord(evidence.virtualDesktopSession)?.displayGroupId);
+  if (!displayGroupId) {
+    issues.push({
+      id: 'missing-screen-identity',
+      path: 'virtualDisplayGroup.displayGroupId',
+      reason: 'Computer Use acceptance evidence must bind a VirtualDisplayGroup displayGroupId.',
+    });
+  }
+  if (screenIds.length === 0) {
+    issues.push({
+      id: 'missing-screen-identity',
+      path: 'screens',
+      reason: 'Computer Use acceptance evidence must include at least one structured screenId; screenshot refs alone are not screen identity.',
+    });
+  }
+  if (screenIds.length < 2) {
+    issues.push({
+      id: 'missing-native-multi-screen-actor-cursor',
+      path: 'virtualDisplayGroup.screens',
+      reason: 'Native multi-screen Computer Use product acceptance requires at least two structured screen refs in the same display group.',
+    });
+  }
+  for (const [index, screen] of screenRecords.entries()) {
+    const screenId = stringValue(screen.screenId);
+    const screenRef = stringValue(screen.ref) ?? stringValue(screen.screenRef) ?? stringValue(screen.manifestRef);
+    if (!screenId || !screenRef) {
+      issues.push({
+        id: 'missing-screen-identity',
+        path: `screens[${index}]`,
+        reason: 'Each Computer Use screen record must include screenId and a bundle-local screen ref.',
+      });
+    } else if (!isEvidenceBundleLocalFileRef(screenRef)) {
+      issues.push({
+        id: 'forbidden-cross-bundle-ref',
+        path: `screens[${index}]`,
+        reason: `Screen refs must be evidence-bundle-local file refs; got ${describeMarkerRef(screenRef)}.`,
+      });
+    }
+  }
+
+  const cursorRecords = computerUseCursorRecords(evidence);
+  if (!cursorRecords.some((cursor) => (
+    isNonEmptyString(cursor.actorId)
+    && isNonEmptyString(cursor.cursorId)
+    && isNonEmptyString(cursor.screenId)
+    && (
+      isNonEmptyString(cursor.ref)
+      || isNonEmptyString(cursor.cursorEventLogRef)
+      || isNonEmptyString(cursor.actorCursorLogRef)
+    )
+  ))) {
+    issues.push({
+      id: 'missing-actor-cursor-provenance',
+      path: 'actorCursorProvenance',
+      reason: 'Computer Use acceptance evidence must include actorId, cursorId, screenId, and cursor event/log refs.',
+    });
+  }
+  for (const [index, cursor] of cursorRecords.entries()) {
+    const screenId = stringValue(cursor.screenId);
+    if (screenId && screenIds.length > 0 && !screenIds.includes(screenId)) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `actorCursorProvenance[${index}].screenId`,
+        reason: `Actor cursor screenId ${screenId} must match a declared screen.`,
+      });
+    }
+  }
+  const actorCursorPairs = uniqueStrings(cursorRecords.flatMap((cursor) => {
+    const actorId = stringValue(cursor.actorId);
+    const cursorId = stringValue(cursor.cursorId);
+    return actorId && cursorId ? [`${actorId}::${cursorId}`] : [];
+  }));
+  const cursorScreenIds = uniqueStrings(cursorRecords.map((cursor) => stringValue(cursor.screenId)).filter(isNonEmptyString));
+  if (actorCursorPairs.length < 3 || cursorScreenIds.filter((screenId) => screenIds.includes(screenId)).length < 2) {
+    issues.push({
+      id: 'missing-native-multi-screen-actor-cursor',
+      path: 'actorCursorProvenance',
+      reason: 'Native multi-actor acceptance requires at least three actor/cursor pairs whose provenance spans at least two declared screens.',
+    });
+  }
+  issues.push(...validateActorCursorEvents(evidence, cursorRecords, screenIds));
+
+  const executorLease = asRecord(evidence.executorLease);
+  const leaseScope = asRecord(executorLease?.leaseScope) ?? asRecord(executorLease?.scope);
+  const leaseScreenId = stringValue(executorLease?.screenId) ?? stringValue(leaseScope?.screenId);
+  const leaseKind = stringValue(leaseScope?.kind) ?? stringValue(leaseScope?.scope);
+  if (!executorLease || !leaseScope || !leaseScreenId || !leaseKind) {
+    issues.push({
+      id: 'missing-executor-lease-scope',
+      path: 'executorLease.leaseScope',
+      reason: 'executorLease must include screen/window scoped leaseScope and screenId.',
+    });
+  } else if (screenIds.length > 0 && !screenIds.includes(leaseScreenId)) {
+    issues.push({
+      id: 'missing-executor-lease-scope',
+      path: 'executorLease.screenId',
+      reason: `executorLease screenId ${leaseScreenId} must match a declared screen.`,
+    });
+  }
+  if (leaseKind?.startsWith('window')) {
+    const leaseWindowId = stringValue(executorLease?.windowId) ?? stringValue(leaseScope?.windowId);
+    if (!leaseWindowId) {
+      issues.push({
+        id: 'missing-executor-lease-scope',
+        path: 'executorLease.windowId',
+        reason: 'window-local executor leases must include windowId.',
+      });
+    }
+  }
+  for (const key of ['actorId', 'cursorId']) {
+    if (!stringValue(executorLease?.[key])) {
+      issues.push({
+        id: 'missing-executor-lease-scope',
+        path: `executorLease.${key}`,
+        reason: `executorLease must include ${key} owner provenance.`,
+      });
+    }
+  }
+
+  const queueEvidence = computerUseQueueRecords(evidence);
+  if (!queueEvidence.some((record) => leaseKindFromRecord(record) === 'window-local')) {
+    issues.push({
+      id: 'missing-native-queue-semantics',
+      path: 'actionProposals',
+      reason: 'Native multi-screen acceptance requires at least one window-local proposal/lease record.',
+    });
+  }
+  if (!queueEvidence.some((record) => leaseKindFromRecord(record) === 'screen-global')) {
+    issues.push({
+      id: 'missing-native-queue-semantics',
+      path: 'executorQueue',
+      reason: 'Native multi-screen acceptance requires at least one screen-global queue/lease record.',
+    });
+  }
+  issues.push(...validateNativeQueueBindings(queueEvidence, screenIds, actorCursorPairs));
+
+  const mutatingActions = computerUseMutatingActionRecords(evidence);
+  if (mutatingActions.length === 0) {
+    issues.push({
+      id: 'missing-action-causality',
+      path: 'mutatingActions',
+      reason: 'Computer Use acceptance evidence must include at least one mutating action causality record.',
+    });
+  }
+  for (const [index, action] of mutatingActions.entries()) {
+    const actionPath = `mutatingActions[${index}]`;
+    for (const key of ['screenId', 'actorId', 'cursorId']) {
+      if (!stringValue(action[key])) {
+        issues.push({
+          id: 'missing-action-causality',
+          path: `${actionPath}.${key}`,
+          reason: `Mutating action evidence must include ${key}.`,
+        });
+      }
+    }
+    if (!asRecord(action.leaseScope) && !stringValue(action.leaseId)) {
+      issues.push({
+        id: 'missing-action-causality',
+        path: `${actionPath}.leaseScope`,
+        reason: 'Mutating action evidence must bind an executor lease scope or leaseId.',
+      });
+    }
+    requireRefs(issues, `${actionPath}.beforeEvidenceRefs`, stringArray(action.beforeEvidenceRefs));
+    requireRefs(issues, `${actionPath}.afterEvidenceRefs`, stringArray(action.afterEvidenceRefs));
+    requireRefs(issues, `${actionPath}.groundingRefs`, stringArray(action.groundingRefs));
+    requireRef(issues, `${actionPath}.executorEventRef`, stringValue(action.executorEventRef));
+    requireRefs(issues, `${actionPath}.verificationRefs`, stringArray(action.verificationRefs));
+    if (isBareGlobalCoordinateAction(action)) {
+      issues.push({
+        id: 'forbidden-bare-global-coordinates',
+        path: `${actionPath}.target`,
+        reason: 'Mutating Computer Use actions must be screen/window/element/region scoped; bare global coordinates are forbidden.',
+      });
+    }
+  }
+
+  issues.push(...validateReplayEvidence(evidence, screenIds));
+
+  if (findRecordValue(evidence, (key, value) => (
+    (key === 'historicalCompletionEvidenceUsed' || key === 'priorRoundCompletionEvidenceUsed' || key === 'staleEvidenceUsed')
+    && value === true
+  ))) {
+    issues.push({
+      id: 'forbidden-stale-evidence',
+      reason: 'Current acceptance must not rely on stale, historical, or prior-round completion evidence.',
+    });
+  }
+  if (findRecordValue(evidence, (_key, value) => (
+    typeof value === 'string'
+    && isForbiddenCrossBundleEvidenceRef(value)
+  ))) {
+    issues.push({
+      id: 'forbidden-cross-bundle-ref',
+      reason: 'Acceptance evidence refs must be bundle-local file refs, not absolute, scheme, or parent-relative refs.',
+    });
+  }
+  return issues;
+}
+
+function validateUserControlRefs(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const control = asRecord(evidence.userControlPlane)
+    ?? asRecord(evidence.userControl)
+    ?? asRecord(evidence.sessionPermission);
+  if (!control) {
+    return [{
+      id: 'missing-user-control-ref',
+      path: 'userControlPlane',
+      reason: 'User-level Computer Use acceptance must include user-control refs for permission, allowlists, risk/data visibility, and stop/cancel.',
+    }];
+  }
+
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  requireCustomRef(issues, 'missing-user-control-ref', 'userControlPlane.sessionPermissionRef', stringValue(control.sessionPermissionRef));
+  requireCustomRefs(issues, 'missing-user-control-ref', 'userControlPlane.allowedAppRefs', stringArray(control.allowedAppRefs));
+  requireCustomRefs(issues, 'missing-user-control-ref', 'userControlPlane.allowedWindowRefs', stringArray(control.allowedWindowRefs));
+  requireCustomRefs(issues, 'missing-user-control-ref', 'userControlPlane.forbiddenAppRefs', stringArray(control.forbiddenAppRefs));
+  requireCustomRef(
+    issues,
+    'missing-user-control-ref',
+    'userControlPlane.inputModalityPolicyRef',
+    stringValue(control.inputModalityPolicyRef) ?? stringValue(asRecord(control.inputModalityPolicy)?.ref),
+  );
+  requireCustomRef(issues, 'missing-user-control-ref', 'userControlPlane.riskPreviewRef', stringValue(control.riskPreviewRef));
+  requireCustomRef(issues, 'missing-user-control-ref', 'userControlPlane.dataVisibilityRef', stringValue(control.dataVisibilityRef));
+  if (!stringValue(control.stopRef) && !stringValue(control.cancelLeaseRef)) {
+    issues.push({
+      id: 'missing-user-control-ref',
+      path: 'userControlPlane.stopRef',
+      reason: 'User-control evidence must include stopRef or cancelLeaseRef.',
+    });
+  }
+  if (!stringValue(control.approvalMode)) {
+    issues.push({
+      id: 'missing-user-control-ref',
+      path: 'userControlPlane.approvalMode',
+      reason: 'User-control evidence must declare approvalMode; third-party page text cannot substitute for user confirmation.',
+    });
+  }
+  return issues;
+}
+
+function validateObserveBeforeMutateRefs(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const policy = asRecord(evidence.observeBeforeMutate)
+    ?? asRecord(evidence.observationFreshness)
+    ?? {};
+  const mutatingActions = computerUseMutatingActionRecords(evidence);
+  for (const [index, action] of mutatingActions.entries()) {
+    const path = `mutatingActions[${index}]`;
+    const currentAppStateRef = firstString(action, ['currentAppStateRef', 'appStateRef', 'stateRef'])
+      ?? firstString(policy, ['currentAppStateRef', 'appStateRef', 'stateRef']);
+    const screenshotOrCaptureRef = firstString(action, ['currentScreenshotRef', 'screenshotRef', 'captureRef'])
+      ?? firstString(policy, ['currentScreenshotRef', 'screenshotRef', 'captureRef']);
+    const stateSnapshotRef = firstString(action, ['accessibilitySnapshotRef', 'stateSnapshotRef', 'visibleStateSnapshotRef'])
+      ?? firstString(policy, ['accessibilitySnapshotRef', 'stateSnapshotRef', 'visibleStateSnapshotRef']);
+    const freshnessCheckRef = firstString(action, ['freshnessCheckRef', 'evidenceFreshnessRef'])
+      ?? firstString(policy, ['freshnessCheckRef', 'evidenceFreshnessRef']);
+
+    requireCustomRef(issues, 'missing-observe-before-mutate-ref', `${path}.currentAppStateRef`, currentAppStateRef);
+    requireCustomRef(issues, 'missing-observe-before-mutate-ref', `${path}.currentScreenshotRef`, screenshotOrCaptureRef);
+    requireCustomRef(issues, 'missing-observe-before-mutate-ref', `${path}.stateSnapshotRef`, stateSnapshotRef);
+    requireCustomRefs(
+      issues,
+      'missing-observe-before-mutate-ref',
+      `${path}.groundingRefs`,
+      stringArray(action.groundingRefs),
+    );
+    requireCustomRef(issues, 'missing-observe-before-mutate-ref', `${path}.freshnessCheckRef`, freshnessCheckRef);
+  }
+  return issues;
+}
+
+function validateBrowserRuntimeObservationHints(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const observations = browserRuntimeObservationRecords(evidence);
+  const hintClaims = records(evidence.evidenceClaims).filter((claim) => (
+    domAxHintClaimKinds.has(String(claim.kind ?? '').toLowerCase())
+  ));
+  if (observations.length === 0) {
+    return [{
+      id: 'missing-browser-runtime-observation-hint',
+      path: 'browserRuntimeDomAxObservation',
+      reason: 'DOM-aware Computer Use acceptance requires structured BrowserRuntime DOM/AX/Playwright observation refs; claim-only DOM/AX hints are not completion evidence.',
+    }];
+  }
+  const structuredObservationRefs = new Set(observations.flatMap((observation) => browserRuntimeObservationRefs(observation)));
+  const boundObservationRefs = new Set(browserRuntimeRefsBoundToActions(evidence));
+
+  for (const [index, claim] of hintClaims.entries()) {
+    if (!isAllowedDomAxObservationHintClaim(claim)) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `evidenceClaims[dom-ax-hint:${index}]`,
+        reason: 'DOM/AX/Playwright claims must be bundle-local refs-first hints and must not substitute for executor leases, GUI action causality, artifact validation, or completion evidence.',
+      });
+    }
+    const claimRefs = refsFromClaim(claim);
+    if (claimRefs.some((ref) => !structuredObservationRefs.has(ref))) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `evidenceClaims[dom-ax-hint:${index}].refs`,
+        reason: 'DOM/AX/Playwright claim refs must be emitted by the structured BrowserRuntime observation for this run.',
+      });
+    }
+  }
+
+  for (const [index, observation] of observations.entries()) {
+    const path = `browserRuntimeDomAxObservation[${index}]`;
+    if (observation.schemaVersion !== browserRuntimeDomAxObservationSchema) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.schemaVersion`,
+        reason: `BrowserRuntime DOM/AX observation hints must use schemaVersion=${browserRuntimeDomAxObservationSchema}.`,
+      });
+    }
+    if (observation.trust !== 'untrusted-page-observation') {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.trust`,
+        reason: 'BrowserRuntime DOM/AX observation hints must mark page data as untrusted-page-observation.',
+      });
+    }
+    if (observation.refsFirst !== true || observation.currentBundleOnly !== true) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path,
+        reason: 'BrowserRuntime DOM/AX observation hints must assert refsFirst=true and currentBundleOnly=true.',
+      });
+    }
+    for (const flag of [
+      'completionEvidenceEligible',
+      'executorLeaseSubstitute',
+      'guiActionSubstitute',
+      'artifactCausalitySubstitute',
+      'userLevelCompletionSubstitute',
+    ]) {
+      if (observation[flag] !== false) {
+        issues.push({
+          id: 'invalid-browser-runtime-observation-hint',
+          path: `${path}.${flag}`,
+          reason: `BrowserRuntime DOM/AX observation hints must explicitly set ${flag}=false.`,
+        });
+      }
+    }
+    const observationScreenId = stringValue(observation.screenId) ?? stringValue(asRecord(observation.scope)?.screenId);
+    if (!observationScreenId) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.screenId`,
+        reason: 'BrowserRuntime DOM/AX observation hints must bind a Computer Use screenId.',
+      });
+    } else {
+      const declaredScreenIds = uniqueStrings(computerUseScreenRecords(evidence).map((screen) => stringValue(screen.screenId)).filter(isNonEmptyString));
+      if (declaredScreenIds.length > 0 && !declaredScreenIds.includes(observationScreenId)) {
+        issues.push({
+          id: 'invalid-browser-runtime-observation-hint',
+          path: `${path}.screenId`,
+          reason: `BrowserRuntime DOM/AX observation screenId ${observationScreenId} must match a declared Computer Use screen.`,
+        });
+      }
+    }
+    const mutatingWindowBound = computerUseMutatingActionRecords(evidence).some((action) => (
+      stringValue(action.windowId) || stringValue(asRecord(action.leaseScope)?.windowId)
+    ));
+    if (mutatingWindowBound && !stringValue(observation.windowId) && !stringValue(asRecord(observation.scope)?.windowId)) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.windowId`,
+        reason: 'BrowserRuntime DOM/AX observation hints must bind windowId when grounding window-scoped actions.',
+      });
+    }
+    const refs = refsFromKeys(observation, [
+      'ref',
+      'observationRef',
+      'visibleDomRef',
+      'accessibilitySnapshotRef',
+      'playwrightEvaluateRef',
+      'pageQueryRef',
+      'stableRef',
+      'stableRefs',
+      'stableElementRefs',
+      'groundingHintRef',
+      'groundingHintRefs',
+    ]);
+    if (refs.length === 0 || refs.some((item) => !isEvidenceBundleLocalFileRef(item))) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path,
+        reason: 'BrowserRuntime DOM/AX observation hints must use bundle-local file refs and avoid inline page state as evidence.',
+      });
+    }
+    const use = normalizeToken(
+      stringValue(observation.observationUse)
+        ?? stringValue(observation.use)
+        ?? stringValue(observation.evidenceUse)
+        ?? '',
+    );
+    if (use !== 'observe-before-mutate-hint' && use !== 'grounding-hint') {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.observationUse`,
+        reason: 'BrowserRuntime DOM/AX observations may only be observe-before-mutate-hint or grounding-hint evidence.',
+      });
+    }
+    if (hasDomAxSubstituteFlag(observation)) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path,
+        reason: 'BrowserRuntime DOM/AX observations must explicitly avoid executor-lease, GUI-action, artifact-validation, and completion-evidence substitution.',
+      });
+    }
+    const pageQuery = asRecord(observation.pageQuery) ?? asRecord(observation.browserRuntimePageQuery);
+    if (!pageQuery && !stringValue(observation.pageQueryRef)) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.pageQuery`,
+        reason: 'BrowserRuntime DOM/AX observation hints must bind a BrowserRuntimePageQuery ref or structured query.',
+      });
+    }
+    const stableRefs = stringArray(observation.stableRefs)
+      .concat(stringArray(observation.stableElementRefs));
+    if (
+      stableRefs.length === 0
+      && records(observation.stableElementRefs).length === 0
+      && records(observation.stableRefs).length === 0
+      && !stringValue(observation.stableRef)
+    ) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path: `${path}.stableRefs`,
+        reason: 'BrowserRuntime DOM/AX observation hints must include stable refs for refs-first grounding.',
+      });
+    }
+    const observationRefs = browserRuntimeObservationRefs(observation);
+    if (observationRefs.length > 0 && !observationRefs.some((ref) => boundObservationRefs.has(ref))) {
+      issues.push({
+        id: 'invalid-browser-runtime-observation-hint',
+        path,
+        reason: 'BrowserRuntime DOM/AX observation refs must be bound to observe-before-mutate or a mutating action beforeEvidenceRefs/groundingRefs.',
+      });
+    }
+  }
+
+  return issues;
+}
+
+function validatePlatformSidecarIsolationReport(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const report = asRecord(evidence.platformSidecarIsolationReport)
+    ?? asRecord(evidence.platformSidecarIsolation)
+    ?? asRecord(evidence.platformSidecar);
+  if (!report) {
+    return [{
+      id: 'missing-platform-sidecar-isolation',
+      path: 'platformSidecarIsolationReport',
+      reason: 'Product-level Computer Use evidence must include native platform sidecar isolation report refs.',
+    }];
+  }
+
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const status = stringValue(report.status);
+  if (status !== 'present' && status !== 'passed') {
+    issues.push({
+      id: 'invalid-platform-sidecar-isolation',
+      path: 'platformSidecarIsolationReport.status',
+      reason: 'platform sidecar isolation report status must be present or passed.',
+    });
+  }
+  const backendKind = normalizeToken(
+    stringValue(report.backendKind)
+      ?? stringValue(report.sidecarKind)
+      ?? stringValue(report.kind)
+      ?? '',
+  );
+  if (!['platform-sidecar', 'native-platform-sidecar', 'native-multi-screen-sidecar'].includes(backendKind)) {
+    issues.push({
+      id: 'invalid-platform-sidecar-isolation',
+      path: 'platformSidecarIsolationReport.backendKind',
+      reason: 'platform sidecar isolation report must identify a native platform sidecar backend.',
+    });
+  }
+  requireCustomRef(issues, 'missing-platform-sidecar-isolation', 'platformSidecarIsolationReport.reportRef', stringValue(report.reportRef));
+  requireCustomRef(issues, 'missing-platform-sidecar-isolation', 'platformSidecarIsolationReport.captureRef', stringValue(report.captureRef));
+  requireCustomRef(issues, 'missing-platform-sidecar-isolation', 'platformSidecarIsolationReport.stateRef', stringValue(report.stateRef));
+  requireCustomRef(issues, 'missing-platform-sidecar-isolation', 'platformSidecarIsolationReport.preflightRef', stringValue(report.preflightRef));
+  requireCustomRef(issues, 'missing-platform-sidecar-isolation', 'platformSidecarIsolationReport.executorAdapterRef', stringValue(report.executorAdapterRef));
+
+  const isolationFlags = asRecord(report.isolationFlags) ?? report;
+  if (
+    isolationFlags.sharedSystemInputUsed === true
+    || isolationFlags.systemPointerMoved === true
+    || isolationFlags.systemKeyboardEventsSent === true
+  ) {
+    issues.push({
+      id: 'invalid-platform-sidecar-isolation',
+      path: 'platformSidecarIsolationReport.isolationFlags',
+      reason: 'platform sidecar isolation must prove shared system input, system pointer movement, and system keyboard events were not used.',
+    });
+  }
+  if (isolationFlags.sidecarDoesPlanning !== false || isolationFlags.sidecarDoesCompletion !== false) {
+    issues.push({
+      id: 'invalid-platform-sidecar-isolation',
+      path: 'platformSidecarIsolationReport.isolationFlags',
+      reason: 'platform sidecar must be isolated to capture/state/input/preflight; planning and completion must remain outside the sidecar.',
+    });
+  }
+  return issues;
+}
+
+function validateProductPathClassification(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+  const classification = asRecord(evidence.productPathClassification)
+    ?? asRecord(evidence.productPath)
+    ?? asRecord(evidence.acceptancePathClassification);
+  if (!classification) {
+    return [{
+      id: 'invalid-product-path-classification',
+      path: 'productPathClassification',
+      reason: 'Live acceptance must classify the path as product-smoke, platform-smoke, or package-diagnostic; missing classification fails closed.',
+    }];
+  }
+
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const tier = normalizeToken(
+    stringValue(classification.tier)
+      ?? stringValue(classification.kind)
+      ?? stringValue(classification.evidenceTier)
+      ?? '',
+  );
+  if (tier !== 'product-smoke') {
+    issues.push({
+      id: 'invalid-product-path-classification',
+      path: 'productPathClassification.tier',
+      reason: `${tier || '(missing)'} evidence cannot satisfy product-level live acceptance; package diagnostic and platform smoke are not product smoke.`,
+    });
+  }
+  const hops = stringArray(classification.hops).map(normalizeToken);
+  if (containsForbiddenLegacyBackendMarker([
+    stringValue(classification.entrypoint),
+    stringValue(classification.backendKind),
+    stringValue(classification.sidecarKind),
+    ...stringArray(classification.hops),
+  ])) {
+    issues.push({
+      id: 'forbidden-legacy-backend-gate',
+      path: 'productPathClassification.hops',
+      reason: 'Docker/noVNC/RDP/container hops cannot participate in native Computer Use product acceptance.',
+    });
+  }
+  for (const requiredHop of ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use']) {
+    if (!hops.includes(requiredHop)) {
+      issues.push({
+        id: 'invalid-product-path-classification',
+        path: 'productPathClassification.hops',
+        reason: `product path must include ${requiredHop}.`,
+      });
+    }
+  }
+  if (!hops.some((hop) => hop === 'platform-sidecar' || hop === 'native-platform-sidecar' || hop === 'native-multi-screen-sidecar')) {
+    issues.push({
+      id: 'invalid-product-path-classification',
+      path: 'productPathClassification.hops',
+      reason: 'product path must include a native platform sidecar backend hop.',
+    });
+  }
+  if (classification.diagnosticOnly === true || classification.packageDiagnosticOnly === true) {
+    issues.push({
+      id: 'invalid-product-path-classification',
+      path: 'productPathClassification.diagnosticOnly',
+      reason: 'package diagnostic evidence must not be accepted as product smoke.',
+    });
+  }
+  if (classification.currentBundleOnly !== true) {
+    issues.push({
+      id: 'invalid-product-path-classification',
+      path: 'productPathClassification.currentBundleOnly',
+      reason: 'product path classification must assert currentBundleOnly=true.',
+    });
+  }
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.appServerRunRef', stringValue(classification.appServerRunRef));
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.nativePluginInvocationRef', stringValue(classification.nativePluginInvocationRef));
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.sciforgeComputerUseRunTaskRef', stringValue(classification.sciforgeComputerUseRunTaskRef));
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.platformSidecarIsolationReportRef', stringValue(classification.platformSidecarIsolationReportRef));
+  requireCustomRef(issues, 'invalid-product-path-classification', 'productPathClassification.currentBundleRef', stringValue(classification.currentBundleRef));
+  return issues;
+}
+
+function validateReplayEvidence(
+  evidence: Record<string, unknown>,
+  screenIds: readonly string[],
+): CuNextLiveAcceptanceIssue[] {
+  const replay = asRecord(evidence.replayBundle)
+    ?? asRecord(evidence.replayManifest)
+    ?? asRecord(evidence.visibleReplay);
+  if (!replay) {
+    return [{
+      id: 'missing-action-causality',
+      path: 'replayBundle',
+      reason: 'Computer Use acceptance evidence must include a replay bundle/manifest with screen frames and cursor overlays.',
+    }];
+  }
+  const frames = records(replay.frames);
+  if (frames.length === 0) {
+    return [{
+      id: 'forbidden-placeholder-viewer',
+      path: 'replayBundle.frames',
+      reason: 'Replay bundle must include real screen frames; placeholder-only viewers cannot be completion evidence.',
+    }];
+  }
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const realFrameCount = frames.filter((frame) => frame.placeholder !== true && stringValue(frame.screenshotRef)).length;
+  if (realFrameCount === 0) {
+    issues.push({
+      id: 'forbidden-placeholder-viewer',
+      path: 'replayBundle.frames',
+      reason: 'Replay bundle must include at least one non-placeholder screenshot frame.',
+    });
+  }
+  for (const [index, frame] of frames.entries()) {
+    const screenId = stringValue(frame.screenId);
+    if (!screenId) {
+      issues.push({
+        id: 'missing-screen-identity',
+        path: `replayBundle.frames[${index}].screenId`,
+        reason: 'Every replay frame must carry screenId.',
+      });
+    } else if (screenIds.length > 0 && !screenIds.includes(screenId)) {
+      issues.push({
+        id: 'missing-screen-identity',
+        path: `replayBundle.frames[${index}].screenId`,
+        reason: `Replay frame screenId ${screenId} must match a declared screen.`,
+      });
+    }
+    if (frame.placeholder === true && !stringValue(frame.screenshotRef)) {
+      issues.push({
+        id: 'forbidden-placeholder-viewer',
+        path: `replayBundle.frames[${index}]`,
+        reason: 'Placeholder replay frames without screenshotRef cannot be completion evidence.',
+      });
+    }
+    requireCustomRefs(
+      issues,
+      'missing-action-causality',
+      `replayBundle.frames[${index}].cursorOverlayRefs`,
+      stringArray(frame.cursorOverlayRefs),
+    );
+  }
+  const frameScreenIds = uniqueStrings(frames
+    .filter((frame) => frame.placeholder !== true && stringValue(frame.screenshotRef))
+    .map((frame) => stringValue(frame.screenId))
+    .filter(isNonEmptyString));
+  for (const screenId of screenIds) {
+    if (!frameScreenIds.includes(screenId)) {
+      issues.push({
+        id: 'missing-action-causality',
+        path: 'replayBundle.frames',
+        reason: `Replay bundle must include a non-placeholder frame for declared screen ${screenId}.`,
+      });
+    }
+  }
+  requireRefs(issues, 'replayBundle.cursorOverlayRefs', stringArray(replay.cursorOverlayRefs));
+  requireRefs(issues, 'replayBundle.leaseOwnerRefs', stringArray(replay.leaseOwnerRefs));
+  requireRefs(issues, 'replayBundle.beforeEvidenceRefs', stringArray(replay.beforeEvidenceRefs));
+  requireRefs(issues, 'replayBundle.afterEvidenceRefs', stringArray(replay.afterEvidenceRefs));
   return issues;
 }
 
@@ -1043,6 +1741,34 @@ function requireRefs(
   });
 }
 
+function requireCustomRef(
+  issues: CuNextLiveAcceptanceIssue[],
+  id: string,
+  path: string,
+  ref: string | undefined,
+): void {
+  if (ref) return;
+  issues.push({
+    id,
+    path,
+    reason: `${path} is required.`,
+  });
+}
+
+function requireCustomRefs(
+  issues: CuNextLiveAcceptanceIssue[],
+  id: string,
+  path: string,
+  refs: string[],
+): void {
+  if (refs.length > 0) return;
+  issues.push({
+    id,
+    path,
+    reason: `${path} must include at least one ref.`,
+  });
+}
+
 function hasClaimWithRefs(
   claims: Array<Record<string, unknown>>,
   kind: string,
@@ -1099,6 +1825,41 @@ function isSciForgeChatOrigin(value: unknown): boolean {
 
 function refsFromClaim(claim: Record<string, unknown>): string[] {
   return refsFromKeys(claim, ['ref', 'refs', 'recordRefs', 'evidenceRefs', 'artifactRefs']);
+}
+
+function isAllowedDomAxObservationHintClaim(claim: Record<string, unknown>): boolean {
+  const kind = String(claim.kind ?? '').toLowerCase();
+  if (!domAxHintClaimKinds.has(kind)) return false;
+  const use = normalizeToken(
+    stringValue(claim.observationUse)
+      ?? stringValue(claim.evidenceUse)
+      ?? stringValue(claim.use)
+      ?? '',
+  );
+  const refs = refsFromClaim(claim);
+  return (use === 'observe-before-mutate-hint' || use === 'grounding-hint')
+    && refs.length > 0
+    && refs.every(isEvidenceBundleLocalFileRef)
+    && !hasDomAxSubstituteFlag(claim);
+}
+
+function hasDomAxSubstituteFlag(value: Record<string, unknown>): boolean {
+  const substituteFlagKeys = new Set([
+    'executorLeaseSubstitute',
+    'guiActionSubstitute',
+    'artifactValidationSubstitute',
+    'artifactCausalitySubstitute',
+    'completionEvidence',
+    'completionEvidenceEligible',
+    'completionEvidenceSubstitute',
+    'completionSubstitute',
+    'finalArtifactSubstitute',
+    'userLevelCompletionSubstitute',
+  ]);
+  return findRecordValue(value, (key, child) => (
+    substituteFlagKeys.has(key)
+    && child === true
+  ));
 }
 
 function refsFromKeys(record: Record<string, unknown>, keys: readonly string[]): string[] {
@@ -1185,6 +1946,10 @@ function normalizeToken(value: string): string {
     .toLowerCase();
 }
 
+function containsForbiddenLegacyBackendMarker(values: Array<string | undefined>): boolean {
+  return values.some((value) => value !== undefined && forbiddenLegacyBackendPattern.test(value));
+}
+
 function highRiskActionMatches(markerAction: string, sidecarAction: unknown): boolean {
   const marker = normalizeToken(markerAction);
   if (!marker) return false;
@@ -1202,6 +1967,300 @@ function highRiskActionMatches(markerAction: string, sidecarAction: unknown): bo
     stringValue(record.target),
   ].filter(isNonEmptyString).map(normalizeToken);
   return candidates.some((candidate) => candidate === marker || marker.includes(candidate) || candidate.includes(marker));
+}
+
+function validateActorCursorEvents(
+  evidence: Record<string, unknown>,
+  cursorRecords: readonly Record<string, unknown>[],
+  screenIds: readonly string[],
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const events = [
+    ...records(evidence.cursorEvents),
+    ...records(evidence.actorCursorEvents),
+    ...records(asRecord(evidence.virtualDesktopSession)?.cursorEvents),
+  ];
+  const eventTypes = new Set(events.map((event) => normalizeToken(
+    stringValue(event.eventType) ?? stringValue(event.kind) ?? stringValue(event.type) ?? '',
+  )));
+  for (const required of ['move', 'point', 'annotate']) {
+    if (!eventTypes.has(required)) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: 'cursorEvents',
+        reason: `Actor cursor event log must include read-only ${required} events.`,
+      });
+    }
+  }
+  const knownPairs = new Set(cursorRecords.flatMap((cursor) => {
+    const actorId = stringValue(cursor.actorId);
+    const cursorId = stringValue(cursor.cursorId);
+    return actorId && cursorId ? [`${actorId}::${cursorId}`] : [];
+  }));
+  for (const [index, event] of events.entries()) {
+    const eventType = normalizeToken(stringValue(event.eventType) ?? stringValue(event.kind) ?? stringValue(event.type) ?? '');
+    if (!['move', 'point', 'annotate'].includes(eventType)) continue;
+    const actorId = stringValue(event.actorId);
+    const cursorId = stringValue(event.cursorId);
+    const screenId = stringValue(event.screenId);
+    if (!actorId || !cursorId || !screenId) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `cursorEvents[${index}]`,
+        reason: 'Read-only actor cursor events must include actorId, cursorId, and screenId.',
+      });
+    }
+    if (actorId && cursorId && knownPairs.size > 0 && !knownPairs.has(`${actorId}::${cursorId}`)) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `cursorEvents[${index}]`,
+        reason: 'Read-only actor cursor events must match declared actor/cursor provenance.',
+      });
+    }
+    if (screenId && screenIds.length > 0 && !screenIds.includes(screenId)) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `cursorEvents[${index}].screenId`,
+        reason: `Read-only actor cursor event screenId ${screenId} must match a declared screen.`,
+      });
+    }
+    if (!firstString(event, ['cursorEventLogRef', 'actorCursorLogRef', 'ref', 'eventRef'])) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `cursorEvents[${index}].cursorEventLogRef`,
+        reason: 'Read-only actor cursor events must bind a cursor event log ref.',
+      });
+    }
+    if (event.readOnlyCursorEvent !== true || event.mutatingGuiAction === true || stringValue(event.executorEventRef)) {
+      issues.push({
+        id: 'missing-actor-cursor-provenance',
+        path: `cursorEvents[${index}]`,
+        reason: 'move/point/annotate actor cursor events must be read-only and must not project into executor events.',
+      });
+    }
+  }
+  return issues;
+}
+
+function validateNativeQueueBindings(
+  queueRecords: readonly Record<string, unknown>[],
+  screenIds: readonly string[],
+  actorCursorPairs: readonly string[],
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const pairSet = new Set(actorCursorPairs);
+  for (const [index, record] of queueRecords.entries()) {
+    const kind = leaseKindFromRecord(record);
+    if (!kind) continue;
+    const scope = asRecord(record.leaseScope)
+      ?? asRecord(record.scope)
+      ?? asRecord(record.proposalScope)
+      ?? asRecord(record.queueScope)
+      ?? {};
+    const screenId = stringValue(record.screenId) ?? stringValue(scope.screenId);
+    if (!screenId || (screenIds.length > 0 && !screenIds.includes(screenId))) {
+      issues.push({
+        id: 'missing-native-queue-semantics',
+        path: `queueRecords[${index}].screenId`,
+        reason: 'Native queue/proposal records must bind a declared screenId.',
+      });
+    }
+    if (kind === 'window-local' && stringValue(record.proposalId) && !(stringValue(record.windowId) ?? stringValue(scope.windowId))) {
+      issues.push({
+        id: 'missing-native-queue-semantics',
+        path: `queueRecords[${index}].windowId`,
+        reason: 'window-local queue/proposal records must bind windowId.',
+      });
+    }
+    if (stringValue(record.proposalId)) {
+      const actorId = stringValue(record.actorId);
+      const cursorId = stringValue(record.cursorId);
+      if (!actorId || !cursorId || (pairSet.size > 0 && !pairSet.has(`${actorId}::${cursorId}`))) {
+        issues.push({
+          id: 'missing-native-queue-semantics',
+          path: `queueRecords[${index}]`,
+          reason: 'Action proposals must bind declared actorId/cursorId provenance.',
+        });
+      }
+      if (!firstString(record, ['proposalRef', 'evidenceRef', 'recordRef'])) {
+        issues.push({
+          id: 'missing-native-queue-semantics',
+          path: `queueRecords[${index}].proposalRef`,
+          reason: 'Action proposals must include a proposal/evidence ref.',
+        });
+      }
+    }
+    if (stringValue(record.queueId) && stringArray(record.leaseOwnerRefs).length === 0) {
+      issues.push({
+        id: 'missing-native-queue-semantics',
+        path: `queueRecords[${index}].leaseOwnerRefs`,
+        reason: 'Executor queue records must include leaseOwnerRefs.',
+      });
+    }
+  }
+  return issues;
+}
+
+function computerUseScreenRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  const screens = [
+    ...records(evidence.screens),
+    ...records(evidence.virtualScreens),
+    ...records(asRecord(evidence.virtualDisplayGroup)?.screens),
+    ...records(asRecord(evidence.virtualDesktopSession)?.screens),
+  ];
+  const visibleScreenRefs = stringArray(evidence.visibleScreenRefs);
+  if (visibleScreenRefs.length > 0) {
+    screens.push(...visibleScreenRefs.map((ref, index) => ({
+      screenId: stringArray(evidence.screenIds)[index] ?? stringValue(evidence.screenId),
+      ref,
+    })));
+  }
+  return screens;
+}
+
+function computerUseCursorRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    ...records(evidence.actorCursorProvenance),
+    ...records(evidence.actorCursors),
+    ...records(evidence.visibleCursorRefs).map((cursorRef, index) => ({
+      actorId: stringArray(evidence.actorIds)[index] ?? stringValue(evidence.actorId),
+      cursorId: stringArray(evidence.cursorIds)[index] ?? stringValue(evidence.cursorId),
+      screenId: stringArray(evidence.screenIds)[index] ?? stringValue(evidence.screenId),
+      ref: stringValue(cursorRef.ref) ?? String(cursorRef),
+    })),
+    ...records(asRecord(evidence.virtualDesktopSession)?.actorCursors),
+  ];
+}
+
+function computerUseMutatingActionRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    ...records(evidence.mutatingActions),
+    ...records(evidence.actionCausality),
+    ...records(evidence.executorEvents),
+    ...records(evidence.inputEvents).filter((event) => isMutatingActionKind(stringValue(event.kind) ?? stringValue(event.actionKind))),
+  ].filter((action) => {
+    const kind = stringValue(action.kind) ?? stringValue(action.actionKind) ?? stringValue(asRecord(action.action)?.kind);
+    return !kind || isMutatingActionKind(kind);
+  });
+}
+
+function computerUseQueueRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  const recordsFromTopLevel = [
+    ...records(evidence.actionProposals),
+    ...records(evidence.proposals),
+    ...records(evidence.executorQueue),
+    ...records(evidence.leaseQueue),
+    ...records(evidence.schedulerQueue),
+    ...records(evidence.executorLeases),
+    ...records(evidence.leases),
+    ...computerUseMutatingActionRecords(evidence),
+  ];
+  const executorLease = asRecord(evidence.executorLease);
+  return executorLease ? [executorLease, ...recordsFromTopLevel] : recordsFromTopLevel;
+}
+
+function leaseKindFromRecord(record: Record<string, unknown>): 'window-local' | 'screen-global' | undefined {
+  const scope = asRecord(record.leaseScope)
+    ?? asRecord(record.scope)
+    ?? asRecord(record.proposalScope)
+    ?? asRecord(record.queueScope);
+  const candidates = [
+    stringValue(record.leaseKind),
+    stringValue(record.queueKind),
+    stringValue(record.kind),
+    stringValue(record.scope),
+    stringValue(scope?.kind),
+    stringValue(scope?.scope),
+  ].filter(isNonEmptyString).map(normalizeToken);
+  if (candidates.some((candidate) => candidate === 'window-local' || candidate === 'window')) return 'window-local';
+  if (candidates.some((candidate) => candidate === 'screen-global' || candidate === 'screen')) return 'screen-global';
+  return undefined;
+}
+
+function browserRuntimeObservationRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  const recordsFromArrays = [
+    ...records(evidence.browserRuntimeDomAxObservations),
+    ...records(evidence.browserRuntimeObservationHints),
+    ...records(evidence.domAxObservationHints),
+  ];
+  return [
+    asRecord(evidence.browserRuntimeDomAxObservation),
+    asRecord(evidence.browserRuntimeObservation),
+    asRecord(evidence.browserRuntimeObservationHint),
+    asRecord(evidence.domAxObservation),
+    ...recordsFromArrays,
+  ].filter((item): item is Record<string, unknown> => Boolean(item));
+}
+
+function browserRuntimeObservationRefs(observation: Record<string, unknown>): string[] {
+  return refsFromKeys(observation, [
+    'ref',
+    'observationRef',
+    'visibleDomRef',
+    'accessibilitySnapshotRef',
+    'playwrightEvaluateRef',
+    'pageQueryRef',
+    'stableRef',
+    'stableRefs',
+    'stableElementRefs',
+    'groundingHintRef',
+    'groundingHintRefs',
+  ]);
+}
+
+function browserRuntimeRefsBoundToActions(evidence: Record<string, unknown>): string[] {
+  const observeBeforeMutate = asRecord(evidence.observeBeforeMutate);
+  return [
+    ...refsFromKeys(observeBeforeMutate ?? {}, [
+      'browserRuntimeObservationRef',
+      'browserRuntimeVisibleDomRef',
+      'browserRuntimeAccessibilitySnapshotRef',
+      'browserRuntimePlaywrightEvaluateRef',
+      'browserRuntimePageQueryRef',
+      'browserRuntimeStableRef',
+      'browserRuntimeStableRefs',
+      'browserRuntimeGroundingHintRef',
+      'browserRuntimeGroundingHintRefs',
+      'beforeEvidenceRefs',
+      'groundingRefs',
+    ]),
+    ...computerUseMutatingActionRecords(evidence).flatMap((action) => refsFromKeys(action, [
+      'beforeEvidenceRefs',
+      'groundingRefs',
+      'browserRuntimeObservationRef',
+      'browserRuntimeGroundingHintRef',
+      'browserRuntimeGroundingHintRefs',
+    ])),
+  ];
+}
+
+function isMutatingActionKind(kind: string | undefined): boolean {
+  if (!kind) return true;
+  return !new Set(['observe', 'capture', 'crop', 'ocr', 'vlm_describe', 'cursor_move', 'move_cursor', 'point', 'annotate', 'proposal']).has(normalizeToken(kind));
+}
+
+function isBareGlobalCoordinateAction(action: Record<string, unknown>): boolean {
+  const target = asRecord(action.target) ?? action;
+  const coordinateSpace = stringValue(target.coordinateSpace) ?? stringValue(target.coordinate_space);
+  const hasGlobalCoordinateSpace = coordinateSpace ? /^(global|system|desktop)$/i.test(coordinateSpace) : false;
+  const hasXy = typeof target.x === 'number' && typeof target.y === 'number';
+  const hasScopedBinding = Boolean(
+    target.screenId
+    || target.windowId
+    || target.elementRef
+    || target.regionRef
+    || target.bounds
+    || target.targetRef
+  );
+  return hasGlobalCoordinateSpace || (hasXy && !hasScopedBinding);
+}
+
+function isForbiddenCrossBundleEvidenceRef(value: string): boolean {
+  const trimmed = value.trim();
+  if (!/\.(json|png|jpe?g|webp|txt|md|pptx|docx|csv|html)$/i.test(trimmed)) return false;
+  if (trimmed.startsWith('../') || trimmed.includes('/../')) return true;
+  if (trimmed.startsWith('/') || trimmed.startsWith('~')) return true;
+  return /^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.startsWith('approval:');
 }
 
 function sameStringSet(left: readonly string[], right: readonly string[]): boolean {

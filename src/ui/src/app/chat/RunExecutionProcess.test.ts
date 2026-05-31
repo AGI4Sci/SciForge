@@ -226,6 +226,53 @@ test('execution process derives trusted preview refs from structured read paths'
   assert.doesNotMatch(html, /\/Applications\/workspace|\/tmp\/secret|trace:read/i);
 });
 
+test('execution process presents Cursor-style read ranges and command intent titles', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Read file', {
+      rawType: 'tool_completed',
+      toolName: 'read_file',
+      status: 'completed',
+      filePath: 'src/ui/src/app/chat/cursorAgentProcess.ts',
+      startLine: 1,
+      endLine: 120,
+      text: 'loaded',
+    }),
+    nativeEvent('tool-result', 'Git diff stat for chat presentation files', {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'completed',
+      command: "git diff --stat -- src/ui/src/app/chat/cursorAgentProcess.ts | tail",
+      detail: 'Git diff stat for chat presentation files',
+      outputSummary: '4 files changed',
+    }),
+  ]);
+
+  assert.match(html, /Read src\/ui\/src\/app\/chat\/cursorAgentProcess\.ts L1-120/);
+  assert.match(html, /Ran Git diff stat for chat presentation files/);
+  assert.doesNotMatch(html, /Diff src\/ui\/src\/app\/chat\/cursorAgentProcess\.ts|git diff --stat/);
+});
+
+test('recorded execution process does not show stale per-action running status', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-call', 'Tool call', { rawType: 'tool_started', toolName: 'read_file', status: 'running', filePath: 'PROJECT.md' }),
+  ]);
+
+  assert.match(html, /Read PROJECT\.md/);
+  assert.doesNotMatch(html, />running<\/span>|>running<\/time>/);
+  assert.doesNotMatch(html, /Read PROJECT\.md running|status-running/);
+  assert.doesNotMatch(html, / active"/);
+});
+
+test('explored execution process group avoids duplicate usage text', () => {
+  const html = renderNativeStream([
+    nativeEventAt('2026-05-25T00:00:01.000Z', 'tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'loaded' }),
+    nativeEventAt('2026-05-25T00:00:03.000Z', 'tool-result', 'Search', { rawType: 'tool_completed', toolName: 'search', status: 'completed', text: 'capability discovery' }),
+  ]);
+
+  assert.match(html, /Explored 1 file, 1 search/);
+  assert.doesNotMatch(html, /Explored 1 file, 1 search<\/span><span class="native-event-usage">1 file, 1 search/);
+});
+
 test('execution process derives missing read previews from safe runtime command text', () => {
   const html = renderNativeStream([
     nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', itemId: 'read-project', status: 'completed', text: 'file loaded' }),
@@ -276,6 +323,59 @@ test('execution process folds generic runtime lifecycle rows out of Cursor-style
   assert.match(html, /Read PROJECT\.md/);
   assert.doesNotMatch(html, /Runtime Codex started with configured runtime|Runtime Codex completed successfully/);
   assert.doesNotMatch(html, /status-running/);
+});
+
+test('execution process folds runtime progress lifecycle rows even when they carry status text', () => {
+  const html = renderNativeStream([
+    nativeEvent('workspace-runtime-event', 'Runtime event', {
+      rawType: 'run_started',
+      status: 'running',
+      message: 'Runtime Codex started with configured runtime',
+      progress: {
+        title: 'Runtime Codex started with configured runtime',
+        detail: 'running',
+      },
+    }),
+    nativeEvent('workspace-runtime-event', 'Runtime event', {
+      rawType: 'output',
+      status: 'running',
+      message: 'Runtime event recorded; structured details are available in the run audit.',
+    }),
+    nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'PROJECT.md loaded' }),
+  ]);
+
+  assert.match(html, /Read PROJECT\.md/);
+  assert.doesNotMatch(html, /Runtime Codex started|Runtime event recorded|structured details|run audit/);
+});
+
+test('execution process folds user prompt commandText carriers out of Cursor actions', () => {
+  const html = renderNativeStream([
+    nativeEvent('workspace-runtime-event', 'Runtime prompt', {
+      rawType: 'audit',
+      commandText: '请只观察当前工作区，不要修改文件。用两句中文说明 SciForge 聊天回复怎样更像 Cursor Agent。',
+    }),
+    nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'PROJECT.md loaded' }),
+  ], 'zh-CN');
+
+  assert.match(html, /读取 PROJECT\.md/);
+  assert.doesNotMatch(html, /Wrote|写入|请只观察|Cursor Agent/);
+});
+
+test('execution process folds internal metadata searches and targetless running reads', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-call', 'Tool call', { rawType: 'tool_started', toolName: 'read_file', status: 'running' }),
+    nativeEvent('tool-result', 'Search', {
+      rawType: 'tool_completed',
+      toolName: 'search',
+      status: 'completed',
+      command: 'find .sciforge -name "*.json" -o -name "*.yaml"',
+      text: '.sciforge runtime metadata',
+    }),
+    nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'PROJECT.md loaded' }),
+  ]);
+
+  assert.match(html, /Read PROJECT\.md/);
+  assert.doesNotMatch(html, /Read file|Searched \.sciforge|runtime metadata/);
 });
 
 test('execution process folds app-server transport statuses and keeps long research anchors', () => {
@@ -329,7 +429,7 @@ test('execution process folds app-server transport statuses and keeps long resea
   assert.match(html, /Searched arxiv agentic RL 2026-05-30/);
   assert.match(html, /Read reports\/arxiv-agentic-rl\/paper\.pdf/);
   assert.match(html, /paper\.pdf/);
-  assert.match(html, /Ran \/bin\/zsh -lc &#x27;echo command-23&#x27; · exit 0/);
+  assert.match(html, /Ran command-23 · exit 0/);
   assert.match(html, /24 commands run/);
   assert.match(html, /earlier actions hidden/);
   assert.match(html, /summary-report\.md/);
@@ -714,7 +814,8 @@ test('execution process renders structured diff text from completed command even
 
   assert.equal((html.match(/cursor-agent-action-diff/g) ?? []).length, 1);
   assert.match(html, /Diff new\.ts/);
-  assert.match(html, /done/);
+  assert.match(html, /status-completed/);
+  assert.doesNotMatch(html, />done<\/span>/);
   assert.doesNotMatch(html, /Diff new\.ts running|Diff new\.ts failed/);
   assert.match(html, /cursor-agent-diff/);
   assert.match(html, /@@ -1 \+1 @@/);
@@ -746,7 +847,8 @@ test('execution process merges completed diff events that only carry lifecycle i
 
   assert.equal((html.match(/cursor-agent-action-diff/g) ?? []).length, 1);
   assert.match(html, /Diff new\.ts/);
-  assert.match(html, /done/);
+  assert.match(html, /status-completed/);
+  assert.doesNotMatch(html, />done<\/span>/);
   assert.doesNotMatch(html, /Diff new\.ts running|Tool result|failed/);
   assert.match(html, /cursor-agent-diff/);
   assert.match(html, /@@ -1 \+1 @@/);
@@ -764,7 +866,8 @@ test('execution process treats no-output diff exit one as differences for quiet 
   ]);
 
   assert.match(html, /Diff src\/ui\/src\/app\.ts/);
-  assert.match(html, /done/);
+  assert.match(html, /status-completed/);
+  assert.doesNotMatch(html, />done<\/span>/);
   assert.doesNotMatch(html, /failed/);
 });
 
@@ -817,7 +920,8 @@ test('execution process merges sub-agent lifecycle and shows transcript affordan
   assert.equal((html.match(/cursor-agent-action-subagent/g) ?? []).length, 1);
   assert.match(html, /1 sub agent/);
   assert.match(html, /Sub agent/);
-  assert.match(html, /done/);
+  assert.match(html, /status-completed/);
+  assert.doesNotMatch(html, />done<\/span>/);
   assert.match(html, /Transcript/);
   assert.match(html, /subagent-transcript-1/);
   assert.doesNotMatch(html, /artifact:subagent-transcript-1/);

@@ -1,0 +1,40 @@
+{
+  "round": 18,
+  "capturedAt": "2026-05-31",
+  "scope": "Cursor Agent-like sidebar action behavior",
+  "userFinding": "Sidebar buttons looked present, but chat archive/delete did not visibly take effect.",
+  "changes": [
+    "Active repository lists now render only draft and active threads; archived and discarded threads remain searchable and manageable through history surfaces.",
+    "Archive, discard, restore, archive-project, and archive-all callbacks return no-op signals instead of always showing success notices.",
+    "Deleting an active chat removes it from the active session map; empty drafts are removed without creating discarded archive rows.",
+    "User-facing destructive chat copy now says Delete/Deleted while preserving the internal discarded archive state.",
+    "Workspace updates no longer bump updatedAt for no-op mutators."
+  ],
+  "browserVerification": {
+    "url": "http://localhost:5173/",
+    "observed": [
+      "Top sidebar commands are visible: New Agent, Automations, Customize.",
+      "Repositories region exposes active-row Archive chat and Delete chat controls.",
+      "No Restore chat controls are rendered in the main repositories list after archived/discarded rows were removed from the active list."
+    ],
+    "destructiveActions": "Skipped in browser to avoid mutating the user's live chats; covered by focused state and DOM tests."
+  },
+  "tests": [
+    {
+      "command": "node --import tsx --test src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts",
+      "result": "passed, 33 tests"
+    },
+    {
+      "command": "npm run typecheck --silent",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "remainingRisk": [
+    "Live destructive archive/delete/restore clicks were not run against the user's current browser state to avoid data loss.",
+    "Future parity pass should verify these actions in an isolated seeded workspace."
+  ]
+}

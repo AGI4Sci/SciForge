@@ -599,8 +599,9 @@ test('native stream promotes shell read lifecycle over backend wait placeholders
     guidanceCount: 0,
   }));
 
-  assert.match(markup, /Explored 1 file/);
-  assert.match(markup, /Read PROJECT\.md running/);
+  assert.match(markup, /Exploring/);
+  assert.match(markup, /Reading PROJECT\.md/);
+  assert.doesNotMatch(markup, /native-event-usage">running/);
   assert.doesNotMatch(markup, /cat PROJECT\.md/);
   assert.doesNotMatch(markup, /Shell command started|下一条 Codex CLI JSONL|后端 25s 没有输出新事件|Backend progress/);
 });
@@ -654,7 +655,8 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     guidanceCount: 0,
   }));
   assert.match(runningCommandMarkup, /Worked for/);
-  assert.match(runningCommandMarkup, /Ran \/bin\/zsh -lc/);
+  assert.match(runningCommandMarkup, /Running npm run typecheck --silent/);
+  assert.doesNotMatch(runningCommandMarkup, /Ran \/bin\/zsh -lc|native-event-usage">running/);
   assert.match(runningCommandMarkup, /<details[^>]*open=""/);
 
   const completedCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
@@ -671,7 +673,7 @@ test('native stream mirrors Codex lifecycle affordances for command, file edit, 
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(completedCommandMarkup, /Ran \/bin\/zsh -lc/);
+  assert.match(completedCommandMarkup, /Ran npm run typecheck --silent/);
   assert.match(completedCommandMarkup, /typecheck clean/);
   assert.doesNotMatch(completedCommandMarkup, /<details[^>]*open=""/);
 
@@ -895,7 +897,7 @@ test('cursor action details are redacted and file previews require trusted refs'
     backend: 'codex',
     guidanceCount: 0,
   }));
-  assert.match(runtimePhraseMarkup, /configured runtime/);
+  assert.equal(runtimePhraseMarkup, '');
   assert.doesNotMatch(runtimePhraseMarkup, /sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek/);
 
   const redactedCommandMarkup = renderToStaticMarkup(React.createElement(RunningWorkProcess, {
@@ -1068,7 +1070,7 @@ test('live chat worklog filters internal runtime events but keeps meaningful wor
 
   assert.deepEqual(worklog.entries.map((entry) => entry.event.id), ['read-step']);
   assert.equal(counts.debug, 6);
-  assert.match(markup, /Read PROJECT\.md|sed -n 1,160p PROJECT\.md/);
+  assert.match(markup, /Reading PROJECT\.md|sed -n 1,160p PROJECT\.md/);
   assert.doesNotMatch(markup, /current-plan|project-tool-start|codex-runtime-run|sciforge-runtime-deepseek|used\/window|workspace=|raw output|native assistant message|raw JSONL|workspace runtime 首个事件/);
 });
 

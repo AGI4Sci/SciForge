@@ -18,6 +18,8 @@
     "discoveryProbe": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
     "virtualDesktopProbe": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir>",
     "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
+    "nativeToolProbe": "python -m sciforge_computer_use.native_tool --tool get_app_state --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
+    "platformSidecarProbe": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
     "path": "packages/actions/computer-use",
     "interface": "runTask(request, hostPorts)",
     "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
@@ -183,7 +185,20 @@
       "isolatedDesktopL3WorkflowExecute": "python -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir <dir> --execute [--display <display>] [--vnc-port <port>] [--novnc-port <port>] [--timeout-seconds <seconds>] [--resource-lock-root <dir>]",
       "virtualDesktopStateOnly": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
       "targetBoundWindowHost": "python -m sciforge_computer_use.target_bound_window_host_probe --request-json '<json>' --scenario-file <file> --output-dir <dir> [--source-repair-manifest <blocked-repair-manifest.json>]",
+      "nativeToolDebug": "python -m sciforge_computer_use.native_tool --tool get_replay_refs --payload-json '{\"displayGroupId\":\"debug-display-group\"}' --output-dir <dir>",
+      "platformSidecarDiagnostic": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
+      "nativeMultiScreenLiveDemo": "python -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> [--run-id <run-id>] [--platform <platform>] [--sidecar-command <command>] [--sidecar-timeout-seconds <seconds>]",
+      "macosNativeVirtualScreenSidecar": "PYTHONPATH=packages/actions/computer-use python3 -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> --platform macos --sidecar-command 'python3 -m sciforge_computer_use.macos_native_sidecar'",
       "semanticVerifier": "python -m sciforge_computer_use.semantic_verifier_probe --output-dir <dir> [--diagnose-provider]"
+    },
+    "nativeMultiScreenSidecarProtocol": {
+      "callSchema": "sciforge.computer-use.native-sidecar-dispatch-call.v1",
+      "resultSchema": "sciforge.computer-use.platform-sidecar-result.v1",
+      "requiredDiscoveryTools": ["capabilities", "discover"],
+      "requiredExecutionTools": ["preflight", "capture", "state", "execute"],
+      "completedRunRequiredRefs": ["sidecarBindingRef", "sidecarCapabilitiesRef", "sidecarDiscoveryRef", "schedulerLeaseRef", "schedulerLeaseRefs", "targetRefs", "replayRef", "validationRef", "currentBundleRef"],
+      "completedRunRequiredCapabilities": ["multi-screen", "multi-actor-cursor", "window-local-lease", "screen-global-lease", "refs-first-evidence", "virtual-screen", "independent-virtual-input-adapter"],
+      "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and may mark M6 completed only when capabilities/discovery plus preflight/capture/state/execute are all non-diagnostic current-bundle evidence."
     },
     "traceHandoff": {
       "schemaRef": "sciforge.computer-use.trace-handoff.v1",
@@ -194,6 +209,148 @@
       "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "requestBody", "apiKey", "inlineImage"]
     },
     "notes": "Computer Use action provider consumes host-owned platform ports. It never imports GUI implementation and never opens confirmation UI directly."
+  },
+  "nativeToolsContract": {
+    "schemaRef": "sciforge.computer-use.native-tool-manifest.v1",
+    "productionHost": "Codex app-server native tool/plugin/MCP or module.invoke(actions, execute)",
+    "diagnosticEntrypoint": "python -m sciforge_computer_use.native_tool --tool <get_app_state|observe|click|type_text|scroll|press_key|propose_action|execute_scoped_action|get_replay_refs> --payload-json '<json>' --output-dir <dir>",
+    "mcpServer": {
+      "serverName": "sciforge-computer-use",
+      "configRef": ".mcp.json",
+      "command": "python -m sciforge_computer_use.mcp_server",
+      "transport": "stdio"
+    },
+    "manifestHelper": "sciforge_computer_use.native_tool.get_native_tool_manifest",
+    "mcpToolsHelper": "sciforge_computer_use.mcp_server.get_mcp_tool_schemas",
+    "mcpServerHelper": "sciforge_computer_use.mcp_server.run_mcp_server",
+    "dispatcherHelper": "sciforge_computer_use.native_tool.dispatch_native_tool",
+    "validator": "sciforge_computer_use.native_tool.validate_native_tool_payload",
+    "tools": ["get_app_state", "observe", "click", "type_text", "scroll", "press_key", "propose_action", "execute_scoped_action", "get_replay_refs"],
+    "sideEffectPolicy": {
+      "get_app_state": "read-only",
+      "observe": "read-only",
+      "click": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
+      "type_text": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
+      "scroll": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
+      "press_key": "facade-projects-to-scoped-proposal-lease-executor-event-evidence",
+      "propose_action": "proposal-only",
+      "execute_scoped_action": "scoped-executor-projection-required",
+      "get_replay_refs": "read-only"
+    },
+    "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "Authorization", "token", "secret", "password"],
+    "forbiddenPublicParameters": ["providerRoute", "guiPrivateState", "schedulerInternals", "executorAdapterRef", "leaseId", "leaseScope", "globalX", "globalY"],
+    "requiredProvenance": ["displayGroupId", "screenId", "windowId", "actorId", "cursorId", "target.scope", "schedulerLeaseRef", "appStateRef", "screenshotRef", "accessibilitySnapshotRef", "groundingRefs", "replayRefs", "currentBundleRef"],
+    "claimLimit": "This is a package-local debug/native-tool contract. It never executes GUI actions itself; real mutating input still requires a host-bound scoped executor adapter."
+  },
+  "publicSurfaceParity": {
+    "schemaRef": "sciforge.computer-use.public-surface-parity.v1",
+    "ownershipMapRef": "docs/native-extension-ownership-map.json#entries/computer-use",
+    "requiredBacklogIds": [
+      "CU-PKG-22-native-multi-screen-multi-actor-cursor-product-gate",
+      "CU-PKG-23-multi-screen-live-demo",
+      "CU-PKG-24-browser-runtime-dom-ax-observation-refs",
+      "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
+      "CU-PKG-26-public-surface-parity-guard"
+    ],
+    "requiredNativeSurfaces": [
+      "native multi-screen/multi-actor cursor product gate",
+      "multi-screen live demo",
+      "BrowserRuntime DOM/AX observation refs",
+      "native multi-app workflow/live acceptance matrix"
+    ],
+    "nativeProductGatePolicy": {
+      "productionHost": "Codex app-server native tool/plugin/MCP or module.invoke(actions, execute)",
+      "requiredProvenance": ["displayGroupId", "screenId", "windowId", "actorId", "cursorId", "leaseId", "schedulerLeaseRef", "appStateRef", "screenshotRef", "groundingRefs", "traceRefs", "replayRefs", "currentBundleRef", "guiPresentRef when presentation is requested"],
+      "guiExecutionAllowed": false,
+      "runtimeBridgePublicProductionApiAllowed": false,
+      "workspaceGatewayProductionFallbackAllowed": false,
+      "codexExecJsonProductionFallbackAllowed": false
+    },
+    "browserRuntimeObservationPolicy": {
+      "allowedRefs": ["browserRuntimeDomSnapshotRef", "browserRuntimeVisibleDomRef", "browserRuntimeAccessibilitySnapshotRef", "browserRuntimePlaywrightEvaluateRef", "browserRuntimeStableTargetRef", "browserRuntimePageQueryRef", "browserRuntimeGroundingHintRef"],
+      "allowedUses": ["observe-before-mutate-hint", "grounding-hint"],
+      "forbiddenUses": ["Computer Use executor", "completion evidence by itself", "DOM click shortcut", "AX action shortcut", "Playwright action shortcut"]
+    },
+    "legacyBackendPackaging": {
+      "docker": "legacy diagnostic/backend packaging only",
+      "noVNC": "legacy diagnostic viewer/backend readiness only",
+      "rdp": "legacy or future sidecar backend packaging only",
+      "activeProductGateEligible": false,
+      "historicalEvidenceAllowedWhenRefsFirst": true
+    },
+    "claimLimit": "This parity block keeps the action manifest aligned with the ownership map. Native multi-screen, BrowserRuntime DOM/AX observation refs, and native multi-app live acceptance are active backlog/product gates; Docker/noVNC/RDP remain legacy diagnostic or backend packaging and cannot be the product owner."
+  },
+  "platformSidecarContract": {
+    "schemaRef": "sciforge.computer-use.platform-sidecar-manifest.v1",
+    "manifestHelper": "sciforge_computer_use.platform_sidecar.get_platform_sidecar_manifest",
+    "dispatcherHelper": "sciforge_computer_use.platform_sidecar.dispatch_platform_sidecar_tool",
+    "validator": "sciforge_computer_use.platform_sidecar.validate_platform_sidecar_payload",
+    "diagnosticEntrypoint": "python -m sciforge_computer_use.platform_sidecar --tool <preflight|capture|state|execute> --payload-json '<json>' --output-dir <dir>",
+    "platforms": ["diagnostic-local", "linux", "linux-novnc", "rdp", "darwin", "win32"],
+    "tools": ["preflight", "capture", "state", "execute"],
+    "permissionRequirements": [
+      "sessionPermissionRef",
+      "appWindowAllowlistRef",
+      "riskPreviewRef",
+      "dataVisibilityRef",
+      "stopRef or cancelLeaseRef",
+      "inputModalityPolicy"
+    ],
+    "isolationFlags": {
+      "sharedSystemInputUsed": false,
+      "systemPointerMoved": false,
+      "systemKeyboardEventsSent": false,
+      "realOsInputExecuted": false,
+      "rawPayloadWritten": false,
+      "inlineImageWritten": false,
+      "secretsWritten": false
+    },
+    "supportedInputModalities": ["pointer", "keyboard", "scroll", "hotkey"],
+    "executorEventSchema": {
+      "schemaRef": "sciforge.computer-use.platform-sidecar-executor-event.v1",
+      "schedulerLeaseBindingRequired": true,
+      "requiredFields": [
+        "eventId",
+        "status",
+        "actionKind",
+        "displayGroupId",
+        "screenId",
+        "actorId",
+        "cursorId",
+        "leaseId",
+        "schedulerLeaseRef",
+        "leaseScope",
+        "schedulerLease",
+        "permissionPreflightRef",
+        "beforeEvidenceRefs",
+        "groundingRefs",
+        "isolationReportRef"
+      ]
+    },
+    "unsupportedActions": [
+      "bare-global-coordinate-execute",
+      "shared-system-input",
+      "real-os-input-without-isolated-backend",
+      "gui.present",
+      "gui.ask_user",
+      "workspace-write-policy",
+      "provider-ranking",
+      "planning",
+      "user-level-completion",
+      "completion-validator"
+    ],
+    "policies": {
+      "refsFirst": true,
+      "failClosedWithoutBackend": true,
+      "noPlanning": true,
+      "noCompletion": true,
+      "noCapabilityRanking": true,
+      "noWorkspaceWritePolicy": true,
+      "noGuiDependency": true,
+      "noRuntimePrivateDependency": true,
+      "noSchedulerBypass": true
+    },
+    "claimLimit": "Platform sidecar L0 backend returns refs, permission preflight, isolation report and scheduler-lease-bound executor events only. It cannot perform planning, provider ranking, GUI presentation, workspace write policy or user-level completion."
   },
   "isolatedDesktopBackendRuntime": {
     "schemaRef": "sciforge.computer-use.isolated-desktop-backend-bundle.v1",
@@ -220,10 +377,14 @@
     "dockerRunL1SmokeCommand": "docker run --rm --shm-size 1g -p 127.0.0.1:6089:6089 -v <output-dir>:/evidence sciforge-computer-use-isolated-backend:local --output-dir /evidence/l1 --execute --display :99 --vnc-port 5909 --novnc-port 6089 --timeout-seconds 30 --resource-lock-root /tmp/sciforge-computer-use-l1-locks",
     "dockerRunL3WorkflowCommand": "docker run --rm --shm-size 1g -p 127.0.0.1:6090:6090 -v <output-dir>:/evidence --entrypoint python sciforge-computer-use-isolated-backend:local -m sciforge_computer_use.isolated_desktop_l3_workflow_probe --output-dir /evidence/l3 --execute --display :100 --vnc-port 5910 --novnc-port 6090 --timeout-seconds 90 --resource-lock-root /tmp/sciforge-computer-use-l3-locks",
     "bundleSpecDiagnosticOnly": true,
+    "legacyDiagnosticOnly": true,
+    "activeProductGateEligible": false,
+    "backendPackagingOnly": true,
+    "legacyBackendKinds": ["docker", "linux-novnc", "rdp"],
     "diagnosticOnlyUntilCompletedL1Evidence": true,
     "diagnosticOnlyUntilCompletedL3Evidence": true,
     "completionEvidenceRef": null,
-    "claimLimit": "The Docker bundle spec only records reproducible Linux/noVNC backend commands. It is not a Docker build log or running backend by itself; PROJECT L1/L3 completion still requires completed runner evidence refs from isolated smoke/workflow runners."
+    "claimLimit": "The Docker/noVNC/RDP bundle spec only records reproducible backend packaging, readiness, and historical diagnostic commands. It is not an active Computer Use product gate, concurrency model, or running backend by itself; native product acceptance must come through the app-server/native plugin surface plus current refs-first evidence."
   },
   "plannerContract": {
     "schemaRef": "sciforge.computer-use.planner-action.v1",

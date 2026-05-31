@@ -15,6 +15,7 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务必须走 Codex ap
 | 文档 | 状态 | 用途 |
 |---|---|---|
 | [`Architecture.md`](Architecture.md) | **当前总架构真相源** | GUI-as-extension 的产品边界、Agent Host Semantic Pipeline、职责归属、全局注释侧栏、双目录能力发现、引用预览、confidence、harness/policy 和 UI 边界。 |
+| [`SemanticModuleEngineering.md`](SemanticModuleEngineering.md) | **软件工程范式设计** | 统一模块函数、Root Agent Host、L1 Module Host、resource graph、UI/memory/skills/tools/project 的关系，以及跨开源项目资源组合原则。 |
 | [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 通过 `module.query/read/invoke(moduleId='gui')` 读取 GUI resource tree 并表达展示/确认意图；迁移期 `gui.*` adapter shim、annotation feedback envelopes、展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
 | [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md) | **内置浏览器运行时设计** | Codex-like browser session、tab、action、snapshot、trace、安全确认和 GUI presentation surface 边界。 |
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |

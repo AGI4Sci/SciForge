@@ -84,12 +84,14 @@ test('archives all active sessions that have activity', () => {
   assert.notEqual(next.sessionsByScenario['scenario-a'].sessionId, 'active-a');
 });
 
-test('starts a new chat while archiving the previous active session', () => {
+test('starts a new chat while retaining the previous active session in sidebar history', () => {
   const state = workspace();
   const next = startNewChat(state, 'scenario-any', 'Scenario new chat');
 
   assert.equal(next.archivedSessions.length, 1);
   assert.equal(next.archivedSessions[0].sessionId, 'active');
+  assert.equal(next.archivedSessions[0].archiveState, undefined);
+  assert.match(next.archivedSessions[0].versions[0]?.reason ?? '', /retained previous session/);
   assert.equal(next.sessionsByScenario['scenario-any'].title, 'Scenario new chat');
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
 });
@@ -148,16 +150,39 @@ test('starts a new chat without archiving an inactive seed-only session', () => 
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'seed-only');
 });
 
-test('deletes active chat by archiving a marked copy and resetting the active session', () => {
+test('deletes active chat by archiving a marked copy and removing it from the active list', () => {
   const state = workspace();
   const next = deleteActiveChat(state, 'scenario-any', 'Fallback new chat');
 
   assert.match(next.archivedSessions[0].title, /已删除/);
   assert.equal(next.archivedSessions[0].archiveState, 'discarded');
-  assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
+  assert.equal(next.sessionsByScenario['scenario-any'], undefined);
 });
 
-test('restores an archived session and archives the active session only when it has activity', () => {
+test('deletes an inactive draft without creating a discarded archived row', () => {
+  const state = workspace(session('draft-only', 'scenario-any', []));
+  const next = deleteActiveChat(state, 'scenario-any', 'Fallback new chat');
+
+  assert.equal(next.archivedSessions.length, 0);
+  assert.equal(next.sessionsByScenario['scenario-any'], undefined);
+});
+
+test('archives and deletes retained sidebar history without touching the current draft', () => {
+  const retained = startNewChat(workspace(session('active')), 'scenario-any', 'Fallback new chat');
+  const retainedId = retained.archivedSessions[0].sessionId;
+
+  const archived = archiveActiveSession(retained, 'scenario-any', retainedId, 'Fallback new chat');
+  assert.equal(archived.sessionsByScenario['scenario-any'].sessionId, retained.sessionsByScenario['scenario-any'].sessionId);
+  assert.equal(archived.archivedSessions[0].sessionId, retainedId);
+  assert.equal(archived.archivedSessions[0].archiveState, 'archived');
+
+  const deleted = deleteActiveChat(retained, 'scenario-any', 'Fallback new chat', undefined, retainedId);
+  assert.equal(deleted.sessionsByScenario['scenario-any'].sessionId, retained.sessionsByScenario['scenario-any'].sessionId);
+  assert.equal(deleted.archivedSessions[0].sessionId, retainedId);
+  assert.equal(deleted.archivedSessions[0].archiveState, 'discarded');
+});
+
+test('restores a stored session and retains the active session only when it has activity', () => {
   const archived = { ...session('archived'), archiveState: 'discarded' as const };
   const state = workspace(session('active'), [archived]);
   const next = restoreArchivedSession(state, 'scenario-any', 'archived', '2026-05-07T01:00:00.000Z', 'Fallback');
@@ -166,7 +191,7 @@ test('restores an archived session and archives the active session only when it 
   assert.equal(next.sessionsByScenario['scenario-any'].archiveState, undefined);
   assert.equal(next.sessionsByScenario['scenario-any'].updatedAt, '2026-05-07T01:00:00.000Z');
   assert.equal(next.archivedSessions[0].sessionId, 'active');
-  assert.equal(next.archivedSessions[0].archiveState, 'archived');
+  assert.equal(next.archivedSessions[0].archiveState, undefined);
 });
 
 test('deletes selected archived sessions without touching other scenarios', () => {
@@ -177,7 +202,10 @@ test('deletes selected archived sessions without touching other scenarios', () =
 });
 
 test('clears archived sessions for one scenario only', () => {
-  const state = workspace(session('active'), [session('a'), session('other', 'other-scenario')]);
+  const state = workspace(session('active'), [
+    { ...session('a'), archiveState: 'archived' as const },
+    { ...session('other', 'other-scenario'), archiveState: 'archived' as const },
+  ]);
   const next = clearArchivedSessions(state, 'scenario-any');
 
   assert.deepEqual(next.archivedSessions.map((item) => item.sessionId), ['other']);

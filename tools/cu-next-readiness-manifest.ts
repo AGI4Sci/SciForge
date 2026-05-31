@@ -31,6 +31,12 @@ export type CuNextRequirement =
   | 'approval-chain'
   | 'repair-continuity'
   | 'dense-grounding'
+  | 'user-control-refs'
+  | 'observe-before-mutate-refs'
+  | 'platform-sidecar-isolation'
+  | 'product-path-classification'
+  | 'current-bundle-evidence'
+  | 'dom-ax-observation-hints'
   | 'no-dom-playwright-accessibility';
 
 export interface CuNextProjectChecklistItem {

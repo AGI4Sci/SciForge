@@ -437,6 +437,8 @@ function packageTraceActionToGenericAction(action: Record<string, unknown>, grou
   if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type: 'hotkey', keys: stringList(action.keys) });
   if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type: 'scroll', direction: scrollDirection(stringAt(action, 'direction')), amount: numberAt(action.amount) });
   if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type: 'open_app', appName: stringAt(action, 'appName') ?? '' });
+  if (type === 'save') return normalizeGenericActionRisk({ ...base, type: 'save', targetPath: stringAt(action, 'targetPath') });
+  if (type === 'open_menu') return normalizeGenericActionRisk({ ...base, type: 'open_menu', menuName: stringAt(action, 'menuName') });
   return normalizeGenericActionRisk({ ...base, type: 'wait' });
 }
 

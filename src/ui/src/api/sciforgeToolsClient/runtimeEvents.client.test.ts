@@ -76,8 +76,8 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
 
     assert.equal(response.message.provenance?.requiresUserConfirmation, true);
     assert.match(String(response.message.provenance?.source), /^gui\.ask_user:codex-command-.*:computer-use$/);
-    assert.match(response.message.content, /Allow Computer Use to click the visible Submit button/);
-    assert.match(response.message.content, /Action kind: `click`/);
+    assert.match(response.message.content, /click the visible Submit button/);
+    assert.match(response.message.content, /Risk: High/);
     assert.equal(guiPresentation.source, `gui.present:${response.run.id}:computer-use`);
     assert.equal(guiPresentation.status, 'needs-confirmation');
     assert.deepEqual(guiPresentation.displayedRefs, [
@@ -99,7 +99,118 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
   }
 });
 
-test('Computer Use approval retry sends approvalRef only for approve terminal-equivalent text', async () => {
+test('Runtime Codex Computer Use host actions materialize user control plane as presentation-only slot', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: workspace_event\n',
+        `data: ${JSON.stringify({
+          type: 'computer-use.tui-host-actions',
+          source: 'computer-use-package-bridge',
+          commandId,
+          attemptId,
+          detail: JSON.stringify({
+            actions: [{
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.present',
+              target: 'computer-use.user-control-plane',
+              payload: {
+                title: 'Computer Use controls',
+                status: 'needs-confirmation',
+                message: 'Review permission and risk refs before continuing.',
+                sessionPermissionRef: 'computer-use:permission/session-control.json',
+                allowedAppRefs: ['computer-use:allowlist/apps/presentation.json'],
+                allowedWindowRefs: ['computer-use:allowlist/windows/deck-editor.json'],
+                forbiddenAppRefs: ['computer-use:allowlist/forbidden/messaging.json'],
+                riskPreviewRef: 'computer-use:risk/preview.json',
+                dataVisibilityRef: 'computer-use:data-visibility/current.json',
+                stopRef: 'computer-use:stop/current',
+                cancelLeaseRef: 'computer-use:lease/current',
+                approvalMode: 'required',
+                approvalRequestRef: 'computer-use:approval/request.json',
+                providerRoute: 'SHOULD_NOT_LEAK',
+                executorLease: { screenId: 'SHOULD_NOT_LEAK' },
+                schedulerParams: { leaseScope: 'SHOULD_NOT_LEAK' },
+              },
+            }, {
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.ask_user',
+              target: 'computer-use.approval-request',
+              payload: {
+                approvalRequest: {
+                  id: 'approval:computer-use:control-plane',
+                  confirmation_text: 'Allow Computer Use to continue with the visible presentation window?',
+                  risk_level: 'medium',
+                  action_kind: 'click',
+                },
+                relatedRefs: ['computer-use:risk/preview.json', 'computer-use:data-visibility/current.json'],
+                sessionPermissionRef: 'computer-use:permission/session-control.json',
+                allowedAppRefs: ['computer-use:allowlist/apps/presentation.json'],
+                allowedWindowRefs: ['computer-use:allowlist/windows/deck-editor.json'],
+                forbiddenAppRefs: ['computer-use:allowlist/forbidden/messaging.json'],
+                riskPreviewRef: 'computer-use:risk/preview.json',
+                dataVisibilityRef: 'computer-use:data-visibility/current.json',
+                stopRef: 'computer-use:stop/current',
+                cancelLeaseRef: 'computer-use:lease/current',
+                approvalMode: 'required',
+                approvalRequestRef: 'computer-use:approval/request.json',
+                providerRoute: 'SHOULD_NOT_LEAK',
+                executorLease: { screenId: 'SHOULD_NOT_LEAK' },
+                schedulerParams: { leaseScope: 'SHOULD_NOT_LEAK' },
+              },
+            }],
+          }),
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          commandId,
+          attemptId,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '/computer-use run "continue guarded presentation task"',
+    });
+    const controlSlot = response.uiManifest.find((slot) => slot.componentId === 'computer-use-control-plane');
+    const controlArtifact = response.artifacts.find((artifact) => artifact.id === controlSlot?.artifactRef);
+    const controlData = controlArtifact?.data as Record<string, unknown> | undefined;
+    const raw = response.run.raw as Record<string, unknown>;
+    const guiAskUser = raw.guiAskUser as Record<string, unknown>;
+    const guiControl = guiAskUser.controlPlane as Record<string, unknown>;
+
+    assert.ok(controlSlot);
+    assert.ok(controlArtifact);
+    assert.equal(controlArtifact?.type, 'computer-use-control-plane');
+    assert.equal(controlData?.sessionPermissionRef, 'computer-use:permission/session-control.json');
+    assert.deepEqual(controlData?.allowedAppRefs, ['computer-use:allowlist/apps/presentation.json']);
+    assert.equal(controlData?.riskPreviewRef, 'computer-use:risk/preview.json');
+    assert.equal(controlData?.dataVisibilityRef, 'computer-use:data-visibility/current.json');
+    assert.equal(controlData?.stopRef, 'computer-use:stop/current');
+    assert.equal(controlData?.cancelLeaseRef, 'computer-use:lease/current');
+    assert.equal(controlData?.approvalMode, 'required');
+    assert.equal(controlData?.status, 'needs-confirmation');
+    assert.equal(guiControl.approvalRef, 'approval:computer-use:control-plane');
+    assert.deepEqual(recursiveForbiddenKeys(controlData, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
+    assert.deepEqual(recursiveForbiddenKeys(guiControl, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
+    assert.deepEqual(recursiveForbiddenKeys(bodies[0], ['selectedActionIds', 'selectedToolIds', 'selectedSenseIds', 'uiState', 'providerRoute', 'executorLease', 'schedulerParams']), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Computer Use approval retry stays terminal-equivalent text through Codex Runtime', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -135,19 +246,20 @@ test('Computer Use approval retry sends approvalRef only for approve terminal-eq
 
   const approveBody = bodies[0]!;
   const rejectBody = bodies[1]!;
-  const approveUiState = approveBody.uiState as Record<string, unknown>;
-  const rejectUiState = rejectBody.uiState as Record<string, unknown>;
-  assert.equal(approveBody.prompt, '/computer-use approve --approval-ref "approval:computer-use:cu-risk"');
-  assert.deepEqual(approveBody.humanApproval, { approvalRef: 'approval:computer-use:cu-risk' });
-  assert.equal(approveUiState.approvalRef, 'approval:computer-use:cu-risk');
-  assert.deepEqual(approveUiState.humanApproval, { approvalRef: 'approval:computer-use:cu-risk' });
-  assert.equal(rejectBody.prompt, '/computer-use reject --approval-ref "approval:computer-use:cu-risk"');
-  assert.equal(rejectBody.humanApproval, undefined);
-  assert.equal(rejectUiState.approvalRef, undefined);
-  assert.equal(rejectUiState.humanApproval, undefined);
+  assert.equal(approveBody.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.match(String(approveBody.commandText), /\/computer-use approve --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
+  assert.match(String(approveBody.commandId), /^codex-command-/);
+  assert.equal('prompt' in approveBody, false);
+  assert.equal('humanApproval' in approveBody, false);
+  assert.equal('approvalRef' in approveBody, false);
+  assert.equal('uiState' in approveBody, false);
+  assert.match(String(rejectBody.commandText), /\/computer-use reject --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
+  assert.equal('humanApproval' in rejectBody, false);
+  assert.equal('approvalRef' in rejectBody, false);
+  assert.equal('uiState' in rejectBody, false);
 });
 
-test('Computer Use approval retry carries prior gui.ask_user provenance when available', async () => {
+test('Computer Use approval retry does not serialize prior gui.ask_user provenance from GUI', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
@@ -195,16 +307,12 @@ test('Computer Use approval retry carries prior gui.ask_user provenance when ava
   }
 
   const body = bodies[0]!;
-  const humanApproval = body.humanApproval as Record<string, unknown>;
-  const provenance = humanApproval.approvalProvenance as Record<string, unknown>;
-  assert.equal(humanApproval.approvalRef, 'approval:computer-use:cu-risk');
-  assert.equal(provenance.source, 'prior-gui-ask-user');
-  assert.equal(provenance.sourceRunId, 'run-needs-confirmation');
-  assert.equal(provenance.guiAskUserSource, 'gui.ask_user:run-needs-confirmation:computer-use');
-  assert.deepEqual(provenance.relatedRefs, [traceRef]);
-  assert.deepEqual(provenance.presentedRefs, [traceRef, continuationRef]);
-  assert.deepEqual(provenance.auditRefs, ['audit:codex-runtime:run-needs-confirmation']);
-  assert.deepEqual((body.uiState as Record<string, unknown>).approvalProvenance, provenance);
+  assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.match(String(body.commandText), /\/computer-use approve --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
+  assert.equal('humanApproval' in body, false);
+  assert.equal('approvalProvenance' in body, false);
+  assert.equal('uiState' in body, false);
+  assert.doesNotMatch(JSON.stringify(body), /prior-gui-ask-user|riskActionHash|risk-audit|gui-ask-user/);
 });
 
 test('Runtime Codex foreground final message can use native assistant message provenance', async () => {
@@ -480,6 +588,90 @@ test('Runtime Codex gui.present stores event session lineage for selected artifa
   assert.match(String(secondBody.commandText ?? ''), /artifact:live-selected-report/);
 });
 
+test('Runtime Codex app-server threadId is fixed to the same chat lane on follow-up turns', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const nativeThreadId = 'thread-app-server-fixed-chat';
+  const laneId = 'workbench:literature-evidence-review:session-test';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      bodies.push(body);
+      const commandId = String(body.commandId);
+      if (bodies.length === 1) {
+        return new Response([
+          'event: gui_present\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'gui_present',
+            text: 'FIRST_NATIVE_THREAD_RESPONSE',
+            provider: 'sciforge-deepseek-proxy',
+            model: 'bailian/deepseek-v4-flash',
+            profile: 'sciforge-runtime-deepseek',
+            workspace: '/tmp/current',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+            threadId: nativeThreadId,
+            raw: {
+              event: {
+                threadId: nativeThreadId,
+              },
+              presentation: {
+                source: `gui.present:${commandId}`,
+                text: 'FIRST_NATIVE_THREAD_RESPONSE',
+              },
+            },
+          })}\n\n`,
+          'event: done\n',
+          `data: ${JSON.stringify({
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            status: 'done',
+            message: 'Runtime Codex completed successfully.',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+          })}\n\n`,
+        ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+      }
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const first = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      conversationLaneId: laneId,
+      references: [],
+      artifacts: [],
+      claims: [],
+    });
+    assert.equal((first.run.raw as Record<string, unknown>).codexSessionId, nativeThreadId);
+    assert.equal((first.run.raw as Record<string, unknown>).conversationLaneId, laneId);
+    assert.ok(first.run.objectReferences?.some((reference) => reference.ref === `codex-thread:${nativeThreadId}`));
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      conversationLaneId: laneId,
+      prompt: '继续同一个对话，不要新开线程',
+      references: [],
+      artifacts: [],
+      claims: [],
+      runs: [first.run],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const secondBody = bodies[1]!;
+  const realtimeSession = secondBody.realtimeSession as Record<string, unknown>;
+  assert.equal(secondBody.codexSessionId, nativeThreadId);
+  assert.equal(realtimeSession.codexSessionId, nativeThreadId);
+  assert.equal(realtimeSession.threadRef, `codex-thread:${nativeThreadId}`);
+  assert.equal(realtimeSession.resumeRequested, true);
+  assert.match(String(secondBody.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+});
+
 test('Runtime Codex annotation quick action starts a fresh native thread even with selected lineage', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
@@ -729,6 +921,47 @@ test('Runtime Codex same-lane resume ignores latest native session from another 
   assert.equal(bodies[0]?.codexSessionId, undefined);
   assert.equal((bodies[0]?.realtimeSession as Record<string, unknown>).resumeRequested, false);
   assert.doesNotMatch(String(bodies[0]?.commandText ?? ''), /^Continue the active Runtime Codex session\./);
+});
+
+test('Runtime Codex same workbench session resumes legacy runs without lane metadata', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const previousThreadId = 'thread-legacy-workbench-session';
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      conversationLaneId: 'workbench:literature-evidence-review:session-test',
+      runs: [{
+        id: 'codex-command-legacy-thread',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'legacy prompt',
+        response: 'legacy answer',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        completedAt: '2026-05-19T00:00:01.000Z',
+        raw: {
+          threadId: previousThreadId,
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const realtimeSession = body.realtimeSession as Record<string, unknown>;
+  assert.equal(body.codexSessionId, previousThreadId);
+  assert.equal(realtimeSession.codexSessionId, previousThreadId);
+  assert.equal(realtimeSession.resumeRequested, true);
+  assert.match(String(body.commandText ?? ''), /^Continue the active Runtime Codex session\./);
 });
 
 test('Runtime Codex native resume keeps GUI follow-up as command text plus refs only', async () => {

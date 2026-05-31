@@ -34,5 +34,8 @@
     "manifest.ts",
     "README.md",
     "package.json"
-  ]
+  ],
+  "dependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0"
+  }
 }

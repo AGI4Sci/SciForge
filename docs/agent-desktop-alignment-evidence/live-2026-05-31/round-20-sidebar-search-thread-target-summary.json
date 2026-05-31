@@ -1,0 +1,47 @@
+{
+  "round": 20,
+  "capturedAt": "2026-05-31",
+  "scope": "Cursor Agent-like sidebar search result targeting and thread open behavior",
+  "userFinding": "The current sidebar still behaves differently from Cursor Agent across left-sidebar functions; old chats must stay reachable after New Agent.",
+  "cursorAgentEvidence": {
+    "tool": "Computer Use",
+    "observed": [
+      "Cursor Agent sidebar keeps historical chats visible in the same repository after New Agent.",
+      "Repository rows expose Pin plus Archive for completed chats, and draft rows expose Pin plus Discard.",
+      "Selecting a concrete chat row targets that chat, not only its generic agent/scenario."
+    ]
+  },
+  "sciforgeBrowserEvidence": {
+    "url": "http://127.0.0.1:5187/",
+    "isolation": "Dedicated Vite dev server with VITE_SCIFORGE_INSTANCE_ID=sidebar-e2e and a temporary workspace path.",
+    "actions": [
+      "Reloaded the isolated sidebar after the search-target fix.",
+      "Searched for New chat and confirmed the sidebar search results expose a Draft chat result.",
+      "Clicked the Draft chat search result and confirmed it targets the visible draft row without throwing or navigating away."
+    ],
+    "limitations": [
+      "The Browser runtime exposes a read-only page evaluation scope, so localStorage could not be seeded directly for destructive Archive/Delete live clicks.",
+      "The isolated app had no writer/runtime-backed completed chat available, so archived/deleted search opening was verified through focused model tests instead of a destructive live click."
+    ]
+  },
+  "implementation": [
+    "Sidebar search matches now carry sanitized project target ids, session ids, and thread state.",
+    "Clicking a search result resolves the target against current sidebar project groups and reuses the same openSidebarThread path as visible rows.",
+    "Archived/deleted/retained search matches can now restore or open their concrete session instead of only switching scenario.",
+    "Search result target ids are hashed project-target refs and do not expose local absolute workspace paths."
+  ],
+  "tests": [
+    {
+      "command": "node --import tsx --test src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts",
+      "result": "passed, 46 tests"
+    },
+    {
+      "command": "npm run typecheck --silent",
+      "result": "blocked by pre-existing/unrelated src/runtime/computer-use/independent-input-adapter.ts type errors for missing sharedSystemInputFailClosedDiagnostic, actorCursorLogEvent, executorProjectionEvent, and applyActorCursorAndExecutorProjection"
+    }
+  ],
+  "remainingRisk": [
+    "Full destructive live clicks for Archive/Delete/Restore still need an isolated seeded workspace or writable test harness that can create completed chats without touching user history.",
+    "The broader active goal remains open until all sidebar functions are deeply exercised end to end against Cursor Agent."
+  ]
+}

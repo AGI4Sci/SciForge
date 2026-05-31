@@ -276,9 +276,24 @@ function defaultModuleDescription(moduleId: RuntimeModuleId): ModuleDescription 
     return createModuleDescription({
       moduleId,
       title: 'Actions',
-      summary: 'Action provider boundary for Computer Use and other host-executed side effects.',
-      resources: [{ kind: 'action', refPrefix: 'action:', queryable: true, readable: true }],
-      intents: [{ name: 'execute', sideEffect: 'workspace', requiresApproval: true, returnsOperation: true }],
+      summary: [
+        'Action provider boundary for host-executed side effects.',
+        'Computer Use is exposed here as an L1 resource/session adapter whose L0 handler intents are selected by the Agent Host inside actions.execute input, not by GUI routes.',
+        'Supported Computer Use L0 handler intents: observe, capture, ground, propose_scoped_action, execute_scoped_action, verify, write_trace, emit_event.',
+      ].join(' '),
+      resources: [
+        { kind: 'action', refPrefix: 'action:', queryable: true, readable: true },
+        { kind: 'computer-use-session', refPrefix: 'computer-use:session:', queryable: true, readable: true },
+        { kind: 'computer-use-evidence', refPrefix: 'computer-use:evidence:', queryable: true, readable: true },
+        { kind: 'computer-use-replay', refPrefix: 'computer-use:replay:', queryable: true, readable: true },
+      ],
+      intents: [{
+        name: 'execute',
+        sideEffect: 'workspace',
+        requiresApproval: true,
+        returnsOperation: true,
+        summary: 'Canonical module.invoke intent for Computer Use L1 action execution; mutating L0 desktop input requires scoped lease/provenance/approval and returns operation/evidence/replay refs.',
+      }],
       facets: { refs: true, approval: true, events: true },
       limits: { maxInlineBytes: 16_000, expectedLatencyMs: 500 },
     });

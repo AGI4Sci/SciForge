@@ -6,6 +6,10 @@ import re
 from dataclasses import dataclass
 
 from .contracts import ActionPlan, RiskLevel
+from .confirmation_policy import (
+    ConfirmationDecision,
+    classify_action_plan_for_confirmation,
+)
 
 
 _HIGH_RISK_RE = re.compile(
@@ -21,10 +25,21 @@ class RiskAssessment:
     blocked: bool
     needs_confirmation: bool
     reason: str
+    confirmation: ConfirmationDecision | None = None
 
 
 def assess_action_risk(action: ActionPlan, *, fail_closed: bool = True) -> RiskAssessment:
     """Classify a generic GUI action before execution."""
+
+    confirmation = classify_action_plan_for_confirmation(action)
+    if confirmation is not None:
+        return RiskAssessment(
+            level="high",
+            blocked=fail_closed or confirmation.handoff_required,
+            needs_confirmation=True,
+            reason=confirmation.reason,
+            confirmation=confirmation,
+        )
 
     inferred_parts = [
         action.kind or "",
@@ -50,6 +65,7 @@ def assess_action_risk(action: ActionPlan, *, fail_closed: bool = True) -> RiskA
             blocked=fail_closed,
             needs_confirmation=True,
             reason="High-risk Computer Use action requires explicit upstream confirmation.",
+            confirmation=None,
         )
     if action.kind in {"hotkey", "drag"}:
         return RiskAssessment(
@@ -57,12 +73,14 @@ def assess_action_risk(action: ActionPlan, *, fail_closed: bool = True) -> RiskA
             blocked=False,
             needs_confirmation=False,
             reason="Medium-risk generic GUI action allowed under current policy.",
+            confirmation=None,
         )
     return RiskAssessment(
         level="low",
         blocked=False,
         needs_confirmation=False,
         reason="Low-risk generic GUI action.",
+        confirmation=None,
     )
 
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import { ExternalLink, Loader2, Play, Square, TerminalSquare } from 'lucide-react';
-import { renderTerminalSessionViewer } from '../../../../packages/presentation/components/terminal-session-viewer/render';
+import { renderTerminalSessionViewer } from '../../../../packages/presentation/components';
 import {
   feedbackCodexPtyWebSocketUrl,
   startRuntimeServices,

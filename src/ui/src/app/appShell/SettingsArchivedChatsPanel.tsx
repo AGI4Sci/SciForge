@@ -19,7 +19,8 @@ export function SettingsArchivedChatsPanel({
 }) {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const items = useMemo(
-    () => buildSidebarArchivedThreadItems(archivedSessions, { sort: 'updatedAt' }),
+    () => buildSidebarArchivedThreadItems(archivedSessions, { sort: 'updatedAt' })
+      .filter((item) => item.archived || item.discarded),
     [archivedSessions],
   );
   const sessionById = useMemo(

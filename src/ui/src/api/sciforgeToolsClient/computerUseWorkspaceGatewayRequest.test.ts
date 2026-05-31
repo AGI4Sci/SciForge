@@ -3,31 +3,40 @@ import assert from 'node:assert/strict';
 import type { SendAgentMessageInput } from '../../domain';
 import {
   buildComputerUseWorkspaceGatewayRequest,
-  computerUseActionProviderRequested,
+  computerUseTerminalEquivalentTextRequested,
+  computerUseWorkspaceGatewayDiagnosticRequested,
 } from './computerUseWorkspaceGatewayRequest';
 import { runtimeRequestInput } from './runtimeEvents.testHelpers';
 
-test('computerUseActionProviderRequested detects slash command and selected package tool', () => {
-  assert.equal(computerUseActionProviderRequested(runtimeRequestInput()), false);
-  assert.equal(computerUseActionProviderRequested({
+test('Computer Use GUI affordances stay terminal-equivalent text by default', () => {
+  assert.equal(computerUseTerminalEquivalentTextRequested(runtimeRequestInput()), false);
+  assert.equal(computerUseTerminalEquivalentTextRequested({
     ...runtimeRequestInput(),
     prompt: '/computer-use inspect the visible browser',
   }), true);
-  assert.equal(computerUseActionProviderRequested({
+  assert.equal(computerUseTerminalEquivalentTextRequested({
     ...runtimeRequestInput(),
     scenarioOverride: {
       ...runtimeRequestInput().scenarioOverride!,
       selectedToolIds: ['action.sciforge.computer-use'],
     },
   }), true);
+  assert.equal(computerUseWorkspaceGatewayDiagnosticRequested({
+    ...runtimeRequestInput(),
+    prompt: '/computer-use inspect the visible browser',
+  }), false);
+  assert.equal(computerUseWorkspaceGatewayDiagnosticRequested({
+    ...runtimeRequestInput(),
+    prompt: '/computer-use diagnostic --legacy-workspace-gateway inspect refs',
+  }), true);
 });
 
-test('buildComputerUseWorkspaceGatewayRequest preserves Computer Use approval provenance and sanitized evidence policy', () => {
+test('buildComputerUseWorkspaceGatewayRequest creates only a legacy diagnostic shim', () => {
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';
   const approvalRef = 'approval:computer-use:cu-risk';
   const input: SendAgentMessageInput = {
     ...runtimeRequestInput(),
-    prompt: `/computer-use approve --approval-ref "${approvalRef}"`,
+    prompt: `/computer-use diagnostic --legacy-workspace-gateway approve --approval-ref "${approvalRef}"`,
     currentTurnId: 'turn-cu-approval',
     scenarioOverride: {
       ...runtimeRequestInput().scenarioOverride!,
@@ -78,15 +87,31 @@ test('buildComputerUseWorkspaceGatewayRequest preserves Computer Use approval pr
   };
 
   const request = buildComputerUseWorkspaceGatewayRequest(input, 'computer-use-command-test');
+  const requestRecord = request as Record<string, unknown>;
   const uiState = request.uiState as Record<string, unknown>;
   const humanApproval = request.humanApproval as Record<string, unknown>;
   const provenance = humanApproval.approvalProvenance as Record<string, unknown>;
 
-  assert.equal(request.handoffSource, 'ui-chat');
+  assert.equal(request.schemaVersion, 'sciforge.computer-use.legacy-workspace-gateway-diagnostic.v1');
+  assert.equal(request.kind, 'legacy-diagnostic-shim');
+  assert.equal(request.diagnosticOnly, true);
+  assert.equal(request.handoffSource, 'ui-chat-legacy-diagnostic-shim');
   assert.equal(uiState.commandId, 'computer-use-command-test');
-  assert.deepEqual(request.selectedToolIds, ['local.vision-sense', 'custom.tool']);
-  assert.deepEqual(request.selectedSenseIds, ['custom.sense', 'local.vision-sense']);
-  assert.deepEqual(request.selectedActionIds, ['custom.action', 'action.sciforge.computer-use']);
+  assert.equal(request.terminalEquivalentText, input.prompt.trim());
+  assert.equal(uiState.terminalEquivalentText, input.prompt.trim());
+  assert.equal(uiState.diagnosticOnly, true);
+  assert.equal(uiState.legacyWorkspaceGatewayShim, true);
+  assert.equal(uiState.guiOwnsExecutor, false);
+  assert.equal(uiState.guiOwnsExecutionRoute, false);
+  assert.equal((request.diagnosticBoundary as Record<string, unknown>).guiOwnsExecutor, false);
+  assert.equal((request.diagnosticBoundary as Record<string, unknown>).gatewayRole, 'legacy diagnostic shim');
+  assert.equal('selectedToolIds' in requestRecord, false);
+  assert.equal('selectedSenseIds' in requestRecord, false);
+  assert.equal('selectedActionIds' in requestRecord, false);
+  assert.equal('visionSenseConfig' in uiState, false);
+  assert.equal('agentServerBaseUrl' in requestRecord, false);
+  assert.equal('agentBackend' in requestRecord, false);
+  assert.equal('modelProvider' in requestRecord, false);
   assert.equal(humanApproval.approvalRef, approvalRef);
   assert.equal(provenance.source, 'prior-gui-ask-user');
   assert.equal(provenance.sourceRunId, 'run-needs-approval');
@@ -101,9 +126,5 @@ test('buildComputerUseWorkspaceGatewayRequest preserves Computer Use approval pr
       enabled: true,
       trigger: 'on-completed-current-run',
     }],
-  });
-  assert.deepEqual(uiState.visionSenseConfig, {
-    desktopBridgeEnabled: true,
-    allowSharedSystemInput: true,
   });
 });

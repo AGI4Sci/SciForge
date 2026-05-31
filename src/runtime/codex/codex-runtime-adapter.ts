@@ -6,6 +6,5 @@ export function createCodexAppServerRuntimeAdapter(options: CodexAppServerJsonRp
     client: createCodexAppServerClient(options),
     provider: 'codex-app-server',
     model: 'app-server-native',
-    profile: 'codex-app-server',
   });
 }

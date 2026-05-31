@@ -87,12 +87,34 @@ export function recordingFetch(fetchImpl: typeof fetch | undefined, requestBodie
   const baseFetch = fetchImpl ?? globalThis.fetch;
   return (async (input, init) => {
     const url = String(input);
+    if (url.endsWith('/api/sciforge/runtime/codex/stream')) {
+      const body = parseJsonObject(String(init?.body ?? '{}'));
+      return baseFetch(url.replace('/api/sciforge/runtime/codex/stream', '/api/sciforge/tools/run/stream'), {
+        ...init,
+        body: JSON.stringify(runtimeCodexRequestToLegacyMockBody(body)),
+      });
+    }
     if (url.endsWith('/api/sciforge/tools/run/stream')) {
       const body = parseJsonObject(String(init?.body ?? '{}'));
       if (body) requestBodies.push(body);
     }
     return baseFetch(input, init);
   }) as typeof fetch;
+}
+
+function runtimeCodexRequestToLegacyMockBody(body: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!body) return {};
+  const uiState = isRecord(body.uiState) ? body.uiState : {};
+  return {
+    ...body,
+    prompt: stringAt(body, 'commandText') ?? stringAt(body, 'prompt'),
+    handoffSource: 'ui-chat',
+    uiState: {
+      ...uiState,
+      commandId: stringAt(body, 'commandId'),
+      attemptId: stringAt(body, 'attemptId'),
+    },
+  };
 }
 
 export function parseJsonObject(value: string): Record<string, unknown> | undefined {

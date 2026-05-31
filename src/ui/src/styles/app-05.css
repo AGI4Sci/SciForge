@@ -585,22 +585,368 @@
 .component-workbench-page {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
   min-height: 0;
-  padding: 24px;
+  color: var(--bio-50);
+  padding: 24px clamp(18px, 3vw, 42px);
   overflow: auto;
 }
 
-.apps-page .apps-empty-state {
-  display: flex;
-  flex: 1;
+.apps-workbench-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 520px);
+  gap: 16px;
+  align-items: center;
+  width: min(100%, 980px);
+  margin: 0 auto;
+}
+
+.apps-workbench-header h1 {
+  margin: 0;
+  color: var(--bio-50);
+  font-size: 22px;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.apps-primary-action,
+.marketplace-get-btn,
+.automation-history-card {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 320px;
-  padding: 32px 24px;
-  border: 1px dashed rgba(123, 147, 176, 0.28);
-  border-radius: 12px;
-  background: var(--surface);
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--bio-50);
+  background: var(--surface-panel);
+  cursor: pointer;
+  font-weight: 780;
+}
+
+.apps-primary-action {
+  justify-self: end;
+  padding: 0 12px;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: transparent;
+}
+
+.automation-metrics,
+.apps-table-panel,
+.marketplace-layout {
+  width: min(100%, 980px);
+  margin: 0 auto;
+}
+
+.automation-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.automation-metric-card,
+.automation-history-card {
+  min-height: 74px;
+  padding: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-direction: column;
+}
+
+.automation-metric-card {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-panel);
+}
+
+.automation-metric-card span,
+.automation-history-card span,
+.marketplace-card-copy span {
+  color: var(--bio-300);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.automation-metric-card strong {
+  color: var(--bio-50);
+  font-size: 22px;
+  letter-spacing: 0;
+}
+
+.automation-metric-card.warning strong {
+  color: var(--danger);
+}
+
+.automation-history-card.active {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 1px var(--accent-border);
+}
+
+.apps-table-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.apps-segmented-control {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.apps-segmented-control button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  min-width: 74px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--bio-250);
+  background: transparent;
+  cursor: pointer;
+  font-weight: 780;
+}
+
+.apps-segmented-control button.active {
+  color: var(--bio-50);
+  background: var(--surface-panel);
+}
+
+.apps-segmented-control span {
+  color: var(--bio-400);
+}
+
+.apps-data-table {
+  display: grid;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-panel);
+}
+
+.apps-data-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(88px, 0.6fr) minmax(110px, 0.8fr) minmax(74px, 0.4fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--bio-100);
+  background: transparent;
+  text-align: left;
+}
+
+.apps-data-row:not(.header) {
+  cursor: pointer;
+}
+
+.apps-data-row:not(.header):hover {
+  background: var(--surface-muted);
+}
+
+.apps-data-row.header {
+  color: var(--bio-300);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.apps-data-row:last-child {
+  border-bottom: 0;
+}
+
+.apps-data-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.automation-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: var(--bio-400);
+}
+
+.automation-status-dot.successful {
+  background: var(--accent);
+}
+
+.automation-status-dot.failed {
+  background: var(--danger);
+}
+
+.marketplace-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--bio-300);
+  background: var(--surface-input);
+}
+
+.marketplace-search input {
+  min-width: 0;
+  width: 100%;
+  border: 0;
+  outline: 0;
+  color: var(--bio-50);
+  background: transparent;
+  font: inherit;
+}
+
+.marketplace-layout {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 22px;
+  align-items: start;
+}
+
+.marketplace-categories {
+  display: grid;
+  gap: 4px;
+}
+
+.marketplace-categories button {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--bio-300);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-weight: 760;
+}
+
+.marketplace-categories button.active,
+.marketplace-categories button:hover {
+  color: var(--bio-50);
+  background: var(--surface-panel);
+}
+
+.marketplace-list {
+  display: grid;
+  gap: 10px;
+}
+
+.marketplace-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--bio-200);
+  font-weight: 820;
+}
+
+.marketplace-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.marketplace-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 78px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-panel);
+}
+
+.marketplace-card-icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--accent);
+  background: var(--surface-muted);
+}
+
+.marketplace-card-copy {
+  min-width: 0;
+}
+
+.marketplace-card-copy strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--bio-50);
+  font-size: 14px;
+}
+
+.marketplace-card-copy p {
+  display: -webkit-box;
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--bio-300);
+  font-size: 12px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.marketplace-get-btn {
+  min-width: 86px;
+  padding: 0 10px;
+}
+
+.marketplace-get-btn.installed {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 44%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-panel));
+}
+
+@media (max-width: 820px) {
+  .apps-workbench-header,
+  .marketplace-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .apps-primary-action {
+    justify-self: stretch;
+  }
+
+  .automation-metrics,
+  .marketplace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .marketplace-categories {
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .marketplace-categories button {
+    flex: 0 0 auto;
+  }
+
+  .apps-data-row {
+    grid-template-columns: minmax(140px, 1fr) minmax(74px, 0.6fr);
+  }
+
+  .apps-data-row span:nth-child(3),
+  .apps-data-row span:nth-child(4) {
+    display: none;
+  }
 }
 
 .browser-runtime-page {
@@ -684,16 +1030,28 @@
 
 .browser-url-form {
   flex: 1 1 420px;
+  min-width: 280px;
 }
 
 .browser-url-form input {
   flex: 1 1 auto;
-  min-width: 180px;
+  min-width: 220px;
+}
+
+.browser-url-form button,
+.browser-download-link,
+.browser-workbench-actions button {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  word-break: keep-all;
+  writing-mode: horizontal-tb;
 }
 
 .browser-download-link {
   display: inline-grid;
+  flex: 0 0 auto;
   place-items: center;
+  min-width: 48px;
   min-height: 34px;
   padding: 0 12px;
   color: var(--bio-50);
@@ -933,6 +1291,7 @@
 
 .browser-status-cluster {
   display: inline-flex;
+  flex: 0 1 220px;
   align-items: center;
   min-width: 0;
   max-width: 260px;
@@ -940,6 +1299,19 @@
   color: var(--bio-300);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+.browser-workbench-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}
+
+.browser-workbench-actions button {
+  min-width: 52px;
+}
+
+.browser-workbench-actions button[aria-label="登录或人工接管"] {
+  min-width: 84px;
 }
 
 .browser-status-cluster span {
@@ -1527,6 +1899,12 @@
 
   .browser-framebar {
     flex-wrap: wrap;
+  }
+
+  .browser-status-cluster {
+    order: 5;
+    flex-basis: 100%;
+    max-width: none;
   }
 
   .browser-workbench-body {

@@ -56,7 +56,7 @@ test('removeSidebarProjectFromConfig drops peer projects but keeps current works
   assert.deepEqual(patch?.peerInstances, []);
 });
 
-test('workspace project activation switches workspace path without changing shared writer config', () => {
+test('workspace project activation switches workspace path and writer routing', () => {
   const config = dualProjectConfig();
   const patch = buildWorkspaceProjectActivation(config, {
     id: peerPath,
@@ -65,9 +65,13 @@ test('workspace project activation switches workspace path without changing shar
   });
 
   assert.equal(patch?.workspacePath, peerPath);
-  assert.equal(patch?.workspaceWriterBaseUrl, undefined);
+  assert.equal(patch?.workspaceWriterBaseUrl, peerWriter);
+  assert.equal(patch?.peerInstances?.[0]?.name, 'main');
   assert.equal(patch?.peerInstances?.[0]?.workspacePath, mainPath);
-  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, peerWriter);
+  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, mainWriter);
+  assert.equal(patch?.peerInstances?.[0]?.appUrl, config.agentServerBaseUrl);
+  assert.equal(patch?.peerInstances?.[0]?.role, 'peer');
+  assert.equal(patch?.peerInstances?.[0]?.trustLevel, 'readonly');
 });
 
 test('workspace directory switch preserves previous workspace as a removable sidebar project', () => {
@@ -92,9 +96,11 @@ test('workspace directory switch activates existing projects without duplicating
   const patch = buildWorkspaceDirectorySwitchPatch(config, peerPath);
 
   assert.equal(patch?.workspacePath, peerPath);
+  assert.equal(patch?.workspaceWriterBaseUrl, peerWriter);
   assert.equal(patch?.peerInstances?.length, 1);
+  assert.equal(patch?.peerInstances?.[0]?.name, 'main');
   assert.equal(patch?.peerInstances?.[0]?.workspacePath, mainPath);
-  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, peerWriter);
+  assert.equal(patch?.peerInstances?.[0]?.workspaceWriterUrl, mainWriter);
 });
 
 test('workspace directory switch ignores blank paths', () => {

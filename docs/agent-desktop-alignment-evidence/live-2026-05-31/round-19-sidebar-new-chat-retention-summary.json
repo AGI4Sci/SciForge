@@ -1,0 +1,56 @@
+{
+  "round": 19,
+  "capturedAt": "2026-05-31",
+  "scope": "Cursor Agent-like sidebar new-chat retention, real archive/delete state transitions, and non-destructive interaction checks",
+  "userFinding": "Creating a new chat made the old chat disappear from the left sidebar.",
+  "cursorAgentEvidence": {
+    "tool": "Computer Use",
+    "observed": [
+      "Cursor Agent keeps multiple previous chats visible under the same repository after New Agent.",
+      "Visible historical rows expose Pin and Archive actions; draft rows expose Discard/Delete-like cleanup.",
+      "Project groups keep See more expansion for older rows without hiding recent historical chats behind default drafts."
+    ]
+  },
+  "sciforgeBrowserEvidence": {
+    "url": "http://localhost:5173/",
+    "actions": [
+      "Clicked the current project New Agent control.",
+      "Verified old conversation rows remained visible in p1 after the new draft was created.",
+      "Searched for an existing chat title and confirmed search returns retained visible history plus deleted history.",
+      "Clicked Show more and verified hidden draft rows expand without removing visible retained history.",
+      "Reloaded an isolated 127.0.0.1 app tab after the runtime export compatibility fix and confirmed the sidebar renders New Agent, Automations, Customize, Search, Repositories, per-project New Agent, Settings, and the active chat area without Vite export errors."
+    ],
+    "observedRowsAfterFix": [
+      "Retained historical chats appear before default draft rows.",
+      "Retained rows expose Archive chat and Delete chat actions, not Restore chat.",
+      "Only the current empty draft is rendered as a draft row; inactive default drafts from other scenarios no longer push real history behind Show more.",
+      "Explicit archived/deleted rows remain out of the main Repositories list."
+    ]
+  },
+  "implementation": [
+    "New chat now retains the previous active session as normal sidebar history instead of marking it archived.",
+    "Legacy sessions archived by the old new-chat path are treated as retained history when their latest reason matches the old new-chat archive reason.",
+    "The main sidebar renders active current threads, retained history, then drafts, so default drafts cannot push old chats out of the first page.",
+    "Explicit Archive/Delete can operate on retained history without touching the current draft.",
+    "Archived settings and workbench archived counts exclude retained sidebar history.",
+    "The browser runtime UI imports the shared runtime contract through the package root so Vite can load the dev page while node package exports are stale for the browser-runtime subpath."
+  ],
+  "tests": [
+    {
+      "command": "node --import tsx --test src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/app/BrowserRuntimePage.test.tsx packages/presentation/components/browser-workbench/render.test.tsx packages/observe/web/browser-runtime.test.ts packages/contracts/runtime/browser-runtime.test.ts",
+      "result": "passed, 65 tests"
+    },
+    {
+      "command": "npm run typecheck --silent",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    }
+  ],
+  "remainingRisk": [
+    "Delete and Archive clicks on retained rows were verified through focused state/DOM tests rather than destructive browser clicks on the user's live chats.",
+    "A fully isolated writer-backed seeded workspace is still the preferred place to perform live destructive Archive/Delete clicks end to end."
+  ]
+}

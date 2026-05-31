@@ -1,15 +1,16 @@
 import { access, readdir, readFile } from 'node:fs/promises';
 import { dirname, join, relative, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
-type ImportEdge = {
+export type ImportEdge = {
   importer: string;
   specifier: string;
   line: number;
   resolvedPath?: string;
 };
 
-type Finding = ImportEdge & {
+export type Finding = ImportEdge & {
   message: string;
   rule: string;
 };
@@ -20,9 +21,157 @@ type WarningRule = {
   match: (edge: ImportEdge) => boolean;
 };
 
+export type ComputerUseBoundaryPolicy = {
+  targetNativeSurfaces: string[];
+  forbiddenOwners: string[];
+  importBoundaries: string[];
+  adapterClassifications: Set<string>;
+  remainingMigrationSubtaskIds: Set<string>;
+  actionProviderPublicSurface: ComputerUseActionProviderPublicSurface;
+};
+
+export type ComputerUseActionProviderPublicSurface = {
+  requiredBacklogIds: Set<string>;
+  requiredNativeSurfaces: string[];
+  browserRuntimeAllowedRefs: Set<string>;
+  browserRuntimeAllowedUses: Set<string>;
+  browserRuntimeForbiddenUses: Set<string>;
+  legacyBackendPackaging: Record<string, string>;
+  legacyActiveProductGateEligible?: boolean;
+  historicalEvidenceAllowedWhenRefsFirst?: boolean;
+  nativeProductGatePolicy: {
+    productionHost?: string;
+    requiredProvenance: Set<string>;
+    guiExecutionAllowed?: boolean;
+    runtimeBridgePublicProductionApiAllowed?: boolean;
+    workspaceGatewayProductionFallbackAllowed?: boolean;
+    codexExecJsonProductionFallbackAllowed?: boolean;
+  };
+  nativeToolsContract: {
+    productionHost?: string;
+    tools: Set<string>;
+    forbiddenPublicParameters: Set<string>;
+    requiredProvenance: Set<string>;
+  };
+  nativeMultiScreenSidecarProtocol: {
+    requiredDiscoveryTools: Set<string>;
+    requiredExecutionTools: Set<string>;
+    completedRunRequiredRefs: Set<string>;
+    completedRunRequiredCapabilities: Set<string>;
+  };
+  diagnosticProbes: Set<string>;
+  isolatedDesktopBackendRuntime: {
+    legacyDiagnosticOnly?: boolean;
+    activeProductGateEligible?: boolean;
+    backendPackagingOnly?: boolean;
+    legacyBackendKinds: Set<string>;
+    claimLimit?: string;
+  };
+};
+
+export type ComputerUseBoundaryViolation = {
+  rule: string;
+  message: string;
+};
+
 const root = process.cwd();
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts']);
 const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage']);
+const requiredComputerUseAdapterClassifications = new Set([
+  'production',
+  'debug-smoke',
+  'legacy-test-only',
+  'legacy-migration-shim',
+  'diagnostic-shim',
+  'backend-packaging-not-concurrency-model',
+  'legacy-diagnostic-backend-packaging',
+]);
+const requiredComputerUseProductBacklogSubtasks = new Set([
+  'CU-PKG-22-native-multi-screen-multi-actor-cursor-product-gate',
+  'CU-PKG-23-multi-screen-live-demo',
+  'CU-PKG-24-browser-runtime-dom-ax-observation-refs',
+  'CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix',
+  'CU-PKG-26-public-surface-parity-guard',
+]);
+const requiredComputerUseBoundarySubtasks = new Set([
+  'CU-PKG-20-import-boundary-guard',
+  ...requiredComputerUseProductBacklogSubtasks,
+]);
+const requiredComputerUseNativeSurfaces = [
+  'native multi-screen/multi-actor cursor product gate',
+  'multi-screen live demo',
+  'BrowserRuntime DOM/AX observation refs',
+  'native multi-app workflow/live acceptance matrix',
+];
+const requiredComputerUseNativeTools = new Set([
+  'get_app_state',
+  'observe',
+  'click',
+  'type_text',
+  'scroll',
+  'press_key',
+  'propose_action',
+  'execute_scoped_action',
+  'get_replay_refs',
+]);
+const requiredForbiddenComputerUsePublicParameters = new Set([
+  'providerRoute',
+  'guiPrivateState',
+  'schedulerInternals',
+  'executorAdapterRef',
+  'leaseId',
+  'leaseScope',
+  'globalX',
+  'globalY',
+]);
+const requiredComputerUseNativeProvenance = new Set([
+  'displayGroupId',
+  'screenId',
+  'windowId',
+  'actorId',
+  'cursorId',
+  'schedulerLeaseRef',
+  'appStateRef',
+  'screenshotRef',
+  'groundingRefs',
+  'replayRefs',
+  'currentBundleRef',
+]);
+const requiredNativeMultiScreenSidecarDiscoveryTools = new Set(['capabilities', 'discover']);
+const requiredNativeMultiScreenSidecarExecutionTools = new Set(['preflight', 'capture', 'state', 'execute']);
+const requiredNativeMultiScreenSidecarCompletedRefs = new Set([
+  'sidecarBindingRef',
+  'sidecarCapabilitiesRef',
+  'sidecarDiscoveryRef',
+  'schedulerLeaseRef',
+  'replayRef',
+  'currentBundleRef',
+]);
+const requiredNativeMultiScreenSidecarCapabilities = new Set([
+  'multi-screen',
+  'multi-actor-cursor',
+  'window-local-lease',
+  'screen-global-lease',
+  'refs-first-evidence',
+]);
+const requiredBrowserRuntimeObservationRefs = new Set([
+  'browserRuntimeDomSnapshotRef',
+  'browserRuntimeVisibleDomRef',
+  'browserRuntimeAccessibilitySnapshotRef',
+  'browserRuntimePlaywrightEvaluateRef',
+  'browserRuntimeStableTargetRef',
+  'browserRuntimePageQueryRef',
+  'browserRuntimeGroundingHintRef',
+]);
+const requiredBrowserRuntimeObservationUses = new Set([
+  'observe-before-mutate-hint',
+  'grounding-hint',
+]);
+const requiredLegacyBackendKinds = new Set([
+  'docker',
+  'linux-novnc',
+  'rdp',
+]);
 
 const knownPackagePrivateImportWarnings: WarningRule[] = [
   {
@@ -56,17 +205,31 @@ const knownUiPackageDeepImportWarnings: WarningRule[] = [
 ];
 
 async function main() {
+  const computerUseBoundaryPolicy = await loadComputerUseBoundaryPolicy(root);
   const packageRoots = await collectPackageRoots();
   const packageNames = await collectPackageNames(packageRoots);
   const files = [
     ...await collectSourceFiles(join(root, 'packages')),
     ...await collectSourceFilesIfExists(join(root, 'src/shared')),
-    ...await collectSourceFiles(join(root, 'src/ui/src')),
+    ...await collectSourceFilesIfExists(join(root, 'src/ui')),
+    ...await collectSourceFilesIfExists(join(root, 'src/runtime/computer-use')),
+    ...await collectSourceFilesIfExists(join(root, 'src/runtime/vision-sense')),
   ];
-  const edges = (await Promise.all(files.map(readImportEdges))).flat();
+  const uniqueFiles = [...new Set(files)];
+  const edges = (await Promise.all(uniqueFiles.map(readImportEdges))).flat();
 
   const errors: Finding[] = [];
   const warnings: Finding[] = [];
+
+  for (const issue of computerUseBoundaryManifestIssues(computerUseBoundaryPolicy)) {
+    errors.push({
+      importer: 'docs/native-extension-ownership-map.json',
+      specifier: 'computer-use',
+      line: 1,
+      rule: 'cu-manifest-boundary-policy',
+      message: issue,
+    });
+  }
 
   for (const sharedFile of await collectSourceFilesIfExists(join(root, 'src/shared'))) {
     errors.push({
@@ -80,10 +243,11 @@ async function main() {
   }
 
   for (const edge of edges) {
+    checkComputerUseImportBoundary(edge, packageNames, errors);
     if (edge.importer.startsWith('packages/')) {
       checkPackagePrivateRuntimeImport(edge, errors, warnings);
     }
-    if (edge.importer.startsWith('src/ui/src/')) {
+    if (edge.importer.startsWith('src/ui/')) {
       checkUiPackageDeepImport(edge, packageRoots, packageNames, errors, warnings);
     }
   }
@@ -110,7 +274,7 @@ async function main() {
     return;
   }
 
-  console.log(`[ok] module boundaries checked: ${files.length} files, ${edges.length} imports.`);
+  console.log(`[ok] module boundaries checked: ${uniqueFiles.length} files, ${edges.length} imports.`);
 }
 
 function checkPackagePrivateRuntimeImport(edge: ImportEdge, errors: Finding[], warnings: Finding[]) {
@@ -125,6 +289,80 @@ function checkPackagePrivateRuntimeImport(edge: ImportEdge, errors: Finding[], w
   else errors.push(finding);
 }
 
+export function checkComputerUseImportBoundary(
+  edge: ImportEdge,
+  packageNames: Map<string, string>,
+  errors: Finding[],
+) {
+  const violation = computerUseImportBoundaryViolation(edge, packageNames);
+  if (!violation) return;
+  errors.push({
+    ...edge,
+    rule: violation.rule,
+    message: violation.message,
+  });
+}
+
+export function computerUseImportBoundaryViolation(
+  edge: ImportEdge,
+  packageNames: Map<string, string> = new Map(),
+): ComputerUseBoundaryViolation | undefined {
+  if (isGuiImporter(edge.importer)) {
+    const forbiddenTarget = computerUseForbiddenGuiTarget(edge);
+    if (!forbiddenTarget) return undefined;
+    return {
+      rule: `cu-gui-import-${forbiddenTarget}`,
+      message: 'src/ui may only consume Computer Use through shared contracts, GUI presentation packages, terminal-equivalent text, or TUI-host GUI intents; it must not import Computer Use action providers, observe provider implementations, runtime bridges, executors, or schedulers.',
+    };
+  }
+
+  if (isComputerUseBoundaryImporter(edge.importer)) {
+    const forbiddenTarget = computerUseForbiddenL0Target(edge, packageNames);
+    if (!forbiddenTarget) return undefined;
+    return {
+      rule: `cu-l0-import-${forbiddenTarget}`,
+      message: 'Computer Use L0/L1 handlers and migration bridges must not import GUI presentation/private UI such as renderer registries, Workbench, AnnotationSidebar, or presentation packages; presentation must flow through refs and TUI-host GUI module intents.',
+    };
+  }
+
+  return undefined;
+}
+
+function computerUseForbiddenGuiTarget(edge: ImportEdge) {
+  if (pointsAtWorkspacePath(edge, ['packages/actions/computer-use']) || looksLikeBareComputerUseActionProvider(edge.specifier)) {
+    return 'action-provider';
+  }
+  if (pointsAtWorkspacePath(edge, ['packages/observe/vision']) || looksLikeBareComputerUseObserveProvider(edge.specifier)) {
+    return 'observe-provider';
+  }
+  if (
+    pointsAtWorkspacePath(edge, ['src/runtime/computer-use', 'src/runtime/vision-sense'])
+    || pointsAtRuntimeComputerUseBridge(edge.specifier)
+  ) {
+    return 'runtime-bridge';
+  }
+  return undefined;
+}
+
+function computerUseForbiddenL0Target(edge: ImportEdge, packageNames: Map<string, string>) {
+  if (pointsAtWorkspacePath(edge, ['src/ui', 'packages/presentation'])) return 'gui-presentation';
+  const barePackage = bareWorkspacePackage(edge.specifier, packageNames);
+  if (barePackage?.root.startsWith('packages/presentation/')) return 'gui-presentation';
+  if (looksLikeBareGuiPresentationPackage(edge.specifier)) return 'gui-presentation';
+  return undefined;
+}
+
+function isGuiImporter(importer: string) {
+  return importer === 'src/ui' || importer.startsWith('src/ui/');
+}
+
+function isComputerUseBoundaryImporter(importer: string) {
+  return pathIsWithin(importer, 'packages/actions/computer-use')
+    || pathIsWithin(importer, 'packages/observe/vision')
+    || pathIsWithin(importer, 'src/runtime/computer-use')
+    || pathIsWithin(importer, 'src/runtime/vision-sense');
+}
+
 function checkUiPackageDeepImport(
   edge: ImportEdge,
   packageRoots: string[],
@@ -132,6 +370,15 @@ function checkUiPackageDeepImport(
   errors: Finding[],
   warnings: Finding[],
 ) {
+  if (edge.specifier === '@sciforge-observe/web/browser-runtime') {
+    errors.push({
+      ...edge,
+      rule: 'ui-browser-runtime-observe-import',
+      message: 'GUI code must import pure browser runtime types/helpers from @sciforge-ui/runtime-contract/browser-runtime; @sciforge-observe/web owns the TUI browser_runtime capability wrapper.',
+    });
+    return;
+  }
+
   if (edge.resolvedPath?.startsWith('packages/')) {
     const packageRoot = longestPackageRootForPath(edge.resolvedPath, packageRoots);
     if (!packageRoot) return;
@@ -175,6 +422,244 @@ async function collectPackageNames(packageRoots: string[]) {
     if (typeof json.name === 'string') names.set(json.name, packageRoot);
   }
   return names;
+}
+
+export async function loadComputerUseBoundaryPolicy(workspaceRoot = root): Promise<ComputerUseBoundaryPolicy> {
+  const manifestPath = join(workspaceRoot, 'docs/native-extension-ownership-map.json');
+  const actionManifestPath = join(workspaceRoot, 'packages/actions/computer-use/action-provider.manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+    entries?: Array<{
+      id?: unknown;
+      targetNativeSurfaces?: unknown;
+      forbiddenOwners?: unknown;
+      importBoundaries?: unknown;
+      adapterClassifications?: unknown;
+      remainingMigrationSubtasks?: unknown;
+    }>;
+  };
+  const actionManifest = JSON.parse(await readFile(actionManifestPath, 'utf8')) as {
+    nativeToolsContract?: unknown;
+    publicSurfaceParity?: unknown;
+    isolatedDesktopBackendRuntime?: unknown;
+    hostPortsContract?: unknown;
+  };
+  const computerUse = Array.isArray(manifest.entries)
+    ? manifest.entries.find((entry) => entry.id === 'computer-use')
+    : undefined;
+  const nativeToolsContract = asRecord(actionManifest.nativeToolsContract);
+  const publicSurfaceParity = asRecord(actionManifest.publicSurfaceParity);
+  const browserRuntimeObservationPolicy = asRecord(publicSurfaceParity?.browserRuntimeObservationPolicy);
+  const legacyBackendPackaging = asRecord(publicSurfaceParity?.legacyBackendPackaging);
+  const nativeProductGatePolicy = asRecord(publicSurfaceParity?.nativeProductGatePolicy);
+  const hostPortsContract = asRecord(actionManifest.hostPortsContract);
+  const nativeMultiScreenSidecarProtocol = asRecord(hostPortsContract?.nativeMultiScreenSidecarProtocol);
+  const isolatedDesktopBackendRuntime = asRecord(actionManifest.isolatedDesktopBackendRuntime);
+  return {
+    targetNativeSurfaces: stringArray(computerUse?.targetNativeSurfaces),
+    forbiddenOwners: stringArray(computerUse?.forbiddenOwners),
+    importBoundaries: stringArray(computerUse?.importBoundaries),
+    adapterClassifications: new Set(classificationArray(computerUse?.adapterClassifications)),
+    remainingMigrationSubtaskIds: new Set(migrationSubtaskIds(computerUse?.remainingMigrationSubtasks)),
+    actionProviderPublicSurface: {
+      requiredBacklogIds: new Set(stringArray(publicSurfaceParity?.requiredBacklogIds)),
+      requiredNativeSurfaces: stringArray(publicSurfaceParity?.requiredNativeSurfaces),
+      browserRuntimeAllowedRefs: new Set(stringArray(browserRuntimeObservationPolicy?.allowedRefs)),
+      browserRuntimeAllowedUses: new Set(stringArray(browserRuntimeObservationPolicy?.allowedUses)),
+      browserRuntimeForbiddenUses: new Set(stringArray(browserRuntimeObservationPolicy?.forbiddenUses)),
+      legacyBackendPackaging: stringRecord(legacyBackendPackaging),
+      legacyActiveProductGateEligible: booleanField(legacyBackendPackaging?.activeProductGateEligible),
+      historicalEvidenceAllowedWhenRefsFirst: booleanField(legacyBackendPackaging?.historicalEvidenceAllowedWhenRefsFirst),
+      nativeProductGatePolicy: {
+        productionHost: stringField(nativeProductGatePolicy?.productionHost),
+        requiredProvenance: new Set(stringArray(nativeProductGatePolicy?.requiredProvenance)),
+        guiExecutionAllowed: booleanField(nativeProductGatePolicy?.guiExecutionAllowed),
+        runtimeBridgePublicProductionApiAllowed: booleanField(nativeProductGatePolicy?.runtimeBridgePublicProductionApiAllowed),
+        workspaceGatewayProductionFallbackAllowed: booleanField(nativeProductGatePolicy?.workspaceGatewayProductionFallbackAllowed),
+        codexExecJsonProductionFallbackAllowed: booleanField(nativeProductGatePolicy?.codexExecJsonProductionFallbackAllowed),
+      },
+      nativeToolsContract: {
+        productionHost: stringField(nativeToolsContract?.productionHost),
+        tools: new Set(stringArray(nativeToolsContract?.tools)),
+        forbiddenPublicParameters: new Set(stringArray(nativeToolsContract?.forbiddenPublicParameters)),
+        requiredProvenance: new Set(stringArray(nativeToolsContract?.requiredProvenance)),
+      },
+      nativeMultiScreenSidecarProtocol: {
+        requiredDiscoveryTools: new Set(stringArray(nativeMultiScreenSidecarProtocol?.requiredDiscoveryTools)),
+        requiredExecutionTools: new Set(stringArray(nativeMultiScreenSidecarProtocol?.requiredExecutionTools)),
+        completedRunRequiredRefs: new Set(stringArray(nativeMultiScreenSidecarProtocol?.completedRunRequiredRefs)),
+        completedRunRequiredCapabilities: new Set(stringArray(nativeMultiScreenSidecarProtocol?.completedRunRequiredCapabilities)),
+      },
+      diagnosticProbes: new Set(Object.keys(asRecord(hostPortsContract?.diagnosticProbes) ?? {})),
+      isolatedDesktopBackendRuntime: {
+        legacyDiagnosticOnly: booleanField(isolatedDesktopBackendRuntime?.legacyDiagnosticOnly),
+        activeProductGateEligible: booleanField(isolatedDesktopBackendRuntime?.activeProductGateEligible),
+        backendPackagingOnly: booleanField(isolatedDesktopBackendRuntime?.backendPackagingOnly),
+        legacyBackendKinds: new Set(stringArray(isolatedDesktopBackendRuntime?.legacyBackendKinds)),
+        claimLimit: stringField(isolatedDesktopBackendRuntime?.claimLimit),
+      },
+    },
+  };
+}
+
+export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPolicy) {
+  const issues: string[] = [];
+  if (!policy.importBoundaries.some((item) => item.includes('src/ui') && item.includes('packages/actions/computer-use'))) {
+    issues.push('Computer Use ownership manifest must classify the GUI -> action provider import boundary.');
+  }
+  if (!policy.importBoundaries.some((item) => item.includes('packages/observe/vision') && /provider implementation|sense|grounding/i.test(item))) {
+    issues.push('Computer Use ownership manifest must classify observe/vision as a TUI sense provider implementation, not a GUI import surface.');
+  }
+  if (!policy.importBoundaries.some((item) => item.includes('src/runtime/computer-use') && /bridge|host-port|diagnostic|adapter/i.test(item))) {
+    issues.push('Computer Use ownership manifest must classify src/runtime/computer-use as a runtime bridge or host adapter boundary.');
+  }
+  if (!policy.importBoundaries.some((item) => /L0|handlers?|Workbench|AnnotationSidebar|renderer/i.test(item))) {
+    issues.push('Computer Use ownership manifest must classify L0 handler imports away from GUI renderer, Workbench, and AnnotationSidebar implementation details.');
+  }
+  for (const classification of requiredComputerUseAdapterClassifications) {
+    if (!policy.adapterClassifications.has(classification)) {
+      issues.push(`Computer Use ownership manifest is missing adapter classification ${classification}.`);
+    }
+  }
+  for (const id of requiredComputerUseBoundarySubtasks) {
+    if (!policy.remainingMigrationSubtaskIds.has(id)) {
+      issues.push(`Computer Use ownership manifest is missing migration subtask ${id}.`);
+    }
+  }
+  for (const surface of requiredComputerUseNativeSurfaces) {
+    if (!policy.targetNativeSurfaces.includes(surface) || !policy.actionProviderPublicSurface.requiredNativeSurfaces.includes(surface)) {
+      issues.push(`Computer Use public surface parity is missing native surface ${surface}.`);
+    }
+  }
+  for (const id of requiredComputerUseProductBacklogSubtasks) {
+    if (!policy.actionProviderPublicSurface.requiredBacklogIds.has(id)) {
+      issues.push(`Computer Use public surface parity is missing backlog id ${id}.`);
+    }
+  }
+  for (const tool of requiredComputerUseNativeTools) {
+    if (!policy.actionProviderPublicSurface.nativeToolsContract.tools.has(tool)) {
+      issues.push(`Computer Use native tool public surface is missing tool ${tool}.`);
+    }
+  }
+  for (const parameter of requiredForbiddenComputerUsePublicParameters) {
+    if (!policy.actionProviderPublicSurface.nativeToolsContract.forbiddenPublicParameters.has(parameter)) {
+      issues.push(`Computer Use native tool public surface must forbid parameter ${parameter}.`);
+    }
+  }
+  for (const provenance of requiredComputerUseNativeProvenance) {
+    if (
+      !policy.actionProviderPublicSurface.nativeToolsContract.requiredProvenance.has(provenance)
+      || !policy.actionProviderPublicSurface.nativeProductGatePolicy.requiredProvenance.has(provenance)
+    ) {
+      issues.push(`Computer Use native product/public surface is missing required provenance ${provenance}.`);
+    }
+  }
+  if (!policy.actionProviderPublicSurface.diagnosticProbes.has('nativeMultiScreenLiveDemo')) {
+    issues.push('Computer Use diagnostic probes must expose nativeMultiScreenLiveDemo for opt-in M6 evidence collection.');
+  }
+  const nativeMultiScreenProtocol = policy.actionProviderPublicSurface.nativeMultiScreenSidecarProtocol;
+  for (const tool of requiredNativeMultiScreenSidecarDiscoveryTools) {
+    if (!nativeMultiScreenProtocol.requiredDiscoveryTools.has(tool)) {
+      issues.push(`Computer Use native multi-screen sidecar protocol is missing discovery tool ${tool}.`);
+    }
+  }
+  for (const tool of requiredNativeMultiScreenSidecarExecutionTools) {
+    if (!nativeMultiScreenProtocol.requiredExecutionTools.has(tool)) {
+      issues.push(`Computer Use native multi-screen sidecar protocol is missing execution tool ${tool}.`);
+    }
+  }
+  for (const ref of requiredNativeMultiScreenSidecarCompletedRefs) {
+    if (!nativeMultiScreenProtocol.completedRunRequiredRefs.has(ref)) {
+      issues.push(`Computer Use native multi-screen sidecar protocol is missing completed run ref ${ref}.`);
+    }
+  }
+  for (const capability of requiredNativeMultiScreenSidecarCapabilities) {
+    if (!nativeMultiScreenProtocol.completedRunRequiredCapabilities.has(capability)) {
+      issues.push(`Computer Use native multi-screen sidecar protocol is missing completed capability ${capability}.`);
+    }
+  }
+  for (const ref of requiredBrowserRuntimeObservationRefs) {
+    if (!policy.actionProviderPublicSurface.browserRuntimeAllowedRefs.has(ref)) {
+      issues.push(`Computer Use BrowserRuntime observation policy is missing allowed ref ${ref}.`);
+    }
+  }
+  for (const use of requiredBrowserRuntimeObservationUses) {
+    if (!policy.actionProviderPublicSurface.browserRuntimeAllowedUses.has(use)) {
+      issues.push(`Computer Use BrowserRuntime observation policy is missing allowed use ${use}.`);
+    }
+  }
+  for (const forbiddenUse of ['Computer Use executor', 'completion evidence by itself', 'DOM click shortcut', 'AX action shortcut', 'Playwright action shortcut']) {
+    if (!policy.actionProviderPublicSurface.browserRuntimeForbiddenUses.has(forbiddenUse)) {
+      issues.push(`Computer Use BrowserRuntime observation policy is missing forbidden use ${forbiddenUse}.`);
+    }
+  }
+  const nativePolicy = policy.actionProviderPublicSurface.nativeProductGatePolicy;
+  if (!nativePolicy.productionHost) {
+    issues.push('Computer Use native product gate policy must declare a productionHost.');
+  }
+  if (
+    nativePolicy.guiExecutionAllowed !== false
+    || nativePolicy.runtimeBridgePublicProductionApiAllowed !== false
+    || nativePolicy.workspaceGatewayProductionFallbackAllowed !== false
+    || nativePolicy.codexExecJsonProductionFallbackAllowed !== false
+  ) {
+    issues.push('Computer Use native product gate policy must fail closed for GUI execution, runtime bridge public production API, Workspace Gateway fallback, and codex exec JSON fallback.');
+  }
+  const legacyRuntime = policy.actionProviderPublicSurface.isolatedDesktopBackendRuntime;
+  if (
+    legacyRuntime.legacyDiagnosticOnly !== true
+    || legacyRuntime.activeProductGateEligible !== false
+    || legacyRuntime.backendPackagingOnly !== true
+  ) {
+    issues.push('Computer Use isolated desktop backend runtime must remain legacy diagnostic/backend packaging only and not active product gate eligible.');
+  }
+  for (const kind of requiredLegacyBackendKinds) {
+    if (!legacyRuntime.legacyBackendKinds.has(kind)) {
+      issues.push(`Computer Use isolated desktop backend runtime is missing legacy backend kind ${kind}.`);
+    }
+  }
+  return issues;
+}
+
+function stringArray(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function stringRecord(value: unknown) {
+  const record = asRecord(value);
+  if (!record) return {};
+  return Object.fromEntries(Object.entries(record).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+}
+
+function stringField(value: unknown) {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function booleanField(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function classificationArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const classification = (item as { classification?: unknown }).classification;
+    return typeof classification === 'string' ? [classification] : [];
+  });
+}
+
+function migrationSubtaskIds(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const id = (item as { id?: unknown }).id;
+    return typeof id === 'string' ? [id] : [];
+  });
 }
 
 async function collectSourceFiles(dir: string): Promise<string[]> {
@@ -253,6 +738,53 @@ function pointsAtPrivateAppOrRuntime(edge: ImportEdge) {
     || /(^|\/)src\/shared(\/|$)/.test(edge.specifier);
 }
 
+function pointsAtWorkspacePath(edge: ImportEdge, prefixes: string[]) {
+  return prefixes.some((prefix) => {
+    const normalizedPrefix = prefix.replaceAll('\\', '/').replace(/\/$/, '');
+    return pathIsWithin(edge.resolvedPath, normalizedPrefix)
+      || pathIsWithin(normalizeSpecifierPath(edge.specifier), normalizedPrefix);
+  });
+}
+
+function pointsAtRuntimeComputerUseBridge(specifier: string) {
+  const normalized = normalizeSpecifierPath(specifier);
+  return pathIsWithin(normalized, 'src/runtime/computer-use')
+    || pathIsWithin(normalized, 'src/runtime/vision-sense')
+    || /(^|\/)vision-sense-runtime(?:\.[cm]?[jt]sx?|$)/.test(normalized);
+}
+
+function looksLikeBareComputerUseActionProvider(specifier: string) {
+  return /^@[^/]*actions?[^/]*\/computer-use(?:\/|$)/.test(specifier)
+    || /^@[^/]+(?:\/|-)actions?(?:\/|-)computer-use(?:\/|$)/.test(specifier)
+    || /^@[^/]+\/computer-use-action(?:\/|$)/.test(specifier)
+    || /^@[^/]+\/computer-use-provider(?:\/|$)/.test(specifier);
+}
+
+function looksLikeBareComputerUseObserveProvider(specifier: string) {
+  return /^@[^/]*observe[^/]*\/vision(?:\/|$)/.test(specifier)
+    || /^@[^/]+(?:\/|-)observe(?:\/|-)vision(?:\/|$)/.test(specifier)
+    || /^@[^/]+\/vision-sense(?:\/|$)/.test(specifier);
+}
+
+function looksLikeBareGuiPresentationPackage(specifier: string) {
+  if (specifier === '@sciforge/interactive-views' || specifier.startsWith('@sciforge/interactive-views/')) return true;
+  if (specifier === '@sciforge-ui/components' || specifier.startsWith('@sciforge-ui/components/')) return true;
+  return /^@sciforge-ui\/(?:.+-viewer|browser-workbench|terminal-session-viewer|workspace-file-viewer|presentation-|design-system)(?:\/|$)/.test(specifier);
+}
+
+function pathIsWithin(path: string | undefined, prefix: string) {
+  if (!path) return false;
+  const normalizedPath = path.replaceAll('\\', '/').replace(/\/$/, '');
+  const normalizedPrefix = prefix.replaceAll('\\', '/').replace(/\/$/, '');
+  return normalizedPath === normalizedPrefix
+    || normalizedPath.startsWith(`${normalizedPrefix}/`)
+    || normalizedPath.startsWith(`${normalizedPrefix}.`);
+}
+
+function normalizeSpecifierPath(specifier: string) {
+  return specifier.replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
 function pointsAtUiDomain(edge: ImportEdge) {
   return edge.resolvedPath === 'src/ui/src/domain' || edge.resolvedPath === 'src/ui/src/domain.ts';
 }
@@ -285,4 +817,6 @@ function extension(name: string) {
   return index >= 0 ? name.slice(index) : '';
 }
 
-await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  await main();
+}

@@ -13,6 +13,7 @@ import {
   buildSidebarProjectThreadGroups,
   buildSidebarSearchMatches,
   buildSidebarThreadItems,
+  findSidebarThreadSearchTarget,
   sidebarThreadTitle,
 } from './ShellPanels';
 
@@ -135,6 +136,28 @@ test('sidebar project groups show current project, peer projects, and top-k thre
   assert.deepEqual(groups[1]?.threads, []);
 });
 
+test('sidebar project groups keep full repository history for See more paging', () => {
+  const sessions = Object.fromEntries(Array.from({ length: 15 }, (_, index) => {
+    const n = index + 1;
+    return [`scenario-${n}`, session({
+      scenarioId: `scenario-${n}`,
+      sessionId: `thread-${n}`,
+      title: `Thread ${n}`,
+      messages: [{ id: `user-${n}`, role: 'user', content: `Question ${n}`, createdAt: `2026-05-21T00:${String(index).padStart(2, '0')}:00.000Z` }],
+      updatedAt: `2026-05-21T00:${String(index).padStart(2, '0')}:00.000Z`,
+    })];
+  })) as Record<ScenarioInstanceId, SciForgeSession>;
+
+  const groups = buildSidebarProjectThreadGroups({
+    ...defaultSciForgeConfig,
+    workspacePath: '/workspace/SciForge',
+  }, sessions);
+
+  assert.equal(groups[0]?.threads.length, 15);
+  assert.deepEqual(groups[0]?.threads.slice(0, 3).map((thread) => thread.title), ['Thread 15', 'Thread 14', 'Thread 13']);
+  assert.equal(groups[0]?.threads.at(-1)?.title, 'Thread 1');
+});
+
 test('shell sidebar publishes Cursor Agent-like projection without local path refs', () => {
   const sessions = {
     'literature-evidence-review': session({
@@ -147,12 +170,14 @@ test('shell sidebar publishes Cursor Agent-like projection without local path re
     scenarioId: 'structure-exploration',
     sessionId: 'archived-main',
     title: '归档实验',
+    archiveState: 'archived',
     messages: [{ id: 'user-2', role: 'user', content: '旧实验记录', createdAt: '2026-05-20T00:00:00.000Z' }],
   });
   const discarded = session({
     scenarioId: 'paper-qa',
     sessionId: 'discarded-main',
     title: 'Temporary chat (deleted)',
+    archiveState: 'discarded',
     messages: [{ id: 'user-3', role: 'user', content: '不要保留这段探索', createdAt: '2026-05-19T00:00:00.000Z' }],
     versions: [{
       id: 'version-deleted',
@@ -213,7 +238,7 @@ test('shell sidebar projection keeps seed-only active chat as draft without rend
     }),
   } as Record<ScenarioInstanceId, SciForgeSession>;
   const config = { ...defaultSciForgeConfig, workspacePath: '/tmp/sciforge-project' };
-  const groups = buildSidebarProjectThreadGroups(config, sessions);
+  const groups = buildSidebarProjectThreadGroups(config, sessions, [], { activeSessionId: 'draft-thread' });
   const projection = buildSidebarCursorAgentProjectionForShell(config, groups, {
     activeThreadId: 'draft-thread',
   });
@@ -225,8 +250,27 @@ test('shell sidebar projection keeps seed-only active chat as draft without rend
   assert.doesNotMatch(JSON.stringify(projection), /provider|model|bootstrap|\/tmp\/sciforge-project/i);
 });
 
-test('sidebar project chat markup keeps only top-k threads visible by default', () => {
-  const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
+test('shell sidebar hides inactive default drafts from other scenarios', () => {
+  const sessions = {
+    'literature-evidence-review': session({
+      scenarioId: 'literature-evidence-review',
+      sessionId: 'current-draft',
+      messages: [],
+    }),
+    'structure-exploration': session({
+      scenarioId: 'structure-exploration',
+      sessionId: 'inactive-default-draft',
+      messages: [{ id: 'seed-1', role: 'scenario', content: 'seed prompt', createdAt: '2026-05-21T00:00:00.000Z' }],
+    }),
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = { ...defaultSciForgeConfig, workspacePath: '/tmp/sciforge-project' };
+  const groups = buildSidebarProjectThreadGroups(config, sessions, [], { activeSessionId: 'current-draft' });
+
+  assert.deepEqual(groups[0]?.draftThreads?.map((thread) => thread.sessionId), ['current-draft']);
+});
+
+test('sidebar project chat markup keeps only Cursor-style top-k repository threads visible by default', () => {
+  const sessions = Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
     const n = index + 1;
     return [`scenario-${n}`, session({
       scenarioId: `scenario-${n}`,
@@ -254,19 +298,20 @@ test('sidebar project chat markup keeps only top-k threads visible by default', 
   assert.match(html, /Repositories/);
   assert.match(html, /New Agent/);
   assert.match(html, /SciForge/);
-  assert.match(html, /Show more/);
-  assert.match(html, /<span>Show more<\/span><small>2<\/small>/);
-  assert.match(html, /线程 6/);
+  assert.match(html, /See more/);
+  assert.doesNotMatch(html, /Show more|Show less/);
+  assert.doesNotMatch(html, /<small>2<\/small>/);
+  assert.match(html, /线程 8/);
   assert.match(html, /线程 3/);
   assert.doesNotMatch(html, /线程 2/);
   assert.doesNotMatch(html, /线程 1/);
 });
 
-test('sidebar shell DOM renders draft archived and discarded thread rows from the unified list', () => {
+test('sidebar shell DOM renders active and draft rows while archived and discarded stay out of the main list', () => {
   const html = renderToStaticMarkup(React.createElement(Sidebar, {
     page: 'workbench',
     setPage: () => undefined,
-    scenarioId: 'literature-evidence-review',
+    scenarioId: 'structure-exploration',
     setScenarioId: () => undefined,
     config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
     sessionsByScenario: {
@@ -311,13 +356,127 @@ test('sidebar shell DOM renders draft archived and discarded thread rows from th
   assert.match(html, /Active research thread/);
   assert.match(html, /New chat/);
   assert.match(html, /Draft ready|Draft/);
-  assert.match(html, /Archived paper notes/);
-  assert.match(html, /Discarded scratch chat/);
-  assert.match(html, /Archived/);
-  assert.match(html, /Discarded/);
-  assert.match(html, /aria-label="Restore chat: Archived paper notes"/);
-  assert.match(html, /aria-label="Restore chat: Discarded scratch chat"/);
-  assert.match(html, /aria-label="Discard chat: Active research thread"/);
+  assert.doesNotMatch(html, /Archived paper notes/);
+  assert.doesNotMatch(html, /Discarded scratch chat/);
+  assert.doesNotMatch(html, /aria-label="Restore chat: Archived paper notes"/);
+  assert.doesNotMatch(html, /aria-label="Restore chat: Discarded scratch chat"/);
+  assert.match(html, /aria-label="Archive chat: Active research thread"/);
+  assert.doesNotMatch(html, /aria-label="Delete chat: Active research thread"/);
+  assert.match(html, /aria-label="Discard draft: New chat"/);
+  assert.doesNotMatch(html, /aria-label="Archive chat: New chat"/);
+});
+
+test('sidebar shell keeps retained previous chats visible after starting a new chat', () => {
+  const html = renderToStaticMarkup(React.createElement(Sidebar, {
+    page: 'workbench',
+    setPage: () => undefined,
+    scenarioId: 'literature-evidence-review',
+    setScenarioId: () => undefined,
+    config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
+    sessionsByScenario: {
+      'literature-evidence-review': session({
+        scenarioId: 'literature-evidence-review',
+        sessionId: 'fresh-draft',
+        title: 'New chat',
+        messages: [],
+      }),
+    } as Record<ScenarioInstanceId, SciForgeSession>,
+    archivedSessions: [
+      session({
+        scenarioId: 'literature-evidence-review',
+        sessionId: 'previous-visible-thread',
+        title: 'Previous visible research thread',
+        messages: [{ id: 'user-previous', role: 'user', content: '旧对话仍应留在左栏', createdAt: '2026-05-20T00:00:00.000Z' }],
+        versions: [{
+          id: 'version-retained',
+          reason: 'new chat retained previous session',
+          createdAt: '2026-05-20T00:01:00.000Z',
+          messageCount: 1,
+          runCount: 0,
+          artifactCount: 0,
+          checksum: 'checksum',
+          snapshot: {} as never,
+        }],
+      }),
+    ],
+    onProjectNewChat: () => undefined,
+    onArchiveThread: () => undefined,
+    onDiscardThread: () => undefined,
+    onRestoreThread: () => undefined,
+    onSearchNavigate: () => undefined,
+    onSettingsOpen: () => undefined,
+    workspaceStatus: 'Connected',
+    onWorkspacePathChange: () => undefined,
+  }));
+
+  assert.match(html, /New chat/);
+  assert.match(html, /Previous visible research thread/);
+  assert.match(html, /aria-label="Archive chat: Previous visible research thread"/);
+  assert.doesNotMatch(html, /aria-label="Delete chat: Previous visible research thread"/);
+  assert.doesNotMatch(html, /aria-label="Restore chat: Previous visible research thread"/);
+});
+
+test('sidebar shell keeps the newly retained previous chat in the visible recent window', () => {
+  const activeThreads = Object.fromEntries(Array.from({ length: 8 }, (_, index) => {
+    const n = index + 1;
+    return [`scenario-${n}`, session({
+      scenarioId: `scenario-${n}`,
+      sessionId: `active-thread-${n}`,
+      title: `Active thread ${n}`,
+      messages: [{ id: `user-active-${n}`, role: 'user', content: `active prompt ${n}`, createdAt: `2026-05-21T00:0${index}:00.000Z` }],
+      updatedAt: `2026-05-21T00:0${index}:00.000Z`,
+    })];
+  })) as Record<ScenarioInstanceId, SciForgeSession>;
+  const html = renderToStaticMarkup(React.createElement(Sidebar, {
+    page: 'workbench',
+    setPage: () => undefined,
+    scenarioId: 'literature-evidence-review',
+    setScenarioId: () => undefined,
+    config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
+    sessionsByScenario: {
+      ...activeThreads,
+      'literature-evidence-review': session({
+        scenarioId: 'literature-evidence-review',
+        sessionId: 'fresh-draft',
+        title: 'New chat',
+        messages: [],
+        updatedAt: '2026-05-21T00:10:00.000Z',
+      }),
+    } as Record<ScenarioInstanceId, SciForgeSession>,
+    archivedSessions: [
+      session({
+        scenarioId: 'literature-evidence-review',
+        sessionId: 'previous-visible-thread',
+        title: 'Previous visible research thread',
+        messages: [{ id: 'user-previous', role: 'user', content: '旧对话仍应留在左栏', createdAt: '2026-05-21T00:09:00.000Z' }],
+        updatedAt: '2026-05-21T00:09:00.000Z',
+        versions: [{
+          id: 'version-retained',
+          reason: 'new chat retained previous session',
+          createdAt: '2026-05-21T00:09:00.000Z',
+          messageCount: 1,
+          runCount: 0,
+          artifactCount: 0,
+          checksum: 'checksum',
+          snapshot: {} as never,
+        }],
+      }),
+    ],
+    onProjectNewChat: () => undefined,
+    onArchiveThread: () => undefined,
+    onDiscardThread: () => undefined,
+    onRestoreThread: () => undefined,
+    onSearchNavigate: () => undefined,
+    onSettingsOpen: () => undefined,
+    workspaceStatus: 'Connected',
+    onWorkspacePathChange: () => undefined,
+  }));
+
+  assert.match(html, /New chat/);
+  assert.match(html, /Previous visible research thread/);
+  assert.match(html, /aria-label="Archive chat: Previous visible research thread"/);
+  assert.doesNotMatch(html, /aria-label="Restore chat: Previous visible research thread"/);
+  assert.doesNotMatch(html, /Active thread 1/);
 });
 
 test('sidebar shell renders Codex-style navigation labels without internal runtime terms', () => {
@@ -430,7 +589,9 @@ test('sidebar search returns concise matches and empty arrays for misses', () =>
     }),
   };
 
-  assert.ok(buildSidebarSearchMatches('protein', sessions).some((match) => match.id === 'thread:protein-thread'));
+  const proteinMatch = buildSidebarSearchMatches('protein', sessions).find((match) => match.id === 'thread:protein-thread');
+  assert.equal(proteinMatch?.sessionId, 'protein-thread');
+  assert.equal(proteinMatch?.threadState, 'active');
   assert.ok(buildSidebarSearchMatches('timeline', sessions).some((match) => match.page === 'timeline'));
   assert.deepEqual(buildSidebarSearchMatches('zzzz-no-result', sessions), []);
 });
@@ -441,13 +602,23 @@ test('sidebar search includes projects and archived threads without exposing loc
     scenarioId: 'structure-exploration',
     sessionId: 'archived-search-thread',
     title: 'Protein archive note',
+    archiveState: 'archived',
     messages: [{ id: 'user-1', role: 'user', content: 'archive protein note', createdAt: '2026-05-21T00:00:00.000Z' }],
   });
   const groups = buildSidebarProjectThreadGroups(config, {}, [archived]);
-  const matches = buildSidebarSearchMatches('protein', {}, { groups });
+  const matches = buildSidebarSearchMatches('protein', {}, { groups, archivedSessions: [archived] });
+  const archivedMatch = matches.find((match) => match.id === 'archived-thread:archived-search-thread');
+  const projectMatch = matches.find((match) => match.id.startsWith('project:') && match.detail === 'Current project');
 
-  assert.ok(matches.some((match) => match.id === 'archived-thread:archived-search-thread'));
-  assert.ok(matches.some((match) => match.id.startsWith('project:') && match.detail === 'Current project'));
+  assert.equal(matches.filter((match) => match.sessionId === 'archived-search-thread').length, 1);
+  assert.equal(archivedMatch?.sessionId, 'archived-search-thread');
+  assert.equal(archivedMatch?.threadState, 'archived');
+  assert.match(archivedMatch?.projectId ?? '', /^project-target:/);
+  assert.match(projectMatch?.projectId ?? '', /^project-target:/);
+  const target = archivedMatch ? findSidebarThreadSearchTarget(groups, archivedMatch) : undefined;
+  assert.equal(target?.project.id, groups[0]?.id);
+  assert.equal(target?.thread.sessionId, 'archived-search-thread');
+  assert.equal(target?.thread.state, 'archived');
   assert.doesNotMatch(JSON.stringify(matches), /\/tmp\/protein-project/);
 });
 

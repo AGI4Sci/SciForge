@@ -15,6 +15,8 @@ export function compactRunRawForRequestPayload(raw: unknown, limits: RunRawCompa
   return {
     codexSessionId: stringField(record.codexSessionId),
     nativeSessionId: stringField(record.nativeSessionId),
+    threadId: stringField(record.threadId),
+    thread_id: stringField(record.thread_id),
     termination: compactRawRecord(record.termination),
     cancelBoundary: compactRawRecord(record.cancelBoundary),
     historicalEditConflict: compactRawRecord(record.historicalEditConflict),

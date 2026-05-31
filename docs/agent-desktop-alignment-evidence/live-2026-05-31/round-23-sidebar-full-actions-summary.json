@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "round": 23,
+  "capturedAt": "2026-05-31T10:00:00+08:00",
+  "area": "left-sidebar-cursor-agent-parity",
+  "prompt": "现有的按钮和交互，需要完全实现，比如我发现对话“归档”、“删除”这些都没有真的实现",
+  "changes": [
+    {
+      "id": "repositories-customize-menu",
+      "summary": "Replaced the stale Repositories header menu with Cursor Agent-like Group by Repository, Show filters, Collapse All, and Mark All as Read entries.",
+      "files": [
+        "src/ui/src/app/contextMenu/SidebarProjectContextMenus.tsx",
+        "src/ui/src/app/appShell/ShellPanels.tsx",
+        "src/ui/src/app/appShell/sidebarPreferences.ts",
+        "src/ui/src/app/appShell/SidebarProjectChatSection.tsx"
+      ]
+    },
+    {
+      "id": "visible-section-filters",
+      "summary": "Implemented persistent sidebar visibility toggles for status, git, environment, archive/unread search results, source detail, and metadata.",
+      "files": [
+        "src/ui/src/app/appShell/sidebarPreferences.ts",
+        "src/ui/src/app/appShell/SidebarProjectChatSection.tsx",
+        "src/ui/src/app/appShell/ShellPanels.tsx"
+      ]
+    },
+    {
+      "id": "destructive-chat-actions",
+      "summary": "Verified real UI clicks for New Agent retention, Archive, Restore, Delete, Settings Archived Delete, cross-project activation, Remove from Sidebar, and dark/light theme switching in an isolated writer-backed browser state."
+    }
+  ],
+  "cursorDesktopBaseline": {
+    "tool": "Computer Use",
+    "observed": [
+      "Top actions: New Agent, Automations, Customize.",
+      "Repositories header customize menu contains Group by Repository, Show filters, Collapse All, and Mark All as Read.",
+      "Project rows keep previous chats visible until the user archives, deletes, or removes the repository."
+    ]
+  },
+  "browserVerification": {
+    "inAppBrowser": {
+      "url": "http://127.0.0.1:5173/",
+      "observed": [
+        "Repositories Customize Sidebar opened the Cursor-like menu.",
+        "Source filter toggled thread detail visibility and was restored before handoff."
+      ]
+    },
+    "isolatedEdge": {
+      "command": "node tmp/sidebar-actions-e2e.mjs",
+      "status": "passed",
+      "stubbedWorkspaceWriter": true,
+      "verified": {
+        "menuAligned": true,
+        "sourceToggleHidThreadDetail": true,
+        "collapseAllHidThreads": true,
+        "newAgentRetainedPreviousChat": true,
+        "archiveSearchAndSettingsVerified": true,
+        "restoreVerified": true,
+        "deleteAndDeleteArchivedVerified": true,
+        "projectSwitchKeptBothRepositoriesBeforeRemoval": true,
+        "removeFromSidebarVerified": true,
+        "themeModesVerified": true,
+        "writerPostCount": 11,
+        "finalWorkspacePath": "/tmp/sciforge-sidebar-e2e/p2",
+        "finalPeerInstances": [],
+        "finalArchivedCount": 0
+      }
+    }
+  },
+  "validation": {
+    "focusedTests": {
+      "command": "node --import tsx --test src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/ComponentWorkbenchPage.test.ts",
+      "status": "passed",
+      "tests": 49
+    },
+    "typecheck": {
+      "command": "npm run typecheck --silent",
+      "status": "passed"
+    },
+    "diffCheck": {
+      "command": "git diff --check",
+      "status": "passed"
+    }
+  },
+  "remainingNotes": [
+    "Open Workspace still depends on the desktop/workspace host because it intentionally leaves the browser-only sandbox; the project-header Open in Finder entry was removed in Round 29.",
+    "Mark All as Read is exposed on the Repositories header and project-header context menu for Cursor parity; SciForge currently has no separate unread badge model beyond visible status dots."
+  ]
+}

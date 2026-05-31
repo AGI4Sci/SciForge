@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from .user_control import write_session_permission_store
 from .virtual_input_adapter import (
     VIRTUAL_INPUT_ADAPTER_STATUS,
     load_input_adapter_manifest,
@@ -25,9 +26,13 @@ from .virtual_input_adapter import (
 VIRTUAL_DESKTOP_SESSION_SCHEMA = "sciforge.computer-use.virtual-desktop-session.v1"
 VIRTUAL_DESKTOP_BLOCKED_SCHEMA = "sciforge.computer-use.virtual-desktop-blocked-manifest.v1"
 VIRTUAL_DESKTOP_DISPLAY_SCHEMA = "sciforge.computer-use.virtual-display-ref.v1"
+VIRTUAL_DESKTOP_DISPLAY_GROUP_SCHEMA = "sciforge.computer-use.virtual-display-group.v1"
+VIRTUAL_DESKTOP_SCREENS_SCHEMA = "sciforge.computer-use.virtual-screens.v1"
 VIRTUAL_DESKTOP_CAPTURE_STREAM_SCHEMA = "sciforge.computer-use.capture-stream-ref.v1"
 VIRTUAL_DESKTOP_REPLAY_BUNDLE_SCHEMA = "sciforge.computer-use.replay-bundle-ref.v1"
 VIRTUAL_DESKTOP_INPUT_LEASE_SCHEMA = "sciforge.computer-use.input-lease.v1"
+VIRTUAL_DESKTOP_DIAGNOSTICS_SCHEMA = "sciforge.computer-use.virtual-desktop-diagnostics.v1"
+ACTOR_CURSOR_EVENT_SCHEMA = "sciforge.computer-use.actor-cursor-event.v1"
 SESSION_MANIFEST_NAME = "virtual-desktop-session-manifest.json"
 BLOCKED_MANIFEST_NAME = "virtual-desktop-session-blocked-manifest.json"
 
@@ -62,23 +67,47 @@ class VirtualDesktopRefs:
     """Durable refs owned by a virtual desktop session."""
 
     session_root_ref: str
+    virtual_display_group_ref: str
     virtual_display_ref: str
+    virtual_screens_ref: str
+    actor_cursor_log_ref: str
     virtual_input_queue_ref: str
     filesystem_root_ref: str
     capture_stream_ref: str
     replay_bundle_ref: str
     input_adapter_manifest_ref: str
+    session_permission_ref: str
+    app_window_allowlist_ref: str
+    risk_preview_ref: str
+    data_visibility_ref: str
+    stop_cancel_lease_ref: str
+    stop_ref: str
+    cancel_lease_ref: str
+    diagnostics_ref: str
+    blocked_manifest_ref: str
     manifest_ref: str
 
     def as_dict(self) -> dict[str, str]:
         return {
             "sessionRootRef": self.session_root_ref,
+            "virtualDisplayGroupRef": self.virtual_display_group_ref,
             "virtualDisplayRef": self.virtual_display_ref,
+            "virtualScreensRef": self.virtual_screens_ref,
+            "actorCursorLogRef": self.actor_cursor_log_ref,
             "virtualInputQueueRef": self.virtual_input_queue_ref,
             "filesystemRootRef": self.filesystem_root_ref,
             "captureStreamRef": self.capture_stream_ref,
             "replayBundleRef": self.replay_bundle_ref,
             "inputAdapterManifestRef": self.input_adapter_manifest_ref,
+            "sessionPermissionRef": self.session_permission_ref,
+            "appWindowAllowlistRef": self.app_window_allowlist_ref,
+            "riskPreviewRef": self.risk_preview_ref,
+            "dataVisibilityRef": self.data_visibility_ref,
+            "stopCancelLeaseRef": self.stop_cancel_lease_ref,
+            "stopRef": self.stop_ref,
+            "cancelLeaseRef": self.cancel_lease_ref,
+            "diagnosticsRef": self.diagnostics_ref,
+            "blockedManifestRef": self.blocked_manifest_ref,
             "manifestRef": self.manifest_ref,
         }
 
@@ -91,6 +120,11 @@ class InputLease:
     session_id: str
     holder: str
     lease_ref: str
+    scope_type: str = "screen"
+    screen_id: str = "screen-1"
+    window_id: str | None = None
+    actor_id: str | None = None
+    cursor_id: str | None = None
     status: str = "active"
     acquired_at: str = field(default_factory=_utc_now)
     released_at: str | None = None
@@ -98,12 +132,29 @@ class InputLease:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def manifest(self) -> dict[str, Any]:
+        owner = {
+            "holder": self.holder,
+            "actorId": self.actor_id,
+            "cursorId": self.cursor_id,
+        }
+        lease_scope = {
+            "scopeType": self.scope_type,
+            "screenId": self.screen_id,
+            "windowId": self.window_id,
+        }
         return {
             "schemaVersion": VIRTUAL_DESKTOP_INPUT_LEASE_SCHEMA,
             "status": self.status,
             "leaseId": self.lease_id,
             "sessionId": self.session_id,
             "holder": self.holder,
+            "owner": _safe_mapping({key: value for key, value in owner.items() if value}),
+            "leaseOwner": _safe_mapping({key: value for key, value in owner.items() if value}),
+            "leaseScope": _safe_mapping({key: value for key, value in lease_scope.items() if value}),
+            "screenId": self.screen_id,
+            "windowId": self.window_id,
+            "actorId": self.actor_id,
+            "cursorId": self.cursor_id,
             "acquiredAt": self.acquired_at,
             "releasedAt": self.released_at,
             "reason": self.reason,
@@ -143,6 +194,9 @@ class VirtualDesktopSession:
     def manifest(self) -> dict[str, Any]:
         refs = self.refs.as_dict()
         lease_ref = self.active_lease.lease_ref if self.active_lease and self.active_lease.status == "active" else None
+        executor_lease_refs = [lease_ref] if lease_ref else []
+        display_group_id = _display_group_id(self.session_id)
+        default_screen_id = _default_screen_id()
         manifest = {
             "schemaVersion": VIRTUAL_DESKTOP_SESSION_SCHEMA,
             "status": self.status,
@@ -150,6 +204,8 @@ class VirtualDesktopSession:
             "reason": "Virtual desktop session refs are reserved." if self.status == "open" else "Virtual desktop session is closed.",
             "sessionId": self.session_id,
             "threadId": self.thread_id,
+            "displayGroupId": display_group_id,
+            "screenIds": [default_screen_id],
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
             "backend": {
@@ -158,8 +214,33 @@ class VirtualDesktopSession:
                 "noVncBackendStarted": False,
                 "claimLimit": "MVP skeleton only; no real noVNC backend is started by this module.",
             },
-            "refs": {**refs, "inputLeaseRef": lease_ref},
+            "refs": {**refs, "inputLeaseRef": lease_ref, "executorLeaseRefs": executor_lease_refs},
             **refs,
+            "displayGroupRef": self.refs.virtual_display_group_ref,
+            "screenRefs": [self.refs.virtual_screens_ref],
+            "visibleScreenRefs": [self.refs.virtual_screens_ref],
+            "visibleCursorRefs": [self.refs.actor_cursor_log_ref],
+            "sessionPermissionRef": self.refs.session_permission_ref,
+            "appWindowAllowlistRef": self.refs.app_window_allowlist_ref,
+            "allowedAppRefs": [],
+            "allowedWindowRefs": [],
+            "forbiddenAppRefs": ["app:shared-user-desktop"],
+            "inputModalityPolicy": {
+                "allowedInputModalities": ["observe", "actor-cursor", "scoped-executor"],
+                "mutatingInputRequiresLease": True,
+                "sharedSystemInputAllowed": False,
+                "targetBoundExecutorRequired": True,
+                "policyRef": self.refs.app_window_allowlist_ref,
+            },
+            "riskPreviewRef": self.refs.risk_preview_ref,
+            "dataVisibilityRef": self.refs.data_visibility_ref,
+            "stopCancelLeaseRef": self.refs.stop_cancel_lease_ref,
+            "stopRef": self.refs.stop_ref,
+            "cancelLeaseRef": self.refs.cancel_lease_ref,
+            "approvalMode": "fail-closed",
+            "actorCursorLogRef": self.refs.actor_cursor_log_ref,
+            "inputQueueRef": self.refs.virtual_input_queue_ref,
+            "executorLeaseRefs": executor_lease_refs,
             "inputLeaseRef": lease_ref,
             "inputLeaseActive": lease_ref is not None,
             "inputAdapterStatus": VIRTUAL_INPUT_ADAPTER_STATUS,
@@ -173,11 +254,23 @@ class VirtualDesktopSession:
                 "inputLeaseExclusive": True,
                 **ISOLATION_FLAGS,
             },
+            "userControl": {
+                "sessionPermissionRef": self.refs.session_permission_ref,
+                "appWindowAllowlistRef": self.refs.app_window_allowlist_ref,
+                "riskPreviewRef": self.refs.risk_preview_ref,
+                "dataVisibilityRef": self.refs.data_visibility_ref,
+                "stopCancelLeaseRef": self.refs.stop_cancel_lease_ref,
+                "stopRef": self.refs.stop_ref,
+                "cancelLeaseRef": self.refs.cancel_lease_ref,
+                "approvalMode": "fail-closed",
+                "guiExecutesActions": False,
+            },
             "diagnosticOnly": True,
             "realWindowEvidence": False,
             "rawPayloadWritten": False,
             "inlineImageWritten": False,
             "secretsWritten": False,
+            "completionEvidenceEligible": False,
             "metadata": _safe_mapping(self.metadata),
             **NO_OS_INPUT_FLAGS,
         }
@@ -185,6 +278,7 @@ class VirtualDesktopSession:
 
     def write_manifest(self) -> dict[str, Any]:
         self.updated_at = _utc_now()
+        self._write_user_control_store()
         payload = self.manifest()
         _write_json(Path(self.refs.manifest_ref), payload)
         return payload
@@ -209,6 +303,9 @@ class VirtualDesktopSession:
                 category="virtual-desktop-input-lease-blocked",
                 reason="Input lease holder is required.",
             )
+        safe_metadata = _safe_mapping(metadata or {})
+        lease_scope = _lease_scope_from_metadata(safe_metadata)
+        owner = _lease_owner_from_metadata(holder_value, safe_metadata)
         lease_id = f"lease-{uuid.uuid4().hex[:12]}"
         lease_ref = str((self.session_root / "leases" / f"{lease_id}.json").resolve())
         lease = InputLease(
@@ -216,11 +313,32 @@ class VirtualDesktopSession:
             session_id=self.session_id,
             holder=holder_value,
             lease_ref=lease_ref,
-            metadata=metadata or {},
+            scope_type=lease_scope["scopeType"],
+            screen_id=lease_scope["screenId"],
+            window_id=lease_scope.get("windowId"),
+            actor_id=owner.get("actorId"),
+            cursor_id=owner.get("cursorId"),
+            metadata=safe_metadata,
         )
         self.active_lease = lease
         lease.write()
-        self._append_input_queue_event("lease-acquired", {"leaseId": lease_id, "holder": holder_value})
+        self._append_input_queue_event("lease-acquired", {
+            "leaseId": lease_id,
+            "holder": holder_value,
+            "leaseRef": lease_ref,
+            "leaseOwner": lease.manifest()["leaseOwner"],
+            "leaseScope": lease.manifest()["leaseScope"],
+        })
+        self._append_actor_cursor_event(
+            event_type="lease-acquired",
+            actor_id=owner.get("actorId") or holder_value,
+            cursor_id=owner.get("cursorId") or f"cursor-{_safe_ref_segment(holder_value)}",
+            screen_id=lease_scope["screenId"],
+            window_id=lease_scope.get("windowId"),
+            state="lease-owner",
+            refs=[lease_ref],
+            payload={"leaseId": lease_id, "holder": holder_value},
+        )
         self.write_manifest()
         return lease
 
@@ -241,7 +359,22 @@ class VirtualDesktopSession:
         lease.reason = reason or "released"
         payload = lease.write()
         self.active_lease = None
-        self._append_input_queue_event("lease-released", {"leaseId": lease_id, "reason": lease.reason})
+        self._append_input_queue_event("lease-released", {
+            "leaseId": lease_id,
+            "reason": lease.reason,
+            "leaseRef": lease.lease_ref,
+            "leaseScope": lease.manifest()["leaseScope"],
+        })
+        self._append_actor_cursor_event(
+            event_type="lease-released",
+            actor_id=lease.actor_id or lease.holder,
+            cursor_id=lease.cursor_id or f"cursor-{_safe_ref_segment(lease.holder)}",
+            screen_id=lease.screen_id,
+            window_id=lease.window_id,
+            state="released",
+            refs=[lease.lease_ref],
+            payload={"leaseId": lease_id, "reason": lease.reason},
+        )
         self.write_manifest()
         return payload
 
@@ -267,17 +400,60 @@ class VirtualDesktopSession:
         _write_json(manifest_ref, manifest)
         raise VirtualDesktopSessionBlocked(reason, manifest)
 
+    def _write_user_control_store(self) -> None:
+        write_session_permission_store(
+            self.session_root,
+            session_id=self.session_id,
+            thread_id=self.thread_id,
+            display_group_ref=self.refs.virtual_display_group_ref,
+            screen_refs=[self.refs.virtual_screens_ref],
+            actor_cursor_log_ref=self.refs.actor_cursor_log_ref,
+            input_queue_ref=self.refs.virtual_input_queue_ref,
+            capture_stream_ref=self.refs.capture_stream_ref,
+            replay_bundle_ref=self.refs.replay_bundle_ref,
+            input_adapter_manifest_ref=self.refs.input_adapter_manifest_ref,
+            active_lease_ref=self.active_lease.lease_ref if self.active_lease and self.active_lease.status == "active" else None,
+            metadata=self.metadata,
+        )
+
     def _append_input_queue_event(self, event_type: str, payload: Mapping[str, Any]) -> None:
         event = {
             "schemaVersion": "sciforge.computer-use.virtual-input-queue-event.v1",
             "eventType": event_type,
             "sessionId": self.session_id,
             "threadId": self.thread_id,
+            "displayGroupId": _display_group_id(self.session_id),
             "createdAt": _utc_now(),
             "payload": _safe_mapping(payload),
             **NO_OS_INPUT_FLAGS,
         }
         _append_jsonl(Path(self.refs.virtual_input_queue_ref), event)
+
+    def _append_actor_cursor_event(
+        self,
+        *,
+        event_type: str,
+        actor_id: str,
+        cursor_id: str,
+        screen_id: str,
+        window_id: str | None,
+        state: str,
+        refs: list[str],
+        payload: Mapping[str, Any] | None = None,
+    ) -> None:
+        _append_actor_cursor_event(
+            Path(self.refs.actor_cursor_log_ref),
+            session_id=self.session_id,
+            thread_id=self.thread_id,
+            event_type=event_type,
+            actor_id=actor_id,
+            cursor_id=cursor_id,
+            screen_id=screen_id,
+            window_id=window_id,
+            state=state,
+            refs=refs,
+            payload=payload or {},
+        )
 
 
 class SessionManager:
@@ -335,6 +511,7 @@ class SessionManager:
             thread_id=thread_value,
             input_adapter_manifest=manifest_source,
             backend_kind=backend_kind,
+            metadata={**self.metadata, **dict(metadata or {})},
         )
         session_validation = {**validation, "adapterManifestRef": refs.input_adapter_manifest_ref}
         session = VirtualDesktopSession(
@@ -431,7 +608,10 @@ def build_blocked_virtual_desktop_manifest(
         "manifestRef": manifest_ref,
         "inputLeaseRef": active_lease_ref,
         "requiredSessionResources": [
+            "virtualDisplayGroupRef",
             "virtualDisplayRef",
+            "virtualScreensRef",
+            "actorCursorLogRef",
             "virtualInputQueueRef",
             "filesystemRootRef",
             "captureStreamRef",
@@ -468,31 +648,147 @@ def _materialize_session_refs(
     thread_id: str,
     input_adapter_manifest: Mapping[str, Any] | str | Path,
     backend_kind: str,
+    metadata: Mapping[str, Any] | None = None,
 ) -> VirtualDesktopRefs:
     session_root.mkdir(parents=True, exist_ok=True)
     filesystem_root = (session_root / "filesystem-root").resolve()
     filesystem_root.mkdir(parents=True, exist_ok=True)
+    (session_root / "leases").mkdir(parents=True, exist_ok=True)
+    (session_root / "blocked").mkdir(parents=True, exist_ok=True)
+    (session_root / "diagnostics").mkdir(parents=True, exist_ok=True)
+    display_group_id = _display_group_id(session_id)
+    default_screen_id = _default_screen_id()
+    display_group_ref = (session_root / "virtual-display-group.json").resolve()
     display_ref = (session_root / "virtual-display.json").resolve()
+    screens_ref = (session_root / "virtual-screens.json").resolve()
+    actor_cursor_log_ref = (session_root / "actor-cursors.jsonl").resolve()
     input_queue_ref = (session_root / "virtual-input-queue.jsonl").resolve()
     capture_stream_ref = (session_root / "capture-stream.json").resolve()
     replay_bundle_ref = (session_root / "replay-bundle.json").resolve()
     adapter_manifest_ref = (session_root / "input-adapter-manifest.json").resolve()
+    diagnostics_ref = (session_root / "diagnostics" / "no-secret-diagnostics.json").resolve()
+    blocked_manifest_ref = (session_root / "blocked" / "blocked-manifest.json").resolve()
     manifest_ref = (session_root / SESSION_MANIFEST_NAME).resolve()
 
     adapter_payload = load_input_adapter_manifest(input_adapter_manifest)
     _write_json(adapter_manifest_ref, _safe_mapping(adapter_payload))
+    user_control_refs = write_session_permission_store(
+        session_root,
+        session_id=session_id,
+        thread_id=thread_id,
+        display_group_ref=str(display_group_ref),
+        screen_refs=[str(screens_ref)],
+        actor_cursor_log_ref=str(actor_cursor_log_ref),
+        input_queue_ref=str(input_queue_ref),
+        capture_stream_ref=str(capture_stream_ref),
+        replay_bundle_ref=str(replay_bundle_ref),
+        input_adapter_manifest_ref=str(adapter_manifest_ref),
+        active_lease_ref=None,
+        metadata=metadata or {},
+    )
+    screen_record = {
+        "screenId": default_screen_id,
+        "index": 0,
+        "status": "reserved",
+        "displayGroupId": display_group_id,
+        "geometry": {
+            "x": 0,
+            "y": 0,
+            "width": 1280,
+            "height": 720,
+            "scale": 1.0,
+            "coordinateSpace": "screen-local",
+        },
+        "backendBinding": {
+            "kind": backend_kind,
+            "status": "not-started",
+            "targetBound": True,
+            "realWindowEvidence": False,
+        },
+        "captureSource": {
+            "kind": "reserved-capture-stream",
+            "captureStreamRef": str(capture_stream_ref),
+        },
+        "windowNamespace": {
+            "kind": "screen-local-window-namespace",
+            "windowRefs": [],
+        },
+        "resourceRefs": {
+            "captureStreamRef": str(capture_stream_ref),
+            "replayBundleRef": str(replay_bundle_ref),
+            "inputQueueRef": str(input_queue_ref),
+        },
+        **NO_OS_INPUT_FLAGS,
+    }
+    _write_json(
+        display_group_ref,
+        {
+            "schemaVersion": VIRTUAL_DESKTOP_DISPLAY_GROUP_SCHEMA,
+            "sessionId": session_id,
+            "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "status": "reserved",
+            "screenIds": [default_screen_id],
+            "screenRefs": [str(screens_ref)],
+        "actorCursorLogRef": str(actor_cursor_log_ref),
+        "virtualInputQueueRef": str(input_queue_ref),
+        "executorLeaseRefs": [],
+        "userControlRefs": user_control_refs.as_dict(),
+        **user_control_refs.as_dict(),
+        "coordinateSpaces": ["screen-local", "window-local"],
+            "backendKind": backend_kind,
+            "diagnosticOnly": True,
+            "realWindowEvidence": False,
+            **NO_OS_INPUT_FLAGS,
+        },
+    )
+    _write_json(
+        screens_ref,
+        {
+            "schemaVersion": VIRTUAL_DESKTOP_SCREENS_SCHEMA,
+            "sessionId": session_id,
+            "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "status": "reserved",
+            "screens": [screen_record],
+            "screenRefs": [str(screens_ref)],
+            "coordinateSpacePolicy": "screen-local; no shared ambiguous global coordinates",
+            "diagnosticOnly": True,
+            "realWindowEvidence": False,
+            **NO_OS_INPUT_FLAGS,
+        },
+    )
     _write_json(
         display_ref,
         {
             "schemaVersion": VIRTUAL_DESKTOP_DISPLAY_SCHEMA,
             "sessionId": session_id,
             "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "screenId": default_screen_id,
             "status": "reserved",
             "backendKind": backend_kind,
+            "displayGroupRef": str(display_group_ref),
+            "screenRefs": [str(screens_ref)],
             "frameRefs": [],
             "currentFrameRef": None,
+            "compatibilityProjection": "legacy single-display ref for callers not yet reading virtual-display-group.json",
             **NO_OS_INPUT_FLAGS,
         },
+    )
+    actor_cursor_log_ref.touch(exist_ok=True)
+    _append_actor_cursor_event(
+        actor_cursor_log_ref,
+        session_id=session_id,
+        thread_id=thread_id,
+        event_type="cursor-presence",
+        actor_id="system",
+        cursor_id=f"cursor-{_safe_ref_segment(session_id)}-system",
+        screen_id=default_screen_id,
+        window_id=None,
+        state="reserved",
+        refs=[str(display_group_ref), str(screens_ref)],
+        payload={"source": "session-manager", "diagnosticOnly": True},
     )
     input_queue_ref.parent.mkdir(parents=True, exist_ok=True)
     input_queue_ref.touch(exist_ok=True)
@@ -502,6 +798,8 @@ def _materialize_session_refs(
             "schemaVersion": VIRTUAL_DESKTOP_CAPTURE_STREAM_SCHEMA,
             "sessionId": session_id,
             "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "screenRefs": [str(screens_ref)],
             "status": "reserved",
             "frameRefs": [],
             "streamRef": str(capture_stream_ref),
@@ -514,21 +812,90 @@ def _materialize_session_refs(
             "schemaVersion": VIRTUAL_DESKTOP_REPLAY_BUNDLE_SCHEMA,
             "sessionId": session_id,
             "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "displayGroupRef": str(display_group_ref),
+            "screenRefs": [str(screens_ref)],
             "status": "reserved",
+            "frames": [],
+            "multiScreenFrames": True,
+            "cursorOverlayRefs": [str(actor_cursor_log_ref)],
             "timelineRefs": [],
             "inputEventLogRef": str(input_queue_ref),
+            "actorCursorLogRef": str(actor_cursor_log_ref),
             "captureStreamRef": str(capture_stream_ref),
+            "executorLeaseRefs": [],
+            "userControlRefs": user_control_refs.as_dict(),
+            **user_control_refs.as_dict(),
+            "completionEvidenceEligible": False,
+            **NO_OS_INPUT_FLAGS,
+        },
+    )
+    _write_json(
+        diagnostics_ref,
+        {
+            "schemaVersion": VIRTUAL_DESKTOP_DIAGNOSTICS_SCHEMA,
+            "sessionId": session_id,
+            "threadId": thread_id,
+            "displayGroupId": display_group_id,
+            "status": "diagnostic-only",
+            "diagnosticOnly": True,
+            "realWindowEvidence": False,
+            "inputAdapterValidation": _safe_mapping(validate_input_adapter_manifest_for_real_desktop(input_adapter_manifest)),
+            "refs": {
+                "virtualDisplayGroupRef": str(display_group_ref),
+                "virtualScreensRef": str(screens_ref),
+                "actorCursorLogRef": str(actor_cursor_log_ref),
+                "virtualInputQueueRef": str(input_queue_ref),
+                "captureStreamRef": str(capture_stream_ref),
+                "replayBundleRef": str(replay_bundle_ref),
+                **user_control_refs.as_dict(),
+            },
+            "rawPayloadWritten": False,
+            "inlineImageWritten": False,
+            "secretsWritten": False,
+            **NO_OS_INPUT_FLAGS,
+        },
+    )
+    _write_json(
+        blocked_manifest_ref,
+        {
+            "schemaVersion": VIRTUAL_DESKTOP_BLOCKED_SCHEMA,
+            "status": "clear",
+            "category": "virtual-desktop-session-blocked-index",
+            "reason": "No blocked session operation has been recorded for this session root.",
+            "blockedReasons": [],
+            "threadId": thread_id,
+            "sessionId": session_id,
+            "refs": {},
+            "manifestRef": str(blocked_manifest_ref),
+            "diagnosticOnly": True,
+            "realWindowEvidence": False,
+            "rawPayloadWritten": False,
+            "inlineImageWritten": False,
+            "secretsWritten": False,
             **NO_OS_INPUT_FLAGS,
         },
     )
     return VirtualDesktopRefs(
         session_root_ref=str(session_root),
+        virtual_display_group_ref=str(display_group_ref),
         virtual_display_ref=str(display_ref),
+        virtual_screens_ref=str(screens_ref),
+        actor_cursor_log_ref=str(actor_cursor_log_ref),
         virtual_input_queue_ref=str(input_queue_ref),
         filesystem_root_ref=str(filesystem_root),
         capture_stream_ref=str(capture_stream_ref),
         replay_bundle_ref=str(replay_bundle_ref),
         input_adapter_manifest_ref=str(adapter_manifest_ref),
+        session_permission_ref=user_control_refs.session_permission_ref,
+        app_window_allowlist_ref=user_control_refs.app_window_allowlist_ref,
+        risk_preview_ref=user_control_refs.risk_preview_ref,
+        data_visibility_ref=user_control_refs.data_visibility_ref,
+        stop_cancel_lease_ref=user_control_refs.stop_cancel_lease_ref,
+        stop_ref=user_control_refs.stop_ref,
+        cancel_lease_ref=user_control_refs.cancel_lease_ref,
+        diagnostics_ref=str(diagnostics_ref),
+        blocked_manifest_ref=str(blocked_manifest_ref),
         manifest_ref=str(manifest_ref),
     )
 
@@ -543,6 +910,116 @@ def _safe_ref_segment(value: str) -> str:
     cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(value).strip().lower())
     cleaned = "-".join(part for part in cleaned.split("-") if part)
     return cleaned[:80] or "virtual-desktop"
+
+
+def _default_screen_id() -> str:
+    return "screen-1"
+
+
+def _display_group_id(session_id: str) -> str:
+    return f"display-group-{_safe_ref_segment(session_id)}"
+
+
+def _lease_scope_from_metadata(metadata: Mapping[str, Any]) -> dict[str, str]:
+    explicit = _safe_mapping(metadata.get("leaseScope") if isinstance(metadata.get("leaseScope"), Mapping) else {})
+    target_scope = _safe_mapping(metadata.get("targetScope") if isinstance(metadata.get("targetScope"), Mapping) else {})
+    source = {**target_scope, **explicit, **metadata}
+    screen_id = _first_non_empty_string(
+        source.get("screenId"),
+        source.get("screen_id"),
+        _nested_string(metadata, "target", "screenId"),
+        _nested_string(metadata, "target", "screen_id"),
+    ) or _default_screen_id()
+    window_id = _first_non_empty_string(
+        source.get("windowId"),
+        source.get("window_id"),
+        _nested_string(metadata, "target", "windowId"),
+        _nested_string(metadata, "target", "window_id"),
+    )
+    scope_type = _first_non_empty_string(
+        source.get("scopeType"),
+        source.get("scope"),
+        source.get("type"),
+    ) or ("window" if window_id else "screen")
+    normalized_scope = scope_type.strip().lower().replace("_", "-")
+    if normalized_scope not in {"screen", "screen-global", "window", "window-local"}:
+        normalized_scope = "window" if window_id else "screen"
+    if normalized_scope == "screen-global":
+        normalized_scope = "screen"
+    if normalized_scope == "window-local":
+        normalized_scope = "window"
+    result = {"scopeType": normalized_scope, "screenId": screen_id}
+    if window_id:
+        result["windowId"] = window_id
+    return result
+
+
+def _lease_owner_from_metadata(holder: str, metadata: Mapping[str, Any]) -> dict[str, str]:
+    explicit = _safe_mapping(metadata.get("leaseOwner") if isinstance(metadata.get("leaseOwner"), Mapping) else {})
+    source = {**explicit, **metadata}
+    actor_id = _first_non_empty_string(
+        source.get("actorId"),
+        source.get("actor_id"),
+        source.get("ownerActorId"),
+    ) or holder
+    cursor_id = _first_non_empty_string(
+        source.get("cursorId"),
+        source.get("cursor_id"),
+        source.get("ownerCursorId"),
+    ) or f"cursor-{_safe_ref_segment(holder)}"
+    return {"actorId": actor_id, "cursorId": cursor_id}
+
+
+def _first_non_empty_string(*values: Any) -> str | None:
+    for value in values:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _nested_string(value: Mapping[str, Any], *keys: str) -> str | None:
+    item: Any = value
+    for key in keys:
+        if not isinstance(item, Mapping):
+            return None
+        item = item.get(key)
+    return item.strip() if isinstance(item, str) and item.strip() else None
+
+
+def _append_actor_cursor_event(
+    path: Path,
+    *,
+    session_id: str,
+    thread_id: str,
+    event_type: str,
+    actor_id: str,
+    cursor_id: str,
+    screen_id: str,
+    window_id: str | None,
+    state: str,
+    refs: list[str],
+    payload: Mapping[str, Any],
+) -> None:
+    event = {
+        "schemaVersion": ACTOR_CURSOR_EVENT_SCHEMA,
+        "eventType": event_type,
+        "sessionId": session_id,
+        "threadId": thread_id,
+        "displayGroupId": _display_group_id(session_id),
+        "actorId": actor_id,
+        "cursorId": cursor_id,
+        "screenId": screen_id,
+        "windowId": window_id,
+        "position": {"x": 0, "y": 0, "coordinateSpace": "screen-local"},
+        "state": state,
+        "source": "session-manager",
+        "refs": [ref for ref in refs if isinstance(ref, str) and ref],
+        "createdAt": _utc_now(),
+        "payload": _safe_mapping(payload),
+        "mutatingGuiAction": False,
+        **NO_OS_INPUT_FLAGS,
+    }
+    _append_jsonl(path, event)
 
 
 def _safe_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -592,6 +1069,7 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 
 
 __all__ = [
+    "ACTOR_CURSOR_EVENT_SCHEMA",
     "BLOCKED_MANIFEST_NAME",
     "ISOLATION_FLAGS",
     "InputLease",
@@ -600,9 +1078,12 @@ __all__ = [
     "SessionManager",
     "VIRTUAL_DESKTOP_BLOCKED_SCHEMA",
     "VIRTUAL_DESKTOP_CAPTURE_STREAM_SCHEMA",
+    "VIRTUAL_DESKTOP_DIAGNOSTICS_SCHEMA",
     "VIRTUAL_DESKTOP_DISPLAY_SCHEMA",
+    "VIRTUAL_DESKTOP_DISPLAY_GROUP_SCHEMA",
     "VIRTUAL_DESKTOP_INPUT_LEASE_SCHEMA",
     "VIRTUAL_DESKTOP_REPLAY_BUNDLE_SCHEMA",
+    "VIRTUAL_DESKTOP_SCREENS_SCHEMA",
     "VIRTUAL_DESKTOP_SESSION_SCHEMA",
     "VirtualDesktopRefs",
     "VirtualDesktopSession",

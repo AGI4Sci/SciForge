@@ -59,6 +59,7 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
     assert.equal(adapter.lastInput?.commandId, 'codex-command-ui');
     assert.equal(adapter.lastInput?.attemptId, 'codex-command-ui-attempt-1');
     assert.equal(adapter.lastInput?.codexSessionId, '019e3e82-164d-79b2-a5d4-b16241620b10');
+    assert.equal(adapter.lastInput?.abortSignal?.aborted, false);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }

@@ -41,6 +41,7 @@ import {
   previewPackageAutoRunPromptPolicy,
   repairDiagnosticViewSlotPolicy,
   reportRuntimeResultViewSlots,
+  runtimeResultViewSlotsPolicy,
   resolveInteractiveViewPlanSection,
   selectedViewComponentsForIntent,
   standaloneWorkspaceArtifactPayloadPolicy,
@@ -66,6 +67,9 @@ test('interactive view renderer mapping owns package renderer aliases and fallba
   assert.equal(alias?.label, 'Record table');
   assert.equal(typeof alias?.render, 'function');
   assert.equal(interactiveViewPackageRendererForComponent('scientific-plot-viewer')?.label, 'Scientific plot viewer');
+  assert.equal(interactiveViewPackageRendererForComponent('computer-use-control-plane')?.label, 'Computer Use control plane');
+  assert.equal(interactiveViewPackageRendererForComponent('terminal-session-viewer')?.label, 'Terminal session viewer');
+  assert.equal(interactiveViewPackageRendererForComponent('workspace-file-viewer')?.label, 'Workspace file viewer');
 
   const fallback = interactiveUnknownComponentFallbackPolicy({
     componentId: 'custom-result-view',
@@ -157,7 +161,7 @@ test('runtime ui manifest policy composes package-owned view semantics', () => {
 
 test('runtime ui manifest policy infers package view encoding and layout', () => {
   const manifest = composeRuntimeUiManifestSlots(
-    [{ componentId: 'point-set-viewer', encoding: { colorBy: 'cellCycle', splitBy: 'batch' }, layout: { mode: 'side-by-side', columns: 2 } }],
+    [],
     [{ id: 'omics-differential-expression', type: 'omics-differential-expression' }],
     {
       skillDomain: 'omics',
@@ -186,6 +190,48 @@ test('runtime ui manifest policy does not fabricate missing targeted artifact re
   const reportSlot = manifest.find((slot) => slot.componentId === 'report-viewer');
   assert.equal(reportSlot?.artifactRef, undefined);
   assert.equal(manifest.find((slot) => slot.componentId === 'point-set-viewer')?.artifactRef, 'omics-differential-expression');
+});
+
+test('runtime ui manifest policy routes browser, terminal, and file artifacts through package viewers', () => {
+  assert.deepEqual(runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: 'browser-runtime',
+    primaryArtifactType: 'browser-runtime-projection',
+    runtimeResultRef: 'run-1',
+  }).map((slot) => slot.componentId), ['browser-workbench', 'execution-unit-table']);
+
+  assert.deepEqual(runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: 'computer-use-control-plane-run-1',
+    primaryArtifactType: 'computer-use-control-plane',
+    runtimeResultRef: 'run-1',
+  }).map((slot) => slot.componentId), ['computer-use-control-plane', 'execution-unit-table']);
+
+  assert.deepEqual(runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: 'terminal-session',
+    primaryArtifactType: 'terminal-session',
+    runtimeResultRef: 'run-1',
+  }).map((slot) => slot.componentId), ['terminal-session-viewer', 'execution-unit-table']);
+
+  assert.deepEqual(runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: 'workspace-file-view',
+    primaryArtifactType: 'workspace-file-view',
+    runtimeResultRef: 'run-1',
+  }).map((slot) => slot.componentId), ['workspace-file-viewer', 'execution-unit-table']);
+
+  const manifest = composeRuntimeUiManifestSlots(
+    [],
+    [
+      { id: 'terminal-session', type: 'terminal-session' },
+      { id: 'workspace-file-view', type: 'workspace-file-view' },
+    ],
+    {
+      skillDomain: 'knowledge',
+      prompt: '展示 terminal session 和 workspace file viewer。',
+    },
+  );
+
+  assert.deepEqual(manifest.slice(0, 2).map((slot) => slot.componentId), ['terminal-session-viewer', 'workspace-file-viewer']);
+  assert.equal(manifest[0].artifactRef, 'terminal-session');
+  assert.equal(manifest[1].artifactRef, 'workspace-file-view');
 });
 
 test('interactive view policy owns prompt artifact intent and component binding', () => {

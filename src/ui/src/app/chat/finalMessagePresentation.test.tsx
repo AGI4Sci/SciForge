@@ -203,6 +203,47 @@ test('final message presentation repairs spaced markdown emphasis from streamed 
   assert.doesNotMatch(markup, /\*\* 两句结论|\*\* 展开态/);
 });
 
+test('final message presentation drops leading scratchpad and repairs inline headings', () => {
+  const presentation = splitFinalMessagePresentation([
+    '让我先看看当前工作目录的内容，了解项目背景。Let me look at the project architecture more deeply. Let me trace the full capability query flow.',
+    '好问题。我通读了 SciForge 的源码，梳理清楚了 GUI 查询能力和 TUI 之间的关系。###结论不需要。GUI 的能力查询不应该问 TUI，它们走的是两条路径： ###1️⃣能力查询路径 GUI 发起查询。',
+    '',
+    '###2️⃣ TUI 的职责 T UI 只在修复/执行类任务中被调用。',
+    '',
+    '###3️⃣核心架构图```GUI -> AgentServer``` **所以你的直觉是对的**。',
+    '',
+    '###流程',
+    '- GUI 发送 terminal-equivalent text。',
+    '- TUI 通过 module.query/read 查询能力目录。',
+  ].join('\n'));
+
+  assert.doesNotMatch(presentation.primaryContent, /Let me|让我先看看|trace the full capability/i);
+  assert.match(presentation.primaryContent, /^好问题/);
+  assert.match(presentation.primaryContent, /\n\n### 结论/);
+  assert.match(presentation.primaryContent, /\n\n不需要。GUI 的能力查询/);
+  assert.match(presentation.primaryContent, /\n\n### 1️⃣能力查询路径/);
+  assert.match(presentation.primaryContent, /\n\nGUI 发起查询。/);
+  assert.match(presentation.primaryContent, /\n\n### 2️⃣ TUI 的职责/);
+  assert.match(presentation.primaryContent, /\n\nTUI 只在修复/);
+  assert.match(presentation.primaryContent, /\n\n### 3️⃣核心架构图/);
+  assert.match(presentation.primaryContent, /\n\n```\nGUI -> AgentServer\n```/);
+  assert.match(presentation.primaryContent, /\n\n\*\*所以你的直觉是对的\*\*。/);
+  assert.match(presentation.primaryContent, /\n\n### 流程/);
+});
+
+test('final message presentation removes project-inspection scratchpad and opens dense section breaks', () => {
+  const presentation = splitFinalMessagePresentation([
+    'Let me explore the project to understand what SciForge is. **SciForge** 是一个为科学研究打造的自治化多模态 Agent 工作台。## 核心理念-**Agent 不只回答问题**，它能看见科学对象、操作软件并生成可审计的产物。## 独特性 1. 前端是 GUI，2. 后端是 Codex app-server，3. 证据对象包括论文卡片、分子序列和知识图谱。典型用途-文献综述、复现实验和交互式分析。',
+  ].join('\n'));
+
+  assert.doesNotMatch(presentation.primaryContent, /Let me explore/i);
+  assert.match(presentation.primaryContent, /^\*\*SciForge\*\* 是一个/);
+  assert.match(presentation.primaryContent, /工作台。\n\n## 核心理念\n\n\*\*Agent 不只回答问题\*\*/);
+  assert.match(presentation.primaryContent, /产物。\n\n## 独特性\n\n1\. 前端/);
+  assert.match(presentation.primaryContent, /GUI\n2\. 后端/);
+  assert.match(presentation.primaryContent, /知识图谱。\n\n典型用途/);
+});
+
 test('final message presentation keeps scientific single-letter terms readable', () => {
   const presentation = splitFinalMessagePresentation('T cell and B cells remain separate while Cursor Agent identifiers stay repaired.');
 
@@ -521,4 +562,21 @@ test('raw HTTP diagnostic payload-only messages stay folded behind a concise sum
   assert.doesNotMatch(presentation.primaryContent, /Invalid token|https?:\/\/|stdoutRef|stderrRef|runtimeEventsRef/);
   assert.equal(presentation.auditSections.length, 1);
   assert.ok(['raw-json', 'execution-audit'].includes(presentation.auditSections[0]?.evidenceType ?? ''));
+});
+
+test('inline session conflict diagnostics before the answer stay folded', () => {
+  const content = [
+    '"schemaVersion": 1, "id": "session-conflict-mpeebed3-hxplmg", "kind": "ordering-conflict",',
+    '"expectedBaseRevision": "39269b24", "actualBaseRevision": "b3e08dd8",',
+    '"conflictingFields": ["messages"], "recoverableActions": ["Reload the current session state.", "Reapply the attempted changes."]}',
+    '否，这次是简单的只读观察任务，不需要把 session conflict payload 放进主回答。',
+  ].join(' ');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /^否，这次是简单的只读观察任务/);
+  assert.doesNotMatch(presentation.primaryContent, /session-conflict|expectedBaseRevision|recoverableActions/);
+  assert.equal(presentation.auditSections.length, 1);
+  assert.equal(presentation.auditSections[0].evidenceType, 'execution-audit');
+  assert.match(presentation.auditSections[0].text, /session-conflict/);
 });

@@ -139,16 +139,18 @@ test('conversation policy stream event makes quick status visible before workspa
   assert.ok(events.find((event) => event.type === 'conversation-policy'));
 });
 
-test('selected Computer Use action provider routes natural-language chat through workspace tools stream', async () => {
+test('selected Computer Use action provider remains terminal-equivalent text through Codex Runtime', async () => {
+  const urls: string[] = [];
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (url, init) => {
+    urls.push(String(url));
     bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-    assert.match(String(url), /\/api\/sciforge\/tools\/run\/stream$/);
+    assert.match(String(url), /\/api\/sciforge\/runtime\/codex\/stream$/);
     return streamResponse([{
       result: {
         status: 'done',
-        message: 'Computer Use natural-language provider selection routed.',
-        executionUnits: [{ id: 'EU-computer-use-natural-language', status: 'done' }],
+        message: 'Codex Runtime received terminal-equivalent Computer Use request.',
+        executionUnits: [{ id: 'EU-codex-computer-use-natural-language', status: 'done' }],
         artifacts: [],
       },
     }]);
@@ -163,13 +165,15 @@ test('selected Computer Use action provider routes natural-language chat through
   }));
 
   assert.equal(bodies.length, 1);
-  assert.equal(bodies[0]?.handoffSource, 'ui-chat');
-  assert.equal(bodies[0]?.prompt, 'Use the visible desktop to inspect the files and produce a short index.');
-  assert.deepEqual(bodies[0]?.selectedActionIds, ['action.sciforge.computer-use']);
-  assert.ok((bodies[0]?.selectedToolIds as string[]).includes('local.vision-sense'));
-  const uiState = bodies[0]?.uiState as Record<string, unknown>;
-  assert.deepEqual(uiState.computerUseNext, { taskId: 'CU-NEXT-01', requirements: ['chat-origin-current-run'] });
-  assert.deepEqual(uiState.computerUseLong, { cuNextTaskId: 'CU-NEXT-01', scenarioId: 'CU-LONG-LIVE-01' });
+  assert.match(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
+  assert.doesNotMatch(urls[0] ?? '', /\/api\/sciforge\/tools\/run\/stream$/);
+  assert.equal(bodies[0]?.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.equal(bodies[0]?.commandText, 'Use the visible desktop to inspect the files and produce a short index.');
+  assert.equal('selectedActionIds' in bodies[0]!, false);
+  assert.equal('selectedToolIds' in bodies[0]!, false);
+  assert.equal('selectedSenseIds' in bodies[0]!, false);
+  assert.equal('uiState' in bodies[0]!, false);
+  assert.doesNotMatch(JSON.stringify(bodies[0]), /computerUseNext|computerUseLong|local\.vision-sense|action\.sciforge\.computer-use/);
 });
 
 test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据', async () => {
@@ -224,7 +228,7 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.match(metadataEvent.detail ?? '', /command codex-command-/);
 });
 
-test('/computer-use 默认聊天请求路由到 Workspace Gateway action provider 而不是 Codex Runtime stream', async () => {
+test('/computer-use 默认聊天请求只生成 terminal-equivalent text 给 Codex Runtime', async () => {
   const urls: string[] = [];
   const bodies: Array<Record<string, unknown>> = [];
   const traceRef = '.sciforge/vision-runs/default-chat/vision-trace.json';
@@ -232,9 +236,7 @@ test('/computer-use 默认聊天请求路由到 Workspace Gateway action provide
     urls.push(String(url));
     const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     bodies.push(body);
-    const commandId = String(body.uiState && typeof body.uiState === 'object'
-      ? (body.uiState as Record<string, unknown>).commandId
-      : 'computer-use-command-test');
+    const commandId = String(body.commandId ?? 'codex-command-test');
     return streamResponse([
       {
         event: {
@@ -289,25 +291,159 @@ test('/computer-use 默认聊天请求路由到 Workspace Gateway action provide
   });
 
   assert.equal(response.message.status, 'completed');
+  assert.match(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
+  assert.doesNotMatch(urls[0] ?? '', /\/api\/sciforge\/tools\/run\/stream$/);
+  const body = bodies[0]!;
+  assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.equal(body.commandText, '/computer-use click the guarded Submit button');
+  assert.match(String(body.commandId), /^codex-command-/);
+  assert.equal('prompt' in body, false);
+  assert.equal('selectedActionIds' in body, false);
+  assert.equal('selectedToolIds' in body, false);
+  assert.equal('selectedSenseIds' in body, false);
+  assert.equal('uiState' in body, false);
+  assert.doesNotMatch(JSON.stringify(body), /desktopBridgeEnabled|allowSharedSystemInput|action\.sciforge\.computer-use|local\.vision-sense/);
+  assert.equal(response.message.provenance?.requiresUserConfirmation, true);
+  assert.match(String(response.message.provenance?.source), /^gui\.ask_user:codex-command-.*:computer-use$/);
+  assert.match(response.message.content, /Confirmation required/);
+  assert.match(response.message.content, /Allow the operation to click the visible Submit button/);
+  assert.doesNotMatch(response.message.content, /approval:computer-use:default-chat/);
+  assert.doesNotMatch(response.message.content, /Raw action-provider result/);
+  const guiAskUser = (response.run.raw as Record<string, unknown>).guiAskUser as Record<string, unknown>;
+  assert.equal((guiAskUser.approvalRequest as Record<string, unknown>).id, 'approval:computer-use:default-chat');
+  assert.ok(events.some((event) => event.type === 'computer-use.tui-host-actions'));
+  assert.ok(events.some((event) => event.type === 'current-plan' && /Computer Use 终端等价文本/.test(event.detail ?? '')));
+});
+
+test('/computer-use diagnostic 明确进入 legacy Workspace Gateway shim 且不注入 executor route', async () => {
+  const urls: string[] = [];
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (url, init) => {
+    urls.push(String(url));
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        status: 'done',
+        message: 'Legacy diagnostic shim accepted.',
+        executionUnits: [{ id: 'EU-computer-use-diagnostic-shim', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  const events: AgentStreamEvent[] = [];
+  await sendSciForgeToolMessage(messageInput({
+    selectedActionIds: ['action.sciforge.computer-use'],
+    selectedToolIds: ['local.vision-sense'],
+  }, {
+    prompt: '/computer-use diagnostic --legacy-workspace-gateway inspect current diagnostic refs',
+  }), {
+    onEvent: (event) => events.push(event),
+  });
+
   assert.match(urls[0] ?? '', /\/api\/sciforge\/tools\/run\/stream$/);
   assert.doesNotMatch(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
   const body = bodies[0]!;
-  assert.equal(body.prompt, '/computer-use click the guarded Submit button');
-  assert.deepEqual(body.selectedActionIds, ['action.sciforge.computer-use']);
-  assert.ok((body.selectedToolIds as string[]).includes('local.vision-sense'));
-  assert.ok((body.selectedSenseIds as string[]).includes('local.vision-sense'));
+  assert.equal(body.schemaVersion, 'sciforge.computer-use.legacy-workspace-gateway-diagnostic.v1');
+  assert.equal(body.kind, 'legacy-diagnostic-shim');
+  assert.equal(body.diagnosticOnly, true);
+  assert.equal(body.terminalEquivalentText, '/computer-use diagnostic --legacy-workspace-gateway inspect current diagnostic refs');
+  assert.equal('selectedActionIds' in body, false);
+  assert.equal('selectedToolIds' in body, false);
+  assert.equal('selectedSenseIds' in body, false);
+  assert.equal('agentBackend' in body, false);
+  assert.equal('modelProvider' in body, false);
   const uiState = body.uiState as Record<string, unknown>;
-  assert.match(String(uiState.commandId), /^computer-use-command-/);
-  assert.equal((uiState.visionSenseConfig as Record<string, unknown>).desktopBridgeEnabled, true);
-  assert.equal((uiState.visionSenseConfig as Record<string, unknown>).allowSharedSystemInput, true);
-  assert.equal(response.message.provenance?.requiresUserConfirmation, true);
-  assert.match(String(response.message.provenance?.source), /^gui\.ask_user:computer-use-command-.*:computer-use$/);
-  assert.match(response.message.content, /Computer Use confirmation required/);
-  assert.match(response.message.content, /Allow Computer Use to click the visible Submit button/);
-  assert.match(response.message.content, /approval:computer-use:default-chat/);
-  assert.doesNotMatch(response.message.content, /Raw action-provider result/);
-  assert.ok(events.some((event) => event.type === 'computer-use.tui-host-actions'));
-  assert.ok(events.some((event) => event.type === 'current-plan' && /Computer Use action provider/.test(event.detail ?? '')));
+  assert.equal(uiState.legacyWorkspaceGatewayShim, true);
+  assert.equal(uiState.guiOwnsExecutor, false);
+  assert.equal(uiState.guiOwnsExecutionRoute, false);
+  assert.equal('visionSenseConfig' in uiState, false);
+  assert.ok(events.some((event) => event.type === 'current-plan' && /legacy .*diagnostic shim/i.test(event.detail ?? '')));
+});
+
+test('/computer-use approve carries bounded approval metadata without executor routing fields', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const approvalRef = 'approval:computer-use:policy-test';
+  const sourceRun = '.sciforge/vision-runs/policy-source';
+  const approvalRequestSidecar = {
+    schemaVersion: 'sciforge.computer-use.approval-request-sidecar.v1',
+    status: 'needs-confirmation',
+    approvalRef,
+    approvalRequestId: approvalRef,
+    riskActionHash: 'risk-action-policy-test',
+    approvalRequestRef: `${sourceRun}/approval-request.json`,
+    guiAskUserRecordRef: `${sourceRun}/gui-ask-user.json`,
+    riskAuditRef: `${sourceRun}/risk-audit.json`,
+    deniedExecuted: false,
+  };
+  const guiAskUserSidecar = {
+    schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+    status: 'needs-confirmation',
+    approvalRef,
+    approvalRequestId: approvalRef,
+    riskActionHash: 'risk-action-policy-test',
+    guiAskUserRecordRef: `${sourceRun}/gui-ask-user.json`,
+    deniedExecuted: false,
+  };
+  const riskAuditSidecar = {
+    schemaVersion: 'sciforge.computer-use.risk-audit-sidecar.v1',
+    status: 'needs-confirmation',
+    approvalRef,
+    approvalRequestId: approvalRef,
+    riskActionHash: 'risk-action-policy-test',
+    riskAuditRef: `${sourceRun}/risk-audit.json`,
+    highRiskAction: { actionKind: 'click', targetDescription: 'Export button' },
+    deniedExecuted: false,
+  };
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response([
+      'event: done\n',
+      'data: {"type":"done","status":"done","message":"approved"}\n\n',
+    ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: `/computer-use approve --approval-ref ${approvalRef}`,
+    references: [
+      { id: 'approval-request', kind: 'file', title: 'approval request', ref: `${sourceRun}/approval-request.json` },
+      { id: 'gui-ask-user', kind: 'file', title: 'gui ask user', ref: `${sourceRun}/gui-ask-user.json` },
+      { id: 'risk-audit', kind: 'file', title: 'risk audit', ref: `${sourceRun}/risk-audit.json` },
+    ],
+    runs: [{
+      id: 'run-policy-source',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'first turn',
+      response: 'needs confirmation',
+      createdAt: '2026-05-31T00:00:00.000Z',
+      completedAt: '2026-05-31T00:00:01.000Z',
+      raw: {
+        codexSessionId: 'codex-thread-policy-source',
+        approvalRequestSidecar,
+        guiAskUserSidecar,
+        riskAuditSidecar,
+        guiAskUser: { approvalRequestSidecar, guiAskUserSidecar, riskAuditSidecar },
+      },
+    }],
+  }));
+
+  const body = bodies[0]!;
+  assert.match(String(body.commandText), /^\/computer-use approve/);
+  assert.match(String(body.commandText), /Runtime resume context:/);
+  assert.doesNotMatch(String(body.commandText), /^ask\s/);
+  assert.equal((body.humanApproval as Record<string, unknown>).approvalRef, approvalRef);
+  assert.equal((body.uiState as Record<string, unknown>).approvalRef, approvalRef);
+  const provenance = ((body.humanApproval as Record<string, unknown>).approvalProvenance as Record<string, unknown>);
+  assert.equal(provenance.sourceApprovalRequestRef, `${sourceRun}/approval-request.json`);
+  assert.equal(provenance.sourceGuiAskUserRecordRef, `${sourceRun}/gui-ask-user.json`);
+  assert.equal(provenance.sourceRiskAuditRef, `${sourceRun}/risk-audit.json`);
+  assert.ok(provenance.approvalRequestSidecar);
+  assert.ok(provenance.guiAskUserSidecar);
+  assert.ok(provenance.riskAuditSidecar);
+  assert.equal('selectedActionIds' in body, false);
+  assert.equal('selectedToolIds' in body, false);
+  assert.equal('selectedSenseIds' in body, false);
 });
 
 test('聊天流式请求用上一轮 native Codex session id 恢复多轮上下文', async () => {
@@ -377,6 +513,8 @@ test('Codex Runtime SSE stream 会归一化展示且 raw JSONL 不进入主事�
     'data: {"type":"run_started","provider":"sciforge-deepseek-proxy","model":"bailian/deepseek-v4-flash","profile":"sciforge-runtime-deepseek","workspace":"/tmp/current","commandId":"cmd-sse","message":"started"}\n\n',
     'event: raw_jsonl\n',
     'data: {"type":"raw_jsonl","rawJsonl":"{\\"secret\\":\\"RAW_JSONL_SHOULD_STAY_AUDIT\\"}","presentationRole":"audit"}\n\n',
+    'event: message\n',
+    'data: {"type":"message","text":"Codex Runtime result ready."}\n\n',
     'event: done\n',
     'data: {"type":"done","status":"done","message":"Codex Runtime result ready."}\n\n',
   ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } })) as typeof fetch;
@@ -503,9 +641,9 @@ test('structured interaction progress events survive transport normalization int
 
   const interaction = events.find((event) => event.type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
   const model = interaction ? progressModelFromEvent(interaction) : undefined;
-  assert.equal(interaction?.label, '需要确认');
+  assert.equal(interaction?.label, 'Needs approval');
   assert.doesNotMatch(interaction?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE|SCENARIO_TEXT_SHOULD_NOT_DECIDE|NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
-  assert.equal(model?.waitingFor, '人工确认');
+  assert.equal(model?.waitingFor, 'approval');
   assert.match(model?.detail ?? '', /Reason: side-effect-policy/);
 });
 
@@ -549,14 +687,15 @@ test('compact interaction progress events use runtime contract before process pr
     onEvent: (event) => events.push(event),
   });
 
-  const compact = events.find((event) => event.label === '需要确认');
+  const compact = events.find((event) => event.type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE
+    && (event.raw as { prompt?: string } | undefined)?.prompt === 'PROMPT_TEXT_SHOULD_NOT_DECIDE');
   const poison = events.find((event) => (event.raw as { message?: string } | undefined)?.message === 'Phase: verification\nStatus: blocked\nInteraction: human-approval required');
   const model = compact ? progressModelFromEvent(compact) : undefined;
 
   assert.equal(compact?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
-  assert.equal(compact?.label, '需要确认');
+  assert.equal(compact?.label, 'Needs approval');
   assert.doesNotMatch(compact?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE|SCENARIO_TEXT_SHOULD_NOT_DECIDE|NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
-  assert.equal(model?.waitingFor, '人工确认');
+  assert.equal(model?.waitingFor, 'approval');
   assert.match(model?.detail ?? '', /Interaction: human-approval required/);
   assert.ok(poison, 'poison compact event should still be transported for raw inspection');
   assert.equal(progressModelFromEvent(poison), undefined);

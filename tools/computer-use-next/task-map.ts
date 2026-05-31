@@ -17,6 +17,12 @@ export type CuNextRequirement =
   | 'approval-chain'
   | 'repair-continuity'
   | 'dense-grounding'
+  | 'user-control-refs'
+  | 'observe-before-mutate-refs'
+  | 'platform-sidecar-isolation'
+  | 'product-path-classification'
+  | 'current-bundle-evidence'
+  | 'dom-ax-observation-hints'
   | 'no-dom-playwright-accessibility';
 
 export interface CuNextTaskMapping {
@@ -48,6 +54,12 @@ const validRequirements = new Set<CuNextRequirement>([
   'approval-chain',
   'repair-continuity',
   'dense-grounding',
+  'user-control-refs',
+  'observe-before-mutate-refs',
+  'platform-sidecar-isolation',
+  'product-path-classification',
+  'current-bundle-evidence',
+  'dom-ax-observation-hints',
   'no-dom-playwright-accessibility',
 ]);
 
@@ -104,6 +116,9 @@ export function validateCuNextTaskMap(map: CuNextTaskMap, longPool: ComputerUseL
     }
     if (!task.requirements.includes('no-dom-playwright-accessibility')) {
       issues.push(`${task.taskId}: must require no-dom-playwright-accessibility`);
+    }
+    if (!task.requirements.includes('dom-ax-observation-hints')) {
+      issues.push(`${task.taskId}: must require dom-ax-observation-hints`);
     }
     for (const requirement of task.requirements) {
       if (!validRequirements.has(requirement)) issues.push(`${task.taskId}: unknown requirement ${requirement}`);

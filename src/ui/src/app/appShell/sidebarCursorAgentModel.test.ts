@@ -32,6 +32,7 @@ test('seed-only and empty sessions become draft threads', () => {
   assert.deepEqual(threads.map((thread) => thread.badges), [['Draft'], ['Draft']]);
   assert.ok(threads.every((thread) => thread.title === 'New chat'));
   assert.ok(threads.every((thread) => thread.actions.some((action) => action.intent === 'discard-thread' && action.commandText)));
+  assert.ok(threads.every((thread) => thread.actions.every((action) => action.intent !== 'archive-thread')));
 });
 
 test('pinned archived and discarded visible state does not leak internal runtime terms', () => {
@@ -72,7 +73,7 @@ test('pinned archived and discarded visible state does not leak internal runtime
   assert.deepEqual(visibleState?.map((thread) => thread.badges), [
     ['Pinned'],
     ['Archived'],
-    ['Discarded'],
+    ['Deleted'],
   ]);
   assert.doesNotMatch(JSON.stringify(visibleState), internalTerms);
 });
@@ -120,6 +121,9 @@ test('command actions have terminal-equivalent commandText and local selection o
         sessionId: 'thread-a',
         title: 'Wet lab plan',
         messages: [{ id: 'user-1', role: 'user', content: 'Plan next experiment' }],
+      }, {
+        sessionId: 'draft-a',
+        messages: [],
       }],
     }, {
       id: 'project-b',
@@ -132,9 +136,18 @@ test('command actions have terminal-equivalent commandText and local selection o
 
   const actions = collectSidebarCursorAgentActions(projection);
   const commandIntents = new Set(actions.filter((action) => action.effect === 'agent-host-command').map((action) => action.intent));
-  for (const intent of ['new-project', 'open-workspace', 'new-chat', 'search', 'remove-project', 'archive-thread', 'discard-thread', 'pin-thread'] as const) {
+  for (const intent of ['new-project', 'open-workspace', 'new-chat', 'search', 'archive-project', 'remove-project', 'archive-thread', 'discard-thread', 'pin-thread'] as const) {
     assert.ok(commandIntents.has(intent), `missing command action ${intent}`);
   }
+  assert.ok(actions.some((action) => action.intent === 'archive-project'
+    && action.scope === 'project'
+    && action.label === 'Archive All'
+    && action.commandText?.includes('chat archive-all')
+    && action.commandText.includes('--project-ref')));
+  const activeThread = projection.groups[0]?.threads.find((thread) => thread.title === 'Wet lab plan');
+  const draftThread = projection.groups[0]?.threads.find((thread) => thread.state === 'draft');
+  assert.deepEqual(activeThread?.actions.map((action) => action.intent), ['pin-thread', 'archive-thread']);
+  assert.deepEqual(draftThread?.actions.map((action) => action.intent), ['pin-thread', 'discard-thread']);
 
   const mutatingActions = actions.filter((action) => action.mutates);
   assert.ok(mutatingActions.length > 0);

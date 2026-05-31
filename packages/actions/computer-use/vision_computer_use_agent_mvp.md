@@ -1,26 +1,35 @@
 # 视觉 Computer Use Agent 设计文档
 
-版本：v0.3-active-visual-session
-日期：2026-05-28
+版本：v0.4-multi-screen-actor-cursor
+日期：2026-05-31
 
 ---
 
 ## 1. 核心目标
 
-Computer Use agent 的目标不是抢占用户当前桌面，而是在每个任务线程里创建一个独立、可观察、可回放的虚拟桌面。agent 使用自己的虚拟鼠标和虚拟键盘完成真实 GUI 工作；用户继续使用自己的真实屏幕、鼠标和键盘，两者互不干扰。
+Computer Use agent 的目标不是抢占用户当前桌面，而是在任务空间里创建独立、可观察、可回放的虚拟显示组。一个显示组可以包含多块虚拟屏幕；每块屏幕可以显示多个参与者光标。用户、agent 和自动化成员都通过自己的 actor cursor 表达 presence、指向和操作意图；真正改变 GUI 状态的输入由 screen/window scoped executor adapter 调度提交，不移动用户真实鼠标，也不向用户当前桌面发送全局键盘事件。
 
 目标架构：
 
 ```text
-Thread A -> virtual display A -> virtual mouse A -> virtual keyboard A
-Thread B -> virtual display B -> virtual mouse B -> virtual keyboard B
-User     -> real display/user desktop -> real mouse -> real keyboard
+Task / Collaboration Space
+-> VirtualDisplayGroup
+   -> VirtualScreen A
+      -> ActorCursor(user)
+      -> ActorCursor(agent-1)
+      -> ScreenExecutor(pointer/keyboard/focus adapter)
+   -> VirtualScreen B
+      -> ActorCursor(agent-2)
+      -> ScreenExecutor(pointer/keyboard/focus adapter)
+User real desktop
+-> real display / real mouse / real keyboard
 ```
 
-这个方向有三个收益：
+这个方向有四个收益：
 
-- **可见**：用户能看到每个 agent 线程的虚拟屏幕、鼠标移动、键盘输入、动作时间线和最终产物。
+- **可见**：用户能看到每个任务空间的虚拟屏幕、参与者光标、键盘输入、动作时间线和最终产物。
 - **隔离**：agent 不移动用户真实鼠标，不向用户当前桌面发送全局键盘事件。
+- **协作**：多位成员可以同时在同一块虚拟屏幕上指向、标注和提出操作意图，执行动作仍经过可审计调度。
 - **通用**：算法面向任意 GUI 软件，不把 PowerPoint、Word、浏览器或某个页面写成特例。
 
 当前 `package-owned target-bound host` 继续保留，但它只是 deterministic test harness。它可以验证 action loop、输入隔离、trace、artifact validator、viewer 和 evidence contract；它不能替代真实虚拟桌面、真实应用或用户级验收。
@@ -28,6 +37,29 @@ User     -> real display/user desktop -> real mouse -> real keyboard
 ---
 
 ## 2. 设计原则
+
+### 2.0 L2/L1/L0 边界先行
+
+Computer Use 是 TUI-owned action provider，不是第二个任务大脑。一个 active task 只能有一个 L2 Root Agent Host；在 SciForge 生产路径中，这个 L2 是 Codex app-server，在调试路径中可以是 Codex CLI/native plugin host。Computer Use package 可以维护 domain-local observe/ground/execute/verify loop，但不能决定跨模块下一步、不能选择 browser/file/gui/verifier pipeline、不能拥有 repair 策略，也不能宣布用户级任务完成。
+
+推荐放置：
+
+```text
+L2 Root Agent Host
+  -> Codex app-server production path
+  -> owns task planning, module selection, approval, repair, completion, pipeline trace
+
+L1 Computer Use Resource Adapter
+  -> display group/session/screen/cursor/lease/evidence/replay refs
+  -> backend/provider/version/resource lifecycle
+  -> exposes only Codex native tool/plugin/MCP or module.* surface
+
+L0 Computer Use Handlers
+  -> capture | crop | ground | propose scoped action | execute | verify | writeTrace | emitEvent
+  -> one handler does one action and does not call unrelated modules
+```
+
+L1 的边界必须具体：它可以管理同一 Computer Use 资源域内的 session、cache、refs、events、adapter readiness、backend lifecycle 和 L0 handler routing；它不做跨模块 planning，不做 capability ranking，不做 prompt route，不做用户级 completion，不直接调用 GUI renderer。L0 handler 只能完成一个明确动作，例如 capture、ground、execute、verify 或 writeTrace；如果需要组合多个无关模块，那是 L2 semantic pipeline 的职责。
 
 ### 2.1 纯视觉优先
 
@@ -77,18 +109,23 @@ VLM 的输出必须变成可引用的 evidence record，由 completion guard 和
 
 ---
 
-## 3. 每线程虚拟桌面架构
+## 3. 多屏多光标虚拟桌面架构
 
-每个任务线程拥有一个 `VirtualDesktopSession`。这个 session 包含虚拟屏幕、虚拟输入队列、文件系统工作区、capture stream、replay bundle 和输入 lease。
+每个任务或协作空间拥有一个 `VirtualDesktopSession`，其中可以包含一个 `VirtualDisplayGroup`、多块 `VirtualScreen`、多个 `ActorCursor`、文件系统工作区、capture stream、replay bundle 和输入 lease。多鼠标在产品语义上优先表示多 actor cursor：它们可并行移动、标注和表达意图；它们不是默认等价于 OS 内注册的多个真实 pointer 设备。
 
 推荐分层：
 
 - **SessionManager**：创建、租用、暂停、关闭每个虚拟桌面 session。
-- **Capture Adapter**：从虚拟屏幕获取整屏截图、窗口截图、局部 crop 和录屏帧。
-- **Input Adapter**：向该 session 的虚拟鼠标/键盘发送动作，不触碰用户真实输入设备。
+- **Display Group Manager**：管理 display group、screen identity、screen geometry、screen lifecycle 和 screen-to-session 绑定。
+- **Capture Adapter**：从指定 screen/window 获取整屏截图、窗口截图、局部 crop 和录屏帧。
+- **Actor Cursor Layer**：维护每个 actor cursor 的 `actorId`、`cursorId`、颜色、标签、screen/window 坐标、状态和轨迹。
+- **Action Scheduler**：把 mutating action 按 screen/window scope 排队，分配 executor lease，并记录 actor/cursor provenance。
+- **Executor Adapter**：把 click/type/drag/scroll/hotkey 等动作提交给目标 screen/window 的真实 backend，不触碰用户真实输入设备。
+- **User Control Plane**：记录 session permission、app/window allowlist、risk preview、confirmation、stop/cancel lease 和截图/数据可见性 refs；GUI 只能展示和回传确认文本，不能扩大权限或执行动作。
+- **Platform Sidecar Adapter**：封装 macOS Accessibility、Windows UI Automation、Linux/noVNC/RDP capture/input、focused-window binding 和 permission/preflight；只返回 refs、executor events、isolation flags 和 diagnostics，不做 planning 或 completion。
 - **Artifact Observer**：观察 run bundle、保存目录、文件列表和最终产物。
-- **Replay Viewer**：展示虚拟屏幕帧、鼠标轨迹、点击、键盘输入、动作时间线和证据 refs。
-- **Computer Use Action Provider**：运行 observe/explore/act/verify/completion 算法，不直接依赖 GUI renderer。
+- **Replay Viewer**：展示虚拟屏幕帧、多光标轨迹、点击、键盘输入、动作时间线和证据 refs。
+- **Computer Use Action Provider**：运行 domain-local observe/explore/act/verify guard，不直接依赖 GUI renderer；它输出 evidence、blocked、approval request 或 candidate completion refs，由 L2 Root Agent Host 组合其它模块后判断用户级完成。
 
 优先 backend：
 
@@ -98,21 +135,77 @@ VLM 的输出必须变成可引用的 evidence record，由 completion guard 和
 
 关键约束：
 
-- 每个 session 有自己的 input lease。agent 输入和用户 takeover 不能同时写同一个虚拟输入队列。
-- 所有输入事件必须记录到 run bundle，包括 pointer、keyboard、scroll、focus 和保存动作。
+- 每个 screen 有自己的 executor lease；window-local action 可以有 window lease，但任何会改变 OS focus、全局菜单、窗口层级或系统状态的动作必须持有 screen lease。
+- actor cursor 的 move/point/annotate 可以并行记录；click/type/drag/scroll/hotkey/save/open_menu 等 mutating action 必须进入 scheduler，并由 executor adapter 提交。
+- 同一 screen 的真实 GUI focus 默认只有一个。多个 actor 可以同时提出 action proposal，但提交顺序必须可审计、可回放、可取消。
+- 所有输入事件必须记录到 run bundle，包括 `actorId`、`cursorId`、`screenId`、可选 `windowId`、lease scope、pointer、keyboard、scroll、focus 和保存动作。
+- 每个真实 mutating run 必须有 session permission ref、app/window allowlist ref、risk preview/ref、cancel path 和 data visibility refs；这些 refs 只能由 TUI Host / Computer Use scheduler 解释，GUI 不得把它们转成直接执行入口。
 - isolation flags 必须明确记录：`sharedSystemInputUsed=false`、`systemPointerMoved=false`、`systemKeyboardEventsSent=false`。
 - viewer 里的可见性必须来自真实或可解释的 frame refs，不应只生成空白 PNG。
+- 真实 OS multi-pointer / multi-seat 只是未来 backend adapter，不进入 planner、schema 或 GUI 的核心假设。产品层多鼠标始终先表达为 actor cursor、proposal、lease owner 和 replay overlay。
 
-### 3.1 当前 session skeleton 边界
+### 3.1 Codex 风格 action adapter 模型
 
-当前 package 已有 `VirtualDesktopSession` / `SessionManager` skeleton，但它是 refs-first session contract，不启动 noVNC、RDP、LibreOffice、浏览器或任何真实 GUI backend。它的职责是为每个 thread 预留可审计资源、写 manifest、管理独占 input lease，并在输入隔离能力不足时 fail closed。
+Computer Use 不应把“鼠标设备”作为核心抽象。更可扩展的模型是 Codex 风格的 action adapter：planner 选择 app/window/element/region 等目标，grounder 把目标绑定到 screen/window-local coordinate 或 host element ref，executor adapter 再负责把动作落到目标 backend。
 
-`SessionManager.create(thread_id)` 成功时会创建独立 session root，并写入：
+推荐输入模型：
+
+```text
+ActorCursor
+  -> presence / pointer movement / intent proposal
+ActionTarget
+  -> screen | window | element | region | artifact intent
+ActionScheduler
+  -> screen lease | window lease | approval gate
+ExecutorAdapter
+  -> host-specific click/type/drag/scroll/hotkey
+EvidenceLedger
+  -> actor/cursor/screen/window/action causality
+```
+
+scope 规则：
+
+- `observe`、`crop`、`OCR`、`VLM describe`、`cursor move`、`point`、`annotate` 是只读或 presentation 行为，不需要 executor lease。
+- window-local 的 click/type/scroll/drag 可以申请 window lease，但执行时仍必须证明目标 window、target bounds、focus 和 before/after evidence。
+- screen-global 的 app switch、window switch、system menu、global hotkey、save dialog、permission prompt 和高风险确认必须申请 screen lease。
+- 如果 backend 将来支持真实 multi-pointer/multi-seat，可以把某个 window executor 升级为独立 backend adapter；package contract 仍按 actor cursor + scheduler + evidence 表达，不把多 pointer backend 写死进 planner。
+
+真实 multi-pointer backend 研究结论：
+
+- XInput MPX 可以在部分 Linux/X11 环境暴露多个 master pointer/keyboard，但桌面环境和应用兼容性不稳定，focus、菜单、拖拽、文本输入和远程观看链路容易退化成单 active focus；只能作为 Linux executor backend 的 opt-in 能力。
+- Wayland seats 的隔离语义更接近多用户输入，但 compositor、portal、远程桌面协议和应用支持差异大；Computer Use contract 只能读取 adapter readiness、seat binding refs 和 executor event refs，不能把 seat 当作 planner 层抽象。
+- RDP/remote desktop protocol 往往更适合 production：每个 remote session/window executor 可以提供隔离 pointer/keyboard、capture stream 和 replay frame，但仍必须通过 screen/window scoped lease 串行动作，并记录 before/after evidence。
+- macOS/VNC/Accessibility 默认更容易变成 shared system input；没有 target-bound isolated adapter 时只能作为 diagnostic/blocked evidence，不能生成 user-acceptance completion。
+
+因此真实多指针能力只允许挂在 `ExecutorAdapter` 之后，作为可替换 backend 宣告 `inputIsolation`、`screenId`、`windowId`、`leaseScope`、`executorEventRef` 和 replay refs；planner、GUI 和 acceptance validator 继续只依赖 actor cursor、scheduler lease 与 evidence/replay contract。
+
+### 3.2 Codex 产品化经验的迁移边界
+
+Codex bundled Computer Use 的可取之处是：标准 plugin/MCP 包装、小而稳定的 UI action tool surface、先观察再动作、细粒度 confirmation policy、用户可控的真实 app access，以及独立 native sidecar 承担平台能力。SciForge 应吸收这些产品化经验，但不能把它们变成 GUI direct action 或第二个 task brain。
+
+迁移原则：
+
+- **Plugin/MCP 包装**：`sciforge.computer-use` 应有可被 Codex app-server / CLI 发现的 local plugin 或 MCP server，tool surface 保持窄入口，例如 `observe`、`propose_action`、`execute_scoped_action`、`get_replay_refs`。内部仍调用 package host ports、scheduler、evidence ledger 和 validator。
+- **小而稳定的工具面**：公共工具可以包含 `get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs`；其中 click/type/scroll/press_key 只是 L2 友好的 action adapter facade，内部必须投影成 scoped action proposal、lease、executor event 和 evidence refs。公共工具不得接受裸全局坐标、provider route、GUI private state 或 scheduler internals。
+- **先 observe 后 mutate**：任何 click/type/drag/scroll/hotkey/save 前必须有当前 screen/window observation ref、state snapshot ref、grounding ref 和 freshness check。没有当前 observation 的 mutating action fail closed。
+- **细粒度 confirmation policy**：删除、上传、发送消息、登录/权限、支付/金融、安装软件、敏感数据传输、系统设置、验证码/安全屏障和医疗/法律/HR 等类别必须分别映射到 `needs-confirmation`、approval request 或 hand-off required；确认发生在 action-time，第三方内容不能作为授权。
+- **用户控制面**：run start 写 session permission manifest，包含 allowed apps/windows/screens、forbidden apps、input modality、risk class、screenshot/data policy、stop/cancel lease ref 和 approval mode。GUI 只展示这些 refs，并把用户确认作为 terminal-equivalent text 或 confirmation result 返回。
+- **Platform sidecar**：macOS/Windows/Linux 的真实 UI 操作放在 sidecar/MCP/backend adapter。sidecar 只能执行 capture/state/input/preflight L0 动作，必须返回 refs-first evidence 和 isolation flags；禁止 planning、completion、GUI rendering、workspace policy 和 artifact shortcut。
+- **产品化 smoke**：package diagnostic 只证明 contract；真实通过标准至少包括 app-server/native plugin 调用、platform sidecar/noVNC/RDP、单 app artifact、multi-app workflow、高风险 confirmation stop、blocked recovery、viewer real frames 和 bundle-local evidence。
+
+### 3.3 当前 session skeleton 边界
+
+当前 package 已有 `VirtualDesktopSession` / `SessionManager` skeleton，但它是 refs-first session contract，不启动 noVNC、RDP、LibreOffice、浏览器或任何真实 GUI backend。它的职责是为每个 task/collaboration space 预留可审计资源、写 manifest、管理 display/screen/cursor/executor lease refs，并在输入隔离能力不足时 fail closed。
+
+`SessionManager.create(task_or_thread_id)` 成功时会创建独立 session root，并写入：
 
 ```text
 <session-root>/
   virtual-desktop-session-manifest.json
+  virtual-display-group.json
   virtual-display.json
+  virtual-screens.json
+  actor-cursors.jsonl
   virtual-input-queue.jsonl
   filesystem-root/
   capture-stream.json
@@ -153,6 +246,8 @@ Action Loop:
 Task Loop:
   evidence loop -> action loop -> evidence loop -> ... -> complete/blocked
 ```
+
+这里的 `complete/blocked` 是 Computer Use action provider 的 domain-local verdict：它说明当前桌面动作链路是否具备足够 refs、artifact evidence 和 verifier evidence。用户级任务是否完成，仍由 L2 Root Agent Host 在 semantic pipeline 中结合其它模块结果决定。
 
 也就是说，agent 不必每次观察后立刻行动。它可以先补充证据：重新截图、等待稳定、crop 局部、OCR、请求 VLM 描述图像、比较 before/after、检测 UI 区域、阅读视觉表格，直到信息足够成熟再行动。但如果下一步需要 scroll、hover、打开菜单、切换面板、缩放视图或改变 focus，它已经不是 evidence loop 的探索，而是一次正式 action。
 
@@ -599,7 +694,7 @@ Runtime Codex direct-chat planner fallback 必须使用 OpenAI-compatible `/chat
 
 - EvidenceLedger standalone API 可以写 `evidence-log.jsonl`、`evidence-index.json`、`evidence-snapshot.json` 和 `planner-brief.json`。
 - Visible viewer contract 支持 screenshot frame 和可解释 placeholder frame，拒绝 inline image/raw payload。
-- `VirtualDesktopSession` / `SessionManager` skeleton 可以创建 refs-first session root、blocked manifest 和独占 input lease。
+- `VirtualDesktopSession` / `SessionManager` skeleton 可以创建 refs-first session root、display group/screen/cursor refs、blocked manifest 和 scoped executor lease。
 - `isolated_desktop_backend_probe` 可以写 Linux noVNC + LibreOffice/browser readiness/blocked manifest，但不启动真实 backend，不截图，不执行输入。
 - `isolated_desktop_backend_bundle` 可以写 package-owned Linux/noVNC Docker bundle spec manifest，记录 Dockerfile ref、package-root build context、apt dependency 清单、localhost-only noVNC port policy、backend readiness run 命令、L1 smoke run 命令和 L3 workflow run 命令。仓库级 `smoke:cu-isolated-l1:docker` / `smoke:cu-isolated-l1:opt-in` / `smoke:cu-isolated-l3:docker` / `smoke:cu-isolated-l3:opt-in` 只提供真实 Linux/Docker evidence 的 opt-in gate，不进入默认 verify；`SCIFORGE_DOCKER_BASE_IMAGE` 只允许替换 Python base image 拉取来源，`SCIFORGE_DOCKER_DEBIAN_APT_MIRROR` / `SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR` / `SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES` 只允许替换 apt 下载来源和重试次数，`SCIFORGE_CU_ISOLATED_L1_EVIDENCE_DIR` / `SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR` 只允许替换 Docker host evidence volume 的宿主机目录，不放宽 evidence gate。严格 Docker L1 gate 已用 ECR Python base image、清华 Debian apt mirror 和 `/tmp/sciforge-cu-isolated-l1` host evidence dir 产出首个真实 Linux/noVNC completed L1 run；严格 Docker L3 gate 已用同类镜像/mirror 产出真实 Linux/noVNC same-session completed L3 run，当前 canonical bundle-local 复验路径为 `/tmp/sciforge-cu-isolated-l3-localized-20260528b/l3`，`completionEvidenceRef=isolated-desktop-l3-workflow-evidence.json`。Dockerfile、build command、workflow 定义或 readiness manifest 仍不能单独替代 completed evidence refs。
 - `isolated_desktop_l1_smoke_probe` 可以写 L1 smoke entrypoint manifest，记录 readiness、isolated input/screenshot runtime components 和 completed evidence contract；只有 Linux + deps ready + `--execute` 时才尝试启动 Xvfb/window manager/VNC/noVNC/browser，并把 xdotool/import 绑定 isolated `DISPLAY`。Runner 会先清理 output dir 下自己生成的上一轮 `isolated-l1-session` / viewer 状态，避免复用 evidence dir 时 Chromium profile lock、旧截图或旧日志污染本轮结果，再分配本轮可用 X display、VNC/noVNC localhost 端口并写通用 `isolated-runtime-resource-allocation.json`；也支持 `--display`、`--vnc-port`、`--novnc-port`、`--timeout-seconds` 和 `--resource-lock-root` 记录真实 Linux/CI 调试请求值。Runner 用独立进程组隔离 backend 子进程，为每个长生命周期进程写 stdout/stderr log refs，检测进程早退，用 `xdotool getdisplaygeometry` bounded polling 证明 isolated X display 可查询，再等待 VNC TCP 与 noVNC localhost `/vnc.html` HTTP viewer ready，写 `backend-readiness-proof.json`、`backend-processes.json` 和 `isolated-runtime-resource-allocation.json`；HTTP viewer proof 只保存 status、bytesRead、sha256 与 HTML/noVNC marker，不保存 raw HTML。Chromium-family 启动会抑制首启/后台 UI，并在 root/container 环境自动使用 `--no-sandbox` 与 `--test-type`，避免 root/no-sandbox 横幅改变 smoke page 坐标。Browser 启动后必须通过页面设置的 ready title marker 被 isolated `xdotool search --onlyvisible --name` 找到，并记录 `getwindowgeometry --shell` 的 visible window geometry；找不到窗口或 page marker 就在输入前 fail closed。Pointer click 必须用 `xdotool mousemove --window <windowId>` 发送到 window-local coordinate space，并写通用 `targetWindowRef` / `windowBoundPointerProofRef` 证明 hit point 位于目标 bounds 内且绑定对应 executor command event；button target 使用真实按钮区域的 window-local bounds/hit point，裸全局坐标或 page-only 坐标点击不能作为 L1 证据。对每个 isolated input 命令写 `l1-executor-command-events.json`，让 pointer/keyboard input logs 引用具体 executor command event。L1 completed evidence 要求 `processRef` 的 backend-processes payload 和 `resourceAllocationRef` 的 isolated-runtime-resource-allocation payload 语义有效；清理后把 session/noVNC/capture/replay refs 标成 `closedAfterRun=true`；validator 要求每个 state-changing step 的 before/after 截图内容变化，任何资源分配、启动、输入、截图、viewer、ledger 或 validator 条件不满足都会保持 blocked。L1 probe 的纯 helper 已拆到 `isolated_desktop_l1_smoke_probe_helpers.py`，主 entrypoint 继续保留 CLI/manifest/run orchestration，不改变 evidence contract。
@@ -656,6 +751,7 @@ MVP 暂时不做：
 - 图数据库：先用 JSONL + rebuildable index 表达逻辑图。
 - 读 DOM/accessibility tree：保持纯视觉通用性。
 - 控制用户真实鼠标键盘：默认只用虚拟 session input。
+- 把多 actor cursor 直接等同于多个 OS 级真实鼠标：MVP 先做协作光标、意图队列和 executor 调度，真实 multi-pointer backend 只作为可替换 adapter。
 - app-specific private API：避免把算法写成特例。
 - VLM 直接执行动作：执行必须经过 grounder/executor/verification。
 - VLM 单独宣布完成：completion 必须由 evidence guard 放行。
@@ -669,10 +765,11 @@ MVP 暂时不做：
 推荐架构是：
 
 ```text
-one user-visible thread
--> one isolated virtual desktop
--> one virtual mouse
--> one virtual keyboard
+one task / collaboration space
+-> one virtual display group
+-> one or more virtual screens
+-> many actor cursors for presence / intent
+-> scoped executor adapters for mutating input
 -> one replay/evidence bundle
 ```
 
@@ -687,7 +784,7 @@ active visual exploration
 -> guarded completion
 ```
 
-这能同时满足三个目标：用户能看到、用户不被打扰、算法不会被写死在某个软件或某个 demo 场景里。
+这能同时满足四个目标：用户能看到、用户不被打扰、多成员可以在同一屏幕协作、算法不会被写死在某个软件或某个 demo 场景里。
 
 ### 未来发展方向：容器化运行环境 + sandbox policy + isolated desktop
 
@@ -697,10 +794,11 @@ active visual exploration
 Host / Orchestrator
 -> task-scoped sandbox policy
 -> ephemeral container runtime
--> isolated desktop session
--> virtual input + evidence capture
+-> isolated virtual display group
+-> virtual screens + actor cursors + scoped executor input
+-> evidence capture
 ```
 
 其中容器负责提供可复现、可销毁、可并发的运行环境；sandbox policy 应由宿主机或编排器在启动容器时施加，而不是依赖容器内部进程自我约束。策略至少应覆盖挂载白名单、网络开关或 allowlist、secret 注入、resource limits、Linux capabilities、seccomp / AppArmor / SELinux profile，以及 evidence/artifact 输出目录。
 
-isolated desktop 仍是 Computer Use 的默认执行目标：任务在虚拟 display、虚拟鼠标、虚拟键盘和独立应用会话中运行，不直接控制用户真实桌面。任务结束后销毁容器并保留 replay/evidence bundle；高风险或不可信二进制任务可升级到 VM / microVM，但常规 Computer Use 不应默认操作宿主机桌面。
+isolated desktop/display group 仍是 Computer Use 的默认执行目标：任务在虚拟 screen、actor cursor、executor adapter 和独立应用会话中运行，不直接控制用户真实桌面。容器负责可复现和可销毁，screen/cursor/executor contract 负责协作和输入隔离；任务结束后销毁容器并保留 replay/evidence bundle。高风险或不可信二进制任务可升级到 VM / microVM，但常规 Computer Use 不应默认操作宿主机桌面。

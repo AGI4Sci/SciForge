@@ -1,7 +1,7 @@
-import { Archive, Check, Clock, Folder, FolderOpen, Quote, Square } from 'lucide-react';
+import { Archive, Check, Eye, GitBranch, HardDrive, Inbox, Layers, Quote, Square, Tag, type LucideIcon } from 'lucide-react';
 import type { SciForgeReference } from '../../domain';
 import type { SidebarProjectDescriptor } from '../appShell/sidebarProjectModel';
-import type { SidebarLayoutMode, SidebarSortMode } from '../appShell/sidebarPreferences';
+import type { SidebarVisibleSection, SidebarVisibleSections } from '../appShell/sidebarPreferences';
 import { ContextMenu, ContextMenuItem, ContextMenuSeparator } from './ContextMenu';
 
 function menuCheck(active: boolean) {
@@ -29,58 +29,66 @@ function ContextMenuReferenceSection({
 export function SidebarThreadsGlobalContextMenu({
   x,
   y,
-  layout,
-  sort,
+  visibleSections,
   reference,
-  onArchiveAllChats,
-  onApplyLayout,
-  onMoveCurrentProjectDown,
-  onApplySort,
+  onGroupByRepository,
+  onToggleVisibleSection,
+  onCollapseAll,
+  onMarkAllAsRead,
   onReferenceToChat,
 }: {
   x: number;
   y: number;
-  layout: SidebarLayoutMode;
-  sort: SidebarSortMode;
+  visibleSections: SidebarVisibleSections;
   reference?: SciForgeReference;
-  onArchiveAllChats: () => void;
-  onApplyLayout: (layout: SidebarLayoutMode) => void;
-  onMoveCurrentProjectDown: () => void;
-  onApplySort: (sort: SidebarSortMode) => void;
+  onGroupByRepository: () => void;
+  onToggleVisibleSection: (section: SidebarVisibleSection) => void;
+  onCollapseAll: () => void;
+  onMarkAllAsRead: () => void;
   onReferenceToChat: (reference: SciForgeReference) => void;
 }) {
   return (
     <ContextMenu x={x} y={y}>
-      <ContextMenuItem onClick={onArchiveAllChats}>
-        <span className="context-menu-item-leading"><Archive size={14} aria-hidden />Archive all chats</span>
+      <ContextMenuItem onClick={onGroupByRepository}>
+        <span className="context-menu-item-leading"><Layers size={14} aria-hidden />Group by</span>
+        <span>Repository</span>
       </ContextMenuItem>
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={() => onApplyLayout('by-project')}>
-        <span className="context-menu-item-leading"><Folder size={14} aria-hidden />Group by project</span>
-        {menuCheck(layout === 'by-project')}
+      <ContextMenuItem disabled>
+        <span className="context-menu-item-leading">Show</span>
       </ContextMenuItem>
-      <ContextMenuItem onClick={() => onApplyLayout('recent-projects')}>
-        <span className="context-menu-item-leading"><FolderOpen size={14} aria-hidden />Recent projects</span>
-        {menuCheck(layout === 'recent-projects')}
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => onApplyLayout('chronological')}>
-        <span className="context-menu-item-leading"><Clock size={14} aria-hidden />Chronological</span>
-        {menuCheck(layout === 'chronological')}
-      </ContextMenuItem>
-      <ContextMenuItem onClick={onMoveCurrentProjectDown}>
-        <span className="context-menu-item-leading">Move current project down</span>
-      </ContextMenuItem>
+      <SidebarVisibleSectionItem section="status" label="Status" icon={Eye} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
+      <SidebarVisibleSectionItem section="git" label="Git" icon={GitBranch} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
+      <SidebarVisibleSectionItem section="environment" label="Environment" icon={HardDrive} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
+      <SidebarVisibleSectionItem section="archiveUnread" label="Archive, Unread" icon={Inbox} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
+      <SidebarVisibleSectionItem section="source" label="Source" icon={Tag} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
+      <SidebarVisibleSectionItem section="metadata" label="Metadata" icon={Square} visibleSections={visibleSections} onToggle={onToggleVisibleSection} />
       <ContextMenuSeparator />
-      <ContextMenuItem onClick={() => onApplySort('createdAt')}>
-        <span className="context-menu-item-leading"><Clock size={14} aria-hidden />Sort by created time</span>
-        {menuCheck(sort === 'createdAt')}
-      </ContextMenuItem>
-      <ContextMenuItem onClick={() => onApplySort('updatedAt')}>
-        <span className="context-menu-item-leading"><Clock size={14} aria-hidden />Sort by updated time</span>
-        {menuCheck(sort === 'updatedAt')}
-      </ContextMenuItem>
+      <ContextMenuItem onClick={onCollapseAll}>Collapse All</ContextMenuItem>
+      <ContextMenuItem onClick={onMarkAllAsRead}>Mark All as Read</ContextMenuItem>
       <ContextMenuReferenceSection reference={reference} onReferenceToChat={onReferenceToChat} />
     </ContextMenu>
+  );
+}
+
+function SidebarVisibleSectionItem({
+  section,
+  label,
+  icon: Icon,
+  visibleSections,
+  onToggle,
+}: {
+  section: SidebarVisibleSection;
+  label: string;
+  icon: LucideIcon;
+  visibleSections: SidebarVisibleSections;
+  onToggle: (section: SidebarVisibleSection) => void;
+}) {
+  return (
+    <ContextMenuItem onClick={() => onToggle(section)}>
+      <span className="context-menu-item-leading"><Icon size={14} aria-hidden />{label}</span>
+      {menuCheck(visibleSections[section])}
+    </ContextMenuItem>
   );
 }
 
@@ -88,43 +96,30 @@ export function SidebarProjectActionContextMenu({
   x,
   y,
   project,
-  reference,
-  onRevealInFolder,
+  onMarkAllAsRead,
   onArchiveChats,
-  onCopyPath,
-  onCopyRelativePath,
   onRemoveProject,
-  onReferenceToChat,
 }: {
   x: number;
   y: number;
   project: Pick<SidebarProjectDescriptor, 'id' | 'label' | 'detail' | 'current'>;
-  reference?: SciForgeReference;
-  onRevealInFolder: () => void;
+  onMarkAllAsRead: () => void;
   onArchiveChats: () => void;
-  onCopyPath: () => void;
-  onCopyRelativePath: () => void;
   onRemoveProject: () => void;
-  onReferenceToChat: (reference: SciForgeReference) => void;
 }) {
   return (
     <ContextMenu x={x} y={y}>
-      <ContextMenuItem onClick={onRevealInFolder}>
-        <span className="context-menu-item-leading"><FolderOpen size={14} aria-hidden />Open in Finder</span>
+      <ContextMenuItem onClick={onMarkAllAsRead}>
+        <span className="context-menu-item-leading"><Check size={14} aria-hidden />Mark All as Read</span>
       </ContextMenuItem>
       <ContextMenuItem onClick={onArchiveChats}>
-        <span className="context-menu-item-leading"><Archive size={14} aria-hidden />Archive chats</span>
+        <span className="context-menu-item-leading"><Archive size={14} aria-hidden />Archive All</span>
       </ContextMenuItem>
-      <ContextMenuReferenceSection reference={reference} onReferenceToChat={onReferenceToChat} />
-      <ContextMenuSeparator />
-      <ContextMenuItem onClick={onCopyPath} disabled={!project.detail.trim()}>Copy path</ContextMenuItem>
-      <ContextMenuItem onClick={onCopyRelativePath} disabled={!project.detail.trim()}>Copy relative path</ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem
         danger
         onClick={onRemoveProject}
-        disabled={project.current}
-        title={project.current ? 'Open another workspace before removing this project. Local files are not deleted.' : 'Remove this project from the sidebar. Local files are not deleted.'}
+        title={project.current ? 'Current workspace cannot be removed until another workspace is open. Local files are not deleted.' : 'Remove this project from the sidebar. Local files are not deleted.'}
       >
         <span className="context-menu-item-leading"><Square size={14} aria-hidden />Remove from Sidebar</span>
       </ContextMenuItem>

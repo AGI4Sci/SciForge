@@ -59,6 +59,8 @@ export function packagePlanToGenericAction(
   if (type === 'hotkey') return normalizeGenericActionRisk({ ...base, type, keys: stringList(plan.keys).length ? stringList(plan.keys) : activeAction && 'keys' in activeAction ? activeAction.keys : [] });
   if (type === 'scroll') return normalizeGenericActionRisk({ ...base, type, direction: scrollDirection(stringAt(plan, 'direction') ?? (activeAction && 'direction' in activeAction ? activeAction.direction : 'down')), amount: numberAt(plan.amount) });
   if (type === 'open_app') return normalizeGenericActionRisk({ ...base, type, appName: stringAt(plan, 'appName') ?? stringAt(plan, 'app_name') ?? (activeAction && 'appName' in activeAction ? activeAction.appName : '') });
+  if (type === 'save') return normalizeGenericActionRisk({ ...base, type, targetPath: stringAt(plan, 'targetPath') ?? stringAt(plan, 'target_path') ?? (activeAction && 'targetPath' in activeAction ? activeAction.targetPath : undefined) });
+  if (type === 'open_menu') return normalizeGenericActionRisk({ ...base, type, menuName: stringAt(plan, 'menuName') ?? stringAt(plan, 'menu_name') ?? (activeAction && 'menuName' in activeAction ? activeAction.menuName : undefined) });
   return normalizeGenericActionRisk({ ...base, type: 'wait', ms: activeAction && 'ms' in activeAction ? activeAction.ms : 500 });
 }
 

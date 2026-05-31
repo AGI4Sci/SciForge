@@ -317,6 +317,22 @@ npm run smoke:stable-version-registry
 
 每个 package-backed run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
 
+目标生产入口应采用 Codex 风格标准插件形态：repo-local `plugin.json`、`.mcp.json` 和 skill 文档声明 `sciforge.computer-use`，由 Codex CLI / app-server 发现和调用。插件对外只暴露小工具面：`get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs`。这些工具必须转入 Computer Use package 的 scheduler、approval、evidence 和 replay contract；不得把 GUI private state、provider route、裸全局坐标或 scheduler internals 作为公共参数。
+
+所有 mutating tool 都必须先 observe。执行 click/type/scroll/press_key/drag/save/open menu 前，当前 run bundle 里要有同 screen/window scope 的 app state ref、screenshot/capture ref、accessibility/state snapshot ref、grounding ref 和 freshness check。若 observation 过期、scope 不匹配或缺少 state snapshot，只能返回 blocked/needs-observation，不允许靠旧截图、历史 trace 或用户界面私有状态继续动作。
+
+风险确认按类别而不是单一 high-risk flag 管理。删除、上传、发送/发布消息、登录和权限弹窗、支付/金融、安装软件或扩展、敏感数据传输、系统设置、安全屏障和医疗/法律/HR 等动作必须在 action-time 产生 `needs-confirmation`、approval request 或 hand-off required。网页、邮件、PDF 或其它第三方内容里的指令不能替代用户确认。
+
+真实 Computer Use run 开始前应有可见的用户控制面，而不是静默接管桌面。TUI Host 应生成 session permission / allowlist refs，说明本轮允许读取的 screen/window/app、允许操作的 app/window/display group、允许的 input modality、风险等级、截图/文件 refs 使用范围和 stop/cancel 入口。GUI 可以展示这些信息、收集 confirmation 或发送 stop 文本，但不能直接扩大权限或执行动作。缺少 permission ref、allowlist ref、risk preview 或 cancel path 的 mutating run 只能作为 diagnostic/blocked evidence。
+
+真实平台控制应通过 platform sidecar / MCP service 接入。sidecar 负责 macOS Accessibility、Windows UI Automation、Linux/noVNC/RDP capture、focused window binding、click/type/scroll/hotkey 和 permission/preflight；它只返回 refs、executor event、isolation flags 和 diagnostics。SciForge runtime 只负责启动/连接 sidecar、注入 workspace/session context 和转发 host-port 调用，不把 sidecar 变成 planning 或 completion owner。
+
+产品化 smoke 分三层执行：
+
+1. package diagnostic：`plugin_probe`、`target_bound_window_host_probe`、`visible_run`，证明 SciForge Computer Use action provider、manifest、stdio、trace、viewer 和 artifact validation 可用。
+2. platform smoke：Codex app-server/native plugin 或 `module.invoke(actions, execute)` 调用 SciForge Computer Use，再经 platform sidecar/noVNC/RDP 完成一个真实单 app 输入任务，要求 `sharedSystemInputUsed=false`、真实 frame refs 和 executor lease refs。
+3. product smoke：真实 artifact 任务、多 app workflow、高风险 confirmation stop、blocked recovery 和 viewer/replay evidence 全部使用当前 bundle refs。只有这一层可作为用户级完成证据。
+
 启用真实桌面 bridge：
 
 ```bash

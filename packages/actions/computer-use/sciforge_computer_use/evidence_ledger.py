@@ -264,6 +264,9 @@ class EvidenceLedger:
             "metadata": _redact_ledger_payload(_json_safe(dict(metadata or {}))),
         }
         record = _redact_ledger_payload(record)
+        scope = _scope_from_value(record)
+        if scope:
+            record["scope"] = scope
         record["ref"] = _safe_ref_or_none(record.get("ref"), allow_absolute_local=True)
         record["refs"] = _safe_refs(record.get("refs"), allow_absolute_local=True)
         self.records.append(record)
@@ -274,6 +277,10 @@ class EvidenceLedger:
         ref = str(getattr(observation, "ref", "") or "")
         artifacts = _mapping(getattr(observation, "artifacts", None))
         metadata = _mapping(getattr(observation, "metadata", None))
+        observation_scope = _scope_from_value({
+            "windowTarget": _json_safe(getattr(observation, "window_target", None)),
+            "metadata": metadata,
+        })
         record_id = self.append_record(
             "observation",
             loop_phase="evidence",
@@ -287,6 +294,7 @@ class EvidenceLedger:
                 "windowTarget": _json_safe(getattr(observation, "window_target", None)),
                 "artifacts": artifacts,
                 "observationMetadata": metadata,
+                "provenance": observation_scope,
             },
         )
         for text_index, text in enumerate(getattr(observation, "visible_texts", ()) or ()):
@@ -297,7 +305,7 @@ class EvidenceLedger:
                 summary=str(text),
                 tags=["visible-text"],
                 derived_from=[record_id],
-                metadata={"textIndex": text_index},
+                metadata={"textIndex": text_index, "provenance": observation_scope},
             )
         for artifact_ref in _artifact_refs_from_observation(observation):
             self.append_record(
@@ -309,6 +317,7 @@ class EvidenceLedger:
                 summary="Artifact/file evidence from current observation.",
                 tags=["artifact-evidence"],
                 derived_from=[record_id],
+                metadata={"provenance": observation_scope},
             )
         return record_id
 
@@ -336,6 +345,7 @@ class EvidenceLedger:
                 "y": getattr(grounding, "y", None),
                 "coordinateSpace": getattr(grounding, "coordinate_space", None),
                 "groundingMetadata": _mapping(getattr(grounding, "metadata", None)),
+                "provenance": _scope_from_value(_mapping(getattr(grounding, "metadata", None))),
             },
         )
 
@@ -351,7 +361,11 @@ class EvidenceLedger:
     ) -> str:
         action_kind = str(getattr(action, "kind", "") or "")
         mutates_screen = action_mutates_visible_state(action_kind, observation_only=observation_only)
-        invalidates = self.current_visible_record_ids() if mutates_screen else []
+        action_scope = _scope_from_value({
+            "actionMetadata": _mapping(getattr(action, "metadata", None)),
+            "execution": _json_safe(execution),
+        })
+        invalidates = self.current_visible_record_ids(scope=action_scope) if mutates_screen else []
         return self.append_record(
             "action",
             loop_phase="action",
@@ -369,9 +383,11 @@ class EvidenceLedger:
                 "keys": list(getattr(action, "keys", ()) or ()),
                 "direction": getattr(action, "direction", None),
                 "amount": getattr(action, "amount", None),
+                "actionMetadata": _mapping(getattr(action, "metadata", None)),
                 "observationOnly": bool(observation_only),
                 "mutatesScreen": mutates_screen,
                 "execution": _json_safe(execution),
+                "scope": action_scope,
             },
         )
 
@@ -399,6 +415,7 @@ class EvidenceLedger:
                 "done": done,
                 "changed": getattr(verification, "changed", None),
                 "verificationMetadata": _mapping(getattr(verification, "metadata", None)),
+                "provenance": _scope_from_value(_mapping(getattr(verification, "metadata", None))),
             },
         )
 
@@ -440,13 +457,14 @@ class EvidenceLedger:
             metadata={"status": status, **dict(metadata or {})},
         )
 
-    def current_visible_record_ids(self) -> list[str]:
+    def current_visible_record_ids(self, *, scope: Mapping[str, Any] | None = None) -> list[str]:
         index = build_evidence_index(self.records)
         current_ids = set(index["current"])
         return [
             record["id"]
             for record in self.records
             if record["id"] in current_ids and record["type"] in VISIBLE_STATE_EVIDENCE_TYPES
+            and _scope_matches_invalidation(_record_scope(record), _normalized_scope(scope))
         ]
 
     def planner_brief(self) -> dict[str, Any]:
@@ -499,7 +517,9 @@ def build_evidence_index(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
     by_ref: dict[str, list[str]] = {}
     by_action_index: dict[str, list[str]] = {}
     by_tag: dict[str, list[str]] = {}
+    by_scope: dict[str, list[str]] = {}
     stale_by: dict[str, str] = {}
+    stale_by_scope: dict[str, dict[str, str]] = {}
     record_ids: list[str] = []
     for record in records:
         record_id = str(record.get("id") or "")
@@ -514,22 +534,36 @@ def build_evidence_index(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]
             by_tag.setdefault(tag, []).append(record_id)
         for ref in _record_refs(record):
             by_ref.setdefault(ref, []).append(record_id)
+        scope_key = _scope_key(_record_scope(record))
+        if scope_key:
+            by_scope.setdefault(scope_key, []).append(record_id)
         for invalidated in _string_list(record.get("invalidates")):
             stale_by[invalidated] = record_id
+            invalidated_scope_key = _scope_key(_record_scope(_record_by_id(records, invalidated)))
+            if invalidated_scope_key:
+                stale_by_scope.setdefault(invalidated_scope_key, {})[invalidated] = record_id
     current = [
         record_id
         for record_id in record_ids
         if record_id not in stale_by and _record_by_id(records, record_id).get("current", True) is True
     ]
+    current_by_scope: dict[str, list[str]] = {}
+    for record_id in current:
+        scope_key = _scope_key(_record_scope(_record_by_id(records, record_id)))
+        if scope_key:
+            current_by_scope.setdefault(scope_key, []).append(record_id)
     return {
         "schemaVersion": EVIDENCE_INDEX_SCHEMA_VERSION,
         "recordCount": len(record_ids),
         "current": current,
         "staleBy": stale_by,
+        "staleByScope": stale_by_scope,
+        "currentByScope": current_by_scope,
         "byType": by_type,
         "byRef": by_ref,
         "byActionIndex": by_action_index,
         "byTag": by_tag,
+        "byScope": by_scope,
     }
 
 
@@ -538,14 +572,30 @@ def build_evidence_snapshot(records: Sequence[Mapping[str, Any]]) -> dict[str, A
     current_ids = set(index["current"])
     current_records = [dict(record) for record in records if record.get("id") in current_ids]
     latest_observation = _latest_record(current_records, "observation")
+    latest_observation_by_scope: dict[str, Any] = {}
+    current_text_by_scope: dict[str, list[str]] = {}
+    current_objects_by_scope: dict[str, list[dict[str, Any] | None]] = {}
+    for record in current_records:
+        scope_key = _scope_key(_record_scope(record))
+        if not scope_key:
+            continue
+        if record.get("type") == "observation":
+            latest_observation_by_scope[scope_key] = _brief_record(record)
+        if record.get("type") == "text":
+            current_text_by_scope.setdefault(scope_key, []).append(record.get("summary"))
+        if record.get("type") == "visual-object":
+            current_objects_by_scope.setdefault(scope_key, []).append(_brief_record(record))
     return {
         "schemaVersion": EVIDENCE_SNAPSHOT_SCHEMA_VERSION,
         "recordCount": len(records),
         "currentRecordCount": len(current_records),
         "latestObservation": _brief_record(latest_observation),
+        "latestObservationByScope": latest_observation_by_scope,
         "currentRecords": [_brief_record(record) for record in current_records],
         "currentText": [record.get("summary") for record in current_records if record.get("type") == "text"],
+        "currentTextByScope": current_text_by_scope,
         "currentObjects": [_brief_record(record) for record in current_records if record.get("type") == "visual-object"],
+        "currentObjectsByScope": current_objects_by_scope,
         "artifactEvidence": [_brief_record(record) for record in current_records if record.get("type") == "artifact"],
         "blockingUncertainty": [
             _brief_record(record)
@@ -557,17 +607,26 @@ def build_evidence_snapshot(records: Sequence[Mapping[str, Any]]) -> dict[str, A
     }
 
 
-def build_planner_brief(records: Sequence[Mapping[str, Any]], *, recent_action_limit: int = 5) -> dict[str, Any]:
+def build_planner_brief(
+    records: Sequence[Mapping[str, Any]],
+    *,
+    recent_action_limit: int = 5,
+    scope: Mapping[str, Any] | None = None,
+    screen_id: str | None = None,
+    window_id: str | None = None,
+) -> dict[str, Any]:
+    requested_scope = _normalized_scope(scope or {"screenId": screen_id, "windowId": window_id})
     snapshot = build_evidence_snapshot(records)
     current_records = [
         record
         for record in records
         if record.get("id") in set(build_evidence_index(records)["current"])
+        and _scope_matches_query(_record_scope(record), requested_scope)
     ]
     recent_actions = [
         _brief_record(record)
         for record in records
-        if record.get("type") == "action"
+        if record.get("type") == "action" and _scope_matches_query(_record_scope(record), requested_scope)
     ][-recent_action_limit:]
     candidate_targets = [
         _brief_record(record)
@@ -583,9 +642,13 @@ def build_planner_brief(records: Sequence[Mapping[str, Any]], *, recent_action_l
         completion_gaps.append("Blocking uncertainty remains current.")
     return {
         "schemaVersion": PLANNER_BRIEF_SCHEMA_VERSION,
-        "latestObservation": snapshot["latestObservation"],
+        "scope": requested_scope,
+        "latestObservation": _brief_record(_latest_record(current_records, "observation")) if requested_scope else snapshot["latestObservation"],
+        "latestObservationByScope": snapshot["latestObservationByScope"],
         "currentText": snapshot["currentText"][:20],
+        "currentTextForScope": [record.get("summary") for record in current_records if record.get("type") == "text"][:20],
         "currentObjects": snapshot["currentObjects"][:20],
+        "currentObjectsForScope": [_brief_record(record) for record in current_records if record.get("type") == "visual-object"][:20],
         "candidateTargets": candidate_targets[-20:],
         "blockingUncertainty": blocking_uncertainty[-10:],
         "recentActions": recent_actions,
@@ -626,6 +689,7 @@ def _brief_record(record: Mapping[str, Any] | None) -> dict[str, Any] | None:
         "summary": record.get("summary"),
         "confidence": record.get("confidence"),
         "tags": _string_list(record.get("tags")),
+        "scope": _record_scope(record),
         "derivedFrom": _string_list(record.get("derivedFrom")),
         "supports": _string_list(record.get("supports")),
     }
@@ -650,6 +714,118 @@ def _record_refs(record: Mapping[str, Any]) -> list[str]:
         *(_string_list(record.get("refs"))),
         *([str(record.get("ref"))] if isinstance(record.get("ref"), str) else []),
     ])
+
+
+def _record_scope(record: Mapping[str, Any]) -> dict[str, str]:
+    return _normalized_scope(record.get("scope") if isinstance(record.get("scope"), Mapping) else _scope_from_value(record))
+
+
+def _scope_from_value(value: Any) -> dict[str, str]:
+    found: dict[str, str] = {}
+    _collect_scope_fields(value, found)
+    return _normalized_scope(found)
+
+
+def _collect_scope_fields(value: Any, found: dict[str, str]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = _normalize_ledger_key(key)
+            if normalized in {"screenid", "screen"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("screenId", str(item).strip())
+            elif normalized in {"windowid", "window"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("windowId", str(item).strip())
+            elif normalized in {"actorid", "actor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("actorId", str(item).strip())
+            elif normalized in {"cursorid", "cursor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("cursorId", str(item).strip())
+            elif normalized in {"scopetype", "leasescope", "targetscope"} and isinstance(item, str) and item.strip():
+                found.setdefault("scopeType", item.strip())
+            if isinstance(item, (Mapping, list, tuple)):
+                _collect_scope_fields(item, found)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_scope_fields(item, found)
+
+
+def _normalized_scope(scope: Mapping[str, Any] | None) -> dict[str, str]:
+    if not isinstance(scope, Mapping):
+        return {}
+    screen_id = _first_scope_string(scope, "screenId", "screen_id", "screen")
+    window_id = _first_scope_string(scope, "windowId", "window_id", "window")
+    actor_id = _first_scope_string(scope, "actorId", "actor_id", "actor")
+    cursor_id = _first_scope_string(scope, "cursorId", "cursor_id", "cursor")
+    scope_type = _first_scope_string(scope, "scopeType", "scope_type", "scope", "type")
+    if not scope_type:
+        scope_type = "window" if window_id else ("screen" if screen_id else "")
+    scope_type = scope_type.strip().lower().replace("_", "-")
+    if scope_type == "screen-global":
+        scope_type = "screen"
+    if scope_type == "window-local":
+        scope_type = "window"
+    normalized: dict[str, str] = {}
+    if scope_type in {"screen", "window"}:
+        normalized["scopeType"] = scope_type
+    if screen_id:
+        normalized["screenId"] = screen_id
+    if window_id:
+        normalized["windowId"] = window_id
+        normalized.setdefault("scopeType", "window")
+    if actor_id:
+        normalized["actorId"] = actor_id
+    if cursor_id:
+        normalized["cursorId"] = cursor_id
+    if normalized.get("scopeType") == "window" and not normalized.get("windowId"):
+        normalized["scopeType"] = "screen" if normalized.get("screenId") else normalized["scopeType"]
+    return normalized
+
+
+def _first_scope_string(scope: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = scope.get(key)
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _scope_key(scope: Mapping[str, Any]) -> str:
+    normalized = _normalized_scope(scope)
+    screen_id = normalized.get("screenId")
+    window_id = normalized.get("windowId")
+    if screen_id and window_id:
+        return f"screen:{screen_id}/window:{window_id}"
+    if screen_id:
+        return f"screen:{screen_id}"
+    return ""
+
+
+def _scope_matches_invalidation(record_scope: Mapping[str, Any], action_scope: Mapping[str, Any]) -> bool:
+    action = _normalized_scope(action_scope)
+    record = _normalized_scope(record_scope)
+    if not action:
+        return True
+    action_screen = action.get("screenId")
+    action_window = action.get("windowId")
+    record_screen = record.get("screenId")
+    record_window = record.get("windowId")
+    if action_screen and record_screen and action_screen != record_screen:
+        return False
+    if action_screen and not record_screen:
+        return True
+    if action_window and record_window and action_window != record_window:
+        return False
+    return True
+
+
+def _scope_matches_query(record_scope: Mapping[str, Any], requested_scope: Mapping[str, Any]) -> bool:
+    requested = _normalized_scope(requested_scope)
+    if not requested:
+        return True
+    record = _normalized_scope(record_scope)
+    if requested.get("screenId") and record.get("screenId") != requested.get("screenId"):
+        return False
+    if requested.get("windowId") and record.get("windowId") != requested.get("windowId"):
+        return False
+    return True
 
 
 def _refs_from_value(value: Any) -> list[str]:

@@ -19,6 +19,7 @@ import {
   type SilentStreamDecisionRecord,
 } from '@sciforge-ui/runtime-contract';
 import { compactSciForgeReference, compactTransportExecutionUnits } from './transportContext';
+import { sameChatContinuityPrompt } from '../../conversationContinuity';
 import {
   contextWindowTelemetryEvent,
   normalizeWorkspaceRuntimeEvent,
@@ -29,7 +30,11 @@ import {
 } from './runtimeEvents';
 import { actionableRuntimeStderrSummary, classifyRuntimeFailure } from './runtimeFailure';
 import { assertCodexRealtimeSessionRequestBoundary, createCodexRealtimeSessionClient, CODEX_RUNTIME_STREAM_PATH, type CodexRealtimeControlSender } from './codexRealtimeSession';
-import { buildComputerUseWorkspaceGatewayRequest, computerUseActionProviderRequested } from './computerUseWorkspaceGatewayRequest';
+import {
+  buildComputerUseWorkspaceGatewayRequest,
+  computerUseTerminalEquivalentTextRequested,
+  computerUseWorkspaceGatewayDiagnosticRequested,
+} from './computerUseWorkspaceGatewayRequest';
 import { attachRuntimeGuiPresentationToResponse } from './runtimeGuiPresentation';
 import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
 
@@ -82,6 +87,7 @@ export async function sendSciForgeToolMessage(
   callbacks: {
     onEvent?: (event: AgentStreamEvent) => void;
     onRealtimeControlReady?: (sender: CodexRealtimeControlSender) => void;
+    onRuntimeRequest?: (request: Record<string, unknown>) => void;
   } = {},
   signal?: AbortSignal,
 ): Promise<NormalizedAgentResponse> {
@@ -207,12 +213,15 @@ export async function sendSciForgeToolMessage(
     }
   }, 10_000);
   try {
-    const useComputerUseActionProvider = computerUseActionProviderRequested(input);
-    callbacks.onEvent?.(toolEvent('current-plan', useComputerUseActionProvider
-      ? '当前计划：把 /computer-use 终端等价文本交给 Computer Use action provider；Runtime Codex 只作为 planner host port，不再让普通模型自称拥有 GUI 工具。'
+    const useComputerUseDiagnosticShim = computerUseWorkspaceGatewayDiagnosticRequested(input);
+    const useComputerUseTerminalText = computerUseTerminalEquivalentTextRequested(input);
+    callbacks.onEvent?.(toolEvent('current-plan', useComputerUseDiagnosticShim
+      ? '当前计划：显式使用 legacy /computer-use Workspace Gateway diagnostic shim；该路径只保留诊断用途，GUI 不拥有 executor 参数或正式执行路由。'
+      : useComputerUseTerminalText
+        ? '当前计划：把 Computer Use 终端等价文本交给 Codex Runtime；正式执行由 Codex app-server/CLI/native Computer Use plugin/tool 或 module.invoke(actions, execute) 决定。'
       : `当前计划：把 GUI 用户操作转换为 terminal-equivalent text，交给 Codex Runtime bridge；任务上下文、记忆、工具和展示意图由 Codex/TUI 原生机制负责。`));
     callbacks.onEvent?.(projectToolStartedEvent({ id: makeId('evt'), createdAt: nowIso() }, builtInScenarioId));
-    const commandId = makeId(useComputerUseActionProvider ? 'computer-use-command' : 'codex-command');
+    const commandId = makeId(useComputerUseDiagnosticShim ? 'computer-use-diagnostic' : 'codex-command');
     const runtimeEvents: AgentStreamEvent[] = [];
     const handleRuntimeEvent = (event: unknown) => {
       const normalized = withConfiguredContextWindowLimit(
@@ -243,7 +252,7 @@ export async function sendSciForgeToolMessage(
     let result: unknown;
     let error: string | undefined;
     let requestBodyForFailure: ReturnType<typeof buildCodexRuntimeStreamRequest> | undefined;
-    if (useComputerUseActionProvider) {
+    if (useComputerUseDiagnosticShim) {
       activeRequestController = new AbortController();
       if (signal?.aborted) activeRequestController.abort();
       const requestBody = buildComputerUseWorkspaceGatewayRequest(input, commandId);
@@ -251,7 +260,7 @@ export async function sendSciForgeToolMessage(
       callbacks.onEvent?.(contextWindowTelemetryEvent(
         input,
         requestBodyText,
-        'Computer Use action-provider request/projection preflight estimate',
+        'Computer Use legacy diagnostic shim request/projection preflight estimate',
       ));
       response = await fetch(`${input.config.workspaceWriterBaseUrl}${WORKSPACE_TOOL_STREAM_PATH}`, {
         method: 'POST',
@@ -264,14 +273,15 @@ export async function sendSciForgeToolMessage(
       error = stream.error;
     } else {
       const requestBody = buildCodexRuntimeStreamRequest({
-      input,
-      commandId,
-      referenceSummary,
-      silentStreamRunId,
+        input,
+        commandId,
+        referenceSummary,
+        silentStreamRunId,
       });
       requestBodyForFailure = requestBody;
       assertCodexRuntimeStreamRequestBoundary(requestBody);
       assertCodexRealtimeSessionRequestBoundary(requestBody);
+      callbacks.onRuntimeRequest?.(requestBody);
       const requestBodyText = JSON.stringify(requestBody);
       callbacks.onEvent?.(contextWindowTelemetryEvent(
         input,
@@ -318,14 +328,14 @@ export async function sendSciForgeToolMessage(
         }
       }
     }
-  if (!useComputerUseActionProvider && requestBodyForFailure && error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
-    return runtimeCodexFailedResponse({
-      input,
-      request: requestBodyForFailure,
-      runtimeEvents,
-      error,
-    });
-  }
+    if (!useComputerUseDiagnosticShim && requestBodyForFailure && error && runtimeEvents.some(isRuntimeCodexFailedEvent)) {
+      return runtimeCodexFailedResponse({
+        input,
+        request: requestBodyForFailure,
+        runtimeEvents,
+        error,
+      });
+    }
   if (!response?.ok || error || !isRecord(result)) {
     throw new Error(error || `SciForge project tool failed: HTTP ${response?.status ?? 'no-response'}`);
   }
@@ -410,6 +420,7 @@ function buildCodexRuntimeStreamRequest(input: {
   const codexSessionId = codexSessionIdForRuntimeResume(input.input);
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
+  const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
     realtimeSession: createCodexRealtimeSessionEnvelope({
@@ -427,6 +438,10 @@ function buildCodexRuntimeStreamRequest(input: {
     guiExtension: {
       enabled: true,
     },
+    ...(computerUseApproval ? {
+      humanApproval: computerUseApproval.humanApproval,
+      uiState: computerUseApproval.uiState,
+    } : {}),
     auditMetadata: {
       schemaVersion: 'sciforge.codex-runtime-stream-audit.v1',
       boundary: 'GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.',
@@ -551,7 +566,6 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
     'selectedSkillIds',
     'toolProviderRoutes',
     'failureRecoveryPolicy',
-    'uiState',
     'references',
     'expectedEvidenceKinds',
     'selectedToolIds',
@@ -566,12 +580,34 @@ function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buil
     'runtimeResumePolicy',
   ];
   const hits = forbidden.filter((key) => key in request);
+  if ('humanApproval' in request || 'uiState' in request) {
+    assertCodexRuntimeApprovalMetadataBoundary(request);
+  }
   const audit = isRecord(request.auditMetadata) ? request.auditMetadata : {};
   const auditHits = forbidden.filter((key) => key in audit);
   if (hits.length || auditHits.length) {
     throw new Error(`Runtime Codex request contains legacy GUI handoff fields: ${[...hits, ...auditHits].join(', ')}`);
   }
   if (!request.commandText.trim()) throw new Error('Runtime Codex request commandText is required.');
+}
+
+function assertCodexRuntimeApprovalMetadataBoundary(request: ReturnType<typeof buildCodexRuntimeStreamRequest>) {
+  if (!/(?:^|\n)\s*\/(?:computer-use|computer\s+use)\s+approve\b/i.test(request.commandText)) {
+    throw new Error('Runtime Codex approval metadata is only allowed for /computer-use approve commandText.');
+  }
+  const humanApproval = isRecord((request as Record<string, unknown>).humanApproval)
+    ? (request as Record<string, unknown>).humanApproval as Record<string, unknown>
+    : {};
+  const uiState = isRecord((request as Record<string, unknown>).uiState)
+    ? (request as Record<string, unknown>).uiState as Record<string, unknown>
+    : {};
+  const humanAllowed = new Set(['approvalRef', 'decision', 'source', 'approvalProvenance']);
+  const uiAllowed = new Set(['schemaVersion', 'approvalRef', 'computerUseApprovalRef', 'terminalEquivalentText', 'approvalProvenance']);
+  const humanExtra = Object.keys(humanApproval).filter((key) => !humanAllowed.has(key));
+  const uiExtra = Object.keys(uiState).filter((key) => !uiAllowed.has(key));
+  if (humanExtra.length || uiExtra.length) {
+    throw new Error(`Runtime Codex approval metadata contains non-confirmation fields: ${[...humanExtra, ...uiExtra].join(', ')}`);
+  }
 }
 
 function buildCodexRuntimeCommandText(
@@ -583,9 +619,19 @@ function buildCodexRuntimeCommandText(
     const readableRefs = [reference.dataRef, reference.path, reference.ref].filter((value): value is string => Boolean(asString(value)));
     return readableRefs.length ? readableRefs : [reference.id];
   })).slice(0, 12);
-  const taskText = refs.length
+  const computerUseCommand = /^\/(?:computer-use|computer\s+use)\b/i.test(prompt);
+  const taskText = computerUseCommand
+    ? [prompt, refs.length ? ['Approval/source refs:', ...refs.map((ref) => `- ${ref}`)].join('\n') : undefined].filter(Boolean).join('\n\n')
+    : refs.length
     ? `ask ${refs.map((ref) => `--ref ${quoteTerminalArg(ref)}`).join(' ')} ${quoteTerminalArg(prompt)}`
     : prompt;
+  if (computerUseCommand) {
+    if (!options.resumeRequested) return taskText;
+    return [
+      taskText,
+      'Runtime resume context: continue the active Runtime Codex session only as transport/session context; the slash command above remains the terminal-equivalent task command.',
+    ].join('\n\n');
+  }
   const continuityContext = !options.resumeRequested
     ? sameChatContinuityContextForRuntimeCommand(input.input)
     : undefined;
@@ -597,16 +643,148 @@ function buildCodexRuntimeCommandText(
     ].join('\n\n');
   }
   if (!options.resumeRequested) return taskText;
+  const resumeContext = 'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.';
   return [
-    'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.',
+    resumeContext,
     taskText,
   ].join('\n\n');
 }
 
-function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {
-  if (!/\b(?:previous turn|last (?:answer|response|message)|that passphrase|the passphrase|remember(?:ed)?|上一轮|上(?:一)?条|刚才)\b/i.test(input.prompt)) {
-    return undefined;
+function computerUseApprovalRuntimeMetadata(
+  input: SendAgentMessageInput,
+  commandText: string,
+  referenceSummary: Array<Record<string, unknown>>,
+) {
+  const approvalRef = approvalRefFromComputerUseApproveText(input.prompt)
+    ?? approvalRefFromComputerUseApproveText(commandText);
+  if (!approvalRef) return undefined;
+  const approvalProvenance = approvalProvenanceForComputerUseApproval(input, referenceSummary, approvalRef);
+  return {
+    humanApproval: {
+      approvalRef,
+      decision: 'approved',
+      source: 'runtime-codex-commandText',
+      ...(approvalProvenance ? { approvalProvenance } : {}),
+    },
+    uiState: {
+      schemaVersion: 'sciforge.runtime-codex.computer-use-approval-context.v1',
+      approvalRef,
+      computerUseApprovalRef: approvalRef,
+      terminalEquivalentText: true,
+      ...(approvalProvenance ? { approvalProvenance } : {}),
+    },
+  };
+}
+
+function approvalRefFromComputerUseApproveText(text: string) {
+  if (!/(?:^|\n)\s*\/(?:computer-use|computer\s+use)\s+approve\b/i.test(text)) return undefined;
+  const match = /--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(text);
+  return (match?.[1] ?? match?.[2] ?? match?.[3])?.trim() || undefined;
+}
+
+function approvalProvenanceForComputerUseApproval(
+  input: SendAgentMessageInput,
+  referenceSummary: Array<Record<string, unknown>>,
+  approvalRef: string,
+) {
+  const sidecars = approvalSidecarsForRef(input, approvalRef);
+  const refs = approvalSourceRefs(referenceSummary, sidecars);
+  if (!sidecars.approvalRequestSidecar && !sidecars.guiAskUserSidecar && !sidecars.riskAuditSidecar && !Object.keys(refs).length) return undefined;
+  return compactRuntimeRecord({
+    schemaVersion: 'sciforge.computer-use.approval-provenance.v1',
+    source: 'runtime-codex-commandText-approval-context',
+    sourceStatus: 'needs-confirmation',
+    approvalRef,
+    approvalRequestId: approvalIdentity(sidecars, 'approvalRequestId') ?? approvalRef,
+    riskActionHash: approvalIdentity(sidecars, 'riskActionHash'),
+    sourceApprovalRequestRef: refs.sourceApprovalRequestRef,
+    sourceGuiAskUserRecordRef: refs.sourceGuiAskUserRecordRef,
+    sourceRiskAuditRef: refs.sourceRiskAuditRef,
+    approvalRequestSidecar: sidecars.approvalRequestSidecar,
+    guiAskUserSidecar: sidecars.guiAskUserSidecar,
+    riskAuditSidecar: sidecars.riskAuditSidecar,
+    highRiskAction: recordField(sidecars.riskAuditSidecar, 'highRiskAction')
+      ?? recordField(recordField(sidecars.riskAuditSidecar, 'approvalBoundary'), 'highRiskAction')
+      ?? recordField(recordField(sidecars.approvalRequestSidecar, 'approvalBoundary'), 'highRiskAction'),
+  });
+}
+
+function approvalSidecarsForRef(input: SendAgentMessageInput, approvalRef: string) {
+  for (const run of [...(input.runs ?? [])].reverse()) {
+    const raw = isRecord(run.raw) ? run.raw : {};
+    const guiAskUser = isRecord(raw.guiAskUser) ? raw.guiAskUser : {};
+    const approvalRequestSidecar = firstApprovalSidecarForRef(approvalRef, raw.approvalRequestSidecar, guiAskUser.approvalRequestSidecar);
+    const guiAskUserSidecar = firstApprovalSidecarForRef(approvalRef, raw.guiAskUserSidecar, guiAskUser.guiAskUserSidecar);
+    const riskAuditSidecar = firstApprovalSidecarForRef(approvalRef, raw.riskAuditSidecar, guiAskUser.riskAuditSidecar);
+    if (approvalRequestSidecar || guiAskUserSidecar || riskAuditSidecar) {
+      return { approvalRequestSidecar, guiAskUserSidecar, riskAuditSidecar };
+    }
   }
+  return {};
+}
+
+function firstApprovalSidecarForRef(approvalRef: string, ...values: unknown[]) {
+  return values.find((value): value is Record<string, unknown> => (
+    isRecord(value) && approvalRefFromSidecar(value) === approvalRef
+  ));
+}
+
+function approvalSourceRefs(
+  referenceSummary: Array<Record<string, unknown>>,
+  sidecars: {
+    approvalRequestSidecar?: Record<string, unknown>;
+    guiAskUserSidecar?: Record<string, unknown>;
+    riskAuditSidecar?: Record<string, unknown>;
+  },
+) {
+  const refs = uniqueRuntimeStringList(referenceSummary.flatMap((reference) => [
+    asString(reference.ref),
+    asString(reference.path),
+    asString(reference.dataRef),
+    asString(reference.id),
+  ]));
+  return {
+    sourceApprovalRequestRef: asString(sidecars.approvalRequestSidecar?.approvalRequestRef) ?? refs.find((ref) => /(?:^|\/)approval-request\.json$/i.test(ref)),
+    sourceGuiAskUserRecordRef: asString(sidecars.guiAskUserSidecar?.guiAskUserRecordRef) ?? refs.find((ref) => /(?:^|\/)gui-ask-user\.json$/i.test(ref)),
+    sourceRiskAuditRef: asString(sidecars.riskAuditSidecar?.riskAuditRef) ?? refs.find((ref) => /(?:^|\/)risk-audit\.json$/i.test(ref)),
+  };
+}
+
+function approvalIdentity(
+  sidecars: {
+    approvalRequestSidecar?: Record<string, unknown>;
+    guiAskUserSidecar?: Record<string, unknown>;
+    riskAuditSidecar?: Record<string, unknown>;
+  },
+  key: 'approvalRequestId' | 'riskActionHash',
+) {
+  return asString(sidecars.approvalRequestSidecar?.[key])
+    ?? asString(sidecars.guiAskUserSidecar?.[key])
+    ?? asString(sidecars.riskAuditSidecar?.[key]);
+}
+
+function approvalRefFromSidecar(sidecar: Record<string, unknown>) {
+  const approvalRequest = recordField(sidecar, 'approvalRequest')
+    ?? recordField(recordField(sidecar, 'payload'), 'approvalRequest');
+  const metadata = recordField(approvalRequest, 'metadata');
+  return asString(sidecar.approvalRef)
+    ?? asString(sidecar.canonicalApprovalRef)
+    ?? asString(approvalRequest?.approvalRef)
+    ?? asString(approvalRequest?.approval_ref)
+    ?? asString(metadata?.approvalRef)
+    ?? asString(metadata?.approval_ref);
+}
+
+function recordField(value: unknown, key: string) {
+  return isRecord(value) ? (isRecord(value[key]) ? value[key] : undefined) : undefined;
+}
+
+function compactRuntimeRecord<T extends Record<string, unknown>>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+
+function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {
+  if (!sameChatContinuityPrompt(input.prompt)) return undefined;
   const entries = (input.messages ?? [])
     .filter((message) => !isSeedDemoOrFixtureMessage(message))
     .map((message) => {
@@ -620,7 +798,7 @@ function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput
     .slice(-4);
   if (!entries.length) return undefined;
   return [
-    'Same-chat continuity context for relative references. Use this bounded non-seed context only to resolve phrases such as "previous turn", "last answer", or "that passphrase"; do not treat it as artifact content or hidden GUI state.',
+    'Same-chat continuity context for relative references. Use this bounded non-seed context only to resolve phrases such as "previous turn", "last answer", "what I asked first", "一开始问的问题", or "that passphrase"; do not treat it as artifact content or hidden GUI state.',
     ...entries,
   ].join('\n');
 }
@@ -628,7 +806,7 @@ function sameChatContinuityContextForRuntimeCommand(input: SendAgentMessageInput
 function latestCodexSessionIdForConversationLane(input: SendAgentMessageInput): string | undefined {
   const laneId = runtimeConversationLaneId(input);
   for (const run of [...(input.runs ?? [])].reverse()) {
-    if (!runMatchesConversationLane(run, laneId)) continue;
+    if (!runMatchesConversationLane(run, laneId, input.sessionId)) continue;
     const sessionId = codexSessionIdFromRun(run);
     if (sessionId) return sessionId;
   }
@@ -649,14 +827,19 @@ function defaultSessionConversationLaneId(sessionId: string) {
 function runMatchesConversationLane(
   run: NonNullable<SendAgentMessageInput['runs']>[number],
   laneId: string,
+  sessionId?: string,
 ) {
   const raw = isRecord(run.raw) ? run.raw : {};
   const runLaneId = asString(raw.conversationLaneId)
     ?? asString(raw.runtimeConversationLaneId)
     ?? asString(raw.conversationLane);
   if (runLaneId) return runLaneId === laneId;
-  if (!laneId.startsWith('session:')) return false;
-  return true;
+  if (laneId.startsWith('session:')) return true;
+  const legacyWorkbenchLane = sessionId?.trim()
+    ? `workbench:${run.scenarioId}:${sessionId.trim()}`
+    : undefined;
+  if (legacyWorkbenchLane && laneId === legacyWorkbenchLane) return true;
+  return false;
 }
 
 function selectedCodexSessionId(input: SendAgentMessageInput): string | undefined {
@@ -690,7 +873,7 @@ function selectedCodexSessionId(input: SendAgentMessageInput): string | undefine
 function codexSessionIdFromRun(run: NonNullable<SendAgentMessageInput['runs']>[number] | undefined): string | undefined {
   if (!run) return undefined;
   const raw = isRecord(run.raw) ? run.raw : undefined;
-  const direct = asString(raw?.codexSessionId) ?? asString(raw?.nativeSessionId);
+  const direct = runtimeThreadIdFromRecord(raw);
   if (direct) return direct;
   const runtimeFailure = isRecord(raw?.codexRuntimeFailure) ? raw.codexRuntimeFailure : undefined;
   const runtimeRecoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
@@ -829,6 +1012,8 @@ function parsedRuntimeOutputResult(raw: Record<string, unknown> | undefined): un
 
 function codexSessionIdFromRuntimeResult(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
+  const direct = runtimeThreadIdFromRecord(value);
+  if (direct) return direct;
   const output = isRecord(value.output) ? value.output : undefined;
   const runtimeFailure = isRecord(value.runtimeFailure) ? value.runtimeFailure : undefined;
   const recoverState = isRecord(runtimeFailure?.recoverState) ? runtimeFailure.recoverState : undefined;
@@ -843,6 +1028,8 @@ function codexSessionIdFromRuntimeResult(value: unknown): string | undefined {
 function codexSessionIdFromRuntimeEvents(events: AgentStreamEvent[]): string | undefined {
   for (const event of [...events].reverse()) {
     const eventRecord = isRecord(event) ? event as Record<string, unknown> : {};
+    const eventId = runtimeThreadIdFromRecord(eventRecord);
+    if (eventId) return eventId;
     const raw = isRecord(event.raw) ? event.raw : {};
     const nestedRaw = isRecord(raw.raw) ? raw.raw : {};
     const payload = isRecord(raw.payload) ? raw.payload : {};
@@ -860,6 +1047,27 @@ function codexSessionIdFromRuntimeEvents(events: AgentStreamEvent[]): string | u
       ?? asString(nestedPayload.codexSessionId)
       ?? asString(nestedPayload.nativeSessionId)
       ?? asString(nestedPayload.thread_id);
+    if (id) return id;
+  }
+  return undefined;
+}
+
+function runtimeThreadIdFromRecord(record: Record<string, unknown> | undefined, depth = 0): string | undefined {
+  if (!record) return undefined;
+  const direct = asString(record.codexSessionId)
+    ?? asString(record.nativeSessionId)
+    ?? asString(record.threadId)
+    ?? asString(record.thread_id);
+  if (direct) return direct.trim();
+  const thread = isRecord(record.thread) ? record.thread : undefined;
+  const threadId = asString(thread?.id)
+    ?? asString(thread?.threadId)
+    ?? asString(thread?.thread_id);
+  if (threadId) return threadId.trim();
+  if (depth >= 3) return undefined;
+  for (const key of ['output', 'result', 'runtimeFailure', 'recoverState', 'payload', 'params', 'event', 'raw', 'data', 'session']) {
+    const nested = isRecord(record[key]) ? record[key] as Record<string, unknown> : undefined;
+    const id = runtimeThreadIdFromRecord(nested, depth + 1);
     if (id) return id;
   }
   return undefined;

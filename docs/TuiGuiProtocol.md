@@ -55,6 +55,56 @@ GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送
 
 浏览器截图、DOM snapshot、console logs、network logs 和下载文件必须通过 refs 进入 GUI projection。GUI state 不保存 `data:image/...;base64,...`、完整 DOM 或完整日志。登录、上传、下载、外部提交、授权、支付、删除、发送、写剪贴板和 visible takeover 都必须先由 TUI 发起 confirmation/handoff。
 
+模块边界：`@sciforge-ui/runtime-contract/browser-runtime` 是 GUI/TUI 共享的纯契约；`packages/observe/web` 只拥有 TUI capability/provider wrapper；`packages/presentation/components/browser-workbench` 只拥有右侧 browser projection renderer。GUI app 不直接 import observe/web 的 browser runtime wrapper。
+
+## Computer Use 输入边界
+
+Computer Use 属于 TUI/Codex native action provider。GUI 可以把用户意图翻译成终端等价文本，例如：
+
+```text
+/computer-use observe --screen current
+/computer-use run "在演示文稿里创建一页摘要并保存"
+/computer-use replay computer-use:replay/bundle-123
+```
+
+这些文本只是用户输入，不是 GUI 调用 executor。正式执行路径必须是：
+
+```text
+GUI text
+  -> Codex app-server production path
+  -> Codex native Computer Use tool/plugin/MCP
+  -> packages/actions/computer-use L1 resource adapter
+  -> L0 capture/ground/execute/verify/trace handlers
+  -> refs-first result / approval request / replay refs
+  -> Agent Host
+  -> module.invoke({ moduleId: 'gui', intent: 'present' | 'ask_user' | 'notify' | 'set_status' })
+```
+
+GUI 对 Computer Use 的合法职责：
+
+- 展示 multi-screen replay、actor cursor overlay、proposal 状态、lease owner、before/after evidence refs 和 validator diagnostics。
+- 收集 `needs-confirmation` 或 `approvalRequest` 的用户确认，并把确认结果作为文本发回 TUI。
+- 聚焦已有 replay/artifact/ref，或显示缺失 renderer、缺失 evidence 的展示错误。
+- 暴露只读 GUI resource，说明当前 replay viewer、selection 和 confirmation state。
+
+GUI 禁止做的事：
+
+- 直接调用 click/type/drag/scroll/hotkey/save/open-menu executor。
+- 传入 executor lease、裸全局坐标、desktop bridge policy、provider route 或 scheduler 参数。
+- 把 cursor move/point/annotate 当成真实 GUI mutating action。
+- 把 placeholder viewer frame、旧截图、GUI 私有状态或 shared system input trace 当成用户级完成证据。
+- import `packages/actions/computer-use`、`packages/observe/vision` provider implementation、`src/runtime/computer-use` bridge 或任何 desktop bridge implementation。
+
+Actor cursor 是 presentation 和 collaboration state；真正改变桌面/窗口状态的动作必须由 TUI Host 通过 scoped scheduler lease 串行进入 executor adapter。缺少独立 input adapter 时，shared system input 只能生成 diagnostic/blocked evidence，不能通过最终用户级验收。
+
+`/computer-use` Workspace Gateway、AgentServer、runtime gateway、exec-MCP 和 `codex exec --json` 路径只能是 legacy/test-only/diagnostic adapter。它们可以帮助读取旧 trace、运行 fixture 或做迁移 smoke，但新增协议、按钮和 public surface 不能依赖这些路径作为产品 fallback。
+
+## 右侧结果区 package renderer 边界
+
+右侧结果区通过 UI manifest slot 选择 package renderer。`browser-workbench`、`terminal-session-viewer`、`workspace-file-viewer` 都属于 GUI presentation module：它们可以渲染 refs、buffer、tree、draft、selection 和 view-local event data，也可以提供终端等价文本建议；它们不得启动 provider、PTY/process、workspace write 或跨域读取。
+
+TUI/Host 对这些 view-local event 的处理必须重新进入协议边界：浏览器动作用 `/browser ...` 或 browser runtime intent，终端输入进入 Host-owned terminal adapter，文件保存进入 workspace adapter。GUI 只显示 Host/TUI 返回的新 projection、refs、draft 状态或错误。
+
 ## AnnotationSidebar 连续反馈输入
 
 全局 `AnnotationSidebar` 是 GUI Shell input/presentation surface，不是独立聊天系统。顶部 `注释` 入口在工作台和非工作台页面都打开这个侧栏；旧的“点选对象后把注释讨论写入工作台主 composer”不再是协议路径。主 composer 继续处理执行、研究和普通对话。

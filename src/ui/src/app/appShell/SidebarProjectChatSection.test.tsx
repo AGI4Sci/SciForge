@@ -4,14 +4,15 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SidebarProjectChatSection } from './SidebarProjectChatSection';
 import type { SidebarProjectThreadGroup, SidebarThreadItem } from './ShellPanels';
+import { defaultSidebarPreferences } from './sidebarPreferences';
 
-test('sidebar project chat section renders search, project actions, and top-k threads', () => {
+test('sidebar project chat section renders search, Cursor-like project heads, and top-k threads', () => {
   const project: SidebarProjectThreadGroup = {
     id: 'project-main',
     label: 'SciForge',
     detail: '/tmp/SciForge',
     current: true,
-    threads: Array.from({ length: 5 }, (_, index) => ({
+    threads: Array.from({ length: 7 }, (_, index) => ({
       sessionId: `thread-${index + 1}`,
       scenarioId: `scenario-${index + 1}`,
       title: `Thread ${index + 1}`,
@@ -25,10 +26,10 @@ test('sidebar project chat section renders search, project actions, and top-k th
     sidebarSearchMatches: [{ id: 'match-1', label: 'Paper project', detail: 'Project', page: 'workbench' }],
     allProjectThreadsCollapsed: false,
     activeMenuKind: 'project',
-    activeProjectMenuId: 'project-main',
-    projectThreadLimit: 4,
+    projectThreadLimit: 6,
+    projectThreadVisibleCounts: {},
     sidebarProjectThreadGroups: [project],
-    expandedProjectThreads: new Set<string>(),
+    visibleSections: defaultSidebarPreferences().visibleSections,
     onSearchQueryChange: () => undefined,
     onSearchSubmit: () => undefined,
     onOpenSearchMatch: () => undefined,
@@ -36,12 +37,17 @@ test('sidebar project chat section renders search, project actions, and top-k th
     onToggleProjectMenu: () => undefined,
     onToggleAllProjectThreadsCollapsed: () => undefined,
     onActivateProject: () => undefined,
-    onToggleProjectThreadExpansion: () => undefined,
+    onShowMoreProjectThreads: () => undefined,
     onOpenProjectNewChat: () => undefined,
+    onOpenAutomations: () => undefined,
+    onOpenCustomize: () => undefined,
     renderSidebarThreadRow: (item) => React.createElement('span', { key: item.sessionId }, item.title),
   }));
 
   assert.match(html, /New Agent/);
+  assert.match(html, /Automations/);
+  assert.match(html, /Customize/);
+  assert.match(html, /aria-label="Customize"/);
   assert.match(html, /Search chats, projects, pages/);
   assert.match(html, /Sidebar search results/);
   assert.match(html, /Paper project/);
@@ -49,17 +55,62 @@ test('sidebar project chat section renders search, project actions, and top-k th
   assert.match(html, /Customize Sidebar/);
   assert.match(html, /Open Workspace/);
   assert.match(html, /SciForge/);
-  assert.match(html, /Current/);
-  assert.match(html, /Project actions/);
   assert.match(html, /New Agent in SciForge/);
+  assert.doesNotMatch(html, /project actions|Project actions/);
+  assert.doesNotMatch(html, /sidebar-project-current-label|>Current</);
   assert.match(html, /Thread 1/);
-  assert.match(html, /Thread 4/);
-  assert.doesNotMatch(html, /Thread 5/);
-  assert.match(html, /Show more/);
-  assert.match(html, /<span>Show more<\/span><small>1<\/small>/);
+  assert.match(html, /Thread 6/);
+  assert.doesNotMatch(html, /Thread 7/);
+  assert.match(html, /See more/);
+  assert.match(html, /aria-label="See more chats in SciForge"/);
+  assert.doesNotMatch(html, /Show more|Show less/);
+  assert.doesNotMatch(html, /<small>1<\/small>/);
 });
 
-test('sidebar project chat section renders unified active draft archived and discarded rows', () => {
+test('sidebar project chat section reveals additional repository rows without a collapse affordance', () => {
+  const project: SidebarProjectThreadGroup = {
+    id: 'project-main',
+    label: 'SciForge',
+    detail: '/tmp/SciForge',
+    current: true,
+    threads: Array.from({ length: 15 }, (_, index) => ({
+      sessionId: `thread-${index + 1}`,
+      scenarioId: `scenario-${index + 1}`,
+      title: `Thread ${index + 1}`,
+      detail: `Question ${index + 1}`,
+      updatedAt: `2026-05-29T00:${String(index).padStart(2, '0')}:00.000Z`,
+    })) as SidebarThreadItem[],
+  };
+
+  const html = renderToStaticMarkup(React.createElement(SidebarProjectChatSection, {
+    sidebarSearchQuery: '',
+    sidebarSearchMatches: [],
+    allProjectThreadsCollapsed: false,
+    projectThreadLimit: 6,
+    projectThreadVisibleCounts: { 'project-main': 14 },
+    sidebarProjectThreadGroups: [project],
+    visibleSections: defaultSidebarPreferences().visibleSections,
+    onSearchQueryChange: () => undefined,
+    onSearchSubmit: () => undefined,
+    onOpenSearchMatch: () => undefined,
+    onOpenProjectMenuAt: () => undefined,
+    onToggleProjectMenu: () => undefined,
+    onToggleAllProjectThreadsCollapsed: () => undefined,
+    onActivateProject: () => undefined,
+    onShowMoreProjectThreads: () => undefined,
+    onOpenProjectNewChat: () => undefined,
+    onOpenAutomations: () => undefined,
+    onOpenCustomize: () => undefined,
+    renderSidebarThreadRow: (item) => React.createElement('span', { key: item.sessionId }, item.title),
+  }));
+
+  assert.match(html, /Thread 14/);
+  assert.doesNotMatch(html, /Thread 15/);
+  assert.match(html, /See more/);
+  assert.doesNotMatch(html, /Show less|<small>1<\/small>/);
+});
+
+test('sidebar project chat section keeps archived and discarded rows out of the active list', () => {
   const project: SidebarProjectThreadGroup = {
     id: 'project-main',
     label: 'SciForge',
@@ -105,8 +156,9 @@ test('sidebar project chat section renders unified active draft archived and dis
     sidebarSearchMatches: [],
     allProjectThreadsCollapsed: false,
     projectThreadLimit: 3,
+    projectThreadVisibleCounts: {},
     sidebarProjectThreadGroups: [project],
-    expandedProjectThreads: new Set<string>(),
+    visibleSections: defaultSidebarPreferences().visibleSections,
     onSearchQueryChange: () => undefined,
     onSearchSubmit: () => undefined,
     onOpenSearchMatch: () => undefined,
@@ -114,15 +166,16 @@ test('sidebar project chat section renders unified active draft archived and dis
     onToggleProjectMenu: () => undefined,
     onToggleAllProjectThreadsCollapsed: () => undefined,
     onActivateProject: () => undefined,
-    onToggleProjectThreadExpansion: () => undefined,
+    onShowMoreProjectThreads: () => undefined,
     onOpenProjectNewChat: () => undefined,
+    onOpenAutomations: () => undefined,
+    onOpenCustomize: () => undefined,
     renderSidebarThreadRow: (item) => React.createElement('span', { key: item.sessionId }, `${item.state}:${item.title}`),
   }));
 
   assert.match(html, /draft:New chat/);
   assert.match(html, /active:Active thread/);
-  assert.match(html, /archived:Archived thread/);
+  assert.doesNotMatch(html, /archived:Archived thread/);
   assert.doesNotMatch(html, /discarded:Discarded thread/);
-  assert.match(html, /Show more/);
-  assert.match(html, /<span>Show more<\/span><small>1<\/small>/);
+  assert.doesNotMatch(html, /See more|Show more/);
 });

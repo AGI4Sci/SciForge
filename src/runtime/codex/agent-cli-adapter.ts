@@ -13,6 +13,8 @@ export interface AgentCliStartTurnInput {
     enabled?: boolean;
     statePath?: string;
   };
+  humanApproval?: Record<string, unknown>;
+  uiState?: Record<string, unknown>;
 }
 
 export interface AgentCliTurn {

@@ -1,12 +1,11 @@
 import type { SendAgentMessageInput } from '../../domain';
-import { expectedArtifactsForCurrentTurn, selectedComponentsForCurrentTurn } from '../../artifactIntent';
-import { builtInScenarioIdForRuntimeInput, skillDomainForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 
-const COMPUTER_USE_VISION_SENSE_TOOL_ID = 'local.vision-sense';
 const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
 const COMPLETION_EVIDENCE_POLICY_SCHEMA = 'sciforge.completion-evidence-policy.v1';
 const EMBEDDED_L3_COMPLETION_EVIDENCE_PRODUCER_ID = 'computer-use.embedded-isolated-desktop-l3';
 const ON_COMPLETED_CURRENT_RUN_TRIGGER = 'on-completed-current-run';
+const LEGACY_WORKSPACE_GATEWAY_SHIM_SCHEMA = 'sciforge.computer-use.legacy-workspace-gateway-diagnostic.v1';
+const LEGACY_WORKSPACE_GATEWAY_FLAG = '--legacy-workspace-gateway';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -48,7 +47,7 @@ function sanitizedCompletionEvidencePolicy(value: unknown): Record<string, unkno
   };
 }
 
-export function computerUseActionProviderRequested(input: SendAgentMessageInput) {
+export function computerUseTerminalEquivalentTextRequested(input: SendAgentMessageInput) {
   if (/^\/(?:computer-use|computer\s+use)\b/i.test(input.prompt.trim())) return true;
   const scenario = input.scenarioOverride;
   return [
@@ -57,24 +56,15 @@ export function computerUseActionProviderRequested(input: SendAgentMessageInput)
   ].includes(COMPUTER_USE_ACTION_PROVIDER_ID);
 }
 
+export function computerUseWorkspaceGatewayDiagnosticRequested(input: SendAgentMessageInput) {
+  const prompt = input.prompt.trim();
+  if (!/^\/(?:computer-use|computer\s+use)\b/i.test(prompt)) return false;
+  return new RegExp(`(^|\\s)${escapeRegex(LEGACY_WORKSPACE_GATEWAY_FLAG)}(?:\\s|$|=true\\b)`, 'i').test(prompt)
+    || /^\/(?:computer-use|computer\s+use)\s+(?:diagnostic|diagnostics|diagnose|legacy-gateway|gateway-diagnostic)\b/i.test(prompt);
+}
+
 export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageInput, commandId: string) {
   const scenario = input.scenarioOverride;
-  const selectedToolIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedToolIds ?? []),
-    COMPUTER_USE_VISION_SENSE_TOOL_ID,
-  ]);
-  const selectedSenseIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedSenseIds ?? []),
-    COMPUTER_USE_VISION_SENSE_TOOL_ID,
-  ]);
-  const selectedActionIds = uniqueRuntimeStringList([
-    ...(scenario?.selectedActionIds ?? []),
-    COMPUTER_USE_ACTION_PROVIDER_ID,
-  ]);
-  const selectedComponentIds = selectedComponentsForCurrentTurn(
-    input.prompt,
-    input.availableComponentIds ?? scenario?.defaultComponents ?? [],
-  );
   const approvalRef = approvalRefFromComputerUsePrompt(input.prompt);
   const approvalProvenance = approvalRef ? approvalProvenanceFromComputerUseRuns(input.runs, approvalRef) : undefined;
   const humanApproval = approvalRef ? {
@@ -82,62 +72,47 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
     ...(approvalProvenance ? { approvalProvenance } : {}),
   } : undefined;
   const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
+  const terminalEquivalentText = input.prompt.trim();
   return {
-    skillDomain: skillDomainForRuntimeInput(input),
-    prompt: input.prompt,
-    handoffSource: 'ui-chat',
+    schemaVersion: LEGACY_WORKSPACE_GATEWAY_SHIM_SCHEMA,
+    kind: 'legacy-diagnostic-shim',
+    diagnosticOnly: true,
+    prompt: terminalEquivalentText,
+    terminalEquivalentText,
+    handoffSource: 'ui-chat-legacy-diagnostic-shim',
     workspacePath: input.config.workspacePath,
-    agentServerBaseUrl: input.config.agentServerBaseUrl,
-    agentBackend: input.config.agentBackend,
-    modelProvider: input.config.modelProvider,
-    modelName: input.config.modelName,
-    maxContextWindowTokens: input.config.maxContextWindowTokens,
-    scenarioPackageRef: input.scenarioPackageRef ?? scenario?.scenarioPackageRef,
-    skillPlanRef: input.skillPlanRef ?? scenario?.skillPlanRef,
-    uiPlanRef: input.uiPlanRef ?? scenario?.uiPlanRef,
-    artifacts: input.artifacts ?? [],
-    references: input.references ?? [],
-    selectedToolIds,
-    selectedSenseIds,
-    selectedActionIds,
-    selectedComponentIds,
-    selectedVerifierIds: scenario?.selectedVerifierIds,
-    expectedArtifactTypes: expectedArtifactsForCurrentTurn({
-      scenarioId: builtInScenarioIdForRuntimeInput(input),
-      prompt: input.prompt,
-      selectedComponentIds,
-    }),
-    verificationResult: input.verificationResult,
-    recentVerificationResults: input.recentVerificationResults,
     humanApproval,
+    diagnosticBoundary: {
+      officialPath: 'terminal-equivalent text -> Codex app-server/CLI/native Computer Use plugin/tool or module.invoke({ moduleId: "actions", intent: "execute" })',
+      gatewayRole: 'legacy diagnostic shim',
+      guiOwnsExecutor: false,
+      guiOwnsExecutionRoute: false,
+    },
+    projectionSummary: {
+      currentTurnId: input.currentTurnId,
+      referenceCount: input.references?.length ?? 0,
+      artifactCount: input.artifacts?.length ?? 0,
+      runCount: input.runs?.length ?? 0,
+      completionEvidencePolicyPresent: Boolean(completionEvidencePolicy),
+    },
     uiState: {
       commandId,
       currentTurnId: input.currentTurnId,
-      selectedToolIds,
-      selectedSenseIds,
-      selectedActionIds,
-      selectedVerifierIds: scenario?.selectedVerifierIds,
-      turnExecutionConstraints: scenario?.turnExecutionConstraints,
-      artifactPolicy: scenario?.artifactPolicy,
-      referencePolicy: scenario?.referencePolicy,
-      failureRecoveryPolicy: scenario?.failureRecoveryPolicy,
-      humanApprovalPolicy: scenario?.humanApprovalPolicy,
+      diagnosticOnly: true,
+      legacyWorkspaceGatewayShim: true,
+      terminalEquivalentText,
       humanApproval,
       approvalRef,
       approvalProvenance,
       completionEvidencePolicy,
-      computerUseLong: scenario?.computerUseLong,
-      computerUseNext: scenario?.computerUseNext,
-      visionSenseConfig: {
-        desktopBridgeEnabled: true,
-        allowSharedSystemInput: input.config.visionAllowSharedSystemInput === true,
-      },
+      guiOwnsExecutor: false,
+      guiOwnsExecutionRoute: false,
     },
   };
 }
 
 function approvalRefFromComputerUsePrompt(prompt: string) {
-  if (!/^\/(?:computer-use|computer\s+use)\s+approve\b/i.test(prompt.trim())) return undefined;
+  if (!/^\/(?:computer-use|computer\s+use)\b/i.test(prompt.trim()) || !/(?:^|\s)approve(?:\s|$)/i.test(prompt.trim())) return undefined;
   const match = /--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(prompt);
   return match?.[1] ?? match?.[2] ?? match?.[3];
 }
@@ -218,4 +193,8 @@ function approvalSourceRefsFromComputerUseRefs(refs: string[]) {
 function recordField(value: unknown, key: string): Record<string, unknown> | undefined {
   if (!isRecord(value)) return undefined;
   return isRecord(value[key]) ? value[key] : undefined;
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

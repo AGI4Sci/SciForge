@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "sciforge-computer-use": {
+      "command": "python",
+      "args": ["-m", "sciforge_computer_use.mcp_server"],
+      "env": {
+        "PYTHONPATH": "packages/actions/computer-use"
+      },
+      "note": "Package-local MCP wrapper for sciforge.computer-use. Public tools stay limited to get_app_state, observe, click, type_text, scroll, press_key, propose_action, execute_scoped_action, and get_replay_refs."
+    }
+  }
+}

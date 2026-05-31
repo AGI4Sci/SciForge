@@ -157,13 +157,20 @@ export function buildWorkspaceProjectActivation(
   }
 
   const nextPeers = [...(config.peerInstances ?? [])];
+  const remainingPeers = nextPeers.filter((_, index) => index !== peerIndex);
   nextPeers[peerIndex] = {
-    ...peer,
+    name: uniquePeerName(remainingPeers, pathBasename(currentPath) || peer.name || 'Workspace'),
+    appUrl: config.agentServerBaseUrl,
+    workspaceWriterUrl: config.workspaceWriterBaseUrl,
     workspacePath: currentPath,
+    role: 'peer',
+    trustLevel: 'readonly',
+    enabled: true,
   };
 
   return {
     workspacePath: targetPath,
+    workspaceWriterBaseUrl: peer.workspaceWriterUrl?.trim() || config.workspaceWriterBaseUrl,
     peerInstances: nextPeers,
   };
 }

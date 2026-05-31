@@ -380,7 +380,7 @@ def test_virtual_adapter_fails_closed_for_high_risk_actions(tmp_path):
     assert outcome.metadata["blockedCode"] == "high-risk-action"
     assert outcome.metadata["simulatedStateUpdated"] is False
     assert outcome.metadata["osInputExecuted"] is False
-    assert "requires explicit upstream confirmation" in outcome.message
+    assert "requires explicit action-time confirmation" in outcome.message
 
 
 def test_apply_virtual_input_action_function_writes_state_refs(tmp_path):

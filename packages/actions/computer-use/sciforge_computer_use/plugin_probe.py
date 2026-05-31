@@ -25,6 +25,19 @@ PROBE_MANIFEST_NAME = "plugin-probe-manifest.json"
 CLI_RESULT_NAME = "plugin-probe-cli-result.json"
 ACTION_MANIFEST_NAME = "action-provider.manifest.json"
 PACKAGE_MODULE = "sciforge_computer_use"
+REPO_PLUGIN_MANIFEST_NAME = "plugin.json"
+REPO_MCP_CONFIG_NAME = ".mcp.json"
+EXPECTED_PUBLIC_TOOLS = (
+    "get_app_state",
+    "observe",
+    "click",
+    "type_text",
+    "scroll",
+    "press_key",
+    "propose_action",
+    "execute_scoped_action",
+    "get_replay_refs",
+)
 REQUIRED_API_VALUE_SYMBOLS = (
     "executorCommandEventLogSchema",
     "EXECUTOR_COMMAND_EVENT_LOG_SCHEMA",
@@ -113,6 +126,12 @@ def run_plugin_probe(
             module_importer=module_importer,
         )
         _check_manifest_diagnostic_claim_semantics(action_manifest, checks)
+        codex_local_packaging = _check_repo_local_codex_packaging(
+            package_root=package_root,
+            action_manifest=action_manifest,
+            checks=checks,
+            module_importer=module_importer,
+        )
 
         cli_probe = _not_run_cli_probe()
         cli_trace_refs: list[str] = []
@@ -167,6 +186,7 @@ def run_plugin_probe(
                     "getManifestMatchesActionProvider": api_manifest.get("id") == action_manifest.get("id"),
                 },
                 "diagnosticProbeModules": diagnostic_probe_modules,
+                "codexLocalPackaging": codex_local_packaging,
                 "cliFixture": cli_probe,
                 "diagnosticOnly": True,
                 "userAcceptanceEligible": False,
@@ -265,6 +285,11 @@ def _required_api_symbols(entry_symbol: str, override: Sequence[str] | None) -> 
         "validateRepairManifest",
         "buildVisibleRunViewer",
         "validateVisibleRunViewerManifest",
+        "getNativeToolManifest",
+        "dispatchNativeTool",
+        "validateNativeToolPayload",
+        "getMcpToolSchemas",
+        "runMcpServer",
         "buildEvidenceIndex",
         "buildEvidenceSnapshot",
         "buildPlannerBrief",
@@ -665,6 +690,108 @@ def _check_manifest_diagnostic_claim_semantics(
     checks.append(_check("diagnostic-claim-semantics:l3-claim-limit", True))
 
 
+def _check_repo_local_codex_packaging(
+    *,
+    package_root: Path,
+    action_manifest: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+    module_importer: ModuleImporter,
+) -> dict[str, Any]:
+    repo_root = _repo_root_for_package(package_root)
+    plugin_path = (repo_root / REPO_PLUGIN_MANIFEST_NAME).resolve()
+    mcp_path = (repo_root / REPO_MCP_CONFIG_NAME).resolve()
+    skill_path = (package_root / "skills" / "sciforge-computer-use" / "SKILL.md").resolve()
+
+    plugin = _load_json_object(plugin_path, "repo-local-plugin-manifest")
+    mcp_config = _load_json_object(mcp_path, "repo-local-mcp-config")
+    skill_text = _load_text(skill_path, "repo-local-computer-use-skill")
+
+    plugin_tools = _nested_list(plugin, ("sciforge", "publicTools"))
+    action_tools = _nested_list(action_manifest, ("nativeToolsContract", "tools"))
+    ok_tools = plugin_tools == list(EXPECTED_PUBLIC_TOOLS) and action_tools == list(EXPECTED_PUBLIC_TOOLS)
+    checks.append(_check(
+        "codex-local-packaging:public-tools",
+        ok_tools,
+        "" if ok_tools else "plugin.json and action-provider manifest must expose only the stable public tools.",
+    ))
+    if not ok_tools:
+        raise ProbeFailure("codex-local-packaging-invalid", "Repo-local public tool surface is not stable.", checks=checks)
+
+    plugin_name_ok = plugin.get("name") == "sciforge-computer-use"
+    checks.append(_check("codex-local-packaging:plugin-name", plugin_name_ok))
+    if not plugin_name_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", "plugin.json name must be sciforge-computer-use.", checks=checks)
+
+    skills_path_ok = plugin.get("skills") == "./packages/actions/computer-use/skills/"
+    checks.append(_check("codex-local-packaging:skills-path", skills_path_ok))
+    if not skills_path_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", "plugin.json skills path must point at the package skill directory.", checks=checks)
+
+    prompts = _nested_list(plugin, ("interface", "defaultPrompt"))
+    prompt_ok = len(prompts) <= 3 and all(isinstance(prompt, str) and len(prompt) <= 128 for prompt in prompts)
+    checks.append(_check("codex-local-packaging:default-prompts", prompt_ok))
+    if not prompt_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", "plugin.json defaultPrompt entries must fit Codex plugin limits.", checks=checks)
+
+    server = _nested_mapping(mcp_config, ("mcpServers", "sciforge-computer-use"))
+    server_ok = isinstance(server, Mapping)
+    checks.append(_check("codex-local-packaging:mcp-server", server_ok))
+    if not server_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", ".mcp.json must declare mcpServers.sciforge-computer-use.", checks=checks)
+
+    command_ok = _python_command_name(str(server.get("command") or "")) is not None
+    args = server.get("args")
+    args_ok = isinstance(args, list) and _module_after_dash_m([str(item) for item in args]) == "sciforge_computer_use.mcp_server"
+    env = server.get("env")
+    env_ok = isinstance(env, Mapping) and "packages/actions/computer-use" in str(env.get("PYTHONPATH") or "")
+    checks.append(_check("codex-local-packaging:mcp-command", command_ok and args_ok and env_ok))
+    if not (command_ok and args_ok and env_ok):
+        raise ProbeFailure("codex-local-packaging-invalid", ".mcp.json must launch the package-local Python MCP server.", checks=checks)
+
+    try:
+        mcp_module = module_importer("sciforge_computer_use.mcp_server")
+    except Exception as exc:  # noqa: BLE001 - import failure must become blocked probe evidence.
+        checks.append(_check("codex-local-packaging:mcp-import", False, str(exc)))
+        raise ProbeFailure("codex-local-packaging-import-failed", f"Could not import package MCP server: {exc}.", checks=checks) from exc
+    tool_schemas = getattr(mcp_module, "get_mcp_tool_schemas", lambda: [])()
+    mcp_tools = [tool.get("name") for tool in tool_schemas if isinstance(tool, Mapping)]
+    mcp_tools_ok = mcp_tools == list(EXPECTED_PUBLIC_TOOLS)
+    checks.append(_check("codex-local-packaging:mcp-tools", mcp_tools_ok))
+    if not mcp_tools_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", "MCP server tool list must match the stable public surface.", checks=checks)
+
+    missing_skill_tools = [tool for tool in EXPECTED_PUBLIC_TOOLS if f"`{tool}`" not in skill_text]
+    missing_boundary_markers = [
+        marker
+        for marker in ("provider routes", "GUI private state", "scheduler internals", "bare global coordinates")
+        if marker not in skill_text
+    ]
+    forbidden_skill_markers = [marker for marker in ("`move_cursor`",) if marker in skill_text]
+    skill_ok = not missing_skill_tools and not missing_boundary_markers and not forbidden_skill_markers
+    checks.append(_check(
+        "codex-local-packaging:skill",
+        skill_ok,
+        "" if skill_ok else (
+            f"missing tools={missing_skill_tools}; "
+            f"missing boundary markers={missing_boundary_markers}; "
+            f"forbidden markers={forbidden_skill_markers}"
+        ),
+    ))
+    if not skill_ok:
+        raise ProbeFailure("codex-local-packaging-invalid", "Computer Use skill must document only the stable public surface.", checks=checks)
+
+    return {
+        "pluginManifestRef": str(plugin_path),
+        "mcpConfigRef": str(mcp_path),
+        "skillRef": str(skill_path),
+        "mcpServerName": "sciforge-computer-use",
+        "mcpServerModule": "sciforge_computer_use.mcp_server",
+        "publicTools": list(EXPECTED_PUBLIC_TOOLS),
+        "diagnosticOnlyUntilHostBound": True,
+        "userAcceptanceEligible": False,
+    }
+
+
 def _diagnostic_probe_check(
     manifest_path: str,
     ok: bool,
@@ -694,6 +821,41 @@ def _nested_mapping(root: Mapping[str, Any], path: Sequence[str]) -> Mapping[str
             return None
         value = value.get(part)
     return value if isinstance(value, Mapping) else None
+
+
+def _nested_list(root: Mapping[str, Any], path: Sequence[str]) -> list[Any]:
+    value: Any = root
+    for part in path:
+        if not isinstance(value, Mapping):
+            return []
+        value = value.get(part)
+    return list(value) if isinstance(value, list) else []
+
+
+def _load_json_object(path: Path, category: str) -> Mapping[str, Any]:
+    if not path.is_file():
+        raise ProbeFailure(category, f"Required JSON file not found: {path}.")
+    try:
+        parsed = json.loads(path.read_text(encoding="utf8"))
+    except json.JSONDecodeError as exc:
+        raise ProbeFailure(category, f"JSON file is invalid: {path}: {exc}.") from exc
+    if not isinstance(parsed, Mapping):
+        raise ProbeFailure(category, f"JSON root must be an object: {path}.")
+    return parsed
+
+
+def _load_text(path: Path, category: str) -> str:
+    if not path.is_file():
+        raise ProbeFailure(category, f"Required text file not found: {path}.")
+    return path.read_text(encoding="utf8")
+
+
+def _repo_root_for_package(package_root: Path) -> Path:
+    for candidate in (package_root, *package_root.parents):
+        if (candidate / "PROJECT.md").is_file():
+            return candidate
+    parents = list(package_root.parents)
+    return parents[2] if len(parents) > 2 else package_root
 
 
 def _run_cli_fixture_probe(

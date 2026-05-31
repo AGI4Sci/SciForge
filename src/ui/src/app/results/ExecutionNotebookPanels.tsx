@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { structureSummaryMetricPresentation, uploadedInteractiveEvidenceArtifacts } from '@sciforge/interactive-views';
 import { ChevronDown, ChevronUp, Clock, Download, FileCode, Lock, Shield } from 'lucide-react';
+import { renderTerminalSessionViewer } from '../../../../../packages/presentation/components';
+import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
 import { buildExecutionBundle, evaluateExecutionBundleExport } from '../../exportPolicy';
 import { scenarios, type ScenarioId } from '../../data';
 import type { EvidenceClaim, NotebookRecord, RuntimeArtifact, RuntimeExecutionUnit, SciForgeRun, SciForgeSession } from '../../domain';
@@ -32,6 +34,91 @@ function exportExecutionBundle(session: SciForgeSession, activeRun: SciForgeRun 
   }
   const runSuffix = activeRun ? `-${activeRun.id}` : '';
   exportJsonFile(`execution-units-${session.scenarioId}-${session.sessionId}${runSuffix}.json`, buildExecutionBundle(session, decision, { activeRun, executionUnits }));
+}
+
+function terminalSessionRendererPropsForRows(rows: RuntimeExecutionUnit[], locale?: ResultLocale): UIComponentRendererProps[] {
+  return rows
+    .map((unit, index) => terminalSessionRendererPropsForExecutionUnit(unit, index, locale))
+    .filter((item): item is UIComponentRendererProps => Boolean(item))
+    .slice(0, 3);
+}
+
+function terminalSessionRendererPropsForExecutionUnit(
+  unit: RuntimeExecutionUnit,
+  index: number,
+  locale?: ResultLocale,
+): UIComponentRendererProps | undefined {
+  if (!executionUnitLooksLikeTerminal(unit)) return undefined;
+  const sessionRef = unit.stdoutRef || unit.stderrRef || unit.outputRef || `terminal:activity-${index + 1}`;
+  const command = terminalCommandTextForExecutionUnit(unit, locale);
+  const refs = [
+    unit.stdoutRef ? `stdout: ${rightPaneInlineLabel(unit.stdoutRef)}` : undefined,
+    unit.stderrRef ? `stderr: ${rightPaneInlineLabel(unit.stderrRef)}` : undefined,
+    unit.outputRef ? `output: ${rightPaneInlineLabel(unit.outputRef)}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  const buffer = [
+    command ? `$ ${command}` : undefined,
+    ...refs.map((ref) => `[ref] ${ref}`),
+    unit.failureReason ? `[status] ${safeExecutionDetail(unit.failureReason, locale)}` : undefined,
+  ].filter(Boolean).join('\n');
+  return {
+    slot: {
+      componentId: 'terminal-session-viewer',
+      title: resultText(locale, { 'zh-CN': `终端步骤 ${index + 1}`, 'en-US': `Terminal step ${index + 1}` }),
+    },
+    artifact: {
+      id: `terminal-session:activity-${index + 1}`,
+      type: 'terminal-session',
+      producerScenario: 'execution-activity',
+      schemaVersion: 'sciforge.terminal-session.v1',
+      data: {
+        sessionRef,
+        status: terminalStatusForExecutionUnit(unit),
+        title: resultText(locale, { 'zh-CN': '执行终端', 'en-US': 'Execution terminal' }),
+        buffer,
+        capabilities: {
+          input: false,
+          paste: false,
+          resize: false,
+          copy: true,
+          download: Boolean(unit.stdoutRef || unit.stderrRef || unit.outputRef),
+          stop: unit.status === 'running',
+          focus: true,
+        },
+        metadata: {
+          tool: safeExecutionDetail(unit.tool, locale),
+          status: executionStatusLabel(unit.status, locale),
+          hash: executionFingerprintLabel(unit.hash, locale),
+        },
+      },
+    },
+  };
+}
+
+function executionUnitLooksLikeTerminal(unit: RuntimeExecutionUnit) {
+  const haystack = [
+    unit.tool,
+    unit.entrypoint,
+    unit.language,
+    unit.params,
+    unit.code,
+    unit.environment,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return /\b(?:shell|terminal|bash|zsh|sh|exec|command_execution|run_command|cmd)\b/.test(haystack)
+    || /(?:^|\s)(?:npm|pnpm|yarn|node|git|rg|grep|pytest|cargo|go|uv|python|tsx|tsc)\s/.test(haystack);
+}
+
+function terminalCommandTextForExecutionUnit(unit: RuntimeExecutionUnit, locale?: ResultLocale) {
+  const code = asString(unit.code);
+  if (code) return boundedRightPaneText(safeExecutionDetail(code, locale), 500);
+  return boundedRightPaneText(executionInputLabel(unit.params, locale), 500);
+}
+
+function terminalStatusForExecutionUnit(unit: RuntimeExecutionUnit) {
+  if (unit.status === 'running') return 'running';
+  if (unit.status === 'failed' || unit.status === 'failed-with-reason' || unit.status === 'repair-needed') return 'error';
+  if (unit.status === 'done' || unit.status === 'self-healed') return 'stopped';
+  return 'idle';
 }
 
 function formatResultFileBytes(value: number) {
@@ -174,6 +261,7 @@ export function ExecutionPanel({
   locale?: ResultLocale;
 }) {
   const rows = executionUnits;
+  const terminalSessions = terminalSessionRendererPropsForRows(rows, locale);
   return (
     <div className="stack">
       <SectionHeader
@@ -185,36 +273,47 @@ export function ExecutionPanel({
         action={<ActionButton icon={Download} variant="secondary" onClick={() => exportExecutionBundle(session, activeRun, rows)}>{resultText(locale, { 'zh-CN': '导出日志', 'en-US': 'Export log' })}</ActionButton>}
       />
       {rows.length ? (
-        <div className="eu-table">
-          <div className="eu-head">
-            <span>{resultText(locale, { 'zh-CN': '步骤', 'en-US': 'Step' })}</span>
-            <span>{resultText(locale, { 'zh-CN': '动作', 'en-US': 'Action' })}</span>
-            <span>{resultText(locale, { 'zh-CN': '输入', 'en-US': 'Input' })}</span>
-            <span>{resultText(locale, { 'zh-CN': '材料', 'en-US': 'Material' })}</span>
-            <span>{resultText(locale, { 'zh-CN': '状态', 'en-US': 'Status' })}</span>
-            <span>{resultText(locale, { 'zh-CN': '指纹', 'en-US': 'Fingerprint' })}</span>
-          </div>
-          {rows.map((unit, index) => (
-            <div className="eu-row" key={`${unit.id}-${unit.hash || index}-${index}`}>
-              <code>{index + 1}</code>
-              <span>{executionActionLabel(unit, locale)}</span>
-              <code title={safeExecutionDetail(unit.params, locale)}>{compactParams(executionInputLabel(unit.params, locale))}</code>
-              <code title={safeExecutionDetail(unit.code || unit.language || '', locale)}>
-                {safeExecutionDetail(unit.code || unit.language || auditMaterialLabel(unit, locale), locale)}
-              </code>
-              <span className="eu-status-stack">
-                <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status, locale)}</Badge>
-                <Badge variant={executionVerificationPresentation(unit, locale).variant}>{executionVerificationPresentation(unit, locale).label}</Badge>
-              </span>
-              <code>{executionFingerprintLabel(unit.hash, locale)}</code>
-              {executionStatusDetail(unit, locale) ? (
-                <div className="eu-detail">
-                  {executionStatusDetail(unit, locale)}
+        <>
+          {terminalSessions.length ? (
+            <div className="terminal-session-strip" aria-label={resultText(locale, { 'zh-CN': '终端活动', 'en-US': 'Terminal activity' })}>
+              {terminalSessions.map((props) => (
+                <div className="terminal-session-strip-item" key={props.artifact?.id ?? props.slot.title}>
+                  {renderTerminalSessionViewer(props)}
                 </div>
-              ) : null}
+              ))}
             </div>
-          ))}
-        </div>
+          ) : null}
+          <div className="eu-table">
+            <div className="eu-head">
+              <span>{resultText(locale, { 'zh-CN': '步骤', 'en-US': 'Step' })}</span>
+              <span>{resultText(locale, { 'zh-CN': '动作', 'en-US': 'Action' })}</span>
+              <span>{resultText(locale, { 'zh-CN': '输入', 'en-US': 'Input' })}</span>
+              <span>{resultText(locale, { 'zh-CN': '材料', 'en-US': 'Material' })}</span>
+              <span>{resultText(locale, { 'zh-CN': '状态', 'en-US': 'Status' })}</span>
+              <span>{resultText(locale, { 'zh-CN': '指纹', 'en-US': 'Fingerprint' })}</span>
+            </div>
+            {rows.map((unit, index) => (
+              <div className="eu-row" key={`${unit.id}-${unit.hash || index}-${index}`}>
+                <code>{index + 1}</code>
+                <span>{executionActionLabel(unit, locale)}</span>
+                <code title={safeExecutionDetail(unit.params, locale)}>{compactParams(executionInputLabel(unit.params, locale))}</code>
+                <code title={safeExecutionDetail(unit.code || unit.language || '', locale)}>
+                  {safeExecutionDetail(unit.code || unit.language || auditMaterialLabel(unit, locale), locale)}
+                </code>
+                <span className="eu-status-stack">
+                  <Badge variant={executionStatusVariant(unit.status)}>{executionStatusLabel(unit.status, locale)}</Badge>
+                  <Badge variant={executionVerificationPresentation(unit, locale).variant}>{executionVerificationPresentation(unit, locale).label}</Badge>
+                </span>
+                <code>{executionFingerprintLabel(unit.hash, locale)}</code>
+                {executionStatusDetail(unit, locale) ? (
+                  <div className="eu-detail">
+                    {executionStatusDetail(unit, locale)}
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </>
       ) : <EmptyArtifactState title={resultText(locale, { 'zh-CN': '等待活动', 'en-US': 'Waiting for activity' })} detail={resultText(locale, { 'zh-CN': '此对话中的可追踪步骤会显示在这里。', 'en-US': 'Traceable steps from this conversation will appear here.' })} />}
       <Card className="code-card">
         <SectionHeader icon={FileCode} title={resultText(locale, { 'zh-CN': '环境', 'en-US': 'Environment' })} />

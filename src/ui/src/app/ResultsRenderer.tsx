@@ -1,20 +1,27 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { AlertTriangle, ChevronDown, ChevronUp, Clock, Lock, Shield, Sparkles, Terminal } from 'lucide-react';
+import { AlertTriangle, ChevronDown, ChevronUp, Clock, FolderTree, Globe2, Lock, Monitor, Shield, Sparkles, Terminal } from 'lucide-react';
 import type { ScenarioId } from '../data';
 import { artifactPreviewActions, objectReferenceKinds, previewDescriptorKinds, runtimeContractSchemas, schemaPreview, validateRuntimeContract } from '../runtimeContracts';
-import { listWorkspace, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../api/workspaceClient';
+import { listWorkspace, loadSciForgeInstanceManifest, readPreviewDerivative, readPreviewDescriptor, readWorkspaceFile, writeWorkspaceFile, type WorkspaceEntry, type WorkspaceFileContent } from '../api/workspaceClient';
 import { uiModuleRegistry } from '../uiModuleRegistry';
 import { interactiveViewResultSummaryPresentation } from '../../../../packages/presentation/interactive-views';
 import {
-  WorkspaceFileViewer,
+  browserWorkbenchDefaultCommands,
+  normalizeBrowserWorkbenchUrl,
+  renderBrowserWorkbench,
+  renderTerminalSessionViewer,
+  renderVirtualScreenViewer,
+  renderWorkspaceFileViewer,
   workspaceFileViewerBasename,
   workspaceFileViewerParentPath,
+  type BrowserWorkbenchCommand,
   type WorkspaceFileViewerEntry,
+  type WorkspaceFileViewerProps,
 } from '../../../../packages/presentation/components';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import { exportJsonFile } from './exportUtils';
 import { Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
-import { ResultShell, type ResultFocusMode } from './results/ResultShell';
+import { ResultShell, type ResultFocusMode, type ResultPaneTab, type ResultPaneTabInstance } from './results/ResultShell';
 import { PreviewDescriptorActions } from './results/PreviewActions';
 import { EvidenceMatrix, ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
 import { resultCountText, resultLocale, resultText, type ResultLocale } from './results/resultLocale';
@@ -97,6 +104,7 @@ import {
   type WorkbenchSlotRenderProps,
 } from './results-renderer-registry-slot';
 import {
+  createCommandTextUIAction,
   createRecoverCommandTextUIAction,
   type CommandTextUIAction,
   type OpenDebugAuditUIAction,
@@ -106,6 +114,13 @@ import { capabilityPlanSummaryForSession, createLocalUserActionApi, type Capabil
 export { renderRegisteredWorkbenchSlot };
 export type { WorkbenchSlotRenderProps };
 
+export type WorkspaceFileEditorState = {
+  file: WorkspaceFileContent;
+  draft: string;
+  workspacePath?: string;
+  focusRequestKey?: string;
+};
+
 function ResultPaneWorkspaceFileViewer({
   state,
   config,
@@ -113,13 +128,13 @@ function ResultPaneWorkspaceFileViewer({
   onChange,
   onClose,
 }: {
-  state: { file: WorkspaceFileContent; draft: string };
+  state: WorkspaceFileEditorState;
   config: SciForgeConfig;
   locale?: ResultLocale;
-  onChange: (next: { file: WorkspaceFileContent; draft: string }) => void;
+  onChange: (next: WorkspaceFileEditorState) => void;
   onClose: () => void;
 }) {
-  const workspaceRoot = config.workspacePath.trim();
+  const workspaceRoot = normalizeWorkspaceRootPath(state.workspacePath || config.workspacePath);
   const dirty = state.draft !== state.file.content;
   const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceFileViewerEntry[] | undefined>>({});
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
@@ -213,7 +228,7 @@ function ResultPaneWorkspaceFileViewer({
     try {
       setWorkspaceError('');
       const file = await readWorkspaceFile(entry.path, config);
-      onChange({ file, draft: file.content });
+      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开 ${file.name}`, 'en-US': `Opened ${file.name}` }));
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : String(error));
@@ -225,7 +240,7 @@ function ResultPaneWorkspaceFileViewer({
     try {
       setSaveError('');
       const file = await writeWorkspaceFile(state.file.path, state.draft, config);
-      onChange({ file, draft: file.content });
+      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已保存 ${file.name}`, 'en-US': `Saved ${file.name}` }));
       const parent = workspaceFileViewerParentPath(file.path) || workspaceRoot;
       if (parent) await loadFolder(parent, { quiet: true });
@@ -239,29 +254,48 @@ function ResultPaneWorkspaceFileViewer({
       aria-label={resultText(locale, { 'zh-CN': '工作区文件', 'en-US': 'Workspace file' })}
       data-sciforge-reference={sciForgeReferenceAttribute(fileReference)}
     >
-      <WorkspaceFileViewer
-        rootPath={workspaceRoot}
-        rootLabel={workspaceFileViewerBasename(workspaceRoot)}
-        entriesByFolder={folderChildren}
-        expandedFolderPaths={Array.from(expandedFolders)}
-        selectedPath={state.file.path}
-        file={state.file}
-        draft={state.draft}
-        dirty={dirty}
-        notice={workspaceNotice}
-        error={boundedRightPaneText(workspaceError, 800)}
-        saveError={boundedRightPaneText(saveError, 800)}
-        labels={workspaceFileViewerLabels(locale)}
-        onToggleFolder={toggleFolder}
-        onOpenFile={(entry) => void openFile(entry)}
-        onRefresh={() => void refreshTree()}
-        onCollapseAll={collapseTree}
-        onDraftChange={(draft) => onChange({ file: state.file, draft })}
-        onSave={() => void save()}
-        onClose={onClose}
-        onCopyPath={(path) => void navigator.clipboard?.writeText(path)}
-        onCopyContents={(content) => void navigator.clipboard?.writeText(content)}
-      />
+      {renderWorkspaceFileViewer({
+        slot: {
+          componentId: 'workspace-file-viewer',
+          title: workspaceFileViewerLabels(locale).title,
+          props: {
+            rootPath: workspaceRoot,
+            rootLabel: workspaceFileViewerBasename(workspaceRoot),
+            entriesByFolder: folderChildren,
+            expandedFolderPaths: Array.from(expandedFolders),
+            selectedPath: state.file.path,
+            file: state.file,
+            draft: state.draft,
+            dirty,
+            notice: workspaceNotice,
+            error: boundedRightPaneText(workspaceError, 800),
+            saveError: boundedRightPaneText(saveError, 800),
+            labels: workspaceFileViewerLabels(locale),
+            onToggleFolder: toggleFolder,
+            onOpenFile: (entry: WorkspaceFileViewerEntry) => void openFile(entry),
+            onRefresh: () => void refreshTree(),
+            onCollapseAll: collapseTree,
+            onDraftChange: (draft: string) => onChange({ ...state, draft }),
+            onSave: () => void save(),
+            onClose,
+            onCopyPath: (path: string) => void navigator.clipboard?.writeText(path),
+            onCopyContents: (content: string) => void navigator.clipboard?.writeText(content),
+          } satisfies Partial<WorkspaceFileViewerProps> as Record<string, unknown>,
+        },
+        artifact: {
+          id: `workspace-file-view:${state.file.path}`,
+          type: 'workspace-file-view',
+          producerScenario: 'workspace-file-viewer',
+          schemaVersion: 'sciforge.workspace-file-view.v1',
+          data: {
+            rootPath: workspaceRoot,
+            selectedPath: state.file.path,
+            file: state.file,
+            dirty,
+          },
+        },
+        config,
+      })}
     </div>
   );
 }
@@ -299,6 +333,18 @@ function workspaceFileEditorMatchesPath(editorPath: string | undefined, requeste
   if (!editor || !requested) return false;
   if (editor === requested) return true;
   return Boolean(root && editor === `${root}/${requested.replace(/^\/+/, '')}`);
+}
+
+export function workspaceFileFocusRequestKey(reference: ObjectReference | undefined, path: string) {
+  if (!reference || !path.trim()) return '';
+  return [
+    reference.kind,
+    reference.id,
+    reference.runId ?? '',
+    reference.ref,
+    reference.provenance?.path ?? '',
+    path.trim(),
+  ].join('|');
 }
 
 function focusedWorkspaceRootForReference(reference: ObjectReference | undefined, session: SciForgeSession, fallbackWorkspaceRoot: string) {
@@ -359,23 +405,205 @@ function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+async function readFocusedWorkspaceFile({
+  path,
+  config,
+  reference,
+}: {
+  path: string;
+  config: SciForgeConfig;
+  reference?: ObjectReference;
+}): Promise<{ file: WorkspaceFileContent; workspacePath: string }> {
+  const primaryWorkspacePath = normalizeWorkspaceRootPath(config.workspacePath);
+  try {
+    const file = await readWorkspaceFile(path, config);
+    return { file, workspacePath: primaryWorkspacePath };
+  } catch (primaryError) {
+    if (!shouldTryRepoRootWorkspaceFallback(reference, path)) throw primaryError;
+    const repoRoot = await repoRootWorkspaceFallback(config).catch(() => '');
+    if (!repoRoot || repoRoot === primaryWorkspacePath) throw primaryError;
+    try {
+      const file = await readWorkspaceFile(path, { ...config, workspacePath: repoRoot });
+      return { file, workspacePath: repoRoot };
+    } catch {
+      throw primaryError;
+    }
+  }
+}
+
+export function shouldTryRepoRootWorkspaceFallback(reference: ObjectReference | undefined, path: string) {
+  return reference?.kind === 'file' && isSafeRepoRelativeFilePath(path);
+}
+
+function isSafeRepoRelativeFilePath(path: string) {
+  const normalized = path.trim().replace(/\\/g, '/').replace(/^file::?/i, '');
+  if (!normalized || normalized.startsWith('/')) return false;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(normalized)) return false;
+  return normalized.split('/').every((segment) => segment && segment !== '.' && segment !== '..' && !segment.startsWith('.'));
+}
+
+async function repoRootWorkspaceFallback(config: SciForgeConfig) {
+  const manifest = await loadSciForgeInstanceManifest(config);
+  const repoRoot = manifest.repo.detected && typeof manifest.repo.root === 'string'
+    ? manifest.repo.root
+    : '';
+  return normalizeWorkspaceRootPath(repoRoot);
+}
+
 function workspaceFileViewerLabels(locale?: ResultLocale) {
   return {
     title: resultText(locale, { 'zh-CN': '工作区文件', 'en-US': 'Workspace files' }),
     treeLabel: resultText(locale, { 'zh-CN': '工作区文件树', 'en-US': 'Workspace file tree' }),
     editorLabel: resultText(locale, { 'zh-CN': '工作区文件编辑器', 'en-US': 'Workspace file editor' }),
+    readOnly: resultText(locale, { 'zh-CN': '只读', 'en-US': 'Read only' }),
+    editing: resultText(locale, { 'zh-CN': '编辑中', 'en-US': 'Editing' }),
+    edit: resultText(locale, { 'zh-CN': '编辑', 'en-US': 'Edit' }),
     loading: resultText(locale, { 'zh-CN': '加载中...', 'en-US': 'Loading...' }),
     emptyTree: resultText(locale, { 'zh-CN': '没有可显示的文件。', 'en-US': 'No files to show.' }),
     emptyEditor: resultText(locale, { 'zh-CN': '选择一个文件查看内容。', 'en-US': 'Select a file to inspect it.' }),
     refresh: resultText(locale, { 'zh-CN': '刷新目录', 'en-US': 'Refresh tree' }),
     collapseAll: resultText(locale, { 'zh-CN': '折叠目录', 'en-US': 'Collapse tree' }),
+    searchPlaceholder: resultText(locale, { 'zh-CN': '搜索文件', 'en-US': 'Search files' }),
+    noSearchResults: resultText(locale, { 'zh-CN': '没有匹配的文件', 'en-US': 'No matching files' }),
     copyPath: resultText(locale, { 'zh-CN': '复制路径', 'en-US': 'Copy path' }),
     copyContents: resultText(locale, { 'zh-CN': '复制内容', 'en-US': 'Copy contents' }),
     save: resultText(locale, { 'zh-CN': '保存文件', 'en-US': 'Save file' }),
+    cancel: resultText(locale, { 'zh-CN': '取消', 'en-US': 'Cancel' }),
     close: resultText(locale, { 'zh-CN': '关闭文件视图', 'en-US': 'Close file view' }),
     saved: resultText(locale, { 'zh-CN': '已保存', 'en-US': 'Saved' }),
     unsaved: resultText(locale, { 'zh-CN': '未保存', 'en-US': 'Unsaved' }),
   };
+}
+
+const DEFAULT_RIGHT_PANE_TABS: ResultPaneTab[] = ['primary', 'browser', 'screen', 'terminal', 'files', 'evidence'];
+
+function baseResultPaneTabId(kind: ResultPaneTab) {
+  return `base:${kind}`;
+}
+
+function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?: ResultLocale) {
+  const label = resultText(locale, {
+    'zh-CN': kind === 'primary'
+      ? '结果'
+      : kind === 'browser'
+        ? '浏览器'
+        : kind === 'screen'
+          ? '屏幕'
+          : kind === 'terminal'
+            ? '终端'
+            : kind === 'files'
+              ? '文件'
+              : '引用',
+    'en-US': kind === 'primary'
+      ? 'Results'
+      : kind === 'browser'
+        ? 'Browser'
+        : kind === 'screen'
+          ? 'Screen'
+          : kind === 'terminal'
+            ? 'Terminal'
+            : kind === 'files'
+              ? 'Files'
+              : 'References',
+  });
+  return index > 1 ? `${label} ${index}` : label;
+}
+
+function createDefaultRightPaneTabs(locale?: ResultLocale): ResultPaneTabInstance[] {
+  return DEFAULT_RIGHT_PANE_TABS.map((kind) => ({
+    id: baseResultPaneTabId(kind),
+    kind,
+    label: resultPaneTabInstanceLabel(kind, 1, locale),
+    closable: true,
+  }));
+}
+
+function nextResultPaneTabIndex(tabs: readonly ResultPaneTabInstance[], kind: ResultPaneTab) {
+  return tabs.filter((tab) => tab.kind === kind).length + 1;
+}
+
+interface StoredRightPaneState {
+  tabs: ResultPaneTabInstance[];
+  activeTabId: string;
+  browserTabAddresses: Record<string, string>;
+}
+
+function rightPaneStateStorageKey(workspacePath: string | undefined) {
+  return `sciforge.right-pane-state.v1.${workspacePath || 'default'}`;
+}
+
+function isResultPaneTab(value: unknown): value is ResultPaneTab {
+  return value === 'primary'
+    || value === 'browser'
+    || value === 'screen'
+    || value === 'terminal'
+    || value === 'files'
+    || value === 'evidence';
+}
+
+function normalizeStoredRightPaneTabs(value: unknown, locale?: ResultLocale) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const tabs: ResultPaneTabInstance[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || !isResultPaneTab(item.kind)) continue;
+    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : baseResultPaneTabId(item.kind);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    tabs.push({
+      id,
+      kind: item.kind,
+      label: typeof item.label === 'string' && item.label.trim()
+        ? item.label.trim()
+        : resultPaneTabInstanceLabel(item.kind, nextResultPaneTabIndex(tabs, item.kind), locale),
+      closable: true,
+    });
+  }
+  return tabs;
+}
+
+function normalizeStoredBrowserTabAddresses(value: unknown) {
+  if (!isRecord(value)) return {};
+  const addresses: Record<string, string> = {};
+  for (const [id, address] of Object.entries(value)) {
+    if (typeof address === 'string') addresses[id] = address;
+  }
+  return addresses;
+}
+
+function loadStoredRightPaneState(storageKey: string, locale: ResultLocale | undefined, initialResultTab: ResultPaneTab): StoredRightPaneState {
+  const fallbackTabs = createDefaultRightPaneTabs(locale);
+  const fallbackActive = fallbackTabs.find((tab) => tab.kind === initialResultTab)?.id ?? fallbackTabs[0]?.id ?? '';
+  if (typeof window === 'undefined') {
+    return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
+  }
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
+    const storedTabs = normalizeStoredRightPaneTabs(parsed.tabs, locale);
+    const tabs = storedTabs.length ? storedTabs : fallbackTabs;
+    const activeTabId = typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
+      ? parsed.activeTabId
+      : tabs.find((tab) => tab.kind === initialResultTab)?.id ?? tabs[0]?.id ?? '';
+    return {
+      tabs,
+      activeTabId,
+      browserTabAddresses: normalizeStoredBrowserTabAddresses(parsed.browserTabAddresses),
+    };
+  } catch {
+    return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
+  }
+}
+
+function saveStoredRightPaneState(storageKey: string, state: StoredRightPaneState) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(state));
+  } catch {
+    // UI state persistence should never break the workbench.
+  }
 }
 
 export function ResultsRenderer({
@@ -397,6 +625,7 @@ export function ResultsRenderer({
   onCommandTextAction,
   onOpenDebugAuditAction,
   initialFocusMode = 'all',
+  initialResultTab = 'primary',
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -410,22 +639,34 @@ export function ResultsRenderer({
   focusedObjectReference?: ObjectReference;
   onFocusedObjectChange: (reference: ObjectReference | undefined) => void;
   onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
-  workspaceFileEditor: { file: WorkspaceFileContent; draft: string } | null;
-  onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
+  workspaceFileEditor: WorkspaceFileEditorState | null;
+  onWorkspaceFileEditorChange: (next: WorkspaceFileEditorState | null) => void;
   /** Hide a resolved results card from the UI only (artifacts and workspace files stay). */
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
   /** Test hook for rendering a non-default focus mode without browser events. */
   initialFocusMode?: ResultFocusMode;
+  /** Test hook for rendering a non-default right-pane tab without browser events. */
+  initialResultTab?: ResultPaneTab;
 }) {
   const locale = resultLocale(config.locale);
-  const [resultTab, setResultTab] = useState('primary');
+  const rightPaneStorageKey = rightPaneStateStorageKey(config.workspacePath);
+  const initialRightPaneState = useRef<StoredRightPaneState | undefined>(undefined);
+  if (!initialRightPaneState.current) {
+    initialRightPaneState.current = loadStoredRightPaneState(rightPaneStorageKey, locale, initialResultTab);
+  }
+  const [resultTabs, setResultTabs] = useState<ResultPaneTabInstance[]>(() => initialRightPaneState.current?.tabs ?? createDefaultRightPaneTabs(locale));
+  const [activeResultTabId, setActiveResultTabId] = useState(initialRightPaneState.current?.activeTabId ?? baseResultPaneTabId(initialResultTab));
+  const [browserTabAddresses, setBrowserTabAddresses] = useState<Record<string, string>>(() => initialRightPaneState.current?.browserTabAddresses ?? {});
   const [focusMode, setFocusMode] = useState<ResultFocusMode>(initialFocusMode);
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
   const [pinnedObjectReferences, setPinnedObjectReferences] = useState<ObjectReference[]>([]);
   const [objectActionError, setObjectActionError] = useState('');
   const [objectActionNotice, setObjectActionNotice] = useState('');
+  const activeResultTab = resultTabs.find((tab) => tab.id === activeResultTabId);
+  const resultTab = activeResultTab?.kind ?? 'primary';
+  const hasOpenRightPaneTabs = resultTabs.length > 0 && Boolean(activeResultTab);
   const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
   const rendererModel = useMemo(() => createResultsRendererViewModel({
@@ -438,11 +679,99 @@ export function ResultsRenderer({
     focusMode,
     locale,
   }), [scenarioId, session, defaultSlots, activeRun, focusedObjectReference, pinnedObjectReferences, focusMode, locale]);
+  useEffect(() => {
+    saveStoredRightPaneState(rightPaneStorageKey, {
+      tabs: resultTabs,
+      activeTabId: activeResultTabId,
+      browserTabAddresses,
+    });
+  }, [activeResultTabId, browserTabAddresses, resultTabs, rightPaneStorageKey]);
+  function activateResultTabKind(tab: ResultPaneTab) {
+    const existingTabId = resultTabs.find((item) => item.kind === tab)?.id ?? baseResultPaneTabId(tab);
+    setActiveResultTabId(existingTabId);
+    if (tab === 'evidence') {
+      setFocusMode('evidence');
+      return;
+    }
+    if (tab === 'terminal') {
+      setFocusMode('execution');
+      return;
+    }
+    if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+  }
+  function handleResultTabChange(tabId: string) {
+    const tab = resultTabs.find((item) => item.id === tabId);
+    if (!tab) return;
+    setActiveResultTabId(tab.id);
+    if (tab.kind === 'evidence') {
+      setFocusMode('evidence');
+      return;
+    }
+    if (tab.kind === 'terminal') {
+      setFocusMode('execution');
+      return;
+    }
+    if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+  }
+  function handleNewResultTab(tab: ResultPaneTab) {
+    setResultTabs((current) => {
+      const nextIndex = nextResultPaneTabIndex(current, tab);
+      const nextTab: ResultPaneTabInstance = {
+        id: `custom:${tab}:${Date.now()}:${nextIndex}`,
+        kind: tab,
+        label: resultPaneTabInstanceLabel(tab, nextIndex, locale),
+        closable: true,
+      };
+      setActiveResultTabId(nextTab.id);
+      window.setTimeout(() => document.getElementById(`result-tab-${nextTab.id.replace(/[^A-Za-z0-9_-]/g, '-')}`)?.focus(), 0);
+      return [...current, nextTab];
+    });
+    if (tab === 'evidence') setFocusMode('evidence');
+    else if (tab === 'terminal') setFocusMode('execution');
+    else if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+  }
+  function handleCloseResultTab(tabId: string) {
+    setBrowserTabAddresses((addresses) => {
+      if (!(tabId in addresses)) return addresses;
+      const { [tabId]: _removed, ...rest } = addresses;
+      return rest;
+    });
+    setResultTabs((current) => {
+      const targetIndex = current.findIndex((tab) => tab.id === tabId);
+      if (targetIndex < 0) return current;
+      const next = current.filter((tab) => tab.id !== tabId);
+      if (!next.length) {
+        setActiveResultTabId('');
+        if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+        return next;
+      }
+      if (activeResultTabId === tabId) {
+        const fallback = next[Math.max(0, targetIndex - 1)] ?? next[0];
+        setActiveResultTabId(fallback.id);
+        if (fallback.kind === 'evidence') setFocusMode('evidence');
+        else if (fallback.kind === 'terminal') setFocusMode('execution');
+        else if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+      }
+      return next;
+    });
+  }
   function handleFocusModeChange(mode: ResultFocusMode) {
     setFocusMode(mode);
-    if (mode === 'evidence') setResultTab('evidence');
-    if (mode === 'execution') setResultTab('primary');
-    if (mode === 'visual') setResultTab('primary');
+    if (mode === 'evidence') activateResultTabKind('evidence');
+    if (mode === 'execution') activateResultTabKind('terminal');
+    if (mode === 'visual') activateResultTabKind('primary');
+  }
+  function requestCommandText(commandText: string, label?: string, targetRef?: string) {
+    if (!commandText.trim()) return;
+    onCommandTextAction?.(createCommandTextUIAction({
+      session,
+      id: actionId('command-right-pane'),
+      createdAt: new Date().toISOString(),
+      source: 'open',
+      commandText,
+      label,
+      targetRef,
+    }));
   }
   const handleObjectAction = async (reference: ObjectReference, action: ObjectAction) => {
     setObjectActionError('');
@@ -456,7 +785,7 @@ export function ResultsRenderer({
     });
     if (result.focusReference) onFocusedObjectChange(result.focusReference);
     if (result.activeRunId) onActiveRunChange(result.activeRunId);
-    if (result.resultTab) setResultTab(result.resultTab);
+    if (result.resultTab) activateResultTabKind(result.resultTab);
     if (result.inspectedArtifact) setInspectedArtifact(result.inspectedArtifact);
     if (result.pinnedObjectReferences) setPinnedObjectReferences(result.pinnedObjectReferences);
     if (result.commandTextAction) onCommandTextAction?.(result.commandTextAction);
@@ -469,24 +798,39 @@ export function ResultsRenderer({
     if (!path || !canHydrateWorkspaceObjectPath(path)) return '';
     return path;
   }, [focusedObjectReference, session]);
+  const focusedWorkspaceFileRequestKey = useMemo(
+    () => workspaceFileFocusRequestKey(focusedObjectReference, focusedWorkspaceFilePath),
+    [focusedObjectReference, focusedWorkspaceFilePath],
+  );
   const focusedWorkspaceRoot = useMemo(
     () => focusedWorkspaceRootForReference(focusedObjectReference, session, config.workspacePath),
     [config.workspacePath, focusedObjectReference, session],
   );
   const workspaceFileConfig = useMemo(
-    () => focusedWorkspaceRoot && focusedWorkspaceRoot !== config.workspacePath
-      ? { ...config, workspacePath: focusedWorkspaceRoot }
-      : config,
-    [config, focusedWorkspaceRoot],
+    () => {
+      const editorRoot = workspaceFileEditor?.focusRequestKey === focusedWorkspaceFileRequestKey
+        ? workspaceFileEditor?.workspacePath
+        : undefined;
+      const root = normalizeWorkspaceRootPath(editorRoot || focusedWorkspaceRoot);
+      return root && root !== normalizeWorkspaceRootPath(config.workspacePath)
+        ? { ...config, workspacePath: root }
+        : config;
+    },
+    [config, focusedWorkspaceFileRequestKey, focusedWorkspaceRoot, workspaceFileEditor?.focusRequestKey, workspaceFileEditor?.workspacePath],
   );
   useEffect(() => {
     if (executionFocus || !focusedWorkspaceFilePath) return undefined;
+    if (workspaceFileEditor?.focusRequestKey === focusedWorkspaceFileRequestKey) return undefined;
     if (workspaceFileEditorMatchesPath(workspaceFileEditor?.file.path, focusedWorkspaceFilePath, workspaceFileConfig.workspacePath)) return undefined;
     let cancelled = false;
     setObjectActionError('');
-    void readWorkspaceFile(focusedWorkspaceFilePath, workspaceFileConfig)
-      .then((file) => {
-        if (!cancelled) onWorkspaceFileEditorChange({ file, draft: file.content });
+    void readFocusedWorkspaceFile({
+      path: focusedWorkspaceFilePath,
+      config: workspaceFileConfig,
+      reference: focusedObjectReference,
+    })
+      .then(({ file, workspacePath }) => {
+        if (!cancelled) onWorkspaceFileEditorChange({ file, draft: file.content, workspacePath, focusRequestKey: focusedWorkspaceFileRequestKey });
       })
       .catch((error) => {
         if (!cancelled) setObjectActionError(error instanceof Error ? error.message : String(error));
@@ -497,21 +841,27 @@ export function ResultsRenderer({
   }, [
     executionFocus,
     focusedWorkspaceFilePath,
+    focusedWorkspaceFileRequestKey,
+    focusedObjectReference,
     onWorkspaceFileEditorChange,
     workspaceFileConfig,
-    workspaceFileEditor?.file.path,
+    workspaceFileEditor?.focusRequestKey,
   ]);
 
   return (
     <ResultShell
       collapsed={collapsed}
+      activeTabId={activeResultTabId}
       resultTab={resultTab}
+      resultTabs={resultTabs}
       focusMode={focusMode}
-      activeRun={undefined}
+      activeRun={activeRun}
       scenarioId={scenarioId}
       locale={locale}
       onToggleCollapse={onToggleCollapse}
-      onResultTabChange={setResultTab}
+      onResultTabChange={handleResultTabChange}
+      onNewResultTab={handleNewResultTab}
+      onCloseResultTab={handleCloseResultTab}
       onFocusModeChange={handleFocusModeChange}
       onActiveRunChange={onActiveRunChange}
       drawer={!executionFocus && inspectedArtifact ? (
@@ -524,13 +874,20 @@ export function ResultsRenderer({
         />
       ) : null}
     >
-            {workspaceFileEditor ? (
+            {!hasOpenRightPaneTabs ? (
+              <RightPaneEmptyWorkspace locale={locale} />
+            ) : (
+              <>
+            {resultTab !== 'files' && workspaceFileEditor ? (
               <ResultPaneWorkspaceFileViewer
                 state={workspaceFileEditor}
                 config={workspaceFileConfig}
                 locale={locale}
                 onChange={onWorkspaceFileEditorChange}
-                onClose={() => onWorkspaceFileEditorChange(null)}
+                onClose={() => {
+                  onWorkspaceFileEditorChange(null);
+                  onFocusedObjectChange(undefined);
+                }}
               />
             ) : null}
             {!executionFocus && focusedObjectReference ? (
@@ -557,8 +914,49 @@ export function ResultsRenderer({
                 onObjectReferenceFocus={onFocusedObjectChange}
               />
             ) : null}
-            {resultTab === 'primary' ? (
+            {resultTab === 'browser' ? (
+              <RightPaneBrowserTool
+                key={activeResultTabId}
+                tabId={activeResultTabId}
+                config={config}
+                session={session}
+                locale={locale}
+                addressDraft={browserTabAddresses[activeResultTabId] ?? 'about:blank'}
+                onAddressDraftChange={(nextAddress) => {
+                  setBrowserTabAddresses((current) => ({
+                    ...current,
+                    [activeResultTabId]: nextAddress,
+                  }));
+                }}
+                onCommandRequest={requestCommandText}
+              />
+            ) : resultTab === 'screen' ? (
+              <RightPaneVirtualScreenTool
+                key={activeResultTabId}
+                config={config}
+                session={session}
+                locale={locale}
+                onCommandRequest={requestCommandText}
+              />
+            ) : resultTab === 'terminal' ? (
+              <RightPaneTerminalTool
+                key={activeResultTabId}
+                session={session}
+                activeRun={activeRun}
+                locale={locale}
+                onCommandRequest={requestCommandText}
+              />
+            ) : resultTab === 'files' ? (
+              <RightPaneFilesTool
+                key={activeResultTabId}
+                config={workspaceFileConfig}
+                locale={locale}
+                state={workspaceFileEditor}
+                onChange={onWorkspaceFileEditorChange}
+              />
+            ) : resultTab === 'primary' ? (
               <PrimaryResult
+                key={activeResultTabId}
                 scenarioId={scenarioId}
                 config={config}
                 session={session}
@@ -572,12 +970,558 @@ export function ResultsRenderer({
                 onDismissResultSlotPresentation={onDismissResultSlotPresentation}
                 onCommandTextAction={onCommandTextAction}
                 onOpenDebugAuditAction={onOpenDebugAuditAction}
+                onWorkbenchToolSelect={activateResultTabKind}
               />
             ) : resultTab === 'evidence' ? (
-              <EvidenceMatrix claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} locale={locale} />
+              <EvidenceMatrix key={activeResultTabId} claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} locale={locale} />
             ) : null}
+              </>
+            )}
     </ResultShell>
   );
+}
+
+function RightPaneEmptyWorkspace({ locale }: { locale?: ResultLocale }) {
+  return (
+    <div className="right-pane-empty-workspace" data-testid="right-pane-empty-workspace">
+      <strong>{resultText(locale, { 'zh-CN': '没有打开的页面', 'en-US': 'No pages open' })}</strong>
+      <span>{resultText(locale, { 'zh-CN': '使用顶部 New 打开 Results、Browser、Screen、Terminal、Files 或 References。', 'en-US': 'Use New above to open Results, Browser, Screen, Terminal, Files, or References.' })}</span>
+    </div>
+  );
+}
+
+function RightPaneToolDock({
+  locale,
+  onSelect,
+}: {
+  locale?: ResultLocale;
+  onSelect: (tab: ResultPaneTab) => void;
+}) {
+  const tools: Array<{ tab: ResultPaneTab; label: string; detail: string; Icon: typeof Globe2 }> = [
+    {
+      tab: 'browser',
+      label: resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' }),
+      detail: resultText(locale, { 'zh-CN': '页面预览和截图', 'en-US': 'Page preview and screenshots' }),
+      Icon: Globe2,
+    },
+    {
+      tab: 'screen',
+      label: resultText(locale, { 'zh-CN': '虚拟屏幕', 'en-US': 'Virtual Screen' }),
+      detail: resultText(locale, { 'zh-CN': '屏幕预览、光标、权限和回放', 'en-US': 'Screen preview, cursor, permissions, and replay' }),
+      Icon: Monitor,
+    },
+    {
+      tab: 'terminal',
+      label: resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' }),
+      detail: resultText(locale, { 'zh-CN': '命令输入、运行输出、停止/复制', 'en-US': 'Command input, output, stop/copy' }),
+      Icon: Terminal,
+    },
+    {
+      tab: 'files',
+      label: resultText(locale, { 'zh-CN': '文件', 'en-US': 'Files' }),
+      detail: resultText(locale, { 'zh-CN': '文件树、查看、编辑和保存', 'en-US': 'File tree, inspect, edit, save' }),
+      Icon: FolderTree,
+    },
+  ];
+
+  return (
+    <section className="right-pane-tool-dock" aria-label={resultText(locale, { 'zh-CN': '右侧工具区', 'en-US': 'Right pane tools' })}>
+      {tools.map(({ tab, label, detail, Icon }) => (
+        <button key={tab} type="button" onClick={() => onSelect(tab)} data-right-pane-tool={tab}>
+          <Icon size={16} aria-hidden="true" />
+          <span>{label}</span>
+          <small>{detail}</small>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function RightPaneBrowserTool({
+  tabId,
+  config,
+  session,
+  locale,
+  addressDraft,
+  onAddressDraftChange,
+  onCommandRequest,
+}: {
+  tabId: string;
+  config: SciForgeConfig;
+  session: SciForgeSession;
+  locale?: ResultLocale;
+  addressDraft: string;
+  onAddressDraftChange: (nextAddress: string) => void;
+  onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
+}) {
+  const normalizedUrl = normalizeRightPaneBrowserUrl(addressDraft);
+  const commands = browserWorkbenchDefaultCommands(normalizedUrl);
+
+  function requestCommand(command: BrowserWorkbenchCommand) {
+    onCommandRequest(command.command, command.label, normalizedUrl);
+  }
+
+  function openAddress(value: string) {
+    const nextUrl = normalizeRightPaneBrowserUrl(value);
+    onAddressDraftChange(nextUrl);
+    onCommandRequest(`/browser open ${JSON.stringify(nextUrl)} --surface workbench`, 'Open browser', nextUrl);
+  }
+
+  return (
+    <div className="right-pane-package-surface right-pane-browser-surface" data-testid="right-pane-browser-tool">
+      {renderBrowserWorkbench({
+        slot: {
+          componentId: 'browser-workbench',
+          title: resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' }),
+          props: {
+            title: resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' }),
+            status: normalizedUrl === 'about:blank' ? 'idle' : 'ready',
+            addressValue: addressDraft,
+            addressPlaceholder: 'https://example.org',
+            previewUrl: rightPaneBrowserPreviewUrl(normalizedUrl),
+            commands,
+            onAddressChange: onAddressDraftChange,
+            onAddressSubmit: openAddress,
+            onCommandRequest: requestCommand,
+            onCopyRefRequest: (ref: { ref: string }) => {
+              if (typeof navigator !== 'undefined') void navigator.clipboard?.writeText(ref.ref);
+            },
+            notes: [
+              resultText(locale, {
+                'zh-CN': 'Browser 动作会转成 /browser 命令交给运行时执行。',
+                'en-US': 'Browser actions emit /browser commands for the runtime.',
+              }),
+            ],
+          },
+        },
+        artifact: {
+          id: 'right-pane-browser-workbench',
+          type: 'browser-runtime-projection',
+          producerScenario: 'browser-runtime',
+          schemaVersion: 'sciforge.browser-runtime.projection.v1',
+          data: {
+            session: {
+              id: 'right-pane-browser',
+              mode: 'agent-headless',
+              providerId: 'browser_runtime',
+              activeTabId: `${tabId}:tab`,
+              tabs: [{
+                id: `${tabId}:tab`,
+                url: normalizedUrl,
+                title: normalizedUrl === 'about:blank' ? 'about:blank' : normalizedUrl,
+                status: normalizedUrl === 'about:blank' ? 'new' : 'ready',
+              }],
+            },
+          },
+        },
+        config,
+        session,
+      })}
+    </div>
+  );
+}
+
+function RightPaneVirtualScreenTool({
+  config,
+  session,
+  locale,
+  onCommandRequest,
+}: {
+  config: SciForgeConfig;
+  session: SciForgeSession;
+  locale?: ResultLocale;
+  onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
+}) {
+  const sessionRef = 'computer-use:session/right-pane/virtual-desktop-session-manifest.json';
+  const screenRef = 'computer-use:session/right-pane/virtual-screens.json#screen-1';
+  const replayRef = 'computer-use:session/right-pane/replay-bundle.json';
+  const frameRef = 'computer-use:session/right-pane/frames/latest.png';
+  const stopRef = 'computer-use:stop/right-pane';
+  const cancelLeaseRef = 'computer-use:lease/right-pane';
+  return (
+    <div className="right-pane-package-surface right-pane-virtual-screen-surface" data-testid="right-pane-virtual-screen-tool">
+      {renderVirtualScreenViewer({
+        slot: {
+          componentId: 'virtual-screen-viewer',
+          title: resultText(locale, { 'zh-CN': '虚拟屏幕', 'en-US': 'Virtual Screen' }),
+          props: {
+            title: resultText(locale, { 'zh-CN': 'Computer Use 虚拟屏幕', 'en-US': 'Computer Use Virtual Screen' }),
+            status: resultText(locale, { 'zh-CN': '等待 backend', 'en-US': 'waiting-backend' }),
+            sessionRef,
+            displayGroupRef: 'computer-use:session/right-pane/virtual-display-group.json',
+            screenRef,
+            frameRef,
+            replayRef,
+            permissionRef: 'computer-use:permission/right-pane.json',
+            stopRef,
+            cancelLeaseRef,
+            screen: { width: 1440, height: 900, label: 'screen-1' },
+            actorCursors: [
+              { actorId: 'user', cursorId: 'cursor-user', label: 'User', color: '#38bdf8', x: 260, y: 220, state: 'watching' },
+              { actorId: 'agent-1', cursorId: 'cursor-agent', label: 'Agent', color: '#00e5a0', x: 880, y: 480, state: 'idle' },
+            ],
+            isolation: {
+              sharedSystemInputUsed: false,
+              systemPointerMoved: false,
+              systemKeyboardEventsSent: false,
+              inputExecuted: false,
+              diagnosticOnly: true,
+            },
+            events: [
+              {
+                label: resultText(locale, { 'zh-CN': 'Session skeleton 已就绪', 'en-US': 'Session skeleton ready' }),
+                ref: sessionRef,
+              },
+              {
+                label: resultText(locale, { 'zh-CN': '等待 isolated virtual desktop backend', 'en-US': 'Waiting for isolated virtual desktop backend' }),
+                ref: 'computer-use:session/right-pane/blocked/backend.json',
+              },
+            ],
+            onTerminalEquivalentText: (event: { commandText: string; label: string; targetRef?: string }) => {
+              onCommandRequest(event.commandText, event.label, event.targetRef);
+            },
+          },
+        },
+        artifact: {
+          id: 'right-pane-virtual-screen',
+          type: 'computer-use-virtual-screen',
+          producerScenario: 'computer-use',
+          schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+          data: {},
+        },
+        config,
+        session,
+      })}
+    </div>
+  );
+}
+
+function RightPaneTerminalTool({
+  session,
+  activeRun,
+  locale,
+  onCommandRequest,
+}: {
+  session: SciForgeSession;
+  activeRun?: SciForgeRun;
+  locale?: ResultLocale;
+  onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
+}) {
+  const units = activeRun ? auditExecutionUnitsForRun(session, activeRun) : session.executionUnits.slice(-6);
+  const buffer = terminalTranscriptForRightPane(units, locale);
+  const status = terminalStatusForRightPane(units, activeRun, buffer);
+  return (
+    <div className="right-pane-package-surface right-pane-terminal-surface" data-testid="right-pane-terminal-tool">
+      {renderTerminalSessionViewer({
+        slot: {
+          componentId: 'terminal-session-viewer',
+          title: resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' }),
+          props: {
+            sessionRef: activeRun ? `run:${rightPaneInlineLabel(activeRun.id)}` : 'right-pane-terminal',
+            title: resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' }),
+            status,
+            buffer,
+            capabilities: { input: true, paste: true, resize: true, copy: true, download: false, stop: activeRun?.status === 'running', focus: true },
+            metadata: {
+              surface: 'right-pane',
+              mode: 'transcript',
+              source: 'execution-units',
+              runStatus: activeRun?.status ?? 'none',
+              unitCount: String(units.length),
+            },
+            onDataInput: (input: string) => onCommandRequest(input, 'Terminal input'),
+            onPasteInput: (input: string) => {
+              if (input.trim()) onCommandRequest(input, 'Terminal paste');
+            },
+          },
+        },
+        artifact: {
+          id: 'right-pane-terminal-session',
+          type: 'terminal-session',
+          producerScenario: 'terminal-session-viewer',
+          schemaVersion: 'sciforge.terminal-session.v1',
+          data: { status, buffer },
+        },
+        session,
+      })}
+      {activeRun ? <ExecutionOnlyResult session={session} activeRun={activeRun} locale={locale} /> : null}
+    </div>
+  );
+}
+
+function RightPaneFilesTool({
+  config,
+  locale,
+  state,
+  onChange,
+}: {
+  config: SciForgeConfig;
+  locale?: ResultLocale;
+  state: WorkspaceFileEditorState | null;
+  onChange: (next: WorkspaceFileEditorState | null) => void;
+}) {
+  const workspaceRoot = normalizeWorkspaceRootPath(state?.workspacePath || config.workspacePath);
+  const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceFileViewerEntry[] | undefined>>({});
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [workspaceNotice, setWorkspaceNotice] = useState('');
+  const [saveError, setSaveError] = useState('');
+  const dirty = Boolean(state && state.draft !== state.file.content);
+
+  useEffect(() => {
+    setFolderChildren({});
+    setExpandedFolders(new Set(workspaceRoot ? [workspaceRoot] : []));
+    setWorkspaceError('');
+    setWorkspaceNotice('');
+  }, [workspaceRoot]);
+
+  useEffect(() => {
+    if (!workspaceRoot) return undefined;
+    let cancelled = false;
+    void loadFolder(workspaceRoot, { cancelled: () => cancelled, quiet: true });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceRoot, config.workspaceWriterBaseUrl]);
+
+  async function loadFolder(path: string, options: { cancelled?: () => boolean; quiet?: boolean } = {}) {
+    if (!path.trim()) return;
+    try {
+      if (!options.quiet) setWorkspaceError('');
+      const entries = await listWorkspace(path, config);
+      if (options.cancelled?.()) return;
+      setFolderChildren((previous) => ({ ...previous, [path]: entries.map(workspaceFileViewerEntryFromWorkspaceEntry) }));
+      if (!options.quiet) {
+        setWorkspaceNotice(entries.length
+          ? resultText(locale, { 'zh-CN': `已加载 ${entries.length} 项`, 'en-US': `${entries.length} items loaded` })
+          : resultText(locale, { 'zh-CN': '文件夹为空', 'en-US': 'Folder is empty' }));
+      }
+    } catch (error) {
+      if (options.cancelled?.()) return;
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      if (!options.quiet) setWorkspaceNotice('');
+    }
+  }
+
+  function toggleFolder(path: string) {
+    setExpandedFolders((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else {
+        next.add(path);
+        if (folderChildren[path] === undefined) void loadFolder(path, { quiet: true });
+      }
+      return next;
+    });
+  }
+
+  async function refreshTree() {
+    if (!workspaceRoot) return;
+    try {
+      setWorkspaceError('');
+      const folders = Array.from(new Set([workspaceRoot, ...expandedFolders])).filter(Boolean);
+      const loaded = await Promise.all(folders.map(async (folder) => [folder, await listWorkspace(folder, config)] as const));
+      setFolderChildren((previous) => ({
+        ...previous,
+        ...Object.fromEntries(loaded.map(([folder, entries]) => [folder, entries.map(workspaceFileViewerEntryFromWorkspaceEntry)])),
+      }));
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': '目录已刷新', 'en-US': 'Tree refreshed' }));
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      setWorkspaceNotice('');
+    }
+  }
+
+  async function openFile(entry: WorkspaceFileViewerEntry) {
+    if (entry.kind !== 'file') return;
+    try {
+      setWorkspaceError('');
+      const file = await readWorkspaceFile(entry.path, config);
+      onChange({ file, draft: file.content, workspacePath: workspaceRoot });
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开 ${file.name}`, 'en-US': `Opened ${file.name}` }));
+    } catch (error) {
+      setWorkspaceError(error instanceof Error ? error.message : String(error));
+      setWorkspaceNotice('');
+    }
+  }
+
+  async function saveFile() {
+    if (!state) return;
+    try {
+      setSaveError('');
+      const file = await writeWorkspaceFile(state.file.path, state.draft, config);
+      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已保存 ${file.name}`, 'en-US': `Saved ${file.name}` }));
+      const parent = workspaceFileViewerParentPath(file.path) || workspaceRoot;
+      if (parent) await loadFolder(parent, { quiet: true });
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return (
+    <div className="right-pane-package-surface right-pane-files-surface" data-testid="right-pane-files-tool">
+      {renderWorkspaceFileViewer({
+        slot: {
+          componentId: 'workspace-file-viewer',
+          title: workspaceFileViewerLabels(locale).title,
+          props: {
+            rootPath: workspaceRoot,
+            rootLabel: workspaceFileViewerBasename(workspaceRoot),
+            entriesByFolder: folderChildren,
+            expandedFolderPaths: Array.from(expandedFolders),
+            selectedPath: state?.file.path,
+            file: state?.file ?? null,
+            draft: state?.draft ?? '',
+            dirty,
+            notice: workspaceNotice,
+            error: boundedRightPaneText(workspaceError, 800),
+            saveError: boundedRightPaneText(saveError, 800),
+            labels: workspaceFileViewerLabels(locale),
+            onToggleFolder: toggleFolder,
+            onOpenFile: (entry: WorkspaceFileViewerEntry) => void openFile(entry),
+            onRefresh: () => void refreshTree(),
+            onCollapseAll: () => setExpandedFolders(new Set(workspaceRoot ? [workspaceRoot] : [])),
+            onDraftChange: (draft: string) => state ? onChange({ ...state, draft }) : undefined,
+            onSave: () => void saveFile(),
+            onClose: () => onChange(null),
+            onCopyPath: (path: string) => {
+              if (typeof navigator !== 'undefined') void navigator.clipboard?.writeText(path);
+            },
+            onCopyContents: (content: string) => {
+              if (typeof navigator !== 'undefined') void navigator.clipboard?.writeText(content);
+            },
+          } satisfies Partial<WorkspaceFileViewerProps> as Record<string, unknown>,
+        },
+        artifact: {
+          id: 'right-pane-workspace-file-view',
+          type: 'workspace-file-view',
+          producerScenario: 'workspace-file-viewer',
+          schemaVersion: 'sciforge.workspace-file-view.v1',
+          data: {
+            rootPath: workspaceRoot,
+            selectedPath: state?.file.path,
+            file: state?.file ?? null,
+            dirty,
+          },
+        },
+        config,
+      })}
+    </div>
+  );
+}
+
+function normalizeRightPaneBrowserUrl(value: string) {
+  return normalizeBrowserWorkbenchUrl(value);
+}
+
+function rightPaneBrowserPreviewUrl(url: string) {
+  if (url === 'about:blank') return 'about:blank';
+  if (shouldProxyRightPaneBrowserUrl(url)) {
+    const params = new URLSearchParams({ url });
+    return `/api/sciforge/browser/proxy?${params.toString()}`;
+  }
+  return url;
+}
+
+function shouldProxyRightPaneBrowserUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    return !/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function terminalStatusForRightPane(units: RuntimeExecutionUnit[], activeRun: SciForgeRun | undefined, buffer: string) {
+  if (activeRun?.status === 'running' || units.some((unit) => unit.status === 'running')) return 'running';
+  if (activeRun?.status === 'failed' || units.some((unit) => terminalExecutionUnitFailed(unit))) return 'error';
+  return buffer.trim() ? 'stopped' : 'idle';
+}
+
+function terminalExecutionUnitFailed(unit: RuntimeExecutionUnit) {
+  return unit.status === 'failed'
+    || unit.status === 'failed-with-reason'
+    || unit.status === 'repair-needed'
+    || Boolean(unit.failureReason);
+}
+
+function terminalTranscriptForRightPane(units: RuntimeExecutionUnit[], locale?: ResultLocale) {
+  if (!units.length) {
+    return [
+      '$ ask --help',
+      `# ${resultText(locale, { 'zh-CN': '等待已附加的终端会话或运行输出。', 'en-US': 'Waiting for an attached terminal session or run output.' })}`,
+    ].join('\n');
+  }
+  return units.slice(-8).flatMap((unit, index) => {
+    const command = terminalCommandForExecutionUnit(unit, index);
+    const lines = [
+      `$ ${boundedRightPaneText(command, 220)}`,
+      terminalStatusLineForExecutionUnit(unit, locale),
+      unit.stdoutRef ? `[stdout] ${rightPaneInlineLabel(unit.stdoutRef)}` : undefined,
+      unit.stderrRef ? `[stderr] ${rightPaneInlineLabel(unit.stderrRef)}` : undefined,
+      unit.outputRef ? `[output] ${rightPaneInlineLabel(unit.outputRef)}` : undefined,
+      unit.failureReason ? `[failed] ${boundedRightPaneText(unit.failureReason, 220)}` : undefined,
+    ].filter((line): line is string => Boolean(line));
+    return index === 0 ? lines : ['', ...lines];
+  }).join('\n');
+}
+
+function terminalCommandForExecutionUnit(unit: RuntimeExecutionUnit, index: number) {
+  if (unit.code?.trim()) return unit.code.trim();
+  const paramsCommand = terminalCommandFromParams(unit.params);
+  if (paramsCommand) return paramsCommand;
+  return unit.tool || `step-${index + 1}`;
+}
+
+function terminalCommandFromParams(params: string | undefined) {
+  if (!params?.trim()) return '';
+  try {
+    const parsed = JSON.parse(params) as unknown;
+    if (isRecord(parsed)) {
+      const direct = firstStringField(parsed, ['cmd', 'command', 'script']);
+      if (direct) return direct;
+      const args = parsed.args;
+      if (Array.isArray(args) && args.every((item) => typeof item === 'string')) return args.join(' ');
+    }
+  } catch {
+    // Params can be plain text for legacy execution units.
+  }
+  return params.length <= 160 && !/[{}\[\]"]/u.test(params) ? params.trim() : '';
+}
+
+function firstStringField(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function terminalStatusLineForExecutionUnit(unit: RuntimeExecutionUnit, locale?: ResultLocale) {
+  const status = terminalExecutionUnitFailed(unit) ? 'failed' : unit.status || 'recorded';
+  const details = [
+    unit.time ? unit.time : undefined,
+    typeof unit.attempt === 'number' ? `attempt ${unit.attempt}` : undefined,
+  ].filter(Boolean).join(' · ');
+  const label = resultText(locale, {
+    'zh-CN': status === 'running'
+      ? '运行中'
+      : status === 'done'
+        ? '完成'
+        : status === 'failed'
+          ? '失败'
+          : '记录',
+    'en-US': status === 'running'
+      ? 'running'
+      : status === 'done'
+        ? 'done'
+        : status === 'failed'
+          ? 'failed'
+          : 'recorded',
+  });
+  return details ? `[${label}] ${boundedRightPaneText(details, 120)}` : `[${label}]`;
 }
 
 function PrimaryResult({
@@ -594,6 +1538,7 @@ function PrimaryResult({
   onDismissResultSlotPresentation,
   onCommandTextAction,
   onOpenDebugAuditAction,
+  onWorkbenchToolSelect,
 }: {
   scenarioId: ScenarioId;
   config: SciForgeConfig;
@@ -608,6 +1553,7 @@ function PrimaryResult({
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
+  onWorkbenchToolSelect: (tab: ResultPaneTab) => void;
 }) {
   const { viewPlan } = model;
   const runtimeState = browserVisibleRuntimeState(session, activeRun, viewPlan);
@@ -647,11 +1593,14 @@ function PrimaryResult({
       />
       {viewPlan.blockedDesign ? <UIDesignBlockerCard blocker={viewPlan.blockedDesign} locale={locale} /> : null}
       {model.emptyState ? (
-        <EmptyArtifactState
-          title={model.emptyState.title}
-          detail={model.emptyState.detail}
-          recoverActions={model.emptyState.recoverActions}
-        />
+        <>
+          <EmptyArtifactState
+            title={model.emptyState.title}
+            detail={model.emptyState.detail}
+            recoverActions={model.emptyState.recoverActions}
+          />
+          <RightPaneToolDock locale={locale} onSelect={onWorkbenchToolSelect} />
+        </>
       ) : null}
       <ResultItemsSection
         title={model.primaryTitle}

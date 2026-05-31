@@ -30,7 +30,14 @@ export async function handleCodexRuntimeRoutes(
   }
 
   const abort = new AbortController();
-  req.on('close', () => abort.abort());
+  req.on('aborted', () => abort.abort());
+  let responseFinished = false;
+  res.on('finish', () => {
+    responseFinished = true;
+  });
+  res.on('close', () => {
+    if (!responseFinished) abort.abort();
+  });
   res.writeHead(200, {
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -194,6 +201,8 @@ async function runCodexRuntimeTurn(
           statePath: stringField(body.guiExtension.statePath),
         }
         : undefined,
+      humanApproval: isRecord(body.humanApproval) ? body.humanApproval : undefined,
+      uiState: isRecord(body.uiState) ? body.uiState : undefined,
       abortSignal,
     });
     hooks.onTurnStarted?.({
@@ -406,7 +415,24 @@ const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
   'nativeSessionId',
   'allowOpenAiRuntime',
   'guiExtension',
+  'humanApproval',
+  'uiState',
   'auditMetadata',
+]);
+
+const CODEX_RUNTIME_HUMAN_APPROVAL_ALLOWED_KEYS = new Set([
+  'approvalRef',
+  'decision',
+  'source',
+  'approvalProvenance',
+]);
+
+const CODEX_RUNTIME_APPROVAL_UI_STATE_ALLOWED_KEYS = new Set([
+  'schemaVersion',
+  'approvalRef',
+  'computerUseApprovalRef',
+  'terminalEquivalentText',
+  'approvalProvenance',
 ]);
 
 const CODEX_RUNTIME_GUI_EXTENSION_ALLOWED_KEYS = new Set([
@@ -466,11 +492,29 @@ function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Recor
       throw new Error(`Runtime Codex guiExtension contains non-adapter fields: ${extraGuiKeys.join(', ')}`);
     }
   }
+  if (isRecord(body.humanApproval) || isRecord(body.uiState)) {
+    assertCodexRuntimeApprovalMetadata(body);
+  }
   if (isRecord(body.auditMetadata)) {
     const forbiddenAuditKeys = nestedForbiddenKeys(body.auditMetadata, CODEX_RUNTIME_FORBIDDEN_NESTED_KEYS);
     if (forbiddenAuditKeys.length) {
       throw new Error(`Runtime Codex auditMetadata contains non-adapter fields: ${forbiddenAuditKeys.slice(0, 8).join(', ')}`);
     }
+  }
+}
+
+function assertCodexRuntimeApprovalMetadata(body: Record<string, unknown>) {
+  const commandText = stringField(body.commandText) ?? '';
+  if (!/(?:^|\n)\s*\/(?:computer-use|computer\s+use)\s+approve\b/i.test(commandText)) {
+    throw new Error('Runtime Codex humanApproval/uiState metadata is only allowed for /computer-use approve commandText.');
+  }
+  if (isRecord(body.humanApproval)) {
+    const extra = Object.keys(body.humanApproval).filter((key) => !CODEX_RUNTIME_HUMAN_APPROVAL_ALLOWED_KEYS.has(key));
+    if (extra.length) throw new Error(`Runtime Codex humanApproval contains non-confirmation fields: ${extra.join(', ')}`);
+  }
+  if (isRecord(body.uiState)) {
+    const extra = Object.keys(body.uiState).filter((key) => !CODEX_RUNTIME_APPROVAL_UI_STATE_ALLOWED_KEYS.has(key));
+    if (extra.length) throw new Error(`Runtime Codex uiState contains non-confirmation fields: ${extra.join(', ')}`);
   }
 }
 

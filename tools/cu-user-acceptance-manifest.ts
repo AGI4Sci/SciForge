@@ -38,6 +38,17 @@ export interface CuEvidenceClaim {
   artifactRefs?: string[];
   sessionRefs?: string[];
   origin?: Record<string, unknown>;
+  observationUse?: 'observe-before-mutate-hint' | 'grounding-hint' | string;
+  evidenceUse?: 'observe-before-mutate-hint' | 'grounding-hint' | string;
+  use?: 'observe-before-mutate-hint' | 'grounding-hint' | string;
+  executorLeaseSubstitute?: boolean;
+  guiActionSubstitute?: boolean;
+  artifactValidationSubstitute?: boolean;
+  artifactCausalitySubstitute?: boolean;
+  completionEvidence?: boolean;
+  completionEvidenceEligible?: boolean;
+  completionEvidenceSubstitute?: boolean;
+  userLevelCompletionSubstitute?: boolean;
   note?: string;
 }
 
@@ -186,14 +197,43 @@ const rejectedShortcutKinds = new Set<CuEvidenceClaimKind>([
 export function evaluateCuUserAcceptanceAntiShortcutGuard(
   evidenceClaims: CuEvidenceClaim[] = [],
 ): CuUserAcceptanceManifest['antiShortcutGuard'] {
-  const rejectedClaims = evidenceClaims.filter((claim) => rejectedShortcutKinds.has(claim.kind));
+  const rejectedClaims = evidenceClaims.filter((claim) => (
+    rejectedShortcutKinds.has(claim.kind)
+    && !isAllowedDomAxObservationHintClaim(claim)
+  ));
   return {
     status: rejectedClaims.length === 0 ? 'passed' : 'failed',
     rejectedKinds: ['dom', 'playwright', 'accessibility', 'generated-file-only'],
     rejectedClaims,
     rule:
-      'CU-05 user acceptance pass evidence must come from TUI Host -> computer_use.runTask(request, hostPorts) and screenshot-grounded Computer Use execution, not DOM, Playwright, accessibility, or generated-file-only substitutes.',
+      'CU-05 user acceptance pass evidence must come from TUI Host -> computer_use.runTask(request, hostPorts), screenshot-grounded Computer Use execution, and refs-first DOM/AX/Playwright observation hints only; DOM, Playwright, accessibility, or generated-file-only substitutes cannot be completion evidence.',
   };
+}
+
+function isAllowedDomAxObservationHintClaim(claim: CuEvidenceClaim): boolean {
+  if (claim.kind !== 'dom' && claim.kind !== 'playwright' && claim.kind !== 'accessibility') return false;
+  const use = claim.observationUse ?? claim.evidenceUse ?? claim.use;
+  const refs = [
+    ...(claim.ref ? [claim.ref] : []),
+    ...(claim.refs ?? []),
+    ...(claim.recordRefs ?? []),
+    ...(claim.evidenceRefs ?? []),
+  ];
+  return (use === 'observe-before-mutate-hint' || use === 'grounding-hint')
+    && refs.length > 0
+    && refs.every(isBundleLocalRef)
+    && claim.executorLeaseSubstitute !== true
+    && claim.guiActionSubstitute !== true
+    && claim.artifactValidationSubstitute !== true
+    && claim.artifactCausalitySubstitute !== true
+    && claim.completionEvidence !== true
+    && claim.completionEvidenceEligible !== true
+    && claim.completionEvidenceSubstitute !== true
+    && claim.userLevelCompletionSubstitute !== true;
+}
+
+function isBundleLocalRef(ref: string): boolean {
+  return ref.startsWith('.sciforge/vision-runs/') && !ref.includes('..') && !/^[a-z]+:/i.test(ref);
 }
 
 export function hasRequiredCuTuiHostChain(tuiHostChain: CuTuiHostChainLink[]): boolean {

@@ -57,10 +57,21 @@ test('valid stored navigation is preserved', () => {
   });
 });
 
-function installWindow(localStorage: MemoryStorage) {
+test('URL page parameter opens deep-linkable workspace views before stored navigation', () => {
+  const storage = new MemoryStorage();
+  storage.setItem(navigationStorageKey, JSON.stringify({ page: 'timeline', scenarioId: 'structure-exploration' }));
+  installWindow(storage, '?page=browser&scenarioId=custom-browser-scenario');
+
+  assert.deepEqual(loadStoredAppNavigation(), {
+    page: 'browser',
+    scenarioId: 'custom-browser-scenario',
+  });
+});
+
+function installWindow(localStorage: MemoryStorage, search = '') {
   Object.defineProperty(globalThis, 'window', {
     value: {
-      location: { host: 'localhost:5173' },
+      location: { host: 'localhost:5173', search },
       localStorage,
     },
     configurable: true,

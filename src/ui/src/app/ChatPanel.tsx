@@ -36,7 +36,7 @@ import { SciForgeReferenceChips } from './chat/ReferenceChips';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
-import { addComposerReferenceWithMarker, addPendingComposerReference, composerReferenceForObjectReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
+import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
 import { highlightSciForgeReference } from './chat/referenceFocus';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
@@ -70,6 +70,10 @@ interface HandoffAutoRunRequest {
 
 function builtInScenarioIdForInstance(scenarioId: ScenarioInstanceId, scenarioOverride?: ScenarioRuntimeOverride): ScenarioId {
   return builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride });
+}
+
+function runtimeCheckingErrorText(value: string) {
+  return /Checking .*Runtime|Please wait before sending|正在检查 .*Runtime|请稍后再发送/i.test(value);
 }
 
 function messageProvenanceKind(message: SciForgeMessage) {
@@ -444,6 +448,11 @@ export function ChatPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [scenarioId, session.sessionId]);
 
+  useEffect(() => {
+    if (!errorText || !runtimeCheckingErrorText(errorText)) return;
+    if (!runtimeReadinessIssue(runtimeHealth, locale)) setErrorText('');
+  }, [errorText, locale, runtimeHealth]);
+
   async function handleSend() {
     const currentPendingReferences = pendingReferencesRef.current;
     const prompt = promptForComposerSend(inputRef.current, currentPendingReferences);
@@ -494,7 +503,6 @@ export function ChatPanel({
 
   function handleObjectReferenceClick(reference: ObjectReference) {
     onObjectFocus(reference);
-    addPendingReferenceToComposer(composerReferenceForObjectReference(reference));
   }
 
   function addPendingReferenceToComposer(reference: SciForgeReference) {
@@ -1116,6 +1124,15 @@ export function ChatPanel({
                     </>
                   ) : (
                     <>
+                      {messageRunId ? (
+                        <RunExecutionProcess
+                          runId={messageRunId}
+                          session={session}
+                          trace={message.expandable}
+                          onObjectFocus={handleObjectReferenceClick}
+                          locale={locale}
+                        />
+                      ) : null}
                       <FinalMessageContent
                         content={sanitizeUserProjectionText(message.content) ?? message.content}
                         references={inlineObjectReferencesForMessage(message, session, messageRunId, { workspaceObjectReferences })}
@@ -1136,15 +1153,6 @@ export function ChatPanel({
                             locale={locale}
                           />
                         </details>
-                      ) : null}
-                      {messageRunId ? (
-                        <RunExecutionProcess
-                          runId={messageRunId}
-                          session={session}
-                          trace={message.expandable}
-                          onObjectFocus={handleObjectReferenceClick}
-                          locale={locale}
-                        />
                       ) : null}
                     </>
                   )}

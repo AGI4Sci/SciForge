@@ -1,10 +1,20 @@
 import type { FormEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
-import { ChevronDown, ChevronsDown, ChevronsUp, Edit3, Folder, FolderPlus, Gauge, GitBranch, HardDrive, MoreHorizontal, PanelTopOpen, Search } from 'lucide-react';
+import { CalendarClock, ChevronsDown, Edit3, Folder, FolderPlus, Gauge, GitBranch, HardDrive, ListFilter, MoreHorizontal, Search, SlidersHorizontal } from 'lucide-react';
 import { useI18n } from '../../i18nContext';
-import { Badge, cx } from '../uiPrimitives';
+import { cx } from '../uiPrimitives';
 import type { SidebarProjectThreadGroup, SidebarSearchMatch, SidebarThreadItem } from './ShellPanels';
 import type { SidebarCursorAgentProjectGroup, SidebarCursorAgentStatus } from './sidebarCursorAgentModel';
+import type { SidebarVisibleSections } from './sidebarPreferences';
 import { sidebarRenderableThreadItems } from './sidebarProjectThreadList';
+
+const defaultVisibleSections: SidebarVisibleSections = {
+  status: true,
+  git: true,
+  environment: true,
+  archiveUnread: true,
+  source: true,
+  metadata: true,
+};
 
 type SidebarProjectMenuTarget =
   | { kind: 'global' }
@@ -16,11 +26,11 @@ export function SidebarProjectChatSection({
   sidebarSearchMatches,
   allProjectThreadsCollapsed,
   activeMenuKind,
-  activeProjectMenuId,
   projectThreadLimit,
+  projectThreadVisibleCounts = {},
   sidebarProjectThreadGroups,
   cursorProjectGroups,
-  expandedProjectThreads,
+  visibleSections = defaultVisibleSections,
   onSearchQueryChange,
   onSearchSubmit,
   onOpenSearchMatch,
@@ -28,19 +38,21 @@ export function SidebarProjectChatSection({
   onToggleProjectMenu,
   onToggleAllProjectThreadsCollapsed,
   onActivateProject,
-  onToggleProjectThreadExpansion,
+  onShowMoreProjectThreads,
   onOpenProjectNewChat,
+  onOpenAutomations,
+  onOpenCustomize,
   renderSidebarThreadRow,
 }: {
   sidebarSearchQuery: string;
   sidebarSearchMatches: SidebarSearchMatch[];
   allProjectThreadsCollapsed: boolean;
   activeMenuKind?: 'global' | 'create' | 'project';
-  activeProjectMenuId?: string;
   projectThreadLimit: number;
+  projectThreadVisibleCounts?: Record<string, number>;
   sidebarProjectThreadGroups: SidebarProjectThreadGroup[];
   cursorProjectGroups?: SidebarCursorAgentProjectGroup[];
-  expandedProjectThreads: Set<string>;
+  visibleSections?: SidebarVisibleSections;
   onSearchQueryChange: (value: string) => void;
   onSearchSubmit: (event: FormEvent) => void;
   onOpenSearchMatch: (match: SidebarSearchMatch) => void;
@@ -56,8 +68,10 @@ export function SidebarProjectChatSection({
   ) => void;
   onToggleAllProjectThreadsCollapsed: () => void;
   onActivateProject: (project: SidebarProjectThreadGroup, thread?: SidebarThreadItem) => void;
-  onToggleProjectThreadExpansion: (projectId: string) => void;
+  onShowMoreProjectThreads: (projectId: string) => void;
   onOpenProjectNewChat: (project: SidebarProjectThreadGroup, event: ReactMouseEvent) => void;
+  onOpenAutomations: () => void;
+  onOpenCustomize: () => void;
   renderSidebarThreadRow: (item: SidebarThreadItem, project: SidebarProjectThreadGroup) => ReactNode;
 }) {
   const { t } = useI18n();
@@ -66,13 +80,14 @@ export function SidebarProjectChatSection({
   const searchLabel = t({ 'zh-CN': '搜索聊天、项目、页面', 'en-US': 'Search chats, projects, pages' });
   const expandAllChatsLabel = t({ 'zh-CN': '展开所有聊天', 'en-US': 'Expand all chats' });
   const collapseAllChatsLabel = t({ 'zh-CN': '折叠所有聊天', 'en-US': 'Collapse all chats' });
-  const projectActionsLabel = t({ 'zh-CN': '项目操作', 'en-US': 'Project actions' });
+  const customizeLabel = t({ 'zh-CN': '自定义', 'en-US': 'Customize' });
+  const automationsLabel = t({ 'zh-CN': '自动化', 'en-US': 'Automations' });
   return (
     <>
       <section className="sidebar-section sidebar-section-actions" aria-label={t({ 'zh-CN': '主操作', 'en-US': 'Primary actions' })}>
         <button
           type="button"
-          className="sidebar-command primary sidebar-new-agent-command"
+          className="sidebar-command sidebar-top-command sidebar-new-agent-command"
           onClick={(event) => {
             if (primaryProject) onOpenProjectNewChat(primaryProject, event);
           }}
@@ -87,6 +102,26 @@ export function SidebarProjectChatSection({
           <Edit3 size={15} aria-hidden />
           <span>{newAgentLabel}</span>
           <small>⌘N</small>
+        </button>
+        <button
+          type="button"
+          className="sidebar-command sidebar-top-command"
+          onClick={onOpenAutomations}
+          title={automationsLabel}
+          aria-label={automationsLabel}
+        >
+          <CalendarClock size={15} aria-hidden />
+          <span>{automationsLabel}</span>
+        </button>
+        <button
+          type="button"
+          className="sidebar-command sidebar-top-command"
+          onClick={onOpenCustomize}
+          title={customizeLabel}
+          aria-label={customizeLabel}
+        >
+          <SlidersHorizontal size={15} aria-hidden />
+          <span>{customizeLabel}</span>
         </button>
         <form className="sidebar-search" onSubmit={onSearchSubmit}>
           <Search size={15} />
@@ -133,7 +168,7 @@ export function SidebarProjectChatSection({
               aria-label={allProjectThreadsCollapsed ? expandAllChatsLabel : collapseAllChatsLabel}
               aria-pressed={allProjectThreadsCollapsed}
             >
-              {allProjectThreadsCollapsed ? <ChevronsDown size={14} /> : <ChevronsUp size={14} />}
+              {allProjectThreadsCollapsed ? <ChevronsDown size={14} /> : <ListFilter size={14} />}
             </button>
             <button
               type="button"
@@ -162,13 +197,15 @@ export function SidebarProjectChatSection({
             <div className="sidebar-project-chat-list">
               {sidebarProjectThreadGroups.map((project, index) => {
                 const cursorProject = cursorProjectGroups?.[index];
-                const expanded = expandedProjectThreads.has(project.id);
                 const projectThreads = sidebarRenderableThreadItems(project);
+                const visibleCount = Math.min(
+                  projectThreads.length,
+                  Math.max(projectThreadLimit, projectThreadVisibleCounts[project.id] ?? projectThreadLimit),
+                );
+                const projectStatusTitle = cursorProject ? projectStatusSummary(cursorProject.status) : project.detail;
                 const visibleThreads = allProjectThreadsCollapsed
                   ? []
-                  : expanded
-                    ? projectThreads
-                    : projectThreads.slice(0, projectThreadLimit);
+                  : projectThreads.slice(0, visibleCount);
                 const hiddenThreadCount = Math.max(0, projectThreads.length - visibleThreads.length);
                 return (
                   <div
@@ -179,6 +216,7 @@ export function SidebarProjectChatSection({
                   >
                     <div
                       className={cx('sidebar-project-chat-head', project.current && 'current')}
+                      title={projectStatusTitle}
                       onContextMenu={(event) => {
                         event.preventDefault();
                         event.stopPropagation();
@@ -191,26 +229,13 @@ export function SidebarProjectChatSection({
                         onClick={() => {
                           if (!project.current) {
                             onActivateProject(project);
-                            return;
                           }
-                          if (projectThreads.length) onToggleProjectThreadExpansion(project.id);
                         }}
                       >
                         <Folder size={15} aria-hidden />
                         <span>{project.label}</span>
-                        {project.current ? <Badge variant="muted">{t({ 'zh-CN': '当前', 'en-US': 'Current' })}</Badge> : null}
                       </button>
                       <div className="sidebar-project-row-actions">
-                        <button
-                          type="button"
-                          className={cx('sidebar-project-icon-btn', activeMenuKind === 'project' && activeProjectMenuId === project.id && 'active')}
-                          onClick={(event) => onToggleProjectMenu({ kind: 'project', projectId: project.id }, event, project)}
-                          title={projectActionsLabel}
-                          aria-label={t({ 'zh-CN': `${project.label} 项目操作`, 'en-US': `${project.label} project actions` })}
-                          aria-haspopup="menu"
-                        >
-                          <MoreHorizontal size={14} />
-                        </button>
                         <button
                           type="button"
                           className="sidebar-project-icon-btn"
@@ -222,8 +247,8 @@ export function SidebarProjectChatSection({
                         </button>
                       </div>
                     </div>
-                    {cursorProject ? (
-                      <ProjectStatusRow status={cursorProject.status} />
+                    {cursorProject && visibleSections.status ? (
+                      <ProjectStatusRow status={cursorProject.status} visibleSections={visibleSections} />
                     ) : null}
                     {visibleThreads.length ? (
                       <div className="sidebar-thread-list">
@@ -232,20 +257,10 @@ export function SidebarProjectChatSection({
                           <button
                             type="button"
                             className="sidebar-thread-more"
-                            onClick={() => onToggleProjectThreadExpansion(project.id)}
+                            onClick={() => onShowMoreProjectThreads(project.id)}
+                            aria-label={t({ 'zh-CN': `查看更多 ${project.label} 聊天`, 'en-US': `See more chats in ${project.label}` })}
                           >
-                            <PanelTopOpen size={14} aria-hidden />
-                            <span>{t({ 'zh-CN': '显示更多', 'en-US': 'Show more' })}</span>
-                            <small>{hiddenThreadCount}</small>
-                          </button>
-                        ) : expanded && projectThreads.length > projectThreadLimit ? (
-                          <button
-                            type="button"
-                            className="sidebar-thread-more"
-                            onClick={() => onToggleProjectThreadExpansion(project.id)}
-                          >
-                            <ChevronDown size={14} aria-hidden />
-                            <span>{t({ 'zh-CN': '收起', 'en-US': 'Show less' })}</span>
+                            <span>{t({ 'zh-CN': '查看更多', 'en-US': 'See more' })}</span>
                           </button>
                         ) : null}
                       </div>
@@ -265,15 +280,25 @@ export function SidebarProjectChatSection({
   );
 }
 
-function ProjectStatusRow({ status }: { status: SidebarCursorAgentProjectGroup['status'] }) {
+function ProjectStatusRow({ status, visibleSections }: { status: SidebarCursorAgentProjectGroup['status']; visibleSections: SidebarVisibleSections }) {
   const { t } = useI18n();
+  const showBranch = visibleSections.git;
+  const showEnvironment = visibleSections.environment;
+  const showContext = visibleSections.metadata;
+  if (!showBranch && !showEnvironment && !showContext) return null;
   return (
-    <div className="sidebar-project-status-row" aria-label={t({ 'zh-CN': '项目状态', 'en-US': 'Project status' })}>
-      <ProjectStatusPill icon="branch" status={status.branch} />
-      <ProjectStatusPill icon="environment" status={status.localEnvironment} />
-      <ProjectStatusPill icon="context" status={status.context} />
+    <div className="sidebar-project-status-row" aria-label={`${t({ 'zh-CN': '项目状态', 'en-US': 'Project status' })}: ${projectStatusSummary(status)}`}>
+      {showBranch ? <ProjectStatusPill icon="branch" status={status.branch} /> : null}
+      {showEnvironment ? <ProjectStatusPill icon="environment" status={status.localEnvironment} /> : null}
+      {showContext ? <ProjectStatusPill icon="context" status={status.context} /> : null}
     </div>
   );
+}
+
+function projectStatusSummary(status: SidebarCursorAgentProjectGroup['status']) {
+  return [status.branch, status.localEnvironment, status.context]
+    .map((item) => `${item.label}: ${item.detail}`)
+    .join(' · ');
 }
 
 function ProjectStatusPill({

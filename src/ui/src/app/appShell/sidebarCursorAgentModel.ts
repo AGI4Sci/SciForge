@@ -13,6 +13,7 @@ export type SidebarCursorAgentActionIntent =
   | 'open-workspace'
   | 'new-chat'
   | 'search'
+  | 'archive-project'
   | 'archive-thread'
   | 'discard-thread'
   | 'restore-thread'
@@ -354,6 +355,7 @@ function buildProjectGroupProjection(args: {
     actions: [
       buildNewChatAction(resourceRef),
       buildSearchAction(resourceRef, args.presentation?.searchQuery),
+      buildArchiveProjectAction(resourceRef),
       ...(!args.project.current ? [buildRemoveProjectAction(resourceRef)] : []),
     ],
     presentationActions: [
@@ -433,7 +435,7 @@ function buildThreadTitle(thread: SidebarCursorAgentThreadInput, state: SidebarC
   if (promptTitle) return promptTitle;
   if (state === 'draft') return 'New chat';
   if (state === 'archived') return 'Archived chat';
-  if (state === 'discarded') return 'Discarded chat';
+  if (state === 'discarded') return 'Deleted chat';
   return 'Untitled chat';
 }
 
@@ -442,7 +444,7 @@ function buildThreadDetail(thread: SidebarCursorAgentThreadInput, state: Sidebar
   if (detail) return detail;
   if (state === 'draft') return 'Draft ready';
   if (state === 'archived') return 'Archived';
-  if (state === 'discarded') return 'Discarded';
+  if (state === 'discarded') return 'Deleted';
 
   const latest = [...semanticMessages(thread)].reverse()[0];
   const snippet = safeVisibleLine(latest?.content, '', 72);
@@ -465,7 +467,7 @@ function threadBadges(state: SidebarCursorAgentThreadState, pinned: boolean): st
   if (pinned) badges.push('Pinned');
   if (state === 'draft') badges.push('Draft');
   if (state === 'archived') badges.push('Archived');
-  if (state === 'discarded') badges.push('Discarded');
+  if (state === 'discarded') badges.push('Deleted');
   return badges;
 }
 
@@ -496,6 +498,17 @@ function buildThreadCommandActions(
     mutates: true,
     commandText: commandText('chat', pinned ? 'unpin' : 'pin', ['--project-ref', projectRef, '--thread-ref', threadRef]),
   }));
+  if (state === 'draft') {
+    actions.push(commandAction({
+      intent: 'discard-thread',
+      label: 'Discard draft',
+      scope: 'thread',
+      targetRef: threadRef,
+      mutates: true,
+      commandText: commandText('chat', 'discard', ['--project-ref', projectRef, '--thread-ref', threadRef]),
+    }));
+    return actions;
+  }
   actions.push(commandAction({
     intent: 'archive-thread',
     label: 'Archive chat',
@@ -503,14 +516,6 @@ function buildThreadCommandActions(
     targetRef: threadRef,
     mutates: true,
     commandText: commandText('chat', 'archive', ['--project-ref', projectRef, '--thread-ref', threadRef]),
-  }));
-  actions.push(commandAction({
-    intent: 'discard-thread',
-    label: 'Discard chat',
-    scope: 'thread',
-    targetRef: threadRef,
-    mutates: true,
-    commandText: commandText('chat', 'discard', ['--project-ref', projectRef, '--thread-ref', threadRef]),
   }));
   return actions;
 }
@@ -545,6 +550,17 @@ function buildNewChatAction(projectRef: string): SidebarCursorAgentAction {
     targetRef: projectRef,
     mutates: true,
     commandText: commandText('chat', 'new', ['--project-ref', projectRef]),
+  });
+}
+
+function buildArchiveProjectAction(projectRef: string): SidebarCursorAgentAction {
+  return commandAction({
+    intent: 'archive-project',
+    label: 'Archive All',
+    scope: 'project',
+    targetRef: projectRef,
+    mutates: true,
+    commandText: commandText('chat', 'archive-all', ['--project-ref', projectRef]),
   });
 }
 

@@ -1,0 +1,51 @@
+{
+  "schemaVersion": "sciforge.agent-desktop-alignment-evidence.v1",
+  "roundId": "round-17-sidebar-cursor-theme",
+  "recordedAt": "2026-05-31",
+  "surface": "left-sidebar",
+  "cursorAgentBaseline": {
+    "source": "Computer Use read-only observation of the local Cursor Agents window",
+    "observedStructure": [
+      "single-column agent sidebar",
+      "top commands: New Agent, Automations, Customize",
+      "Repositories section with project groups and inline New Agent affordance",
+      "compact thread rows with status marker, title, age/state, pin/archive/discard affordances",
+      "See more expansion for long thread lists",
+      "bottom Settings/account affordances"
+    ],
+    "redaction": "No provider secrets, raw prompts, filesystem absolute paths, or private message bodies were copied into this evidence."
+  },
+  "sciforgeVerification": {
+    "source": "Codex in-app Browser at http://localhost:5173/",
+    "themeCoverage": [
+      {
+        "theme": "dark",
+        "screenshotRef": "docs/agent-desktop-alignment-evidence/live-2026-05-31/round-17-sidebar-dark.jpg",
+        "result": "Sidebar uses Cursor-like single-column layout with SciForge dark semantic tokens; activity bar, Navigation header, Tools block, and branch/environment/context pill rows are visually removed while their protocol projection remains available."
+      },
+      {
+        "theme": "light",
+        "screenshotRef": "docs/agent-desktop-alignment-evidence/live-2026-05-31/round-17-sidebar-light.jpg",
+        "result": "Sidebar uses the same layout with SciForge light semantic tokens; selected project, hover rows, border, search, and menu surfaces remain legible."
+      }
+    ],
+    "interactionCoverage": [
+      "Search for p2 returned the project match without exposing local paths.",
+      "Show more expanded the visible thread list.",
+      "Customize opened the global sidebar menu with layout, sort, archive, and reference actions.",
+      "New Agent and Automations top commands remained enabled.",
+      "Current project highlight remained visible without a separate Current badge."
+    ],
+    "openDifferences": []
+  },
+  "implementationRefs": [
+    "src/ui/src/app/appShell/SidebarProjectChatSection.tsx",
+    "src/ui/src/app/appShell/ShellPanels.tsx",
+    "src/ui/src/styles/app-01.css",
+    "src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx"
+  ],
+  "verification": [
+    "node --import tsx --test src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/themeTokens.test.ts",
+    "npm run typecheck --silent"
+  ]
+}

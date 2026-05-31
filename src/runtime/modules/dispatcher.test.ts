@@ -23,6 +23,32 @@ test('runtime module registry describes all Agent Host boundary modules', async 
   assert.ok(modules.find((description) => description.moduleId === 'capabilities')?.intents?.some((intent) => intent.name === 'plan'));
 });
 
+test('actions module describe declares Computer Use L1/L0 boundary metadata', async () => {
+  const dispatcher = createRuntimeModuleDispatcher();
+
+  const result = await dispatcher.describe({ moduleId: 'actions' });
+
+  assert.equal(result.ok, true);
+  const description = result.value as ModuleDescription;
+  assert.equal(description.moduleId, 'actions');
+  assert.equal(description.functions.invoke, true);
+  assert.match(description.summary, /Computer Use.*L1 resource\/session adapter/i);
+  assert.match(description.summary, /observe, capture, ground, propose_scoped_action, execute_scoped_action, verify, write_trace, emit_event/i);
+  assert.ok(description.resources?.some((resource) => resource.kind === 'computer-use-session' && resource.refPrefix === 'computer-use:session:'));
+  assert.ok(description.resources?.some((resource) => resource.kind === 'computer-use-evidence' && resource.refPrefix === 'computer-use:evidence:'));
+  assert.ok(description.resources?.some((resource) => resource.kind === 'computer-use-replay' && resource.refPrefix === 'computer-use:replay:'));
+  const execute = description.intents?.find((intent) => intent.name === 'execute');
+  assert.equal(execute?.sideEffect, 'workspace');
+  assert.equal(execute?.requiresApproval, true);
+  assert.equal(execute?.returnsOperation, true);
+  assert.match(execute?.summary ?? '', /scoped lease\/provenance\/approval/i);
+  assert.equal(description.facets?.refs, true);
+  assert.equal(description.facets?.approval, true);
+  assert.equal(description.facets?.events, true);
+  assert.equal(description.limits?.maxInlineBytes, 16_000);
+  assert.equal(description.limits?.expectedLatencyMs, 500);
+});
+
 test('runtime module dispatcher routes read by ref prefix and fails closed', async () => {
   const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
     gui: createGuiModuleHandler(createGuiProtocolController({ revision: 8 })),
@@ -56,6 +82,29 @@ test('runtime module dispatcher returns approval request before approved side ef
   assert.match(result.error ?? '', /approval_required:write/);
   assert.equal(result.approvalRequest?.moduleId, 'memory');
   assert.equal(result.approvalRequest?.intent, 'write');
+});
+
+test('actions module invoke fail-closes undeclared Computer Use intents', async () => {
+  const dispatcher = createRuntimeModuleDispatcher();
+
+  const undeclared = await dispatcher.invoke({
+    moduleId: 'actions',
+    intent: 'execute_scoped_action',
+    input: { actionKind: 'click' },
+  });
+  assert.equal(undeclared.ok, false);
+  assert.match(undeclared.error ?? '', /unsupported_intent:execute_scoped_action/);
+
+  const execute = await dispatcher.invoke({
+    moduleId: 'actions',
+    intent: 'execute',
+    input: { capability: 'computer-use', handlerIntent: 'execute_scoped_action' },
+  });
+  assert.equal(execute.ok, false);
+  assert.match(execute.error ?? '', /approval_required:execute/);
+  assert.equal(execute.approvalRequest?.moduleId, 'actions');
+  assert.equal(execute.approvalRequest?.intent, 'execute');
+  assert.equal(execute.approvalRequest?.sideEffect, 'workspace');
 });
 
 test('runtime module dispatcher records scrubbed trace summaries and timing', async () => {

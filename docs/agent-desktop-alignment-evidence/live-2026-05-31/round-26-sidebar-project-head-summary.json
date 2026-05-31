@@ -1,0 +1,34 @@
+{
+  "round": 26,
+  "date": "2026-05-31",
+  "scope": "repositories-only project header parity",
+  "cursorAgentObservations": [
+    "Cursor Repositories project headers are exposed as sortable repo rows with a New Agent action.",
+    "The visible project header does not expose a separate ellipsis-style Project actions button.",
+    "Project thread rows continue to expose their row-specific actions separately: active rows use Pin and Archive; draft rows use Pin and Discard."
+  ],
+  "sciforgeChanges": [
+    "Removed the visible per-project ellipsis action button from repository project headers.",
+    "Kept the project New Agent action in the project header.",
+    "Kept project management actions available through the project header context menu instead of a visible header ellipsis."
+  ],
+  "sciforgeLiveVerification": [
+    "Reloaded the current in-app Browser SciForge page at http://localhost:5173/.",
+    "Verified p1 and p2 project headers expose only the project main button and New Agent action; no project actions button is present.",
+    "Right-clicked the p1 project header and verified the context menu still exposes Open in Finder, Archive chats, and Remove from Sidebar.",
+    "Verified the current draft row still exposes only Pin chat and Discard draft."
+  ],
+  "supersededBy": {
+    "round": 29,
+    "note": "Round 29 replaces the project-header context menu with Cursor's current Mark All as Read, Archive All, and Remove from Sidebar menu. The Round 26 context-menu label observation is historical, not current behavior."
+  },
+  "verification": [
+    "node --import tsx --test src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts src/ui/src/app/ResultsRenderer.test.ts passed with 100 tests.",
+    "git diff --check passed.",
+    "npm run typecheck --silent remains blocked by existing Computer Use/CU-next task-map type errors outside the Repositories sidebar files."
+  ],
+  "openNotes": [
+    "Automations, top Customize, and search remain intentionally unchanged per the narrowed user scope.",
+    "The current user's live workspace has only a draft row, so destructive archive/delete remains covered by existing isolated and model tests rather than live user-state clicks in this round."
+  ]
+}

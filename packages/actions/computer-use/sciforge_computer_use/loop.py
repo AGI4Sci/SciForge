@@ -27,6 +27,7 @@ from .contracts import (
     ComputerUseHostPorts,
 )
 from .budget import create_loop_budget_debit
+from .confirmation_policy import classify_action_plan_for_confirmation
 from .evidence_ledger import EvidenceLedger, action_mutates_visible_state, build_evidence_index
 from .safety import assess_action_risk
 from .verifier import normalize_verifier_metadata
@@ -1668,6 +1669,13 @@ def _approval_request(
     target = plan.target.description if plan.target else plan.app_name or plan.kind or "unknown-action"
     digest = hashlib.sha256(f"{request.task}\n{action_index}\n{target}".encode("utf8")).hexdigest()[:16]
     approval_id = f"approval:computer-use:{digest}"
+    confirmation = classify_action_plan_for_confirmation(plan)
+    confirmation_metadata = confirmation.as_metadata() if confirmation else {
+        "confirmationMode": "needs-confirmation",
+        "confirmationTiming": "action-time",
+        "requiresConfirmation": True,
+        "handoffRequired": False,
+    }
     return ApprovalRequest(
         id=approval_id,
         reason=reason,
@@ -1684,5 +1692,6 @@ def _approval_request(
             "riskPolicy": request.risk_policy,
             "approvalRef": request.approval_ref,
             "target": target,
+            **confirmation_metadata,
         },
     )

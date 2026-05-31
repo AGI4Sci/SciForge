@@ -1,0 +1,31 @@
+{
+  "round": 28,
+  "date": "2026-05-31",
+  "scope": "repositories-only peer project history loading parity",
+  "cursorAgentObservations": [
+    "Cursor Repositories shows multiple repository groups at once, and non-current repositories can still show their own historical chats before the user switches into them.",
+    "Each visible repository keeps its own New Agent action and row actions: completed rows expose Pin and Archive, draft rows expose Pin and Discard."
+  ],
+  "sciforgeIssueFound": [
+    "SciForge peer project snapshot discovery used the active workspace writer URL for every peer project, ignoring peer.workspaceWriterUrl.",
+    "That made non-current repository history depend on the active writer being able to serve every peer path, while peer archive/delete/restore actions already used the peer writer URL."
+  ],
+  "sciforgeChanges": [
+    "Changed peer sidebar session targets to use peer.workspaceWriterUrl when present, falling back to the shared workspace writer only when the peer writer is blank.",
+    "Added focused tests covering both peer writer selection and shared-writer fallback."
+  ],
+  "sciforgeLiveVerification": [
+    "Inspected the current in-app Browser SciForge Repositories DOM at http://localhost:5173/ after the change.",
+    "Verified the current p1 project still renders its draft row with Pin chat and Discard draft only.",
+    "Verified the non-current p2 project remains stable in the list without project-header Current text or project ellipsis."
+  ],
+  "verification": [
+    "node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/app/appShell/sidebarProjectModel.test.ts src/ui/src/app/appShell/sidebarProjectSessions.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts passed with 112 tests.",
+    "npm run typecheck --silent passed.",
+    "git diff --check passed."
+  ],
+  "openNotes": [
+    "Automations, top Customize, and search remain intentionally unchanged per the narrowed user scope.",
+    "The current live Browser workspace still has no p2 rows to display; the peer-writer behavior is covered by project-session unit tests and Cursor desktop observation rather than mutating the user's live workspace."
+  ]
+}

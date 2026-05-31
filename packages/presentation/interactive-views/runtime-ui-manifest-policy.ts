@@ -62,6 +62,23 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
   'knowledge-graph': 'graph-viewer',
   'data-table': 'record-table',
   'runtime-context-summary': 'report-viewer',
+  'browser-runtime-projection': 'browser-workbench',
+  'browser-session': 'browser-workbench',
+  'browser-snapshot': 'browser-workbench',
+  'computer-use-control-plane': 'computer-use-control-plane',
+  'computer-use-user-control-plane': 'computer-use-control-plane',
+  'computer-use-session-control': 'computer-use-control-plane',
+  'computer-use-replay-control': 'computer-use-control-plane',
+  'computer-use-virtual-screen': 'virtual-screen-viewer',
+  'virtual-desktop-session': 'virtual-screen-viewer',
+  'computer-use-screen': 'virtual-screen-viewer',
+  'computer-use-replay': 'virtual-screen-viewer',
+  'terminal-session': 'terminal-session-viewer',
+  'terminal-buffer': 'terminal-session-viewer',
+  'runtime-terminal-session': 'terminal-session-viewer',
+  'workspace-file-view': 'workspace-file-viewer',
+  'workspace-file': 'workspace-file-viewer',
+  'workspace-tree': 'workspace-file-viewer',
 };
 
 const PREVIEW_KIND_COMPONENTS: Partial<Record<PreviewDescriptorKind, string>> = {
@@ -80,6 +97,11 @@ const PRESENTATION_ONLY_COMPONENTS = new Set(['evidence-matrix', 'execution-unit
 const AUDIT_COMPONENTS = new Set([...PRESENTATION_ONLY_COMPONENTS, 'unknown-artifact-inspector']);
 const TABULAR_COMPONENTS = new Set(['record-table', 'data-table']);
 const PRIMARY_RESULT_COMPONENTS = new Set([
+  'browser-workbench',
+  'virtual-screen-viewer',
+  'computer-use-control-plane',
+  'terminal-session-viewer',
+  'workspace-file-viewer',
   'report-viewer',
   'structure-viewer',
   'molecule-viewer',
@@ -92,6 +114,11 @@ const PRIMARY_RESULT_COMPONENTS = new Set([
   'network-graph',
 ]);
 const DEFAULT_RESULT_COMPONENT_ORDER = [
+  'browser-workbench',
+  'virtual-screen-viewer',
+  'computer-use-control-plane',
+  'terminal-session-viewer',
+  'workspace-file-viewer',
   'report-viewer',
   'structure-viewer',
   'molecule-viewer',
@@ -124,7 +151,10 @@ export function composeRuntimeUiManifestSlots(
   request: RuntimeUiManifestPolicyRequest,
 ): Array<Record<string, unknown>> {
   const overrideComponents = normalizeComponentIds(request.scenarioDefaultComponents ?? []).filter((id) => REGISTERED_COMPONENTS.has(id));
-  const selectedComponents = normalizeComponentIds(request.selectedComponentIds ?? []).filter((id) => REGISTERED_COMPONENTS.has(id));
+  const selectedComponents = normalizeComponentIds([
+    ...(request.selectedComponentIds ?? []),
+    ...promptSelectedComponentIds(request.prompt),
+  ]).filter((id) => REGISTERED_COMPONENTS.has(id));
   const incomingComponents = incoming
     .map((slot) => typeof slot.componentId === 'string' ? normalizeUIComponentId(slot.componentId) : undefined)
     .filter((id): id is string => typeof id === 'string' && REGISTERED_COMPONENTS.has(id));
@@ -138,6 +168,7 @@ export function composeRuntimeUiManifestSlots(
   const sourceByComponent = new Map(incoming.map((slot) => [normalizeUIComponentId(String(slot.componentId || '')), slot]));
   return componentIds.map((componentId, index) => {
     const base = sourceByComponent.get(componentId) ?? {};
+    const viewHints = promptViewHintsForComponent(componentId, request.prompt);
     return {
       ...base,
       componentId,
@@ -146,8 +177,8 @@ export function composeRuntimeUiManifestSlots(
         ? base.artifactRef
         : inferArtifactRef(componentId, artifacts),
       priority: typeof base.priority === 'number' ? base.priority : index + 1,
-      encoding: isRecord(base.encoding) ? base.encoding : undefined,
-      layout: isRecord(base.layout) ? base.layout : undefined,
+      encoding: isRecord(base.encoding) ? base.encoding : viewHints.encoding,
+      layout: isRecord(base.layout) ? base.layout : viewHints.layout,
     };
   });
 }
@@ -209,9 +240,80 @@ function artifactTypeMatchesCurrentTurnIntent(artifactType: string, prompt: stri
   return true;
 }
 
-export function selectedViewComponentsForIntent(_prompt: string, configuredComponentIds: string[] = []) {
+export function selectedViewComponentsForIntent(prompt: string, configuredComponentIds: string[] = []) {
   const configured = normalizeComponentIds(configuredComponentIds);
-  return uniqueStrings(configured);
+  return uniqueStrings([
+    ...configured,
+    ...promptSelectedComponentIds(prompt),
+  ]);
+}
+
+function promptSelectedComponentIds(prompt: string) {
+  const text = prompt.trim();
+  if (!text) return [];
+  const selected: string[] = [];
+  if (/\b(?:data\s*table|table|record\s*table)\b|数据表|表格视图/i.test(text)) selected.push('record-table');
+  if (/\b(?:evidence\s*matrix)\b|证据矩阵/i.test(text)) selected.push('evidence-matrix');
+  if (/\b(?:execution\s*unit|execution\s*units|activity|provenance)\b|执行单元|活动记录|过程记录/i.test(text)) selected.push('execution-unit-table');
+  if (/\b(?:browser\s*workbench|browser\s*runtime|built[-\s]?in\s*browser)\b|内置浏览器|浏览器工作台/i.test(text)) selected.push('browser-workbench');
+  if (/\b(?:terminal\s*session|terminal\s*viewer|pty)\b|终端查看器|终端会话/i.test(text)) selected.push('terminal-session-viewer');
+  if (/\b(?:workspace\s*file\s*viewer|file\s*viewer|file\s*tree)\b|文件查看器|文件树/i.test(text)) selected.push('workspace-file-viewer');
+  if (!/(?:不需要|不要|排除|without|no)\s*(?:网络图|network\s*graph|graph)/i.test(text)
+    && /\b(?:network\s*graph|graph\s*viewer)\b|网络图/i.test(text)) {
+    selected.push('graph-viewer');
+  }
+  return selected;
+}
+
+function promptViewHintsForComponent(componentId: string, prompt: string): { encoding?: Record<string, unknown>; layout?: Record<string, unknown> } {
+  if (!componentAcceptsPromptViewHints(componentId)) return {};
+  const encoding: Record<string, unknown> = {};
+  const colorBy = firstMatch(prompt, [
+    /\bcolor(?:ed)?\s+by\s+([A-Za-z0-9_.-]+)/i,
+    /按\s*([A-Za-z0-9_.-]+)\s*着色/i,
+  ]);
+  const splitBy = firstMatch(prompt, [
+    /\bsplit\s+by\s+([A-Za-z0-9_.-]+)/i,
+    /\bgroup(?:ed)?\s+by\s+([A-Za-z0-9_.-]+)/i,
+    /按\s*([A-Za-z0-9_.-]+)\s*(?:分组|拆分|分面)/i,
+  ]);
+  if (colorBy) encoding.colorBy = colorBy;
+  if (splitBy) encoding.splitBy = splitBy;
+
+  const layout: Record<string, unknown> = {};
+  if (/\bside[-\s]?by[-\s]?side\b|\bsplit\s+view\b|并排|对照/i.test(prompt)) {
+    layout.mode = 'side-by-side';
+    layout.columns = 2;
+  }
+
+  return {
+    encoding: Object.keys(encoding).length ? encoding : undefined,
+    layout: Object.keys(layout).length ? layout : undefined,
+  };
+}
+
+function componentAcceptsPromptViewHints(componentId: string) {
+  return new Set([
+    'point-set-viewer',
+    'matrix-viewer',
+    'heatmap-viewer',
+    'umap-viewer',
+    'volcano-plot',
+    'scientific-plot-viewer',
+    'graph-viewer',
+    'network-graph',
+    'paper-card-list',
+    'record-table',
+    'data-table',
+  ]).has(componentId);
+}
+
+function firstMatch(text: string, patterns: RegExp[]) {
+  for (const pattern of patterns) {
+    const match = pattern.exec(text);
+    if (match?.[1]) return match[1].trim();
+  }
+  return undefined;
 }
 
 export type MinimalInteractiveToolPayloadExampleRequest = {
@@ -376,6 +478,11 @@ function componentTargetType(componentId: string, artifacts: Array<Record<string
   if (componentId === 'comparison-viewer') return 'artifact-diff';
   if (componentId === 'publication-figure-builder') return 'figure-spec';
   if (componentId === 'statistical-annotation-layer') return 'statistical-result';
+  if (componentId === 'browser-workbench') return 'browser-runtime-projection';
+  if (componentId === 'virtual-screen-viewer') return 'computer-use-virtual-screen';
+  if (componentId === 'computer-use-control-plane') return 'computer-use-control-plane';
+  if (componentId === 'terminal-session-viewer') return 'terminal-session';
+  if (componentId === 'workspace-file-viewer') return 'workspace-file-view';
   if (componentId === 'point-set-viewer' || componentId === 'matrix-viewer') return 'omics-differential-expression';
   if (componentId === 'graph-viewer') return 'knowledge-graph';
   if (componentId === 'record-table') {
@@ -396,6 +503,8 @@ function refForArtifact(artifact?: Record<string, unknown>) {
 function titleForComponent(componentId: string) {
   const titles: Record<string, string> = {
     'paper-card-list': '文献卡片',
+    'computer-use-control-plane': 'Computer Use 控制面',
+    'virtual-screen-viewer': 'Computer Use 虚拟屏幕',
     'molecule-viewer': '分子结构查看器',
     'structure-viewer': '结构查看器',
     'scientific-plot-viewer': '科学绘图',
@@ -425,6 +534,9 @@ function titleForComponent(componentId: string) {
     'evidence-matrix': '证据矩阵',
     'execution-unit-table': '可复现执行单元',
     'notebook-timeline': '研究记录',
+    'browser-workbench': '浏览器工作台',
+    'terminal-session-viewer': '终端',
+    'workspace-file-viewer': '文件查看器',
     'unknown-artifact-inspector': 'Artifact Inspector',
   };
   return titles[componentId] ?? componentId;

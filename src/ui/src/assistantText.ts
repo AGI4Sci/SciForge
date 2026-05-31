@@ -37,7 +37,7 @@ export function normalizeAssistantProseForDisplay(content: string): string {
     }
     if (isStandaloneMarkdownBlockLine(line)) {
       flushParagraph();
-      output.push(repairSplitLatinIdentifiers(line));
+      output.push(...repairStandaloneMarkdownBlockLine(line));
       continue;
     }
     if (/^\*\*/.test(trimmed) && paragraph.length && /[.!?。！？]$/.test(paragraph.at(-1) ?? '')) {
@@ -48,7 +48,33 @@ export function normalizeAssistantProseForDisplay(content: string): string {
   }
 
   flushParagraph();
-  return output.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return paragraphizeDenseAssistantText(output.join('\n').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n')).trim();
+}
+
+function repairStandaloneMarkdownBlockLine(line: string) {
+  return splitDenseInlineNumberedList(line)
+    .flatMap(splitDenseSectionCueLine)
+    .map(repairSplitLatinIdentifiers);
+}
+
+function splitDenseInlineNumberedList(line: string) {
+  const trimmed = line.trim();
+  if (!/^\s*(?:[-*+]|\d+[.)])\s+/.test(line)) return [line];
+  if (!/[，,；;]\s*(?:\d+[.)]|[一二三四五六七八九十]+[、.)])\s+/.test(line)) return [line];
+  const leading = line.match(/^\s*/)?.[0] ?? '';
+  return trimmed
+    .replace(/[，,；;]\s*((?:\d+[.)]|[一二三四五六七八九十]+[、.)])\s+)/g, '\n$1')
+    .split('\n')
+    .map((part, index) => index === 0 ? `${leading}${part}` : `${leading}${part.trim()}`)
+    .filter(Boolean);
+}
+
+function splitDenseSectionCueLine(line: string) {
+  const pattern = new RegExp(`([。！？.!?])\\s*(${DENSE_SECTION_CUES.join('|')})(?=\\s*[-:：A-Za-z0-9]|[\\u3400-\\u9fff])`, 'g');
+  if (!pattern.test(line)) return [line];
+  return line
+    .replace(pattern, '$1\n\n$2')
+    .split('\n');
 }
 
 function joinSoftWrappedProseLines(lines: string[]) {
@@ -75,10 +101,67 @@ function repairSplitLatinIdentifiers(text: string) {
     .replace(/([A-Za-z0-9_\]\)>-])([\u3400-\u9fff])/g, '$1 $2');
 }
 
+function paragraphizeDenseAssistantText(content: string) {
+  const lines = content.split('\n');
+  const output: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (/^```/.test(trimmed)) {
+      output.push(line);
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence || !trimmed || isStandaloneMarkdownBlockLine(line)) {
+      output.push(line);
+      continue;
+    }
+    output.push(...repairDenseProseLine(line));
+  }
+  return output.join('\n').replace(/\n{3,}/g, '\n\n');
+}
+
+function repairDenseProseLine(line: string) {
+  if (line.length < 120) return [line];
+  const repaired = line
+    .replace(/([，,。！？.!?])\s*((?:\d+[.)]|[一二三四五六七八九十]+[、.)])\s+)/g, '$1\n\n$2')
+    .replace(
+      new RegExp(`([。！？.!?])\\s*(${DENSE_SECTION_CUES.join('|')})(?=\\s*[-:：A-Za-z0-9]|[\\u3400-\\u9fff])`, 'g'),
+      '$1\n\n$2',
+    );
+  return repaired.split('\n');
+}
+
+const DENSE_SECTION_CUES = [
+  '核心理念',
+  '独特性',
+  '架构特性',
+  '典型用途',
+  '使用方式',
+  '设计原则',
+  '注意事项',
+  '下一步',
+  '总结',
+  '结论',
+  '答案',
+  '要点',
+  '验证',
+  '实现',
+  '风险',
+];
+
 const TECHNICAL_IDENTIFIER_REPAIRS: Array<[RegExp, string]> = [
   [/\bSci\s+Forge\b/g, 'SciForge'],
   [/\bSciFor\s+ge\b/g, 'SciForge'],
   [/\bC\s+ursor\b/g, 'Cursor'],
+  [/\bG\s+UI\b/g, 'GUI'],
+  [/\bT\s+UI\b/g, 'TUI'],
+  [/\bCode\s+x\b/g, 'Codex'],
+  [/\bCap\s+ability\b/g, 'Capability'],
+  [/\bcap\s+ability\b/g, 'capability'],
+  [/\bBro\s+ker\b/g, 'Broker'],
+  [/\bdis\s+covery\b/g, 'discovery'],
+  [/\bc\s+apability\b/g, 'capability'],
   [/\bsub\s*[‑-]\s*agent\b/gi, 'sub-agent'],
   [/\bRun\s+Execution\s*Process\b/g, 'RunExecutionProcess'],
   [/\bCursor\s+Agent\s+Process\b/g, 'CursorAgentProcess'],

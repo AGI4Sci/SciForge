@@ -1,4 +1,10 @@
 import type { UIComponentManifest, UIComponentRendererProps, UIComponentRuntimeArtifact } from './types';
+import { basicBrowserWorkbenchFixture } from './browser-workbench/fixtures/basic';
+import { emptyBrowserWorkbenchFixture } from './browser-workbench/fixtures/empty';
+import { selectionBrowserWorkbenchFixture } from './browser-workbench/fixtures/selection';
+import { basicComputerUseControlPlaneFixture } from './computer-use-control-plane/fixtures/basic';
+import { emptyComputerUseControlPlaneFixture } from './computer-use-control-plane/fixtures/empty';
+import { selectionComputerUseControlPlaneFixture } from './computer-use-control-plane/fixtures/selection';
 import { basicEvidenceMatrixFixture } from './evidence-matrix/fixtures/basic';
 import { emptyEvidenceMatrixFixture } from './evidence-matrix/fixtures/empty';
 import { selectionEvidenceMatrixFixture } from './evidence-matrix/fixtures/selection';
@@ -30,9 +36,15 @@ import { basicPlotlyScatterLineFixture } from './scientific-plot-viewer/fixtures
 import { basicStructureViewerFixture } from './structure-viewer/fixtures/basic';
 import { emptyStructureViewerFixture } from './structure-viewer/fixtures/empty';
 import { selectionStructureViewerFixture } from './structure-viewer/fixtures/selection';
+import { basicTerminalSessionViewerFixture } from './terminal-session-viewer/fixtures/basic';
+import { emptyTerminalSessionViewerFixture } from './terminal-session-viewer/fixtures/empty';
+import { selectionTerminalSessionViewerFixture } from './terminal-session-viewer/fixtures/selection';
 import { basicUnknownArtifactInspectorFixture } from './unknown-artifact-inspector/fixtures/basic';
 import { emptyUnknownArtifactInspectorFixture } from './unknown-artifact-inspector/fixtures/empty';
 import { selectionUnknownArtifactInspectorFixture } from './unknown-artifact-inspector/fixtures/selection';
+import { basicWorkspaceFileViewerFixture } from './workspace-file-viewer/fixtures/basic';
+import { emptyWorkspaceFileViewerFixture } from './workspace-file-viewer/fixtures/empty';
+import { selectionWorkspaceFileViewerFixture } from './workspace-file-viewer/fixtures/selection';
 
 export type WorkbenchDemoVariant = 'basic' | 'empty' | 'selection';
 
@@ -67,6 +79,16 @@ export function workbenchSafetySummary(safety: UIComponentManifest['safety'] | u
 }
 
 export const workbenchComponentFixtures: Record<string, Partial<Record<WorkbenchDemoVariant, UIComponentRendererProps>>> = {
+  'browser-workbench': {
+    basic: basicBrowserWorkbenchFixture,
+    empty: emptyBrowserWorkbenchFixture,
+    selection: selectionBrowserWorkbenchFixture,
+  },
+  'computer-use-control-plane': {
+    basic: basicComputerUseControlPlaneFixture,
+    empty: emptyComputerUseControlPlaneFixture,
+    selection: selectionComputerUseControlPlaneFixture,
+  },
   'data-table': {
     basic: basicRecordTableFixture,
     empty: emptyRecordTableFixture,
@@ -106,6 +128,11 @@ export const workbenchComponentFixtures: Record<string, Partial<Record<Workbench
     basic: basicStructureViewerFixture,
     empty: emptyStructureViewerFixture,
     selection: selectionStructureViewerFixture,
+  },
+  'terminal-session-viewer': {
+    basic: basicTerminalSessionViewerFixture,
+    empty: emptyTerminalSessionViewerFixture,
+    selection: selectionTerminalSessionViewerFixture,
   },
   'network-graph': {
     basic: basicGraphViewerFixture,
@@ -154,6 +181,11 @@ export const workbenchComponentFixtures: Record<string, Partial<Record<Workbench
     basic: basicPointSetViewerFixture,
     empty: emptyPointSetViewerFixture,
     selection: selectionPointSetViewerFixture,
+  },
+  'workspace-file-viewer': {
+    basic: basicWorkspaceFileViewerFixture,
+    empty: emptyWorkspaceFileViewerFixture,
+    selection: selectionWorkspaceFileViewerFixture,
   },
 };
 

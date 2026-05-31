@@ -447,3 +447,88 @@ def test_visible_viewer_validation_requires_placeholder_explanation_and_source()
     assert "placeholder_explanation_missing" in codes
     assert "placeholder_source_refs_missing" in codes
     assert "placeholder_source_context_missing" in codes
+
+
+def test_visible_viewer_writes_multi_screen_cursor_and_lease_refs(tmp_path):
+    screen_a = tmp_path / "screen-a.png"
+    screen_b = tmp_path / "screen-b.png"
+    cursor_log = tmp_path / "actor-cursors.jsonl"
+    screens_ref = tmp_path / "virtual-screens.json"
+    executor_ref = tmp_path / "executor-event.json"
+    screen_a.write_bytes(b"screen-a")
+    screen_b.write_bytes(b"screen-b")
+    cursor_log.write_text('{"actorId":"agent-a","cursorId":"cursor-a","screenId":"screen-a"}\n', encoding="utf8")
+    screens_ref.write_text('{"screens":[{"screenId":"screen-a"},{"screenId":"screen-b"}]}\n', encoding="utf8")
+    executor_ref.write_text('{"ok":true}\n', encoding="utf8")
+
+    viewer = build_visible_run_viewer(
+        output_dir=tmp_path,
+        result=minimal_visible_payload(
+            status="completed",
+            reason="Completed with current multi-screen evidence.",
+            screenshotRefs=[str(screen_a), str(screen_b)],
+            visibleScreenRefs=[str(screens_ref)],
+            visibleCursorRefs=[str(cursor_log)],
+            completionEvidenceRef=str(tmp_path / "completion-evidence.json"),
+            steps=[
+                {
+                    "index": 0,
+                    "status": "done",
+                    "beforeRef": str(screen_a),
+                    "afterRef": str(screen_b),
+                    "screenId": "screen-b",
+                    "windowId": "writer-window",
+                    "actorId": "agent-a",
+                    "cursorId": "cursor-a",
+                    "leaseOwner": {"actorId": "agent-a", "cursorId": "cursor-a"},
+                    "leaseScope": {"scopeType": "window", "screenId": "screen-b", "windowId": "writer-window"},
+                    "executorEventRef": str(executor_ref),
+                    "beforeEvidenceRefs": [str(screen_a)],
+                    "afterEvidenceRefs": [str(screen_b)],
+                    "action": {"kind": "click", "target": "Save"},
+                    "verification": {"reason": "Saved"},
+                }
+            ],
+        ),
+        title="Multi-screen visible run",
+    )
+
+    assert viewer["validation"]["ok"] is True
+    assert viewer["visibleScreenRefs"] == [str(screens_ref)]
+    assert viewer["visibleCursorRefs"] == [str(cursor_log)]
+    assert viewer["completionEvidenceEligible"] is True
+    assert viewer["completionEvidenceRef"] == str(tmp_path / "completion-evidence.json")
+    assert {frame["screenId"] for frame in viewer["frames"]} == {"screen-b"}
+    assert all(frame["cursorOverlayRefs"] == [str(cursor_log)] for frame in viewer["frames"])
+    assert viewer["actions"][0]["leaseOwner"] == {"actorId": "agent-a", "cursorId": "cursor-a"}
+    assert viewer["actions"][0]["leaseScope"]["windowId"] == "writer-window"
+    assert viewer["actions"][0]["executorEventRef"] == str(executor_ref)
+    assert "data:image" not in Path(viewer["viewerHtmlRef"]).read_text(encoding="utf8")
+
+
+def test_visible_viewer_placeholder_only_is_not_completion_evidence(tmp_path):
+    completion_ref = tmp_path / "completion-evidence.json"
+    viewer = build_visible_run_viewer(
+        output_dir=tmp_path,
+        result=minimal_visible_payload(
+            status="completed",
+            reason="Completed claim without real screenshots must remain diagnostic.",
+            completionEvidenceRef=str(completion_ref),
+        ),
+        title="Placeholder-only completion claim",
+    )
+
+    assert viewer["validation"]["ok"] is True
+    assert viewer["validation"]["frameCounts"] == {"screenshot": 0, "placeholder": 1}
+    assert viewer["completionEvidenceEligible"] is False
+    assert viewer["completionEvidenceRef"] is None
+    assert viewer["completionEvidenceBlockedReason"] == "placeholder-only-viewer"
+
+    invalid = dict(viewer)
+    invalid["completionEvidenceEligible"] = True
+    invalid["completionEvidenceRef"] = str(completion_ref)
+    validation = validate_visible_run_viewer_manifest(invalid)
+    codes = {error["code"] for error in validation["errors"]}
+    assert validation["ok"] is False
+    assert "placeholder_only_completion_evidence" in codes
+    assert "placeholder_only_completion_evidence_ref" in codes

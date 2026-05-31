@@ -1,0 +1,43 @@
+{
+  "schemaVersion": "sciforge.sidebar-parity-e2e.v1",
+  "capturedAt": "2026-05-31T07:24:19.256Z",
+  "appUrl": "http://127.0.0.1:5173/",
+  "checks": {
+    "automations": {
+      "opened": true,
+      "runHistoryToggled": true,
+      "newAutomationAdded": true
+    },
+    "customizeMarketplace": {
+      "opened": true,
+      "searchFiltered": true,
+      "installToggleWorked": true
+    },
+    "repositoryMenus": {
+      "customizeMenuOpened": true,
+      "createMenuOpened": true
+    },
+    "newAgentRetention": {
+      "draftVisible": true,
+      "previousChatStillVisible": true
+    },
+    "draftDelete": {
+      "draftDeleteClicked": true,
+      "remainingDraftRows": 0,
+      "previousChatStillVisible": true
+    },
+    "archiveRestore": {
+      "archiveHidActiveRow": true,
+      "searchFoundArchivedRow": true,
+      "searchResultRestoredRow": true
+    },
+    "deleteRestore": {
+      "deleteHidActiveRow": true,
+      "searchFoundDiscardedRow": true,
+      "searchResultRestoredRow": true
+    }
+  },
+  "finalSidebarRows": 1,
+  "localStorageWorkspacePresent": true,
+  "ok": true
+}

@@ -129,7 +129,7 @@ export interface ObjectReferenceChipModel {
 }
 
 export function normalizeArtifactRef(ref: string) {
-  return ref.replace(/^artifact:\/\//i, '').replace(/^artifact:/i, '');
+  return ref.replace(/^artifact:\/\//i, '').replace(/^artifact::?/i, '');
 }
 
 export function normalizeWorkspacePath(path: string) {

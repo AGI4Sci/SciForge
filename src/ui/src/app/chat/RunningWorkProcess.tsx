@@ -89,7 +89,7 @@ export function NativeEventStream({
     >
       <div className="native-event-list">
         {process.groups.map((group) => (
-          <CursorAgentProcessGroupView key={group.id} group={group} onObjectFocus={onObjectFocus} locale={locale} />
+          <CursorAgentProcessGroupView key={group.id} group={group} mode={mode} onObjectFocus={onObjectFocus} locale={locale} />
         ))}
       </div>
       {(guidanceCount || process.hiddenActionCount || resolvedCounts.debug || process.hiddenAuditCount) ? (
@@ -106,13 +106,16 @@ export function NativeEventStream({
 
 function CursorAgentProcessGroupView({
   group,
+  mode,
   onObjectFocus,
   locale,
 }: {
   group: CursorAgentProcessGroup;
+  mode: 'live' | 'recorded';
   onObjectFocus?: (reference: ObjectReference) => void;
   locale?: SupportedLocale;
 }) {
+  const usage = cursorGroupUsageLabel(group);
   return (
     <details
       className={cx('native-event-row cursor-agent-group', `cursor-agent-${group.kind}`, `status-${group.status}`)}
@@ -123,23 +126,30 @@ function CursorAgentProcessGroupView({
         <span className="native-event-dot" aria-hidden="true" />
         <span className="native-event-kind" aria-label={group.kind === 'worked' ? chatText(locale, { 'zh-CN': '工作', 'en-US': 'Worked' }) : chatText(locale, { 'zh-CN': '探索', 'en-US': 'Explored' })} />
         <span className="native-event-title">{group.title}</span>
-        <span className="native-event-usage">{group.summary}</span>
+        {usage ? <span className="native-event-usage">{usage}</span> : null}
       </summary>
       <div className="native-event-expanded cursor-agent-actions">
         {group.actions.map((action) => (
-          <CursorAgentActionRow key={action.id} action={action} onObjectFocus={onObjectFocus} locale={locale} />
+          <CursorAgentActionRow key={action.id} action={action} mode={mode} onObjectFocus={onObjectFocus} locale={locale} />
         ))}
       </div>
     </details>
   );
 }
 
+function cursorGroupUsageLabel(group: CursorAgentProcessGroup) {
+  if (group.kind === 'explored') return '';
+  return group.summary;
+}
+
 function CursorAgentActionRow({
   action,
+  mode,
   onObjectFocus,
   locale,
 }: {
   action: CursorAgentAction;
+  mode: 'live' | 'recorded';
   onObjectFocus?: (reference: ObjectReference) => void;
   locale?: SupportedLocale;
 }) {
@@ -156,11 +166,11 @@ function CursorAgentActionRow({
     || hasResult,
   );
   const focusReference = objectReferenceForCursorAction(action);
-  const className = cx('native-event-row cursor-agent-action', `cursor-agent-action-${action.kind}`, `status-${action.status}`, action.status === 'running' && 'active', !hasDetail && 'is-leaf');
+  const className = cx('native-event-row cursor-agent-action', `cursor-agent-action-${action.kind}`, `status-${action.status}`, mode === 'live' && action.status === 'running' && 'active', !hasDetail && 'is-leaf');
   if (!hasDetail) {
     return (
       <div className={className}>
-        <CursorAgentActionSummary action={action} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} asSummary={false} />
+        <CursorAgentActionSummary action={action} mode={mode} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} asSummary={false} />
       </div>
     );
   }
@@ -169,7 +179,7 @@ function CursorAgentActionRow({
       className={className}
       open={action.initiallyExpanded}
     >
-      <CursorAgentActionSummary action={action} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} />
+      <CursorAgentActionSummary action={action} mode={mode} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} />
       <div className="native-event-expanded">
         <CursorAgentActionDetail action={action} resultRefs={resultRefs} visibleRefs={visibleRefs} onObjectFocus={onObjectFocus} locale={locale} />
       </div>
@@ -179,18 +189,23 @@ function CursorAgentActionRow({
 
 function CursorAgentActionSummary({
   action,
+  mode,
   focusReference,
   onObjectFocus,
   locale,
   asSummary = true,
 }: {
   action: CursorAgentAction;
+  mode: 'live' | 'recorded';
   focusReference?: ObjectReference;
   onObjectFocus?: (reference: ObjectReference) => void;
   locale?: SupportedLocale;
   asSummary?: boolean;
 }) {
   const SummaryTag = asSummary ? 'summary' : 'div';
+  const showStatus = mode === 'live'
+    ? action.status !== 'unknown' && action.status !== 'completed' && action.status !== 'running'
+    : action.status === 'failed' || action.status === 'blocked' || action.status === 'cancelled';
   return (
     <SummaryTag className="cursor-agent-action-summary">
       <span className="native-event-chevron" aria-hidden="true"><ChevronRight size={12} /></span>
@@ -213,7 +228,7 @@ function CursorAgentActionSummary({
       ) : (
         <span className="native-event-title">{action.title}</span>
       )}
-      {action.status !== 'unknown' ? <span className="native-event-usage">{cursorActionStatusLabel(action.status, locale)}</span> : null}
+      {showStatus ? <span className="native-event-usage">{cursorActionStatusLabel(action.status, locale)}</span> : null}
       <time>{formatEventTime(action.createdAt)}</time>
     </SummaryTag>
   );

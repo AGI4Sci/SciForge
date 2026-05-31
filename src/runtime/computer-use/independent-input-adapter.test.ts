@@ -9,19 +9,19 @@ import {
   hasExecutableIndependentInputAdapter,
   SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
 } from './independent-input-adapter.js';
-import type { ComputerUseConfig, ResolvedWindowTarget } from './types.js';
+import type { ComputerUseConfig, ComputerUseObserveBeforeMutateEvidence, GenericVisionAction, ResolvedWindowTarget } from './types.js';
 
-test('remote-desktop simulated input adapter keeps virtual pointer and keyboard state without system input', async () => {
+test('remote-desktop simulated input adapter keeps scoped executor state without system input', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-'));
   try {
     const config = baseConfig('independent-input-adapter-ok');
     const targetResolution = resolvedWindowTarget();
-    const click = await executeIndependentInputAdapterAction({
+    const click = await executeIndependentInputAdapterAction(withObserve({
       type: 'click',
       x: 42,
       y: 84,
       targetDescription: 'visible Save icon',
-    }, config, targetResolution, {
+    }), config, targetResolution, {
       workspace,
       runDir: workspace,
       stepIndex: 0,
@@ -29,10 +29,10 @@ test('remote-desktop simulated input adapter keeps virtual pointer and keyboard 
     assert.equal(click.exitCode, 0);
     assert.match(click.stdout, /systemMouseEvents=not-sent/);
 
-    const typed = await executeIndependentInputAdapterAction({
+    const typed = await executeIndependentInputAdapterAction(withObserve({
       type: 'type_text',
-      text: 'SciForge virtual keyboard',
-    }, config, targetResolution, {
+      text: 'SciForge scoped executor input',
+    }), config, targetResolution, {
       workspace,
       runDir: workspace,
       stepIndex: 1,
@@ -44,12 +44,49 @@ test('remote-desktop simulated input adapter keeps virtual pointer and keyboard 
     assert.equal(state.userDeviceImpact, 'none');
     assert.equal(state.systemMouseEvents, 'not-sent');
     assert.equal(state.systemKeyboardEvents, 'not-sent');
+    assert.deepEqual(state.isolationFlags, {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      failClosedByDefault: true,
+    });
     assert.equal(((state.virtualPointer as Record<string, unknown>).x), 42);
     assert.equal(((state.virtualPointer as Record<string, unknown>).y), 84);
     const keyboard = state.virtualKeyboard as Record<string, unknown>;
     const typedTextLedger = keyboard.typedTextLedger as Array<Record<string, unknown>>;
-    assert.equal(typedTextLedger[0]?.text, 'SciForge virtual keyboard');
+    assert.equal(typedTextLedger[0]?.text, 'SciForge scoped executor input');
     assert.equal(((state.actions as Array<Record<string, unknown>>)[0]?.systemMouseEvents), 'not-sent');
+    assert.equal(((state.actions as Array<Record<string, unknown>>)[0]?.sharedSystemInputUsed), false);
+    assert.equal(((state.actorCursorLog as Record<string, unknown>).appendOnly), true);
+    assert.equal(((state.actorCursorLog as Record<string, unknown>).eventCount), 2);
+    const actorCursors = state.actorCursors as Array<Record<string, unknown>>;
+    assert.equal(actorCursors[0]?.actorId, 'actor-agent');
+    assert.equal(actorCursors[0]?.cursorId, 'actor-agent-cursor');
+    assert.equal(actorCursors[0]?.screenId, 'screen-1');
+    const executorProjection = state.executorProjection as Record<string, any>;
+    assert.equal(executorProjection.schemaVersion, 'sciforge.computer-use.executor-projection.v1');
+    assert.equal(executorProjection.eventCount, 2);
+    assert.equal(executorProjection.sharedSystemInputUsed, false);
+    assert.equal(executorProjection.systemPointerMoved, false);
+    assert.equal(executorProjection.systemKeyboardEventsSent, false);
+    assert.equal(executorProjection.events[0]?.leaseScope?.kind, 'window-local');
+    assert.equal(executorProjection.events[0]?.displayGroupId, 'display-group-1');
+    assert.equal(executorProjection.events[0]?.screenId, 'screen-1');
+    assert.equal(executorProjection.events[0]?.windowId, 'window-101');
+    assert.equal(executorProjection.events[0]?.staleEvidenceInvalidation?.invalidatesVisibleState, true);
+    const logLines = (await readFile(join(workspace, 'actor-cursors.jsonl'), 'utf8')).trim().split('\n');
+    assert.equal(logLines.length, 2);
+    const firstCursorEvent = JSON.parse(logLines[0] ?? '{}') as Record<string, any>;
+    assert.equal(firstCursorEvent.schemaVersion, 'sciforge.computer-use.actor-cursor-log.v1');
+    assert.equal(firstCursorEvent.eventType, 'intent-proposal');
+    assert.equal(firstCursorEvent.actorId, 'actor-agent');
+    assert.equal(firstCursorEvent.cursorId, 'actor-agent-cursor');
+    assert.equal(firstCursorEvent.sharedSystemInputUsed, false);
+    const typedMetadata = ('independentInputAdapter' in typed ? typed.independentInputAdapter : undefined) as Record<string, any>;
+    assert.equal(typedMetadata.actorCursorLogRef, 'actor-cursors.jsonl');
+    assert.equal(typedMetadata.executorProjectionRef, 'executor-projection.json');
+    assert.equal(typedMetadata.leaseScope.kind, 'window-local');
+    assert.equal(typedMetadata.sharedSystemInputDiagnostic.failClosedByDefault, true);
     assert.match(await readFile(join(workspace, 'independent-input-pointer.svg'), 'utf8'), /SciForge virtual input pointer/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -65,12 +102,12 @@ test('remote-desktop simulated input adapter separates window-local pointer and 
       bounds: { x: -887, y: -949, width: 1125, height: 763 },
       contentRect: { x: -887, y: -949, width: 1125, height: 763 },
     };
-    const click = await executeIndependentInputAdapterAction({
+    const click = await executeIndependentInputAdapterAction(withObserve({
       type: 'click',
       x: -800,
       y: -900,
       targetDescription: 'visible file item',
-    }, config, targetResolution, {
+    }), config, targetResolution, {
       workspace,
       runDir: workspace,
       stepIndex: 0,
@@ -102,9 +139,9 @@ test('remote-desktop simulated input adapter maintains a virtual multi-app sessi
     const targetResolution = resolvedWindowTarget();
     const actions = [
       { type: 'open_app' as const, appName: 'Browser' },
-      { type: 'type_text' as const, text: 'Visible source fact: independent input does not move the system mouse.' },
+      withObserve({ type: 'type_text' as const, text: 'Visible source fact: independent input does not move the system mouse.' }),
       { type: 'open_app' as const, appName: 'PowerPoint' },
-      { type: 'type_text' as const, text: 'SciForge Computer Use L3\n- Browser source reviewed\n- Slide content created\n- Finder shows saved artifact' },
+      withObserve({ type: 'type_text' as const, text: 'SciForge Computer Use L3\n- Browser source reviewed\n- Slide content created\n- Finder shows saved artifact' }),
       { type: 'open_app' as const, appName: 'Finder' },
     ];
     for (const [index, action] of actions.entries()) {
@@ -141,7 +178,7 @@ test('remote-desktop simulated input adapter materializes summary prompts as vis
     const taskText = '让 SciForge 总结每个字段/控件的视觉证据和对应 action，只引用 screenshot refs、窗口目标、坐标和 action ledger；过程证据 refs 包括 vision-trace.json。';
     const actions = [
       { type: 'open_app' as const, appName: 'Browser' },
-      { type: 'type_text' as const, text: '字段视觉证据总结\n- 控件 A: screenshot ref + action ledger ref\n- 控件 B: window-local coordinate evidence\n- Trace: vision-trace.json is process evidence, not the final artifact' },
+      withObserve({ type: 'type_text' as const, text: '字段视觉证据总结\n- 控件 A: screenshot ref + action ledger ref\n- 控件 B: window-local coordinate evidence\n- Trace: vision-trace.json is process evidence, not the final artifact' }),
       { type: 'open_app' as const, appName: 'Finder' },
     ];
     for (const [index, action] of actions.entries()) {
@@ -174,6 +211,75 @@ test('independent input adapter requires an executable provider registration', (
     ...baseConfig('virtual-hid-unimplemented'),
     inputAdapter: 'virtual-hid',
   }), false);
+});
+
+test('independent input adapter fails closed with diagnostic when provider is missing', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-missing-provider-'));
+  try {
+    const result = await executeIndependentInputAdapterAction({
+      type: 'type_text',
+      text: 'do not use shared system input',
+    }, {
+      ...baseConfig('missing-provider-execute'),
+      independentInputAdapterProvider: undefined,
+      allowSharedSystemInput: false,
+    }, resolvedWindowTarget(), {
+      workspace,
+      runDir: workspace,
+      stepIndex: 0,
+    });
+
+    assert.equal(result.exitCode, 125);
+    assert.match(result.stderr, /No executable independent input adapter provider/);
+    const diagnostic = ('independentInputAdapter' in result ? result.independentInputAdapter : undefined) as Record<string, unknown>;
+    assert.equal(diagnostic.status, 'blocked-no-independent-adapter');
+    assert.equal(diagnostic.failClosedByDefault, true);
+    assert.equal(diagnostic.sharedSystemInputUsed, false);
+    assert.equal(diagnostic.systemPointerMoved, false);
+    assert.equal(diagnostic.systemKeyboardEventsSent, false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('independent input adapter refuses bare global pointer coordinates before projection', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-bare-global-'));
+  try {
+    const target = {
+      ...resolvedWindowTarget(),
+      captureKind: 'display' as const,
+      windowId: undefined,
+      virtualWindowId: undefined,
+      coordinateSpace: 'screen' as const,
+      schedulerLockId: 'display-1',
+    };
+    const result = await executeIndependentInputAdapterAction({
+      type: 'click',
+      x: 200,
+      y: 100,
+      displayGroupId: 'display-group-1',
+      screenId: 'screen-1',
+      windowId: 'window-101',
+      leaseScope: {
+        kind: 'window-local',
+        displayGroupId: 'display-group-1',
+        screenId: 'screen-1',
+        windowId: 'window-101',
+      },
+    }, baseConfig('bare-global'), target, {
+      workspace,
+      runDir: workspace,
+      stepIndex: 0,
+    });
+
+    assert.equal(result.exitCode, 125);
+    assert.match(result.stderr, /bare-global-coordinate-blocked/);
+    const diagnostic = ('independentInputAdapter' in result ? result.independentInputAdapter : undefined) as Record<string, unknown>;
+    assert.equal(diagnostic.status, 'blocked-scoped-scheduler');
+    await assert.rejects(readFile(join(workspace, 'actor-cursors.jsonl'), 'utf8'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 function baseConfig(runId: string): ComputerUseConfig {
@@ -223,5 +329,37 @@ function resolvedWindowTarget(): ResolvedWindowTarget {
     schedulerLockId: 'remote-session-101',
     source: 'config',
     diagnostics: [],
+  };
+}
+
+function withObserve<T extends GenericVisionAction>(action: T): T {
+  return {
+    ...action,
+    observeBeforeMutate: observeEvidence(),
+  };
+}
+
+function observeEvidence(overrides: Partial<ComputerUseObserveBeforeMutateEvidence> = {}): ComputerUseObserveBeforeMutateEvidence {
+  return {
+    appStateRef: 'independent-input-before-app-state.json',
+    screenshotRef: 'independent-input-before.png',
+    captureRef: 'independent-input-before.png',
+    accessibilitySnapshotRef: 'independent-input-before-accessibility-state.json',
+    stateSnapshotRef: 'independent-input-before-app-state.json',
+    groundingRef: 'independent-input-grounding.json',
+    sourceObservationRef: 'independent-input-before.png',
+    displayGroupId: 'display-group-1',
+    screenId: 'screen-1',
+    windowId: 'window-101',
+    observedAt: '2026-05-31T10:00:00.000Z',
+    capturedAt: '2026-05-31T10:00:00.000Z',
+    freshnessCheckedAt: '2026-05-31T10:00:00.000Z',
+    freshnessCheck: {
+      status: 'current',
+      observedAt: '2026-05-31T10:00:00.000Z',
+      checkedAt: '2026-05-31T10:00:00.000Z',
+      maxAgeMs: 300000,
+    },
+    ...overrides,
   };
 }

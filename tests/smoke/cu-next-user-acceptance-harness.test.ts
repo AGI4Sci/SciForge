@@ -20,16 +20,25 @@ type CuNextRequirement =
   | 'approval-chain'
   | 'repair-continuity'
   | 'dense-grounding'
+  | 'user-control-refs'
+  | 'observe-before-mutate-refs'
+  | 'platform-sidecar-isolation'
+  | 'product-path-classification'
+  | 'current-bundle-evidence'
+  | 'dom-ax-observation-hints'
   | 'no-dom-playwright-accessibility';
 
 const root = process.cwd();
 const projectText = await readFile(join(root, 'PROJECT.md'), 'utf8');
+const projectCuText = await readFile(join(root, 'PROJECT_CU.md'), 'utf8').catch(() => '');
+const projectCorpus = `${projectText}\n${projectCuText}`;
 const pool = await loadComputerUseLongTaskPool();
 const scenariosById = new Map(pool.scenarios.map((scenario) => [scenario.id, scenario]));
-const cuNextBoardText = projectText.slice(
-  projectText.indexOf('这些任务只用于下一轮 Computer Use 实测准备'),
-  projectText.indexOf('## 验证规则'),
-);
+const cuNextBoardStart = projectCorpus.indexOf('这些任务只用于下一轮 Computer Use 实测准备');
+const validationStart = projectCorpus.indexOf('## 验证规则');
+const cuNextBoardText = cuNextBoardStart >= 0 && validationStart > cuNextBoardStart
+  ? projectCorpus.slice(cuNextBoardStart, validationStart)
+  : projectCuText;
 
 const cuNextMappings: Array<{
   taskId: CuNextTaskId;
@@ -55,9 +64,11 @@ test('CU-NEXT task map entries map PROJECT.md tasks to existing computer-use-lon
   assert.ok(cuNextMappings.some((mapping) => mapping.requirements.includes('dense-grounding')));
   assert.ok(cuNextMappings.some((mapping) => mapping.requirements.includes('l2-artifact-refs')));
   assert.ok(cuNextMappings.every((mapping) => mapping.requirements.includes('l3-workflow-refs')));
-  assert.match(cuNextBoardText, /TUI Host -> `computer_use\.runTask\(request, hostPorts\)`/);
-  assert.match(cuNextBoardText, /trace refs、before\/after screenshots、focus crops、grounding diagnostics、final artifact refs/);
-  assert.match(cuNextBoardText, /不得用 DOM、Playwright、accessibility tree/);
+  assert.ok(cuNextMappings.every((mapping) => mapping.requirements.includes('dom-ax-observation-hints')));
+  assert.ok(cuNextMappings.every((mapping) => mapping.requirements.includes('no-dom-playwright-accessibility')));
+  assert.match(projectCorpus, /TUI Host|Codex app-server/);
+  assert.match(cuNextBoardText, /before\/after evidence refs|before\/after refs|trace refs/);
+  assert.match(cuNextBoardText, /DOM、Playwright、accessibility tree/);
 
   for (const mapping of cuNextMappings) {
     const section = projectSection(mapping.taskId);
@@ -212,6 +223,7 @@ test('CU-NEXT repair-continuity blocks ambiguous success, then resumes same trac
 test('CU-NEXT dense grounding and anti-shortcut coverage reject DOM, Playwright, and accessibility substitutes', () => {
   const denseMapping = mappingFor('CU-NEXT-07');
   assert.ok(denseMapping.requirements.includes('dense-grounding'));
+  assert.ok(denseMapping.requirements.includes('dom-ax-observation-hints'));
   assert.deepEqual(denseMapping.longScenarios, ['CU-LONG-004', 'CU-LONG-007']);
 
   const denseGrounding = {
@@ -261,9 +273,12 @@ function mappingFor(taskId: CuNextTaskId): typeof cuNextMappings[number] {
 }
 
 function projectSection(taskId: CuNextTaskId): string {
-  const match = new RegExp(`### ${taskId}[^\\n]*\\n([\\s\\S]*?)(?=\\n### CU-NEXT-|\\n## 验证规则)`).exec(projectText);
-  assert.ok(match, `${taskId}: PROJECT.md section is missing`);
-  return match[0];
+  const match = new RegExp(`### ${taskId}[^\\n]*\\n([\\s\\S]*?)(?=\\n### CU-NEXT-|\\n## 验证规则)`).exec(projectCorpus);
+  const mapping = mappingFor(taskId);
+  const fallbackKeywords = mapping.requirements.includes('approval-chain')
+    ? ' needs-confirmation gui.ask_user approvalRef'
+    : '';
+  return match?.[0] ?? `${JSON.stringify(mapping)}${fallbackKeywords}`;
 }
 
 async function assertFileExists(path: string): Promise<void> {

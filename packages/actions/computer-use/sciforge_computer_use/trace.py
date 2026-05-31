@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from dataclasses import fields, is_dataclass
 from pathlib import Path
@@ -18,6 +19,15 @@ REPAIR_REPLAY_EVIDENCE_SCHEMA_VERSION = "sciforge.computer-use.repair-replay-evi
 REPAIR_REPLAY_EVIDENCE_VALIDATION_SCHEMA_VERSION = "sciforge.computer-use.repair-replay-evidence-validation.v1"
 VIEWPORT_RECOVERY_EVIDENCE_SCHEMA_VERSION = "sciforge.computer-use.viewport-recovery-evidence.v1"
 VIEWPORT_RECOVERY_EVIDENCE_VALIDATION_SCHEMA_VERSION = "sciforge.computer-use.viewport-recovery-evidence-validation.v1"
+TRACE_REDACTED_VALUE = "[REDACTED]"
+TRACE_SECRET_TEXT_RE = re.compile(
+    r"\b(?:authorization|api[_-]?key|access[_-]?key|token|secret|password|credential)s?\b",
+    re.IGNORECASE,
+)
+TRACE_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b(?:authorization|api[_-]?key|access[_-]?key|refresh[_-]?token|token|secret|password|credential)s?\s*[:=]\s*[^\s,;}\]]+",
+    re.IGNORECASE,
+)
 
 
 def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
@@ -25,6 +35,9 @@ def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
 
     screenshot_refs, artifact_refs = _promoted_result_refs(result)
     final_artifact_refs = _promoted_final_artifact_refs(result)
+    diagnostics = dict(result.failure_diagnostics)
+    visible_screen_refs = _visible_screen_refs(diagnostics)
+    visible_cursor_refs = _visible_cursor_refs(diagnostics)
     trace = {
         "schemaVersion": TRACE_SCHEMA_VERSION,
         "resultSchemaVersion": result.schema_version,
@@ -32,21 +45,27 @@ def result_to_trace(result: ComputerUseResult) -> dict[str, Any]:
         "reason": result.reason,
         "approvalRequest": _compact_dataclass(result.approval_request),
         "metrics": dict(result.metrics),
-        "failureDiagnostics": dict(result.failure_diagnostics),
+        "failureDiagnostics": diagnostics,
         "finalObservationRef": result.final_observation.ref if result.final_observation else None,
         "traceRefs": list(result.trace_refs),
         "screenshotRefs": screenshot_refs,
         "artifactRefs": artifact_refs,
         "finalArtifactRef": final_artifact_refs[0] if final_artifact_refs else None,
         "finalArtifactRefs": final_artifact_refs,
-        "evidenceLogRef": result.failure_diagnostics.get("evidenceLogRef"),
-        "evidenceSnapshotRef": result.failure_diagnostics.get("evidenceSnapshotRef"),
-        "evidenceIndexRef": result.failure_diagnostics.get("evidenceIndexRef"),
-        "plannerBriefRef": result.failure_diagnostics.get("plannerBriefRef"),
+        "visibleScreenRefs": visible_screen_refs,
+        "visibleCursorRefs": visible_cursor_refs,
+        "displayGroupRef": _first_ref(diagnostics, "displayGroupRef", "virtualDisplayGroupRef"),
+        "screenRefs": visible_screen_refs,
+        "cursorOverlayRefs": visible_cursor_refs,
+        "evidenceLogRef": diagnostics.get("evidenceLogRef"),
+        "evidenceSnapshotRef": diagnostics.get("evidenceSnapshotRef"),
+        "evidenceIndexRef": diagnostics.get("evidenceIndexRef"),
+        "plannerBriefRef": diagnostics.get("plannerBriefRef"),
         "steps": [_step_to_trace(step) for step in result.steps],
         "budgetDebits": [dict(debit) for debit in result.budget_debits],
         "budgetDebitRefs": list(result.budget_debit_refs),
     }
+    trace = _sanitize_trace_payload(trace)
     _reject_inline_payloads(trace)
     return trace
 
@@ -60,6 +79,8 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
         *trace["artifactRefs"],
         *trace["finalArtifactRefs"],
         *trace["traceRefs"],
+        *trace.get("visibleScreenRefs", []),
+        *trace.get("visibleCursorRefs", []),
         *[
             ref
             for ref in (
@@ -81,6 +102,8 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
         "artifactRefs": trace["artifactRefs"],
         "finalArtifactRef": trace.get("finalArtifactRef"),
         "finalArtifactRefs": trace["finalArtifactRefs"],
+        "visibleScreenRefs": trace.get("visibleScreenRefs", []),
+        "visibleCursorRefs": trace.get("visibleCursorRefs", []),
         "evidenceLogRef": trace.get("evidenceLogRef"),
         "evidenceSnapshotRef": trace.get("evidenceSnapshotRef"),
         "evidenceIndexRef": trace.get("evidenceIndexRef"),
@@ -94,6 +117,15 @@ def compact_result_for_handoff(result: ComputerUseResult) -> dict[str, Any]:
                 "verification": step.get("verification"),
                 "screenshotRefs": step.get("screenshotRefs", []),
                 "artifactRefs": step.get("artifactRefs", []),
+                "screenId": step.get("screenId"),
+                "windowId": step.get("windowId"),
+                "actorId": step.get("actorId"),
+                "cursorId": step.get("cursorId"),
+                "leaseOwner": step.get("leaseOwner"),
+                "leaseScope": step.get("leaseScope"),
+                "executorEventRef": step.get("executorEventRef"),
+                "beforeEvidenceRefs": step.get("beforeEvidenceRefs", []),
+                "afterEvidenceRefs": step.get("afterEvidenceRefs", []),
                 "budgetDebitRefs": list(step.get("budgetDebitRefs", [])),
             }
             for step in trace["steps"]
@@ -664,6 +696,14 @@ def validate_trace(
         *_collect_final_artifact_refs(trace),
     ])
     trace_refs = _unique_strings(_refs_from_explicit_list(trace.get("traceRefs")))
+    visible_screen_refs = _unique_strings([
+        *_refs_from_explicit_list(trace.get("visibleScreenRefs")),
+        *_refs_from_explicit_list(trace.get("screenRefs")),
+    ])
+    visible_cursor_refs = _unique_strings([
+        *_refs_from_explicit_list(trace.get("visibleCursorRefs")),
+        *_refs_from_explicit_list(trace.get("cursorOverlayRefs")),
+    ])
 
     if not screenshot_refs:
         warnings.append("Trace has no promoted screenshotRefs.")
@@ -698,6 +738,8 @@ def validate_trace(
         artifact_refs=artifact_refs,
         final_artifact_refs=final_artifact_refs,
         trace_refs=trace_refs,
+        visible_screen_refs=visible_screen_refs,
+        visible_cursor_refs=visible_cursor_refs,
     )
 
 
@@ -706,6 +748,21 @@ def _step_to_trace(step: Any) -> dict[str, Any]:
         step.before,
         step.after,
     ])
+    provenance = _step_provenance(step)
+    before_evidence_refs = _unique_strings([
+        step.before.ref,
+        *_evidence_refs_from_value(getattr(step.before, "metadata", None)),
+        *_evidence_refs_from_value(getattr(step.before, "artifacts", None)),
+    ])
+    after_evidence_refs = _unique_strings([
+        *([step.after.ref] if step.after else []),
+        *_evidence_refs_from_value(getattr(step.after, "metadata", None) if step.after else None),
+        *_evidence_refs_from_value(getattr(step.after, "artifacts", None) if step.after else None),
+        *_evidence_refs_from_value(getattr(step.verification, "metadata", None)),
+    ])
+    executor_event_ref = _executor_event_ref(step)
+    lease_scope = _lease_scope(step)
+    lease_owner = _lease_owner(step)
     return {
         "index": step.index,
         "status": step.status,
@@ -714,6 +771,16 @@ def _step_to_trace(step: Any) -> dict[str, Any]:
         "afterRef": step.after.ref if step.after else None,
         "screenshotRefs": screenshot_refs,
         "artifactRefs": artifact_refs,
+        "screenId": provenance.get("screenId"),
+        "windowId": provenance.get("windowId"),
+        "actorId": provenance.get("actorId"),
+        "cursorId": provenance.get("cursorId"),
+        "leaseScope": lease_scope,
+        "leaseOwner": lease_owner,
+        "executorEventRef": executor_event_ref,
+        "beforeEvidenceRefs": before_evidence_refs,
+        "afterEvidenceRefs": after_evidence_refs,
+        "sourceEvidenceRefs": _unique_strings([*before_evidence_refs, *after_evidence_refs]),
         "action": _action_to_trace(step.plan),
         "grounding": _compact_dataclass(step.grounding),
         "execution": _compact_dataclass(step.execution),
@@ -738,7 +805,156 @@ def _action_to_trace(action: Any) -> dict[str, Any]:
         "reason": action.reason,
         "riskLevel": action.risk_level,
         "requiresConfirmation": action.requires_confirmation,
+        "metadata": _sanitize_trace_payload(dict(getattr(action, "metadata", {}) or {})),
     }
+
+
+def _step_provenance(step: Any) -> dict[str, str]:
+    return _scope_from_value({
+        "before": _compact_dataclass(getattr(step, "before", None)),
+        "actionMetadata": getattr(getattr(step, "plan", None), "metadata", None),
+        "groundingMetadata": getattr(getattr(step, "grounding", None), "metadata", None),
+        "executionMetadata": getattr(getattr(step, "execution", None), "metadata", None),
+        "verificationMetadata": getattr(getattr(step, "verification", None), "metadata", None),
+        "after": _compact_dataclass(getattr(step, "after", None)),
+    })
+
+
+def _lease_scope(step: Any) -> dict[str, Any]:
+    value = _first_mapping(
+        _mapping(getattr(getattr(step, "plan", None), "metadata", None)).get("leaseScope"),
+        _mapping(getattr(getattr(step, "execution", None), "metadata", None)).get("leaseScope"),
+        _mapping(getattr(getattr(step, "grounding", None), "metadata", None)).get("leaseScope"),
+    )
+    scope = _scope_from_value(value or _step_provenance(step))
+    if not scope:
+        return {}
+    return {
+        key: scope[key]
+        for key in ("scopeType", "screenId", "windowId")
+        if key in scope
+    }
+
+
+def _lease_owner(step: Any) -> dict[str, Any]:
+    value = _first_mapping(
+        _mapping(getattr(getattr(step, "plan", None), "metadata", None)).get("leaseOwner"),
+        _mapping(getattr(getattr(step, "execution", None), "metadata", None)).get("leaseOwner"),
+    )
+    provenance = _step_provenance(step)
+    owner = {**dict(value or {})}
+    for key in ("actorId", "cursorId"):
+        if key not in owner and provenance.get(key):
+            owner[key] = provenance[key]
+    return _sanitize_trace_payload(owner)
+
+
+def _executor_event_ref(step: Any) -> str | None:
+    return _first_ref(
+        _mapping(getattr(getattr(step, "execution", None), "metadata", None)),
+        "executorEventRef",
+        "commandEventRef",
+        "executorCommandEventRef",
+        "commandEventLogRef",
+    )
+
+
+def _scope_from_value(value: Any) -> dict[str, str]:
+    found: dict[str, str] = {}
+    _collect_scope_fields(value, found)
+    screen_id = found.get("screenId")
+    window_id = found.get("windowId")
+    scope_type = found.get("scopeType") or ("window" if window_id else ("screen" if screen_id else ""))
+    scope_type = scope_type.strip().lower().replace("_", "-")
+    if scope_type == "screen-global":
+        scope_type = "screen"
+    if scope_type == "window-local":
+        scope_type = "window"
+    result: dict[str, str] = {}
+    if scope_type in {"screen", "window"}:
+        result["scopeType"] = scope_type
+    for key in ("screenId", "windowId", "actorId", "cursorId"):
+        if found.get(key):
+            result[key] = found[key]
+    return result
+
+
+def _collect_scope_fields(value: Any, found: dict[str, str]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {"screenid", "screen"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("screenId", str(item).strip())
+            elif normalized in {"windowid", "window"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("windowId", str(item).strip())
+            elif normalized in {"actorid", "actor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("actorId", str(item).strip())
+            elif normalized in {"cursorid", "cursor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("cursorId", str(item).strip())
+            elif normalized in {"scopetype", "scope"} and isinstance(item, str) and item.strip():
+                found.setdefault("scopeType", item.strip())
+            if isinstance(item, (Mapping, list, tuple)):
+                _collect_scope_fields(item, found)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_scope_fields(item, found)
+
+
+def _evidence_refs_from_value(value: Any) -> list[str]:
+    refs: list[str] = []
+    if isinstance(value, str):
+        if _looks_like_ref(value):
+            refs.append(value)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized.endswith("ref") or normalized.endswith("refs") or normalized in {"path", "uri"}:
+                refs.extend(_refs_inside(item, prefer_image=False))
+            if isinstance(item, (Mapping, list, tuple)):
+                refs.extend(_evidence_refs_from_value(item))
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            refs.extend(_evidence_refs_from_value(item))
+    return _unique_strings(refs)
+
+
+def _visible_screen_refs(diagnostics: Mapping[str, Any]) -> list[str]:
+    return _unique_strings([
+        *_refs_from_explicit_list(diagnostics.get("visibleScreenRefs")),
+        *_refs_from_explicit_list(diagnostics.get("screenRefs")),
+        *[
+            ref
+            for ref in (
+                diagnostics.get("virtualScreensRef"),
+                diagnostics.get("virtualDisplayGroupRef"),
+                diagnostics.get("displayGroupRef"),
+            )
+            if isinstance(ref, str)
+        ],
+    ])
+
+
+def _visible_cursor_refs(diagnostics: Mapping[str, Any]) -> list[str]:
+    return _unique_strings([
+        *_refs_from_explicit_list(diagnostics.get("visibleCursorRefs")),
+        *_refs_from_explicit_list(diagnostics.get("cursorOverlayRefs")),
+        *[
+            ref
+            for ref in (
+                diagnostics.get("actorCursorLogRef"),
+                diagnostics.get("cursorLogRef"),
+            )
+            if isinstance(ref, str)
+        ],
+    ])
+
+
+def _first_ref(value: Mapping[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        ref = value.get(key)
+        if isinstance(ref, str) and ref.strip() and _looks_like_ref(ref):
+            return ref.strip()
+    return None
 
 
 def _compact_dataclass(value: Any) -> dict[str, Any] | None:
@@ -763,6 +979,74 @@ def _compact_value(value: Any) -> Any:
     return value
 
 
+def _sanitize_trace_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        safe: dict[str, Any] = {}
+        redacted_fields = 0
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = key_text.replace("_", "").replace("-", "").lower()
+            if _is_sensitive_trace_key(normalized):
+                redacted_fields += 1
+                continue
+            safe[key_text] = _sanitize_trace_payload(item)
+        if redacted_fields:
+            safe["redactedFieldCount"] = redacted_fields
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_trace_payload(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_trace_text(value)
+    return value
+
+
+def _sanitize_trace_text(value: str) -> str:
+    text = TRACE_SECRET_ASSIGNMENT_RE.sub(TRACE_REDACTED_VALUE, value)
+    lowered = text.strip().lower()
+    if "data:image/" in lowered or ";base64," in lowered:
+        return TRACE_REDACTED_VALUE
+    if TRACE_SECRET_TEXT_RE.search(text.strip()):
+        return TRACE_REDACTED_VALUE
+    return text
+
+
+def _is_sensitive_trace_key(normalized_key: str) -> bool:
+    if normalized_key.endswith("count"):
+        return False
+    if normalized_key in {"rawpayloadwritten", "inlineimagewritten", "secretswritten"}:
+        return False
+    if normalized_key in {
+        "authorization",
+        "authheader",
+        "base64",
+        "body",
+        "credential",
+        "credentials",
+        "dataurl",
+        "header",
+        "headers",
+        "imagebase64",
+        "password",
+        "payload",
+        "providerpayload",
+        "raw",
+        "rawbody",
+        "rawimage",
+        "rawpayload",
+        "rawproviderbody",
+        "rawproviderpayload",
+        "rawscreenshot",
+        "secret",
+        "token",
+    }:
+        return True
+    if any(token in normalized_key for token in ("authorization", "password", "credential", "secret", "token")):
+        return True
+    if any(token in normalized_key for token in ("apikey", "accesskey", "privatekey", "base64", "dataurl")):
+        return True
+    return normalized_key.startswith("raw") or normalized_key.endswith("payload")
+
+
 def _reject_inline_payloads(value: Any) -> None:
     if _inline_payload_issues(value):
         raise ValueError("Computer Use trace must be file-ref-only and cannot contain inline image payloads.")
@@ -781,6 +1065,8 @@ def _collect_inline_payload_issues(value: Any, issues: list[str], *, path: str) 
             normalized = key_text.replace("_", "").replace("-", "").lower()
             if normalized in {"rawscreenshot", "rawimage", "base64", "imagebase64"}:
                 issues.append(f"Trace contains forbidden inline payload key {key_text!r} at {path}.")
+            elif _is_sensitive_trace_key(normalized):
+                issues.append(f"Trace contains forbidden sensitive/raw payload key {key_text!r} at {path}.")
             _collect_inline_payload_issues(item, issues, path=f"{path}.{key_text}")
         return
     if isinstance(value, (list, tuple)):
@@ -790,6 +1076,8 @@ def _collect_inline_payload_issues(value: Any, issues: list[str], *, path: str) 
     if isinstance(value, str):
         if "data:image/" in value or ";base64," in value:
             issues.append("Trace must be file-ref-only and cannot contain inline image payloads.")
+        elif TRACE_SECRET_ASSIGNMENT_RE.search(value) or TRACE_SECRET_TEXT_RE.search(value.strip()):
+            issues.append("Trace must not inline provider payloads, tokens, secrets, or credentials.")
 
 
 def _promoted_result_refs(result: ComputerUseResult) -> tuple[list[str], list[str]]:
@@ -1365,6 +1653,8 @@ def _trace_validation_result(
     artifact_refs: list[str] | None = None,
     final_artifact_refs: list[str] | None = None,
     trace_refs: list[str] | None = None,
+    visible_screen_refs: list[str] | None = None,
+    visible_cursor_refs: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": TRACE_VALIDATION_SCHEMA_VERSION,
@@ -1377,6 +1667,8 @@ def _trace_validation_result(
         "artifactRefs": artifact_refs or [],
         "finalArtifactRefs": final_artifact_refs or [],
         "traceRefs": trace_refs or [],
+        "visibleScreenRefs": visible_screen_refs or [],
+        "visibleCursorRefs": visible_cursor_refs or [],
     }
 
 

@@ -18,6 +18,28 @@ export {
   type WorkbenchDemoVariant,
 } from './workbench-policy';
 export { renderPackageWorkbenchPreview } from './workbench-renderers';
+export { renderBrowserWorkbench, browserWorkbenchDefaultCommands, normalizeBrowserWorkbenchUrl } from './browser-workbench/render';
+export type { BrowserWorkbenchCommand, BrowserWorkbenchPayload } from './browser-workbench/render';
+export {
+  COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
+  COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
+  COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
+  COMPUTER_USE_CONFIRMATION_RESULT_SCHEMA_VERSION,
+  GUI_TERMINAL_EQUIVALENT_TEXT_SCHEMA_VERSION,
+  computerUseControlPlaneCommand,
+  computerUseControlPlaneConfirmationResult,
+  computerUseControlPlaneDisplayedRefs,
+  hasComputerUseControlPlanePresentation,
+  normalizeComputerUseControlPlanePayload,
+  type ComputerUseApprovalMode,
+  type ComputerUseConfirmationDecision,
+  type ComputerUseConfirmationResult,
+  type ComputerUseControlPlaneAction,
+  type ComputerUseControlPlanePayload,
+  type ComputerUseControlPlaneStatus,
+  type ComputerUseTerminalEquivalentText,
+} from './computer-use-control-plane/contract';
+export { renderComputerUseControlPlane, type ComputerUseControlPlaneCallbacks } from './computer-use-control-plane/render';
 export { renderReportViewer, coerceReportPayload as coerceReportViewerPayload } from './report-viewer/render';
 export { renderPaperCardList, paperCardListPresentationPolicy, type PaperCardPresentation } from './paper-card-list/render';
 export { renderRecordTable } from './record-table/render';
@@ -26,6 +48,8 @@ export { renderPointSetViewer } from './point-set-viewer/render';
 export { renderMatrixViewer } from './matrix-viewer/render';
 export { renderStructureViewer } from './structure-viewer/render';
 export { renderTerminalSessionViewer } from './terminal-session-viewer/render';
+export { renderVirtualScreenViewer } from './virtual-screen-viewer/render';
+export type { VirtualScreenCursor, VirtualScreenEvent, VirtualScreenPayload } from './virtual-screen-viewer/render';
 export {
   renderWorkspaceFileViewer,
   sortWorkspaceFileViewerEntries,

@@ -137,6 +137,66 @@ test('CodexAppServerAdapter preserves native shell command lifecycle details', a
   assert.equal(toolCompleted?.outputSummary, 'clean');
 });
 
+test('CodexAppServerAdapter preserves Computer Use native-route workspace events', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn(input) {
+      return {
+        threadId: 'thread-cu-1',
+        turnId: 'turn-cu-1',
+        events: asyncGenerator([
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'computer-use.tui-host-actions',
+            timestamp: new Date().toISOString(),
+            commandId: input.commandId,
+            attemptId: input.attemptId,
+            detail: JSON.stringify({
+              actions: [{
+                schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+                port: 'gui.present',
+                target: 'computer-use.trace-summary',
+                payload: {
+                  title: 'Computer Use result',
+                  status: 'needs-confirmation',
+                  traceRefs: ['.sciforge/vision-runs/native-route/vision-trace.json'],
+                  runTaskChainRefs: ['.sciforge/vision-runs/native-route/tui-host-run-task-chain.json'],
+                },
+              }],
+            }),
+          },
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            timestamp: new Date().toISOString(),
+            commandId: input.commandId,
+            attemptId: input.attemptId,
+            status: 'needs-confirmation',
+            message: 'Computer Use stopped before a guarded action.',
+          },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: '/computer-use click the guarded Submit button',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'cu-command-1',
+    attemptId: 'attempt-1',
+  });
+  const events = await collect(turn.events);
+
+  assert.deepEqual(events.map((event) => event.type), [
+    'run_started',
+    'computer-use.tui-host-actions',
+    'done',
+  ]);
+  assert.equal(events[1]?.commandId, 'cu-command-1');
+  assert.match(String((events[1] as unknown as Record<string, unknown>).detail), /vision-trace\.json/);
+  assert.equal(events[2]?.status, 'needs-confirmation');
+});
+
 test('CodexAppServerAdapter promotes sub-agent refs into normalized events', async () => {
   const client: CodexAppServerClient = {
     async startTurn() {

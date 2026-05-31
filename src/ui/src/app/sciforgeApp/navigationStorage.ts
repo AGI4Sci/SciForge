@@ -14,6 +14,8 @@ export function appNavigationStorageKey() {
 
 export function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioInstanceId } {
   if (typeof window === 'undefined') return defaultNavigation;
+  const urlNavigation = navigationFromUrl();
+  if (urlNavigation) return urlNavigation;
   try {
     const raw = window.localStorage.getItem(appNavigationStorageKey());
     if (!raw) return defaultNavigation;
@@ -28,6 +30,20 @@ export function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioI
     return { page, scenarioId };
   } catch {
     return defaultNavigation;
+  }
+}
+
+function navigationFromUrl(): { page: PageId; scenarioId: ScenarioInstanceId } | undefined {
+  try {
+    const search = typeof window.location.search === 'string' ? window.location.search : '';
+    const params = new URLSearchParams(search);
+    const requestedPage = params.get('page') ?? params.get('view');
+    const page = requestedPage && validPages.has(requestedPage as PageId) ? requestedPage as PageId : undefined;
+    if (!page) return undefined;
+    const scenarioId = params.get('scenarioId')?.trim() || params.get('scenario')?.trim() || defaultBuiltInScenarioId;
+    return { page, scenarioId };
+  } catch {
+    return undefined;
   }
 }
 

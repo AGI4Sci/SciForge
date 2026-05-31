@@ -10,7 +10,7 @@ import {
   computerUseUsesSharedSystemInput,
 } from '../../../packages/actions/computer-use/runtime-policy.js';
 import type { ComputerUseConfig, GenericSwiftGuiAction, GenericVisionAction, ResolvedWindowTarget, WindowTargetResolution } from './types.js';
-import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
+import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace, validateComputerUseScopedAction } from './scheduler.js';
 import { appleScriptString, isDarwinPlatform, runCommand, sleep } from './utils.js';
 import { defaultMacBundleIdForAppName } from './window-target.js';
 
@@ -37,11 +37,26 @@ export async function executeGenericDesktopAction(action: GenericVisionAction, c
       stderr: 'Real Computer Use pointer/keyboard action blocked before execution because no target window is resolved. Use open_app or configure WindowTarget before click, type_text, press_key, hotkey, scroll, or drag actions.',
     };
   }
+  const scopedAction = validateComputerUseScopedAction({
+    action,
+    targetResolution,
+  });
+  if (!scopedAction.ok) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: scopedAction.reason,
+      schedulerDecision: scopedAction,
+    };
+  }
   const lease = await acquireComputerUseSchedulerLease({
     targetResolution,
-    lockId: computerUseSchedulerLockId(targetResolution, { sharedSystemInput: usesSharedSystemInput(config) }),
+    lockId: computerUseSchedulerLockId(targetResolution, { sharedSystemInput: usesSharedSystemInput(config), leaseScope: scopedAction.leaseScope }),
     runId: config.runId,
     stepId: action.type,
+    action,
+    provenance: scopedAction.provenance,
+    leaseScope: scopedAction.leaseScope,
     timeoutMs: config.schedulerLockTimeoutMs,
     staleMs: config.schedulerStaleLockMs,
   });
@@ -536,6 +551,11 @@ function genericMacActionScript(action: GenericVisionAction) {
     const key = action.keys[action.keys.length - 1] || '';
     const modifiers = action.keys.slice(0, -1).map(appleScriptModifier).filter(Boolean);
     lines.push(`  ${keyStrokeScript(key, modifiers)}`);
+  } else if (action.type === 'save') {
+    lines.push(`  ${keyStrokeScript('s', ['command down'])}`);
+  } else if (action.type === 'open_menu') {
+    const menuName = action.menuName ?? action.targetDescription ?? '';
+    lines.push(menuName ? `  click menu bar item ${appleScriptString(menuName)} of menu bar 1 of application process 1` : '  key code 48 using {control down}');
   } else if (action.type === 'scroll') {
     if (action.direction === 'up') {
       lines.push('  key code 116');

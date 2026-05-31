@@ -30,6 +30,8 @@ test('component package exports a deduped runtime registry and alias artifact in
 
   assert.equal(new Set(keys).size, keys.length);
   assert.ok(uiComponentRuntimeRegistry.length > uiComponentManifests.length);
+  assert.ok(uiComponentManifests.some((module) => module.componentId === 'computer-use-control-plane'));
+  assert.deepEqual(index['computer-use-control-plane'], ['computer-use-control-plane', 'computer-use-user-control-plane', 'computer-use-session-control', 'computer-use-replay-control']);
   assert.deepEqual(index['data-table'], index['record-table']);
   assert.deepEqual(index['volcano-plot'], index['point-set-viewer']);
 });

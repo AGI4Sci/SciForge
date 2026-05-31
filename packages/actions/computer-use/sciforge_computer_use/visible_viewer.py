@@ -5,12 +5,22 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
 VISIBLE_RUN_VIEWER_SCHEMA = "sciforge.computer-use.visible-run-viewer.v1"
 VISIBLE_RUN_VIEWER_VALIDATION_SCHEMA = "sciforge.computer-use.visible-run-viewer-validation.v1"
+VIEWER_REDACTED_VALUE = "[REDACTED]"
+VIEWER_SECRET_TEXT_RE = re.compile(
+    r"\b(?:authorization|api[_-]?key|access[_-]?key|token|secret|password|credential)s?\b",
+    re.IGNORECASE,
+)
+VIEWER_SECRET_ASSIGNMENT_RE = re.compile(
+    r"\b(?:authorization|api[_-]?key|access[_-]?key|refresh[_-]?token|token|secret|password|credential)s?\s*[:=]\s*[^\s,;}\]]+",
+    re.IGNORECASE,
+)
 
 
 def build_visible_run_viewer(
@@ -66,6 +76,21 @@ def build_visible_run_viewer(
     isolation = _isolation_summary(diagnostics)
     actions = _actions(payload.get("steps"))
     source_manifest_ref = str(Path(manifest_ref).expanduser().resolve()) if manifest_ref else _source_manifest_ref(diagnostics)
+    display_group_ref = _first_ref(
+        payload,
+        diagnostics,
+        keys=["displayGroupRef", "virtualDisplayGroupRef"],
+    )
+    visible_screen_refs = _unique_strings([
+        *_safe_ref_strings(payload.get("visibleScreenRefs")),
+        *_safe_ref_strings(payload.get("screenRefs")),
+        *_diagnostic_ref_list(diagnostics, ["virtualScreensRef", "virtualDisplayGroupRef", "displayGroupRef"]),
+    ])
+    visible_cursor_refs = _unique_strings([
+        *_safe_ref_strings(payload.get("visibleCursorRefs")),
+        *_safe_ref_strings(payload.get("cursorOverlayRefs")),
+        *_diagnostic_ref_list(diagnostics, ["actorCursorLogRef", "cursorLogRef"]),
+    ])
     final_artifact_ref_values = _safe_ref_strings([payload.get("finalArtifactRef")])
     final_artifact_ref = final_artifact_ref_values[0] if final_artifact_ref_values else None
     artifact_refs = _unique_strings([
@@ -79,6 +104,8 @@ def build_visible_run_viewer(
         *([source_manifest_ref] if source_manifest_ref else []),
         *artifact_refs,
         *input_event_log_refs,
+        *visible_screen_refs,
+        *visible_cursor_refs,
     ])
     source_context = _source_context(
         payload,
@@ -90,10 +117,11 @@ def build_visible_run_viewer(
     frames = _frames(
         screenshot_refs,
         root,
-        _frame_context(actions, payload),
+        _frame_context(actions, payload, visible_cursor_refs=visible_cursor_refs),
         source_refs=source_refs,
         source_context=source_context,
         omitted_inline_screenshot_ref_count=omitted_inline_screenshot_ref_count,
+        visible_cursor_refs=visible_cursor_refs,
     )
     real_screenshot_refs = [
         str(frame["screenshotRef"])
@@ -101,19 +129,33 @@ def build_visible_run_viewer(
         if _frame_kind(frame) == "screenshot" and isinstance(frame.get("screenshotRef"), str)
     ]
     input_summary = _input_summary(input_event_log_refs)
+    frame_counts = _frame_counts(frames)
+    completion_evidence_requested_ref = _safe_ref_strings([payload.get("completionEvidenceRef")])
+    completion_evidence_ref = completion_evidence_requested_ref[0] if completion_evidence_requested_ref and frame_counts["screenshot"] > 0 else None
+    completion_evidence_eligible = payload.get("status") == "completed" and frame_counts["screenshot"] > 0
 
     manifest = {
         "schemaVersion": VISIBLE_RUN_VIEWER_SCHEMA,
         "status": payload.get("status"),
-        "reason": payload.get("reason") or payload.get("message"),
-        "title": title or str(payload.get("task") or "Computer Use visible run"),
+        "reason": _sanitize_viewer_text(str(payload.get("reason") or payload.get("message") or "")),
+        "title": _sanitize_viewer_text(title or str(payload.get("task") or "Computer Use visible run")),
         "resultRef": str(result_path),
         "sourceManifestRef": source_manifest_ref,
         "viewerHtmlRef": str(viewer_html_ref),
+        "displayGroupRef": display_group_ref,
+        "screenRefs": visible_screen_refs,
+        "visibleScreenRefs": visible_screen_refs,
+        "visibleCursorRefs": visible_cursor_refs,
+        "cursorOverlayRefs": visible_cursor_refs,
         "traceRefs": trace_refs,
         "screenshotRefs": real_screenshot_refs,
         "artifactRefs": artifact_refs,
         "finalArtifactRef": final_artifact_ref,
+        "completionEvidenceRef": completion_evidence_ref,
+        "completionEvidenceEligible": completion_evidence_eligible,
+        "completionEvidenceBlockedReason": (
+            "placeholder-only-viewer" if completion_evidence_requested_ref and not completion_evidence_ref else None
+        ),
         "frames": frames,
         "actions": actions,
         "inputEventLogRefs": input_event_log_refs,
@@ -162,6 +204,8 @@ def validate_visible_run_viewer_manifest(
         kind = _frame_kind(frame)
         if kind == "screenshot":
             frame_counts["screenshot"] += 1
+            if not isinstance(frame.get("screenId"), str) or not frame.get("screenId"):
+                errors.append(_error("frame_screen_id_missing", "Screenshot frame must include screenId.", f"$.frames[{index}].screenId"))
             ref = frame.get("screenshotRef")
             if not isinstance(ref, str) or not ref:
                 errors.append(_error("screenshot_frame_ref_missing", "Screenshot frame must include screenshotRef.", f"$.frames[{index}].screenshotRef"))
@@ -169,6 +213,9 @@ def validate_visible_run_viewer_manifest(
                 errors.append(_error("inline_frame_ref", "Screenshot frame must reference a file, not an inline payload.", f"$.frames[{index}].screenshotRef"))
             elif require_existing_refs and not _existing_file(ref, base_dir=manifest_base_dir):
                 errors.append(_error("ref_missing", "Frame screenshot ref does not exist or is empty.", f"$.frames[{index}].screenshotRef", ref=ref))
+            for ref_index, overlay_ref in enumerate(_safe_ref_strings(frame.get("cursorOverlayRefs"))):
+                if _looks_inline_payload(overlay_ref):
+                    errors.append(_error("inline_cursor_overlay_ref", "cursorOverlayRefs must contain refs, not inline payloads.", f"$.frames[{index}].cursorOverlayRefs[{ref_index}]"))
         elif kind == "placeholder":
             frame_counts["placeholder"] += 1
             if isinstance(frame.get("screenshotRef"), str) and frame.get("screenshotRef"):
@@ -199,9 +246,18 @@ def validate_visible_run_viewer_manifest(
         errors.append(_error("raw_payload_written", "Visible viewer must not write raw payloads.", "$.rawPayloadWritten"))
     if manifest.get("inlineImageWritten") is not False:
         errors.append(_error("inline_image_written", "Visible viewer must not inline images.", "$.inlineImageWritten"))
+    if manifest.get("completionEvidenceEligible") is True and frame_counts["screenshot"] == 0:
+        errors.append(_error("placeholder_only_completion_evidence", "Placeholder-only viewer cannot be completion evidence.", "$.completionEvidenceEligible"))
+    if isinstance(manifest.get("completionEvidenceRef"), str) and manifest.get("completionEvidenceRef") and frame_counts["screenshot"] == 0:
+        errors.append(_error("placeholder_only_completion_evidence_ref", "completionEvidenceRef requires at least one real screenshot frame.", "$.completionEvidenceRef"))
     for index, ref in enumerate(_string_list(manifest.get("screenshotRefs"))):
         if _looks_inline_payload(ref):
             errors.append(_error("inline_screenshot_ref", "screenshotRefs must contain refs, not inline image payloads.", f"$.screenshotRefs[{index}]"))
+    for index, ref in enumerate(_string_list(manifest.get("visibleCursorRefs"))):
+        if _looks_inline_payload(ref):
+            errors.append(_error("inline_cursor_ref", "visibleCursorRefs must contain refs, not inline payloads.", f"$.visibleCursorRefs[{index}]"))
+    for issue in _inline_payload_issues(manifest):
+        errors.append(_error("inline_payload_forbidden", issue, "$"))
     if require_existing_refs:
         for path_field in ["viewerHtmlRef", "resultRef"]:
             ref = manifest.get(path_field)
@@ -283,9 +339,22 @@ def _frame_html(frame: Mapping[str, Any], base_dir: Path) -> str:
     label = html.escape(str(frame.get("label") or ref))
     index = html.escape(str(frame.get("index")))
     summary = html.escape(str(frame.get("summary") or ""))
+    screen = html.escape(str(frame.get("screenId") or "screen-unknown"))
+    window = html.escape(str(frame.get("windowId") or ""))
+    lease_owner = _mapping(frame.get("leaseOwner"))
+    owner_label = html.escape(str(lease_owner.get("actorId") or lease_owner.get("holder") or ""))
+    cursor_refs = html.escape(", ".join(_safe_ref_strings(frame.get("cursorOverlayRefs"))))
     image = f'<img src="{src}" alt="{label}">' if ref else ""
     summary_block = f"<div>{summary}</div>" if summary else ""
-    return f"<figure>{image}<figcaption>Frame {index}: <code>{label}</code>{summary_block}</figcaption></figure>"
+    provenance = f"<div>Screen: <code>{screen}</code>"
+    if window:
+        provenance += f"; window: <code>{window}</code>"
+    if owner_label:
+        provenance += f"; lease owner: <code>{owner_label}</code>"
+    if cursor_refs:
+        provenance += f"; cursor overlays: <code>{cursor_refs}</code>"
+    provenance += "</div>"
+    return f"<figure>{image}<figcaption>Frame {index}: <code>{label}</code>{provenance}{summary_block}</figcaption></figure>"
 
 
 def _placeholder_frame_html(frame: Mapping[str, Any]) -> str:
@@ -315,12 +384,26 @@ def _placeholder_frame_html(frame: Mapping[str, Any]) -> str:
 def _action_html(action: Mapping[str, Any]) -> str:
     refs = ", ".join(_string_list(action.get("screenshotRefs")) + _string_list(action.get("artifactRefs")))
     input_text = _input_label(action)
+    target = str(action.get("target") or "")
+    provenance = []
+    if action.get("screenId"):
+        provenance.append(f"screen={action['screenId']}")
+    if action.get("windowId"):
+        provenance.append(f"window={action['windowId']}")
+    if action.get("actorId"):
+        provenance.append(f"actor={action['actorId']}")
+    if action.get("cursorId"):
+        provenance.append(f"cursor={action['cursorId']}")
+    if action.get("executorEventRef"):
+        provenance.append(f"executor={action['executorEventRef']}")
+    if provenance:
+        target = "; ".join([target, *provenance]) if target else "; ".join(provenance)
     return (
         "<tr>"
         f"<td>{html.escape(str(action.get('index')))}</td>"
         f"<td>{html.escape(str(action.get('kind') or ''))}</td>"
         f"<td>{html.escape(str(action.get('status') or ''))}</td>"
-        f"<td>{html.escape(str(action.get('target') or ''))}</td>"
+        f"<td>{html.escape(target)}</td>"
         f"<td>{html.escape(input_text)}</td>"
         f"<td><code>{html.escape(refs)}</code></td>"
         "</tr>"
@@ -330,24 +413,44 @@ def _action_html(action: Mapping[str, Any]) -> str:
 def _frames(
     refs: Sequence[str],
     root: Path,
-    context: Mapping[str, str],
+    context: Mapping[str, Mapping[str, Any]],
     *,
     source_refs: Sequence[str],
     source_context: Mapping[str, Any],
     omitted_inline_screenshot_ref_count: int,
+    visible_cursor_refs: Sequence[str],
 ) -> list[dict[str, Any]]:
     frames: list[dict[str, Any]] = []
     for index, ref in enumerate(_unique_strings(refs)):
         path = Path(ref)
         absolute_ref = str(path.resolve()) if path.is_absolute() else str((root / path).resolve())
+        frame_context = _mapping(context.get(ref)) or _mapping(context.get(absolute_ref))
         if _existing_file(absolute_ref):
-            frames.append({
+            frame = {
                 "index": index,
                 "label": path.name or f"frame-{index}",
                 "screenshotRef": absolute_ref,
-                "summary": context.get(ref) or context.get(absolute_ref),
                 "kind": "screenshot",
-            })
+                "screenId": frame_context.get("screenId") or "screen-1",
+                "windowId": frame_context.get("windowId"),
+                "cursorOverlayRefs": _unique_strings([
+                    *_safe_ref_strings(frame_context.get("cursorOverlayRefs")),
+                    *_safe_ref_strings(visible_cursor_refs),
+                ]),
+                "sourceEvidenceRefs": _unique_strings([
+                    *_safe_ref_strings(frame_context.get("sourceEvidenceRefs")),
+                    *_safe_ref_strings(source_refs),
+                ]),
+                "beforeEvidenceRefs": _safe_ref_strings(frame_context.get("beforeEvidenceRefs")),
+                "afterEvidenceRefs": _safe_ref_strings(frame_context.get("afterEvidenceRefs")),
+                "leaseOwner": _mapping(frame_context.get("leaseOwner")),
+                "leaseScope": _mapping(frame_context.get("leaseScope")),
+                "timelineEventRef": frame_context.get("timelineEventRef"),
+                "actionIndex": frame_context.get("actionIndex"),
+            }
+            if frame_context.get("summary"):
+                frame["summary"] = frame_context.get("summary")
+            frames.append(_sanitize_viewer_payload(frame))
         else:
             frames.append(_placeholder_frame(
                 index=index,
@@ -358,9 +461,9 @@ def _frames(
                     "This placeholder is generated from run refs and metadata instead of rendering a blank frame."
                 ),
                 source_refs=source_refs,
-                source_context={**source_context, "missingScreenshotRef": absolute_ref},
+                source_context={**source_context, **frame_context, "missingScreenshotRef": absolute_ref},
                 missing_screenshot_ref=absolute_ref,
-                summary=context.get(ref) or context.get(absolute_ref),
+                summary=frame_context.get("summary"),
             ))
     if not frames:
         reason = "screenshot_refs_missing"
@@ -403,21 +506,24 @@ def _placeholder_frame(
         "placeholder": True,
         "reason": reason,
         "explanation": explanation,
+        "screenId": source_context.get("screenId") or "screen-1",
+        "windowId": source_context.get("windowId"),
         "sourceRefs": _unique_strings(list(source_refs)),
-        "sourceContext": dict(source_context),
+        "sourceContext": _sanitize_viewer_payload(dict(source_context)),
     }
     if missing_screenshot_ref:
         frame["missingScreenshotRef"] = missing_screenshot_ref
     if summary:
         frame["summary"] = summary
-    return frame
+    return _sanitize_viewer_payload(frame)
 
 
 def _actions(steps: Any) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     for fallback_index, step in enumerate(_mapping_list(steps)):
         action = _mapping(step.get("action"))
-        actions.append({
+        provenance = _provenance_from_step(step)
+        action_record = {
             "index": step.get("index", fallback_index),
             "kind": action.get("kind") or action.get("type"),
             "target": _target_text(action.get("target")),
@@ -426,29 +532,72 @@ def _actions(steps: Any) -> list[dict[str, Any]]:
             "reason": action.get("reason"),
             "status": step.get("status"),
             "verification": step.get("verification"),
+            "screenId": step.get("screenId") or provenance.get("screenId"),
+            "windowId": step.get("windowId") or provenance.get("windowId"),
+            "actorId": step.get("actorId") or provenance.get("actorId"),
+            "cursorId": step.get("cursorId") or provenance.get("cursorId"),
+            "leaseOwner": _mapping(step.get("leaseOwner")) or _lease_owner_from_step(step),
+            "leaseScope": _mapping(step.get("leaseScope")) or _lease_scope_from_step(step),
+            "executorEventRef": step.get("executorEventRef") or _first_ref(step, _mapping(step.get("execution")), keys=["executorEventRef", "commandEventRef", "executorCommandEventRef", "commandEventLogRef"]),
             "beforeSummary": step.get("beforeSummary"),
             "verificationReason": _mapping(step.get("verification")).get("reason"),
+            "beforeEvidenceRefs": _safe_ref_strings(step.get("beforeEvidenceRefs")) or _safe_ref_strings([step.get("beforeRef")]),
+            "afterEvidenceRefs": _safe_ref_strings(step.get("afterEvidenceRefs")) or _safe_ref_strings([step.get("afterRef")]),
+            "sourceEvidenceRefs": _safe_ref_strings(step.get("sourceEvidenceRefs")),
+            "cursorOverlayRefs": _safe_ref_strings(step.get("cursorOverlayRefs")),
             "screenshotRefs": _safe_ref_strings([
                 *([str(step.get("beforeRef"))] if isinstance(step.get("beforeRef"), str) else []),
                 *([str(step.get("afterRef"))] if isinstance(step.get("afterRef"), str) else []),
                 *_string_list(step.get("screenshotRefs")),
             ]),
             "artifactRefs": _safe_ref_strings(step.get("artifactRefs")),
-        })
+        }
+        actions.append(_sanitize_viewer_payload(action_record))
     return actions
 
 
-def _frame_context(actions: Sequence[Mapping[str, Any]], payload: Mapping[str, Any]) -> dict[str, str]:
-    context: dict[str, str] = {}
+def _frame_context(
+    actions: Sequence[Mapping[str, Any]],
+    payload: Mapping[str, Any],
+    *,
+    visible_cursor_refs: Sequence[str],
+) -> dict[str, Mapping[str, Any]]:
+    context: dict[str, Mapping[str, Any]] = {}
     for action in actions:
         refs = _string_list(action.get("screenshotRefs"))
-        if refs and isinstance(action.get("beforeSummary"), str):
-            context.setdefault(refs[0], str(action.get("beforeSummary")))
-        if refs and isinstance(action.get("verificationReason"), str):
-            context[refs[-1]] = str(action.get("verificationReason"))
+        if refs:
+            common = {
+                "actionIndex": action.get("index"),
+                "screenId": action.get("screenId") or "screen-1",
+                "windowId": action.get("windowId"),
+                "cursorOverlayRefs": _unique_strings([
+                    *_safe_ref_strings(action.get("cursorOverlayRefs")),
+                    *_safe_ref_strings(visible_cursor_refs),
+                ]),
+                "leaseOwner": _mapping(action.get("leaseOwner")),
+                "leaseScope": _mapping(action.get("leaseScope")),
+                "sourceEvidenceRefs": _safe_ref_strings(action.get("sourceEvidenceRefs")),
+                "timelineEventRef": action.get("executorEventRef"),
+            }
+            before_context = {
+                **common,
+                "summary": action.get("beforeSummary"),
+                "beforeEvidenceRefs": _safe_ref_strings(action.get("beforeEvidenceRefs")) or [refs[0]],
+            }
+            context.setdefault(refs[0], _sanitize_viewer_payload(before_context))
+            after_context = {
+                **common,
+                "summary": action.get("verificationReason"),
+                "afterEvidenceRefs": _safe_ref_strings(action.get("afterEvidenceRefs")) or [refs[-1]],
+            }
+            context[refs[-1]] = _sanitize_viewer_payload(after_context)
     final_ref = payload.get("finalObservationRef")
     if isinstance(final_ref, str) and isinstance(payload.get("reason"), str):
-        context[final_ref] = str(payload.get("reason"))
+        context[final_ref] = _sanitize_viewer_payload({
+            "summary": str(payload.get("reason")),
+            "screenId": _provenance_from_step(payload).get("screenId") or "screen-1",
+            "cursorOverlayRefs": _safe_ref_strings(visible_cursor_refs),
+        })
     return context
 
 
@@ -467,6 +616,7 @@ def _text_preview(value: Any) -> str | None:
     if not isinstance(value, str) or not value:
         return None
     compact = " ".join(value.split())
+    compact = _sanitize_viewer_text(compact)
     if len(compact) > 160:
         return compact[:157] + "..."
     return compact
@@ -557,6 +707,99 @@ def _source_manifest_ref(diagnostics: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _first_ref(*mappings: Mapping[str, Any], keys: Sequence[str]) -> str | None:
+    for mapping in mappings:
+        for key in keys:
+            value = mapping.get(key)
+            if isinstance(value, str) and value.strip() and not _unsafe_ref_string(value):
+                return value.strip()
+    return None
+
+
+def _frame_counts(frames: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    counts = {"screenshot": 0, "placeholder": 0}
+    for frame in frames:
+        kind = _frame_kind(frame)
+        if kind in counts:
+            counts[kind] += 1
+    return counts
+
+
+def _provenance_from_step(step: Mapping[str, Any]) -> dict[str, str]:
+    found: dict[str, str] = {}
+    _collect_provenance(step, found)
+    screen_id = found.get("screenId")
+    window_id = found.get("windowId")
+    scope_type = found.get("scopeType") or ("window" if window_id else ("screen" if screen_id else ""))
+    result: dict[str, str] = {}
+    if scope_type:
+        result["scopeType"] = scope_type.strip().lower().replace("_", "-")
+    for key in ("screenId", "windowId", "actorId", "cursorId"):
+        if found.get(key):
+            result[key] = found[key]
+    return result
+
+
+def _collect_provenance(value: Any, found: dict[str, str]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized = str(key).replace("_", "").replace("-", "").lower()
+            if normalized in {"screenid", "screen"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("screenId", str(item).strip())
+            elif normalized in {"windowid", "window"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("windowId", str(item).strip())
+            elif normalized in {"actorid", "actor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("actorId", str(item).strip())
+            elif normalized in {"cursorid", "cursor"} and isinstance(item, (str, int, float)) and str(item).strip():
+                found.setdefault("cursorId", str(item).strip())
+            elif normalized in {"scopetype", "scope"} and isinstance(item, str) and item.strip():
+                found.setdefault("scopeType", item.strip())
+            if isinstance(item, (Mapping, list, tuple)):
+                _collect_provenance(item, found)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _collect_provenance(item, found)
+
+
+def _lease_owner_from_step(step: Mapping[str, Any]) -> dict[str, Any]:
+    action = _mapping(step.get("action"))
+    execution = _mapping(step.get("execution"))
+    candidates = [
+        _mapping(step.get("leaseOwner")),
+        _mapping(action.get("leaseOwner")),
+        _mapping(_mapping(action.get("metadata")).get("leaseOwner")),
+        _mapping(_mapping(execution.get("metadata")).get("leaseOwner")),
+    ]
+    owner: dict[str, Any] = {}
+    for candidate in candidates:
+        owner.update(candidate)
+    provenance = _provenance_from_step(step)
+    for key in ("actorId", "cursorId"):
+        if key not in owner and provenance.get(key):
+            owner[key] = provenance[key]
+    return _sanitize_viewer_payload(owner)
+
+
+def _lease_scope_from_step(step: Mapping[str, Any]) -> dict[str, Any]:
+    action = _mapping(step.get("action"))
+    execution = _mapping(step.get("execution"))
+    candidates = [
+        _mapping(step.get("leaseScope")),
+        _mapping(action.get("leaseScope")),
+        _mapping(_mapping(action.get("metadata")).get("leaseScope")),
+        _mapping(_mapping(execution.get("metadata")).get("leaseScope")),
+        _provenance_from_step(step),
+    ]
+    scope: dict[str, Any] = {}
+    for candidate in candidates:
+        scope.update({key: value for key, value in candidate.items() if value})
+    return _sanitize_viewer_payload({
+        key: scope[key]
+        for key in ("scopeType", "screenId", "windowId")
+        if key in scope
+    })
+
+
 def _source_context(
     payload: Mapping[str, Any],
     actions: Sequence[Mapping[str, Any]],
@@ -566,17 +809,20 @@ def _source_context(
     omitted_inline_screenshot_ref_count: int,
 ) -> dict[str, Any]:
     diagnostics = _mapping(payload.get("failureDiagnostics"))
-    return {
+    provenance = _provenance_from_step(payload) or _provenance_from_step(diagnostics)
+    return _sanitize_viewer_payload({
         "status": str(payload.get("status") or "unknown"),
         "reason": str(payload.get("reason") or payload.get("message") or ""),
         "task": str(payload.get("task") or ""),
         "failedStage": str(diagnostics.get("failedStage") or ""),
+        "screenId": provenance.get("screenId") or "screen-1",
+        "windowId": provenance.get("windowId"),
         "actionCount": len(actions),
         "declaredScreenshotRefCount": declared_screenshot_ref_count,
         "rawScreenshotRefCount": raw_screenshot_ref_count,
         "omittedInlineScreenshotRefCount": omitted_inline_screenshot_ref_count,
         "source": "computer-use-result steps, screenshotRefs, and finalObservationRef",
-    }
+    })
 
 
 def _relative_ref(ref: str, base_dir: Path) -> str:
@@ -632,7 +878,7 @@ def _safe_ref_strings(value: Any) -> list[str]:
     return _unique_strings([
         str(item)
         for item in values
-        if isinstance(item, (str, int, float)) and str(item) and not _looks_inline_payload(str(item))
+        if isinstance(item, (str, int, float)) and str(item) and not _unsafe_ref_string(str(item))
     ])
 
 
@@ -669,6 +915,114 @@ def _existing_file(ref: str, *, base_dir: Path | None = None) -> bool:
 def _looks_inline_payload(value: str) -> bool:
     text = value.strip().lower()
     return text.startswith("data:") or text.startswith("base64:") or ";base64," in text
+
+
+def _unsafe_ref_string(value: str) -> bool:
+    text = value.strip()
+    lowered = text.lower()
+    return (
+        not text
+        or _looks_inline_payload(text)
+        or lowered.startswith(("http://", "https://", "www."))
+        or "?" in text
+        or "#" in text
+        or VIEWER_SECRET_ASSIGNMENT_RE.search(text) is not None
+        or VIEWER_SECRET_TEXT_RE.search(text) is not None
+    )
+
+
+def _sanitize_viewer_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        safe: dict[str, Any] = {}
+        redacted_fields = 0
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = key_text.replace("_", "").replace("-", "").lower()
+            if _is_sensitive_viewer_key(normalized):
+                redacted_fields += 1
+                continue
+            safe[key_text] = _sanitize_viewer_payload(item)
+        if redacted_fields:
+            safe["redactedFieldCount"] = redacted_fields
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_viewer_payload(item) for item in value]
+    if isinstance(value, str):
+        return _sanitize_viewer_text(value)
+    return value
+
+
+def _sanitize_viewer_text(value: str) -> str:
+    text = VIEWER_SECRET_ASSIGNMENT_RE.sub(VIEWER_REDACTED_VALUE, value)
+    lowered = text.strip().lower()
+    if _looks_inline_payload(text) or "data:image/" in lowered:
+        return VIEWER_REDACTED_VALUE
+    if VIEWER_SECRET_TEXT_RE.search(text.strip()):
+        return VIEWER_REDACTED_VALUE
+    return text
+
+
+def _inline_payload_issues(value: Any) -> list[str]:
+    issues: list[str] = []
+    _collect_inline_payload_issues(value, issues, path="$")
+    return _unique_strings(issues)
+
+
+def _collect_inline_payload_issues(value: Any, issues: list[str], *, path: str) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = key_text.replace("_", "").replace("-", "").lower()
+            if _is_sensitive_viewer_key(normalized):
+                issues.append(f"Viewer manifest contains forbidden sensitive/raw payload key {key_text!r} at {path}.")
+            _collect_inline_payload_issues(item, issues, path=f"{path}.{key_text}")
+        return
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            _collect_inline_payload_issues(item, issues, path=f"{path}[{index}]")
+        return
+    if isinstance(value, str):
+        if _looks_inline_payload(value) or "data:image/" in value.lower():
+            issues.append("Viewer manifest must not contain inline image/base64 payloads.")
+        elif VIEWER_SECRET_ASSIGNMENT_RE.search(value) or VIEWER_SECRET_TEXT_RE.search(value.strip()):
+            issues.append("Viewer manifest must not inline provider payloads, tokens, secrets, or credentials.")
+
+
+def _is_sensitive_viewer_key(normalized_key: str) -> bool:
+    if normalized_key.endswith("count"):
+        return False
+    if normalized_key in {"rawpayloadwritten", "inlineimagewritten", "secretswritten"}:
+        return False
+    if normalized_key in {
+        "authorization",
+        "authheader",
+        "base64",
+        "body",
+        "credential",
+        "credentials",
+        "dataurl",
+        "header",
+        "headers",
+        "imagebase64",
+        "password",
+        "payload",
+        "providerpayload",
+        "raw",
+        "rawbody",
+        "rawimage",
+        "rawpayload",
+        "rawproviderbody",
+        "rawproviderpayload",
+        "rawscreenshot",
+        "secret",
+        "token",
+    }:
+        return True
+    if any(token in normalized_key for token in ("authorization", "password", "credential", "secret", "token")):
+        return True
+    if any(token in normalized_key for token in ("apikey", "accesskey", "privatekey", "base64", "dataurl")):
+        return True
+    return normalized_key.startswith("raw") or normalized_key.endswith("payload")
 
 
 def _validation(

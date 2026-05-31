@@ -7,7 +7,7 @@ export const manifest: UIComponentManifest = {
   title: 'Terminal session viewer',
   description: 'Pure presentation renderer for interactive terminal session buffers and host-declared terminal events.',
   componentId: 'terminal-session-viewer',
-  lifecycle: 'draft',
+  lifecycle: 'published',
   outputArtifactTypes: ['terminal-session'],
   acceptsArtifactTypes: ['terminal-session', 'terminal-buffer', 'runtime-terminal-session'],
   viewParams: ['sessionRef', 'status', 'buffer', 'title', 'capabilities', 'theme', 'metadata'],

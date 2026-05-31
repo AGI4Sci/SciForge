@@ -17,7 +17,7 @@ import {
   browserRuntimeCommandRisk,
   buildBrowserRuntimeStableRef,
   type BrowserRuntimeStableRef,
-} from '@sciforge-observe/web/browser-runtime';
+} from '@sciforge-ui/runtime-contract';
 import { Badge, Button, Input, SectionHeader, cx } from './uiPrimitives';
 
 const DEFAULT_BROWSER_URL = 'about:blank';

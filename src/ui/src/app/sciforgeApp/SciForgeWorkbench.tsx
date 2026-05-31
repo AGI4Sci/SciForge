@@ -4,7 +4,7 @@ import { compileScenarioIRFromSelection } from '@sciforge/scenario-core/scenario
 import { builtInScenarioIdForRuntimeInput, scenarioRuntimeOverrideForBuiltInScenario } from '@sciforge/scenario-core/scenario-routing-policy';
 import { scenarios, type ScenarioId } from '../../data';
 import { nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type ScenarioInstanceId, type ScenarioRuntimeOverride, type SciForgeConfig, type SciForgeReference, type SciForgeSession, type TimelineEventRecord } from '../../domain';
-import { listWorkspace, type WorkspaceEntry, type WorkspaceFileContent } from '../../api/workspaceClient';
+import { listWorkspace, type WorkspaceEntry } from '../../api/workspaceClient';
 import {
   artifactTypeForPath,
   normalizeWorkspacePath,
@@ -13,7 +13,7 @@ import {
   workspacePathBasename,
 } from '../../../../../packages/support/object-references';
 import { ChatPanel } from '../ChatPanel';
-import { ResultsRenderer } from '../ResultsRenderer';
+import { ResultsRenderer, type WorkspaceFileEditorState } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
 import { runPresentationState } from '../results-renderer-execution-model';
 import { composerReferenceForObjectReference } from '../chat/composerReferences';
@@ -104,8 +104,8 @@ export function Workbench({
   onTimelineEvent: (event: TimelineEventRecord) => void;
   onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
   onPreviewPackageRequest: (scenarioId: ScenarioInstanceId, reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
-  workspaceFileEditor: { file: WorkspaceFileContent; draft: string } | null;
-  onWorkspaceFileEditorChange: (next: { file: WorkspaceFileContent; draft: string } | null) => void;
+  workspaceFileEditor: WorkspaceFileEditorState | null;
+  onWorkspaceFileEditorChange: (next: WorkspaceFileEditorState | null) => void;
   externalReferenceRequest?: { id: string; reference: SciForgeReference };
   onExternalReferenceConsumed: (requestId: string) => void;
   availableComponentIds: string[];

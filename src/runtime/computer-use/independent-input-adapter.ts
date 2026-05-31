@@ -1,4 +1,4 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -6,8 +6,23 @@ import {
   computerUsePointerKeyboardOwnershipIds,
   normalizeComputerUseIndependentInputAdapter,
 } from '../../../packages/actions/computer-use/runtime-policy.js';
-import type { ComputerUseConfig, GenericVisionAction, WindowBounds, WindowTargetResolution } from './types.js';
-import { acquireComputerUseSchedulerLease, computerUseSchedulerLockId, schedulerLeaseTrace } from './scheduler.js';
+import type {
+  ComputerUseActionProvenance,
+  ComputerUseConfig,
+  ComputerUseLeaseScope,
+  ComputerUseVisibleEvidenceInvalidation,
+  GenericVisionAction,
+  WindowBounds,
+  WindowTargetResolution,
+} from './types.js';
+import {
+  acquireComputerUseSchedulerLease,
+  computerUseSchedulerLockId,
+  computerUseStaleEvidenceInvalidationForAction,
+  deriveComputerUseActionProvenance,
+  schedulerLeaseTrace,
+  validateComputerUseScopedAction,
+} from './scheduler.js';
 import { workspaceRel } from './utils.js';
 import {
   applyVirtualRemoteSessionAction,
@@ -23,6 +38,8 @@ import {
 
 export const SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER = 'sciforge-simulated-remote-desktop';
 export const SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA = 'sciforge.computer-use.independent-input-adapter.v1';
+export const SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA = 'sciforge.computer-use.actor-cursor-log.v1';
+export const SCIFORGE_EXECUTOR_PROJECTION_SCHEMA = 'sciforge.computer-use.executor-projection.v1';
 
 type VirtualPointerState = {
   mode: 'virtual-pointer';
@@ -46,6 +63,35 @@ type VirtualKeyboardState = {
   lastUpdatedAt?: string;
 };
 
+type ActorCursorProjection = {
+  schemaVersion: 'sciforge.computer-use.actor-cursor-projection.v1';
+  actorId: string;
+  cursorId: string;
+  displayGroupId: string;
+  screenId: string;
+  windowId?: string;
+  label: string;
+  color: string;
+  coordinateSpace: string;
+  x?: number;
+  y?: number;
+  targetDescription?: string;
+  lastEventId: string;
+  lastUpdatedAt: string;
+};
+
+type ExecutorProjectionState = {
+  schemaVersion: typeof SCIFORGE_EXECUTOR_PROJECTION_SCHEMA;
+  projectionRef: string;
+  eventCount: number;
+  lastExecutorEventRef?: string;
+  events: Array<Record<string, unknown>>;
+  sharedSystemInputUsed: false;
+  systemPointerMoved: false;
+  systemKeyboardEventsSent: false;
+  lastStaleEvidenceInvalidation?: ComputerUseVisibleEvidenceInvalidation;
+};
+
 type IndependentInputAdapterState = {
   schemaVersion: typeof SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA;
   adapter: 'remote-desktop';
@@ -63,6 +109,20 @@ type IndependentInputAdapterState = {
   };
   virtualPointer: VirtualPointerState;
   virtualKeyboard: VirtualKeyboardState;
+  actorCursorLog: {
+    schemaVersion: typeof SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA;
+    logRef: string;
+    eventCount: number;
+    appendOnly: true;
+  };
+  actorCursors: ActorCursorProjection[];
+  executorProjection: ExecutorProjectionState;
+  isolationFlags: {
+    sharedSystemInputUsed: false;
+    systemPointerMoved: false;
+    systemKeyboardEventsSent: false;
+    failClosedByDefault: true;
+  };
   actions: Array<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +162,7 @@ export async function executeIndependentInputAdapterAction(
       exitCode: 125,
       stdout: '',
       stderr: targetResolution.reason,
+      independentInputAdapter: sharedSystemInputFailClosedDiagnostic(config, 'blocked-unresolved-target'),
     };
   }
   if (!hasExecutableIndependentInputAdapter(config)) {
@@ -109,13 +170,31 @@ export async function executeIndependentInputAdapterAction(
       exitCode: 125,
       stdout: '',
       stderr: 'No executable independent input adapter provider is registered for this Computer Use run.',
+      independentInputAdapter: sharedSystemInputFailClosedDiagnostic(config, 'blocked-no-independent-adapter'),
+    };
+  }
+  const adapterTargetResolution = projectIndependentInputAdapterTargetResolution(config, action, targetResolution);
+  const scopedAction = validateComputerUseScopedAction({
+    action,
+    targetResolution: adapterTargetResolution,
+  });
+  if (!scopedAction.ok) {
+    return {
+      exitCode: 125,
+      stdout: '',
+      stderr: scopedAction.reason,
+      schedulerDecision: scopedAction,
+      independentInputAdapter: sharedSystemInputFailClosedDiagnostic(config, 'blocked-scoped-scheduler'),
     };
   }
   const lease = await acquireComputerUseSchedulerLease({
-    targetResolution,
-    lockId: computerUseSchedulerLockId(targetResolution, { sharedSystemInput: false }),
+    targetResolution: adapterTargetResolution,
+    lockId: computerUseSchedulerLockId(adapterTargetResolution, { sharedSystemInput: false, leaseScope: scopedAction.leaseScope }),
     runId: config.runId,
     stepId: action.type,
+    action,
+    provenance: scopedAction.provenance,
+    leaseScope: scopedAction.leaseScope,
     timeoutMs: config.schedulerLockTimeoutMs,
     staleMs: config.schedulerStaleLockMs,
   });
@@ -131,15 +210,21 @@ export async function executeIndependentInputAdapterAction(
         waitMs: lease.waitMs,
         status: 'timeout',
         reason: lease.reason,
+        leaseScope: scopedAction.leaseScope,
+        provenance: scopedAction.provenance,
       },
     };
   }
   const now = new Date().toISOString();
   const statePath = join(options.runDir, 'independent-input-adapter.json');
   const iconPath = join(options.runDir, 'independent-input-pointer.svg');
+  const actorCursorLogPath = join(options.runDir, 'actor-cursors.jsonl');
+  const executorProjectionPath = join(options.runDir, 'executor-projection.json');
   const sessionPath = virtualRemoteSessionPath(options.runDir);
   const stateRef = workspaceRel(options.workspace, statePath);
   const iconRef = workspaceRel(options.workspace, iconPath);
+  const actorCursorLogRef = workspaceRel(options.workspace, actorCursorLogPath);
+  const executorProjectionRef = workspaceRel(options.workspace, executorProjectionPath);
   const sessionRef = workspaceRel(options.workspace, sessionPath);
   await writeFile(iconPath, virtualPointerIconSvg(), 'utf8');
   let result: {
@@ -152,14 +237,16 @@ export async function executeIndependentInputAdapterAction(
     const session = await readVirtualRemoteSessionState(options.runDir)
       ?? initialVirtualRemoteSessionState({
         config,
-        targetResolution,
+        targetResolution: adapterTargetResolution,
         now,
       });
     const state = await readAdapterState(statePath) ?? initialAdapterState({
       config,
-      targetResolution,
+      targetResolution: adapterTargetResolution,
       now,
       sessionRef,
+      actorCursorLogRef,
+      executorProjectionRef,
       session,
     });
     const nextSession = await applyVirtualRemoteSessionAction(options.workspace, options.runDir, session, action, {
@@ -173,8 +260,36 @@ export async function executeIndependentInputAdapterAction(
       iconRef,
       sessionRef,
       session: nextSession,
+      actorCursorLogRef,
+      executorProjectionRef,
+      provenance: scopedAction.provenance,
+      leaseScope: scopedAction.leaseScope,
+      schedulerLeaseRef: lease.lease.lockPath,
     });
-    await writeFile(statePath, `${JSON.stringify(nextState, null, 2)}\n`, 'utf8');
+    const cursorEvent = actorCursorLogEvent(nextState, action, {
+      stepIndex: options.stepIndex,
+      now,
+      provenance: scopedAction.provenance,
+      leaseScope: scopedAction.leaseScope,
+      executorProjectionRef,
+    });
+    const executorEvent = executorProjectionEvent(nextState, action, {
+      stepIndex: options.stepIndex,
+      now,
+      provenance: scopedAction.provenance,
+      leaseScope: scopedAction.leaseScope,
+      executorProjectionRef,
+      schedulerLeaseRef: lease.lease.lockPath,
+      staleEvidenceInvalidation: scopedAction.staleEvidenceInvalidation
+        ?? computerUseStaleEvidenceInvalidationForAction(action, scopedAction.leaseScope),
+    });
+    const projectedState = applyActorCursorAndExecutorProjection(nextState, cursorEvent, executorEvent, {
+      actorCursorLogRef,
+      executorProjectionRef,
+    });
+    await appendFile(actorCursorLogPath, `${JSON.stringify(cursorEvent)}\n`, 'utf8');
+    await writeFile(executorProjectionPath, `${JSON.stringify(projectedState.executorProjection, null, 2)}\n`, 'utf8');
+    await writeFile(statePath, `${JSON.stringify(projectedState, null, 2)}\n`, 'utf8');
     await writeVirtualRemoteSessionState(options.workspace, options.runDir, nextSession);
     const visibleArtifacts = collectVirtualRemoteSessionArtifacts(nextSession);
     result = {
@@ -192,17 +307,33 @@ export async function executeIndependentInputAdapterAction(
         provider: SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
         stateRef,
         pointerIconRef: iconRef,
+        actorCursorLogRef,
+        executorProjectionRef,
         virtualRemoteSessionRef: sessionRef,
         visibleArtifactRefs: visibleArtifacts.map((artifact) => artifact.artifactRef),
         visibleArtifacts,
         visibleTexts: collectVirtualRemoteSessionVisibleTexts(nextSession),
+        displayGroupId: scopedAction.provenance.displayGroupId,
+        screenId: scopedAction.provenance.screenId,
+        windowId: scopedAction.provenance.windowId,
+        actorId: scopedAction.provenance.actorId,
+        cursorId: scopedAction.provenance.cursorId,
+        leaseScope: scopedAction.leaseScope,
+        executorEventRef: executorEvent.executorEventRef,
+        staleEvidenceInvalidation: executorEvent.staleEvidenceInvalidation,
         pointerKeyboardOwnership: computerUsePointerKeyboardOwnershipIds.independentAdapter,
         pointerMode: 'adapter-window-bound-pointer',
         keyboardMode: 'adapter-window-bound-keyboard',
         userDeviceImpact: 'none',
         systemMouseEvents: 'not-sent',
         systemKeyboardEvents: 'not-sent',
-        actionCount: nextState.actions.length,
+        sharedSystemInputUsed: false,
+        systemPointerMoved: false,
+        systemKeyboardEventsSent: false,
+        actionCount: projectedState.actions.length,
+        actorCursorEventCount: projectedState.actorCursorLog.eventCount,
+        executorProjectionEventCount: projectedState.executorProjection.eventCount,
+        sharedSystemInputDiagnostic: sharedSystemInputFailClosedDiagnostic(config, 'not-used-independent-adapter'),
       },
     };
   } finally {
@@ -231,6 +362,51 @@ function normalizeIndependentInputAdapterProvider(value: string | undefined) {
   return normalized;
 }
 
+function projectIndependentInputAdapterTargetResolution(
+  config: ComputerUseConfig,
+  action: GenericVisionAction,
+  targetResolution: Extract<WindowTargetResolution, { ok: true }>,
+): Extract<WindowTargetResolution, { ok: true }> {
+  if (targetResolution.captureKind === 'window') return targetResolution;
+  if (action.windowId || action.leaseScope) return targetResolution;
+  const displayId = targetResolution.displayId ?? config.windowTarget.displayId ?? config.captureDisplays[0] ?? 1;
+  const displayGroupId = config.windowTarget.displayGroupId ?? targetResolution.displayGroupId ?? `display-group-${displayId}`;
+  const screenId = config.windowTarget.screenId ?? targetResolution.screenId ?? `screen-${displayId}`;
+  const virtualWindowId = config.windowTarget.virtualWindowId ?? `virtual-remote-session-window-${displayId}`;
+  const bounds = targetResolution.bounds ?? config.windowTarget.bounds ?? { x: 0, y: 0, width: 1280, height: 720 };
+  return {
+    ...targetResolution,
+    target: {
+      ...targetResolution.target,
+      enabled: true,
+      mode: 'app-window',
+      displayGroupId,
+      screenId,
+      virtualWindowId,
+      appName: targetResolution.appName ?? config.windowTarget.appName ?? 'Virtual Remote Session',
+      title: targetResolution.title ?? config.windowTarget.title ?? 'Simulated Remote Desktop',
+      coordinateSpace: 'window-local',
+      inputIsolation: 'require-focused-target',
+    },
+    captureKind: 'window',
+    displayGroupId,
+    screenId,
+    virtualWindowId,
+    appName: targetResolution.appName ?? config.windowTarget.appName ?? 'Virtual Remote Session',
+    title: targetResolution.title ?? config.windowTarget.title ?? 'Simulated Remote Desktop',
+    displayId,
+    bounds,
+    contentRect: targetResolution.contentRect ?? config.windowTarget.contentRect ?? bounds,
+    coordinateSpace: 'window-local',
+    inputIsolation: 'require-focused-target',
+    schedulerLockId: `virtual-remote-session-${displayGroupId}-${screenId}-${virtualWindowId}`,
+    diagnostics: [
+      ...targetResolution.diagnostics,
+      'projected display fallback to package-owned simulated remote desktop window for scoped executor lease',
+    ],
+  };
+}
+
 async function readAdapterState(path: string): Promise<IndependentInputAdapterState | undefined> {
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8')) as unknown;
@@ -245,8 +421,14 @@ function initialAdapterState(options: {
   targetResolution: Extract<WindowTargetResolution, { ok: true }>;
   now: string;
   sessionRef: string;
+  actorCursorLogRef: string;
+  executorProjectionRef: string;
   session: VirtualRemoteSessionState;
 }): IndependentInputAdapterState {
+  const provenance = deriveComputerUseActionProvenance({
+    action: { type: 'wait', ms: 0 },
+    targetResolution: options.targetResolution,
+  });
   return {
     schemaVersion: SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA,
     adapter: 'remote-desktop',
@@ -260,6 +442,9 @@ function initialAdapterState(options: {
       mode: options.targetResolution.captureKind,
       source: options.targetResolution.source,
       windowId: options.targetResolution.windowId,
+      displayGroupId: provenance.displayGroupId,
+      screenId: provenance.screenId,
+      virtualWindowId: provenance.windowId,
       appName: options.targetResolution.appName,
       title: options.targetResolution.title,
       coordinateSpace: options.targetResolution.coordinateSpace,
@@ -285,6 +470,40 @@ function initialAdapterState(options: {
       typedTextLedger: [],
       lastUpdatedAt: options.now,
     },
+    actorCursorLog: {
+      schemaVersion: SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA,
+      logRef: options.actorCursorLogRef,
+      eventCount: 0,
+      appendOnly: true,
+    },
+    actorCursors: [{
+      schemaVersion: 'sciforge.computer-use.actor-cursor-projection.v1',
+      actorId: provenance.actorId,
+      cursorId: provenance.cursorId,
+      displayGroupId: provenance.displayGroupId,
+      screenId: provenance.screenId,
+      windowId: provenance.windowId,
+      label: provenance.actorId,
+      color: '#00d5ff',
+      coordinateSpace: options.targetResolution.coordinateSpace,
+      lastEventId: 'initial-presence',
+      lastUpdatedAt: options.now,
+    }],
+    executorProjection: {
+      schemaVersion: SCIFORGE_EXECUTOR_PROJECTION_SCHEMA,
+      projectionRef: options.executorProjectionRef,
+      eventCount: 0,
+      events: [],
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+    },
+    isolationFlags: {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      failClosedByDefault: true,
+    },
     actions: [],
     createdAt: options.now,
     updatedAt: options.now,
@@ -300,16 +519,31 @@ function applyVirtualInputAction(
     iconRef: string;
     sessionRef: string;
     session: VirtualRemoteSessionState;
+    actorCursorLogRef: string;
+    executorProjectionRef: string;
+    provenance: ComputerUseActionProvenance;
+    leaseScope: ComputerUseLeaseScope;
+    schedulerLeaseRef: string;
   },
 ): IndependentInputAdapterState {
   const record: Record<string, unknown> = {
     id: `step-${String(options.stepIndex).padStart(3, '0')}-${action.type}`,
     type: action.type,
     timestamp: options.now,
+    displayGroupId: options.provenance.displayGroupId,
+    screenId: options.provenance.screenId,
+    windowId: options.provenance.windowId,
+    actorId: options.provenance.actorId,
+    cursorId: options.provenance.cursorId,
+    leaseScope: options.leaseScope,
+    schedulerLeaseRef: options.schedulerLeaseRef,
     targetDescription: action.targetDescription,
     targetRegionDescription: action.targetRegionDescription,
     systemMouseEvents: 'not-sent',
     systemKeyboardEvents: 'not-sent',
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
   };
   const virtualPointer = { ...state.virtualPointer, lastUpdatedAt: options.now };
   const virtualKeyboard = {
@@ -359,8 +593,226 @@ function applyVirtualInputAction(
     },
     virtualPointer,
     virtualKeyboard,
+    actorCursorLog: state.actorCursorLog ?? {
+      schemaVersion: SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA,
+      logRef: options.actorCursorLogRef,
+      eventCount: 0,
+      appendOnly: true,
+    },
+    actorCursors: Array.isArray(state.actorCursors) ? state.actorCursors : [],
+    executorProjection: state.executorProjection ?? {
+      schemaVersion: SCIFORGE_EXECUTOR_PROJECTION_SCHEMA,
+      projectionRef: options.executorProjectionRef,
+      eventCount: 0,
+      events: [],
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+    },
+    isolationFlags: state.isolationFlags ?? {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      failClosedByDefault: true,
+    },
     actions: [...state.actions, record],
     updatedAt: options.now,
+  };
+}
+
+function actorCursorLogEvent(
+  state: IndependentInputAdapterState,
+  action: GenericVisionAction,
+  options: {
+    stepIndex: number;
+    now: string;
+    provenance: ComputerUseActionProvenance;
+    leaseScope: ComputerUseLeaseScope;
+    executorProjectionRef: string;
+  },
+) {
+  const actionRecord = state.actions[state.actions.length - 1] ?? {};
+  const pointer = isRecord(actionRecord.pointer) ? actionRecord.pointer : undefined;
+  return {
+    schemaVersion: SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA,
+    id: `cursor-event-${String(options.stepIndex).padStart(3, '0')}-${action.type}`,
+    eventType: 'intent-proposal',
+    actionType: action.type,
+    timestamp: options.now,
+    displayGroupId: options.provenance.displayGroupId,
+    screenId: options.provenance.screenId,
+    windowId: options.provenance.windowId,
+    actorId: options.provenance.actorId,
+    cursorId: options.provenance.cursorId,
+    leaseScope: options.leaseScope,
+    pointer,
+    targetDescription: action.targetDescription,
+    targetRegionDescription: action.targetRegionDescription,
+    executorProjectionRef: options.executorProjectionRef,
+    systemMouseEvents: 'not-sent',
+    systemKeyboardEvents: 'not-sent',
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+    appendOnly: true,
+  };
+}
+
+function executorProjectionEvent(
+  state: IndependentInputAdapterState,
+  action: GenericVisionAction,
+  options: {
+    stepIndex: number;
+    now: string;
+    provenance: ComputerUseActionProvenance;
+    leaseScope: ComputerUseLeaseScope;
+    executorProjectionRef: string;
+    schedulerLeaseRef: string;
+    staleEvidenceInvalidation?: ComputerUseVisibleEvidenceInvalidation;
+  },
+) {
+  const actionRecord = state.actions[state.actions.length - 1] ?? {};
+  const executorEventRef = `executor-projection:${String(options.stepIndex).padStart(3, '0')}:${action.type}`;
+  return {
+    schemaVersion: 'sciforge.computer-use.executor-projection-event.v1',
+    id: `executor-event-${String(options.stepIndex).padStart(3, '0')}-${action.type}`,
+    executorEventRef,
+    projectionRef: options.executorProjectionRef,
+    timestamp: options.now,
+    actionId: actionRecord.id,
+    actionType: action.type,
+    status: 'projected-to-isolated-adapter',
+    displayGroupId: options.provenance.displayGroupId,
+    screenId: options.provenance.screenId,
+    windowId: options.provenance.windowId,
+    actorId: options.provenance.actorId,
+    cursorId: options.provenance.cursorId,
+    leaseScope: options.leaseScope,
+    schedulerLeaseRef: options.schedulerLeaseRef,
+    pointer: isRecord(actionRecord.pointer) ? actionRecord.pointer : undefined,
+    keyboard: keyboardProjectionForAction(action),
+    staleEvidenceInvalidation: options.staleEvidenceInvalidation,
+    executor: SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+  };
+}
+
+function applyActorCursorAndExecutorProjection(
+  state: IndependentInputAdapterState,
+  cursorEvent: Record<string, unknown>,
+  executorEvent: Record<string, unknown>,
+  refs: {
+    actorCursorLogRef: string;
+    executorProjectionRef: string;
+  },
+): IndependentInputAdapterState {
+  const actorId = stringField(cursorEvent.actorId) ?? 'actor-agent';
+  const cursorId = stringField(cursorEvent.cursorId) ?? `${actorId}-cursor`;
+  const existingCursors = Array.isArray(state.actorCursors) ? state.actorCursors : [];
+  const actorCursors = upsertActorCursorProjection(existingCursors, cursorEvent);
+  const priorProjection = state.executorProjection ?? {
+    schemaVersion: SCIFORGE_EXECUTOR_PROJECTION_SCHEMA,
+    projectionRef: refs.executorProjectionRef,
+    eventCount: 0,
+    events: [],
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+  };
+  const events = [...priorProjection.events, executorEvent];
+  return {
+    ...state,
+    actorCursorLog: {
+      schemaVersion: SCIFORGE_ACTOR_CURSOR_LOG_SCHEMA,
+      logRef: refs.actorCursorLogRef,
+      eventCount: (state.actorCursorLog?.eventCount ?? 0) + 1,
+      appendOnly: true,
+    },
+    actorCursors,
+    executorProjection: {
+      schemaVersion: SCIFORGE_EXECUTOR_PROJECTION_SCHEMA,
+      projectionRef: refs.executorProjectionRef,
+      eventCount: events.length,
+      lastExecutorEventRef: stringField(executorEvent.executorEventRef),
+      events,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      lastStaleEvidenceInvalidation: isVisibleEvidenceInvalidation(executorEvent.staleEvidenceInvalidation)
+        ? executorEvent.staleEvidenceInvalidation
+        : undefined,
+    },
+    isolationFlags: {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      failClosedByDefault: true,
+    },
+    actions: state.actions.map((record, index, all) => index === all.length - 1
+      ? {
+          ...record,
+          actorCursorEventRef: stringField(cursorEvent.id),
+          executorEventRef: stringField(executorEvent.executorEventRef),
+          actorId,
+          cursorId,
+          sharedSystemInputUsed: false,
+          systemPointerMoved: false,
+          systemKeyboardEventsSent: false,
+        }
+      : record),
+  };
+}
+
+function upsertActorCursorProjection(
+  existingCursors: ActorCursorProjection[],
+  cursorEvent: Record<string, unknown>,
+): ActorCursorProjection[] {
+  const actorId = stringField(cursorEvent.actorId) ?? 'actor-agent';
+  const cursorId = stringField(cursorEvent.cursorId) ?? `${actorId}-cursor`;
+  const pointer = isRecord(cursorEvent.pointer) ? cursorEvent.pointer : {};
+  const next: ActorCursorProjection = {
+    schemaVersion: 'sciforge.computer-use.actor-cursor-projection.v1',
+    actorId,
+    cursorId,
+    displayGroupId: stringField(cursorEvent.displayGroupId) ?? 'display-group-default',
+    screenId: stringField(cursorEvent.screenId) ?? 'screen-default',
+    windowId: stringField(cursorEvent.windowId),
+    label: actorId,
+    color: '#00d5ff',
+    coordinateSpace: stringField(pointer.coordinateSpace) ?? 'window-local',
+    x: numberField(pointer.x),
+    y: numberField(pointer.y),
+    targetDescription: stringField(cursorEvent.targetDescription),
+    lastEventId: stringField(cursorEvent.id) ?? 'unknown-event',
+    lastUpdatedAt: stringField(cursorEvent.timestamp) ?? new Date().toISOString(),
+  };
+  const found = existingCursors.findIndex((cursor) => cursor.actorId === actorId && cursor.cursorId === cursorId);
+  if (found < 0) return [...existingCursors, next];
+  return existingCursors.map((cursor, index) => index === found ? next : cursor);
+}
+
+function keyboardProjectionForAction(action: GenericVisionAction) {
+  if (action.type === 'type_text') return { mode: 'type_text', textLength: action.text.length };
+  if (action.type === 'press_key') return { mode: 'press_key', key: action.key };
+  if (action.type === 'hotkey') return { mode: 'hotkey', keys: action.keys };
+  return undefined;
+}
+
+function sharedSystemInputFailClosedDiagnostic(config: ComputerUseConfig, status: string) {
+  return {
+    schemaVersion: SCIFORGE_INDEPENDENT_INPUT_ADAPTER_SCHEMA,
+    adapter: normalizeComputerUseIndependentInputAdapter(config.inputAdapter) ?? 'not-configured',
+    provider: normalizeIndependentInputAdapterProvider(config.independentInputAdapterProvider) ?? 'not-registered',
+    status,
+    failClosedByDefault: true,
+    requestedSharedSystemInput: Boolean(config.allowSharedSystemInput),
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+    userDeviceImpact: 'none',
+    diagnosticOnly: true,
   };
 }
 
@@ -433,6 +885,17 @@ function numberField(value: unknown) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isVisibleEvidenceInvalidation(value: unknown): value is ComputerUseVisibleEvidenceInvalidation {
+  return isRecord(value)
+    && value.invalidatesVisibleState === true
+    && isRecord(value.scope)
+    && typeof value.staleBy === 'string';
 }
 
 function virtualPointerIconSvg() {

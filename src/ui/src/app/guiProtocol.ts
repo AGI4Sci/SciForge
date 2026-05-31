@@ -1,5 +1,4 @@
-import { uiComponentManifests } from '../../../../packages/presentation/components/manifest-registry';
-import type { UIComponentManifest } from '../../../../packages/presentation/components/types';
+import { uiComponentManifests, type UIComponentManifest } from '../../../../packages/presentation/components';
 import {
   SIDEBAR_CURSOR_AGENT_REGION_ID,
   sidebarCursorAgentRegionDetail,

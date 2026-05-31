@@ -24,6 +24,8 @@ export interface CodexAppServerStartTurnRequest {
     enabled?: boolean;
     statePath?: string;
   };
+  humanApproval?: Record<string, unknown>;
+  uiState?: Record<string, unknown>;
   abortSignal?: AbortSignal;
 }
 
@@ -74,6 +76,8 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       profile: input.profile ?? this.options.profile,
       allowOpenAiRuntime: input.allowOpenAiRuntime,
       guiExtension: input.guiExtension,
+      humanApproval: input.humanApproval,
+      uiState: input.uiState,
       abortSignal: input.abortSignal,
     });
     const turnId = stream.turnId ?? commandId;
@@ -122,6 +126,19 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
     try {
       yield runStartedEvent(metadata);
       for await (const raw of rawEvents) {
+        if (isNormalizedAgentEventEnvelope(raw)) {
+          yield {
+            ...raw,
+            provider: typeof raw.provider === 'string' ? raw.provider : metadata.provider,
+            model: typeof raw.model === 'string' ? raw.model : metadata.model,
+            profile: typeof raw.profile === 'string' ? raw.profile : metadata.profile,
+            workspace: typeof raw.workspace === 'string' ? raw.workspace : metadata.workspace,
+            commandId: typeof raw.commandId === 'string' ? raw.commandId : metadata.commandId,
+            attemptId: typeof raw.attemptId === 'string' ? raw.attemptId : metadata.attemptId,
+            evidenceRefs: Array.isArray(raw.evidenceRefs) ? raw.evidenceRefs : metadata.evidenceRefs,
+          } as NormalizedAgentEvent;
+          continue;
+        }
         const normalized = normalizeBackendEvent(raw, {
           backend: 'codex-app-server',
           traceParent: options.traceParent,
@@ -136,6 +153,14 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       options.cleanup();
     }
   }
+}
+
+function isNormalizedAgentEventEnvelope(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object'
+    && value !== null
+    && !Array.isArray(value)
+    && (value as Record<string, unknown>).schemaVersion === 'sciforge.codex.normalized-event.v1'
+    && typeof (value as Record<string, unknown>).type === 'string';
 }
 
 function unavailableCodexAppServerClient(): CodexAppServerClient {

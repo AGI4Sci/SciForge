@@ -16,9 +16,10 @@ test('terminal session viewer renders buffer, status, and no side-effect boundar
   const html = htmlFor();
 
   assert.match(html, /terminal-session-viewer/);
+  assert.match(html, /data-render-boundary="presentation-only"/);
   assert.match(html, /data-status="running"/);
   assert.match(html, /ok 1 renderTerminalSessionViewer/);
-  assert.match(html, /Presentation only: no process, socket, provider, workspace write, or command is started/);
+  assert.doesNotMatch(html, /Presentation only: no process, socket, provider, workspace write, or command is started/);
 });
 
 test('terminal session viewer exposes input, paste, resize, copy, and stop events as DOM data', () => {
@@ -46,7 +47,7 @@ test('terminal session viewer renders empty status without pretending to own run
 
   assert.match(html, /data-status="idle"/);
   assert.match(html, /Terminal buffer is empty/);
-  assert.match(html, /Host receives this input; renderer does not execute it/);
+  assert.match(html, /Type input for attached session/);
 });
 
 test('terminal session viewer can expose a host-owned live PTY surface', () => {

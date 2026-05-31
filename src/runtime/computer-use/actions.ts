@@ -153,6 +153,12 @@ function normalizeGenericAction(value: unknown): GenericVisionAction | undefined
     const appName = stringConfig(value.appName, value.app_name, value.application, value.applicationName, value.name);
     return appName ? normalizeGenericActionRisk({ type, appName, ...metadata }) : undefined;
   }
+  if (type === 'save') {
+    return normalizeGenericActionRisk({ type, targetPath: stringConfig(value.targetPath, value.target_path, value.path), ...metadata });
+  }
+  if (type === 'open_menu') {
+    return normalizeGenericActionRisk({ type, menuName: stringConfig(value.menuName, value.menu_name, value.name, value.menu), ...metadata });
+  }
   if (type === 'wait') return normalizeGenericActionRisk({ type, ms: numberConfig(value.ms, value.durationMs, value.duration, value.amount), ...metadata });
   return undefined;
 }
@@ -179,6 +185,7 @@ function normalizeActionType(value: string) {
   if (normalized === 'type' || normalized === 'input_text') return 'type_text';
   if (normalized === 'keypress') return 'press_key';
   if (normalized === 'openapp' || normalized === 'launch_app' || normalized === 'launchapp' || normalized === 'open_application') return 'open_app';
+  if (normalized === 'openmenu' || normalized === 'menu') return 'open_menu';
   return normalized;
 }
 

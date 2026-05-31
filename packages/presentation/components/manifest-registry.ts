@@ -1,4 +1,6 @@
 import { manifest as alignmentViewer } from './alignment-viewer/manifest';
+import { manifest as browserWorkbench } from './browser-workbench/manifest';
+import { manifest as computerUseControlPlane } from './computer-use-control-plane/manifest';
 import { manifest as comparisonViewer } from './comparison-viewer/manifest';
 import { manifest as evidenceMatrix } from './evidence-matrix/manifest';
 import { manifest as executionUnitTable } from './execution-unit-table/manifest';
@@ -25,11 +27,15 @@ import { manifest as structureViewer } from './structure-viewer/manifest';
 import { manifest as terminalSessionViewer } from './terminal-session-viewer/manifest';
 import { manifest as timeSeriesViewer } from './time-series-viewer/manifest';
 import { manifest as unknownArtifactInspector } from './unknown-artifact-inspector/manifest';
+import { manifest as virtualScreenViewer } from './virtual-screen-viewer/manifest';
 import { manifest as workspaceFileViewer } from './workspace-file-viewer/manifest';
 import type { UIComponentManifest } from './types';
 
 export const uiComponentManifests: UIComponentManifest[] = [
   reportViewer,
+  browserWorkbench,
+  virtualScreenViewer,
+  computerUseControlPlane,
   paperCardList,
   evidenceMatrix,
   executionUnitTable,

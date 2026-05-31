@@ -15,6 +15,7 @@ import {
   type CodexAppServerProcess,
   type SpawnCodexAppServerProcess,
 } from './codex-app-server-client.js';
+import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
 
 test('Codex app-server client registers runtime tools and serves sub-agent dynamic calls', async () => {
@@ -129,6 +130,76 @@ test('Codex app-server client preserves runtime dynamic tools when resuming a th
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
 });
 
+test('Codex app-server client routes /computer-use through native package bridge before spawning app-server', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let runnerCommandText = '';
+  let runnerWorkspace = '';
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      throw new Error('app-server should not spawn for native Computer Use route');
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerCommandText = input.request.commandText;
+      runnerWorkspace = input.workspace;
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'computer-use.tui-host-actions',
+            timestamp: new Date().toISOString(),
+            commandId: input.request.commandId,
+            attemptId: input.request.attemptId,
+            detail: JSON.stringify({ actions: [] }),
+          },
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            timestamp: new Date().toISOString(),
+            commandId: input.request.commandId,
+            attemptId: input.request.attemptId,
+            status: 'done',
+          },
+        ]),
+      };
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '/computer-use click the guarded Submit button',
+    workspacePath: workspace,
+    commandId: 'native-cu-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(spawnCalled, false);
+  assert.equal(runnerCommandText, '/computer-use click the guarded Submit button');
+  assert.equal(runnerWorkspace, workspace);
+  assert.equal(stream.turnId, 'native-cu-command');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), [
+    'computer-use.tui-host-actions',
+    'done',
+  ]);
+});
+
+test('Computer Use native route only claims top-level slash commands', () => {
+  assert.equal(isComputerUseNativeRouteCommand('  /computer-use click the guarded Submit button'), true);
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use approve --approval-ref approval:computer-use:test'), true);
+  assert.equal(isComputerUseNativeRouteCommand('/computer-use diagnostic --dry-run'), false);
+  assert.equal(isComputerUseNativeRouteCommand('Plan a GUI action for this task: /computer-use click Submit'), false);
+  assert.equal(isComputerUseNativeRouteCommand('ask --ref "prior" "/computer-use approve --approval-ref approval:computer-use:test"'), false);
+});
+
 async function tempWorkspace() {
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-app-server-client-workspace-'));
   await mkdir(dir, { recursive: true });
@@ -150,6 +221,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const result: T[] = [];
   for await (const event of iterable) result.push(event);
   return result;
+}
+
+async function* asyncGenerator(values: unknown[]) {
+  for (const value of values) yield value;
 }
 
 function fakeAppServer() {

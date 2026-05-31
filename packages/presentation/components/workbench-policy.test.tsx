@@ -36,6 +36,10 @@ test('component package owns workbench defaults and empty labels', () => {
 test('component package owns workbench fixture and alias artifact policy', () => {
   const plotFixture = workbenchComponentFixtures['scientific-plot-viewer']?.basic;
   assert.equal(plotFixture?.artifact?.type, 'plot-spec');
+  assert.equal(workbenchComponentFixtures['browser-workbench']?.basic?.artifact?.type, 'browser-runtime-projection');
+  assert.equal(workbenchComponentFixtures['computer-use-control-plane']?.basic?.artifact?.type, 'computer-use-control-plane');
+  assert.equal(workbenchComponentFixtures['terminal-session-viewer']?.basic?.artifact?.type, 'terminal-session');
+  assert.equal(workbenchComponentFixtures['workspace-file-viewer']?.basic?.artifact?.type, 'workspace-file-view');
 
   const normalized = normalizeWorkbenchFixtureArtifact('data-table', {
     id: 'record-table-basic',
@@ -82,4 +86,16 @@ test('component package owns special workbench renderer selection', () => {
 
   assert.match(html, /scientific-plot-viewer/);
   assert.doesNotMatch(html, /fallback renderer/);
+
+  for (const componentId of ['browser-workbench', 'computer-use-control-plane', 'terminal-session-viewer', 'workspace-file-viewer']) {
+    const packageFixture = workbenchComponentFixtures[componentId]?.basic;
+    assert.ok(packageFixture);
+    const packageHtml = renderToStaticMarkup(createElement(
+      Fragment,
+      null,
+      renderPackageWorkbenchPreview(packageFixture, () => createElement('div', null, 'fallback renderer')),
+    ));
+    assert.match(packageHtml, new RegExp(componentId));
+    assert.doesNotMatch(packageHtml, /fallback renderer/);
+  }
 });

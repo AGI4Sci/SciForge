@@ -1,3 +1,6 @@
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, resolve } from 'node:path';
+
 import type { GatewayRequest } from '../runtime-types.js';
 import { isRecord, toStringList, uniqueStrings } from '../gateway-utils.js';
 import type { ComputerUseConfig, WindowTarget } from './types.js';
@@ -13,18 +16,20 @@ import {
   computerUseActionRequestExecutorProvider,
   computerUseCaptureHostPortProvider,
   computerUseExecuteHostPortProvider,
-  computerUseHostPortLists,
   computerUseHostPortProviderIds,
-  computerUseHostPortsContractIds,
   computerUseTraceHandoffContract,
 } from '../../../packages/actions/computer-use/provider-policy.js';
+import {
+  computerUseActionProviderContractIds,
+  createComputerUseHostPortsContract,
+} from '../../../packages/actions/computer-use/host-adapter-contract.js';
 import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
 
-export const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
-export const COMPUTER_USE_REQUEST_SCHEMA = 'sciforge.computer-use.request.v1';
-export const COMPUTER_USE_HOST_PORTS_SCHEMA = computerUseHostPortsContractIds.schemaVersion;
-export const COMPUTER_USE_TUI_HOST_ACTIONS_SCHEMA = 'sciforge.computer-use.tui-host-actions.v1';
-export const COMPUTER_USE_PLANNER_ACCEPTANCE_CONTRACT_SCHEMA = 'sciforge.computer-use.planner-acceptance-contract.v1';
+export const COMPUTER_USE_ACTION_PROVIDER_ID = computerUseActionProviderContractIds.actionProviderId;
+export const COMPUTER_USE_REQUEST_SCHEMA = computerUseActionProviderContractIds.requestSchema;
+export const COMPUTER_USE_HOST_PORTS_SCHEMA = computerUseActionProviderContractIds.hostPortsSchema;
+export const COMPUTER_USE_TUI_HOST_ACTIONS_SCHEMA = computerUseActionProviderContractIds.tuiHostActionsSchema;
+export const COMPUTER_USE_PLANNER_ACCEPTANCE_CONTRACT_SCHEMA = computerUseActionProviderContractIds.plannerAcceptanceContractSchema;
 
 export type ComputerUseActionProviderRequest = {
   schemaVersion: typeof COMPUTER_USE_REQUEST_SCHEMA;
@@ -87,16 +92,22 @@ export function gatewayRequestToComputerUseRequest(
   config: ComputerUseConfig,
   workspace: string,
 ): ComputerUseActionProviderRequest {
-  const approvalRef = computerUseApprovalRef(request);
-  const approvalProvenance = computerUseApprovalProvenance(request);
+  const explicitApprovalRef = computerUseApprovalRef(request);
+  const approveCommandText = computerUseApproveCommandText(request);
+  const commandApprovalRef = approveCommandText ? approvalRefFromComputerUseApproveCommand(approveCommandText) : undefined;
+  const approvalRefForRecovery = explicitApprovalRef ?? commandApprovalRef;
+  const requestApprovalProvenance = computerUseApprovalProvenance(request);
+  const approvalProvenance = requestApprovalProvenance
+    ?? (commandApprovalRef ? computerUseApprovalProvenanceFromWorkspaceSidecars(workspace, approvalRefForRecovery) : undefined);
+  const approvalRef = explicitApprovalRef ?? (approvalProvenance ? approvalRefForRecovery : undefined);
   const plannerAcceptanceContract = withComputerUseContinuationContract(
     computerUsePlannerAcceptanceContract(request),
-    computerUseContinuationContract(request),
+    computerUseContinuationContract(request, workspace),
   );
   const completionEvidencePolicy = computerUseCompletionEvidencePolicy(request);
   return {
     schemaVersion: COMPUTER_USE_REQUEST_SCHEMA,
-    task: computerUseTaskForPlanner(request.prompt, approvalRef, approvalProvenance),
+    task: computerUseTaskForPlanner(request.prompt, approvalRef, approvalProvenance, approveCommandText),
     maxSteps: config.maxSteps,
     riskPolicy: approvalRef ? 'allow-confirmed' : 'fail-closed',
     approvalRef,
@@ -155,8 +166,9 @@ function computerUseTaskForPlanner(
   prompt: string,
   approvalRef: string | undefined,
   approvalProvenance: Record<string, unknown> | undefined,
+  approveCommandText?: string,
 ) {
-  if (!approvalRef || !approvalProvenance || !isComputerUseApprovePrompt(prompt)) return prompt;
+  if (!approvalRef || !approvalProvenance || (!isComputerUseApprovePrompt(prompt) && !approveCommandText)) return prompt;
   const approvalRequest = recordAt(approvalProvenance, 'approvalRequest');
   const highRiskAction = recordAt(approvalProvenance, 'highRiskAction')
     ?? recordAt(recordAt(approvalProvenance, 'riskAuditSidecar'), 'highRiskAction');
@@ -200,10 +212,8 @@ function computerUseChatOrigin(request: GatewayRequest) {
 }
 
 export function computerUseHostPortsContract(config: ComputerUseConfig) {
-  return {
-    schemaVersion: COMPUTER_USE_HOST_PORTS_SCHEMA,
-    owner: 'src/runtime host adapter',
-    actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
+  return createComputerUseHostPortsContract({
+    owner: 'src/runtime computer-use host adapter',
     ports: {
       capture: {
         provider: capturePortProvider(config.windowTarget),
@@ -240,9 +250,7 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
         provider: computerUseHostPortProviderIds.emitEvent,
       },
     },
-    forbiddenPorts: [...computerUseHostPortLists.forbidden],
-    guiBoundary: 'TUI Host may call gui.present/gui.ask_user after receiving refs-first result or approvalRequest; Computer Use package must not call GUI directly.',
-  };
+  });
 }
 
 export function computerUseResultToTuiHostActions(result: unknown): ComputerUseTuiHostAction[] {
@@ -327,7 +335,7 @@ function withComputerUseContinuationContract(
   });
 }
 
-function computerUseContinuationContract(request: GatewayRequest): Record<string, unknown> | undefined {
+function computerUseContinuationContract(request: GatewayRequest, workspace: string): Record<string, unknown> | undefined {
   const references = computerUseContinuationReferenceRecords(request);
   const promptRefs = refsFromText(request.prompt);
   const blockedManifestRefs = uniqueStrings([
@@ -352,9 +360,12 @@ function computerUseContinuationContract(request: GatewayRequest): Record<string
     || runTaskChainRefs.length > 0;
   if (!hasRefs) return undefined;
   const sidecars = compactRecord({
-    blockedManifest: continuationSidecarSummary(references, 'blocked-manifest.json'),
-    repairHint: continuationSidecarSummary(references, 'repair-hint.json'),
-    continuationRequest: continuationSidecarSummary(references, 'continuation-request.json'),
+    blockedManifest: continuationSidecarSummary(references, 'blocked-manifest.json')
+      ?? continuationSidecarSummaryFromWorkspace(workspace, blockedManifestRefs, 'blocked-manifest.json'),
+    repairHint: continuationSidecarSummary(references, 'repair-hint.json')
+      ?? continuationSidecarSummaryFromWorkspace(workspace, repairHintRefs, 'repair-hint.json'),
+    continuationRequest: continuationSidecarSummary(references, 'continuation-request.json')
+      ?? continuationSidecarSummaryFromWorkspace(workspace, continuationRequestRefs, 'continuation-request.json'),
   });
   return compactRecord({
     schemaVersion: 'sciforge.computer-use.continuation-context.v1',
@@ -392,6 +403,22 @@ function continuationSidecarSummary(references: Record<string, unknown>[], filen
     ?? recordAt(payload, 'record')
     ?? recordAt(reference, 'sidecar');
   if (!sidecar) return undefined;
+  return continuationSidecarRecordSummary(sidecar);
+}
+
+function continuationSidecarSummaryFromWorkspace(workspace: string, refs: string[], filename: string) {
+  for (const ref of refs) {
+    if (!isSidecarPathRef(ref, filename)) continue;
+    const path = workspaceBoundPath(workspace, ref);
+    if (!path) continue;
+    const sidecar = readJsonRecordSync(path);
+    const summary = sidecar ? continuationSidecarRecordSummary(sidecar) : undefined;
+    if (summary) return summary;
+  }
+  return undefined;
+}
+
+function continuationSidecarRecordSummary(sidecar: Record<string, unknown>) {
   return compactRecord({
     schemaVersion: stringAt(sidecar, 'schemaVersion'),
     status: stringAt(sidecar, 'status'),
@@ -404,6 +431,14 @@ function continuationSidecarSummary(references: Record<string, unknown>[], filen
     requestRef: stringAt(sidecar, 'requestRef'),
     nextAttempt: continuationNextAttemptSummary(recordAt(sidecar, 'nextAttempt')),
   });
+}
+
+function workspaceBoundPath(workspace: string, ref: string) {
+  const root = resolve(workspace);
+  const candidate = ref.startsWith('/') ? resolve(ref) : resolve(root, ref);
+  const relativePath = relative(root, candidate);
+  if (!relativePath || relativePath.startsWith('..') || relativePath.startsWith('/')) return undefined;
+  return candidate;
 }
 
 function continuationNextAttemptSummary(nextAttempt: Record<string, unknown> | undefined) {
@@ -425,6 +460,29 @@ function computerUseApprovalRef(request: GatewayRequest) {
     ?? stringAt(request.uiState, 'approvalRef');
 }
 
+function computerUseApproveCommandText(request: GatewayRequest) {
+  for (const text of computerUseCommandTexts(request)) {
+    if (approvalRefFromComputerUseApproveCommand(text)) return text;
+  }
+  return undefined;
+}
+
+function computerUseCommandTexts(request: GatewayRequest) {
+  return uniqueStrings([
+    request.prompt,
+    stringAt(request, 'commandText'),
+    stringAt(request, 'terminalEquivalentText'),
+    stringAt(request.uiState, 'commandText'),
+    stringAt(request.uiState, 'terminalEquivalentText'),
+  ].filter((value): value is string => Boolean(value?.trim())));
+}
+
+function approvalRefFromComputerUseApproveCommand(text: string) {
+  if (!isComputerUseApprovePrompt(text)) return undefined;
+  const match = /--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(text);
+  return (match?.[1] ?? match?.[2] ?? match?.[3])?.trim() || undefined;
+}
+
 function computerUseApprovalProvenance(request: GatewayRequest) {
   const candidates = [
     recordAt(request.humanApproval, 'approvalProvenance'),
@@ -434,6 +492,167 @@ function computerUseApprovalProvenance(request: GatewayRequest) {
     recordAt(recordAt(request.uiState, 'humanApprovalPolicy'), 'approvalProvenance'),
   ];
   return candidates.find(Boolean);
+}
+
+function computerUseApprovalProvenanceFromWorkspaceSidecars(
+  workspace: string,
+  approvalRef: string | undefined,
+) {
+  if (!approvalRef) return undefined;
+  for (const runDir of computerUseApprovalSidecarRunDirs(workspace)) {
+    const sourceProvenance = approvalProvenanceFromSidecarGroup({
+      workspace,
+      approvalRef,
+      runDir,
+      approvalRequestFile: 'approval-source-request.json',
+      guiAskUserFile: 'approval-source-gui-ask-user.json',
+      riskAuditFile: 'approval-source-risk-audit.json',
+    });
+    if (sourceProvenance) return sourceProvenance;
+    const currentProvenance = approvalProvenanceFromSidecarGroup({
+      workspace,
+      approvalRef,
+      runDir,
+      approvalRequestFile: 'approval-request.json',
+      guiAskUserFile: 'gui-ask-user.json',
+      riskAuditFile: 'risk-audit.json',
+    });
+    if (currentProvenance) return currentProvenance;
+  }
+  return undefined;
+}
+
+function computerUseApprovalSidecarRunDirs(workspace: string) {
+  const visionRunsDir = join(resolve(workspace), '.sciforge', 'vision-runs');
+  if (!safeDirectoryExists(visionRunsDir)) return [];
+  return readdirSync(visionRunsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(visionRunsDir, entry.name))
+    .sort((left, right) => safeMtimeMs(right) - safeMtimeMs(left));
+}
+
+function approvalProvenanceFromSidecarGroup(input: {
+  workspace: string;
+  approvalRef: string;
+  runDir: string;
+  approvalRequestFile: string;
+  guiAskUserFile: string;
+  riskAuditFile: string;
+}) {
+  const approvalRequestPath = join(input.runDir, input.approvalRequestFile);
+  const guiAskUserPath = join(input.runDir, input.guiAskUserFile);
+  const riskAuditPath = join(input.runDir, input.riskAuditFile);
+  const approvalRequestSidecar = readJsonRecordSync(approvalRequestPath);
+  const guiAskUserSidecar = readJsonRecordSync(guiAskUserPath);
+  const riskAuditSidecar = readJsonRecordSync(riskAuditPath);
+  if (!approvalRequestSidecar || !guiAskUserSidecar || !riskAuditSidecar) return undefined;
+  if (!approvalSidecarsMatchRef(input.approvalRef, [
+    approvalRequestSidecar,
+    guiAskUserSidecar,
+    riskAuditSidecar,
+  ])) {
+    return undefined;
+  }
+  const approvalRequest = recordAt(approvalRequestSidecar, 'approvalRequest')
+    ?? recordAt(recordAt(guiAskUserSidecar, 'payload'), 'approvalRequest');
+  const highRiskAction = recordAt(riskAuditSidecar, 'highRiskAction')
+    ?? recordAt(recordAt(riskAuditSidecar, 'approvalBoundary'), 'highRiskAction')
+    ?? recordAt(approvalRequestSidecar, 'highRiskAction')
+    ?? recordAt(recordAt(approvalRequestSidecar, 'approvalBoundary'), 'highRiskAction')
+    ?? recordAt(approvalRequest, 'highRiskAction');
+  return compactRecord({
+    schemaVersion: 'sciforge.computer-use.approval-provenance.v1',
+    source: 'workspace-approval-sidecar',
+    sourceStatus: 'needs-confirmation',
+    sourceRunId: stringAt(riskAuditSidecar, 'runId')
+      ?? stringAt(approvalRequestSidecar, 'runId')
+      ?? stringAt(guiAskUserSidecar, 'runId'),
+    approvalRef: input.approvalRef,
+    approvalRequestId: approvalRequestIdFromApprovalSidecars(approvalRequestSidecar, approvalRequest),
+    riskActionHash: stringAt(riskAuditSidecar, 'riskActionHash')
+      ?? stringAt(approvalRequestSidecar, 'riskActionHash')
+      ?? stringAt(guiAskUserSidecar, 'riskActionHash')
+      ?? stringAt(approvalRequest, 'riskActionHash'),
+    highRiskAction,
+    approvalRequest,
+    sourceApprovalRequestRef: workspaceRefForPath(input.workspace, approvalRequestPath),
+    sourceGuiAskUserRecordRef: workspaceRefForPath(input.workspace, guiAskUserPath),
+    sourceRiskAuditRef: workspaceRefForPath(input.workspace, riskAuditPath),
+    approvalRequestSidecar,
+    guiAskUserSidecar,
+    riskAuditSidecar,
+  });
+}
+
+function approvalSidecarsMatchRef(approvalRef: string, sidecars: Record<string, unknown>[]) {
+  return sidecars.every((sidecar) => {
+    const sidecarApprovalRef = approvalRefFromApprovalSidecar(sidecar);
+    return !sidecarApprovalRef || sidecarApprovalRef === approvalRef;
+  }) && sidecars.some((sidecar) => approvalRefFromApprovalSidecar(sidecar) === approvalRef);
+}
+
+function approvalRefFromApprovalSidecar(sidecar: Record<string, unknown>) {
+  const approvalRequest = recordAt(sidecar, 'approvalRequest')
+    ?? recordAt(recordAt(sidecar, 'payload'), 'approvalRequest');
+  const metadata = recordAt(approvalRequest, 'metadata');
+  return stringAt(sidecar, 'approvalRef')
+    ?? stringAt(sidecar, 'approval_ref')
+    ?? stringAt(sidecar, 'canonicalApprovalRef')
+    ?? stringAt(approvalRequest, 'approvalRef')
+    ?? stringAt(approvalRequest, 'approval_ref')
+    ?? stringAt(metadata, 'approvalRef')
+    ?? stringAt(metadata, 'approval_ref')
+    ?? stringAt(approvalRequest, 'id');
+}
+
+function approvalRequestIdFromApprovalSidecars(
+  approvalRequestSidecar: Record<string, unknown>,
+  approvalRequest: Record<string, unknown> | undefined,
+) {
+  return stringAt(approvalRequestSidecar, 'approvalRequestId')
+    ?? stringAt(approvalRequestSidecar, 'approval_request_id')
+    ?? stringAt(approvalRequest, 'id')
+    ?? stringAt(approvalRequest, 'approvalRequestId')
+    ?? stringAt(approvalRequest, 'approval_request_id');
+}
+
+function readJsonRecordSync(path: string) {
+  if (!safeFileExists(path)) return undefined;
+  try {
+    const data = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+    return isRecord(data) ? data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function workspaceRefForPath(workspace: string, path: string) {
+  const ref = relative(resolve(workspace), resolve(path)).replace(/\\/g, '/');
+  return ref && !ref.startsWith('..') && !ref.startsWith('/') ? ref : path;
+}
+
+function safeDirectoryExists(path: string) {
+  try {
+    return existsSync(path) && statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function safeFileExists(path: string) {
+  try {
+    return existsSync(path) && statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function safeMtimeMs(path: string) {
+  try {
+    return statSync(path).mtimeMs;
+  } catch {
+    return 0;
+  }
 }
 
 function stringAt(value: unknown, key: string) {
@@ -490,9 +709,9 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
   const continuationRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('continuation-request.json', /continuationRequestRef/i)));
   const directoryListingRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('directory-listing.json', /directoryListingRef/i)));
   const runTaskChainRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('tui-host-run-task-chain.json', /tuiHostRunTaskChainRef|runTaskChainRef/i)));
-  const guiAskUserRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('gui-ask-user.json', /guiAskUser(?:Record)?Ref/i)));
-  const approvalRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('approval-request.json', /approvalRequestRef/i)));
-  const riskAuditRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('risk-audit.json', /riskAuditRef/i)));
+  const guiAskUserRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('gui-ask-user.json', /^(?:guiAskUserRef|guiAskUserRefs|guiAskUserRecordRef|guiAskUserRecordRefs)$/i)));
+  const approvalRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('approval-request.json', /^(?:approvalRequestRef|approvalRequestRefs)$/i)));
+  const riskAuditRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('risk-audit.json', /^(?:riskAuditRef|riskAuditRefs)$/i)));
   const confirmedRequestRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('confirmed-request.json', /confirmedRequestRef/i)));
   const approvalDecisionRefs = uniqueStrings(refsFromUnknown(result, sidecarRefKey('approval-decision.json', /approvalDecisionRef/i)));
   const sourceApprovalRefs = uniqueStrings([
@@ -592,7 +811,14 @@ function refsFromText(value: string) {
 }
 
 function sidecarRefKey(filename: string, keyPattern: RegExp) {
-  return (key: string, value?: string) => keyPattern.test(key) || (value ? value.endsWith(`/${filename}`) || value.endsWith(filename) : false);
+  return (key: string, value?: string) => keyPattern.test(key) || (value ? isSidecarPathRef(value, filename) : false);
+}
+
+function isSidecarPathRef(value: string, filename: string) {
+  const trimmed = value.trim();
+  if (!trimmed || /\s/.test(trimmed)) return false;
+  if (trimmed !== filename && !trimmed.endsWith(`/${filename}`)) return false;
+  return trimmed.startsWith('.sciforge/') || trimmed.startsWith('/');
 }
 
 function traceRefsFromArtifacts(value: unknown) {

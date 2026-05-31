@@ -323,7 +323,6 @@
 }
 
 .codex-quiet-shell .message:not(.system) .message-body {
-  width: 100%;
   max-width: 100%;
   box-sizing: border-box;
   border-left-width: 0;
@@ -332,6 +331,7 @@
 
 .codex-quiet-shell .message.assistant-message .message-body {
   position: relative;
+  width: min(100%, 76ch);
   padding: 0;
   background: transparent;
   border: 0;
@@ -340,10 +340,20 @@
 }
 
 .codex-quiet-shell .message.user .message-body {
-  max-width: min(88%, 76ch);
+  width: fit-content;
+  max-width: min(74%, 54ch);
   margin-left: auto;
-  padding: 12px 15px;
-  border-radius: 18px;
+  padding: 10px 13px;
+  border-radius: 8px;
+}
+
+.codex-quiet-shell .message.user .message-content,
+.codex-quiet-shell .message.user .message-markdown {
+  display: block;
+}
+
+.codex-quiet-shell .message.user .message-markdown > * + * {
+  margin-top: 0.55em;
 }
 
 .codex-quiet-shell .message.system .message-body {

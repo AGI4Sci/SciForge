@@ -1,4 +1,4 @@
-import { composeRuntimeUiManifestSlots } from '../../packages/presentation/interactive-views';
+import { composeRuntimeUiManifestSlots, selectedViewComponentsForIntent } from '../../packages/presentation/interactive-views';
 import { selectedComponentIdsForRequest } from './gateway/gateway-request.js';
 import type { GatewayRequest } from './runtime-types.js';
 
@@ -12,7 +12,7 @@ export function composeRuntimeUiManifest(
     prompt: request.prompt,
     skillDomain: request.skillDomain,
     scenarioDefaultComponents: toStringList(override?.defaultComponents),
-    selectedComponentIds: selectedComponentIdsForRequest(request),
+    selectedComponentIds: selectedViewComponentsForIntent(request.prompt, selectedComponentIdsForRequest(request)),
   });
 }
 

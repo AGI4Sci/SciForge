@@ -184,6 +184,7 @@ function cursorEntryShouldRender(entry: StreamWorklogEntry): boolean {
   if (isGenericLifecyclePlaceholder(entry)) return false;
   if (isRuntimeLifecyclePlaceholder(entry)) return false;
   if (isRuntimeMetadataPlaceholder(entry)) return false;
+  if (isInternalWorkspaceMetadataAction(entry)) return false;
   return Boolean(cursorEntryText(entry) || entry.presentation.usageDetail || entry.event.label);
 }
 
@@ -286,16 +287,18 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
     transcriptRef,
     resultSummary,
   });
+  const displayStatus = mode === 'recorded' && status === 'running' ? 'unknown' : status;
+  const titleStatus = mode === 'live' && status === 'running' ? 'running' : displayStatus;
   const title = actionTitle(actionKind, {
     target: actionTarget(entry, actionKind, command, fileTarget, { agentId, resultSummary }, locale),
-    status,
+    status: titleStatus,
     outputSummary,
     exitCode,
   }, locale);
   return {
     id: event.id,
     kind: actionKind,
-    status,
+    status: displayStatus,
     title,
     summary: title,
     detail,
@@ -557,9 +560,9 @@ function actionTarget(
   subagent?: { agentId?: string; resultSummary?: string },
   locale?: SupportedLocale,
 ) {
-  if (kind === 'shell_command') return command ?? cursorEntryText(entry) ?? chatText(locale, { 'zh-CN': '命令', 'en-US': 'command' });
+  if (kind === 'shell_command') return shellCommandDisplayTarget(entry, command, locale);
   if (kind === 'search') return cleanSearchDisplayTarget(searchTargetFromCommand(command) ?? cursorEntryText(entry)) ?? chatText(locale, { 'zh-CN': '搜索', 'en-US': 'search' });
-  if (kind === 'read') return fileTarget ?? fileTargetFromCommand(command) ?? fileLikeTargetFromText(cursorEntryText(entry)) ?? chatText(locale, { 'zh-CN': '文件', 'en-US': 'file' });
+  if (kind === 'read') return readDisplayTarget(entry, command, fileTarget, locale);
   if (kind === 'file_edit' || kind === 'diff') return fileTarget ?? fileLikeTargetFromText(cursorEntryText(entry)) ?? cursorEntryText(entry) ?? chatText(locale, { 'zh-CN': '文件', 'en-US': 'file' });
   if (kind === 'subagent') return subagentTarget(subagent?.resultSummary ?? cursorEntryText(entry)) ?? chatText(locale, { 'zh-CN': '子代理', 'en-US': 'sub agent' });
   return cursorEntryText(entry) || entry.presentation.typeLabel;
@@ -571,6 +574,7 @@ function actionTitle(
   locale?: SupportedLocale,
 ) {
   const target = localizeActionTarget(compactInline(input.target, 128), locale);
+  if (input.status === 'running') return runningActionTitle(kind, target, locale);
   const suffix = actionStatusSuffix(input.status, locale);
   if (kind === 'read') return `${chatText(locale, { 'zh-CN': '读取', 'en-US': 'Read' })} ${target}${suffix}`;
   if (kind === 'search') return `${chatText(locale, { 'zh-CN': '搜索', 'en-US': 'Searched' })} ${target}${suffix}`;
@@ -598,6 +602,60 @@ function actionTitle(
   if (kind === 'validate') return `${chatText(locale, { 'zh-CN': '检查', 'en-US': 'Checked' })} ${target}${suffix}`;
   if (kind === 'artifact') return `${chatText(locale, { 'zh-CN': '创建', 'en-US': 'Created' })} ${target}${suffix}`;
   return target || chatText(locale, { 'zh-CN': '工作', 'en-US': 'Worked' });
+}
+
+function runningActionTitle(kind: CursorAgentActionKind, target: string, locale?: SupportedLocale) {
+  if (kind === 'read') return `${chatText(locale, { 'zh-CN': '正在读取', 'en-US': 'Reading' })} ${target}`;
+  if (kind === 'search') return `${chatText(locale, { 'zh-CN': '正在搜索', 'en-US': 'Searching' })} ${target}`;
+  if (kind === 'fetch') return `${chatText(locale, { 'zh-CN': '正在获取', 'en-US': 'Fetching' })} ${target}`;
+  if (kind === 'shell_command') return `${chatText(locale, { 'zh-CN': '正在运行', 'en-US': 'Running' })} ${target}`;
+  if (kind === 'file_edit') return `${chatText(locale, { 'zh-CN': '正在编辑', 'en-US': 'Editing' })} ${target}`;
+  if (kind === 'diff') return `${chatText(locale, { 'zh-CN': '正在对比', 'en-US': 'Diffing' })} ${target}`;
+  if (kind === 'thought') return target
+    ? chatText(locale, { 'zh-CN': `正在思考 ${target}`, 'en-US': `Thinking about ${target}` })
+    : chatText(locale, { 'zh-CN': '正在思考', 'en-US': 'Thinking' });
+  if (kind === 'approval') return `${chatText(locale, { 'zh-CN': '等待确认', 'en-US': 'Waiting for approval' })} ${target}`;
+  if (kind === 'subagent') return `${chatText(locale, { 'zh-CN': '正在运行子代理', 'en-US': 'Running sub agent' })}${target ? ` ${target}` : ''}`;
+  if (kind === 'write') return `${chatText(locale, { 'zh-CN': '正在写入', 'en-US': 'Writing' })} ${target}`;
+  if (kind === 'validate') return `${chatText(locale, { 'zh-CN': '正在检查', 'en-US': 'Checking' })} ${target}`;
+  if (kind === 'artifact') return `${chatText(locale, { 'zh-CN': '正在创建', 'en-US': 'Creating' })} ${target}`;
+  return target || chatText(locale, { 'zh-CN': '正在工作', 'en-US': 'Working' });
+}
+
+function shellCommandDisplayTarget(entry: StreamWorklogEntry, command: string | undefined, locale?: SupportedLocale) {
+  for (const value of [
+    nativeString(entry.event, 'title'),
+    nativeString(entry.event, 'name'),
+    entry.operationLine,
+    cursorEntryText(entry),
+  ]) {
+    const candidate = cleanHumanCommandTitle(value, command);
+    if (candidate) return candidate;
+  }
+  return unwrapShellCommand(command) || command || cursorEntryText(entry) || chatText(locale, { 'zh-CN': '命令', 'en-US': 'command' });
+}
+
+function cleanHumanCommandTitle(value: string | undefined, command: string | undefined) {
+  const text = sanitizeCursorText(value)
+    .replace(/^(?:ran|running|run)\s+/i, '')
+    .trim();
+  if (!text || text.includes('\n')) return undefined;
+  if (command && normalizeText(text) === normalizeText(command)) return undefined;
+  if (command && normalizeText(text).includes(normalizeText(command))) return undefined;
+  if (/^(?:tool|command|shell)\s+(?:call|result|started|completed|finished|running)\b/i.test(text)) return undefined;
+  if (/^(?:running|completed|failed|done|output|workspace runtime|runtime metadata)$/i.test(text)) return undefined;
+  if (/runtime event recorded|structured details are available|folded run audit/i.test(text)) return undefined;
+  if (looksLikeBackendEnvelopeSummary(text)) return undefined;
+  if (looksLikeUserInstructionEcho(normalizeText(text))) return undefined;
+  if (/^(?:\/bin\/)?(?:zsh|bash|sh)\s+-lc\b/.test(text)) return undefined;
+  if (text.length > 96) return undefined;
+  return text;
+}
+
+function readDisplayTarget(entry: StreamWorklogEntry, command: string | undefined, fileTarget: string | undefined, locale?: SupportedLocale) {
+  const target = fileTarget ?? fileTargetFromCommand(command) ?? fileLikeTargetFromText(cursorEntryText(entry)) ?? chatText(locale, { 'zh-CN': '文件', 'en-US': 'file' });
+  const range = lineRangeForEvent(entry.event);
+  return range && target !== chatText(locale, { 'zh-CN': '文件', 'en-US': 'file' }) ? `${target} ${range}` : target;
 }
 
 function localizeActionTarget(value: string, locale?: SupportedLocale) {
@@ -804,7 +862,7 @@ function groupFromActions(
   const status = groupStatus(actions);
   const title = kind === 'worked'
     ? chatText(locale, { 'zh-CN': `工作 ${durationLabel(events, now)}`, 'en-US': `Worked for ${durationLabel(events, now)}` })
-    : exploredTitle(actions, locale);
+    : exploredTitle(actions, status, mode, locale);
   return {
     id: `cursor-agent-${kind}-${index}`,
     kind,
@@ -816,7 +874,10 @@ function groupFromActions(
   };
 }
 
-function exploredTitle(actions: CursorAgentAction[], locale?: SupportedLocale) {
+function exploredTitle(actions: CursorAgentAction[], status: CursorAgentActionStatus, mode: 'live' | 'recorded', locale?: SupportedLocale) {
+  if (mode === 'live' && status === 'running') {
+    return chatText(locale, { 'zh-CN': '正在查看', 'en-US': 'Exploring' });
+  }
   const parts = [
     countPhrase(actions, 'read', { zh: '个文件', enSingular: 'file', enPlural: 'files' }, locale),
     countPhrase(actions, 'search', { zh: '次搜索', enSingular: 'search', enPlural: 'searches' }, locale),
@@ -1023,6 +1084,21 @@ function structuredFilePreviewTargetForEvent(event: AgentStreamEvent): string | 
   return ref.slice('file:'.length);
 }
 
+function lineRangeForEvent(event: AgentStreamEvent) {
+  const start = nativeNumber(event, 'startLine')
+    ?? nativeNumber(event, 'start_line')
+    ?? nativeNumber(event, 'lineStart')
+    ?? nativeNumber(event, 'line_start')
+    ?? nativeNumber(event, 'line');
+  const end = nativeNumber(event, 'endLine')
+    ?? nativeNumber(event, 'end_line')
+    ?? nativeNumber(event, 'lineEnd')
+    ?? nativeNumber(event, 'line_end');
+  if (!Number.isFinite(start ?? Number.NaN) || (start ?? 0) <= 0) return '';
+  if (!Number.isFinite(end ?? Number.NaN) || !end || end === start) return `L${start}`;
+  return `L${start}-${end}`;
+}
+
 function displayPathFromStructuredPath(value: string | undefined) {
   const raw = value?.trim();
   if (!raw) return undefined;
@@ -1030,7 +1106,11 @@ function displayPathFromStructuredPath(value: string | undefined) {
     const filePath = raw.slice('file:'.length);
     return isSafeRelativeRefPath(filePath) ? filePath : sanitizeCursorPath(raw);
   }
-  return sanitizeCursorPath(raw);
+  const sanitized = sanitizeCursorPath(raw);
+  if (!sanitized) return undefined;
+  const normalized = sanitized.replace(/\\/g, '/');
+  if (!isSpecificDisplayPath(normalized)) return undefined;
+  return normalized;
 }
 
 function fileRefFromWorkEvidence(event: AgentStreamEvent, kind: CursorAgentActionKind): string | undefined {
@@ -1227,7 +1307,11 @@ function commandIntentForCursorCommand(command: string | undefined): CursorAgent
   const first = shellWords(unwrapped)[0]?.replace(/^.*\//, '').toLowerCase();
   if (!first) return undefined;
   if (first === 'diff') return 'diff';
-  if (first === 'git' && /\bdiff\b/.test(unwrapped)) return 'diff';
+  if (first === 'git' && /\bdiff\b/.test(unwrapped)) {
+    if (diffExitOneMeansDifferences(unwrapped)) return 'diff';
+    if (/\s--(?:stat|shortstat|summary|name-only|name-status|check)(?:[=\s]|$)/.test(unwrapped)) return 'shell_command';
+    return 'diff';
+  }
   if (/^(?:rg|ripgrep|grep|egrep|fgrep|find|fd|glob)$/.test(first)) return 'search';
   if (/^(?:cat|sed|head|tail|less|more|nl|ls|tree|pwd)$/.test(first)) return 'read';
   return undefined;
@@ -1338,14 +1422,17 @@ function hasNativeLifecycleContent(event: AgentStreamEvent) {
 }
 
 function isRuntimeLifecyclePlaceholder(entry: StreamWorklogEntry) {
-  if (hasNativeLifecycleContent(entry.event)) return false;
-  if (hasUserFacingStructuredProgress(entry)) return false;
   const type = rawType(entry.event);
-  if (type === 'run_started' || type === 'done' || type === 'run_completed') return true;
   const text = normalizeText(cursorEntryText(entry) || entry.event.label || '');
-  return isBackendTransportLifecycleText(text)
+  if (type === 'run_started' || type === 'run_completed' || type === 'ready') return true;
+  if (hasStrongActionEvidence(entry.event) || hasUserFacingStructuredProgress(entry)) return false;
+  if (isBackendTransportLifecycleText(text)
     || /^runtime codex (?:started with configured runtime|completed successfully\.?)$/.test(text)
-    || /^(?:disabled|starting|ready|output|completed(?: done)?|running|done)$/.test(text);
+    || /^(?:disabled|starting|ready|output|completed(?: done)?|running|done)$/.test(text)) {
+    return true;
+  }
+  if (hasNativeLifecycleContent(entry.event)) return false;
+  return type === 'done';
 }
 
 function isRuntimeMetadataPlaceholder(entry: StreamWorklogEntry) {
@@ -1359,19 +1446,22 @@ function isRuntimeMetadataPlaceholder(entry: StreamWorklogEntry) {
 
 function isUserPromptEchoEvent(entry: StreamWorklogEntry) {
   if (nativeString(entry.event, 'toolName') || nativeString(entry.event, 'command')) return false;
+  if (hasUserFacingStructuredProgress(entry)) return false;
   const role = nativeString(entry.event, 'role')?.toLowerCase();
   if (role === 'user') return true;
   const type = rawType(entry.event);
+  if ((type === 'audit' || type === 'workspace-runtime-event' || type === 'run_started') && nativePromptText(entry.event)) return true;
   if (/\b(?:user|prompt|input)\b/.test(type)) return true;
   return false;
 }
 
 function isPromptCommandEchoEvent(entry: StreamWorklogEntry) {
   if (nativeString(entry.event, 'command')) return false;
-  const text = normalizeText(cursorEntryText(entry) || entry.event.label || '');
+  const text = normalizeText(nativePromptText(entry.event) || cursorEntryText(entry) || entry.event.label || '');
   if (text.length < 24) return false;
   return /\b(?:use the .*tool|run exactly|do not edit|do not infer|after the command runs|say whether|report the exit code)\b/.test(text)
-    || (/^run\s+/.test(text) && /\b(?:do not|say whether|report|after)\b/.test(text));
+    || (/^run\s+/.test(text) && /\b(?:do not|say whether|report|after)\b/.test(text))
+    || looksLikeUserInstructionEcho(text);
 }
 
 function isInstructionEchoOnlyToolEvent(entry: StreamWorklogEntry) {
@@ -1413,6 +1503,29 @@ function isPromptLikeNonWorkAction(entry: StreamWorklogEntry) {
     nativeString(entry.event, 'result_summary'),
   ].filter(Boolean).join(' ');
   return looksLikeUserInstructionEcho(text);
+}
+
+function isInternalWorkspaceMetadataAction(entry: StreamWorklogEntry) {
+  const type = rawType(entry.event);
+  const command = sanitizeCursorText(nativeString(entry.event, 'command') ?? commandTextFromEntry(entry));
+  const actionKind = actionKindForEntry(entry, type, nativeString(entry.event, 'toolName'), command);
+  const fileTarget = sanitizeCursorPath(fileTargetForEntry(entry.event, entry, actionKind, command));
+  const text = normalizeText([
+    command,
+    fileTarget,
+    cursorEntryText(entry),
+    entry.operationLine,
+    nativeString(entry.event, 'outputSummary'),
+    nativeString(entry.event, 'output_summary'),
+  ].filter(Boolean).join(' '));
+  if (actionKind === 'search' && /(?:^|[\s"'])\.sciforge(?:[/\s"']|$)/i.test(text)) return true;
+  if (actionKind !== 'read') return false;
+  const status = actionStatus(entry.event, type, { actionKind, command });
+  if (status !== 'running') return false;
+  return !fileTarget
+    && !fileLikeTargetFromText(cursorEntryText(entry))
+    && !filePreviewRefForEntry(entry.event, actionKind, command)
+    && !workEvidenceRecordsForEvent(entry.event).length;
 }
 
 function isLowValueToolLifecyclePlaceholder(entry: StreamWorklogEntry) {
@@ -1657,6 +1770,21 @@ function compactInline(value: string, limit: number) {
 
 function normalizeText(value: string) {
   return value.toLowerCase().replace(/\b\d+\s*(?:ms|s|sec|seconds)\b/g, '<elapsed>').replace(/\s+/g, ' ').trim();
+}
+
+function nativePromptText(event: AgentStreamEvent) {
+  return nativeString(event, 'commandText')
+    ?? nativeString(event, 'command_text')
+    ?? nativeString(event, 'prompt')
+    ?? nativeString(event, 'request');
+}
+
+function isSpecificDisplayPath(value: string) {
+  if (!value || value === 'current workspace') return Boolean(value);
+  if (/(?:^|\/)\.sciforge(?:\/|$)/i.test(value)) return false;
+  if (/^(?:head|tail|cat|sed|ls|pwd|tree|\{\})$/i.test(value)) return false;
+  if (/^[A-Za-z0-9_-]{1,24}$/.test(value)) return false;
+  return /^(?:\.{1,2}\/|[\w.-]+\/|[\w.-]+\.[A-Za-z0-9][\w.-]*|[A-Za-z]:\/|\/)/.test(value);
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

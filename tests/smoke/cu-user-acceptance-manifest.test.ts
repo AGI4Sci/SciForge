@@ -279,6 +279,38 @@ test('CU-05 anti-shortcut guard rejects DOM, Playwright, accessibility, and gene
   assert.ok(manifest.blockedItems[0]?.reason.includes('shortcut substitute evidence'));
 });
 
+test('CU-05 anti-shortcut guard allows DOM, Playwright, and accessibility refs only as observation hints', () => {
+  const guard = evaluateCuUserAcceptanceAntiShortcutGuard([
+    {
+      id: 'dom-visible',
+      kind: 'dom',
+      observationUse: 'observe-before-mutate-hint',
+      refs: ['.sciforge/vision-runs/cu-05/browser-visible-dom.json'],
+      executorLeaseSubstitute: false,
+      guiActionSubstitute: false,
+      artifactCausalitySubstitute: false,
+      completionEvidenceEligible: false,
+    },
+    {
+      id: 'playwright-evaluate',
+      kind: 'playwright',
+      use: 'grounding-hint',
+      refs: ['.sciforge/vision-runs/cu-05/browser-evaluate.json'],
+      completionEvidenceSubstitute: false,
+    },
+    {
+      id: 'ax-snapshot',
+      kind: 'accessibility',
+      evidenceUse: 'grounding-hint',
+      refs: ['.sciforge/vision-runs/cu-05/browser-accessibility.json'],
+      userLevelCompletionSubstitute: false,
+    },
+  ]);
+
+  assert.equal(guard.status, 'passed');
+  assert.deepEqual(guard.rejectedClaims, []);
+});
+
 test('CU-05 CLI writes the evaluated manifest from JSON input', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-user-acceptance-'));
   try {
@@ -411,7 +443,7 @@ function validMultiAppPassInput(runId = 'cu-05-multi') {
           `.sciforge/vision-runs/${runId}/virtual-keyboard-events.json`,
         ],
         sessionRefs: [`.sciforge/vision-runs/${runId}/independent-input-session.json`],
-        note: 'Virtual pointer and keyboard adapter drove the final L3 flow.',
+        note: 'Scoped executor adapter drove the final L3 flow without shared system input.',
       },
     ],
     guiPresent: {

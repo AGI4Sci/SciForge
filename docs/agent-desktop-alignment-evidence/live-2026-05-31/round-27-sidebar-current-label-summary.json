@@ -1,0 +1,30 @@
+{
+  "round": 27,
+  "date": "2026-05-31",
+  "scope": "repositories-only current project header parity",
+  "cursorAgentObservations": [
+    "Cursor project headers expose the repository name and New Agent action without adding a visible or accessible Current label.",
+    "Current selection is conveyed visually by the surrounding sidebar state rather than by appending Current to the repository name."
+  ],
+  "sciforgeChanges": [
+    "Removed the hidden Current text node from repository project headers.",
+    "Kept the current project state as styling and GUI metadata rather than text in the project header."
+  ],
+  "sciforgeLiveVerification": [
+    "Reloaded the current in-app Browser SciForge page at http://localhost:5173/.",
+    "Verified p1 project header text is p1, not p1Current.",
+    "Verified p1 project header buttons are p1 and New Agent in p1; no sidebar-project-current-label node remains.",
+    "Verified p2 project header also exposes only p2 and New Agent in p2.",
+    "Verified no project actions ellipsis button is present in repository project headers.",
+    "Verified the current draft row still exposes Pin chat and Discard draft only."
+  ],
+  "verification": [
+    "node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts passed with 100 tests.",
+    "git diff --check passed.",
+    "Evidence JSON parsed successfully.",
+    "npm run typecheck --silent remains blocked by unrelated Computer Use/CU-next live acceptance validator missing-symbol errors in tools/computer-use-next/live-acceptance-validator.ts."
+  ],
+  "openNotes": [
+    "Automations, top Customize, and search remain intentionally unchanged per the narrowed user scope."
+  ]
+}

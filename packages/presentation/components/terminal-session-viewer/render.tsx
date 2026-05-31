@@ -123,7 +123,13 @@ function metadataRows(metadata: unknown) {
     .map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)] as const);
 }
 
-function eventButton(label: string, event: string, disabled?: boolean, data?: Record<string, string | number | undefined>) {
+function eventButton(
+  label: string,
+  event: string,
+  disabled?: boolean,
+  data?: Record<string, string | number | undefined>,
+  onClick?: () => void,
+) {
   return (
     <button
       key={event}
@@ -131,6 +137,7 @@ function eventButton(label: string, event: string, disabled?: boolean, data?: Re
       data-event={event}
       data-terminal-event={event}
       disabled={disabled}
+      onClick={onClick}
       {...data}
     >
       {label}
@@ -160,6 +167,7 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
     <div
       className={`terminal-session-viewer terminal-session-viewer-${theme}`}
       data-component-id="terminal-session-viewer"
+      data-render-boundary="presentation-only"
       data-session-ref={sessionRef}
       data-status={status}
       data-theme={theme}
@@ -175,14 +183,11 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
           {status}
         </span>
       </header>
-      <p className="terminal-session-viewer-safety">
-        Presentation only: no process, socket, provider, workspace write, or command is started by this renderer.
-      </p>
       <div className="terminal-session-viewer-actions" aria-label="Terminal session actions">
-        {eventButton('Copy', 'copy-request', !capabilities.copy, { 'data-selection': selectionText })}
-        {eventButton('Download', 'download-request', !capabilities.download, { 'data-session-ref': sessionRef })}
-        {eventButton('Stop', 'stop-request', !capabilities.stop || status === 'stopped', { 'data-session-ref': sessionRef })}
-        {eventButton('Focus', 'focus-change', !capabilities.focus, { 'data-focused': 'true' })}
+        {eventButton('Copy', 'copy-request', !capabilities.copy, { 'data-selection': selectionText }, () => payload.onCopyRequest?.(selectionText))}
+        {eventButton('Download', 'download-request', !capabilities.download, { 'data-session-ref': sessionRef }, () => payload.onDownloadRequest?.(sessionRef))}
+        {eventButton('Stop', 'stop-request', !capabilities.stop || status === 'stopped', { 'data-session-ref': sessionRef }, () => payload.onStopRequest?.(sessionRef))}
+        {eventButton('Focus', 'focus-change', !capabilities.focus, { 'data-focused': 'true' }, () => payload.onFocusChange?.(true))}
       </div>
       <section
         className="terminal-session-viewer-screen"
@@ -216,7 +221,16 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
           <p>Terminal buffer is empty. Waiting for host-provided output.</p>
         )}
       </section>
-      <form className="terminal-session-viewer-input" data-terminal-form="presentation-only">
+      <form
+        className="terminal-session-viewer-input"
+        data-terminal-form="presentation-only"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const data = new FormData(event.currentTarget);
+          const input = String(data.get('terminal-input') ?? '');
+          if (input.trim()) payload.onDataInput?.(input);
+        }}
+      >
         <label>
           Input
           <textarea
@@ -225,13 +239,20 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
             data-terminal-event="data-input"
             disabled={!capabilities.input || status === 'stopped'}
             rows={2}
-            placeholder="Host receives this input; renderer does not execute it."
+            placeholder="Type input for attached session"
           />
         </label>
         <div className="terminal-session-viewer-input-actions">
-          {eventButton('Send input', 'data-input', !capabilities.input || status === 'stopped')}
-          {eventButton('Paste', 'paste-input', !capabilities.paste || status === 'stopped')}
-          {eventButton('Resize', 'resize', !capabilities.resize, { 'data-cols': cols, 'data-rows': rows })}
+          <button
+            type="submit"
+            data-event="data-input"
+            data-terminal-event="data-input"
+            disabled={!capabilities.input || status === 'stopped'}
+          >
+            Send input
+          </button>
+          {eventButton('Paste', 'paste-input', !capabilities.paste || status === 'stopped', undefined, () => payload.onPasteInput?.(''))}
+          {eventButton('Resize', 'resize', !capabilities.resize, { 'data-cols': cols, 'data-rows': rows }, () => payload.onResize?.({ cols, rows }))}
         </div>
       </form>
       {metadata.length ? (

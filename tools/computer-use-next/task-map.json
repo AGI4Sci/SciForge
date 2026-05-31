@@ -8,7 +8,7 @@
       "priority": 4,
       "primaryScenarioId": "CU-LONG-001",
       "longScenarioIds": ["CU-LONG-001", "CU-LONG-002"],
-      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "no-dom-playwright-accessibility"],
+      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Browser",
       "recommendedMaxSteps": 10
@@ -20,7 +20,7 @@
       "priority": 5,
       "primaryScenarioId": "CU-LONG-002",
       "longScenarioIds": ["CU-LONG-002"],
-      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "no-dom-playwright-accessibility"],
+      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Finder",
       "recommendedMaxSteps": 10
@@ -32,7 +32,7 @@
       "priority": 6,
       "primaryScenarioId": "CU-LONG-009",
       "longScenarioIds": ["CU-LONG-001", "CU-LONG-009"],
-      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "approval-chain", "no-dom-playwright-accessibility"],
+      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "approval-chain", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Browser",
       "recommendedMaxSteps": 12
@@ -44,7 +44,7 @@
       "priority": 2,
       "primaryScenarioId": "CU-LONG-005",
       "longScenarioIds": ["CU-LONG-005"],
-      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "no-dom-playwright-accessibility"],
+      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Finder",
       "recommendedMaxSteps": 8
@@ -56,7 +56,7 @@
       "priority": 7,
       "primaryScenarioId": "CU-LONG-006",
       "longScenarioIds": ["CU-LONG-006", "CU-LONG-008"],
-      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "repair-continuity", "no-dom-playwright-accessibility"],
+      "requirements": ["l2-artifact-refs", "l3-workflow-refs", "repair-continuity", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Browser",
       "recommendedMaxSteps": 12
@@ -68,7 +68,7 @@
       "priority": 3,
       "primaryScenarioId": "CU-LONG-009",
       "longScenarioIds": ["CU-LONG-009"],
-      "requirements": ["l3-workflow-refs", "approval-chain", "no-dom-playwright-accessibility"],
+      "requirements": ["l3-workflow-refs", "approval-chain", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Browser",
       "recommendedMaxSteps": 8
@@ -80,7 +80,7 @@
       "priority": 1,
       "primaryScenarioId": "CU-LONG-004",
       "longScenarioIds": ["CU-LONG-004", "CU-LONG-007"],
-      "requirements": ["l3-workflow-refs", "dense-grounding", "no-dom-playwright-accessibility"],
+      "requirements": ["l3-workflow-refs", "dense-grounding", "user-control-refs", "observe-before-mutate-refs", "platform-sidecar-isolation", "product-path-classification", "current-bundle-evidence", "dom-ax-observation-hints", "no-dom-playwright-accessibility"],
       "recommendedTargetMode": "app-window",
       "recommendedTargetApp": "Browser",
       "recommendedMaxSteps": 8

@@ -10,11 +10,11 @@
     "kind": "slide-deck",
     "slides": [
       {
-        "title": "Virtual Input, Real Evidence",
+        "title": "Scoped Executor, Real Evidence",
         "subtitle": "A generic Computer Use workflow",
         "bullets": [
-          "Virtual pointer clicks the editable surface",
-          "Virtual keyboard writes the slide content",
+          "Actor cursor targets the editable surface",
+          "Scoped executor writes the slide content",
           "Trace refs prove every current observation"
         ]
       },
@@ -63,7 +63,7 @@
     {
       "id": "slide-one-focused",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-01-slide-one-focused.png",
-      "summary": "Virtual pointer focused the first slide title field.",
+      "summary": "Actor cursor proposal focused the first slide title field through a scoped executor.",
       "visibleTexts": ["Slide 1 title field focused"],
       "elements": [
         {
@@ -80,8 +80,8 @@
     {
       "id": "slide-one-content",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-02-slide-one-content.png",
-      "summary": "Slide 1 content is visible after virtual keyboard input.",
-      "visibleTexts": ["Virtual Input, Real Evidence", "Virtual pointer clicks the editable surface", "Virtual keyboard writes the slide content"],
+      "summary": "Slide 1 content is visible after scoped executor input.",
+      "visibleTexts": ["Scoped Executor, Real Evidence", "Actor cursor targets the editable surface", "Scoped executor writes the slide content"],
       "elements": [
         {
           "id": "new-slide-command",
@@ -96,7 +96,7 @@
     {
       "id": "slide-two-created",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-03-slide-two-created.png",
-      "summary": "Virtual keyboard created slide 2 with a standard new-slide hotkey.",
+      "summary": "Scoped executor created slide 2 with a standard new-slide hotkey.",
       "visibleTexts": ["Slide 2", "Slide title field"],
       "elements": [],
       "metadata": {"realWindowEvidence": true}
@@ -104,7 +104,7 @@
     {
       "id": "slide-two-content",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-04-slide-two-content.png",
-      "summary": "Slide 2 content is visible after virtual keyboard input.",
+      "summary": "Slide 2 content is visible after scoped executor input.",
       "visibleTexts": ["Not A PPT-Only Path", "Actions stay generic", "Artifacts are selected by renderer registry"],
       "elements": [
         {
@@ -120,7 +120,7 @@
     {
       "id": "slide-three-created",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-05-slide-three-created.png",
-      "summary": "Virtual keyboard created slide 3 with a standard new-slide hotkey.",
+      "summary": "Scoped executor created slide 3 with a standard new-slide hotkey.",
       "visibleTexts": ["Slide 3", "Slide title field"],
       "elements": [],
       "metadata": {"realWindowEvidence": true}
@@ -128,7 +128,7 @@
     {
       "id": "slide-three-content",
       "ref": ".sciforge/vision-runs/target-bound-visible-three-page-pptx/screen-06-slide-three-content.png",
-      "summary": "Slide 3 content is visible after virtual keyboard input.",
+      "summary": "Slide 3 content is visible after scoped executor input.",
       "visibleTexts": ["Safe To Watch", "System pointer is never moved", "Global keyboard events are never sent"],
       "elements": [],
       "metadata": {"realWindowEvidence": true}
@@ -167,7 +167,7 @@
     },
     {
       "type": "type_text",
-      "text": "# Virtual Input, Real Evidence\n\n- Virtual pointer clicks the editable surface\n- Virtual keyboard writes the slide content\n- Trace refs prove every current observation\n"
+      "text": "# Scoped Executor, Real Evidence\n\n- Actor cursor targets the editable surface\n- Scoped executor writes the slide content\n- Trace refs prove every current observation\n"
     },
     {
       "type": "click",

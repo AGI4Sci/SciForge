@@ -185,6 +185,66 @@ def test_planner_brief_uses_current_records_after_staleness(tmp_path):
     assert "Old" not in brief["currentText"]
 
 
+def test_evidence_freshness_is_scoped_by_screen_and_window(tmp_path):
+    ledger = EvidenceLedger(tmp_path)
+    screen_a_window_1 = ledger.append_observation(
+        Observation(
+            ref="screen-a-window-1.png",
+            summary="Screen A editor",
+            visible_texts=("Editor A",),
+            metadata={"screenId": "screen-a", "windowId": "writer"},
+        ),
+        action_index=0,
+        query=None,
+    )
+    screen_a_window_2 = ledger.append_observation(
+        Observation(
+            ref="screen-a-window-2.png",
+            summary="Screen A browser",
+            visible_texts=("Browser A",),
+            metadata={"screenId": "screen-a", "windowId": "browser"},
+        ),
+        action_index=0,
+        query=None,
+    )
+    screen_b = ledger.append_observation(
+        Observation(
+            ref="screen-b-window-1.png",
+            summary="Screen B editor",
+            visible_texts=("Editor B",),
+            metadata={"screenId": "screen-b", "windowId": "writer"},
+        ),
+        action_index=0,
+        query=None,
+    )
+
+    action_id = ledger.append_action(
+        ActionPlan(
+            kind="click",
+            reason="click in writer",
+            metadata={
+                "leaseScope": {"scopeType": "window", "screenId": "screen-a", "windowId": "writer"},
+                "leaseOwner": {"actorId": "agent-a", "cursorId": "cursor-a"},
+            },
+        ),
+        ExecutionOutcome(ok=True, metadata={"executorEventRef": "trace:/runs/scoped/executor-event.json"}),
+        action_index=1,
+        before_record_id=screen_a_window_1,
+        grounding_record_id=None,
+    )
+    index = build_evidence_index(ledger.records)
+    brief_for_screen_b = build_planner_brief(ledger.records, screen_id="screen-b")
+
+    assert index["staleBy"][screen_a_window_1] == action_id
+    assert screen_a_window_2 in index["current"]
+    assert screen_b in index["current"]
+    assert index["staleByScope"]["screen:screen-a/window:writer"][screen_a_window_1] == action_id
+    assert "screen:screen-a/window:browser" in index["currentByScope"]
+    assert brief_for_screen_b["latestObservation"]["id"] == screen_b
+    assert "Editor B" in brief_for_screen_b["currentTextForScope"]
+    assert "Editor A" not in brief_for_screen_b["currentTextForScope"]
+
+
 def test_action_mutation_policy_keeps_read_only_evidence_operations_fresh():
     assert action_mutates_visible_state("click") is True
     assert action_mutates_visible_state("scroll") is True

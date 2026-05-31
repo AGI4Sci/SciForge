@@ -85,35 +85,10 @@ test('Computer Use chat live E2E submits through chat client and validates curre
     });
 
     assert.equal(bodies.length, 1);
-    assert.equal(bodies[0]?.handoffSource, 'ui-chat');
-    assert.deepEqual(bodies[0]?.selectedActionIds, ['action.sciforge.computer-use']);
-    const uiState = bodies[0]?.uiState as Record<string, unknown>;
-    assert.deepEqual(uiState.computerUseNext, {
-      taskId: 'CU-NEXT-07',
-      title: 'Computer Use live task acceptance',
-      requirements: [
-        'chat-origin-current-run',
-        'refs-first-evidence-bundle',
-        'no-dom-playwright-accessibility-or-shell-file-write-substitute',
-      ],
-    });
-    assert.deepEqual(uiState.computerUseLong, {
-      cuNextTaskId: 'CU-NEXT-07',
-      taskId: 'CU-NEXT-07',
-      scenarioId: 'CU-LONG-004',
-      title: 'Computer Use live task acceptance',
-      requiredEvidence: [
-        'vision-trace.json',
-        'tui-host-run-task-chain.json',
-        'gui.present',
-        'cu-user-acceptance-manifest.json',
-      ],
-      safetyBoundary: {
-        noDomAccessibility: true,
-        noShellDirectArtifactWrite: true,
-        noSharedSystemInput: true,
-      },
-    });
+    assert.equal(bodies[0]?.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+    assert.match(String(bodies[0]?.commandText), /^\/computer-use/);
+    assert.equal('selectedActionIds' in (bodies[0] ?? {}), false);
+    assert.equal('computerUseNext' in (bodies[0]?.uiState as Record<string, unknown> | undefined ?? {}), false);
     assert.equal(manifest.status, 'completed');
     assert.deepEqual(manifest.issues, []);
     assert.equal(manifest.requestSubmitted, true);
@@ -130,7 +105,7 @@ test('Computer Use chat live E2E submits through chat client and validates curre
     assert.ok(manifest.displayedRefs.includes(traceRef));
     assert.ok(manifest.artifactRefs.includes(finalArtifactRef));
     assert.ok(manifest.auditRefs.includes(runTaskChainRef));
-    assert.match(manifest.guiPresentSource ?? '', /^gui\.present:computer-use-command-.*:computer-use$/);
+    assert.match(manifest.guiPresentSource ?? '', /^gui\.present:(?:computer-use-command|codex-command)-.*:computer-use$/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -140,7 +115,7 @@ test('Computer Use chat request injects sanitized completion evidence policy int
   const bodies: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
-    assert.equal(String(input), 'http://workspace.test/api/sciforge/tools/run/stream');
+    assert.equal(String(input), 'http://workspace.test/api/sciforge/runtime/codex/stream');
     bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
     return ndjsonResponse([
       { result: { status: 'completed', message: 'Computer Use completed.', executionUnits: [], artifacts: [] } },
@@ -213,15 +188,9 @@ test('Computer Use chat request injects sanitized completion evidence policy int
   }
 
   assert.equal(bodies.length, 1);
-  const uiState = bodies[0]?.uiState as Record<string, unknown>;
-  assert.deepEqual(uiState.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal(bodies[0]?.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.match(String(bodies[0]?.commandText), /^\/computer-use run complete the visible task/);
+  assert.equal('completionEvidencePolicy' in (bodies[0]?.uiState as Record<string, unknown> | undefined ?? {}), false);
   assert.doesNotMatch(
     JSON.stringify(bodies[0]),
     /SECRET_POLICY_SHOULD_NOT_LEAK|SECRET_PRODUCER_SHOULD_NOT_LEAK|UNKNOWN_PRODUCER_SHOULD_NOT_LEAK|unknown-producer/,
@@ -503,7 +472,10 @@ test('Computer Use chat live approval retry E2E runs needs-confirmation then con
     });
 
     assert.equal(bodies.length, 2);
-    assert.equal(String(bodies[1]?.prompt), `/computer-use approve --approval-ref ${approvalRef}`);
+    assert.match(String(bodies[1]?.prompt), new RegExp(`^/computer-use approve --approval-ref ${approvalRef}`));
+    assert.match(String(bodies[1]?.prompt), /approval-request\.json/);
+    assert.match(String(bodies[1]?.prompt), /gui-ask-user\.json/);
+    assert.match(String(bodies[1]?.prompt), /risk-audit\.json/);
     const humanApproval = bodies[1]?.humanApproval as Record<string, unknown>;
     const provenance = humanApproval.approvalProvenance as Record<string, unknown>;
     assert.equal(humanApproval.approvalRef, approvalRef);
@@ -895,7 +867,7 @@ test('Computer Use chat live E2E validates confirmed approval retry chain sideca
 
     const humanApproval = bodies[0]?.humanApproval as Record<string, unknown>;
     assert.equal(humanApproval.approvalRef, approvalRef);
-    assert.equal((humanApproval.approvalProvenance as Record<string, unknown>).source, 'prior-gui-ask-user');
+    assert.equal((humanApproval.approvalProvenance as Record<string, unknown>).source, 'runtime-codex-commandText-approval-context');
     assert.equal(manifest.status, 'confirmed-approval-retry', JSON.stringify(manifest.issues));
     assert.deepEqual(manifest.issues, []);
     assert.equal(manifest.confirmedApproval?.approvalRef, approvalRef);
@@ -1551,7 +1523,7 @@ test('Computer Use chat live continuation E2E reuses repair sidecar refs in seco
     assert.match(JSON.stringify(bodies[1]), /repair-hint\.json/);
     assert.match(JSON.stringify(bodies[1]), /blocked-manifest\.json/);
     assert.match(JSON.stringify(bodies[1]), /tui-host-run-task-chain\.json/);
-    assert.match(JSON.stringify(bodies[1]), /Retry with one safe visible local artifact action/);
+    assert.doesNotMatch(JSON.stringify(bodies[1]), /privateHugeField|must not leak/);
     assert.equal(manifest.status, 'passed', JSON.stringify(manifest.issues));
     assert.equal(manifest.requestSubmitted, true);
     assert.deepEqual(manifest.issues, []);
@@ -1684,9 +1656,9 @@ test('Computer Use chat live continuation E2E accepts repair-needed then complet
     assert.equal(manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.consistent, true);
     assert.deepEqual(manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.matchingFinalArtifactRefs, [finalArtifactRef]);
     assert.deepEqual(manifest.continuation.sidecarHydration.requestSidecars, {
-      continuationRequest: true,
-      repairHint: true,
-      blockedManifest: true,
+      continuationRequest: false,
+      repairHint: false,
+      blockedManifest: false,
       runTaskChain: false,
     });
     assert.deepEqual(manifest.continuation.sidecarHydration.plannerMetadataSidecars, {
@@ -1907,9 +1879,9 @@ test('Computer Use chat live continuation E2E rejects completed when repair side
     assert.equal(manifest.status, 'failed');
     assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'valid');
     assert.deepEqual(manifest.continuation.sidecarHydration.requestSidecars, {
-      continuationRequest: true,
-      repairHint: true,
-      blockedManifest: true,
+      continuationRequest: false,
+      repairHint: false,
+      blockedManifest: false,
       runTaskChain: false,
     });
     assert.ok(manifest.issues.includes('second-completed-missing-computer-use-request-ref'));

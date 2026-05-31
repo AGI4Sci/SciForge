@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
 
 import {
@@ -105,6 +108,102 @@ test('gateway adapter expands confirmed approval retry into prior approved actio
   assert.equal(request.riskPolicy, 'allow-confirmed');
   assert.equal(request.approvalRef, 'approval:computer-use:cu-risk');
   assert.ok((request.metadata.approvalProvenance as Record<string, unknown>).highRiskAction);
+});
+
+test('gateway adapter recovers approval provenance from workspace sidecars for command approval refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-host-adapter-'));
+  try {
+    const approvalRef = 'approval:computer-use:workspace-recovered';
+    const runDir = join(workspace, '.sciforge/vision-runs/run-workspace-source');
+    await mkdir(runDir, { recursive: true });
+    await writeJson(join(runDir, 'approval-request.json'), {
+      schemaVersion: 'sciforge.computer-use.approval-request-sidecar.v1',
+      runId: 'run-workspace-source',
+      status: 'needs-confirmation',
+      approvalRequestId: 'approval-request:workspace-recovered',
+      approvalRef,
+      riskActionHash: 'risk-action:workspace-recovered',
+      approvalRequest: {
+        id: 'approval-request:workspace-recovered',
+        approvalRef,
+        riskActionHash: 'risk-action:workspace-recovered',
+        confirmation_text: 'Allow Computer Use to type the guarded text?',
+        action_kind: 'type_text',
+      },
+    });
+    await writeJson(join(runDir, 'gui-ask-user.json'), {
+      schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+      port: 'gui.ask_user',
+      status: 'needs-confirmation',
+      approvalRequestId: 'approval-request:workspace-recovered',
+      approvalRef,
+      riskActionHash: 'risk-action:workspace-recovered',
+      payload: {
+        approvalRequest: {
+          id: 'approval-request:workspace-recovered',
+          approvalRef,
+          riskActionHash: 'risk-action:workspace-recovered',
+        },
+      },
+    });
+    await writeJson(join(runDir, 'risk-audit.json'), {
+      schemaVersion: 'sciforge.computer-use.risk-audit-sidecar.v1',
+      runId: 'run-workspace-source',
+      status: 'needs-confirmation',
+      approvalRequestId: 'approval-request:workspace-recovered',
+      approvalRef,
+      riskActionHash: 'risk-action:workspace-recovered',
+      highRiskAction: {
+        actionKind: 'type_text',
+        targetDescription: 'Guarded editor field',
+      },
+    });
+
+    const request = gatewayRequestToComputerUseRequest({
+      skillDomain: 'knowledge',
+      prompt: 'Continue the approved Computer Use action.',
+      commandText: `/computer-use approve --approval-ref "${approvalRef}"`,
+      workspacePath: workspace,
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+    } as Parameters<typeof gatewayRequestToComputerUseRequest>[0] & { commandText: string }, baseConfig, workspace);
+
+    assert.equal(request.riskPolicy, 'allow-confirmed');
+    assert.equal(request.approvalRef, approvalRef);
+    assert.match(request.task, /Approved action kind: type_text/);
+    assert.match(request.task, /Approved target: Guarded editor field/);
+    const provenance = request.metadata.approvalProvenance as Record<string, unknown>;
+    assert.equal(provenance.source, 'workspace-approval-sidecar');
+    assert.equal(provenance.sourceApprovalRequestRef, '.sciforge/vision-runs/run-workspace-source/approval-request.json');
+    assert.equal(provenance.sourceGuiAskUserRecordRef, '.sciforge/vision-runs/run-workspace-source/gui-ask-user.json');
+    assert.equal(provenance.sourceRiskAuditRef, '.sciforge/vision-runs/run-workspace-source/risk-audit.json');
+    assert.deepEqual(provenance.highRiskAction, {
+      actionKind: 'type_text',
+      targetDescription: 'Guarded editor field',
+    });
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('gateway adapter keeps prompt-only approval ref fail-closed when workspace sidecars are absent', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-host-adapter-missing-'));
+  try {
+    const request = gatewayRequestToComputerUseRequest({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use approve --approval-ref "approval:computer-use:missing-sidecar"',
+      workspacePath: workspace,
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+    }, baseConfig, workspace);
+
+    assert.equal(request.riskPolicy, 'fail-closed');
+    assert.equal(request.approvalRef, undefined);
+    assert.equal(request.metadata.approvalProvenance, undefined);
+    assert.doesNotMatch(request.task, /Approved retry context/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
 
 test('gateway adapter projects generic planner acceptance contract from UI state', () => {
@@ -261,6 +360,63 @@ test('gateway adapter projects bounded Computer Use continuation sidecar context
   assert.doesNotMatch(JSON.stringify(continuation), /privateHugeField|must not leak|data:image|accessibilityTree|DOMSnapshot/);
 });
 
+test('gateway adapter hydrates bounded Computer Use continuation sidecar context from workspace refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-continuation-sidecars-'));
+  try {
+    const runDir = join(workspace, '.sciforge/vision-runs/run-repair');
+    await mkdir(runDir, { recursive: true });
+    await writeJson(join(runDir, 'blocked-manifest.json'), {
+      schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
+      status: 'blocked',
+      reason: 'Previous attempt stopped before a visible final artifact.',
+      failedStage: 'visible-artifact-final-guard',
+      privateHugeField: 'must not leak',
+    });
+    await writeJson(join(runDir, 'repair-hint.json'), {
+      schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
+      status: 'repair-needed',
+      reason: 'Retry with one safe visible local artifact action.',
+      nextAttempt: {
+        reuseTraceRef: '.sciforge/vision-runs/run-repair/vision-trace.json',
+        reuseRunTaskChainRef: '.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json',
+        requireFreshObservation: true,
+        privateHugeField: 'must not leak',
+      },
+    });
+    await writeJson(join(runDir, 'continuation-request.json'), {
+      schemaVersion: 'sciforge.computer-use.continuation-request-sidecar.v1',
+      status: 'repair-needed',
+      continuationRequestRef: '.sciforge/vision-runs/run-repair/continuation-request.json',
+      requestRef: '.sciforge/vision-runs/run-repair/computer-use-request.json',
+    });
+
+    const request = gatewayRequestToComputerUseRequest({
+      skillDomain: 'knowledge',
+      prompt: [
+        '/computer-use continue --continuation-request-ref ".sciforge/vision-runs/run-repair/continuation-request.json"',
+        'Approval/source refs:',
+        '- .sciforge/vision-runs/run-repair/blocked-manifest.json',
+        '- .sciforge/vision-runs/run-repair/repair-hint.json',
+        '- .sciforge/vision-runs/run-repair/tui-host-run-task-chain.json',
+      ].join('\n'),
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+    }, baseConfig, workspace);
+
+    const contract = request.metadata.plannerAcceptanceContract as Record<string, unknown>;
+    const continuation = contract.computerUseContinuation as Record<string, unknown>;
+    assert.deepEqual(continuation.continuationRequestRefs, ['.sciforge/vision-runs/run-repair/continuation-request.json']);
+    assert.deepEqual(continuation.repairHintRefs, ['.sciforge/vision-runs/run-repair/repair-hint.json']);
+    assert.deepEqual(continuation.runTaskChainRefs, ['.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json']);
+    assert.match(JSON.stringify(continuation), /Previous attempt stopped before a visible final artifact/);
+    assert.match(JSON.stringify(continuation), /Retry with one safe visible local artifact action/);
+    assert.doesNotMatch(JSON.stringify(continuation), /privateHugeField|must not leak/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('gateway adapter does not advertise visual grounder fallback when KV-Ground is absent', () => {
   const request = gatewayRequestToComputerUseRequest({
     skillDomain: 'knowledge',
@@ -285,13 +441,28 @@ test('host ports contract exposes platform ports and forbids direct GUI calls', 
   const contract = computerUseHostPortsContract(baseConfig);
 
   assert.equal(contract.schemaVersion, COMPUTER_USE_HOST_PORTS_SCHEMA);
+  assert.equal(contract.hostAdapterSchemaVersion, 'sciforge.computer-use.host-adapter.v1');
   assert.equal(contract.actionProvider, COMPUTER_USE_ACTION_PROVIDER_ID);
   assert.equal(contract.ports.capture.provider, 'target-window-capture');
   assert.equal(contract.ports.plan.provider, 'runtime-codex-tui-text-planner');
+  assert.equal(contract.ports.crop.provider, 'host-focus-region-crop');
+  assert.equal(contract.ports.query.optional, true);
   assert.equal(contract.ports.locate.provider, 'kv-ground');
   assert.equal(contract.ports.execute.inputAdapter, 'shared-system-input-acknowledged');
   assert.equal(contract.ports.verify.provider, 'layered-vision-verifier');
+  assert.deepEqual(contract.requiredPorts, ['capture', 'plan', 'locate', 'execute', 'verify']);
+  assert.deepEqual(contract.optionalPorts, ['crop', 'query', 'writeTrace', 'emitEvent']);
   assert.deepEqual(contract.forbiddenPorts, ['requestApproval', 'gui.present', 'gui.ask_user']);
+  assert.equal(contract.approvalBoundary.policy, 'refs-first-approval-sidecars-only');
+  assert.deepEqual(contract.approvalBoundary.packageMayReturn, [
+    'needs-confirmation',
+    'approvalRequestRef',
+    'draftRef',
+    'auditRef',
+    'riskAuditRef',
+    'approvalRequestSidecarRef',
+  ]);
+  assert.deepEqual(contract.adapterBoundary.reusableBy, ['codex-cli-plugin', 'sciforge-runtime']);
 });
 
 test('result adapter presents refs-first Computer Use trace summaries through TUI host action metadata', () => {
@@ -372,6 +543,28 @@ test('result adapter maps approvalRequest to gui.ask_user while preserving relat
   ]);
 });
 
+test('result adapter does not treat slash commands as sidecar refs', () => {
+  const commandText = [
+    '/computer-use approve --approval-ref approval:computer-use:test',
+    '',
+    'Approval/source refs:',
+    '- .sciforge/vision-runs/source/approval-request.json',
+    '- .sciforge/vision-runs/source/gui-ask-user.json',
+    '- .sciforge/vision-runs/source/risk-audit.json',
+  ].join('\n');
+  const actions = computerUseResultToTuiHostActions({
+    status: 'completed',
+    message: commandText,
+    riskAuditRef: '.sciforge/vision-runs/current/risk-audit.json',
+    sourceRiskAuditRef: '.sciforge/vision-runs/current/approval-source-risk-audit.json',
+  });
+
+  assert.equal(actions.length, 1);
+  const payload = actions[0]?.payload as Record<string, unknown>;
+  assert.deepEqual(payload.riskAuditRefs, ['.sciforge/vision-runs/current/risk-audit.json']);
+  assert.deepEqual(payload.sourceApprovalRefs, ['.sciforge/vision-runs/current/approval-source-risk-audit.json']);
+});
+
 test('result adapter preserves repair sidecar refs for blocked Computer Use runs', () => {
   const actions = computerUseResultToTuiHostActions({
     status: 'blocked',
@@ -394,3 +587,7 @@ test('result adapter preserves repair sidecar refs for blocked Computer Use runs
   assert.deepEqual(actions[0]?.payload.directoryListingRefs, ['.sciforge/vision-runs/run-repair/directory-listing.json']);
   assert.deepEqual(actions[0]?.payload.runTaskChainRefs, ['.sciforge/vision-runs/run-repair/tui-host-run-task-chain.json']);
 });
+
+async function writeJson(path: string, value: unknown) {
+  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
+}

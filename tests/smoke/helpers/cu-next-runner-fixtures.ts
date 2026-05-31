@@ -551,6 +551,7 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
       displayedRefs: [finalArtifactRef],
       artifactRefs: [finalArtifactRef],
     },
+    ...cuNext07AcceptanceProductRefs('cu-next-07-wrapper', ''),
     evidenceMarkers: [cuNext07DenseGroundingMarker()],
     completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
     completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
@@ -758,9 +759,291 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
       displayedRefs: [finalArtifactRef],
       artifactRefs: [finalArtifactRef],
     },
+    ...cuNext07AcceptanceProductRefs(runId, `.sciforge/vision-runs/${runId}/`),
     evidenceMarkers: [cuNext07DenseGroundingMarker(runId)],
     completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
     completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+  };
+}
+
+function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<string, unknown> {
+  const ref = (name: string) => `${prefix}${name}`;
+  const bundleRef = prefix.endsWith('/') ? prefix.slice(0, -1) : (prefix || 'current-run-bundle');
+  const screenId = `${runId}-screen-main`;
+  const previewScreenId = `${runId}-screen-preview`;
+  const windowId = `${runId}-window-main`;
+  const writerWindowId = `${runId}-window-writer`;
+  const actorId = `${runId}-actor-agent`;
+  const cursorId = `${runId}-cursor-agent`;
+  const writerActorId = `${runId}-actor-writer`;
+  const writerCursorId = `${runId}-cursor-writer`;
+  const previewActorId = `${runId}-actor-preview`;
+  const previewCursorId = `${runId}-cursor-preview`;
+  return {
+    productPathClassification: {
+      schemaVersion: 'sciforge.computer-use.product-path-classification.v1',
+      tier: 'product-smoke',
+      entrypoint: 'codex-app-server/native-plugin',
+      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
+      appServerRunRef: ref('codex-app-server-run.json'),
+      nativePluginInvocationRef: ref('native-plugin-invocation.json'),
+      sciforgeComputerUseRunTaskRef: ref('tui-host-run-task-chain.json'),
+      platformSidecarIsolationReportRef: ref('platform-sidecar-isolation-report.json'),
+      currentBundleRef: bundleRef,
+      currentBundleOnly: true,
+      diagnosticOnly: false,
+      packageDiagnosticOnly: false,
+    },
+    userControlPlane: {
+      schemaVersion: 'sciforge.computer-use.user-control-plane.v1',
+      status: 'present',
+      sessionPermissionRef: ref('session-permission.json'),
+      allowedAppRefs: [ref('allowed-apps.json')],
+      allowedWindowRefs: [ref('allowed-windows.json')],
+      forbiddenAppRefs: [ref('forbidden-apps.json')],
+      inputModalityPolicyRef: ref('input-modality-policy.json'),
+      riskPreviewRef: ref('risk-preview.json'),
+      dataVisibilityRef: ref('data-visibility.json'),
+      stopRef: ref('stop-cancel-lease.json'),
+      cancelLeaseRef: ref('stop-cancel-lease.json'),
+      approvalMode: 'bounded-low-risk',
+    },
+    platformSidecarIsolationReport: {
+      schemaVersion: 'sciforge.computer-use.platform-sidecar-isolation-report.v1',
+      status: 'passed',
+      backendKind: 'native-multi-screen-sidecar',
+      sidecarKind: 'native-multi-screen-sidecar',
+      reportRef: ref('platform-sidecar-isolation-report.json'),
+      captureRef: ref('sidecar-capture.json'),
+      stateRef: ref('sidecar-state.json'),
+      preflightRef: ref('sidecar-preflight.json'),
+      executorAdapterRef: ref('sidecar-executor-adapter.json'),
+      isolationFlags: {
+        sharedSystemInputUsed: false,
+        systemPointerMoved: false,
+        systemKeyboardEventsSent: false,
+        sidecarDoesPlanning: false,
+        sidecarDoesCompletion: false,
+      },
+    },
+    virtualDisplayGroup: {
+      displayGroupId: `${runId}-display-group`,
+      ref: ref('virtual-display-group.json'),
+      screens: [
+        {
+          screenId,
+          ref: ref('virtual-screen-main.json'),
+          geometry: { x: 0, y: 0, width: 1280, height: 720, scale: 1 },
+        },
+        {
+          screenId: previewScreenId,
+          ref: ref('virtual-screen-preview.json'),
+          geometry: { x: 1280, y: 0, width: 1024, height: 720, scale: 1 },
+        },
+      ],
+    },
+    actorCursorProvenance: [
+      {
+        actorId,
+        cursorId,
+        screenId,
+        actorCursorLogRef: ref('actor-cursors.jsonl'),
+      },
+      {
+        actorId: writerActorId,
+        cursorId: writerCursorId,
+        screenId,
+        actorCursorLogRef: ref('actor-cursors.jsonl'),
+      },
+      {
+        actorId: previewActorId,
+        cursorId: previewCursorId,
+        screenId: previewScreenId,
+        actorCursorLogRef: ref('actor-cursors.jsonl'),
+      },
+    ],
+    cursorEvents: [
+      {
+        kind: 'move',
+        actorId,
+        cursorId,
+        screenId,
+        cursorEventLogRef: ref('actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+      {
+        kind: 'point',
+        actorId: writerActorId,
+        cursorId: writerCursorId,
+        screenId,
+        cursorEventLogRef: ref('actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+      {
+        kind: 'annotate',
+        actorId: previewActorId,
+        cursorId: previewCursorId,
+        screenId: previewScreenId,
+        cursorEventLogRef: ref('actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+    ],
+    executorLease: {
+      status: 'present',
+      ref: ref('executor-lease.json'),
+      owner: 'sciforge-independent-input-adapter',
+      screenId,
+      windowId,
+      actorId,
+      cursorId,
+      leaseScope: {
+        kind: 'window-local',
+        screenId,
+        windowId,
+      },
+    },
+    observeBeforeMutate: {
+      schemaVersion: 'sciforge.computer-use.observe-before-mutate.v1',
+      status: 'passed',
+      currentAppStateRef: ref('current-app-state.json'),
+      currentScreenshotRef: ref('before.png'),
+      stateSnapshotRef: ref('state-snapshot.json'),
+      freshnessCheckRef: ref('freshness-check.json'),
+      browserRuntimeObservationRef: ref('browser-dom-ax-observation.json'),
+      browserRuntimeObservationUse: 'observe-before-mutate-hint',
+    },
+    browserRuntimeDomAxObservation: {
+      schemaVersion: 'sciforge.computer-use.browser-runtime-dom-ax-observation.v1',
+      trust: 'untrusted-page-observation',
+      refsFirst: true,
+      currentBundleOnly: true,
+      screenId,
+      windowId,
+      observationRef: ref('browser-dom-ax-observation.json'),
+      visibleDomRef: ref('browser-visible-dom.json'),
+      accessibilitySnapshotRef: ref('browser-accessibility.json'),
+      playwrightEvaluateRef: ref('browser-playwright-evaluate.json'),
+      pageQueryRef: ref('browser-page-query.json'),
+      stableRefs: [ref('browser-stable-refs.json')],
+      groundingHintRefs: [ref('browser-grounding-hints.json')],
+      observationUse: 'observe-before-mutate-hint',
+      executorLeaseSubstitute: false,
+      guiActionSubstitute: false,
+      artifactCausalitySubstitute: false,
+      completionEvidenceEligible: false,
+      userLevelCompletionSubstitute: false,
+    },
+    actionProposals: [
+      {
+        proposalId: `${runId}-proposal-main-agent`,
+        proposalRef: ref('proposal-main-agent.json'),
+        actorId,
+        cursorId,
+        leaseScope: { kind: 'window-local', screenId, windowId },
+      },
+      {
+        proposalId: `${runId}-proposal-main-writer`,
+        proposalRef: ref('proposal-main-writer.json'),
+        actorId: writerActorId,
+        cursorId: writerCursorId,
+        leaseScope: { kind: 'window-local', screenId, windowId: writerWindowId },
+        decisionStatus: 'queued',
+      },
+      {
+        proposalId: `${runId}-proposal-preview-refresh`,
+        proposalRef: ref('proposal-preview-refresh.json'),
+        actorId: previewActorId,
+        cursorId: previewCursorId,
+        leaseScope: { kind: 'screen-global', screenId: previewScreenId },
+      },
+    ],
+    executorQueue: [
+      {
+        queueId: `${runId}-window-local-queue`,
+        screenId,
+        queueKind: 'window-local',
+        schedulerPolicy: 'native-screen-serial',
+        leaseOwnerRefs: [ref('executor-lease.json')],
+      },
+      {
+        queueId: `${runId}-screen-global-queue`,
+        screenId: previewScreenId,
+        queueKind: 'screen-global',
+        schedulerPolicy: 'native-screen-serial',
+        leaseOwnerRefs: [ref('screen-global-lease.json')],
+      },
+    ],
+    mutatingActions: [
+      {
+        actionKind: 'click',
+        screenId,
+        windowId,
+        actorId,
+        cursorId,
+        leaseId: `${runId}-lease-window-main`,
+        leaseScope: {
+          kind: 'window-local',
+          screenId,
+          windowId,
+        },
+        target: {
+          scope: 'window',
+          screenId,
+          windowId,
+          bounds: { x: 64, y: 72, width: 160, height: 36 },
+        },
+        beforeEvidenceRefs: [ref('before.png')],
+        afterEvidenceRefs: [ref('after.png')],
+        currentAppStateRef: ref('current-app-state.json'),
+        currentScreenshotRef: ref('before.png'),
+        stateSnapshotRef: ref('state-snapshot.json'),
+        freshnessCheckRef: ref('freshness-check.json'),
+        groundingRefs: [ref('coarse-fine-rejected-targets.json'), ref('browser-grounding-hints.json')],
+        executorEventRef: ref('executor-event.json'),
+        verificationRefs: [ref('verifier-verdict.json')],
+      },
+    ],
+    replayBundle: {
+      ref: ref('replay-bundle.json'),
+      frames: [
+        {
+          screenId,
+          screenshotRef: ref('before.png'),
+          cursorOverlayRefs: [ref('cursor-overlay-before.json')],
+          sourceEvidenceRefs: [ref('before.png')],
+        },
+        {
+          screenId: previewScreenId,
+          screenshotRef: ref('preview-before.png'),
+          cursorOverlayRefs: [ref('cursor-overlay-preview-before.json')],
+          sourceEvidenceRefs: [ref('preview-before.png')],
+        },
+        {
+          screenId,
+          screenshotRef: ref('after.png'),
+          cursorOverlayRefs: [ref('cursor-overlay-after.json')],
+          sourceEvidenceRefs: [ref('after.png')],
+        },
+        {
+          screenId: previewScreenId,
+          screenshotRef: ref('preview-after.png'),
+          cursorOverlayRefs: [ref('cursor-overlay-preview-after.json')],
+          sourceEvidenceRefs: [ref('preview-after.png')],
+        },
+      ],
+      cursorOverlayRefs: [
+        ref('cursor-overlay-before.json'),
+        ref('cursor-overlay-preview-before.json'),
+        ref('cursor-overlay-after.json'),
+        ref('cursor-overlay-preview-after.json'),
+      ],
+      leaseOwnerRefs: [ref('executor-lease.json'), ref('screen-global-lease.json')],
+      beforeEvidenceRefs: [ref('before.png'), ref('preview-before.png')],
+      afterEvidenceRefs: [ref('after.png'), ref('preview-after.png')],
+    },
   };
 }
 

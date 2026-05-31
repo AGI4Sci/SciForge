@@ -11,6 +11,7 @@ import type {
   UserGoalSnapshot,
 } from '../../domain';
 import { isSeedDemoOrFixtureMessage } from '@sciforge-ui/runtime-contract';
+import { sameChatContinuityPrompt } from '../../conversationContinuity';
 import {
   compactProjectionExecutionUnitsForRequestPayload,
   compactRunRawAuditForProjectionPayload,
@@ -266,10 +267,6 @@ function sameChatContinuityMessageIds(
     .filter((message) => !isSeedDemoOrFixtureMessage(message))
     .slice(-4)
     .map((message) => message.id));
-}
-
-function sameChatContinuityPrompt(prompt: string) {
-  return /\b(?:previous turn|last (?:answer|response|message)|that passphrase|the passphrase|remember(?:ed)?|上一轮|上(?:一)?条|刚才)\b/i.test(prompt);
 }
 
 function filterReferencesForRequestPayload(references: SciForgeReference[] | undefined, selectedRefs: Set<string>) {

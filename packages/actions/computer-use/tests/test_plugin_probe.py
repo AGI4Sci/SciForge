@@ -65,6 +65,11 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
         "validateRepairManifest",
         "buildVisibleRunViewer",
         "validateVisibleRunViewerManifest",
+        "getNativeToolManifest",
+        "dispatchNativeTool",
+        "validateNativeToolPayload",
+        "getMcpToolSchemas",
+        "runMcpServer",
         "buildEvidenceIndex",
         "buildEvidenceSnapshot",
         "buildPlannerBrief",
@@ -95,6 +100,11 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
         "sciforge_computer_use.response_compat.extract_provider_text",
         "sciforge_computer_use.response_compat.responses_to_chat_completions",
         "sciforge_computer_use.response_compat.chat_completions_to_responses",
+        "sciforge_computer_use.native_tool.get_native_tool_manifest",
+        "sciforge_computer_use.native_tool.dispatch_native_tool",
+        "sciforge_computer_use.native_tool.validate_native_tool_payload",
+        "sciforge_computer_use.mcp_server.get_mcp_tool_schemas",
+        "sciforge_computer_use.mcp_server.run_mcp_server",
     } <= set(manifest["api"]["manifestCallablePaths"])
     assert manifest["api"]["getManifestMatchesActionProvider"] is True
     diagnostic_probe_modules = {
@@ -105,7 +115,9 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
         ("entrypoint.discoveryProbe", "sciforge_computer_use.plugin_probe"),
         ("entrypoint.virtualDesktopProbe", "sciforge_computer_use.virtual_desktop_probe"),
         ("entrypoint.targetBoundWindowHostProbe", "sciforge_computer_use.target_bound_window_host_probe"),
+        ("entrypoint.nativeToolProbe", "sciforge_computer_use.native_tool"),
         ("hostPortsContract.diagnosticProbes.pluginDiscovery", "sciforge_computer_use.plugin_probe"),
+        ("hostPortsContract.diagnosticProbes.nativeToolDebug", "sciforge_computer_use.native_tool"),
         ("hostPortsContract.diagnosticProbes.nativePreflight", "sciforge_computer_use.desktop_preflight"),
         (
             "hostPortsContract.diagnosticProbes.isolatedDesktopBackend",
@@ -150,6 +162,19 @@ def test_plugin_probe_discovers_manifest_api_and_runs_cli_fixture(tmp_path):
     assert manifest["userAcceptanceEligible"] is False
     assert manifest["l1SmokeCompleted"] is False
     assert manifest["l3WorkflowCompleted"] is False
+    assert manifest["codexLocalPackaging"]["mcpServerName"] == "sciforge-computer-use"
+    assert manifest["codexLocalPackaging"]["publicTools"] == [
+        "get_app_state",
+        "observe",
+        "click",
+        "type_text",
+        "scroll",
+        "press_key",
+        "propose_action",
+        "execute_scoped_action",
+        "get_replay_refs",
+    ]
+    assert manifest["codexLocalPackaging"]["userAcceptanceEligible"] is False
     assert manifest["sciForgeRuntimeTouched"] is False
     assert manifest["guiTouched"] is False
     assert "actionSchema" not in manifest

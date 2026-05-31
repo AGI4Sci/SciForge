@@ -137,7 +137,7 @@ function customCuNextTaskMap(): Record<string, unknown> {
         priority: 1,
         primaryScenarioId: 'CU-LONG-004',
         longScenarioIds: ['CU-LONG-004'],
-        requirements: ['l3-workflow-refs', 'dense-grounding', 'no-dom-playwright-accessibility'],
+        requirements: ['l3-workflow-refs', 'dense-grounding', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
         recommendedTargetMode: 'app-window',
         recommendedTargetApp: 'Browser',
         recommendedMaxSteps: 4,
@@ -230,6 +230,7 @@ test('CU-NEXT task map validates against the CU-LONG task pool', async () => {
   for (const task of map.tasks) {
     assert.ok(longScenarioIds.has(task.primaryScenarioId), `${task.taskId}: primary scenario must exist`);
     assert.ok(task.longScenarioIds.every((id) => longScenarioIds.has(id)), `${task.taskId}: all scenarios must exist`);
+    assert.ok(task.requirements.includes('dom-ax-observation-hints'));
     assert.ok(task.requirements.includes('no-dom-playwright-accessibility'));
   }
 });

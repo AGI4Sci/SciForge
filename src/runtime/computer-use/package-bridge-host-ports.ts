@@ -1,23 +1,19 @@
 import type { WorkspaceRuntimeCallbacks } from '../runtime-types.js';
+import {
+  computerUsePackageStdioHostPortNames,
+  isComputerUseForbiddenHostPortName,
+  type ComputerUseHostPortHandlers,
+  type ComputerUsePackageStdioHostPortName,
+} from '../../../packages/actions/computer-use/host-adapter-contract.js';
 import type { HostPortCall } from './package-bridge-stdio.js';
 
-export const packageBridgeHostPortNames = [
-  'capture',
-  'plan',
-  'locate',
-  'execute',
-  'verify',
-  'writeTrace',
-  'emitEvent',
-] as const;
+export const packageBridgeHostPortNames = computerUsePackageStdioHostPortNames;
 
-export type PackageBridgeHostPortName = (typeof packageBridgeHostPortNames)[number];
+export type PackageBridgeHostPortName = ComputerUsePackageStdioHostPortName;
 
 export type PackageBridgeHostPortHandler = (call: HostPortCall) => Promise<unknown> | unknown;
 
-export type PackageBridgeHostPortHandlers = {
-  [Name in PackageBridgeHostPortName]: PackageBridgeHostPortHandler;
-};
+export type PackageBridgeHostPortHandlers = ComputerUseHostPortHandlers<HostPortCall>;
 
 export async function dispatchPackageBridgeHostPortCall(
   call: HostPortCall,
@@ -26,8 +22,11 @@ export async function dispatchPackageBridgeHostPortCall(
     handlers: PackageBridgeHostPortHandlers;
   },
 ): Promise<unknown> {
-  if (options.callbacks.signal?.aborted) {
+  if (options.callbacks.signal?.aborted && call.port !== 'execute') {
     throw new Error('Computer Use host port call aborted by workspace runtime signal.');
+  }
+  if (isComputerUseForbiddenHostPortName(call.port)) {
+    throw new Error(`Forbidden Computer Use host port: ${call.port}. High-risk actions must return approval refs/sidecars for the TUI Host boundary.`);
   }
   const handler = isPackageBridgeHostPortName(call.port)
     ? options.handlers[call.port]

@@ -79,10 +79,21 @@ export function formatProgressHeadline(model: ProcessProgressModel | undefined, 
   const parts = [model.title];
   if (model.reading.length) parts.push(t({ 'zh-CN': `读取 ${model.reading[0]}`, 'en-US': `Reading ${model.reading[0]}` }));
   if (model.writing.length) parts.push(t({ 'zh-CN': `写入 ${model.writing[0]}`, 'en-US': `Writing ${model.writing[0]}` }));
-  if (model.waitingFor) parts.push(t({ 'zh-CN': `等待 ${model.waitingFor}`, 'en-US': `Waiting for ${model.waitingFor}` }));
+  if (model.waitingFor && !progressTitleAlreadyNamesWait(model.title, model.waitingFor)) {
+    parts.push(t({ 'zh-CN': `等待 ${model.waitingFor}`, 'en-US': `Waiting for ${model.waitingFor}` }));
+  }
   if (model.lastEvent) parts.push(t({ 'zh-CN': `最近 ${model.lastEvent.label}: ${model.lastEvent.detail}`, 'en-US': `Latest ${model.lastEvent.label}: ${model.lastEvent.detail}` }));
   if (model.nextStep) parts.push(t({ 'zh-CN': `下一步 ${model.nextStep}`, 'en-US': `Next ${model.nextStep}` }));
   return parts.join(' · ');
+}
+
+function progressTitleAlreadyNamesWait(title: string, waitingFor: string) {
+  const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').trim();
+  const normalizedWaitingFor = waitingFor.toLowerCase().replace(/\s+/g, ' ').trim();
+  if (!normalizedTitle || !normalizedWaitingFor) return false;
+  return normalizedTitle.includes(`waiting for ${normalizedWaitingFor}`)
+    || normalizedTitle.includes(`等待${normalizedWaitingFor}`)
+    || normalizedTitle.includes(`等待 ${normalizedWaitingFor}`);
 }
 
 export function buildSilentStreamProgressEvent({

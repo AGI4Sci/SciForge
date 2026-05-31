@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from '../runtime-types.js';
@@ -13,7 +13,7 @@ import {
   type VirtualRemoteVisibleArtifact,
 } from './virtual-remote-session.js';
 import type { ComputerUseConfig, FocusRegion, GenericVisionAction, LoopStep, ScreenshotRef, WindowTargetResolution } from './types.js';
-import { sanitizeId } from './utils.js';
+import { sanitizeId, workspaceRel } from './utils.js';
 import {
   resolveWindowTarget,
   toTraceWindowTarget,
@@ -373,7 +373,25 @@ async function locatePort(
       grounding = refined.grounding ?? grounding;
     }
   }
-  state.activeAction = { ...resolvedAction, grounding };
+  const historyLength = Array.isArray(call.args?.[2]) ? call.args[2].length : state.executedActions.length;
+  const groundingRef = await writePackageBridgeGroundingRef({
+    workspace,
+    state,
+    stepIndex: historyLength + 1,
+    observationRef,
+    beforeRefs,
+    action: resolvedAction,
+    grounding,
+  });
+  state.activeAction = {
+    ...resolvedAction,
+    grounding: { ...grounding, groundingRef, sourceObservationRef: observationRef },
+    beforeEvidenceRefs: uniqueStrings([
+      observationRef,
+      ...beforeRefs.map((ref) => ref.path),
+    ]),
+    groundingRefs: [groundingRef],
+  };
   return {
     ok: true,
     x: numberAt(grounding.executorX) ?? numberAt(grounding.x) ?? numberAt(grounding.localX),
@@ -381,8 +399,37 @@ async function locatePort(
     coordinateSpace: stringAt(grounding, 'coordinateSpace') ?? 'observation',
     confidence: numberAt(grounding.confidence),
     reason: stringAt(grounding, 'reason') ?? '',
-    metadata: grounding,
+    metadata: { ...grounding, groundingRef, sourceObservationRef: observationRef },
   };
+}
+
+async function writePackageBridgeGroundingRef(params: {
+  workspace: string;
+  state: PackageBridgeState;
+  stepIndex: number;
+  observationRef: string;
+  beforeRefs: ScreenshotRef[];
+  action: GenericVisionAction;
+  grounding: Record<string, unknown>;
+}) {
+  const path = join(params.state.runDir, `step-${String(params.stepIndex).padStart(3, '0')}-grounding.json`);
+  const ref = workspaceRel(params.workspace, path);
+  await writeFile(path, `${JSON.stringify({
+    schemaVersion: 'sciforge.computer-use.grounding-diagnostic.v1',
+    ref,
+    sourceObservationRef: params.observationRef,
+    beforeEvidenceRefs: [
+      params.observationRef,
+      ...params.beforeRefs.map((beforeRef) => beforeRef.path),
+    ],
+    actionType: params.action.type,
+    targetDescription: params.action.targetDescription,
+    targetRegionDescription: params.action.targetRegionDescription,
+    grounding: params.grounding,
+    windowTarget: params.state.targetResolution.ok ? toTraceWindowTarget(params.state.targetResolution) : undefined,
+    writtenAt: new Date().toISOString(),
+  }, null, 2)}\n`, 'utf8');
+  return ref;
 }
 
 function emitEventPort(
@@ -416,4 +463,8 @@ function stringAt(value: unknown, key: string) {
 function numberAt(value: unknown) {
   const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
   return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function uniqueStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
 }

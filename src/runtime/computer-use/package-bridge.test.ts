@@ -491,7 +491,11 @@ test('package bridge routes registered remote-desktop adapter through independen
     assert.doesNotMatch(traceText, /macos-cgevent-system-events|swift-cgevent|System Events executor|shared-system-pointer-keyboard/);
     const guiStep = (trace.steps as Array<Record<string, any>>).find((step) => step.kind === 'gui-execution');
     assert.equal(guiStep?.scheduler?.executorLease?.mode, 'real-gui-executor-lock');
-    assert.equal(guiStep?.scheduler?.executorLease?.status, undefined);
+    assert.equal(guiStep?.scheduler?.executorLease?.status, 'released');
+    assert.equal(guiStep?.scheduler?.executorLease?.leaseScope?.kind, 'window-local');
+    assert.equal(guiStep?.scheduler?.executorLease?.displayGroupId, 'display-group-1');
+    assert.equal(guiStep?.scheduler?.executorLease?.screenId, 'screen-1');
+    assert.equal(typeof guiStep?.scheduler?.executorLease?.windowId, 'string');
     assert.equal(typeof guiStep?.scheduler?.executorLease?.lockId, 'string');
     assert.equal(typeof guiStep?.scheduler?.executorLease?.acquiredAt, 'string');
     assert.equal(typeof guiStep?.scheduler?.executorLease?.releasedAt, 'string');
@@ -1550,6 +1554,16 @@ test('package bridge action-ledger completion waits for current-round quota', as
       { type: 'click', targetDescription: 'visible safe search field after clearing', x: 120, y: 80 },
     ]);
     config.maxSteps = 5;
+    config.windowTarget = {
+      enabled: true,
+      required: true,
+      mode: 'app-window',
+      appName: 'Validation Workspace',
+      title: 'Search validation',
+      virtualWindowId: 'window-ledger-quota',
+      coordinateSpace: 'window-local',
+      inputIsolation: 'require-focused-target',
+    };
     const payload = await runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run create a low-risk validation/no-result state in a visible search field, observe it, then clear or correct the field; do not submit, save, send, delete, or authorize anything',

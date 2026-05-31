@@ -6,7 +6,6 @@ import type { ScreenshotRef, TraceWindowTarget } from '../computer-use/types.js'
 import { platformLabel, sanitizeId, sha256, workspaceRel } from '../computer-use/utils.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import { visionSenseTraceContractPolicy, visionSenseTraceIds, visionSenseTraceOutputPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
-import { visionSenseTraceOutputViews } from '../../../packages/presentation/interactive-views';
 import {
   createCapabilityBudgetDebitRecord,
   type CapabilityBudgetDebitLine,
@@ -37,6 +36,10 @@ type ComputerUseWorkEvidence = WorkEvidence & {
 };
 
 type VisibleLoopArtifact = Record<string, unknown>;
+type VisionSenseTraceOutputViewRefs = {
+  execution?: string;
+  trace?: string;
+};
 
 export function genericLoopPayload(params: {
   request: GatewayRequest;
@@ -371,6 +374,29 @@ function stringArray(value: unknown) {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values));
+}
+
+function visionSenseTraceOutputViews(options: {
+  includeTrace?: boolean;
+  refs?: VisionSenseTraceOutputViewRefs;
+} = {}) {
+  const executionRef = options.refs?.execution ?? 'vision-sense-generic-execution';
+  const traceRef = options.refs?.trace ?? 'vision-sense-trace';
+  const views: Array<Record<string, unknown>> = [{
+    componentId: 'execution-unit-table',
+    title: 'Execution units',
+    artifactRef: executionRef,
+    priority: 1,
+  }];
+  if (options.includeTrace) {
+    views.push({
+      componentId: 'unknown-artifact-inspector',
+      title: 'Vision trace',
+      artifactRef: traceRef,
+      priority: 2,
+    });
+  }
+  return views;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

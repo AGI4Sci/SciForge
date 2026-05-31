@@ -100,6 +100,22 @@ test('builds minimal first-turn payload but retains prior work and explicit refe
   assert.deepEqual(requestPayloadForTurn(seeded, userMessage, [{ id: 'ref-1', kind: 'message', title: 'ref', ref: 'message:1' }]).messages.map((item) => item.id), ['msg-user']);
 });
 
+test('Chinese same-chat recall keeps bounded prior message text for runtime continuity', () => {
+  const firstUser = message('msg-first-user', 'user', '介绍一下 SciForge', '2026-05-07T00:00:00.000Z');
+  const firstAssistant = message('msg-first-assistant', 'scenario', 'SciForge 是一个科学研究 Agent 工作台。', '2026-05-07T00:00:01.000Z');
+  const currentUser = message('msg-current-user', 'user', '你还记得我一开始问的问题么？', '2026-05-07T00:00:02.000Z');
+  const payload = requestPayloadForTurn(session({
+    messages: [firstUser, firstAssistant, currentUser],
+  }), currentUser, []);
+
+  const firstPayload = payload.messages.find((item) => item.id === firstUser.id) as { content?: string; continuityContent?: string };
+  const assistantPayload = payload.messages.find((item) => item.id === firstAssistant.id) as { content?: string; continuityContent?: string };
+  assert.match(firstPayload.content ?? '', /omitted/);
+  assert.equal(firstPayload.continuityContent, '介绍一下 SciForge');
+  assert.equal(assistantPayload.continuityContent, 'SciForge 是一个科学研究 Agent 工作台。');
+  assert.equal(payload.messages.at(-1)?.content, '你还记得我一开始问的问题么？');
+});
+
 test('compacts prior work payloads for multi-turn requests', () => {
   const messages = Array.from({ length: 18 }, (_, index) => message(
     `msg-${index}`,

@@ -298,6 +298,87 @@ test('assistant message follows Codex-style answer, results, process, verificati
   assert.doesNotMatch(html, /ConversationProjection|ExecutionUnit|ArtifactDelivery|native-message|live-runtime-codex|raw JSONL|SSE|stdout|stderr|provider|run id/);
 });
 
+test('assistant message presents recorded agent process before the final answer', () => {
+  const session = {
+    schemaVersion: 2,
+    sessionId: 'session-process-first',
+    scenarioId: 'literature-evidence-review',
+    title: 'process first',
+    createdAt: '2026-05-31T00:00:00.000Z',
+    updatedAt: '2026-05-31T00:00:10.000Z',
+    messages: [
+      { id: 'msg-process-user', role: 'user', content: '检查 actions 包', createdAt: '2026-05-31T00:00:00.000Z' },
+      { id: 'msg-process-assistant', role: 'scenario', content: 'FINAL_ANSWER_AFTER_PROCESS', createdAt: '2026-05-31T00:00:06.000Z' },
+    ],
+    runs: [{
+      id: 'run-process-first',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: '检查 actions 包',
+      response: 'FINAL_ANSWER_AFTER_PROCESS',
+      createdAt: '2026-05-31T00:00:01.000Z',
+      raw: {
+        streamProcess: {
+          events: [{
+            type: 'tool-result',
+            label: 'Tool result',
+            createdAt: '2026-05-31T00:00:02.000Z',
+            native: {
+              backend: 'codex-app-server',
+              rawType: 'tool_completed',
+              toolName: 'read_file',
+              status: 'completed',
+              filePath: 'packages/actions/README.md',
+              text: 'actions package loaded',
+            },
+          }],
+        },
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  } as SciForgeSession;
+  const html = renderChatPanel(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  const processIndex = html.indexOf('data-testid="chat-process-thread"');
+  const answerIndex = html.indexOf('message-content final-answer-prose');
+  assert.ok(processIndex >= 0);
+  assert.ok(answerIndex > processIndex);
+  assert.match(html, /FINAL_ANSWER_AFTER_PROCESS/);
+  assert.match(html, /Read packages\/actions\/README\.md/);
+});
+
 test('run key info counts durable file refs as user-visible objects', () => {
   const html = renderToStaticMarkup(createElement(RunKeyInfo, {
     runId: 'run-file-writeback',

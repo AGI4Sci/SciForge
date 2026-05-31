@@ -1,5 +1,121 @@
 import type { ComputerUsePlannerContractIssue } from '../../../packages/actions/computer-use/runtime-policy.js';
 
+export type ComputerUseLeaseScopeKind = 'screen-global' | 'window-local';
+
+export type ComputerUseApprovalState = 'not-required' | 'needs-confirmation' | 'approved' | 'denied';
+
+export type ComputerUseSchedulerEntryStatus =
+  | 'queued'
+  | 'ready'
+  | 'needs-observation'
+  | 'blocked'
+  | 'needs-confirmation'
+  | 'cancelled'
+  | 'timed-out'
+  | 'rejected';
+
+export interface ComputerUseLeaseScope {
+  kind: ComputerUseLeaseScopeKind;
+  displayGroupId: string;
+  screenId: string;
+  windowId?: string;
+  reason?: string;
+}
+
+export interface ComputerUseActorCursorProvenance {
+  displayGroupId: string;
+  screenId: string;
+  windowId?: string;
+  actorId: string;
+  cursorId: string;
+  source?: 'planner' | 'grounder' | 'executor' | 'adapter' | 'compat-projection';
+}
+
+export interface ComputerUseActionProvenance extends ComputerUseActorCursorProvenance {
+  leaseScope?: ComputerUseLeaseScope;
+  beforeEvidenceRefs?: string[];
+  groundingRefs?: string[];
+  afterEvidenceRefs?: string[];
+  executorEventRef?: string;
+  verificationRefs?: string[];
+  approvalState?: ComputerUseApprovalState;
+}
+
+export interface ComputerUseVisibleEvidenceInvalidation {
+  invalidatesVisibleState: boolean;
+  staleBy: string;
+  scope: ComputerUseLeaseScope;
+  staleEvidenceKinds: Array<'observation' | 'region' | 'text' | 'visual-object' | 'vlm-claim' | 'grounding'>;
+  preservedEvidenceKinds: Array<'artifact' | 'verification' | 'completion-claim'>;
+  reason: string;
+}
+
+export interface ComputerUseObservationFreshnessCheck {
+  status: 'current' | 'stale' | 'unknown';
+  checkedAt?: string;
+  observedAt?: string;
+  expiresAt?: string;
+  maxAgeMs?: number;
+  staleBy?: string;
+  reason?: string;
+}
+
+export interface ComputerUseObserveBeforeMutateEvidence {
+  appStateRef?: string;
+  screenshotRef?: string;
+  captureRef?: string;
+  accessibilitySnapshotRef?: string;
+  stateSnapshotRef?: string;
+  groundingRef?: string;
+  groundingHintRefs?: string[];
+  browserRuntimeObservationRef?: string;
+  browserRuntimeVisibleDomRef?: string;
+  browserRuntimeAccessibilitySnapshotRef?: string;
+  browserRuntimePlaywrightEvaluateRef?: string;
+  browserRuntimeStateSnapshotRef?: string;
+  browserRuntimeObservationUse?: 'observe-before-mutate-hint' | 'grounding-hint';
+  browserRuntimeCompletionEvidenceEligible?: false;
+  browserRuntimeExecutorLeaseSubstitute?: false;
+  browserRuntimeGuiActionSubstitute?: false;
+  browserRuntimeArtifactCausalitySubstitute?: false;
+  browserRuntimeUserLevelCompletionSubstitute?: false;
+  sourceObservationRef?: string;
+  displayGroupId?: string;
+  screenId?: string;
+  windowId?: string;
+  appName?: string;
+  windowTitle?: string;
+  observedAt?: string;
+  capturedAt?: string;
+  freshnessCheckedAt?: string;
+  freshnessCheck?: ComputerUseObservationFreshnessCheck;
+}
+
+export interface ComputerUseSchedulerStopSignal {
+  aborted?: boolean;
+  cancelled?: boolean;
+  reason?: string;
+  ref?: string;
+  receivedAt?: string;
+  proposalIds?: string[];
+  leaseIds?: string[];
+  scope?: ComputerUseLeaseScope;
+  displayGroupId?: string;
+  screenId?: string;
+  windowId?: string;
+}
+
+export interface ComputerUseSchedulerDecisionRefs {
+  schemaVersion: 'sciforge.computer-use.scheduler-decision-refs.v1';
+  status: 'blocked' | 'aborted' | 'cancelled' | 'needs-observation';
+  reason: string;
+  executorEventRef?: string;
+  blockedManifestRef: string;
+  traceRefs: string[];
+  replayRefs: string[];
+  mutatingActionExecuted: false;
+}
+
 export type GenericVisionAction =
   | ({ type: 'click'; x?: number; y?: number } & GenericActionMetadata)
   | ({ type: 'double_click'; x?: number; y?: number } & GenericActionMetadata)
@@ -9,6 +125,8 @@ export type GenericVisionAction =
   | ({ type: 'hotkey'; keys: string[] } & GenericActionMetadata)
   | ({ type: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; amount?: number } & GenericActionMetadata)
   | ({ type: 'open_app'; appName: string } & GenericActionMetadata)
+  | ({ type: 'save'; targetPath?: string } & GenericActionMetadata)
+  | ({ type: 'open_menu'; menuName?: string } & GenericActionMetadata)
   | ({ type: 'wait'; ms?: number } & GenericActionMetadata);
 
 export type GenericSwiftGuiAction = Extract<GenericVisionAction, { type: 'click' | 'double_click' | 'drag' | 'scroll' }>;
@@ -18,6 +136,19 @@ export interface GenericActionMetadata {
   targetRegionDescription?: string;
   focusRegion?: Partial<FocusRegion>;
   grounding?: Record<string, unknown>;
+  displayGroupId?: string;
+  screenId?: string;
+  windowId?: string;
+  actorId?: string;
+  cursorId?: string;
+  leaseScope?: ComputerUseLeaseScope;
+  beforeEvidenceRefs?: string[];
+  groundingRefs?: string[];
+  afterEvidenceRefs?: string[];
+  executorEventRef?: string;
+  verificationRefs?: string[];
+  observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence;
+  approvalState?: ComputerUseApprovalState;
   riskLevel?: 'low' | 'medium' | 'high';
   requiresConfirmation?: boolean;
   confirmationText?: string;
@@ -87,7 +218,10 @@ export interface WindowTarget {
   enabled: boolean;
   required: boolean;
   mode: 'display' | 'active-window' | 'window-id' | 'app-window';
+  displayGroupId?: string;
+  screenId?: string;
   windowId?: number;
+  virtualWindowId?: string;
   processId?: number;
   bundleId?: string;
   appName?: string;
@@ -107,7 +241,10 @@ export interface ResolvedWindowTarget {
   ok: true;
   target: WindowTarget;
   captureKind: 'display' | 'window';
+  displayGroupId?: string;
+  screenId?: string;
   windowId?: number;
+  virtualWindowId?: string;
   processId?: number;
   bundleId?: string;
   appName?: string;
@@ -142,11 +279,66 @@ export type GroundingResolution =
 
 export type PlannerContractIssue = ComputerUsePlannerContractIssue;
 
+export interface ComputerUseSchedulerActionProposal {
+  id: string;
+  action: GenericVisionAction;
+  targetResolution: WindowTargetResolution;
+  provenance?: ComputerUseActionProvenance;
+  submittedAt?: string;
+  sequence?: number;
+  approvalState?: ComputerUseApprovalState;
+  cancelReason?: string;
+  timeoutAt?: string;
+  beforeEvidenceRefs?: string[];
+  groundingRefs?: string[];
+  observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence;
+}
+
+export interface ComputerUseActiveLease {
+  leaseId: string;
+  scope: ComputerUseLeaseScope;
+  ownerId?: string;
+  actorId?: string;
+  cursorId?: string;
+  acquiredAt?: string;
+  expiresAt?: string;
+}
+
+export interface ComputerUseSchedulerQueueEntry {
+  proposalId: string;
+  actionType: GenericVisionAction['type'];
+  status: ComputerUseSchedulerEntryStatus;
+  reason?: string;
+  submittedAt?: string;
+  sequence: number;
+  provenance: ComputerUseActionProvenance;
+  leaseScope?: ComputerUseLeaseScope;
+  leaseId?: string;
+  executorEventRef?: string;
+  staleEvidenceInvalidation?: ComputerUseVisibleEvidenceInvalidation;
+  observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence;
+  schedulerDecisionRefs?: ComputerUseSchedulerDecisionRefs;
+  approvalState?: ComputerUseApprovalState;
+  blocksFollowingActions?: boolean;
+}
+
+export interface ComputerUseSchedulerQueue {
+  schemaVersion: 'sciforge.computer-use.scheduler-queue.v1';
+  entries: ComputerUseSchedulerQueueEntry[];
+  deterministicOrder: string[];
+  diagnostics: string[];
+}
+
 export interface ScreenshotRef {
   id: string;
   path: string;
   absPath: string;
   displayId: number;
+  displayGroupId?: string;
+  screenId?: string;
+  windowId?: string;
+  actorId?: string;
+  cursorId?: string;
   windowTarget?: TraceWindowTarget;
   captureScope?: 'display' | 'window' | 'focus-region';
   captureProvider?: string;
@@ -203,6 +395,9 @@ export interface TraceWindowTarget {
   required: boolean;
   mode: WindowTarget['mode'];
   captureKind: 'display' | 'window';
+  displayGroupId?: string;
+  screenId?: string;
+  virtualWindowId?: string;
   coordinateSpace: WindowTarget['coordinateSpace'];
   inputIsolation: WindowTarget['inputIsolation'];
   windowId?: number;
@@ -250,6 +445,11 @@ export function toTraceScreenshotRef(ref: ScreenshotRef) {
     type: 'screenshot',
     path: ref.path,
     displayId: ref.displayId,
+    displayGroupId: ref.displayGroupId,
+    screenId: ref.screenId,
+    windowId: ref.windowId,
+    actorId: ref.actorId,
+    cursorId: ref.cursorId,
     windowTarget: ref.windowTarget,
     captureScope: ref.captureScope,
     captureProvider: ref.captureProvider,

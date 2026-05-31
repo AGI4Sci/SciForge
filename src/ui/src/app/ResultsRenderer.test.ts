@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails, shouldTryRepoRootWorkspaceFallback, workspaceFileFocusRequestKey, type WorkspaceFileEditorState } from './ResultsRenderer';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { MarkdownBlock } from './results/reportContent';
 import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
@@ -10,9 +10,24 @@ import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
 import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
-import type { WorkspaceFileContent } from '../api/workspaceClient';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
-import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
+import type { ObjectReference, RuntimeArtifact, RuntimeExecutionUnit, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
+
+class MemoryStorage {
+  private readonly values = new Map<string, string>();
+
+  getItem(key: string) {
+    return this.values.get(key) ?? null;
+  }
+
+  setItem(key: string, value: string) {
+    this.values.set(key, value);
+  }
+
+  removeItem(key: string) {
+    this.values.delete(key);
+  }
+}
 
 test('coerceReportPayload extracts report refs from backend ToolPayload text instead of rendering raw JSON', () => {
   const payloadText = [
@@ -244,6 +259,140 @@ test('ResultsRenderer keeps raw ContractValidationFailure audit-only without syn
   assert.doesNotMatch(html, /Completed report|ready result/);
 });
 
+test('ResultsRenderer empty right pane exposes Cursor-like browser terminal and files tools', () => {
+  const html = renderResultsRenderer(emptySession());
+
+  assert.match(html, /class="result-tabstrip"/);
+  assert.match(html, /class="result-new-tab-button"/);
+  assert.match(html, /aria-label="New right pane page"/);
+  assert.match(html, /aria-haspopup="menu"/);
+  assert.match(html, />New</);
+  assert.match(html, /role="tab"/);
+  assert.match(html, /data-right-pane-tool="browser"/);
+  assert.match(html, /data-right-pane-tool="screen"/);
+  assert.match(html, /data-right-pane-tool="terminal"/);
+  assert.match(html, /data-right-pane-tool="files"/);
+  assert.match(html, />Browser</);
+  assert.match(html, /Virtual Screen|虚拟屏幕/);
+  assert.match(html, />Terminal</);
+  assert.match(html, />Files</);
+  assert.match(html, /Nothing to preview yet/);
+});
+
+test('ResultsRenderer tool tabs render package-owned browser terminal and file modules', () => {
+  const browserHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'browser' });
+  const screenHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'screen' });
+  const terminalHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'terminal' });
+  const filesHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'files' });
+
+  assert.match(browserHtml, /data-testid="right-pane-browser-tool"/);
+  assert.match(browserHtml, /data-component-id="browser-workbench"/);
+  assert.match(browserHtml, /data-render-boundary="presentation-only"/);
+  assert.match(browserHtml, /name="browser-url"/);
+  assert.match(browserHtml, /\/browser open/);
+  assert.match(browserHtml, /src="about:blank"/);
+  assert.match(screenHtml, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(screenHtml, /data-component-id="virtual-screen-viewer"/);
+  assert.match(screenHtml, /data-render-boundary="presentation-only"/);
+  assert.match(screenHtml, /computer-use:session\/right-pane\/virtual-desktop-session-manifest\.json/);
+  assert.match(screenHtml, /\/computer-use observe --screen-ref/);
+  assert.doesNotMatch(screenHtml, /providerRoute|executorLease|desktopBridge/);
+  assert.match(terminalHtml, /data-testid="right-pane-terminal-tool"/);
+  assert.match(terminalHtml, /data-component-id="terminal-session-viewer"/);
+  assert.match(terminalHtml, /data-render-boundary="presentation-only"/);
+  assert.match(terminalHtml, /name="terminal-input"/);
+  assert.match(filesHtml, /data-testid="right-pane-files-tool"/);
+  assert.match(filesHtml, /data-component-id="workspace-file-viewer"/);
+  assert.match(filesHtml, /data-render-boundary="presentation-only"/);
+  assert.match(filesHtml, /workspace-file-viewer-tree/);
+});
+
+test('ResultsRenderer right pane terminal renders execution transcript', () => {
+  const executionUnits: RuntimeExecutionUnit[] = [{
+    id: 'EU-raw-id-should-not-be-command',
+    tool: 'shell_command',
+    params: '{"cmd":"npm test -- --watch=false"}',
+    code: 'npm test -- --watch=false',
+    status: 'failed',
+    hash: 'hash-terminal',
+    runId: 'run-terminal',
+    stdoutRef: 'artifact:terminal-stdout',
+    stderrRef: 'artifact:terminal-stderr',
+    outputRef: 'artifact:terminal-output',
+    failureReason: 'unit test failed',
+    time: '2026-05-31T08:00:00.000Z',
+    attempt: 2,
+  }];
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      id: 'run-terminal',
+      scenarioId: 'literature-evidence-review',
+      status: 'failed',
+      prompt: 'run tests',
+      response: 'failed',
+      createdAt: '2026-05-31T08:00:00.000Z',
+    }],
+    executionUnits,
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-terminal', initialResultTab: 'terminal' });
+
+  assert.match(html, /data-testid="right-pane-terminal-tool"/);
+  assert.match(html, /data-status="error"/);
+  assert.match(html, /\$ npm test -- --watch=false/);
+  assert.match(html, /\[stderr\] artifact:terminal-stderr/);
+  assert.match(html, /\[stdout\] artifact:terminal-stdout/);
+  assert.match(html, /\[output\] artifact:terminal-output/);
+  assert.match(html, /\[failed\] unit test failed/);
+  assert.match(html, /<dt>mode<\/dt>\s*<dd>transcript<\/dd>/);
+  assert.match(html, /<dt>source<\/dt>\s*<dd>execution-units<\/dd>/);
+  assert.doesNotMatch(html, /\$ EU-raw-id-should-not-be-command/);
+});
+
+test('ResultsRenderer browser tool uses normalized urls and proxies external previews', () => {
+  const browserHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'browser' });
+
+  assert.match(browserHtml, /\/browser open &quot;about:blank&quot; --surface workbench/);
+  assert.doesNotMatch(browserHtml, /src="localhost:/);
+});
+
+test('ResultsRenderer restores right pane tabs and Browser address from localStorage', () => {
+  const previousWindow = globalThis.window;
+  const storage = new MemoryStorage();
+  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    tabs: [
+      { id: 'base:primary', kind: 'primary', label: 'Results', closable: true },
+      { id: 'base:browser', kind: 'browser', label: 'Browser', closable: true },
+      { id: 'custom:browser:test:2', kind: 'browser', label: 'Browser 2', closable: true },
+    ],
+    activeTabId: 'custom:browser:test:2',
+    browserTabAddresses: {
+      'custom:browser:test:2': 'https://example.org',
+    },
+  }));
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession());
+
+    assert.match(html, /data-result-tab="browser"/);
+    assert.match(html, />Browser 2</);
+    assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
+    assert.match(html, /value="https:\/\/example\.org"/);
+    assert.match(html, /src="\/api\/sciforge\/browser\/proxy\?url=https%3A%2F%2Fexample\.org"/);
+    assert.doesNotMatch(html, /src="about:blank"/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
 test('ResultsRenderer shows clicked workspace files as editable right-pane tree view', () => {
   const fileReference: ObjectReference = {
     id: 'file-project',
@@ -270,6 +419,8 @@ test('ResultsRenderer shows clicked workspace files as editable right-pane tree 
   assert.match(html, /workspace-file-viewer/);
   assert.match(html, /workspace-file-viewer-tree/);
   assert.match(html, /workspace-file-viewer-editor/);
+  assert.match(html, /data-component-id="workspace-file-viewer"/);
+  assert.match(html, /data-render-boundary="presentation-only"/);
   assert.match(html, /PROJECT\.md/);
   assert.match(html, /textarea/);
   assert.match(html, /Edited draft/);
@@ -322,6 +473,72 @@ test('ResultsRenderer scopes cursor process file views to the originating run wo
 
   assert.match(html, /runtime-root/);
   assert.doesNotMatch(html, /tmp\/sciforge/);
+});
+
+test('ResultsRenderer uses resolved file editor workspace root for fallback previews', () => {
+  const html = renderResultsRenderer(emptySession(), {
+    workspaceFileEditor: {
+      file: {
+        path: '/tmp/sciforge-repo/src/runtime/gateway/agentserver-stream.ts',
+        name: 'agentserver-stream.ts',
+        content: 'export const ok = true;\n',
+        size: 24,
+        language: 'typescript',
+      },
+      draft: 'export const ok = true;\n',
+      workspacePath: '/tmp/sciforge-repo',
+    },
+  });
+
+  assert.match(html, /sciforge-repo/);
+  assert.match(html, /agentserver-stream\.ts/);
+  assert.doesNotMatch(html, /tmp\/sciforge"/);
+});
+
+test('ResultsRenderer allows repo-root fallback for safe relative file references from replies', () => {
+  const replyReference: ObjectReference = {
+    id: 'reply-file',
+    kind: 'file',
+    title: 'agentserver-stream.ts',
+    ref: 'file:src/runtime/gateway/agentserver-stream.ts',
+    status: 'available',
+    provenance: { path: 'src/runtime/gateway/agentserver-stream.ts', producer: 'message-inline-reference' },
+  };
+
+  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, 'src/runtime/gateway/agentserver-stream.ts'), true);
+  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '../config.local.json'), false);
+  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '.env'), false);
+  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '.sciforge/workspace-state.json'), false);
+  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '/Applications/workspace/SciForge/PROJECT.md'), false);
+});
+
+test('ResultsRenderer focus request keys stay stable while the file viewer browses another file', () => {
+  const reference: ObjectReference = {
+    id: 'process-file',
+    kind: 'file',
+    title: 'agentserver-stream.ts',
+    ref: 'file:src/runtime/gateway/agentserver-stream.ts',
+    runId: 'run-a',
+    status: 'available',
+    provenance: { path: 'src/runtime/gateway/agentserver-stream.ts', producer: 'cursor-agent-process' },
+  };
+  const key = workspaceFileFocusRequestKey(reference, 'src/runtime/gateway/agentserver-stream.ts');
+  const browsedEditor: WorkspaceFileEditorState = {
+    file: {
+      path: '/tmp/sciforge-repo/src/runtime/gateway/capability-broker.ts',
+      name: 'capability-broker.ts',
+      content: 'export {};\n',
+      size: 11,
+      language: 'typescript',
+    },
+    draft: 'export {};\n',
+    workspacePath: '/tmp/sciforge-repo',
+    focusRequestKey: key,
+  };
+
+  assert.equal(browsedEditor.focusRequestKey, key);
+  assert.notEqual(browsedEditor.file.path, '/tmp/sciforge-repo/src/runtime/gateway/agentserver-stream.ts');
+  assert.notEqual(workspaceFileFocusRequestKey({ ...reference, id: 'other-file' }, 'src/runtime/gateway/agentserver-stream.ts'), key);
 });
 
 test('ResultsRenderer keeps raw failure text out of the first-screen main summary while preserving audit details', () => {
@@ -735,6 +952,67 @@ test('ResultsRenderer uses projection execution process instead of raw execution
   assert.equal(model.viewPlan.allItems.some((item) => item.module.moduleId === 'execution-provenance-table'), false);
 });
 
+test('ResultsRenderer renders Computer Use control plane without executor private params', () => {
+  const controlArtifact: RuntimeArtifact = {
+    id: 'computer-use-control-plane-run-visible',
+    type: 'computer-use-control-plane',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.user-control-plane.presentation.v1',
+    metadata: { title: 'Computer Use controls', presentationRole: 'supporting-evidence' },
+    data: {
+      schemaVersion: 'sciforge.computer-use.user-control-plane.presentation.v1',
+      sessionPermissionRef: 'computer-use:permission/right-pane.json',
+      allowedAppRefs: ['computer-use:allowlist/apps/presentation.json'],
+      allowedWindowRefs: ['computer-use:allowlist/windows/deck-editor.json'],
+      forbiddenAppRefs: ['computer-use:allowlist/forbidden/messages.json'],
+      riskPreviewRef: 'computer-use:risk/right-pane.json',
+      dataVisibilityRef: 'computer-use:data-visibility/right-pane.json',
+      stopRef: 'computer-use:stop/right-pane',
+      cancelLeaseRef: 'computer-use:lease/right-pane',
+      approvalMode: 'required',
+      status: 'needs-confirmation',
+      approvalRef: 'approval:computer-use:right-pane',
+      providerRoute: 'SHOULD_NOT_RENDER',
+      executorLease: { screenId: 'SHOULD_NOT_RENDER' },
+      schedulerParams: { leaseScope: 'SHOULD_NOT_RENDER' },
+    },
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: 'artifact:computer-use-control-plane-run-visible',
+      role: 'supporting-evidence',
+      declaredMediaType: 'application/vnd.sciforge.computer-use-control-plane+json',
+      declaredExtension: '.json',
+      contentShape: 'external-ref',
+      readableRef: 'artifact:computer-use-control-plane-run-visible',
+      previewPolicy: 'inline',
+    },
+  };
+  const session = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-computer-use-control-plane'),
+      raw: {
+        resultPresentation: projectionResultPresentation('run-computer-use-control-plane', ['artifact:computer-use-control-plane-run-visible']),
+      },
+    }],
+    artifacts: [controlArtifact],
+    uiManifest: [{
+      componentId: 'computer-use-control-plane',
+      artifactRef: 'computer-use-control-plane-run-visible',
+      priority: 1,
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-computer-use-control-plane' });
+
+  assert.match(html, /computer-use-control-plane/);
+  assert.match(html, /data-render-boundary="presentation-only"/);
+  assert.match(html, /computer-use:permission\/right-pane\.json/);
+  assert.match(html, /\/computer-use stop --stop-ref/);
+  assert.match(html, /\/computer-use approve --approval-ref/);
+  assert.doesNotMatch(html, /SHOULD_NOT_RENDER|providerRoute|executorLease|schedulerParams|screenId|leaseScope/);
+});
+
 test('ResultsRenderer surfaces runtime compatibility drift without rerunning old sessions', () => {
   const session = {
     ...emptySession(),
@@ -902,6 +1180,51 @@ test('ResultsRenderer execution table separates verification states from complet
   assert.doesNotMatch(html, /verificationStatus=|runtime verification|verification:unverified|verification:failed|verification:passed/);
 });
 
+test('ResultsRenderer renders shell execution activity through terminal-session-viewer package', () => {
+  const session = {
+    ...emptySession(),
+    executionUnits: [{
+      id: 'EU-shell-terminal',
+      tool: 'shell_command',
+      params: '{"cmd":"npm test -- --watch=false"}',
+      code: 'npm test -- --watch=false',
+      language: 'bash',
+      status: 'done',
+      hash: 'shell-hash',
+      stdoutRef: 'artifact:shell-stdout',
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { initialFocusMode: 'execution' });
+
+  assert.match(html, /terminal-session-viewer/);
+  assert.match(html, /data-component-id="terminal-session-viewer"/);
+  assert.match(html, /data-render-boundary="presentation-only"/);
+  assert.match(html, /\$ npm test -- --watch=false/);
+  assert.match(html, /\[ref\] stdout: artifact:shell-stdout/);
+});
+
+test('ResultsRenderer terminal activity avoids exposing raw execution unit ids as session labels', () => {
+  const session = {
+    ...emptySession(),
+    executionUnits: [{
+      id: 'EU-internal-shell-id',
+      tool: 'shell_command',
+      params: '{"cmd":"git status --short"}',
+      code: 'git status --short',
+      language: 'bash',
+      status: 'running',
+      hash: 'internal-shell-hash',
+    }],
+  } as SciForgeSession;
+
+  const html = renderResultsRenderer(session, { initialFocusMode: 'execution' });
+
+  assert.match(html, /terminal-session-viewer/);
+  assert.match(html, /Session terminal:activity-1/);
+  assert.doesNotMatch(html, /Session execution-unit:EU-internal-shell-id/);
+});
+
 test('ResultsRenderer execution focus scopes execution units to the active run', () => {
   const session: SciForgeSession = {
     ...emptySession(),
@@ -994,6 +1317,104 @@ test('paper-card-list workbench slot is rendered by package policy', () => {
   assert.match(html, /Package-owned paper renderer/);
   assert.match(html, /SciForge Journal/);
   assert.doesNotMatch(html, /缺少 papers\/rows 数组/);
+});
+
+test('registry slot renders browser, terminal, and workspace file package modules in the right pane', () => {
+  const artifacts: RuntimeArtifact[] = [
+    {
+      id: 'browser-runtime',
+      type: 'browser-runtime-projection',
+      producerScenario: 'browser-runtime',
+      schemaVersion: '1',
+      data: {
+        session: {
+          id: 'browser-session',
+          mode: 'agent-headless',
+          providerId: 'sciforge.observe.browser-runtime',
+          activeTabId: 'tab-1',
+          tabs: [{ id: 'tab-1', url: 'http://127.0.0.1:5175', title: 'SciForge', status: 'ready' }],
+        },
+        snapshot: {
+          schemaVersion: 'sciforge.browser-runtime.snapshot.v1',
+          url: 'http://127.0.0.1:5175',
+          title: 'SciForge',
+          textPreview: 'Browser runtime projection in the right pane.',
+          screenshotRef: 'artifact:browser-screenshot',
+        },
+        traceRefs: [{ kind: 'screenshot', ref: 'artifact:browser-screenshot' }],
+      },
+    },
+    {
+      id: 'terminal-session',
+      type: 'terminal-session',
+      producerScenario: 'runtime-terminal',
+      schemaVersion: '1',
+      data: {
+        sessionRef: 'terminal:run-1',
+        status: 'running',
+        buffer: '$ npm test\nok 1 right-pane terminal',
+      },
+    },
+    {
+      id: 'workspace-file-view',
+      type: 'workspace-file-view',
+      producerScenario: 'workspace-file-preview',
+      schemaVersion: '1',
+      data: {
+        rootPath: '/workspace/SciForge',
+        rootLabel: 'SciForge',
+        expandedFolderPaths: ['/workspace/SciForge'],
+        selectedPath: '/workspace/SciForge/PROJECT.md',
+        entriesByFolder: {
+          '/workspace/SciForge': [
+            { kind: 'file', name: 'PROJECT.md', path: '/workspace/SciForge/PROJECT.md', size: 42 },
+          ],
+        },
+        file: {
+          path: '/workspace/SciForge/PROJECT.md',
+          name: 'PROJECT.md',
+          content: '# Project',
+          size: 9,
+          language: 'markdown',
+        },
+        draft: '# Project',
+      },
+    },
+  ];
+  const session = {
+    ...emptySession(),
+    artifacts,
+  };
+  const html = artifacts.map((artifact) => renderToStaticMarkup(createElement(RegistrySlot, {
+    scenarioId: 'literature-evidence-review',
+    config: testConfig(),
+    session,
+    item: {
+      id: `slot-${artifact.id}`,
+      slot: {
+        componentId: artifact.type === 'browser-runtime-projection'
+          ? 'browser-workbench'
+          : artifact.type === 'terminal-session'
+            ? 'terminal-session-viewer'
+            : 'workspace-file-viewer',
+        artifactRef: artifact.id,
+      },
+      artifact,
+      section: 'primary',
+      status: 'ready',
+      source: 'manifest',
+      module: {},
+    } as never,
+    onArtifactHandoff: () => undefined,
+    onInspectArtifact: () => undefined,
+  }))).join('\n');
+
+  assert.match(html, /browser-workbench/);
+  assert.match(html, /terminal-session-viewer/);
+  assert.match(html, /workspace-file-viewer/);
+  assert.match(html, /right-pane terminal/);
+  assert.match(html, /PROJECT\.md/);
+  assert.doesNotMatch(html, /fallback renderer|未注册组件/);
 });
 
 test('registry slot renders unknown component fallback with artifact diagnostics', () => {
@@ -1705,8 +2126,9 @@ function projectionResultPresentation(runId: string, artifactRefs: string[]) {
 function renderResultsRenderer(session: SciForgeSession, options: {
   activeRunId?: string;
   initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution';
+  initialResultTab?: 'primary' | 'browser' | 'screen' | 'terminal' | 'files' | 'evidence';
   focusedObjectReference?: ObjectReference;
-  workspaceFileEditor?: { file: WorkspaceFileContent; draft: string } | null;
+  workspaceFileEditor?: WorkspaceFileEditorState | null;
 } = {}) {
   const effectiveSession = withMaterializedProjectionFixture(session);
   return renderToStaticMarkup(createElement(ResultsRenderer, {
@@ -1724,6 +2146,7 @@ function renderResultsRenderer(session: SciForgeSession, options: {
     workspaceFileEditor: options.workspaceFileEditor ?? null,
     onWorkspaceFileEditorChange: () => undefined,
     initialFocusMode: options.initialFocusMode,
+    initialResultTab: options.initialResultTab,
   }));
 }
 

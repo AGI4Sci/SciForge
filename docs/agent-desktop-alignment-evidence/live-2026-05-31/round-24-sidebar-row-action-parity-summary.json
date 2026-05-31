@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "round": 24,
+  "capturedAt": "2026-05-31T18:05:00+08:00",
+  "area": "left-sidebar-row-action-parity",
+  "prompt": "Automations和Customize部分暂时不改了，其他的地方继续对齐；现有的按钮和交互，需要完全实现，比如对话归档、删除",
+  "scopeNote": "Top-level Automations and Customize surfaces were intentionally left unchanged in this round; only ordinary left-sidebar project/thread behavior was adjusted.",
+  "cursorDesktopBaseline": {
+    "tool": "Computer Use",
+    "observed": [
+      "Completed/done-seen Cursor Agent rows expose Pin and Archive, not Delete.",
+      "Draft rows expose Pin and Discard, not Archive.",
+      "Archived/discarded rows are removed from the ordinary repository list and are recovered through search/history management rather than staying inline."
+    ]
+  },
+  "changes": [
+    {
+      "id": "thread-row-actions",
+      "summary": "Aligned SciForge ordinary sidebar row actions with Cursor Agent: active/retained rows expose Archive only, draft rows expose Discard only, archived/deleted rows expose Restore only when surfaced via search/history.",
+      "files": [
+        "src/ui/src/app/appShell/ShellPanels.tsx"
+      ]
+    },
+    {
+      "id": "agent-host-action-projection",
+      "summary": "Aligned sidebar semantic actions with the UI: draft projections produce pin + discard-thread, active projections produce pin + archive-thread, and active rows no longer advertise discard/delete commandText.",
+      "files": [
+        "src/ui/src/app/appShell/sidebarCursorAgentModel.ts"
+      ]
+    },
+    {
+      "id": "regression-tests",
+      "summary": "Updated shell DOM and projection tests so the action matrix fails if draft Archive or active Delete returns."
+    }
+  ],
+  "browserVerification": {
+    "inAppBrowser": {
+      "url": "http://localhost:5173/",
+      "safeClickFlow": [
+        "Reloaded current SciForge page and confirmed the current empty draft row exposed only Pin and Discard draft.",
+        "Clicked Discard draft on the current empty draft; the row disappeared.",
+        "Clicked the top New Agent command; a new draft row reappeared with Pin and Discard draft only."
+      ],
+      "observedRowsAfterRecreate": [
+        {
+          "className": "sidebar-thread-row state-draft active",
+          "text": "New chatDraftDraft ready",
+          "actions": [
+            "Pin chat: New chat",
+            "Discard draft: New chat"
+          ]
+        }
+      ]
+    }
+  },
+  "validation": {
+    "focusedTests": {
+      "command": "node --import tsx --test src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts",
+      "status": "passed",
+      "tests": 47
+    }
+  },
+  "remainingNotes": [
+    "Destructive active-thread archive/search/settings flows were already covered by the isolated writer-backed Round 23 browser run; this round specifically fixed the ordinary row action matrix to match Cursor Agent.",
+    "Mark All as Read remains a visible parity menu entry without a separate unread-state model."
+  ]
+}

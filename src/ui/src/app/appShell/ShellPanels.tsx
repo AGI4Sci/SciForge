@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
-import { Archive, ChevronLeft, ChevronRight, Clock, File, FileCode, FileText, MessageSquare, Pin, RotateCcw, Trash2 } from 'lucide-react';
+import { Archive, ChevronLeft, ChevronRight, File, FileCode, FileText, Pin, RotateCcw, Trash2 } from 'lucide-react';
 import { navItems, scenarios, sidebarViewNavItems, type PageId } from '../../data';
 import { normalizeWorkspaceRootPath } from '../../config';
 import type { SciForgeConfig, SciForgeReference, SciForgeSession, ScenarioInstanceId } from '../../domain';
@@ -22,13 +22,15 @@ import {
 } from './explorerModels';
 import {
   loadSidebarPreferences,
-  moveCurrentProjectDown,
+  markThreadIdsRead,
   removeProjectFromSidebarPreferences,
   saveSidebarPreferences,
+  toggleSidebarVisibleSection,
   togglePinnedThreadId,
   type SidebarLayoutMode,
   type SidebarPreferences,
   type SidebarSortMode,
+  type SidebarVisibleSection,
 } from './sidebarPreferences';
 import {
   clampSidebarPanelHeights,
@@ -56,7 +58,7 @@ import {
   sidebarProjectPath,
 } from './sidebarProjectModel';
 import { resolveSidebarProjectSessionBundle, type SidebarProjectSessionsByPath } from './sidebarProjectSessions';
-import { sidebarRenderableThreadItems } from './sidebarProjectThreadList';
+import { sidebarHiddenArchiveThreadItems, sidebarRenderableThreadItems, sidebarSearchableThreadItems } from './sidebarProjectThreadList';
 import { ExplorerContextMenu } from '../contextMenu/ExplorerContextMenu';
 import { resolveAppContextMenuReference } from '../contextMenu/contextMenuModel';
 import {
@@ -64,7 +66,6 @@ import {
   SidebarProjectCreateContextMenu,
   SidebarThreadsGlobalContextMenu,
 } from '../contextMenu/SidebarProjectContextMenus';
-import { referenceForWorkspaceEntry } from '../../../../../packages/support/object-references';
 import {
   applyExplorerEntryClickSelection,
   collectVisibleExplorerEntries,
@@ -134,9 +135,13 @@ export interface SidebarSearchMatch {
   detail: string;
   page: PageId;
   scenarioId?: ScenarioInstanceId;
+  projectId?: string;
+  sessionId?: string;
+  threadState?: SidebarCursorAgentThreadState;
 }
 
-const SIDEBAR_PROJECT_THREAD_LIMIT = 4;
+const SIDEBAR_PROJECT_THREAD_LIMIT = 6;
+const SIDEBAR_PROJECT_THREAD_PAGE_SIZE = 8;
 const SIDEBAR_RECENT_PROJECT_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const SHELL_MODEL_DEFAULT_LOCALE: SupportedLocale = 'en-US';
 
@@ -155,12 +160,13 @@ export interface SidebarProjectBuildOptions extends SidebarThreadBuildOptions {
   layout?: SidebarLayoutMode;
   projectOrder?: string[];
   activeWorkspacePath?: string;
+  activeSessionId?: string;
   projectSessionsByPath?: SidebarProjectSessionsByPath;
 }
 type SidebarProjectMenu =
   | { kind: 'global'; x: number; y: number; reference?: SciForgeReference }
   | { kind: 'create'; x: number; y: number }
-  | { kind: 'project'; x: number; y: number; projectId: string; reference?: SciForgeReference };
+  | { kind: 'project'; x: number; y: number; projectId: string };
 
 export function sidebarSessionActivityScore(session: SciForgeSession) {
   const nonSeedMessages = session.messages.filter((message) => !message.id.startsWith('seed')).length;
@@ -200,13 +206,7 @@ export function buildSidebarThreadItems(
       createdAt: session.createdAt,
       pinned: pinned.has(session.sessionId),
     }));
-  items.sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    const left = sort === 'createdAt' ? Date.parse(a.createdAt) : Date.parse(a.updatedAt);
-    const right = sort === 'createdAt' ? Date.parse(b.createdAt) : Date.parse(b.updatedAt);
-    return right - left;
-  });
-  return items.slice(0, limit).map((item) => ({
+  return sortSidebarThreadItems(items, sort).slice(0, limit).map((item) => ({
     sessionId: item.sessionId,
     scenarioId: item.scenarioId,
     title: item.title,
@@ -237,13 +237,7 @@ export function buildSidebarArchivedThreadItems(
       pinned: pinned.has(session.sessionId),
       session,
     }));
-  items.sort((a, b) => {
-    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-    const left = sort === 'createdAt' ? Date.parse(a.createdAt) : Date.parse(a.updatedAt);
-    const right = sort === 'createdAt' ? Date.parse(b.createdAt) : Date.parse(b.updatedAt);
-    return right - left;
-  });
-  return items.map((item) => {
+  return sortSidebarThreadItems(items, sort).map((item) => {
     const state = sidebarArchivedSessionState(item.session);
     return {
       sessionId: item.sessionId,
@@ -260,7 +254,30 @@ export function buildSidebarArchivedThreadItems(
   });
 }
 
+function sortSidebarThreadItems<T extends { createdAt?: string; pinned?: boolean; updatedAt?: string }>(
+  items: T[],
+  sort: SidebarSortMode = 'updatedAt',
+): T[] {
+  return [...items].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    const left = sidebarThreadSortTime(a, sort);
+    const right = sidebarThreadSortTime(b, sort);
+    return right - left;
+  });
+}
+
+function sidebarThreadSortTime(
+  item: { createdAt?: string; updatedAt?: string },
+  sort: SidebarSortMode,
+): number {
+  const primary = sort === 'createdAt' ? item.createdAt : item.updatedAt;
+  const fallback = sort === 'createdAt' ? item.updatedAt : item.createdAt;
+  const time = Date.parse(primary ?? fallback ?? '');
+  return Number.isFinite(time) ? time : 0;
+}
+
 function sidebarArchivedSessionState(session: SciForgeSession): SidebarCursorAgentThreadState {
+  if (isSidebarRetainedHistorySession(session)) return 'active';
   if (session.archiveState === 'archived' || session.archiveState === 'discarded') return session.archiveState;
   const latestVersionReason = session.versions[0]?.reason ?? '';
   return /deleted|discard|remove|删除|丢弃/i.test(`${session.title} ${latestVersionReason}`)
@@ -268,13 +285,22 @@ function sidebarArchivedSessionState(session: SciForgeSession): SidebarCursorAge
     : 'archived';
 }
 
+function isSidebarRetainedHistorySession(session: SciForgeSession): boolean {
+  if (!session.archiveState) return true;
+  const latestReason = session.versions[0]?.reason ?? '';
+  return session.archiveState === 'archived' && /new chat (?:archived|retained) previous session/i.test(latestReason);
+}
+
 function buildSidebarDraftThreadItems(
   sessionsByScenario: Partial<Record<ScenarioInstanceId, SciForgeSession>>,
   locale?: SupportedLocale,
+  activeSessionId?: string,
 ): SidebarThreadItem[] {
+  if (!activeSessionId) return [];
   return Object.values(sessionsByScenario)
     .filter((session): session is SciForgeSession => {
       if (!session) return false;
+      if (session.sessionId !== activeSessionId) return false;
       return sidebarSessionActivityScore(session) === 0;
     })
     .map((session) => ({
@@ -295,7 +321,7 @@ export function buildSidebarProjectThreadGroups(
   options: SidebarProjectBuildOptions = {},
 ): SidebarProjectThreadGroup[] {
   const layout = options.layout ?? 'by-project';
-  const threadLimit = layout === 'chronological' ? 12 : 8;
+  const threadLimit = options.limit ?? Number.POSITIVE_INFINITY;
   const locale = options.locale;
   const threadItems = buildSidebarThreadItems(sessionsByScenario, {
     sort: options.sort,
@@ -304,18 +330,21 @@ export function buildSidebarProjectThreadGroups(
     locale,
   });
   if (layout === 'chronological') {
+    const archivedThreadItems = buildSidebarArchivedThreadItems(archivedSessions ?? [], {
+      sort: options.sort,
+      pinnedThreadIds: options.pinnedThreadIds,
+      locale,
+    });
+    const retainedThreads = archivedThreadItems.filter(isSidebarVisibleRetainedThread);
+    const hiddenArchivedThreads = archivedThreadItems.filter((thread) => !isSidebarVisibleRetainedThread(thread));
     return [{
       id: SIDEBAR_CHRONOLOGICAL_PROJECT_ID,
       label: shellText(locale, { 'zh-CN': '全部聊天', 'en-US': 'All chats' }),
       detail: config.workspacePath,
       current: true,
-      threads: threadItems,
-      draftThreads: buildSidebarDraftThreadItems(sessionsByScenario, locale),
-      archivedThreads: buildSidebarArchivedThreadItems(archivedSessions ?? [], {
-        sort: options.sort,
-        pinnedThreadIds: options.pinnedThreadIds,
-        locale,
-      }),
+      threads: sortSidebarThreadItems([...threadItems, ...retainedThreads], options.sort).slice(0, threadLimit),
+      draftThreads: buildSidebarDraftThreadItems(sessionsByScenario, locale, options.activeSessionId),
+      archivedThreads: hiddenArchivedThreads,
     }];
   }
   let projects = buildConfiguredSidebarProjects(config);
@@ -343,24 +372,31 @@ export function buildSidebarProjectThreadGroups(
       archivedSessions,
       options.projectSessionsByPath,
     );
-    const threads = buildSidebarThreadItems(projectSessions, {
+    const activeThreads = buildSidebarThreadItems(projectSessions, {
       sort: options.sort,
       pinnedThreadIds: options.pinnedThreadIds,
       limit: threadLimit,
       locale,
     });
-    const archivedThreads = buildSidebarArchivedThreadItems(projectArchivedSessions, {
+    const archivedThreadItems = buildSidebarArchivedThreadItems(projectArchivedSessions, {
       sort: options.sort,
       pinnedThreadIds: options.pinnedThreadIds,
       locale,
     });
+    const retainedThreads = archivedThreadItems.filter(isSidebarVisibleRetainedThread);
+    const archivedThreads = archivedThreadItems.filter((thread) => !isSidebarVisibleRetainedThread(thread));
+    const threads = sortSidebarThreadItems([...activeThreads, ...retainedThreads], options.sort).slice(0, threadLimit);
     return {
       ...project,
       threads,
-      draftThreads: buildSidebarDraftThreadItems(projectSessions, locale),
+      draftThreads: buildSidebarDraftThreadItems(projectSessions, locale, project.current ? options.activeSessionId : undefined),
       archivedThreads,
     };
   });
+}
+
+function isSidebarVisibleRetainedThread(thread: SidebarThreadItem) {
+  return thread.state === 'active' && !thread.archived && !thread.discarded;
 }
 
 export function buildSidebarCursorAgentProjectionForShell(
@@ -406,10 +442,7 @@ export function buildSidebarCursorAgentProjectionForShell(
       path: group.detail,
       current: group.current,
       pinnedThreadIds: options.pinnedThreadIds,
-      threads: [
-        ...(group.draftThreads ?? []),
-        ...group.threads,
-      ].map((thread) => ({
+      threads: sidebarRenderableThreadItems(group).map((thread) => ({
         id: thread.sessionId,
         sessionId: thread.sessionId,
         scenarioId: thread.scenarioId,
@@ -420,7 +453,7 @@ export function buildSidebarCursorAgentProjectionForShell(
         state: thread.state ?? 'active',
         pinned: thread.pinned,
       })),
-      archivedThreads: (group.archivedThreads ?? []).filter((thread) => thread.archived !== false && !thread.discarded).map((thread) => ({
+      archivedThreads: sidebarHiddenArchiveThreadItems(group).filter((thread) => thread.archived !== false && !thread.discarded).map((thread) => ({
         id: thread.sessionId,
         sessionId: thread.sessionId,
         scenarioId: thread.scenarioId,
@@ -432,7 +465,7 @@ export function buildSidebarCursorAgentProjectionForShell(
         archived: true,
         pinned: thread.pinned,
       })),
-      discardedThreads: (group.archivedThreads ?? []).filter((thread) => thread.discarded).map((thread) => ({
+      discardedThreads: sidebarHiddenArchiveThreadItems(group).filter((thread) => thread.discarded).map((thread) => ({
         id: thread.sessionId,
         sessionId: thread.sessionId,
         scenarioId: thread.scenarioId,
@@ -515,11 +548,14 @@ export function buildSidebarSearchMatches(
         detail: thread.detail,
         page: 'workbench',
         scenarioId: thread.scenarioId,
+        sessionId: thread.sessionId,
+        threadState: thread.state,
       });
     }
   }
   for (const project of options.groups ?? []) {
     if (containsNeedle(project.label, needle)) {
+      const projectTargetId = sidebarSearchProjectTargetId(project);
       matches.push({
         id: sidebarSearchMatchId('project', project.id || project.label),
         label: project.label,
@@ -527,15 +563,17 @@ export function buildSidebarSearchMatches(
           ? shellText(locale, { 'zh-CN': '当前项目', 'en-US': 'Current project' })
           : shellText(locale, { 'zh-CN': '项目', 'en-US': 'Project' }),
         page: 'workbench',
+        projectId: projectTargetId,
       });
     }
-    for (const thread of sidebarRenderableThreadItems(project)) {
+    for (const thread of sidebarSearchableThreadItems(project)) {
       if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
+        const projectTargetId = sidebarSearchProjectTargetId(project);
         matches.push({
           id: `${thread.state === 'archived' || thread.state === 'discarded' ? 'archived-thread' : thread.state === 'draft' ? 'draft-thread' : 'thread'}:${thread.sessionId}`,
           label: thread.title,
           detail: thread.state === 'discarded'
-            ? shellText(locale, { 'zh-CN': '已丢弃聊天', 'en-US': 'Discarded chat' })
+            ? shellText(locale, { 'zh-CN': '已删除聊天', 'en-US': 'Deleted chat' })
             : thread.state === 'archived'
               ? shellText(locale, { 'zh-CN': '已归档聊天', 'en-US': 'Archived chat' })
               : thread.state === 'draft'
@@ -543,6 +581,9 @@ export function buildSidebarSearchMatches(
                 : thread.detail,
           page: 'workbench',
           scenarioId: thread.scenarioId,
+          projectId: projectTargetId,
+          sessionId: thread.sessionId,
+          threadState: thread.state,
         });
       }
     }
@@ -553,10 +594,12 @@ export function buildSidebarSearchMatches(
         id: `${thread.discarded ? 'archived-thread-discarded' : 'archived-thread'}:${thread.sessionId}`,
         label: thread.title,
         detail: thread.discarded
-          ? shellText(locale, { 'zh-CN': '已丢弃聊天', 'en-US': 'Discarded chat' })
+          ? shellText(locale, { 'zh-CN': '已删除聊天', 'en-US': 'Deleted chat' })
           : shellText(locale, { 'zh-CN': '已归档聊天', 'en-US': 'Archived chat' }),
         page: 'workbench',
         scenarioId: thread.scenarioId,
+        sessionId: thread.sessionId,
+        threadState: thread.state,
       });
     }
   }
@@ -603,8 +646,22 @@ function sidebarThreadDetail(session: SciForgeSession, locale?: SupportedLocale)
 function sidebarThreadStateLabel(state: SidebarCursorAgentThreadState, locale?: SupportedLocale) {
   if (state === 'draft') return shellText(locale, { 'zh-CN': '草稿', 'en-US': 'Draft' });
   if (state === 'archived') return shellText(locale, { 'zh-CN': '已归档', 'en-US': 'Archived' });
-  if (state === 'discarded') return shellText(locale, { 'zh-CN': '已丢弃', 'en-US': 'Discarded' });
+  if (state === 'discarded') return shellText(locale, { 'zh-CN': '已删除', 'en-US': 'Deleted' });
   return '';
+}
+
+function sidebarThreadAgeLabel(value: string | undefined, locale?: SupportedLocale) {
+  const time = Date.parse(value ?? '');
+  if (!Number.isFinite(time)) return shellText(locale, { 'zh-CN': '刚刚', 'en-US': 'now' });
+  const diffMs = Math.max(0, Date.now() - time);
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 1) return shellText(locale, { 'zh-CN': '刚刚', 'en-US': 'now' });
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d`;
+  return new Date(time).toLocaleDateString(locale ?? SHELL_MODEL_DEFAULT_LOCALE, { month: 'short', day: 'numeric' });
 }
 
 function containsNeedle(value: string, needle: string) {
@@ -644,10 +701,19 @@ function containsSidebarInternalTerm(value: string) {
 function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
   const seen = new Set<string>();
   return matches.filter((match) => {
-    if (seen.has(match.id)) return false;
-    seen.add(match.id);
+    const key = sidebarSearchMatchDedupeKey(match);
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
+}
+
+function sidebarSearchMatchDedupeKey(match: SidebarSearchMatch) {
+  if (match.sessionId) {
+    return `thread:${match.scenarioId ?? ''}:${match.sessionId}:${match.threadState ?? ''}`;
+  }
+  if (match.projectId) return `project:${match.projectId}`;
+  return match.id;
 }
 
 function sidebarSearchMatchId(prefix: string, raw: string) {
@@ -657,6 +723,27 @@ function sidebarSearchMatchId(prefix: string, raw: string) {
     hash = Math.imul(hash, 16777619);
   }
   return `${prefix}:${(hash >>> 0).toString(36)}`;
+}
+
+function sidebarSearchProjectTargetId(project: Pick<SidebarProjectThreadGroup, 'id' | 'label'>) {
+  return sidebarSearchMatchId('project-target', project.id || project.label);
+}
+
+export function findSidebarThreadSearchTarget(
+  groups: SidebarProjectThreadGroup[],
+  match: SidebarSearchMatch,
+): { project: SidebarProjectThreadGroup; thread: SidebarThreadItem } | undefined {
+  if (!match.sessionId) return undefined;
+  const projects = match.projectId
+    ? groups.filter((project) => sidebarSearchProjectTargetId(project) === match.projectId)
+    : groups;
+  for (const project of projects) {
+    const thread = sidebarSearchableThreadItems(project).find((item) => (
+      item.sessionId === match.sessionId && (!match.scenarioId || item.scenarioId === match.scenarioId)
+    ));
+    if (thread) return { project, thread };
+  }
+  return undefined;
 }
 
 export function Sidebar({
@@ -672,9 +759,10 @@ export function Sidebar({
   onDiscardThread,
   onRestoreThread,
   onArchiveProjectChats,
-  onArchiveAllChats,
   onRemoveSidebarProject,
   onSearchNavigate,
+  onOpenAutomations,
+  onOpenCustomize,
   onSettingsOpen,
   workspaceStatus,
   onWorkspacePathChange,
@@ -695,13 +783,14 @@ export function Sidebar({
   sessionsByScenario?: Record<ScenarioInstanceId, SciForgeSession>;
   archivedSessions?: SciForgeSession[];
   onProjectNewChat?: (project: SidebarProjectThreadGroup) => void;
-  onArchiveThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => void | Promise<void>;
-  onDiscardThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => void | Promise<void>;
-  onRestoreThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => void | Promise<void>;
-  onArchiveProjectChats?: (project: SidebarProjectThreadGroup) => void | Promise<void>;
-  onArchiveAllChats?: () => void;
+  onArchiveThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => boolean | void | Promise<boolean | void>;
+  onDiscardThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => boolean | void | Promise<boolean | void>;
+  onRestoreThread?: (scenarioId: ScenarioInstanceId, sessionId: string, project?: SidebarProjectThreadGroup) => boolean | void | Promise<boolean | void>;
+  onArchiveProjectChats?: (project: SidebarProjectThreadGroup) => boolean | void | Promise<boolean | void>;
   onRemoveSidebarProject?: (project: SidebarProjectThreadGroup) => void;
   onSearchNavigate?: (query: string) => void;
+  onOpenAutomations?: () => void;
+  onOpenCustomize?: () => void;
   onSettingsOpen?: () => void;
   workspaceStatus: string;
   onWorkspacePathChange: (value: string) => void;
@@ -720,7 +809,7 @@ export function Sidebar({
   const { locale, t } = useI18n();
   const workspaceRoot = explorerWorkspaceRoot(config);
   const [collapsed, setCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(284);
+  const [sidebarWidth, setSidebarWidth] = useState(244);
   const [folderChildren, setFolderChildren] = useState<Record<string, WorkspaceEntry[]>>({});
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(workspaceRoot ? [workspaceRoot] : []));
   const [workspaceError, setWorkspaceError] = useState('');
@@ -739,7 +828,7 @@ export function Sidebar({
   } | null>(null);
   const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboardState | null>(null);
   const [sidebarSearchQuery, setSidebarSearchQuery] = useState('');
-  const [expandedProjectThreads, setExpandedProjectThreads] = useState<Set<string>>(() => new Set());
+  const [projectThreadVisibleCounts, setProjectThreadVisibleCounts] = useState<Record<string, number>>({});
   const [allProjectThreadsCollapsed, setAllProjectThreadsCollapsed] = useState(false);
   const [sidebarProjectMenu, setSidebarProjectMenu] = useState<SidebarProjectMenu | null>(null);
   const [sidebarPreferences, setSidebarPreferences] = useState<SidebarPreferences>(() => loadSidebarPreferences());
@@ -762,17 +851,22 @@ export function Sidebar({
       projectOrder: sidebarPreferences.projectOrder,
       projectSessionsByPath,
       activeWorkspacePath,
+      activeSessionId: sidebarSessions[scenarioId]?.sessionId,
       locale,
     }),
-    [config, sidebarSessions, archivedSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath, locale],
+    [config, sidebarSessions, archivedSessions, sidebarPreferences, projectSessionsByPath, activeWorkspacePath, scenarioId, locale],
   );
   const sidebarSearchMatches = useMemo(
-    () => buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions, {
-      groups: sidebarProjectThreadGroups,
-      archivedSessions,
-      locale,
-    }),
-    [sidebarSearchQuery, sidebarSessions, sidebarProjectThreadGroups, archivedSessions, locale],
+    () => {
+      const matches = buildSidebarSearchMatches(sidebarSearchQuery, sidebarSessions, {
+        groups: sidebarProjectThreadGroups,
+        archivedSessions,
+        locale,
+      });
+      if (sidebarPreferences.visibleSections.archiveUnread) return matches;
+      return matches.filter((match) => match.threadState !== 'archived' && match.threadState !== 'discarded');
+    },
+    [sidebarSearchQuery, sidebarSessions, sidebarProjectThreadGroups, archivedSessions, locale, sidebarPreferences.visibleSections.archiveUnread],
   );
   const cursorSidebarRegion = useMemo(() => {
     const projection = buildSidebarCursorAgentProjectionForShell(config, sidebarProjectThreadGroups, {
@@ -787,6 +881,7 @@ export function Sidebar({
     return sidebarCursorAgentRegionDetail(projection);
   }, [config, sidebarProjectThreadGroups, sidebarPreferences.sort, sidebarSearchQuery, workspaceStatus, activeWorkspacePath, sidebarSessions, scenarioId, sidebarPreferences.pinnedThreadIds, locale]);
   const pinnedThreadIds = useMemo(() => new Set(sidebarPreferences.pinnedThreadIds), [sidebarPreferences.pinnedThreadIds]);
+  const readThreadIds = useMemo(() => new Set(sidebarPreferences.readThreadIds), [sidebarPreferences.readThreadIds]);
   const sidebarProjectContextMenuProject = useMemo(
     () => (sidebarProjectMenu?.kind === 'project'
       ? sidebarProjectThreadGroups.find((project) => project.id === sidebarProjectMenu.projectId)
@@ -806,6 +901,20 @@ export function Sidebar({
       setCollapsed(true);
     }
   }, [page]);
+
+  useEffect(() => {
+    if (!showWorkbenchNav) return;
+    function handleNewAgentShortcut(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'n') return;
+      const project = sidebarProjectThreadGroups.find((item) => item.current) ?? sidebarProjectThreadGroups[0];
+      if (!project) return;
+      event.preventDefault();
+      startSidebarProjectNewChat(project);
+    }
+    window.addEventListener('keydown', handleNewAgentShortcut);
+    return () => window.removeEventListener('keydown', handleNewAgentShortcut);
+  }, [showWorkbenchNav, sidebarProjectThreadGroups, onProjectNewChat]);
 
   useEffect(() => {
     if (!sidebarExpanded) return;
@@ -1372,22 +1481,10 @@ export function Sidebar({
     && workspacePasteTargetPath({ entry: contextMenu.entry, workspaceRoot }),
   );
 
-  function referenceForSidebarProject(project: Pick<SidebarProjectThreadGroup, 'label' | 'detail'>) {
-    const path = project.detail.trim();
-    if (!path) return undefined;
-    return referenceForWorkspaceEntry({
-      path,
-      name: project.label || pathBasename(path),
-      kind: 'folder',
-    });
-  }
-
   function resolveSidebarMenuReference(
     kind: SidebarProjectMenu['kind'],
     event: ReactMouseEvent,
-    project?: SidebarProjectThreadGroup,
   ) {
-    if (kind === 'project' && project) return referenceForSidebarProject(project);
     if (kind === 'global') return resolveAppContextMenuReference(event.nativeEvent);
     return undefined;
   }
@@ -1401,8 +1498,8 @@ export function Sidebar({
       ...base,
       x: event.clientX,
       y: event.clientY,
-      ...(base.kind === 'global' || base.kind === 'project'
-        ? { reference: resolveSidebarMenuReference(base.kind, event, project) }
+      ...(base.kind === 'global'
+        ? { reference: resolveSidebarMenuReference(base.kind, event) }
         : {}),
     } as SidebarProjectMenu;
   }
@@ -1436,27 +1533,6 @@ export function Sidebar({
     onReferenceToChat?.(reference);
   }
 
-  async function copySidebarProjectPath(project: SidebarProjectThreadGroup) {
-    setSidebarProjectMenu(null);
-    if (!project.detail.trim()) return;
-    await navigator.clipboard?.writeText(project.detail);
-    setWorkspaceNotice(t({ 'zh-CN': `已复制路径 ${project.detail}`, 'en-US': `Copied path ${project.detail}` }));
-  }
-
-  async function copySidebarProjectRelativePath(project: SidebarProjectThreadGroup) {
-    setSidebarProjectMenu(null);
-    if (!project.detail.trim()) return;
-    const root = explorerWorkspaceRoot(config);
-    const relativePath = toWorkspaceRelativePath(root, project.detail);
-    await navigator.clipboard?.writeText(relativePath);
-    setWorkspaceNotice(t({ 'zh-CN': `已复制相对路径 ${relativePath}`, 'en-US': `Copied relative path ${relativePath}` }));
-  }
-
-  function closeSidebarProjectMenuWithNotice(message: string) {
-    setSidebarProjectMenu(null);
-    setWorkspaceNotice(message);
-  }
-
   function updateSidebarPreferences(next: SidebarPreferences | ((current: SidebarPreferences) => SidebarPreferences), message?: string) {
     setSidebarPreferences((current) => {
       const resolved = typeof next === 'function' ? next(current) : next;
@@ -1467,29 +1543,39 @@ export function Sidebar({
     if (message) setWorkspaceNotice(message);
   }
 
-  function applySidebarLayout(layout: SidebarLayoutMode) {
-    updateSidebarPreferences((current) => ({ ...current, layout }), layout === 'by-project'
-      ? t({ 'zh-CN': '已按项目整理侧边栏。', 'en-US': 'Sidebar organized by project.' })
-      : layout === 'recent-projects'
-        ? t({ 'zh-CN': '已切换到近期项目视图。', 'en-US': 'Switched to recent projects view.' })
-        : t({ 'zh-CN': '已切换到按时间顺序视图。', 'en-US': 'Switched to chronological view.' }));
-  }
-
-  function applySidebarSort(sort: SidebarSortMode) {
-    updateSidebarPreferences((current) => ({ ...current, sort }), sort === 'createdAt'
-      ? t({ 'zh-CN': '已按创建时间排序。', 'en-US': 'Sorted by creation time.' })
-      : t({ 'zh-CN': '已按最近更新排序。', 'en-US': 'Sorted by last update.' }));
-  }
-
-  function moveCurrentProjectDownInSidebar() {
-    const currentProject = sidebarProjectThreadGroups.find((project) => project.current);
-    if (!currentProject) {
-      closeSidebarProjectMenuWithNotice(t({ 'zh-CN': '没有可移动的当前项目。', 'en-US': 'There is no current project to move.' }));
-      return;
-    }
+  function groupSidebarByRepository() {
     updateSidebarPreferences(
-      (current) => moveCurrentProjectDown(current, sidebarProjectThreadGroups.map((project) => project.id), currentProject.id),
-      t({ 'zh-CN': `已将 ${currentProject.label} 下移。`, 'en-US': `Moved ${currentProject.label} down.` }),
+      (current) => ({ ...current, layout: 'by-project' }),
+      t({ 'zh-CN': '已按仓库分组。', 'en-US': 'Grouped by Repository.' }),
+    );
+  }
+
+  function toggleSidebarVisibleFilter(section: SidebarVisibleSection) {
+    updateSidebarPreferences((current) => toggleSidebarVisibleSection(current, section));
+  }
+
+  function collapseAllSidebarProjects() {
+    setAllProjectThreadsCollapsed(true);
+    setProjectThreadVisibleCounts({});
+    setSidebarProjectMenu(null);
+    setWorkspaceNotice(t({ 'zh-CN': '已折叠所有仓库聊天。', 'en-US': 'Collapsed all repository chats.' }));
+  }
+
+  function markAllSidebarThreadsAsRead() {
+    const visibleThreadIds = sidebarProjectThreadGroups.flatMap((project) => sidebarRenderableThreadItems(project).map((thread) => thread.sessionId));
+    updateSidebarPreferences(
+      (current) => markThreadIdsRead(current, visibleThreadIds),
+      t({ 'zh-CN': '所有可见聊天已标记为已读。', 'en-US': 'All visible chats are marked as read.' }),
+    );
+  }
+
+  function markSidebarProjectThreadsAsRead(project: SidebarProjectThreadGroup) {
+    updateSidebarPreferences(
+      (current) => markThreadIdsRead(current, sidebarRenderableThreadItems(project).map((thread) => thread.sessionId)),
+      t({
+        'zh-CN': `${project.label} 中的可见聊天已标记为已读。`,
+        'en-US': `Visible chats in ${project.label} are marked as read.`,
+      }),
     );
   }
 
@@ -1504,13 +1590,25 @@ export function Sidebar({
 
   async function archiveSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
     setSidebarProjectMenu(null);
+    if (item.state === 'draft') {
+      await discardSidebarThread(item, project);
+      return;
+    }
     if (item.state === 'archived' || item.state === 'discarded') {
       await restoreSidebarThread(item, project);
       return;
     }
+    if (!onArchiveThread) {
+      setWorkspaceNotice(t({ 'zh-CN': `没有可归档的聊天：${item.title}`, 'en-US': `No chat to archive: ${item.title}` }));
+      return;
+    }
     try {
       setWorkspaceError('');
-      await onArchiveThread?.(item.scenarioId, item.sessionId, project);
+      const changed = await onArchiveThread(item.scenarioId, item.sessionId, project);
+      if (changed === false) {
+        setWorkspaceNotice(t({ 'zh-CN': `没有可归档的聊天：${item.title}`, 'en-US': `No chat to archive: ${item.title}` }));
+        return;
+      }
       setWorkspaceNotice(t({ 'zh-CN': `已归档聊天：${item.title}`, 'en-US': `Archived chat: ${item.title}` }));
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : String(err));
@@ -1520,10 +1618,25 @@ export function Sidebar({
 
   async function discardSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
     setSidebarProjectMenu(null);
+    const draft = item.state === 'draft';
+    const unavailable = draft
+      ? t({ 'zh-CN': `没有可丢弃的草稿：${item.title}`, 'en-US': `No draft to discard: ${item.title}` })
+      : t({ 'zh-CN': `没有可删除的聊天：${item.title}`, 'en-US': `No chat to delete: ${item.title}` });
+    const completed = draft
+      ? t({ 'zh-CN': `已丢弃草稿：${item.title}`, 'en-US': `Discarded draft: ${item.title}` })
+      : t({ 'zh-CN': `已删除聊天：${item.title}`, 'en-US': `Deleted chat: ${item.title}` });
+    if (!onDiscardThread) {
+      setWorkspaceNotice(unavailable);
+      return;
+    }
     try {
       setWorkspaceError('');
-      await onDiscardThread?.(item.scenarioId, item.sessionId, project);
-      setWorkspaceNotice(t({ 'zh-CN': `已丢弃聊天：${item.title}`, 'en-US': `Discarded chat: ${item.title}` }));
+      const changed = await onDiscardThread(item.scenarioId, item.sessionId, project);
+      if (changed === false) {
+        setWorkspaceNotice(unavailable);
+        return;
+      }
+      setWorkspaceNotice(completed);
     } catch (err) {
       setWorkspaceError(err instanceof Error ? err.message : String(err));
       setWorkspaceNotice('');
@@ -1532,9 +1645,17 @@ export function Sidebar({
 
   async function restoreSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup, openAfterRestore = false) {
     setSidebarProjectMenu(null);
+    if (!onRestoreThread) {
+      setWorkspaceNotice(t({ 'zh-CN': `没有可恢复的聊天：${item.title}`, 'en-US': `No chat to restore: ${item.title}` }));
+      return;
+    }
     try {
       setWorkspaceError('');
-      await onRestoreThread?.(item.scenarioId, item.sessionId, project);
+      const changed = await onRestoreThread(item.scenarioId, item.sessionId, project);
+      if (changed === false) {
+        setWorkspaceNotice(t({ 'zh-CN': `没有可恢复的聊天：${item.title}`, 'en-US': `No chat to restore: ${item.title}` }));
+        return;
+      }
       if (openAfterRestore && project.current) {
         setScenarioId(item.scenarioId);
         setPage('workbench');
@@ -1544,12 +1665,6 @@ export function Sidebar({
       setWorkspaceError(err instanceof Error ? err.message : String(err));
       setWorkspaceNotice('');
     }
-  }
-
-  function archiveAllSidebarChats() {
-    setSidebarProjectMenu(null);
-    onArchiveAllChats?.();
-    setWorkspaceNotice(t({ 'zh-CN': '已归档所有活跃聊天。', 'en-US': 'Archived all active chats.' }));
   }
 
   async function chooseWorkspaceRootPath() {
@@ -1588,9 +1703,7 @@ export function Sidebar({
     setAllProjectThreadsCollapsed((current) => {
       const next = !current;
       if (next) {
-        setExpandedProjectThreads(new Set());
-      } else {
-        setExpandedProjectThreads(new Set(sidebarProjectThreadGroups.map((project) => project.id)));
+        setProjectThreadVisibleCounts({});
       }
       setSidebarProjectMenu(null);
       return next;
@@ -1609,27 +1722,29 @@ export function Sidebar({
     onWorkspaceProjectActivate?.(project, thread ? { scenarioId: thread.scenarioId, sessionId: thread.sessionId } : undefined);
     setPage('workbench');
     setAllProjectThreadsCollapsed(false);
-    setExpandedProjectThreads(new Set([project.id]));
     setWorkspaceNotice(t({ 'zh-CN': `已切换到项目 ${project.label}`, 'en-US': `Switched to project ${project.label}` }));
   }
 
-  function openProjectNewChat(project: SidebarProjectThreadGroup, event: ReactMouseEvent) {
-    event.stopPropagation();
+  function startSidebarProjectNewChat(project: SidebarProjectThreadGroup) {
     setSidebarProjectMenu(null);
     onProjectNewChat?.(project);
   }
 
-  async function revealSidebarProject(project: SidebarProjectThreadGroup) {
+  function openProjectNewChat(project: SidebarProjectThreadGroup, event: ReactMouseEvent) {
+    event.stopPropagation();
+    startSidebarProjectNewChat(project);
+  }
+
+  function openSidebarAutomations() {
     setSidebarProjectMenu(null);
-    if (!project.detail) return;
-    try {
-      setWorkspaceError('');
-      await openWorkspaceObject(config, 'reveal-in-folder', project.detail, config.workspacePath);
-      setWorkspaceNotice(t({ 'zh-CN': `已在访达中定位 ${project.label}`, 'en-US': `Revealed ${project.label} in Finder` }));
-    } catch (err) {
-      setWorkspaceError(err instanceof Error ? err.message : String(err));
-      setWorkspaceNotice('');
-    }
+    if (onOpenAutomations) onOpenAutomations();
+    else setPage('components');
+  }
+
+  function openSidebarCustomize() {
+    setSidebarProjectMenu(null);
+    if (onOpenCustomize) onOpenCustomize();
+    else setPage('components');
   }
 
   async function archiveProjectChats(project: SidebarProjectThreadGroup) {
@@ -1640,11 +1755,15 @@ export function Sidebar({
     }
     try {
       setWorkspaceError('');
-      await onArchiveProjectChats(project);
+      const changed = await onArchiveProjectChats(project);
+      if (changed === false) {
+        setWorkspaceNotice(t({ 'zh-CN': `${project.label} 没有可归档的活跃聊天。`, 'en-US': `${project.label} has no active chats to archive.` }));
+        return;
+      }
       setWorkspaceNotice(t({ 'zh-CN': `已归档 ${project.label} 中的活跃聊天。`, 'en-US': `Archived active chats in ${project.label}.` }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-        setWorkspaceError(message.includes('没有可归档') ? '' : message);
+      setWorkspaceError(message.includes('没有可归档') ? '' : message);
       setWorkspaceNotice(message);
     }
   }
@@ -1683,22 +1802,32 @@ export function Sidebar({
     const isPinned = pinnedThreadIds.has(item.sessionId);
     const threadState = item.state ?? 'active';
     const archivedOrDiscarded = threadState === 'archived' || threadState === 'discarded';
-    const ThreadIcon = threadState === 'draft'
-      ? Clock
-      : threadState === 'archived'
-        ? Archive
-        : threadState === 'discarded'
-          ? Trash2
-          : MessageSquare;
+    const draft = threadState === 'draft';
+    const timeLabel = threadState === 'draft' ? '' : sidebarThreadAgeLabel(item.updatedAt || item.createdAt, locale);
+    const showSource = sidebarPreferences.visibleSections.source;
+    const showMetadata = sidebarPreferences.visibleSections.metadata;
+    const isUnread = sidebarPreferences.visibleSections.archiveUnread
+      && threadState === 'active'
+      && !isActive
+      && !readThreadIds.has(item.sessionId);
     return (
-      <div key={`${project.id}:${item.sessionId}`} className={cx('sidebar-thread-row', `state-${threadState}`, isActive && 'active', isPinned && 'pinned')}>
+      <div
+        key={`${project.id}:${item.sessionId}`}
+        className={cx('sidebar-thread-row', `state-${threadState}`, isActive && 'active', isPinned && 'pinned', isUnread && 'unread')}
+        title={`${item.title}${item.detail ? ` · ${item.detail}` : ''}`}
+      >
         <button type="button" className="sidebar-thread-main" onClick={() => openSidebarThread(item, project)}>
-          {isPinned && !archivedOrDiscarded ? <Pin size={14} className="sidebar-thread-pin-icon" aria-hidden /> : <ThreadIcon size={15} aria-hidden />}
+          <span className={cx('sidebar-thread-status-dot', threadState, isUnread && 'unread', isPinned && !archivedOrDiscarded && 'pinned')} aria-hidden />
           <span className="sidebar-thread-title-line">
             <span className="sidebar-thread-title">{item.title}</span>
-            {threadState !== 'active' ? <span className="sidebar-thread-state-badge">{sidebarThreadStateLabel(threadState, locale)}</span> : null}
+            {showMetadata ? (
+              <span className="sidebar-thread-meta">
+                {threadState !== 'active' ? <span className="sidebar-thread-state-badge">{sidebarThreadStateLabel(threadState, locale)}</span> : null}
+                {timeLabel ? <time dateTime={item.updatedAt || item.createdAt}>{timeLabel}</time> : null}
+              </span>
+            ) : null}
           </span>
-          <small className="sidebar-thread-detail">{item.detail}</small>
+          {showSource ? <small className="sidebar-thread-detail">{item.detail}</small> : null}
         </button>
         <div className="sidebar-thread-actions" aria-label={t({ 'zh-CN': `${item.title} 聊天操作`, 'en-US': `${item.title} chat actions` })}>
           {archivedOrDiscarded ? (
@@ -1726,24 +1855,27 @@ export function Sidebar({
               >
                 <Pin size={13} />
               </button>
-              <button
-                type="button"
-                className="sidebar-project-icon-btn"
-                onClick={() => { void archiveSidebarThread(item, project); }}
-                title={t({ 'zh-CN': '归档聊天', 'en-US': 'Archive chat' })}
-                aria-label={t({ 'zh-CN': `归档聊天：${item.title}`, 'en-US': `Archive chat: ${item.title}` })}
-              >
-                <Archive size={13} />
-              </button>
-              <button
-                type="button"
-                className="sidebar-project-icon-btn"
-                onClick={() => { void discardSidebarThread(item, project); }}
-                title={t({ 'zh-CN': '丢弃聊天', 'en-US': 'Discard chat' })}
-                aria-label={t({ 'zh-CN': `丢弃聊天：${item.title}`, 'en-US': `Discard chat: ${item.title}` })}
-              >
-                <Trash2 size={13} />
-              </button>
+              {draft ? (
+                <button
+                  type="button"
+                  className="sidebar-project-icon-btn"
+                  onClick={() => { void discardSidebarThread(item, project); }}
+                  title={t({ 'zh-CN': '丢弃草稿', 'en-US': 'Discard draft' })}
+                  aria-label={t({ 'zh-CN': `丢弃草稿：${item.title}`, 'en-US': `Discard draft: ${item.title}` })}
+                >
+                  <Trash2 size={13} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="sidebar-project-icon-btn"
+                  onClick={() => { void archiveSidebarThread(item, project); }}
+                  title={t({ 'zh-CN': '归档聊天', 'en-US': 'Archive chat' })}
+                  aria-label={t({ 'zh-CN': `归档聊天：${item.title}`, 'en-US': `Archive chat: ${item.title}` })}
+                >
+                  <Archive size={13} />
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1752,6 +1884,20 @@ export function Sidebar({
   }
 
   function openSidebarSearchMatch(match: SidebarSearchMatch) {
+    if (match.sessionId) {
+      const threadTarget = findSidebarThreadSearchTarget(sidebarProjectThreadGroups, match);
+      if (threadTarget) {
+        openSidebarThread(threadTarget.thread, threadTarget.project);
+        return;
+      }
+    }
+    if (match.projectId) {
+      const project = sidebarProjectThreadGroups.find((item) => sidebarSearchProjectTargetId(item) === match.projectId);
+      if (project) {
+        activateSidebarProject(project);
+        return;
+      }
+    }
     if (match.scenarioId) setScenarioId(match.scenarioId);
     setPage(match.page);
   }
@@ -1768,11 +1914,15 @@ export function Sidebar({
   }
 
   function openSidebarThread(item: SidebarThreadItem, project: SidebarProjectThreadGroup) {
+    if (!readThreadIds.has(item.sessionId)) {
+      updateSidebarPreferences((current) => markThreadIdsRead(current, [item.sessionId]));
+    }
     if (!project.current) {
       activateSidebarProject(project, item);
       return;
     }
-    if (item.state === 'archived' || item.state === 'discarded') {
+    const active = sidebarSessions[item.scenarioId];
+    if (item.state === 'archived' || item.state === 'discarded' || active?.sessionId !== item.sessionId) {
       void restoreSidebarThread(item, project, true);
       return;
     }
@@ -1780,12 +1930,17 @@ export function Sidebar({
     setPage('workbench');
   }
 
-  function toggleProjectThreadExpansion(projectId: string) {
+  function showMoreProjectThreads(projectId: string) {
     setAllProjectThreadsCollapsed(false);
-    setExpandedProjectThreads((current) => {
-      const next = new Set(current);
-      if (next.has(projectId)) next.delete(projectId);
-      else next.add(projectId);
+    setProjectThreadVisibleCounts((current) => {
+      const project = sidebarProjectThreadGroups.find((item) => item.id === projectId);
+      const total = project ? sidebarRenderableThreadItems(project).length : 0;
+      const currentVisible = Math.max(SIDEBAR_PROJECT_THREAD_LIMIT, current[projectId] ?? SIDEBAR_PROJECT_THREAD_LIMIT);
+      const nextVisible = total
+        ? Math.min(total, currentVisible + SIDEBAR_PROJECT_THREAD_PAGE_SIZE)
+        : currentVisible + SIDEBAR_PROJECT_THREAD_PAGE_SIZE;
+      if (current[projectId] === nextVisible) return current;
+      const next = { ...current, [projectId]: nextVisible };
       return next;
     });
   }
@@ -1832,7 +1987,7 @@ export function Sidebar({
 
   return (
     <aside
-      className={cx('sidebar', !sidebarExpanded && 'collapsed')}
+      className={cx('sidebar', showWorkbenchNav && 'cursor-agent-sidebar', !sidebarExpanded && 'collapsed')}
       style={{ width: sidebarExpanded ? sidebarWidth : 46 }}
       data-gui-region-id={cursorSidebarRegion.regionId}
       data-gui-region-ref={cursorSidebarRegion.rendererState.projection.sidebarResourceRef}
@@ -1912,11 +2067,11 @@ export function Sidebar({
                 sidebarSearchMatches={sidebarSearchMatches}
                 allProjectThreadsCollapsed={allProjectThreadsCollapsed}
                 activeMenuKind={sidebarProjectMenu?.kind}
-                activeProjectMenuId={sidebarProjectMenu?.kind === 'project' ? sidebarProjectMenu.projectId : undefined}
                 projectThreadLimit={SIDEBAR_PROJECT_THREAD_LIMIT}
+                projectThreadVisibleCounts={projectThreadVisibleCounts}
                 sidebarProjectThreadGroups={sidebarProjectThreadGroups}
                 cursorProjectGroups={cursorSidebarRegion.rendererState.projection.groups}
-                expandedProjectThreads={expandedProjectThreads}
+                visibleSections={sidebarPreferences.visibleSections}
                 onSearchQueryChange={setSidebarSearchQuery}
                 onSearchSubmit={handleSidebarSearchSubmit}
                 onOpenSearchMatch={openSidebarSearchMatch}
@@ -1924,8 +2079,10 @@ export function Sidebar({
                 onToggleProjectMenu={toggleSidebarProjectMenu}
                 onToggleAllProjectThreadsCollapsed={toggleAllProjectThreadsCollapsed}
                 onActivateProject={activateSidebarProject}
-                onToggleProjectThreadExpansion={toggleProjectThreadExpansion}
+                onShowMoreProjectThreads={showMoreProjectThreads}
                 onOpenProjectNewChat={openProjectNewChat}
+                onOpenAutomations={openSidebarAutomations}
+                onOpenCustomize={openSidebarCustomize}
                 renderSidebarThreadRow={renderSidebarThreadRow}
               />
                   </div>
@@ -2105,13 +2262,12 @@ export function Sidebar({
         <SidebarThreadsGlobalContextMenu
           x={sidebarProjectMenu.x}
           y={sidebarProjectMenu.y}
-          layout={sidebarPreferences.layout}
-          sort={sidebarPreferences.sort}
+          visibleSections={sidebarPreferences.visibleSections}
           reference={sidebarProjectMenu.reference}
-          onArchiveAllChats={() => archiveAllSidebarChats()}
-          onApplyLayout={applySidebarLayout}
-          onMoveCurrentProjectDown={moveCurrentProjectDownInSidebar}
-          onApplySort={applySidebarSort}
+          onGroupByRepository={groupSidebarByRepository}
+          onToggleVisibleSection={toggleSidebarVisibleFilter}
+          onCollapseAll={collapseAllSidebarProjects}
+          onMarkAllAsRead={markAllSidebarThreadsAsRead}
           onReferenceToChat={handleSidebarProjectReferenceToChat}
         />
       ) : null}
@@ -2135,13 +2291,9 @@ export function Sidebar({
           x={sidebarProjectMenu.x}
           y={sidebarProjectMenu.y}
           project={sidebarProjectContextMenuProject}
-          reference={sidebarProjectMenu.reference ?? referenceForSidebarProject(sidebarProjectContextMenuProject)}
-          onRevealInFolder={() => void revealSidebarProject(sidebarProjectContextMenuProject)}
+          onMarkAllAsRead={() => markSidebarProjectThreadsAsRead(sidebarProjectContextMenuProject)}
           onArchiveChats={() => void archiveProjectChats(sidebarProjectContextMenuProject)}
-          onCopyPath={() => void copySidebarProjectPath(sidebarProjectContextMenuProject)}
-          onCopyRelativePath={() => void copySidebarProjectRelativePath(sidebarProjectContextMenuProject)}
           onRemoveProject={() => removeSidebarProject(sidebarProjectContextMenuProject)}
-          onReferenceToChat={handleSidebarProjectReferenceToChat}
         />
       ) : null}
     </aside>

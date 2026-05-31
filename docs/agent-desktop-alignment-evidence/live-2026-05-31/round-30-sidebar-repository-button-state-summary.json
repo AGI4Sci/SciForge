@@ -1,0 +1,39 @@
+{
+  "round": 30,
+  "date": "2026-05-31",
+  "scope": "repositories-only button behavior completion and Cursor Agent parity follow-up",
+  "cursorAgentObservations": [
+    "Computer Use observed Cursor Agent Repositories with multiple projects visible before switching, including sciforge, Home, and openteam-studio.",
+    "Cursor repository histories can exceed the first visible page; See more keeps paging additional rows instead of being capped at eight model rows.",
+    "Cursor row actions remain state-specific: completed/history rows expose Pin and Archive, draft rows expose Pin and Discard.",
+    "Cursor project header context menus expose Mark All as Read, Archive All, and Remove from Sidebar."
+  ],
+  "sciforgeIssuesFound": [
+    "SciForge project groups were still built from an eight-row model limit, so the UI See more control could not reveal repository history beyond the pre-truncated rows.",
+    "Mark All as Read existed in the Cursor-like menus but only emitted a notice; there was no sidebar read-state mutation to make the button real.",
+    "Activating a non-current repository switched the workspace path but left workspaceWriterBaseUrl on the departing/current project writer, while the departing project retained the target peer writer in peerInstances.",
+    "The Agent Host sidebar semantic projection exposed row-level archive/discard actions but did not publish a project-level Archive All command intent."
+  ],
+  "sciforgeChanges": [
+    "Removed the default pre-truncation inside buildSidebarProjectThreadGroups; repository groups now retain the full sorted thread history, leaving default display and paging to SidebarProjectChatSection.",
+    "Added readThreadIds to sidebar preferences plus markThreadIdsRead; global and project Mark All as Read now persist visible thread ids as read, and opening a thread marks that thread read.",
+    "Added unread row/dot styling using existing SciForge sidebar tokens so the read-state is visible in both dark and light modes.",
+    "Fixed workspace project activation to carry the target peer workspaceWriterUrl into workspaceWriterBaseUrl and preserve the departing current workspace as a peer with the previous writer.",
+    "Published project-level archive-project / Archive All in the Cursor Agent semantic projection with terminal-equivalent commandText."
+  ],
+  "sciforgeLiveVerification": [
+    "Connected to the current in-app Browser tab at http://localhost:5173/ and inspected the Repositories DOM without mutating user state.",
+    "The current live workspace only had one p2 draft row, so Archive All, Archive, and Remove from Sidebar were not clicked in the user's real state.",
+    "The live draft row exposed New Agent and Discard draft controls; completed-row destructive behavior remains covered by isolated/focused state tests from earlier rounds and the current test suite."
+  ],
+  "verification": [
+    "node --import tsx --test src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/sidebarPreferences.test.ts src/ui/src/app/appShell/sidebarProjectModel.test.ts src/ui/src/app/appShell/sidebarProjectSessions.test.ts src/ui/src/app/contextMenu/SidebarProjectContextMenus.test.tsx src/ui/src/workspace/sessionWorkspace.test.ts src/ui/src/app/sciforgeApp/appStateModels.test.ts passed with 64 tests.",
+    "npm run typecheck --silent passed.",
+    "git diff --check passed."
+  ],
+  "openNotes": [
+    "Automations, top Customize, and sidebar search remain outside this round per the narrowed Repositories focus.",
+    "The user's current live workspace lacked completed rows, so this round avoided destructive Browser clicks against the real session and relied on isolated state tests for Archive/Delete/Restore.",
+    "Full visual parity remains an active live task; this round specifically closes behavior gaps for Repositories buttons, project writer routing, read-state, and See more model capacity."
+  ]
+}

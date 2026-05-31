@@ -5,6 +5,8 @@ import type {
 } from '@sciforge-ui/runtime-contract';
 import {
   normalizeUIComponentId,
+  renderBrowserWorkbench,
+  renderComputerUseControlPlane,
   renderGraphViewer,
   renderMatrixViewer,
   renderPaperCardList,
@@ -12,6 +14,9 @@ import {
   renderRecordTable,
   renderReportViewer,
   renderStructureViewer,
+  renderTerminalSessionViewer,
+  renderVirtualScreenViewer,
+  renderWorkspaceFileViewer,
   uiComponentManifests,
 } from '../components';
 import { renderScientificPlotViewer } from '../components/scientific-plot-viewer/render';
@@ -47,6 +52,11 @@ export type InteractiveArtifactInspectorTablePolicy = {
 };
 
 const packageRenderersByComponentId: Record<string, UIComponentRenderer> = {
+  'browser-workbench': renderBrowserWorkbench,
+  'virtual-screen-viewer': renderVirtualScreenViewer,
+  'computer-use-control-plane': renderComputerUseControlPlane,
+  'terminal-session-viewer': renderTerminalSessionViewer,
+  'workspace-file-viewer': renderWorkspaceFileViewer,
   'report-viewer': renderReportViewer,
   'paper-card-list': renderPaperCardList,
   'structure-viewer': renderStructureViewer,

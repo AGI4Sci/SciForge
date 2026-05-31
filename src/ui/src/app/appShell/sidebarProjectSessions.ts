@@ -69,7 +69,7 @@ export function peerSidebarProjectSessionTargets(config: SciForgeConfig) {
     .filter((peer) => peer.enabled !== false)
     .map((peer) => ({
       path: sidebarProjectPath(peer.workspacePath),
-      writerBaseUrl: sharedWriter,
+      writerBaseUrl: peer.workspaceWriterUrl?.trim() || sharedWriter,
     }))
     .filter((peer) => peer.path && peer.path !== currentPath && peer.writerBaseUrl);
 }

@@ -52,6 +52,21 @@ test('dispatchPackageBridgeHostPortCall rejects when workspace runtime signal is
   );
 });
 
+test('dispatchPackageBridgeHostPortCall lets execute handler convert aborts into scheduler cancellation', async () => {
+  const controller = new AbortController();
+  controller.abort(new Error('user pressed stop'));
+
+  const result = await dispatchPackageBridgeHostPortCall(hostPortCall('execute'), {
+    callbacks: { signal: controller.signal },
+    handlers: {
+      ...baseHandlers(),
+      execute: () => ({ ok: false, blocked: true, reason: 'scheduler-cancelled' }),
+    },
+  });
+
+  assert.deepEqual(result, { ok: false, blocked: true, reason: 'scheduler-cancelled' });
+});
+
 test('dispatchPackageBridgeHostPortCall rejects unsupported host ports', async () => {
   await assert.rejects(
     dispatchPackageBridgeHostPortCall(hostPortCall('directGuiCall'), {
@@ -60,4 +75,16 @@ test('dispatchPackageBridgeHostPortCall rejects unsupported host ports', async (
     }),
     /Unsupported Computer Use host port: directGuiCall/,
   );
+});
+
+test('dispatchPackageBridgeHostPortCall forbids direct GUI and approval ports', async () => {
+  for (const port of ['requestApproval', 'gui.present', 'gui.ask_user']) {
+    await assert.rejects(
+      dispatchPackageBridgeHostPortCall(hostPortCall(port), {
+        callbacks: {},
+        handlers: baseHandlers(),
+      }),
+      /Forbidden Computer Use host port: .*approval refs\/sidecars/,
+    );
+  }
 });

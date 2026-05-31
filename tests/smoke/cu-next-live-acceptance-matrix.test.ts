@@ -15,6 +15,13 @@ import {
   validateCuNextLiveAcceptanceTaskEvidence,
   type CuNextLiveAcceptanceMarkerKind,
 } from '../../tools/computer-use-next/live-acceptance-validator.js';
+import {
+  buildCuNextProductSmokeMatrix,
+  CU_NEXT_LIVE_MATRIX_CLASSIFICATION_CASES,
+  CU_NEXT_PRODUCT_SMOKE_CASES,
+  validateCuNextProductSmokeMatrix,
+  type CuNextProductSmokeCaseEvidence,
+} from '../../tools/computer-use-next/product-smoke-matrix.js';
 import { CU_NEXT_TASK_MAPPINGS } from '../../tools/computer-use-next/task-map.js';
 
 type CuNextTaskId =
@@ -44,6 +51,406 @@ test('CU-NEXT live acceptance semantic rules cover CU-NEXT-01..07 with task-spec
   for (const rule of CU_NEXT_LIVE_ACCEPTANCE_TASK_RULES) {
     assert.equal(rule.markerKind, expectedMarkerKinds[rule.taskId as CuNextTaskId]);
   }
+});
+
+test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform smoke, and product smoke gates', () => {
+  assert.deepEqual(
+    CU_NEXT_PRODUCT_SMOKE_CASES.map((item) => item.id),
+    [
+      'product-path-codex-native-plugin-sidecar',
+      'real-single-app-input',
+      'real-artifact-save',
+      'high-risk-confirmation-stop',
+      'blocked-recovery',
+      'viewer-real-frames',
+      'multi-app-workflow',
+      'current-bundle-evidence',
+      'single-screen-single-actor',
+      'single-screen-multi-actor',
+      'multi-screen-single-actor',
+      'multi-screen-multi-actor',
+      'multi-screen-live-demo',
+      'browser-runtime-dom-ax-observation',
+      'dom-aware-observe-before-mutate',
+      'window-local-queue',
+      'screen-global-queue',
+      'directory-preview',
+    ],
+  );
+  for (const item of CU_NEXT_PRODUCT_SMOKE_CASES) {
+    assert.equal(item.requiredTier, 'product-smoke');
+    assert.equal(item.requiredExecutionMode, 'opt-in-live-backend');
+  }
+  const requirements = new Set<string>(CU_NEXT_PRODUCT_SMOKE_CASES.flatMap((item) => item.requirements));
+  for (const requirement of [
+    'codex-app-server-native-plugin-path',
+    'sciforge-computer-use-provider',
+    'platform-sidecar-isolation',
+    'real-single-app-input',
+    'real-artifact-save',
+    'high-risk-confirmation-stop',
+    'blocked-recovery',
+    'viewer-real-frames',
+    'multi-app-workflow',
+    'current-bundle-evidence',
+    'native-multi-screen-sidecar',
+    'multi-screen-live-demo',
+    'multi-screen-multi-actor',
+    'multi-actor-cursor-provenance',
+    'browser-runtime-dom-ax-observation',
+    'dom-aware-observe-before-mutate',
+  ]) {
+    assert.ok(requirements.has(requirement), requirement);
+  }
+});
+
+test('CU-NEXT live matrix dry-run classification covers actor/screen/queue cases without passing product smoke', () => {
+  const matrix = buildCuNextProductSmokeMatrix({ generatedAt: '2026-05-31T00:00:00.000Z' });
+  const result = validateCuNextProductSmokeMatrix(matrix);
+
+  assert.equal(result.ok, true, result.issues.map((issue) => issue.reason).join('\n'));
+  assert.equal(matrix.status, 'opt-in-required');
+  assert.deepEqual(result.passedCaseIds, []);
+  assert.deepEqual(
+    CU_NEXT_LIVE_MATRIX_CLASSIFICATION_CASES.map((item) => item.id).filter((id) => id.includes('screen') || id.includes('queue')),
+    [
+      'single-screen-single-actor',
+      'single-screen-multi-actor',
+      'multi-screen-single-actor',
+      'multi-screen-multi-actor',
+      'multi-screen-live-demo',
+      'window-local-queue',
+      'screen-global-queue',
+    ],
+  );
+  for (const item of matrix.cases) {
+    assert.notEqual(item.status, 'passed');
+    assert.equal(item.realBackendExecuted, false);
+    assert.ok(item.notRunReason?.includes('opt-in'));
+  }
+});
+
+test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 pass', () => {
+  const liveCase: CuNextProductSmokeCaseEvidence = {
+    id: 'multi-screen-live-demo',
+    status: 'passed',
+    evidenceTier: 'product-smoke',
+    executionMode: 'opt-in-live-backend',
+    realBackendExecuted: true,
+    productPath: {
+      entrypoint: 'Codex app-server native plugin',
+      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
+      backendKind: 'native-multi-screen-sidecar',
+      appServerRunRef: ref('CU-NEXT-07', 'app-server-run.json'),
+      nativePluginInvocationRef: ref('CU-NEXT-07', 'native-plugin-invocation.json'),
+      sciforgeComputerUseRunTaskRef: ref('CU-NEXT-07', 'run-task.json'),
+      platformSidecarIsolationReportRef: ref('CU-NEXT-07', 'sidecar-isolation.json'),
+    },
+    evidenceRefs: {
+      'multi-screen-live-demo': [ref('CU-NEXT-07', 'm6-live-demo.json')],
+      'multi-screen-multi-actor': [ref('CU-NEXT-07', 'display-group.json')],
+      'multi-actor-cursor-provenance': [ref('CU-NEXT-07', 'actor-cursors.jsonl')],
+      'native-multi-screen-sidecar': [ref('CU-NEXT-07', 'sidecar-isolation.json')],
+      'window-local-queue': [ref('CU-NEXT-07', 'window-local-queue.json')],
+      'screen-global-queue': [ref('CU-NEXT-07', 'screen-global-queue.json')],
+      'viewer-real-frames': [ref('CU-NEXT-07', 'replay-bundle.json')],
+      'current-bundle-evidence': [ref('CU-NEXT-07', 'current-bundle.json')],
+    },
+    currentRunBundleRef: `.sciforge/vision-runs/${runId('CU-NEXT-07')}`,
+    acceptanceManifestRef: ref('CU-NEXT-07', 'acceptance.json'),
+  };
+  const matrix = buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  });
+
+  const result = validateCuNextProductSmokeMatrix(matrix);
+
+  assert.equal(result.ok, false);
+  assert.ok(productSmokeIssue(result, 'missing-native-multi-screen-summary'));
+
+  const validationRef = ref('CU-NEXT-07', 'm6-live-demo-validation.json');
+  const currentBundleRef = ref('CU-NEXT-07', 'current-bundle.json');
+  const sidecarBindingRef = ref('CU-NEXT-07', 'sidecar-binding.json');
+  const sidecarCapabilitiesRef = ref('CU-NEXT-07', 'sidecar-capabilities.json');
+  const sidecarDiscoveryRef = ref('CU-NEXT-07', 'sidecar-discovery.json');
+  const schedulerLeaseRefs = [
+    ref('CU-NEXT-07', 'leases/lease-1.json'),
+    ref('CU-NEXT-07', 'leases/lease-2.json'),
+  ];
+  const replayRef = ref('CU-NEXT-07', 'replay-bundle.json');
+  const targetRefs = [
+    ref('CU-NEXT-07', 'targets/target-1.json'),
+    ref('CU-NEXT-07', 'targets/target-2.json'),
+  ];
+  const validationPayload = {
+    schemaVersion: 'sciforge.computer-use.native-multi-screen-live-demo-validation.v1',
+    ok: true,
+    status: 'accepted',
+    errorCount: 0,
+    realNativeSidecarExecuted: true,
+    completionEligible: true,
+    screenCount: 2,
+    actorCursorCount: 3,
+    cursorEventTypes: ['move', 'point', 'annotate'],
+    nonPlaceholderReplayScreenCount: 2,
+    sidecarBindingKind: 'external-command',
+  };
+  const validationRefPayload = {
+    schemaVersion: validationPayload.schemaVersion,
+    ok: validationPayload.ok,
+    status: validationPayload.status,
+    errorCount: validationPayload.errorCount,
+    runId: runId('CU-NEXT-07'),
+    currentBundleRef,
+    sidecarBindingRef,
+    sidecarCapabilitiesRef,
+    sidecarDiscoveryRef,
+    schedulerLeaseRefs,
+    replayRef,
+    targetRefs,
+    refs: [
+      currentBundleRef,
+      sidecarBindingRef,
+      sidecarCapabilitiesRef,
+      sidecarDiscoveryRef,
+      ...schedulerLeaseRefs,
+      replayRef,
+      ...targetRefs,
+    ],
+    sidecarBinding: {
+      schemaVersion: 'sciforge.computer-use.native-multi-screen-sidecar-binding.v1',
+      bindingKind: validationPayload.sidecarBindingKind,
+      executable: '/Applications/SciForge Native Sidecar.app/Contents/MacOS/sciforge-native-sidecar',
+      commandDigest: 'sha256-native-sidecar-contract',
+      dockerNovncRequired: false,
+    },
+    sidecarCapabilities: {
+      schemaVersion: 'sciforge.computer-use.native-sidecar-capabilities.v1',
+      features: ['multi-screen', 'multi-actor-cursor', 'window-local-lease', 'screen-global-lease', 'refs-first-evidence'],
+      tools: ['capabilities', 'preflight', 'capture', 'state', 'execute', 'discover'],
+      planningPerformed: false,
+      completionJudged: false,
+      sharedSystemInputAllowed: false,
+      dockerNovncRequired: false,
+    },
+    sidecarDiscovery: {
+      schemaVersion: 'sciforge.computer-use.native-sidecar-discovery.v1',
+      screens: [
+        { screenId: `${runId('CU-NEXT-07')}-screen-main` },
+        { screenId: `${runId('CU-NEXT-07')}-screen-preview` },
+      ],
+      windows: [
+        { windowId: `${runId('CU-NEXT-07')}-window-main`, windowRef: 'native-window-ref-main' },
+        { windowId: `${runId('CU-NEXT-07')}-window-preview`, windowRef: 'native-window-ref-preview' },
+      ],
+      actorCursorPlan: [
+        { actorId: `${runId('CU-NEXT-07')}-actor-agent`, cursorId: `${runId('CU-NEXT-07')}-cursor-agent`, screenId: `${runId('CU-NEXT-07')}-screen-main`, windowId: `${runId('CU-NEXT-07')}-window-main` },
+        { actorId: `${runId('CU-NEXT-07')}-actor-writer`, cursorId: `${runId('CU-NEXT-07')}-cursor-writer`, screenId: `${runId('CU-NEXT-07')}-screen-main`, windowId: `${runId('CU-NEXT-07')}-window-main` },
+        { actorId: `${runId('CU-NEXT-07')}-actor-preview`, cursorId: `${runId('CU-NEXT-07')}-cursor-preview`, screenId: `${runId('CU-NEXT-07')}-screen-preview`, windowId: `${runId('CU-NEXT-07')}-window-preview` },
+      ],
+    },
+    currentBundle: {
+      schemaVersion: 'sciforge.computer-use.current-bundle.v1',
+      runId: runId('CU-NEXT-07'),
+      refs: [
+        sidecarBindingRef,
+        sidecarCapabilitiesRef,
+        sidecarDiscoveryRef,
+        ...schedulerLeaseRefs,
+        replayRef,
+        ...targetRefs,
+      ],
+    },
+    summary: {
+      realNativeSidecarExecuted: validationPayload.realNativeSidecarExecuted,
+      completionEligible: validationPayload.completionEligible,
+      screenCount: validationPayload.screenCount,
+      actorCursorCount: validationPayload.actorCursorCount,
+      cursorEventTypes: validationPayload.cursorEventTypes,
+      nonPlaceholderReplayScreenCount: validationPayload.nonPlaceholderReplayScreenCount,
+      sidecarBindingKind: validationPayload.sidecarBindingKind,
+    },
+  };
+  liveCase.nativeMultiScreenSummary = {
+    screenCount: 2,
+    actorCursorCount: 3,
+    cursorEventTypes: ['move', 'point', 'annotate'],
+    windowLocalQueue: true,
+    screenGlobalQueue: true,
+    nonPlaceholderReplayScreenCount: 2,
+    validationRef,
+    validation: validationPayload,
+  };
+  const claimOnly = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }));
+  assert.ok(productSmokeIssue(claimOnly, 'missing-native-multi-screen-validation-ref-record'));
+
+  const summaryOnlyRecord = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [validationRef]: {
+        schemaVersion: validationRefPayload.schemaVersion,
+        ok: validationRefPayload.ok,
+        status: validationRefPayload.status,
+        errorCount: validationRefPayload.errorCount,
+        summary: validationRefPayload.summary,
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(summaryOnlyRecord, 'missing-native-multi-screen-validation-ref-proof'));
+
+  const accepted = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: validationRefPayload } });
+  assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-summary'), false);
+  assert.equal(productSmokeIssue(accepted, 'invalid-native-multi-screen-summary'), false);
+  assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation'), false);
+  assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation-ref-record'), false);
+  assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation-ref-proof'), false);
+  assert.equal(productSmokeIssue(accepted, 'invalid-native-multi-screen-validation-ref-proof'), false);
+
+  const mismatched = structuredClone(liveCase);
+  mismatched.nativeMultiScreenSummary = {
+    ...liveCase.nativeMultiScreenSummary,
+    validation: {
+      ...liveCase.nativeMultiScreenSummary.validation,
+      actorCursorCount: 2,
+    },
+  };
+  const mismatchResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      mismatched,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: validationRefPayload } });
+  assert.ok(productSmokeIssue(mismatchResult, 'native-multi-screen-validation-summary-mismatch'));
+  assert.ok(productSmokeIssue(mismatchResult, 'native-multi-screen-validation-ref-mismatch'));
+
+  const diagnosticLocal = structuredClone(liveCase);
+  diagnosticLocal.nativeMultiScreenSummary = {
+    ...liveCase.nativeMultiScreenSummary,
+    validation: {
+      ...liveCase.nativeMultiScreenSummary.validation,
+      sidecarBindingKind: 'diagnostic-local',
+    },
+  };
+  const diagnosticLocalPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
+  diagnosticLocalPayload.sidecarBinding = {
+    ...(diagnosticLocalPayload.sidecarBinding as Record<string, unknown>),
+    bindingKind: 'diagnostic-local',
+  };
+  diagnosticLocalPayload.summary = {
+    ...(diagnosticLocalPayload.summary as Record<string, unknown>),
+    sidecarBindingKind: 'diagnostic-local',
+  };
+  const diagnosticLocalResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      diagnosticLocal,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: diagnosticLocalPayload } });
+  assert.ok(productSmokeIssue(diagnosticLocalResult, 'invalid-native-multi-screen-validation-ref-proof'));
+
+  const missingDiscoveryCapabilityPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
+  delete missingDiscoveryCapabilityPayload.sidecarCapabilitiesRef;
+  delete missingDiscoveryCapabilityPayload.sidecarDiscoveryRef;
+  const missingDiscoveryCapabilityResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: missingDiscoveryCapabilityPayload } });
+  assert.ok(productSmokeIssue(missingDiscoveryCapabilityResult, 'missing-native-multi-screen-validation-ref-proof'));
+
+  const unsafeRef = structuredClone(liveCase);
+  unsafeRef.evidenceRefs = {
+    ...unsafeRef.evidenceRefs,
+    'multi-screen-live-demo': ['https://example.test/old-run.json'],
+  };
+  const unsafeRefResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      unsafeRef,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: validationRefPayload } });
+  assert.ok(productSmokeIssue(unsafeRefResult, 'unsafe-product-smoke-ref'));
+
+  const crossBundleRef = structuredClone(liveCase);
+  crossBundleRef.evidenceRefs = {
+    ...crossBundleRef.evidenceRefs,
+    'multi-screen-live-demo': [ref('CU-NEXT-04', 'm6-live-demo.json')],
+  };
+  const crossBundleRefResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      crossBundleRef,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: validationRefPayload } });
+  assert.ok(productSmokeIssue(crossBundleRefResult, 'product-smoke-ref-outside-current-bundle'));
+
+  const crossBundleValidationPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
+  crossBundleValidationPayload.sidecarDiscoveryRef = ref('CU-NEXT-04', 'sidecar-discovery.json');
+  crossBundleValidationPayload.refs = [
+    ...(validationRefPayload.refs.filter((item) => item !== sidecarDiscoveryRef)),
+    crossBundleValidationPayload.sidecarDiscoveryRef,
+  ];
+  const crossBundleValidationResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), { refRecords: { [validationRef]: crossBundleValidationPayload } });
+  assert.ok(productSmokeIssue(crossBundleValidationResult, 'product-smoke-ref-outside-current-bundle'));
+});
+
+test('CU-NEXT product smoke matrix rejects package diagnostic and dry-run pass claims', () => {
+  const diagnosticCase: CuNextProductSmokeCaseEvidence = {
+    id: 'real-single-app-input',
+    status: 'passed',
+    evidenceTier: 'package-diagnostic',
+    executionMode: 'dry-run',
+    realBackendExecuted: false,
+    packageDiagnosticOnly: true,
+    dryRun: true,
+    productPath: {
+      entrypoint: 'package-local native_tool diagnostic',
+      hops: ['package-local'],
+    },
+    evidenceRefs: {
+      'real-single-app-input': ['.sciforge/vision-runs/package-diagnostic/vision-trace.json'],
+    },
+    currentRunBundleRef: '.sciforge/vision-runs/package-diagnostic',
+    acceptanceManifestRef: '.sciforge/vision-runs/package-diagnostic/cu-user-acceptance-manifest.json',
+  };
+  const matrix = buildCuNextProductSmokeMatrix({
+    cases: [
+      diagnosticCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== diagnosticCase.id),
+    ],
+  });
+
+  const result = validateCuNextProductSmokeMatrix(matrix);
+
+  assert.equal(result.ok, false);
+  assert.ok(productSmokeIssue(result, 'product-smoke-pass-without-real-backend'));
+  assert.ok(productSmokeIssue(result, 'non-product-tier-cannot-pass-product-smoke'));
+  assert.ok(productSmokeIssue(result, 'product-smoke-pass-requires-opt-in-live-backend'));
+  assert.ok(productSmokeIssue(result, 'diagnostic-cannot-pass-product-smoke'));
+  assert.ok(productSmokeIssue(result, 'missing-product-path-hop'));
 });
 
 test('CU-NEXT live acceptance matrix accepts complete task-level semantic evidence markers', () => {
@@ -185,6 +592,281 @@ test('CU-NEXT live acceptance rejects fixture, dry-run, shared input, shell dire
   assert.ok(hasIssue(result, 'forbidden-shared-input'));
   assert.ok(hasIssue(result, 'forbidden-shell-direct-artifact-write'));
   assert.ok(hasIssue(result, 'forbidden-shortcut-substitute'));
+});
+
+test('CU-NEXT live acceptance allows DOM/AX/Playwright only as refs-first observation hints', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07', {
+    evidenceClaims: [
+      ...commonEvidenceClaims('CU-NEXT-07'),
+      {
+        id: 'dom-visible-hint',
+        kind: 'dom',
+        observationUse: 'observe-before-mutate-hint',
+        refs: [ref('CU-NEXT-07', 'browser-visible-dom.json')],
+        executorLeaseSubstitute: false,
+        guiActionSubstitute: false,
+        artifactCausalitySubstitute: false,
+        completionEvidenceEligible: false,
+      },
+      {
+        id: 'ax-grounding-hint',
+        kind: 'accessibility',
+        use: 'grounding-hint',
+        refs: [ref('CU-NEXT-07', 'browser-accessibility.json')],
+        completionEvidence: false,
+      },
+      {
+        id: 'playwright-evaluate-hint',
+        kind: 'playwright',
+        evidenceUse: 'grounding-hint',
+        refs: [ref('CU-NEXT-07', 'browser-playwright-evaluate.json')],
+        completionEvidenceSubstitute: false,
+      },
+    ],
+  });
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, true, result.issues.map((issue) => issue.reason).join('\n'));
+  assert.equal(result.checks.disqualifiersClean, true);
+});
+
+test('CU-NEXT live acceptance rejects DOM/AX claim-only hints without structured BrowserRuntime observation', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07', {
+    evidenceClaims: [
+      ...commonEvidenceClaims('CU-NEXT-07'),
+      {
+        id: 'dom-visible-claim-only',
+        kind: 'dom',
+        observationUse: 'observe-before-mutate-hint',
+        refs: [ref('CU-NEXT-07', 'browser-visible-dom.json')],
+        executorLeaseSubstitute: false,
+        guiActionSubstitute: false,
+        artifactCausalitySubstitute: false,
+        completionEvidenceEligible: false,
+      },
+    ],
+  });
+  delete evidence.browserRuntimeDomAxObservation;
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-browser-runtime-observation-hint'));
+});
+
+test('CU-NEXT live acceptance rejects DOM/AX claims outside structured BrowserRuntime observation refs', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07', {
+    evidenceClaims: [
+      ...commonEvidenceClaims('CU-NEXT-07'),
+      {
+        id: 'dom-visible-other-run',
+        kind: 'dom',
+        observationUse: 'observe-before-mutate-hint',
+        refs: [ref('CU-NEXT-07', 'unbound-dom-claim.json')],
+        executorLeaseSubstitute: false,
+        guiActionSubstitute: false,
+        artifactCausalitySubstitute: false,
+        completionEvidenceEligible: false,
+      },
+    ],
+  });
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'invalid-browser-runtime-observation-hint'));
+});
+
+test('CU-NEXT live acceptance rejects floating BrowserRuntime observations not bound to action refs', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  const observeBeforeMutate = evidence.observeBeforeMutate as Record<string, unknown>;
+  delete observeBeforeMutate.browserRuntimeObservationRef;
+  const action = (evidence.mutatingActions as Array<Record<string, unknown>>)[0];
+  action.groundingRefs = [ref('CU-NEXT-07', 'grounding-diagnostics.json')];
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'invalid-browser-runtime-observation-hint'));
+});
+
+test('CU-NEXT live acceptance requires multi-screen actor cursor provenance and replay refs', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  delete evidence.virtualDisplayGroup;
+  delete evidence.actorCursorProvenance;
+  delete evidence.cursorEvents;
+  delete evidence.mutatingActions;
+  delete evidence.replayBundle;
+  evidence.executorLease = {
+    status: 'present',
+    ref: ref('CU-NEXT-07', 'executor-lease.json'),
+  };
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-screen-identity'));
+  assert.ok(hasIssue(result, 'missing-actor-cursor-provenance'));
+  assert.ok(hasIssue(result, 'missing-executor-lease-scope'));
+  assert.ok(hasIssue(result, 'missing-action-causality'));
+});
+
+test('CU-NEXT live acceptance requires read-only actor cursor events', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  evidence.cursorEvents = [
+    {
+      kind: 'move',
+      actorId: `${runId('CU-NEXT-07')}-actor-agent`,
+      cursorId: `${runId('CU-NEXT-07')}-cursor-agent`,
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+      cursorEventLogRef: ref('CU-NEXT-07', 'actor-cursors.jsonl'),
+      readOnlyCursorEvent: false,
+      mutatingGuiAction: true,
+    },
+  ];
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'missing-actor-cursor-provenance'));
+});
+
+test('CU-NEXT live acceptance requires non-placeholder replay frames for every screen', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  const replay = evidence.replayBundle as Record<string, unknown>;
+  replay.frames = [
+    {
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+      screenshotRef: ref('CU-NEXT-07', 'before.png'),
+      cursorOverlayRefs: [ref('CU-NEXT-07', 'cursor-overlay-before.json')],
+    },
+    {
+      screenId: `${runId('CU-NEXT-07')}-screen-preview`,
+      placeholder: true,
+      cursorOverlayRefs: [ref('CU-NEXT-07', 'cursor-overlay-preview-before.json')],
+    },
+  ];
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'missing-action-causality'));
+  assert.ok(hasIssue(result, 'forbidden-placeholder-viewer'));
+});
+
+test('CU-NEXT live acceptance requires strict BrowserRuntime DOM/AX hint boundary flags', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  const observation = evidence.browserRuntimeDomAxObservation as Record<string, unknown>;
+  delete observation.refsFirst;
+  delete observation.currentBundleOnly;
+  delete observation.trust;
+  delete observation.executorLeaseSubstitute;
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'invalid-browser-runtime-observation-hint'));
+});
+
+test('CU-NEXT live acceptance fail-closes without user control, observe-before-mutate, sidecar isolation, and product path refs', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  delete evidence.userControlPlane;
+  delete evidence.observeBeforeMutate;
+  delete evidence.platformSidecarIsolationReport;
+  evidence.productPathClassification = {
+    tier: 'package-diagnostic',
+    hops: ['package-local'],
+    diagnosticOnly: true,
+    packageDiagnosticOnly: true,
+  };
+  for (const action of evidence.mutatingActions as Array<Record<string, unknown>>) {
+    delete action.currentAppStateRef;
+    delete action.currentScreenshotRef;
+    delete action.stateSnapshotRef;
+    delete action.freshnessCheckRef;
+  }
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-user-control-ref'));
+  assert.ok(hasIssue(result, 'missing-observe-before-mutate-ref'));
+  assert.ok(hasIssue(result, 'missing-platform-sidecar-isolation'));
+  assert.ok(hasIssue(result, 'invalid-product-path-classification'));
+});
+
+test('CU-NEXT live acceptance rejects global coordinates placeholder-only viewer stale and cross-bundle evidence', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  evidence.staleEvidenceUsed = true;
+  const displayGroup = evidence.virtualDisplayGroup as Record<string, unknown>;
+  displayGroup.screens = [
+    {
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+      ref: '../previous-round/virtual-screen-main.json',
+    },
+  ];
+  const action = ((evidence.mutatingActions as Array<Record<string, unknown>>)[0]);
+  action.target = { coordinateSpace: 'global', x: 10, y: 20 };
+  evidence.replayBundle = {
+    frames: [{ screenId: `${runId('CU-NEXT-07')}-screen-main`, placeholder: true }],
+    cursorOverlayRefs: [ref('CU-NEXT-07', 'cursor-overlay.json')],
+    leaseOwnerRefs: [ref('CU-NEXT-07', 'executor-lease.json')],
+    beforeEvidenceRefs: [ref('CU-NEXT-07', 'before.png')],
+    afterEvidenceRefs: [ref('CU-NEXT-07', 'after.png')],
+  };
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.disqualifiersClean, false);
+  assert.ok(hasIssue(result, 'forbidden-bare-global-coordinates'));
+  assert.ok(hasIssue(result, 'forbidden-placeholder-viewer'));
+  assert.ok(hasIssue(result, 'forbidden-stale-evidence'));
+  assert.ok(hasIssue(result, 'forbidden-cross-bundle-ref'));
 });
 
 test('CU-NEXT live acceptance rejects synthetic fixture origin strings', () => {
@@ -510,6 +1192,119 @@ function liveAcceptanceEvidence(
       apps: ['Browser', 'LibreOffice Writer', 'Finder'],
       windowSwitchTraceRefs: [ref(taskId, 'window-switch-trace.json')],
     },
+    productPathClassification: {
+      schemaVersion: 'sciforge.computer-use.product-path-classification.v1',
+      tier: 'product-smoke',
+      entrypoint: 'codex-app-server/native-plugin',
+      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
+      appServerRunRef: ref(taskId, 'codex-app-server-run.json'),
+      nativePluginInvocationRef: ref(taskId, 'native-plugin-invocation.json'),
+      sciforgeComputerUseRunTaskRef: ref(taskId, 'tui-host-run-task-chain.json'),
+      platformSidecarIsolationReportRef: ref(taskId, 'platform-sidecar-isolation-report.json'),
+      currentBundleRef: `.sciforge/vision-runs/${runId(taskId)}`,
+      currentBundleOnly: true,
+      diagnosticOnly: false,
+      packageDiagnosticOnly: false,
+    },
+    userControlPlane: {
+      schemaVersion: 'sciforge.computer-use.user-control-plane.v1',
+      status: 'present',
+      sessionPermissionRef: ref(taskId, 'session-permission.json'),
+      allowedAppRefs: [ref(taskId, 'allowed-apps.json')],
+      allowedWindowRefs: [ref(taskId, 'allowed-windows.json')],
+      forbiddenAppRefs: [ref(taskId, 'forbidden-apps.json')],
+      inputModalityPolicyRef: ref(taskId, 'input-modality-policy.json'),
+      riskPreviewRef: ref(taskId, 'risk-preview.json'),
+      dataVisibilityRef: ref(taskId, 'data-visibility.json'),
+      stopRef: ref(taskId, 'stop-cancel-lease.json'),
+      cancelLeaseRef: ref(taskId, 'stop-cancel-lease.json'),
+      approvalMode: taskId === 'CU-NEXT-03' || taskId === 'CU-NEXT-06'
+        ? 'required-before-high-risk-action'
+        : 'bounded-low-risk',
+    },
+    platformSidecarIsolationReport: {
+      schemaVersion: 'sciforge.computer-use.platform-sidecar-isolation-report.v1',
+      status: 'passed',
+      backendKind: 'native-multi-screen-sidecar',
+      sidecarKind: 'native-multi-screen-sidecar',
+      reportRef: ref(taskId, 'platform-sidecar-isolation-report.json'),
+      captureRef: ref(taskId, 'sidecar-capture.json'),
+      stateRef: ref(taskId, 'sidecar-state.json'),
+      preflightRef: ref(taskId, 'sidecar-preflight.json'),
+      executorAdapterRef: ref(taskId, 'sidecar-executor-adapter.json'),
+      isolationFlags: {
+        sharedSystemInputUsed: false,
+        systemPointerMoved: false,
+        systemKeyboardEventsSent: false,
+        sidecarDoesPlanning: false,
+        sidecarDoesCompletion: false,
+      },
+    },
+    virtualDisplayGroup: {
+      displayGroupId: `${runId(taskId)}-display-group`,
+      ref: ref(taskId, 'virtual-display-group.json'),
+      screens: [
+        {
+          screenId: `${runId(taskId)}-screen-main`,
+          ref: ref(taskId, 'virtual-screen-main.json'),
+          geometry: { x: 0, y: 0, width: 1280, height: 720, scale: 1 },
+        },
+        {
+          screenId: `${runId(taskId)}-screen-preview`,
+          ref: ref(taskId, 'virtual-screen-preview.json'),
+          geometry: { x: 1280, y: 0, width: 1024, height: 720, scale: 1 },
+        },
+      ],
+    },
+    actorCursorProvenance: [
+      {
+        actorId: `${runId(taskId)}-actor-agent`,
+        cursorId: `${runId(taskId)}-cursor-agent`,
+        screenId: `${runId(taskId)}-screen-main`,
+        actorCursorLogRef: ref(taskId, 'actor-cursors.jsonl'),
+      },
+      {
+        actorId: `${runId(taskId)}-actor-writer`,
+        cursorId: `${runId(taskId)}-cursor-writer`,
+        screenId: `${runId(taskId)}-screen-main`,
+        actorCursorLogRef: ref(taskId, 'actor-cursors.jsonl'),
+      },
+      {
+        actorId: `${runId(taskId)}-actor-preview`,
+        cursorId: `${runId(taskId)}-cursor-preview`,
+        screenId: `${runId(taskId)}-screen-preview`,
+        actorCursorLogRef: ref(taskId, 'actor-cursors.jsonl'),
+      },
+    ],
+    cursorEvents: [
+      {
+        kind: 'move',
+        actorId: `${runId(taskId)}-actor-agent`,
+        cursorId: `${runId(taskId)}-cursor-agent`,
+        screenId: `${runId(taskId)}-screen-main`,
+        cursorEventLogRef: ref(taskId, 'actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+      {
+        kind: 'point',
+        actorId: `${runId(taskId)}-actor-writer`,
+        cursorId: `${runId(taskId)}-cursor-writer`,
+        screenId: `${runId(taskId)}-screen-main`,
+        cursorEventLogRef: ref(taskId, 'actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+      {
+        kind: 'annotate',
+        actorId: `${runId(taskId)}-actor-preview`,
+        cursorId: `${runId(taskId)}-cursor-preview`,
+        screenId: `${runId(taskId)}-screen-preview`,
+        cursorEventLogRef: ref(taskId, 'actor-cursors.jsonl'),
+        readOnlyCursorEvent: true,
+        mutatingGuiAction: false,
+      },
+    ],
     antiShortcutGuard: {
       status: 'passed',
       rejectedClaims: [],
@@ -552,6 +1347,165 @@ function liveAcceptanceEvidence(
       status: 'present',
       ref: ref(taskId, 'executor-lease.json'),
       owner: 'sciforge-independent-input-adapter',
+      screenId: `${runId(taskId)}-screen-main`,
+      windowId: `${runId(taskId)}-window-main`,
+      actorId: `${runId(taskId)}-actor-agent`,
+      cursorId: `${runId(taskId)}-cursor-agent`,
+      leaseScope: {
+        kind: 'window-local',
+        screenId: `${runId(taskId)}-screen-main`,
+        windowId: `${runId(taskId)}-window-main`,
+      },
+    },
+    observeBeforeMutate: {
+      schemaVersion: 'sciforge.computer-use.observe-before-mutate.v1',
+      status: 'passed',
+      currentAppStateRef: ref(taskId, 'current-app-state.json'),
+      currentScreenshotRef: ref(taskId, 'before.png'),
+      stateSnapshotRef: ref(taskId, 'state-snapshot.json'),
+      freshnessCheckRef: ref(taskId, 'freshness-check.json'),
+      browserRuntimeObservationRef: ref(taskId, 'browser-dom-ax-observation.json'),
+      browserRuntimeObservationUse: 'observe-before-mutate-hint',
+    },
+    browserRuntimeDomAxObservation: {
+      schemaVersion: 'sciforge.computer-use.browser-runtime-dom-ax-observation.v1',
+      trust: 'untrusted-page-observation',
+      refsFirst: true,
+      currentBundleOnly: true,
+      screenId: `${runId(taskId)}-screen-main`,
+      windowId: `${runId(taskId)}-window-main`,
+      observationRef: ref(taskId, 'browser-dom-ax-observation.json'),
+      visibleDomRef: ref(taskId, 'browser-visible-dom.json'),
+      accessibilitySnapshotRef: ref(taskId, 'browser-accessibility.json'),
+      playwrightEvaluateRef: ref(taskId, 'browser-playwright-evaluate.json'),
+      pageQueryRef: ref(taskId, 'browser-page-query.json'),
+      stableRefs: [ref(taskId, 'browser-stable-refs.json')],
+      groundingHintRefs: [ref(taskId, 'browser-grounding-hints.json')],
+      observationUse: 'observe-before-mutate-hint',
+      executorLeaseSubstitute: false,
+      guiActionSubstitute: false,
+      artifactCausalitySubstitute: false,
+      completionEvidenceEligible: false,
+      userLevelCompletionSubstitute: false,
+    },
+    actionProposals: [
+      {
+        proposalId: `${runId(taskId)}-proposal-main-agent`,
+        proposalRef: ref(taskId, 'proposal-main-agent.json'),
+        actorId: `${runId(taskId)}-actor-agent`,
+        cursorId: `${runId(taskId)}-cursor-agent`,
+        leaseScope: {
+          kind: 'window-local',
+          screenId: `${runId(taskId)}-screen-main`,
+          windowId: `${runId(taskId)}-window-main`,
+        },
+      },
+      {
+        proposalId: `${runId(taskId)}-proposal-main-writer`,
+        proposalRef: ref(taskId, 'proposal-main-writer.json'),
+        actorId: `${runId(taskId)}-actor-writer`,
+        cursorId: `${runId(taskId)}-cursor-writer`,
+        leaseScope: {
+          kind: 'window-local',
+          screenId: `${runId(taskId)}-screen-main`,
+          windowId: `${runId(taskId)}-window-writer`,
+        },
+        decisionStatus: 'queued',
+      },
+      {
+        proposalId: `${runId(taskId)}-proposal-preview-refresh`,
+        proposalRef: ref(taskId, 'proposal-preview-refresh.json'),
+        actorId: `${runId(taskId)}-actor-preview`,
+        cursorId: `${runId(taskId)}-cursor-preview`,
+        leaseScope: {
+          kind: 'screen-global',
+          screenId: `${runId(taskId)}-screen-preview`,
+        },
+      },
+    ],
+    executorQueue: [
+      {
+        queueId: `${runId(taskId)}-window-local-queue`,
+        screenId: `${runId(taskId)}-screen-main`,
+        queueKind: 'window-local',
+        schedulerPolicy: 'native-screen-serial',
+        leaseOwnerRefs: [ref(taskId, 'executor-lease.json')],
+      },
+      {
+        queueId: `${runId(taskId)}-screen-global-queue`,
+        screenId: `${runId(taskId)}-screen-preview`,
+        queueKind: 'screen-global',
+        schedulerPolicy: 'native-screen-serial',
+        leaseOwnerRefs: [ref(taskId, 'screen-global-lease.json')],
+      },
+    ],
+    mutatingActions: [
+      {
+        actionKind: 'click',
+        screenId: `${runId(taskId)}-screen-main`,
+        windowId: `${runId(taskId)}-window-main`,
+        actorId: `${runId(taskId)}-actor-agent`,
+        cursorId: `${runId(taskId)}-cursor-agent`,
+        leaseId: `${runId(taskId)}-lease-window-main`,
+        leaseScope: {
+          kind: 'window-local',
+          screenId: `${runId(taskId)}-screen-main`,
+          windowId: `${runId(taskId)}-window-main`,
+        },
+        target: {
+          scope: 'window',
+          screenId: `${runId(taskId)}-screen-main`,
+          windowId: `${runId(taskId)}-window-main`,
+          bounds: { x: 10, y: 12, width: 80, height: 28 },
+        },
+        beforeEvidenceRefs: [ref(taskId, 'before.png')],
+        afterEvidenceRefs: [ref(taskId, 'after.png')],
+        currentAppStateRef: ref(taskId, 'current-app-state.json'),
+        currentScreenshotRef: ref(taskId, 'before.png'),
+        stateSnapshotRef: ref(taskId, 'state-snapshot.json'),
+        freshnessCheckRef: ref(taskId, 'freshness-check.json'),
+        groundingRefs: [ref(taskId, 'grounding-diagnostics.json'), ref(taskId, 'browser-grounding-hints.json')],
+        executorEventRef: ref(taskId, 'executor-event.json'),
+        verificationRefs: [ref(taskId, 'verifier-verdict.json')],
+      },
+    ],
+    replayBundle: {
+      ref: ref(taskId, 'replay-bundle.json'),
+      frames: [
+        {
+          screenId: `${runId(taskId)}-screen-main`,
+          screenshotRef: ref(taskId, 'before.png'),
+          cursorOverlayRefs: [ref(taskId, 'cursor-overlay-before.json')],
+          sourceEvidenceRefs: [ref(taskId, 'before.png')],
+        },
+        {
+          screenId: `${runId(taskId)}-screen-preview`,
+          screenshotRef: ref(taskId, 'preview-before.png'),
+          cursorOverlayRefs: [ref(taskId, 'cursor-overlay-preview-before.json')],
+          sourceEvidenceRefs: [ref(taskId, 'preview-before.png')],
+        },
+        {
+          screenId: `${runId(taskId)}-screen-main`,
+          screenshotRef: ref(taskId, 'after.png'),
+          cursorOverlayRefs: [ref(taskId, 'cursor-overlay-after.json')],
+          sourceEvidenceRefs: [ref(taskId, 'after.png')],
+        },
+        {
+          screenId: `${runId(taskId)}-screen-preview`,
+          screenshotRef: ref(taskId, 'preview-after.png'),
+          cursorOverlayRefs: [ref(taskId, 'cursor-overlay-preview-after.json')],
+          sourceEvidenceRefs: [ref(taskId, 'preview-after.png')],
+        },
+      ],
+      cursorOverlayRefs: [
+        ref(taskId, 'cursor-overlay-before.json'),
+        ref(taskId, 'cursor-overlay-preview-before.json'),
+        ref(taskId, 'cursor-overlay-after.json'),
+        ref(taskId, 'cursor-overlay-preview-after.json'),
+      ],
+      leaseOwnerRefs: [ref(taskId, 'executor-lease.json'), ref(taskId, 'screen-global-lease.json')],
+      beforeEvidenceRefs: [ref(taskId, 'before.png'), ref(taskId, 'preview-before.png')],
+      afterEvidenceRefs: [ref(taskId, 'after.png'), ref(taskId, 'preview-after.png')],
     },
     finalArtifactRef,
     finalVisibleScreenshotRef: ref(taskId, 'final-visible.png'),
@@ -986,6 +1940,13 @@ function sessionRef(taskId: CuNextTaskId): string {
 
 function hasIssue(
   result: ReturnType<typeof validateCuNextLiveAcceptanceTaskEvidence>,
+  id: string,
+): boolean {
+  return result.issues.some((issue) => issue.id === id);
+}
+
+function productSmokeIssue(
+  result: ReturnType<typeof validateCuNextProductSmokeMatrix>,
   id: string,
 ): boolean {
   return result.issues.some((issue) => issue.id === id);
