@@ -6,13 +6,16 @@ export type SidebarCursorAgentThreadState = 'active' | 'draft' | 'archived' | 'd
 export type SidebarCursorAgentSortMode = 'updatedAt' | 'createdAt' | 'manual';
 export type SidebarCursorAgentStatusState = 'ready' | 'syncing' | 'warning' | 'unavailable' | 'unknown';
 export type SidebarCursorAgentActionEffect = 'agent-host-command' | 'local-presentation';
-export type SidebarCursorAgentPresentationMutation = 'selection' | 'sort' | 'context';
+export type SidebarCursorAgentPresentationMutation = 'selection' | 'sort' | 'context' | 'navigation';
 
 export type SidebarCursorAgentActionIntent =
   | 'new-project'
   | 'open-workspace'
   | 'new-chat'
   | 'search'
+  | 'open-automations'
+  | 'open-customize'
+  | 'open-repositories'
   | 'archive-project'
   | 'archive-thread'
   | 'discard-thread'
@@ -225,6 +228,9 @@ export function buildSidebarCursorAgentProjection(
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'updatedAt'),
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'createdAt'),
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'manual'),
+    buildOpenRepositoriesAction(SIDEBAR_CURSOR_AGENT_REGION_REF),
+    buildOpenAutomationsAction(SIDEBAR_CURSOR_AGENT_REGION_REF),
+    buildOpenCustomizeAction(SIDEBAR_CURSOR_AGENT_REGION_REF),
   ];
 
   return {
@@ -627,6 +633,36 @@ function buildOpenContextAction(projectRef: string): SidebarCursorAgentAction {
     scope: 'project',
     targetRef: projectRef,
     presentationMutation: 'context',
+  });
+}
+
+function buildOpenRepositoriesAction(sidebarRef: string): SidebarCursorAgentAction {
+  return localPresentationAction({
+    intent: 'open-repositories',
+    label: 'Open Repositories',
+    scope: 'sidebar',
+    targetRef: sidebarRef,
+    presentationMutation: 'navigation',
+  });
+}
+
+function buildOpenAutomationsAction(sidebarRef: string): SidebarCursorAgentAction {
+  return localPresentationAction({
+    intent: 'open-automations',
+    label: 'Open Automations',
+    scope: 'sidebar',
+    targetRef: sidebarRef,
+    presentationMutation: 'navigation',
+  });
+}
+
+function buildOpenCustomizeAction(sidebarRef: string): SidebarCursorAgentAction {
+  return localPresentationAction({
+    intent: 'open-customize',
+    label: 'Open Customize',
+    scope: 'sidebar',
+    targetRef: sidebarRef,
+    presentationMutation: 'navigation',
   });
 }
 

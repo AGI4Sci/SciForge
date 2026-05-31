@@ -134,11 +134,14 @@ export interface SidebarSearchMatch {
   label: string;
   detail: string;
   page: PageId;
+  action?: SidebarSearchAction;
   scenarioId?: ScenarioInstanceId;
   projectId?: string;
   sessionId?: string;
   threadState?: SidebarCursorAgentThreadState;
 }
+
+export type SidebarSearchAction = 'open-automations' | 'open-customize' | 'open-repositories';
 
 const SIDEBAR_PROJECT_THREAD_LIMIT = 6;
 const SIDEBAR_PROJECT_THREAD_PAGE_SIZE = 8;
@@ -517,6 +520,8 @@ export function buildSidebarSearchMatches(
   const matches: SidebarSearchMatch[] = [];
   const locale = options.locale;
 
+  matches.push(...sidebarActionSearchMatches(needle, locale));
+
   for (const item of navItems) {
     const label = sidebarNavItemLabel(item.id, item.label, locale);
     if (containsNeedle(`${label} ${item.label} ${item.id}`, needle)) {
@@ -605,6 +610,49 @@ export function buildSidebarSearchMatches(
   }
 
   return uniqueSidebarMatches(matches).slice(0, 8);
+}
+
+function sidebarActionSearchMatches(needle: string, locale?: SupportedLocale): SidebarSearchMatch[] {
+  return sidebarSearchActions(locale).filter((item) => containsNeedle(item.haystack, needle)).map((item) => ({
+    id: `sidebar-action:${item.action}`,
+    label: item.label,
+    detail: item.detail,
+    page: item.page,
+    action: item.action,
+  }));
+}
+
+function sidebarSearchActions(locale?: SupportedLocale): Array<{
+  action: SidebarSearchAction;
+  label: string;
+  detail: string;
+  page: PageId;
+  haystack: string;
+}> {
+  const automationsLabel = shellText(locale, { 'zh-CN': '自动化', 'en-US': 'Automations' });
+  const customizeLabel = shellText(locale, { 'zh-CN': '自定义', 'en-US': 'Customize' });
+  const repositoriesLabel = shellText(locale, { 'zh-CN': '仓库', 'en-US': 'Repositories' });
+  const actionDetail = shellText(locale, { 'zh-CN': '侧边栏动作', 'en-US': 'Sidebar action' });
+  const sectionDetail = shellText(locale, { 'zh-CN': '侧边栏区块', 'en-US': 'Sidebar section' });
+  return [{
+    action: 'open-automations',
+    label: automationsLabel,
+    detail: actionDetail,
+    page: 'components',
+    haystack: `${automationsLabel} Automations automation scheduled reminders monitors follow ups 自动化 提醒 监控 定时任务`,
+  }, {
+    action: 'open-customize',
+    label: customizeLabel,
+    detail: actionDetail,
+    page: 'components',
+    haystack: `${customizeLabel} Customize custom preferences appearance sidebar 自定义 偏好 外观 侧边栏`,
+  }, {
+    action: 'open-repositories',
+    label: repositoriesLabel,
+    detail: sectionDetail,
+    page: 'workbench',
+    haystack: `${repositoriesLabel} Repositories repository repos projects workspaces 仓库 项目 工作区`,
+  }];
 }
 
 function compactSidebarLine(value: string | undefined, maxLength: number) {
@@ -1884,6 +1932,22 @@ export function Sidebar({
   }
 
   function openSidebarSearchMatch(match: SidebarSearchMatch) {
+    if (match.action === 'open-automations') {
+      openSidebarAutomations();
+      return;
+    }
+    if (match.action === 'open-customize') {
+      openSidebarCustomize();
+      return;
+    }
+    if (match.action === 'open-repositories') {
+      setSidebarProjectMenu(null);
+      setCollapsed(false);
+      setAllProjectThreadsCollapsed(false);
+      setPage('workbench');
+      setWorkspaceNotice(t({ 'zh-CN': '仓库列表已就绪。', 'en-US': 'Repositories are ready.' }));
+      return;
+    }
     if (match.sessionId) {
       const threadTarget = findSidebarThreadSearchTarget(sidebarProjectThreadGroups, match);
       if (threadTarget) {

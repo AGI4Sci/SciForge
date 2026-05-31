@@ -114,6 +114,8 @@ export interface CuNextProductSmokeCaseEvidence {
       screenCount?: number;
       actorCursorCount?: number;
       cursorEventTypes?: string[];
+      windowLocalQueue?: boolean;
+      screenGlobalQueue?: boolean;
       nonPlaceholderReplayScreenCount?: number;
       sidecarBindingKind?: string;
     };
@@ -672,6 +674,8 @@ function validateNativeMultiScreenSummary(
     || numberValue(validationProjection.errorCount) !== 0
     || validationProjection.realNativeSidecarExecuted !== true
     || validationProjection.completionEligible !== true
+    || validationProjection.windowLocalQueue !== true
+    || validationProjection.screenGlobalQueue !== true
   ) {
     issues.push({
       id: 'invalid-native-multi-screen-validation',
@@ -698,12 +702,22 @@ function validateNativeMultiScreenSummary(
       });
     }
   }
+  for (const field of ['windowLocalQueue', 'screenGlobalQueue'] as const) {
+    if (validationProjection[field] !== true || validationProjection[field] !== summary[field]) {
+      issues.push({
+        id: 'native-multi-screen-validation-summary-mismatch',
+        path: `${path}.nativeMultiScreenSummary.validation.${field}`,
+        reason: `Native multi-screen validation ${field} must match summary and prove the product queue requirement.`,
+      });
+    }
+  }
   if (validationOptions.requireValidationRefProof && validationRefRecord) {
     issues.push(...validateNativeMultiScreenValidationRefRecord(
       validationRefRecord,
       validationProjection,
       `${path}.nativeMultiScreenSummary.validationRef`,
       validationOptions.currentRunBundleRef,
+      refRecords,
     ));
   }
   return issues;
@@ -714,6 +728,7 @@ function validateNativeMultiScreenValidationRefRecord(
   validationProjection: Record<string, unknown>,
   path: string,
   currentRunBundleRef: string | undefined,
+  refRecords: Record<string, unknown> | undefined,
 ): CuNextProductSmokeMatrixIssue[] {
   const issues: CuNextProductSmokeMatrixIssue[] = [];
   const currentBundle = asRecord(value.currentBundle);
@@ -791,17 +806,33 @@ function validateNativeMultiScreenValidationRefRecord(
     }
   }
 
-  const currentBundleRefs = new Set(stringArray(currentBundle?.refs));
-  if (currentBundleRefs.size > 0) {
-    for (const namedRef of namedRefs.filter((item) => !item.path.endsWith('.currentBundleRef'))) {
-      if (!currentBundleRefs.has(namedRef.ref)) {
-        issues.push({
-          id: 'invalid-native-multi-screen-validation-ref-proof',
-          path: `${path}.currentBundle.refs`,
-          reason: `Native multi-screen currentBundle refs must include ${namedRef.ref}.`,
-        });
-      }
-    }
+  const currentBundleRef = stringValue(value.currentBundleRef);
+  const currentBundleRefRecord = currentBundleRef
+    ? requireLoadedRecord(issues, refRecords, currentBundleRef, `${path}.currentBundleRef`, 'currentBundleRef')
+    : undefined;
+  const sidecarBindingRefRecord = stringValue(value.sidecarBindingRef)
+    ? requireLoadedRecord(issues, refRecords, stringValue(value.sidecarBindingRef), `${path}.sidecarBindingRef`, 'sidecar binding ref')
+    : undefined;
+  const sidecarCapabilitiesRefRecord = stringValue(value.sidecarCapabilitiesRef)
+    ? requireLoadedRecord(issues, refRecords, stringValue(value.sidecarCapabilitiesRef), `${path}.sidecarCapabilitiesRef`, 'sidecar capabilities ref')
+    : undefined;
+  const sidecarDiscoveryRefRecord = stringValue(value.sidecarDiscoveryRef)
+    ? requireLoadedRecord(issues, refRecords, stringValue(value.sidecarDiscoveryRef), `${path}.sidecarDiscoveryRef`, 'sidecar discovery ref')
+    : undefined;
+  const replayRef = stringValue(value.replayRef);
+  const replayRefRecord = replayRef
+    ? requireLoadedRecord(issues, refRecords, replayRef, `${path}.replayRef`, 'replayRef')
+    : undefined;
+  const schedulerLeaseRecords: Array<{ path: string; ref: string; record?: Record<string, unknown> }> = [];
+  for (const [index, ref] of schedulerLeaseRefs.entries()) {
+    schedulerLeaseRecords.push({
+      path: `${path}.schedulerLeaseRefs[${index}]`,
+      ref,
+      record: requireLoadedRecord(issues, refRecords, ref, `${path}.schedulerLeaseRefs[${index}]`, 'scheduler lease ref'),
+    });
+  }
+  for (const [index, ref] of targetRefs.entries()) {
+    requireLoadedRecord(issues, refRecords, ref, `${path}.targetRefs[${index}]`, 'target ref');
   }
 
   const bindingKind = normalizeToken(
@@ -817,21 +848,21 @@ function validateNativeMultiScreenValidationRefRecord(
       path: `${path}.sidecarBindingKind`,
       reason: 'Native multi-screen validationRef record must prove the live sidecar binding kind.',
     });
-  } else if (bindingKind === 'diagnostic-local') {
+  } else if (bindingKind === 'diagnostic-local' || bindingKind === 'custom-dispatcher') {
     issues.push({
       id: 'invalid-native-multi-screen-validation-ref-proof',
       path: `${path}.sidecarBindingKind`,
-      reason: 'Native multi-screen product pass cannot use a diagnostic-local sidecar binding.',
+      reason: 'Native multi-screen product pass requires an external native sidecar command binding.',
     });
-  } else if (!['custom-dispatcher', 'external-command'].includes(bindingKind)) {
+  } else if (bindingKind !== 'external-command') {
     issues.push({
       id: 'invalid-native-multi-screen-validation-ref-proof',
       path: `${path}.sidecarBindingKind`,
-      reason: 'Native multi-screen product pass requires a live custom-dispatcher or external-command sidecar binding.',
+      reason: 'Native multi-screen product pass requires an external native sidecar command binding.',
     });
   }
 
-  const sidecarBinding = asRecord(value.sidecarBinding);
+  const sidecarBinding = sidecarBindingRefRecord ?? asRecord(value.sidecarBinding);
   if (sidecarBinding) {
     if (sidecarBinding.schemaVersion !== NATIVE_MULTI_SCREEN_SIDECAR_BINDING_SCHEMA) {
       issues.push({
@@ -849,8 +880,105 @@ function validateNativeMultiScreenValidationRefRecord(
     }
   }
 
-  issues.push(...validateNativeSidecarCapabilitiesProof(asRecord(value.sidecarCapabilities), path));
-  issues.push(...validateNativeSidecarDiscoveryProof(asRecord(value.sidecarDiscovery), path));
+  const sidecarCapabilities = sidecarCapabilitiesRefRecord ?? asRecord(value.sidecarCapabilities);
+  const sidecarDiscovery = sidecarDiscoveryRefRecord ?? asRecord(value.sidecarDiscovery);
+  issues.push(...validateNativeSidecarCapabilitiesProof(sidecarCapabilities, path));
+  issues.push(...validateNativeSidecarDiscoveryProof(sidecarDiscovery, path));
+  issues.push(...validateNativeSchedulerLeaseProof(schedulerLeaseRecords));
+
+  const currentBundleRefProof = currentBundleRefRecord ?? currentBundle;
+  const currentBundleRefs = new Set(stringArray(currentBundleRefProof?.refs));
+  const frameRefs = replayRefRecord
+    ? validateReplayFrameRefProof(
+      issues,
+      replayRefRecord,
+      `${path}.replayRef`,
+      currentRunBundleRef,
+      refRecords,
+    )
+    : [];
+  const timelineRefs = replayRefRecord
+    ? validateReplayTimelineProof(
+      issues,
+      replayRefRecord,
+      `${path}.replayRef`,
+      currentRunBundleRef,
+    )
+    : [];
+  const refsRequiredInCurrentBundle = [
+    ...namedRefs.filter((item) => !item.path.endsWith('.currentBundleRef')),
+    ...frameRefs,
+    ...timelineRefs,
+  ];
+  if (currentBundleRefProof) {
+    if (currentBundleRefProof.schemaVersion !== 'sciforge.computer-use.current-bundle.v1') {
+      issues.push({
+        id: 'invalid-current-bundle-ref-proof',
+        path: `${path}.currentBundle.schemaVersion`,
+        reason: 'Native multi-screen currentBundleRef must load a current-bundle proof record.',
+      });
+    }
+    if (currentBundleRefs.size === 0) {
+      issues.push({
+        id: 'invalid-current-bundle-ref-proof',
+        path: `${path}.currentBundle.refs`,
+        reason: 'Native multi-screen currentBundleRef must list the refs loaded by product smoke.',
+      });
+    }
+    for (const namedRef of refsRequiredInCurrentBundle) {
+      if (!currentBundleRefs.has(namedRef.ref)) {
+        issues.push({
+          id: 'invalid-current-bundle-ref-proof',
+          path: `${path}.currentBundle.refs`,
+          reason: `Native multi-screen currentBundle refs must include ${namedRef.ref}.`,
+        });
+      }
+    }
+  }
+  for (const frameRef of frameRefs) {
+    if (!validationRefs.has(frameRef.ref)) {
+      issues.push({
+        id: 'invalid-native-multi-screen-validation-ref-proof',
+        path: `${path}.refs`,
+        reason: `Native multi-screen validationRef refs must include frame ref ${frameRef.ref}.`,
+      });
+    }
+  }
+  for (const timelineRef of timelineRefs) {
+    if (!validationRefs.has(timelineRef.ref)) {
+      issues.push({
+        id: 'invalid-native-multi-screen-validation-ref-proof',
+        path: `${path}.refs`,
+        reason: `Native multi-screen validationRef refs must include timeline event ref ${timelineRef.ref}.`,
+      });
+    }
+  }
+
+  const rawInlineIssuePaths = [
+    ...forbiddenRawInlinePayloadPaths(value, path),
+    ...(currentBundleRefRecord ? forbiddenRawInlinePayloadPaths(currentBundleRefRecord, `${path}.currentBundleRef`) : []),
+    ...(sidecarCapabilitiesRefRecord ? forbiddenRawInlinePayloadPaths(sidecarCapabilitiesRefRecord, `${path}.sidecarCapabilitiesRef`) : []),
+    ...(sidecarDiscoveryRefRecord ? forbiddenRawInlinePayloadPaths(sidecarDiscoveryRefRecord, `${path}.sidecarDiscoveryRef`) : []),
+    ...(replayRefRecord ? forbiddenRawInlinePayloadPaths(replayRefRecord, `${path}.replayRef`) : []),
+  ];
+  for (const issuePath of rawInlineIssuePaths) {
+    issues.push({
+      id: 'forbidden-raw-inline-payload',
+      path: issuePath,
+      reason: 'Product smoke Screen pane evidence must be refs-first; raw inline screenshots, provider payloads, base64, and data URLs are forbidden.',
+    });
+  }
+  const browserSubstituteIssuePaths = [
+    ...browserDomAxSubstitutePaths(value, path),
+    ...(replayRefRecord ? browserDomAxSubstitutePaths(replayRefRecord, `${path}.replayRef`) : []),
+  ];
+  for (const issuePath of browserSubstituteIssuePaths) {
+    issues.push({
+      id: 'forbidden-browser-dom-ax-substitute',
+      path: issuePath,
+      reason: 'Browser DOM/AX/Playwright observations may only be grounding hints and cannot substitute for Screen pane replay frames, executor leases, or completion evidence.',
+    });
+  }
 
   const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
     ? currentBundleRoot(currentRunBundleRef)
@@ -873,9 +1001,27 @@ function validateNativeMultiScreenValidationRefRecord(
         });
       }
     }
+    for (const [index, ref] of stringArray(value.refs).entries()) {
+      if (isSafeProductSmokeRef(ref) && !isRefUnderBundleRoot(ref, bundleRoot)) {
+        issues.push({
+          id: 'product-smoke-ref-outside-current-bundle',
+          path: `${path}.refs[${index}]`,
+          reason: `Product smoke validationRef refs entry ${ref} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+        });
+      }
+    }
+    for (const [index, ref] of stringArray(currentBundleRefProof?.refs).entries()) {
+      if (isSafeProductSmokeRef(ref) && !isRefUnderBundleRoot(ref, bundleRoot)) {
+        issues.push({
+          id: 'product-smoke-ref-outside-current-bundle',
+          path: `${path}.currentBundle.refs[${index}]`,
+          reason: `Product smoke currentBundle refs entry ${ref} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+        });
+      }
+    }
   }
 
-  const currentBundleRunId = stringValue(currentBundle?.runId);
+  const currentBundleRunId = stringValue(currentBundleRefProof?.runId);
   if (runId && currentBundleRunId && currentBundleRunId !== runId) {
     issues.push({
       id: 'invalid-native-multi-screen-validation-ref-proof',
@@ -884,6 +1030,294 @@ function validateNativeMultiScreenValidationRefRecord(
     });
   }
 
+  return issues;
+}
+
+function requireLoadedRecord(
+  issues: CuNextProductSmokeMatrixIssue[],
+  refRecords: Record<string, unknown> | undefined,
+  ref: string | undefined,
+  path: string,
+  label: string,
+): Record<string, unknown> | undefined {
+  if (!ref) return undefined;
+  const loaded = refRecords && Object.prototype.hasOwnProperty.call(refRecords, ref)
+    ? refRecords[ref]
+    : undefined;
+  const record = asRecord(loaded);
+  if (!record) {
+    issues.push({
+      id: 'missing-product-smoke-loaded-ref',
+      path,
+      reason: `Product smoke must load ${label} ${ref} from the current bundle; inline or claim-only evidence is not enough.`,
+    });
+  }
+  return record;
+}
+
+function validateReplayFrameRefProof(
+  issues: CuNextProductSmokeMatrixIssue[],
+  replay: Record<string, unknown>,
+  path: string,
+  currentRunBundleRef: string | undefined,
+  refRecords: Record<string, unknown> | undefined,
+): Array<{ path: string; ref: string }> {
+  const frames = records(replay.frames);
+  const frameRefs: Array<{ path: string; ref: string }> = [];
+  const nonPlaceholderScreens = new Set<string>();
+  if (frames.length === 0) {
+    issues.push({
+      id: 'invalid-product-smoke-replay-proof',
+      path: `${path}.frames`,
+      reason: 'Product smoke replayRef must load replay frames for the Screen pane.',
+    });
+  }
+  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
+    ? currentBundleRoot(currentRunBundleRef)
+    : undefined;
+  for (const [index, frame] of frames.entries()) {
+    const framePath = `${path}.frames[${index}]`;
+    if (frame.placeholder === true || frame.placeholderOnly === true) {
+      issues.push({
+        id: 'forbidden-placeholder-viewer',
+        path: framePath,
+        reason: 'Product smoke Screen pane replay must load real non-placeholder frame refs.',
+      });
+      continue;
+    }
+    const frameRef = stringValue(frame.frameRef)
+      ?? stringValue(frame.screenshotRef)
+      ?? stringValue(frame.imageRef);
+    if (!frameRef) {
+      issues.push({
+        id: 'missing-native-multi-screen-validation-ref-proof',
+        path: framePath,
+        reason: 'Product smoke replay frame must carry a frameRef, screenshotRef, or imageRef.',
+      });
+      continue;
+    }
+    requireRef(issues, `${framePath}.frameRef`, frameRef);
+    frameRefs.push({ path: `${framePath}.frameRef`, ref: frameRef });
+    if (bundleRoot && isSafeProductSmokeRef(frameRef) && !isRefUnderBundleRoot(frameRef, bundleRoot)) {
+      issues.push({
+        id: 'product-smoke-ref-outside-current-bundle',
+        path: `${framePath}.frameRef`,
+        reason: `Product smoke replay frame ref ${frameRef} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+      });
+    }
+    const frameRecord = refRecords && Object.prototype.hasOwnProperty.call(refRecords, frameRef)
+      ? asRecord(refRecords[frameRef])
+      : undefined;
+    if (!frameRecord) {
+      issues.push({
+        id: 'missing-product-smoke-loaded-ref',
+        path: `${framePath}.frameRef`,
+        reason: `Product smoke must load replay frame ref ${frameRef} from the current bundle.`,
+      });
+    } else {
+      const contentType = (stringValue(frameRecord.contentType) ?? stringValue(frameRecord.mimeType) ?? '').trim().toLowerCase();
+      if (!contentType.startsWith('image/png') && !contentType.startsWith('image/jpeg') && !contentType.startsWith('image/webp') && !contentType.startsWith('image/gif')) {
+        issues.push({
+          id: 'invalid-product-smoke-replay-proof',
+          path: `${framePath}.frameRef`,
+          reason: `Product smoke replay frame ref ${frameRef} must load image frame evidence, not JSON capture metadata.`,
+        });
+      }
+    }
+    const screenId = stringValue(frame.screenId);
+    if (screenId) nonPlaceholderScreens.add(screenId);
+  }
+  if (frames.length > 0 && nonPlaceholderScreens.size < 2) {
+    issues.push({
+      id: 'invalid-product-smoke-replay-proof',
+      path: `${path}.frames`,
+      reason: 'Product smoke Screen pane replay must prove non-placeholder frame refs for at least two screens.',
+    });
+  }
+  return frameRefs;
+}
+
+function validateReplayTimelineProof(
+  issues: CuNextProductSmokeMatrixIssue[],
+  replay: Record<string, unknown>,
+  path: string,
+  currentRunBundleRef: string | undefined,
+): Array<{ path: string; ref: string }> {
+  const timeline = asRecord(replay.timeline);
+  const events = [
+    ...records(replay.timelineEvents),
+    ...records(replay.events),
+    ...records(timeline?.events),
+  ];
+  const eventRefs: Array<{ path: string; ref: string }> = [];
+  if (events.length === 0) {
+    issues.push({
+      id: 'invalid-product-smoke-timeline-proof',
+      path: `${path}.timeline`,
+      reason: 'Product smoke replayRef must include replay timeline events for frame, cursor, proposal, lease, and executor causality.',
+    });
+    return eventRefs;
+  }
+
+  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
+    ? currentBundleRoot(currentRunBundleRef)
+    : undefined;
+  const eventMatches = (patterns: RegExp[]): boolean => events.some((event) => {
+    const token = normalizeToken([
+      stringValue(event.kind),
+      stringValue(event.type),
+      stringValue(event.eventKind),
+      stringValue(event.phase),
+      stringValue(event.cursorEventKind),
+      stringValue(event.leaseEventKind),
+      stringValue(event.actionKind),
+    ].filter(Boolean).join('-'));
+    return patterns.some((pattern) => pattern.test(token));
+  });
+
+  const requiredTimelineKinds: Array<[string, RegExp[]]> = [
+    ['before frame', [/before.*frame|frame.*before|before.*capture|capture.*before/]],
+    ['after frame', [/after.*frame|frame.*after|after.*capture|capture.*after/]],
+    ['cursor move', [/cursor.*move|move.*cursor|^move$/]],
+    ['cursor point', [/cursor.*point|point.*cursor|^point$/]],
+    ['cursor annotate', [/cursor.*annotate|annotate.*cursor|^annotate$/]],
+    ['action proposal', [/proposal/]],
+    ['lease acquired', [/lease.*acquir|acquir.*lease/]],
+    ['lease released', [/lease.*releas|releas.*lease/]],
+    ['executor event', [/executor|execute|action/]],
+  ];
+  for (const [label, patterns] of requiredTimelineKinds) {
+    if (!eventMatches(patterns)) {
+      issues.push({
+        id: 'invalid-product-smoke-timeline-proof',
+        path: `${path}.timeline`,
+        reason: `Product smoke replay timeline must include ${label} causality.`,
+      });
+    }
+  }
+
+  for (const [index, event] of events.entries()) {
+    const eventPath = `${path}.timeline.events[${index}]`;
+    const eventRef = stringValue(event.eventRef)
+      ?? stringValue(event.ref)
+      ?? stringValue(event.timelineEventRef);
+    if (!eventRef) {
+      issues.push({
+        id: 'invalid-product-smoke-timeline-proof',
+        path: eventPath,
+        reason: 'Replay timeline events must carry bundle-local eventRef values.',
+      });
+      continue;
+    }
+    requireRef(issues, `${eventPath}.eventRef`, eventRef);
+    eventRefs.push({ path: `${eventPath}.eventRef`, ref: eventRef });
+    if (bundleRoot && isSafeProductSmokeRef(eventRef) && !isRefUnderBundleRoot(eventRef, bundleRoot)) {
+      issues.push({
+        id: 'product-smoke-ref-outside-current-bundle',
+        path: `${eventPath}.eventRef`,
+        reason: `Product smoke replay timeline event ref ${eventRef} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+      });
+    }
+  }
+  return eventRefs;
+}
+
+function validateNativeSchedulerLeaseProof(
+  leases: Array<{ path: string; ref: string; record?: Record<string, unknown> }>,
+): CuNextProductSmokeMatrixIssue[] {
+  const issues: CuNextProductSmokeMatrixIssue[] = [];
+  const leaseKinds = new Set<string>();
+  for (const lease of leases) {
+    const record = lease.record;
+    if (!record) continue;
+    if (record.schemaVersion !== 'sciforge.computer-use.scheduler-lease.v1') {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.schemaVersion`,
+        reason: `Scheduler lease ref ${lease.ref} must load schemaVersion=sciforge.computer-use.scheduler-lease.v1.`,
+      });
+    }
+    const scope = asRecord(record.leaseScope) ?? asRecord(record.scope);
+    const leaseKind = normalizeToken(
+      stringValue(record.scope)
+        ?? stringValue(record.kind)
+        ?? stringValue(record.leaseKind)
+        ?? stringValue(scope?.kind)
+        ?? stringValue(scope?.scope)
+        ?? '',
+    );
+    if (leaseKind) leaseKinds.add(leaseKind);
+    if (leaseKind !== 'window-local' && leaseKind !== 'screen-global') {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.scope`,
+        reason: 'Scheduler lease proof must be window-local or screen-global.',
+      });
+    }
+    const screenId = stringValue(record.screenId) ?? stringValue(scope?.screenId);
+    if (!screenId) {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.screenId`,
+        reason: 'Scheduler lease proof must bind a screenId.',
+      });
+    }
+    if (leaseKind === 'window-local' && !stringValue(record.windowId) && !stringValue(scope?.windowId)) {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.windowId`,
+        reason: 'Window-local scheduler lease proof must bind a windowId.',
+      });
+    }
+    const owner = asRecord(record.owner) ?? asRecord(record.leaseOwner);
+    if (
+      !stringValue(record.actorId)
+      && !stringValue(owner?.actorId)
+    ) {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.actorId`,
+        reason: 'Scheduler lease proof must bind actor owner provenance.',
+      });
+    }
+    if (
+      !stringValue(record.cursorId)
+      && !stringValue(owner?.cursorId)
+    ) {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: `${lease.path}.cursorId`,
+        reason: 'Scheduler lease proof must bind cursor owner provenance.',
+      });
+    }
+    if (
+      record.sharedSystemInputUsed === true
+      || record.systemPointerMoved === true
+      || record.systemKeyboardEventsSent === true
+      || record.guiAccessed === true
+      || record.guiDependencyUsed === true
+    ) {
+      issues.push({
+        id: 'invalid-native-scheduler-lease-proof',
+        path: lease.path,
+        reason: 'Scheduler lease proof must not use GUI execution or shared system input.',
+      });
+    }
+  }
+  if (leases.length > 0 && !leaseKinds.has('window-local')) {
+    issues.push({
+      id: 'invalid-native-scheduler-lease-proof',
+      path: leases[0]?.path,
+      reason: 'Native multi-screen product pass requires a window-local scheduler lease proof.',
+    });
+  }
+  if (leases.length > 0 && !leaseKinds.has('screen-global')) {
+    issues.push({
+      id: 'invalid-native-scheduler-lease-proof',
+      path: leases[0]?.path,
+      reason: 'Native multi-screen product pass requires a screen-global scheduler lease proof.',
+    });
+  }
   return issues;
 }
 
@@ -1021,9 +1455,79 @@ function nativeValidationProjection(value: Record<string, unknown>): Record<stri
     screenCount: value.screenCount ?? summary?.screenCount,
     actorCursorCount: value.actorCursorCount ?? summary?.actorCursorCount,
     cursorEventTypes: value.cursorEventTypes ?? summary?.cursorEventTypes,
+    windowLocalQueue: value.windowLocalQueue ?? summary?.windowLocalQueue,
+    screenGlobalQueue: value.screenGlobalQueue ?? summary?.screenGlobalQueue,
     nonPlaceholderReplayScreenCount: value.nonPlaceholderReplayScreenCount ?? summary?.nonPlaceholderReplayScreenCount,
     sidecarBindingKind: value.sidecarBindingKind ?? summary?.sidecarBindingKind,
   };
+}
+
+const RAW_INLINE_PAYLOAD_KEYS = new Set([
+  'rawInlinePayload',
+  'rawPayload',
+  'providerRawPayload',
+  'rawScreenshot',
+  'screenshotBase64',
+  'base64Screenshot',
+  'imageBase64',
+  'base64Png',
+  'inlinePng',
+  'dataUrl',
+  'domSnapshotRaw',
+  'accessibilityTreeRaw',
+]);
+
+function forbiddenRawInlinePayloadPaths(value: unknown, path: string, depth = 0): string[] {
+  if (depth > 8) return [];
+  if (typeof value === 'string') {
+    return /^data:image\//i.test(value.trim()) ? [path] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => forbiddenRawInlinePayloadPaths(item, `${path}[${index}]`, depth + 1));
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+  const paths: string[] = [];
+  for (const [key, item] of Object.entries(record)) {
+    const itemPath = `${path}.${key}`;
+    if (RAW_INLINE_PAYLOAD_KEYS.has(key)) {
+      paths.push(itemPath);
+      continue;
+    }
+    paths.push(...forbiddenRawInlinePayloadPaths(item, itemPath, depth + 1));
+  }
+  return paths;
+}
+
+function browserDomAxSubstitutePaths(value: unknown, path: string, depth = 0): string[] {
+  if (depth > 8) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => browserDomAxSubstitutePaths(item, `${path}[${index}]`, depth + 1));
+  }
+  const record = asRecord(value);
+  if (!record) return [];
+  const paths: string[] = [];
+  const kind = normalizeToken([
+    stringValue(record.kind),
+    stringValue(record.sourceKind),
+    stringValue(record.providerKind),
+    stringValue(record.observationKind),
+  ].filter(Boolean).join('-'));
+  const browserLike = /browser|dom|accessibility|ax|playwright/.test(kind);
+  const substituteFlag = record.executorLeaseSubstitute === true
+    || record.guiActionSubstitute === true
+    || record.artifactCausalitySubstitute === true
+    || record.completionEvidenceEligible === true
+    || record.userLevelCompletionSubstitute === true
+    || record.screenPaneSubstitute === true
+    || record.virtualScreenFrameSubstitute === true;
+  if (substituteFlag && (browserLike || record.browserRuntimeDomAxObservation === true)) {
+    paths.push(path);
+  }
+  for (const [key, item] of Object.entries(record)) {
+    paths.push(...browserDomAxSubstitutePaths(item, `${path}.${key}`, depth + 1));
+  }
+  return paths;
 }
 
 function matrixStatusFromCases(cases: readonly CuNextProductSmokeCaseEvidence[]): CuNextProductSmokeStatus {

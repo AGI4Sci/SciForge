@@ -24,6 +24,8 @@ from .platform_sidecar import PLATFORM_SIDECAR_RESULT_SCHEMA, dispatch_platform_
 
 NATIVE_MULTI_SCREEN_LIVE_DEMO_RUN_SCHEMA = "sciforge.computer-use.native-multi-screen-live-demo-run.v1"
 NATIVE_MULTI_SCREEN_LIVE_DEMO_VALIDATION_SCHEMA = "sciforge.computer-use.native-multi-screen-live-demo-validation.v1"
+NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA = "sciforge.computer-use.native-multi-screen-evidence-index.v1"
+NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA = "sciforge.computer-use.native-multi-screen-retention-redaction.v1"
 NATIVE_MULTI_SCREEN_SIDECAR_BINDING_SCHEMA = "sciforge.computer-use.native-multi-screen-sidecar-binding.v1"
 NATIVE_SIDECAR_DISPATCH_CALL_SCHEMA = "sciforge.computer-use.native-sidecar-dispatch-call.v1"
 NATIVE_SIDECAR_CAPABILITIES_SCHEMA = "sciforge.computer-use.native-sidecar-capabilities.v1"
@@ -31,6 +33,50 @@ NATIVE_SIDECAR_DISCOVERY_SCHEMA = "sciforge.computer-use.native-sidecar-discover
 
 SidecarDispatcher = Callable[..., dict[str, Any]]
 _FORBIDDEN_BACKEND_MARKERS = ("docker", "novnc", "vnc", "rdp", "container")
+_FORBIDDEN_EVIDENCE_FIELD_NAMES = {
+    "base64",
+    "imagebase64",
+    "inlineimage",
+    "inlineimagepayload",
+    "providerrawpayload",
+    "rawimage",
+    "rawpayload",
+    "rawproviderpayload",
+    "rawscreenshot",
+    "rawscreenshotdata",
+    "rawtrace",
+    "rawtracedump",
+    "screenshotbase64",
+    "screenshotdataurl",
+}
+_SENSITIVE_EVIDENCE_FIELD_NAMES = {
+    "accesstoken",
+    "apikey",
+    "authorization",
+    "credential",
+    "password",
+    "refreshtoken",
+    "secret",
+    "token",
+}
+_WINDOW_TITLE_OWNER_FIELD_NAMES = {
+    "appowner",
+    "applicationowner",
+    "owner",
+    "ownername",
+    "processtitle",
+    "title",
+    "windowowner",
+    "windowtitle",
+}
+_FORBIDDEN_EVIDENCE_VALUE_MARKERS = (
+    "data:image/",
+    ";base64,",
+    "authorization:",
+    "password=",
+    "secret=",
+    "token=",
+)
 
 
 def run_native_multi_screen_live_demo(
@@ -61,7 +107,7 @@ def run_native_multi_screen_live_demo(
         custom_dispatcher=sidecar_dispatcher is not None,
         timeout_seconds=sidecar_timeout_seconds,
     )
-    sidecar_binding_ref = _write_json(root / "sidecar-binding.json", sidecar_binding)
+    sidecar_binding_ref = _bundle_local_ref(_write_json(root / "sidecar-binding.json", sidecar_binding), root)
     sidecar_dir = root / "sidecar"
     calls: list[dict[str, Any]] = []
     sidecar_capabilities, sidecar_capabilities_ref, sidecar_discovery, sidecar_discovery_ref = _collect_sidecar_capabilities_and_discovery(
@@ -77,7 +123,7 @@ def run_native_multi_screen_live_demo(
     )
     screens = _screens_from_discovery(sidecar_discovery, run_id, display_group_id)
     actor_cursors = _actor_cursors_from_discovery(sidecar_discovery, run_id, display_group_id, screens)
-    user_control_refs = _write_user_control_refs(root, run_id, display_group_id, screens, actor_cursors)
+    user_control_refs = _localize_bundle_refs(_write_user_control_refs(root, run_id, display_group_id, screens, actor_cursors), root)
     allowlisted_window_refs = set(_discovery_window_refs_for_screen(actor_cursors, None))
 
     preflight_refs: dict[str, str] = {}
@@ -109,6 +155,7 @@ def run_native_multi_screen_live_demo(
         preflight_refs[screen["screenId"]] = _value_ref(call["result"], "permissionPreflightRef") or call["resultRef"]
 
     capture_refs: dict[str, str] = {}
+    capture_frame_refs: dict[str, str] = {}
     state_refs: dict[str, str] = {}
     for screen in screens:
         capture_payload = {
@@ -122,6 +169,7 @@ def run_native_multi_screen_live_demo(
         capture_call = _sidecar_call(dispatcher, "capture", capture_payload, root, sidecar_dir, platform)
         calls.append(capture_call)
         capture_refs[screen["screenId"]] = _value_ref(capture_call["result"], "captureRef") or _first_ref(capture_call["result"]) or capture_call["resultRef"]
+        capture_frame_refs[screen["screenId"]] = _capture_screenshot_ref(capture_call["result"], capture_refs[screen["screenId"]], root) or capture_refs[screen["screenId"]]
 
         state_payload = {
             "displayGroupId": display_group_id,
@@ -144,7 +192,7 @@ def run_native_multi_screen_live_demo(
     ]
     proposal_refs: dict[str, str] = {}
     for proposal in proposals:
-        proposal_ref = _write_json(root / "proposals" / f"{proposal['proposalId']}.json", proposal)
+        proposal_ref = _bundle_local_ref(_write_json(root / "proposals" / f"{proposal['proposalId']}.json", proposal), root)
         proposal["proposalRef"] = proposal_ref
         proposal_refs[str(proposal["proposalId"])] = proposal_ref
     lease_queues = [
@@ -187,9 +235,9 @@ def run_native_multi_screen_live_demo(
             state_refs[screen_id],
             capture_refs[screen_id],
         )
-        target_ref = _write_json(root / "targets" / f"target-{index + 1}.json", target_record)
+        target_ref = _bundle_local_ref(_write_json(root / "targets" / f"target-{index + 1}.json", target_record), root)
         target_refs.append(target_ref)
-        scheduler_lease_ref = _write_json(root / "leases" / f"lease-{index + 1}.json", {
+        scheduler_lease_ref = _bundle_local_ref(_write_json(root / "leases" / f"lease-{index + 1}.json", {
             "schemaVersion": "sciforge.computer-use.scheduler-lease.v1",
             "displayGroupId": display_group_id,
             "screenId": screen_id,
@@ -201,7 +249,7 @@ def run_native_multi_screen_live_demo(
             "actorId": cursor["actorId"],
             "cursorId": cursor["cursorId"],
             "observedAt": observed,
-        })
+        }), root)
         scheduler_lease_refs.append(scheduler_lease_ref)
         execute_payload = {
             "displayGroupId": display_group_id,
@@ -226,6 +274,7 @@ def run_native_multi_screen_live_demo(
         executor_event_refs.extend(_refs(call["result"]) or [call["resultRef"]])
 
     after_capture_refs: dict[str, str] = {}
+    after_capture_frame_refs: dict[str, str] = {}
     after_state_refs: dict[str, str] = {}
     for screen in screens:
         capture_payload = {
@@ -239,6 +288,7 @@ def run_native_multi_screen_live_demo(
         capture_call = _sidecar_call(dispatcher, "capture", capture_payload, root, sidecar_dir, platform)
         calls.append(capture_call)
         after_capture_refs[screen["screenId"]] = _value_ref(capture_call["result"], "captureRef") or _first_ref(capture_call["result"]) or capture_call["resultRef"]
+        after_capture_frame_refs[screen["screenId"]] = _capture_screenshot_ref(capture_call["result"], after_capture_refs[screen["screenId"]], root) or after_capture_refs[screen["screenId"]]
 
         state_payload = {
             "displayGroupId": display_group_id,
@@ -253,19 +303,25 @@ def run_native_multi_screen_live_demo(
         after_state_refs[screen["screenId"]] = _value_ref(state_call["result"], "stateRef") or _first_ref(state_call["result"]) or state_call["resultRef"]
 
     discovery_supports_live = _capabilities_and_discovery_support_m6(sidecar_capabilities, sidecar_discovery, screens, actor_cursors)
-    live_sidecar_completed = _all_sidecar_calls_completed(calls) and discovery_supports_live
+    sidecar_binding_kind = _string(sidecar_binding.get("bindingKind")) or ""
+    live_sidecar_completed = (
+        sidecar_binding_kind == "external-command"
+        and _all_sidecar_calls_completed(calls)
+        and _all_sidecar_calls_from_native_command(calls)
+        and discovery_supports_live
+    )
     status = "completed" if live_sidecar_completed else "blocked"
     overlay_by_screen = {
-        screens[0]["screenId"]: _write_json(root / "replay" / "overlay-source.json", {
+        screens[0]["screenId"]: _bundle_local_ref(_write_json(root / "replay" / "overlay-source.json", {
             "screenId": screens[0]["screenId"],
             "cursorIds": [actor_cursors[0]["cursorId"], actor_cursors[1]["cursorId"]],
             "observedAt": observed,
-        }),
-        screens[1]["screenId"]: _write_json(root / "replay" / "overlay-preview.json", {
+        }), root),
+        screens[1]["screenId"]: _bundle_local_ref(_write_json(root / "replay" / "overlay-preview.json", {
             "screenId": screens[1]["screenId"],
             "cursorIds": [actor_cursors[2]["cursorId"]],
             "observedAt": observed,
-        }),
+        }), root),
     }
     overlay_refs = list(overlay_by_screen.values())
     replay_bundle = {
@@ -275,9 +331,9 @@ def run_native_multi_screen_live_demo(
         "frames": [
             {
                 "screenId": screen["screenId"],
-                "screenshotRef": after_capture_refs.get(screen["screenId"], capture_refs.get(screen["screenId"])),
+                "screenshotRef": after_capture_frame_refs.get(screen["screenId"], capture_frame_refs.get(screen["screenId"])),
                 "beforeEvidenceRefs": [capture_refs.get(screen["screenId"]), state_refs.get(screen["screenId"])],
-                "afterEvidenceRefs": [after_capture_refs.get(screen["screenId"]), after_state_refs.get(screen["screenId"])],
+                "afterEvidenceRefs": [after_capture_refs.get(screen["screenId"]), after_capture_frame_refs.get(screen["screenId"]), after_state_refs.get(screen["screenId"])],
                 "cursorOverlayRef": overlay_by_screen.get(screen["screenId"]),
                 "leaseOwnerRefs": scheduler_lease_refs,
                 "placeholder": False,
@@ -288,9 +344,13 @@ def run_native_multi_screen_live_demo(
         "executorEventRefs": executor_event_refs,
         "cursorEventRefs": [event["cursorEventRef"] for event in cursor_events],
     }
-    replay_ref = _write_json(root / "replay" / "manifest.json", replay_bundle)
-    manifest_ref_path = str((root / "native-multi-screen-live-demo-run.json").resolve())
-    validation_ref = str((root / "m6-live-demo-validation.json").resolve())
+    replay_ref = _bundle_local_ref(_write_json(root / "replay" / "manifest.json", replay_bundle), root)
+    manifest_ref_path = _bundle_local_ref(root / "native-multi-screen-live-demo-run.json", root)
+    validation_ref = _bundle_local_ref(root / "m6-live-demo-validation.json", root)
+    current_bundle_ref_path = root / "current-bundle.json"
+    current_bundle_ref_text = _bundle_local_ref(current_bundle_ref_path, root)
+    evidence_index_ref_path = root / "evidence-index.json"
+    evidence_index_ref_text = _bundle_local_ref(evidence_index_ref_path, root)
     current_refs = sorted(set(
         list(user_control_refs.values())
         + [sidecar_binding_ref]
@@ -304,20 +364,49 @@ def run_native_multi_screen_live_demo(
         + [call["resultRef"] for call in calls]
         + [ref for call in calls for ref in _refs(call["result"])]
         + list(capture_refs.values())
+        + list(capture_frame_refs.values())
         + list(state_refs.values())
         + list(after_capture_refs.values())
+        + list(after_capture_frame_refs.values())
         + list(after_state_refs.values())
         + executor_event_refs
         + overlay_refs
         + [replay_ref]
-        + [manifest_ref_path, validation_ref]
+        + [manifest_ref_path, validation_ref, current_bundle_ref_text, evidence_index_ref_text]
     ))
-    current_bundle_ref = _write_json(root / "current-bundle.json", {
+    current_bundle_ref = _bundle_local_ref(_write_json(current_bundle_ref_path, {
         "schemaVersion": "sciforge.computer-use.current-bundle.v1",
         "runId": run_id,
         "rootRef": str(root),
         "refs": current_refs,
-    })
+    }), root)
+    evidence_index = _build_evidence_index(
+        root=root,
+        run_id=run_id,
+        observed=observed,
+        status=status,
+        platform=platform,
+        sidecar_binding=sidecar_binding,
+        sidecar_binding_ref=sidecar_binding_ref,
+        sidecar_capabilities_ref=sidecar_capabilities_ref,
+        sidecar_discovery=sidecar_discovery,
+        sidecar_discovery_ref=sidecar_discovery_ref,
+        screens=screens,
+        actor_cursors=actor_cursors,
+        replay_bundle=replay_bundle,
+        replay_ref=replay_ref,
+        overlay_refs=overlay_refs,
+        cursor_events=cursor_events,
+        scheduler_lease_refs=scheduler_lease_refs,
+        target_refs=target_refs,
+        executor_event_refs=executor_event_refs,
+        current_refs=current_refs,
+        current_bundle_ref=current_bundle_ref,
+        manifest_ref=manifest_ref_path,
+        validation_ref=validation_ref,
+        evidence_index_ref=evidence_index_ref_text,
+    )
+    evidence_index_ref = _bundle_local_ref(_write_json(evidence_index_ref_path, evidence_index), root)
     manifest = {
         "schemaVersion": NATIVE_MULTI_SCREEN_LIVE_DEMO_RUN_SCHEMA,
         "runId": run_id,
@@ -354,17 +443,31 @@ def run_native_multi_screen_live_demo(
         "executorEventRefs": executor_event_refs,
         "replayRef": replay_ref,
         "replayBundle": replay_bundle,
+        "runSummary": _native_summary({
+            "realNativeSidecarExecuted": live_sidecar_completed,
+            "completionEligible": live_sidecar_completed,
+            "screens": screens,
+            "actorCursors": actor_cursors,
+            "cursorEvents": cursor_events,
+            "leaseQueues": lease_queues,
+            "replayBundle": replay_bundle,
+            "sidecarBinding": sidecar_binding,
+        }),
         "overlayRefs": overlay_refs,
         "currentBundleRef": current_bundle_ref,
         "currentBundle": {"schemaVersion": "sciforge.computer-use.current-bundle.v1", "runId": run_id, "rootRef": str(root), "refs": current_refs},
+        "evidenceIndexRef": evidence_index_ref,
+        "evidenceIndex": evidence_index,
+        "retentionRedaction": evidence_index["retentionRedaction"],
         "validationRef": validation_ref,
         "blockedReason": "" if live_sidecar_completed else _blocked_reason(calls, discovery_supports_live),
         "observedAt": observed,
     }
     manifest["manifestRef"] = manifest_ref_path
+    manifest["runSummary"] = _native_summary(manifest)
     _write_json(root / "native-multi-screen-live-demo-run.json", manifest)
     validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=False)
-    _write_json(Path(validation_ref), validation)
+    _write_json(_resolve_bundle_ref(validation_ref, root), validation)
     return manifest
 
 
@@ -433,6 +536,7 @@ def validate_native_multi_screen_live_demo_run(
 
     errors: list[dict[str, Any]] = []
     refs = _collect_refs(manifest)
+    _validate_no_forbidden_inline_evidence(manifest, "$", errors)
     if manifest.get("schemaVersion") != NATIVE_MULTI_SCREEN_LIVE_DEMO_RUN_SCHEMA:
         errors.append(_issue("unsupported_schema_version", "Native multi-screen live demo schemaVersion is invalid.", "$.schemaVersion"))
     status = manifest.get("status")
@@ -471,8 +575,10 @@ def validate_native_multi_screen_live_demo_run(
         _mapping(manifest.get("sidecarDiscovery")),
         _string(manifest.get("sidecarDiscoveryRef")),
         _mapping_list(manifest.get("actorCursors")),
+        _string(_mapping(manifest.get("sidecarBinding")).get("bindingKind")) or "",
     )
     _validate_replay_bundle(_mapping(manifest.get("replayBundle")), screen_ids, status == "completed", errors)
+    _validate_evidence_index(manifest, errors)
     if status == "completed":
         _validate_completed_live_manifest(manifest, errors)
     else:
@@ -483,10 +589,14 @@ def validate_native_multi_screen_live_demo_run(
     if require_existing_refs:
         root = _bundle_root(manifest)
         for ref in refs:
-            if _looks_like_path(ref) and not Path(ref).exists():
+            is_file_ref = _looks_like_file_ref(ref)
+            ref_path = _resolve_bundle_ref(ref, root) if root and is_file_ref else Path(ref)
+            if is_file_ref and not ref_path.exists():
                 errors.append(_issue("ref_missing", f"Referenced file does not exist: {ref}", "$.refs"))
-            if root and _looks_like_path(ref) and not _is_under(Path(ref), root):
+            if root and is_file_ref and not _is_under(ref_path, root):
                 errors.append(_issue("ref_outside_current_bundle", f"Reference is outside current bundle root: {ref}", "$.currentBundle.refs"))
+            if is_file_ref and ref_path.is_file():
+                _validate_referenced_json_ref(ref_path, root, errors)
     return _validation_result(errors, refs, _native_summary(manifest), manifest)
 
 
@@ -518,14 +628,15 @@ def _sidecar_call(
     sidecar_dir: Path,
     platform: str | None,
 ) -> dict[str, Any]:
-    payload_ref = _write_json(root / "sidecar-payloads" / f"{tool}-{_digest(payload)}.json", payload)
+    payload_ref = _bundle_local_ref(_write_json(root / "sidecar-payloads" / f"{tool}-{_digest(payload)}.json", payload), root)
     try:
         result = dispatcher(tool, payload, output_dir=sidecar_dir, platform=platform)
     except TypeError:
         result = dispatcher(tool, payload)
     if not isinstance(result, Mapping):
         result = {"schemaVersion": PLATFORM_SIDECAR_RESULT_SCHEMA, "tool": tool, "status": "failed", "reason": "sidecar_dispatcher_returned_non_object", "refs": []}
-    result_ref = _write_json(root / "sidecar-results" / f"{tool}-{_digest(result)}.json", result)
+    result = _mapping(_localize_bundle_refs(_redact_for_storage(result), root))
+    result_ref = _bundle_local_ref(_write_json(root / "sidecar-results" / f"{tool}-{_digest(result)}.json", result), root)
     return {
         "tool": tool,
         "payload": dict(payload),
@@ -630,7 +741,7 @@ def _collect_sidecar_capabilities_and_discovery(
     capability_call = _sidecar_call(dispatcher, "capabilities", capabilities_payload, root, sidecar_dir, platform)
     calls.append(capability_call)
     capability_ref = _value_ref(capability_call["result"], "capabilitiesRef") or _value_ref(capability_call["result"], "capabilityRef")
-    capabilities = _sidecar_value_record(capability_call["result"], capability_ref, "capabilities")
+    capabilities = _mapping(_localize_bundle_refs(_redact_for_storage(_sidecar_value_record(capability_call["result"], capability_ref, "capabilities", root)), root))
 
     discovery_payload = {
         "runId": run_id,
@@ -643,14 +754,14 @@ def _collect_sidecar_capabilities_and_discovery(
     discovery_call = _sidecar_call(dispatcher, "discover", discovery_payload, root, sidecar_dir, platform)
     calls.append(discovery_call)
     discovery_ref = _value_ref(discovery_call["result"], "discoveryRef")
-    discovery = _sidecar_value_record(discovery_call["result"], discovery_ref, "discovery")
+    discovery = _mapping(_localize_bundle_refs(_redact_for_storage(_sidecar_value_record(discovery_call["result"], discovery_ref, "discovery", root)), root))
     return capabilities, capability_ref, discovery, discovery_ref
 
 
-def _sidecar_value_record(result: Mapping[str, Any], ref: str | None, inline_key: str) -> dict[str, Any]:
+def _sidecar_value_record(result: Mapping[str, Any], ref: str | None, inline_key: str, root: Path) -> dict[str, Any]:
     if ref and _looks_like_path(ref):
         try:
-            loaded = _mapping(json.loads(Path(ref).read_text(encoding="utf8")))
+            loaded = _mapping(json.loads(_resolve_bundle_ref(ref, root).read_text(encoding="utf8")))
             if loaded.get("schemaVersion"):
                 return loaded
         except (OSError, json.JSONDecodeError):
@@ -794,6 +905,161 @@ def _blocked_reason(calls: list[Mapping[str, Any]], discovery_supports_live: boo
     return "real-native-multi-screen-sidecar-unavailable-or-diagnostic"
 
 
+def _build_evidence_index(
+    *,
+    root: Path,
+    run_id: str,
+    observed: str,
+    status: str,
+    platform: str | None,
+    sidecar_binding: Mapping[str, Any],
+    sidecar_binding_ref: str,
+    sidecar_capabilities_ref: str | None,
+    sidecar_discovery: Mapping[str, Any],
+    sidecar_discovery_ref: str | None,
+    screens: list[Mapping[str, Any]],
+    actor_cursors: list[Mapping[str, Any]],
+    replay_bundle: Mapping[str, Any],
+    replay_ref: str,
+    overlay_refs: list[str],
+    cursor_events: list[Mapping[str, Any]],
+    scheduler_lease_refs: list[str],
+    target_refs: list[str],
+    executor_event_refs: list[str],
+    current_refs: list[str],
+    current_bundle_ref: str,
+    manifest_ref: str,
+    validation_ref: str,
+    evidence_index_ref: str,
+) -> dict[str, Any]:
+    frame_refs = _replay_frame_screenshot_refs(replay_bundle)
+    retention_redaction = _retention_redaction_metadata(
+        root=root,
+        screenshot_refs=frame_refs,
+        window_refs=sorted(_discovery_window_refs(sidecar_discovery) | {
+            ref
+            for ref in (_string(cursor.get("windowRef")) or _string(cursor.get("windowId")) for cursor in actor_cursors)
+            if ref
+        }),
+        title_owner_hashes=_window_title_owner_hashes(sidecar_discovery),
+        cursor_refs=[event["cursorEventRef"] for event in cursor_events if _string(event.get("cursorEventRef"))] + overlay_refs,
+        executor_event_refs=executor_event_refs,
+        validation_ref=validation_ref,
+    )
+    critical_refs = sorted(set(
+        [manifest_ref, current_bundle_ref, validation_ref, evidence_index_ref, replay_ref, sidecar_binding_ref]
+        + ([sidecar_capabilities_ref] if sidecar_capabilities_ref else [])
+        + ([sidecar_discovery_ref] if sidecar_discovery_ref else [])
+        + frame_refs
+        + overlay_refs
+        + scheduler_lease_refs
+        + target_refs
+        + executor_event_refs
+    ))
+    return {
+        "schemaVersion": NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA,
+        "runId": run_id,
+        "observedAt": observed,
+        "status": status,
+        "platform": platform or sys.platform,
+        "bundleLocal": True,
+        "completionEvidenceSubstitute": False,
+        "notCompletionEvidence": True,
+        "sidecarBindingKind": _string(sidecar_binding.get("bindingKind")) or "unknown",
+        "sidecarBindingRef": sidecar_binding_ref,
+        "sidecarCapabilitiesRef": sidecar_capabilities_ref,
+        "sidecarDiscoveryRef": sidecar_discovery_ref,
+        "screenCount": len(screens),
+        "actorCursorCount": len(actor_cursors),
+        "manifestRef": manifest_ref,
+        "currentBundleRef": current_bundle_ref,
+        "validationRef": validation_ref,
+        "evidenceIndexRef": evidence_index_ref,
+        "replayRef": replay_ref,
+        "frameRefs": frame_refs,
+        "overlayRefs": overlay_refs,
+        "cursorEventRefs": [event["cursorEventRef"] for event in cursor_events if _string(event.get("cursorEventRef"))],
+        "schedulerLeaseRefs": scheduler_lease_refs,
+        "targetRefs": target_refs,
+        "executorEventRefs": executor_event_refs,
+        "criticalRefs": critical_refs,
+        "currentBundleRefsDigest": _hash_json(current_refs),
+        "cleanup": {
+            "cleanupUnit": "run-bundle",
+            "bundleRootRef": ".",
+            "cleanupStatus": "retained-current-run",
+            "canDeleteWhenSuperseded": True,
+            "replayValidationPreservedByRefs": True,
+            "preserveRefs": sorted(set([current_bundle_ref, validation_ref, replay_ref, evidence_index_ref] + frame_refs)),
+        },
+        "retentionRedaction": retention_redaction,
+    }
+
+
+def _retention_redaction_metadata(
+    *,
+    root: Path,
+    screenshot_refs: list[str],
+    window_refs: list[str],
+    title_owner_hashes: list[dict[str, str]],
+    cursor_refs: list[str],
+    executor_event_refs: list[str],
+    validation_ref: str,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA,
+        "refsFirst": True,
+        "bundleLocal": True,
+        "rawInlineStored": False,
+        "cleanupUnit": "run-bundle",
+        "bundleRootRef": ".",
+        "forbiddenInlineFields": sorted(_FORBIDDEN_EVIDENCE_FIELD_NAMES | _SENSITIVE_EVIDENCE_FIELD_NAMES),
+        "screenshot": {
+            "storage": "ref-and-hash-only",
+            "refs": screenshot_refs,
+            "refHashes": [_hash_text(ref) for ref in screenshot_refs],
+            "contentHashes": [_file_hash(ref, root) for ref in screenshot_refs if _looks_like_path(ref) and _resolve_bundle_ref(ref, root).exists()],
+            "rawInlineStored": False,
+        },
+        "window": {
+            "storage": "ref-and-title-owner-hash-only",
+            "refs": window_refs,
+            "refHashes": [_hash_text(ref) for ref in window_refs],
+            "titleOwnerHashes": title_owner_hashes,
+            "rawTitleOwnerStored": False,
+            "rawInlineStored": False,
+        },
+        "cursor": {
+            "storage": "ref-only",
+            "refs": sorted(set(cursor_refs)),
+            "rawInlineStored": False,
+        },
+        "executor": {
+            "storage": "ref-only",
+            "refs": executor_event_refs,
+            "rawInlineStored": False,
+        },
+        "validation": {
+            "storage": "ref-only",
+            "validationRef": validation_ref,
+            "rawInlineStored": False,
+        },
+    }
+
+
+def _window_title_owner_hashes(discovery: Mapping[str, Any]) -> list[dict[str, str]]:
+    hashes: list[dict[str, str]] = []
+    for window in _mapping_list(discovery.get("windows")):
+        window_ref = _string(window.get("windowRef")) or _string(window.get("windowId")) or ""
+        for key, value in window.items():
+            normalized = _normalized_field_name(key)
+            if normalized.endswith("hash") and any(normalized.startswith(prefix) for prefix in ("title", "windowtitle", "owner", "windowowner", "appowner", "applicationowner")):
+                hash_value = _string(value)
+                if hash_value:
+                    hashes.append({"windowRefHash": _hash_text(window_ref), "field": str(key), "hash": hash_value})
+    return hashes
+
+
 def _default_screens(run_id: str, display_group_id: str) -> list[dict[str, Any]]:
     return [
         {
@@ -852,7 +1118,7 @@ def _write_cursor_events(root: Path, run_id: str, actor_cursors: list[Mapping[st
             "executorEventRef": None,
             "observedAt": observed,
         }
-        event_ref = _write_json(root / "cursor-events" / f"{event_id}.json", event)
+        event_ref = _bundle_local_ref(_write_json(root / "cursor-events" / f"{event_id}.json", event), root)
         events.append({**event, "cursorEventRef": event_ref})
     return events
 
@@ -1001,6 +1267,10 @@ def _all_sidecar_calls_completed(calls: list[Mapping[str, Any]]) -> bool:
     return True
 
 
+def _all_sidecar_calls_from_native_command(calls: list[Mapping[str, Any]]) -> bool:
+    return bool(calls) and all(_mapping(call.get("result")).get("nativeSidecarCommandExecuted") is True for call in calls)
+
+
 def _validate_proposals_and_queues(proposals: list[Mapping[str, Any]], queues: list[Mapping[str, Any]], errors: list[dict[str, Any]]) -> None:
     scopes = [_mapping(proposal.get("leaseScope")) for proposal in proposals]
     same_screen_window_local: dict[str, set[str]] = {}
@@ -1055,8 +1325,8 @@ def _validate_sidecar_binding(binding: Mapping[str, Any], binding_ref: str | Non
         errors.append(_issue("sidecar_binding_docker_novnc_forbidden", "M6 sidecar binding must not require Docker/noVNC.", "$.sidecarBinding.dockerNovncRequired"))
     if not binding_ref:
         errors.append(_issue("sidecar_binding_ref_missing", "M6 live demo must write sidecarBindingRef.", "$.sidecarBindingRef"))
-    if require_completed and binding_kind == "diagnostic-local":
-        errors.append(_issue("completed_run_requires_live_sidecar_binding", "Completed M6 evidence cannot use the diagnostic-local sidecar binding.", "$.sidecarBinding.bindingKind"))
+    if require_completed and binding_kind != "external-command":
+        errors.append(_issue("completed_run_requires_external_sidecar_command", "Completed M6 evidence requires an external native sidecar command binding.", "$.sidecarBinding.bindingKind"))
     if binding_kind == "external-command":
         if not _string(binding.get("commandDigest")) or not _string(binding.get("executable")):
             errors.append(_issue("external_sidecar_binding_incomplete", "External sidecar binding must record executable and command digest.", "$.sidecarBinding"))
@@ -1127,6 +1397,7 @@ def _validate_sidecar_calls(
     discovery: Mapping[str, Any],
     discovery_ref: str | None,
     actor_cursors: list[Mapping[str, Any]],
+    binding_kind: str,
 ) -> None:
     tools = [call.get("tool") for call in calls]
     for tool in ("capabilities", "discover", "preflight", "capture", "state", "execute"):
@@ -1146,6 +1417,8 @@ def _validate_sidecar_calls(
             errors.append(_issue("sidecar_call_not_completed", "Completed M6 run requires every sidecar call to complete.", f"$.sidecarCalls[{index}]"))
         if result.get("diagnosticOnly") is not False or result.get("userAcceptanceEligible") is not True:
             errors.append(_issue("sidecar_call_not_live_eligible", "Completed M6 run requires non-diagnostic live sidecar evidence.", f"$.sidecarCalls[{index}].result"))
+        if binding_kind == "external-command" and result.get("nativeSidecarCommandExecuted") is not True:
+            errors.append(_issue("sidecar_call_not_external_command", "Completed M6 run requires every sidecar call to come from the external native sidecar command.", f"$.sidecarCalls[{index}].result.nativeSidecarCommandExecuted"))
         for key in ("planningPerformed", "completionJudged", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent", "rawPayloadWritten", "inlineImageWritten", "secretsWritten"):
             if result.get(key) is not False:
                 errors.append(_issue("sidecar_boundary_or_input_violation", f"Completed M6 sidecar result must keep {key}=false.", f"$.sidecarCalls[{index}].result.{key}"))
@@ -1247,8 +1520,71 @@ def _validate_replay_bundle(
             errors.append(_issue("replay_cursor_overlay_missing", "M6 replay frames must bind cursor overlay refs.", f"$.replayBundle.frames[{index}].cursorOverlayRef"))
         if not string_array(frame.get("leaseOwnerRefs")):
             errors.append(_issue("replay_lease_owner_refs_missing", "M6 replay frames must bind scheduler lease owner refs.", f"$.replayBundle.frames[{index}].leaseOwnerRefs"))
+        if require_completed:
+            screenshot_ref = _string(frame.get("screenshotRef")) or ""
+            if not _is_image_frame_ref(screenshot_ref):
+                errors.append(_issue("replay_screenshot_not_image_ref", "Completed M6 replay screenshotRef must point at an image frame ref, not JSON capture metadata.", f"$.replayBundle.frames[{index}].screenshotRef"))
     if len(string_array(replay_bundle.get("cursorEventRefs"))) < 3:
         errors.append(_issue("replay_cursor_event_refs_missing", "M6 replay must include cursor event refs.", "$.replayBundle.cursorEventRefs"))
+
+
+def _validate_evidence_index(manifest: Mapping[str, Any], errors: list[dict[str, Any]]) -> None:
+    index = _load_evidence_index(manifest)
+    if not index:
+        errors.append(_issue("evidence_index_missing", "M6 live demo must write a bundle-local evidence index.", "$.evidenceIndexRef"))
+        return
+    _validate_no_forbidden_inline_evidence(index, "$.evidenceIndex", errors)
+    if index.get("schemaVersion") != NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA:
+        errors.append(_issue("evidence_index_schema_invalid", "Evidence index schemaVersion is invalid.", "$.evidenceIndex.schemaVersion"))
+    if index.get("runId") != manifest.get("runId"):
+        errors.append(_issue("evidence_index_run_mismatch", "Evidence index runId must match the manifest.", "$.evidenceIndex.runId"))
+    if index.get("status") != manifest.get("status"):
+        errors.append(_issue("evidence_index_status_mismatch", "Evidence index status must match the manifest completed/blocked path.", "$.evidenceIndex.status"))
+    if index.get("bundleLocal") is not True:
+        errors.append(_issue("evidence_index_not_bundle_local", "Evidence index must be bundle-local.", "$.evidenceIndex.bundleLocal"))
+    if index.get("completionEvidenceSubstitute") is not False or index.get("notCompletionEvidence") is not True:
+        errors.append(_issue("evidence_index_completion_substitute_forbidden", "Evidence index is a directory, not completion evidence.", "$.evidenceIndex.completionEvidenceSubstitute"))
+    if index.get("screenCount") != len(_mapping_list(manifest.get("screens"))):
+        errors.append(_issue("evidence_index_screen_count_mismatch", "Evidence index screenCount must match manifest screens.", "$.evidenceIndex.screenCount"))
+    if index.get("actorCursorCount") != len(_mapping_list(manifest.get("actorCursors"))):
+        errors.append(_issue("evidence_index_actor_count_mismatch", "Evidence index actorCursorCount must match manifest actor cursors.", "$.evidenceIndex.actorCursorCount"))
+    for manifest_key, index_key in (
+        ("currentBundleRef", "currentBundleRef"),
+        ("validationRef", "validationRef"),
+        ("replayRef", "replayRef"),
+        ("sidecarBindingRef", "sidecarBindingRef"),
+    ):
+        if _string(manifest.get(manifest_key)) and index.get(index_key) != manifest.get(manifest_key):
+            errors.append(_issue("evidence_index_ref_mismatch", f"Evidence index {index_key} must match the manifest.", f"$.evidenceIndex.{index_key}"))
+    index_ref = _string(manifest.get("evidenceIndexRef"))
+    current_bundle_refs = set(string_array(_mapping(manifest.get("currentBundle")).get("refs")))
+    if not index_ref:
+        errors.append(_issue("evidence_index_ref_missing", "Manifest must expose evidenceIndexRef.", "$.evidenceIndexRef"))
+    elif index_ref not in current_bundle_refs:
+        errors.append(_issue("evidence_index_ref_not_current_bundle", "evidenceIndexRef must be part of currentBundle.refs.", "$.currentBundle.refs"))
+    replay_frame_refs = set(_replay_frame_screenshot_refs(_mapping(manifest.get("replayBundle"))))
+    index_frame_refs = set(string_array(index.get("frameRefs")))
+    if replay_frame_refs and not replay_frame_refs.issubset(index_frame_refs):
+        errors.append(_issue("evidence_index_replay_refs_missing", "Evidence index must include replay frame refs without replacing replay validation.", "$.evidenceIndex.frameRefs"))
+    critical_refs = set(string_array(index.get("criticalRefs")))
+    for ref in (manifest.get("manifestRef"), manifest.get("currentBundleRef"), manifest.get("validationRef"), manifest.get("replayRef"), manifest.get("evidenceIndexRef")):
+        if _string(ref) and ref not in critical_refs:
+            errors.append(_issue("evidence_index_critical_ref_missing", "Evidence index must list the manifest/current bundle/validation/replay/index refs.", "$.evidenceIndex.criticalRefs"))
+    retention = _mapping(index.get("retentionRedaction"))
+    if retention.get("schemaVersion") != NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA:
+        errors.append(_issue("retention_redaction_schema_invalid", "Retention/redaction metadata schemaVersion is invalid.", "$.evidenceIndex.retentionRedaction.schemaVersion"))
+    if retention.get("refsFirst") is not True or retention.get("bundleLocal") is not True or retention.get("rawInlineStored") is not False:
+        errors.append(_issue("retention_redaction_policy_invalid", "Retention/redaction metadata must be refs-first, bundle-local, and raw-inline-free.", "$.evidenceIndex.retentionRedaction"))
+    for category in ("screenshot", "window", "cursor", "executor", "validation"):
+        section = _mapping(retention.get(category))
+        if section.get("rawInlineStored") is not False:
+            errors.append(_issue("retention_redaction_raw_inline_forbidden", f"{category} retention must not store raw inline data.", f"$.evidenceIndex.retentionRedaction.{category}.rawInlineStored"))
+        storage = _string(section.get("storage")) or ""
+        if "ref" not in storage and "hash" not in storage:
+            errors.append(_issue("retention_redaction_storage_invalid", f"{category} retention must use refs or hashes.", f"$.evidenceIndex.retentionRedaction.{category}.storage"))
+    cleanup = _mapping(index.get("cleanup"))
+    if cleanup.get("cleanupUnit") != "run-bundle" or cleanup.get("replayValidationPreservedByRefs") is not True:
+        errors.append(_issue("evidence_index_cleanup_invalid", "Evidence index cleanup must operate by run bundle and preserve replay validation refs.", "$.evidenceIndex.cleanup"))
 
 
 def _validate_completed_live_manifest(manifest: Mapping[str, Any], errors: list[dict[str, Any]]) -> None:
@@ -1261,12 +1597,16 @@ def _validate_completed_live_manifest(manifest: Mapping[str, Any], errors: list[
         errors.append(_issue("completed_run_replay_missing", "Completed M6 evidence requires replay and overlay refs.", "$.replayRef"))
     if not manifest.get("executorEventRefs"):
         errors.append(_issue("completed_run_executor_refs_missing", "Completed M6 evidence requires executor event refs.", "$.executorEventRefs"))
+    summary = _mapping(manifest.get("runSummary"))
+    if summary.get("windowLocalQueue") is not True or summary.get("screenGlobalQueue") is not True:
+        errors.append(_issue("completed_run_summary_queue_flags_missing", "Completed M6 runSummary must prove window-local and screen-global queues.", "$.runSummary"))
 
 
 def _native_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
     cursor_events = _mapping_list(manifest.get("cursorEvents"))
     replay_bundle = _mapping(manifest.get("replayBundle"))
     frames = _mapping_list(replay_bundle.get("frames"))
+    queues = _mapping_list(manifest.get("leaseQueues"))
     validation_summary = {
         "realNativeSidecarExecuted": manifest.get("realNativeSidecarExecuted") is True,
         "completionEligible": manifest.get("completionEligible") is True,
@@ -1282,7 +1622,12 @@ def _native_summary(manifest: Mapping[str, Any]) -> dict[str, Any]:
             for frame in frames
             if frame.get("placeholder") is not True and _string(frame.get("screenshotRef"))
         }),
+        "windowLocalQueue": any(queue.get("scopeKind") == "window-local" and queue.get("schedulerPolicy") == "native-screen-serial" for queue in queues),
+        "screenGlobalQueue": any(queue.get("scopeKind") == "screen-global" and queue.get("schedulerPolicy") == "native-screen-serial" for queue in queues),
     }
+    for key in ("runId", "status", "validationRef", "currentBundleRef", "evidenceIndexRef", "replayRef"):
+        if _string(manifest.get(key)):
+            validation_summary[key] = manifest.get(key)
     binding = _mapping(manifest.get("sidecarBinding"))
     if binding.get("bindingKind"):
         validation_summary["sidecarBindingKind"] = binding.get("bindingKind")
@@ -1352,10 +1697,125 @@ def _reject_forbidden_markers(value: Any, path: str, errors: list[dict[str, Any]
         errors.append(_issue("legacy_docker_novnc_backend_forbidden", f"Legacy Docker/noVNC/RDP backend marker is not allowed for M6: {marker}.", path))
 
 
+def _validate_no_forbidden_inline_evidence(value: Any, path: str, errors: list[dict[str, Any]]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            child_path = f"{path}.{key}"
+            normalized = _normalized_field_name(key)
+            if _is_forbidden_evidence_field(normalized):
+                errors.append(_issue(
+                    "raw_or_secret_evidence_field_forbidden",
+                    "M6 evidence must not inline raw screenshots/base64/raw traces/secrets.",
+                    child_path,
+                ))
+                continue
+            if normalized in _WINDOW_TITLE_OWNER_FIELD_NAMES and item not in {None, ""}:
+                errors.append(_issue(
+                    "window_title_owner_not_redacted",
+                    "Window title/owner evidence must be stored as a hash, not raw text.",
+                    child_path,
+                ))
+                continue
+            _validate_no_forbidden_inline_evidence(item, child_path, errors)
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _validate_no_forbidden_inline_evidence(item, f"{path}[{index}]", errors)
+    elif isinstance(value, str) and _contains_forbidden_evidence_value(value):
+        errors.append(_issue(
+            "raw_or_secret_evidence_value_forbidden",
+            "M6 evidence value contains inline image/base64/raw trace/secret material.",
+            path,
+        ))
+
+
+def _validate_referenced_json_ref(path: Path, root: Path | None, errors: list[dict[str, Any]]) -> None:
+    if root and not _is_under(path, root):
+        return
+    if path.suffix.lower() != ".json":
+        return
+    try:
+        parsed = json.loads(path.read_text(encoding="utf8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return
+    _validate_no_forbidden_inline_evidence(parsed, f"ref:{path}", errors)
+
+
+def _load_evidence_index(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    index_ref = _string(manifest.get("evidenceIndexRef"))
+    if index_ref:
+        root = _bundle_root(manifest)
+        path = _resolve_bundle_ref(index_ref, root) if root else Path(index_ref)
+        if path.is_file():
+            try:
+                return _mapping(json.loads(path.read_text(encoding="utf8")))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+                return {}
+    return _mapping(manifest.get("evidenceIndex"))
+
+
+def _redact_for_storage(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        cleaned: dict[str, Any] = {}
+        redactions: list[dict[str, str]] = []
+        for key, item in value.items():
+            normalized = _normalized_field_name(key)
+            if _is_forbidden_evidence_field(normalized):
+                redactions.append({
+                    "fieldHash": _hash_text(str(key)),
+                    "valueHash": _hash_json(item),
+                    "reason": "forbidden-inline-evidence",
+                })
+                continue
+            if normalized in _WINDOW_TITLE_OWNER_FIELD_NAMES and item not in {None, ""}:
+                cleaned[f"{key}Hash"] = _hash_json(item)
+                redactions.append({
+                    "fieldHash": _hash_text(str(key)),
+                    "valueHash": _hash_json(item),
+                    "reason": "window-title-owner-redacted",
+                })
+                continue
+            cleaned[str(key)] = _redact_for_storage(item)
+        if redactions:
+            cleaned["redactedFieldSummaries"] = redactions
+        return cleaned
+    if isinstance(value, list):
+        return [_redact_for_storage(item) for item in value]
+    if isinstance(value, str) and _contains_forbidden_evidence_value(value):
+        return {
+            "redactedValueHash": _hash_text(value),
+            "redactionReason": "forbidden-inline-evidence-value",
+        }
+    return value
+
+
+def _is_forbidden_evidence_field(normalized: str) -> bool:
+    return normalized in _FORBIDDEN_EVIDENCE_FIELD_NAMES or normalized in _SENSITIVE_EVIDENCE_FIELD_NAMES
+
+
+def _contains_forbidden_evidence_value(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in _FORBIDDEN_EVIDENCE_VALUE_MARKERS)
+
+
+def _normalized_field_name(value: Any) -> str:
+    return "".join(character for character in str(value).lower() if character.isalnum())
+
+
+def _replay_frame_screenshot_refs(replay_bundle: Mapping[str, Any]) -> list[str]:
+    return sorted(set(
+        ref
+        for ref in (_string(frame.get("screenshotRef")) for frame in _mapping_list(replay_bundle.get("frames")))
+        if ref
+    ))
+
+
 def _collect_refs(value: Any) -> list[str]:
     refs: list[str] = []
     if isinstance(value, Mapping):
         for key, item in value.items():
+            normalized_key = _normalized_field_name(key)
+            if normalized_key in {"rootref", "bundlerootref"}:
+                continue
             if str(key).lower().endswith("ref") and isinstance(item, str) and item.strip():
                 refs.append(item.strip())
             elif str(key).lower().endswith("refs") and isinstance(item, list):
@@ -1383,6 +1843,22 @@ def _value_ref(result: Mapping[str, Any], key: str) -> str | None:
     return _string(value)
 
 
+def _capture_screenshot_ref(result: Mapping[str, Any], capture_ref: str, root: Path) -> str | None:
+    screenshot_ref = _value_ref(result, "screenshotRef")
+    if screenshot_ref and _is_image_frame_ref(screenshot_ref):
+        return screenshot_ref
+    capture_path = _resolve_bundle_ref(capture_ref, root) if _looks_like_path(capture_ref) else None
+    if capture_path and capture_path.is_file():
+        try:
+            capture = _mapping(json.loads(capture_path.read_text(encoding="utf8")))
+            loaded_screenshot_ref = _string(capture.get("screenshotRef"))
+            if loaded_screenshot_ref and _is_image_frame_ref(loaded_screenshot_ref):
+                return _bundle_local_ref(loaded_screenshot_ref, root)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    return None
+
+
 def _mapping(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
@@ -1408,6 +1884,51 @@ def _looks_like_path(ref: str) -> bool:
     return ref.startswith("/") or ref.startswith(".") or "/" in ref
 
 
+def _looks_like_file_ref(ref: str) -> bool:
+    return bool(_string(ref)) and not _has_uri_scheme(ref) and (_looks_like_path(ref) or bool(Path(ref).suffix))
+
+
+def _is_image_frame_ref(ref: str) -> bool:
+    return bool(_string(ref)) and Path(ref).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _resolve_bundle_ref(ref: str | Path, root: Path) -> Path:
+    path = Path(ref).expanduser()
+    if not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def _bundle_local_ref(ref: str | Path, root: Path) -> str:
+    ref_text = str(ref)
+    if _has_uri_scheme(ref_text):
+        return ref_text
+    resolved = _resolve_bundle_ref(ref, root)
+    if not _is_under(resolved, root.resolve()):
+        raise ValueError(f"bundle ref must stay under evidence root: {ref}")
+    return resolved.relative_to(root.resolve()).as_posix()
+
+
+def _localize_bundle_refs(value: Any, root: Path) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _localize_bundle_refs(item, root) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_localize_bundle_refs(item, root) for item in value]
+    if isinstance(value, str) and _looks_like_path(value) and not _has_uri_scheme(value):
+        try:
+            resolved = _resolve_bundle_ref(value, root)
+            if _is_under(resolved, root.resolve()):
+                return resolved.relative_to(root.resolve()).as_posix()
+        except (OSError, RuntimeError, ValueError):
+            return value
+    return value
+
+
+def _has_uri_scheme(value: str) -> bool:
+    head = value.split("/", 1)[0]
+    return ":" in head and not value.startswith(("./", "../"))
+
+
 def _bundle_root(manifest: Mapping[str, Any]) -> Path | None:
     bundle = _mapping(manifest.get("currentBundle"))
     root_ref = _string(bundle.get("rootRef"))
@@ -1426,9 +1947,27 @@ def _digest(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode("utf8")).hexdigest()[:12]
 
 
+def _hash_json(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode("utf8")).hexdigest()
+
+
+def _hash_text(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf8")).hexdigest()
+
+
+def _file_hash(ref: str, root: Path | None = None) -> str:
+    try:
+        path = _resolve_bundle_ref(ref, root) if root else Path(ref)
+        return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return _hash_text(ref)
+
+
 __all__ = [
     "NATIVE_MULTI_SCREEN_LIVE_DEMO_RUN_SCHEMA",
     "NATIVE_MULTI_SCREEN_LIVE_DEMO_VALIDATION_SCHEMA",
+    "NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA",
+    "NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA",
     "NATIVE_MULTI_SCREEN_SIDECAR_BINDING_SCHEMA",
     "NATIVE_SIDECAR_CAPABILITIES_SCHEMA",
     "NATIVE_SIDECAR_DISPATCH_CALL_SCHEMA",

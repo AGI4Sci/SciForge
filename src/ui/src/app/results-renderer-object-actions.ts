@@ -5,6 +5,8 @@ import {
 } from '../../../../packages/support/object-references';
 import { createLocalUserActionApi, type UserActionApi } from './projectionApi';
 import { createOpenCommandTextUIAction, type CommandTextUIAction, type SelectObjectUIAction } from './uiActionBoundary';
+import type { ResultPaneTab } from './results/ResultShell';
+import { focusResultPaneRouteForObjectReference } from './results/resultPaneContract';
 
 type WorkspaceOpenObjectAction = Extract<ObjectAction, 'open-external' | 'reveal-in-folder'>;
 
@@ -48,7 +50,7 @@ export type ObjectReferenceActionResult = {
   inspectedArtifact?: RuntimeArtifact;
   notice?: string;
   pinnedObjectReferences?: ObjectReference[];
-  resultTab?: 'primary';
+  resultTab?: ResultPaneTab;
   sourceAction?: SelectObjectUIAction;
 };
 
@@ -129,7 +131,7 @@ export async function performObjectReferenceAction({
       activeRunId: plan.activeRunId,
       focusReference: plan.reference,
       notice: plan.notice,
-      resultTab: 'primary',
+      resultTab: resultTabForObjectReference(plan.reference),
       sourceAction,
     };
   }
@@ -139,7 +141,7 @@ export async function performObjectReferenceAction({
       focusReference: plan.reference,
       notice: plan.notice,
       pinnedObjectReferences: plan.pinnedObjectReferences,
-      resultTab: 'primary',
+      resultTab: resultTabForObjectReference(plan.reference),
       sourceAction,
     };
   }
@@ -165,6 +167,10 @@ export async function performObjectReferenceAction({
     commandTextAction,
     notice: `${plan.notice} 已生成命令：${commandTextAction.commandText}`,
   };
+}
+
+export function resultTabForObjectReference(reference: ObjectReference): ResultPaneTab {
+  return focusResultPaneRouteForObjectReference(reference).pane;
 }
 
 async function selectedObjectActionForReference({

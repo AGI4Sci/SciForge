@@ -515,6 +515,46 @@ describe('WorkspaceObjectPreview presentation input', () => {
     assert.match(html, /redacted-local-path|redacted-secret|redacted-audit-ref/);
   });
 
+  it('keeps workspace image and PDF binary previews ref-first instead of data-url inline', () => {
+    const cases = [{
+      label: 'image',
+      file: {
+        path: 'figures/provider-plot.png',
+        name: 'provider-plot.png',
+        content: 'aW1hZ2UtYmluYXJ5',
+        size: 16,
+        language: 'image',
+        encoding: 'base64' as const,
+        mimeType: 'image/png',
+      },
+      expectedCopy: /Copy image reference/,
+      forbidden: /data:image|<img\b|aW1hZ2UtYmluYXJ5/i,
+    }, {
+      label: 'pdf',
+      file: {
+        path: 'papers/provider-paper.pdf',
+        name: 'provider-paper.pdf',
+        content: 'JVBERi0xLjQKc2VjcmV0',
+        size: 20,
+        language: 'pdf',
+        encoding: 'base64' as const,
+        mimeType: 'application/pdf',
+      },
+      expectedCopy: /Copy PDF reference/,
+      forbidden: /data:application\/pdf|<object\b|<iframe\b|JVBERi0xLjQKc2VjcmV0/i,
+    }];
+
+    for (const { label, file, expectedCopy, forbidden } of cases) {
+      const html = renderToStaticMarkup(createElement(WorkspaceFileInlineViewer, { file }));
+
+      assert.match(html, /data-sciforge-reference=/, label);
+      assert.match(html, new RegExp(file.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), label);
+      assert.match(html, expectedCopy, label);
+      assert.doesNotMatch(html, forbidden, label);
+      assertNoInternalPreviewTerms(html);
+    }
+  });
+
   it('renders system-open notice for binary deliveries', () => {
     const artifact: RuntimeArtifact = {
       id: 'paper-pdf',

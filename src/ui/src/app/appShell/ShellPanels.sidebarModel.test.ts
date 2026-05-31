@@ -225,6 +225,12 @@ test('shell sidebar publishes Cursor Agent-like projection without local path re
   assert.equal(projection.groups[0]?.status.context.detail, '200k available');
   assert.ok(projection.actions.some((action) => action.intent === 'new-project' && action.commandText?.includes('--workspace-ref')));
   assert.ok(projection.actions.some((action) => action.intent === 'open-workspace' && action.commandText?.includes('open-workspace')));
+  for (const intent of ['open-repositories', 'open-automations', 'open-customize']) {
+    const action = projection.presentationActions.find((item) => item.intent === intent);
+    assert.equal(action?.effect, 'local-presentation');
+    assert.equal(action?.mutates, false);
+    assert.equal(action?.commandText, undefined);
+  }
   assert.ok(projection.groups.some((group) => group.actions.some((action) => action.intent === 'new-chat')));
   assert.ok(projection.groups.some((group) => !group.current && group.actions.some((action) => action.intent === 'remove-project' && action.commandText?.includes('--keep-files'))));
   assert.doesNotMatch(JSON.stringify(projection), /\/tmp\/sciforge-(?:project|peer-project)|file:\/tmp|provider|model|Authorization|secret|token/i);
@@ -594,6 +600,25 @@ test('sidebar search returns concise matches and empty arrays for misses', () =>
   assert.equal(proteinMatch?.threadState, 'active');
   assert.ok(buildSidebarSearchMatches('timeline', sessions).some((match) => match.page === 'timeline'));
   assert.deepEqual(buildSidebarSearchMatches('zzzz-no-result', sessions), []);
+});
+
+test('sidebar search exposes Automations, Customize, and Repositories as local sidebar actions', () => {
+  const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
+  const automations = buildSidebarSearchMatches('automation', sessions).find((match) => match.action === 'open-automations');
+  const customize = buildSidebarSearchMatches('customize', sessions).find((match) => match.action === 'open-customize');
+  const repositories = buildSidebarSearchMatches('repos', sessions).find((match) => match.action === 'open-repositories');
+  const localized = buildSidebarSearchMatches('自动化', sessions, { locale: 'zh-CN' }).find((match) => match.action === 'open-automations');
+
+  assert.equal(automations?.label, 'Automations');
+  assert.equal(automations?.detail, 'Sidebar action');
+  assert.equal(automations?.page, 'components');
+  assert.equal(customize?.label, 'Customize');
+  assert.equal(customize?.detail, 'Sidebar action');
+  assert.equal(repositories?.label, 'Repositories');
+  assert.equal(repositories?.detail, 'Sidebar section');
+  assert.equal(repositories?.page, 'workbench');
+  assert.equal(localized?.label, '自动化');
+  assert.doesNotMatch(JSON.stringify([automations, customize, repositories, localized]), /provider|model|Authorization|secret|token|\/tmp|\/Applications/i);
 });
 
 test('sidebar search includes projects and archived threads without exposing local paths', () => {

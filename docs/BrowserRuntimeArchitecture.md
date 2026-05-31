@@ -8,6 +8,8 @@ SciForge 的“内置浏览器”应该实现为 **TUI agent browser runtime cap
 
 更准确地说，它不是一个普通浏览器，而是一个面向开发智能体的可视化执行环境：把视觉问题压缩成稳定引用、终端等价命令和可验证断言，再把代码修改的副作用展开成截图、DOM、日志和验证证据。
 
+当前实现边界更窄且更明确：`BrowserRuntime` 是 TUI capability / Agent Host module；右侧 Browser pane 只渲染 host 提供的 projection、typed state、safe preview URL 和 refs，并把用户按钮转换成 declared intent 或 `/browser ...` 终端等价文本。GUI 不新增 provider route，不直接调用 Playwright/MCP，不跨域读取 DOM/AX/console/network，不把 hidden completion logic 放进 renderer。
+
 Codex in-app browser 的核心体验不是“打开一个网页控件”这么简单，而是一套可被 agent 使用的浏览器运行时：
 
 - session / tab 管理：创建、命名、选择、关闭、列出 tab。
@@ -17,12 +19,12 @@ Codex in-app browser 的核心体验不是“打开一个网页控件”这么�
 - 状态隔离：默认不污染用户主浏览器；需要登录/人工接管时才进入可见浏览器。
 - 安全确认：登录、上传、下载、外部提交、授权、删除、支付、发送等动作不能静默执行。
 
-SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser` 两条 provider：
+SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser` 两条 provider，provider routing 由 TUI / Agent Host 侧完成：
 
 - `playwright_browser_automation`：后台、headless、isolated，适合 agent 自动浏览、检索、截图、结构化抽取。
 - `playwright_edge_browser`：可见 Edge、独立 profile，适合登录、人工接管和需要桌面可见性的验收。
 
-缺口是：这两条 provider 还只是“单次浏览器调用能力”，没有形成像 Codex 内置浏览器那样稳定的 **session / tab / action / snapshot / trace** 契约，也没有给用户一个能直接打开 URL、查看页面、框选问题并交回 agent 的可见工作台。本文档和本轮代码补上这个中间层。
+缺口是：这两条 provider 还只是“单次浏览器调用能力”，没有形成像 Codex 内置浏览器那样稳定的 **session / tab / action / snapshot / trace** 契约，也没有给用户一个能直接打开 URL、查看页面、请求 snapshot/state/takeover 并交回 agent 的可见工作台。当前 Browser pane 补的是 presentation / projection 中间层，不把 provider routing 或 completion 判断搬进 GUI。
 
 ## 三层架构
 
@@ -44,10 +46,10 @@ SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser`
 |---|---|---|---|
 | `@sciforge-ui/runtime-contract/browser-runtime` | shared contract | `BrowserRuntimeSession/Tab/Command/Snapshot/Trace/StableRef/PageQuery`、risk/page-query/stable-ref 等纯函数 | Playwright、MCP client、React、iframe、workspace IO、provider route |
 | `packages/observe/web` | TUI capability | `browser_runtime` manifest、Playwright MCP wrapper、provider availability、TUI-facing provider adapter | React renderer、右侧结果区布局、GUI state、provider 选择以外的 GUI 控件 |
-| `packages/presentation/components/browser-workbench` | GUI presentation | 右侧 browser projection renderer、tabs/snapshot/log refs、terminal-equivalent command events、host-declared preview | provider routing、页面动作执行、跨域 DOM/console/network 读取、截图 base64/完整 DOM 保存 |
-| `src/ui/**` host 装配层 | GUI host | 将按钮/表单翻译成 `/browser ...` 文本、装配 Browser page、连接反馈收件箱和结果区 placement | import `@sciforge-observe/web/browser-runtime`、直接调用 Playwright/MCP/provider、判断网页任务完成 |
+| `packages/presentation/components/browser-workbench` | GUI presentation | 右侧 browser projection renderer、typed browser state、tabs/snapshot/log refs、terminal-equivalent command events、host-declared safe preview 和 blocked/error/offline fallback | provider routing、页面动作执行、跨域 DOM/console/network 读取、截图 base64/完整 DOM 保存、completion 判断 |
+| `src/ui/**` host 装配层 | GUI host | 将按钮/表单翻译成 `/browser ...` 文本或 declared GUI intent、装配 Browser page、连接反馈收件箱和结果区 placement | import `@sciforge-observe/web/browser-runtime`、直接调用 Playwright/MCP/provider、判断网页任务完成、把外部网页白屏伪装成 ready |
 
-Cursor Agent 右侧结果区的对齐目标不是把 browser、terminal、file viewer 都塞进一个 React 页面，而是把它们变成可组合 presentation modules：`browser-workbench`、`terminal-session-viewer`、`workspace-file-viewer`。TUI 通过 `module.invoke({ moduleId: 'gui', intent: 'present' })` 或 UI manifest slot 选择 presentation；GUI 模块只发出 view-local events 或终端等价文本。
+Cursor Agent 右侧结果区的对齐目标不是把 browser、screen、terminal、file viewer 和 references 都塞进一个 React 页面，而是把它们变成可组合 presentation modules：`browser-workbench`、`virtual-screen-viewer`、`terminal-session-viewer`、`workspace-file-viewer` 和 references object inspector。TUI 通过 `module.invoke({ moduleId: 'gui', intent: 'present' })` 或 UI manifest slot 选择 presentation；GUI 模块只发出 view-local events、declared intent 或终端等价文本。
 
 ## 边界
 
@@ -62,18 +64,19 @@ Cursor Agent 右侧结果区的对齐目标不是把 browser、terminal、file v
 ### GUI 侧负责
 
 - 展示 browser session 状态、tab 列表、当前 URL、截图/DOM/日志 refs。
-- 提供真实的 Browser Workbench：地址栏、嵌入式预览、后退、刷新、打开 URL、同源 DOM 摘要读取和页面区域标注。
-- 将页面标注保存为 refs-first feedback bundle 意图：URL、viewport、region rect、同源可读 selector/text、comment 和 `/browser annotate ... --snapshot --dom --refs-first` 终端等价命令。
+- 提供 Browser Workbench projection：地址栏、safe iframe preview、`idle/loading/ready/blocked/error/offline` 状态、blocked reason、proxy/materialized snapshot fallback 和外部打开入口。
+- 展示 refs-first feedback / evidence bundle 的摘要，例如 URL、viewport、region ref、snapshot ref、DOM/AX snapshot ref、console/network refs、trace refs 和 redacted diagnostics。
 - 提供“打开浏览器视图”“查看截图”“复制 URL”“请求人工接管”等 presentation controls。
-- 把用户按钮转换成 terminal-equivalent text command，例如 `/browser open <url>` 或 `/browser takeover <sessionId>`。
+- 把用户按钮转换成 terminal-equivalent text command 或 declared GUI intent，例如 `/browser open <url>`、`/browser snapshot`、`/browser state` 或 `/browser takeover <sessionId>`。
 
 ### GUI 侧不负责
 
 - 不判断用户是不是“想浏览网页”。
 - 不选择 browser provider。
 - 不拼 browser task prompt。
-- 不自己做跨域网页阅读/抽取/验证；跨域 DOM、console、network、screenshot 必须由 TUI browser runtime 生成 refs。
+- 不自己做网页阅读/抽取/验证；DOM、AX、console、network、screenshot 和下载证据必须由 TUI browser runtime 生成 refs，GUI 只展示 ref 摘要。
 - 不把截图 base64、DOM 全量、console 全量塞进 workspace state。
+- 不根据 iframe load、DOM 文本或历史 run 推断用户级完成。
 
 ## 运行时模型
 
@@ -92,15 +95,14 @@ User text / GUI command
 GUI Browser Workbench 的本地输入链路是：
 
 ```text
-User opens URL / marks region / writes comment
+User opens URL / requests snapshot / requests takeover
   -> GUI Browser Workbench
-  -> same-origin DOM summary if readable, otherwise region-only target
-  -> terminal-equivalent /browser command
+  -> terminal-equivalent /browser command or declared GUI intent
   -> TUI/Codex browser_runtime executes snapshot/DOM/logs/action
   -> refs-first trace returns to GUI projection
 ```
 
-这个链路让用户得到真实可见预览和直观标注，同时避免 GUI 自己接管 provider routing 或把跨域网页内容直接塞进 workspace state。
+这个链路让用户得到真实可见预览和明确 blocked/error 状态，同时避免 GUI 自己接管 provider routing、隐藏执行网页动作，或把网页内容直接塞进 workspace state。
 
 ## BrowserRuntime Contract
 
@@ -154,6 +156,26 @@ type BrowserRuntimeTrace = {
   diagnostics: string[];
 };
 ```
+
+GUI 只消费 projection，不消费 executor payload：
+
+```ts
+type BrowserRuntimeProjection = {
+  schemaVersion: 'sciforge.browser-runtime.projection.v1';
+  session: BrowserRuntimeSession;
+  activeTab?: BrowserRuntimeTab;
+  snapshot?: BrowserRuntimeSnapshot;
+  traceRefs: BrowserRuntimeTraceRef[];
+  guiBoundary: {
+    taskReasoning: false;
+    providerRouting: false;
+    promptAssembly: false;
+    presentationOnly: true;
+  };
+};
+```
+
+`guiBoundary` 是契约的一部分：Browser pane 可以据此渲染 session、tab、snapshot、trace refs 和 typed state，但不能把 iframe load、DOM/AX observation、console/network 摘要或页面文本升级为 executor lease、action causality、artifact validation、用户级 completion、provider route 或 hidden completion 信号。
 
 ### StableRef
 
@@ -217,7 +239,7 @@ type BrowserRuntimePageQuery = {
 | iframe 枚举和切换 | `browser.list_frames` / `browser.switch_frame`，跨源 frame 标记 inaccessible，不伪装可读。 |
 | 原生 dialog | `browser.list_dialogs` / `browser.handle_dialog`，处理 dialog 属高风险，需要审批或明确上下文。 |
 | network/storage/idle | `browser.get_network_log` / `browser.get_storage` / `browser.wait_for_idle`。 |
-| DOM CUA node id 操作 | 用 Playwright MCP snapshot/click target 表达，trace 记录 target。 |
+| DOM CUA node id 操作 | 作为 observation / grounding hint，用 Playwright MCP snapshot/click target 表达，trace 记录 target；不能替代 executor lease、action causality、artifact validation 或 completion evidence。 |
 | Playwright locator 子集 | 通过 generic actions 和 PageQuery DSL 暴露，不把 site-specific 逻辑写死。 |
 | 截图 | 写入 screenshot ref，不进入 workspace state。 |
 | console logs | 写入 console log ref 或 bounded summary。 |
@@ -229,12 +251,11 @@ type BrowserRuntimePageQuery = {
 
 当前 GUI 侧提供的不是静态说明页，而是一个可操作的浏览器工作台：
 
-- URL bar：支持 `localhost:5173`、`127.0.0.1:3000`、`https://...` 自动补全协议。
-- Embedded preview：通过 iframe 预览本地 dev server 或公开页面；网页自身交互仍由用户手动或 TUI browser runtime 执行。
-- Navigation controls：后退、刷新、打开 URL。
-- Same-origin inspection：当 iframe 与 SciForge 同源时，GUI 可读取 bounded DOM 摘要、链接、控件和 assets；跨域时显示明确 blocked reason，并提示使用 `/browser snapshot`。
-- Annotation mode：用户在预览区域拖拽框选元素/区域，保存评论后生成本地 annotation record 和 `/browser annotate ... --refs-first` 命令。
-- Command surface：所有按钮生成终端等价文本，例如 `/browser open`、`/browser snapshot`、`/browser state`、`/browser action page.scroll`、`/browser takeover`。
+- URL bar：支持 `localhost`、`127.0.0.1`、`http` 和 `https` 输入归一化；无效 URL 进入 typed error。
+- Embedded preview：只展示 host 声明为可嵌入的 safe preview。X-Frame-Options、CSP、network/offline 或 host policy blocked 时显示 typed blocked/error/offline，不保留空白 iframe。
+- Navigation controls：Open、Back、Forward、Reload/Stop、Snapshot、State、Takeover、Copy URL、Open External。
+- Fallback controls：不可嵌入网页必须给出原因和下一步，例如 Open External、proxy/materialized snapshot 或 BrowserRuntime takeover。
+- Command surface：所有按钮生成终端等价文本或 declared GUI intent，例如 `/browser open`、`/browser back`、`/browser forward`、`/browser reload`、`/browser stop`、`/browser snapshot`、`/browser state`、`/browser takeover`、`/browser copy-url`、`/browser open-external`。
 
 Web GUI 版本的硬边界：
 
@@ -278,7 +299,7 @@ StableRef 是工具层地基。每个标注目标必须尽量同时记录 select
 
 ### 5. iframe / Shadow DOM / 跨 origin
 
-同源 iframe 可独立采集；跨源 iframe 只能记录 bbox、origin 和 inaccessible reason；open shadow DOM 可递归读；closed shadow DOM 等同 inaccessible。`get_state` 的返回结构必须显式表达这些边界。
+TUI `browser_runtime` 可以对同源 iframe 做独立采集；跨源 iframe 只能记录 bbox、origin 和 inaccessible reason；open shadow DOM 可递归读；closed shadow DOM 等同 inaccessible。`get_state` 的返回结构必须显式表达这些边界，GUI 只展示这些 refs 和摘要。
 
 ### 6. 上下文经济学
 
@@ -318,12 +339,12 @@ M3 之前要建立 30-50 个固定 browser regression tasks，每个任务包含
 | M5 | 源码映射 + 验证闭环 | DOM→源码 resolver、结构/行为/视觉断言、代码 diff 验证。 | “标注→改码→刷新→验证”端到端可用。 |
 | M6 | 样式反馈 + 高级体验 | style inspector、live preview、visual diff、responsive presets。 | 15 个前端常见任务成功率 > 70%。 |
 
-当前实现达到 M1/M2 的 Web GUI 起点：可打开本地页面、可预览、可区域标注、可生成 refs-first `/browser` 命令；跨域和深度自动化交给 TUI browser runtime。
+当前实现达到 M1 的 Web GUI 起点，并补齐右侧结果栏可用性边界：可打开本地 safe preview，外部页面和失败状态不白屏，Browser pane 有明确状态机和 command surface；跨域观察、截图、DOM/AX、console/network 和深度自动化交给 TUI browser runtime。
 
 ## 后续路线
 
 1. 把 `browser_runtime` 接入 Codex GUI extension resource tree，例如 `/gui/browser/sessions.json`，resource 内容只包含 projection/ref 摘要。
 2. 将 Browser Workbench 的 `/browser ...` 命令直接接入 TUI/Codex command executor，而不是只复制命令。
 3. 为 Runtime Codex 暴露 `/browser` slash command 或 MCP tool，并把高风险动作统一落到 approval request。
-4. 增加 live acceptance：用 Codex in-app browser 打开 SciForge 内置 Browser Workbench，完成 `open -> annotate -> snapshot command -> scroll command -> inspect same-origin state`。
+4. 增加 live acceptance：用 Codex in-app browser 打开 SciForge 内置 Browser Workbench，完成 `open safe preview -> blocked/error fallback -> snapshot command -> state command -> takeover/open-external intent`。
 5. 如果未来需要真正突破 iframe 限制，应在桌面壳里实现 Electron `WebContentsView`/独立 Chromium surface；Web GUI 不应伪装成具备这种权限。

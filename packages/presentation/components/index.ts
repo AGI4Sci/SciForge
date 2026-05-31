@@ -18,8 +18,20 @@ export {
   type WorkbenchDemoVariant,
 } from './workbench-policy';
 export { renderPackageWorkbenchPreview } from './workbench-renderers';
-export { renderBrowserWorkbench, browserWorkbenchDefaultCommands, normalizeBrowserWorkbenchUrl } from './browser-workbench/render';
-export type { BrowserWorkbenchCommand, BrowserWorkbenchPayload } from './browser-workbench/render';
+export {
+  renderBrowserWorkbench,
+  browserWorkbenchDefaultCommands,
+  browserWorkbenchStateFromPayload,
+  normalizeBrowserWorkbenchUrl,
+} from './browser-workbench/render';
+export type {
+  BrowserWorkbenchCommand,
+  BrowserWorkbenchDefaultCommandOptions,
+  BrowserWorkbenchEmbedPolicy,
+  BrowserWorkbenchPayload,
+  BrowserWorkbenchState,
+  BrowserWorkbenchStateStatus,
+} from './browser-workbench/render';
 export {
   COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
   COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
@@ -48,9 +60,25 @@ export { renderPointSetViewer } from './point-set-viewer/render';
 export { renderMatrixViewer } from './matrix-viewer/render';
 export { renderStructureViewer } from './structure-viewer/render';
 export { renderTerminalSessionViewer } from './terminal-session-viewer/render';
+export type {
+  HostOwnedTerminalSession,
+  TerminalCapabilities,
+  TerminalMode,
+  TerminalSessionAdapter,
+  TerminalSessionPayload,
+  TerminalSessionStatus,
+} from './terminal-session-viewer/render';
 export { renderVirtualScreenViewer } from './virtual-screen-viewer/render';
-export type { VirtualScreenCursor, VirtualScreenEvent, VirtualScreenPayload } from './virtual-screen-viewer/render';
+export type {
+  VirtualScreenCursor,
+  VirtualScreenEvent,
+  VirtualScreenFrame,
+  VirtualScreenLeaseOwner,
+  VirtualScreenPayload,
+} from './virtual-screen-viewer/render';
 export {
+  WORKSPACE_FILE_VIEWER_DEFAULT_INLINE_TEXT_LIMIT_BYTES,
+  WORKSPACE_FILE_VIEWER_DEFAULT_TREE_PAGE_SIZE,
   renderWorkspaceFileViewer,
   sortWorkspaceFileViewerEntries,
   WorkspaceFileViewer,
@@ -58,6 +86,8 @@ export {
   workspaceFileViewerParentPath,
   type WorkspaceFileViewerEntry,
   type WorkspaceFileViewerFile,
+  type WorkspaceFileViewerFolderContinuation,
+  type WorkspaceFileViewerFolderContinuationRequest,
   type WorkspaceFileViewerProps,
 } from './workspace-file-viewer/render';
 

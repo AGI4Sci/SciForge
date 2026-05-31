@@ -15,7 +15,12 @@ import {
   workspaceFileViewerBasename,
   workspaceFileViewerParentPath,
   type BrowserWorkbenchCommand,
+  type TerminalSessionAdapter,
+  type TerminalSessionStatus,
+  type VirtualScreenFrame,
+  type VirtualScreenPayload,
   type WorkspaceFileViewerEntry,
+  type WorkspaceFileViewerFile,
   type WorkspaceFileViewerProps,
 } from '../../../../packages/presentation/components';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
@@ -23,7 +28,7 @@ import { exportJsonFile } from './exportUtils';
 import { Badge, Card, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 import { ResultShell, type ResultFocusMode, type ResultPaneTab, type ResultPaneTabInstance } from './results/ResultShell';
 import { PreviewDescriptorActions } from './results/PreviewActions';
-import { EvidenceMatrix, ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
+import { ExecutionPanel, NotebookTimeline } from './results/ExecutionNotebookPanels';
 import { resultCountText, resultLocale, resultText, type ResultLocale } from './results/resultLocale';
 import { normalizeWorkspaceRootPath } from '../config';
 export { handoffAutoRunPrompt, previewPackageAutoRunPrompt } from './results/autoRunPrompts';
@@ -52,7 +57,7 @@ import {
   uploadedArtifactPreview,
 } from './results/previewDescriptor';
 import { canHydrateWorkspaceObjectPath, UploadedDataUrlPreview, WorkspaceObjectPreview } from './results/WorkspaceObjectPreview';
-import { type EvidenceClaim, type SciForgeConfig, type SciForgeRun, type SciForgeSession, type ObjectAction, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeCompatibilityDiagnostic, type RuntimeExecutionUnit, type UIManifestSlot } from '../domain';
+import { type SciForgeConfig, type SciForgeRun, type SciForgeSession, type ObjectAction, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type RuntimeCompatibilityDiagnostic, type RuntimeExecutionUnit, type UIManifestSlot } from '../domain';
 import {
   conversationProjectionForSession,
   conversationProjectionStatus,
@@ -86,16 +91,19 @@ import {
 } from '../../../../packages/support/object-references';
 import {
   objectReferenceKindLabel,
+  objectReferenceForArtifactSummary,
   pathForObjectReference,
   referenceKindForWorkspaceFileLike,
   referenceForObjectReference,
   referenceForWorkspaceFileLike,
   sciForgeReferenceAttribute,
+  toWorkspaceRelativePath,
   withRegionLocator,
 } from '../../../../packages/support/object-references';
 import {
   objectActionLabel,
   performObjectReferenceAction,
+  resultTabForObjectReference,
 } from './results-renderer-object-actions';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import {
@@ -115,11 +123,107 @@ export { renderRegisteredWorkbenchSlot };
 export type { WorkbenchSlotRenderProps };
 
 export type WorkspaceFileEditorState = {
-  file: WorkspaceFileContent;
+  file: WorkspaceFileContent & WorkspaceFileViewerFile;
   draft: string;
   workspacePath?: string;
   focusRequestKey?: string;
+  editMode?: boolean;
 };
+
+export type WorkspaceFileEditorsByTabId = Record<string, WorkspaceFileEditorState | undefined>;
+
+const WORKSPACE_FILE_INLINE_TEXT_LIMIT_BYTES = 1024 * 1024;
+
+export function setWorkspaceFileEditorForTab(
+  current: WorkspaceFileEditorsByTabId,
+  tabId: string,
+  next: WorkspaceFileEditorState | null,
+): WorkspaceFileEditorsByTabId {
+  if (!tabId) return current;
+  const updated = { ...current };
+  if (next) updated[tabId] = next;
+  else delete updated[tabId];
+  return updated;
+}
+
+export function removeWorkspaceFileEditorForTab(current: WorkspaceFileEditorsByTabId, tabId: string): WorkspaceFileEditorsByTabId {
+  if (!tabId || !(tabId in current)) return current;
+  const updated = { ...current };
+  delete updated[tabId];
+  return updated;
+}
+
+export function cancelWorkspaceFileEditorEdit(state: WorkspaceFileEditorState): WorkspaceFileEditorState {
+  return { ...state, draft: state.file.content, editMode: false };
+}
+
+function workspaceFileEditorMimeLooksText(mimeType: string | undefined) {
+  if (!mimeType) return true;
+  const normalized = mimeType.toLowerCase();
+  return normalized.startsWith('text/')
+    || /(?:json|xml|yaml|toml|csv|markdown|javascript|typescript|x-sh|x-python|x-ruby|x-php|x-java|x-c|x-c\+\+)/.test(normalized);
+}
+
+function workspaceFileEditorCanEditFile(file: WorkspaceFileEditorState['file'] | null | undefined) {
+  return Boolean(file && !file.readOnly && !workspaceFileEditorUnsupportedKind(file));
+}
+
+function workspaceFileEditorUnsupportedKind(file: WorkspaceFileEditorState['file'] | null | undefined): WorkspaceFileViewerFile['unsupportedKind'] | undefined {
+  if (!file) return undefined;
+  if (file.unsupportedKind) return file.unsupportedKind;
+  if (file.encoding === 'base64') return 'binary';
+  if (!workspaceFileEditorMimeLooksText(file.mimeType)) return 'binary';
+  if (typeof file.size === 'number' && file.size > WORKSPACE_FILE_INLINE_TEXT_LIMIT_BYTES) return 'too-large';
+  if (file.contentUnavailable) return 'unsupported';
+  return undefined;
+}
+
+function workspaceFileWithInlinePolicy(file: WorkspaceFileContent & WorkspaceFileViewerFile): WorkspaceFileEditorState['file'] {
+  const unsupportedKind = workspaceFileEditorUnsupportedKind(file);
+  if (!unsupportedKind) return file;
+  return {
+    ...file,
+    content: '',
+    readOnly: true,
+    contentUnavailable: true,
+    unsupportedKind,
+  };
+}
+
+function workspaceFileEditorWithEditMode(state: WorkspaceFileEditorState, editMode: boolean): WorkspaceFileEditorState {
+  return { ...state, editMode: editMode && workspaceFileEditorCanEditFile(state.file) };
+}
+
+function workspaceFileViewerDraftForFile(file: WorkspaceFileEditorState['file']) {
+  return workspaceFileEditorCanEditFile(file) ? file.content : '';
+}
+
+function workspaceDisplayPathForPath(workspaceRoot: string, path: string) {
+  const relative = toWorkspaceRelativePath(workspaceRoot, path);
+  if (relative === '.') return workspaceFileViewerBasename(workspaceRoot) || '.';
+  return relative || workspaceFileViewerBasename(path) || path;
+}
+
+function workspaceCopyRefForPath(workspaceRoot: string, path: string) {
+  const relative = toWorkspaceRelativePath(workspaceRoot, path);
+  return relative === '.' ? 'workspace:.' : `file:${relative}`;
+}
+
+function tooLargeWorkspaceFileFromEntry(entry: WorkspaceFileViewerEntry): WorkspaceFileEditorState['file'] | undefined {
+  if (typeof entry.size !== 'number' || entry.size <= WORKSPACE_FILE_INLINE_TEXT_LIMIT_BYTES) return undefined;
+  return {
+    path: entry.path,
+    name: entry.name,
+    content: '',
+    size: entry.size,
+    modifiedAt: entry.modifiedAt,
+    language: 'unsupported',
+    encoding: 'utf8',
+    readOnly: true,
+    contentUnavailable: true,
+    unsupportedKind: 'too-large',
+  };
+}
 
 function ResultPaneWorkspaceFileViewer({
   state,
@@ -141,6 +245,7 @@ function ResultPaneWorkspaceFileViewer({
   const [workspaceError, setWorkspaceError] = useState('');
   const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [saveError, setSaveError] = useState('');
+  const canEditFile = workspaceFileEditorCanEditFile(state.file);
   const fileReference = referenceForWorkspaceFileLike(state.file, referenceKindForWorkspaceFileLike(state.file));
 
   useEffect(() => {
@@ -225,10 +330,18 @@ function ResultPaneWorkspaceFileViewer({
 
   async function openFile(entry: WorkspaceFileViewerEntry) {
     if (entry.kind !== 'file') return;
+    const tooLargeFile = tooLargeWorkspaceFileFromEntry(entry);
+    if (tooLargeFile) {
+      onChange({ ...state, file: tooLargeFile, draft: '', workspacePath: workspaceRoot, editMode: false });
+      setWorkspaceError('');
+      setSaveError('');
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开只读元数据：${entry.name}`, 'en-US': `Opened read-only metadata for ${entry.name}` }));
+      return;
+    }
     try {
       setWorkspaceError('');
-      const file = await readWorkspaceFile(entry.path, config);
-      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
+      const file = workspaceFileWithInlinePolicy(await readWorkspaceFile(entry.path, config));
+      onChange({ ...state, file, draft: workspaceFileViewerDraftForFile(file), workspacePath: workspaceRoot, editMode: false });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开 ${file.name}`, 'en-US': `Opened ${file.name}` }));
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : String(error));
@@ -237,10 +350,11 @@ function ResultPaneWorkspaceFileViewer({
   }
 
   async function save() {
+    if (!canEditFile) return;
     try {
       setSaveError('');
-      const file = await writeWorkspaceFile(state.file.path, state.draft, config);
-      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
+      const file = workspaceFileWithInlinePolicy(await writeWorkspaceFile(state.file.path, state.draft, config));
+      onChange({ ...state, file, draft: workspaceFileViewerDraftForFile(file), workspacePath: workspaceRoot, editMode: false });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已保存 ${file.name}`, 'en-US': `Saved ${file.name}` }));
       const parent = workspaceFileViewerParentPath(file.path) || workspaceRoot;
       if (parent) await loadFolder(parent, { quiet: true });
@@ -265,18 +379,27 @@ function ResultPaneWorkspaceFileViewer({
             expandedFolderPaths: Array.from(expandedFolders),
             selectedPath: state.file.path,
             file: state.file,
+            treePageSize: 200,
+            inlineTextLimitBytes: WORKSPACE_FILE_INLINE_TEXT_LIMIT_BYTES,
             draft: state.draft,
-            dirty,
+            dirty: dirty && canEditFile,
+            editMode: Boolean(state.editMode && canEditFile),
             notice: workspaceNotice,
             error: boundedRightPaneText(workspaceError, 800),
             saveError: boundedRightPaneText(saveError, 800),
             labels: workspaceFileViewerLabels(locale),
+            displayPathForPath: (path: string) => workspaceDisplayPathForPath(workspaceRoot, path),
+            copyPathForPath: (path: string) => workspaceCopyRefForPath(workspaceRoot, path),
             onToggleFolder: toggleFolder,
             onOpenFile: (entry: WorkspaceFileViewerEntry) => void openFile(entry),
             onRefresh: () => void refreshTree(),
             onCollapseAll: collapseTree,
-            onDraftChange: (draft: string) => onChange({ ...state, draft }),
+            onDraftChange: (draft: string) => {
+              if (state.editMode && canEditFile) onChange({ ...state, draft });
+            },
+            onEditModeChange: (editMode: boolean) => onChange(workspaceFileEditorWithEditMode(state, editMode)),
             onSave: () => void save(),
+            onCancel: () => onChange(cancelWorkspaceFileEditorEdit(state)),
             onClose,
             onCopyPath: (path: string) => void navigator.clipboard?.writeText(path),
             onCopyContents: (content: string) => void navigator.clipboard?.writeText(content),
@@ -291,7 +414,7 @@ function ResultPaneWorkspaceFileViewer({
             rootPath: workspaceRoot,
             selectedPath: state.file.path,
             file: state.file,
-            dirty,
+            dirty: dirty && canEditFile,
           },
         },
         config,
@@ -416,14 +539,14 @@ async function readFocusedWorkspaceFile({
 }): Promise<{ file: WorkspaceFileContent; workspacePath: string }> {
   const primaryWorkspacePath = normalizeWorkspaceRootPath(config.workspacePath);
   try {
-    const file = await readWorkspaceFile(path, config);
+    const file = workspaceFileWithInlinePolicy(await readWorkspaceFile(path, config));
     return { file, workspacePath: primaryWorkspacePath };
   } catch (primaryError) {
     if (!shouldTryRepoRootWorkspaceFallback(reference, path)) throw primaryError;
     const repoRoot = await repoRootWorkspaceFallback(config).catch(() => '');
     if (!repoRoot || repoRoot === primaryWorkspacePath) throw primaryError;
     try {
-      const file = await readWorkspaceFile(path, { ...config, workspacePath: repoRoot });
+      const file = workspaceFileWithInlinePolicy(await readWorkspaceFile(path, { ...config, workspacePath: repoRoot }));
       return { file, workspacePath: repoRoot };
     } catch {
       throw primaryError;
@@ -472,10 +595,28 @@ function workspaceFileViewerLabels(locale?: ResultLocale) {
     close: resultText(locale, { 'zh-CN': '关闭文件视图', 'en-US': 'Close file view' }),
     saved: resultText(locale, { 'zh-CN': '已保存', 'en-US': 'Saved' }),
     unsaved: resultText(locale, { 'zh-CN': '未保存', 'en-US': 'Unsaved' }),
+    unsupported: resultText(locale, { 'zh-CN': '不支持预览', 'en-US': 'Unsupported file' }),
+    binaryUnsupported: resultText(locale, { 'zh-CN': '二进制文件在此视图中只读。', 'en-US': 'Binary files are read-only in this viewer.' }),
+    tooLargeUnsupported: resultText(locale, { 'zh-CN': '文件过大，已切换为只读元数据视图。', 'en-US': 'This file is too large for inline editing.' }),
+    readOnlyReason: resultText(locale, { 'zh-CN': '该文件为只读。', 'en-US': 'This file is read-only.' }),
   };
 }
 
 const DEFAULT_RIGHT_PANE_TABS: ResultPaneTab[] = ['primary', 'browser', 'screen', 'terminal', 'files', 'evidence'];
+
+export type RightPaneFocusTarget =
+  | { kind: 'tab'; tabId: string }
+  | { kind: 'new-button' };
+
+export interface RightPaneTabLifecycleState {
+  tabs: ResultPaneTabInstance[];
+  activeTabId: string;
+  browserTabAddresses: Record<string, string>;
+}
+
+export interface RightPaneTabLifecycleTransition extends RightPaneTabLifecycleState {
+  focusTarget: RightPaneFocusTarget;
+}
 
 function baseResultPaneTabId(kind: ResultPaneTab) {
   return `base:${kind}`;
@@ -509,7 +650,7 @@ function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?:
   return index > 1 ? `${label} ${index}` : label;
 }
 
-function createDefaultRightPaneTabs(locale?: ResultLocale): ResultPaneTabInstance[] {
+export function createDefaultRightPaneTabs(locale?: ResultLocale): ResultPaneTabInstance[] {
   return DEFAULT_RIGHT_PANE_TABS.map((kind) => ({
     id: baseResultPaneTabId(kind),
     kind,
@@ -526,6 +667,91 @@ interface StoredRightPaneState {
   tabs: ResultPaneTabInstance[];
   activeTabId: string;
   browserTabAddresses: Record<string, string>;
+}
+
+export function addRightPaneTabLifecycleState(
+  state: RightPaneTabLifecycleState,
+  tab: ResultPaneTab,
+  locale?: ResultLocale,
+  now = Date.now(),
+): RightPaneTabLifecycleTransition {
+  const nextIndex = nextResultPaneTabIndex(state.tabs, tab);
+  const nextTab: ResultPaneTabInstance = {
+    id: `custom:${tab}:${now}:${nextIndex}`,
+    kind: tab,
+    label: resultPaneTabInstanceLabel(tab, nextIndex, locale),
+    closable: true,
+  };
+  return {
+    tabs: [...state.tabs, nextTab],
+    activeTabId: nextTab.id,
+    browserTabAddresses: state.browserTabAddresses,
+    focusTarget: { kind: 'tab', tabId: nextTab.id },
+  };
+}
+
+export function closeRightPaneTabLifecycleState(
+  state: RightPaneTabLifecycleState,
+  tabId: string,
+): RightPaneTabLifecycleTransition {
+  const targetIndex = state.tabs.findIndex((tab) => tab.id === tabId);
+  if (targetIndex < 0) {
+    const activeTab = state.tabs.find((tab) => tab.id === state.activeTabId);
+    return {
+      ...state,
+      focusTarget: activeTab ? { kind: 'tab', tabId: activeTab.id } : { kind: 'new-button' },
+    };
+  }
+  const nextTabs = state.tabs.filter((tab) => tab.id !== tabId);
+  const browserTabAddresses = removeBrowserTabAddress(state.browserTabAddresses, tabId);
+  if (!nextTabs.length) {
+    return {
+      tabs: nextTabs,
+      activeTabId: '',
+      browserTabAddresses,
+      focusTarget: { kind: 'new-button' },
+    };
+  }
+  if (state.activeTabId !== tabId && nextTabs.some((tab) => tab.id === state.activeTabId)) {
+    return {
+      tabs: nextTabs,
+      activeTabId: state.activeTabId,
+      browserTabAddresses,
+      focusTarget: { kind: 'tab', tabId: state.activeTabId },
+    };
+  }
+  const fallback = nextTabs[Math.max(0, targetIndex - 1)] ?? nextTabs[0];
+  return {
+    tabs: nextTabs,
+    activeTabId: fallback.id,
+    browserTabAddresses,
+    focusTarget: { kind: 'tab', tabId: fallback.id },
+  };
+}
+
+function removeBrowserTabAddress(addresses: Record<string, string>, tabId: string) {
+  if (!(tabId in addresses)) return addresses;
+  const { [tabId]: _removed, ...rest } = addresses;
+  return rest;
+}
+
+function browserTabAddressesForOpenTabs(addresses: Record<string, string>, tabs: readonly ResultPaneTabInstance[]) {
+  const openTabIds = new Set(tabs.map((tab) => tab.id));
+  const filtered: Record<string, string> = {};
+  for (const [id, address] of Object.entries(addresses)) {
+    if (openTabIds.has(id)) filtered[id] = address;
+  }
+  return filtered;
+}
+
+function queueRightPaneFocus(target: RightPaneFocusTarget) {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  window.setTimeout(() => {
+    const element = target.kind === 'tab'
+      ? document.getElementById(`result-tab-${target.tabId.replace(/[^A-Za-z0-9_-]/g, '-')}`)
+      : document.querySelector<HTMLButtonElement>('.result-new-tab-button');
+    element?.focus();
+  }, 0);
 }
 
 function rightPaneStateStorageKey(workspacePath: string | undefined) {
@@ -582,15 +808,16 @@ function loadStoredRightPaneState(storageKey: string, locale: ResultLocale | und
     if (!raw) return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
-    const storedTabs = normalizeStoredRightPaneTabs(parsed.tabs, locale);
-    const tabs = storedTabs.length ? storedTabs : fallbackTabs;
+    const tabs = Array.isArray(parsed.tabs)
+      ? normalizeStoredRightPaneTabs(parsed.tabs, locale)
+      : fallbackTabs;
     const activeTabId = typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
       ? parsed.activeTabId
       : tabs.find((tab) => tab.kind === initialResultTab)?.id ?? tabs[0]?.id ?? '';
     return {
       tabs,
       activeTabId,
-      browserTabAddresses: normalizeStoredBrowserTabAddresses(parsed.browserTabAddresses),
+      browserTabAddresses: browserTabAddressesForOpenTabs(normalizeStoredBrowserTabAddresses(parsed.browserTabAddresses), tabs),
     };
   } catch {
     return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
@@ -659,6 +886,9 @@ export function ResultsRenderer({
   const [resultTabs, setResultTabs] = useState<ResultPaneTabInstance[]>(() => initialRightPaneState.current?.tabs ?? createDefaultRightPaneTabs(locale));
   const [activeResultTabId, setActiveResultTabId] = useState(initialRightPaneState.current?.activeTabId ?? baseResultPaneTabId(initialResultTab));
   const [browserTabAddresses, setBrowserTabAddresses] = useState<Record<string, string>>(() => initialRightPaneState.current?.browserTabAddresses ?? {});
+  const [workspaceFileEditorsByTabId, setWorkspaceFileEditorsByTabId] = useState<WorkspaceFileEditorsByTabId>(() => (
+    workspaceFileEditor ? { [baseResultPaneTabId('files')]: workspaceFileEditorWithEditMode(workspaceFileEditor, Boolean(workspaceFileEditor.editMode)) } : {}
+  ));
   const [focusMode, setFocusMode] = useState<ResultFocusMode>(initialFocusMode);
   const [inspectedArtifact, setInspectedArtifact] = useState<RuntimeArtifact | undefined>();
   const [pinnedObjectReferences, setPinnedObjectReferences] = useState<ObjectReference[]>([]);
@@ -666,6 +896,9 @@ export function ResultsRenderer({
   const [objectActionNotice, setObjectActionNotice] = useState('');
   const activeResultTab = resultTabs.find((tab) => tab.id === activeResultTabId);
   const resultTab = activeResultTab?.kind ?? 'primary';
+  const activeFilesWorkspaceFileEditor = resultTab === 'files'
+    ? workspaceFileEditorsByTabId[activeResultTabId] ?? null
+    : null;
   const hasOpenRightPaneTabs = resultTabs.length > 0 && Boolean(activeResultTab);
   const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
@@ -715,44 +948,37 @@ export function ResultsRenderer({
   }
   function handleNewResultTab(tab: ResultPaneTab) {
     setResultTabs((current) => {
-      const nextIndex = nextResultPaneTabIndex(current, tab);
-      const nextTab: ResultPaneTabInstance = {
-        id: `custom:${tab}:${Date.now()}:${nextIndex}`,
-        kind: tab,
-        label: resultPaneTabInstanceLabel(tab, nextIndex, locale),
-        closable: true,
-      };
-      setActiveResultTabId(nextTab.id);
-      window.setTimeout(() => document.getElementById(`result-tab-${nextTab.id.replace(/[^A-Za-z0-9_-]/g, '-')}`)?.focus(), 0);
-      return [...current, nextTab];
+      const nextState = addRightPaneTabLifecycleState({
+        tabs: current,
+        activeTabId: activeResultTabId,
+        browserTabAddresses,
+      }, tab, locale);
+      setActiveResultTabId(nextState.activeTabId);
+      queueRightPaneFocus(nextState.focusTarget);
+      return nextState.tabs;
     });
     if (tab === 'evidence') setFocusMode('evidence');
     else if (tab === 'terminal') setFocusMode('execution');
     else if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
   }
   function handleCloseResultTab(tabId: string) {
-    setBrowserTabAddresses((addresses) => {
-      if (!(tabId in addresses)) return addresses;
-      const { [tabId]: _removed, ...rest } = addresses;
-      return rest;
-    });
+    setWorkspaceFileEditorsByTabId((current) => removeWorkspaceFileEditorForTab(current, tabId));
     setResultTabs((current) => {
-      const targetIndex = current.findIndex((tab) => tab.id === tabId);
-      if (targetIndex < 0) return current;
-      const next = current.filter((tab) => tab.id !== tabId);
-      if (!next.length) {
-        setActiveResultTabId('');
+      const nextState = closeRightPaneTabLifecycleState({
+        tabs: current,
+        activeTabId: activeResultTabId,
+        browserTabAddresses,
+      }, tabId);
+      setBrowserTabAddresses(nextState.browserTabAddresses);
+      setActiveResultTabId(nextState.activeTabId);
+      const nextActiveTab = nextState.tabs.find((tab) => tab.id === nextState.activeTabId);
+      if (!nextActiveTab) {
         if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
-        return next;
-      }
-      if (activeResultTabId === tabId) {
-        const fallback = next[Math.max(0, targetIndex - 1)] ?? next[0];
-        setActiveResultTabId(fallback.id);
-        if (fallback.kind === 'evidence') setFocusMode('evidence');
-        else if (fallback.kind === 'terminal') setFocusMode('execution');
-        else if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
-      }
-      return next;
+      } else if (nextActiveTab.kind === 'evidence') setFocusMode('evidence');
+      else if (nextActiveTab.kind === 'terminal') setFocusMode('execution');
+      else if (focusMode === 'evidence' || focusMode === 'execution') setFocusMode('all');
+      queueRightPaneFocus(nextState.focusTarget);
+      return nextState.tabs;
     });
   }
   function handleFocusModeChange(mode: ResultFocusMode) {
@@ -808,20 +1034,23 @@ export function ResultsRenderer({
   );
   const workspaceFileConfig = useMemo(
     () => {
-      const editorRoot = workspaceFileEditor?.focusRequestKey === focusedWorkspaceFileRequestKey
-        ? workspaceFileEditor?.workspacePath
-        : undefined;
+      const editor = activeFilesWorkspaceFileEditor ?? workspaceFileEditor;
+      const editorRoot = activeFilesWorkspaceFileEditor?.workspacePath
+        || (editor?.focusRequestKey === focusedWorkspaceFileRequestKey
+        ? editor?.workspacePath
+        : undefined);
       const root = normalizeWorkspaceRootPath(editorRoot || focusedWorkspaceRoot);
       return root && root !== normalizeWorkspaceRootPath(config.workspacePath)
         ? { ...config, workspacePath: root }
         : config;
     },
-    [config, focusedWorkspaceFileRequestKey, focusedWorkspaceRoot, workspaceFileEditor?.focusRequestKey, workspaceFileEditor?.workspacePath],
+    [activeFilesWorkspaceFileEditor, config, focusedWorkspaceFileRequestKey, focusedWorkspaceRoot, workspaceFileEditor],
   );
   useEffect(() => {
     if (executionFocus || !focusedWorkspaceFilePath) return undefined;
-    if (workspaceFileEditor?.focusRequestKey === focusedWorkspaceFileRequestKey) return undefined;
-    if (workspaceFileEditorMatchesPath(workspaceFileEditor?.file.path, focusedWorkspaceFilePath, workspaceFileConfig.workspacePath)) return undefined;
+    const currentEditor = resultTab === 'files' ? activeFilesWorkspaceFileEditor : workspaceFileEditor;
+    if (currentEditor?.focusRequestKey === focusedWorkspaceFileRequestKey) return undefined;
+    if (workspaceFileEditorMatchesPath(currentEditor?.file.path, focusedWorkspaceFilePath, workspaceFileConfig.workspacePath)) return undefined;
     let cancelled = false;
     setObjectActionError('');
     void readFocusedWorkspaceFile({
@@ -830,7 +1059,19 @@ export function ResultsRenderer({
       reference: focusedObjectReference,
     })
       .then(({ file, workspacePath }) => {
-        if (!cancelled) onWorkspaceFileEditorChange({ file, draft: file.content, workspacePath, focusRequestKey: focusedWorkspaceFileRequestKey });
+        if (cancelled) return;
+        const nextEditor = {
+          file,
+          draft: workspaceFileViewerDraftForFile(file),
+          workspacePath,
+          focusRequestKey: focusedWorkspaceFileRequestKey,
+          editMode: false,
+        };
+        if (resultTab === 'files') {
+          setWorkspaceFileEditorsByTabId((current) => setWorkspaceFileEditorForTab(current, activeResultTabId, nextEditor));
+        } else {
+          onWorkspaceFileEditorChange(nextEditor);
+        }
       })
       .catch((error) => {
         if (!cancelled) setObjectActionError(error instanceof Error ? error.message : String(error));
@@ -839,13 +1080,16 @@ export function ResultsRenderer({
       cancelled = true;
     };
   }, [
+    activeFilesWorkspaceFileEditor,
+    activeResultTabId,
     executionFocus,
     focusedWorkspaceFilePath,
     focusedWorkspaceFileRequestKey,
     focusedObjectReference,
     onWorkspaceFileEditorChange,
+    resultTab,
     workspaceFileConfig,
-    workspaceFileEditor?.focusRequestKey,
+    workspaceFileEditor,
   ]);
 
   return (
@@ -864,6 +1108,7 @@ export function ResultsRenderer({
       onCloseResultTab={handleCloseResultTab}
       onFocusModeChange={handleFocusModeChange}
       onActiveRunChange={onActiveRunChange}
+      showActiveRunBanner={resultTab === 'primary'}
       drawer={!executionFocus && inspectedArtifact ? (
         <ArtifactInspectorDrawer
           scenarioId={scenarioId}
@@ -935,6 +1180,7 @@ export function ResultsRenderer({
                 key={activeResultTabId}
                 config={config}
                 session={session}
+                activeRun={activeRun}
                 locale={locale}
                 onCommandRequest={requestCommandText}
               />
@@ -951,8 +1197,10 @@ export function ResultsRenderer({
                 key={activeResultTabId}
                 config={workspaceFileConfig}
                 locale={locale}
-                state={workspaceFileEditor}
-                onChange={onWorkspaceFileEditorChange}
+                state={activeFilesWorkspaceFileEditor}
+                onChange={(nextEditor) => {
+                  setWorkspaceFileEditorsByTabId((current) => setWorkspaceFileEditorForTab(current, activeResultTabId, nextEditor));
+                }}
               />
             ) : resultTab === 'primary' ? (
               <PrimaryResult
@@ -973,7 +1221,14 @@ export function ResultsRenderer({
                 onWorkbenchToolSelect={activateResultTabKind}
               />
             ) : resultTab === 'evidence' ? (
-              <EvidenceMatrix key={activeResultTabId} claims={evidenceClaimsForRun(session, activeRun)} artifacts={artifactsForRun(session, activeRun)} locale={locale} />
+              <RightPaneReferencesTool
+                key={activeResultTabId}
+                session={session}
+                activeRun={activeRun}
+                pinnedReferences={pinnedObjectReferences}
+                locale={locale}
+                onAction={handleObjectAction}
+              />
             ) : null}
               </>
             )}
@@ -1055,7 +1310,19 @@ function RightPaneBrowserTool({
   onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
 }) {
   const normalizedUrl = normalizeRightPaneBrowserUrl(addressDraft);
-  const commands = browserWorkbenchDefaultCommands(normalizedUrl);
+  const browserState = rightPaneBrowserProjectionForUrl(normalizedUrl);
+  const commands = browserWorkbenchDefaultCommands(normalizedUrl, {
+    status: browserState.status,
+    canGoBack: false,
+    canGoForward: false,
+    canReload: normalizedUrl !== 'about:blank',
+    canStop: browserState.status === 'loading',
+    canSnapshot: normalizedUrl !== 'about:blank',
+    canState: normalizedUrl !== 'about:blank',
+    canTakeover: normalizedUrl !== 'about:blank',
+    canCopyUrl: normalizedUrl !== 'about:blank',
+    canOpenExternal: Boolean(browserState.externalUrl),
+  });
 
   function requestCommand(command: BrowserWorkbenchCommand) {
     onCommandRequest(command.command, command.label, normalizedUrl);
@@ -1075,10 +1342,21 @@ function RightPaneBrowserTool({
           title: resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' }),
           props: {
             title: resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' }),
-            status: normalizedUrl === 'about:blank' ? 'idle' : 'ready',
+            status: browserState.status,
+            state: {
+              status: browserState.status,
+              url: normalizedUrl,
+              reason: browserState.reason,
+              detail: browserState.detail,
+              ref: browserState.ref,
+              canRenderFrame: browserState.canRenderFrame,
+            },
+            embedPolicy: browserState.embedPolicy,
             addressValue: addressDraft,
             addressPlaceholder: 'https://example.org',
-            previewUrl: rightPaneBrowserPreviewUrl(normalizedUrl),
+            previewUrl: browserState.previewUrl,
+            externalUrl: browserState.externalUrl,
+            proxyFallbackUrl: browserState.proxyFallbackUrl,
             commands,
             onAddressChange: onAddressDraftChange,
             onAddressSubmit: openAddress,
@@ -1109,7 +1387,7 @@ function RightPaneBrowserTool({
                 id: `${tabId}:tab`,
                 url: normalizedUrl,
                 title: normalizedUrl === 'about:blank' ? 'about:blank' : normalizedUrl,
-                status: normalizedUrl === 'about:blank' ? 'new' : 'ready',
+                status: browserState.tabStatus,
               }],
             },
           },
@@ -1124,20 +1402,17 @@ function RightPaneBrowserTool({
 function RightPaneVirtualScreenTool({
   config,
   session,
+  activeRun,
   locale,
   onCommandRequest,
 }: {
   config: SciForgeConfig;
   session: SciForgeSession;
+  activeRun?: SciForgeRun;
   locale?: ResultLocale;
   onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
 }) {
-  const sessionRef = 'computer-use:session/right-pane/virtual-desktop-session-manifest.json';
-  const screenRef = 'computer-use:session/right-pane/virtual-screens.json#screen-1';
-  const replayRef = 'computer-use:session/right-pane/replay-bundle.json';
-  const frameRef = 'computer-use:session/right-pane/frames/latest.png';
-  const stopRef = 'computer-use:stop/right-pane';
-  const cancelLeaseRef = 'computer-use:lease/right-pane';
+  const payload = rightPaneVirtualScreenPayload(session, activeRun, config, locale);
   return (
     <div className="right-pane-package-surface right-pane-virtual-screen-surface" data-testid="right-pane-virtual-screen-tool">
       {renderVirtualScreenViewer({
@@ -1145,38 +1420,7 @@ function RightPaneVirtualScreenTool({
           componentId: 'virtual-screen-viewer',
           title: resultText(locale, { 'zh-CN': '虚拟屏幕', 'en-US': 'Virtual Screen' }),
           props: {
-            title: resultText(locale, { 'zh-CN': 'Computer Use 虚拟屏幕', 'en-US': 'Computer Use Virtual Screen' }),
-            status: resultText(locale, { 'zh-CN': '等待 backend', 'en-US': 'waiting-backend' }),
-            sessionRef,
-            displayGroupRef: 'computer-use:session/right-pane/virtual-display-group.json',
-            screenRef,
-            frameRef,
-            replayRef,
-            permissionRef: 'computer-use:permission/right-pane.json',
-            stopRef,
-            cancelLeaseRef,
-            screen: { width: 1440, height: 900, label: 'screen-1' },
-            actorCursors: [
-              { actorId: 'user', cursorId: 'cursor-user', label: 'User', color: '#38bdf8', x: 260, y: 220, state: 'watching' },
-              { actorId: 'agent-1', cursorId: 'cursor-agent', label: 'Agent', color: '#00e5a0', x: 880, y: 480, state: 'idle' },
-            ],
-            isolation: {
-              sharedSystemInputUsed: false,
-              systemPointerMoved: false,
-              systemKeyboardEventsSent: false,
-              inputExecuted: false,
-              diagnosticOnly: true,
-            },
-            events: [
-              {
-                label: resultText(locale, { 'zh-CN': 'Session skeleton 已就绪', 'en-US': 'Session skeleton ready' }),
-                ref: sessionRef,
-              },
-              {
-                label: resultText(locale, { 'zh-CN': '等待 isolated virtual desktop backend', 'en-US': 'Waiting for isolated virtual desktop backend' }),
-                ref: 'computer-use:session/right-pane/blocked/backend.json',
-              },
-            ],
+            ...payload,
             onTerminalEquivalentText: (event: { commandText: string; label: string; targetRef?: string }) => {
               onCommandRequest(event.commandText, event.label, event.targetRef);
             },
@@ -1187,13 +1431,451 @@ function RightPaneVirtualScreenTool({
           type: 'computer-use-virtual-screen',
           producerScenario: 'computer-use',
           schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
-          data: {},
+          data: payload,
         },
         config,
         session,
       })}
     </div>
   );
+}
+
+function rightPaneVirtualScreenPayload(
+  session: SciForgeSession,
+  activeRun: SciForgeRun | undefined,
+  config: SciForgeConfig,
+  locale?: ResultLocale,
+): VirtualScreenPayload {
+  const candidates = virtualScreenPayloadCandidates(session, activeRun, config);
+  const payload = candidates.find((candidate) =>
+    candidate.frameRef
+    || candidate.frameRefs.length
+    || candidate.replayRef
+    || candidate.screenRef
+    || candidate.sessionRef
+    || candidate.blockedRef
+    || candidate.errorRef
+  );
+  if (payload) return payload;
+  return {
+    title: resultText(locale, { 'zh-CN': 'Computer Use 虚拟屏幕', 'en-US': 'Computer Use Virtual Screen' }),
+    status: 'empty',
+    sessionRef: undefined,
+    screenRef: undefined,
+    visibleScreenRefs: [],
+    visibleCursorRefs: [],
+    replayRef: undefined,
+    frameRefs: [],
+    cursorOverlayRefs: [],
+    leaseOwnerRefs: [],
+    proposalRefs: [],
+    proposals: [],
+    permissionStatus: 'not-requested',
+    permissionRequired: false,
+    sharedInputAllowed: false,
+    leaseStatus: 'none',
+    rejectedInputs: [],
+    screen: { width: 1440, height: 900, label: resultText(locale, { 'zh-CN': '无可用屏幕', 'en-US': 'No attached screen' }) },
+    isolation: {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      inputExecuted: false,
+      diagnosticOnly: true,
+    },
+    events: [],
+  };
+}
+
+function virtualScreenPayloadCandidates(session: SciForgeSession, activeRun: SciForgeRun | undefined, config: SciForgeConfig): VirtualScreenPayload[] {
+  const runArtifacts = activeRun
+    ? dedupeRuntimeArtifacts([
+      ...artifactsForRun(session, activeRun),
+      ...runtimeArtifactsFromRunForRightPane(activeRun),
+    ])
+    : [];
+  const artifacts = activeRun ? runArtifacts : session.artifacts;
+  return artifacts
+    .filter((artifact) => /computer-use|virtual-screen|replay|screen/i.test([artifact.type, artifact.producerScenario, artifact.id].join(' ')))
+    .map((artifact) => virtualScreenPayloadFromArtifact(artifact, config))
+    .filter((payload): payload is VirtualScreenPayload => Boolean(payload));
+}
+
+function runtimeArtifactsFromRunForRightPane(run: SciForgeRun): RuntimeArtifact[] {
+  const raw = isRecord(run.raw) ? run.raw : undefined;
+  const data = isRecord(raw?.data) ? raw.data : undefined;
+  const output = isRecord(raw?.output) ? raw.output : undefined;
+  const dataOutput = isRecord(data?.output) ? data.output : undefined;
+  const roots = [
+    raw,
+    raw?.payload,
+    raw?.toolPayload,
+    raw?.structured,
+    data,
+    data?.payload,
+    data?.toolPayload,
+    output,
+    output?.payload,
+    output?.result,
+    dataOutput,
+    dataOutput?.payload,
+    dataOutput?.result,
+  ];
+  return dedupeRuntimeArtifacts(roots.flatMap((root) => {
+    const record = isRecord(root) ? root : undefined;
+    return toRecordList(record?.artifacts).map((artifact) => runtimeArtifactFromRecord(artifact, run.scenarioId));
+  }).filter((artifact): artifact is RuntimeArtifact => Boolean(artifact)));
+}
+
+function runtimeArtifactFromRecord(record: Record<string, unknown>, fallbackScenario: RuntimeArtifact['producerScenario']): RuntimeArtifact | undefined {
+  const id = firstNonEmptyString(stringField(record.id), stringField(record.artifactId))?.replace(/^artifact::?/i, '');
+  const type = firstNonEmptyString(stringField(record.type), stringField(record.artifactType));
+  if (!id || !type) return undefined;
+  return {
+    id,
+    type,
+    producerScenario: (stringField(record.producerScenario) ?? fallbackScenario) as RuntimeArtifact['producerScenario'],
+    schemaVersion: stringField(record.schemaVersion) ?? 'unknown',
+    dataRef: stringField(record.dataRef),
+    data: record.data,
+    metadata: isRecord(record.metadata) ? record.metadata : undefined,
+    delivery: isRecord(record.delivery) ? record.delivery as unknown as RuntimeArtifact['delivery'] : undefined,
+  };
+}
+
+function dedupeRuntimeArtifacts(artifacts: RuntimeArtifact[]) {
+  const byId = new Map<string, RuntimeArtifact>();
+  for (const artifact of artifacts) {
+    if (!artifact.id || byId.has(artifact.id)) continue;
+    byId.set(artifact.id, artifact);
+  }
+  return Array.from(byId.values());
+}
+
+function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, config: SciForgeConfig): VirtualScreenPayload | undefined {
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const frameRecords = virtualScreenFrameRecords(data, metadata, config);
+  const frameRefs = frameRecords.map((frame) => frame.ref);
+  const visibleScreenRefs = stringListField(data.visibleScreenRefs).concat(stringListField(metadata.visibleScreenRefs));
+  const visibleCursorRefs = stringListField(data.visibleCursorRefs).concat(stringListField(metadata.visibleCursorRefs));
+  const beforeRefs = stringListField(data.beforeEvidenceRefs).concat(stringListField(metadata.beforeEvidenceRefs));
+  const afterRefs = stringListField(data.afterEvidenceRefs).concat(stringListField(metadata.afterEvidenceRefs));
+  const cursorOverlayRefs = Array.from(new Set([
+    ...stringListField(data.cursorOverlayRefs),
+    ...stringListField(metadata.cursorOverlayRefs),
+    ...frameRecords.flatMap((frame) => frame.cursorOverlayRefs ?? []),
+  ]));
+  const proposalRefs = Array.from(new Set([
+    ...stringListField(data.proposalRefs),
+    ...stringListField(metadata.proposalRefs),
+    ...frameRecords.map((frame) => frame.proposalRef).filter((ref): ref is string => Boolean(ref)),
+  ]));
+  const replayRef = firstNonEmptyString(stringField(data.replayRef), stringField(metadata.replayRef), stringField(artifact.delivery?.readableRef), stringField(artifact.dataRef));
+  const frameRef = firstNonEmptyString(stringField(data.frameRef), frameRefs[0], stringField(metadata.frameRef));
+  const screenRef = firstNonEmptyString(stringField(data.screenRef), visibleScreenRefs[0], frameRecords[0]?.screenRef, stringField(metadata.screenRef));
+  const sessionRef = firstNonEmptyString(stringField(data.sessionRef), stringField(metadata.sessionRef));
+  const blockedRef = firstNonEmptyString(stringField(data.blockedRef), stringField(metadata.blockedRef));
+  const errorRef = firstNonEmptyString(stringField(data.errorRef), stringField(metadata.errorRef));
+  if (!frameRef && !replayRef && !screenRef && !sessionRef && !blockedRef && !errorRef) return undefined;
+  const screenRecord = isRecord(data.screen) ? data.screen : {};
+  return {
+    title: stringField(data.title) ?? stringField(metadata.title) ?? 'Computer Use Virtual Screen',
+    status: errorRef ? 'error' : blockedRef ? 'blocked' : frameRef ? 'ready' : 'empty',
+    sessionRef,
+    displayGroupRef: firstNonEmptyString(stringField(data.displayGroupRef), stringField(metadata.displayGroupRef)),
+    screenRef,
+    visibleScreenRefs: Array.from(new Set([screenRef, ...visibleScreenRefs, ...frameRecords.map((frame) => frame.screenRef)].filter((ref): ref is string => Boolean(ref)))),
+    visibleCursorRefs,
+    frameRef,
+    frameRefs: frameRecords.map((frame) => ({
+      ...frame,
+      screenRef: frame.screenRef ?? screenRef,
+      beforeEvidenceRef: frame.beforeEvidenceRef ?? beforeRefs[0],
+      afterEvidenceRef: frame.afterEvidenceRef ?? afterRefs[0],
+    })),
+    replayRef,
+    cursorOverlayRefs,
+    leaseOwnerRefs: [
+      ...toRecordList(data.leaseOwnerRefs),
+      ...toRecordList(metadata.leaseOwnerRefs),
+      ...frameRecords.flatMap((frame) => frame.leaseOwnerRefs ?? []).map((ref) => ({ ref })),
+    ].flatMap((owner) => {
+      const ownerRecord = owner as Record<string, unknown>;
+      const ref = stringField(ownerRecord.ref) ?? stringField(ownerRecord.leaseOwnerRef);
+      return ref ? [{ ref, label: stringField(ownerRecord.label), status: stringField(ownerRecord.status), ownerRef: stringField(ownerRecord.ownerRef), scopeRef: stringField(ownerRecord.scopeRef) }] : [];
+    }),
+    proposalRefs,
+    proposals: toRecordList(data.proposals).flatMap((proposal) => {
+      const ref = stringField(proposal.ref) ?? stringField(proposal.proposalRef);
+      return ref ? [{ ref, label: stringField(proposal.label), status: stringField(proposal.status), actorRef: stringField(proposal.actorRef), cursorRef: stringField(proposal.cursorRef), frameRef: stringField(proposal.frameRef), approvalRef: stringField(proposal.approvalRef), riskLevel: stringField(proposal.riskLevel) }] : [];
+    }),
+    beforeEvidenceRef: beforeRefs[0],
+    afterEvidenceRef: afterRefs[0],
+    completionEvidenceRef: stringField(data.completionEvidenceRef) ?? stringField(metadata.completionEvidenceRef),
+    blockedRef,
+    errorRef,
+    blockedReason: stringField(data.blockedReason) ?? stringField(metadata.blockedReason),
+    errorReason: stringField(data.errorReason) ?? stringField(metadata.errorReason),
+    permissionRef: firstNonEmptyString(stringField(data.permissionRef), stringField(metadata.permissionRef)),
+    permissionStatus: stringField(data.permissionStatus) ?? stringField(metadata.permissionStatus),
+    permissionRequired: typeof data.permissionRequired === 'boolean' ? data.permissionRequired : undefined,
+    permissionGranted: typeof data.permissionGranted === 'boolean' ? data.permissionGranted : undefined,
+    sharedInputAllowed: typeof data.sharedInputAllowed === 'boolean' ? data.sharedInputAllowed : undefined,
+    leaseStatus: stringField(data.leaseStatus) ?? stringField(metadata.leaseStatus),
+    stopRef: firstNonEmptyString(stringField(data.stopRef), stringField(metadata.stopRef)),
+    cancelLeaseRef: firstNonEmptyString(stringField(data.cancelLeaseRef), stringField(metadata.cancelLeaseRef)),
+    screen: {
+      width: numberField(screenRecord.width) ?? numberField(data.width) ?? 1440,
+      height: numberField(screenRecord.height) ?? numberField(data.height) ?? 900,
+      label: stringField(screenRecord.label) ?? stringField(data.screenId) ?? screenRef,
+    },
+    actorCursors: toRecordList(data.actorCursors).map((cursor, index) => ({
+      actorId: stringField(cursor.actorId) ?? `actor-${index + 1}`,
+      cursorId: stringField(cursor.cursorId),
+      label: stringField(cursor.label) ?? stringField(cursor.actorId),
+      color: stringField(cursor.color),
+      x: numberField(cursor.x),
+      y: numberField(cursor.y),
+      state: stringField(cursor.state),
+    })),
+    isolation: isRecord(data.isolation) ? data.isolation : {
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      inputExecuted: false,
+      diagnosticOnly: true,
+    },
+    runSummary: virtualScreenRunSummaryFromArtifact(data, metadata, artifact, frameRecords, {
+      status: errorRef ? 'error' : blockedRef ? 'blocked' : frameRef ? 'ready' : 'empty',
+      sessionRef,
+      screenRef,
+      replayRef,
+      blockedRef,
+    }),
+    rejectedInputs: [],
+    events: [
+      ...refEvents('frame', frameRefs),
+      ...refEvents('screen', visibleScreenRefs),
+      ...refEvents('cursor', visibleCursorRefs),
+      ...refEvents('before', beforeRefs),
+      ...refEvents('after', afterRefs),
+      stringField(data.completionEvidenceRef) ? { label: 'completion', ref: stringField(data.completionEvidenceRef), status: 'recorded' } : undefined,
+      blockedRef ? { label: 'blocked', ref: blockedRef, status: 'blocked' } : undefined,
+      errorRef ? { label: 'error', ref: errorRef, status: 'error' } : undefined,
+    ].filter((event): event is { label: string; ref: string; status: string } => Boolean(event?.ref)),
+  };
+}
+
+function virtualScreenRunSummaryFromArtifact(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  artifact: RuntimeArtifact,
+  frameRecords: VirtualScreenFrame[],
+  fallback: {
+    status: string;
+    sessionRef?: string;
+    screenRef?: string;
+    replayRef?: string;
+    blockedRef?: string;
+  },
+) {
+  const raw = isRecord(data.runSummary)
+    ? data.runSummary
+    : isRecord(metadata.runSummary)
+      ? metadata.runSummary
+      : {};
+  const visibleScreenRefs = Array.from(new Set([
+    ...stringListField(data.visibleScreenRefs),
+    stringField(data.screenRef),
+    fallback.screenRef,
+    ...frameRecords.map((frame) => frame.screenRef),
+  ].filter((ref): ref is string => Boolean(ref))));
+  const visibleCursorRefs = Array.from(new Set([
+    ...stringListField(data.visibleCursorRefs),
+    ...stringListField(data.cursorOverlayRefs),
+    ...frameRecords.flatMap((frame) => frame.cursorOverlayRefs ?? []),
+  ]));
+  const sidecarBinding = isRecord(data.sidecarBinding) ? data.sidecarBinding : {};
+  return compactVirtualScreenRunSummary({
+    schemaVersion: stringField(raw.schemaVersion) ?? 'sciforge.computer-use.run-summary.v1',
+    status: stringField(raw.status) ?? stringField(data.status) ?? fallback.status,
+    runId: stringField(raw.runId) ?? stringField(data.runId) ?? stringField(metadata.runId) ?? stringField(artifact.metadata?.runId),
+    validationRef: firstNonEmptyString(stringField(raw.validationRef), stringField(data.validationRef), stringField(metadata.validationRef)),
+    currentBundleRef: firstNonEmptyString(stringField(raw.currentBundleRef), stringField(data.currentBundleRef), stringField(metadata.currentBundleRef), fallback.sessionRef),
+    evidenceBundleIndexRef: firstNonEmptyString(stringField(raw.evidenceBundleIndexRef), stringField(raw.evidenceIndexRef), stringField(data.evidenceBundleIndexRef), stringField(data.evidenceIndexRef), stringField(metadata.evidenceBundleIndexRef)),
+    replayRef: firstNonEmptyString(stringField(raw.replayRef), fallback.replayRef),
+    validationStatus: boundedRightPaneText(firstNonEmptyString(stringField(raw.validationStatus), stringField(data.validationStatus), stringField(metadata.validationStatus)) ?? '', 120) || undefined,
+    validationOk: booleanField(raw.validationOk) ?? booleanField(data.validationOk),
+    sidecarBindingRef: firstNonEmptyString(stringField(raw.sidecarBindingRef), stringField(data.sidecarBindingRef), stringField(metadata.sidecarBindingRef)),
+    sidecarCapabilitiesRef: firstNonEmptyString(stringField(raw.sidecarCapabilitiesRef), stringField(data.sidecarCapabilitiesRef), stringField(metadata.sidecarCapabilitiesRef)),
+    sidecarDiscoveryRef: firstNonEmptyString(stringField(raw.sidecarDiscoveryRef), stringField(data.sidecarDiscoveryRef), stringField(metadata.sidecarDiscoveryRef)),
+    sidecarBindingKind: boundedRightPaneText(firstNonEmptyString(stringField(raw.sidecarBindingKind), stringField(data.sidecarBindingKind), stringField(sidecarBinding.bindingKind)) ?? '', 120) || undefined,
+    realNativeSidecarExecuted: booleanField(raw.realNativeSidecarExecuted) ?? booleanField(data.realNativeSidecarExecuted),
+    completionEligible: booleanField(raw.completionEligible) ?? booleanField(data.completionEligible),
+    screenCount: positiveIntegerField(raw.screenCount) ?? positiveIntegerField(data.screenCount) ?? visibleScreenRefs.length,
+    actorCursorCount: positiveIntegerField(raw.actorCursorCount) ?? positiveIntegerField(data.actorCursorCount) ?? Math.max(toRecordList(data.actorCursors).length, visibleCursorRefs.length),
+    frameCount: positiveIntegerField(raw.frameCount) ?? positiveIntegerField(data.frameCount) ?? frameRecords.length,
+    cursorOverlayCount: positiveIntegerField(raw.cursorOverlayCount) ?? positiveIntegerField(data.cursorOverlayCount) ?? visibleCursorRefs.length,
+    schedulerLeaseCount: positiveIntegerField(raw.schedulerLeaseCount) ?? positiveIntegerField(data.schedulerLeaseCount) ?? Math.max(stringListField(data.schedulerLeaseRefs).length, stringListField(data.leaseOwnerRefs).length),
+    targetCount: positiveIntegerField(raw.targetCount) ?? positiveIntegerField(data.targetCount) ?? stringListField(data.targetRefs).length,
+    blockedReason: boundedRightPaneText(firstNonEmptyString(stringField(raw.blockedReason), stringField(data.blockedReason)) ?? '', 240) || undefined,
+  });
+}
+
+function compactVirtualScreenRunSummary(summary: Record<string, unknown>) {
+  const compact = Object.fromEntries(Object.entries(summary).filter(([, value]) => {
+    if (value === undefined || value === null || value === '') return false;
+    return true;
+  }));
+  return Object.keys(compact).length > 1 ? compact : undefined;
+}
+
+function virtualScreenFrameRecords(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  config: SciForgeConfig,
+): VirtualScreenFrame[] {
+  const frames = [
+    ...frameRecordsFromValue(data.frames, config),
+    ...frameRecordsFromValue(data.frameRefs, config),
+    ...frameRecordsFromValue(metadata.frames, config),
+    ...frameRecordsFromValue(metadata.frameRefs, config),
+  ];
+  const topLevelFrame = frameRecordFromValue({
+    ref: stringField(data.frameRef) ?? stringField(metadata.frameRef),
+    frameRef: stringField(data.frameRef) ?? stringField(metadata.frameRef),
+    frameUrl: stringField(data.frameUrl) ?? stringField(metadata.frameUrl),
+    frameDataRef: stringField(data.frameDataRef) ?? stringField(metadata.frameDataRef),
+    screenshotRef: stringField(data.screenshotRef) ?? stringField(metadata.screenshotRef),
+    screenRef: stringField(data.screenRef) ?? stringField(metadata.screenRef),
+    label: stringField(data.frameLabel) ?? stringField(metadata.frameLabel),
+    status: stringField(data.frameStatus) ?? stringField(metadata.frameStatus),
+    framePreviewUrl: stringField(data.framePreviewUrl) ?? stringField(metadata.framePreviewUrl),
+    thumbnailPreviewUrl: stringField(data.thumbnailPreviewUrl) ?? stringField(metadata.thumbnailPreviewUrl),
+    safePreviewUrl: stringField(data.safePreviewUrl) ?? stringField(metadata.safePreviewUrl),
+    previewUrl: stringField(data.previewUrl) ?? stringField(metadata.previewUrl),
+    thumbnailUrl: stringField(data.thumbnailUrl) ?? stringField(metadata.thumbnailUrl),
+    beforeEvidenceRef: stringField(data.beforeEvidenceRef) ?? stringListField(data.beforeEvidenceRefs)[0],
+    afterEvidenceRef: stringField(data.afterEvidenceRef) ?? stringListField(data.afterEvidenceRefs)[0],
+    evidenceRef: stringField(data.evidenceRef),
+    cursorOverlayRefs: stringListField(data.cursorOverlayRefs),
+    leaseOwnerRefs: stringListField(data.leaseOwnerRefs),
+    proposalRef: stringField(data.proposalRef) ?? stringField(data.actionProposalRef),
+    blockedReason: stringField(data.blockedReason),
+    errorReason: stringField(data.errorReason),
+  }, config);
+  if (topLevelFrame) frames.unshift(topLevelFrame);
+  const byRef = new Map<string, VirtualScreenFrame>();
+  for (const frame of frames) {
+    const previous = byRef.get(frame.ref);
+    byRef.set(frame.ref, previous ? mergeVirtualScreenFrame(previous, frame) : frame);
+  }
+  return Array.from(byRef.values());
+}
+
+function frameRecordsFromValue(value: unknown, config: SciForgeConfig): VirtualScreenFrame[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((frame) => frameRecordFromValue(frame, config)).filter((frame): frame is VirtualScreenFrame => Boolean(frame));
+}
+
+function frameRecordFromValue(value: unknown, config: SciForgeConfig): VirtualScreenFrame | undefined {
+  if (typeof value === 'string') {
+    const ref = stringField(value);
+    return ref ? { ref, framePreviewUrl: rightPaneVirtualScreenFramePreviewUrl(ref, config) } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const ref = firstNonEmptyString(
+    stringField(value.ref),
+    stringField(value.frameRef),
+    stringField(value.screenshotRef),
+    stringField(value.frameDataRef),
+  );
+  if (!ref) return undefined;
+  const previewUrl = safeFramePreviewUrl(value.framePreviewUrl)
+    ?? safeFramePreviewUrl(value.safePreviewUrl)
+    ?? safeFramePreviewUrl(value.previewUrl)
+    ?? safeFramePreviewUrl(value.rawUrl)
+    ?? safeFramePreviewUrl(value.frameUrl)
+    ?? rightPaneVirtualScreenFramePreviewUrl(ref, config);
+  return {
+    ref,
+    screenRef: stringField(value.screenRef),
+    label: stringField(value.label),
+    status: stringField(value.status),
+    frameUrl: safeFramePreviewUrl(value.frameUrl),
+    frameDataRef: stringField(value.frameDataRef),
+    screenshotRef: stringField(value.screenshotRef),
+    framePreviewUrl: previewUrl,
+    thumbnailPreviewUrl: safeFramePreviewUrl(value.thumbnailPreviewUrl),
+    safePreviewUrl: safeFramePreviewUrl(value.safePreviewUrl),
+    previewUrl: safeFramePreviewUrl(value.previewUrl),
+    thumbnailUrl: safeFramePreviewUrl(value.thumbnailUrl),
+    rawUrl: safeFramePreviewUrl(value.rawUrl),
+    beforeEvidenceRef: stringField(value.beforeEvidenceRef) ?? stringListField(value.beforeEvidenceRefs)[0],
+    afterEvidenceRef: stringField(value.afterEvidenceRef) ?? stringListField(value.afterEvidenceRefs)[0],
+    evidenceRef: stringField(value.evidenceRef),
+    cursorOverlayRefs: stringListField(value.cursorOverlayRefs),
+    leaseOwnerRefs: stringListField(value.leaseOwnerRefs),
+    proposalRef: stringField(value.proposalRef) ?? stringField(value.actionProposalRef),
+    blockedReason: stringField(value.blockedReason),
+    errorReason: stringField(value.errorReason),
+  };
+}
+
+function mergeVirtualScreenFrame(
+  left: VirtualScreenFrame,
+  right: VirtualScreenFrame,
+): VirtualScreenFrame {
+  const merged: Record<string, unknown> = { ...left };
+  for (const [key, value] of Object.entries(right)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value) && !value.length) continue;
+    merged[key] = value;
+  }
+  return merged as unknown as VirtualScreenFrame;
+}
+
+function rightPaneVirtualScreenFramePreviewUrl(ref: string, config: SciForgeConfig) {
+  if (!isPreviewableFrameRef(ref)) return undefined;
+  const params = new URLSearchParams({ ref });
+  const workspacePath = normalizeWorkspaceRootPath(config.workspacePath);
+  if (workspacePath) params.set('workspacePath', workspacePath);
+  return `/api/sciforge/preview/raw?${params.toString()}`;
+}
+
+function isPreviewableFrameRef(ref: string) {
+  const value = ref.trim();
+  if (!/\.(?:png|jpe?g|webp|gif)$/i.test(value)) return false;
+  if (/^(?:data:|blob:|file:|javascript:)/i.test(value) || /base64/i.test(value)) return false;
+  if (value.startsWith('/') || value.startsWith('~')) return false;
+  return !/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value);
+}
+
+function safeFramePreviewUrl(value: unknown) {
+  const url = stringField(value);
+  if (!url || /^(?:data:|blob:|file:|javascript:)/i.test(url) || /base64/i.test(url)) return undefined;
+  return url.startsWith('/api/sciforge/preview/') && !url.startsWith('//') ? url : undefined;
+}
+
+function stringListField(value: unknown) {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [];
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function positiveIntegerField(value: unknown) {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function booleanField(value: unknown) {
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function refEvents(label: string, refs: string[]) {
+  return refs.map((ref) => ({ label, ref, status: 'recorded' }));
 }
 
 function RightPaneTerminalTool({
@@ -1210,6 +1892,27 @@ function RightPaneTerminalTool({
   const units = activeRun ? auditExecutionUnitsForRun(session, activeRun) : session.executionUnits.slice(-6);
   const buffer = terminalTranscriptForRightPane(units, locale);
   const status = terminalStatusForRightPane(units, activeRun, buffer);
+  const sessionRef = activeRun ? `run:${rightPaneInlineLabel(activeRun.id)}:terminal` : 'right-pane-terminal';
+  const sessionId = activeRun ? rightPaneInlineLabel(activeRun.id) : 'right-pane-terminal';
+  const transcriptRef = terminalTranscriptRefForRightPane(units, activeRun);
+  const ptyTranscriptRef = terminalPtyTranscriptRefForRightPane(units, activeRun);
+  const terminalAdapter: TerminalSessionAdapter = {
+    kind: 'host-owned-terminal-session',
+    mode: 'transcript',
+    session: {
+      sessionRef,
+      sessionId,
+      status,
+      rows: 24,
+      cols: 80,
+      startedAt: activeRun?.createdAt,
+      completedAt: activeRun?.completedAt,
+      transcriptRef,
+      ptyTranscriptRef,
+    },
+    transcript: buffer,
+  };
+  const inputAllowed = status === 'running';
   return (
     <div className="right-pane-package-surface right-pane-terminal-surface" data-testid="right-pane-terminal-tool">
       {renderTerminalSessionViewer({
@@ -1217,11 +1920,18 @@ function RightPaneTerminalTool({
           componentId: 'terminal-session-viewer',
           title: resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' }),
           props: {
-            sessionRef: activeRun ? `run:${rightPaneInlineLabel(activeRun.id)}` : 'right-pane-terminal',
+            mode: 'transcript',
+            adapter: terminalAdapter,
+            sessionRef,
+            sessionId,
             title: resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' }),
             status,
+            rows: 24,
+            cols: 80,
             buffer,
-            capabilities: { input: true, paste: true, resize: true, copy: true, download: false, stop: activeRun?.status === 'running', focus: true },
+            transcriptRef,
+            ptyTranscriptRef,
+            capabilities: { input: inputAllowed, paste: inputAllowed, resize: true, copy: true, download: true, stop: status === 'running', focus: true },
             metadata: {
               surface: 'right-pane',
               mode: 'transcript',
@@ -1229,9 +1939,18 @@ function RightPaneTerminalTool({
               runStatus: activeRun?.status ?? 'none',
               unitCount: String(units.length),
             },
-            onDataInput: (input: string) => onCommandRequest(input, 'Terminal input'),
+            onDataInput: (input: string) => {
+              if (status === 'running' && input.trim()) onCommandRequest(`/terminal input --session ${JSON.stringify(sessionRef)} --text ${JSON.stringify(input)}`, 'Terminal input', sessionRef);
+            },
             onPasteInput: (input: string) => {
-              if (input.trim()) onCommandRequest(input, 'Terminal paste');
+              if (status === 'running' && input.trim()) onCommandRequest(`/terminal paste --session ${JSON.stringify(sessionRef)} --text ${JSON.stringify(input)}`, 'Terminal paste', sessionRef);
+            },
+            onResize: (size: { cols: number; rows: number }) => onCommandRequest(`/terminal resize --session ${JSON.stringify(sessionRef)} --cols ${size.cols} --rows ${size.rows}`, 'Resize terminal', sessionRef),
+            onCopyRequest: () => onCommandRequest(`/terminal copy --session ${JSON.stringify(sessionRef)}`, 'Copy terminal transcript', sessionRef),
+            onDownloadRequest: () => onCommandRequest(`/terminal download --session ${JSON.stringify(sessionRef)}`, 'Download terminal transcript', sessionRef),
+            onStopRequest: () => onCommandRequest(`/terminal stop --session ${JSON.stringify(sessionRef)}`, 'Stop terminal', sessionRef),
+            onFocusChange: (focused: boolean) => {
+              if (focused) onCommandRequest(`/terminal focus --session ${JSON.stringify(sessionRef)}`, 'Focus terminal', sessionRef);
             },
           },
         },
@@ -1240,11 +1959,10 @@ function RightPaneTerminalTool({
           type: 'terminal-session',
           producerScenario: 'terminal-session-viewer',
           schemaVersion: 'sciforge.terminal-session.v1',
-          data: { status, buffer },
+          data: { status, buffer, transcriptRef, ptyTranscriptRef },
         },
         session,
       })}
-      {activeRun ? <ExecutionOnlyResult session={session} activeRun={activeRun} locale={locale} /> : null}
     </div>
   );
 }
@@ -1266,7 +1984,8 @@ function RightPaneFilesTool({
   const [workspaceError, setWorkspaceError] = useState('');
   const [workspaceNotice, setWorkspaceNotice] = useState('');
   const [saveError, setSaveError] = useState('');
-  const dirty = Boolean(state && state.draft !== state.file.content);
+  const canEditFile = workspaceFileEditorCanEditFile(state?.file);
+  const dirty = Boolean(state && canEditFile && state.draft !== state.file.content);
 
   useEffect(() => {
     setFolderChildren({});
@@ -1334,10 +2053,18 @@ function RightPaneFilesTool({
 
   async function openFile(entry: WorkspaceFileViewerEntry) {
     if (entry.kind !== 'file') return;
+    const tooLargeFile = tooLargeWorkspaceFileFromEntry(entry);
+    if (tooLargeFile) {
+      onChange({ file: tooLargeFile, draft: '', workspacePath: workspaceRoot, editMode: false });
+      setWorkspaceError('');
+      setSaveError('');
+      setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开只读元数据：${entry.name}`, 'en-US': `Opened read-only metadata for ${entry.name}` }));
+      return;
+    }
     try {
       setWorkspaceError('');
-      const file = await readWorkspaceFile(entry.path, config);
-      onChange({ file, draft: file.content, workspacePath: workspaceRoot });
+      const file = workspaceFileWithInlinePolicy(await readWorkspaceFile(entry.path, config));
+      onChange({ file, draft: workspaceFileViewerDraftForFile(file), workspacePath: workspaceRoot, editMode: false });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已打开 ${file.name}`, 'en-US': `Opened ${file.name}` }));
     } catch (error) {
       setWorkspaceError(error instanceof Error ? error.message : String(error));
@@ -1346,11 +2073,11 @@ function RightPaneFilesTool({
   }
 
   async function saveFile() {
-    if (!state) return;
+    if (!state || !canEditFile) return;
     try {
       setSaveError('');
-      const file = await writeWorkspaceFile(state.file.path, state.draft, config);
-      onChange({ ...state, file, draft: file.content, workspacePath: workspaceRoot });
+      const file = workspaceFileWithInlinePolicy(await writeWorkspaceFile(state.file.path, state.draft, config));
+      onChange({ ...state, file, draft: workspaceFileViewerDraftForFile(file), workspacePath: workspaceRoot, editMode: false });
       setWorkspaceNotice(resultText(locale, { 'zh-CN': `已保存 ${file.name}`, 'en-US': `Saved ${file.name}` }));
       const parent = workspaceFileViewerParentPath(file.path) || workspaceRoot;
       if (parent) await loadFolder(parent, { quiet: true });
@@ -1372,18 +2099,31 @@ function RightPaneFilesTool({
             expandedFolderPaths: Array.from(expandedFolders),
             selectedPath: state?.file.path,
             file: state?.file ?? null,
+            treePageSize: 200,
+            inlineTextLimitBytes: WORKSPACE_FILE_INLINE_TEXT_LIMIT_BYTES,
             draft: state?.draft ?? '',
             dirty,
+            editMode: Boolean(state?.editMode && canEditFile),
             notice: workspaceNotice,
             error: boundedRightPaneText(workspaceError, 800),
             saveError: boundedRightPaneText(saveError, 800),
             labels: workspaceFileViewerLabels(locale),
+            displayPathForPath: (path: string) => workspaceDisplayPathForPath(workspaceRoot, path),
+            copyPathForPath: (path: string) => workspaceCopyRefForPath(workspaceRoot, path),
             onToggleFolder: toggleFolder,
             onOpenFile: (entry: WorkspaceFileViewerEntry) => void openFile(entry),
             onRefresh: () => void refreshTree(),
             onCollapseAll: () => setExpandedFolders(new Set(workspaceRoot ? [workspaceRoot] : [])),
-            onDraftChange: (draft: string) => state ? onChange({ ...state, draft }) : undefined,
+            onDraftChange: (draft: string) => {
+              if (state?.editMode && canEditFile) onChange({ ...state, draft });
+            },
+            onEditModeChange: (editMode: boolean) => {
+              if (state) onChange(workspaceFileEditorWithEditMode(state, editMode));
+            },
             onSave: () => void saveFile(),
+            onCancel: () => {
+              if (state) onChange(cancelWorkspaceFileEditorEdit(state));
+            },
             onClose: () => onChange(null),
             onCopyPath: (path: string) => {
               if (typeof navigator !== 'undefined') void navigator.clipboard?.writeText(path);
@@ -1411,33 +2151,252 @@ function RightPaneFilesTool({
   );
 }
 
+function RightPaneReferencesTool({
+  session,
+  activeRun,
+  pinnedReferences,
+  locale,
+  onAction,
+}: {
+  session: SciForgeSession;
+  activeRun?: SciForgeRun;
+  pinnedReferences: ObjectReference[];
+  locale?: ResultLocale;
+  onAction: (reference: ObjectReference, action: ObjectAction) => void | Promise<void>;
+}) {
+  const references = rightPaneObjectReferences(session, activeRun);
+  const grouped = groupObjectReferencesByKind(references);
+  if (!references.length) {
+    return (
+      <div className="right-pane-references-inspector" data-testid="right-pane-references-tool" data-state="empty">
+        <strong>{resultText(locale, { 'zh-CN': '没有对象引用', 'en-US': 'No object references' })}</strong>
+        <span>{resultText(locale, { 'zh-CN': '当回答、过程或结果声明 refs 后会显示在这里。', 'en-US': 'Declared refs from answers, process rows, and results appear here.' })}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="right-pane-references-inspector" data-testid="right-pane-references-tool" data-state="ready">
+      {grouped.map((group) => (
+        <section key={group.kind} className="right-pane-reference-group" data-reference-kind={group.kind}>
+          <div className="view-plan-section-head">
+            <span>{objectReferenceKindLabel(group.kind)}</span>
+            <Badge variant="muted">{group.references.length}</Badge>
+          </div>
+          <div className="right-pane-reference-list">
+            {group.references.map((reference) => {
+              const actions = availableObjectActions(reference, session);
+              const targetTab = resultTabForObjectReference(reference);
+              const isPinned = pinnedReferences.some((item) => item.id === reference.id);
+              return (
+                <article key={`${reference.kind}:${reference.id}:${reference.ref}`} className="right-pane-reference-card" data-focus-target={targetTab}>
+                  <div>
+                    <Badge variant={reference.status === 'blocked' || reference.status === 'missing' ? 'warning' : 'info'}>{reference.status ?? 'available'}</Badge>
+                    <strong>{rightPaneInlineLabel(reference.title || reference.ref)}</strong>
+                    <span>{rightPaneInlineLabel(reference.summary || reference.ref)}</span>
+                  </div>
+                  <code>{rightPaneInlineLabel(reference.ref)}</code>
+                  <div className="object-focus-actions">
+                    {actions.slice(0, 5).map((action) => (
+                      <button key={action} type="button" onClick={() => void onAction(reference, action)}>
+                        {action === 'focus-right-pane'
+                          ? resultText(locale, { 'zh-CN': '打开', 'en-US': 'Open' })
+                          : objectActionLabel(action)}
+                      </button>
+                    ))}
+                    {isPinned ? <span>{resultText(locale, { 'zh-CN': '已固定', 'en-US': 'Pinned' })}</span> : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function rightPaneObjectReferences(session: SciForgeSession, activeRun?: SciForgeRun): ObjectReference[] {
+  const activeRunIds = activeRun ? new Set([activeRun.id]) : undefined;
+  const fromMessages = session.messages.flatMap((message) => message.objectReferences ?? [])
+    .filter((reference) => !activeRunIds || !reference.runId || activeRunIds.has(reference.runId));
+  const runs = activeRun ? [activeRun] : session.runs;
+  const fromRuns = runs.flatMap((run) => run.objectReferences ?? []);
+  const fromArtifacts = (activeRun ? artifactsForRun(session, activeRun) : session.artifacts)
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, activeRun?.id));
+  const fromExecutionUnits = auditExecutionUnitsForRun(session, activeRun).map((unit): ObjectReference => ({
+    id: `object-execution-unit-${unit.id}`,
+    kind: 'execution-unit',
+    title: unit.tool || unit.id,
+    ref: `execution-unit:${unit.id}`,
+    runId: unit.runId ?? activeRun?.id,
+    executionUnitId: unit.id,
+    status: terminalExecutionUnitFailed(unit) ? 'blocked' : 'available',
+    summary: unit.outputRef || unit.stdoutRef || unit.stderrRef || unit.status,
+    actions: ['focus-right-pane', 'copy-path'],
+    provenance: {
+      dataRef: unit.outputRef,
+      producer: unit.tool,
+    },
+  }));
+  return dedupeObjectReferences([
+    ...fromMessages,
+    ...fromRuns,
+    ...fromArtifacts,
+    ...fromExecutionUnits,
+  ]);
+}
+
+function dedupeObjectReferences(references: ObjectReference[]) {
+  const byKey = new Map<string, ObjectReference>();
+  for (const reference of references) {
+    if (!reference?.ref || !reference.kind) continue;
+    const key = `${reference.kind}:${reference.ref}`;
+    if (!byKey.has(key)) byKey.set(key, reference);
+  }
+  return Array.from(byKey.values()).slice(0, 60);
+}
+
+function groupObjectReferencesByKind(references: ObjectReference[]) {
+  const order: ObjectReference['kind'][] = ['artifact', 'file', 'folder', 'url', 'execution-unit', 'run', 'scenario-package'];
+  return order
+    .map((kind) => ({
+      kind,
+      references: references.filter((reference) => reference.kind === kind),
+    }))
+    .filter((group) => group.references.length > 0);
+}
+
 function normalizeRightPaneBrowserUrl(value: string) {
   return normalizeBrowserWorkbenchUrl(value);
 }
 
-function rightPaneBrowserPreviewUrl(url: string) {
-  if (url === 'about:blank') return 'about:blank';
-  if (shouldProxyRightPaneBrowserUrl(url)) {
-    const params = new URLSearchParams({ url });
-    return `/api/sciforge/browser/proxy?${params.toString()}`;
-  }
-  return url;
+type RightPaneBrowserProjectionStatus = 'idle' | 'loading' | 'ready' | 'blocked' | 'error' | 'offline';
+
+interface RightPaneBrowserProjectionState {
+  status: RightPaneBrowserProjectionStatus;
+  tabStatus: 'new' | 'loading' | 'ready' | 'failed' | 'closed';
+  previewUrl?: string;
+  externalUrl?: string;
+  proxyFallbackUrl?: string;
+  reason?: string;
+  detail?: string;
+  ref?: string;
+  canRenderFrame?: boolean;
+  embedPolicy?: {
+    embeddable?: boolean;
+    status?: RightPaneBrowserProjectionStatus;
+    reason?: string;
+    ref?: string;
+  };
 }
 
-function shouldProxyRightPaneBrowserUrl(url: string) {
+function rightPaneBrowserProjectionForUrl(url: string): RightPaneBrowserProjectionState {
+  if (url === 'about:blank') {
+    return {
+      status: 'idle',
+      tabStatus: 'new',
+      previewUrl: 'about:blank',
+      reason: 'No browser URL is open in this right-pane tab yet.',
+      canRenderFrame: true,
+    };
+  }
+
+  const parsed = parseRightPaneBrowserUrl(url);
+  if (!parsed) {
+    return {
+      status: 'error',
+      tabStatus: 'failed',
+      reason: 'The URL could not be parsed into a browser target.',
+      detail: 'Enter a local path, localhost URL, http URL, or https URL.',
+      ref: 'browser:error/right-pane/invalid-url',
+      canRenderFrame: false,
+    };
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return {
+      status: 'blocked',
+      tabStatus: 'failed',
+      reason: 'This URL scheme is not embeddable by the browser workbench.',
+      detail: 'Use an http or https URL, or open the target through a host-owned BrowserRuntime command.',
+      ref: 'browser:embed-policy/right-pane/unsupported-scheme',
+      canRenderFrame: false,
+      embedPolicy: {
+        embeddable: false,
+        status: 'blocked',
+        reason: 'Unsupported browser workbench URL scheme.',
+        ref: 'browser:embed-policy/right-pane/unsupported-scheme',
+      },
+    };
+  }
+
+  if (rightPaneBrowserUrlIsLocal(parsed)) {
+    return {
+      status: 'ready',
+      tabStatus: 'ready',
+      previewUrl: url,
+      reason: 'Local pages can be embedded directly in the workbench.',
+      canRenderFrame: true,
+    };
+  }
+
+  return {
+    status: 'blocked',
+    tabStatus: 'failed',
+    previewUrl: url,
+    externalUrl: url,
+    proxyFallbackUrl: rightPaneBrowserProxyFallbackUrl(url),
+    reason: 'External pages may block iframe embedding with X-Frame-Options or Content-Security-Policy.',
+    detail: 'Use Open External, Snapshot, State, Takeover, or the proxy snapshot fallback instead of a blank embedded frame.',
+    ref: 'browser:embed-policy/right-pane/external-iframe',
+    canRenderFrame: false,
+    embedPolicy: {
+      embeddable: false,
+      status: 'blocked',
+      reason: 'External page embedding is blocked until BrowserRuntime reports an embeddable projection.',
+      ref: 'browser:embed-policy/right-pane/external-iframe',
+    },
+  };
+}
+
+function parseRightPaneBrowserUrl(url: string) {
   try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-    return !/^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(parsed.hostname);
+    return new URL(url);
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function terminalStatusForRightPane(units: RuntimeExecutionUnit[], activeRun: SciForgeRun | undefined, buffer: string) {
+function rightPaneBrowserUrlIsLocal(parsed: URL) {
+  return /^(?:localhost|127\.0\.0\.1|0\.0\.0\.0|::1)$/i.test(parsed.hostname);
+}
+
+function rightPaneBrowserProxyFallbackUrl(url: string) {
+  const params = new URLSearchParams({ url });
+  return `/api/sciforge/browser/proxy?${params.toString()}`;
+}
+
+function terminalStatusForRightPane(units: RuntimeExecutionUnit[], activeRun: SciForgeRun | undefined, buffer: string): TerminalSessionStatus {
   if (activeRun?.status === 'running' || units.some((unit) => unit.status === 'running')) return 'running';
   if (activeRun?.status === 'failed' || units.some((unit) => terminalExecutionUnitFailed(unit))) return 'error';
-  return buffer.trim() ? 'stopped' : 'idle';
+  if (activeRun?.status === 'completed' || units.some((unit) => unit.status === 'done' || unit.status === 'self-healed')) return 'completed';
+  return 'stopped';
+}
+
+function terminalTranscriptRefForRightPane(units: RuntimeExecutionUnit[], activeRun: SciForgeRun | undefined) {
+  const explicitRef = units
+    .flatMap((unit) => [unit.stdoutRef, unit.stderrRef, unit.outputRef])
+    .find((ref): ref is string => typeof ref === 'string' && Boolean(ref.trim()));
+  if (explicitRef) return explicitRef;
+  if (activeRun?.id) return `terminal-transcript:${rightPaneInlineLabel(activeRun.id)}`;
+  return 'terminal-transcript:right-pane';
+}
+
+function terminalPtyTranscriptRefForRightPane(units: RuntimeExecutionUnit[], activeRun: SciForgeRun | undefined) {
+  const terminalUnit = units.find((unit) => unit.tool === 'shell_command' || unit.language === 'bash' || unit.language === 'shell');
+  if (terminalUnit?.hash) return `pty-transcript:${rightPaneInlineLabel(terminalUnit.hash)}`;
+  if (activeRun?.id) return `pty-transcript:${rightPaneInlineLabel(activeRun.id)}`;
+  return 'pty-transcript:right-pane';
 }
 
 function terminalExecutionUnitFailed(unit: RuntimeExecutionUnit) {
@@ -2256,20 +3215,6 @@ function runtimeCompatibilityDiagnosticsForPresentation(session: SciForgeSession
     if (Number.isFinite(diagnosticTime) && Number.isFinite(runCreatedAt) && diagnosticTime < runCreatedAt) return false;
     return true;
   }).slice(0, 4);
-}
-
-function evidenceClaimsForRun(session: SciForgeSession, activeRun?: SciForgeRun): EvidenceClaim[] {
-  if (!activeRun) return session.claims;
-  const artifactIds = new Set(artifactsForRun(session, activeRun).map((artifact) => artifact.id));
-  const executionUnitIds = new Set(auditExecutionUnitsForRun(session, activeRun).map((unit) => unit.id.replace(/^execution-unit::?/i, '')));
-  if (!artifactIds.size && !executionUnitIds.size) return [];
-  return session.claims.filter((claim) => {
-    const refs = [...claim.supportingRefs, ...claim.opposingRefs, ...(claim.dependencyRefs ?? [])];
-    return refs.some((ref) => {
-      const normalized = ref.replace(/^(artifact|file|execution-unit)::?/i, '');
-      return artifactIds.has(normalized) || executionUnitIds.has(normalized);
-    });
-  });
 }
 
 function compactVisibleFailureText(value: string, locale?: ResultLocale) {

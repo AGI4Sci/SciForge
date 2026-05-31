@@ -28,6 +28,10 @@ import {
   type ComputerUseControlPlanePayload,
 } from '../../../../../packages/presentation/components';
 
+const COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE = 'computer-use-virtual-screen';
+const COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID = 'virtual-screen-viewer';
+const COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION = 'sciforge.computer-use.virtual-screen.v1';
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -48,6 +52,31 @@ function asStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const entries = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
   return entries.length ? entries : undefined;
+}
+
+type PublicRuntimeMetadataField = 'provider' | 'model' | 'profile' | 'workspace';
+
+const unsafeRuntimeMetadataPattern = /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}\b|https?:\/\/|^(?:data|blob|file|javascript):/i;
+const localWorkspacePathPattern = /^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/;
+
+function publicRuntimeMetadataValue(value: unknown, field: PublicRuntimeMetadataField): string | undefined {
+  const text = asString(value)?.trim();
+  if (!text) return undefined;
+  if (unsafeRuntimeMetadataPattern.test(text)) return `[redacted-${field}]`;
+  if (field === 'workspace') {
+    if (localWorkspacePathPattern.test(text) || /[\\/]/.test(text)) return '[redacted-workspace]';
+  }
+  if (field !== 'model' && /[?#]/.test(text)) return `[redacted-${field}]`;
+  if (text.length > 160) return `[redacted-${field}]`;
+  return text;
+}
+
+function publicRuntimeMetadataValueFrom(
+  primary: unknown,
+  fallback: unknown,
+  field: PublicRuntimeMetadataField,
+): string | undefined {
+  return publicRuntimeMetadataValue(primary, field) ?? publicRuntimeMetadataValue(fallback, field);
 }
 
 export function withConfiguredContextWindowLimit(event: AgentStreamEvent, maxContextWindowTokens: number): AgentStreamEvent {
@@ -316,9 +345,11 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
     ...(presentation.displayedRefs ?? []),
   ]);
   const controlPlane = computerUseControlPlaneResultBundle(presentation.controlPlane, commandId);
+  const virtualScreen = computerUseVirtualScreenResultBundle(presentation.virtualScreen, commandId);
   const projectedArtifactRefs = uniqueStrings([
     ...artifactRefs,
     ...(controlPlane.artifact ? [`artifact:${controlPlane.artifact.id}`] : []),
+    ...(virtualScreen.artifact ? [`artifact:${virtualScreen.artifact.id}`] : []),
   ]);
   const artifacts = artifactRefs.map((ref) => ({
     ref,
@@ -339,10 +370,11 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
           text: presentation.text,
           artifactRefs: projectedArtifactRefs,
         },
-        artifacts: controlPlane.artifact ? [
+        artifacts: [
           ...artifacts,
-          { ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE },
-        ] : artifacts,
+          ...(controlPlane.artifact ? [{ ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE }] : []),
+          ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE }] : []),
+        ],
         executionProcess: [{
           eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
           type: 'GuiPresent',
@@ -361,9 +393,17 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
       message: presentation.text,
       guiPresentation: presentation,
     },
-    ...(controlPlane.artifact ? {
-      artifacts: [...recordList(result.artifacts), controlPlane.artifact],
-      uiManifest: [...recordList(result.uiManifest), controlPlane.slot],
+    ...((controlPlane.artifact || virtualScreen.artifact) ? {
+      artifacts: [
+        ...recordList(result.artifacts),
+        ...(controlPlane.artifact ? [controlPlane.artifact] : []),
+        ...(virtualScreen.artifact ? [virtualScreen.artifact] : []),
+      ],
+      uiManifest: [
+        ...recordList(result.uiManifest),
+        ...(controlPlane.slot ? [controlPlane.slot] : []),
+        ...(virtualScreen.slot ? [virtualScreen.slot] : []),
+      ],
     } : {}),
   };
 }
@@ -399,10 +439,12 @@ function withGuiAskUserRuntimeResult(
     askUser.controlPlane ?? presentation?.controlPlane,
     commandId,
   );
-  const projectedArtifacts = controlPlane.artifact ? [
+  const virtualScreen = computerUseVirtualScreenResultBundle(presentation?.virtualScreen, commandId);
+  const projectedArtifacts = [
     ...artifacts,
-    { ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE },
-  ] : artifacts;
+    ...(controlPlane.artifact ? [{ ref: `artifact:${controlPlane.artifact.id}`, label: 'Computer Use controls', mime: COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE }] : []),
+    ...(virtualScreen.artifact ? [{ ref: `artifact:${virtualScreen.artifact.id}`, label: 'Computer Use screen', mime: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE }] : []),
+  ];
   const executionProcess = [
     presentation ? {
       eventId: `${commandId ?? 'runtime-codex'}:gui-present`,
@@ -453,9 +495,17 @@ function withGuiAskUserRuntimeResult(
       guiPresentation: presentation,
       guiAskUser: askUser,
     },
-    ...(controlPlane.artifact ? {
-      artifacts: [...recordList(result.artifacts), controlPlane.artifact],
-      uiManifest: [...recordList(result.uiManifest), controlPlane.slot],
+    ...((controlPlane.artifact || virtualScreen.artifact) ? {
+      artifacts: [
+        ...recordList(result.artifacts),
+        ...(controlPlane.artifact ? [controlPlane.artifact] : []),
+        ...(virtualScreen.artifact ? [virtualScreen.artifact] : []),
+      ],
+      uiManifest: [
+        ...recordList(result.uiManifest),
+        ...(controlPlane.slot ? [controlPlane.slot] : []),
+        ...(virtualScreen.slot ? [virtualScreen.slot] : []),
+      ],
     } : {}),
   };
 }
@@ -475,10 +525,10 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
       text: message,
       commandId,
       attemptId: asString(result.attemptId),
-      provider: asString(result.provider),
-      model: asString(result.model),
-      profile: asString(result.profile),
-      workspace: asString(result.workspace),
+      provider: publicRuntimeMetadataValue(result.provider, 'provider'),
+      model: publicRuntimeMetadataValue(result.model, 'model'),
+      profile: publicRuntimeMetadataValue(result.profile, 'profile'),
+      workspace: publicRuntimeMetadataValue(result.workspace, 'workspace'),
       codexSessionId: asString(result.codexSessionId),
       liveAcceptanceEligible: false,
     },
@@ -527,10 +577,10 @@ function runtimeMetadataForProjection(
   auditRefs: string[],
 ) {
   const metadata = {
-    provider: asString(primary.provider),
-    model: asString(primary.model),
-    profile: asString(primary.profile),
-    workspace: asString(primary.workspace),
+    provider: publicRuntimeMetadataValue(primary.provider, 'provider'),
+    model: publicRuntimeMetadataValue(primary.model, 'model'),
+    profile: publicRuntimeMetadataValue(primary.profile, 'profile'),
+    workspace: publicRuntimeMetadataValue(primary.workspace, 'workspace'),
     commandId: asString(primary.commandId),
     attemptId: asString(primary.attemptId),
     codexSessionId: asString(primary.codexSessionId),
@@ -563,12 +613,13 @@ function guiPresentationFromEvent(event: Record<string, unknown>, result: Record
     displayedRefs: asStringArray(nested.displayedRefs),
     placement: isRecord(nested.placement) ? nested.placement : undefined,
     controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
+    virtualScreen: normalizeComputerUseVirtualScreenPayload(nested.virtualScreen),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
-    provider: asString(event.provider) ?? asString(result.provider),
-    model: asString(event.model) ?? asString(result.model),
-    profile: asString(event.profile) ?? asString(result.profile),
-    workspace: asString(event.workspace) ?? asString(result.workspace),
+    provider: publicRuntimeMetadataValueFrom(event.provider, result.provider, 'provider'),
+    model: publicRuntimeMetadataValueFrom(event.model, result.model, 'model'),
+    profile: publicRuntimeMetadataValueFrom(event.profile, result.profile, 'profile'),
+    workspace: publicRuntimeMetadataValueFrom(event.workspace, result.workspace, 'workspace'),
   };
 }
 
@@ -608,10 +659,10 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
-    provider: asString(event.provider) ?? asString(result.provider),
-    model: asString(event.model) ?? asString(result.model),
-    profile: asString(event.profile) ?? asString(result.profile),
-    workspace: asString(event.workspace) ?? asString(result.workspace),
+    provider: publicRuntimeMetadataValueFrom(event.provider, result.provider, 'provider'),
+    model: publicRuntimeMetadataValueFrom(event.model, result.model, 'model'),
+    profile: publicRuntimeMetadataValueFrom(event.profile, result.profile, 'profile'),
+    workspace: publicRuntimeMetadataValueFrom(event.workspace, result.workspace, 'workspace'),
   };
 }
 
@@ -628,10 +679,10 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
   const commandId = asString(event.commandId);
   const common = {
     schemaVersion: 'sciforge.codex.normalized-event.v1',
-    provider: asString(event.provider),
-    model: asString(event.model),
-    profile: asString(event.profile),
-    workspace: asString(event.workspace),
+    provider: publicRuntimeMetadataValue(event.provider, 'provider'),
+    model: publicRuntimeMetadataValue(event.model, 'model'),
+    profile: publicRuntimeMetadataValue(event.profile, 'profile'),
+    workspace: publicRuntimeMetadataValue(event.workspace, 'workspace'),
     commandId,
     attemptId: asString(event.attemptId),
     evidenceRefs: asStringArray(event.evidenceRefs),
@@ -644,6 +695,7 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
     if (port === 'gui.present') {
       const summary = computerUseSummaryFromPresentationPayload(payload);
       const controlPlane = computerUseControlPlaneFromActionPayload(payload);
+      const virtualScreen = normalizeComputerUseVirtualScreenPayload(payload);
       guiPresent = {
         ...common,
         type: 'gui_present',
@@ -663,6 +715,7 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
             status: asString(payload.status),
             hint: 'markdown',
             controlPlane,
+            virtualScreen,
           },
         },
       };
@@ -692,6 +745,9 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
 function computerUseSummaryFromPresentationPayload(payload: Record<string, unknown>) {
   const controlPlane = computerUseControlPlaneFromActionPayload(payload);
   const controlPlaneRefs = computerUseControlPlaneDisplayedRefs(controlPlane);
+  const virtualScreen = normalizeComputerUseVirtualScreenPayload(payload);
+  const virtualScreenRefs = computerUseVirtualScreenDisplayedRefs(virtualScreen);
+  const virtualScreenSummary = computerUseVirtualScreenSummaryLines(virtualScreen);
   const artifactRefs = asStringArray(payload.artifactRefs) ?? [];
   const blockedManifestRefs = asStringArray(payload.blockedManifestRefs) ?? [];
   const repairHintRefs = asStringArray(payload.repairHintRefs) ?? [];
@@ -740,6 +796,7 @@ function computerUseSummaryFromPresentationPayload(payload: Record<string, unkno
     ...approvalDecisionRefs,
     ...sourceApprovalRefs,
     ...controlPlaneRefs,
+    ...virtualScreenRefs,
     ...completionGradeDiagnosticRefs,
     ...producerDiagnosticRefs,
     ...acceptanceManifestRefs,
@@ -753,6 +810,7 @@ function computerUseSummaryFromPresentationPayload(payload: Record<string, unkno
     asString(payload.message),
     controlPlane ? `User control plane: status \`${controlPlane.status ?? 'unknown'}\`${controlPlane.approvalMode ? `, approval \`${controlPlane.approvalMode}\`` : ''}.` : undefined,
     controlPlaneRefs.length ? ['User control refs:', ...controlPlaneRefs.map((ref) => `- \`${ref}\``)].join('\n') : undefined,
+    virtualScreenSummary.length ? ['Virtual screen run summary:', ...virtualScreenSummary.map((line) => `- ${line}`)].join('\n') : undefined,
     completedWithoutFinalArtifact
       ? 'Completion diagnostic: completed status did not include a visible final artifact ref, so completion remains fail-closed.'
       : undefined,
@@ -839,6 +897,277 @@ function computerUseControlPlaneResultBundle(value: unknown, commandId: string |
       title: 'Computer Use controls',
       artifactRef: id,
       priority: -5,
+    },
+  };
+}
+
+function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const visibleScreenRefs = uniqueStrings([
+    ...(safeRefArray(value.visibleScreenRefs) ?? []),
+    ...(safeRefArray(value.screenRefs) ?? []),
+  ]);
+  const visibleCursorRefs = uniqueStrings([
+    ...(safeRefArray(value.visibleCursorRefs) ?? []),
+    ...(safeRefArray(value.cursorOverlayRefs) ?? []),
+  ]);
+  const cursorOverlayRefs = safeRefArray(value.cursorOverlayRefs) ?? [];
+  const leaseOwnerRefs = safeRefArray(value.leaseOwnerRefs) ?? [];
+  const explicitFrameRefs = uniqueStrings([
+    ...(safeRefArray(value.frameRefs) ?? []),
+    ...safeRefList(value.frameRef),
+  ]);
+  const replayRef = safeRef(value.replayRef);
+  const blockedRef = safeRef(value.blockedRef)
+    ?? safeRef(value.blockedManifestRef)
+    ?? (safeRefArray(value.blockedManifestRefs) ?? [])[0];
+  const errorRef = safeRef(value.errorRef);
+  const completionEvidenceRef = safeRef(value.completionEvidenceRef)
+    ?? (safeRefArray(value.completionEvidenceRefs) ?? [])[0];
+  const validationRef = safeRef(value.validationRef);
+  const currentBundleRef = safeRef(value.currentBundleRef);
+  const evidenceBundleIndexRef = safeRef(value.evidenceBundleIndexRef) ?? safeRef(value.evidenceIndexRef);
+  const sidecarBindingRef = safeRef(value.sidecarBindingRef);
+  const sidecarCapabilitiesRef = safeRef(value.sidecarCapabilitiesRef);
+  const sidecarDiscoveryRef = safeRef(value.sidecarDiscoveryRef);
+  const sidecarCallRefs = safeRefArray(value.sidecarCallRefs) ?? [];
+  const targetRefs = safeRefArray(value.targetRefs) ?? [];
+  const schedulerLeaseRefs = safeRefArray(value.schedulerLeaseRefs) ?? [];
+  const stopRef = safeRef(value.stopRef);
+  const cancelLeaseRef = safeRef(value.cancelLeaseRef);
+  const sessionRef = safeRef(value.sessionRef) ?? safeRef(value.sessionManifestRef);
+  const displayGroupRef = safeRef(value.displayGroupRef) ?? safeRef(value.currentBundleRef);
+  const screenRef = safeRef(value.screenRef) ?? visibleScreenRefs[0];
+  const permissionRef = safeRef(value.permissionRef) ?? safeRef(value.sessionPermissionRef);
+  const sidecarBinding = isRecord(value.sidecarBinding) ? value.sidecarBinding : {};
+  const actorCursors = sanitizeRecordArray(value.actorCursors);
+  const frames = sanitizeRecordArray(value.frames)
+    .map((frame) => compactRecord({
+      ...frame,
+      frameRef: safeRef(frame.frameRef) ?? safeRef(frame.screenshotRef),
+      screenshotRef: safeRef(frame.screenshotRef) ?? safeRef(frame.frameRef),
+      cursorOverlayRefs: safeRefArray(frame.cursorOverlayRefs) ?? visibleCursorRefs,
+      beforeEvidenceRefs: safeRefArray(frame.beforeEvidenceRefs),
+      afterEvidenceRefs: safeRefArray(frame.afterEvidenceRefs),
+      leaseOwnerRefs: safeRefArray(frame.leaseOwnerRefs),
+    }))
+    .filter((frame) => safeRef(frame.frameRef) || safeRef(frame.screenshotRef));
+  const hasVirtualScreenSignal = Boolean(
+    sessionRef
+    || displayGroupRef
+    || screenRef
+    || replayRef
+    || explicitFrameRefs.length
+    || frames.length
+    || visibleScreenRefs.length
+    || cursorOverlayRefs.length
+    || leaseOwnerRefs.length
+    || actorCursors.length
+  );
+  if (!hasVirtualScreenSignal) return undefined;
+  const frameRefs = uniqueStrings([
+    ...explicitFrameRefs,
+    ...(safeRefArray(value.screenshotRefs) ?? []),
+    ...safeRefList(value.screenshotRef),
+  ]);
+  const events = sanitizeRecordArray(value.events);
+  const isolation = isRecord(value.isolation) ? compactRecord({
+    sharedSystemInputUsed: asBoolean(value.isolation.sharedSystemInputUsed),
+    systemPointerMoved: asBoolean(value.isolation.systemPointerMoved),
+    systemKeyboardEventsSent: asBoolean(value.isolation.systemKeyboardEventsSent),
+    virtualInputExecuted: asBoolean(value.isolation.virtualInputExecuted),
+    realOsInputExecuted: asBoolean(value.isolation.realOsInputExecuted),
+    diagnosticOnly: asBoolean(value.isolation.diagnosticOnly),
+  }) : undefined;
+  const runSummary = normalizeComputerUseRunSummary(value.runSummary, {
+    status: asString(value.status),
+    runId: asString(value.runId),
+    validationRef,
+    currentBundleRef,
+    evidenceBundleIndexRef,
+    replayRef,
+    validationStatus: asString(value.validationStatus) ?? asString(value.validation_status) ?? (isRecord(value.validation) ? asString(value.validation.status) : undefined),
+    validationOk: asBoolean(value.validationOk) ?? asBoolean(value.validation_ok) ?? (isRecord(value.validation) ? asBoolean(value.validation.ok) : undefined),
+    sidecarBindingRef,
+    sidecarCapabilitiesRef,
+    sidecarDiscoveryRef,
+    sidecarBindingKind: asString(value.sidecarBindingKind) ?? asString(sidecarBinding.bindingKind),
+    realNativeSidecarExecuted: asBoolean(value.realNativeSidecarExecuted),
+    completionEligible: asBoolean(value.completionEligible),
+    screenCount: positiveInteger(value.screenCount) ?? visibleScreenRefs.length,
+    actorCursorCount: positiveInteger(value.actorCursorCount) ?? Math.max(actorCursors.length, visibleCursorRefs.length),
+    frameCount: positiveInteger(value.frameCount) ?? Math.max(frameRefs.length, frames.length),
+    cursorOverlayCount: positiveInteger(value.cursorOverlayCount) ?? cursorOverlayRefs.length,
+    schedulerLeaseCount: positiveInteger(value.schedulerLeaseCount) ?? Math.max(schedulerLeaseRefs.length, leaseOwnerRefs.length),
+    targetCount: positiveInteger(value.targetCount) ?? targetRefs.length,
+    blockedReason: safeSummaryText(value.blockedReason),
+  });
+  if (!sessionRef && !screenRef && !replayRef && !frameRefs.length && !frames.length && !visibleScreenRefs.length && !blockedRef && !errorRef) {
+    return undefined;
+  }
+  return compactRecord({
+    schemaVersion: COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION,
+    title: asString(value.title) ?? 'Computer Use Virtual Screen',
+    status: asString(value.status),
+    sessionRef,
+    displayGroupRef,
+    screenRef,
+    visibleScreenRefs,
+    visibleCursorRefs,
+    cursorOverlayRefs,
+    leaseOwnerRefs,
+    validationRef,
+    currentBundleRef,
+    evidenceBundleIndexRef,
+    sidecarBindingRef,
+    sidecarCapabilitiesRef,
+    sidecarDiscoveryRef,
+    sidecarCallRefs,
+    targetRefs,
+    schedulerLeaseRefs,
+    frameRef: frameRefs[0],
+    frameRefs,
+    replayRef,
+    permissionRef,
+    stopRef,
+    cancelLeaseRef,
+    completionEvidenceRef,
+    blockedRef,
+    errorRef,
+    screen: isRecord(value.screen) ? compactRecord({
+      width: asNumber(value.screen.width),
+      height: asNumber(value.screen.height),
+      label: asString(value.screen.label),
+    }) : undefined,
+    actorCursors,
+    frames,
+    events,
+    isolation,
+    runSummary,
+  });
+}
+
+function normalizeComputerUseRunSummary(
+  value: unknown,
+  fallback: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const raw = isRecord(value) ? value : {};
+  const summary = compactRecord({
+    schemaVersion: 'sciforge.computer-use.run-summary.v1',
+    status: asString(raw.status) ?? asString(fallback.status),
+    runId: safeRef(raw.runId) ?? safeRef(fallback.runId),
+    validationRef: safeRef(raw.validationRef) ?? safeRef(fallback.validationRef),
+    currentBundleRef: safeRef(raw.currentBundleRef) ?? safeRef(fallback.currentBundleRef),
+    evidenceBundleIndexRef: safeRef(raw.evidenceBundleIndexRef) ?? safeRef(raw.evidenceIndexRef) ?? safeRef(fallback.evidenceBundleIndexRef),
+    replayRef: safeRef(raw.replayRef) ?? safeRef(fallback.replayRef),
+    validationStatus: safeSummaryText(raw.validationStatus) ?? safeSummaryText(fallback.validationStatus),
+    validationOk: asBoolean(raw.validationOk) ?? asBoolean(fallback.validationOk),
+    sidecarBindingRef: safeRef(raw.sidecarBindingRef) ?? safeRef(fallback.sidecarBindingRef),
+    sidecarCapabilitiesRef: safeRef(raw.sidecarCapabilitiesRef) ?? safeRef(fallback.sidecarCapabilitiesRef),
+    sidecarDiscoveryRef: safeRef(raw.sidecarDiscoveryRef) ?? safeRef(fallback.sidecarDiscoveryRef),
+    sidecarBindingKind: safeSummaryText(raw.sidecarBindingKind) ?? safeSummaryText(fallback.sidecarBindingKind),
+    realNativeSidecarExecuted: asBoolean(raw.realNativeSidecarExecuted) ?? asBoolean(fallback.realNativeSidecarExecuted),
+    completionEligible: asBoolean(raw.completionEligible) ?? asBoolean(fallback.completionEligible),
+    screenCount: positiveInteger(raw.screenCount) ?? positiveInteger(fallback.screenCount),
+    actorCursorCount: positiveInteger(raw.actorCursorCount) ?? positiveInteger(fallback.actorCursorCount),
+    frameCount: positiveInteger(raw.frameCount) ?? positiveInteger(fallback.frameCount),
+    cursorOverlayCount: positiveInteger(raw.cursorOverlayCount) ?? positiveInteger(fallback.cursorOverlayCount),
+    schedulerLeaseCount: positiveInteger(raw.schedulerLeaseCount) ?? positiveInteger(fallback.schedulerLeaseCount),
+    targetCount: positiveInteger(raw.targetCount) ?? positiveInteger(fallback.targetCount),
+    blockedReason: safeSummaryText(raw.blockedReason) ?? safeSummaryText(fallback.blockedReason),
+  });
+  return Object.keys(summary).length > 1 ? summary : undefined;
+}
+
+function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> | undefined): string[] {
+  if (!payload) return [];
+  const runSummary = isRecord(payload.runSummary) ? payload.runSummary : {};
+  return uniqueStrings([
+    ...(safeRefArray(payload.visibleScreenRefs) ?? []),
+    ...(safeRefArray(payload.visibleCursorRefs) ?? []),
+    ...(safeRefArray(payload.cursorOverlayRefs) ?? []),
+    ...(safeRefArray(payload.frameRefs) ?? []),
+    ...(safeRefArray(payload.sidecarCallRefs) ?? []),
+    ...(safeRefArray(payload.targetRefs) ?? []),
+    ...(safeRefArray(payload.schedulerLeaseRefs) ?? []),
+    safeRef(payload.sessionRef),
+    safeRef(payload.displayGroupRef),
+    safeRef(payload.replayRef),
+    safeRef(payload.validationRef),
+    safeRef(payload.currentBundleRef),
+    safeRef(payload.evidenceBundleIndexRef),
+    safeRef(payload.sidecarBindingRef),
+    safeRef(payload.sidecarCapabilitiesRef),
+    safeRef(payload.sidecarDiscoveryRef),
+    safeRef(payload.completionEvidenceRef),
+    safeRef(payload.blockedRef),
+    safeRef(payload.errorRef),
+    safeRef(runSummary.validationRef),
+    safeRef(runSummary.currentBundleRef),
+    safeRef(runSummary.evidenceBundleIndexRef),
+    safeRef(runSummary.replayRef),
+    safeRef(runSummary.sidecarBindingRef),
+    safeRef(runSummary.sidecarCapabilitiesRef),
+    safeRef(runSummary.sidecarDiscoveryRef),
+  ].filter((ref): ref is string => Boolean(ref)));
+}
+
+function computerUseVirtualScreenSummaryLines(payload: Record<string, unknown> | undefined): string[] {
+  if (!payload) return [];
+  const runSummary = isRecord(payload.runSummary) ? payload.runSummary : {};
+  const lines = [
+    asString(runSummary.status) ? `status \`${asString(runSummary.status)}\`` : undefined,
+    positiveInteger(runSummary.screenCount) ? `${positiveInteger(runSummary.screenCount)} screen(s)` : undefined,
+    positiveInteger(runSummary.actorCursorCount) ? `${positiveInteger(runSummary.actorCursorCount)} actor cursor(s)` : undefined,
+    positiveInteger(runSummary.frameCount) ? `${positiveInteger(runSummary.frameCount)} frame(s)` : undefined,
+    asString(runSummary.sidecarBindingKind) ? `sidecar \`${asString(runSummary.sidecarBindingKind)}\`` : undefined,
+    asString(runSummary.validationStatus) ? `validation status \`${asString(runSummary.validationStatus)}\`` : undefined,
+    typeof runSummary.validationOk === 'boolean' ? `validation ok: \`${String(runSummary.validationOk)}\`` : undefined,
+    typeof runSummary.realNativeSidecarExecuted === 'boolean' ? `real native sidecar executed: \`${String(runSummary.realNativeSidecarExecuted)}\`` : undefined,
+    typeof runSummary.completionEligible === 'boolean' ? `completion eligible: \`${String(runSummary.completionEligible)}\`` : undefined,
+    asString(runSummary.validationRef) ? `validation ref \`${asString(runSummary.validationRef)}\`` : undefined,
+    asString(runSummary.evidenceBundleIndexRef) ? `evidence index \`${asString(runSummary.evidenceBundleIndexRef)}\`` : undefined,
+    asString(runSummary.blockedReason) ? `blocked reason: ${asString(runSummary.blockedReason)}` : undefined,
+  ];
+  return lines.filter((line): line is string => Boolean(line));
+}
+
+function computerUseVirtualScreenResultBundle(value: unknown, commandId: string | undefined): {
+  artifact?: Record<string, unknown>;
+  slot?: Record<string, unknown>;
+} {
+  const payload = normalizeComputerUseVirtualScreenPayload(value);
+  if (!payload) return {};
+  const id = `computer-use-virtual-screen-${safeRefSegment(commandId ?? asString(payload.sessionRef) ?? asString(payload.replayRef) ?? 'current')}`;
+  const artifact = {
+    id,
+    type: COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE,
+    producerScenario: 'computer-use',
+    schemaVersion: COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION,
+    metadata: {
+      title: 'Computer Use screen',
+      presentationRole: 'primary-deliverable',
+      producer: 'gui.presentation',
+    },
+    data: payload,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role: 'primary-deliverable',
+      declaredMediaType: 'application/vnd.sciforge.computer-use-virtual-screen+json',
+      declaredExtension: '.json',
+      contentShape: 'external-ref',
+      readableRef: `artifact:${id}`,
+      previewPolicy: 'inline',
+    },
+  };
+  return {
+    artifact,
+    slot: {
+      componentId: COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID,
+      title: 'Computer Use screen',
+      artifactRef: id,
+      priority: -6,
     },
   };
 }
@@ -963,6 +1292,47 @@ function recordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function sanitizeRecordArray(value: unknown): Record<string, unknown>[] {
+  return recordList(value).map((record) => compactRecord(record));
+}
+
+const FORBIDDEN_SCREEN_PRESENTATION_KEYS = new Set([
+  'rawScreenshot',
+  'screenshot',
+  'screenshotBase64',
+  'imageBase64',
+  'base64Screenshot',
+  'frameBase64',
+  'rawTrace',
+  'traceJson',
+  'rawJson',
+  'rawJSON',
+  'providerJson',
+  'rawPayload',
+  'providerRoute',
+  'providerParams',
+  'desktopBridge',
+  'executorLease',
+  'executorLeaseParams',
+  'schedulerParams',
+  'Authorization',
+  'authorization',
+  'token',
+  'secret',
+  'password',
+  'credential',
+]);
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([key, value]) => {
+    if (FORBIDDEN_SCREEN_PRESENTATION_KEYS.has(key)) return false;
+    if (value === undefined || value === null) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (isRecord(value)) return Object.keys(value).length > 0;
+    return true;
+  }));
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
   if (isRecord(value)) return value;
   if (typeof value !== 'string' || !value.trim()) return undefined;
@@ -976,6 +1346,42 @@ function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
 
 function uniqueStrings(values: string[]): string[] {
   return Array.from(new Set(values.filter((value) => value.trim().length > 0)));
+}
+
+function safeRef(value: unknown): string | undefined {
+  const ref = asString(value);
+  if (
+    !ref
+    || /^(?:data:|blob:|file:|javascript:|https?:|provider:)/i.test(ref)
+    || ref.startsWith('/')
+    || ref.startsWith('~')
+    || /base64/i.test(ref)
+    || /^\s*[{[]/.test(ref)
+  ) return undefined;
+  return ref;
+}
+
+function safeRefList(value: unknown): string[] {
+  const ref = safeRef(value);
+  return ref ? [ref] : [];
+}
+
+function safeRefArray(value: unknown): string[] | undefined {
+  const refs = asStringArray(value)?.map((ref) => safeRef(ref)).filter((ref): ref is string => Boolean(ref));
+  return refs?.length ? uniqueStrings(refs) : undefined;
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function safeSummaryText(value: unknown): string | undefined {
+  const text = asString(value);
+  if (!text) return undefined;
+  if (/^\s*[\[{]/.test(text) || /authorization|bearer|api[_-]?key|password|secret|token/i.test(text)) {
+    return 'Summary detail is available by ref.';
+  }
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
 }
 
 function refLabel(ref: string) {

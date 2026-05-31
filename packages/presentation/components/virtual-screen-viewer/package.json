@@ -20,6 +20,7 @@
     "./render": "./render.tsx",
     "./fixtures/basic": "./fixtures/basic.ts",
     "./fixtures/empty": "./fixtures/empty.ts",
+    "./fixtures/refs-contract": "./fixtures/refs-contract.ts",
     "./fixtures/selection": "./fixtures/selection.ts"
   },
   "peerDependencies": {

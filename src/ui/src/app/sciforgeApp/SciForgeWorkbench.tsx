@@ -16,7 +16,6 @@ import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer, type WorkspaceFileEditorState } from '../ResultsRenderer';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
 import { runPresentationState } from '../results-renderer-execution-model';
-import { composerReferenceForObjectReference } from '../chat/composerReferences';
 import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { scopedResultSlotId } from '../results/viewPlanResolver';
@@ -128,7 +127,6 @@ export function Workbench({
   const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
-  const [resultReferenceRequest, setResultReferenceRequest] = useState<{ id: string; reference: SciForgeReference } | undefined>();
   const [workspaceObjectReferences, setWorkspaceObjectReferences] = useState<ObjectReference[]>([]);
   const [chatColumnWidth, setChatColumnWidth] = useState(42);
   const workbenchResizeRef = useRef<{ startX: number; startWidth: number; gridWidth: number } | null>(null);
@@ -240,19 +238,9 @@ export function Workbench({
       return;
     }
     handleObjectFocus(reference);
-    setResultReferenceRequest({
-      id: `result-ref-${reference.id}-${Date.now()}`,
-      reference: composerReferenceForObjectReference(reference),
-    });
   }
 
-  const activeExternalReferenceRequest = externalReferenceRequest ?? resultReferenceRequest;
-
   function handleExternalReferenceConsumed(requestId: string) {
-    if (resultReferenceRequest?.id === requestId) {
-      setResultReferenceRequest(undefined);
-      return;
-    }
     onExternalReferenceConsumed(requestId);
   }
 
@@ -404,7 +392,7 @@ export function Workbench({
             onActiveRunChange={handleActiveRunChange}
             onMarkReusableRun={(runId) => onMarkReusableRun(scenarioId, runId)}
             onObjectFocus={handleObjectFocus}
-            externalReferenceRequest={activeExternalReferenceRequest}
+            externalReferenceRequest={externalReferenceRequest}
             onExternalReferenceConsumed={handleExternalReferenceConsumed}
             availableComponentIds={availableComponentIds}
             runtimeHealth={runtimeHealth}

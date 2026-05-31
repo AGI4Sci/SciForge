@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails, shouldTryRepoRootWorkspaceFallback, workspaceFileFocusRequestKey, type WorkspaceFileEditorState } from './ResultsRenderer';
+import { addRightPaneTabLifecycleState, backendRepairStates, cancelWorkspaceFileEditorEdit, closeRightPaneTabLifecycleState, coerceReportPayload, contractValidationFailures, removeWorkspaceFileEditorForTab, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, setWorkspaceFileEditorForTab, shouldOpenRunAuditDetails, shouldTryRepoRootWorkspaceFallback, workspaceFileFocusRequestKey, type WorkspaceFileEditorState } from './ResultsRenderer';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { MarkdownBlock } from './results/reportContent';
-import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan } from './results-renderer-object-actions';
+import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan, resultTabForObjectReference } from './results-renderer-object-actions';
 import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
@@ -263,7 +264,12 @@ test('ResultsRenderer empty right pane exposes Cursor-like browser terminal and 
   const html = renderResultsRenderer(emptySession());
 
   assert.match(html, /class="result-tabstrip"/);
+  assert.match(html, /data-right-pane-tab-layout="scroll-tabs-fixed-actions"/);
+  assert.match(html, /data-overflow-policy="horizontal-scroll"/);
   assert.match(html, /class="result-new-tab-button"/);
+  assert.match(html, /data-fixed-action="new"/);
+  assert.match(html, /data-fixed-action="close"/);
+  assert.match(html, /data-fixed-action="focus-mode"/);
   assert.match(html, /aria-label="New right pane page"/);
   assert.match(html, /aria-haspopup="menu"/);
   assert.match(html, />New</);
@@ -279,6 +285,78 @@ test('ResultsRenderer empty right pane exposes Cursor-like browser terminal and 
   assert.match(html, /Nothing to preview yet/);
 });
 
+test('ResultsRenderer right pane lifecycle activates New Browser Terminal and Files tabs', () => {
+  const browserState = addRightPaneTabLifecycleState({
+    tabs: [],
+    activeTabId: '',
+    browserTabAddresses: {},
+  }, 'browser', undefined, 101);
+  const terminalState = addRightPaneTabLifecycleState(browserState, 'terminal', undefined, 102);
+  const filesState = addRightPaneTabLifecycleState(terminalState, 'files', undefined, 103);
+
+  assert.equal(browserState.activeTabId, 'custom:browser:101:1');
+  assert.deepEqual(browserState.focusTarget, { kind: 'tab', tabId: 'custom:browser:101:1' });
+  assert.equal(browserState.tabs[0]?.label, 'Browser');
+  assert.equal(terminalState.activeTabId, 'custom:terminal:102:1');
+  assert.deepEqual(terminalState.focusTarget, { kind: 'tab', tabId: 'custom:terminal:102:1' });
+  assert.equal(terminalState.tabs.at(-1)?.label, 'Terminal');
+  assert.equal(filesState.activeTabId, 'custom:files:103:1');
+  assert.deepEqual(filesState.focusTarget, { kind: 'tab', tabId: 'custom:files:103:1' });
+  assert.equal(filesState.tabs.at(-1)?.label, 'Files');
+});
+
+test('ResultsRenderer right pane close-all reaches empty state and New recovers', () => {
+  const browserState = addRightPaneTabLifecycleState({
+    tabs: [],
+    activeTabId: '',
+    browserTabAddresses: {},
+  }, 'browser', undefined, 201);
+  const terminalState = addRightPaneTabLifecycleState(browserState, 'terminal', undefined, 202);
+  const filesState = addRightPaneTabLifecycleState({
+    ...terminalState,
+    browserTabAddresses: {
+      [browserState.activeTabId]: 'http://localhost:5173',
+    },
+  }, 'files', undefined, 203);
+  const closedFiles = closeRightPaneTabLifecycleState(filesState, filesState.activeTabId);
+  const closedTerminal = closeRightPaneTabLifecycleState(closedFiles, terminalState.activeTabId);
+  const emptyState = closeRightPaneTabLifecycleState(closedTerminal, browserState.activeTabId);
+  const recovered = addRightPaneTabLifecycleState(emptyState, 'files', undefined, 204);
+
+  assert.equal(closedFiles.activeTabId, terminalState.activeTabId);
+  assert.deepEqual(closedFiles.focusTarget, { kind: 'tab', tabId: terminalState.activeTabId });
+  assert.equal(closedTerminal.activeTabId, browserState.activeTabId);
+  assert.deepEqual(emptyState, {
+    tabs: [],
+    activeTabId: '',
+    browserTabAddresses: {},
+    focusTarget: { kind: 'new-button' },
+  });
+  assert.equal(recovered.activeTabId, 'custom:files:204:1');
+  assert.equal(recovered.tabs.length, 1);
+  assert.deepEqual(recovered.focusTarget, { kind: 'tab', tabId: 'custom:files:204:1' });
+});
+
+test('ResultsRenderer right pane narrow overflow keeps tablist actions accessible', () => {
+  const shellSource = readFileSync(new URL('./results/ResultShell.tsx', import.meta.url), 'utf8');
+  const cssSource = readFileSync(new URL('../styles/app-04.css', import.meta.url), 'utf8');
+
+  assert.match(shellSource, /role="tablist"/);
+  assert.match(shellSource, /role="tabpanel"/);
+  assert.match(shellSource, /role="menu"/);
+  assert.match(shellSource, /role="menuitem"/);
+  assert.match(shellSource, /aria-orientation="horizontal"/);
+  assert.match(shellSource, /aria-controls=\{resultTabPanelId\(tab\.id\)\}/);
+  assert.match(shellSource, /data-right-pane-tab-layout="scroll-tabs-fixed-actions"/);
+  assert.match(shellSource, /data-overflow-policy="horizontal-scroll"/);
+  assert.match(shellSource, /data-fixed-action="new"/);
+  assert.match(shellSource, /data-fixed-action="close"/);
+  assert.match(shellSource, /data-fixed-action="focus-mode"/);
+  assert.match(cssSource, /\.result-tabstrip\s*\{[\s\S]*overflow-x:\s*auto/);
+  assert.match(cssSource, /\.result-tabs\s*\{[\s\S]*overflow:\s*visible/);
+  assert.match(cssSource, /\.result-tabs \[data-fixed-action\]\s*\{[\s\S]*flex:\s*0 0 auto/);
+});
+
 test('ResultsRenderer tool tabs render package-owned browser terminal and file modules', () => {
   const browserHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'browser' });
   const screenHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'screen' });
@@ -290,13 +368,13 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(browserHtml, /data-render-boundary="presentation-only"/);
   assert.match(browserHtml, /name="browser-url"/);
   assert.match(browserHtml, /\/browser open/);
-  assert.match(browserHtml, /src="about:blank"/);
+  assert.match(browserHtml, /data-browser-state="(?:idle|loading)"/);
   assert.match(screenHtml, /data-testid="right-pane-virtual-screen-tool"/);
   assert.match(screenHtml, /data-component-id="virtual-screen-viewer"/);
   assert.match(screenHtml, /data-render-boundary="presentation-only"/);
-  assert.match(screenHtml, /computer-use:session\/right-pane\/virtual-desktop-session-manifest\.json/);
-  assert.match(screenHtml, /\/computer-use observe --screen-ref/);
-  assert.doesNotMatch(screenHtml, /providerRoute|executorLease|desktopBridge/);
+  assert.match(screenHtml, /data-status="empty"/);
+  assert.match(screenHtml, /Virtual screen refs are not attached/);
+  assert.doesNotMatch(screenHtml, /computer-use:screen\/right-pane\/blocked\/no-current-frame|computer-use:session\/right-pane|providerRoute|executorLease|desktopBridge/);
   assert.match(terminalHtml, /data-testid="right-pane-terminal-tool"/);
   assert.match(terminalHtml, /data-component-id="terminal-session-viewer"/);
   assert.match(terminalHtml, /data-render-boundary="presentation-only"/);
@@ -305,6 +383,100 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(filesHtml, /data-component-id="workspace-file-viewer"/);
   assert.match(filesHtml, /data-render-boundary="presentation-only"/);
   assert.match(filesHtml, /workspace-file-viewer-tree/);
+});
+
+test('ResultsRenderer screen pane renders active Computer Use frame source and refs-first state', () => {
+  const screenRef = 'computer-use:session/run-screen/virtual-screens.json#screen-1';
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [completedRun('run-screen')],
+    artifacts: [{
+      id: 'computer-use-screen-run',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      metadata: { runId: 'run-screen' },
+      data: {
+        title: 'Computer Use Screen',
+        status: 'blocked',
+        sessionRef: 'computer-use:session/run-screen/manifest.json',
+        displayGroupRef: 'computer-use:session/run-screen/display-group.json',
+        screenRef,
+        visibleScreenRefs: [screenRef],
+        visibleCursorRefs: ['computer-use:session/run-screen/cursors/agent.json'],
+        frameRefs: [{
+          ref: 'computer-use:session/run-screen/frames/after.png',
+          screenRef,
+          frameUrl: '/api/sciforge/preview/raw?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter.png',
+          frameDataRef: 'computer-use:session/run-screen/frame-data/after.json',
+          beforeEvidenceRef: 'computer-use:session/run-screen/evidence/before.json',
+          afterEvidenceRef: 'computer-use:session/run-screen/evidence/after.json',
+          cursorOverlayRefs: ['computer-use:session/run-screen/overlays/cursors.json'],
+          leaseOwnerRefs: ['computer-use:session/run-screen/leases/screen-1.json'],
+          proposalRef: 'computer-use:session/run-screen/proposals/click.json',
+        }],
+        replayRef: 'computer-use:session/run-screen/replay.json',
+        leaseOwnerRefs: [{ ref: 'computer-use:session/run-screen/leases/screen-1.json', status: 'held', ownerRef: 'computer-use:session/run-screen/actors/agent.json' }],
+        proposals: [{ ref: 'computer-use:session/run-screen/proposals/click.json', status: 'needs-confirmation', frameRef: 'computer-use:session/run-screen/frames/after.png' }],
+        completionEvidenceRef: 'computer-use:session/run-screen/evidence/completion.json',
+        validationRef: 'computer-use:session/run-screen/validation.json',
+        currentBundleRef: 'computer-use:session/run-screen/current-bundle.json',
+        evidenceBundleIndexRef: 'computer-use:session/run-screen/evidence/index.json',
+        sidecarBindingRef: 'computer-use:session/run-screen/sidecar/binding.json',
+        sidecarCapabilitiesRef: 'computer-use:session/run-screen/sidecar/capabilities.json',
+        sidecarDiscoveryRef: 'computer-use:session/run-screen/sidecar/discovery.json',
+        runSummary: {
+          status: 'blocked',
+          screenCount: 2,
+          actorCursorCount: 3,
+          frameCount: 1,
+          sidecarBindingKind: 'macos-native-virtual-screen',
+          validationStatus: 'accepted',
+          validationOk: true,
+          realNativeSidecarExecuted: false,
+          completionEligible: false,
+        },
+        blockedRef: 'computer-use:session/run-screen/blocked/permission.json',
+        blockedReason: 'Screen recording permission pending.',
+        permissionRef: 'computer-use:permission/run-screen.json',
+        permissionStatus: 'blocked',
+        permissionRequired: true,
+        permissionGranted: false,
+        sharedInputAllowed: false,
+        leaseStatus: 'held',
+        stopRef: 'computer-use:stop/run-screen',
+        cancelLeaseRef: 'computer-use:lease/run-screen',
+        screen: { width: 1280, height: 720, label: 'screen-1' },
+        actorCursors: [{ actorId: 'agent', cursorId: 'cursor-agent', label: 'Agent', x: 480, y: 260, state: 'lease-held' }],
+        rawScreenshot: 'RAW_SCREENSHOT_SHOULD_NOT_RENDER',
+      },
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-screen', initialResultTab: 'screen' });
+
+  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(html, /class="virtual-screen-frame-image"/);
+  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png"/);
+  assert.match(html, /data-frame-data-ref="computer-use:session\/run-screen\/frame-data\/after\.json"/);
+  assert.match(html, /computer-use:session\/run-screen\/replay\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/overlays\/cursors\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/leases\/screen-1\.json/);
+  assert.match(html, /data-cursor-state="lease-held"/);
+  assert.match(html, /data-proposal-status="needs-confirmation"/);
+  assert.match(html, /data-control-flag="permission status"/);
+  assert.match(html, /class="virtual-screen-run-summary"/);
+  assert.match(html, /data-run-summary-field="screens">screens: <strong>2<\/strong>/);
+  assert.match(html, /data-run-summary-field="actor cursors">actor cursors: <strong>3<\/strong>/);
+  assert.match(html, /data-run-summary-field="sidecar">sidecar: <strong>macos-native-virtual-screen<\/strong>/);
+  assert.match(html, /data-run-summary-field="validation">validation: <strong>accepted<\/strong>/);
+  assert.match(html, /data-run-summary-field="validation ok">validation ok: <strong>true<\/strong>/);
+  assert.match(html, /computer-use:session\/run-screen\/validation\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/evidence\/index\.json/);
+  assert.match(html, /data-status-reason="blocked"/);
+  assert.match(html, /Screen recording permission pending/);
+  assert.match(html, /\/computer-use stop --stop-ref/);
+  assert.doesNotMatch(html, /RAW_SCREENSHOT_SHOULD_NOT_RENDER|data:image|providerRoute|desktopBridge/);
 });
 
 test('ResultsRenderer right pane terminal renders execution transcript', () => {
@@ -345,15 +517,204 @@ test('ResultsRenderer right pane terminal renders execution transcript', () => {
   assert.match(html, /\[stdout\] artifact:terminal-stdout/);
   assert.match(html, /\[output\] artifact:terminal-output/);
   assert.match(html, /\[failed\] unit test failed/);
-  assert.match(html, /<dt>mode<\/dt>\s*<dd>transcript<\/dd>/);
-  assert.match(html, /<dt>source<\/dt>\s*<dd>execution-units<\/dd>/);
+  assert.match(html, /<dt>Mode<\/dt>\s*<dd>transcript<\/dd>/);
+  assert.match(html, /data-mode="transcript"/);
+  assert.match(html, /data-terminal-session-adapter="host-owned-terminal-session"/);
+  assert.match(html, /data-session-id="run-terminal"/);
+  assert.match(html, /data-transcript-ref="artifact:terminal-stdout"/);
+  assert.match(html, /data-pty-transcript-ref="pty-transcript:hash-terminal"/);
   assert.doesNotMatch(html, /\$ EU-raw-id-should-not-be-command/);
 });
 
-test('ResultsRenderer browser tool uses normalized urls and proxies external previews', () => {
+test('ResultsRenderer terminal tab contains only terminal session surface', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      id: 'run-terminal-only',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'run command',
+      response: 'done',
+      createdAt: '2026-05-31T08:00:00.000Z',
+    }],
+    executionUnits: [{
+      id: 'EU-terminal-only',
+      tool: 'shell_command',
+      params: '{"cmd":"git status --short"}',
+      code: 'git status --short',
+      status: 'done',
+      hash: 'terminal-only',
+      runId: 'run-terminal-only',
+      stdoutRef: 'artifact:terminal-only-stdout',
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-terminal-only', initialResultTab: 'terminal' });
+
+  assert.match(html, /data-testid="right-pane-terminal-tool"/);
+  assert.match(html, /data-component-id="terminal-session-viewer"/);
+  assert.match(html, /data-status="completed"/);
+  assert.match(html, /\$ git status --short/);
+  assert.doesNotMatch(html, /Active result|当前结果/);
+  assert.doesNotMatch(html, /data-component-id="execution-provenance-table"|audit-details-panel|NotebookTimeline/);
+});
+
+test('ResultsRenderer terminal tab falls back to transcript controls without live output', () => {
+  const html = renderResultsRenderer(emptySession(), { initialResultTab: 'terminal' });
+
+  assert.match(html, /data-testid="right-pane-terminal-tool"/);
+  assert.match(html, /data-component-id="terminal-session-viewer"/);
+  assert.match(html, /data-status="stopped"/);
+  assert.match(html, /data-mode="transcript"/);
+  assert.match(html, /data-requested-mode="transcript"/);
+  assert.match(html, /data-terminal-session-adapter="host-owned-terminal-session"/);
+  assert.match(html, /data-transcript-ref="terminal-transcript:right-pane"/);
+  assert.match(html, /data-pty-transcript-ref="pty-transcript:right-pane"/);
+  assert.match(html, /\$ ask --help/);
+  assert.match(html, /Waiting for an attached terminal session or run output/);
+  assert.match(html, /name="terminal-input"[^>]*disabled=""/);
+  assert.match(html, /data-terminal-event="copy-request"/);
+  assert.match(html, /data-terminal-event="download-request"/);
+  assert.doesNotMatch(html, /data-terminal-live-surface="host-owned"/);
+});
+
+test('ResultsRenderer right pane terminal callbacks use terminal-equivalent commands', () => {
+  const source = readFileSync(new URL('./ResultsRenderer.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /\/terminal input --session/);
+  assert.match(source, /\/terminal paste --session/);
+  assert.match(source, /\/terminal resize --session/);
+  assert.match(source, /\/terminal copy --session/);
+  assert.match(source, /\/terminal download --session/);
+  assert.match(source, /\/terminal stop --session/);
+  assert.match(source, /\/terminal focus --session/);
+  assert.doesNotMatch(source, /navigator\.clipboard\?\.writeText\(buffer\)/);
+});
+
+test('ResultsRenderer screen tab derives Computer Use frame and replay refs from current run artifacts', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'cu-screen-run',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    metadata: { runId: 'run-cu-screen' },
+    data: {
+      sessionRef: 'computer-use:session/run-cu-screen/session.json',
+      screenRef: 'computer-use:screen/run-cu-screen/screen-1.json',
+      frameRefs: ['.sciforge/computer-use/run-cu-screen/latest.png'],
+      replayRef: 'computer-use:replay/run-cu-screen/replay.json',
+      validationRef: 'computer-use:validation/run-cu-screen/validation.json',
+      evidenceBundleIndexRef: 'computer-use:evidence/run-cu-screen/index.json',
+      sidecarBindingKind: 'diagnostic-local',
+      validationStatus: 'accepted',
+      validationOk: true,
+      realNativeSidecarExecuted: false,
+      completionEligible: false,
+      visibleCursorRefs: ['computer-use:cursor/run-cu-screen/agent.json'],
+      actorCursors: [{ actorId: 'agent-1', label: 'Agent', x: 42, y: 64, state: 'watching' }],
+      isolation: { sharedSystemInputUsed: false, systemPointerMoved: false, systemKeyboardEventsSent: false, inputExecuted: false, diagnosticOnly: true },
+      screen: { width: 100, height: 80, label: 'screen-1' },
+    },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [completedRun('run-cu-screen')],
+    artifacts: [artifact],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-cu-screen', initialResultTab: 'screen' });
+
+  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(html, /data-status="ready"/);
+  assert.match(html, /.sciforge\/computer-use\/run-cu-screen\/latest\.png/);
+  assert.match(html, /computer-use:replay\/run-cu-screen\/replay\.json/);
+  assert.match(html, /data-run-summary-status="ready"/);
+  assert.match(html, /computer-use:validation\/run-cu-screen\/validation\.json/);
+  assert.match(html, /computer-use:evidence\/run-cu-screen\/index\.json/);
+  assert.match(html, /data-run-summary-field="sidecar">sidecar: <strong>diagnostic-local<\/strong>/);
+  assert.match(html, /data-run-summary-field="validation">validation: <strong>accepted<\/strong>/);
+  assert.match(html, /\/computer-use observe --screen-ref &quot;computer-use:screen\/run-cu-screen\/screen-1\.json&quot;/);
+  assert.match(html, /class="virtual-screen-frame-image"/);
+  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png&amp;workspacePath=%2Ftmp%2Fsciforge"/);
+  assert.match(html, /Agent/);
+  assert.doesNotMatch(html, /virtual-desktop-session-manifest\.json/);
+  assert.doesNotMatch(html, /providerRoute|executorLease|desktopBridge|rawScreenshot|base64/);
+});
+
+test('ResultsRenderer screen tab does not reuse old session screen when active run has no screen artifact', () => {
+  const oldArtifact: RuntimeArtifact = {
+    id: 'cu-screen-old-run',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    metadata: { runId: 'run-old-screen' },
+    data: {
+      sessionRef: 'computer-use:session/run-old-screen/session.json',
+      screenRef: 'computer-use:screen/run-old-screen/screen-1.json',
+      frameRefs: ['.sciforge/computer-use/run-old-screen/latest.png'],
+      replayRef: 'computer-use:replay/run-old-screen/replay.json',
+      screen: { width: 100, height: 80, label: 'old-screen' },
+    },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [
+      completedRun('run-old-screen'),
+      { ...completedRun('run-current-no-screen'), status: 'running' },
+    ],
+    artifacts: [oldArtifact],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-current-no-screen', initialResultTab: 'screen' });
+
+  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(html, /data-status="empty"/);
+  assert.match(html, /Virtual screen refs are not attached/);
+  assert.doesNotMatch(html, /run-old-screen|old-screen|latest\.png|computer-use:replay\/run-old-screen/);
+});
+
+test('ResultsRenderer references tab is an object ref inspector with focus/open actions', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'report-ref',
+    type: 'research-report',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    metadata: { runId: 'run-refs' },
+    data: { markdown: '# Report' },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...completedRun('run-refs'),
+      objectReferences: [{
+        id: 'file-ref',
+        kind: 'file',
+        title: 'PROJECT.md',
+        ref: 'file:PROJECT.md',
+        status: 'available',
+        actions: ['focus-right-pane', 'copy-path'],
+      }],
+    }],
+    artifacts: [artifact],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'run-refs', initialResultTab: 'evidence' });
+
+  assert.match(html, /data-testid="right-pane-references-tool"/);
+  assert.match(html, /data-reference-kind="artifact"/);
+  assert.match(html, /data-reference-kind="file"/);
+  assert.match(html, /data-focus-target="primary"/);
+  assert.match(html, /data-focus-target="files"/);
+  assert.match(html, />Open<\/button>/);
+  assert.match(html, /PROJECT\.md/);
+  assert.doesNotMatch(html, /supportingRefs|opposingRefs|raw JSON/i);
+});
+
+test('ResultsRenderer browser tool uses normalized urls and typed Browser state', () => {
   const browserHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'browser' });
 
   assert.match(browserHtml, /\/browser open &quot;about:blank&quot; --surface workbench/);
+  assert.match(browserHtml, /data-browser-state="idle"/);
   assert.doesNotMatch(browserHtml, /src="localhost:/);
 });
 
@@ -383,8 +744,133 @@ test('ResultsRenderer restores right pane tabs and Browser address from localSto
     assert.match(html, />Browser 2</);
     assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
     assert.match(html, /value="https:\/\/example\.org"/);
-    assert.match(html, /src="\/api\/sciforge\/browser\/proxy\?url=https%3A%2F%2Fexample\.org"/);
+    assert.match(html, /data-browser-state="blocked"/);
+    assert.match(html, /X-Frame-Options or Content-Security-Policy/);
+    assert.match(html, /data-browser-state-action="open-external"/);
+    assert.match(html, /data-browser-state-action="proxy-fallback"/);
+    assert.match(html, /href="\/api\/sciforge\/browser\/proxy\?url=https%3A%2F%2Fexample\.org"/);
+    assert.match(html, /\/browser open-external &quot;https:\/\/example\.org&quot; --approval required/);
     assert.doesNotMatch(html, /src="about:blank"/);
+    assert.doesNotMatch(html, /src="https:\/\/example\.org"/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
+test('ResultsRenderer restores an explicitly empty right pane without recreating default tabs', () => {
+  const previousWindow = globalThis.window;
+  const storage = new MemoryStorage();
+  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    tabs: [],
+    activeTabId: '',
+    browserTabAddresses: {
+      'custom:browser:closed:1': 'https://closed.example.test',
+    },
+  }));
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession());
+
+    assert.match(html, /data-testid="right-pane-empty-workspace"/);
+    assert.match(html, /No pages open/);
+    assert.match(html, /class="result-new-tab-button"/);
+    assert.doesNotMatch(html, /role="tab"/);
+    assert.doesNotMatch(html, /class="result-active-tab-close"/);
+    assert.doesNotMatch(html, /closed\.example\.test|Nothing to preview yet|aria-selected="true"/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
+test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
+  const previousWindow = globalThis.window;
+  const storage = new MemoryStorage();
+  const persistedTabs = [
+    { id: 'custom:browser:first:1', kind: 'browser', label: 'Browser', closable: true },
+    { id: 'custom:browser:second:2', kind: 'browser', label: 'Browser 2', closable: true },
+  ];
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+
+  try {
+    storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+      tabs: persistedTabs,
+      activeTabId: 'custom:browser:second:2',
+      browserTabAddresses: {
+        'custom:browser:first:1': 'localhost:4173/first',
+        'custom:browser:second:2': 'https://example.org/second',
+      },
+    }));
+    const secondHtml = renderResultsRenderer(emptySession());
+
+    assert.match(secondHtml, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
+    assert.match(secondHtml, /value="https:\/\/example\.org\/second"/);
+    assert.match(secondHtml, /\/browser open-external &quot;https:\/\/example\.org\/second&quot; --approval required/);
+    assert.doesNotMatch(secondHtml, /value="localhost:4173\/first"|src="http:\/\/localhost:4173\/first"/);
+
+    storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+      tabs: persistedTabs,
+      activeTabId: 'custom:browser:first:1',
+      browserTabAddresses: {
+        'custom:browser:first:1': 'localhost:4173/first',
+        'custom:browser:second:2': 'https://example.org/second',
+      },
+    }));
+    const firstHtml = renderResultsRenderer(emptySession());
+
+    assert.match(firstHtml, /aria-selected="true"[^>]*><span>Browser<\/span>/);
+    assert.match(firstHtml, /value="localhost:4173\/first"/);
+    assert.match(firstHtml, /src="http:\/\/localhost:4173\/first"/);
+    assert.doesNotMatch(firstHtml, /value="https:\/\/example\.org\/second"|\/browser open-external &quot;https:\/\/example\.org\/second/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
+test('ResultsRenderer restores persisted New/Close state and Browser URL without closed pages', () => {
+  const previousWindow = globalThis.window;
+  const storage = new MemoryStorage();
+  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    tabs: [
+      { id: 'custom:browser:persisted:2', kind: 'browser', label: 'Browser 2', closable: true },
+    ],
+    activeTabId: 'custom:browser:persisted:2',
+    browserTabAddresses: {
+      'custom:browser:persisted:2': 'localhost:4173/preview',
+      'custom:browser:closed:3': 'https://closed.example.test',
+    },
+  }));
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession());
+
+    assert.match(html, /class="result-new-tab-button"/);
+    assert.match(html, /aria-label="New right pane page"/);
+    assert.match(html, /class="result-active-tab-close"[^>]*aria-label="Close Browser 2"/);
+    assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
+    assert.match(html, /value="localhost:4173\/preview"/);
+    assert.match(html, /src="http:\/\/localhost:4173\/preview"/);
+    assert.match(html, /\/browser open &quot;http:\/\/localhost:4173\/preview&quot; --surface workbench/);
+    assert.doesNotMatch(html, /closed\.example\.test|result-tab-base-primary/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
@@ -424,6 +910,39 @@ test('ResultsRenderer shows clicked workspace files as editable right-pane tree 
   assert.match(html, /PROJECT\.md/);
   assert.match(html, /textarea/);
   assert.match(html, /Edited draft/);
+  assert.doesNotMatch(html, /workspace-file-inline-viewer/);
+});
+
+test('ResultsRenderer files tab exposes read, edit, and save affordances for selected workspace files', () => {
+  const html = renderResultsRenderer(emptySession(), {
+    initialResultTab: 'files',
+    workspaceFileEditor: {
+      file: {
+        path: '/tmp/sciforge/src/app/ResultsRenderer.tsx',
+        name: 'ResultsRenderer.tsx',
+        content: 'export const before = true;\n',
+        size: 28,
+        language: 'typescript',
+      },
+      draft: 'export const after = true;\n',
+      workspacePath: '/tmp/sciforge',
+    },
+  });
+
+  assert.match(html, /data-testid="right-pane-files-tool"/);
+  assert.match(html, /data-component-id="workspace-file-viewer"/);
+  assert.match(html, /workspace-file-viewer-tree/);
+  assert.match(html, /workspace-file-viewer-editor/);
+  assert.match(html, /ResultsRenderer\.tsx/);
+  assert.match(html, /textarea/);
+  assert.match(html, /export const after = true/);
+  assert.match(html, /Read only/);
+  assert.match(html, /Unsaved/);
+  assert.match(html, /aria-label="Edit"/);
+  assert.match(html, /aria-label="Save file"/);
+  assert.match(html, /aria-label="Close file view"/);
+  assert.match(html, /aria-label="Copy path"/);
+  assert.match(html, /aria-label="Copy contents"/);
   assert.doesNotMatch(html, /workspace-file-inline-viewer/);
 });
 
@@ -539,6 +1058,62 @@ test('ResultsRenderer focus request keys stay stable while the file viewer brows
   assert.equal(browsedEditor.focusRequestKey, key);
   assert.notEqual(browsedEditor.file.path, '/tmp/sciforge-repo/src/runtime/gateway/agentserver-stream.ts');
   assert.notEqual(workspaceFileFocusRequestKey({ ...reference, id: 'other-file' }, 'src/runtime/gateway/agentserver-stream.ts'), key);
+});
+
+test('ResultsRenderer scopes Files editor state by right-pane tab id', () => {
+  const first: WorkspaceFileEditorState = {
+    file: {
+      path: '/tmp/sciforge/first.md',
+      name: 'first.md',
+      content: '# First\n',
+      size: 8,
+      language: 'markdown',
+    },
+    draft: '# First draft\n',
+    workspacePath: '/tmp/sciforge',
+    editMode: true,
+  };
+  const second: WorkspaceFileEditorState = {
+    file: {
+      path: '/tmp/sciforge/second.md',
+      name: 'second.md',
+      content: '# Second\n',
+      size: 9,
+      language: 'markdown',
+    },
+    draft: '# Second draft\n',
+    workspacePath: '/tmp/sciforge',
+    editMode: true,
+  };
+  const withFirst = setWorkspaceFileEditorForTab({}, 'base:files', first);
+  const withBoth = setWorkspaceFileEditorForTab(withFirst, 'custom:files:2', second);
+  const changedFirst = setWorkspaceFileEditorForTab(withBoth, 'base:files', { ...first, draft: '# First changed\n' });
+  const closedFirst = removeWorkspaceFileEditorForTab(changedFirst, 'base:files');
+
+  assert.equal(changedFirst['base:files']?.draft, '# First changed\n');
+  assert.equal(changedFirst['custom:files:2']?.draft, '# Second draft\n');
+  assert.equal(closedFirst['base:files'], undefined);
+  assert.equal(closedFirst['custom:files:2']?.file.path, '/tmp/sciforge/second.md');
+});
+
+test('ResultsRenderer cancel edit restores the original file draft without closing the Files tab', () => {
+  const file = {
+    path: '/tmp/sciforge/PROJECT.md',
+    name: 'PROJECT.md',
+    content: '# Original\n',
+    size: 11,
+    language: 'markdown',
+  };
+  const cancelled = cancelWorkspaceFileEditorEdit({
+    file,
+    draft: '# Changed\n',
+    workspacePath: '/tmp/sciforge',
+    editMode: true,
+  });
+
+  assert.equal(cancelled.file, file);
+  assert.equal(cancelled.draft, '# Original\n');
+  assert.equal(cancelled.editMode, false);
 });
 
 test('ResultsRenderer keeps raw failure text out of the first-screen main summary while preserving audit details', () => {
@@ -1221,8 +1796,8 @@ test('ResultsRenderer terminal activity avoids exposing raw execution unit ids a
   const html = renderResultsRenderer(session, { initialFocusMode: 'execution' });
 
   assert.match(html, /terminal-session-viewer/);
-  assert.match(html, /Session terminal:activity-1/);
-  assert.doesNotMatch(html, /Session execution-unit:EU-internal-shell-id/);
+  assert.match(html, /Terminal session terminal:activity-1/);
+  assert.doesNotMatch(html, /Terminal session execution-unit:EU-internal-shell-id/);
 });
 
 test('ResultsRenderer execution focus scopes execution units to the active run', () => {
@@ -1722,6 +2297,14 @@ test('object reference action helper resolves pin and workspace path plans witho
   if (copyPlan.kind !== 'copy-path') assert.fail(`Expected copy-path plan, got ${copyPlan.kind}`);
   assert.equal(copyPlan.path, '.sciforge/artifacts/report.md');
   assert.equal(copyPlan.notice, '已复制路径：.sciforge/artifacts/report.md');
+});
+
+test('object reference focus routes open refs to typed right-pane tabs', () => {
+  assert.equal(resultTabForObjectReference({ id: 'file', kind: 'file', title: 'File', ref: 'file:PROJECT.md' }), 'files');
+  assert.equal(resultTabForObjectReference({ id: 'url', kind: 'url', title: 'URL', ref: 'url:https://example.org' }), 'browser');
+  assert.equal(resultTabForObjectReference({ id: 'terminal', kind: 'execution-unit', title: 'Shell', ref: 'execution-unit:EU-shell' }), 'terminal');
+  assert.equal(resultTabForObjectReference({ id: 'screen', kind: 'artifact', title: 'Screen', ref: 'computer-use:frame/latest.png', artifactType: 'computer-use-virtual-screen' }), 'screen');
+  assert.equal(resultTabForObjectReference({ id: 'artifact', kind: 'artifact', title: 'Report', ref: 'artifact:report' }), 'primary');
 });
 
 test('object reference selection actions route through UserActionApi', async () => {

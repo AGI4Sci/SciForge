@@ -99,6 +99,71 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
   }
 });
 
+test('Runtime Codex Computer Use GUI events redact unsafe public metadata', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: workspace_event\n',
+        `data: ${JSON.stringify({
+          type: 'computer-use.tui-host-actions',
+          source: 'computer-use-package-bridge',
+          commandId,
+          attemptId,
+          provider: 'https://provider.example.test/v1?api_key=sk-provider-secret-1234567890',
+          model: 'deepseek Authorization: Bearer sk-model-secret-1234567890',
+          profile: 'runtime token=sk-profile-secret-1234567890',
+          workspace: '/Users/alice/private/SciForge',
+          detail: JSON.stringify({
+            actions: [{
+              schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+              port: 'gui.present',
+              target: 'computer-use.trace-summary',
+              payload: {
+                title: 'Computer Use result',
+                status: 'completed',
+                message: 'Computer Use completed with visible evidence.',
+                traceRefs: ['computer-use:trace/safe.json'],
+              },
+            }],
+          }),
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          commandId,
+          attemptId,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const guiPresentation = raw.guiPresentation as Record<string, unknown>;
+    const projection = (raw.displayIntent as Record<string, unknown>).conversationProjection as Record<string, unknown>;
+    const runtimeMetadata = projection.runtimeMetadata as Record<string, unknown>;
+    const rawText = JSON.stringify(raw);
+
+    assert.equal(guiPresentation.provider, '[redacted-provider]');
+    assert.equal(guiPresentation.model, '[redacted-model]');
+    assert.equal(guiPresentation.profile, '[redacted-profile]');
+    assert.equal(guiPresentation.workspace, '[redacted-workspace]');
+    assert.equal(runtimeMetadata.provider, '[redacted-provider]');
+    assert.equal(runtimeMetadata.model, '[redacted-model]');
+    assert.equal(runtimeMetadata.profile, '[redacted-profile]');
+    assert.equal(runtimeMetadata.workspace, '[redacted-workspace]');
+    assert.doesNotMatch(rawText, /provider\.example|sk-provider-secret|sk-model-secret|sk-profile-secret|\/Users\/alice|Bearer/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Runtime Codex Computer Use host actions materialize user control plane as presentation-only slot', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
@@ -134,6 +199,60 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
                 cancelLeaseRef: 'computer-use:lease/current',
                 approvalMode: 'required',
                 approvalRequestRef: 'computer-use:approval/request.json',
+                sessionRef: 'computer-use:session/live/current-bundle.json',
+                displayGroupRef: 'computer-use:display/live/group.json',
+                screenRef: 'computer-use:screen/live/screen-1.json',
+                visibleScreenRefs: ['computer-use:screen/live/screen-1.json'],
+                visibleCursorRefs: ['computer-use:cursor/live/agent.json'],
+                frameRefs: ['.sciforge/computer-use/live/frame-after.png'],
+                replayRef: 'computer-use:replay/live/replay.json',
+                validationRef: 'computer-use:validation/live/validation.json',
+                currentBundleRef: 'computer-use:bundle/live/current-bundle.json',
+                evidenceBundleIndexRef: 'computer-use:evidence/live/index.json',
+                sidecarBindingRef: 'computer-use:sidecar/live/binding.json',
+                sidecarCapabilitiesRef: 'computer-use:sidecar/live/capabilities.json',
+                sidecarDiscoveryRef: 'computer-use:sidecar/live/discovery.json',
+                sidecarCallRefs: ['computer-use:sidecar/live/calls/execute-1.json'],
+                targetRefs: ['computer-use:target/live/screen-1-button.json'],
+                schedulerLeaseRefs: ['computer-use:lease/live/scheduler-screen-1.json'],
+                runSummary: {
+                  status: 'blocked',
+                  screenCount: 2,
+                  actorCursorCount: 3,
+                  frameCount: 1,
+                  sidecarBindingKind: 'macos-native-virtual-screen',
+                  validationStatus: 'accepted',
+                  validationOk: true,
+                  realNativeSidecarExecuted: false,
+                  completionEligible: false,
+                  validationRef: 'computer-use:validation/live/validation.json',
+                  evidenceBundleIndexRef: 'computer-use:evidence/live/index.json',
+                  rawTrace: 'SHOULD_NOT_LEAK',
+                  token: 'SHOULD_NOT_LEAK',
+                },
+                cursorOverlayRefs: ['computer-use:cursor-overlay/live/latest.json'],
+                leaseOwnerRefs: ['computer-use:lease/live/screen-1.json'],
+                beforeEvidenceRefs: ['computer-use:evidence/live/before.json'],
+                afterEvidenceRefs: ['computer-use:evidence/live/after.json'],
+                completionEvidenceRefs: ['computer-use:evidence/live/completion.json'],
+                actorCursors: [{ actorId: 'agent-1', label: 'Agent', x: 44, y: 55, providerRoute: 'SHOULD_NOT_LEAK' }],
+                frames: [{
+                  frameRef: '.sciforge/computer-use/live/frame-after.png',
+                  screenRef: 'computer-use:screen/live/screen-1.json',
+                  cursorOverlayRefs: ['computer-use:cursor-overlay/live/latest.json'],
+                  beforeEvidenceRefs: ['computer-use:evidence/live/before.json'],
+                  afterEvidenceRefs: ['computer-use:evidence/live/after.json'],
+                  leaseOwnerRefs: ['computer-use:lease/live/screen-1.json'],
+                  rawScreenshot: 'SHOULD_NOT_LEAK',
+                  providerRoute: 'SHOULD_NOT_LEAK',
+                }],
+                isolation: {
+                  sharedSystemInputUsed: false,
+                  systemPointerMoved: false,
+                  systemKeyboardEventsSent: false,
+                  virtualInputExecuted: true,
+                  realOsInputExecuted: false,
+                },
                 providerRoute: 'SHOULD_NOT_LEAK',
                 executorLease: { screenId: 'SHOULD_NOT_LEAK' },
                 schedulerParams: { leaseScope: 'SHOULD_NOT_LEAK' },
@@ -186,6 +305,9 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     const controlSlot = response.uiManifest.find((slot) => slot.componentId === 'computer-use-control-plane');
     const controlArtifact = response.artifacts.find((artifact) => artifact.id === controlSlot?.artifactRef);
     const controlData = controlArtifact?.data as Record<string, unknown> | undefined;
+    const screenSlot = response.uiManifest.find((slot) => slot.componentId === 'virtual-screen-viewer');
+    const screenArtifact = response.artifacts.find((artifact) => artifact.id === screenSlot?.artifactRef);
+    const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
     const raw = response.run.raw as Record<string, unknown>;
     const guiAskUser = raw.guiAskUser as Record<string, unknown>;
     const guiControl = guiAskUser.controlPlane as Record<string, unknown>;
@@ -201,9 +323,34 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     assert.equal(controlData?.cancelLeaseRef, 'computer-use:lease/current');
     assert.equal(controlData?.approvalMode, 'required');
     assert.equal(controlData?.status, 'needs-confirmation');
+    assert.ok(screenSlot);
+    assert.ok(screenArtifact);
+    assert.equal(screenArtifact?.type, 'computer-use-virtual-screen');
+    assert.equal(screenData?.sessionRef, 'computer-use:session/live/current-bundle.json');
+    assert.deepEqual(screenData?.visibleScreenRefs, ['computer-use:screen/live/screen-1.json']);
+    assert.deepEqual(screenData?.frameRefs, ['.sciforge/computer-use/live/frame-after.png']);
+    assert.equal(screenData?.replayRef, 'computer-use:replay/live/replay.json');
+    assert.deepEqual(screenData?.cursorOverlayRefs, ['computer-use:cursor-overlay/live/latest.json']);
+    assert.equal(screenData?.validationRef, 'computer-use:validation/live/validation.json');
+    assert.equal(screenData?.currentBundleRef, 'computer-use:bundle/live/current-bundle.json');
+    assert.equal(screenData?.evidenceBundleIndexRef, 'computer-use:evidence/live/index.json');
+    assert.deepEqual(screenData?.sidecarCallRefs, ['computer-use:sidecar/live/calls/execute-1.json']);
+    assert.deepEqual(screenData?.targetRefs, ['computer-use:target/live/screen-1-button.json']);
+    assert.deepEqual(screenData?.schedulerLeaseRefs, ['computer-use:lease/live/scheduler-screen-1.json']);
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.screenCount, 2);
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.actorCursorCount, 3);
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.sidecarBindingKind, 'macos-native-virtual-screen');
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.validationStatus, 'accepted');
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.validationOk, true);
+    assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.realNativeSidecarExecuted, false);
+    assert.equal((screenData?.isolation as Record<string, unknown> | undefined)?.realOsInputExecuted, false);
+    assert.match(String((raw.guiPresentation as Record<string, unknown>).text), /Virtual screen run summary/);
+    assert.match(String((raw.guiPresentation as Record<string, unknown>).text), /validation ref `computer-use:validation\/live\/validation\.json`/);
+    assert.match(String((raw.guiPresentation as Record<string, unknown>).text), /validation status `accepted`/);
     assert.equal(guiControl.approvalRef, 'approval:computer-use:control-plane');
     assert.deepEqual(recursiveForbiddenKeys(controlData, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
     assert.deepEqual(recursiveForbiddenKeys(guiControl, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
+    assert.deepEqual(recursiveForbiddenKeys(screenData, ['providerRoute', 'executorLease', 'schedulerParams', 'rawScreenshot', 'rawTrace', 'token', 'screenId', 'leaseScope']), []);
     assert.deepEqual(recursiveForbiddenKeys(bodies[0], ['selectedActionIds', 'selectedToolIds', 'selectedSenseIds', 'uiState', 'providerRoute', 'executorLease', 'schedulerParams']), []);
   } finally {
     globalThis.fetch = originalFetch;
@@ -250,9 +397,10 @@ test('Computer Use approval retry stays terminal-equivalent text through Codex R
   assert.match(String(approveBody.commandText), /\/computer-use approve --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
   assert.match(String(approveBody.commandId), /^codex-command-/);
   assert.equal('prompt' in approveBody, false);
-  assert.equal('humanApproval' in approveBody, false);
   assert.equal('approvalRef' in approveBody, false);
-  assert.equal('uiState' in approveBody, false);
+  assert.equal((approveBody.humanApproval as Record<string, unknown>).approvalRef, 'approval:computer-use:cu-risk');
+  assert.equal((approveBody.uiState as Record<string, unknown>).terminalEquivalentText, true);
+  assert.deepEqual(recursiveForbiddenKeys(approveBody, ['providerRoute', 'executorLease', 'schedulerParams', 'desktopBridge']), []);
   assert.match(String(rejectBody.commandText), /\/computer-use reject --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
   assert.equal('humanApproval' in rejectBody, false);
   assert.equal('approvalRef' in rejectBody, false);
@@ -309,9 +457,11 @@ test('Computer Use approval retry does not serialize prior gui.ask_user provenan
   const body = bodies[0]!;
   assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
   assert.match(String(body.commandText), /\/computer-use approve --approval-ref \\?"approval:computer-use:cu-risk\\?"/);
-  assert.equal('humanApproval' in body, false);
+  assert.equal((body.humanApproval as Record<string, unknown>).approvalRef, 'approval:computer-use:cu-risk');
   assert.equal('approvalProvenance' in body, false);
-  assert.equal('uiState' in body, false);
+  assert.equal((body.uiState as Record<string, unknown>).terminalEquivalentText, true);
+  assert.doesNotMatch(JSON.stringify((body.humanApproval as Record<string, unknown>).approvalProvenance ?? {}), /display-only-risk-request|prior-gui-ask-user|gui-ask-user/);
+  assert.doesNotMatch(JSON.stringify((body.uiState as Record<string, unknown>).approvalProvenance ?? {}), /display-only-risk-request|prior-gui-ask-user|gui-ask-user/);
   assert.doesNotMatch(JSON.stringify(body), /prior-gui-ask-user|riskActionHash|risk-audit|gui-ask-user/);
 });
 
@@ -827,7 +977,8 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   assert.deepEqual(recursiveForbiddenKeys(body, forbiddenKeys), []);
   assert.doesNotMatch(JSON.stringify(body), /SEED_MESSAGE_SHOULD_NOT_LEAK|ARTIFACT_BODY_SHOULD_NOT_LEAK|CLAIM_BODY_SHOULD_NOT_LEAK/);
   assert.doesNotMatch(JSON.stringify(body), /legacy\.skill|127\.0\.0\.1:7777|preserve-context/);
-  assert.doesNotMatch(JSON.stringify(body), /raw-terminal|pty|raw-bytes/);
+  assert.deepEqual(recursiveForbiddenKeys(body, ['pty', 'rawBytes', 'rawTerminalBytes', 'rawTerminalPayload']), []);
+  assert.doesNotMatch(JSON.stringify(body), /raw-terminal|raw-bytes/);
 });
 
 test('Runtime Codex stream request resumes from persisted nested Runtime Codex session metadata', async () => {

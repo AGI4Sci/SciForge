@@ -5,11 +5,15 @@ export const basicTerminalSessionViewerFixture: UIComponentRendererProps = {
     componentId: 'terminal-session-viewer',
     title: 'Runtime terminal',
     props: {
+      mode: 'transcript',
       sessionRef: 'terminal:run-rt-03',
+      sessionId: 'run-rt-03',
       status: 'running',
       title: 'RT-03 package test',
+      cwd: '/workspace/SciForge',
       rows: 20,
       cols: 100,
+      startedAt: '2026-05-31T09:30:00.000Z',
       capabilities: {
         input: true,
         paste: true,
@@ -20,10 +24,6 @@ export const basicTerminalSessionViewerFixture: UIComponentRendererProps = {
         focus: true,
       },
       theme: 'dark',
-      metadata: {
-        cwd: '/workspace/SciForge',
-        shell: 'zsh',
-      },
     },
   },
   artifact: {

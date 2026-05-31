@@ -10,7 +10,9 @@ from typing import Any, Mapping
 import pytest
 
 from sciforge_computer_use.native_multi_screen_live_demo import (
+    NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA,
     NATIVE_MULTI_SCREEN_LIVE_DEMO_RUN_SCHEMA,
+    NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA,
     NATIVE_MULTI_SCREEN_SIDECAR_BINDING_SCHEMA,
     NATIVE_SIDECAR_CAPABILITIES_SCHEMA,
     NATIVE_SIDECAR_DISCOVERY_SCHEMA,
@@ -20,6 +22,26 @@ from sciforge_computer_use.native_multi_screen_live_demo import (
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def read_evidence_index(manifest: Mapping[str, Any]) -> Mapping[str, Any]:
+    index_ref = manifest.get("evidenceIndexRef")
+    assert isinstance(index_ref, str) and index_ref
+    root_ref = manifest.get("currentBundle", {}).get("rootRef") if isinstance(manifest.get("currentBundle"), Mapping) else None
+    index_path = Path(index_ref)
+    if not index_path.is_absolute() and isinstance(root_ref, str):
+        index_path = Path(root_ref) / index_path
+    parsed = json.loads(index_path.read_text(encoding="utf8"))
+    assert isinstance(parsed, Mapping)
+    return parsed
+
+
+def completed_external_sidecar_kwargs(tmp_path: Path) -> dict[str, Any]:
+    return {
+        "platform": "macos",
+        "sidecar_command": [sys.executable, str(write_completed_sidecar_command(tmp_path))],
+        "sidecar_timeout_seconds": 5,
+    }
 
 
 def test_native_multi_screen_live_demo_blocks_without_real_sidecar(tmp_path) -> None:
@@ -48,7 +70,7 @@ def test_native_multi_screen_live_demo_accepts_completed_real_sidecar_contract(t
         tmp_path / "m6-completed",
         run_id="m6-completed",
         observed_at="2026-05-31T12:00:00.000Z",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
 
     validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=True)
@@ -67,6 +89,23 @@ def test_native_multi_screen_live_demo_accepts_completed_real_sidecar_contract(t
     execute_calls = [call for call in manifest["sidecarCalls"] if call["tool"] == "execute"]
     assert all(call["payload"]["target"]["targetRef"] in manifest["targetRefs"] for call in execute_calls)
     assert all(call["payload"]["target"]["targetSource"] == "native-sidecar-discovery-state" for call in execute_calls)
+    assert validation["ok"] is True, validation["errors"]
+
+
+def test_native_multi_screen_live_demo_blocks_custom_dispatcher_as_completion_evidence(tmp_path) -> None:
+    manifest = run_native_multi_screen_live_demo(
+        tmp_path / "m6-custom-dispatcher",
+        run_id="m6-custom-dispatcher",
+        observed_at="2026-05-31T12:00:00.000Z",
+        sidecar_dispatcher=completed_sidecar_dispatcher,
+    )
+
+    validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=True)
+
+    assert manifest["status"] == "blocked"
+    assert manifest["completionEligible"] is False
+    assert manifest["realNativeSidecarExecuted"] is False
+    assert manifest["sidecarBinding"]["bindingKind"] == "custom-dispatcher"
     assert validation["ok"] is True, validation["errors"]
 
 
@@ -103,6 +142,140 @@ def test_native_multi_screen_live_demo_accepts_external_sidecar_command_contract
     assert validation["summary"]["actorCursorCount"] == 3
     assert validation["summary"]["nonPlaceholderReplayScreenCount"] == 2
     assert validation["ok"] is True, validation["errors"]
+
+
+@pytest.mark.parametrize(
+    ("run_id", "dispatcher_kind", "expected_status"),
+    [
+        ("m6-index-blocked", None, "blocked"),
+        ("m6-index-completed", "completed", "completed"),
+    ],
+)
+def test_native_multi_screen_live_demo_writes_refs_first_evidence_index_for_blocked_and_completed(
+    tmp_path,
+    run_id: str,
+    dispatcher_kind: str | None,
+    expected_status: str,
+) -> None:
+    kwargs: dict[str, Any] = {}
+    if dispatcher_kind == "completed":
+        kwargs.update(completed_external_sidecar_kwargs(tmp_path))
+    manifest = run_native_multi_screen_live_demo(
+        tmp_path / run_id,
+        run_id=run_id,
+        observed_at="2026-05-31T12:00:00.000Z",
+        **kwargs,
+    )
+
+    validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=True)
+    index = read_evidence_index(manifest)
+    replay_frame_refs = {
+        frame["screenshotRef"]
+        for frame in manifest["replayBundle"]["frames"]
+        if frame.get("screenshotRef")
+    }
+
+    assert manifest["status"] == expected_status
+    assert manifest["evidenceIndexRef"] in manifest["currentBundle"]["refs"]
+    assert manifest["retentionRedaction"] == index["retentionRedaction"]
+    assert index["schemaVersion"] == NATIVE_MULTI_SCREEN_EVIDENCE_INDEX_SCHEMA
+    assert index["status"] == expected_status
+    assert index["bundleLocal"] is True
+    assert index["completionEvidenceSubstitute"] is False
+    assert index["notCompletionEvidence"] is True
+    assert index["validationRef"] == manifest["validationRef"]
+    assert index["currentBundleRef"] == manifest["currentBundleRef"]
+    assert replay_frame_refs.issubset(set(index["frameRefs"]))
+    assert index["cleanup"]["cleanupUnit"] == "run-bundle"
+    assert index["cleanup"]["replayValidationPreservedByRefs"] is True
+    assert index["retentionRedaction"]["schemaVersion"] == NATIVE_MULTI_SCREEN_RETENTION_REDACTION_SCHEMA
+    assert index["retentionRedaction"]["refsFirst"] is True
+    assert index["retentionRedaction"]["rawInlineStored"] is False
+    assert index["retentionRedaction"]["screenshot"]["rawInlineStored"] is False
+    assert index["retentionRedaction"]["window"]["rawTitleOwnerStored"] is False
+    assert index["retentionRedaction"]["cursor"]["refs"]
+    assert index["retentionRedaction"]["executor"]["storage"] == "ref-only"
+    assert index["retentionRedaction"]["validation"]["validationRef"] == manifest["validationRef"]
+    assert validation["ok"] is True, validation["errors"]
+
+
+def test_native_multi_screen_live_demo_hashes_window_title_owner_metadata(tmp_path) -> None:
+    manifest = run_native_multi_screen_live_demo(
+        tmp_path / "m6-title-owner-redaction",
+        run_id="m6-title-owner-redaction",
+        **completed_external_sidecar_kwargs(tmp_path),
+    )
+
+    validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=True)
+    discovery_windows = manifest["sidecarDiscovery"]["windows"]
+    index = read_evidence_index(manifest)
+
+    assert all("title" not in window and "owner" not in window for window in discovery_windows)
+    assert all(window["titleHash"].startswith("sha256:") for window in discovery_windows)
+    assert all(window["ownerHash"].startswith("sha256:") for window in discovery_windows)
+    assert len(index["retentionRedaction"]["window"]["titleOwnerHashes"]) >= 6
+    assert validation["ok"] is True, validation["errors"]
+
+
+@pytest.mark.parametrize(
+    ("run_id", "dispatcher_kind"),
+    [
+        ("m6-raw-blocked", None),
+        ("m6-raw-completed", "completed"),
+    ],
+)
+def test_native_multi_screen_live_demo_validator_rejects_raw_fields_on_blocked_and_completed_paths(
+    tmp_path,
+    run_id: str,
+    dispatcher_kind: str | None,
+) -> None:
+    kwargs: dict[str, Any] = {}
+    if dispatcher_kind == "completed":
+        kwargs.update(completed_external_sidecar_kwargs(tmp_path))
+    manifest = run_native_multi_screen_live_demo(tmp_path / run_id, run_id=run_id, **kwargs)
+    invalid = copy.deepcopy(manifest)
+    invalid["sidecarCalls"][0]["result"]["rawScreenshot"] = "data:image/png;base64,SECRET"
+    invalid["sidecarCalls"][0]["result"]["secret"] = "token=SECRET"
+
+    validation = validate_native_multi_screen_live_demo_run(invalid)
+
+    codes = {error["code"] for error in validation["errors"]}
+    assert "raw_or_secret_evidence_field_forbidden" in codes
+
+
+def test_native_multi_screen_live_demo_validator_rejects_raw_fields_in_evidence_index_ref(tmp_path) -> None:
+    manifest = run_native_multi_screen_live_demo(
+        tmp_path / "m6-index-raw",
+        run_id="m6-index-raw",
+        **completed_external_sidecar_kwargs(tmp_path),
+    )
+    index_path = Path(manifest["currentBundle"]["rootRef"]) / manifest["evidenceIndexRef"]
+    index = json.loads(index_path.read_text(encoding="utf8"))
+    index["rawTrace"] = {"events": ["secret=SHOULD_NOT_INLINE"]}
+    index_path.write_text(json.dumps(index), encoding="utf8")
+
+    validation = validate_native_multi_screen_live_demo_run(manifest, require_existing_refs=True)
+
+    assert validation["ok"] is False
+    assert "raw_or_secret_evidence_field_forbidden" in {error["code"] for error in validation["errors"]}
+
+
+def test_native_multi_screen_live_demo_evidence_index_does_not_replace_replay_or_executor_validation(tmp_path) -> None:
+    manifest = run_native_multi_screen_live_demo(
+        tmp_path / "m6-index-not-completion",
+        run_id="m6-index-not-completion",
+        **completed_external_sidecar_kwargs(tmp_path),
+    )
+    invalid = copy.deepcopy(manifest)
+    invalid["executorEventRefs"] = []
+    invalid["replayBundle"]["frames"][0]["screenshotRef"] = ""
+
+    validation = validate_native_multi_screen_live_demo_run(invalid)
+
+    codes = {error["code"] for error in validation["errors"]}
+    assert "completed_run_executor_refs_missing" in codes
+    assert "replay_screenshot_missing_for_screen" in codes
+    assert invalid["evidenceIndex"]["completionEvidenceSubstitute"] is False
 
 
 def test_native_multi_screen_live_demo_blocks_completed_calls_without_discovery(tmp_path) -> None:
@@ -166,7 +339,7 @@ def test_native_multi_screen_live_demo_rejects_completed_without_cursor_events(t
     manifest = run_native_multi_screen_live_demo(
         tmp_path / "m6-no-cursor-events",
         run_id="m6-no-cursor-events",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
     invalid = copy.deepcopy(manifest)
     invalid["cursorEvents"] = []
@@ -184,7 +357,7 @@ def test_native_multi_screen_live_demo_rejects_completed_replay_without_per_scre
     manifest = run_native_multi_screen_live_demo(
         tmp_path / "m6-bad-replay",
         run_id="m6-bad-replay",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
     invalid = copy.deepcopy(manifest)
     invalid["replayBundle"]["frames"][1]["screenshotRef"] = ""
@@ -199,7 +372,7 @@ def test_native_multi_screen_live_demo_rejects_completed_sidecar_result_tool_mis
     manifest = run_native_multi_screen_live_demo(
         tmp_path / "m6-tool-mismatch",
         run_id="m6-tool-mismatch",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
     invalid = copy.deepcopy(manifest)
     invalid["sidecarCalls"][0]["result"]["tool"] = "execute"
@@ -214,7 +387,7 @@ def test_native_multi_screen_live_demo_rejects_completed_preflight_windows_outsi
     manifest = run_native_multi_screen_live_demo(
         tmp_path / "m6-bad-preflight-windows",
         run_id="m6-bad-preflight-windows",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
     invalid = copy.deepcopy(manifest)
     for call in invalid["sidecarCalls"]:
@@ -232,7 +405,7 @@ def test_native_multi_screen_live_demo_rejects_completed_execute_magic_target(tm
     manifest = run_native_multi_screen_live_demo(
         tmp_path / "m6-bad-target",
         run_id="m6-bad-target",
-        sidecar_dispatcher=completed_sidecar_dispatcher,
+        **completed_external_sidecar_kwargs(tmp_path),
     )
     invalid = copy.deepcopy(manifest)
     for call in invalid["sidecarCalls"]:
@@ -303,6 +476,8 @@ output_dir = pathlib.Path(request["outputDir"])
 output_dir.mkdir(parents=True, exist_ok=True)
 digest = hashlib.sha256(json.dumps({"tool": tool, "payload": payload}, sort_keys=True).encode("utf8")).hexdigest()[:12]
 ref = output_dir / f"external-{tool}-{digest}.json"
+def hash_value(value):
+    return "sha256:" + hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf8")).hexdigest()
 value_key = {
     "capabilities": "capabilitiesRef",
     "discover": "discoveryRef",
@@ -326,11 +501,9 @@ capabilities = {
     "completionJudged": False,
     "sharedSystemInputAllowed": False,
 }
-window_ref_1 = output_dir / f"{run_id}-native-window-1.json"
-window_ref_2 = output_dir / f"{run_id}-native-window-2.json"
-window_ref_3 = output_dir / f"{run_id}-native-window-3.json"
-for index, window_ref in enumerate([window_ref_1, window_ref_2, window_ref_3], start=1):
-    window_ref.write_text(json.dumps({"schemaVersion": "sciforge.computer-use.native-window-ref.v1", "windowIndex": index, "runId": run_id}) + "\\n", encoding="utf8")
+window_ref_1 = "native-window-ref-1"
+window_ref_2 = "native-window-ref-2"
+window_ref_3 = "native-window-ref-3"
 discovery = {
     "schemaVersion": "sciforge.computer-use.native-sidecar-discovery.v1",
     "runId": run_id,
@@ -340,9 +513,9 @@ discovery = {
         {"screenId": f"{run_id}-native-screen-2", "displayGroupId": display_group_id, "bounds": {"x": 1200, "y": 0, "width": 1000, "height": 760}},
     ],
     "windows": [
-        {"windowId": f"{run_id}-native-window-1", "screenId": f"{run_id}-native-screen-1", "windowRef": str(window_ref_1), "bounds": {"x": 40, "y": 40, "width": 520, "height": 360}},
-        {"windowId": f"{run_id}-native-window-2", "screenId": f"{run_id}-native-screen-1", "windowRef": str(window_ref_2), "bounds": {"x": 600, "y": 40, "width": 520, "height": 360}},
-        {"windowId": f"{run_id}-native-window-3", "screenId": f"{run_id}-native-screen-2", "windowRef": str(window_ref_3), "bounds": {"x": 1240, "y": 40, "width": 520, "height": 360}},
+        {"windowId": f"{run_id}-native-window-1", "screenId": f"{run_id}-native-screen-1", "windowRef": window_ref_1, "titleHash": hash_value("Source document"), "ownerHash": hash_value("SourceApp"), "bounds": {"x": 40, "y": 40, "width": 520, "height": 360}},
+        {"windowId": f"{run_id}-native-window-2", "screenId": f"{run_id}-native-screen-1", "windowRef": window_ref_2, "titleHash": hash_value("Writer document"), "ownerHash": hash_value("WriterApp"), "bounds": {"x": 600, "y": 40, "width": 520, "height": 360}},
+        {"windowId": f"{run_id}-native-window-3", "screenId": f"{run_id}-native-screen-2", "windowRef": window_ref_3, "titleHash": hash_value("Preview window"), "ownerHash": hash_value("PreviewApp"), "bounds": {"x": 1240, "y": 40, "width": 520, "height": 360}},
     ],
     "actorCursorPlan": [
         {"actorId": f"{run_id}-native-actor-1", "cursorId": f"{run_id}-native-cursor-1", "screenId": f"{run_id}-native-screen-1", "windowId": f"{run_id}-native-window-1"},
@@ -350,9 +523,17 @@ discovery = {
         {"actorId": f"{run_id}-native-actor-3", "cursorId": f"{run_id}-native-cursor-3", "screenId": f"{run_id}-native-screen-2", "windowId": f"{run_id}-native-window-3"},
     ],
 }
+screenshot_ref = None
+if tool == "capture":
+    screenshot_ref = output_dir / f"external-{tool}-{digest}.png"
+    screenshot_ref.write_bytes(b"\\x89PNG\\r\\n\\x1a\\n")
 ref_payload = capabilities if tool == "capabilities" else discovery if tool == "discover" else {"tool": tool, "payload": payload, "platform": request.get("platform")}
+if screenshot_ref is not None:
+    ref_payload["screenshotRef"] = str(screenshot_ref)
 ref.write_text(json.dumps(ref_payload, sort_keys=True) + "\\n", encoding="utf8")
 value = {value_key: str(ref), "isolationReportRef": str(ref), "bindingKind": "external-command"}
+if screenshot_ref is not None:
+    value["screenshotRef"] = str(screenshot_ref)
 if tool == "capabilities":
     value["capabilities"] = capabilities
 if tool == "discover":
@@ -362,7 +543,7 @@ print(json.dumps({
     "tool": tool,
     "status": "completed",
     "reason": "external-native-sidecar-completed",
-    "refs": [str(ref)],
+    "refs": [str(ref), *([str(screenshot_ref)] if screenshot_ref is not None else [])],
     "value": value,
     "diagnosticOnly": False,
     "userAcceptanceEligible": True,
@@ -394,7 +575,13 @@ def completed_sidecar_dispatcher(
     out.mkdir(parents=True, exist_ok=True)
     digest = abs(hash(json.dumps({"tool": tool, "payload": dict(payload)}, sort_keys=True, default=str)))
     ref = out / f"live-{tool}-{digest}.json"
-    ref.write_text(json.dumps({"tool": tool, "payload": dict(payload), "platform": platform}, sort_keys=True) + "\n", encoding="utf8")
+    ref_payload: dict[str, Any] = {"tool": tool, "payload": dict(payload), "platform": platform}
+    screenshot_ref: Path | None = None
+    if tool == "capture":
+        screenshot_ref = out / f"live-{tool}-{digest}.png"
+        screenshot_ref.write_bytes(b"\x89PNG\r\n\x1a\n")
+        ref_payload["screenshotRef"] = str(screenshot_ref)
+    ref.write_text(json.dumps(ref_payload, sort_keys=True) + "\n", encoding="utf8")
     ref_text = str(ref)
     value_key = {
         "capabilities": "capabilitiesRef",
@@ -408,6 +595,10 @@ def completed_sidecar_dispatcher(
         value_key: ref_text,
         "isolationReportRef": ref_text,
     }
+    refs = [ref_text]
+    if screenshot_ref is not None:
+        value["screenshotRef"] = str(screenshot_ref)
+        refs.append(str(screenshot_ref))
     if tool == "capabilities":
         value["capabilities"] = capability_payload(payload)
     if tool == "discover":
@@ -417,7 +608,7 @@ def completed_sidecar_dispatcher(
         "tool": tool,
         "status": "completed",
         "reason": "live-sidecar-completed",
-        "refs": [ref_text],
+        "refs": refs,
         "value": value,
         "diagnosticOnly": False,
         "userAcceptanceEligible": True,
@@ -516,9 +707,9 @@ def discovery_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
             {"screenId": f"{run_id}-native-screen-2", "displayGroupId": display_group_id, "bounds": {"x": 1200, "y": 0, "width": 1000, "height": 760}},
         ],
         "windows": [
-            {"windowId": f"{run_id}-native-window-1", "screenId": f"{run_id}-native-screen-1", "windowRef": "native-window-ref-1"},
-            {"windowId": f"{run_id}-native-window-2", "screenId": f"{run_id}-native-screen-1", "windowRef": "native-window-ref-2"},
-            {"windowId": f"{run_id}-native-window-3", "screenId": f"{run_id}-native-screen-2", "windowRef": "native-window-ref-3"},
+            {"windowId": f"{run_id}-native-window-1", "screenId": f"{run_id}-native-screen-1", "windowRef": "native-window-ref-1", "title": "Source document", "owner": "SourceApp"},
+            {"windowId": f"{run_id}-native-window-2", "screenId": f"{run_id}-native-screen-1", "windowRef": "native-window-ref-2", "title": "Writer document", "owner": "WriterApp"},
+            {"windowId": f"{run_id}-native-window-3", "screenId": f"{run_id}-native-screen-2", "windowRef": "native-window-ref-3", "title": "Preview window", "owner": "PreviewApp"},
         ],
         "actorCursorPlan": [
             {"actorId": f"{run_id}-native-actor-1", "cursorId": f"{run_id}-native-cursor-1", "screenId": f"{run_id}-native-screen-1", "windowId": f"{run_id}-native-window-1"},

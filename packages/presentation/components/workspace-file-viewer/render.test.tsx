@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { basicWorkspaceFileViewerFixture } from './fixtures/basic';
 import { emptyWorkspaceFileViewerFixture } from './fixtures/empty';
 import { manifest } from './manifest';
-import { renderWorkspaceFileViewer, WorkspaceFileViewer } from './render';
+import { renderWorkspaceFileViewer, WorkspaceFileViewer, workspaceFileViewerCanEditFile, workspaceFileViewerUnsupportedKind } from './render';
 
 test('workspace-file-viewer package exposes manifest and renders tree plus draft editor', () => {
   assert.equal(manifest.componentId, 'workspace-file-viewer');
@@ -59,6 +59,124 @@ test('workspace-file-viewer package renderer accepts host slot props', () => {
   assert.match(html, /# Read me/);
   assert.match(html, /Host tree loaded/);
   assert.match(html, /placeholder="Find in workspace"/);
+});
+
+test('workspace-file-viewer can render workspace-relative display paths', () => {
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    selectedPath: '/workspace/SciForge/docs/README.md',
+    entriesByFolder: {
+      '/workspace/SciForge': [
+        { kind: 'folder', name: 'docs', path: '/workspace/SciForge/docs', size: 0 },
+      ],
+      '/workspace/SciForge/docs': [
+        { kind: 'file', name: 'README.md', path: '/workspace/SciForge/docs/README.md', size: 9 },
+      ],
+    },
+    file: {
+      path: '/workspace/SciForge/docs/README.md',
+      name: 'README.md',
+      content: '# Read me',
+      size: 9,
+      language: 'markdown',
+    },
+    displayPathForPath: (path) => path.replace('/workspace/SciForge/', '').replace('/workspace/SciForge', '.'),
+    copyPathForPath: (path) => `file:${path.replace('/workspace/SciForge/', '').replace('/workspace/SciForge', '.')}`,
+    onCopyPath: () => {},
+  }));
+
+  assert.match(html, /title="docs\/README\.md"/);
+  assert.doesNotMatch(html, /title="\/workspace\/SciForge/);
+});
+
+test('workspace-file-viewer package renderer preserves display and copy path helpers', () => {
+  const html = renderToStaticMarkup(React.createElement(renderWorkspaceFileViewer, {
+    slot: {
+      componentId: 'workspace-file-viewer',
+      props: {
+        rootPath: '/workspace/SciForge',
+        rootLabel: 'SciForge',
+        expandedFolderPaths: ['/workspace/SciForge'],
+        selectedPath: '/workspace/SciForge/docs/README.md',
+        entriesByFolder: {
+          '/workspace/SciForge': [
+            { kind: 'file', name: 'README.md', path: '/workspace/SciForge/docs/README.md', size: 9 },
+          ],
+        },
+        file: {
+          path: '/workspace/SciForge/docs/README.md',
+          name: 'README.md',
+          content: '# Read me',
+          size: 9,
+          language: 'markdown',
+        },
+        displayPathForPath: (path: string) => path.replace('/workspace/SciForge/', '').replace('/workspace/SciForge', '.'),
+        copyPathForPath: (path: string) => `file:${path.replace('/workspace/SciForge/', '').replace('/workspace/SciForge', '.')}`,
+        onCopyPath: () => {},
+      },
+    },
+  }));
+
+  assert.match(html, /title="docs\/README\.md"/);
+  assert.doesNotMatch(html, /title="\/workspace\/SciForge\/docs\/README\.md"/);
+});
+
+test('workspace-file-viewer limits large folders and renders typed continuation controls', () => {
+  const entries = Array.from({ length: 65 }, (_, index) => ({
+    kind: 'file' as const,
+    name: `file-${String(index).padStart(3, '0')}.txt`,
+    path: `/workspace/SciForge/file-${String(index).padStart(3, '0')}.txt`,
+    size: index,
+  }));
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': entries },
+    treePageSize: 10,
+  }));
+
+  assert.match(html, /file-000\.txt/);
+  assert.match(html, /file-009\.txt/);
+  assert.doesNotMatch(html, /file-010\.txt/);
+  assert.match(html, /data-folder-continuation-state="available"/);
+  assert.match(html, /data-folder-offset="10"/);
+  assert.match(html, /data-folder-limit="10"/);
+  assert.match(html, /data-folder-total="65"/);
+  assert.match(html, /Showing 10 of 65/);
+  assert.match(html, />Load more<\/button>/);
+});
+
+test('workspace-file-viewer renders host-provided folder continuation metadata', () => {
+  const entries = Array.from({ length: 10 }, (_, index) => ({
+    kind: 'file' as const,
+    name: `chunk-${String(index).padStart(2, '0')}.txt`,
+    path: `/workspace/SciForge/chunk-${String(index).padStart(2, '0')}.txt`,
+    size: index,
+  }));
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': entries },
+    treePageSize: 10,
+    folderContinuations: {
+      '/workspace/SciForge': {
+        offset: 10,
+        limit: 10,
+        total: 65,
+        hasMore: true,
+        commandLabel: 'Load next chunk',
+      },
+    },
+  }));
+
+  assert.match(html, /chunk-09\.txt/);
+  assert.match(html, /data-folder-offset="10"/);
+  assert.match(html, /data-folder-total="65"/);
+  assert.match(html, /Load next chunk/);
 });
 
 test('workspace-file-viewer expresses copy and save through callbacks', () => {
@@ -154,4 +272,151 @@ test('workspace-file-viewer enables editing controls only in edit mode', () => {
   assert.match(html, /aria-label="Save file"(?:(?!disabled).)*>Save<\/button>/);
   assert.match(html, /aria-label="Cancel"[^>]*>Cancel<\/button>/);
   assert.doesNotMatch(html, /aria-label="Close file view"/);
+});
+
+test('workspace-file-viewer renders binary files as typed unsupported read-only previews', () => {
+  const file = {
+    path: '/workspace/SciForge/assets/plot.png',
+    name: 'plot.png',
+    content: 'iVBORw0KGgo=',
+    size: 12,
+    language: 'image',
+    encoding: 'base64' as const,
+    mimeType: 'image/png',
+  };
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: file.path,
+    file,
+    draft: file.content,
+    editMode: true,
+    onSave: () => {},
+    onCopyContents: () => {},
+  }));
+
+  assert.equal(workspaceFileViewerUnsupportedKind(file), 'binary');
+  assert.equal(workspaceFileViewerCanEditFile(file), false);
+  assert.match(html, /data-file-preview-state="unsupported-binary"/);
+  assert.match(html, /Binary files are read-only in this viewer/);
+  assert.match(html, /image\/png/);
+  assert.doesNotMatch(html, /iVBORw0KGgo/);
+  assert.doesNotMatch(html, /<textarea/);
+  assert.match(html, /disabled="" title="Edit" aria-label="Edit"/);
+  assert.match(html, /disabled="" title="Save file" aria-label="Save file"/);
+});
+
+test('workspace-file-viewer treats oversized loaded text as typed large-file state', () => {
+  const file = {
+    path: '/workspace/SciForge/logs/full.log',
+    name: 'full.log',
+    content: 'raw content should not render',
+    size: 2048,
+    language: 'log',
+    mimeType: 'text/plain',
+  };
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: file.path,
+    file,
+    draft: file.content,
+    editMode: true,
+    inlineTextLimitBytes: 1024,
+    onSave: () => {},
+    onCopyPath: () => {},
+  }));
+
+  assert.equal(workspaceFileViewerUnsupportedKind(file, 1024), 'too-large');
+  assert.equal(workspaceFileViewerCanEditFile(file, 1024), false);
+  assert.match(html, /data-file-preview-state="unsupported-too-large"/);
+  assert.match(html, /data-file-size-bytes="2048"/);
+  assert.match(html, /data-inline-limit-bytes="1024"/);
+  assert.match(html, /Large file/);
+  assert.match(html, /Inline limit: 1\.0 KB/);
+  assert.match(html, /Copy path/);
+  assert.doesNotMatch(html, /raw content should not render/);
+  assert.doesNotMatch(html, /<textarea/);
+});
+
+test('workspace-file-viewer renders host-provided large file segment as read-only preview', () => {
+  const file = {
+    path: '/workspace/SciForge/logs/full.log',
+    name: 'full.log',
+    content: 'full payload should stay host-owned',
+    size: 4096,
+    language: 'log',
+    mimeType: 'text/plain',
+    previewContent: 'line 1\nline 2\n',
+    previewSegment: {
+      offset: 1024,
+      length: 14,
+      total: 4096,
+      hasMore: true,
+      label: 'Log segment 2',
+    },
+  };
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: file.path,
+    file,
+    draft: file.content,
+    editMode: true,
+    inlineTextLimitBytes: 1024,
+    onSave: () => {},
+    onCopyContents: () => {},
+  }));
+
+  assert.match(html, /data-file-preview-state="unsupported-too-large"/);
+  assert.match(html, /class="workspace-file-viewer-segment-preview"/);
+  assert.match(html, /data-file-segment-offset="1024"/);
+  assert.match(html, /data-file-segment-length="14"/);
+  assert.match(html, /data-file-segment-total="4096"/);
+  assert.match(html, /data-file-segment-has-more="true"/);
+  assert.match(html, /aria-label="Log segment 2"/);
+  assert.match(html, /line 1/);
+  assert.match(html, /line 2/);
+  assert.match(html, /aria-label="Copy contents"(?:(?!disabled).)*>Copy<\/button>/);
+  assert.doesNotMatch(html, /full payload should stay host-owned/);
+  assert.doesNotMatch(html, /<textarea/);
+});
+
+test('workspace-file-viewer renders oversized metadata without an editable draft', () => {
+  const file = {
+    path: '/workspace/SciForge/data/table.csv',
+    name: 'table.csv',
+    content: '',
+    size: 2 * 1024 * 1024,
+    language: 'unsupported',
+    contentUnavailable: true,
+    unsupportedKind: 'too-large' as const,
+  };
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: file.path,
+    file,
+    draft: '',
+    editMode: true,
+    onSave: () => {},
+    onDraftChange: () => {},
+  }));
+
+  assert.equal(workspaceFileViewerUnsupportedKind(file), 'too-large');
+  assert.equal(workspaceFileViewerCanEditFile(file), false);
+  assert.match(html, /data-file-preview-state="unsupported-too-large"/);
+  assert.match(html, /data-inline-limit-bytes="1048576"/);
+  assert.match(html, /This file is too large for inline editing/);
+  assert.match(html, /2\.0 MB/);
+  assert.match(html, /Inline limit: 1\.0 MB/);
+  assert.doesNotMatch(html, /<textarea/);
 });

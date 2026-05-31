@@ -1,10 +1,11 @@
 import React, { type RefObject } from 'react';
 import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
 
-type TerminalStatus = 'connected' | 'running' | 'stopped' | 'error' | 'idle' | 'unknown';
+export type TerminalMode = 'live' | 'transcript';
+export type TerminalSessionStatus = 'running' | 'completed' | 'stopped' | 'error';
 type TerminalTheme = 'dark' | 'light' | 'system';
 
-type TerminalCapabilities = {
+export type TerminalCapabilities = {
   input?: boolean;
   paste?: boolean;
   resize?: boolean;
@@ -14,17 +15,56 @@ type TerminalCapabilities = {
   focus?: boolean;
 };
 
-type TerminalSessionPayload = {
+export type HostOwnedTerminalSession = {
+  sessionId: string;
+  sessionRef?: string;
+  terminalSessionId?: string;
+  terminalSessionRef?: string;
+  cwd?: string;
+  rows?: number;
+  cols?: number;
+  status: TerminalSessionStatus | string;
+  exitCode?: number | string | null;
+  startedAt?: string;
+  completedAt?: string;
+  transcriptRef?: string;
+  ptyTranscriptRef?: string;
+};
+
+export type TerminalSessionAdapter = {
+  kind: 'host-owned-terminal-session';
+  session: HostOwnedTerminalSession;
+  mode?: TerminalMode | string;
+  buffer?: unknown;
+  transcript?: unknown;
+  liveSurfaceRef?: RefObject<HTMLDivElement | null>;
+  liveSurfaceLabel?: string;
+};
+
+export type TerminalSessionPayload = {
+  mode?: TerminalMode | string;
+  adapter?: TerminalSessionAdapter;
+  hostSession?: HostOwnedTerminalSession;
+  session?: HostOwnedTerminalSession;
   sessionRef?: string;
   sessionId?: string;
-  status?: TerminalStatus | string;
+  terminalSessionRef?: string;
+  terminalSessionId?: string;
+  status?: TerminalSessionStatus | string;
   buffer?: unknown;
+  transcript?: unknown;
+  transcriptRef?: string;
+  ptyTranscriptRef?: string;
   title?: string;
   capabilities?: TerminalCapabilities;
   theme?: TerminalTheme | string;
   metadata?: Record<string, unknown>;
+  cwd?: string;
   rows?: number;
   cols?: number;
+  exitCode?: number | string | null;
+  startedAt?: string;
+  completedAt?: string;
   selection?: { text?: string; range?: string };
   onDataInput?: (input: string) => void;
   onPasteInput?: (input: string) => void;
@@ -59,6 +99,11 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
+function scalarString(value: unknown): string | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return stringValue(value);
+}
+
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   return isRecord(value) ? value : undefined;
 }
@@ -69,9 +114,17 @@ function payloadFromProps(props: UIComponentRendererProps): TerminalSessionPaylo
   return { ...artifactData, ...slotProps } as TerminalSessionPayload;
 }
 
-function normalizeStatus(value: unknown): TerminalStatus {
-  if (value === 'connected' || value === 'running' || value === 'stopped' || value === 'error' || value === 'idle') return value;
-  return value ? 'unknown' : 'idle';
+function normalizeStatus(value: unknown): TerminalSessionStatus {
+  if (value === 'running' || value === 'connected' || value === 'active') return 'running';
+  if (value === 'completed' || value === 'complete' || value === 'done' || value === 'success' || value === 0) return 'completed';
+  if (value === 'error' || value === 'failed' || value === 'failure') return 'error';
+  return 'stopped';
+}
+
+function normalizeMode(value: unknown): TerminalMode | undefined {
+  if (value === 'live' || value === 'transcript') return value;
+  if (value === 'buffer' || value === 'static') return 'transcript';
+  return undefined;
 }
 
 function normalizeCapabilities(value: unknown): Required<TerminalCapabilities> {
@@ -98,7 +151,7 @@ function bufferLines(value: unknown): string[] {
         const sanitized = sanitizeTerminalText(item);
         return sanitized.trim().length ? sanitized.split(/\r?\n/) : [];
       }
-      if (isRecord(item) && typeof item.text === 'string') {
+      if (isRecord(item) && typeof item.text === 'string' && isTerminalLineRecord(item)) {
         const sanitized = sanitizeTerminalText(item.text);
         return sanitized.trim().length ? sanitized.split(/\r?\n/) : [];
       }
@@ -106,6 +159,15 @@ function bufferLines(value: unknown): string[] {
     });
   }
   return [];
+}
+
+function isTerminalLineRecord(item: Record<string, unknown>) {
+  const classifier = ['kind', 'type', 'role', 'source', 'channel', 'stream']
+    .map((key) => stringValue(item[key])?.toLowerCase())
+    .filter((value): value is string => Boolean(value));
+  const blocked = ['agent', 'trace', 'summary', 'environment', 'activity', 'active-result', 'agent-result'];
+
+  return !classifier.some((value) => blocked.some((blockedValue) => value.includes(blockedValue)));
 }
 
 function sanitizeTerminalText(value: string) {
@@ -116,16 +178,21 @@ function sanitizeTerminalText(value: string) {
     .replace(/\r/g, '\n');
 }
 
-function metadataRows(metadata: unknown) {
-  return Object.entries(recordValue(metadata) ?? {})
-    .filter(([, value]) => value !== undefined && value !== null && typeof value !== 'function')
-    .slice(0, 6)
-    .map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)] as const);
+function firstScalar(records: Array<Record<string, unknown> | undefined>, keys: string[]) {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const value = scalarString(record[key]);
+      if (value !== undefined) return value;
+    }
+  }
+  return undefined;
 }
 
 function eventButton(
   label: string,
   event: string,
+  action: string,
   disabled?: boolean,
   data?: Record<string, string | number | undefined>,
   onClick?: () => void,
@@ -136,6 +203,7 @@ function eventButton(
       type="button"
       data-event={event}
       data-terminal-event={event}
+      data-terminal-action={action}
       disabled={disabled}
       onClick={onClick}
       {...data}
@@ -147,21 +215,55 @@ function eventButton(
 
 export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
   const payload = payloadFromProps(props);
-  const status = normalizeStatus(payload.status);
+  const payloadRecord = payload as Record<string, unknown>;
+  const adapter = payload.adapter;
+  const adapterRecord = recordValue(adapter);
+  const hostSession = payload.hostSession ?? payload.session ?? adapter?.session;
+  const hostSessionRecord = recordValue(hostSession);
+  const payloadMetadataRecord = recordValue(payload.metadata);
+  const artifactMetadataRecord = recordValue(props.artifact?.metadata);
+  const status = normalizeStatus(payload.status ?? hostSession?.status);
   const capabilities = normalizeCapabilities(payload.capabilities);
-  const sessionRef = payload.sessionRef ?? payload.sessionId ?? stringValue(props.artifact?.dataRef) ?? props.artifact?.id;
+  const surfaceSources = [payloadRecord, hostSessionRecord, adapterRecord, payloadMetadataRecord, artifactMetadataRecord];
+  const sessionRef = firstScalar(surfaceSources, ['sessionRef', 'terminalSessionRef'])
+    ?? stringValue(props.artifact?.dataRef);
+  const sessionId = firstScalar(surfaceSources, ['sessionId', 'terminalSessionId'])
+    ?? props.artifact?.id;
+  const sessionLabel = sessionRef ?? sessionId;
   const title = payload.title ?? props.slot.title ?? 'Terminal session';
-  const lines = bufferLines(payload.buffer);
-  const rows = numberValue(payload.rows) ?? 24;
-  const cols = numberValue(payload.cols) ?? 80;
+  const liveSurfaceRef = payload.liveSurfaceRef ?? adapter?.liveSurfaceRef;
+  const requestedMode = normalizeMode(payload.mode ?? adapter?.mode) ?? (liveSurfaceRef ? 'live' : 'transcript');
+  const mode: TerminalMode = requestedMode === 'live' && liveSurfaceRef ? 'live' : 'transcript';
+  const lines = mode === 'transcript' ? bufferLines(payload.transcript ?? adapter?.transcript ?? payload.buffer ?? adapter?.buffer) : [];
+  const rows = numberValue(payload.rows ?? hostSession?.rows) ?? 24;
+  const cols = numberValue(payload.cols ?? hostSession?.cols) ?? 80;
   const theme = payload.theme === 'light' || payload.theme === 'system' ? payload.theme : 'dark';
-  const metadata = metadataRows(payload.metadata ?? props.artifact?.metadata);
+  const cwd = firstScalar(surfaceSources, ['cwd', 'workingDirectory', 'workingDir']);
+  const exitCode = firstScalar(surfaceSources, ['exitCode', 'exit_code']);
+  const startedAt = firstScalar(surfaceSources, ['startedAt', 'startedTime', 'startTime', 'started_at']);
+  const completedAt = firstScalar(surfaceSources, ['completedAt', 'completedTime', 'finishedAt', 'endedAt', 'completed_at']);
+  const transcriptRef = firstScalar(surfaceSources, ['transcriptRef', 'terminalTranscriptRef', 'outputRef']);
+  const ptyTranscriptRef = firstScalar(surfaceSources, ['ptyTranscriptRef', 'ptyRef']);
+  const surfaceRows = [
+    ['Mode', mode],
+    ['Session ref', sessionRef],
+    ['Session id', sessionId],
+    ['CWD', cwd],
+    ['Status', status],
+    ['Size', `${cols}x${rows}`],
+    ['Exit code', exitCode],
+    ['Started', startedAt],
+    ['Completed', completedAt],
+    ['Transcript ref', transcriptRef],
+    ['PTY transcript ref', ptyTranscriptRef],
+  ].filter(([, value]) => value !== undefined && value !== '') as Array<[string, string]>;
   const selectionText = payload.selection?.text;
-  const liveSurfaceRef = payload.liveSurfaceRef;
-  const liveSurfaceLabel = payload.liveSurfaceLabel ?? 'Host-owned live terminal surface';
-  const ArtifactSourceBar = props.helpers?.ArtifactSourceBar;
-  const ArtifactDownloads = props.helpers?.ArtifactDownloads;
-  const ComponentEmptyState = props.helpers?.ComponentEmptyState;
+  const liveSurfaceLabel = payload.liveSurfaceLabel ?? adapter?.liveSurfaceLabel ?? 'Host-owned live terminal surface';
+  const closedForInput = status === 'stopped' || status === 'completed' || status === 'error';
+  const canInput = capabilities.input && !closedForInput;
+  const canPaste = capabilities.paste && !closedForInput;
+  const canResize = capabilities.resize && status === 'running';
+  const canStop = capabilities.stop && status === 'running';
 
   return (
     <div
@@ -169,33 +271,44 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
       data-component-id="terminal-session-viewer"
       data-render-boundary="presentation-only"
       data-session-ref={sessionRef}
+      data-session-id={sessionId}
       data-status={status}
+      data-mode={mode}
+      data-requested-mode={requestedMode}
+      data-cwd={cwd}
+      data-exit-code={exitCode}
+      data-started-at={startedAt}
+      data-completed-at={completedAt}
+      data-transcript-ref={transcriptRef}
+      data-pty-transcript-ref={ptyTranscriptRef}
+      data-terminal-session-adapter={adapter?.kind}
       data-theme={theme}
     >
-      {ArtifactSourceBar ? <ArtifactSourceBar artifact={props.artifact} session={props.session} /> : null}
-      {ArtifactDownloads ? <ArtifactDownloads artifact={props.artifact} /> : null}
       <header className="terminal-session-viewer-header">
         <div>
           <h3>{title}</h3>
-          <p>{sessionRef ? `Session ${sessionRef}` : 'No terminal session is attached.'}</p>
+          <p>{sessionLabel ? `Terminal session ${sessionLabel}` : 'No terminal session is attached.'}</p>
         </div>
         <span className={`terminal-session-viewer-status terminal-session-viewer-status-${status}`}>
           {status}
         </span>
       </header>
       <div className="terminal-session-viewer-actions" aria-label="Terminal session actions">
-        {eventButton('Copy', 'copy-request', !capabilities.copy, { 'data-selection': selectionText }, () => payload.onCopyRequest?.(selectionText))}
-        {eventButton('Download', 'download-request', !capabilities.download, { 'data-session-ref': sessionRef }, () => payload.onDownloadRequest?.(sessionRef))}
-        {eventButton('Stop', 'stop-request', !capabilities.stop || status === 'stopped', { 'data-session-ref': sessionRef }, () => payload.onStopRequest?.(sessionRef))}
-        {eventButton('Focus', 'focus-change', !capabilities.focus, { 'data-focused': 'true' }, () => payload.onFocusChange?.(true))}
+        {eventButton('Copy', 'copy-request', 'copy', !capabilities.copy, { 'data-selection': selectionText }, () => payload.onCopyRequest?.(selectionText))}
+        {eventButton('Download', 'download-request', 'download', !capabilities.download, { 'data-session-ref': sessionRef }, () => payload.onDownloadRequest?.(sessionRef))}
+        {eventButton('Stop', 'stop-request', 'stop', !canStop, { 'data-session-ref': sessionRef }, () => {
+          if (canStop) payload.onStopRequest?.(sessionRef);
+        })}
+        {eventButton('Focus', 'focus-change', 'focus', !capabilities.focus, { 'data-focused': 'true' }, () => payload.onFocusChange?.(true))}
       </div>
       <section
         className="terminal-session-viewer-screen"
         aria-label="Terminal output"
+        data-mode={mode}
         data-rows={rows}
         data-cols={cols}
       >
-        {liveSurfaceRef ? (
+        {mode === 'live' && liveSurfaceRef ? (
           <div
             ref={liveSurfaceRef}
             className="terminal-session-viewer-live-surface"
@@ -211,12 +324,6 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
               </span>
             ))}
           </pre>
-        ) : ComponentEmptyState ? (
-          <ComponentEmptyState
-            componentId="terminal-session-viewer"
-            artifactType={props.artifact?.type ?? 'terminal-session'}
-            detail="Terminal buffer is empty. The host must attach an existing session before live output appears."
-          />
         ) : (
           <p>Terminal buffer is empty. Waiting for host-provided output.</p>
         )}
@@ -228,7 +335,7 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
           const input = String(data.get('terminal-input') ?? '');
-          if (input.trim()) payload.onDataInput?.(input);
+          if (canInput && input.trim()) payload.onDataInput?.(input);
         }}
       >
         <label>
@@ -237,7 +344,8 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
             name="terminal-input"
             data-event="data-input"
             data-terminal-event="data-input"
-            disabled={!capabilities.input || status === 'stopped'}
+            data-terminal-action="input"
+            disabled={!canInput}
             rows={2}
             placeholder="Type input for attached session"
           />
@@ -247,17 +355,22 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
             type="submit"
             data-event="data-input"
             data-terminal-event="data-input"
-            disabled={!capabilities.input || status === 'stopped'}
+            data-terminal-action="input"
+            disabled={!canInput}
           >
             Send input
           </button>
-          {eventButton('Paste', 'paste-input', !capabilities.paste || status === 'stopped', undefined, () => payload.onPasteInput?.(''))}
-          {eventButton('Resize', 'resize', !capabilities.resize, { 'data-cols': cols, 'data-rows': rows }, () => payload.onResize?.({ cols, rows }))}
+          {eventButton('Paste', 'paste-input', 'paste', !canPaste, undefined, () => {
+            if (canPaste) payload.onPasteInput?.('');
+          })}
+          {eventButton('Resize', 'resize', 'resize', !canResize, { 'data-cols': cols, 'data-rows': rows }, () => {
+            if (canResize) payload.onResize?.({ cols, rows });
+          })}
         </div>
       </form>
-      {metadata.length ? (
+      {surfaceRows.length ? (
         <dl className="terminal-session-viewer-metadata">
-          {metadata.map(([key, value]) => (
+          {surfaceRows.map(([key, value]) => (
             <React.Fragment key={key}>
               <dt>{key}</dt>
               <dd>{value}</dd>
@@ -265,17 +378,6 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
           ))}
         </dl>
       ) : null}
-      <script type="application/json" data-terminal-callback-props>
-        {JSON.stringify([
-          'onDataInput',
-          'onPasteInput',
-          'onResize',
-          'onCopyRequest',
-          'onDownloadRequest',
-          'onStopRequest',
-          'onFocusChange',
-        ])}
-      </script>
     </div>
   );
 }

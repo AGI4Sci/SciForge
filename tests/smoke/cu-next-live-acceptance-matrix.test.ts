@@ -185,6 +185,62 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
     ref('CU-NEXT-07', 'targets/target-1.json'),
     ref('CU-NEXT-07', 'targets/target-2.json'),
   ];
+  const frameRefs = [
+    ref('CU-NEXT-07', 'frames/screen-main-before.png'),
+    ref('CU-NEXT-07', 'frames/screen-preview-before.png'),
+  ];
+  const timelineRefs = [
+    ref('CU-NEXT-07', 'timeline/frame-before-main.json'),
+    ref('CU-NEXT-07', 'timeline/frame-after-main.json'),
+    ref('CU-NEXT-07', 'timeline/cursor-move.json'),
+    ref('CU-NEXT-07', 'timeline/cursor-point.json'),
+    ref('CU-NEXT-07', 'timeline/cursor-annotate.json'),
+    ref('CU-NEXT-07', 'timeline/proposal-main.json'),
+    ref('CU-NEXT-07', 'timeline/lease-acquired.json'),
+    ref('CU-NEXT-07', 'timeline/lease-released.json'),
+    ref('CU-NEXT-07', 'timeline/executor-event.json'),
+  ];
+  const replayPayload = {
+    schemaVersion: 'sciforge.computer-use.replay-bundle.v1',
+    ref: replayRef,
+    frames: [
+      {
+        screenId: `${runId('CU-NEXT-07')}-screen-main`,
+        frameRef: frameRefs[0],
+        screenshotRef: frameRefs[0],
+        cursorOverlayRefs: [ref('CU-NEXT-07', 'cursor-overlays/main-before.json')],
+        sourceEvidenceRefs: [frameRefs[0]],
+      },
+      {
+        screenId: `${runId('CU-NEXT-07')}-screen-preview`,
+        frameRef: frameRefs[1],
+        screenshotRef: frameRefs[1],
+        cursorOverlayRefs: [ref('CU-NEXT-07', 'cursor-overlays/preview-before.json')],
+        sourceEvidenceRefs: [frameRefs[1]],
+      },
+    ],
+    cursorOverlayRefs: [
+      ref('CU-NEXT-07', 'cursor-overlays/main-before.json'),
+      ref('CU-NEXT-07', 'cursor-overlays/preview-before.json'),
+    ],
+    leaseOwnerRefs: schedulerLeaseRefs,
+    beforeEvidenceRefs: frameRefs,
+    afterEvidenceRefs: frameRefs,
+    timeline: {
+      schemaVersion: 'sciforge.computer-use.replay-timeline.v1',
+      events: [
+        { eventKind: 'frame-before', eventRef: timelineRefs[0], screenId: `${runId('CU-NEXT-07')}-screen-main`, frameRef: frameRefs[0] },
+        { eventKind: 'frame-after', eventRef: timelineRefs[1], screenId: `${runId('CU-NEXT-07')}-screen-main`, frameRef: frameRefs[0] },
+        { eventKind: 'cursor-move', eventRef: timelineRefs[2], actorId: `${runId('CU-NEXT-07')}-actor-agent`, cursorId: `${runId('CU-NEXT-07')}-cursor-agent` },
+        { eventKind: 'cursor-point', eventRef: timelineRefs[3], actorId: `${runId('CU-NEXT-07')}-actor-writer`, cursorId: `${runId('CU-NEXT-07')}-cursor-writer` },
+        { eventKind: 'cursor-annotate', eventRef: timelineRefs[4], actorId: `${runId('CU-NEXT-07')}-actor-preview`, cursorId: `${runId('CU-NEXT-07')}-cursor-preview` },
+        { eventKind: 'action-proposal', eventRef: timelineRefs[5], schedulerLeaseRef: schedulerLeaseRefs[0] },
+        { eventKind: 'lease-acquired', eventRef: timelineRefs[6], schedulerLeaseRef: schedulerLeaseRefs[0] },
+        { eventKind: 'lease-released', eventRef: timelineRefs[7], schedulerLeaseRef: schedulerLeaseRefs[1] },
+        { eventKind: 'executor-event', eventRef: timelineRefs[8], schedulerLeaseRef: schedulerLeaseRefs[0] },
+      ],
+    },
+  };
   const validationPayload = {
     schemaVersion: 'sciforge.computer-use.native-multi-screen-live-demo-validation.v1',
     ok: true,
@@ -195,6 +251,8 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
     screenCount: 2,
     actorCursorCount: 3,
     cursorEventTypes: ['move', 'point', 'annotate'],
+    windowLocalQueue: true,
+    screenGlobalQueue: true,
     nonPlaceholderReplayScreenCount: 2,
     sidecarBindingKind: 'external-command',
   };
@@ -219,6 +277,8 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       ...schedulerLeaseRefs,
       replayRef,
       ...targetRefs,
+      ...frameRefs,
+      ...timelineRefs,
     ],
     sidecarBinding: {
       schemaVersion: 'sciforge.computer-use.native-multi-screen-sidecar-binding.v1',
@@ -262,16 +322,70 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
         ...schedulerLeaseRefs,
         replayRef,
         ...targetRefs,
+        ...frameRefs,
+        ...timelineRefs,
       ],
     },
+    replay: replayPayload,
     summary: {
       realNativeSidecarExecuted: validationPayload.realNativeSidecarExecuted,
       completionEligible: validationPayload.completionEligible,
       screenCount: validationPayload.screenCount,
       actorCursorCount: validationPayload.actorCursorCount,
       cursorEventTypes: validationPayload.cursorEventTypes,
+      windowLocalQueue: validationPayload.windowLocalQueue,
+      screenGlobalQueue: validationPayload.screenGlobalQueue,
       nonPlaceholderReplayScreenCount: validationPayload.nonPlaceholderReplayScreenCount,
       sidecarBindingKind: validationPayload.sidecarBindingKind,
+    },
+  };
+  const productSmokeRefRecords = {
+    [validationRef]: validationRefPayload,
+    [currentBundleRef]: validationRefPayload.currentBundle,
+    [sidecarBindingRef]: validationRefPayload.sidecarBinding,
+    [sidecarCapabilitiesRef]: validationRefPayload.sidecarCapabilities,
+    [sidecarDiscoveryRef]: validationRefPayload.sidecarDiscovery,
+    [replayRef]: replayPayload,
+    [schedulerLeaseRefs[0]]: {
+      schemaVersion: 'sciforge.computer-use.scheduler-lease.v1',
+      leaseId: `${runId('CU-NEXT-07')}-lease-main`,
+      scope: 'window-local',
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+      windowId: `${runId('CU-NEXT-07')}-window-main`,
+      actorId: `${runId('CU-NEXT-07')}-actor-agent`,
+      cursorId: `${runId('CU-NEXT-07')}-cursor-agent`,
+      sharedSystemInputUsed: false,
+    },
+    [schedulerLeaseRefs[1]]: {
+      schemaVersion: 'sciforge.computer-use.scheduler-lease.v1',
+      leaseId: `${runId('CU-NEXT-07')}-lease-preview`,
+      scope: 'screen-global',
+      screenId: `${runId('CU-NEXT-07')}-screen-preview`,
+      actorId: `${runId('CU-NEXT-07')}-actor-preview`,
+      cursorId: `${runId('CU-NEXT-07')}-cursor-preview`,
+      sharedSystemInputUsed: false,
+    },
+    [targetRefs[0]]: {
+      schemaVersion: 'sciforge.computer-use.target-ref.v1',
+      targetId: `${runId('CU-NEXT-07')}-target-main`,
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+      windowRef: 'native-window-ref-main',
+    },
+    [targetRefs[1]]: {
+      schemaVersion: 'sciforge.computer-use.target-ref.v1',
+      targetId: `${runId('CU-NEXT-07')}-target-preview`,
+      screenId: `${runId('CU-NEXT-07')}-screen-preview`,
+      windowRef: 'native-window-ref-preview',
+    },
+    [frameRefs[0]]: {
+      contentType: 'image/png',
+      byteLength: 2048,
+      screenId: `${runId('CU-NEXT-07')}-screen-main`,
+    },
+    [frameRefs[1]]: {
+      contentType: 'image/png',
+      byteLength: 2048,
+      screenId: `${runId('CU-NEXT-07')}-screen-preview`,
     },
   };
   liveCase.nativeMultiScreenSummary = {
@@ -315,13 +429,159 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       liveCase,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: validationRefPayload } });
+  }), { refRecords: productSmokeRefRecords });
   assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-summary'), false);
   assert.equal(productSmokeIssue(accepted, 'invalid-native-multi-screen-summary'), false);
   assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation'), false);
   assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation-ref-record'), false);
   assert.equal(productSmokeIssue(accepted, 'missing-native-multi-screen-validation-ref-proof'), false);
   assert.equal(productSmokeIssue(accepted, 'invalid-native-multi-screen-validation-ref-proof'), false);
+  assert.equal(productSmokeIssue(accepted, 'missing-product-smoke-loaded-ref'), false);
+  assert.equal(productSmokeIssue(accepted, 'invalid-current-bundle-ref-proof'), false);
+  assert.equal(productSmokeIssue(accepted, 'invalid-product-smoke-replay-proof'), false);
+  assert.equal(productSmokeIssue(accepted, 'forbidden-placeholder-viewer'), false);
+
+  for (const [name, refToRemove] of Object.entries({
+    currentBundleRef,
+    replayRef,
+    sidecarCapabilitiesRef,
+    sidecarDiscoveryRef,
+    schedulerLeaseRef: schedulerLeaseRefs[0],
+    targetRef: targetRefs[0],
+    frameRef: frameRefs[0],
+  })) {
+    const missingLoadedRefRecords = { ...productSmokeRefRecords };
+    delete (missingLoadedRefRecords as Record<string, unknown>)[refToRemove];
+    const missingLoadedRefResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+      cases: [
+        liveCase,
+        ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+      ],
+    }), { refRecords: missingLoadedRefRecords });
+    assert.ok(productSmokeIssue(missingLoadedRefResult, 'missing-product-smoke-loaded-ref'), name);
+  }
+
+  const placeholderReplayResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [replayRef]: {
+        ...replayPayload,
+        frames: replayPayload.frames.map((frame) => ({ ...frame, placeholder: true })),
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(placeholderReplayResult, 'forbidden-placeholder-viewer'));
+
+  const jsonFrameRefResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [frameRefs[0]]: {
+        contentType: 'application/json',
+        schemaVersion: 'sciforge.computer-use.native-capture.v1',
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(jsonFrameRefResult, 'invalid-product-smoke-replay-proof'));
+
+  const rawInlinePayloadResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [replayRef]: {
+        ...replayPayload,
+        rawPayload: { screenshotBase64: 'data:image/png;base64,AAAA' },
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(rawInlinePayloadResult, 'forbidden-raw-inline-payload'));
+
+  const invalidSchedulerLeaseResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [schedulerLeaseRefs[0]]: {
+        ...(productSmokeRefRecords as Record<string, Record<string, unknown>>)[schedulerLeaseRefs[0]],
+        scope: 'screen-global',
+        actorId: undefined,
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(invalidSchedulerLeaseResult, 'invalid-native-scheduler-lease-proof'));
+
+  const missingTimelineResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [replayRef]: {
+        ...replayPayload,
+        timeline: { schemaVersion: 'sciforge.computer-use.replay-timeline.v1', events: [] },
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(missingTimelineResult, 'invalid-product-smoke-timeline-proof'));
+
+  const browserSubstituteResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [replayRef]: {
+        ...replayPayload,
+        browserRuntimeDomAxObservation: {
+          kind: 'browser-runtime-dom-ax-observation',
+          executorLeaseSubstitute: true,
+          completionEvidenceEligible: true,
+        },
+      },
+    },
+  });
+  assert.ok(productSmokeIssue(browserSubstituteResult, 'forbidden-browser-dom-ax-substitute'));
+
+  const crossBundleFrameRef = ref('CU-NEXT-04', 'frames/foreign-screen.png');
+  const crossBundleFrameResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [replayRef]: {
+        ...replayPayload,
+        frames: [
+          { ...replayPayload.frames[0], frameRef: crossBundleFrameRef, screenshotRef: crossBundleFrameRef },
+          replayPayload.frames[1],
+        ],
+      },
+      [crossBundleFrameRef]: { contentType: 'image/png', byteLength: 2048 },
+    },
+  });
+  assert.ok(productSmokeIssue(crossBundleFrameResult, 'product-smoke-ref-outside-current-bundle'));
 
   const mismatched = structuredClone(liveCase);
   mismatched.nativeMultiScreenSummary = {
@@ -336,7 +596,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       mismatched,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: validationRefPayload } });
+  }), { refRecords: productSmokeRefRecords });
   assert.ok(productSmokeIssue(mismatchResult, 'native-multi-screen-validation-summary-mismatch'));
   assert.ok(productSmokeIssue(mismatchResult, 'native-multi-screen-validation-ref-mismatch'));
 
@@ -362,8 +622,45 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       diagnosticLocal,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: diagnosticLocalPayload } });
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [validationRef]: diagnosticLocalPayload,
+      [sidecarBindingRef]: diagnosticLocalPayload.sidecarBinding,
+    },
+  });
   assert.ok(productSmokeIssue(diagnosticLocalResult, 'invalid-native-multi-screen-validation-ref-proof'));
+
+  const customDispatcher = structuredClone(liveCase);
+  customDispatcher.nativeMultiScreenSummary = {
+    ...liveCase.nativeMultiScreenSummary,
+    validation: {
+      ...liveCase.nativeMultiScreenSummary.validation,
+      sidecarBindingKind: 'custom-dispatcher',
+    },
+  };
+  const customDispatcherPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
+  customDispatcherPayload.sidecarBinding = {
+    ...(customDispatcherPayload.sidecarBinding as Record<string, unknown>),
+    bindingKind: 'custom-dispatcher',
+  };
+  customDispatcherPayload.summary = {
+    ...(customDispatcherPayload.summary as Record<string, unknown>),
+    sidecarBindingKind: 'custom-dispatcher',
+  };
+  const customDispatcherResult = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      customDispatcher,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      ...productSmokeRefRecords,
+      [validationRef]: customDispatcherPayload,
+      [sidecarBindingRef]: customDispatcherPayload.sidecarBinding,
+    },
+  });
+  assert.ok(productSmokeIssue(customDispatcherResult, 'invalid-native-multi-screen-validation-ref-proof'));
 
   const missingDiscoveryCapabilityPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
   delete missingDiscoveryCapabilityPayload.sidecarCapabilitiesRef;
@@ -373,7 +670,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       liveCase,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: missingDiscoveryCapabilityPayload } });
+  }), { refRecords: { ...productSmokeRefRecords, [validationRef]: missingDiscoveryCapabilityPayload } });
   assert.ok(productSmokeIssue(missingDiscoveryCapabilityResult, 'missing-native-multi-screen-validation-ref-proof'));
 
   const unsafeRef = structuredClone(liveCase);
@@ -386,7 +683,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       unsafeRef,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: validationRefPayload } });
+  }), { refRecords: productSmokeRefRecords });
   assert.ok(productSmokeIssue(unsafeRefResult, 'unsafe-product-smoke-ref'));
 
   const crossBundleRef = structuredClone(liveCase);
@@ -399,7 +696,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       crossBundleRef,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: validationRefPayload } });
+  }), { refRecords: productSmokeRefRecords });
   assert.ok(productSmokeIssue(crossBundleRefResult, 'product-smoke-ref-outside-current-bundle'));
 
   const crossBundleValidationPayload = structuredClone(validationRefPayload) as Record<string, unknown>;
@@ -413,7 +710,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       liveCase,
       ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
     ],
-  }), { refRecords: { [validationRef]: crossBundleValidationPayload } });
+  }), { refRecords: { ...productSmokeRefRecords, [validationRef]: crossBundleValidationPayload } });
   assert.ok(productSmokeIssue(crossBundleValidationResult, 'product-smoke-ref-outside-current-bundle'));
 });
 

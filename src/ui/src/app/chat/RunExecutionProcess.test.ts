@@ -6,6 +6,7 @@ import type { AgentStreamEvent, RuntimeExecutionUnit, SciForgeSession } from '..
 import { RunExecutionProcess } from './RunExecutionProcess';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 import { attachStreamProcessToResponse } from './runPresentation';
+import { NativeEventStream } from './RunningWorkProcess';
 
 test('execution process groups blocking execution units into Codex-style folded sections', () => {
   const html = renderProcess([
@@ -896,6 +897,54 @@ test('execution process keeps failed non-diff commands failed even when output c
   assert.doesNotMatch(html, /Diff actual\.snap|done/);
 });
 
+test('execution process keeps terminal command targets for failed and cancelled rows', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Command failed', {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'failed',
+      command: 'npm test',
+      exitCode: 1,
+      stderr: '1 failing test',
+    }),
+    nativeEvent('tool-result', 'Cancelled', {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'cancelled',
+      command: 'npm run long',
+      outputSummary: 'user cancelled',
+    }),
+  ]);
+
+  assert.match(html, /Ran npm test · exit 1/);
+  assert.match(html, /status-failed/);
+  assert.match(html, />failed<\/span>/);
+  assert.match(html, /Ran npm run long cancelled/);
+  assert.match(html, /status-cancelled/);
+  assert.match(html, />cancelled<\/span>/);
+  assert.doesNotMatch(html, /Ran Command failed|Ran Cancelled/);
+});
+
+test('live execution process keeps running terminal deltas expanded and active', () => {
+  const html = renderToStaticMarkup(createElement(NativeEventStream, {
+    events: [agentNativeEventAt('2026-05-25T00:00:01.000Z', 'tool-call', 'Tool call', {
+      rawType: 'tool_started',
+      toolName: 'shell',
+      status: 'running',
+      command: 'npm test',
+      itemId: 'live-terminal-delta',
+    })],
+    mode: 'live',
+    limit: 48,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /Worked for/);
+  assert.match(html, /Running npm test/);
+  assert.match(html, /cursor-agent-action-shell_command status-running active/);
+  assert.match(html, /open=""/);
+});
+
 test('execution process merges sub-agent lifecycle and shows transcript affordance', () => {
   const html = renderNativeStream([
     nativeEvent('tool-call', 'Sub agent started', {
@@ -1486,6 +1535,22 @@ function nativeEventAt(createdAt: string, type: string, label: string, native: R
     native: {
       backend: 'codex-app-server',
       ...native,
+    },
+  };
+}
+
+function agentNativeEventAt(createdAt: string, type: string, label: string, native: Record<string, unknown>): AgentStreamEvent {
+  return {
+    id: `${type}-${createdAt}-${String(native.itemId ?? native.toolName ?? native.status ?? 'event')}`,
+    type,
+    label,
+    detail: typeof native.text === 'string' ? native.text : undefined,
+    createdAt,
+    raw: {
+      native: {
+        backend: 'codex-app-server',
+        ...native,
+      },
     },
   };
 }

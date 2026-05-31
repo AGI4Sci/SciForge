@@ -258,15 +258,36 @@ SciForge 的内置浏览器是 TUI/Codex runtime 的 `browser_runtime` capabilit
 
 ## 右侧结果交互模块
 
-Cursor/Codex agent 风格的右侧结果区由 package-owned presentation modules 组合，而不是由 `src/ui` 为每种能力手写独立结果卡。当前三个工作台级模块是：
+Cursor/Codex agent 风格的右侧结果区由 `ResultShell` 和 package-owned presentation modules 组合，而不是由 `src/ui` 为每种能力手写独立结果卡。右侧栏按对象类型渲染 Browser、Screen、Terminal、Files、References 和 Results preview；点击 object ref 的默认语义是 focus/open 对象，只有显式 Attach/Pick/上下文菜单才把引用插回输入框。
 
-| 组件 | Package owner | Host/TUI owner |
-|---|---|---|
-| `browser-workbench` | 渲染 browser session、tabs、snapshot/log refs、host-declared preview 和 `/browser ...` 文本命令。 | `packages/observe/web` / TUI browser runtime 拥有 provider、Playwright/MCP、登录接管和网页动作。 |
-| `terminal-session-viewer` | 渲染已有 terminal session buffer、host-owned live surface、copy/download/stop/focus/data-input view intents。 | TUI/Host PTY adapter 拥有 process、socket、terminal input、resize、stop 和 transcript refs。 |
-| `workspace-file-viewer` | 渲染 workspace tree、选中文件、editable draft、copy/save/open/toggle view intents。 | Host workspace adapter 拥有 list/read/write、路径校验、持久化和冲突处理。 |
+### ResultShell pane contract
 
-`packages/presentation/interactive-views` 负责把 UI manifest slot、artifact type 和 prompt 明示的 view request 路由到这些 package renderer。`src/ui` 只装配 helper 和 host adapter，不在结果区重新实现 browser/terminal/file viewer 的业务语义。
+每个 pane 必须声明 object kind、ref prefix、可见状态、required refs、allowed actions 和 redaction rule。未知对象进入 typed unsupported state，并展示可复制的 ref；不得退回 raw JSON/log dump。大 payload、截图、录屏、terminal transcript、DOM/AX snapshot、artifact、audit、replay 和 provider output 必须 refs-first；GUI projection 只能保存 ref、摘要、尺寸/hash、safe preview URL 和 redacted diagnostics。
+
+| Pane / 组件 | GUI package owner | Host / TUI owner | 必须保持的边界 |
+|---|---|---|---|
+| Results / `ResultShell` | 路由 object ref、placement、loading/empty/error/blocked/unsupported 状态和 object action UI。 | TUI 负责决定哪些 artifact/file/image/table/report/interactive view 是可预览结果。 | Results 不展示普通 chat answer，不从日志推断 completion，不内联 provider payload。 |
+| Browser / `browser-workbench` | 渲染 browser projection、typed state、tabs、safe preview、snapshot/log refs、Open/Back/Forward/Reload/Stop/Snapshot/State/Takeover/Copy URL/Open External 命令。 | `packages/observe/web` / TUI `browser_runtime` 拥有 provider、Playwright/MCP、登录接管、DOM/AX/console/network/screenshot refs 和网页动作。 | GUI 只发 `/browser ...` 文本或 declared intent；不选择 provider、不跨域读取 DOM、不把 iframe 白屏当 ready、不判断网页任务完成。 |
+| Screen / `virtual-screen-viewer` | 渲染 Computer Use virtual screen projection、frame/replay refs、actor cursor overlay、lease/proposal/permission/shared-input 状态和 Observe/Replay/Stop 命令。 | `packages/actions/computer-use` + platform sidecar 拥有 capture、grounding、executor lease、input scheduling、approval、replay evidence 和 completion candidates。 | GUI 不执行 Computer Use action，不持有 executor lease，不接收 raw screenshot/base64/provider payload；只有 refs-first frame/materializer URL 可展示。 |
+| Terminal / `terminal-session-viewer` | 渲染 host-owned live surface 或 transcript fallback、cwd、status、rows/cols、exit code、Copy/Download/Stop/Focus/Resize/Input/Paste intents。 | TUI/Host PTY adapter 拥有 process、socket、stdin、resize、stop、copy/download materialization 和 transcript refs。 | Terminal pane 不展示 Active result、agent answer、trace dump、activity/environment summary；stopped/error session 不能继续输入。 |
+| Files / `workspace-file-viewer` | 渲染 workspace tree、选中文件、只读/编辑草稿、dirty/cancel/save/error 状态、copy/open/toggle view intents。 | Host workspace adapter 拥有 list/read/write、路径规范化、权限、冲突处理、大文件/二进制策略和持久化。 | 默认只读；显式 Edit 后才允许草稿；GUI 不直接写 workspace，不把绝对私有路径作为长期上下文。 |
+| References | 按 artifact/file/browser/screen/terminal/evidence/provenance 等 kind 分组展示 refs、focus/open/copy/pin。 | TUI/Host 拥有 ref 生成、provenance、audit、bundle-local validity 和 materializer。 | References 是 object inspector，不是 raw event log；未知 ref 显示 unsupported，不展示未脱敏 provider JSON。 |
+
+`packages/presentation/interactive-views` 负责把 UI manifest slot、artifact type 和 prompt 明示的 view request 路由到这些 package renderer。`src/ui` 只装配 helper 和 host adapter，不在结果区重新实现 browser/screen/terminal/file/reference 的业务语义，也不越过 Agent Host 直接执行 browser、Computer Use、terminal 或 workspace action。
+
+### Cursor Agent 对照记录
+
+状态：已用 Computer Use 只读观察 Cursor Agents 窗口并形成通用对照清单（2026-05-31）。记录仅保留稳定信息架构：左侧线程/仓库与项目入口、中间聊天与 Worked/Thought 折叠过程、右侧对象/文件预览 tab；不得记录当前坐标、当前 URL、具体历史 run id 或一次性截图路径作为产品逻辑。
+
+通用行为清单：
+
+- 右侧栏按对象打开和聚焦，Browser、Screen、Terminal、Files、References 各自有独立状态；普通回答留在聊天区。
+- Terminal 只像终端：session 标题、cwd、running/stopped/error、stdout/stderr/transcript、exit code、输入、stop、copy/download、focus/resize；agent trace 和 answer summary 不混入终端。
+- Browser 像网页工作台：地址栏和导航命令可见；不可嵌入、网络失败或权限阻断必须给原因和替代动作；自动化观察和动作属于 host runtime。
+- Screen 像远程/虚拟屏幕：主体展示最新 frame 或 replay，actor cursor、permission、lease、proposal 和 blocked/error 不遮挡主体；真实输入由 Computer Use owner 执行。
+- Files 像文件查看器/编辑器：默认只读、显式编辑、保存失败保留草稿；多 tab 状态互不污染。
+- References 像 provenance inspector：按对象类型分组，支持 open/focus/copy/pin；不把 raw trace/provider payload 当 UI。
+- 所有 pane 的按钮都是 focus/open、declared intent 或 terminal-equivalent text；不会因为点击 citation 就自动把 ref 塞进 composer。
 
 ## TUI 感知 GUI：只读虚拟资源树
 

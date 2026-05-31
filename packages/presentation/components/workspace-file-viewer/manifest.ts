@@ -19,7 +19,7 @@ export const manifest: UIComponentManifest = {
     },
   ],
   viewParams: ['rootPath', 'selectedPath', 'expandedFolderPaths'],
-  interactionEvents: ['open-file-request', 'save-draft-request', 'refresh-tree-request', 'toggle-folder', 'draft-change', 'close-file', 'copy-path-request', 'copy-contents-request'],
+  interactionEvents: ['open-file-request', 'save-draft-request', 'refresh-tree-request', 'toggle-folder', 'draft-change', 'close-file', 'copy-path-request', 'copy-contents-request', 'load-more-folder-request'],
   roleDefaults: ['software-engineer', 'research-engineer'],
   fallbackModuleIds: ['generic-artifact-inspector'],
   defaultSection: 'primary',

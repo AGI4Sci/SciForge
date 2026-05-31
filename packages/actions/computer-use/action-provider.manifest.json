@@ -188,7 +188,7 @@
       "nativeToolDebug": "python -m sciforge_computer_use.native_tool --tool get_replay_refs --payload-json '{\"displayGroupId\":\"debug-display-group\"}' --output-dir <dir>",
       "platformSidecarDiagnostic": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
       "nativeMultiScreenLiveDemo": "python -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> [--run-id <run-id>] [--platform <platform>] [--sidecar-command <command>] [--sidecar-timeout-seconds <seconds>]",
-      "macosNativeVirtualScreenSidecar": "PYTHONPATH=packages/actions/computer-use python3 -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> --platform macos --sidecar-command 'python3 -m sciforge_computer_use.macos_native_sidecar'",
+      "macosNativeVirtualScreenSidecar": "python -m sciforge_computer_use.native_multi_screen_live_demo --output-dir <dir> --platform macos --sidecar-command 'python -m sciforge_computer_use.macos_native_sidecar'",
       "semanticVerifier": "python -m sciforge_computer_use.semantic_verifier_probe --output-dir <dir> [--diagnose-provider]"
     },
     "nativeMultiScreenSidecarProtocol": {
@@ -198,6 +198,10 @@
       "requiredExecutionTools": ["preflight", "capture", "state", "execute"],
       "completedRunRequiredRefs": ["sidecarBindingRef", "sidecarCapabilitiesRef", "sidecarDiscoveryRef", "schedulerLeaseRef", "schedulerLeaseRefs", "targetRefs", "replayRef", "validationRef", "currentBundleRef"],
       "completedRunRequiredCapabilities": ["multi-screen", "multi-actor-cursor", "window-local-lease", "screen-global-lease", "refs-first-evidence", "virtual-screen", "independent-virtual-input-adapter"],
+      "commands": {
+        "nativeM6OptIn": "npm run smoke:cu-native-m6:opt-in",
+        "nativeM6OptInHelp": "npm run smoke:cu-native-m6:opt-in -- --help"
+      },
       "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and may mark M6 completed only when capabilities/discovery plus preflight/capture/state/execute are all non-diagnostic current-bundle evidence."
     },
     "traceHandoff": {

@@ -808,42 +808,23 @@ export function WorkspaceFileInlineViewer({
   if (kind === 'json') return <pre className="workspace-object-code">{formatJsonLike(file.content)}</pre>;
   if (kind === 'csv' || kind === 'tsv') return <DelimitedTextPreview content={safeContent} delimiter={kind === 'tsv' ? '\t' : ','} locale={locale} />;
   if (kind === 'image') {
-    if (file.encoding === 'base64') {
-      return (
-        <div className="workspace-object-image-frame">
-          <img src={`data:${file.mimeType || 'image/png'};base64,${file.content}`} alt={rightPaneInlineLabel(file.name)} />
-        </div>
-      );
-    }
     return (
-      <div className="workspace-object-media-note">
-        {resultText(locale, { 'zh-CN': '图像已附加，但没有返回内联图像数据。请在外部打开查看。', 'en-US': 'This image is attached, but no inline image data was returned. Open it externally to inspect it.' })}
-        <pre className="workspace-object-code">{boundedRightPaneText(file.content, 4_000)}</pre>
-      </div>
+      <WorkspaceFileMediaReferenceNotice
+        kind="image"
+        file={file}
+        reference={referenceForWorkspaceFile(file)}
+        locale={locale}
+      />
     );
   }
   if (kind === 'pdf') {
-    const pdfReference = referenceForWorkspaceFile(file);
-    if (file.encoding === 'base64') {
-      return (
-        <UploadedDataUrlPreview
-          kind="pdf"
-          dataUrl={`data:${file.mimeType || 'application/pdf'};base64,${file.content}`}
-          title={file.name}
-          mimeType={file.mimeType || 'application/pdf'}
-          reference={pdfReference}
-          locale={locale}
-        />
-      );
-    }
     return (
-      <div className="workspace-object-media-note">
-        <p>{resultText(locale, { 'zh-CN': 'PDF 已作为可点击文件引用附加。选择此卡片作为上下文后，可带页码、章节、图号或区域细节提问。', 'en-US': 'The PDF is attached as a clickable file reference. Select this card as context, then ask with page, section, figure, or region details.' })}</p>
-        <div className="source-list">
-          <code>{rightPaneInlineLabel(file.path)}</code>
-          <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(pdfReference, null, 2))}>{resultText(locale, { 'zh-CN': '复制 PDF 引用', 'en-US': 'Copy PDF reference' })}</button>
-        </div>
-      </div>
+      <WorkspaceFileMediaReferenceNotice
+        kind="pdf"
+        file={file}
+        reference={referenceForWorkspaceFile(file)}
+        locale={locale}
+      />
     );
   }
   if (kind === 'document' || kind === 'spreadsheet' || kind === 'presentation') {
@@ -862,6 +843,36 @@ export function WorkspaceFileInlineViewer({
   }
   if (kind === 'html') return <pre className="workspace-object-code">{safeContent}</pre>;
   return <pre className="workspace-object-code">{safeContent}</pre>;
+}
+
+function WorkspaceFileMediaReferenceNotice({
+  kind,
+  file,
+  reference,
+  locale,
+}: {
+  kind: 'image' | 'pdf';
+  file: WorkspaceFileContent;
+  reference: SciForgeReference;
+  locale?: ResultLocale;
+}) {
+  const copyLabel = kind === 'pdf'
+    ? resultText(locale, { 'zh-CN': '复制 PDF 引用', 'en-US': 'Copy PDF reference' })
+    : resultText(locale, { 'zh-CN': '复制图像引用', 'en-US': 'Copy image reference' });
+  const message = kind === 'pdf'
+    ? resultText(locale, { 'zh-CN': 'PDF 已作为可点击文件引用附加。选择此卡片作为上下文后，可带页码、章节、图号或区域细节提问。', 'en-US': 'The PDF is attached as a clickable file reference. Select this card as context, then ask with page, section, figure, or region details.' })
+    : resultText(locale, { 'zh-CN': '图像已作为可点击文件引用附加。内联预览不会嵌入二进制内容；请选择此卡片作为图像上下文，或在外部打开查看。', 'en-US': 'The image is attached as a clickable file reference. Inline preview does not embed binary content; select this card as image context, or open it externally to inspect it.' });
+  return (
+    <div className="workspace-object-media-note" data-sciforge-reference={sciForgeReferenceAttribute(reference)}>
+      <p>{message}</p>
+      <div className="source-list">
+        <code>{rightPaneInlineLabel(file.path)}</code>
+        {file.mimeType ? <code>{rightPaneInlineLabel(file.mimeType)}</code> : null}
+        {file.encoding ? <code>{rightPaneInlineLabel(file.encoding)}</code> : null}
+        <button type="button" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(reference, null, 2))}>{copyLabel}</button>
+      </div>
+    </div>
+  );
 }
 
 function officePreviewLabel(kind: string, locale?: ResultLocale) {

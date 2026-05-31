@@ -30,6 +30,26 @@ const RESULT_FOCUS_MODES: Array<{ id: ResultFocusMode; label: string; icon: Luci
   { id: 'execution', label: 'Activity', icon: TerminalSquare },
 ];
 
+export function nextResultShellTabIndexForKey(key: string, currentIndex: number, count: number) {
+  if (count <= 0) return undefined;
+  const boundedCurrentIndex = Math.min(Math.max(currentIndex, 0), count - 1);
+  if (key === 'ArrowRight') return boundedCurrentIndex >= count - 1 ? 0 : boundedCurrentIndex + 1;
+  if (key === 'ArrowLeft') return boundedCurrentIndex <= 0 ? count - 1 : boundedCurrentIndex - 1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return undefined;
+}
+
+export function nextResultShellMenuIndexForKey(key: string, currentIndex: number, count: number) {
+  if (count <= 0) return undefined;
+  const boundedCurrentIndex = Math.min(Math.max(currentIndex, 0), count - 1);
+  if (key === 'ArrowDown' || key === 'ArrowRight') return boundedCurrentIndex >= count - 1 ? 0 : boundedCurrentIndex + 1;
+  if (key === 'ArrowUp' || key === 'ArrowLeft') return boundedCurrentIndex <= 0 ? count - 1 : boundedCurrentIndex - 1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return undefined;
+}
+
 export function ResultShell({
   collapsed,
   activeTabId,
@@ -41,6 +61,7 @@ export function ResultShell({
   locale,
   children,
   drawer,
+  showActiveRunBanner = true,
   onToggleCollapse,
   onResultTabChange,
   onNewResultTab,
@@ -58,6 +79,7 @@ export function ResultShell({
   locale?: ResultLocale;
   children: ReactNode;
   drawer?: ReactNode;
+  showActiveRunBanner?: boolean;
   onToggleCollapse: () => void;
   onResultTabChange: (tabId: string) => void;
   onNewResultTab: (tab: ResultPaneTab) => void;
@@ -83,7 +105,7 @@ export function ResultShell({
   }));
   const activeTab = tabs.find((tab) => tab.id === activeTabId);
   const activeTabButtonId = activeTab ? resultTabButtonId(activeTab.id) : undefined;
-  const activePanelId = activeTab ? resultTabPanelId(activeTab.id) : undefined;
+  const activePanelId = activeTab ? resultTabPanelId(activeTab.id) : 'result-panel-empty';
   useEffect(() => {
     if (!newTabMenuOpen) return undefined;
     const firstItem = newTabMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]');
@@ -101,13 +123,8 @@ export function ResultShell({
   function handleTabstripKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (!tabs.length) return;
     const currentIndex = Math.max(0, tabs.findIndex((tab) => tab.id === activeTabId));
-    const lastIndex = tabs.length - 1;
-    let nextIndex = currentIndex;
-    if (event.key === 'ArrowRight') nextIndex = currentIndex >= lastIndex ? 0 : currentIndex + 1;
-    else if (event.key === 'ArrowLeft') nextIndex = currentIndex <= 0 ? lastIndex : currentIndex - 1;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = lastIndex;
-    else return;
+    const nextIndex = nextResultShellTabIndexForKey(event.key, currentIndex, tabs.length);
+    if (nextIndex === undefined) return;
     event.preventDefault();
     const nextTab = tabs[nextIndex];
     if (!nextTab) return;
@@ -118,19 +135,24 @@ export function ResultShell({
     const items = Array.from(newTabMenuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []);
     if (!items.length) return;
     const currentIndex = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement));
-    let nextIndex = currentIndex;
-    if (event.key === 'ArrowDown') nextIndex = currentIndex >= items.length - 1 ? 0 : currentIndex + 1;
-    else if (event.key === 'ArrowUp') nextIndex = currentIndex <= 0 ? items.length - 1 : currentIndex - 1;
-    else if (event.key === 'Home') nextIndex = 0;
-    else if (event.key === 'End') nextIndex = items.length - 1;
-    else if (event.key === 'Escape') {
+    const nextIndex = nextResultShellMenuIndexForKey(event.key, currentIndex, items.length);
+    if (event.key === 'Escape') {
       event.preventDefault();
       setNewTabMenuOpen(false);
       window.setTimeout(() => newTabButtonRef.current?.focus(), 0);
       return;
-    } else return;
+    }
+    if (nextIndex === undefined) return;
     event.preventDefault();
     items[nextIndex]?.focus();
+  }
+  function closeActiveTab() {
+    if (!activeTab) return;
+    onCloseResultTab(activeTab.id);
+    window.setTimeout(() => {
+      const selectedTab = document.querySelector<HTMLButtonElement>('.result-tabstrip [role="tab"][aria-selected="true"]');
+      (selectedTab ?? newTabButtonRef.current)?.focus();
+    }, 0);
   }
   return (
     <div className={cx('results-panel', collapsed && 'collapsed')} data-result-tab={resultTab}>
@@ -146,11 +168,13 @@ export function ResultShell({
       </button>
       {!collapsed ? (
         <>
-          <div className="result-tabs">
+          <div className="result-tabs" data-right-pane-tab-layout="scroll-tabs-fixed-actions">
             <div
               className="result-tabstrip"
               role="tablist"
               aria-label={resultText(locale, { 'zh-CN': '右侧页面', 'en-US': 'Right pane pages' })}
+              aria-orientation="horizontal"
+              data-overflow-policy="horizontal-scroll"
               onKeyDown={handleTabstripKeyDown}
             >
               {tabs.map((tab) => (
@@ -170,14 +194,14 @@ export function ResultShell({
                 </span>
               ))}
             </div>
-            <div className="result-new-tab">
+            <div className="result-new-tab" data-fixed-action="new">
               <button
                 ref={newTabButtonRef}
                 className="result-new-tab-button"
                 type="button"
                 aria-haspopup="menu"
                 aria-expanded={newTabMenuOpen}
-                aria-controls={newTabMenuOpen ? newTabMenuId : undefined}
+                aria-controls={newTabMenuId}
                 aria-label={resultText(locale, { 'zh-CN': '新建右侧页面', 'en-US': 'New right pane page' })}
                 title={resultText(locale, { 'zh-CN': '新建页面', 'en-US': 'New tab' })}
                 onClick={() => setNewTabMenuOpen((open) => !open)}
@@ -196,6 +220,7 @@ export function ResultShell({
                   ref={newTabMenuRef}
                   className="result-new-tab-menu"
                   role="menu"
+                  aria-label={resultText(locale, { 'zh-CN': '新建右侧页面类型', 'en-US': 'New right pane page type' })}
                   onKeyDown={handleNewTabMenuKeyDown}
                 >
                   {newTabOptions.map((option) => (
@@ -218,14 +243,19 @@ export function ResultShell({
               <button
                 type="button"
                 className="result-active-tab-close"
+                data-fixed-action="close"
                 aria-label={resultText(locale, { 'zh-CN': `关闭 ${activeTab.label}`, 'en-US': `Close ${activeTab.label}` })}
                 title={resultText(locale, { 'zh-CN': `关闭 ${activeTab.label}`, 'en-US': `Close ${activeTab.label}` })}
-                onClick={() => onCloseResultTab(activeTab.id)}
+                onClick={closeActiveTab}
               >
                 <X size={13} aria-hidden="true" />
               </button>
             ) : null}
-            <div className="result-focus-mode" aria-label={resultText(locale, { 'zh-CN': '结果聚焦模式', 'en-US': 'Result focus mode' })}>
+            <div
+              className="result-focus-mode"
+              aria-label={resultText(locale, { 'zh-CN': '结果聚焦模式', 'en-US': 'Result focus mode' })}
+              data-fixed-action="focus-mode"
+            >
               {focusModes.map((mode) => {
                 const Icon = mode.icon;
                 return (
@@ -249,8 +279,10 @@ export function ResultShell({
             role="tabpanel"
             id={activePanelId}
             aria-labelledby={activeTabButtonId}
+            aria-label={activeTabButtonId ? undefined : resultText(locale, { 'zh-CN': '右侧空状态', 'en-US': 'Right pane empty state' })}
+            aria-live="polite"
           >
-            {activeRun ? (
+            {showActiveRunBanner && activeRun ? (
               <div className="active-run-banner">
                 <div>
                   <strong>{resultText(locale, { 'zh-CN': '当前结果', 'en-US': 'Active result' })}</strong>

@@ -642,8 +642,8 @@ function cleanHumanCommandTitle(value: string | undefined, command: string | und
   if (!text || text.includes('\n')) return undefined;
   if (command && normalizeText(text) === normalizeText(command)) return undefined;
   if (command && normalizeText(text).includes(normalizeText(command))) return undefined;
-  if (/^(?:tool|command|shell)\s+(?:call|result|started|completed|finished|running)\b/i.test(text)) return undefined;
-  if (/^(?:running|completed|failed|done|output|workspace runtime|runtime metadata)$/i.test(text)) return undefined;
+  if (/^(?:tool|command|shell)\s+(?:call|result|started|completed|finished|running|failed|errored|cancelled|canceled|aborted|interrupted)\b/i.test(text)) return undefined;
+  if (/^(?:running|completed|failed|errored|cancelled|canceled|aborted|interrupted|done|output|workspace runtime|runtime metadata)$/i.test(text)) return undefined;
   if (/runtime event recorded|structured details are available|folded run audit/i.test(text)) return undefined;
   if (looksLikeBackendEnvelopeSummary(text)) return undefined;
   if (looksLikeUserInstructionEcho(normalizeText(text))) return undefined;
