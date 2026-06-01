@@ -1,8 +1,10 @@
 import type { AgentStreamEvent, ObjectReference, SciForgeRun, SciForgeSession } from '../../domain';
 import type { SupportedLocale } from '../../i18n';
 import { MessageContent } from './MessageContent';
+import { InlineObjectReferences } from './InlineObjectReferences';
 import { NativeEventStream } from './RunningWorkProcess';
 import { buildCursorAgentProcessModel } from './cursorAgentProcess';
+import { objectReferenceForCursorRef } from './cursorProcessObjectReferences';
 import { chatText } from './chatI18n';
 import {
   artifactHasUserFacingDelivery,
@@ -22,12 +24,14 @@ export function RunExecutionProcess({
   runId,
   session,
   onObjectFocus,
+  onGuiCommand,
   locale,
 }: {
   runId: string;
   session: SciForgeSession;
   trace?: string;
   onObjectFocus: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
   const run = session.runs.find((item) => item.id === runId);
@@ -43,7 +47,7 @@ export function RunExecutionProcess({
       data-testid="chat-process-thread"
       data-process-source="native-event-stream"
     >
-      <NativeEventStream events={nativeEvents} mode="recorded" limit={18} onObjectFocus={onObjectFocus} locale={locale} sourceRunId={runId} />
+      <NativeEventStream events={nativeEvents} mode="recorded" limit={18} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} sourceRunId={runId} />
     </div>
   );
 }
@@ -151,10 +155,17 @@ export function RunKeyInfo({
       {claims.length ? (
         <div className="message-key-list">
           {claims.map((claim, index) => (
-            <p key={`${claim.id || 'claim'}-${index}`} className="message-key-row">
-              <span>{sanitizeUserProjectionText(claim.text) ?? claim.text}</span>
-              <small>{claim.evidenceLevel} · {chatText(locale, { 'zh-CN': '置信度', 'en-US': 'confidence' })} {Math.round(claim.confidence * 100)}%</small>
-            </p>
+            <article
+              key={`${claim.id || 'claim'}-${index}`}
+              className="message-key-row"
+              data-claim-ref-count={claim.evidenceReferences.length}
+            >
+              <span className="message-key-row-title">{sanitizeUserProjectionText(claim.text) ?? claim.text}</span>
+              <small className="message-key-row-meta">{claim.evidenceLevel} · {chatText(locale, { 'zh-CN': '置信度', 'en-US': 'confidence' })} {Math.round(claim.confidence * 100)}%</small>
+              {claim.evidenceReferences.length ? (
+                <InlineObjectReferences references={claim.evidenceReferences} limit={4} onObjectFocus={onObjectFocus ?? (() => undefined)} />
+              ) : null}
+            </article>
           ))}
         </div>
       ) : null}
@@ -185,14 +196,97 @@ function runKeyInfoModel(session: SciForgeSession, runId: string) {
     .filter(isUserFacingObjectReference)
     .slice(0, 4);
   const deliverableReferences = mergeObjectReferences(
-    artifactReferences,
-    objectRefs.filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder'),
+    mergeObjectReferences(
+      artifactReferences,
+      objectRefs.filter((reference) => reference.kind === 'artifact' || reference.kind === 'file' || reference.kind === 'folder'),
+      8,
+    )
+      .map(safeRunKeyInfoReference)
+      .filter(isProcessObjectReference),
+    [],
     8,
   ).slice(0, 4);
   const artifacts = session.artifacts.filter((artifact) => deliverableReferences.some((reference) => reference.ref === `artifact:${artifact.id}`));
-  const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id)).slice(0, 3);
+  const claims = claimsForRun(session, runId, artifacts.map((artifact) => artifact.id))
+    .slice(0, 3)
+    .map((claim) => ({
+      ...claim,
+      evidenceReferences: claimEvidenceReferences(claim, session, runId),
+    }));
   if (!deliverableReferences.length && !claims.length) return undefined;
   return { claims, deliverableReferences };
+}
+
+function claimEvidenceReferences(
+  claim: SciForgeSession['claims'][number],
+  session: SciForgeSession,
+  runId: string,
+) {
+  const artifactIds = new Set(session.artifacts.map((artifact) => artifact.id));
+  const refs = [
+    ...claim.supportingRefs,
+    ...claim.opposingRefs,
+    ...(claim.dependencyRefs ?? []),
+  ];
+  return mergeObjectReferences(
+    refs
+      .map((ref) => objectReferenceForClaimEvidenceRef(ref, artifactIds, runId))
+      .filter((reference): reference is ObjectReference => Boolean(reference))
+      .map(safeRunKeyInfoReference)
+      .filter((reference) => ['artifact', 'file', 'folder'].includes(reference.kind))
+      .filter(isProcessObjectReference),
+    [],
+    4,
+  );
+}
+
+function objectReferenceForClaimEvidenceRef(ref: string, artifactIds: Set<string>, runId: string): ObjectReference | undefined {
+  const normalized = ref.trim();
+  if (!normalized) return undefined;
+  const prefixed = normalized.includes(':')
+    ? normalized
+    : artifactIds.has(normalized)
+      ? `artifact:${normalized}`
+      : looksLikeSafeWorkspaceFileRef(normalized)
+        ? `file:${normalized}`
+        : undefined;
+  const reference = prefixed ? objectReferenceForCursorRef(prefixed) : undefined;
+  if (!reference) return undefined;
+  return {
+    ...reference,
+    id: `claim-evidence-${reference.id}`,
+    runId,
+    summary: 'Claim evidence',
+    provenance: {
+      ...reference.provenance,
+      producer: 'scientific-claim',
+    },
+  };
+}
+
+function looksLikeSafeWorkspaceFileRef(value: string) {
+  return /^[^:/?#]+(?:\/[^:/?#]+)*\.[A-Za-z0-9]{1,12}(?:#[A-Za-z0-9_.:-]+)?$/.test(value)
+    && !/(?:^|\/)(?:\.sciforge|Users|Applications|Volumes|private|var|tmp|raw|stdout|stderr|provider)(?:\/|$)/i.test(value)
+    && !value.includes('..')
+    && !value.startsWith('~');
+}
+
+function safeRunKeyInfoReference(reference: ObjectReference): ObjectReference {
+  return {
+    ...reference,
+    title: isPrivateRunKeyRefText(reference.title) ? displayTitleForObjectReference(reference) : reference.title,
+    summary: isPrivateRunKeyRefText(reference.summary) ? undefined : reference.summary,
+    provenance: {
+      ...reference.provenance,
+      path: isPrivateRunKeyRefText(reference.provenance?.path) ? undefined : reference.provenance?.path,
+      dataRef: isPrivateRunKeyRefText(reference.provenance?.dataRef) ? undefined : reference.provenance?.dataRef,
+    },
+  };
+}
+
+function isPrivateRunKeyRefText(value: string | undefined) {
+  return containsInternalProcessText(value)
+    || (typeof value === 'string' && /(?:^|[/#:])\.sciforge(?:[/#:]|$)/i.test(value));
 }
 
 function claimsForRun(session: SciForgeSession, runId: string, artifactIds: string[]) {

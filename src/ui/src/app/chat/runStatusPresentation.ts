@@ -7,8 +7,22 @@ import { providerReadinessNoticeFromConfig } from '../../providerReadiness';
 import type { AgentStreamEvent, SciForgeConfig } from '../../domain';
 import type { SupportedLocale } from '../../i18n';
 import type { RuntimeHealthItem } from '../runtimeHealthPanel';
+import { buildCursorAgentProcessModel } from './cursorAgentProcess';
 import { chatText } from './chatI18n';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
+
+export function liveProgressSentenceFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[], locale?: SupportedLocale) {
+  const progressSentence = safeLiveProgressSentence(latestUserFacingProgressModel(streamEvents)?.title, locale);
+  if (progressSentence) return progressSentence;
+  const processSentence = safeLiveProgressSentence(
+    buildCursorAgentProcessModel(streamEvents, { mode: 'live', limit: 48, locale }).latestProgressSentence,
+    locale,
+  );
+  if (processSentence) return processSentence;
+  if (assistantDraft.trim()) return runningDraftProgressSentence(assistantDraft, locale);
+  return safeLiveProgressSentence(runningMessageContentFromStream('', streamEvents, locale), locale)
+    || chatText(locale, { 'zh-CN': '正在处理你的请求。', 'en-US': 'Working on your request.' });
+}
 
 export function runningMessageContentFromStream(assistantDraft: string, streamEvents: AgentStreamEvent[], locale?: SupportedLocale) {
   const latestEventLine = latestRunningEvent(streamEvents);
@@ -24,6 +38,48 @@ export function runningMessageContentFromStream(assistantDraft: string, streamEv
   }
   if (streamEvents.length) return chatText(locale, { 'zh-CN': '正在处理你的请求。', 'en-US': 'Working on your request.' });
   return chatText(locale, { 'zh-CN': '正在连接工作区活动。', 'en-US': 'Connecting to workspace activity.' });
+}
+
+function runningDraftProgressSentence(assistantDraft: string, locale?: SupportedLocale) {
+  if (looksLikeDenseLocalPathDraft(assistantDraft) || looksLikeFoldedAuditFallback(runningDraftContentForDisplay(assistantDraft, locale))) {
+    return chatText(locale, {
+      'zh-CN': '正在整理工作区上下文。详细活动已折叠在过程记录中。',
+      'en-US': 'Organizing workspace context. Detailed activity is folded into the process log.',
+    });
+  }
+  return chatText(locale, { 'zh-CN': '正在整理回答。', 'en-US': 'Drafting the response.' });
+}
+
+function safeLiveProgressSentence(value: string | undefined, locale?: SupportedLocale) {
+  const text = compactLiveProgressSentence(value);
+  if (!text) return '';
+  if (isTransportProgressText(text) || isRuntimeDiagnosticProgressText(text) || looksLikePromptOrAuditLeak(text)) {
+    return chatText(locale, { 'zh-CN': '正在处理你的请求。', 'en-US': 'Working on your request.' });
+  }
+  return text;
+}
+
+function compactLiveProgressSentence(value: string | undefined) {
+  const text = normalizeLiveProgressText(value);
+  if (!text) return '';
+  const [firstLine] = text.split(/\n+/);
+  return (firstLine ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function normalizeLiveProgressText(value: string | undefined) {
+  return (value ?? '')
+    .replace(/\[(?:local-path|redacted-path)\]\/[^\s"'`<>]+/gi, '[path]')
+    .replace(/(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\/[^\s"'`<>]+/g, '[path]')
+    .replace(/\b(Authorization|api[-_ ]?key|token|secret|password|credential)\b\s*[:=]\s*["']?[^"'\s,;)]+/gi, '$1=[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [redacted]')
+    .replace(/\bsk-[A-Za-z0-9._-]+/gi, '[redacted-secret]')
+    .trim();
+}
+
+function looksLikePromptOrAuditLeak(value: string) {
+  return /\b(?:raw\s*jsonl|stdout|stderr|provider|backend|trace|prompt assembly|authorization|api[-_ ]?key|credential)\b/i.test(value)
+    || /\b(?:ConversationProjection|ArtifactDelivery|ExecutionUnit|native-message|live-runtime-codex)\b/.test(value)
+    || /\[path\]/.test(value);
 }
 
 function runningDraftContentForDisplay(assistantDraft: string, locale?: SupportedLocale) {
@@ -174,15 +230,21 @@ export function runReadiness({
       message: runtimeNotice.message,
     };
   }
+  const providerPreflightNotice = runtimeProviderPreflightReadinessNotice(runtimeHealth, locale);
+  if (providerPreflightNotice) {
+    return {
+      ok: true,
+      severity: providerPreflightNotice.severity,
+      message: providerPreflightNotice.message,
+    };
+  }
   const providerNotice = providerReadinessNoticeFromConfig(config);
   if (!providerNotice.ready) {
+    const assistantNotice = assistantConnectionSetupNotice(providerNotice.recoverAction, locale);
     return {
       ok: true,
       severity: 'warning' as const,
-      message: chatText(locale, {
-        'zh-CN': `连接提示：${providerNotice.detail}.${providerNotice.recoverAction ? ` ${providerNotice.recoverAction}` : ''}`,
-        'en-US': `Connection notice: ${providerNotice.detail}.${providerNotice.recoverAction ? ` ${providerNotice.recoverAction}` : ''}`,
-      }),
+      message: assistantNotice,
     };
   }
   return {
@@ -191,6 +253,44 @@ export function runReadiness({
     message: chatText(locale, {
       'zh-CN': '已准备好在当前工作区运行。',
       'en-US': 'Ready to run in the current workspace.',
+    }),
+  };
+}
+
+function assistantConnectionSetupNotice(recoverAction: string | undefined, locale?: SupportedLocale) {
+  const action = recoverAction ?? '';
+  if (/Model, Base URL, or API Key/i.test(action)) {
+    return chatText(locale, {
+      'zh-CN': 'Assistant 连接需要设置。请在设置中填写模型、连接 URL 或凭据。',
+      'en-US': 'Assistant connection needs setup. Set a model, connection URL, or credential in Settings.',
+    });
+  }
+  if (/Base URL/i.test(action)) {
+    return chatText(locale, {
+      'zh-CN': 'Assistant 连接需要设置。请在设置中填写连接 URL。',
+      'en-US': 'Assistant connection needs setup. Set the connection URL in Settings.',
+    });
+  }
+  if (/API Key/i.test(action)) {
+    return chatText(locale, {
+      'zh-CN': 'Assistant 连接需要设置。请在设置中填写凭据。',
+      'en-US': 'Assistant connection needs setup. Set the credential in Settings.',
+    });
+  }
+  return chatText(locale, {
+    'zh-CN': 'Assistant 连接需要设置。请在设置中完成连接配置。',
+    'en-US': 'Assistant connection needs setup. Complete the connection settings.',
+  });
+}
+
+function runtimeProviderPreflightReadinessNotice(runtimeHealth?: RuntimeHealthItem[], locale?: SupportedLocale) {
+  const model = runtimeHealth?.find((item) => item.id === 'model' && item.source === 'runtime-provider-preflight');
+  if (!model || model.status === 'online') return undefined;
+  return {
+    severity: 'warning' as const,
+    message: chatText(locale, {
+      'zh-CN': 'Assistant 连接预检需要处理。长任务前请在设置中检查连接状态。',
+      'en-US': 'Assistant connection preflight needs attention. Check Settings before long runs.',
     }),
   };
 }

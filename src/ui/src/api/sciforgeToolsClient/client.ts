@@ -289,6 +289,8 @@ export async function sendSciForgeToolMessage(
         'Codex Runtime command/projection preflight estimate',
       ));
       callbacks.onEvent?.(codexRuntimeRunEvent(requestBody));
+      const composerDeclaredIntentEvent = composerDeclaredIntentProjectionEvent(requestBody);
+      if (composerDeclaredIntentEvent) callbacks.onEvent?.(composerDeclaredIntentEvent);
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         activeRequestController = new AbortController();
         retryForSilentFirstEvent = false;
@@ -447,6 +449,7 @@ function buildCodexRuntimeStreamRequest(input: {
       boundary: 'GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.',
       promptCarriedBy: 'commandText',
       legacyHandoffBoundary: 'GUI transcript, artifact bodies, expected results, capability selection, provider routing, and recovery policy stay outside the Runtime Codex task request.',
+      declaredPreferenceBoundary: 'Composer model/mode choices are public declared intents under guiLocalProjection only; they are not provider routes or concrete runtime model names.',
       runtime: {
         kind: 'codex',
         provider,
@@ -541,10 +544,12 @@ function auditOnlyGuiProjectionRefs(
   const claimRefs = (input.claims ?? []).slice(-16).map((claim) => `claim:${claim.id}`);
   const executionRefs = (input.executionUnits ?? []).slice(-16).map((unit) => `execution-unit:${unit.id}`);
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
+  const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents);
   return {
     currentTurnId: input.currentTurnId,
     selectedRefCount: referenceSummary.length,
     refs: uniqueRuntimeStringList([...references, ...runRefs, ...artifactRefs, ...claimRefs, ...executionRefs]).slice(0, 48),
+    ...(composerDeclaredIntents ? { composerDeclaredIntents } : {}),
     counts: {
       nonSeedMessages: nonSeedMessageCount,
       seedMessagesExcluded: (input.messages ?? []).length - nonSeedMessageCount,
@@ -554,6 +559,59 @@ function auditOnlyGuiProjectionRefs(
       executionUnitRefs: input.executionUnits?.length ?? 0,
     },
   };
+}
+
+function safeComposerDeclaredIntents(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.composer-declared-intents.v1' || value.source !== 'ui-action-audit-log') return undefined;
+  const model = safeComposerDeclaredModelIntent(value.model);
+  if (!model) return undefined;
+  return {
+    schemaVersion: 'sciforge.composer-declared-intents.v1',
+    source: 'ui-action-audit-log',
+    model,
+  };
+}
+
+function safeComposerDeclaredModelIntent(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const modelIntentId = knownString(value.modelIntentId, ['auto', 'max', 'assistant-auto', 'assistant-fast', 'assistant-balanced', 'assistant-deep']);
+  const mode = knownString(value.mode, ['auto', 'max', 'assistant']);
+  const capabilityTier = knownString(value.capabilityTier, ['auto', 'max', 'fast', 'balanced', 'deep']);
+  const publicLabel = publicComposerDeclaredLabel(value.publicLabel, modelIntentId);
+  const actionId = asString(value.actionId);
+  const declaredAt = asString(value.declaredAt);
+  if (!modelIntentId || !mode || !capabilityTier || !actionId || !declaredAt) return undefined;
+  return {
+    modelIntentId,
+    mode,
+    capabilityTier,
+    publicLabel,
+    actionId,
+    declaredAt,
+  };
+}
+
+function knownString<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T : undefined;
+}
+
+function publicComposerDeclaredLabel(value: unknown, modelIntentId: string | undefined) {
+  const fallback = modelIntentId === 'max'
+    ? 'MAX Mode'
+    : modelIntentId === 'assistant-fast'
+      ? 'Assistant Fast'
+      : modelIntentId === 'assistant-balanced'
+        ? 'Assistant Balanced'
+        : modelIntentId === 'assistant-deep'
+          ? 'Assistant Deep'
+          : modelIntentId === 'auto'
+            ? 'Auto'
+            : 'Assistant Auto';
+  if (typeof value !== 'string') return fallback;
+  const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
+  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
+  return compact;
 }
 
 function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buildCodexRuntimeStreamRequest>) {
@@ -1123,6 +1181,35 @@ function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStream
   };
 }
 
+function composerDeclaredIntentProjectionEvent(request: ReturnType<typeof buildCodexRuntimeStreamRequest>): AgentStreamEvent | undefined {
+  const auditMetadata: Record<string, unknown> = isRecord(request.auditMetadata) ? request.auditMetadata : {};
+  const projection = isRecord(auditMetadata.guiLocalProjection) ? auditMetadata.guiLocalProjection : {};
+  const declaredIntents = safeComposerDeclaredIntents(projection.composerDeclaredIntents);
+  const model = declaredIntents?.model;
+  if (!model) return undefined;
+  const text = `Shared ${model.publicLabel} preference with Agent Host.`;
+  return {
+    id: makeId('evt'),
+    type: 'composer-declared-intent-projection',
+    label: 'Composer preference',
+    detail: text,
+    createdAt: nowIso(),
+    raw: {
+      native: {
+        rawType: 'composer_declared_intent_projection',
+        operationKind: 'message',
+        status: 'completed',
+        text,
+        modelIntentId: model.modelIntentId,
+        mode: model.mode,
+        capabilityTier: model.capabilityTier,
+        sourceActionId: model.actionId,
+        declaredAt: model.declaredAt,
+      },
+    },
+  };
+}
+
 function runtimeCodexFailedResponse(input: {
   input: SendAgentMessageInput;
   request: ReturnType<typeof buildCodexRuntimeStreamRequest>;
@@ -1391,18 +1478,22 @@ function stableRefId(value: string) {
   return value.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 80) || 'runtime-audit';
 }
 
-function isBackendProgressEvent(event: AgentStreamEvent) {
+export function isBackendProgressEvent(event: AgentStreamEvent) {
   const type = String(event.type || '').toLowerCase();
   const label = String(event.label || '').toLowerCase();
   const raw = isRecord(event.raw) ? event.raw : {};
   const rawType = String(raw.type || '').toLowerCase();
   const progress = isRecord(raw.progress) ? raw.progress : undefined;
+  const progressReason = String(progress?.reason || raw.reason || '').toLowerCase();
+  const progressPhase = String(progress?.phase || '').toLowerCase();
   if (type.includes('silent') || rawType.includes('silent')) return false;
   if (type.includes('timeout-extended') || rawType.includes('timeout-extended')) return false;
   if (type === 'backend-silent' || rawType === 'backend-silent') return false;
   if (raw.silentStreamWaiting === true) return false;
-  if (String(raw.reason || '').toLowerCase() === 'backend-waiting') return false;
-  if (String(progress?.reason || '').toLowerCase() === 'backend-waiting') return false;
+  if (raw.heartbeat) return false;
+  if (progressReason === 'backend-waiting') return false;
+  if (progressReason === 'runtime-codex-waiting-for-app-server-event') return false;
+  if (progressPhase === 'wait' && /waiting|等待|app-server/.test(`${progressReason} ${progress?.title ?? ''} ${progress?.detail ?? ''}`.toLowerCase())) return false;
   if (String(event.detail || '').toLowerCase().includes('reason: backend-waiting')) return false;
   if (label === 'wait' || label === 'waiting' || label === '等待') return false;
   return true;

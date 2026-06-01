@@ -28,7 +28,6 @@
   box-shadow: var(--shadow-soft);
 }
 
-.theme-light .sidebar-activitybar,
 .theme-light .sidebar-panel-header,
 .theme-light .mobile-workbench-tabs,
 .theme-light .run-readiness,
@@ -71,7 +70,6 @@
   border-left-color: rgba(151, 163, 183, 0.32);
 }
 
-.theme-light .activity-item:hover,
 .theme-light .panel-collapse-button:hover,
 .theme-light .collapse-button:hover,
 .theme-light .workspace-toolbar button:hover,
@@ -86,7 +84,6 @@
   color: var(--text-primary);
 }
 
-.theme-light .activity-item.active,
 .theme-light .scenario-nav.active,
 .theme-light .tab.active,
 .theme-light .scenario-preview-tabs button.active,

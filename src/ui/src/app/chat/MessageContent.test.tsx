@@ -70,6 +70,143 @@ test('message markdown renderer supports GFM tables while structured object refs
   assert.match(markup, /Picked methods file/);
 });
 
+test('message markdown renderer supports complete assistant markdown without raw html', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={[
+        '# Evaluation Plan',
+        '',
+        '中文和 English terms should stay readable with inline math-like symbols z_t and W_2 plus inline LaTeX $z_t = W_2 + \\alpha$.',
+        '',
+        '$$',
+        '\\hat{z}_{t+\\Delta}=z_t+\\alpha(\\Delta)R_\\theta(z_t)',
+        '$$',
+        '',
+        '## Checklist',
+        '- Data',
+        '  - perturbation labels',
+        '  - held-out cell types',
+        '1. Score generalization.',
+        '2. Review calibration.',
+        '',
+        '| Metric | Use | Caveat |',
+        '| --- | --- | --- |',
+        '| MSE | regression | scale-sensitive |',
+        '',
+        '> Keep the biological question attached to the benchmark.',
+        '',
+        '```ts',
+        'const score: number = 0.92;',
+        '```',
+        '',
+        'Read [arXiv](https://arxiv.org) for public preprints.',
+        '',
+        '<section>RAW_HTML_SHOULD_NOT_RENDER</section>',
+      ].join('\n')}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /<h1>Evaluation Plan<\/h1>/);
+  assert.match(markup, /<h2>Checklist<\/h2>/);
+  assert.match(markup, /<ul>/);
+  assert.match(markup, /<ol>/);
+  assert.match(markup, /<table>/);
+  assert.match(markup, /<blockquote>/);
+  assert.match(markup, /<pre>/);
+  assert.match(markup, /class="language-ts"/);
+  assert.match(markup, /href="https:\/\/arxiv\.org"/);
+  assert.match(markup, /z_t/);
+  assert.match(markup, /W_2/);
+  assert.match(markup, /class="katex/);
+  assert.match(markup, /katex-display/);
+  assert.doesNotMatch(markup, /\$z_t|\$\$/);
+  assert.doesNotMatch(markup, /RAW_HTML_SHOULD_NOT_RENDER|<section>/);
+});
+
+test('message markdown renderer preserves literal dollars and code math text', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={[
+        'A price like $5 and a p-value like p < 0.05 should stay prose.',
+        '',
+        'Inline code keeps `$x+y$` literal.',
+        '',
+        '```md',
+        '$$',
+        'x+y',
+        '$$',
+        '```',
+        '',
+        'Real math still renders: $x+y$.',
+      ].join('\n')}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /A price like \$5/);
+  assert.match(markup, /p &lt; 0\.05/);
+  assert.match(markup, /<code>\$x\+y\$<\/code>/);
+  assert.match(markup, /<pre><code class="language-md">\$\$\nx\+y\n\$\$/);
+  assert.match(markup, /class="katex/);
+});
+
+test('message markdown renderer disables unsafe markdown link protocols', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={[
+        '[unsafe js](javascript:alert(1))',
+        '[unsafe data](data:text/html;base64,PHNjcmlwdD4=)',
+        '[safe](https://example.org/path?q=1)',
+      ].join('\n\n')}
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.doesNotMatch(markup, /href="javascript:|href="data:/i);
+  assert.match(markup, /markdown-disabled-link/);
+  assert.match(markup, /href="https:\/\/example\.org\/path\?q=1"/);
+});
+
+test('message markdown renderer keeps CJK punctuation outside autolink literals and object refs', () => {
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={[
+        '参考 https://example.org、再看 https://example.com/path，最后 https://example.net/a；以及 https://example.edu/b：说明 https://example.edu/c！',
+        '继续 https://example.edu/d？收尾 https://example.edu/e）与 https://example.edu/f】。',
+        '显式链接 [explicit](https://example.net/explicit)。',
+        '对象引用 file:papers/methods.md，和 file:papers/methods.md）都应保留标点在按钮外。',
+      ].join('\n\n')}
+      references={[pickedFile]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /href="https:\/\/example\.org"/);
+  assert.match(markup, /href="https:\/\/example\.com\/path"/);
+  assert.match(markup, /href="https:\/\/example\.net\/a"/);
+  assert.match(markup, /href="https:\/\/example\.edu\/b"/);
+  assert.match(markup, /href="https:\/\/example\.edu\/c"/);
+  assert.match(markup, /href="https:\/\/example\.edu\/d"/);
+  assert.match(markup, /href="https:\/\/example\.edu\/e"/);
+  assert.match(markup, /href="https:\/\/example\.edu\/f"/);
+  assert.match(markup, /href="https:\/\/example\.net\/explicit"/);
+  assert.match(markup, />https:\/\/example\.org<\/a>、再看/);
+  assert.match(markup, />https:\/\/example\.com\/path<\/a>，最后/);
+  assert.match(markup, />https:\/\/example\.net\/a<\/a>；以及/);
+  assert.match(markup, />https:\/\/example\.edu\/b<\/a>：说明/);
+  assert.match(markup, />https:\/\/example\.edu\/c<\/a>！/);
+  assert.match(markup, />https:\/\/example\.edu\/d<\/a>？收尾/);
+  assert.match(markup, />https:\/\/example\.edu\/e<\/a>）与/);
+  assert.match(markup, />https:\/\/example\.edu\/f<\/a>】。/);
+  assert.match(markup, /file:papers\/methods\.md<\/button>，/);
+  assert.match(markup, /file:papers\/methods\.md<\/button>）/);
+  assert.doesNotMatch(markup, /href="[^"]*%(?:E3%80%81|EF%BC%8C|E3%80%82|EF%BC%9B|EF%BC%9A|EF%BC%81|EF%BC%9F|EF%BC%89|E3%80%91)/);
+});
+
 test('message markdown renderer upgrades resolvable inline code and explicit prose refs', () => {
   const markup = renderToStaticMarkup(
     <MessageContent

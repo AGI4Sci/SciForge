@@ -48,15 +48,15 @@ test('terminal session viewer exposes input, paste, resize, copy, and stop event
   assert.match(html, /data-rows="20"/);
 });
 
-test('terminal session viewer preserves running, completed, stopped, and error lifecycle states', () => {
-  for (const status of ['running', 'completed', 'stopped', 'error'] as const) {
+test('terminal session viewer preserves empty, running, completed, stopped, and error lifecycle states', () => {
+  for (const status of ['empty', 'running', 'completed', 'stopped', 'error'] as const) {
     const html = renderToStaticMarkup(renderTerminalSessionViewer({
       slot: {
         componentId: 'terminal-session-viewer',
         props: {
           sessionRef: `terminal:${status}`,
           status,
-          buffer: `${status} terminal output`,
+          buffer: status === 'empty' ? '' : `${status} terminal output`,
           capabilities: { input: true, paste: true, resize: true, stop: true },
         },
       },
@@ -69,7 +69,11 @@ test('terminal session viewer preserves running, completed, stopped, and error l
     }));
 
     assert.match(html, new RegExp(`data-status="${status}"`));
-    assert.match(html, new RegExp(`${status} terminal output`));
+    if (status === 'empty') {
+      assert.match(html, /Terminal buffer is empty/);
+    } else {
+      assert.match(html, new RegExp(`${status} terminal output`));
+    }
     if (status === 'running') {
       assert.doesNotMatch(html, /data-terminal-action="input"[^>]*disabled=""/);
       assert.doesNotMatch(html, /data-terminal-action="paste"[^>]*disabled=""/);
@@ -96,9 +100,10 @@ test('terminal session viewer supports copy selection and stopped status', () =>
 test('terminal session viewer renders empty status without pretending to own runtime work', () => {
   const html = htmlFor(emptyTerminalSessionViewerFixture);
 
-  assert.match(html, /data-status="stopped"/);
+  assert.match(html, /data-status="empty"/);
   assert.match(html, /Terminal buffer is empty/);
   assert.match(html, /Type input for attached session/);
+  assert.doesNotMatch(html, /\$ ask --help/);
 });
 
 test('terminal session viewer falls back to transcript when live mode has no host surface', () => {

@@ -46,6 +46,9 @@ export type DesktopPreloadApiMethod =
   | 'nativeBrowserReload'
   | 'getNativeBrowserState'
   | 'captureNativeBrowserScreenshot'
+  | 'attachBrowserHostSessionSurface'
+  | 'detachBrowserHostSessionSurface'
+  | 'getBrowserHostSessionSurfaceState'
   | 'revealPath'
   | 'pickDirectory';
 
@@ -66,6 +69,9 @@ export type DesktopPreloadContract = {
     | 'desktop:native-browser:reload'
     | 'desktop:native-browser:state'
     | 'desktop:native-browser:screenshot'
+    | 'desktop:browser-host-surface:attach'
+    | 'desktop:browser-host-surface:detach'
+    | 'desktop:browser-host-surface:state'
     | 'platform:open-external'
     | 'platform:reveal-path'
     | 'platform:pick-directory'
@@ -372,6 +378,9 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'nativeBrowserReload',
         'getNativeBrowserState',
         'captureNativeBrowserScreenshot',
+        'attachBrowserHostSessionSurface',
+        'detachBrowserHostSessionSurface',
+        'getBrowserHostSessionSurfaceState',
         'revealPath',
         'pickDirectory',
       ],
@@ -386,6 +395,9 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'desktop:native-browser:reload',
         'desktop:native-browser:state',
         'desktop:native-browser:screenshot',
+        'desktop:browser-host-surface:attach',
+        'desktop:browser-host-surface:detach',
+        'desktop:browser-host-surface:state',
         'platform:open-external',
         'platform:reveal-path',
         'platform:pick-directory',

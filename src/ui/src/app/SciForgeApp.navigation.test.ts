@@ -46,13 +46,13 @@ test('invalid stored page falls back to workbench without losing scenario id', (
   });
 });
 
-test('valid stored navigation is preserved', () => {
+test('legacy stored pages fall back to workbench', () => {
   const storage = new MemoryStorage();
   storage.setItem(navigationStorageKey, JSON.stringify({ page: 'timeline', scenarioId: 'structure-exploration' }));
   installWindow(storage);
 
   assert.deepEqual(loadStoredAppNavigation(), {
-    page: 'timeline',
+    page: 'workbench',
     scenarioId: 'structure-exploration',
   });
 });
@@ -60,10 +60,10 @@ test('valid stored navigation is preserved', () => {
 test('URL page parameter opens deep-linkable workspace views before stored navigation', () => {
   const storage = new MemoryStorage();
   storage.setItem(navigationStorageKey, JSON.stringify({ page: 'timeline', scenarioId: 'structure-exploration' }));
-  installWindow(storage, '?page=browser&scenarioId=custom-browser-scenario');
+  installWindow(storage, '?page=feedback&scenarioId=custom-browser-scenario');
 
   assert.deepEqual(loadStoredAppNavigation(), {
-    page: 'browser',
+    page: 'feedback',
     scenarioId: 'custom-browser-scenario',
   });
 });

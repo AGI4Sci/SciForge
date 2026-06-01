@@ -507,10 +507,10 @@ test('Runtime Codex foreground final message can use native assistant message pr
     assert.equal(response.message.content, 'VISIBLE_FOREGROUND_NATIVE_MESSAGE');
     assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
     assert.match(String(response.message.provenance?.source), /^codex\.native-message:codex-command-/);
-    assert.equal(response.message.provenance?.liveAcceptanceEligible, false);
+    assert.equal(response.message.provenance?.liveAcceptanceEligible, true);
     const raw = response.run.raw as Record<string, unknown>;
     const nativeMessage = raw.nativeCodexMessage as Record<string, unknown>;
-    assert.equal(nativeMessage.liveAcceptanceEligible, false);
+    assert.equal(nativeMessage.liveAcceptanceEligible, true);
   } finally {
     globalThis.fetch = originalFetch;
   }

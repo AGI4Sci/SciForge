@@ -1,0 +1,38 @@
+{
+  "name": "@sciforge-connector/feishu",
+  "version": "0.1.0",
+  "type": "module",
+  "private": false,
+  "description": "SciForge Feishu channel plugin backed by lark-cli.",
+  "sciforge": {
+    "lifecycleLayer": "connectors",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": false
+  },
+  "exports": {
+    ".": "./plugin.ts",
+    "./plugin": "./plugin.ts",
+    "./manifest": "./manifest.ts"
+  },
+  "files": [
+    "README.md",
+    "package.json",
+    "manifest.ts",
+    "plugin.ts",
+    "index.ts",
+    "larkCliProvider.ts",
+    "intake",
+    "resources",
+    "delivery",
+    "confirmation",
+    "tests"
+  ],
+  "dependencies": {
+    "@sciforge-ui/runtime-contract": "^1.0.0"
+  },
+  "scripts": {
+    "test": "node --import tsx --test \"tests/*.test.ts\""
+  }
+}

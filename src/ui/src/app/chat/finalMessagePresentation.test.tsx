@@ -75,10 +75,37 @@ test('plain failure diagnostics are folded out of the primary chat answer', () =
   const presentation = splitFinalMessagePresentation(content);
 
   assert.match(presentation.primaryContent, /The task did not finish/);
+  assert.match(presentation.primaryContent, /Next step: retry with bounded context/i);
+  assert.match(presentation.primaryContent, /folded diagnostics/i);
   assert.doesNotMatch(presentation.primaryContent, /stderrRef=/);
+  assert.doesNotMatch(presentation.primaryContent, /AgentServer|agentserver:\/\/|stdout|stderr/i);
   assert.equal(presentation.auditSections.length, 1);
   assert.equal(presentation.auditSections[0].evidenceType, 'execution-audit');
   assert.match(presentation.auditSections[0].text, /failureReason/);
+});
+
+test('raw failure payloads expose a sanitized recovery step without provider diagnostics', () => {
+  const content = [
+    '```json',
+    JSON.stringify({
+      status: 'failed',
+      finalText: 'HTTP 401 Unauthorized from https://provider.example.invalid/v1/chat using token sk-secret-123 stdoutRef=.sciforge/logs/stdout.log',
+      recoverActions: [
+        'Rotate the workspace credential and retry from the preserved request.',
+        'Inspect stderrRef=.sciforge/logs/stderr.log before resending.',
+      ],
+      runtimeEventsRef: '.sciforge/sessions/session-a/runtime-events.json',
+    }, null, 2),
+    '```',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /The task did not finish/);
+  assert.match(presentation.primaryContent, /Next step: Rotate the workspace credential and retry from the preserved request/i);
+  assert.doesNotMatch(presentation.primaryContent, /401|provider\.example|https?:\/\/|sk-secret|stdoutRef|stderrRef|runtimeEventsRef|\.sciforge/i);
+  assert.equal(presentation.auditSections.length, 1);
+  assert.equal(presentation.auditSections[0].evidenceType, 'raw-json');
 });
 
 test('python tracebacks from failed research runs collapse behind a concise failure summary', () => {
@@ -252,6 +279,20 @@ test('final message presentation keeps scientific single-letter terms readable',
   assert.doesNotMatch(presentation.primaryContent, /Tcell|Bcells/);
 });
 
+test('final message rendering preserves legitimate scientific model wording', () => {
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent
+      content="The perturbation model is a statistical model for single-cell response prediction, not runtime configuration."
+      references={[]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /perturbation model/);
+  assert.match(markup, /statistical model/);
+  assert.doesNotMatch(markup, /perturbation runtime|statistical runtime/);
+});
+
 test('raw payload-only messages promote embedded human answer and fold payload metadata', () => {
   const content = [
     '```json',
@@ -260,6 +301,7 @@ test('raw payload-only messages promote embedded human answer and fold payload m
       confidence: 0.91,
       claimType: 'analysis-result',
       objects: [{ ref: 'artifact::analysis-report' }],
+      recoverActions: ['Archive this successful run for later comparison.'],
       executionUnits: [{ id: 'unit-1', backend: 'worker' }],
     }, null, 2),
     '```',
@@ -270,6 +312,7 @@ test('raw payload-only messages promote embedded human answer and fold payload m
   assert.match(presentation.primaryContent, /Analysis finished/);
   assert.match(presentation.primaryContent, /artifact::analysis-report/);
   assert.match(presentation.primaryContent, /file::data\/results\.csv/);
+  assert.doesNotMatch(presentation.primaryContent, /The task did not finish/);
   assert.doesNotMatch(presentation.primaryContent, /executionUnits/);
   assert.equal(presentation.auditSections.length, 1);
   assert.equal(presentation.auditSections[0].evidenceType, 'raw-json');
@@ -327,6 +370,48 @@ test('Runtime Codex plugin and transport warnings stay out of the main answer DO
   assert.match(markup, /final-message-audit-fold/);
   assert.match(mainDom, /Done:/);
   assert.doesNotMatch(mainDom, /plugin manifest|failed to load plugin|Attention Required|CF-RAY|RAW_JSONL_SHOULD_NOT_RENDER/i);
+});
+
+test('plain raw webpage and search dumps fold out while later answer prose remains primary', () => {
+  const content = [
+    '<!DOCTYPE html><html lang="en"><head><title>RAW_HTML_SHOULD_NOT_RENDER</title></head><body>',
+    'quick links Login Help Pages About Search API',
+    '--- Paper 1 ---',
+    'ID: 2605.30001',
+    'Title: RAW_TITLE_ONE_SHOULD_NOT_RENDER',
+    'Authors: Example Team',
+    'Abstract: A long raw abstract copied from a public search page.',
+    'URL: https://arxiv.org/abs/2605.30001',
+    '--- Paper 2 ---',
+    'ID: 2605.30002',
+    'Title: RAW_TITLE_TWO_SHOULD_NOT_RENDER',
+    'Authors: Example Team',
+    'Abstract: Another raw abstract copied from a public search page.',
+    'URL: https://arxiv.org/abs/2605.30002',
+    Array.from({ length: 12 }, (_, index) => `Raw search result line ${index}: metadata copied verbatim.`).join('\n'),
+    '</body></html>',
+    '',
+    '总结：I actually opened the public abstract pages and found two relevant candidates.',
+    '',
+    '| Title | Date | Confidence |',
+    '| --- | --- | --- |',
+    '| Candidate A | 2026-05-30 | medium |',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+  const markup = renderToStaticMarkup(
+    <FinalMessageContent content={content} references={[]} onObjectFocus={() => undefined} />,
+  );
+  const foldStart = markup.indexOf('final-message-audit-fold');
+  const mainDom = foldStart >= 0 ? markup.slice(0, foldStart) : markup;
+
+  assert.match(presentation.primaryContent, /I actually opened/);
+  assert.match(presentation.primaryContent, /Candidate A/);
+  assert.doesNotMatch(presentation.primaryContent, /RAW_HTML_SHOULD_NOT_RENDER|quick links|Paper 2|RAW_TITLE_TWO_SHOULD_NOT_RENDER/i);
+  assert.equal(presentation.auditSections.length, 1);
+  assert.equal(presentation.auditSections[0].evidenceType, 'tool-output');
+  assert.match(mainDom, /I actually opened/);
+  assert.doesNotMatch(mainDom, /RAW_HTML_SHOULD_NOT_RENDER|quick links|Paper 2|RAW_TITLE_TWO_SHOULD_NOT_RENDER/i);
 });
 
 test('generic ToolPayload and Received sections fold without hiding later result headings', () => {

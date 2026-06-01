@@ -6,7 +6,9 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { ObjectReference, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../../domain';
-import { canHydrateWorkspaceObjectPath, descriptorNeedsManualPreviewLoad, requestManualArtifactPreviewLoad, WorkspaceFileInlineViewer, WorkspaceObjectPreview } from './WorkspaceObjectPreview';
+import { WorkspaceFileInlineViewer, WorkspaceObjectPreview } from './WorkspaceObjectPreview';
+import { descriptorNeedsManualPreviewLoad, requestManualArtifactPreviewLoad } from './workspaceDescriptorPreviewLoad';
+import { canHydrateWorkspaceObjectPath } from './workspaceObjectPreviewModel';
 import { MarkdownBlock } from './reportContent';
 
 describe('WorkspaceObjectPreview presentation input', () => {

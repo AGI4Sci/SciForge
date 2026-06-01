@@ -1,6 +1,6 @@
 # TUI / GUI 协议
 
-最后更新：2026-05-29
+最后更新：2026-06-01
 
 ## 结论
 
@@ -51,9 +51,9 @@ GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送
 
 ## Built-in Browser 输入边界
 
-`browser_runtime` 属于 TUI/Codex runtime capability。GUI 可以展示 session/tabs/snapshot refs，也可以把用户点击翻译成 `/browser ...` 文本命令；它不能自己选择 `playwright_browser_automation`、`playwright_edge_browser` 或其它 provider。
+`browser_runtime` 属于 TUI/Codex runtime capability，host-owned `BrowserHostSession` 是 live browser owner。GUI 可以展示 session/tabs/snapshot refs 和同一 owner session 的 native/streaming live surface，也可以把用户点击翻译成 `/browser ...` 文本命令；它不能自己选择 `playwright_browser_automation`、`playwright_edge_browser` 或其它 provider。
 
-浏览器截图、DOM snapshot、console logs、network logs 和下载文件必须通过 refs 进入 GUI projection。GUI state 不保存 `data:image/...;base64,...`、完整 DOM 或完整日志。登录、上传、下载、外部提交、授权、支付、删除、发送、写剪贴板和 visible takeover 都必须先由 TUI 发起 confirmation/handoff。
+浏览器截图、DOM snapshot、console logs、network logs 和下载文件必须通过 refs 进入 GUI projection。GUI state 不保存 `data:image/...;base64,...`、完整 DOM 或完整日志。截图、PDF、document、proxy materialization、旧 frame 和旧 replay 只能是 evidence/artifact，不得作为 Browser pane 的第二套交互真相源或交互 fallback。frame-stream / WebRTC / canvas stream 只是同一 BrowserHostSession live surface 的 transport；Web shell 主画面优先使用同一 frame-stream 的 websocket-binary pixels，`/frame` HTTP route 只作 evidence/manual inspection，不能在 stream 不可用时接管 live view。登录、上传、下载、外部提交、授权、支付、删除、发送、写剪贴板和 visible takeover 都必须先由 TUI 发起 confirmation/handoff。
 
 模块边界：`@sciforge-ui/runtime-contract/browser-runtime` 是 GUI/TUI 共享的纯契约；`packages/observe/web` 只拥有 TUI capability/provider wrapper；`packages/presentation/components/browser-workbench` 只拥有右侧 browser projection renderer。GUI app 不直接 import observe/web 的 browser runtime wrapper。
 
@@ -82,7 +82,7 @@ GUI text
 
 GUI 对 Computer Use 的合法职责：
 
-- 展示 multi-screen replay、actor cursor overlay、proposal 状态、lease owner、before/after evidence refs 和 validator diagnostics。
+- 展示 VirtualAppScreen native/streaming live surface、multi-screen replay evidence、actor cursor overlay、proposal 状态、lease owner、before/after evidence refs 和 validator diagnostics。
 - 收集 `needs-confirmation` 或 `approvalRequest` 的用户确认，并把确认结果作为文本发回 TUI。
 - 聚焦已有 replay/artifact/ref，或显示缺失 renderer、缺失 evidence 的展示错误。
 - 暴露只读 GUI resource，说明当前 replay viewer、selection 和 confirmation state。
@@ -92,18 +92,18 @@ GUI 禁止做的事：
 - 直接调用 click/type/drag/scroll/hotkey/save/open-menu executor。
 - 传入 executor lease、裸全局坐标、desktop bridge policy、provider route 或 scheduler 参数。
 - 把 cursor move/point/annotate 当成真实 GUI mutating action。
-- 把 placeholder viewer frame、旧截图、GUI 私有状态或 shared system input trace 当成用户级完成证据。
+- 把 placeholder viewer frame、旧截图、replay、GUI 私有状态或 shared system input trace 当成用户级完成证据，或把它们作为 Screen pane 的第二交互真相源 / 交互 fallback。
 - import `packages/actions/computer-use`、`packages/observe/vision` provider implementation、`src/runtime/computer-use` bridge 或任何 desktop bridge implementation。
 
-Actor cursor 是 presentation 和 collaboration state；真正改变桌面/窗口状态的动作必须由 TUI Host 通过 scoped scheduler lease 串行进入 executor adapter。缺少独立 input adapter 时，shared system input 只能生成 diagnostic/blocked evidence，不能通过最终用户级验收。
+Actor cursor 是 presentation 和 collaboration state；真正改变桌面/窗口状态的动作必须由 TUI Host 通过 scoped scheduler lease 串行进入 executor adapter。VirtualAppScreen 的用户和 agent 交互必须绑定同一个 app/window/session native/streaming live surface。缺少独立 input adapter 或无法 attach live surface 时，只能生成 diagnostic/blocked/handoff evidence，不能自动切到 replay/snapshot/shared system input 继续通过最终用户级验收。
 
 `/computer-use` Workspace Gateway、AgentServer、runtime gateway、exec-MCP 和 `codex exec --json` 路径只能是 legacy/test-only/diagnostic adapter。它们可以帮助读取旧 trace、运行 fixture 或做迁移 smoke，但新增协议、按钮和 public surface 不能依赖这些路径作为产品 fallback。
 
 ## 右侧结果区 package renderer 边界
 
-右侧结果区通过 UI manifest slot 选择 package renderer。`browser-workbench`、`terminal-session-viewer`、`workspace-file-viewer` 都属于 GUI presentation module：它们可以渲染 refs、buffer、tree、draft、selection 和 view-local event data，也可以提供终端等价文本建议；它们不得启动 provider、PTY/process、workspace write 或跨域读取。
+右侧结果区通过 UI manifest slot 选择 package renderer。`browser-workbench`、`virtual-screen-viewer`、`terminal-session-viewer`、`workspace-file-viewer` 都属于 GUI presentation module：它们可以渲染 refs、owner-owned live surface、buffer、tree、draft、selection 和 view-local event data，也可以提供终端等价文本建议；它们不得启动 provider、PTY/process、workspace write 或跨域读取。
 
-TUI/Host 对这些 view-local event 的处理必须重新进入协议边界：浏览器动作用 `/browser ...` 或 browser runtime intent，终端输入进入 Host-owned terminal adapter，文件保存进入 workspace adapter。GUI 只显示 Host/TUI 返回的新 projection、refs、draft 状态或错误。
+TUI/Host 对这些 view-local event 的处理必须重新进入协议边界：浏览器动作用 `/browser ...` 或 BrowserHostSession/browser runtime intent，Screen 动作进入 Computer Use scoped executor lease，终端输入进入 Host-owned terminal adapter，文件保存进入 workspace adapter。GUI 只显示 Host/TUI 返回的新 projection、refs、draft 状态或错误。Browser 和 Screen 都不能用 iframe/proxy/snapshot/replay/旧 frame 建立第二个可交互真相源，也不能把这些路径作为交互 fallback。
 
 ## AnnotationSidebar 连续反馈输入
 
@@ -716,6 +716,15 @@ GUI 可以包含确定性的 presentation logic，但这不会让它变成 task 
 
 第三方 app 接入沿用 TUI 资产模型，不扩展 GUI 协议。飞书 CLI、飞书 API、微信/企业微信 bridge 等能力通过 Codex 原生 tool / plugin / MCP / worker 暴露；repo 内 adapter 可放在 `packages/connectors`。
 
+可插拔 channel plugin、`ChannelMessageEnvelope`、Web 聊天端投影和 Feishu CLI provider 的详细设计见 [`ChannelPluginArchitecture.md`](ChannelPluginArchitecture.md)。
+
+通讯工具有两种入口形态，不能混为一谈：
+
+- **输入型 intake**：外部消息、mention、群聊指令、webhook 或附件进入 connector 后，被规范化成 Agent Host 的输入 envelope，相当于 Web/GUI 输入栏提交了一条带 provenance 的用户消息。它可以直接进入 TUI thread/input queue，不需要 GUI 参与，也不需要先走 `gui.*`。
+- **资源/动作型 connector**：Agent Host 主动搜索文档、读取聊天、起草回复、上传文件、发送消息或同步外部系统。读操作返回 refs；写、发送、删除、同步等外部副作用必须 draft / dry-run / approval。
+
+输入型 intake 写入 Agent Host thread ledger 后，Web 聊天端必须渲染成普通用户消息 bubble，并带 channel badge、sender、source refs、attachments 和 delivery/audit 状态。GUI 不直接读飞书/微信 SDK 或 CLI；它只消费 thread events。
+
 GUI 侧交互仍然只发送文本：
 
 ```text
@@ -724,7 +733,17 @@ GUI 侧交互仍然只发送文本：
 /connectors wechat draft-message --to wechat:chat:xxx --text "请看这份报告"
 ```
 
-TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wechat:*`、`artifact:*`、`audit:*`。读操作可以映射为 MCP resources 或 `list/read/search/stat/watch` 风格资源；写、发送、删除、同步等外部副作用操作必须先 draft / dry-run，再通过 TUI approval 或 `gui.ask_user` 收集确认，并携带 idempotency / audit refs。
+外部通道触发 agent 时，推荐转换成同一类 input envelope，而不是模拟 GUI click：
+
+```text
+feishu mention "请根据这个 CSV 做质控报告"
+  -> connector intake
+  -> input: "请根据这个 CSV 做质控报告"
+  -> refs: feishu:message:..., feishu:file:..., audit:...
+  -> TUI Agent Host thread
+```
+
+TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wechat:*`、`artifact:*`、`audit:*`。读操作可以映射为 MCP resources 或 `list/read/search/stat/watch` 风格资源；写、发送、删除、同步等外部副作用操作必须先 draft / dry-run，再通过 TUI approval、`gui.ask_user` 或外部通道中的明确用户确认收集确认，并携带 idempotency / audit refs。
 
 ## 适配策略
 

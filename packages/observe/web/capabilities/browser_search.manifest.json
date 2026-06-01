@@ -25,8 +25,17 @@
     "required": ["query", "results"],
     "properties": {
       "query": { "type": "string" },
+      "boundedSummary": { "type": "string" },
       "finalUrl": { "type": "string" },
       "results": { "type": "array" },
+      "browserSessionRef": { "type": "string" },
+      "projectionRef": { "type": "string" },
+      "searchResultRef": { "type": "string" },
+      "screenshotRef": { "type": "string" },
+      "domSnapshotRef": { "type": "string" },
+      "axSnapshotRef": { "type": "string" },
+      "consoleLogRef": { "type": "string" },
+      "networkLogRef": { "type": "string" },
       "providerDiagnostics": { "type": "object" }
     }
   },
@@ -62,6 +71,22 @@
     }
   ],
   "providers": [
+    {
+      "id": "sciforge.browser-host-session.browser_search",
+      "label": "SciForge host-owned BrowserHostSession browser_search",
+      "kind": "internal",
+      "contractRef": "packages/observe/web/capabilities/browser_search.manifest.json",
+      "requiredConfig": [],
+      "priority": 1,
+      "capabilityId": "browser_search",
+      "source": "workspace-runtime",
+      "transport": "host-session",
+      "runtimeLocation": "src/runtime/browser-host-session.ts",
+      "permissions": ["network", "browser"],
+      "auth": { "required": false },
+      "fallbackEligible": false,
+      "status": "available"
+    },
     {
       "id": "sciforge.web-worker.browser_search",
       "label": "SciForge web worker browser_search",

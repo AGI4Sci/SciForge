@@ -17,8 +17,10 @@ const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.lo
 const RUNTIME_LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || 'workspace/.sciforge/logs');
 const runtimeChildren = new Map<string, ReturnType<typeof spawn>>();
 const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS || 30_000);
+const BROWSER_HOST_SESSION_FINAL_ENDPOINT_TOKENS = ['computer-use-actions', 'frame-stream'] as const;
 
 export default defineConfig({
+  base: './',
   plugins: [react(), sciForgeRuntimeLauncher()],
   root: 'src/ui',
   define: {
@@ -138,7 +140,11 @@ function sciForgeRuntimeLauncher() {
               healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
               cwd: process.cwd(),
               args: ['run', 'workspace:server'],
-              requiredCapability: 'workspace-snapshot',
+              requiredCapability: 'browser-host-session',
+              requiredEndpoint: {
+                key: 'browserHostSession',
+                tokens: BROWSER_HOST_SESSION_FINAL_ENDPOINT_TOKENS,
+              },
             }),
             ensureRuntimeProcess({
               id: 'agentserver',
@@ -172,10 +178,14 @@ async function ensureRuntimeProcess(options: {
   enabled?: boolean;
   missingReason?: string;
   requiredCapability?: string;
+  requiredEndpoint?: {
+    key: string;
+    tokens: readonly string[];
+  };
 }) {
   if (options.enabled === false) return { id: options.id, label: options.label, ok: false, status: 'missing', detail: options.missingReason };
   const health = await readHealth(options.healthUrl);
-  if (health.ok && (!options.requiredCapability || health.capabilities.includes(options.requiredCapability))) {
+  if (runtimeHealthSatisfiesRequirements(health, options.requiredCapability, options.requiredEndpoint)) {
     return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl };
   }
   const existing = runtimeChildren.get(options.id);
@@ -200,7 +210,7 @@ async function ensureRuntimeProcess(options: {
     runtimeChildren.delete(options.id);
   });
   runtimeChildren.set(options.id, child);
-  const healthy = await waitForHealthy(options.healthUrl, STARTUP_TIMEOUT_MS, options.requiredCapability);
+  const healthy = await waitForHealthy(options.healthUrl, STARTUP_TIMEOUT_MS, options.requiredCapability, options.requiredEndpoint);
   if (healthy) {
     return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl, logPath };
   }
@@ -507,21 +517,32 @@ function browserPdfViewerPath(url: URL) {
 
 export function transformBrowserProxyHtml(rawHtml: string, target: URL) {
   const withoutScripts = rawHtml
+    .replace(/<base\b[^>]*>/gi, '')
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/\s+on[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
     .replace(/\s+target\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
-  return Buffer.from(rewriteBrowserProxyAnchors(withoutScripts, target), 'utf8');
+  return Buffer.from(rewriteBrowserProxyResourceUrls(withoutScripts, target), 'utf8');
 }
 
-function rewriteBrowserProxyAnchors(html: string, target: URL) {
-  return html.replace(/(<a\b[^>]*?\shref=)(["'])([^"']+)\2/gi, (match, prefix: string, quote: string, href: string) => {
-    const rewritten = browserProxyAnchorHref(href, target);
+function rewriteBrowserProxyResourceUrls(html: string, target: URL) {
+  const hrefRewritten = html.replace(/(<(?:a|link)\b[^>]*?\shref=)(["'])([^"']+)\2/gi, (match, prefix: string, quote: string, href: string) => {
+    const rewritten = browserProxyResourceUrl(href, target);
+    if (!rewritten) return match;
+    return `${prefix}${quote}${escapeHtml(rewritten)}${quote}`;
+  });
+  const srcRewritten = hrefRewritten.replace(/(<(?:img|source|video|audio|iframe)\b[^>]*?\ssrc=)(["'])([^"']+)\2/gi, (match, prefix: string, quote: string, src: string) => {
+    const rewritten = browserProxyResourceUrl(src, target);
+    if (!rewritten) return match;
+    return `${prefix}${quote}${escapeHtml(rewritten)}${quote}`;
+  });
+  return srcRewritten.replace(/(<form\b[^>]*?\saction=)(["'])([^"']+)\2/gi, (match, prefix: string, quote: string, action: string) => {
+    const rewritten = browserProxyResourceUrl(action, target);
     if (!rewritten) return match;
     return `${prefix}${quote}${escapeHtml(rewritten)}${quote}`;
   });
 }
 
-function browserProxyAnchorHref(href: string, target: URL) {
+function browserProxyResourceUrl(href: string, target: URL) {
   const trimmed = href.trim();
   if (!trimmed || /^(?:#|mailto:|tel:|javascript:|data:)/i.test(trimmed)) return undefined;
   try {
@@ -622,24 +643,43 @@ function escapeHtml(value: string) {
 async function readHealth(url: string) {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(1200) });
-    const json = await response.json().catch(() => ({})) as { capabilities?: unknown };
+    const json = await response.json().catch(() => ({})) as { capabilities?: unknown; endpoints?: unknown };
     return {
       ok: response.ok,
       capabilities: Array.isArray(json.capabilities) ? json.capabilities.map(String) : [],
+      endpoints: isRecord(json.endpoints) ? json.endpoints : {},
     };
   } catch {
-    return { ok: false, capabilities: [] };
+    return { ok: false, capabilities: [], endpoints: {} };
   }
 }
 
-async function waitForHealthy(url: string, timeoutMs: number, requiredCapability?: string) {
+async function waitForHealthy(
+  url: string,
+  timeoutMs: number,
+  requiredCapability?: string,
+  requiredEndpoint?: { key: string; tokens: readonly string[] },
+) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const health = await readHealth(url);
-    if (health.ok && (!requiredCapability || health.capabilities.includes(requiredCapability))) return true;
+    if (runtimeHealthSatisfiesRequirements(health, requiredCapability, requiredEndpoint)) return true;
     await sleep(350);
   }
   return false;
+}
+
+function runtimeHealthSatisfiesRequirements(
+  health: { ok: boolean; capabilities: string[]; endpoints: Record<string, unknown> },
+  requiredCapability?: string,
+  requiredEndpoint?: { key: string; tokens: readonly string[] },
+) {
+  if (!health.ok) return false;
+  if (requiredCapability && !health.capabilities.includes(requiredCapability)) return false;
+  if (!requiredEndpoint) return true;
+  const endpoint = health.endpoints[requiredEndpoint.key];
+  if (typeof endpoint !== 'string') return false;
+  return requiredEndpoint.tokens.every((token) => endpoint.includes(token));
 }
 
 function sleep(ms: number) {

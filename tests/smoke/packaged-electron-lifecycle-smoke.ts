@@ -108,7 +108,10 @@ try {
   assert.deepEqual(
     await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort()),
     [
+      'attachBrowserHostSessionSurface',
       'captureNativeBrowserScreenshot',
+      'detachBrowserHostSessionSurface',
+      'getBrowserHostSessionSurfaceState',
       'getNativeBrowserState',
       'getRuntimeConfig',
       'getRuntimeHealth',

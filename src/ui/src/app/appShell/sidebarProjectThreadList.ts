@@ -7,7 +7,7 @@ export function sidebarRenderableThreadItems(
   const visible = [
     ...(project.draftThreads ?? []),
     ...project.threads,
-    ...(project.archivedThreads ?? []).filter((thread) => thread.state === 'active' && !thread.archived && !thread.discarded),
+    ...(project.archivedThreads ?? []).filter((thread) => thread.state === 'done' && !thread.archived && !thread.discarded),
   ];
   return visible.filter((thread) => {
     if (renderedIds.has(thread.sessionId)) return false;
@@ -20,7 +20,7 @@ export function sidebarHiddenArchiveThreadItems(
   project: Pick<SidebarProjectThreadGroup, 'archivedThreads'>,
 ): SidebarThreadItem[] {
   return [
-    ...(project.archivedThreads ?? []).filter((thread) => thread.state !== 'active' || thread.archived || thread.discarded),
+    ...(project.archivedThreads ?? []).filter((thread) => thread.state !== 'done' || thread.archived || thread.discarded),
   ];
 }
 

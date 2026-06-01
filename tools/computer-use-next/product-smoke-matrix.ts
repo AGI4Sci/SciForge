@@ -8,11 +8,14 @@ const NATIVE_SIDECAR_CAPABILITIES_SCHEMA =
   'sciforge.computer-use.native-sidecar-capabilities.v1' as const;
 const NATIVE_SIDECAR_DISCOVERY_SCHEMA =
   'sciforge.computer-use.native-sidecar-discovery.v1' as const;
+const VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA =
+  'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1' as const;
 
 export type CuNextProductSmokeTier =
   | 'package-diagnostic'
   | 'platform-smoke'
-  | 'product-smoke';
+  | 'product-smoke'
+  | 'historical-regression';
 
 export type CuNextProductSmokeStatus =
   | 'blocked'
@@ -33,6 +36,8 @@ export type CuNextProductSmokeEvidenceRequirement =
   | 'viewer-real-frames'
   | 'multi-app-workflow'
   | 'current-bundle-evidence'
+  | 'virtual-app-screen-user-acceptance'
+  | 'virtual-app-screen-user-acceptance-manifest'
   | 'single-screen-single-actor'
   | 'single-screen-multi-actor'
   | 'multi-screen-single-actor'
@@ -47,6 +52,7 @@ export type CuNextProductSmokeEvidenceRequirement =
 
 export type CuNextProductSmokeCaseId =
   | 'product-path-codex-native-plugin-sidecar'
+  | 'virtual-app-screen-user-acceptance'
   | 'real-single-app-input'
   | 'real-artifact-save'
   | 'high-risk-confirmation-stop'
@@ -69,7 +75,8 @@ export interface CuNextProductSmokeCaseDefinition {
   id: CuNextProductSmokeCaseId;
   label: string;
   taskId?: string;
-  requiredTier: 'product-smoke';
+  gateRole?: 'active-product-gate' | 'historical-opt-in-regression';
+  requiredTier: 'product-smoke' | 'historical-regression';
   requiredExecutionMode: 'opt-in-live-backend';
   requirements: CuNextProductSmokeEvidenceRequirement[];
 }
@@ -123,6 +130,11 @@ export interface CuNextProductSmokeCaseEvidence {
   evidenceRefs?: Partial<Record<CuNextProductSmokeEvidenceRequirement, string[]>>;
   currentRunBundleRef?: string;
   acceptanceManifestRef?: string;
+  virtualAppScreenUserAcceptanceManifestRef?: string;
+  regressionManifestRef?: string;
+  userAcceptanceGate?: string;
+  userAcceptanceEligible?: boolean;
+  historicalRegression?: boolean;
   issues?: string[];
 }
 
@@ -170,6 +182,21 @@ export const CU_NEXT_PRODUCT_SMOKE_CASES: readonly CuNextProductSmokeCaseDefinit
       'sciforge-computer-use-provider',
       'platform-sidecar-isolation',
       'native-multi-screen-sidecar',
+      'current-bundle-evidence',
+    ],
+  },
+  {
+    id: 'virtual-app-screen-user-acceptance',
+    label: 'VirtualAppScreen user-level acceptance',
+    taskId: 'P0-CU-UA-FIRST-SCENARIO',
+    requiredTier: 'product-smoke',
+    requiredExecutionMode: 'opt-in-live-backend',
+    gateRole: 'active-product-gate',
+    requirements: [
+      'virtual-app-screen-user-acceptance',
+      'virtual-app-screen-user-acceptance-manifest',
+      'viewer-real-frames',
+      'real-artifact-save',
       'current-bundle-evidence',
     ],
   },
@@ -272,9 +299,10 @@ export const CU_NEXT_PRODUCT_SMOKE_CASES: readonly CuNextProductSmokeCaseDefinit
   },
   {
     id: 'multi-screen-live-demo',
-    label: 'M6 multi-screen multi-actor live demo',
-    requiredTier: 'product-smoke',
+    label: 'M6 native multi-screen historical opt-in regression',
+    requiredTier: 'historical-regression',
     requiredExecutionMode: 'opt-in-live-backend',
+    gateRole: 'historical-opt-in-regression',
     requirements: [
       'multi-screen-live-demo',
       'multi-screen-multi-actor',
@@ -333,11 +361,13 @@ export function buildCuNextProductSmokeMatrix(input: {
   const cases = input.cases ?? CU_NEXT_PRODUCT_SMOKE_CASES.map((item) => ({
     id: item.id,
     status: 'opt-in-required' as const,
-    evidenceTier: 'product-smoke' as const,
+    evidenceTier: item.requiredTier,
     executionMode: 'dry-run' as const,
     realBackendExecuted: false,
     dryRun: true,
-    notRunReason: 'Product smoke requires opt-in Codex app-server/native plugin plus native platform sidecar execution.',
+    notRunReason: item.gateRole === 'historical-opt-in-regression'
+      ? 'Historical regression requires opt-in native M6 evidence and cannot satisfy user-level acceptance.'
+      : 'Product smoke requires opt-in Codex app-server/native plugin plus native platform sidecar execution.',
     evidenceRefs: {},
   }));
   return {
@@ -415,20 +445,33 @@ export function validateCuNextProductSmokeMatrix(
   }
 
   const status = isProductSmokeStatus(record.status) ? record.status : 'invalid';
-  if (status === 'passed' && cases.some((item) => item.status !== 'passed')) {
+  const activeCases = cases.filter((item) => {
+    const id = stringValue(item.id);
+    const definition = id && isProductSmokeCaseId(id) ? definitionsById.get(id) : undefined;
+    return definition ? isActiveProductGateDefinition(definition) : false;
+  });
+  if (status === 'passed' && activeCases.some((item) => item.status !== 'passed')) {
     issues.push({
       id: 'matrix-passed-with-unpassed-cases',
       path: 'status',
-      reason: 'Matrix status=passed requires every product smoke case to be passed by opt-in live backend evidence.',
+      reason: 'Matrix status=passed requires every active product smoke case to be passed by opt-in live backend evidence; historical M6 regressions do not count as user-level pass.',
     });
   }
 
   const passedCaseIds = cases
     .filter((item) => item.status === 'passed' && isProductSmokeCaseId(item.id))
+    .filter((item) => {
+      const definition = definitionsById.get(item.id as CuNextProductSmokeCaseId);
+      return definition ? isActiveProductGateDefinition(definition) : false;
+    })
     .map((item) => item.id as CuNextProductSmokeCaseId);
   const pendingCaseIds = cases
     .filter((item) => item.status === 'blocked' || item.status === 'opt-in-required' || item.status === 'pending')
     .filter((item) => isProductSmokeCaseId(item.id))
+    .filter((item) => {
+      const definition = definitionsById.get(item.id as CuNextProductSmokeCaseId);
+      return definition ? isActiveProductGateDefinition(definition) : false;
+    })
     .map((item) => item.id as CuNextProductSmokeCaseId);
 
   return {
@@ -466,6 +509,9 @@ function validateProductSmokeCase(
       reason: 'Unexecuted, fixture, or dry-run product smoke cases must remain blocked/opt-in-required/pending, not passed.',
     });
   }
+  if (!isActiveProductGateDefinition(definition)) {
+    return validateHistoricalRegressionCase(item, definition, path, issues, options);
+  }
   if (passed && evidenceTier !== definition.requiredTier) {
     issues.push({
       id: 'non-product-tier-cannot-pass-product-smoke',
@@ -500,6 +546,9 @@ function validateProductSmokeCase(
   const currentRunBundleRef = stringValue(item.currentRunBundleRef);
   requireRef(issues, `${path}.currentRunBundleRef`, currentRunBundleRef);
   requireRef(issues, `${path}.acceptanceManifestRef`, stringValue(item.acceptanceManifestRef));
+  if (definition.id === 'virtual-app-screen-user-acceptance') {
+    issues.push(...validateVirtualAppScreenUserAcceptanceGate(item, path, options.refRecords, currentRunBundleRef));
+  }
   const evidenceRefs = asRecord(item.evidenceRefs) ?? {};
   for (const requirement of definition.requirements) {
     const refs = stringArray(evidenceRefs[requirement]);
@@ -522,6 +571,253 @@ function validateProductSmokeCase(
     }));
   }
   issues.push(...validateCurrentBundleScopedRefs(item, currentRunBundleRef, path));
+  return issues;
+}
+
+function validateHistoricalRegressionCase(
+  item: Record<string, unknown>,
+  definition: CuNextProductSmokeCaseDefinition,
+  path: string,
+  issues: CuNextProductSmokeMatrixIssue[],
+  options: CuNextProductSmokeMatrixValidationOptions,
+): CuNextProductSmokeMatrixIssue[] {
+  const status = stringValue(item.status);
+  const evidenceTier = stringValue(item.evidenceTier);
+  const executionMode = stringValue(item.executionMode);
+  const passed = status === 'passed';
+  if (passed && evidenceTier !== definition.requiredTier) {
+    issues.push({
+      id: 'historical-regression-tier-required',
+      path: `${path}.evidenceTier`,
+      reason: `${definition.id} is historical opt-in regression evidence and must not claim product-smoke tier.`,
+    });
+  }
+  if (passed && executionMode !== definition.requiredExecutionMode) {
+    issues.push({
+      id: 'historical-regression-requires-opt-in-live-backend',
+      path: `${path}.executionMode`,
+      reason: 'Historical M6 regression pass requires opt-in-live-backend execution, not dry-run or fixture execution.',
+    });
+  }
+  if (passed && (item.dryRun === true || item.fixture === true || item.packageDiagnosticOnly === true)) {
+    issues.push({
+      id: 'historical-regression-cannot-use-dry-run-or-fixture',
+      path,
+      reason: 'Historical M6 regression may be diagnostic, but a passed regression still requires opt-in live backend evidence.',
+    });
+  }
+  if (passed && item.userAcceptanceEligible === true) {
+    issues.push({
+      id: 'historical-regression-cannot-pass-user-acceptance',
+      path: `${path}.userAcceptanceEligible`,
+      reason: 'M6/native multi-screen is historical regression evidence and cannot by itself satisfy VirtualAppScreen user-level acceptance.',
+    });
+  }
+  if (!passed && !stringValue(item.notRunReason) && status !== 'failed') {
+    issues.push({
+      id: 'missing-not-run-reason',
+      path: `${path}.notRunReason`,
+      reason: 'Blocked, opt-in-required, or pending historical regression cases must state why no regression pass was claimed.',
+    });
+  }
+  if (!passed) return issues;
+
+  issues.push(...validateProductPath(item.productPath, `${path}.productPath`));
+  const currentRunBundleRef = stringValue(item.currentRunBundleRef);
+  requireRef(issues, `${path}.currentRunBundleRef`, currentRunBundleRef);
+  requireRef(
+    issues,
+    `${path}.regressionManifestRef`,
+    stringValue(item.regressionManifestRef) ?? stringValue(item.acceptanceManifestRef),
+  );
+  const evidenceRefs = asRecord(item.evidenceRefs) ?? {};
+  for (const requirement of definition.requirements) {
+    const refs = stringArray(evidenceRefs[requirement]);
+    if (refs.length === 0) {
+      issues.push({
+        id: 'missing-product-smoke-evidence-ref',
+        path: `${path}.evidenceRefs.${requirement}`,
+        reason: `Historical regression case ${definition.id} requires ${requirement} refs.`,
+      });
+    }
+    refs.forEach((ref, index) => requireRef(issues, `${path}.evidenceRefs.${requirement}[${index}]`, ref));
+  }
+  if (
+    definition.requirements.includes('multi-screen-multi-actor')
+    || definition.requirements.includes('multi-screen-live-demo')
+  ) {
+    issues.push(...validateNativeMultiScreenSummary(item.nativeMultiScreenSummary, path, options.refRecords, {
+      currentRunBundleRef,
+      requireValidationRefProof: definition.id === 'multi-screen-live-demo',
+    }));
+  }
+  issues.push(...validateCurrentBundleScopedRefs(item, currentRunBundleRef, path));
+  return issues;
+}
+
+const requiredVirtualAppScreenManifestArrayFields = [
+  'targetAppRefs',
+  'targetWindowRefs',
+  'sessionRefs',
+  'adapterReadinessRefs',
+  'screenFrameRefs',
+  'inputIntentRefs',
+  'executorEventRefs',
+  'beforeAfterFrameRefs',
+  'annotationProposalRefs',
+  'artifactRefs',
+  'verificationRefs',
+  'guiPresentRefs',
+] as const;
+
+function validateVirtualAppScreenUserAcceptanceGate(
+  item: Record<string, unknown>,
+  path: string,
+  refRecords: Record<string, unknown> | undefined,
+  currentRunBundleRef: string | undefined,
+): CuNextProductSmokeMatrixIssue[] {
+  const issues: CuNextProductSmokeMatrixIssue[] = [];
+  if (item.userAcceptanceGate !== 'virtual-app-screen-user-acceptance') {
+    issues.push({
+      id: 'missing-virtual-app-screen-user-acceptance-gate',
+      path: `${path}.userAcceptanceGate`,
+      reason: 'Active Computer Use product pass must name userAcceptanceGate=virtual-app-screen-user-acceptance.',
+    });
+  }
+
+  const manifestRef = stringValue(item.virtualAppScreenUserAcceptanceManifestRef)
+    ?? stringValue(item.acceptanceManifestRef);
+  requireRef(issues, `${path}.virtualAppScreenUserAcceptanceManifestRef`, manifestRef);
+  if (
+    stringValue(item.acceptanceManifestRef)
+    && stringValue(item.virtualAppScreenUserAcceptanceManifestRef)
+    && item.acceptanceManifestRef !== item.virtualAppScreenUserAcceptanceManifestRef
+  ) {
+    issues.push({
+      id: 'virtual-app-screen-manifest-ref-mismatch',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
+      reason: 'virtualAppScreenUserAcceptanceManifestRef must match acceptanceManifestRef when both are present.',
+    });
+  }
+
+  const manifest = manifestRef
+    ? requireLoadedRecord(
+      issues,
+      refRecords,
+      manifestRef,
+      `${path}.virtualAppScreenUserAcceptanceManifestRef`,
+      'virtual-app-screen-user-acceptance-manifest',
+    )
+    : undefined;
+  if (!manifest) return issues;
+
+  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
+    ? currentBundleRoot(currentRunBundleRef)
+    : undefined;
+  if (bundleRoot && manifestRef && isSafeProductSmokeRef(manifestRef) && !isRefUnderBundleRoot(manifestRef, bundleRoot)) {
+    issues.push({
+      id: 'product-smoke-ref-outside-current-bundle',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
+      reason: `VirtualAppScreen user acceptance manifest ${manifestRef} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+    });
+  }
+
+  if (manifest.schemaVersion !== VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-user-acceptance-manifest',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.schemaVersion`,
+      reason: `VirtualAppScreen user acceptance manifest must use ${VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA}.`,
+    });
+  }
+  if (manifest.status !== 'passed' || manifest.userAcceptanceEligible !== true || manifest.diagnosticOnly === true) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-user-acceptance-status',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.status`,
+      reason: 'VirtualAppScreen user acceptance pass requires status=passed, userAcceptanceEligible=true, and diagnosticOnly=false.',
+    });
+  }
+  if (!Object.prototype.hasOwnProperty.call(manifest, 'blockedReason')) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-user-acceptance-manifest',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.blockedReason`,
+      reason: 'VirtualAppScreen user acceptance manifest must declare blockedReason; passed manifests use null.',
+    });
+  } else if (manifest.status === 'passed' && manifest.blockedReason !== null) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-user-acceptance-status',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.blockedReason`,
+      reason: 'VirtualAppScreen user acceptance passed status must declare blockedReason=null.',
+    });
+  }
+  if (asRecord(manifest.validation)?.ok !== true) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-user-acceptance-validation',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.validation`,
+      reason: 'VirtualAppScreen user acceptance manifest validation.ok must be true.',
+    });
+  }
+  for (const field of ['taskId', 'scenarioId', 'userIntent', 'replayRef', 'evidenceLedgerRef'] as const) {
+    if (!stringValue(manifest[field])) {
+      issues.push({
+        id: 'invalid-virtual-app-screen-user-acceptance-manifest',
+        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.${field}`,
+        reason: `VirtualAppScreen user acceptance manifest must include ${field}.`,
+      });
+    }
+  }
+  for (const field of requiredVirtualAppScreenManifestArrayFields) {
+    if (stringArray(manifest[field]).length === 0) {
+      issues.push({
+        id: 'invalid-virtual-app-screen-user-acceptance-manifest',
+        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.${field}`,
+        reason: `VirtualAppScreen user acceptance manifest must include non-empty ${field}.`,
+      });
+    }
+  }
+
+  const flags = asRecord(manifest.isolationFlags);
+  const unsafeIsolationFlags = [
+    ['backgroundRenderable', flags?.backgroundRenderable !== true],
+    ['affectsPhysicalDisplay', flags?.affectsPhysicalDisplay !== false],
+    ['requiresFocusSteal', flags?.requiresFocusSteal !== false],
+    ['sharedSystemInputUsed', flags?.sharedSystemInputUsed !== false],
+    ['physicalDisplayPopup', flags?.physicalDisplayPopup !== false],
+    ['systemPointerMoved', flags?.systemPointerMoved !== false],
+    ['systemKeyboardEventsSent', flags?.systemKeyboardEventsSent !== false],
+    ['diagnosticOnly', flags?.diagnosticOnly !== false],
+  ] as const;
+  for (const [field, unsafe] of unsafeIsolationFlags) {
+    if (unsafe) {
+      issues.push({
+        id: 'invalid-virtual-app-screen-isolation-flags',
+        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.isolationFlags.${field}`,
+        reason: 'VirtualAppScreen user acceptance requires isolated background control flags that do not affect the physical desktop.',
+      });
+    }
+  }
+
+  const rejectedClaimKinds = stringArray(asRecord(manifest.validation)?.rejectedClaimKinds);
+  if (rejectedClaimKinds.length > 0) {
+    issues.push({
+      id: 'virtual-app-screen-rejected-substitute-claims',
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef.validation.rejectedClaimKinds`,
+      reason: `VirtualAppScreen user acceptance manifest rejects substitute evidence: ${rejectedClaimKinds.join(', ')}.`,
+    });
+  }
+  const claims = records(manifest.evidenceClaims);
+  for (const [index, claim] of claims.entries()) {
+    const kind = normalizeToken(stringValue(claim.kind) ?? '');
+    if (
+      ['package-smoke', 'm6-native-multi-screen', 'target-bound-fixture', 'historical-docker-novnc', 'single-click-smoke', 'dom', 'playwright', 'accessibility', 'shell-direct-artifact', 'old-trace', 'gui-executor', 'shared-system-input'].includes(kind)
+      && (claim.userAcceptanceEligible === true || claim.completionEvidence === true)
+    ) {
+      issues.push({
+        id: 'virtual-app-screen-rejected-substitute-claims',
+        path: `${path}.virtualAppScreenUserAcceptanceManifestRef.evidenceClaims[${index}]`,
+        reason: 'Package smoke, M6/native multi-screen, fixtures, shortcuts, GUI executor, shared input, old traces, or shell direct artifact writes cannot satisfy user-level acceptance.',
+      });
+    }
+  }
   return issues;
 }
 
@@ -1434,6 +1730,17 @@ function validateCurrentBundleScopedRefs(
   if (acceptanceManifestRef) {
     refs.push({ path: `${path}.acceptanceManifestRef`, ref: acceptanceManifestRef });
   }
+  const virtualAppScreenUserAcceptanceManifestRef = stringValue(item.virtualAppScreenUserAcceptanceManifestRef);
+  if (virtualAppScreenUserAcceptanceManifestRef) {
+    refs.push({
+      path: `${path}.virtualAppScreenUserAcceptanceManifestRef`,
+      ref: virtualAppScreenUserAcceptanceManifestRef,
+    });
+  }
+  const regressionManifestRef = stringValue(item.regressionManifestRef);
+  if (regressionManifestRef) {
+    refs.push({ path: `${path}.regressionManifestRef`, ref: regressionManifestRef });
+  }
   return refs
     .filter(({ ref }) => isSafeProductSmokeRef(ref) && !isRefUnderBundleRoot(ref, root))
     .map(({ path: refPath, ref }) => ({
@@ -1531,11 +1838,20 @@ function browserDomAxSubstitutePaths(value: unknown, path: string, depth = 0): s
 }
 
 function matrixStatusFromCases(cases: readonly CuNextProductSmokeCaseEvidence[]): CuNextProductSmokeStatus {
-  if (cases.length > 0 && cases.every((item) => item.status === 'passed')) return 'passed';
-  if (cases.some((item) => item.status === 'failed')) return 'failed';
-  if (cases.some((item) => item.status === 'blocked')) return 'blocked';
-  if (cases.some((item) => item.status === 'opt-in-required')) return 'opt-in-required';
+  const definitionsById = new Map(CU_NEXT_PRODUCT_SMOKE_CASES.map((item) => [item.id, item]));
+  const activeCases = cases.filter((item) => {
+    const definition = definitionsById.get(item.id);
+    return definition ? isActiveProductGateDefinition(definition) : true;
+  });
+  if (activeCases.length > 0 && activeCases.every((item) => item.status === 'passed')) return 'passed';
+  if (activeCases.some((item) => item.status === 'failed')) return 'failed';
+  if (activeCases.some((item) => item.status === 'blocked')) return 'blocked';
+  if (activeCases.some((item) => item.status === 'opt-in-required')) return 'opt-in-required';
   return 'pending';
+}
+
+function isActiveProductGateDefinition(definition: CuNextProductSmokeCaseDefinition): boolean {
+  return definition.gateRole !== 'historical-opt-in-regression';
 }
 
 function requireRef(

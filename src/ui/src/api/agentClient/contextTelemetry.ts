@@ -104,6 +104,7 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
     source,
     status: normalizeContextWindowStatus(asString(record.status), ratio, clampRatio(asNumber(record.autoCompactThreshold))),
     compactCapability: normalizeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability)),
+    breakdown: normalizeContextBreakdown(record),
     budget: normalizeContextBudget(record.budget),
     auditRefs: asStringArray(record.auditRefs),
     autoCompactThreshold: clampRatio(asNumber(record.autoCompactThreshold)),
@@ -237,6 +238,39 @@ function normalizeContextBudget(value: unknown): NonNullable<AgentStreamEvent['c
     normalizedBudgetRatio: clampRatio(asNumber(value.normalizedBudgetRatio)),
     decisions: Array.isArray(value.decisions) ? value.decisions.filter(isRecord) : undefined,
   };
+}
+
+function normalizeContextBreakdown(record: Record<string, unknown>): NonNullable<AgentStreamEvent['contextWindowState']>['breakdown'] | undefined {
+  const nested = firstRecord(
+    record.breakdown,
+    record.contextBreakdown,
+    record.context_breakdown,
+    record.categoryTokens,
+    record.categories,
+  );
+  const source = nested ?? record;
+  const breakdown = {
+    systemPrompt: firstNumber(source, ['systemPrompt', 'system_prompt', 'system', 'systemPromptTokens', 'system_prompt_tokens']),
+    toolDefinitions: firstNumber(source, ['toolDefinitions', 'tool_definitions', 'tools', 'toolDefinitionTokens', 'tool_definition_tokens']),
+    rules: firstNumber(source, ['rules', 'ruleTokens', 'rulesTokens', 'rules_tokens']),
+    skills: firstNumber(source, ['skills', 'skillTokens', 'skillsTokens', 'skills_tokens']),
+    mcp: firstNumber(source, ['mcp', 'mcpTokens', 'mcp_tokens', 'mcpServers', 'mcp_servers']),
+    subagentDefinitions: firstNumber(source, ['subagentDefinitions', 'subagent_definitions', 'subagents', 'subagentTokens', 'subagent_definition_tokens']),
+    conversation: firstNumber(source, ['conversation', 'conversationTokens', 'conversation_tokens', 'messages', 'messageTokens', 'message_tokens']),
+  };
+  return Object.values(breakdown).some((value) => value !== undefined) ? breakdown : undefined;
+}
+
+function firstRecord(...values: unknown[]) {
+  return values.find(isRecord);
+}
+
+function firstNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = asNumber(record[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function normalizeCompactionStatus(

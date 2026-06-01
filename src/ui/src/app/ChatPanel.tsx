@@ -2,28 +2,32 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Activity as ActivityIcon, ClipboardCopy, Pencil } from 'lucide-react';
 import { scenarios, type ScenarioId } from '../data';
 import { SCENARIO_SPECS } from '@sciforge/scenario-core/scenario-specs';
-import { buildSilentStreamRunId, guidanceQueuedEvent, isLiveRuntimeCodexMessage, isSeedDemoOrFixtureMessage, userInterruptEvent } from '@sciforge-ui/runtime-contract';
+import { buildSilentStreamRunId, channelMessageMetadataFromProvenance, channelTitle, guidanceQueuedEvent, isLiveRuntimeCodexMessage, isSeedDemoOrFixtureMessage, userInterruptEvent } from '@sciforge-ui/runtime-contract';
 import { estimateContextWindowState, latestContextWindowState } from '../contextWindow';
 import { builtInScenarioPackageRef } from '@sciforge/scenario-core/scenario-package';
 import { builtInScenarioIdForRuntimeInput } from '@sciforge/scenario-core/scenario-routing-policy';
 import { resetSession } from '../sessionStore';
 import { buildRequestAcceptedProgressEvent, buildSilentStreamProgressEvent, silentStreamWaitThresholdMs } from '../processProgress';
-import { assistantDraftFromStreamEvents, coalesceStreamEvents, streamEventCounts } from '../streamEventPresentation';
+import { appendLiveStreamEvent, assistantDraftFromStreamEvents, boundLiveStreamEvents, streamEventCounts } from '../streamEventPresentation';
 import { makeId, nowIso, type AgentContextWindowState, type AgentStreamEvent, type GuidanceQueueRecord, type GuidanceQueueStatus, type SciForgeConfig, type SciForgeMessage, type SciForgeReference, type SciForgeRun, type SciForgeSession, type ObjectReference, type ScenarioInstanceId, type ScenarioRuntimeOverride, type TimelineEventRecord } from '../domain';
 import { useI18n } from '../i18nContext';
 import { exportJsonFile } from './exportUtils';
 import { Badge, ClaimTag, ConfidenceBar, EvidenceTag, cx } from './uiPrimitives';
 import {
+  createChatPanelActionUIAction,
   createCancelRunUIAction,
   createConcurrencyDecisionUIAction,
   createSubmitTurnUIAction,
+  createUpdateCapabilityPreferenceUIAction,
   recordUIActionInSession,
   type UIAction,
 } from './uiActionBoundary';
 import { AcceptancePanel } from './chat/AcceptancePanel';
 import { ArchiveDrawer } from './chat/ArchiveDrawer';
 import { ChatComposer } from './chat/ChatComposer';
+import { buildChatCopyFallback, ChatCopyFallback, type ChatCopyFallbackKind, type ChatCopyFallbackState } from './chat/ChatCopyFallback';
 import { ChatPanelHeader } from './chat/ChatPanelHeader';
+import { LiveProgressSentence } from './chat/LiveProgressSentence';
 import { RunReadinessBar } from './chat/RunReadinessBar';
 import { MessageList } from './chat/MessageList';
 import { RunningWorkProcess } from './chat/RunningWorkProcess';
@@ -33,6 +37,8 @@ import { FinalMessageContent } from './chat/FinalMessageContent';
 import type { RuntimeGuiSurface } from './chat/RuntimeGuiPanel';
 import { ContextWindowMeter } from './chat/ContextWindowMeter';
 import { SciForgeReferenceChips } from './chat/ReferenceChips';
+import { buildChatPanelActions, buildCopyMessagesText, buildCopyRequestIdText, type ChatPanelAction, type ChatPanelActionId } from './chat/chatPanelActions';
+import { chatText } from './chat/chatI18n';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
@@ -43,9 +49,12 @@ import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
 import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
-import { runReadiness, runningMessageContentFromStream, runtimeReadinessIssue } from './chat/runStatusPresentation';
+import { runReadiness, runtimeReadinessIssue } from './chat/runStatusPresentation';
 import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
+import { composerAgentHostCatalogForSession } from './chat/composerAgentHostCatalog';
+import { composerDeclaredIntentsForSession } from './chat/composerDeclaredIntents';
+import type { ComposerModelSelectionIntent } from './chat/composerToolMenu';
 import type { SupportedLocale } from '../i18n';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import { createGuiProtocolController } from './guiProtocol';
@@ -86,6 +95,7 @@ function messageProvenanceKind(message: SciForgeMessage) {
 
 function MessageProvenanceBadge({ message }: { message: SciForgeMessage }) {
   const kind = messageProvenanceKind(message);
+  if (channelMessageMetadataFromProvenance(message.provenance)) return null;
   if (isLiveRuntimeCodexMessage(message) || kind === 'live-runtime-codex' || kind === 'runtime-result' || kind === 'user-authored') return null;
   if (isSeedDemoOrFixtureMessage(message)) {
     return <Badge variant={kind === 'fixture' ? 'muted' : 'warning'}>{kind === 'fixture' ? 'fixture' : 'seed-demo'}</Badge>;
@@ -100,6 +110,14 @@ function messageProvenanceAttribute(kind: string) {
   if (kind === 'live-runtime-codex' || kind === 'runtime-result') return 'assistant-result';
   if (kind === 'seed-demo' || kind === 'fixture') return kind;
   return 'message';
+}
+
+function isLiveConversationAcceptanceMessage(message: SciForgeMessage, provenanceKind: string) {
+  if (message.role === 'user' || message.role === 'system') return false;
+  if (message.status === 'failed') return false;
+  if (provenanceKind === 'seed-demo' || provenanceKind === 'fixture') return false;
+  if (messageProvenanceAttribute(provenanceKind) !== 'assistant-result') return false;
+  return Boolean(message.content.trim() || message.expandable || message.objectReferences?.length);
 }
 
 function isInternalMessageProvenance(value: string) {
@@ -118,6 +136,7 @@ function messageHasPersistentMeta(
 ) {
   return Boolean(
     showMessageConfidence
+      || channelMessageMetadataFromProvenance(message.provenance)
       || message.status === 'failed'
       || message.guidanceQueue
       || message.acceptance
@@ -137,6 +156,16 @@ function visibleMessageReference(message: SciForgeMessage) {
   return reference;
 }
 
+function messageRoleLabel(message: SciForgeMessage, locale?: SupportedLocale) {
+  const channelSource = channelMessageMetadataFromProvenance(message.provenance);
+  if (message.role === 'user' && channelSource) {
+    return channelSource.sender.displayName || channelTitle(channelSource.channel);
+  }
+  if (message.role === 'user') return locale === 'zh-CN' ? '你' : 'You';
+  if (message.role === 'system') return locale === 'zh-CN' ? '系统' : 'System';
+  return locale === 'zh-CN' ? '助手' : 'Assistant';
+}
+
 function looksLikeRuntimeGuiPlaceholderMessage(content: string) {
   return /^#{0,2}\s*(?:Computer Use )?(?:confirmation required|operation result)\b/i.test(content.replace(/\s+/g, ' ').trim())
     || /\/computer-use\s+(?:approve|reject)\b|Approval ref:|Action ref:|Evidence refs:|Choices:/i.test(content);
@@ -154,6 +183,8 @@ export function ChatPanel({
   onSessionChange,
   onNewChat,
   onDeleteChat,
+  onForkChat,
+  onArchiveChat,
   archivedSessions,
   onRestoreArchivedSession,
   onDeleteArchivedSessions,
@@ -188,6 +219,8 @@ export function ChatPanel({
   onSessionChange: (session: SciForgeSession) => void;
   onNewChat: () => void;
   onDeleteChat: () => void;
+  onForkChat?: () => void;
+  onArchiveChat?: () => void;
   archivedSessions: SciForgeSession[];
   onRestoreArchivedSession: (sessionId: string) => void;
   onDeleteArchivedSessions: (sessionIds: string[]) => void;
@@ -215,6 +248,7 @@ export function ChatPanel({
   const [editingContent, setEditingContent] = useState('');
   const [historyOpen, setHistoryOpen] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [clipboardFallback, setClipboardFallback] = useState<ChatCopyFallbackState | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [composerHeight, setComposerHeight] = useState(58);
   const [composerExpanded, setComposerExpanded] = useState(() => shouldOpenComposerByDefault(session));
@@ -223,6 +257,7 @@ export function ChatPanel({
   const [retainedContextWindowState, setRetainedContextWindowState] = useState<AgentContextWindowState | undefined>();
   const [guidanceQueue, setGuidanceQueue] = useState<GuidanceQueueRecord[]>([]);
   const [referencePickMode, setReferencePickMode] = useState(false);
+  const [chatSplitLayout, setChatSplitLayout] = useState<'single' | 'right' | 'down'>('single');
   const [targetInstanceName, setTargetInstanceName] = useState(CURRENT_TARGET_INSTANCE_VALUE);
   const [pendingReferences, setPendingReferences] = useState<SciForgeReference[]>([]);
   const activeSessionRef = useRef(session);
@@ -254,13 +289,21 @@ export function ChatPanel({
   const visibleMessages = messages.slice(visibleMessageStart);
   const liveTokenUsage = latestTokenUsage(streamEvents);
   const worklogCounts = streamEventCounts(streamEvents);
-  const runningMessageContent = runningMessageContentFromStream(assistantDraft, streamEvents, locale);
   const latestStreamEventAt = streamEvents.at(-1)?.createdAt;
   const contextWindowState = latestContextWindowState(streamEvents)
     ?? retainedContextWindowState
     ?? estimateContextWindowState(session, config, streamEvents);
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
+  const composerAgentHostCatalog = useMemo(() => composerAgentHostCatalogForSession(session), [session]);
+  const chatPanelActions = useMemo(() => buildChatPanelActions({
+    locale,
+    canFork: sessionActivityScoreForChatAction(session) > 0 && Boolean(onForkChat),
+    canArchive: sessionActivityScoreForChatAction(session) > 0 && Boolean(onArchiveChat),
+    canCopyMessages: session.messages.some((message) => message.role === 'user' || message.role === 'scenario'),
+    canCopyRequestId: Boolean(activeRunId || session.sessionId),
+    isSending,
+  }), [activeRunId, isSending, locale, onArchiveChat, onForkChat, session]);
   const guiProtocolSurface = useMemo(() => {
     const selectedRefs = pendingReferences.map((reference) => reference.ref);
     const controller = createGuiProtocolController({
@@ -361,7 +404,7 @@ export function ChatPanel({
           const raw = typeof event.raw === 'object' && event.raw !== null ? event.raw as Record<string, unknown> : {};
           return raw.silentStreamWaiting !== true;
         });
-        const updated = [...next.slice(-159), waitingEvent];
+        const updated = appendLiveStreamEvent(next, waitingEvent);
         streamEventsRef.current = updated;
         return updated;
       });
@@ -566,7 +609,7 @@ export function ChatPanel({
       createdAt: nowIso(),
     };
     const acceptedEvent = buildRequestAcceptedProgressEvent(prompt, locale);
-    const initialEvents = [queuedEvent, acceptedEvent];
+    const initialEvents = boundLiveStreamEvents([queuedEvent, acceptedEvent]);
     streamEventsRef.current = initialEvents;
     setStreamEvents(initialEvents);
     setAssistantDraft('');
@@ -581,7 +624,7 @@ export function ChatPanel({
     try {
       const handleStreamEvent = (event: AgentStreamEvent) => {
         if (!isCurrentTurn()) return;
-        const next = coalesceStreamEvents(streamEventsRef.current, event).slice(-160);
+        const next = appendLiveStreamEvent(streamEventsRef.current, event);
         streamEventsRef.current = next;
         const latestContext = latestContextWindowState(next);
         if (latestContext) setRetainedContextWindowState(latestContext);
@@ -600,6 +643,7 @@ export function ChatPanel({
         config,
         targetPeer,
         scenarioOverride,
+        composerDeclaredIntents: composerDeclaredIntentsForSession(baseSession),
         availableComponentIds,
         defaultComponentIds: scenarioOverride?.defaultComponents?.length
           ? scenarioOverride.defaultComponents
@@ -815,13 +859,20 @@ export function ChatPanel({
       requestId: guidance.id,
       reason: 'running-guidance',
     });
-    setStreamEvents((current) => [...current.slice(-32), guidanceQueuedEvent({ id: makeId('evt'), createdAt: now }, guidance)]);
+    const guidanceEvent = guidanceQueuedEvent({ id: makeId('evt'), createdAt: now }, guidance);
+    setStreamEvents((current) => {
+      const next = appendLiveStreamEvent(current.slice(-32), guidanceEvent, { limit: 33 });
+      streamEventsRef.current = next;
+      return next;
+    });
   }
 
   function handleAbort() {
-    if (!abortRef.current) return;
+    const controller = abortRef.current;
+    if (!controller || userAbortRequestedRef.current) return;
     const interruptedAt = nowIso();
     const rejectedIds = guidanceQueueRef.current.map((item) => item.id);
+    userAbortRequestedRef.current = true;
     recordUIAction(createCancelRunUIAction({
       id: makeId('ui-action'),
       session: activeSessionRef.current,
@@ -839,18 +890,40 @@ export function ChatPanel({
     }
     guidanceQueueRef.current = [];
     setGuidanceQueue([]);
-    setStreamEvents((current) => [...current.slice(-31), userInterruptEvent({ id: makeId('evt'), createdAt: interruptedAt })]);
-    userAbortRequestedRef.current = true;
+    const interruptEvent = userInterruptEvent({ id: makeId('evt'), createdAt: interruptedAt });
+    setStreamEvents((current) => {
+      const next = appendLiveStreamEvent(current.slice(-31), interruptEvent, { limit: 32 });
+      streamEventsRef.current = next;
+      return next;
+    });
     const sentControl = realtimeControlRef.current?.send({
       controlType: 'cancel',
       requestId: makeId('cancel'),
       reason: 'user-interrupt',
     }) === true;
     if (sentControl) {
-      window.setTimeout(() => abortRef.current?.abort(), 150);
+      window.setTimeout(() => {
+        if (abortRef.current === controller) controller.abort();
+      }, 150);
       return;
     }
-    abortRef.current.abort();
+    controller.abort();
+  }
+
+  function handleModelIntentSelect(intent: ComposerModelSelectionIntent) {
+    recordUIAction(createUpdateCapabilityPreferenceUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      preference: {
+        intent: 'composer-model-selection',
+        source: 'composer-model-menu',
+        modelIntentId: intent.id,
+        publicLabel: intent.label,
+        mode: intent.mode,
+        capabilityTier: intent.capabilityTier,
+      },
+    }));
   }
 
   function recordUIAction(action: UIAction) {
@@ -939,16 +1012,86 @@ export function ChatPanel({
     onScrollTopChange(element.scrollTop);
   }
 
-  async function copyMessageContent(content: string) {
+  async function copyTextOrShowManualFallback(text: string, kind: ChatCopyFallbackKind, title: string) {
     try {
-      await copyTextToClipboard(content);
+      await copyTextToClipboard(text);
       setErrorText('');
+      setClipboardFallback(null);
     } catch (error) {
-      setErrorText(error instanceof Error ? error.message : t({
-        'zh-CN': '复制失败：剪贴板访问被阻止。',
-        'en-US': 'Copy failed: clipboard access was blocked.',
+      setClipboardFallback(buildChatCopyFallback({ kind, title, text, locale, error }));
+      setErrorText(t({
+        'zh-CN': '复制失败：剪贴板被浏览器阻止，已提供手动复制文本。',
+        'en-US': 'Copy failed: browser clipboard access was blocked, so manual copy text is available.',
       }));
     }
+  }
+
+  async function copyMessageContent(content: string) {
+    await copyTextOrShowManualFallback(content, 'message', t({ 'zh-CN': '复制 Markdown', 'en-US': 'Copy Markdown' }));
+  }
+
+  async function handleChatPanelAction(actionId: ChatPanelActionId) {
+    const action = chatPanelActions.find((item) => item.id === actionId);
+    if (!action) return;
+    recordHeaderAction(action);
+    if (action.disabled) {
+      setErrorText(action.disabledReason ?? t({
+        'zh-CN': '这个聊天动作当前不可用。',
+        'en-US': 'This chat action is currently unavailable.',
+      }));
+      return;
+    }
+    try {
+      if (action.id === 'split-right') {
+        setChatSplitLayout((current) => current === 'right' ? 'single' : 'right');
+        setErrorText('');
+        return;
+      }
+      if (action.id === 'split-down') {
+        setChatSplitLayout((current) => current === 'down' ? 'single' : 'down');
+        setErrorText('');
+        return;
+      }
+      if (action.id === 'fork-chat') {
+        onForkChat?.();
+        setErrorText('');
+        return;
+      }
+      if (action.id === 'archive-chat') {
+        onArchiveChat?.();
+        setErrorText('');
+        return;
+      }
+      if (action.id === 'copy-messages') {
+        const text = buildCopyMessagesText(session.messages, locale);
+        if (!text) throw new Error(t({ 'zh-CN': '当前聊天没有可复制消息。', 'en-US': 'There are no messages to copy yet.' }));
+        await copyTextOrShowManualFallback(text, 'messages', action.label);
+        return;
+      }
+      if (action.id === 'copy-request-id') {
+        await copyTextOrShowManualFallback(buildCopyRequestIdText({ activeRunId, sessionId: session.sessionId }), 'request-id', action.label);
+      }
+    } catch (error) {
+      setErrorText(error instanceof Error ? error.message : t({
+        'zh-CN': '聊天动作失败。',
+        'en-US': 'Chat action failed.',
+      }));
+    }
+  }
+
+  function recordHeaderAction(action: ChatPanelAction) {
+    recordUIAction(createChatPanelActionUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      action: action.id,
+      effect: action.effect,
+      commandText: action.commandText,
+      targetRef: action.effect === 'thread-lifecycle' ? `session:${session.sessionId}` : undefined,
+      copiedTextKind: action.id === 'copy-messages' ? 'messages' : action.id === 'copy-request-id' ? 'request-id' : undefined,
+      disabledReason: action.disabledReason,
+      auditRefs: [`chat-action:${action.id}`],
+    }));
   }
 
   function handleGuiCommand(commandText: string) {
@@ -977,18 +1120,22 @@ export function ChatPanel({
   }
 
   return (
-    <div className="chat-panel">
+    <div className="chat-panel" data-chat-split-layout={chatSplitLayout}>
       <ChatPanelHeader
         scenario={scenario}
         config={config}
+        chatTitle={session.title}
+        requestId={buildCopyRequestIdText({ activeRunId, sessionId: session.sessionId })}
         archivedCount={archivedCount}
         isSending={isSending}
+        actions={chatPanelActions}
         onConfigChange={onConfigChange}
         onNewChat={handleNewChat}
         onToggleHistory={() => setHistoryOpen((value) => !value)}
         onAbort={handleAbort}
         onExport={handleExport}
         onDeleteChat={onDeleteChat}
+        onAction={(actionId) => void handleChatPanelAction(actionId)}
       />
 
       {historyOpen ? (
@@ -1003,38 +1150,40 @@ export function ChatPanel({
           onClear={onClearArchivedSessions}
         />
       ) : null}
-      <MessageList
-        refObject={messagesRef}
-        hasMessages={messages.length > 0}
-        visibleMessageCount={visibleMessages.length}
-        collapsedBeforeCount={visibleMessageStart}
-        onScroll={handleMessagesScroll}
-        locale={locale}
-        runningMessage={isSending ? (
-          <div className="message scenario assistant-message">
-            <div className="message-body">
-              <div className="message-meta">
-                <strong className="message-role-label">{t({ 'zh-CN': '助手', 'en-US': 'Assistant' })}</strong>
-                <Badge variant="info">{t({ 'zh-CN': '运行中', 'en-US': 'Running' })}</Badge>
+      <div className="chat-body-shell">
+        <MessageList
+          refObject={messagesRef}
+          hasMessages={messages.length > 0}
+          visibleMessageCount={visibleMessages.length}
+          collapsedBeforeCount={visibleMessageStart}
+          onScroll={handleMessagesScroll}
+          locale={locale}
+          runningMessage={isSending ? (
+            <div className="message scenario assistant-message">
+              <div className="message-body">
+                <div className="message-meta">
+                  <strong className="message-role-label">{t({ 'zh-CN': '助手', 'en-US': 'Assistant' })}</strong>
+                  <Badge variant="info">{t({ 'zh-CN': '运行中', 'en-US': 'Running' })}</Badge>
+                </div>
+                <LiveProgressSentence assistantDraft={assistantDraft} events={streamEvents} locale={locale} />
+                <RunningWorkProcess
+                  events={streamEvents}
+                  counts={worklogCounts}
+                  tokenUsage={liveTokenUsage}
+                  backend={config.agentBackend}
+                  guidanceCount={guidanceQueue.length}
+                  onObjectFocus={handleObjectReferenceClick}
+                  locale={locale}
+                />
               </div>
-              <MessageContent content={runningMessageContent} references={[]} onObjectFocus={onObjectFocus} />
-              <RunningWorkProcess
-                events={streamEvents}
-                counts={worklogCounts}
-                tokenUsage={liveTokenUsage}
-                backend={config.agentBackend}
-                guidanceCount={guidanceQueue.length}
-                onObjectFocus={handleObjectReferenceClick}
-                locale={locale}
-              />
             </div>
-          </div>
-        ) : null}
-      >
+          ) : null}
+        >
         {visibleMessages.map((message, visibleIndex) => {
           const index = visibleMessageStart + visibleIndex;
           const messageRunId = runIdForMessage(message, index, messages, session.runs);
           const provenanceKind = messageProvenanceKind(message);
+          const channelSource = channelMessageMetadataFromProvenance(message.provenance);
           const showDiagnosticBadges = shouldShowMessageDiagnosticBadges(message, provenanceKind);
           const showMessageConfidence = message.role !== 'user' && typeof message.confidence === 'number' && Number.isFinite(message.confidence);
           return (
@@ -1044,23 +1193,22 @@ export function ChatPanel({
               'message',
               message.role,
               message.role !== 'user' && message.role !== 'system' && 'assistant-message',
+              channelSource && 'external-channel-message',
               message.role !== 'user' && message.role !== 'system' && messageHasPersistentMeta(message, provenanceKind, showMessageConfidence, showDiagnosticBadges) && 'message-has-persistent-meta',
               activeRunId && messageRunId === activeRunId && 'active-run',
             )}
             data-testid="chat-message"
             data-message-id={message.id}
             data-message-provenance={messageProvenanceAttribute(provenanceKind)}
+            data-source-channel={channelSource?.channel}
             data-runtime-request-eligible={message.provenance?.runtimeRequestEligible === true ? 'true' : 'false'}
-            data-live-acceptance-eligible={isLiveRuntimeCodexMessage(message) ? 'true' : 'false'}
+            data-live-acceptance-eligible={isLiveConversationAcceptanceMessage(message, provenanceKind) ? 'true' : 'false'}
             data-sciforge-reference={sciForgeReferenceAttribute(visibleMessageReference(message))}
           >
             <div className="message-body">
               <div className="message-meta">
-                <strong className="message-role-label">{message.role === 'user'
-                  ? t({ 'zh-CN': '你', 'en-US': 'You' })
-                  : message.role === 'system'
-                    ? t({ 'zh-CN': '系统', 'en-US': 'System' })
-                    : t({ 'zh-CN': '助手', 'en-US': 'Assistant' })}</strong>
+                <strong className="message-role-label">{messageRoleLabel(message, locale)}</strong>
+                {channelSource ? <ChannelSourceBadge source={channelSource} locale={locale} /> : null}
                 {messageRunId ? (
                   <button
                     type="button"
@@ -1115,9 +1263,9 @@ export function ChatPanel({
                 <>
                   {message.role === 'user' ? (
                     <>
-                      <FollowupBindingLine message={message} locale={locale} />
+                      {channelSource ? <ChannelSourceLine source={channelSource} locale={locale} /> : <FollowupBindingLine message={message} locale={locale} />}
                       <MessageContent
-                        content={sanitizeUserProjectionText(message.content) ?? message.content}
+                        content={message.content}
                         references={inlineObjectReferencesForMessage(message, session)}
                         onObjectFocus={handleObjectReferenceClick}
                       />
@@ -1130,6 +1278,7 @@ export function ChatPanel({
                           session={session}
                           trace={message.expandable}
                           onObjectFocus={handleObjectReferenceClick}
+                          onGuiCommand={handleGuiCommand}
                           locale={locale}
                         />
                       ) : null}
@@ -1168,7 +1317,17 @@ export function ChatPanel({
           </div>
           );
         })}
-      </MessageList>
+        </MessageList>
+        {chatSplitLayout !== 'single' ? (
+          <ChatSplitPreview
+            layout={chatSplitLayout}
+            title={session.title}
+            requestId={buildCopyRequestIdText({ activeRunId, sessionId: session.sessionId })}
+            messages={visibleMessages}
+            locale={locale}
+          />
+        ) : null}
+      </div>
 
       {errorText ? (
         <div className="composer-error">
@@ -1178,6 +1337,17 @@ export function ChatPanel({
             'en-US': 'Check runtime health, start missing services, or retry from the current workspace.',
           })}</small>
         </div>
+      ) : null}
+      {clipboardFallback ? (
+        <ChatCopyFallback
+          fallback={clipboardFallback}
+          locale={locale}
+          onRetry={() => void copyTextOrShowManualFallback(clipboardFallback.text, clipboardFallback.kind, clipboardFallback.title)}
+          onDismiss={() => {
+            setClipboardFallback(null);
+            setErrorText('');
+          }}
+        />
       ) : null}
       <RunReadinessBar
         ok={readiness.ok}
@@ -1192,6 +1362,7 @@ export function ChatPanel({
         composerHeight={composerHeight}
         referencePickMode={referencePickMode}
         pendingReferences={pendingReferences}
+        queuedGuidanceCount={guidanceQueue.length}
         contextMeter={<ContextWindowMeter state={contextWindowState} running={isSending} locale={locale} />}
         fileInputRef={fileInputRef}
         textareaRef={composerTextareaRef}
@@ -1201,6 +1372,8 @@ export function ChatPanel({
           workspacePath: config.workspacePath,
           permissionMode: t({ 'zh-CN': '工作区可写', 'en-US': 'workspace writable' }),
         }}
+        toolProviderRoutes={config.toolProviderRoutes}
+        agentHostCatalog={composerAgentHostCatalog}
         topAddon={(
           <TargetInstanceSelector
             peers={targetPeers}
@@ -1222,6 +1395,7 @@ export function ChatPanel({
         onInputChange={onInputChange}
         onSend={() => void handleSend()}
         onAbort={handleAbort}
+        onModelIntentSelect={handleModelIntentSelect}
         onBeginResize={beginComposerResize}
       />
     </div>
@@ -1249,6 +1423,91 @@ function FollowupBindingLine({ message, locale }: { message: SciForgeMessage; lo
       <span>{labels}{overflow}</span>
     </div>
   );
+}
+
+function ChannelSourceBadge({ source, locale }: { source: NonNullable<ReturnType<typeof channelMessageMetadataFromProvenance>>; locale?: SupportedLocale }) {
+  const status = source.threadBindingStatus
+    ? locale === 'zh-CN'
+      ? source.threadBindingStatus === 'created'
+        ? '新绑定'
+        : source.threadBindingStatus === 'unbound'
+          ? '未绑定'
+          : '已绑定'
+      : source.threadBindingStatus
+    : undefined;
+  return (
+    <>
+      <Badge variant="muted">{channelTitle(source.channel)}</Badge>
+      {status ? <Badge variant={source.threadBindingStatus === 'unbound' ? 'warning' : 'muted'}>{status}</Badge> : null}
+    </>
+  );
+}
+
+function ChannelSourceLine({ source, locale }: { source: NonNullable<ReturnType<typeof channelMessageMetadataFromProvenance>>; locale?: SupportedLocale }) {
+  const labels = [
+    source.conversationRef,
+    source.attachmentRefs.length ? `${locale === 'zh-CN' ? '附件' : 'attachments'} ${source.attachmentRefs.length}` : '',
+    source.auditRef,
+  ].filter(Boolean);
+  return (
+    <div className="message-channel-line">
+      <span>{locale === 'zh-CN' ? '外部来源' : 'External source'}</span>
+      <span>{labels.join(' · ')}</span>
+    </div>
+  );
+}
+
+function ChatSplitPreview({
+  layout,
+  title,
+  requestId,
+  messages,
+  locale,
+}: {
+  layout: 'right' | 'down';
+  title: string;
+  requestId: string;
+  messages: SciForgeMessage[];
+  locale?: SupportedLocale;
+}) {
+  const recent = messages
+    .filter((message) => message.role === 'user' || message.role === 'scenario')
+    .slice(-4);
+  return (
+    <aside className="chat-split-preview" data-layout={layout} aria-label={chatText(locale, { 'zh-CN': '聊天拆分预览', 'en-US': 'Chat split preview' })}>
+      <div className="chat-split-preview-head">
+        <strong>{title || chatText(locale, { 'zh-CN': '当前聊天', 'en-US': 'Current chat' })}</strong>
+        <code>{requestId}</code>
+      </div>
+      <div className="chat-split-preview-list">
+        {recent.length ? recent.map((message) => (
+          <article key={message.id}>
+            <span>{message.role === 'user'
+              ? chatText(locale, { 'zh-CN': '用户', 'en-US': 'User' })
+              : chatText(locale, { 'zh-CN': '助手', 'en-US': 'Assistant' })}</span>
+            <p>{splitPreviewText(message.content)}</p>
+          </article>
+        )) : (
+          <p>{chatText(locale, { 'zh-CN': '新聊天已就绪。', 'en-US': 'New chat ready.' })}</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function splitPreviewText(value: string) {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return compact.length > 180 ? `${compact.slice(0, 177).trim()}...` : compact;
+}
+
+function sessionActivityScoreForChatAction(session: SciForgeSession) {
+  return session.messages.length
+    + session.runs.length
+    + session.artifacts.length
+    + session.executionUnits.length
+    + session.claims.length
+    + session.uiManifest.length
+    + session.notebook.length;
 }
 
 function enrichRepairRaw(raw: unknown, repairHistory: unknown, sourceRunId: string, failureReason?: string) {

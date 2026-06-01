@@ -22,8 +22,9 @@ test('browser runtime feature matrix maps Codex in-app browser concepts to SciFo
   assert.ok(matrix.some((feature) => /screenshots/i.test(feature.codexFeature) && /refs-first/i.test(feature.notes)));
   assert.ok(matrix.some((feature) => feature.owner === 'playwright_edge_browser' && /takeover/i.test(feature.sciforgeSurface)));
   assert.ok(matrix.some((feature) => /clipboard/i.test(feature.codexFeature) && /approval/i.test(feature.notes)));
-  assert.ok(matrix.some((feature) => /CUA coordinate/i.test(feature.codexFeature) && feature.owner === 'computer_use'));
-  assert.ok(matrix.some((feature) => /visibility and viewport/i.test(feature.codexFeature) && feature.owner === 'gui'));
+  assert.ok(matrix.some((feature) => /CUA coordinate/i.test(feature.codexFeature) && feature.owner === 'browser_host_session'));
+  assert.ok(matrix.some((feature) => /coordinate CUA handoff/i.test(feature.codexFeature) && feature.owner === 'computer_use'));
+  assert.ok(matrix.some((feature) => /visibility and viewport/i.test(feature.codexFeature) && feature.owner === 'browser_host_session'));
   assert.ok(matrix.every((feature) => !/GUI.*route|GUI.*prompt/i.test(`${feature.notes} ${feature.sciforgeSurface}`)));
 });
 

@@ -23,9 +23,17 @@ test('workspace writer health helper preserves the public health response shape'
     instanceId: 'p2',
     lifecycleToken: 'lifecycle-token',
     capabilities: [...WORKSPACE_WRITER_HEALTH_CAPABILITIES],
-    endpoints: {},
+    endpoints: {
+      runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
+      browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+      browserHostSearch: '/api/sciforge/browser-host/search',
+    },
   });
   assert.ok(health.capabilities.includes('workspace-files'));
+  assert.ok(health.capabilities.includes('runtime-module-dispatcher'));
+  assert.ok(health.capabilities.includes('workspace-terminal-websocket-pty'));
+  assert.ok(health.capabilities.includes('browser-host-session'));
+  assert.ok(health.capabilities.includes('browser-host-search'));
   assert.ok(health.capabilities.includes('repair-handoff-runner'));
   assert.ok(health.capabilities.includes('stable-version-registry'));
 });

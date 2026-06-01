@@ -18,6 +18,21 @@ export function guidanceBadgeVariant(status: GuidanceQueueRecord['status']): Bad
   return 'warning';
 }
 
+const PERSISTED_STREAM_PROCESS_EVENT_LIMIT = 48;
+const PERSISTED_STREAM_PROCESS_JSON_LIMIT = 80_000;
+const PERSISTED_STREAM_TEXT_FIELD_LIMIT = 1_200;
+const PERSISTED_STREAM_DIFF_LIMIT = 4_000;
+
+interface PersistedStreamProcessRecord {
+  eventCount: number;
+  retainedEventCount: number;
+  truncated: boolean;
+  refs?: string[];
+  summaryDigest?: Record<string, unknown>;
+  eventSummaries?: Array<Record<string, unknown>>;
+  events: Array<Record<string, unknown>>;
+}
+
 export function attachStreamProcessToResponse(response: NormalizedAgentResponse, events: AgentStreamEvent[], guidanceQueue: GuidanceQueueRecord[] = []): NormalizedAgentResponse {
   const responseWithGuidance = attachGuidanceQueueToResponse(
     response,
@@ -32,10 +47,7 @@ export function attachStreamProcessToResponse(response: NormalizedAgentResponse,
       ...responseWithGuidance.run,
       raw: {
         ...(typeof responseWithGuidance.run.raw === 'object' && responseWithGuidance.run.raw !== null ? responseWithGuidance.run.raw : {}),
-        streamProcess: {
-          eventCount: events.length,
-          events: events.slice(-80).map(nativeStreamEventRecord),
-        },
+        streamProcess: streamProcessRecordFromEvents(events),
       },
     },
   };
@@ -45,7 +57,56 @@ export function attachStreamProcessToFailedSession(session: SciForgeSession, fai
   return attachProcessRecoveryToFailedSession({
     session,
     failedRunId,
-    events: events.slice(-80).map(nativeStreamEventRecord),
+    ...streamProcessRecordFromEvents(events),
+  });
+}
+
+function streamProcessRecordFromEvents(events: AgentStreamEvent[]): PersistedStreamProcessRecord {
+  const retainedEvents = trimPersistedStreamEvents(events
+    .slice(-PERSISTED_STREAM_PROCESS_EVENT_LIMIT)
+    .map(nativeStreamEventRecord)
+    .filter(isRecord));
+  const eventSummaries = retainedEvents
+    .map(streamProcessEventSummary)
+    .filter(isRecord)
+    .slice(-24);
+  const refs = safeStreamProcessRefs(retainedEvents).slice(0, 32);
+  const summaryText = eventSummaries.length
+    ? JSON.stringify(eventSummaries)
+    : retainedEvents.map((event) => [event.type, event.label, event.detail].filter(Boolean).join(' · ')).join('\n');
+  return {
+    eventCount: events.length,
+    retainedEventCount: retainedEvents.length,
+    truncated: events.length > retainedEvents.length,
+    ...(refs.length ? { refs } : {}),
+    ...(digestTextField(summaryText) ? { summaryDigest: digestTextField(summaryText) } : {}),
+    ...(eventSummaries.length ? { eventSummaries } : {}),
+    events: retainedEvents,
+  };
+}
+
+function trimPersistedStreamEvents(events: Array<Record<string, unknown>>) {
+  let retained = events;
+  while (retained.length > 8 && safeJsonLength(retained) > PERSISTED_STREAM_PROCESS_JSON_LIMIT) {
+    retained = retained.slice(Math.max(1, Math.floor(retained.length / 4)));
+  }
+  return retained;
+}
+
+function streamProcessEventSummary(event: Record<string, unknown>) {
+  const native = isRecord(event.native) ? event.native : {};
+  return compactRecord({
+    type: stringField(event.type),
+    label: stringField(event.label),
+    createdAt: stringField(event.createdAt),
+    status: stringField(native.status),
+    toolName: stringField(native.toolName),
+    fileRef: stringField(native.fileRef),
+    filePath: stringField(native.filePath),
+    ref: stringField(native.ref),
+    refs: safeRefListField(native.refs),
+    resultRefs: safeRefListField(native.resultRefs),
+    detailDigest: digestTextField(stringField(event.detail) ?? stringField(native.outputSummary) ?? stringField(native.resultSummary) ?? stringField(native.text) ?? stringField(native.message)),
   });
 }
 
@@ -58,41 +119,43 @@ function nativeStreamEventRecord(event: AgentStreamEvent) {
   const nestedEvent = isRecord(nestedRaw.event) ? nestedRaw.event : {};
   const sourceRecords = [raw, native, nativeRaw, nestedRaw, nestedEvent];
   const sourceField = (...keys: string[]) => firstRecordField(sourceRecords, keys);
-  return {
+  const nativeRecord = compactRecord({
+    backend: safeIdentifierField(sourceField('backend')),
+    rawType: safeIdentifierField(sourceField('type', 'rawType')),
+    toolName: safeIdentifierField(sourceField('toolName')),
+    command: safeTextField(sourceField('command'), 1_000),
+    path: safeRelativePathField(sourceField('path')),
+    file: safeRelativePathField(sourceField('file')),
+    filename: safeRelativePathField(sourceField('filename')),
+    filePath: safeRelativePathField(sourceField('filePath', 'file_path')),
+    fileRef: safeFileRefField(sourceField('fileRef', 'file_ref')),
+    ref: safeExplicitPreviewRefField(sourceField('ref')),
+    outputSummary: safeActionSummaryField(sourceField('outputSummary', 'output_summary'), 1_000),
+    status: safeIdentifierField(sourceField('status')),
+    exitCode: numberField(sourceField('exitCode', 'exit_code')),
+    diff: safeDiffTextField(sourceField('diff', 'patch', 'stdout', 'output', 'outputSummary', 'output_summary', 'result')),
+    diffRef: safeOpaqueRefField(sourceField('diffRef', 'diff_ref')),
+    stdoutRef: safeOpaqueRefField(sourceField('stdoutRef', 'stdout_ref')),
+    stderrRef: safeOpaqueRefField(sourceField('stderrRef', 'stderr_ref')),
+    transcriptRef: safeOpaqueRefField(sourceField('transcriptRef', 'transcript_ref')),
+    agentId: safeIdentifierField(sourceField('agentId', 'agent_id')),
+    parentAgentId: safeIdentifierField(sourceField('parentAgentId', 'parent_agent_id')),
+    resultSummary: safeActionSummaryField(sourceField('resultSummary', 'result_summary', 'summary'), 1_000),
+    resultRefs: safeRefListField(sourceField('resultRefs', 'result_refs')),
+    refs: safeRefListField(sourceField('refs')),
+    workEvidence: safeWorkEvidenceRecords(event.workEvidence ?? sourceField('workEvidence', 'work_evidence')),
+    itemId: safeIdentifierField(sourceField('itemId')),
+    traceStepId: safeIdentifierField(sourceField('traceStepId')),
+    text: safeTextField(sourceField('text'), 1_000),
+    message: safeTextField(sourceField('message'), 1_000),
+  });
+  return compactRecord({
     type: event.type,
-    label: safeTextField(event.label, 400),
-    detail: safeTextField(presentation.detail || presentation.usageDetail),
+    label: safeTextField(event.label, 240),
+    detail: safeTextField(presentation.detail || presentation.usageDetail, PERSISTED_STREAM_TEXT_FIELD_LIMIT),
     createdAt: event.createdAt,
-    native: {
-      backend: safeIdentifierField(sourceField('backend')),
-      rawType: safeIdentifierField(sourceField('type', 'rawType')),
-      toolName: safeIdentifierField(sourceField('toolName')),
-      command: safeTextField(sourceField('command'), 2000),
-      path: safeRelativePathField(sourceField('path')),
-      file: safeRelativePathField(sourceField('file')),
-      filename: safeRelativePathField(sourceField('filename')),
-      filePath: safeRelativePathField(sourceField('filePath', 'file_path')),
-      fileRef: safeFileRefField(sourceField('fileRef', 'file_ref')),
-      ref: safeExplicitPreviewRefField(sourceField('ref')),
-      outputSummary: safeActionSummaryField(sourceField('outputSummary', 'output_summary'), 2000),
-      status: safeIdentifierField(sourceField('status')),
-      exitCode: numberField(sourceField('exitCode', 'exit_code')),
-      diff: safeDiffTextField(sourceField('diff', 'patch', 'stdout', 'output', 'outputSummary', 'output_summary', 'result')),
-      diffRef: safeOpaqueRefField(sourceField('diffRef', 'diff_ref')),
-      stdoutRef: safeOpaqueRefField(sourceField('stdoutRef', 'stdout_ref')),
-      stderrRef: safeOpaqueRefField(sourceField('stderrRef', 'stderr_ref')),
-      transcriptRef: safeOpaqueRefField(sourceField('transcriptRef', 'transcript_ref')),
-      agentId: safeIdentifierField(sourceField('agentId', 'agent_id')),
-      parentAgentId: safeIdentifierField(sourceField('parentAgentId', 'parent_agent_id')),
-      resultSummary: safeActionSummaryField(sourceField('resultSummary', 'result_summary', 'summary'), 2000),
-      refs: safeRefListField(sourceField('refs')),
-      workEvidence: safeWorkEvidenceRecords(event.workEvidence ?? sourceField('workEvidence', 'work_evidence')),
-      itemId: safeIdentifierField(sourceField('itemId')),
-      traceStepId: safeIdentifierField(sourceField('traceStepId')),
-      text: safeTextField(sourceField('text'), 2000),
-      message: safeTextField(sourceField('message'), 2000),
-    },
-  };
+    native: Object.keys(nativeRecord).length ? nativeRecord : undefined,
+  });
 }
 
 export function compactFailureNotice(value: string, locale?: SupportedLocale) {
@@ -105,6 +168,12 @@ export function compactFailureNotice(value: string, locale?: SupportedLocale) {
     'zh-CN': '任务未完成。工作日志仍保留在过程详情中。',
     'en-US': 'The task did not finish. The work log is still available in the process details.',
   });
+  if (looksLikeRuntimeConnectionFailure(primary)) {
+    return chatText(locale, {
+      'zh-CN': '任务未完成：Assistant 连接中断。工作日志已保留在过程详情中，请检查连接后重试。',
+      'en-US': 'The task did not finish: assistant connection was interrupted. The work log is saved in activity; check the connection and retry.',
+    });
+  }
   if (looksLikeRawFailureNotice(primary)) {
     const httpStatus = primary.match(/\bHTTP\s+(\d{3})(?:\s+([A-Za-z][A-Za-z -]{2,40}))?/i);
     const reason = httpStatus
@@ -127,6 +196,11 @@ function looksLikeRawFailureNotice(value: string) {
     || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
     || /\bHTTP\s+(?:401|403|429|5\d\d)\b/i.test(value)
     || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
+}
+
+function looksLikeRuntimeConnectionFailure(value: string) {
+  return /\b(?:WebSocket|connection|connect|network)\b/i.test(value)
+    && /\b(?:Assistant|Runtime Codex|workspace agent|runtime)\b/i.test(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -213,6 +287,7 @@ function safeTextField(value: unknown, limit = 4000): string | undefined {
     .replace(/\r\n/g, '\n')
     .trim();
   if (!redacted) return undefined;
+  if (looksLikeRawRuntimePayloadText(redacted)) return undefined;
   if (redacted.length <= limit) return redacted;
   return `${redacted.slice(0, Math.max(0, limit - 180)).replace(/\s+\S*$/, '')}\n...\n${redacted.slice(-120)}`;
 }
@@ -265,8 +340,8 @@ function safeDiffTextField(value: unknown): string | undefined {
     .replace(/[ \t]+\n/g, '\n')
     .trim();
   if (!redacted) return undefined;
-  if (redacted.length <= 12_000) return redacted;
-  return `${redacted.slice(0, 9_500).replace(/\s+\S*$/, '')}\n...\n${redacted.slice(-1_500)}`;
+  if (redacted.length <= PERSISTED_STREAM_DIFF_LIMIT) return redacted;
+  return `${redacted.slice(0, 3_000).replace(/\s+\S*$/, '')}\n...\n${redacted.slice(-800)}`;
 }
 
 function looksLikeUnifiedDiff(value: string | undefined) {
@@ -328,4 +403,79 @@ function numberField(value: unknown): number | undefined {
 
 export function latestTokenUsage(events: AgentStreamEvent[]) {
   return [...events].reverse().find((event) => event.usage)?.usage;
+}
+
+function compactRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => {
+    if (value === undefined) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (isRecord(value)) return Object.keys(value).length > 0;
+    return true;
+  }));
+}
+
+function safeStreamProcessRefs(events: Array<Record<string, unknown>>) {
+  return Array.from(new Set(events.flatMap((event) => {
+    const native = isRecord(event.native) ? event.native : {};
+    return [
+      stringField(native.ref),
+      stringField(native.fileRef),
+      stringField(native.filePath) ? `file:${stringField(native.filePath)}` : undefined,
+      stringField(native.diffRef),
+      stringField(native.transcriptRef),
+      ...stringList(native.refs),
+      ...stringList(native.resultRefs),
+      ...stringList(native.result_refs),
+      ...safeWorkEvidenceRefs(native.workEvidence),
+    ];
+  }).filter((ref): ref is string => Boolean(ref && safeStreamProcessRef(ref)))));
+}
+
+function safeWorkEvidenceRefs(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(isRecord)
+    .flatMap((record) => stringList(record.evidenceRefs).concat(stringList(record.evidence_refs)));
+}
+
+function safeStreamProcessRef(value: string) {
+  if (/\s/.test(value)) return false;
+  if (/https?:\/\//i.test(value) || /^(?:data|blob):/i.test(value) || /^file:\/\//i.test(value)) return false;
+  if (/^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(value)) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(value)) return false;
+  return true;
+}
+
+function digestTextField(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return {
+    omitted: 'stream-process-text',
+    chars: value.length,
+    hash: stableTextHash(value),
+  };
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function safeJsonLength(value: unknown) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return PERSISTED_STREAM_PROCESS_JSON_LIMIT + 1;
+  }
+}
+
+function looksLikeRawRuntimePayloadText(value: string) {
+  const text = value.trim();
+  return /<!doctype\s+html|<html\b|<body\b|<script\b|cf-ray|cloudflare/i.test(text)
+    || /\bRAW_[A-Z0-9_]+\b/.test(text)
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef|raw_jsonl|provider_sse|providerRawOutput|rawOutput)\b/i.test(text)
+    || ((text.startsWith('{') || text.startsWith('[')) && /"?(?:raw|stdout|stderr|provider|payload|body|html|authorization|token|secret|password)"?\s*:/.test(text));
 }

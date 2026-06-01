@@ -322,8 +322,8 @@ test('runtime events policy owns structured interaction progress contracts', () 
   assert.equal(normalized?.type, HUMAN_APPROVAL_REQUIRED_EVENT_TYPE);
   assert.equal(normalized?.interaction?.kind, 'human-approval');
   assert.equal(presentation?.label, 'Needs approval');
-  assert.match(presentation?.detail ?? '', /Phase: verification/);
-  assert.match(presentation?.detail ?? '', /Interaction: human-approval required/);
+  assert.match(presentation?.detail ?? '', /Waiting for approval before continuing/);
+  assert.doesNotMatch(presentation?.detail ?? '', /Phase:|Status:|Interaction:/);
   assert.doesNotMatch(presentation?.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DRIVE_UI/);
   assert.doesNotMatch(presentation?.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DRIVE_UI/);
   assert.doesNotMatch(presentation?.detail ?? '', /NATURAL_LANGUAGE_SHOULD_NOT_DRIVE_UI/);

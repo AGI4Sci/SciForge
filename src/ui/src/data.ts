@@ -4,8 +4,6 @@ import {
   Database,
   Dna,
   FlaskConical,
-  GitBranch,
-  Globe2,
   Inbox,
   MessageSquare,
   type LucideIcon,
@@ -20,7 +18,7 @@ import {
 
 export type { ClaimType, EvidenceLevel, ScenarioId };
 
-export type PageId = 'workbench' | 'components' | 'timeline' | 'feedback' | 'browser' | 'settings';
+export type PageId = 'workbench' | 'components' | 'feedback' | 'settings';
 
 export interface ScenarioViewConfig {
   id: ScenarioId;
@@ -49,10 +47,5 @@ export const scenarios: ScenarioViewConfig[] = builtInScenarioDisplayData.map((s
 export const navItems = [
   { id: 'workbench' as const, label: 'Chat', icon: MessageSquare },
   { id: 'components' as const, label: 'Apps', icon: Blocks },
-  { id: 'browser' as const, label: 'Browser', icon: Globe2 },
-  { id: 'timeline' as const, label: 'Timeline', icon: GitBranch },
   { id: 'feedback' as const, label: 'Feedback', icon: Inbox },
 ];
-
-/** Primary workspace views shown on the always-visible sidebar activity bar. */
-export const sidebarViewNavItems = navItems.filter((item) => item.id !== 'components');

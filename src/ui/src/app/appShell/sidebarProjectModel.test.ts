@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { defaultSciForgeConfig, normalizeWorkspaceRootPath } from '../../config';
 import {
+  SIDEBAR_HOME_PROJECT_ID,
   buildConfiguredSidebarProjects,
   buildWorkspaceDirectorySwitchPatch,
   buildWorkspaceProjectActivation,
@@ -46,6 +47,18 @@ test('legacy sidebar project ids migrate to configured workspace paths', () => {
   const config = dualProjectConfig();
   assert.equal(migrateLegacySidebarProjectId(config, 'current'), mainPath);
   assert.equal(migrateLegacySidebarProjectId(config, 'peer:repair'), peerPath);
+});
+
+test('blank current workspace is represented as the Home repository group', () => {
+  const config = dualProjectConfig('');
+  const projects = buildConfiguredSidebarProjects(config);
+
+  assert.equal(sidebarProjectIdForConfig(config), SIDEBAR_HOME_PROJECT_ID);
+  assert.equal(projects[0]?.id, SIDEBAR_HOME_PROJECT_ID);
+  assert.equal(projects[0]?.label, 'Home');
+  assert.equal(projects[0]?.detail, '');
+  assert.equal(projects[0]?.current, true);
+  assert.equal(migrateLegacySidebarProjectId(config, 'current'), SIDEBAR_HOME_PROJECT_ID);
 });
 
 test('removeSidebarProjectFromConfig drops peer projects but keeps current workspace', () => {

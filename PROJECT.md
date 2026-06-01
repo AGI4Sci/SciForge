@@ -10,6 +10,7 @@
 - Codex app-server 是产品 runtime 主路径；`codex exec --json`、runtime gateway、Workspace Gateway 和旧 AgentServer 路径只能作为 legacy/test-only/diagnostic shim。
 - 所有边界能力通过 `module.describe/query/read/invoke` 或 Codex native tool/plugin/MCP 暴露；GUI 不做 provider route、capability ranking、completion 判断、workspace 写入、Computer Use 执行或隐藏 prompt assembly。
 - BrowserRuntime、Computer Use、files、terminal、connectors、verifiers、skills、memory、capabilities 和 artifacts 都是 Agent Host 可组合模块；复杂流程由 Agent Host 组合成 typed semantic pipeline，并写入结构化 trace。
+- Computer Use 当前验收名统一为 `virtual-app-screen-user-acceptance`：active gate 必须基于 VirtualAppScreen session、adapter-first app/window/session 执行、refs-first evidence、`gui.present` 和 isolation flags；M6/native multi-screen 只保留为 historical regression/diagnostic evidence，不阻塞当前路线。
 - 对齐体验时必须同时使用 SciForge web 与 Cursor Agent desktop app 做双端对照：Browser 验证 SciForge 真实页面，Computer Use 观察 Cursor Agent 基线；对照结果只能沉淀为通用规则，不允许写成截图/文件名/历史会话硬编码。
 
 ## 不可变规则
@@ -36,7 +37,7 @@
 - 用户体验尽可能与 Cursor Agent desktop app 的稳定信息架构对齐；对照记录只保留通用行为，不固化一次性坐标、URL、截图或历史 run。
 - 左侧栏只管理 workspace/project/thread 的可视化投影、选择、排序、归档、置顶、草稿和上下文入口；真实任务启动、工具选择、repair、sub agent 创建和 workspace 写入仍由 Agent Host 执行并产生 trace。
 - 聊天中间栏只展示用户消息、assistant 进度句、`Worked for ...` / `Explored ...` 聚合项、动作行和最终回答；旧 SciForge summary、重复 transcript、不可交互过程块和占位 progress 应删除。
-- 右侧结果栏必须按对象渲染：Browser 展示真实可交互网页或明确 blocked/error；Screen 展示 Computer Use virtual screen/replay frames；Terminal 展示 Cursor-like terminal session；Files 展示 workspace file viewer/editor；References 展示对象 refs 和 provenance。
+- 右侧结果栏必须按对象渲染：Browser 展示真实可交互网页或明确 blocked/error；Screen 展示 Computer Use VirtualAppScreen frame、annotation overlay 和 replay refs；Terminal 展示 Cursor-like terminal session；Files 展示 workspace file viewer/editor；References 展示对象 refs 和 provenance。
 - 点击对象引用必须打开或聚焦右侧对象；把引用插回输入框只能通过显式引用/上下文菜单完成。
 
 ## 当前任务板
@@ -59,7 +60,7 @@
 - Runtime adapter 改动：运行 adapter normalization tests、runtime event tests 和 `git diff --check`。
 - GUI module / result pane 改动：运行 GUI protocol/controller tests、runtime events client tests、pane focused tests、Browser visual check，并确认 GUI 没有执行 Computer Use action。
 - Browser pane 改动：覆盖 embeddable URL、X-Frame-Options/CSP blocked URL、network failure、loading、open-external 和 DOM/AX observation refs。
-- Screen pane / Computer Use 改动：运行 package-local Python suite、package bridge focused tests、presentation focused tests 和 refs-first validator。
+- Screen pane / Computer Use 改动：运行 package-local Python suite、package bridge focused tests、presentation focused tests、refs-first validator 和 `virtual-app-screen-user-acceptance` gate；确认 GUI 只做 presentation/confirmation/focus，不执行 Computer Use action。
 - Terminal pane 改动：覆盖 running/completed/error/stopped terminal session、pty transcript refs、copy/download/focus/resize 和非 terminal object rejection。
 
 ## 本地模型配置
@@ -83,7 +84,7 @@
 - [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影、`gui.*` alias 和执行边界。
 - [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair、Computer Use 和 connector 能力归属。
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：browser runtime 作为 TUI capability + GUI presentation surface 的边界。
-- [`PROJECT_CU.md`](PROJECT_CU.md)：Computer Use multi-screen actor-cursor 协议和任务板。
+- [`PROJECT_CU.md`](PROJECT_CU.md)：Computer Use VirtualAppScreen / 后台应用控制协议、`virtual-app-screen-user-acceptance` active gate 和任务板。
 
 ## Worktree 规则
 

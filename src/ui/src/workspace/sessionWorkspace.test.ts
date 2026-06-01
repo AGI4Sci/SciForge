@@ -10,6 +10,7 @@ import {
   deleteArchivedSessions,
   deleteSessionMessage,
   editSessionMessage,
+  forkActiveSession,
   restoreArchivedSession,
   startNewChat,
 } from './sessionWorkspace';
@@ -94,6 +95,20 @@ test('starts a new chat while retaining the previous active session in sidebar h
   assert.match(next.archivedSessions[0].versions[0]?.reason ?? '', /retained previous session/);
   assert.equal(next.sessionsByScenario['scenario-any'].title, 'Scenario new chat');
   assert.notEqual(next.sessionsByScenario['scenario-any'].sessionId, 'active');
+});
+
+test('forks the active chat into a new active session while retaining the source', () => {
+  const state = workspace();
+  const next = forkActiveSession(state, 'scenario-any');
+  const forked = next.sessionsByScenario['scenario-any'];
+
+  assert.equal(next.archivedSessions.length, 1);
+  assert.equal(next.archivedSessions[0].sessionId, 'active');
+  assert.match(next.archivedSessions[0].versions[0]?.reason ?? '', /forked chat retained source session/);
+  assert.notEqual(forked.sessionId, 'active');
+  assert.match(forked.title, /Fork/);
+  assert.deepEqual(forked.messages.map((message) => message.content), ['hello']);
+  assert.equal(forked.archiveState, undefined);
 });
 
 test('first request after new chat does not retain archived repair run context', () => {

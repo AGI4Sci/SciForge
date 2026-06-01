@@ -5,9 +5,12 @@ import type { SciForgeSession, SciForgeWorkspaceState } from '../../domain';
 import {
   buildArchivedSessionCountsByScenario,
   buildArchivedSessionsByScenario,
+  draftForWorkspaceScenario,
   defaultPublishedRuntimeComponentIds,
   updateDraftRecord,
+  updateWorkspaceDraftRecord,
   workspaceCanDiscardSidebarChat,
+  workspaceDraftKey,
   workspaceHasArchivableSidebarChat,
   workspaceHasArchivableSidebarChats,
 } from './appStateModels';
@@ -113,6 +116,20 @@ test('draft updates preserve identity when textarea value is unchanged', () => {
 
   assert.equal(updateDraftRecord(current, 'literature-evidence-review', 'long prompt'), current);
   assert.equal(updateDraftRecord(current, 'literature-evidence-review', 'new prompt')['literature-evidence-review'], 'new prompt');
+});
+
+test('workspace draft updates are scoped by repository path and scenario', () => {
+  const mainPath = '/tmp/sciforge-projects/main';
+  const peerPath = '/tmp/sciforge-projects/peer';
+  const current = updateWorkspaceDraftRecord({}, mainPath, 'literature-evidence-review', 'main prompt');
+  const sameValue = updateWorkspaceDraftRecord(current, mainPath, 'literature-evidence-review', 'main prompt');
+  const withPeer = updateWorkspaceDraftRecord(current, peerPath, 'literature-evidence-review', 'peer prompt');
+
+  assert.equal(workspaceDraftKey(`${mainPath}/`), workspaceDraftKey(mainPath));
+  assert.equal(sameValue, current);
+  assert.equal(draftForWorkspaceScenario(withPeer, mainPath, 'literature-evidence-review'), 'main prompt');
+  assert.equal(draftForWorkspaceScenario(withPeer, peerPath, 'literature-evidence-review'), 'peer prompt');
+  assert.equal(draftForWorkspaceScenario(withPeer, mainPath, 'structure-exploration'), '');
 });
 
 test('sidebar chat action guards allow deleting drafts while keeping archive activity-based', () => {

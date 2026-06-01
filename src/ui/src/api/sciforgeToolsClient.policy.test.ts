@@ -228,6 +228,76 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.match(metadataEvent.detail ?? '', /command codex-command-/);
 });
 
+test('composer model picker declared intent rides as read-only gui projection metadata', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const events: AgentStreamEvent[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-composer-intent', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Summarize current context',
+    composerDeclaredIntents: {
+      schemaVersion: 'sciforge.composer-declared-intents.v1',
+      source: 'ui-action-audit-log',
+      model: {
+        modelIntentId: 'assistant-deep',
+        mode: 'assistant',
+        capabilityTier: 'deep',
+        publicLabel: 'https://provider.local/v1 token secret',
+        actionId: 'ui-action-model-deep',
+        declaredAt: '2026-06-01T00:00:02.000Z',
+        provider: 'private-provider',
+        modelName: 'private/model-name',
+      } as NonNullable<SendAgentMessageInput['composerDeclaredIntents']>['model'] & Record<string, unknown>,
+      providerUrl: 'https://provider.local/v1',
+      apiKey: 'sk-private',
+    } as SendAgentMessageInput['composerDeclaredIntents'] & Record<string, unknown>,
+  }), { onEvent: (event) => events.push(event) });
+
+  const body = bodies[0]!;
+  assert.equal(body.commandText, 'Summarize current context');
+  assert.equal('composerDeclaredIntents' in body, false);
+  assert.equal('modelName' in body, false);
+  assert.equal('providerUrl' in body, false);
+  const projection = ((body.auditMetadata as Record<string, unknown>).guiLocalProjection as Record<string, unknown>);
+  assert.deepEqual(projection.composerDeclaredIntents, {
+    schemaVersion: 'sciforge.composer-declared-intents.v1',
+    source: 'ui-action-audit-log',
+    model: {
+      modelIntentId: 'assistant-deep',
+      mode: 'assistant',
+      capabilityTier: 'deep',
+      publicLabel: 'Assistant Deep',
+      actionId: 'ui-action-model-deep',
+      declaredAt: '2026-06-01T00:00:02.000Z',
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(body), /provider\.local|sk-private|private-provider|private\/model-name|token secret/i);
+  const projectionEvent = events.find((event) => event.type === 'composer-declared-intent-projection');
+  assert.ok(projectionEvent);
+  assert.equal(projectionEvent.detail, 'Shared Assistant Deep preference with Agent Host.');
+  assert.deepEqual((projectionEvent.raw as { native?: Record<string, unknown> }).native, {
+    rawType: 'composer_declared_intent_projection',
+    operationKind: 'message',
+    status: 'completed',
+    text: 'Shared Assistant Deep preference with Agent Host.',
+    modelIntentId: 'assistant-deep',
+    mode: 'assistant',
+    capabilityTier: 'deep',
+    sourceActionId: 'ui-action-model-deep',
+    declaredAt: '2026-06-01T00:00:02.000Z',
+  });
+  assert.doesNotMatch(JSON.stringify(projectionEvent), /provider\.local|sk-private|private-provider|private\/model-name|token secret/i);
+});
+
 test('/computer-use 默认聊天请求只生成 terminal-equivalent text 给 Codex Runtime', async () => {
   const urls: string[] = [];
   const bodies: Array<Record<string, unknown>> = [];

@@ -5,8 +5,47 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { AgentStreamEvent, RuntimeExecutionUnit, SciForgeSession } from '../../domain';
 import { RunExecutionProcess } from './RunExecutionProcess';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
-import { attachStreamProcessToResponse } from './runPresentation';
+import { attachStreamProcessToResponse, compactFailureNotice } from './runPresentation';
 import { NativeEventStream } from './RunningWorkProcess';
+import type { CursorAgentAction } from './cursorAgentProcess';
+import { objectReferenceForCursorAction, objectReferenceForCursorRef } from './cursorProcessObjectReferences';
+import { focusResultPaneRouteForObjectReference } from '../results/resultPaneContract';
+
+test('runtime connection failure notice stays user-facing and hides transport wording', () => {
+  const notice = compactFailureNotice('Runtime Codex WebSocket error.');
+
+  assert.match(notice, /The task did not finish/);
+  assert.match(notice, /assistant connection/i);
+  assert.doesNotMatch(notice, /Runtime Codex|WebSocket|stdout|stderr|provider|model|run id/i);
+});
+
+test('queued guidance action row renders Cursor-like copy instead of structured progress fields', () => {
+  const html = renderToStaticMarkup(createElement(NativeEventStream, {
+    events: [{
+      id: 'evt-guidance-queued',
+      type: 'guidance-queued',
+      label: 'Guidance queued',
+      detail: 'Phase: interaction\nStatus: running\nReason: backend run is active\nInteraction: guidance optional',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      raw: {
+        schemaVersion: 'sciforge.interaction-progress-event.v1',
+        type: 'guidance-queued',
+        phase: 'interaction',
+        status: 'running',
+        reason: 'backend run is active',
+        interaction: { kind: 'guidance', required: false },
+        message: 'PROMPT_TEXT_SHOULD_NOT_RENDER',
+      },
+    }] satisfies AgentStreamEvent[],
+    mode: 'live',
+    guidanceCount: 1,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /Guidance queued|Queued follow-up will merge after the current run ends/);
+  assert.match(html, /More activity/);
+  assert.doesNotMatch(html, /Phase:|Status:|Interaction:|backend run is active|PROMPT_TEXT_SHOULD_NOT_RENDER/);
+});
 
 test('execution process groups blocking execution units into Codex-style folded sections', () => {
   const html = renderProcess([
@@ -227,6 +266,323 @@ test('execution process derives trusted preview refs from structured read paths'
   assert.doesNotMatch(html, /\/Applications\/workspace|\/tmp\/secret|trace:read/i);
 });
 
+test('execution process keeps private runtime run ids out of public DOM focus attributes', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Tool result', { rawType: 'tool_completed', toolName: 'read_file', status: 'completed', filePath: 'PROJECT.md', text: 'PROJECT.md loaded' }),
+  ], undefined, 'native stream please', 'codex-command-live-secret-run');
+
+  assert.match(html, /cursor-agent-action-focus/);
+  assert.doesNotMatch(html, /codex-command-live-secret-run/);
+  assert.doesNotMatch(html, /data-sciforge-run-id="codex-command/);
+});
+
+test('cursor process refs map to typed right-pane objects beyond files', () => {
+  const cases: Array<[string, string, string, string]> = [
+    ['browser:session-1', 'url', 'browser', 'browser-object'],
+    ['screen:frame-1', 'artifact', 'screen', 'screen-observation'],
+    ['file:patches/update.diff', 'file', 'files', 'workspace-diff-viewer'],
+    ['diff:patch-1', 'artifact', 'files', 'workspace-diff-viewer'],
+    ['terminal-transcript:run-1', 'execution-unit', 'terminal', 'terminal-session-viewer'],
+    ['execution-unit:EU-1', 'execution-unit', 'terminal', 'terminal-session-viewer'],
+    ['subagent:worker-1', 'run', 'evidence', 'subagent-result'],
+    ['run:run-1', 'run', 'evidence', 'evidence-inspector'],
+  ];
+
+  for (const [ref, kind, pane, preferredView] of cases) {
+    const reference = objectReferenceForCursorRef(ref);
+    assert.ok(reference, `${ref} is focusable`);
+    assert.equal(reference.kind, kind, ref);
+    assert.equal(reference.preferredView, preferredView, ref);
+    assert.deepEqual(focusResultPaneRouteForObjectReference(reference).pane, pane, ref);
+    assert.equal(focusResultPaneRouteForObjectReference(reference).composerInsertion, false, ref);
+  }
+
+  for (const unsafeRef of [
+    'https://provider.example/v1/chat',
+    'url:https://provider.example/v1/chat',
+    'file:/Applications/workspace/private.ts',
+    'file:../private.ts',
+    'trace:raw-stream',
+    'terminal-transcript:.sciforge/sessions/raw.jsonl',
+    'browser:Authorization=Bearer-sk-secret',
+  ]) {
+    assert.equal(objectReferenceForCursorRef(unsafeRef), undefined, unsafeRef);
+  }
+});
+
+test('cursor process action summaries focus preview objects, not terminal transcript logs', () => {
+  const shellReference = objectReferenceForCursorAction(cursorAction({
+    kind: 'shell_command',
+    title: 'Ran npm test',
+    refs: ['terminal-transcript:run-1'],
+    traceStepId: 'EU-1',
+  }));
+  const subagentReference = objectReferenceForCursorAction(cursorAction({
+    kind: 'subagent',
+    title: 'Sub agent',
+    transcriptRef: 'agent-transcript:worker-1',
+    resultRefs: ['subagent:worker-1'],
+  }));
+  const fallbackReference = objectReferenceForCursorAction(cursorAction({
+    kind: 'read',
+    title: 'Read PROJECT.md',
+    fileRef: 'file:/Applications/workspace/private.ts',
+    refs: ['file:PROJECT.md'],
+  }));
+
+  assert.equal(shellReference, undefined);
+  assert.equal(subagentReference?.kind, 'run');
+  assert.equal(focusResultPaneRouteForObjectReference(subagentReference).pane, 'evidence');
+  assert.equal(fallbackReference?.ref, 'file:PROJECT.md');
+  assert.equal(focusResultPaneRouteForObjectReference(fallbackReference).pane, 'files');
+});
+
+test('native stream renders Browser Screen Terminal and subagent refs as focus buttons', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Object refs completed', {
+      rawType: 'tool_completed',
+      toolName: 'web_fetch',
+      status: 'completed',
+      resultSummary: 'Collected refs.',
+      refs: ['browser:session-1', 'screen:frame-1', 'terminal-transcript:run-1', 'subagent:worker-1'],
+    }),
+  ]);
+
+  assert.equal((html.match(/cursor-agent-ref-button/g) ?? []).length, 4);
+  assert.match(html, /session-1/);
+  assert.match(html, /frame-1/);
+  assert.match(html, /run-1/);
+  assert.match(html, /worker-1/);
+  assert.doesNotMatch(html, /<code>session-1<\/code>|<code>frame-1<\/code>|<code>run-1<\/code>|<code>worker-1<\/code>/);
+  assert.doesNotMatch(html, /browser:session-1|screen:frame-1|terminal-transcript:run-1|subagent:worker-1/);
+});
+
+test('native stream keeps terminal transcripts behind explicit ref buttons', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Shell completed', {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'completed',
+      command: 'npm test',
+      refs: ['terminal-transcript:run-1'],
+      outputSummary: 'tests passed',
+    }),
+  ]);
+
+  const summaryStart = html.indexOf('cursor-agent-action-shell_command');
+  const summaryEnd = html.indexOf('</summary>', summaryStart);
+  assert.ok(summaryStart >= 0 && summaryEnd > summaryStart);
+  const summary = html.slice(summaryStart, summaryEnd);
+  assert.doesNotMatch(summary, /cursor-agent-action-focus|terminal-session-viewer/);
+  assert.match(html, /data-object-kind="execution-unit"/);
+  assert.match(html, /data-preferred-view="terminal-session-viewer"/);
+  assert.match(html, />run-1<\/button>/);
+  assert.doesNotMatch(html, /terminal-transcript:run-1/);
+});
+
+test('native stream action rows expose kind and status accessibility contract', () => {
+  const events = [
+    agentNativeEventAt('2026-05-25T00:00:01.000Z', 'tool-call', 'Read file', {
+      rawType: 'tool_started',
+      toolName: 'read_file',
+      status: 'running',
+      filePath: 'PROJECT.md',
+      text: 'opening file',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:02.000Z', 'tool-result', 'Search workspace', {
+      rawType: 'tool_completed',
+      toolName: 'search',
+      status: 'completed',
+      text: 'middle pane',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:03.000Z', 'tool-result', 'Fetch docs', {
+      rawType: 'tool_completed',
+      operationKind: 'fetch',
+      status: 'completed',
+      text: 'https://example.org/docs',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:04.000Z', 'tool-result', 'Run tests', {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'failed',
+      command: 'npm test',
+      exitCode: 1,
+      stderr: 'Traceback (most recent call last):\n  File "stack.py", line 4',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:05.000Z', 'tool-result', 'Patch file', {
+      rawType: 'tool_completed',
+      toolName: 'apply_patch',
+      status: 'completed',
+      filePath: 'src/app.ts',
+      outputSummary: '+1 -1',
+      text: '*** Update File: src/app.ts',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:06.000Z', 'tool-result', 'Diff file', {
+      rawType: 'tool_completed',
+      status: 'completed',
+      diff: 'diff --git a/src/app.ts b/src/app.ts',
+      text: 'src/app.ts',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:07.000Z', 'tool-result', 'Thought', {
+      rawType: 'tool_completed',
+      toolName: 'process_summary',
+      status: 'completed',
+      text: 'planned next step',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:08.000Z', 'human-approval-required', 'Approval', {
+      rawType: 'approval_requested',
+      status: 'blocked',
+      text: 'Proceed with write?',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:09.000Z', 'tool-result', 'Subagent', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      agentId: 'worker-1',
+      resultSummary: 'worker done',
+      resultRefs: ['artifact:worker-result'],
+    }),
+    agentNativeEventAt('2026-05-25T00:00:10.000Z', 'tool-result', 'Write notes', {
+      rawType: 'tool_completed',
+      operationKind: 'write',
+      status: 'completed',
+      filePath: 'notes.md',
+      text: 'wrote notes',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:11.000Z', 'tool-result', 'Validate', {
+      rawType: 'tool_completed',
+      toolName: 'check',
+      status: 'completed',
+      text: 'typecheck',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:12.000Z', 'tool-result', 'Artifact', {
+      rawType: 'tool_completed',
+      operationKind: 'artifact',
+      status: 'completed',
+      text: 'figure artifact',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:13.000Z', 'workspace-runtime-event', 'Message', {
+      rawType: 'work_message',
+      operationKind: 'message',
+      status: 'completed',
+      text: 'Noted user preference',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:14.000Z', 'tool-result', 'Other', {
+      rawType: 'tool_completed',
+      toolName: 'custom_tool',
+      status: 'cancelled',
+      text: 'custom step',
+    }),
+    agentNativeEventAt('2026-05-25T00:00:15.000Z', 'workspace-runtime-event', 'Verifier blocked', {
+      rawType: 'verifier_blocked',
+      status: 'needs-human-verification',
+      verifier: 'acceptance-verifier',
+      text: 'Verification blocked: evidence review needs a human check.',
+      evidenceRefs: ['artifact:verification-report'],
+    }),
+    agentNativeEventAt('2026-05-25T00:00:16.000Z', 'workspace-runtime-event', 'Repair needed', {
+      rawType: 'acceptance_repair_required',
+      status: 'repair-needed',
+      text: 'Repair needed: regenerate the report artifact.',
+      evidenceRefs: ['artifact:repair-plan'],
+    }),
+  ];
+  const html = renderLiveNativeStream(events);
+
+  for (const kind of ['read', 'search', 'fetch', 'shell_command', 'file_edit', 'diff', 'thought', 'approval', 'subagent', 'write', 'validate', 'artifact', 'message', 'other', 'verifier', 'repair']) {
+    assert.match(html, new RegExp(`data-action-kind="${kind}"`), kind);
+  }
+  for (const status of ['running', 'completed', 'failed', 'blocked', 'cancelled']) {
+    assert.match(html, new RegExp(`data-action-status="${status}"`), status);
+  }
+  assert.match(html, /cursor-agent-action-icon/);
+  assert.match(html, /aria-label="Read: Reading PROJECT\.md; status: running"/);
+  assert.match(html, /aria-label="Search: Searched middle pane; status: completed"/);
+  assert.match(html, /aria-label="Message: Noted user preference; status: completed"/);
+  assert.match(html, />failed<\/span>/);
+
+  const failedSummaryStart = html.indexOf('data-action-status="failed"');
+  const failedSummaryEnd = html.indexOf('</summary>', failedSummaryStart);
+  assert.ok(failedSummaryStart >= 0 && failedSummaryEnd > failedSummaryStart);
+  const failedSummary = html.slice(failedSummaryStart, failedSummaryEnd);
+  assert.doesNotMatch(failedSummary, /Traceback|stack\.py/);
+});
+
+test('native stream renders composer declared intent ack as public message action', () => {
+  const html = renderNativeStream([
+    nativeEvent('workspace-runtime-event', 'Composer preference', {
+      rawType: 'composer_declared_intent_ack',
+      status: 'completed',
+      text: 'Agent Host acknowledged Assistant Deep preference.',
+      providerUrl: 'https://provider.example.invalid/v1',
+      apiKey: 'sk-private',
+      modelName: 'private/model-name',
+    }),
+  ]);
+
+  assert.match(html, /data-action-kind="message"/);
+  assert.match(html, /data-action-status="completed"/);
+  assert.match(html, /Message: Agent Host acknowledged Assistant Deep preference\.; status: completed/);
+  assert.match(html, /Agent Host acknowledged Assistant Deep preference/);
+  assert.doesNotMatch(html, /provider\.example|sk-private|private\/model-name|providerUrl|apiKey|modelName/i);
+});
+
+test('native stream renders approval choices and repair evidence as action-row affordances', () => {
+  const html = renderNativeStream([
+    nativeEvent('workspace-runtime-event', 'Approval', {
+      rawType: 'gui_ask_user',
+      status: 'requires-user-confirmation',
+      text: 'Confirm before applying the guarded repair.',
+      guiAskUser: {
+        title: 'Confirm guarded repair',
+        choices: [
+          { label: 'Approve repair', commandText: '/approve approval-1', style: 'primary' },
+          { label: 'Reject', commandText: '/reject approval-1', style: 'secondary' },
+          { label: 'Unsafe', commandText: 'deleteFile("report.md")', style: 'danger' },
+        ],
+      },
+    }),
+    nativeEvent('workspace-runtime-event', 'Repair needed', {
+      rawType: 'acceptance_repair_required',
+      status: 'repair-needed',
+      text: 'Repair needed: provider https://provider.example.invalid returned stdoutRef=.sciforge/stdout.log',
+      evidenceRefs: ['artifact:repair-plan', 'file:reports/repair.md', 'stderr:.sciforge/stderr.log'],
+    }),
+  ]);
+
+  assert.match(html, /data-action-kind="approval"/);
+  assert.match(html, /data-action-status="blocked"/);
+  assert.match(html, /cursor-agent-command-choice primary/);
+  assert.match(html, />Approve repair<\/button>/);
+  assert.match(html, />Reject<\/button>/);
+  assert.doesNotMatch(html, /\/approve approval-1|\/reject approval-1|deleteFile|Unsafe/);
+  assert.match(html, /data-action-kind="repair"/);
+  assert.match(html, /data-object-kind="artifact"/);
+  assert.match(html, /data-object-kind="file"/);
+  assert.doesNotMatch(html, /provider\.example|stdoutRef|stderr:\.sciforge|\.sciforge/);
+});
+
+test('native stream folded placeholders expose the same action row contract', () => {
+  const events = Array.from({ length: 12 }, (_, index) => agentNativeEventAt(
+    `2026-05-25T00:00:${String(index + 1).padStart(2, '0')}.000Z`,
+    'tool-result',
+    `Command ${index}`,
+    {
+      rawType: 'tool_completed',
+      toolName: 'shell',
+      status: 'completed',
+      command: `echo ${index}`,
+      exitCode: 0,
+      text: `command-${index}`,
+    },
+  ));
+  const html = renderLiveNativeStream(events, 4);
+
+  assert.match(html, /data-action-kind="folded"/);
+  assert.match(html, /data-action-status="completed"/);
+  assert.match(html, /aria-label="Folded: \d+ earlier actions hidden; status: completed"/);
+});
+
 test('execution process presents Cursor-style read ranges and command intent titles', () => {
   const html = renderNativeStream([
     nativeEvent('tool-result', 'Read file', {
@@ -433,6 +789,11 @@ test('execution process folds app-server transport statuses and keeps long resea
   assert.match(html, /Ran command-23 · exit 0/);
   assert.match(html, /24 commands run/);
   assert.match(html, /earlier actions hidden/);
+  assert.match(html, /<details class="native-event-audit-fold cursor-agent-muted-row"[^>]*data-hidden-action-count="[1-9]\d*"/);
+  assert.match(html, /<details class="native-event-audit-fold cursor-agent-muted-row"[^>]*data-hidden-audit-count="[1-9]\d*"/);
+  assert.match(html, /<summary><span>More activity<\/span>/);
+  assert.match(html, /earlier actions<\/span>|earlier actions hidden/);
+  assert.doesNotMatch(html, /<details class="native-event-audit-fold cursor-agent-muted-row"[^>]* open/);
   assert.match(html, /summary-report\.md/);
   assert.doesNotMatch(html, /file:reports\/arxiv-agentic-rl/);
   assert.doesNotMatch(html, /Codex app-server|rich-client|收到事件后继续|Runtime event recorded|disabled|starting|ready|folded low-level events/i);
@@ -449,6 +810,43 @@ test('execution process folds user prompt echoes and runtime metadata placeholde
 
   assert.match(html, /Read PROJECT\.md/);
   assert.doesNotMatch(html, /Diff old\.ts|Use the shell tool|上下文窗口|Workspace Runtime/);
+});
+
+test('live execution process folds prompt-like progress titles without hiding real wait status', () => {
+  const promptEcho = 'Lightweight follow-up for chat parity: reply in two short bullets, no files, no local paths, and do not repeat the prompt.';
+  const html = renderLiveNativeStream([
+    {
+      id: 'evt-prompt-like-progress',
+      type: 'process-progress',
+      label: 'Progress',
+      createdAt: '2026-05-25T00:00:01.000Z',
+      raw: {
+        type: 'process-progress',
+        progress: {
+          title: promptEcho,
+          detail: promptEcho,
+          nextStep: 'SciForge will continue when new activity arrives.',
+        },
+      },
+    },
+    {
+      id: 'evt-wait-progress',
+      type: 'process-progress',
+      label: 'Progress',
+      createdAt: '2026-05-25T00:00:02.000Z',
+      raw: {
+        type: 'process-progress',
+        progress: {
+          title: 'Waiting for workspace activity',
+          waitingFor: 'workspace activity',
+          nextStep: 'SciForge will continue when new activity arrives.',
+        },
+      },
+    },
+  ]);
+
+  assert.match(html, /Waiting for workspace activity/);
+  assert.doesNotMatch(html, /Lightweight follow-up|reply in two short bullets|do not repeat the prompt|ActionLightweight/);
 });
 
 test('execution process folds tool-labeled prompt command echoes without rendering action summary', () => {
@@ -820,6 +1218,38 @@ test('execution process renders structured diff text from completed command even
   assert.doesNotMatch(html, /Diff new\.ts running|Diff new\.ts failed/);
   assert.match(html, /cursor-agent-diff/);
   assert.match(html, /@@ -1 \+1 @@/);
+});
+
+test('execution process keeps diff previews inline and exposes explicit comparison refs', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Patch preview', {
+      rawType: 'tool_completed',
+      operationKind: 'diff',
+      status: 'completed',
+      filePath: 'src/app.ts',
+      diffRef: 'patches/update.diff',
+      diff: [
+        '--- a/src/app.ts',
+        '+++ b/src/app.ts',
+        '@@ -1 +1 @@',
+        '-before',
+        '+after',
+      ].join('\n'),
+    }),
+  ]);
+
+  const summaryStart = html.indexOf('cursor-agent-action-diff');
+  const summaryEnd = html.indexOf('</summary>', summaryStart);
+  assert.ok(summaryStart >= 0 && summaryEnd > summaryStart);
+  const summary = html.slice(summaryStart, summaryEnd);
+  assert.doesNotMatch(summary, /cursor-agent-action-focus|workspace-diff-viewer/);
+  assert.match(html, /cursor-agent-diff/);
+  assert.match(html, /@@ -1 \+1 @@/);
+  assert.match(html, /data-object-kind="file"/);
+  assert.match(html, /data-preferred-view="workspace-diff-viewer"/);
+  assert.match(html, />update\.diff<\/button>/);
+  assert.match(html, />app\.ts<\/button>/);
+  assert.doesNotMatch(html, /patches\/update\.diff|file:patches\/update\.diff|file:src\/app\.ts/);
 });
 
 test('execution process merges completed diff events that only carry lifecycle id and diff text', () => {
@@ -1383,6 +1813,57 @@ test('stream process persistence keeps safe read file paths for replay previews'
   assert.match(html, /cursor-agent-action-focus/);
 });
 
+test('stream process persistence stores bounded replay summaries instead of raw runtime payloads', () => {
+  const response = attachStreamProcessToResponse({
+    message: { id: 'msg-bounded-stream', role: 'assistant', content: 'done', createdAt: '2026-05-25T00:00:02.000Z' },
+    run: {
+      id: 'run-bounded-stream',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'run long markdown task',
+      response: 'done',
+      createdAt: '2026-05-25T00:00:00.000Z',
+    },
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+  } as never, Array.from({ length: 120 }, (_, index) => agentStreamEvent({
+    id: `evt-heavy-${index}`,
+    type: 'tool-result',
+    label: 'Tool result',
+    detail: 'Tool completed: read_file',
+    raw: {
+      type: 'tool_completed',
+      toolName: 'read_file',
+      status: 'completed',
+      filePath: `reports/${index}.md`,
+      refs: [`file:reports/${index}.md`, 'https://provider.example/v1/debug'],
+      outputSummary: '<html>RAW_PROVIDER_HTML_SHOULD_NOT_SURVIVE</html>'.repeat(200),
+      message: 'RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURVIVE'.repeat(200),
+      stdout: 'RAW_STDOUT_SHOULD_NOT_SURVIVE'.repeat(200),
+      stderr: 'RAW_STDERR_SHOULD_NOT_SURVIVE'.repeat(200),
+      providerUrl: 'https://provider.example/v1',
+      apiKey: 'sk-persist-secret-1234567890',
+      cwd: '/Applications/workspace/private',
+    },
+  })));
+  const streamProcess = (response.run.raw as { streamProcess?: { eventCount?: number; retainedEventCount?: number; truncated?: boolean; events?: unknown[]; eventSummaries?: unknown[]; summaryDigest?: { hash?: string }; refs?: string[] } }).streamProcess;
+  const serialized = JSON.stringify(streamProcess);
+
+  assert.equal(streamProcess?.eventCount, 120);
+  assert.ok((streamProcess?.retainedEventCount ?? 0) <= 48);
+  assert.equal(streamProcess?.truncated, true);
+  assert.ok((streamProcess?.events?.length ?? 0) <= 48);
+  assert.ok((streamProcess?.eventSummaries?.length ?? 0) <= 24);
+  assert.match(streamProcess?.summaryDigest?.hash ?? '', /^fnv1a-/);
+  assert.ok(serialized.length < 90_000);
+  assert.match(streamProcess?.refs?.join('\n') ?? '', /file:reports/);
+  assert.doesNotMatch(serialized, /RAW_PROVIDER_HTML_SHOULD_NOT_SURVIVE|RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURVIVE|RAW_STDOUT_SHOULD_NOT_SURVIVE|RAW_STDERR_SHOULD_NOT_SURVIVE/);
+  assert.doesNotMatch(serialized, /provider\.example|sk-persist-secret|\/Applications\/workspace|<html/i);
+});
+
 test('execution process distinguishes verification states from execution success', () => {
   const html = renderProcess([
     executionUnit({ id: 'ordinary', status: 'done' }),
@@ -1456,13 +1937,30 @@ function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   }));
 }
 
-function renderNativeStream(events: Array<Record<string, unknown>>, locale?: 'zh-CN' | 'en-US', prompt = 'native stream please') {
+function cursorAction(overrides: Partial<CursorAgentAction>): CursorAgentAction {
+  return {
+    id: 'action-1',
+    kind: 'other',
+    status: 'completed',
+    title: 'Action',
+    summary: 'Action',
+    detail: '',
+    resultRefs: [],
+    commands: [],
+    refs: [],
+    createdAt: '2026-05-25T00:00:01.000Z',
+    initiallyExpanded: false,
+    ...overrides,
+  };
+}
+
+function renderNativeStream(events: Array<Record<string, unknown>>, locale?: 'zh-CN' | 'en-US', prompt = 'native stream please', runId = 'run-native-stream-test') {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {
-    runId: 'run-native-stream-test',
+    runId,
     session: {
       ...session([]),
       runs: [{
-        id: 'run-native-stream-test',
+        id: runId,
         scenarioId: 'literature-evidence-review',
         status: 'completed',
         prompt,
@@ -1472,6 +1970,17 @@ function renderNativeStream(events: Array<Record<string, unknown>>, locale?: 'zh
       }],
       executionUnits: [],
     },
+    onObjectFocus: () => undefined,
+    locale,
+  }));
+}
+
+function renderLiveNativeStream(events: AgentStreamEvent[], limit = 48, locale?: 'zh-CN' | 'en-US') {
+  return renderToStaticMarkup(createElement(NativeEventStream, {
+    events,
+    mode: 'live',
+    limit,
+    sourceRunId: 'run-native-stream-test',
     onObjectFocus: () => undefined,
     locale,
   }));

@@ -144,6 +144,7 @@ import {
 import { hasRecoverableRecentAttempt } from './gateway/recoverable-attempts.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { tryRunPlaywrightEdgeBrowserRuntime } from './playwright-edge-browser-runtime.js';
+import { tryRunBrowserHostSearchRuntime } from './browser-host-search-runtime.js';
 import { tryRunLocalDataSensitivityRuntime } from './local-data-sensitivity-runtime.js';
 import { tryRunLocalTabularAnalysisRuntime } from './local-tabular-analysis-runtime.js';
 import { tryRunLocalCodeDebugRuntime } from './local-code-debug-runtime.js';
@@ -191,6 +192,7 @@ export const STAGE_CAPABILITY_PROVIDER_PREFLIGHT = 'capability-provider-prefligh
 export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
 export const STAGE_ARTIFACT_MUTATION_FAST_PATH = 'artifact-mutation-fast-path';
 export const STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME = 'playwright-edge-browser-runtime';
+export const STAGE_BROWSER_HOST_SEARCH_RUNTIME = 'browser-host-search-runtime';
 export const STAGE_RUNTIME_EXECUTION_CONSTRAINTS = 'runtime-execution-constraints';
 export const STAGE_CODEX_RUNTIME_BRIDGE = 'codex-runtime-bridge';
 export const STAGE_VISION_SENSE_RUNTIME = 'vision-sense-runtime';
@@ -209,6 +211,7 @@ export type GatewayPipelineStageName =
   | typeof STAGE_DIRECT_CONTEXT_FAST_PATH
   | typeof STAGE_ARTIFACT_MUTATION_FAST_PATH
   | typeof STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME
+  | typeof STAGE_BROWSER_HOST_SEARCH_RUNTIME
   | typeof STAGE_RUNTIME_EXECUTION_CONSTRAINTS
   | typeof STAGE_CODEX_RUNTIME_BRIDGE
   | typeof STAGE_VISION_SENSE_RUNTIME
@@ -240,6 +243,7 @@ export interface GatewayPipelineStage {
 export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_CONVERSATION_POLICY,
   STAGE_REQUEST_ENRICHMENT,
+  STAGE_BROWSER_HOST_SEARCH_RUNTIME,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
   STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME,
   STAGE_DIRECT_CONTEXT_FAST_PATH,
@@ -283,6 +287,13 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
           await requestWithAgentHarnessShadow(context.request, context.telemetry.callbacks, context.policyApplication),
         ),
       };
+    },
+  },
+  {
+    name: STAGE_BROWSER_HOST_SEARCH_RUNTIME,
+    async execute(context) {
+      const payload = await tryRunBrowserHostSearchRuntime(context.request, context.telemetry.callbacks);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },
   {

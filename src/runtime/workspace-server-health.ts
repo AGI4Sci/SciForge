@@ -1,7 +1,11 @@
 export const WORKSPACE_WRITER_HEALTH_CAPABILITIES = [
   'workspace-snapshot',
   'workspace-files',
+  'runtime-module-dispatcher',
   'sciforge-tools',
+  'workspace-terminal-websocket-pty',
+  'browser-host-session',
+  'browser-host-search',
   'repair-handoff-runner',
   'feedback-direct-codex-terminal-websocket-pty',
   'feedback-direct-codex-terminal-system-terminal',
@@ -33,6 +37,10 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
     instanceId: input.instanceId,
     lifecycleToken: input.lifecycleToken || undefined,
     capabilities: [...WORKSPACE_WRITER_HEALTH_CAPABILITIES],
-    endpoints: {},
+    endpoints: {
+      runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
+      browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+      browserHostSearch: '/api/sciforge/browser-host/search',
+    },
   };
 }

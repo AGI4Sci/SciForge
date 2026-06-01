@@ -1,5 +1,5 @@
 import { lstat, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF } from './evidence-classification.js';
@@ -168,7 +168,12 @@ function requiredValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+function isMaterializeL3CompletionEvidenceCliEntrypoint(argv1 = process.argv[1]): boolean {
+  const entry = argv1 ? basename(argv1) : '';
+  return entry === 'materialize-l3-completion-evidence.ts' || entry === 'materialize-l3-completion-evidence.js';
+}
+
+if (isMaterializeL3CompletionEvidenceCliEntrypoint()) {
   const targetPath = await materializeCuNextL3CompletionEvidence(parseArgs(process.argv.slice(2)));
   process.stdout.write(`[ok] materialized ${targetPath}\n`);
 }

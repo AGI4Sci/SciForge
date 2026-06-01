@@ -562,6 +562,8 @@ function normalizeConversationEvent(
   const id = stringValue(event.id) ?? digestStableBytes(event).slice('sha256:'.length, 'sha256:'.length + 16);
   const payload = asRecord(event.payload);
   const refs = normalizeRefs(extractRefs(payload), stringValue(event.runId));
+  const source = asRecord(payload?.source);
+  const sender = asRecord(payload?.sender);
   return {
     schemaVersion: 'sciforge.workspace-ledger-event.v1',
     eventId: `conversation:${id}`,
@@ -574,11 +576,20 @@ function normalizeConversationEvent(
     kind: mapConversationKind(stringValue(event.type)),
     summary: eventSummary(stringValue(event.type), payload, refs),
     refs,
-    metadata: {
+    metadata: compactRecord({
       source: 'conversation-event-log',
       sourceEventType: stringValue(event.type),
       sourceStorage: stringValue(event.storage),
-    },
+      messageSource: source,
+      sourceChannel: stringValue(source?.channel),
+      senderRef: stringValue(sender?.ref),
+      senderDisplayName: stringValue(sender?.displayName),
+      conversationRef: stringValue(payload?.conversationRef),
+      externalMessageRef: stringValue(payload?.externalMessageRef),
+      attachmentRefs: Array.isArray(payload?.attachmentRefs) ? payload?.attachmentRefs : undefined,
+      auditRef: stringValue(payload?.auditRef),
+      rawEventRef: stringValue(payload?.rawEventRef),
+    }),
   };
 }
 
@@ -806,6 +817,12 @@ function renderBlock(input: {
 
 function mapConversationKind(type: string | undefined): WorkspaceLedgerEventKind {
   switch (type) {
+    case 'ChannelMessageReceived':
+      return 'user-turn';
+    case 'ChannelDeliveryQueued':
+    case 'ChannelDeliverySent':
+    case 'ChannelDeliveryFailed':
+      return 'backend-event';
     case 'TurnReceived':
       return 'user-turn';
     case 'Dispatched':

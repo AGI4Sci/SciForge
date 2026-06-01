@@ -1,6 +1,14 @@
 import type { AgentContextWindowState, AgentStreamEvent, SciForgeConfig, SciForgeSession } from './domain';
 import { localeText, type SupportedLocale } from './i18n';
 
+interface ContextUsageRow {
+  kind: string;
+  label: string;
+  value: string;
+  tokens?: number;
+  known: boolean;
+}
+
 export function buildContextWindowMeterModel(state: AgentContextWindowState, running: boolean, locale?: SupportedLocale) {
   const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
   const ratio = state.ratio ?? 0;
@@ -16,6 +24,9 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
   const statusLabel = contextWindowStatusLabel(state, locale);
   const thresholdDetail = contextCompactLabel(state, locale);
   const budgetRows = contextBudgetRows(state, locale);
+  const usageRows = contextInspectorUsageRows(state, locale);
+  const usageSegments = contextUsageSegments(usageRows, state.windowTokens);
+  const warningLine = contextWindowWarningLine(state, running, locale);
   const detailRows = [
     { label: t({ 'zh-CN': '已使用', 'en-US': 'Used' }), value: t({ 'zh-CN': `${ratioDetail} 上下文`, 'en-US': `${ratioDetail} context` }) },
     { label: t({ 'zh-CN': '剩余', 'en-US': 'Remaining' }), value: remainingTokens !== undefined ? `${formatCompactNumber(remainingTokens)} tokens` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }) },
@@ -46,6 +57,9 @@ export function buildContextWindowMeterModel(state: AgentContextWindowState, run
     remainingExact: remainingTokens !== undefined ? formatExactNumber(remainingTokens) : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }),
     ratioDetail,
     thresholdDetail,
+    usageRows,
+    usageSegments,
+    warningLine,
     detailRows,
     memoryBoundaryLine,
     title,
@@ -110,6 +124,7 @@ export function estimateContextWindowState(session: SciForgeSession, config: Sci
     autoCompactThreshold: 0.82,
     watchThreshold: 0.68,
     nearLimitThreshold: 0.86,
+    breakdown: Number.isFinite(usedTokens) ? { conversation: usedTokens } : undefined,
   };
 }
 
@@ -236,6 +251,41 @@ function contextWindowStatusLabel(state: AgentContextWindowState, locale?: Suppo
   return label('unknown');
 }
 
+function contextWindowWarningLine(state: AgentContextWindowState, running: boolean, locale?: SupportedLocale) {
+  const level = contextWindowLevel(state);
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
+  if (state.status === 'exceeded' || (state.ratio !== undefined && state.ratio >= 1)) {
+    return t({
+      'zh-CN': '上下文已超出窗口；先压缩或缩小引用，已选对象和必要摘要会保留。',
+      'en-US': 'Context exceeds the window; compact or slim references first. Selected objects and essential summaries are retained.',
+    });
+  }
+  if (state.status === 'blocked') {
+    return t({
+      'zh-CN': '上下文已阻塞发送；需要压缩或缩小请求，已选对象不会被静默丢弃。',
+      'en-US': 'Context is blocking send; compact or slim the request. Selected objects are not silently dropped.',
+    });
+  }
+  if (level === 'near-limit') {
+    return running
+      ? t({
+        'zh-CN': '本轮已接近上下文窗口；追加指令会排队，已选对象会继续保留。',
+        'en-US': 'This turn is near the context window; added guidance queues and selected objects stay attached.',
+      })
+      : t({
+        'zh-CN': '上下文接近窗口；可继续发送，但压缩会优先保留对话、已选对象和必要摘要。',
+        'en-US': 'Context is near the window; you can continue, and compaction preserves chat, selected objects, and essential summaries.',
+      });
+  }
+  if (level === 'watch') {
+    return t({
+      'zh-CN': '上下文用量上升；继续添加大引用前请留意窗口余量。',
+      'en-US': 'Context usage is rising; watch remaining space before adding large references.',
+    });
+  }
+  return undefined;
+}
+
 function formatCompactNumber(value: number) {
   if (value >= 1_000_000) return `${Math.round(value / 100_000) / 10}M`;
   if (value >= 1_000) return `${Math.round(value / 100) / 10}k`;
@@ -287,4 +337,56 @@ function contextBudgetRows(state: AgentContextWindowState, locale?: SupportedLoc
       ? { label: t({ 'zh-CN': '预算', 'en-US': 'Budget' }), value: `${Math.round(budget.normalizedBudgetRatio * 1000) / 10}%` }
       : undefined,
   ].filter((row): row is { label: string; value: string } => Boolean(row));
+}
+
+function contextInspectorUsageRows(state: AgentContextWindowState, locale?: SupportedLocale): ContextUsageRow[] {
+  const t = (copy: Record<SupportedLocale, string>) => localeText(locale ?? 'en-US', copy);
+  const breakdown = state.breakdown ?? {};
+  const knownNonConversation = [
+    breakdown.systemPrompt,
+    breakdown.toolDefinitions,
+    breakdown.rules,
+    breakdown.skills,
+    breakdown.mcp,
+    breakdown.subagentDefinitions,
+  ].reduce<number>((sum, value) => sum + (value ?? 0), 0);
+  const conversationTokens = breakdown.conversation ?? (
+    state.usedTokens !== undefined ? Math.max(0, state.usedTokens - knownNonConversation) : undefined
+  );
+  const definitions: Array<{ kind: string; label: Record<SupportedLocale, string>; tokens?: number }> = [
+    { kind: 'system-prompt', label: { 'zh-CN': 'System prompt', 'en-US': 'System prompt' }, tokens: breakdown.systemPrompt },
+    { kind: 'tool-definitions', label: { 'zh-CN': 'Tool definitions', 'en-US': 'Tool definitions' }, tokens: breakdown.toolDefinitions },
+    { kind: 'rules', label: { 'zh-CN': 'Rules', 'en-US': 'Rules' }, tokens: breakdown.rules },
+    { kind: 'skills', label: { 'zh-CN': 'Skills', 'en-US': 'Skills' }, tokens: breakdown.skills },
+    { kind: 'mcp', label: { 'zh-CN': 'MCP', 'en-US': 'MCP' }, tokens: breakdown.mcp },
+    { kind: 'subagent-definitions', label: { 'zh-CN': 'Subagent definitions', 'en-US': 'Subagent definitions' }, tokens: breakdown.subagentDefinitions },
+    { kind: 'conversation', label: { 'zh-CN': 'Conversation', 'en-US': 'Conversation' }, tokens: conversationTokens },
+  ];
+  const rows = definitions.map((definition) => ({
+    kind: definition.kind,
+    label: t(definition.label),
+    value: definition.tokens !== undefined ? `${formatCompactNumber(definition.tokens)} tokens` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }),
+    tokens: definition.tokens,
+    known: definition.tokens !== undefined,
+  }));
+
+  return rows.some((row) => row.known) ? rows : [{
+    kind: 'context',
+    label: t({ 'zh-CN': '上下文', 'en-US': 'Context' }),
+    value: state.ratio !== undefined ? `${Math.round(state.ratio * 1000) / 10}%` : t({ 'zh-CN': '未知', 'en-US': 'Unknown' }),
+    known: state.ratio !== undefined,
+  }];
+}
+
+function contextUsageSegments(rows: ContextUsageRow[], windowTokens: number | undefined) {
+  const knownRows = rows.filter((row) => row.tokens !== undefined && row.tokens > 0);
+  const denominator = windowTokens && windowTokens > 0
+    ? windowTokens
+    : knownRows.reduce((sum, row) => sum + (row.tokens ?? 0), 0);
+  if (!denominator) return [];
+  return knownRows.map((row) => ({
+    kind: row.kind,
+    label: row.label,
+    width: `${Math.max(0.5, Math.min(100, ((row.tokens ?? 0) / denominator) * 100))}%`,
+  }));
 }

@@ -137,6 +137,10 @@
     display: none;
   }
 
+  .workbench-canvas .panel-title.compact .chat-title-button .panel-scenario-name {
+    display: block;
+  }
+
 }
 
 @media (max-width: 760px) {
@@ -345,6 +349,12 @@
   margin-left: auto;
   padding: 10px 13px;
   border-radius: 8px;
+}
+
+.codex-quiet-shell .message.user.external-channel-message .message-body {
+  width: min(100%, 66ch);
+  max-width: min(86%, 66ch);
+  margin-left: 0;
 }
 
 .codex-quiet-shell .message.user .message-content,

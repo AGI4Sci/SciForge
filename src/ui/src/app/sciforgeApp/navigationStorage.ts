@@ -3,8 +3,13 @@ import type { PageId } from '../../data';
 import type { ScenarioInstanceId } from '../../domain';
 
 const APP_NAVIGATION_STORAGE_KEY = 'sciforge.app-navigation.v1';
-const validPages = new Set<PageId>(['workbench', 'components', 'timeline', 'feedback', 'browser']);
+const validPages = new Set<PageId>(['workbench', 'components', 'feedback']);
 const defaultNavigation = { page: 'workbench' as const, scenarioId: defaultBuiltInScenarioId };
+
+function normalizeStoredPage(raw: string): PageId {
+  if (raw === 'timeline' || raw === 'browser' || raw === 'dashboard') return 'workbench';
+  return validPages.has(raw as PageId) ? raw as PageId : 'workbench';
+}
 
 export function appNavigationStorageKey() {
   if (typeof window === 'undefined') return APP_NAVIGATION_STORAGE_KEY;
@@ -21,9 +26,7 @@ export function loadStoredAppNavigation(): { page: PageId; scenarioId: ScenarioI
     if (!raw) return defaultNavigation;
     const parsed = JSON.parse(raw) as { page?: unknown; scenarioId?: unknown };
     const storedPage = typeof parsed.page === 'string' ? parsed.page : '';
-    const page = storedPage === 'dashboard' || !validPages.has(storedPage as PageId)
-      ? 'workbench'
-      : storedPage as PageId;
+    const page = normalizeStoredPage(storedPage);
     const scenarioId = typeof parsed.scenarioId === 'string' && parsed.scenarioId.trim()
       ? parsed.scenarioId.trim()
       : defaultBuiltInScenarioId;
@@ -38,8 +41,8 @@ function navigationFromUrl(): { page: PageId; scenarioId: ScenarioInstanceId } |
     const search = typeof window.location.search === 'string' ? window.location.search : '';
     const params = new URLSearchParams(search);
     const requestedPage = params.get('page') ?? params.get('view');
-    const page = requestedPage && validPages.has(requestedPage as PageId) ? requestedPage as PageId : undefined;
-    if (!page) return undefined;
+    if (!requestedPage?.trim()) return undefined;
+    const page = normalizeStoredPage(requestedPage.trim());
     const scenarioId = params.get('scenarioId')?.trim() || params.get('scenario')?.trim() || defaultBuiltInScenarioId;
     return { page, scenarioId };
   } catch {

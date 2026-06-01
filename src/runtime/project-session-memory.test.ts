@@ -68,6 +68,39 @@ test('normalizes conversation event logs append-only without rewriting existing 
   assert.equal(appended.events[2].kind, 'artifact-materialized');
 });
 
+test('preserves channel source metadata from conversation ledger events', () => {
+  const projection = normalizeWorkspaceKernelAuditInput({
+    schemaVersion: 'sciforge.conversation-event-log.v1',
+    conversationId: 'session-channel-source',
+    events: [{
+      id: 'turn-channel-feishu',
+      type: 'TurnReceived',
+      timestamp: '2026-06-01T00:00:00.000Z',
+      actor: 'user',
+      storage: 'inline',
+      payload: {
+        prompt: 'Summarize the attached protocol.',
+        source: { channel: 'feishu' },
+        sender: { ref: 'feishu:user:ou_1', displayName: 'Dr. Chen' },
+        conversationRef: 'feishu:chat:oc_1',
+        externalMessageRef: 'feishu:message:om_1',
+        attachmentRefs: ['feishu:file:file_1'],
+        auditRef: 'audit:feishu:intake:om_1',
+        rawEventRef: 'audit:feishu:raw:om_1',
+      },
+    }],
+  } satisfies ConversationEventLog);
+
+  const event = projection.events[0];
+  assert.equal(event.kind, 'user-turn');
+  assert.equal(event.metadata?.sourceChannel, 'feishu');
+  assert.deepEqual(event.metadata?.messageSource, { channel: 'feishu' });
+  assert.equal(event.metadata?.senderDisplayName, 'Dr. Chen');
+  assert.equal(event.metadata?.conversationRef, 'feishu:chat:oc_1');
+  assert.deepEqual(event.metadata?.attachmentRefs, ['feishu:file:file_1']);
+  assert.equal(event.metadata?.auditRef, 'audit:feishu:intake:om_1');
+});
+
 test('normalizes ref digests and builds a stable ref index from session-like runs', () => {
   const projection = normalizeWorkspaceKernelAuditInput({
     sessionId: 'session-refs',

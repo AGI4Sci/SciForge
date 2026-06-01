@@ -1,53 +1,63 @@
 # SciForge Computer Use 项目协议
 
-最后更新：2026-05-31
+最后更新：2026-06-01
 
-当前目标：把 Computer Use 稳定为 **multi-screen actor-cursor Computer Use**，并把真实虚拟屏幕接入 SciForge 右侧 `Screen` 结果栏展示。核心抽象是 task/collaboration space 下的 `VirtualDisplayGroup`、多块 `VirtualScreen`、多个 `ActorCursor`、screen/window scoped executor lease，以及 refs-first evidence/replay bundle。Docker/noVNC 不再作为后续推进方向；历史 Docker/container 路径只保留为 legacy diagnostic / optional historical evidence。
+当前目标：把 Computer Use 从“完整虚拟桌面 / 多物理屏模拟”收敛为 **VirtualAppScreen：科研应用级后台控制会话**。每个虚拟屏幕绑定一个 app/session/window，右侧 `Screen` 结果栏像远程桌面一样展示、注释和接管它；底层执行优先走 app-scoped / window-scoped adapter，做到视觉上等效鼠标键盘，但不移动用户真实鼠标、不抢用户当前焦点、不把应用窗口弹到物理屏幕。
 
 本文件只记录 Computer Use 的当前原则、任务板、TODO 和验收规则。总项目原则以 [`PROJECT.md`](PROJECT.md) 为准；详细设计参考 [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md) 和 [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)。
 
 ## 当前范围
 
-- `packages/actions/computer-use` 拥有 request/result schema、session contract、actor cursor contract、domain-local action loop、scheduler/executor adapter contract、safety/approval、trace contract 和 compact handoff；它不是第二个 Root Agent Host。
-- `packages/observe/vision` 只提供 observation、focus region、OCR/VLM/KV-Ground grounding helper、verifier feedback 和 file-ref-only visual memory；不执行真实桌面动作。
-- GUI 只负责多屏/多光标 presentation、trace/replay 展示、focus、confirmation 和 terminal-equivalent text；不直接执行 Computer Use。
-- 多鼠标首先是协作层概念：多个 actor cursor 可以并行移动、指向、标注和提出 action proposal；真正会改变 GUI 状态的 click/type/drag/scroll/hotkey/save/open menu 必须经过 scoped executor scheduler。
-- 真实 platform sidecar / MCP / backend adapter 只做 OS-specific capture/state/input/preflight，不做 planning、completion、GUI presentation 或 workspace policy。
-- BrowserRuntime / DOM / accessibility / Playwright 能力可以作为 web/app observation provider，为当前 screen/window 产出 refs-first state snapshot、stable element ref、DOM/AX 摘要和 grounding hint；它不能替代 Computer Use 的 executor lease、action causality、before/after evidence、artifact validation 或用户级 completion。
+- `packages/actions/computer-use` 拥有 request/result schema、VirtualAppScreen/session contract、actor cursor contract、domain-local action loop、scheduler/executor adapter contract、safety/approval、trace contract 和 compact handoff；它不是第二个 Root Agent Host。
+- `packages/observe/vision` 提供 observation、focus region、OCR/VLM/KV-Ground grounding helper、verifier feedback 和 file-ref-only visual memory；不直接执行真实桌面动作。
+- GUI 只负责 VirtualAppScreen presentation、annotation overlay、trace/replay 展示、focus、confirmation 和 terminal-equivalent text；不直接执行 Computer Use。
+- BrowserRuntime / DOM / accessibility / Playwright 可以作为 observation、target hint 或 adapter source，但不能绕过 Computer Use 的 executor lease、action causality、before/after evidence、artifact validation 或用户级 completion。
+- Platform sidecar / MCP / backend adapter 只做 app/window capture、state、input/preflight 和 adapter readiness；不做 planning、completion、GUI presentation 或 workspace policy。
+- VM / microVM / 完整 remote desktop 只作为未来强隔离或不可信任务 backend，不作为当前科研自动化主路线。
 
 ## 不可变规则
 
-- 所有修改必须通用，不能为某个 demo app、截图、窗口标题、文件名或历史 run 写硬编码补丁。
-- 代码路径保持唯一真相源；旧的一线程一鼠标假设与新设计冲突时，应迁移或删除旧路径，不做长期并行实现。
-- Evidence Loop 只允许只读观察；任何会改变屏幕、窗口、viewport、focus、菜单、tab 或应用状态的操作都必须进入 Action Loop。
-- 完成判断必须来自当前 evidence ledger、artifact/file evidence、validator/verifier 和 action causality，不能只依赖旧截图、历史 trace 或 action history。
-- 所有大对象、截图、录屏、artifact、approval、audit 和 replay 只保存 refs；不得内联 raw screenshot、base64、provider raw payload、Authorization、token、secret、password 或 credential。
-- `sharedSystemInputUsed`、`systemPointerMoved`、`systemKeyboardEventsSent` 在最终用户级验收中必须为 `false`；缺少独立 input adapter 时 fail closed 或降级为 diagnostic/blocked evidence。
-- 高风险动作必须返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`，由 TUI Host 调用 GUI confirmation 后再受控继续。
-- 一个 active task 只能有一个 L2 Root Agent Host；Computer Use package、runtime bridge、GUI presentation 和 backend adapter 都不能决定跨模块下一步、repair 策略或用户级 completion。
-- L1 resource adapter 只能整理同一资源域的 session、cache、refs、events、version compatibility 和 L0 handler；不能扩大公共 API 面。
-- L0 handler 只做一个具体动作，例如 capture、ground、execute、verify、writeTrace、emitEvent；不得直接调用其它模块或把自己伪装成 pipeline。
-- 缺少 session permission ref、allowlist ref、risk preview/ref、stop/cancel lease path 或 platform-sidecar isolation report 的真实 mutating run，不能作为用户级完成证据。
-- 已完成 TODO 必须打勾，并补充日期、evidence refs、验证命令和最终状态。
+- 所有修改必须通用，不能为当前页面、截图、URL、文件名或历史 run 写硬编码补丁。
+- 代码路径保持唯一真相源；旧逻辑和最终方案冲突时删除或迁移旧逻辑，不做长期并行实现。
+- GUI -> TUI 只发送终端等价文本、focus/confirmation 结果或只读 projection；TUI -> GUI 只通过 declared GUI intents。
+- 右侧结果栏不是日志 dump。它必须按对象类型展示 Browser、Screen、Terminal、Files、References 等 Cursor-like panes，并以可点击 refs 驱动。
+- 大 payload、截图、录屏、terminal transcript、DOM snapshot、artifact、audit 和 replay 必须 refs-first；不得内联 raw screenshot/base64/provider payload/secret。
+- 涉及 provider URL、API key、model name、Authorization、token、secret、password、credential 的日志和 evidence 必须脱敏；ignored local config 不得提交。
+- 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
+- 已完成 TODO 需要打勾，并补充日期、evidence refs、验证命令和最终状态。
+
+## 大文件拆分登记
+
+- [x] 2026-06-01 登记 `packages/actions/computer-use/sciforge_computer_use/contracts.py`：当前约 3405 行，已新增 VirtualAppScreen user-acceptance / adapter readiness / input intent / annotation overlay 合约；后续应拆出 `virtual_app_screen_acceptance` 等 package-local contract 模块，保持 `contracts.py` 作为兼容导出和统一入口。当前验证：`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py -q`；状态：已登记，满足“拆分或登记拆分任务”规则。
+
+## 模块化设计原则
+
+- 公共函数只有四个：`module.describe`、`module.query`、`module.read`、`module.invoke`。
+- `describe/query/read` 必须只读；只有 `invoke` 可以有副作用。未声明 module function、intent、facet 或 ref prefix 必须 fail closed。
+- `list/search` 收敛为 `query`，`stat` 收敛为 `read({ includeMeta: true })`，`watch/subscribe/present/ask_user/apply_batch` 收敛为具体 `invoke` intent。
+- Agent Host 负责编排 semantic pipeline；模块不得直接 import 或调用其它模块；GUI 可以展示 pipeline trace，但不决定 pipeline。
+- trace-first 是默认要求：跨模块组合必须记录 step id、moduleId、function、intent/query/ref、input/result summary、refs、approval、operation、timing、status 和 parent/child relation。
+
 
 ## 目标架构
 
 ```text
 Task / Collaboration Space
--> VirtualDesktopSession
-   -> VirtualDisplayGroup
-      -> VirtualScreen A
-         -> ActorCursor(user)
-         -> ActorCursor(agent-1)
-         -> ScreenExecutor(pointer/keyboard/focus adapter)
-      -> VirtualScreen B
-         -> ActorCursor(agent-2)
-         -> ScreenExecutor(pointer/keyboard/focus adapter)
+-> VirtualDisplayGroup
+   -> VirtualAppScreen A
+      -> targetAppRef / targetWindowRef / sessionRef
+      -> frameStreamRef / currentFrameRef
+      -> ActorCursor(user)
+      -> ActorCursor(agent)
+      -> annotationOverlayRefs
+      -> inputLeaseRef
+      -> actionAdapterRef
+   -> VirtualAppScreen B
+      -> another app/session/window
    -> EvidenceLedger
    -> ReplayBundle
-   -> ArtifactObserver
    -> UserControlPlane(permission/allowlist/risk/stop/data-visibility refs)
-   -> PlatformSidecarAdapter(optional OS-specific backend)
+   -> AdapterReadinessIndex
 ```
 
 L0/L1/L2 放置：
@@ -57,125 +67,155 @@ L2 Root Agent Host
   -> Codex app-server production path
   -> Codex CLI/native plugin debug path
   -> owns cross-module planning, approval, repair, completion, pipeline trace
+
 L1 Computer Use Resource Adapter
-  -> display group/session/cursor/lease/evidence/replay refs
-  -> session permission/allowlist/risk/sidecar readiness refs
+  -> VirtualAppScreen session/app/window/frame/input/replay/evidence refs
+  -> session permission/allowlist/risk/adapter readiness refs
   -> adapts backend/provider/version/resource lifecycle
   -> exposes only Codex native tool/plugin/MCP or module.* surface
+
 L0 Computer Use Handlers
-  -> capture | crop | ground | propose scoped action | execute | verify | writeTrace | emitEvent | sidecar preflight
+  -> capture | crop | ground | propose scoped action | execute | verify | writeTrace | emitEvent | adapter preflight
+
 GUI Module
-  -> present replay/overlay/permission/risk/stop controls, ask_user, notify, set_status, focus
+  -> present frame/replay/overlay/permission/risk/stop controls, ask_user, notify, set_status, focus
 ```
 
-## 当前任务板：Virtual Screen Product Integration
+## 当前任务板：VirtualAppScreen User-Level Acceptance
 
-### P0-CU-SCREEN：把虚拟屏幕接入 SciForge 右侧 Screen tab
+用户级验收不是“能看到一张 frame”或“能点一次按钮”。一次 Computer Use run 只有同时满足下面条件，才能从 package/product smoke 升级为 user-acceptance evidence：
 
-- [x] 定义 `Screen` result pane 的 Computer Use presentation contract。
-  验收：pane 输入只接受 refs-first payload，例如 `visibleScreenRefs`、`visibleCursorRefs`、`replayRef`、`frameRefs`、`cursorOverlayRefs`、`leaseOwnerRefs`、`before/after evidence refs`、`completionEvidenceRef`、`blockedRef` 和 `errorRef`；不接受 raw screenshot/base64/raw trace dump。
-  完成：2026-05-31；evidence：`computer-use-virtual-screen-*` runtime artifact、`virtual-screen-viewer` slot、`visual-regression` fixture、`ResultsRenderer screen tab derives Computer Use frame and replay refs from current run artifacts`；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx`、`npx tsc --noEmit --pretty false`；状态：passed。
-- [x] 让 `Screen` tab 从真实 Computer Use replay/evidence refs 加载 frame。
-  验收：用户在右侧结果栏看到真实 virtual screen frame，而不是 placeholder 网格或单独的 `frame ref` 文本；没有 frame 时必须显示明确 blocked/error/empty state。
-  完成：2026-05-31；evidence：`ResultsRenderer screen tab derives Computer Use frame and replay refs from current run artifacts`、`ResultsRenderer screen tab does not reuse old session screen when active run has no screen artifact`、`virtual-screen-viewer keeps replay preview, overlays, timeline, and lease status visually materialized`；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 渲染 actor cursor overlay 和 lease/proposal 状态。
-  验收：同一 screen 上能区分 user、agent、sub-agent cursor；move/point/annotate 是只读 overlay；click/type/drag/scroll/hotkey/open menu/save 只显示 scheduler/executor 已确认的 action causality。
-  完成：2026-05-31；evidence：`packages/presentation/components/virtual-screen-viewer/render.tsx` actor cursor overlay、`cursorOverlayRefs`、`leaseOwnerRefs`、`proposalRefs` timeline；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 实现 Observe / Replay / Stop 的 GUI 边界。
-  验收：Observe 只请求只读观察或聚焦最新 frame；Replay 只播放 replay bundle；Stop 只发送 terminal-equivalent stop/cancel/confirmation intent 给 TUI Host，不直接杀 package state 或执行 action。
-  完成：2026-05-31；evidence：viewer emits only `virtual-screen-terminal-equivalent-text` for Observe/Replay/Stop；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 与 Right Pane 任务板保持同步。
-  验收：`PROJECT_right.md` 的 P0 Screen pane TODO 和本文件任务一一对应；完成时两个文件都补 evidence 和验证命令。
-  完成：2026-05-31；evidence：`PROJECT_right.md` P0 Screen pane 同步勾选；验证：`git diff --check`；状态：passed。
+- 用户提出的科研任务有可检查产物或可检查外部状态，例如报告、notebook、figure、CSV、PPT/DOCX、实验日志、标注记录或 app 内已保存修改。
+- 产物来自当前 `VirtualAppScreen` 会话的 action causality，而不是 shell 直写、旧 trace、fixture、DOM shortcut 或历史文件。
+- 右侧 `Screen` 能展示当前 app/window/session frame、actor cursor、annotation/proposal、before/after、timeline 和关键 refs，用户可以观察或介入。
+- evidence bundle 内有 adapter readiness、session permission、allowlist、risk preview、input intent、executor event、before/after frame、verification、artifact、gui.present 和 replay refs。
+- isolated background control 的 flags 必须证明未影响用户物理桌面；做不到时只能是 diagnostic/hand-off，不能 user-level pass。
 
-### P0-CU-CONTRACT：防止 Screen pane 变成 GUI executor
+### P0-CU-UA-CONTRACT：定义用户级验收 manifest
 
-- [x] 增加或补齐 boundary guard。
-  验收：`src/ui/**` 不能 import Computer Use action provider、runtime bridge、platform sidecar 或 observe provider implementation；GUI 只能 import shared contract 与 presentation package。
-  完成：2026-05-31；evidence：`render.test.tsx` import guard、`runtimeEvents.client.test.ts` sanitizer、`rg -n "packages/actions/computer-use|src/runtime/computer-use|observe/vision|runComputerUse|executeScoped|macos_native_sidecar" src/ui packages/presentation/components/virtual-screen-viewer -g '*.ts' -g '*.tsx'` only matches guard text；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 增加 Screen pane focused tests。
-  验收：覆盖真实 frame refs、missing frame、blocked ref、error ref、multi-cursor overlay、lease owner、timeline replay、Stop terminal-equivalent text，以及 raw screenshot/raw JSON rejection。
-  完成：2026-05-31；evidence：`ResultsRenderer.test.ts` Screen tab tests、`render.test.tsx` refs contract/raw rejection tests、`runtimeEvents.client.test.ts` materialized Screen artifact test；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 更新 validator。
-  验收：completed/user-acceptance evidence 必须证明 Screen pane 展示来自 current-bundle replay/evidence refs；placeholder-only viewer、旧截图、跨 bundle refs、GUI private state 和 raw inline payload 均 fail closed。
-  完成：2026-05-31；evidence：M6 product smoke loads `validationRef/currentBundleRef/replayRef/targetRefs/schedulerLeaseRefs/sidecar capabilities/discovery/frame refs` and rejects placeholder/cross-bundle/raw/DOM substitutes；验证：`npm run smoke:cu-next-live-acceptance`；状态：passed。
+- [x] 定义 `virtual-app-screen-user-acceptance-manifest` schema。
+  验收：manifest 必须包含 `taskId`、`scenarioId`、`userIntent`、`targetAppRefs`、`targetWindowRefs`、`sessionRefs`、`adapterReadinessRefs`、`screenFrameRefs`、`inputIntentRefs`、`executorEventRefs`、`beforeAfterFrameRefs`、`annotationProposalRefs`、`artifactRefs`、`verificationRefs`、`guiPresentRefs`、`replayRef`、`evidenceLedgerRef`、`isolationFlags` 和 `blockedReason`。
+  完成：2026-06-01；evidence refs：`tools/virtual-app-screen-user-acceptance-manifest.ts`、`packages/actions/computer-use/sciforge_computer_use/contracts.py`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py -q`；状态：schema/validator landed。
+- [x] 定义 user-level pass / blocked / needs-confirmation / handoff 状态机。
+  验收：`passed` 只能在产物、可见 app evidence、action causality、validator/verifier 和 isolation flags 全部满足时出现；缺权限、缺后台渲染、需要 focus steal、需要 shared input、目标歧义或高风险未确认时必须是 `blocked` / `needs-confirmation` / `requires-handoff`。
+  完成：2026-06-01；evidence refs：`tests/smoke/virtual-app-screen-user-acceptance-manifest.test.ts`、`packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py`；验证：同上；状态：pass/fail-closed/confirmation/handoff covered。
+- [x] 定义用户级验收与 package smoke 的边界。
+  验收：package-local contract、M6 opt-in、target-bound fixture、历史 Docker/noVNC evidence、单次 click smoke 都不能单独写 `userAcceptanceEligible=true`；只能作为依赖 readiness、回归或诊断 evidence。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/product-smoke-matrix.ts`、`tests/smoke/cu-next-live-acceptance-matrix.test.ts`、`packages/actions/computer-use/action-provider.manifest.json`；验证：`npm run smoke:cu-next-live-acceptance --silent`、`npm run smoke:module-boundaries --silent`、`npm run smoke:native-extension-ownership --silent`；状态：active gate migrated to VirtualAppScreen, M6 historical only。
 
-### P1-CU-BROWSER：BrowserRuntime observation 与 Screen pane 的关系
+### P0-CU-UA-FIRST-SCENARIO：收敛第一个可验收科研任务
 
-- [x] 继续保留 BrowserRuntime DOM/AX 为 observation/grounding hints。
-  验收：DOM/AX refs 可以帮助定位 web element，但不能替代 virtual screen frame、executor lease、before/after evidence、artifact validation 或用户级 completion。
-  完成：2026-05-31；evidence：live acceptance matrix rejects DOM/AX substitutes outside structured BrowserRuntime observation refs；验证：`npm run smoke:cu-next-live-acceptance`；状态：passed。
-- [x] Browser pane 与 Screen pane 不共享含糊状态。
-  验收：Browser tab 负责网页/BrowserRuntime presentation；Screen tab 负责 Computer Use virtual screen/replay。两者可以通过 refs 关联，但不能把 Browser iframe 白屏误报为 Computer Use screen 成功。
-  完成：2026-05-31；evidence：Right pane Browser/Screen are separate package-owned modules and Screen uses `computer-use-virtual-screen` artifact only when explicit Screen signals exist；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts`；状态：passed。
+- [x] 选择并固定首个用户级验收场景。
+  验收：首个场景必须是低风险、可重复、可本地运行的科研任务，例如“在后台 Browser/PDF/notes app 中读取一段资料，添加可见标注，生成并展示 `research-note.md` 或 notebook/report artifact”；任务必须不需要外部账号、不发送外部消息、不修改用户真实桌面。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-first-scenario.ts`、`tests/smoke/virtual-app-screen-first-scenario.test.ts`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、`node --import tsx tools/computer-use-next/virtual-app-screen-first-scenario.ts --out-dir /tmp/sciforge-vas-first-scenario-cli-smoke --run-id cli-fixture-smoke`；状态：local research-note scenario fixed, fixture defaults to diagnostic-only。
+- [x] 定义首个场景的最低用户可见行为。
+  验收：用户在 Screen tab 里至少能看到 target app frame、一次用户/agent annotation、一次等效鼠标键盘操作、一次 before/after frame 变化、最终产物预览和 replay timeline。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-first-scenario.ts`、`tests/smoke/virtual-app-screen-first-scenario.test.ts`、`packages/presentation/components/virtual-screen-viewer/render.test.tsx`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、VirtualScreen viewer focused tests；状态：Screen-visible refs, annotation, input intent, before/after, artifact preview and replay timeline covered。
+- [x] 定义首个场景的 artifact 验证。
+  验收：最终 artifact 必须在当前 run bundle 或目标 workspace 中存在，内容包含来自 app evidence 的引用或摘要，并由 validator/verifier 证明不是空文件、旧文件或 shell-only 伪产物。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-first-scenario.ts`、`tests/smoke/virtual-app-screen-first-scenario.test.ts`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`；状态：artifact validator rejects shell-only and stale artifacts。
 
-### P1-CU-LIVE-EVIDENCE：把 M6 live evidence 接入产品路径
+### P0-CU-UA-SCREEN-ATTACH：让 Screen tab 成为验收可见面
 
-- [x] 把 M6 native virtual-screen live run 接入产品 smoke artifact loader。
-  验收：product smoke 能从当前 run bundle 加载 `validationRef`、`currentBundleRef`、`replayRef`、`targetRefs`、`schedulerLeaseRefs`、sidecar capabilities/discovery refs 和 frame refs；缺任一关键 ref 时 fail closed。
-  完成：2026-05-31；evidence：`tools/computer-use-next/product-smoke-matrix.ts` current-bundle/replay loader；验证：`npm run smoke:cu-next-live-acceptance`；状态：passed。
-- [x] 定义 live evidence retention / redaction 策略。
-  验收：截图、window refs、title/owner hash、cursor overlay、executor event 和 validation record 均只保存 refs/脱敏摘要；过期 evidence 可以按 run bundle 清理，不破坏当前 validation replay。
-  完成：2026-05-31；evidence：`native_multi_screen_live_demo.py` 写入 bundle-local `evidenceIndexRef` 和 `retentionRedaction`，截图/window/cursor/executor/validation 均为 ref/hash-only，validator 拒绝 raw/secret field；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py packages/actions/computer-use/tests/test_macos_native_sidecar.py packages/actions/computer-use/tests/test_platform_sidecar.py`、`npm run smoke:cu-next-live-acceptance`；状态：passed。
-- [x] 增加真实 run summary 投影到 GUI/报告层。
-  验收：用户能看到 screen count、actor cursor count、sidecar binding kind、blocked/completed status、replay frames、validation status 和关键 ref 链；报告层不内联截图或原始窗口标题。
-  完成：2026-05-31；evidence：`computer-use-virtual-screen` artifact carries sanitized `runSummary`; `virtual-screen-viewer` 渲染 screens/actor cursors/sidecar/validation/evidence index/ref 链；报告层 `Computer Use result` 输出 summary 但不内联截图/窗口标题；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx`、`npx tsc --noEmit --pretty false`；状态：passed。
-- [x] 固化 M6 completed/blocked 双路径回归。
-  验收：同一 suite 同时覆盖真实 sidecar pass、无 sidecar blocked、缺 capabilities/discovery blocked、缺 target/window refs fail-closed 和跨 bundle ref rejection。
-  完成：2026-05-31；evidence：`test_native_multi_screen_live_demo.py`、`cu-next-live-acceptance-matrix.test.ts` completed/blocked/fail-closed cases；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py`、`npm run smoke:cu-next-live-acceptance`；状态：passed。
+- [x] 定义 `VirtualAppScreen` result pane / action provider contract。
+  验收：payload 只接受 refs-first 字段，例如 `targetAppRef`、`targetWindowRef`、`sessionRef`、`frameStreamRef`、`currentFrameRef`、`actorCursorRefs`、`annotationOverlayRefs`、`inputLeaseRef`、`actionAdapterRef`、`adapterReadinessRef`、`replayRef`、`evidenceLedgerRef`、`blockedRef` 和 `errorRef`；不接受 raw screenshot/base64/raw trace dump。
+  完成：2026-06-01；evidence refs：`packages/presentation/components/virtual-screen-viewer/render.tsx`、`src/ui/src/app/results/resultPaneContract.ts`；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx src/ui/src/app/results/resultPaneContract.test.ts`；状态：refs-first presentation contract landed。
+- [x] 把 Screen tab 的空态从“virtual screen refs missing”升级为验收导向的 attach 状态。
+  验收：没有 active app screen 时，UI 能区分 no session、adapter unavailable、observe-only、blocked、requires user handoff；用户级验收报告必须能引用这些状态，不能把 placeholder 当成 frame evidence。
+  完成：2026-06-01；evidence refs：`packages/presentation/components/virtual-screen-viewer/render.test.tsx`、`src/ui/src/app/results/resultPaneContract.test.ts`；验证：同上；状态：attach states covered and placeholder frame evidence rejected。
+- [x] 定义一个 app/window/session 绑定一块虚拟屏幕的 lifecycle。
+  验收：create、attach、observe、annotate、control、pause、resume、close、handoff 都有 refs-first event；同一个 active screen 只能绑定一个 target app/window/session。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-lifecycle.ts`、`tests/smoke/virtual-app-screen-lifecycle.test.ts`；验证：`npm run smoke:virtual-app-screen-lifecycle-contract --silent`；状态：complete lifecycle events, active binding uniqueness, handoff refs, raw payload rejection covered。
 
-### P1-CU-SIDECAR-HARDENING：硬化 macOS virtual-screen sidecar
+### P0-CU-UA-ADAPTER-FIRST：证明等效鼠标键盘不影响用户电脑
 
-- [x] 给 virtual-screen discovery 增加跨机器兼容探针。
-  验收：多物理屏、单物理屏 split、无 Screen Recording 权限、无 Swift、无 `screencapture`、CGWindowList 为空等场景都有明确 `blockedReason` 和 refs-first diagnostic record。
-  完成：2026-05-31；evidence：`macos_native_sidecar.py` blocked diagnostic records；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_macos_native_sidecar.py packages/actions/computer-use/tests/test_platform_sidecar.py packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py`；状态：passed。
-- [x] 明确 virtual-screen input adapter 的产品边界。
-  验收：文档和 validator 都区分 `virtualInputExecuted=true` 与 `realOsInputExecuted=false`；用户级完成不能把 virtual input event log 误读成真实 OS pointer/keyboard mutation。
-  完成：2026-05-31；evidence：sidecar `execute` result/executor/input-event flags and M6 validator fail-closed checks；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_macos_native_sidecar.py packages/actions/computer-use/tests/test_platform_sidecar.py packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py`、`npm run smoke:cu-next-live-acceptance`；状态：passed。
-- [x] 把 sidecar command 做成稳定可发现入口。
-  验收：plugin/MCP/manifest 中有 canonical command、required env、platform guard、schema refs 和 opt-in 标记；不需要开发者记住临时 `PYTHONPATH` 拼法。
-  完成：2026-05-31；evidence：`package.json` 增加 `smoke:cu-native-m6:opt-in`，`action-provider.manifest.json` 暴露 `nativeM6OptIn` / `nativeM6OptInHelp` / schema refs / opt-in claim limit，`README.md` 记录 env 覆盖和 macOS fail-closed guard；验证：`npm run smoke:cu-native-m6:opt-in -- --help`、manifest/script consistency `node -e` check、`git diff --check`；状态：passed。
-- [x] 增加 sidecar 输出 schema 兼容测试。
-  验收：`capabilities` / `discover` / `preflight` / `capture` / `state` / `execute` 的 result records 都有 schema tests，且禁止 planning/completion、GUI import、workspace write policy 和 shared system input。
-  完成：2026-05-31；evidence：`test_macos_native_sidecar.py` schema/boundary tests；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_macos_native_sidecar.py`；状态：passed。
+- [x] 定义 `ActionAdapter` readiness/capability schema。
+  验收：每个 adapter 必须声明 `adapterKind`、`targetScope`、`supportedActions`、`captureSupported`、`backgroundRenderable`、`affectsPhysicalDisplay`、`requiresFocusSteal`、`sharedSystemInputUsed`、`blockedReason` 和 schema refs。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/sciforge_computer_use/contracts.py`、`packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py`；验证：`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py -q`；状态：validator fail-closes unsafe adapter readiness。
+- [x] 把 Screen canvas 输入投影成 `InputIntent`。
+  验收：click/type/drag/scroll/hotkey/menu command 都先写 input intent ref，再经 target binding、lease、executor event、before/after evidence 和 verifier；GUI 不直接调用 backend。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/sciforge_computer_use/contracts.py`、`packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py`、`tools/computer-use-next/virtual-app-screen-first-scenario.ts`、`packages/presentation/components/virtual-screen-viewer/render.tsx`；验证：`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py -q`、`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、VirtualScreen viewer focused tests；状态：all generic input kinds require lease/adapter/executor/before-after/verifier refs and GUI remains terminal-equivalent/presentation-only。
+  追加：2026-06-01；evidence refs：`packages/presentation/components/virtual-screen-viewer/render.tsx`、`packages/presentation/components/virtual-screen-viewer/render.test.tsx`、`packages/presentation/components/virtual-screen-viewer/README.md`、`src/ui/src/app/results/screenPaneHostAdapter.test.ts`、`src/ui/src/app/results/resultPaneContract.ts`；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx src/ui/src/app/results/screenPaneHostAdapter.test.ts src/ui/src/app/results/screenPaneModel.test.ts src/ui/src/app/results/resultPaneContract.test.ts`、`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`；状态：Screen frame now captures click/drag/scroll/text/hotkey only when attached screen has safe isolation, session/frame/lease/adapter/readiness refs; capture emits terminal-equivalent `/computer-use input-intent ...` text and never calls GUI/backend executor directly。
+- [x] 建立 isolated 与 non-isolated 的 fail-closed gate。
+  验收：需要 focus steal、物理屏弹窗、全局鼠标键盘、shared system input 的 adapter 不能作为后台隔离完成证据；可以作为 explicit fallback，但 user-level manifest 必须标记 `requires-handoff` 或 `diagnosticOnly=true`。
+  完成：2026-06-01；evidence refs：`tools/virtual-app-screen-user-acceptance-manifest.ts`、`tools/computer-use-next/product-smoke-matrix.ts`、`packages/actions/computer-use/sciforge_computer_use/contracts.py`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、`npm run smoke:cu-next-live-acceptance --silent`、Python contract tests；状态：focus/shared-input/popup/physical-display pass rejected。
 
-### P2-CU-REPLAY-QUALITY：提升多屏 replay 可用性
+### P0-CU-UA-ANNOTATION-TO-ACTION：把注释转成可验收修改
 
-- [x] 优化多屏 replay 帧体积和加载速度。
-  验收：大分辨率截图有可选缩略图/preview refs，原始 frame refs 仍保留；Screen tab 首屏加载不需要一次性读完整 bundle。
-  完成：2026-05-31；evidence：viewer accepts `framePreviewUrl`/`thumbnailPreviewUrl`/`rawUrl` while preserving frame refs; Right Pane generates `/api/sciforge/preview/raw?ref=...` for workspace-local frame refs；验证：`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 增加 replay timeline 可视化状态。
-  验收：timeline 能显示 before/after frame、cursor move/point/annotate、proposal、lease acquired/released、execute event 和 blocked/error markers。
-  完成：2026-05-31；evidence：`virtual-screen-timeline` renders frame/events/proposal/lease refs；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx`；状态：passed。
-- [x] 增加视觉回归检查。
-  验收：Browser/Screen pane screenshot test 能证明真实 frame 非空、cursor overlay 可见、文本不重叠、blocked/error/empty state 清楚，且 GUI 没有执行 Computer Use action。
-  完成：2026-05-31；evidence：`visual-regression` Screen fixture 覆盖 active frame preview、cursor overlay、timeline、lease/proposal、summary refs 和 raw payload rejection；headless visual assertion confirms frame image nonblank, cursor/summary/timeline visible, and no error boundary without retaining `/tmp` screenshot paths as durable evidence；验证：`node --import tsx --test packages/presentation/components/virtual-screen-viewer/render.test.tsx src/ui/src/app/ResultsRenderer.test.ts`；状态：passed。
+- [x] 定义 annotation overlay refs。
+  验收：point、rectangle、arrow、highlight、comment、agent cursor trace、rejected target 都能绑定到 window region、AX element、DOM element、OCR text span、visual object 或 artifact/file ref。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/sciforge_computer_use/contracts.py`、`packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py`、`packages/presentation/components/virtual-screen-viewer/render.test.tsx`；验证：Python contract tests、VirtualScreen viewer focused tests；状态：overlay kinds/bindings validated and presented refs-first。
+- [x] 支持 annotation -> proposal -> action -> verification。
+  验收：用户或 agent 对窗口区域说“把这里改成 X”时，系统先生成 action proposal，包含 target ref、adapter kind、risk preview、before evidence、expected after evidence 和 approval policy；执行后必须有 after evidence 与 verification ref。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/sciforge_computer_use/contracts.py`、`packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py`、`tools/computer-use-next/virtual-app-screen-first-scenario.ts`；验证：Python contract tests、`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`；状态：annotation/proposal/input/executor/before-after/verifier chain covered by refs-first contract and first scenario smoke。
+- [x] 让 annotation 成为最终报告证据。
+  验收：最终 artifact 或验收报告可以引用 annotation/proposal refs，说明“用户/agent 在窗口何处提出了什么修改、系统如何执行、结果如何验证”。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-first-scenario.ts`、`tests/smoke/virtual-app-screen-first-scenario.test.ts`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`；状态：research-note artifact includes source evidence and annotation/proposal refs, shell-only/stale artifact rejected。
 
-### P2-CU-OPERABILITY：运维和开发者体验
+### P1-CU-UA-BACKGROUND-NATIVE-WINDOW：后台原生应用能力进入验收链
 
-- [x] 增加一键本地 M6 opt-in 命令。
-  验收：提供 `npm` 或 repo-local script 包装当前 macOS sidecar live demo，输出 manifest/currentBundle/validation 路径和最小 summary；失败时打印可操作 blocked reason。
-  完成：2026-05-31；evidence：`npm run smoke:cu-native-m6:opt-in` 包装 native sidecar live demo，CLI 输出 manifest/validation JSON，blocked 路径返回明确 reason 且不 claim completion；验证：`npm run smoke:cu-native-m6:opt-in -- --help`、`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py`；状态：passed。
-- [x] 建立 evidence bundle index。
-  验收：每次 opt-in live run 可写入本地 index，记录 runId、日期、status、platform、sidecar binding、screen count、validationRef 和清理状态；index 不能成为 completion evidence 的替代。
-  完成：2026-05-31；evidence：`evidenceIndexRef` 记录 runId/observedAt/status/platform/sidecarBindingKind/screenCount/actorCursorCount/validationRef/cleanup，validator 拒绝把 index 当 completion substitute；验证：`PYTHONPATH=packages/actions/computer-use pytest -q packages/actions/computer-use/tests/test_native_multi_screen_live_demo.py`、`npm run smoke:cu-next-live-acceptance`；状态：passed。
-- [x] 写清跨平台策略。
-  验收：macOS 当前走 native virtual-screen sidecar；Linux/Windows 只列 future backend adapter 条件，不重新引入 Docker/noVNC 作为 product blocker。
-  完成：2026-05-31；evidence：`README.md` 和 manifest 将 macOS native sidecar 作为当前 opt-in 入口，非 macOS/缺权限/缺工具 fail closed，Docker/noVNC/RDP 仅保留 legacy diagnostic/historical evidence；验证：`rg -n "smoke:cu-native-m6|nativeM6OptIn|Docker/noVNC/RDP" package.json packages/actions/computer-use/action-provider.manifest.json packages/actions/computer-use/README.md`、`git diff --check`；状态：passed。
+- [x] 建立 native window capture provider contract。
+  验收：可读取 app/window identity、bounds、frame ref、preview ref、timestamp/hash、permission diagnostics；缺 Screen Recording/Accessibility 或窗口不可渲染时给出 blocked reason。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/native-window-capability.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_native_window_capability.py`；验证：`python3 -m json.tool packages/actions/computer-use/native-window-capability.manifest.json >/tmp/sciforge-native-window-capability-jsoncheck.json`、`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_native_window_capability.py -q`；状态：contract-only refs-first native window capability manifest landed。
+- [x] 建立 AX / UIA / AT-SPI hit-test 与 action contract。
+  验收：窗口坐标可绑定到 element ref 或 region ref；标准控件能执行 press/set value/scroll/menu command；自绘控件必须明确降级为 vision-grounded 或 blocked。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/native-window-capability.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_native_window_capability.py`；验证：native-window capability focused pytest；状态：AX/UIA/AT-SPI hit-test/action refs require proposal, lease, before/after, verifier, no direct mutation。
+- [x] 研究 offscreen / hidden display-like surface。
+  验收：只有 capability probe 证明 `backgroundRenderable=true`、`affectsPhysicalDisplay=false`、`requiresFocusSteal=false` 时，才能宣称应用在后台运行且物理屏不弹窗。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/native-window-capability.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_native_window_capability.py`；验证：native-window capability focused pytest；状态：offscreen/hidden/occluded/minimized probes are readiness-only and fail closed on focus steal/popup/shared input。
+- [x] 定义 app lifecycle manager。
+  验收：open/attach/reuse/close target app session 不污染用户当前桌面；如果必须弹窗或抢焦点，必须先返回 handoff/diagnostic 状态。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/native-window-capability.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_native_window_capability.py`；验证：native-window capability focused pytest；状态：open/attach/reuse/close lifecycle contract returns handoff/diagnostic for dialogs/focus-steal/destructive close。
+
+### P1-CU-UA-RESEARCH-WORKFLOW：从单 app 走向科研多 app 验收
+
+- [x] 定义第一批科研 app screen profiles。
+  验收：至少覆盖 Browser research、Terminal experiment、Jupyter/notebook、Editor/Cursor、PDF/Zotero/Preview、CSV/table viewer；每个 profile 有 adapter readiness、frame、input、artifact、user-level eligibility 和 blocked 策略。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-research-workflow.ts`、`tests/smoke/virtual-app-screen-research-workflow.test.ts`、`packages/actions/computer-use/adapter-registry.manifest.json`；验证：`node --import tsx --test tests/smoke/virtual-app-screen-research-workflow.test.ts`；状态：first six research profiles covered without fixture pass substitution。
+- [x] 设计多 `VirtualAppScreen` 协作。
+  验收：一个 task 可以同时展示文献检索、实验运行、日志观察、notebook/report 编辑等 screen；能隔离的 adapter 并行，不能隔离的 adapter 串行；user-level manifest 必须记录每个 screen 的贡献和边界。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-research-workflow.ts`、`tests/smoke/virtual-app-screen-research-workflow.test.ts`；验证：research workflow focused smoke；状态：isolated-parallel and non-isolated-serial scheduling plus cross-screen contribution boundaries covered。
+- [x] 建立科研产物验收链。
+  验收：final report、notebook、figure、CSV、PPT/DOCX、实验日志等产物必须有 current app screen evidence、artifact refs、validator/verifier refs 和 gui.present refs。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-research-workflow.ts`、`tests/smoke/virtual-app-screen-research-workflow.test.ts`；验证：research workflow focused smoke；状态：report/notebook/figure/CSV/PPT/DOCX/log artifact chains require artifact/verifier/gui.present refs and reject DOM/Playwright/shell-only substitutes。
+
+### P1-CU-UA-VALIDATION：更新 product smoke 到用户级验收
+
+- [x] 更新 Computer Use product smoke matrix。
+  验收：新增 `virtual-app-screen-user-acceptance` gate；拒绝 placeholder-only、旧 frame、跨 bundle refs、GUI executor、shared system input、focus steal、physical display popup、shell direct artifact write、缺 gui.present、缺 artifact validator 和缺 user-visible Screen attach。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/product-smoke-matrix.ts`、`tests/smoke/cu-next-live-acceptance-matrix.test.ts`；验证：`npm run smoke:cu-next-live-acceptance --silent`；状态：active product gate now requires VirtualAppScreen manifest。
+- [x] 更新 live acceptance marker。
+  验收：task evidence 能表达 app/session/window refs、adapter readiness、input intent、before/after refs、annotation/proposal refs、user control refs、artifact refs、verifier refs 和 final user-facing summary。
+  完成：2026-06-01；evidence refs：`tests/smoke/cu-next-live-acceptance-matrix.test.ts`、`tools/computer-use-next/product-smoke-matrix.ts`；验证：`npm run smoke:cu-next-live-acceptance --silent`；状态：manifest-backed task evidence accepted, substitute evidence rejected。
+- [x] 保留 M6/native multi-screen 为历史回归，不再作为 active product direction。
+  验收：旧 M6 opt-in 仍可用于 sidecar/replay/ref hardening 回归，但新任务板、设计文档和默认产品路线不把完整虚拟桌面作为 blocker，也不能单独满足 VirtualAppScreen user-level acceptance。
+  完成：2026-06-01；evidence refs：`docs/native-extension-ownership-map.json`、`packages/actions/computer-use/action-provider.manifest.json`、`tools/check-module-boundaries.ts`；验证：`npm run smoke:native-extension-ownership --silent`、`npm run smoke:module-boundaries --silent`、`npm run smoke:cu-next-live-acceptance --silent`；状态：M6 historical opt-in regression only。
+
+### P2-CU-UA-OPERABILITY：让验收可运行、可诊断、可复验
+
+- [x] 建立 adapter registry 文档和 manifest。
+  验收：每个 adapter profile 都能被 describe/query/read，未声明 adapter 或 capability fail closed。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/adapter-registry.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_adapter_registry.py`、`packages/actions/computer-use/README.md`；验证：`python3 -m json.tool packages/actions/computer-use/adapter-registry.manifest.json >/tmp/sciforge-adapter-registry-jsoncheck.json`、`PYTHONPATH=packages/actions/computer-use python3 -m pytest packages/actions/computer-use/tests/test_virtual_app_screen_adapter_registry.py packages/actions/computer-use/tests/test_virtual_app_screen_user_acceptance.py -q`；状态：registry describe/query/read + undeclared adapter/capability fail-closed。
+- [x] 建立本地 app-screen user-acceptance smoke。
+  验收：能启动一个低风险 app/session，attach 到 Screen tab，显示 frame，执行一个非破坏性 input intent，写 before/after evidence，生成 user-facing artifact，并输出 user-acceptance manifest；失败时输出清晰 blocked reason。
+  完成：2026-06-01；evidence refs：`tools/computer-use-next/virtual-app-screen-local-smoke.ts`、`tests/smoke/virtual-app-screen-local-smoke.test.ts`、`package.json`；验证：`npm run smoke:virtual-app-screen-user-acceptance-contract --silent`、`node --import tsx tools/computer-use-next/virtual-app-screen-local-smoke.ts --out-dir /tmp/sciforge-vas-local-smoke-real-evidence --run-id cli-real-evidence-smoke --mode real-evidence`；状态：default diagnostic fail-closed smoke plus explicit complete real-evidence pass path covered。
+- [x] 建立失败诊断与 repair hints。
+  验收：失败时能区分 no session、adapter unavailable、background rendering unavailable、permission missing、target ambiguous、verification failed、artifact missing、isolation failed、needs confirmation 和 user handoff required。
+  完成：2026-06-01；evidence refs：`packages/actions/computer-use/adapter-registry.manifest.json`、`packages/actions/computer-use/tests/test_virtual_app_screen_adapter_registry.py`；验证：同 adapter registry tests；状态：10 类失败诊断固定为 refs-first diagnostic taxonomy。
+- [x] 更新 ownership map / architecture 文档。
+  验收：`PROJECT.md`、`PROJECT_CU.md`、Computer Use 设计文档、NativeExtensionOwnershipMap 和 action-provider manifest 对 user-level acceptance 的命名一致。
+  完成：2026-06-01；evidence refs：`PROJECT.md`、`PROJECT_CU.md`、`packages/actions/computer-use/vision_computer_use_agent_mvp.md`、`docs/NativeExtensionOwnershipMap.md`、`docs/native-extension-ownership-map.json`、`packages/actions/computer-use/action-provider.manifest.json`；验证：`git diff --check`、`npm run smoke:module-boundaries --silent`、`npm run smoke:native-extension-ownership --silent`；状态：active gate naming aligned to VirtualAppScreen user acceptance。
 
 ## 已完成基线
 
 - [x] 定义 Computer Use L0/L1/L2 module boundary contract。
-- [x] 定义 multi-screen session schema、`VirtualDisplayGroup` / `VirtualScreen`、`ActorCursor`、action proposal 和 scoped executor lease contract。
-- [x] 定义 user control / session permission contract。
-- [x] 定义 Codex-style local plugin / MCP contract，并收敛 public tool surface。
-- [x] 实现 session skeleton、actor cursor log、screen/window scoped lease manager 和 old single-screen diagnostic projection。
-- [x] 实现 scheduler queue、stop/cancel、approval gate、executor adapter contract 和 observe-before-mutate。
-- [x] 扩展 evidence ledger freshness、grounding metadata、planner brief、multi-screen replay manifest 和 cursor overlay contract。
-- [x] 将 Docker/noVNC/container 从 active product roadmap 退役。
-- [x] 建立 native multi-screen / multi-actor cursor product gate、platform sidecar MVP、BrowserRuntime DOM/AX observation refs 和 live/product validators。
+- [x] 定义 refs-first evidence ledger、replay bundle、actor cursor、scheduler lease 和 user-control contract。
+- [x] 建立 Screen pane presentation-only 边界，GUI 不执行 Computer Use。
+- [x] 建立 raw screenshot/base64/provider payload/secrets rejection。
+- [x] 建立 M6 native multi-screen / multi-actor cursor opt-in evidence、sidecar schema、bundle-local replay 和 product smoke 回归。
+- [x] 建立 BrowserRuntime DOM/AX observation refs 只能作为 hints 的 fail-closed 边界。
 
-基线 evidence 归档在 Git 历史和 2026-05-31 之前的 `PROJECT_CU.md` 版本中；本文件当前只追踪未完成的 product integration 缺口。
+这些基线是新路线的安全底座；旧的完整虚拟桌面任务板不再作为 active backlog。
 
 ## 验证规则
 
@@ -183,23 +223,25 @@ GUI Module
 - Computer Use package contract/schema 改动：运行 package-local Python tests，并补 focused schema/validator tests。
 - Runtime bridge 改动：运行 package bridge focused tests、runtime event tests 和 `git diff --check`。
 - GUI presentation 改动：运行 viewer/presentation focused tests、Browser visual check，并确认 GUI 没有执行 Computer Use action。
-- Screen pane 改动：覆盖真实 frame refs、multi-cursor overlay、lease owner、replay timeline、blocked/error/empty state、Stop terminal-equivalent text 和 raw payload rejection。
-- Backend/live 改动：先跑 fixture/focused tests，再跑 opt-in native multi-screen live gates；live evidence 必须 refs-first、脱敏、bundle-local。
+- VirtualAppScreen 改动：覆盖 attach/no-session/observe-only/blocked/error、frame refs、annotation overlay、actor cursor、input intent、lease owner、replay timeline、Stop terminal-equivalent text 和 raw payload rejection。
+- Adapter 改动：覆盖 readiness record、capability flags、before/after evidence、shared-system-input rejection、focus-steal/physical-display-popup rejection 和 blocked reason。
+- Backend/live 改动：先跑 fixture/focused tests，再跑 opt-in native/app-screen gates；live evidence 必须 refs-first、脱敏、bundle-local。
 - 每轮完成后更新本文件对应 TODO，补 evidence refs、日期、验证命令和状态。
 
 ## 暂缓集成
 
 - 默认依赖真实 OS multi-pointer / multi-seat。
-- 将 Docker/container 作为产品层并发隔离抽象。
+- 将完整 Docker/container/noVNC/RDP desktop 作为产品层并发隔离抽象。
+- 默认使用 VM / microVM / full remote desktop 作为科研自动化主路径。
 - 让 GUI 直接调用 Computer Use executor。
-- 用 DOM、Playwright、accessibility tree、shell 直写 artifact 或旧 trace 替代 Computer Use 完成证据。
-- 在默认 release gate 中运行长耗时 live Computer Use gates；native multi-screen / multi-actor gates 仍作为 opt-in release evidence。
+- 用 DOM、Playwright、accessibility tree、shell 直写 artifact、旧 trace 或 app private shortcut 替代 Computer Use 完成证据。
+- 在默认 release gate 中运行长耗时 live Computer Use gates；native/app-screen gates 仍作为 opt-in release evidence。
 
 ## 必读文档
 
 - [`PROJECT.md`](PROJECT.md)：总项目协议、模块化原则和验证规则。
 - [`docs/Architecture.md`](docs/Architecture.md)：GUI-TUI、L0/L1/L2、Agent Host Semantic Pipeline 和 native extension 边界。
 - [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI -> TUI 文本、TUI -> GUI intent tools 和只读 GUI resource tree。
-- [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)：Computer Use 视觉 agent 与 multi-screen actor-cursor 设计。
+- [`packages/actions/computer-use/vision_computer_use_agent_mvp.md`](packages/actions/computer-use/vision_computer_use_agent_mvp.md)：VirtualAppScreen、后台应用控制会话和 adapter-first 设计。
 - [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：Computer Use ownership 与 GUI/runtime 边界。
 - [`docs/native-extension-ownership-map.json`](docs/native-extension-ownership-map.json)：可验证 ownership manifest。

@@ -35,6 +35,12 @@ export function resolveSidebarProjectSessionBundle(
       archivedSessions: liveArchived ?? [],
     };
   }
+  if (!normalizedProjectPath && !normalizedActivePath) {
+    return {
+      sessionsByScenario: liveSessions,
+      archivedSessions: liveArchived ?? [],
+    };
+  }
   return { sessionsByScenario: {}, archivedSessions: [] };
 }
 

@@ -30,6 +30,7 @@ import type {
   SciForgeMessage,
   SciForgeReference,
   SciForgeSession,
+  ComposerDeclaredIntentSnapshot,
   ConversationTurnMode,
   RuntimeResumePolicy,
 } from '../../domain';
@@ -61,6 +62,7 @@ export interface RunPromptOrchestratorInput {
   config: SciForgeConfig;
   targetPeer?: PeerInstance;
   scenarioOverride?: ScenarioRuntimeOverride;
+  composerDeclaredIntents?: ComposerDeclaredIntentSnapshot;
   availableComponentIds: string[];
   defaultComponentIds: string[];
   scenarioPackageRef: ScenarioPackageRef;
@@ -143,6 +145,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       runs: turnPayload.runs,
       config: input.config,
       scenarioOverride: input.scenarioOverride,
+      composerDeclaredIntents: input.composerDeclaredIntents,
       availableComponentIds: input.availableComponentIds,
       scenarioPackageRef: input.scenarioPackageRef,
       skillPlanRef: input.skillPlanRef,

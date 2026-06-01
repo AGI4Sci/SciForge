@@ -482,9 +482,23 @@ test('result adapter presents refs-first Computer Use trace summaries through TU
       id: 'ref:vision-sense-trace',
       path: '.sciforge/vision-runs/run-1/vision-trace.json',
       metadata: {
+        runId: 'run-1',
         screenshotRefs: [{
           path: '.sciforge/vision-runs/run-1/before.png',
           type: 'screenshot',
+          displayId: 2,
+          width: 1440,
+          height: 900,
+          windowTarget: {
+            captureKind: 'window',
+            mode: 'app-window',
+            windowId: 4242,
+            bundleId: 'com.example.Editor',
+            appName: 'Example Editor',
+            title: 'Experiment.md',
+            displayId: 2,
+            inputIsolation: 'require-focused-target',
+          },
         }],
       },
     }],
@@ -500,6 +514,16 @@ test('result adapter presents refs-first Computer Use trace summaries through TU
     '.sciforge/vision-runs/run-1/before.png',
     '.sciforge/vision-runs/run-1/after.png',
   ]);
+  assert.equal(actions[0]?.payload.attachState, 'observe-only');
+  assert.equal(actions[0]?.payload.targetAppRef, 'app:com.example.Editor');
+  assert.equal(actions[0]?.payload.targetWindowRef, 'window:4242');
+  assert.equal(actions[0]?.payload.currentFrameRef, '.sciforge/vision-runs/run-1/before.png');
+  assert.deepEqual(actions[0]?.payload.screen, { width: 1440, height: 900, label: 'Experiment.md' });
+  assert.deepEqual(actions[0]?.payload.isolationFlags, {
+    requiresFocusSteal: true,
+    backgroundRenderable: false,
+    diagnosticOnly: true,
+  });
   assert.deepEqual(actions[0]?.payload.executionUnitRefs, ['EU-computer-use-run-1']);
   assert.deepEqual(actions[0]?.payload.workEvidenceRefs, ['workEvidence:computer-use-action-provider:run-1']);
 });

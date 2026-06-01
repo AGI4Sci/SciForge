@@ -420,6 +420,84 @@ test('run key info counts durable file refs as user-visible objects', () => {
   assert.match(html, /file:p6-mini-grant\/timeline-budget\.md/);
 });
 
+test('run key info keeps scientific claims refs-first and hides internal evidence refs', () => {
+  const html = renderToStaticMarkup(createElement(RunKeyInfo, {
+    runId: 'run-scientific-artifacts',
+    session: {
+      schemaVersion: 2,
+      sessionId: 'session-scientific-artifacts',
+      scenarioId: 'literature-evidence-review',
+      title: 'scientific artifacts',
+      createdAt: '2026-05-13T00:00:00.000Z',
+      updatedAt: '2026-05-13T00:00:05.000Z',
+      messages: [],
+      runs: [{
+        id: 'run-scientific-artifacts',
+        scenarioId: 'literature-evidence-review',
+        status: 'completed',
+        prompt: 'summarize evidence',
+        response: 'done',
+        createdAt: '2026-05-13T00:00:00.000Z',
+        completedAt: '2026-05-13T00:00:04.000Z',
+        objectReferences: [{
+          id: 'obj-evidence-table',
+          kind: 'artifact',
+          title: 'Evidence table',
+          ref: 'artifact:evidence-table',
+          status: 'available',
+          presentationRole: 'supporting-evidence',
+        }],
+      }],
+      uiManifest: [],
+      claims: [{
+        id: 'claim-evidence-supported',
+        text: 'Treatment B increased the median signal.',
+        type: 'inference',
+        confidence: 0.87,
+        evidenceLevel: 'experimental',
+        supportingRefs: [
+          'artifact:evidence-table',
+          'reports/support.csv',
+          'stderr:.sciforge/logs/stderr.log',
+          'artifact:.sciforge/raw-provider-payload',
+        ],
+        opposingRefs: [],
+        dependencyRefs: [],
+        updatedAt: '2026-05-13T00:00:02.000Z',
+      }],
+      executionUnits: [],
+      artifacts: [{
+        id: 'evidence-table',
+        type: 'data-table',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        metadata: { title: 'Evidence table', runId: 'run-scientific-artifacts' },
+        delivery: {
+          contractId: 'sciforge.artifact-delivery.v1',
+          ref: 'artifact:evidence-table',
+          role: 'supporting-evidence',
+          declaredMediaType: 'text/csv',
+          declaredExtension: 'csv',
+          contentShape: 'raw-file',
+          readableRef: '.sciforge/artifacts/evidence-table.csv',
+          previewPolicy: 'inline',
+        },
+      }],
+      notebook: [],
+      versions: [],
+      hiddenResultSlotIds: [],
+    } as SciForgeSession,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /1 objects · 1 findings/);
+  assert.match(html, /Treatment B increased the median signal/);
+  assert.match(html, /data-claim-ref-count="2"/);
+  assert.match(html, /evidence-table/);
+  assert.match(html, /support\.csv/);
+  assert.doesNotMatch(html, /\.sciforge|stderr|raw-provider-payload/);
+});
+
 test('chat verification badge is projection-only and ignores raw verification fallback', () => {
   const rawOnly = renderToStaticMarkup(createElement(RunVerificationTag, {
     runId: 'run-raw-verification',
@@ -718,11 +796,109 @@ test('chat message DOM and badges distinguish demo seed from live runtime answer
   assert.match(html, /data-message-id="legacy-live-runtime-message"/);
   assert.match(html, /legacy live answer/);
   assert.match(html, /data-message-id="native-runtime-message"/);
-  assert.match(html, /data-message-provenance="assistant-result"/);
+  assert.match(html, /data-message-id="native-runtime-message"[^>]*data-message-provenance="assistant-result"[^>]*data-live-acceptance-eligible="true"/);
   assert.doesNotMatch(html, /native-message/);
   assert.doesNotMatch(html, /codex-command-native-message/);
   assert.doesNotMatch(html, /codex-command-live/);
   assert.doesNotMatch(html, /live-runtime-codex|live Runtime Codex|运行结果/);
+});
+
+test('chat renders external channel user messages from thread event metadata without Feishu imports', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-channel-message',
+    scenarioId: 'literature-evidence-review',
+    title: 'channel message',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    updatedAt: '2026-06-01T00:00:10.000Z',
+    messages: [{
+      id: 'channel-user-feishu',
+      role: 'user',
+      content: 'Please summarize the attached protocol.',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      references: [{
+        id: 'ref-feishu-message',
+        kind: 'message',
+        title: 'Feishu message',
+        ref: 'feishu:message:om_1',
+      }, {
+        id: 'ref-feishu-attachment',
+        kind: 'file',
+        title: 'Feishu attachment 1',
+        ref: 'feishu:file:file_1',
+      }, {
+        id: 'ref-feishu-audit',
+        kind: 'message',
+        title: 'Feishu audit',
+        ref: 'audit:feishu:intake:om_1',
+      }],
+      provenance: {
+        kind: 'channel-message',
+        source: { channel: 'feishu' },
+        channel: {
+          channel: 'feishu',
+          accountId: 'tenant-a',
+          sender: { ref: 'feishu:user:ou_1', displayName: 'Dr. Chen' },
+          conversationRef: 'feishu:chat:oc_1',
+          externalMessageRef: 'feishu:message:om_1',
+          attachmentRefs: ['feishu:file:file_1'],
+          auditRef: 'audit:feishu:intake:om_1',
+          rawEventRef: 'audit:feishu:raw:om_1',
+          receivedAt: '2026-06-01T00:00:00.000Z',
+          threadBindingStatus: 'bound',
+        },
+        runtimeRequestEligible: true,
+        liveAcceptanceEligible: true,
+      },
+    }],
+    runs: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+    versions: [],
+    hiddenResultSlotIds: [],
+  };
+
+  const html = renderChatPanel(createElement(ChatPanel, {
+    scenarioId: 'literature-evidence-review',
+    role: 'Researcher',
+    config: defaultSciForgeConfig,
+    session,
+    input: '',
+    savedScrollTop: 0,
+    onInputChange: () => undefined,
+    onScrollTopChange: () => undefined,
+    onSessionChange: () => undefined,
+    onNewChat: () => undefined,
+    onDeleteChat: () => undefined,
+    archivedSessions: [],
+    onRestoreArchivedSession: () => undefined,
+    onDeleteArchivedSessions: () => undefined,
+    onClearArchivedSessions: () => undefined,
+    onEditMessage: () => undefined,
+    onDeleteMessage: () => undefined,
+    archivedCount: 0,
+    onAutoRunConsumed: () => undefined,
+    onConfigChange: () => undefined,
+    onTimelineEvent: () => undefined,
+    onActiveRunChange: () => undefined,
+    onMarkReusableRun: () => undefined,
+    onObjectFocus: () => undefined,
+    runtimeHealth: [],
+  }));
+
+  assert.match(html, /data-message-id="channel-user-feishu"/);
+  assert.match(html, /data-source-channel="feishu"/);
+  assert.match(html, /external-channel-message/);
+  assert.match(html, /Feishu/);
+  assert.match(html, /Dr\. Chen/);
+  assert.match(html, /feishu:chat:oc_1/);
+  assert.match(html, /attachments 1/);
+  assert.match(html, /audit:feishu:intake:om_1/);
+  assert.match(html, /feishu:file:file_1/);
+  assert.doesNotMatch(html, /lark-cli|@larksuite|connectors\/feishu|packages\/connectors\/feishu/);
 });
 
 test('default chat renders Computer Use confirmation panels without protocol command chrome', () => {

@@ -1,19 +1,13 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
-import { AlertTriangle, Check, Clock, CornerUpLeft, FilePlus, FileText, Sparkles, Target } from 'lucide-react';
+import { AlertTriangle, Check, Clock, FilePlus, FileText, Sparkles, Target } from 'lucide-react';
 import {
-  alignmentContractTimelineDisplay,
   alignmentDefaultContractData,
   alignmentFeasibilityRows,
   alignmentPageDisplayPolicy as pageDisplay,
   alignmentRadarData,
-  alignmentRuntimeTimelineDisplay,
-  alignmentTimelineClassNames,
 } from '@sciforge/scenario-core/alignment-display-policy';
-import { scenarios } from '../data';
-import { timeline } from '../demoData';
-import { nowIso, type AlignmentContractRecord, type ScenarioInstanceId, type TimelineEventRecord } from '../domain';
-import { exportJsonFile } from './exportUtils';
-import { ActionButton, Badge, Card, ChartLoadingFallback, ClaimTag, ConfidenceBar, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
+import type { AlignmentContractRecord } from '../domain';
+import { ActionButton, Badge, Card, ChartLoadingFallback, EmptyArtifactState, SectionHeader, cx } from './uiPrimitives';
 
 const CapabilityRadarChart = lazy(async () => ({ default: (await import('../charts')).CapabilityRadarChart }));
 
@@ -269,86 +263,5 @@ function EditableBlock({
       <span>{label}</span>
       <textarea value={value} rows={rows} onChange={(event) => onChange(event.target.value)} />
     </label>
-  );
-}
-
-export function TimelinePage({
-  alignmentContracts = [],
-  events = [],
-  onOpenScenario,
-}: {
-  alignmentContracts?: AlignmentContractRecord[];
-  events?: TimelineEventRecord[];
-  onOpenScenario: (id: ScenarioInstanceId) => void;
-}) {
-  const [query, setQuery] = useState('');
-  const [actionFilter, setActionFilter] = useState('all');
-  const alignmentItems = alignmentContracts.map((contract) => ({
-    time: new Date(contract.updatedAt).toLocaleString('zh-CN', { hour12: false }),
-    ...alignmentContractTimelineDisplay(contract),
-  }));
-  const runtimeItems = events.map((event) => ({
-    time: new Date(event.createdAt).toLocaleString('zh-CN', { hour12: false }),
-    ...alignmentRuntimeTimelineDisplay(event),
-  }));
-  const items = [...runtimeItems, ...alignmentItems, ...timeline.map((item) => ({ ...item, action: item.action ?? pageDisplay.timeline.demoAction, refs: [] }))];
-  const filtered = items.filter((item) => {
-    if (actionFilter !== 'all' && item.action !== actionFilter) return false;
-    if (!query.trim()) return true;
-    const normalized = query.trim().toLowerCase();
-    return [item.title, item.desc, item.scenario, item.action, ...(item.refs ?? [])].some((value) => String(value).toLowerCase().includes(normalized));
-  });
-  const actions = ['all', ...Array.from(new Set(items.map((item) => item.action)))];
-  function exportFilteredBranch() {
-    exportJsonFile(`${pageDisplay.timeline.exportFilePrefix}-${actionFilter}-${new Date().toISOString().slice(0, 10)}.json`, {
-      schemaVersion: '1',
-      exportedAt: nowIso(),
-      query,
-      actionFilter,
-      eventCount: filtered.length,
-      events: filtered,
-    });
-  }
-  return (
-    <main className="page">
-      <div className="page-heading">
-        <h1>研究时间线</h1>
-        <p>聊天、工具、证据和执行单元最终都沉淀为可审计的研究记录。</p>
-      </div>
-      <div className="library-controls">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={pageDisplay.timeline.searchPlaceholder} aria-label="搜索 Timeline" />
-        <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value)} aria-label="按事件类型过滤">
-          {actions.map((action) => <option key={action} value={action}>{action === 'all' ? pageDisplay.timeline.allActionsLabel : action}</option>)}
-        </select>
-        <button type="button" onClick={exportFilteredBranch}>导出当前分支</button>
-      </div>
-      <div className={alignmentTimelineClassNames.list}>
-        {filtered.map((item) => {
-          const scenario = scenarios.find((entry) => entry.id === item.scenario) ?? scenarios[0];
-          return (
-            <Card className={alignmentTimelineClassNames.card} key={`${item.time}-${item.title}`}>
-              <div className={alignmentTimelineClassNames.dot} style={{ background: scenario.color }} />
-              <div>
-                <div className={alignmentTimelineClassNames.meta}>
-                  <span>{item.time}</span>
-                  <Badge variant="info">{scenario.name}</Badge>
-                  <ClaimTag type={item.claimType} />
-                  <ConfidenceBar value={item.confidence} />
-                </div>
-                <h3>{item.title}</h3>
-                <p>{item.desc}</p>
-                <div className="scenario-builder-actions timeline-card-actions">
-                  <ActionButton type="button" icon={CornerUpLeft} variant="secondary" onClick={() => onOpenScenario(item.scenario)}>
-                    回到场景
-                  </ActionButton>
-                  {item.refs?.slice(0, 3).map((ref) => <code key={ref}>{ref}</code>)}
-                </div>
-              </div>
-            </Card>
-          );
-        })}
-      </div>
-      {!filtered.length ? <EmptyArtifactState title={pageDisplay.timeline.emptyTitle} detail={pageDisplay.timeline.emptyDetail} /> : null}
-    </main>
   );
 }

@@ -812,6 +812,32 @@ export interface TargetInstanceContext {
 export type ConversationTurnMode = 'normal' | 'annotation-plan-only' | 'annotation-quick-action';
 export type RuntimeResumePolicy = 'same-conversation-lane' | 'explicit-reference-only' | 'none';
 
+export type ComposerDeclaredModelIntentId =
+  | 'auto'
+  | 'max'
+  | 'assistant-auto'
+  | 'assistant-fast'
+  | 'assistant-balanced'
+  | 'assistant-deep';
+
+export type ComposerDeclaredModelMode = 'auto' | 'max' | 'assistant';
+export type ComposerDeclaredCapabilityTier = 'auto' | 'max' | 'fast' | 'balanced' | 'deep';
+
+export interface ComposerDeclaredModelIntentProjection {
+  modelIntentId: ComposerDeclaredModelIntentId;
+  mode: ComposerDeclaredModelMode;
+  capabilityTier: ComposerDeclaredCapabilityTier;
+  publicLabel: string;
+  actionId: string;
+  declaredAt: string;
+}
+
+export interface ComposerDeclaredIntentSnapshot {
+  schemaVersion: 'sciforge.composer-declared-intents.v1';
+  source: 'ui-action-audit-log';
+  model?: ComposerDeclaredModelIntentProjection;
+}
+
 export interface SendAgentMessageInput {
   sessionId?: string;
   sessionCreatedAt?: string;
@@ -839,6 +865,7 @@ export interface SendAgentMessageInput {
   conversationEnvelope?: unknown;
   conversationLaneId?: string;
   runtimeResumePolicy?: RuntimeResumePolicy;
+  composerDeclaredIntents?: ComposerDeclaredIntentSnapshot;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;
 }

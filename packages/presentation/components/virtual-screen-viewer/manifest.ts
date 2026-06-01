@@ -9,7 +9,7 @@ export const manifest: UIComponentManifest = {
   moduleId: 'virtual-screen-panel',
   version: '1.0.0',
   title: 'Virtual screen viewer',
-  description: 'Presentation-only Computer Use virtual display/session viewer with refs-first frames, actor cursors, isolation flags, leases, evidence, and replay status.',
+  description: 'Presentation-only Computer Use VirtualAppScreen surface with host-owned live frame refs, actor cursors, isolation flags, leases, input-intent requests, evidence, and replay status.',
   componentId: VIRTUAL_SCREEN_VIEWER_COMPONENT_ID,
   lifecycle: 'published',
   outputArtifactTypes: [VIRTUAL_SCREEN_VIEWER_ARTIFACT_TYPE],
@@ -21,6 +21,8 @@ export const manifest: UIComponentManifest = {
   ],
   viewParams: [
     'sessionRef',
+    'liveSurfaceRef',
+    'surfaceTransport',
     'visibleScreenRefs',
     'visibleCursorRefs',
     'frameRefs',
@@ -41,9 +43,9 @@ export const manifest: UIComponentManifest = {
     'actorCursors',
     'isolation',
   ],
-  interactionEvents: ['virtual-screen-terminal-equivalent-text'],
+  interactionEvents: ['virtual-screen-terminal-equivalent-text', 'virtual-screen-input-intent-request'],
   roleDefaults: ['desktop-operator', 'runtime-operator'],
-  fallbackModuleIds: ['computer-use-control-plane', 'generic-artifact-inspector'],
+  fallbackModuleIds: [],
   defaultSection: 'primary',
   priority: 8,
   safety: { sandbox: false, externalResources: 'none', executesCode: false },
@@ -53,7 +55,7 @@ export const manifest: UIComponentManifest = {
   },
   docs: {
     readmePath: 'packages/presentation/components/virtual-screen-viewer/README.md',
-    agentSummary: 'Use only for displaying Computer Use virtual screen/session refs. The GUI never executes input, never owns scheduler leases, and never accepts raw coordinates, desktop bridge params, provider routes, or inline screenshots.',
+    agentSummary: 'Use for displaying Computer Use VirtualAppScreen live-surface refs and requesting scoped InputIntent terminal-equivalent commands from the frame. The GUI never executes input, never owns scheduler leases, never creates virtual displays, and never accepts raw coordinates, desktop bridge params, provider routes, transport SDP, or inline screenshots.',
   },
   workbenchDemo: {
     artifactType: VIRTUAL_SCREEN_VIEWER_ARTIFACT_TYPE,

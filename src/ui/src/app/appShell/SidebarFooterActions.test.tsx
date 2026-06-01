@@ -2,14 +2,42 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { SidebarFooterActions } from './SidebarFooterActions';
+import { buildSidebarFooterStatus, SidebarFooterActions } from './SidebarFooterActions';
 
-test('sidebar footer actions render settings command', () => {
+test('sidebar footer actions render status feedback and settings commands', () => {
   const html = renderToStaticMarkup(React.createElement(SidebarFooterActions, {
+    workspacePath: '/Applications/workspace/SciForge',
+    workspaceStatus: 'Connected',
+    onFeedbackOpen: () => undefined,
     onSettingsOpen: () => undefined,
   }));
 
   assert.match(html, /sidebar-footer-actions/);
+  assert.match(html, /role="status"/);
+  assert.match(html, /SciForge/);
+  assert.match(html, /Local runtime/);
+  assert.match(html, /Connected/);
   assert.match(html, /nav-item sidebar-command/);
+  assert.match(html, />Feedback</);
   assert.match(html, />Settings</);
+  assert.doesNotMatch(html, /Applications|workspace\/SciForge/);
+});
+
+test('sidebar footer status redacts path and secret-like workspace labels', () => {
+  const status = buildSidebarFooterStatus({
+    workspacePath: '/tmp/openai-token-secret',
+    workspaceStatus: 'Did not find /tmp/openai-token-secret/.sciforge/workspace-state.json',
+  });
+
+  assert.equal(status.workspaceLabel, 'Workspace');
+  assert.equal(status.health, 'warning');
+  assert.equal(status.statusLabel, 'Needs attention');
+  assert.doesNotMatch(JSON.stringify(status), /tmp|token|secret|workspace-state/);
+});
+
+test('sidebar footer status normalizes connected syncing warning and unavailable states', () => {
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: 'Connected' }).health, 'connected');
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: 'Syncing workspace snapshot' }).health, 'syncing');
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceError: 'writer unavailable' }).health, 'warning');
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '', workspaceStatus: 'Connected' }).health, 'unavailable');
 });

@@ -4,7 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import type { AgentStreamEvent } from './domain';
-import { assistantDraftDeltaFromStreamEvent, assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, presentStreamEvent, presentStreamWorklog, streamEventCounts } from './streamEventPresentation';
+import { appendLiveStreamEvent, assistantDraftDeltaFromStreamEvent, assistantDraftFromStreamEvents, coalesceStreamEvents, latestRunningEvent, presentStreamEvent, presentStreamWorklog, streamEventCounts } from './streamEventPresentation';
 import { RunningWorkProcess, visibleRunningWorkEntries } from './app/chat/RunningWorkProcess';
 import { normalizeWorkspaceRuntimeEvent } from './api/sciforgeToolsClient/runtimeEvents';
 
@@ -300,15 +300,14 @@ test('structured interaction progress fields drive presentation without prompt o
   assert.equal(presentation.importance, 'background');
   assert.equal(presentation.tone, 'success');
   assert.equal(presentation.visibleInRunningMessage, false);
-  assert.match(presentation.detail, /Phase: verification/);
-  assert.match(presentation.detail, /Status: completed/);
-  assert.match(presentation.detail, /Reason: budget-watch/);
+  assert.match(presentation.detail, /Verification completed/);
   assert.match(presentation.detail, /Budget: elapsed 1200ms, remaining 800ms, retries 1\/2, max wall 5000ms/);
+  assert.doesNotMatch(presentation.detail, /Phase:|Status:|Reason:/);
   assert.doesNotMatch(presentation.detail, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(presentation.detail, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(presentation.detail, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
   assert.equal(entry.operationKind, 'validate');
-  assert.match(entry.operationLine, /^Validated Phase: verification/);
+  assert.match(entry.operationLine, /^Validated Verification completed/);
   assert.equal(worklog.operationCounts.validate, 1);
   assert.match(worklog.summary, /1 checked/);
 });
@@ -354,9 +353,10 @@ test('interaction progress presentation covers blocked guidance and cancellation
   assert.equal(worklog.entries[0].presentation.tone, 'warning');
   assert.equal(worklog.entries[2].presentation.tone, 'danger');
   const visible = worklog.entries.map((entry) => entry.presentation.detail).join('\n');
-  assert.match(visible, /Interaction: human-approval required/);
-  assert.match(visible, /Interaction: guidance optional/);
-  assert.match(visible, /Cancellation: user-cancelled/);
+  assert.match(visible, /Waiting for approval before continuing/);
+  assert.match(visible, /Queued follow-up will merge after the current run ends/);
+  assert.match(visible, /The run was cancelled/);
+  assert.doesNotMatch(visible, /Phase:|Status:|Interaction:|Cancellation:/);
   assert.doesNotMatch(visible, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(visible, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(visible, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
@@ -406,12 +406,13 @@ test('worklog restores compact interaction progress from structured detail only'
 
   assert.equal(compactPresentation.typeLabel, 'Needs approval');
   assert.equal(compactPresentation.importance, 'key');
-  assert.match(compactPresentation.detail, /Interaction: human-approval required/);
+  assert.match(compactPresentation.detail, /Waiting for approval before continuing/);
+  assert.doesNotMatch(compactPresentation.detail, /Phase:|Status:|Interaction:/);
   assert.equal(poisonPresentation.typeLabel, 'human-approval-required');
   assert.equal(poisonPresentation.detail, '');
   assert.equal(worklog.entries.length, 1);
   assert.equal(worklog.entries[0].operationKind, 'wait');
-  assert.match(worklog.entries[0].operationLine, /^Waiting Phase: verification/);
+  assert.match(worklog.entries[0].operationLine, /^Waiting Waiting for approval before continuing/);
   assert.doesNotMatch(worklog.entries[0].operationLine, /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(worklog.entries[0].operationLine, /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(worklog.entries[0].operationLine, /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
@@ -1486,4 +1487,42 @@ test('running work process keeps raw output out of the live chat DOM', () => {
   assert.doesNotMatch(markup, /stream-event-raw-fold/);
   assert.doesNotMatch(markup, /RAW_PAYLOAD_SHOULD_STAY_IN_FOLD/);
   assert.doesNotMatch(markup, /runtime-debug-sensitive/);
+});
+
+test('live stream event state is count and payload bounded before React stores it', () => {
+  let liveEvents: AgentStreamEvent[] = [];
+  for (let index = 0; index < 220; index += 1) {
+    liveEvents = appendLiveStreamEvent(liveEvents, event({
+      id: `heavy-${index}`,
+      type: 'tool-result',
+      label: 'Tool completed',
+      detail: index === 219
+        ? '<!DOCTYPE html><html><title>Attention Required</title><body>CF-RAY raw provider page</body></html>'
+        : 'Read PROJECT.md',
+      raw: {
+        type: 'tool_completed',
+        toolName: 'read_file',
+        status: 'completed',
+        filePath: 'PROJECT.md',
+        refs: ['file:PROJECT.md', 'https://provider.example/v1/debug'],
+        payload: {
+          html: '<html>RAW_PROVIDER_HTML_SHOULD_NOT_SURVIVE</html>'.repeat(300),
+          stdout: 'RAW_STDOUT_SHOULD_NOT_SURVIVE'.repeat(300),
+          stderr: 'RAW_STDERR_SHOULD_NOT_SURVIVE'.repeat(300),
+          localPath: '/Applications/workspace/private/raw.json',
+          token: 'sk-live-secret-1234567890',
+        },
+      },
+    }));
+  }
+
+  const serialized = JSON.stringify(liveEvents);
+
+  assert.ok(liveEvents.length <= 160);
+  assert.ok(serialized.length < 120_000);
+  assert.match(serialized, /runtime-debug-sensitive/);
+  assert.match(serialized, /PROJECT\.md/);
+  assert.doesNotMatch(serialized, /RAW_PROVIDER_HTML_SHOULD_NOT_SURVIVE|RAW_STDOUT_SHOULD_NOT_SURVIVE|RAW_STDERR_SHOULD_NOT_SURVIVE/);
+  assert.doesNotMatch(serialized, /provider\.example|sk-live-secret|\/Applications\/workspace|<html|CF-RAY/i);
+  assert.match(liveEvents.at(-1)?.detail ?? '', /Runtime provider transport output recorded|Runtime event recorded/);
 });

@@ -17,33 +17,88 @@ export function ContextWindowMeter({
 }) {
   const { locale: contextLocale } = useI18n();
   const locale = localeOverride ?? contextLocale;
-  const meter = buildContextWindowMeterModel(state, running);
+  const meter = buildContextWindowMeterModel(state, running, locale);
   const tooltipId = useId();
   const ratioLabel = localizeContextValue(meter.ratioLabel, locale);
   const statusLabel = localizeContextStatus(meter.statusLabel, locale);
+  const fullLabel = chatText(locale, { 'zh-CN': 'Full', 'en-US': 'Full' });
+  const tokensLabel = chatText(locale, { 'zh-CN': 'Tokens', 'en-US': 'Tokens' });
   const title = chatText(locale, {
     'zh-CN': `上下文 ${localizeContextValue(meter.ratioDetail, locale)} · ${statusLabel}`,
     'en-US': `Context ${meter.ratioDetail} · ${statusLabel}`,
   });
   return (
-    <div
-      role="status"
-      aria-label={chatText(locale, {
-        'zh-CN': `上下文窗口 ${ratioLabel}，${statusLabel}`,
-        'en-US': `Context window ${ratioLabel}, ${statusLabel}`,
-      })}
-      aria-describedby={tooltipId}
+    <details
       className={cx('context-window-meter', meter.level, meter.isEstimated && 'estimated', meter.isUnknown && 'unknown')}
       title={title}
-      tabIndex={0}
       style={{ '--context-window-ratio': meter.ratioStyle } as CSSProperties}
+      data-context-level={meter.level}
+      data-context-status={meter.statusLabel}
+      data-context-retention="selected-objects-preserved"
     >
-      <span className="context-window-ring" aria-hidden="true">
-        <span>{meter.ratioLabel === 'Unknown' ? '?' : meter.ratioLabel}</span>
-      </span>
-      <div className="context-window-popover" id={tooltipId} role="tooltip">
+      <summary
+        aria-label={chatText(locale, {
+          'zh-CN': `打开上下文窗口详情，${ratioLabel}，${statusLabel}`,
+          'en-US': `Open context window details, ${ratioLabel}, ${statusLabel}`,
+        })}
+        aria-controls={tooltipId}
+      >
+        <span className="context-window-ring" aria-hidden="true">
+          <span>{meter.ratioLabel === 'Unknown' ? '?' : meter.ratioLabel}</span>
+        </span>
+      </summary>
+      <div className="context-window-popover" id={tooltipId} role="dialog" aria-label={chatText(locale, { 'zh-CN': '上下文用量详情', 'en-US': 'Context usage details' })}>
         <div className="context-window-popover-head">
           <strong>{chatText(locale, { 'zh-CN': '上下文', 'en-US': 'Context' })}</strong>
+          <button
+            type="button"
+            className="context-window-close"
+            aria-label={chatText(locale, { 'zh-CN': '关闭上下文详情', 'en-US': 'Close context details' })}
+            onClick={(event) => {
+              event.currentTarget.closest('details')?.removeAttribute('open');
+            }}
+          >
+            ×
+          </button>
+        </div>
+        <div className="context-window-usage-summary">
+          <strong>{meter.ratioDetail}</strong>
+          <span>{fullLabel}</span>
+          <em>{meter.used} / {meter.windowSize} {tokensLabel}</em>
+        </div>
+        <div
+          className="context-window-usage-bar"
+          aria-label={chatText(locale, {
+            'zh-CN': `上下文用量：${meter.used} / ${meter.windowSize} tokens`,
+            'en-US': `Context usage: ${meter.used} / ${meter.windowSize} tokens`,
+          })}
+          role="img"
+        >
+          {meter.usageSegments.length ? meter.usageSegments.map((segment) => (
+            <span
+              key={segment.kind}
+              data-context-segment={segment.kind}
+              aria-label={`${segment.label}: ${segment.width}`}
+              style={{ width: segment.width }}
+            />
+          )) : <span style={{ width: meter.ratioStyle }} />}
+        </div>
+        <ul className="context-window-usage-list">
+          {meter.usageRows.map((row) => (
+            <li key={row.label} data-context-usage-kind={row.kind} data-context-usage-known={row.known ? 'true' : 'false'}>
+              <span aria-hidden="true" />
+              <strong>{localizeContextRowLabel(row.label, locale)}</strong>
+              <em>{localizeContextValue(row.value, locale)}</em>
+            </li>
+          ))}
+        </ul>
+        {meter.warningLine ? (
+          <div className="context-window-warning" role="status" data-context-warning={meter.level}>
+            {meter.warningLine}
+          </div>
+        ) : null}
+        <div className="context-window-popover-head secondary">
+          <strong>{chatText(locale, { 'zh-CN': '状态', 'en-US': 'Status' })}</strong>
           <em>{statusLabel}</em>
         </div>
         <dl>
@@ -59,7 +114,7 @@ export function ContextWindowMeter({
           'en-US': meter.memoryBoundaryLine,
         })}</small>
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -73,6 +128,14 @@ function localizeContextRowLabel(value: string, locale?: SupportedLocale) {
     Saved: { 'zh-CN': '已节省', 'en-US': 'Saved' },
     'Payload size': { 'zh-CN': '载荷大小', 'en-US': 'Payload size' },
     Budget: { 'zh-CN': '预算', 'en-US': 'Budget' },
+    'System prompt': { 'zh-CN': 'System prompt', 'en-US': 'System prompt' },
+    'Tool definitions': { 'zh-CN': 'Tool definitions', 'en-US': 'Tool definitions' },
+    Rules: { 'zh-CN': 'Rules', 'en-US': 'Rules' },
+    Skills: { 'zh-CN': 'Skills', 'en-US': 'Skills' },
+    MCP: { 'zh-CN': 'MCP', 'en-US': 'MCP' },
+    'Subagent definitions': { 'zh-CN': 'Subagent definitions', 'en-US': 'Subagent definitions' },
+    Conversation: { 'zh-CN': 'Conversation', 'en-US': 'Conversation' },
+    Context: { 'zh-CN': '上下文', 'en-US': 'Context' },
   };
   return labels[value] ? chatText(locale, labels[value]) : value;
 }

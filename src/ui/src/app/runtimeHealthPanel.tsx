@@ -1,8 +1,16 @@
 import { useEffect, useState } from 'react';
 import { defaultSciForgeConfig } from '../config';
-import { codexRuntimeHealth, modelHealth, workspaceWriterHealth, type RuntimeHealthItem, type RuntimeHealthStatus } from '../runtimeHealth';
+import {
+  codexRuntimeHealth,
+  modelHealth,
+  probeWorkspaceWriterHealthDetailsUrl,
+  workspaceWriterHealth,
+  type RuntimeHealthItem,
+  type RuntimeHealthStatus,
+} from '../runtimeHealth';
 import type { SciForgeConfig } from '../domain';
-import { startRuntimeServices } from '../api/workspaceClient';
+import { loadRuntimeProviderPreflightManifest, startRuntimeServices } from '../api/workspaceClient';
+import { providerReadinessNoticeFromManifest } from '../providerReadiness';
 import { Badge, cx } from './uiPrimitives';
 
 export type { RuntimeHealthItem };
@@ -15,16 +23,19 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
     setItems(buildInitialHealth(config, libraryCount));
     async function check() {
       const shouldCheckDefaultWriter = config.workspaceWriterBaseUrl.replace(/\/+$/, '') !== defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '');
-      const [workspaceOnline, defaultWorkspaceOnline] = await Promise.all([
-        probeUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
-        shouldCheckDefaultWriter ? probeUrl(`${defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`) : Promise.resolve(false),
+      const [workspaceProbe, defaultWorkspaceProbe] = await Promise.all([
+        probeWorkspaceWriterHealthDetailsUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
+        shouldCheckDefaultWriter ? probeWorkspaceWriterHealthDetailsUrl(`${defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`) : Promise.resolve({ online: false, capabilities: [] }),
       ]);
+      const providerPreflightNotice = workspaceProbe.online && workspaceProbe.capabilities.includes('runtime-provider-preflight-manifest')
+        ? await loadProviderPreflightNotice(config)
+        : undefined;
       if (cancelled) return;
       setItems([
         { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
-        workspaceWriterHealth(config, workspaceOnline, defaultWorkspaceOnline),
-        codexRuntimeHealth(config, workspaceOnline),
-        modelHealth(config),
+        workspaceWriterHealth(config, workspaceProbe, defaultWorkspaceProbe),
+        codexRuntimeHealth(config, workspaceProbe.online),
+        modelHealth(config, providerPreflightNotice),
         {
           id: 'library',
           label: 'Scenario Library',
@@ -50,6 +61,15 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
   return items;
 }
 
+async function loadProviderPreflightNotice(config: SciForgeConfig) {
+  try {
+    return providerReadinessNoticeFromManifest(await loadRuntimeProviderPreflightManifest(config));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return providerReadinessNoticeFromManifest(undefined, message.replace(/https?:\/\/[^\s"'<>]+/gi, '[url]'));
+  }
+}
+
 function buildInitialHealth(config: SciForgeConfig, libraryCount?: number): RuntimeHealthItem[] {
   return [
     { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
@@ -63,20 +83,6 @@ function buildInitialHealth(config: SciForgeConfig, libraryCount?: number): Runt
       detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
     },
   ];
-}
-
-async function probeUrl(url: string) {
-  if (!url || !/^https?:\/\//.test(url)) return false;
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 1600);
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    return response.ok;
-  } catch {
-    return false;
-  } finally {
-    window.clearTimeout(timer);
-  }
 }
 
 function healthBadgeVariant(status: RuntimeHealthStatus): 'success' | 'info' | 'warning' | 'danger' | 'muted' {

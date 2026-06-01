@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import {
   createDefaultDesktopManagedServices,
+  createDesktopBrowserHostSurfaceController,
   createDesktopBrowserWindowOptions,
   createDesktopNativeBrowserController,
   createElectronDesktopMainController,
@@ -30,6 +31,7 @@ test('R-DESK Electron window options load dist-ui with isolated preload only', (
   assert.equal(options.webPreferences.contextIsolation, true);
   assert.equal(options.webPreferences.nodeIntegration, false);
   assert.equal(options.webPreferences.sandbox, true);
+  assert.equal(options.webPreferences.webviewTag, false);
   assert.equal(plan.renderer.loadStrategy.filePath, join(process.cwd(), 'dist-ui', 'index.html'));
   assert.doesNotMatch(plan.renderer.loadStrategy.fileUrl, /localhost:517/);
 });
@@ -85,6 +87,9 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
   assert.equal(started.plan.fullElectronEntrypointImplemented, true);
   assert.equal(loadedFiles[0], join(process.cwd(), 'dist-ui', 'index.html'));
   assert.deepEqual(handledChannels.sort(), [
+	    'desktop:browser-host-surface:attach',
+	    'desktop:browser-host-surface:detach',
+	    'desktop:browser-host-surface:state',
 	    'desktop:native-browser:back',
 	    'desktop:native-browser:forward',
 	    'desktop:native-browser:open',
@@ -169,6 +174,9 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
   await api.nativeBrowserReload();
   await api.getNativeBrowserState();
   await api.captureNativeBrowserScreenshot();
+  await api.attachBrowserHostSessionSurface({ sessionId: 'browser-host-1', bounds: { x: 1, y: 2, width: 300, height: 200 } });
+  await api.getBrowserHostSessionSurfaceState({ sessionId: 'browser-host-1' });
+  await api.detachBrowserHostSessionSurface({ sessionId: 'browser-host-1' });
   await api.revealPath('/tmp/example');
   await api.pickDirectory('/tmp/workspace');
 
@@ -185,11 +193,17 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'desktop:native-browser:reload',
     'desktop:native-browser:state',
     'desktop:native-browser:screenshot',
+    'desktop:browser-host-surface:attach',
+    'desktop:browser-host-surface:state',
+    'desktop:browser-host-surface:detach',
     'platform:reveal-path',
     'platform:pick-directory',
   ]);
 	  assert.deepEqual(Object.keys(api).sort(), [
+	    'attachBrowserHostSessionSurface',
 	    'captureNativeBrowserScreenshot',
+	    'detachBrowserHostSessionSurface',
+	    'getBrowserHostSessionSurfaceState',
 	    'getNativeBrowserState',
 	    'getRuntimeConfig',
 	    'getRuntimeHealth',
@@ -273,6 +287,136 @@ test('R-DESK native browser controller opens frame-blocked sites in an Electron-
     'focus',
     'reload',
     'focus',
+  ]);
+});
+
+test('R-DESK BrowserHostSession native surface controller attaches an embedded WebContentsView', async () => {
+  const events: string[] = [];
+  const inputEvents: Record<string, unknown>[] = [];
+  const executedJavaScript: string[] = [];
+  class FakeWebContentsView {
+    bounds = { x: 0, y: 0, width: 1, height: 1 };
+    visible = false;
+    webContents = {
+      currentUrl: '',
+      title: 'Native embedded page',
+      async loadURL(url: string) {
+        this.currentUrl = url;
+        events.push(`loadURL:${url}`);
+      },
+      getURL() {
+        return this.currentUrl;
+      },
+      getTitle() {
+        return this.title;
+      },
+      canGoBack() {
+        return false;
+      },
+      canGoForward() {
+        return false;
+      },
+      sendInputEvent(event: Record<string, unknown>) {
+        inputEvents.push(event);
+      },
+      async insertText(text: string) {
+        events.push(`insertText:${text}`);
+      },
+      focus() {
+        events.push('webContents.focus');
+      },
+      async executeJavaScript<T = unknown>(code: string) {
+        executedJavaScript.push(code);
+        return (code.includes('document.elementFromPoint') ? 'pointer' : 'default') as T;
+      },
+      async capturePage() {
+        return { toDataURL: () => 'data:image/png;base64,test' };
+      },
+    };
+
+    setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+      this.bounds = bounds;
+      events.push(`bounds:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`);
+    }
+
+    setVisible(visible: boolean): void {
+      this.visible = visible;
+      events.push(`visible:${visible}`);
+    }
+  }
+
+  const addedViews: unknown[] = [];
+  const controller = createDesktopBrowserHostSurfaceController({
+    WebContentsView: FakeWebContentsView,
+  });
+  controller.setMainWindow({
+    contentView: {
+      addChildView(view) {
+        addedViews.push(view);
+        events.push('addChildView');
+      },
+      removeChildView() {
+        events.push('removeChildView');
+      },
+    },
+    focus() {
+      events.push('window.focus');
+    },
+  });
+
+  const started = controller.startSession({ sessionId: 'browser-host-native-1', width: 800, height: 600 });
+  const navigated = await controller.navigate('browser-host-native-1', { url: 'example.com' });
+  const attached = controller.attach({
+    sessionId: 'browser-host-native-1',
+    bounds: { x: 640, y: 96, width: 720, height: 620 },
+    visible: true,
+    focus: true,
+  });
+  await controller.action('browser-host-native-1', { action: 'click', x: 24, y: 32 });
+  await controller.action('browser-host-native-1', { action: 'scroll', deltaX: 4, deltaY: -160 });
+  await controller.action('browser-host-native-1', { action: 'type', text: 'native input' });
+  await controller.action('browser-host-native-1', { action: 'press', key: 'Control+Enter' });
+  const cursorState = await controller.action('browser-host-native-1', { action: 'cursor', x: 40, y: 44 });
+  const liveState = controller.state('browser-host-native-1');
+  const screenshot = await controller.screenshot('browser-host-native-1');
+  const detached = controller.detach('browser-host-native-1');
+
+  assert.equal(started.liveSurfaceTransport, 'native-embedded');
+  assert.equal(started.owner, 'BrowserHostSession');
+  assert.equal(started.adapterRole, 'display-input-adapter');
+  assert.equal(navigated.url, 'https://example.com');
+  assert.equal(attached.embedded, true);
+  assert.equal(attached.secondTruthSource, false);
+  assert.deepEqual(attached.bounds, { x: 640, y: 96, width: 720, height: 620 });
+  assert.equal(liveState.owner, 'BrowserHostSession');
+  assert.equal(liveState.liveSurfaceTransport, 'native-embedded');
+  assert.equal(liveState.secondTruthSource, false);
+  assert.equal(liveState.embedded, true);
+  assert.equal(liveState.visible, true);
+  assert.deepEqual(cursorState.diagnostics, ['cursor:pointer']);
+  assert.equal(screenshot.dataUrl, 'data:image/png;base64,test');
+  assert.equal(detached.visible, false);
+  assert.equal(addedViews.length, 1);
+  assert.deepEqual(inputEvents, [
+    { type: 'mouseDown', x: 24, y: 32, button: 'left', clickCount: 1 },
+    { type: 'mouseUp', x: 24, y: 32, button: 'left', clickCount: 1 },
+    { type: 'mouseWheel', x: 24, y: 32, deltaX: 4, deltaY: -160 },
+    { type: 'keyDown', keyCode: 'Enter', modifiers: ['control'] },
+    { type: 'keyUp', keyCode: 'Enter', modifiers: ['control'] },
+  ]);
+  assert.equal(executedJavaScript.length, 1);
+  assert.match(executedJavaScript[0], /document\.elementFromPoint\(40, 44\)/);
+  assert.deepEqual(events, [
+    'visible:false',
+    'loadURL:https://example.com',
+    'addChildView',
+    'bounds:640,96,720,620',
+    'visible:true',
+    'window.focus',
+    'webContents.focus',
+    'insertText:native input',
+    'visible:false',
+    'removeChildView',
   ]);
 });
 

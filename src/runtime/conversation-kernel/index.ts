@@ -1,4 +1,5 @@
 export * from './background-continuation';
+export * from './channel-events';
 export * from './event-log-digest';
 export * from './event-log';
 export * from './failure-classifier';

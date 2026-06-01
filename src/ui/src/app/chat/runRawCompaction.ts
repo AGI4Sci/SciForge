@@ -38,12 +38,41 @@ export function compactRunRawForRequestPayload(raw: unknown, limits: RunRawCompa
       omitted: 'run-raw-body',
       keys: Object.keys(record).slice(0, 16),
     },
-    streamProcess: streamProcess
-      ? {
-          eventCount: streamProcess.eventCount,
-        }
-      : undefined,
+    streamProcess: streamProcess ? compactStreamProcessForRequestPayload(streamProcess) : undefined,
   };
+}
+
+function compactStreamProcessForRequestPayload(streamProcess: Record<string, unknown>) {
+  return compactRecord({
+    eventCount: numberField(streamProcess.eventCount),
+    retainedEventCount: numberField(streamProcess.retainedEventCount),
+    truncated: typeof streamProcess.truncated === 'boolean' ? streamProcess.truncated : undefined,
+    summaryDigest: compactDigestRecord(streamProcess.summaryDigest) ?? digestTextField(streamProcess.summary),
+    refs: refsFromRawValue(streamProcess).slice(0, 24),
+    eventSummaries: compactStreamProcessEventSummaries(streamProcess).slice(-16),
+  });
+}
+
+function compactStreamProcessEventSummaries(streamProcess: Record<string, unknown>) {
+  const source = Array.isArray(streamProcess.eventSummaries)
+    ? streamProcess.eventSummaries
+    : Array.isArray(streamProcess.events)
+      ? streamProcess.events
+      : [];
+  return source
+    .map(compactRawEventSummary)
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry && Object.keys(entry).length));
+}
+
+function compactDigestRecord(value: unknown) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return compactRecord({
+    omitted: stringField(record.omitted),
+    chars: numberField(record.chars),
+    hash: stringField(record.hash),
+    refs: Array.isArray(record.refs) ? record.refs.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0).slice(0, 12) : undefined,
+  });
 }
 
 function compactRawRecord(value: unknown) {
@@ -62,17 +91,34 @@ function compactRawRecord(value: unknown) {
 function compactRawEventSummary(value: unknown) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  return {
+  const native = recordField(record.native);
+  const hasStructuredSignal = stringField(record.type)
+    || stringField(record.status)
+    || stringField(native.status)
+    || stringField(record.ref)
+    || stringField(native.ref)
+    || record.progress
+    || native.progress
+    || record.schemaVersion === 'sciforge.interaction-progress-event.v1';
+  if (!hasStructuredSignal) return undefined;
+  return compactRecord({
     type: stringField(record.type),
+    label: stringField(record.label),
     status: stringField(record.status),
+    createdAt: stringField(record.createdAt),
     source: stringField(record.source),
+    toolName: stringField(record.toolName) ?? stringField(native.toolName),
+    fileRef: stringField(record.fileRef) ?? stringField(native.fileRef),
+    ref: stringField(record.ref) ?? stringField(native.ref),
     messageDigest: digestTextField(record.message),
+    detailDigest: compactDigestRecord(record.detailDigest) ?? digestTextField(record.detail),
     refs: refsFromRawValue(record).slice(0, 12),
-  };
+  });
 }
 
 function refsFromRawValue(value: unknown, depth = 0): string[] {
-  return collectRuntimeRefsFromValue(value, { maxDepth: 5 - depth, maxRefs: 32, includeIds: true });
+  return collectRuntimeRefsFromValue(value, { maxDepth: 5 - depth, maxRefs: 32, includeIds: true })
+    .filter(safeRequestPayloadRef);
 }
 
 function recordField(value: unknown): Record<string, unknown> {
@@ -116,4 +162,27 @@ function stableTextHash(value: string) {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function compactRecord(record: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => {
+    if (value === undefined) return false;
+    if (Array.isArray(value)) return value.length > 0;
+    if (value && typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+    return true;
+  }));
+}
+
+function safeRequestPayloadRef(value: string) {
+  const text = value.trim();
+  if (!text) return false;
+  if (/\s/.test(text)) return false;
+  if (/https?:\/\//i.test(text) || /^(?:data|blob):/i.test(text) || /^file:\/\//i.test(text)) return false;
+  if (/^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(text)) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return false;
+  return true;
 }

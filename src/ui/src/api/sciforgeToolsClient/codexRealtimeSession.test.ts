@@ -120,9 +120,80 @@ test('Codex realtime session client preserves adjacent tool lifecycle events bef
   assert.match(String((events[1] as Record<string, unknown>).diff), /@@ -1 \+1 @@/);
 });
 
+test('Codex realtime session client does not treat completed item lifecycle events as terminal', async () => {
+  let socket: MockSocket | undefined;
+  const client = createCodexRealtimeSessionClient({
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+    webSocketFactory(url) {
+      socket = new MockSocket(url);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const request = {
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: 'codex-command-ws-item-completed',
+      attemptId: 'codex-command-ws-item-completed-attempt-1',
+    }),
+    commandText: 'run item lifecycle',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-ws-item-completed',
+    attemptId: 'codex-command-ws-item-completed-attempt-1',
+  };
+  const events: unknown[] = [];
+  const pending = client.stream(JSON.stringify(request), (event) => events.push(event));
+
+  socket?.open();
+  socket?.message({ type: 'event', event: 'item_completed', data: { type: 'item_completed', status: 'completed', itemId: 'user-message' } });
+  assert.equal(socket?.readyState, 1);
+  socket?.message({ type: 'event', event: 'message_delta', data: { type: 'message_delta', text: 'still running' } });
+  socket?.message({ type: 'event', event: 'done', data: { type: 'done', status: 'done' } });
+
+  const stream = await pending;
+
+  assert.equal(stream.error, undefined);
+  assert.equal((stream.result as Record<string, unknown>).message, 'still running');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['item_completed', 'message_delta', 'done']);
+});
+
+test('Codex realtime session client resolves terminal done events without waiting for server socket close', async () => {
+  let socket: MockSocket | undefined;
+  const client = createCodexRealtimeSessionClient({
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+    webSocketFactory(url) {
+      socket = new MockSocket(url);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const request = {
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: 'codex-command-ws-done',
+      attemptId: 'codex-command-ws-done-attempt-1',
+    }),
+    commandText: 'finish cleanly',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-ws-done',
+    attemptId: 'codex-command-ws-done-attempt-1',
+  };
+  const events: unknown[] = [];
+  const pending = client.stream(JSON.stringify(request), (event) => events.push(event));
+
+  socket?.open();
+  socket?.message({ type: 'event', event: 'message', data: { type: 'message', text: 'complete' } });
+  socket?.message({ type: 'event', event: 'done', data: { type: 'done', status: 'done' } });
+
+  const stream = await pending;
+
+  assert.equal(stream.error, undefined);
+  assert.equal((stream.result as Record<string, unknown>).message, 'complete');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['message', 'done']);
+  assert.equal(socket?.closeCount, 1);
+  assert.equal(socket?.readyState, 3);
+});
+
 class MockSocket {
   readonly sent: string[] = [];
   readyState = 0;
+  closeCount = 0;
   private readonly listeners = new Map<string, Array<(event: { data?: string }) => void>>();
 
   constructor(readonly url: string) {}
@@ -147,6 +218,7 @@ class MockSocket {
   }
 
   close(): void {
+    this.closeCount += 1;
     this.readyState = 3;
     this.emit('close', {});
   }

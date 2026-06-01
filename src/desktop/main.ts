@@ -11,6 +11,12 @@ import {
   createDesktopProductionShellPlan,
   type DesktopProductionShellPlan,
 } from './production-shell-planner.js';
+import {
+  createDesktopBrowserHostSurfaceController,
+  type DesktopBrowserHostSurfaceController,
+  type DesktopBrowserHostSurfaceElectron,
+  type DesktopBrowserHostSurfaceViewContainer,
+} from './browser-host-surface.js';
 
 type ElectronAppLike = {
   whenReady(): Promise<void>;
@@ -26,7 +32,9 @@ type ElectronIpcMainLike = {
 };
 
 type ElectronNativeBrowserWebContentsLike = {
+  loadURL?(url: string, options?: unknown): Promise<void>;
   getURL?(): string;
+  getTitle?(): string;
   canGoBack?(): boolean;
   canGoForward?(): boolean;
   goBack?(): void;
@@ -49,6 +57,7 @@ type ElectronBrowserWindowLike = {
   isDestroyed?(): boolean;
   setMenuBarVisibility?(visible: boolean): void;
   webContents?: ElectronNativeBrowserWebContentsLike;
+  contentView?: DesktopBrowserHostSurfaceViewContainer;
 };
 
 type ElectronBrowserWindowConstructor = new(options: ElectronBrowserWindowOptions) => ElectronBrowserWindowLike;
@@ -65,10 +74,11 @@ export type ElectronBrowserWindowOptions = {
     contextIsolation: true;
     nodeIntegration: false;
     sandbox: true;
+    webviewTag?: boolean;
   };
 };
 
-export type ElectronDesktopModule = {
+export type ElectronDesktopModule = DesktopBrowserHostSurfaceElectron & {
   app: ElectronAppLike;
   BrowserWindow: ElectronBrowserWindowConstructor;
   ipcMain: ElectronIpcMainLike;
@@ -107,6 +117,8 @@ export type DesktopRuntimeConfig = {
 export type DesktopNativeBrowserState = {
   ok: boolean;
   surface: 'electron-browser-window';
+  embedded?: false;
+  handoffOnly?: true;
   url?: string;
   canGoBack?: boolean;
   canGoForward?: boolean;
@@ -121,16 +133,20 @@ export type DesktopAppPaths = {
 
 export function createDefaultDesktopManagedServices(
   appRoot: string,
-  options: { sidecarCwd?: string; command?: string; electronRunAsNode?: boolean } = {},
+  options: { sidecarCwd?: string; command?: string; electronRunAsNode?: boolean; env?: Record<string, string> } = {},
 ): ManagedRuntimeServiceSpec[] {
   const root = resolve(appRoot);
   const sidecarCwd = resolve(options.sidecarCwd ?? directoryCwdForAppRoot(root));
   const command = options.command ?? process.execPath;
-  const baseEnv = options.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : undefined;
+  const baseEnv = {
+    ...(options.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
+    ...(options.env ?? {}),
+  };
+  const env = Object.keys(baseEnv).length ? baseEnv : undefined;
   return [
-    compiledJsService('workspace-server', 'workspace-writer', join(root, 'dist-desktop', 'src', 'runtime', 'workspace-server.js'), sidecarCwd, command, [], baseEnv),
-    compiledJsService('provider-proxy', 'provider-proxy', join(root, 'dist-desktop', 'packages', 'backend', 'src', 'cli.js'), sidecarCwd, command, ['--quiet'], baseEnv),
-    compiledJsService('runtime-codex', 'runtime-codex', join(root, 'dist-desktop', 'src', 'runtime', 'codex', 'codex-runtime-standalone-server.js'), sidecarCwd, command, [], baseEnv),
+    compiledJsService('workspace-server', 'workspace-writer', join(root, 'dist-desktop', 'src', 'runtime', 'workspace-server.js'), sidecarCwd, command, [], env),
+    compiledJsService('provider-proxy', 'provider-proxy', join(root, 'dist-desktop', 'packages', 'backend', 'src', 'cli.js'), sidecarCwd, command, ['--quiet'], env),
+    compiledJsService('runtime-codex', 'runtime-codex', join(root, 'dist-desktop', 'src', 'runtime', 'codex', 'codex-runtime-standalone-server.js'), sidecarCwd, command, [], env),
   ];
 }
 
@@ -146,6 +162,7 @@ export function createDesktopBrowserWindowOptions(plan: DesktopProductionShellPl
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      webviewTag: false,
     },
   };
 }
@@ -162,12 +179,19 @@ export function createElectronDesktopMainController(
   let started: DesktopMainStartResult | undefined;
   let shutdownPromise: Promise<void> | undefined;
   let activeLauncher: ProductionRuntimeLauncher | undefined;
+  let browserHostSurface: DesktopBrowserHostSurfaceController | undefined;
 
   async function start(): Promise<DesktopMainStartResult> {
     if (started) return started;
     logDesktopStartupDebug('waiting-for-app-ready', { appRoot: appPaths.appRoot, appDataRoot, workspacePath });
     await electron.app.whenReady();
     logDesktopStartupDebug('app-ready', { appRoot: appPaths.appRoot, appDataRoot, workspacePath });
+    browserHostSurface = electron.WebContentsView
+      ? createDesktopBrowserHostSurfaceController(electron)
+      : undefined;
+    const browserHostSurfaceStart = browserHostSurface
+      ? await browserHostSurface.startServer()
+      : undefined;
     const launcher = options.launcher ?? new ProductionRuntimeLauncher({
       appDataRoot: electron.app.getPath('userData'),
       workspacePath,
@@ -179,6 +203,9 @@ export function createElectronDesktopMainController(
       services: createDefaultDesktopManagedServices(appPaths.appRoot, {
         sidecarCwd: appPaths.sidecarCwd,
         electronRunAsNode: isElectronRuntimeProcess(),
+        env: browserHostSurfaceStart?.url
+          ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: browserHostSurfaceStart.url }
+          : undefined,
       }),
     });
     const launcherResult = await launcher.start();
@@ -201,8 +228,10 @@ export function createElectronDesktopMainController(
       launcherResult,
       runtimeConfig,
       platformService: options.platformService ?? new DesktopPlatformService(),
+      browserHostSurface,
     });
     const window = new electron.BrowserWindow(createDesktopBrowserWindowOptions(plan));
+    browserHostSurface?.setMainWindow(window);
     logDesktopStartupDebug('browser-window-created', { rendererFile: plan.renderer.loadStrategy.filePath });
     await window.loadFile(plan.renderer.loadStrategy.filePath);
     logDesktopStartupDebug('renderer-loaded', { rendererFile: plan.renderer.loadStrategy.filePath });
@@ -211,9 +240,12 @@ export function createElectronDesktopMainController(
   }
 
   async function shutdown(): Promise<void> {
-    if (!shutdownPromise) {
-      shutdownPromise = activeLauncher ? activeLauncher.shutdown() : Promise.resolve();
-    }
+	    if (!shutdownPromise) {
+	      shutdownPromise = Promise.all([
+	        activeLauncher ? activeLauncher.shutdown() : Promise.resolve(),
+	        browserHostSurface ? browserHostSurface.stopServer() : Promise.resolve(),
+	      ]).then(() => undefined);
+	    }
     await shutdownPromise;
   }
 
@@ -233,6 +265,7 @@ export function registerDesktopIpcHandlers(input: {
   launcherResult: RuntimeLauncherStartResult;
   runtimeConfig: DesktopRuntimeConfig;
   platformService: DesktopPlatformService;
+  browserHostSurface?: DesktopBrowserHostSurfaceController;
 }): void {
   const nativeBrowser = createDesktopNativeBrowserController(input.electron);
   input.electron.ipcMain.handle('runtime:health', () => input.launcher.health());
@@ -256,6 +289,19 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:native-browser:reload', () => nativeBrowser.reload());
   input.electron.ipcMain.handle('desktop:native-browser:state', () => nativeBrowser.state());
   input.electron.ipcMain.handle('desktop:native-browser:screenshot', () => nativeBrowser.screenshot());
+  input.electron.ipcMain.handle('desktop:browser-host-surface:attach', async (_event: unknown, value: unknown) => {
+    if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
+    const request = browserHostSurfaceAttachRequest(value);
+    return input.browserHostSurface.attach(request);
+  });
+  input.electron.ipcMain.handle('desktop:browser-host-surface:detach', async (_event: unknown, value: unknown) => {
+    if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
+    return input.browserHostSurface.detach(browserHostSurfaceSessionId(value));
+  });
+  input.electron.ipcMain.handle('desktop:browser-host-surface:state', async (_event: unknown, value: unknown) => {
+    if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
+    return input.browserHostSurface.state(browserHostSurfaceSessionId(value));
+  });
   input.electron.ipcMain.handle('platform:reveal-path', async (_event: unknown, path: unknown) => {
     if (typeof path !== 'string') throw new Error('platform:reveal-path requires a path string');
     await input.platformService.revealInFolder(path);
@@ -280,7 +326,7 @@ export function registerDesktopIpcHandlers(input: {
     if (result.canceled || !result.filePaths[0]) return { ok: false };
     return { ok: true, path: result.filePaths[0] };
   });
-}
+	}
 
 export function createDesktopNativeBrowserWindowOptions(): ElectronBrowserWindowOptions {
   return {
@@ -310,10 +356,12 @@ export function createDesktopNativeBrowserController(
 
   function state(reason?: string): DesktopNativeBrowserState {
     const active = currentWindow();
-    if (!active) return { ok: false, surface: 'electron-browser-window', reason: reason ?? 'native-browser-not-open' };
+    if (!active) return { ok: false, surface: 'electron-browser-window', embedded: false, handoffOnly: true, reason: reason ?? 'native-browser-not-open' };
     return {
       ok: true,
       surface: 'electron-browser-window',
+      embedded: false,
+      handoffOnly: true,
       url: active.webContents?.getURL?.() ?? undefined,
       canGoBack: active.webContents?.canGoBack?.() ?? false,
       canGoForward: active.webContents?.canGoForward?.() ?? false,
@@ -331,7 +379,7 @@ export function createDesktopNativeBrowserController(
         window = undefined;
       });
     }
-    if (!active.loadURL) return { ok: false, surface: 'electron-browser-window', reason: 'native-browser-load-url-unavailable' };
+    if (!active.loadURL) return { ok: false, surface: 'electron-browser-window', embedded: false, handoffOnly: true, reason: 'native-browser-load-url-unavailable' };
     await active.loadURL(normalized);
     active.show?.();
     active.focus?.();
@@ -380,6 +428,42 @@ function normalizeDesktopNativeBrowserUrl(input: string): string {
   if (/^(?:https?:|file:|about:)/i.test(trimmed)) return trimmed;
   if (/^(?:localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(?::\d+)?(?:\/|$)/i.test(trimmed)) return `http://${trimmed}`;
   return `https://${trimmed}`;
+}
+
+function browserHostSurfaceSessionId(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object' && typeof (value as { sessionId?: unknown }).sessionId === 'string') {
+    return (value as { sessionId: string }).sessionId;
+  }
+  throw new Error('desktop:browser-host-surface requires sessionId');
+}
+
+function browserHostSurfaceAttachRequest(value: unknown) {
+  if (!value || typeof value !== 'object') throw new Error('desktop:browser-host-surface:attach requires an object');
+  const record = value as {
+    sessionId?: unknown;
+    bounds?: unknown;
+    visible?: unknown;
+    focus?: unknown;
+  };
+  if (!record.bounds || typeof record.bounds !== 'object') throw new Error('desktop:browser-host-surface:attach requires bounds');
+  const bounds = record.bounds as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+  return {
+    sessionId: browserHostSurfaceSessionId(record.sessionId),
+    bounds: {
+      x: numberField(bounds.x, 'bounds.x'),
+      y: numberField(bounds.y, 'bounds.y'),
+      width: numberField(bounds.width, 'bounds.width'),
+      height: numberField(bounds.height, 'bounds.height'),
+    },
+    visible: record.visible === false ? false : undefined,
+    focus: record.focus === true,
+  };
+}
+
+function numberField(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`desktop:browser-host-surface:attach requires numeric ${field}`);
+  return value;
 }
 
 function loadElectronRuntime(): ElectronDesktopModule {

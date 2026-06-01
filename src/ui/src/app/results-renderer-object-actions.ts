@@ -4,7 +4,7 @@ import {
   pathForObjectReference,
 } from '../../../../packages/support/object-references';
 import { createLocalUserActionApi, type UserActionApi } from './projectionApi';
-import { createOpenCommandTextUIAction, type CommandTextUIAction, type SelectObjectUIAction } from './uiActionBoundary';
+import { createCommandTextUIAction, createOpenCommandTextUIAction, type CommandTextUIAction, type SelectObjectUIAction } from './uiActionBoundary';
 import type { ResultPaneTab } from './results/ResultShell';
 import { focusResultPaneRouteForObjectReference } from './results/resultPaneContract';
 
@@ -37,6 +37,12 @@ export type ObjectReferenceActionPlan =
   | {
     kind: 'open-workspace-object';
     action: WorkspaceOpenObjectAction;
+    path?: string;
+    notice?: string;
+    error?: string;
+  }
+  | {
+    kind: 'open-browser-object';
     path?: string;
     notice?: string;
     error?: string;
@@ -99,6 +105,15 @@ export function resolveObjectReferenceActionPlan({
       : { kind: 'copy-path', error: `没有可复制路径：${reference.title}` };
   }
   const path = pathForObjectReference(reference, session);
+  if (action === 'open-external' && reference.kind === 'url') {
+    return path && /^https?:\/\//i.test(path)
+      ? {
+        kind: 'open-browser-object',
+        path,
+        notice: '已请求通过浏览器打开外部 URL。',
+      }
+      : { kind: 'open-browser-object', error: `没有可打开 URL：${reference.title}` };
+  }
   return path
     ? {
       kind: 'open-workspace-object',
@@ -153,6 +168,22 @@ export async function performObjectReferenceAction({
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
+  }
+  if (plan.kind === 'open-browser-object') {
+    if (!plan.path) return { error: plan.error };
+    const commandTextAction = createCommandTextUIAction({
+      session,
+      id: actionId('command-browser-open-external'),
+      createdAt: new Date().toISOString(),
+      source: 'open',
+      commandText: `/browser open-external ${JSON.stringify(plan.path)} --approval required`,
+      label: plan.notice,
+      targetRef: reference.ref,
+    });
+    return {
+      commandTextAction,
+      notice: `${plan.notice} 已生成命令：${commandTextAction.commandText}`,
+    };
   }
   if (!plan.path) return { error: plan.error };
   const commandTextAction = createOpenCommandTextUIAction({

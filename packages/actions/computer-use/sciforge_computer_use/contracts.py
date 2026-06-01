@@ -28,6 +28,15 @@ RISK_PREVIEW_SCHEMA = "sciforge.computer-use.risk-preview.v1"
 DATA_VISIBILITY_SCHEMA = "sciforge.computer-use.data-visibility.v1"
 STOP_CANCEL_LEASE_SCHEMA = "sciforge.computer-use.stop-cancel-lease.v1"
 USER_LEVEL_MUTATING_EVIDENCE_SCHEMA = "sciforge.computer-use.user-level-mutating-evidence.v1"
+VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA = (
+    "sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1"
+)
+VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_VALIDATION_SCHEMA_VERSION = (
+    "sciforge.computer-use.virtual-app-screen-user-acceptance-validation.v1"
+)
+ACTION_ADAPTER_READINESS_SCHEMA = "sciforge.computer-use.action-adapter-readiness.v1"
+INPUT_INTENT_SCHEMA = "sciforge.computer-use.input-intent.v1"
+ANNOTATION_OVERLAY_SCHEMA = "sciforge.computer-use.annotation-overlay.v1"
 
 
 ActionKind = Literal[
@@ -67,6 +76,23 @@ ApprovalMode = Literal[
     "preapproved-session",
     "allow-confirmed",
     "handoff-required",
+]
+VirtualAppScreenUserAcceptanceStatus = Literal[
+    "passed",
+    "blocked",
+    "needs-confirmation",
+    "requires-handoff",
+    "diagnostic",
+]
+VirtualAppScreenInputKind = Literal["click", "type_text", "drag", "scroll", "hotkey", "menu_command"]
+AnnotationOverlayKind = Literal[
+    "point",
+    "rectangle",
+    "arrow",
+    "highlight",
+    "comment",
+    "agent_cursor_trace",
+    "rejected_target",
 ]
 
 
@@ -619,6 +645,190 @@ class StopCancelLease:
 
 
 @dataclass(frozen=True)
+class ActionAdapterReadiness:
+    adapter_id: str
+    adapter_kind: str
+    target_scope: str
+    supported_actions: Sequence[str]
+    capture_supported: bool
+    background_renderable: bool
+    affects_physical_display: bool
+    requires_focus_steal: bool
+    shared_system_input_used: bool
+    schema_refs: Sequence[str]
+    ready: bool = True
+    blocked_reason: str | None = None
+    readiness_ref: str | None = None
+    capability_ref: str | None = None
+    physical_popup_shown: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = _drop_none_values({
+            "schemaVersion": ACTION_ADAPTER_READINESS_SCHEMA,
+            "adapterId": self.adapter_id,
+            "adapterKind": self.adapter_kind,
+            "targetScope": self.target_scope,
+            "supportedActions": list(self.supported_actions),
+            "captureSupported": self.capture_supported,
+            "backgroundRenderable": self.background_renderable,
+            "affectsPhysicalDisplay": self.affects_physical_display,
+            "requiresFocusSteal": self.requires_focus_steal,
+            "sharedSystemInputUsed": self.shared_system_input_used,
+            "physicalPopupShown": self.physical_popup_shown,
+            "ready": self.ready,
+            "readinessRef": self.readiness_ref,
+            "capabilityRef": self.capability_ref,
+            "schemaRefs": list(self.schema_refs),
+            "metadata": dict(self.metadata),
+        })
+        payload["blockedReason"] = self.blocked_reason
+        return payload
+
+
+@dataclass(frozen=True)
+class InputIntent:
+    intent_id: str
+    input_kind: VirtualAppScreenInputKind
+    actor_id: str
+    cursor_id: str
+    screen_id: str
+    target: Mapping[str, Any]
+    input_lease_ref: str
+    action_adapter_ref: str
+    adapter_readiness_ref: str
+    executor_event_ref: str
+    before_after_frame_refs: Sequence[str]
+    verification_refs: Sequence[str]
+    before_frame_refs: Sequence[str] = field(default_factory=tuple)
+    after_frame_refs: Sequence[str] = field(default_factory=tuple)
+    proposal_ref: str | None = None
+    timestamp: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return _drop_none_values({
+            "schemaVersion": INPUT_INTENT_SCHEMA,
+            "intentId": self.intent_id,
+            "inputKind": self.input_kind,
+            "actorId": self.actor_id,
+            "cursorId": self.cursor_id,
+            "screenId": self.screen_id,
+            "target": dict(self.target),
+            "inputLeaseRef": self.input_lease_ref,
+            "actionAdapterRef": self.action_adapter_ref,
+            "adapterReadinessRef": self.adapter_readiness_ref,
+            "executorEventRef": self.executor_event_ref,
+            "beforeAfterFrameRefs": list(self.before_after_frame_refs),
+            "beforeFrameRefs": list(self.before_frame_refs),
+            "afterFrameRefs": list(self.after_frame_refs),
+            "verificationRefs": list(self.verification_refs),
+            "proposalRef": self.proposal_ref,
+            "timestamp": self.timestamp,
+            "metadata": dict(self.metadata),
+        })
+
+
+@dataclass(frozen=True)
+class AnnotationOverlay:
+    overlay_id: str
+    annotation_kind: AnnotationOverlayKind
+    screen_id: str
+    overlay_ref: str
+    target_ref: str
+    target_binding_kind: str
+    proposal_ref: str
+    action_ref: str
+    verification_ref: str
+    before_frame_ref: str
+    after_frame_ref: str
+    author_actor_id: str | None = None
+    refs: Sequence[str] = field(default_factory=tuple)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return _drop_none_values({
+            "schemaVersion": ANNOTATION_OVERLAY_SCHEMA,
+            "overlayId": self.overlay_id,
+            "annotationKind": self.annotation_kind,
+            "screenId": self.screen_id,
+            "authorActorId": self.author_actor_id,
+            "overlayRef": self.overlay_ref,
+            "targetRef": self.target_ref,
+            "targetBindingKind": self.target_binding_kind,
+            "proposalRef": self.proposal_ref,
+            "actionRef": self.action_ref,
+            "verificationRef": self.verification_ref,
+            "beforeFrameRef": self.before_frame_ref,
+            "afterFrameRef": self.after_frame_ref,
+            "refs": list(self.refs),
+            "metadata": dict(self.metadata),
+        })
+
+
+@dataclass(frozen=True)
+class VirtualAppScreenUserAcceptanceManifest:
+    task_id: str
+    scenario_id: str
+    user_intent: str
+    target_app_refs: Sequence[str]
+    target_window_refs: Sequence[str]
+    session_refs: Sequence[str]
+    adapter_readiness_refs: Sequence[str]
+    screen_frame_refs: Sequence[str]
+    input_intent_refs: Sequence[str]
+    executor_event_refs: Sequence[str]
+    before_after_frame_refs: Sequence[str]
+    annotation_proposal_refs: Sequence[str]
+    artifact_refs: Sequence[str]
+    verification_refs: Sequence[str]
+    gui_present_refs: Sequence[str]
+    replay_ref: str
+    evidence_ledger_ref: str
+    isolation_flags: Mapping[str, Any]
+    status: VirtualAppScreenUserAcceptanceStatus = "passed"
+    blocked_reason: str | None = None
+    diagnostic_only: bool = False
+    user_acceptance_eligible: bool | None = None
+    approval_mode: ApprovalMode = "fail-closed"
+    user_confirmation_ref: str | None = None
+    source_boundary: str | None = None
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = _drop_none_values({
+            "schemaVersion": VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA,
+            "taskId": self.task_id,
+            "scenarioId": self.scenario_id,
+            "userIntent": self.user_intent,
+            "targetAppRefs": list(self.target_app_refs),
+            "targetWindowRefs": list(self.target_window_refs),
+            "sessionRefs": list(self.session_refs),
+            "adapterReadinessRefs": list(self.adapter_readiness_refs),
+            "screenFrameRefs": list(self.screen_frame_refs),
+            "inputIntentRefs": list(self.input_intent_refs),
+            "executorEventRefs": list(self.executor_event_refs),
+            "beforeAfterFrameRefs": list(self.before_after_frame_refs),
+            "annotationProposalRefs": list(self.annotation_proposal_refs),
+            "artifactRefs": list(self.artifact_refs),
+            "verificationRefs": list(self.verification_refs),
+            "guiPresentRefs": list(self.gui_present_refs),
+            "replayRef": self.replay_ref,
+            "evidenceLedgerRef": self.evidence_ledger_ref,
+            "isolationFlags": dict(self.isolation_flags),
+            "status": self.status,
+            "diagnosticOnly": self.diagnostic_only,
+            "userAcceptanceEligible": self.user_acceptance_eligible,
+            "approvalMode": self.approval_mode,
+            "userConfirmationRef": self.user_confirmation_ref,
+            "sourceBoundary": self.source_boundary,
+            "metadata": dict(self.metadata),
+        })
+        payload["blockedReason"] = self.blocked_reason
+        return payload
+
+
+@dataclass(frozen=True)
 class ApprovalRequest:
     id: str
     reason: str
@@ -855,6 +1065,66 @@ READ_ONLY_EVIDENCE_ACTION_KINDS = {
     "vlm_describe",
     "wait",
     "wait_until_stable",
+}
+VIRTUAL_APP_SCREEN_ACCEPTANCE_STATUSES = {
+    "passed",
+    "blocked",
+    "needs-confirmation",
+    "requires-handoff",
+    "diagnostic",
+}
+VIRTUAL_APP_SCREEN_INPUT_KINDS = {"click", "type_text", "drag", "scroll", "hotkey", "menu_command"}
+ANNOTATION_OVERLAY_KINDS = {
+    "point",
+    "rectangle",
+    "arrow",
+    "highlight",
+    "comment",
+    "agent_cursor_trace",
+    "rejected_target",
+}
+ANNOTATION_TARGET_BINDING_KINDS = {
+    "window-region",
+    "ax-element",
+    "dom-element",
+    "ocr-text-span",
+    "visual-object",
+    "artifact-file",
+    "file-ref",
+}
+VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_REF_LIST_FIELDS = (
+    "targetAppRefs",
+    "targetWindowRefs",
+    "sessionRefs",
+    "adapterReadinessRefs",
+    "screenFrameRefs",
+    "inputIntentRefs",
+    "executorEventRefs",
+    "beforeAfterFrameRefs",
+    "annotationProposalRefs",
+    "artifactRefs",
+    "verificationRefs",
+    "guiPresentRefs",
+)
+DIAGNOSTIC_ONLY_ACCEPTANCE_SOURCES = {
+    "browser-runtime-dom",
+    "click-smoke",
+    "diagnostic",
+    "dom",
+    "dom-shortcut",
+    "docker-novnc",
+    "fixture",
+    "historical-docker-novnc",
+    "legacy-m6",
+    "m6",
+    "m6-opt-in",
+    "package-local-contract",
+    "package-smoke",
+    "shell-direct",
+    "shell-direct-artifact-write",
+    "shell-only",
+    "single-click-smoke",
+    "target-bound-fixture",
 }
 GLOBAL_COORDINATE_SPACES = {"absolute", "desktop", "display", "global", "host", "os"}
 SESSION_COMPATIBILITY_FIELD_NAMES = {
@@ -1188,6 +1458,281 @@ def validate_user_level_mutating_evidence(
         status="blocked" if errors else "accepted",
         mutating_gui_action=mutating,
         user_acceptance_eligible=bool(mutating and not errors),
+    )
+
+
+def validate_action_adapter_readiness(
+    readiness_or_ref: Mapping[str, Any] | str | Path,
+    *,
+    require_existing_refs: bool = False,
+) -> dict[str, Any]:
+    payload_ref: str | None = None
+    try:
+        readiness = _load_contract_payload(readiness_or_ref)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        return _virtual_app_screen_acceptance_validation_result(
+            schema_version=None,
+            payload_ref=str(readiness_or_ref),
+            errors=[_contract_error("payload_load_failed", f"ActionAdapter readiness could not be loaded: {exc}.", "$")],
+            warnings=[],
+            refs=[],
+            status="blocked",
+            user_acceptance_eligible=False,
+            diagnostic_only=True,
+        )
+    if not isinstance(readiness_or_ref, Mapping):
+        payload_ref = str(readiness_or_ref)
+
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    schema_version = _string_or_none(readiness.get("schemaVersion"))
+    if schema_version != ACTION_ADAPTER_READINESS_SCHEMA:
+        errors.append(_contract_error(
+            "unsupported_schema_version",
+            "ActionAdapter readiness schemaVersion is invalid.",
+            "$.schemaVersion",
+            expected=ACTION_ADAPTER_READINESS_SCHEMA,
+            actual=schema_version,
+        ))
+    errors.extend(_security_issues(readiness, require_existing_refs=require_existing_refs))
+    blockers = _ua_validate_action_adapter_readiness_payload(
+        readiness,
+        errors,
+        require_existing_refs=require_existing_refs,
+    )
+    if blockers:
+        warnings.append(_contract_warning(
+            "adapter_not_user_acceptance_capable",
+            "ActionAdapter readiness cannot satisfy isolated VirtualAppScreen user acceptance.",
+            "$",
+        ))
+
+    status: VirtualAppScreenUserAcceptanceStatus = "passed" if not errors and not blockers else "requires-handoff"
+    if errors and not blockers:
+        status = "blocked"
+    return _virtual_app_screen_acceptance_validation_result(
+        schema_version=schema_version,
+        payload_ref=payload_ref,
+        errors=errors,
+        warnings=warnings,
+        refs=_collect_ref_values(readiness),
+        status=status,
+        user_acceptance_eligible=False,
+        diagnostic_only=status != "passed",
+        extra={"isolationBlockers": blockers, "isolatedBackgroundCapable": not errors and not blockers},
+    )
+
+
+def validate_input_intent(
+    intent_or_ref: Mapping[str, Any] | str | Path,
+    *,
+    require_existing_refs: bool = False,
+) -> dict[str, Any]:
+    payload_ref: str | None = None
+    try:
+        intent = _load_contract_payload(intent_or_ref)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        return _virtual_app_screen_acceptance_validation_result(
+            schema_version=None,
+            payload_ref=str(intent_or_ref),
+            errors=[_contract_error("payload_load_failed", f"InputIntent could not be loaded: {exc}.", "$")],
+            warnings=[],
+            refs=[],
+            status="blocked",
+            user_acceptance_eligible=False,
+            diagnostic_only=True,
+        )
+    if not isinstance(intent_or_ref, Mapping):
+        payload_ref = str(intent_or_ref)
+
+    errors: list[dict[str, Any]] = []
+    schema_version = _string_or_none(intent.get("schemaVersion"))
+    if schema_version != INPUT_INTENT_SCHEMA:
+        errors.append(_contract_error(
+            "unsupported_schema_version",
+            "InputIntent schemaVersion is invalid.",
+            "$.schemaVersion",
+            expected=INPUT_INTENT_SCHEMA,
+            actual=schema_version,
+        ))
+    errors.extend(_security_issues(intent, require_existing_refs=require_existing_refs))
+    _ua_validate_input_intent_payload(intent, errors, require_existing_refs=require_existing_refs)
+
+    return _virtual_app_screen_acceptance_validation_result(
+        schema_version=schema_version,
+        payload_ref=payload_ref,
+        errors=errors,
+        warnings=[],
+        refs=_collect_ref_values(intent),
+        status="passed" if not errors else "blocked",
+        user_acceptance_eligible=False,
+        diagnostic_only=bool(errors),
+    )
+
+
+def validate_annotation_overlay(
+    overlay_or_ref: Mapping[str, Any] | str | Path,
+    *,
+    require_existing_refs: bool = False,
+) -> dict[str, Any]:
+    payload_ref: str | None = None
+    try:
+        overlay = _load_contract_payload(overlay_or_ref)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        return _virtual_app_screen_acceptance_validation_result(
+            schema_version=None,
+            payload_ref=str(overlay_or_ref),
+            errors=[_contract_error("payload_load_failed", f"Annotation overlay could not be loaded: {exc}.", "$")],
+            warnings=[],
+            refs=[],
+            status="blocked",
+            user_acceptance_eligible=False,
+            diagnostic_only=True,
+        )
+    if not isinstance(overlay_or_ref, Mapping):
+        payload_ref = str(overlay_or_ref)
+
+    errors: list[dict[str, Any]] = []
+    schema_version = _string_or_none(overlay.get("schemaVersion"))
+    if schema_version != ANNOTATION_OVERLAY_SCHEMA:
+        errors.append(_contract_error(
+            "unsupported_schema_version",
+            "Annotation overlay schemaVersion is invalid.",
+            "$.schemaVersion",
+            expected=ANNOTATION_OVERLAY_SCHEMA,
+            actual=schema_version,
+        ))
+    errors.extend(_security_issues(overlay, require_existing_refs=require_existing_refs))
+    _ua_validate_annotation_overlay_payload(overlay, errors, require_existing_refs=require_existing_refs)
+
+    return _virtual_app_screen_acceptance_validation_result(
+        schema_version=schema_version,
+        payload_ref=payload_ref,
+        errors=errors,
+        warnings=[],
+        refs=_collect_ref_values(overlay),
+        status="passed" if not errors else "blocked",
+        user_acceptance_eligible=False,
+        diagnostic_only=bool(errors),
+    )
+
+
+def validate_virtual_app_screen_user_acceptance_manifest(
+    manifest_or_ref: Mapping[str, Any] | str | Path,
+    *,
+    require_existing_refs: bool = False,
+) -> dict[str, Any]:
+    """Validate the refs-first VirtualAppScreen user-acceptance manifest.
+
+    This gate is deliberately stricter than package smoke. Diagnostic fixtures,
+    DOM shortcuts, shell-only artifacts, legacy M6 evidence, focus steal, shared
+    system input, or physical display popups may be useful diagnostics, but they
+    cannot claim userAcceptanceEligible=true.
+    """
+
+    payload_ref: str | None = None
+    try:
+        manifest = _load_contract_payload(manifest_or_ref)
+    except (OSError, json.JSONDecodeError, TypeError) as exc:
+        return _virtual_app_screen_acceptance_validation_result(
+            schema_version=None,
+            payload_ref=str(manifest_or_ref),
+            errors=[_contract_error("payload_load_failed", f"User-acceptance manifest could not be loaded: {exc}.", "$")],
+            warnings=[],
+            refs=[],
+            status="blocked",
+            user_acceptance_eligible=False,
+            diagnostic_only=True,
+        )
+    if not isinstance(manifest_or_ref, Mapping):
+        payload_ref = str(manifest_or_ref)
+
+    errors: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    schema_version = _string_or_none(manifest.get("schemaVersion"))
+    if schema_version != VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA:
+        errors.append(_contract_error(
+            "unsupported_schema_version",
+            "VirtualAppScreen user-acceptance manifest schemaVersion is invalid.",
+            "$.schemaVersion",
+            expected=VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_MANIFEST_SCHEMA,
+            actual=schema_version,
+        ))
+    errors.extend(_security_issues(manifest, require_existing_refs=require_existing_refs))
+
+    declared_status = _ua_validate_acceptance_status(manifest.get("status"), errors)
+    if declared_status is None:
+        declared_status = "blocked"
+    _require_string(manifest, "taskId", "$.taskId", errors)
+    _require_string(manifest, "scenarioId", "$.scenarioId", errors)
+    _require_string(manifest, "userIntent", "$.userIntent", errors)
+    _require_ref(manifest, "replayRef", "$.replayRef", errors, require_existing_refs=require_existing_refs)
+    _require_ref(manifest, "evidenceLedgerRef", "$.evidenceLedgerRef", errors, require_existing_refs=require_existing_refs)
+    if "blockedReason" not in manifest:
+        errors.append(_contract_error("blocked_reason_field_missing", "blockedReason must be present; use null only when not blocked.", "$.blockedReason"))
+    _require_declared_optional_string(manifest, "blockedReason", "$.blockedReason", errors)
+
+    refs_by_key: dict[str, list[str]] = {}
+    for key in VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_REF_LIST_FIELDS:
+        refs_by_key[key] = _require_ref_list(
+            manifest,
+            key,
+            f"$.{key}",
+            errors,
+            require_existing_refs=require_existing_refs,
+            min_count=0,
+        )
+
+    isolation_blockers = _ua_validate_virtual_app_screen_isolation_flags(manifest.get("isolationFlags"), errors)
+    diagnostic_markers = _ua_diagnostic_acceptance_markers(manifest)
+    pass_missing_ref_keys = _ua_pass_missing_ref_keys(refs_by_key)
+    requires_confirmation = _ua_acceptance_requires_confirmation(manifest)
+    diagnostic_only = _bool_or_none(manifest.get("diagnosticOnly")) is True or bool(diagnostic_markers)
+    user_acceptance_claim = _bool_or_none(manifest.get("userAcceptanceEligible"))
+    if "diagnosticOnly" in manifest and _bool_or_none(manifest.get("diagnosticOnly")) is None:
+        errors.append(_contract_error("required_bool_invalid", "diagnosticOnly must be a boolean when present.", "$.diagnosticOnly"))
+    if "userAcceptanceEligible" in manifest and user_acceptance_claim is None:
+        errors.append(_contract_error(
+            "required_bool_invalid",
+            "userAcceptanceEligible must be a boolean when present.",
+            "$.userAcceptanceEligible",
+        ))
+
+    effective_status = _ua_derive_user_acceptance_status(
+        declared_status=declared_status,
+        diagnostic_only=diagnostic_only,
+        isolation_blockers=isolation_blockers,
+        requires_confirmation=requires_confirmation,
+        pass_missing_ref_keys=pass_missing_ref_keys,
+    )
+    _ua_validate_acceptance_boundary_consistency(
+        manifest,
+        errors,
+        declared_status=declared_status,
+        effective_status=effective_status,
+        diagnostic_markers=diagnostic_markers,
+        isolation_blockers=isolation_blockers,
+        pass_missing_ref_keys=pass_missing_ref_keys,
+        requires_confirmation=requires_confirmation,
+        user_acceptance_claim=user_acceptance_claim,
+    )
+
+    return _virtual_app_screen_acceptance_validation_result(
+        schema_version=schema_version,
+        payload_ref=payload_ref,
+        errors=errors,
+        warnings=warnings,
+        refs=_collect_ref_values(manifest),
+        status=effective_status,
+        user_acceptance_eligible=not errors and effective_status == "passed",
+        diagnostic_only=diagnostic_only or effective_status == "diagnostic",
+        extra={
+            "declaredStatus": declared_status,
+            "diagnosticSourceMarkers": diagnostic_markers,
+            "isolationBlockers": isolation_blockers,
+            "passMissingRefKeys": pass_missing_ref_keys,
+            "requiresConfirmation": requires_confirmation,
+        },
     )
 
 
@@ -2158,6 +2703,71 @@ def _require_string(
     return value
 
 
+def _require_declared_optional_string(
+    payload: Mapping[str, Any],
+    key: str,
+    path: str,
+    errors: list[dict[str, Any]],
+) -> str | None:
+    if key not in payload:
+        errors.append(_contract_error("required_field_missing", f"{key} must be declared.", path))
+        return None
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        errors.append(_contract_error("required_string_invalid", f"{key} must be a string or null.", path, actual=value))
+        return None
+    return value.strip() or None
+
+
+def _require_bool(
+    payload: Mapping[str, Any],
+    key: str,
+    path: str,
+    errors: list[dict[str, Any]],
+) -> bool | None:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        code = "required_bool_missing" if key not in payload else "required_bool_invalid"
+        errors.append(_contract_error(code, f"{key} must be a boolean.", path, actual=value))
+        return None
+    return value
+
+
+def _require_string_list(
+    payload: Mapping[str, Any],
+    key: str,
+    path: str,
+    errors: list[dict[str, Any]],
+    *,
+    min_count: int,
+) -> list[str]:
+    value = payload.get(key)
+    if value is None:
+        errors.append(_contract_error("required_list_missing", f"{key} is required.", path))
+        return []
+    if not isinstance(value, (list, tuple)):
+        errors.append(_contract_error("required_list_invalid", f"{key} must be a list of strings.", path, actual=value))
+        return []
+    strings: list[str] = []
+    for index, item in enumerate(value):
+        item_value = _string_or_none(item)
+        if not item_value:
+            errors.append(_contract_error("required_string_missing", f"{key}[{index}] must be a non-empty string.", f"{path}[{index}]"))
+            continue
+        strings.append(item_value)
+    if len(strings) < min_count:
+        errors.append(_contract_error(
+            "required_list_empty",
+            f"{key} must include at least {min_count} value(s).",
+            path,
+            expected=f">={min_count}",
+            actual=len(strings),
+        ))
+    return strings
+
+
 def _require_ref(
     payload: Mapping[str, Any],
     key: str,
@@ -2297,10 +2907,18 @@ def _number_or_none(value: Any) -> float | None:
     return None
 
 
+def _bool_or_none(value: Any) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
 def _normalize_action_kind(value: str | None) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip().lower().replace("-", "_")
+
+
+def _normalize_acceptance_marker(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
 
 
 def _normalized_key(value: Any) -> str:
@@ -2371,6 +2989,415 @@ def _user_control_validation_result(
         result["userAcceptanceEligible"] = user_acceptance_eligible
         result["diagnosticOnly"] = not user_acceptance_eligible
     return result
+
+
+def _virtual_app_screen_acceptance_validation_result(
+    *,
+    schema_version: str | None,
+    payload_ref: str | None,
+    errors: Sequence[Mapping[str, Any]],
+    warnings: Sequence[Mapping[str, Any]],
+    refs: Sequence[str],
+    status: VirtualAppScreenUserAcceptanceStatus,
+    user_acceptance_eligible: bool,
+    diagnostic_only: bool,
+    extra: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "schemaVersion": VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_VALIDATION_SCHEMA_VERSION,
+        "ok": not errors,
+        "status": status,
+        "contractSchemaVersion": schema_version,
+        "payloadRef": payload_ref,
+        "errorCount": len(errors),
+        "errors": [dict(error) for error in errors],
+        "warnings": [dict(warning) for warning in warnings],
+        "refs": list(refs),
+        "userAcceptanceEligible": user_acceptance_eligible,
+        "diagnosticOnly": diagnostic_only,
+    }
+    if extra:
+        result.update(dict(extra))
+    return result
+
+
+def _ua_require_declared_optional_string(
+    payload: Mapping[str, Any],
+    key: str,
+    path: str,
+    errors: list[dict[str, Any]],
+) -> str | None:
+    if key not in payload:
+        errors.append(_contract_error("required_field_missing", f"{key} must be declared.", path))
+        return None
+    value = payload.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        errors.append(_contract_error("required_string_invalid", f"{key} must be a string or null.", path, actual=value))
+        return None
+    return value.strip() or None
+
+
+def _ua_validate_action_adapter_readiness_payload(
+    payload: Mapping[str, Any],
+    errors: list[dict[str, Any]],
+    *,
+    require_existing_refs: bool,
+) -> list[str]:
+    _require_string(payload, "adapterId", "$.adapterId", errors)
+    _require_string(payload, "adapterKind", "$.adapterKind", errors)
+    target_scope = _require_string(payload, "targetScope", "$.targetScope", errors)
+    if target_scope and target_scope not in {"app", "app-window", "element", "region", "screen", "session", "virtual-app-screen", "window"}:
+        errors.append(_contract_error("target_scope_invalid", "ActionAdapter targetScope is invalid.", "$.targetScope", actual=target_scope))
+    _require_string_list(payload, "supportedActions", "$.supportedActions", errors, min_count=1)
+    _require_bool(payload, "captureSupported", "$.captureSupported", errors)
+    _require_bool(payload, "backgroundRenderable", "$.backgroundRenderable", errors)
+    _require_bool(payload, "affectsPhysicalDisplay", "$.affectsPhysicalDisplay", errors)
+    _require_bool(payload, "requiresFocusSteal", "$.requiresFocusSteal", errors)
+    _require_bool(payload, "sharedSystemInputUsed", "$.sharedSystemInputUsed", errors)
+    _require_bool(payload, "ready", "$.ready", errors)
+    if "physicalPopupShown" in payload:
+        _require_bool(payload, "physicalPopupShown", "$.physicalPopupShown", errors)
+    _ua_require_declared_optional_string(payload, "blockedReason", "$.blockedReason", errors)
+    _require_ref_list(payload, "schemaRefs", "$.schemaRefs", errors, require_existing_refs=require_existing_refs, min_count=1)
+    for key in ("readinessRef", "capabilityRef"):
+        ref = _string_or_none(payload.get(key))
+        if ref and _safe_ref_or_none(ref, require_existing=require_existing_refs) is None:
+            errors.append(_contract_error("unsafe_ref_value", f"{key} must be a safe durable ref.", f"$.{key}", actual=ref))
+
+    blockers = _ua_adapter_isolation_blockers(payload)
+    if blockers and payload.get("ready") is True:
+        errors.append(_contract_error(
+            "adapter_ready_flag_inconsistent",
+            "ActionAdapter cannot be ready for isolated background user acceptance with unsafe capability flags.",
+            "$.ready",
+            actual=True,
+        ))
+    if (payload.get("ready") is False or blockers) and not _string_or_none(payload.get("blockedReason")):
+        errors.append(_contract_error(
+            "blocked_reason_required",
+            "ActionAdapter readiness must explain blocked or unsafe capability flags.",
+            "$.blockedReason",
+        ))
+    return blockers
+
+
+def _ua_adapter_isolation_blockers(payload: Mapping[str, Any]) -> list[str]:
+    blockers: list[str] = []
+    if payload.get("captureSupported") is not True:
+        blockers.append("capture-unsupported")
+    if payload.get("backgroundRenderable") is not True:
+        blockers.append("background-rendering-unavailable")
+    if payload.get("affectsPhysicalDisplay") is not False:
+        blockers.append("physical-display-affected")
+    if payload.get("requiresFocusSteal") is not False:
+        blockers.append("focus-steal-required")
+    if payload.get("sharedSystemInputUsed") is not False:
+        blockers.append("shared-system-input")
+    if payload.get("physicalPopupShown") is True:
+        blockers.append("physical-popup")
+    return _unique_strings(blockers)
+
+
+def _ua_validate_input_intent_payload(
+    payload: Mapping[str, Any],
+    errors: list[dict[str, Any]],
+    *,
+    require_existing_refs: bool,
+) -> None:
+    _require_string(payload, "intentId", "$.intentId", errors)
+    input_kind = _require_string(payload, "inputKind", "$.inputKind", errors)
+    if input_kind and input_kind not in VIRTUAL_APP_SCREEN_INPUT_KINDS:
+        errors.append(_contract_error("input_kind_invalid", "InputIntent inputKind is invalid.", "$.inputKind", actual=input_kind))
+    _require_string(payload, "actorId", "$.actorId", errors)
+    _require_string(payload, "cursorId", "$.cursorId", errors)
+    screen_id = _require_string(payload, "screenId", "$.screenId", errors)
+    target = _mapping(payload.get("target"))
+    if not target:
+        errors.append(_contract_error("target_missing", "InputIntent target is required.", "$.target"))
+    _validate_action_target(target, errors, "$.target", require_screen=True, require_window=True, expected_screen_id=screen_id)
+    _validate_top_level_coordinate_leaks(payload, errors)
+    for key in ("inputLeaseRef", "actionAdapterRef", "adapterReadinessRef", "executorEventRef"):
+        _require_ref(payload, key, f"$.{key}", errors, require_existing_refs=require_existing_refs)
+    _require_ref_list(payload, "beforeAfterFrameRefs", "$.beforeAfterFrameRefs", errors, require_existing_refs=require_existing_refs, min_count=1)
+    _require_ref_list(payload, "verificationRefs", "$.verificationRefs", errors, require_existing_refs=require_existing_refs, min_count=1)
+    if "beforeFrameRefs" in payload:
+        _require_ref_list(payload, "beforeFrameRefs", "$.beforeFrameRefs", errors, require_existing_refs=require_existing_refs, min_count=0)
+    if "afterFrameRefs" in payload:
+        _require_ref_list(payload, "afterFrameRefs", "$.afterFrameRefs", errors, require_existing_refs=require_existing_refs, min_count=0)
+    proposal_ref = _string_or_none(payload.get("proposalRef"))
+    if proposal_ref and _safe_ref_or_none(proposal_ref, require_existing=require_existing_refs) is None:
+        errors.append(_contract_error("unsafe_ref_value", "proposalRef must be a safe durable ref.", "$.proposalRef", actual=proposal_ref))
+
+
+def _ua_validate_annotation_overlay_payload(
+    payload: Mapping[str, Any],
+    errors: list[dict[str, Any]],
+    *,
+    require_existing_refs: bool,
+) -> None:
+    _require_string(payload, "overlayId", "$.overlayId", errors)
+    annotation_kind = _require_string(payload, "annotationKind", "$.annotationKind", errors)
+    if annotation_kind and annotation_kind not in ANNOTATION_OVERLAY_KINDS:
+        errors.append(_contract_error(
+            "annotation_kind_invalid",
+            "Annotation overlay kind is invalid.",
+            "$.annotationKind",
+            actual=annotation_kind,
+        ))
+    _require_string(payload, "screenId", "$.screenId", errors)
+    target_binding_kind = _require_string(payload, "targetBindingKind", "$.targetBindingKind", errors)
+    if target_binding_kind and target_binding_kind not in ANNOTATION_TARGET_BINDING_KINDS:
+        errors.append(_contract_error(
+            "annotation_target_binding_invalid",
+            "Annotation targetBindingKind must bind to a window region, AX/DOM element, OCR span, visual object, or artifact/file ref.",
+            "$.targetBindingKind",
+            actual=target_binding_kind,
+        ))
+    for key in (
+        "overlayRef",
+        "targetRef",
+        "proposalRef",
+        "actionRef",
+        "verificationRef",
+        "beforeFrameRef",
+        "afterFrameRef",
+    ):
+        _require_ref(payload, key, f"$.{key}", errors, require_existing_refs=require_existing_refs)
+    if "refs" in payload:
+        _require_ref_list(payload, "refs", "$.refs", errors, require_existing_refs=require_existing_refs, min_count=0)
+
+
+def _ua_validate_virtual_app_screen_isolation_flags(value: Any, errors: list[dict[str, Any]]) -> list[str]:
+    if not isinstance(value, Mapping):
+        errors.append(_contract_error("isolation_flags_missing", "isolationFlags must be an object.", "$.isolationFlags"))
+        return ["isolation-flags-missing"]
+
+    blockers: list[str] = []
+    for key in ("isolatedBackgroundControl", "backgroundRenderable"):
+        flag = _require_bool(value, key, f"$.isolationFlags.{key}", errors)
+        if flag is not True:
+            blockers.append(f"{_normalize_acceptance_marker(key)}-missing")
+    false_flags = {
+        "affectsPhysicalDisplay": "physical-display-affected",
+        "requiresFocusSteal": "focus-steal-required",
+        "sharedSystemInputUsed": "shared-system-input",
+        "physicalPopupShown": "physical-popup",
+        "systemPointerMoved": "physical-pointer-moved",
+        "systemKeyboardEventsSent": "physical-keyboard-events",
+    }
+    for key, blocker in false_flags.items():
+        flag = _require_bool(value, key, f"$.isolationFlags.{key}", errors)
+        if flag is not False:
+            blockers.append(blocker)
+    optional_false_flags = {
+        "sharedSystemInputAllowed": "shared-system-input",
+        "physicalPopupExpected": "physical-popup",
+        "physicalDisplayPopup": "physical-popup",
+        "physicalDisplayPopupShown": "physical-popup",
+        "appWindowRaisedToPhysicalScreen": "physical-popup",
+    }
+    for key, blocker in optional_false_flags.items():
+        if key in value:
+            flag = _require_bool(value, key, f"$.isolationFlags.{key}", errors)
+            if flag is not False:
+                blockers.append(blocker)
+    return _unique_strings(blockers)
+
+
+def _ua_validate_acceptance_status(value: Any, errors: list[dict[str, Any]]) -> VirtualAppScreenUserAcceptanceStatus | None:
+    status = _string_or_none(value)
+    if not status:
+        errors.append(_contract_error("required_string_missing", "status is required.", "$.status"))
+        return None
+    if status not in VIRTUAL_APP_SCREEN_ACCEPTANCE_STATUSES:
+        errors.append(_contract_error("acceptance_status_invalid", "User-acceptance status is invalid.", "$.status", actual=status))
+        return None
+    return status  # type: ignore[return-value]
+
+
+def _ua_pass_missing_ref_keys(refs_by_key: Mapping[str, Sequence[str]]) -> list[str]:
+    return [key for key in VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_REF_LIST_FIELDS if not refs_by_key.get(key)]
+
+
+def _ua_acceptance_requires_confirmation(payload: Mapping[str, Any]) -> bool:
+    has_confirmation_ref = _first_safe_ref(
+        payload,
+        ("userConfirmationRef", "approvalDecisionRef", "approvalRef"),
+        require_existing_refs=False,
+    )
+    if payload.get("requiresUserConfirmation") is True and not has_confirmation_ref:
+        return True
+    approval_mode = _string_or_none(payload.get("approvalMode"))
+    return bool(approval_mode == "require-confirmation" and not has_confirmation_ref)
+
+
+def _ua_derive_user_acceptance_status(
+    *,
+    declared_status: VirtualAppScreenUserAcceptanceStatus,
+    diagnostic_only: bool,
+    isolation_blockers: Sequence[str],
+    requires_confirmation: bool,
+    pass_missing_ref_keys: Sequence[str],
+) -> VirtualAppScreenUserAcceptanceStatus:
+    if diagnostic_only or declared_status == "diagnostic":
+        return "diagnostic"
+    if isolation_blockers or declared_status == "requires-handoff":
+        return "requires-handoff"
+    if requires_confirmation or declared_status == "needs-confirmation":
+        return "needs-confirmation"
+    if declared_status == "blocked":
+        return "blocked"
+    if pass_missing_ref_keys:
+        return "blocked"
+    return "passed"
+
+
+def _ua_validate_acceptance_boundary_consistency(
+    payload: Mapping[str, Any],
+    errors: list[dict[str, Any]],
+    *,
+    declared_status: VirtualAppScreenUserAcceptanceStatus,
+    effective_status: VirtualAppScreenUserAcceptanceStatus,
+    diagnostic_markers: Sequence[str],
+    isolation_blockers: Sequence[str],
+    pass_missing_ref_keys: Sequence[str],
+    requires_confirmation: bool,
+    user_acceptance_claim: bool | None,
+) -> None:
+    claiming_pass = declared_status == "passed" or user_acceptance_claim is True
+    if claiming_pass and diagnostic_markers:
+        errors.append(_contract_error(
+            "diagnostic_source_user_acceptance_forbidden",
+            "Package smoke, legacy M6, DOM, fixture, shell-only, and other diagnostic sources cannot set userAcceptanceEligible=true.",
+            "$.userAcceptanceEligible",
+            actual=list(diagnostic_markers),
+        ))
+    if claiming_pass and payload.get("diagnosticOnly") is True:
+        errors.append(_contract_error(
+            "diagnostic_manifest_cannot_pass",
+            "diagnosticOnly manifests cannot pass user-level acceptance.",
+            "$.diagnosticOnly",
+            actual=True,
+        ))
+    if claiming_pass and isolation_blockers:
+        errors.append(_contract_error(
+            "isolation_gate_rejected",
+            "Isolated VirtualAppScreen acceptance rejects focus steal, shared system input, physical display effects, or physical popups.",
+            "$.isolationFlags",
+            actual=list(isolation_blockers),
+        ))
+    if claiming_pass and requires_confirmation:
+        errors.append(_contract_error(
+            "user_confirmation_required",
+            "User-level acceptance cannot pass while a user confirmation is still required.",
+            "$.userConfirmationRef",
+        ))
+    if claiming_pass and pass_missing_ref_keys:
+        errors.append(_contract_error(
+            "pass_evidence_ref_missing",
+            "passed requires app/window/session, adapter readiness, frame, input, executor, before/after, annotation/proposal, artifact, verifier, and gui.present refs.",
+            "$",
+            actual=list(pass_missing_ref_keys),
+        ))
+    if user_acceptance_claim is True and effective_status != "passed":
+        errors.append(_contract_error(
+            "user_acceptance_eligible_claim_forbidden",
+            "userAcceptanceEligible=true is only valid when the effective status is passed.",
+            "$.userAcceptanceEligible",
+            expected="passed",
+            actual=effective_status,
+        ))
+    if declared_status == "passed" and user_acceptance_claim is False:
+        errors.append(_contract_error(
+            "passed_requires_user_acceptance_eligible",
+            "A passed manifest cannot explicitly set userAcceptanceEligible=false.",
+            "$.userAcceptanceEligible",
+            expected=True,
+            actual=False,
+        ))
+
+    blocked_reason = _string_or_none(payload.get("blockedReason"))
+    if effective_status == "passed":
+        if blocked_reason:
+            errors.append(_contract_error(
+                "blocked_reason_for_pass_forbidden",
+                "passed manifests must not carry blockedReason.",
+                "$.blockedReason",
+                actual=blocked_reason,
+            ))
+    elif not blocked_reason:
+        errors.append(_contract_error(
+            "blocked_reason_required",
+            "Non-passed user-acceptance manifests must include a blockedReason.",
+            "$.blockedReason",
+        ))
+
+
+def _ua_diagnostic_acceptance_markers(payload: Mapping[str, Any]) -> list[str]:
+    markers: list[str] = []
+    _ua_collect_diagnostic_acceptance_markers(payload, markers)
+    return sorted(marker for marker in _unique_strings(markers) if marker in DIAGNOSTIC_ONLY_ACCEPTANCE_SOURCES)
+
+
+def _ua_collect_diagnostic_acceptance_markers(value: Any, markers: list[str]) -> None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            normalized_key = _normalized_key(key)
+            if item is True:
+                boolean_marker = {
+                    "domshortcut": "dom-shortcut",
+                    "dryrun": "diagnostic",
+                    "fixture": "fixture",
+                    "historicalevidence": "historical-docker-novnc",
+                    "legacym6": "legacy-m6",
+                    "m6optin": "m6-opt-in",
+                    "packageharnessonly": "package-smoke",
+                    "packagesmoke": "package-smoke",
+                    "shelldirectartifactwrite": "shell-direct-artifact-write",
+                    "shellonly": "shell-only",
+                    "singleclicksmoke": "single-click-smoke",
+                }.get(normalized_key)
+                if boolean_marker:
+                    markers.append(boolean_marker)
+            if normalized_key in {
+                "acceptancesource",
+                "artifactorigin",
+                "boundary",
+                "evidenceorigin",
+                "evidencesource",
+                "evidencetype",
+                "executorprovider",
+                "runkind",
+                "sourceboundary",
+                "sourcekind",
+                "sourcetype",
+            }:
+                _ua_collect_source_marker_values(item, markers)
+            _ua_collect_diagnostic_acceptance_markers(item, markers)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _ua_collect_diagnostic_acceptance_markers(item, markers)
+
+
+def _ua_collect_source_marker_values(value: Any, markers: list[str]) -> None:
+    if isinstance(value, str):
+        normalized = _normalize_acceptance_marker(value)
+        if normalized in DIAGNOSTIC_ONLY_ACCEPTANCE_SOURCES:
+            markers.append(normalized)
+        for marker in DIAGNOSTIC_ONLY_ACCEPTANCE_SOURCES:
+            if marker in normalized:
+                markers.append(marker)
+        return
+    if isinstance(value, Mapping):
+        for item in value.values():
+            _ua_collect_source_marker_values(item, markers)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _ua_collect_source_marker_values(item, markers)
 
 
 def _contract_error(

@@ -37,7 +37,7 @@ export function FinalMessageContent({
         />
       ) : null}
       {showRuntimeGui ? (
-        <RuntimeGuiPanel surface={runtimeGui} onCommand={onGuiCommand} />
+        <RuntimeGuiPanel surface={runtimeGui} onCommand={onGuiCommand} onObjectFocus={onObjectFocus} />
       ) : null}
       {presentation.auditSections.length ? (
         <details className="message-fold depth-2 final-message-audit-fold" key={finalAuditFoldKey(content, presentation.summary)}>

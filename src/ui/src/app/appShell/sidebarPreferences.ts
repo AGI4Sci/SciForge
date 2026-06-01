@@ -1,5 +1,6 @@
 export type SidebarLayoutMode = 'by-project' | 'recent-projects' | 'chronological';
 export type SidebarSortMode = 'updatedAt' | 'createdAt';
+export type SidebarProjectSortMode = 'manual' | 'workspace' | 'updated' | 'status' | 'environment';
 export type SidebarVisibleSection = 'status' | 'git' | 'environment' | 'archiveUnread' | 'source' | 'metadata';
 
 export type SidebarVisibleSections = Record<SidebarVisibleSection, boolean>;
@@ -7,6 +8,7 @@ export type SidebarVisibleSections = Record<SidebarVisibleSection, boolean>;
 export interface SidebarPreferences {
   layout: SidebarLayoutMode;
   sort: SidebarSortMode;
+  projectSort: SidebarProjectSortMode;
   pinnedThreadIds: string[];
   readThreadIds: string[];
   projectOrder: string[];
@@ -28,6 +30,7 @@ export function defaultSidebarPreferences(): SidebarPreferences {
   return {
     layout: 'by-project',
     sort: 'updatedAt',
+    projectSort: 'manual',
     pinnedThreadIds: [],
     readThreadIds: [],
     projectOrder: [],
@@ -44,6 +47,7 @@ export function loadSidebarPreferences(): SidebarPreferences {
     return {
       layout: parsed.layout === 'recent-projects' || parsed.layout === 'chronological' ? parsed.layout : 'by-project',
       sort: parsed.sort === 'createdAt' ? 'createdAt' : 'updatedAt',
+      projectSort: normalizeProjectSort(parsed.projectSort),
       pinnedThreadIds: Array.isArray(parsed.pinnedThreadIds) ? parsed.pinnedThreadIds.filter((id) => typeof id === 'string') : [],
       readThreadIds: Array.isArray(parsed.readThreadIds) ? parsed.readThreadIds.filter((id) => typeof id === 'string') : [],
       projectOrder: Array.isArray(parsed.projectOrder) ? parsed.projectOrder.filter((id) => typeof id === 'string') : [],
@@ -107,7 +111,7 @@ export function moveCurrentProjectDown(preferences: SidebarPreferences, projectI
   if (index < 0 || index >= order.length - 1) return preferences;
   const nextOrder = [...order];
   [nextOrder[index], nextOrder[index + 1]] = [nextOrder[index + 1], nextOrder[index]];
-  return { ...preferences, projectOrder: nextOrder };
+  return { ...preferences, projectSort: 'manual', projectOrder: nextOrder };
 }
 
 export function removeProjectFromSidebarPreferences(
@@ -133,4 +137,14 @@ function normalizeVisibleSections(value: unknown): SidebarVisibleSections {
     source: typeof record.source === 'boolean' ? record.source : true,
     metadata: typeof record.metadata === 'boolean' ? record.metadata : true,
   };
+}
+
+function normalizeProjectSort(value: unknown): SidebarProjectSortMode {
+  return value === 'workspace'
+    || value === 'updated'
+    || value === 'status'
+    || value === 'environment'
+    || value === 'manual'
+    ? value
+    : 'manual';
 }

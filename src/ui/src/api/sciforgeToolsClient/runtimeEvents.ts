@@ -27,6 +27,7 @@ import {
   normalizeComputerUseControlPlanePayload,
   type ComputerUseControlPlanePayload,
 } from '../../../../../packages/presentation/components';
+import { runtimeNativeMessageLiveAcceptanceEligible } from './runtimeNativeMessage';
 
 const COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE = 'computer-use-virtual-screen';
 const COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID = 'virtual-screen-viewer';
@@ -38,6 +39,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function asTextFragment(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -55,6 +60,10 @@ function asStringArray(value: unknown): string[] | undefined {
 }
 
 type PublicRuntimeMetadataField = 'provider' | 'model' | 'profile' | 'workspace';
+type AssistantStreamTextFragment = {
+  text: string;
+  exact: boolean;
+};
 
 const unsafeRuntimeMetadataPattern = /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}\b|https?:\/\/|^(?:data|blob|file|javascript):/i;
 const localWorkspacePathPattern = /^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/;
@@ -159,7 +168,7 @@ export async function readWorkspaceToolStream(
   let error: string | undefined;
   let guiPresent: Record<string, unknown> | undefined;
   let guiAskUser: Record<string, unknown> | undefined;
-  const genericMessages: string[] = [];
+  const genericMessages: AssistantStreamTextFragment[] = [];
   const rememberGuiIntent = (event: unknown) => {
     if (!isRecord(event)) return;
     const assistantText = assistantTextFromStreamEventRecord('', event);
@@ -179,7 +188,7 @@ export async function readWorkspaceToolStream(
       rememberGuiIntent(envelope.event);
       onEvent(envelope.event);
     }
-    if ('result' in envelope) result = withStreamRuntimeResult(envelope.result, guiPresent, guiAskUser, joinAssistantTextFragments(genericMessages));
+    if ('result' in envelope) result = withStreamRuntimeResult(envelope.result, guiPresent, guiAskUser, joinAssistantStreamText(genericMessages));
     if ('error' in envelope) error = asString(envelope.error) || JSON.stringify(envelope.error);
   }
   for (;;) {
@@ -193,7 +202,7 @@ export async function readWorkspaceToolStream(
     if (done) break;
   }
   if (buffer.trim()) consumeLine(buffer);
-  result = withStreamRuntimeResult(result, guiPresent, guiAskUser, joinAssistantTextFragments(genericMessages));
+  result = withStreamRuntimeResult(result, guiPresent, guiAskUser, joinAssistantStreamText(genericMessages));
   return { result, error };
 }
 
@@ -221,7 +230,7 @@ async function readWorkspaceToolSse(
   let error: string | undefined;
   let guiPresent: Record<string, unknown> | undefined;
   let guiAskUser: Record<string, unknown> | undefined;
-  const genericMessages: string[] = [];
+  const genericMessages: AssistantStreamTextFragment[] = [];
   function consumeBlock(block: string) {
     const lines = block.split(/\r?\n/);
     const eventName = lines
@@ -267,7 +276,7 @@ async function readWorkspaceToolSse(
         result = withGuiPresentRuntimeResult(data, guiPresent);
         return;
       }
-      const nativeMessage = joinAssistantTextFragments(genericMessages);
+      const nativeMessage = joinAssistantStreamText(genericMessages);
       if (nativeMessage) {
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
         return;
@@ -292,10 +301,11 @@ async function readWorkspaceToolSse(
   return { result, error };
 }
 
-function assistantTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): string | undefined {
+function assistantTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): AssistantStreamTextFragment | undefined {
   const eventType = asString(data.type) ?? asString(data.kind) ?? eventName;
   const normalized = normalizeRuntimeWorkspaceEventType(eventType, data);
   const lowerEventName = eventName.trim().toLowerCase();
+  const lowerEventType = eventType.trim().toLowerCase();
   const isAssistantText = normalized === 'text-delta'
     || normalized === 'output'
     || lowerEventName === 'message'
@@ -303,10 +313,29 @@ function assistantTextFromStreamEventRecord(eventName: string, data: Record<stri
     || lowerEventName === 'text-delta'
     || lowerEventName === 'text_delta';
   if (!isAssistantText) return undefined;
-  return asString(data.text)
-    ?? asString(data.delta)
-    ?? asString(data.detail)
-    ?? asString(data.message);
+  const text = asTextFragment(data.text)
+    ?? asTextFragment(data.delta)
+    ?? asTextFragment(data.detail)
+    ?? asTextFragment(data.message);
+  if (text === undefined) return undefined;
+  return {
+    text,
+    exact: normalized === 'text-delta'
+      || lowerEventName === 'message_delta'
+      || lowerEventName === 'text-delta'
+      || lowerEventName === 'text_delta'
+      || lowerEventType === 'message_delta'
+      || lowerEventType === 'text-delta'
+      || lowerEventType === 'text_delta',
+  };
+}
+
+function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): string {
+  if (!fragments.length) return '';
+  if (fragments.some((fragment) => fragment.exact)) {
+    return fragments.map((fragment) => fragment.text).join('');
+  }
+  return joinAssistantTextFragments(fragments.map((fragment) => fragment.text));
 }
 
 function withAssistantMessageRuntimeResult(result: unknown, message: string): unknown {
@@ -516,6 +545,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
   const commandId = asString(result.commandId);
   const auditRefs = asStringArray(result.evidenceRefs) ?? [];
   const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
+  const liveAcceptanceEligible = runtimeNativeMessageLiveAcceptanceEligible(message, result);
   return {
     ...result,
     message,
@@ -530,7 +560,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
       profile: publicRuntimeMetadataValue(result.profile, 'profile'),
       workspace: publicRuntimeMetadataValue(result.workspace, 'workspace'),
       codexSessionId: asString(result.codexSessionId),
-      liveAcceptanceEligible: false,
+      liveAcceptanceEligible,
     },
     displayIntent: {
       source: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
@@ -541,7 +571,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
           status: 'visible-not-live-acceptance',
           text: message,
           artifactRefs: [],
-          liveAcceptanceEligible: false,
+          liveAcceptanceEligible,
         },
         artifacts: [],
         executionProcess: [{
@@ -557,7 +587,7 @@ function withNativeCodexMessageRuntimeResult(result: unknown, message: string): 
           status: 'unverified',
           verdict: 'native-message',
           verifierRef: commandId ? `codex.native-message:${commandId}` : 'codex.native-message',
-          liveAcceptanceEligible: false,
+          liveAcceptanceEligible,
         },
         runtimeMetadata,
         auditRefs,
@@ -917,6 +947,10 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     ...(safeRefArray(value.frameRefs) ?? []),
     ...safeRefList(value.frameRef),
   ]);
+  const screenshotFrameRefs = uniqueStrings([
+    ...(safeRefArray(value.screenshotRefs) ?? []),
+    ...safeRefList(value.screenshotRef),
+  ]);
   const replayRef = safeRef(value.replayRef);
   const blockedRef = safeRef(value.blockedRef)
     ?? safeRef(value.blockedManifestRef)
@@ -933,6 +967,22 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
   const sidecarCallRefs = safeRefArray(value.sidecarCallRefs) ?? [];
   const targetRefs = safeRefArray(value.targetRefs) ?? [];
   const schedulerLeaseRefs = safeRefArray(value.schedulerLeaseRefs) ?? [];
+  const targetAppRef = safeRef(value.targetAppRef) ?? safeRef(value.appRef);
+  const targetWindowRef = safeRef(value.targetWindowRef) ?? safeRef(value.windowRef);
+  const frameStreamRef = safeRef(value.frameStreamRef);
+  const currentFrameRef = safeRef(value.currentFrameRef) ?? safeRef(value.frameRef);
+  const inputIntentRefs = uniqueStrings([
+    ...(safeRefArray(value.inputIntentRefs) ?? []),
+    ...safeRefList(value.inputIntentRef),
+  ]);
+  const executorEventRefs = uniqueStrings([
+    ...(safeRefArray(value.executorEventRefs) ?? []),
+    ...safeRefList(value.executorEventRef),
+  ]);
+  const inputLeaseRef = safeRef(value.inputLeaseRef) ?? safeRef(value.schedulerLeaseRef) ?? schedulerLeaseRefs[0];
+  const actionAdapterRef = safeRef(value.actionAdapterRef) ?? sidecarBindingRef;
+  const adapterReadinessRef = safeRef(value.adapterReadinessRef) ?? sidecarCapabilitiesRef;
+  const evidenceLedgerRef = safeRef(value.evidenceLedgerRef) ?? evidenceBundleIndexRef;
   const stopRef = safeRef(value.stopRef);
   const cancelLeaseRef = safeRef(value.cancelLeaseRef);
   const sessionRef = safeRef(value.sessionRef) ?? safeRef(value.sessionManifestRef);
@@ -956,9 +1006,16 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     sessionRef
     || displayGroupRef
     || screenRef
+    || targetAppRef
+    || targetWindowRef
+    || frameStreamRef
     || replayRef
+    || currentFrameRef
     || explicitFrameRefs.length
+    || screenshotFrameRefs.length
     || frames.length
+    || inputIntentRefs.length
+    || executorEventRefs.length
     || visibleScreenRefs.length
     || cursorOverlayRefs.length
     || leaseOwnerRefs.length
@@ -967,8 +1024,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
   if (!hasVirtualScreenSignal) return undefined;
   const frameRefs = uniqueStrings([
     ...explicitFrameRefs,
-    ...(safeRefArray(value.screenshotRefs) ?? []),
-    ...safeRefList(value.screenshotRef),
+    ...screenshotFrameRefs,
   ]);
   const events = sanitizeRecordArray(value.events);
   const isolation = isRecord(value.isolation) ? compactRecord({
@@ -1002,7 +1058,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     targetCount: positiveInteger(value.targetCount) ?? targetRefs.length,
     blockedReason: safeSummaryText(value.blockedReason),
   });
-  if (!sessionRef && !screenRef && !replayRef && !frameRefs.length && !frames.length && !visibleScreenRefs.length && !blockedRef && !errorRef) {
+  if (!sessionRef && !screenRef && !targetAppRef && !targetWindowRef && !frameStreamRef && !replayRef && !frameRefs.length && !frames.length && !visibleScreenRefs.length && !blockedRef && !errorRef) {
     return undefined;
   }
   return compactRecord({
@@ -1014,6 +1070,8 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     screenRef,
     visibleScreenRefs,
     visibleCursorRefs,
+    targetAppRef,
+    targetWindowRef,
     cursorOverlayRefs,
     leaseOwnerRefs,
     validationRef,
@@ -1025,8 +1083,16 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     sidecarCallRefs,
     targetRefs,
     schedulerLeaseRefs,
-    frameRef: frameRefs[0],
+    frameStreamRef,
+    currentFrameRef: currentFrameRef ?? frameRefs[0],
+    frameRef: currentFrameRef ?? frameRefs[0],
     frameRefs,
+    inputIntentRefs,
+    executorEventRefs,
+    inputLeaseRef,
+    actionAdapterRef,
+    adapterReadinessRef,
+    evidenceLedgerRef,
     replayRef,
     permissionRef,
     stopRef,
@@ -1087,11 +1153,22 @@ function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> 
     ...(safeRefArray(payload.visibleCursorRefs) ?? []),
     ...(safeRefArray(payload.cursorOverlayRefs) ?? []),
     ...(safeRefArray(payload.frameRefs) ?? []),
+    ...(safeRefArray(payload.inputIntentRefs) ?? []),
+    ...(safeRefArray(payload.executorEventRefs) ?? []),
     ...(safeRefArray(payload.sidecarCallRefs) ?? []),
     ...(safeRefArray(payload.targetRefs) ?? []),
     ...(safeRefArray(payload.schedulerLeaseRefs) ?? []),
     safeRef(payload.sessionRef),
     safeRef(payload.displayGroupRef),
+    safeRef(payload.screenRef),
+    safeRef(payload.targetAppRef),
+    safeRef(payload.targetWindowRef),
+    safeRef(payload.frameStreamRef),
+    safeRef(payload.currentFrameRef),
+    safeRef(payload.inputLeaseRef),
+    safeRef(payload.actionAdapterRef),
+    safeRef(payload.adapterReadinessRef),
+    safeRef(payload.evidenceLedgerRef),
     safeRef(payload.replayRef),
     safeRef(payload.validationRef),
     safeRef(payload.currentBundleRef),
@@ -1561,6 +1638,7 @@ function rawEventDetailFallback(record: Record<string, unknown>) {
 function safeVisibleDetail(value: unknown, rawFallback: string | undefined) {
   const text = asString(value);
   if (!text) return undefined;
+  if (looksUnsafeTransportBodyText(text)) return rawFallback ?? 'Runtime event recorded; structured details are available in the run audit.';
   if (rawFallback && (isLowInformationStatus(text) || looksPrivateRuntimeText(text))) return rawFallback;
   return text;
 }
@@ -1572,8 +1650,19 @@ function isLowInformationStatus(value: string) {
 function looksPrivateRuntimeText(value: string) {
   return /^[{[]/.test(value.trim())
     || runtimeTextLooksAuditOnly(value)
+    || /<!doctype\s+html|<html\b|<body\b|<script\b|cf-ray|cloudflare/i.test(value)
+    || /\bRAW_[A-Z0-9_]+\b/.test(value)
     || /\b(?:stdout|stderr|jsonl|rawJsonl|stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b/i.test(value)
     || /\bhttps?:\/\/[^\s"'<>]+/i.test(value)
+    || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
+}
+
+function looksUnsafeTransportBodyText(value: string) {
+  return /^[{[]/.test(value.trim())
+    || runtimeTextLooksAuditOnly(value)
+    || /<!doctype\s+html|<html\b|<body\b|<script\b|cf-ray|cloudflare/i.test(value)
+    || /\bRAW_[A-Z0-9_]+\b/.test(value)
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef|raw_jsonl|provider_sse|providerRawOutput|rawOutput)\b/i.test(value)
     || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(value);
 }
 
@@ -1642,6 +1731,7 @@ function normalizeContextWindowState(value: unknown, type: string, fallback: Rec
     source,
     status: normalizeRuntimeContextWindowStatus(asString(record.status), ratio, clampRatio(asNumber(record.autoCompactThreshold))),
     compactCapability: normalizeRuntimeCompactCapability(asString(record.compactCapability) ?? asString(record.compactionCapability)),
+    breakdown: normalizeContextBreakdown(record),
     budget: normalizeContextBudget(record.budget),
     auditRefs: asStringArray(record.auditRefs),
     autoCompactThreshold: clampRatio(asNumber(record.autoCompactThreshold)),
@@ -1734,6 +1824,39 @@ function normalizeContextBudget(value: unknown): NonNullable<AgentStreamEvent['c
     normalizedBudgetRatio: clampRatio(asNumber(value.normalizedBudgetRatio)),
     decisions: Array.isArray(value.decisions) ? value.decisions.filter(isRecord) : undefined,
   };
+}
+
+function normalizeContextBreakdown(record: Record<string, unknown>): NonNullable<AgentStreamEvent['contextWindowState']>['breakdown'] | undefined {
+  const nested = firstRecord(
+    record.breakdown,
+    record.contextBreakdown,
+    record.context_breakdown,
+    record.categoryTokens,
+    record.categories,
+  );
+  const source = nested ?? record;
+  const breakdown = {
+    systemPrompt: firstNumber(source, ['systemPrompt', 'system_prompt', 'system', 'systemPromptTokens', 'system_prompt_tokens']),
+    toolDefinitions: firstNumber(source, ['toolDefinitions', 'tool_definitions', 'tools', 'toolDefinitionTokens', 'tool_definition_tokens']),
+    rules: firstNumber(source, ['rules', 'ruleTokens', 'rulesTokens', 'rules_tokens']),
+    skills: firstNumber(source, ['skills', 'skillTokens', 'skillsTokens', 'skills_tokens']),
+    mcp: firstNumber(source, ['mcp', 'mcpTokens', 'mcp_tokens', 'mcpServers', 'mcp_servers']),
+    subagentDefinitions: firstNumber(source, ['subagentDefinitions', 'subagent_definitions', 'subagents', 'subagentTokens', 'subagent_definition_tokens']),
+    conversation: firstNumber(source, ['conversation', 'conversationTokens', 'conversation_tokens', 'messages', 'messageTokens', 'message_tokens']),
+  };
+  return Object.values(breakdown).some((value) => value !== undefined) ? breakdown : undefined;
+}
+
+function firstRecord(...values: unknown[]) {
+  return values.find(isRecord);
+}
+
+function firstNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = asNumber(record[key]);
+    if (value !== undefined) return value;
+  }
+  return undefined;
 }
 
 function clampRatio(value?: number) {

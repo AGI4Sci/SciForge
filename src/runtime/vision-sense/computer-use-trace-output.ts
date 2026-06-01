@@ -40,6 +40,11 @@ type VisionSenseTraceOutputViewRefs = {
   execution?: string;
   trace?: string;
 };
+type GenericBridgeBlockedVirtualScreen = {
+  artifactId?: string;
+  title?: string;
+  data: Record<string, unknown>;
+};
 
 export function genericLoopPayload(params: {
   request: GatewayRequest;
@@ -496,9 +501,28 @@ export function genericBridgeBlockedPayload(
   workspace: string,
   reason: string,
   routeDecision: Record<string, unknown>,
+  options: {
+    runId?: string;
+    virtualScreen?: GenericBridgeBlockedVirtualScreen;
+  } = {},
 ): ToolPayload {
-  const runId = sanitizeId(`generic-cu-blocked-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
+  const runId = sanitizeId(options.runId || `generic-cu-blocked-${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`);
   const expectedTrace = workspaceRel(workspace, join(workspace, '.sciforge', 'vision-runs', runId, 'vision-trace.json'));
+  const virtualScreenArtifact = options.virtualScreen
+    ? genericBridgeBlockedVirtualScreenArtifact(runId, options.virtualScreen)
+    : undefined;
+  const virtualScreenArtifactRefs = virtualScreenArtifact ? [virtualScreenArtifact.id] : [];
+  const uiManifest = visionSenseTraceOutputViews({
+    refs: { execution: visionSenseTraceIds.execution, trace: visionSenseTraceIds.trace },
+  });
+  if (virtualScreenArtifact) {
+    uiManifest.unshift({
+      componentId: 'virtual-screen-viewer',
+      title: options.virtualScreen?.title ?? 'Computer Use screen',
+      artifactRef: virtualScreenArtifact.id,
+      priority: -6,
+    });
+  }
   return {
     message: `vision-sense generic Computer Use bridge is not ready: ${reason}`,
     confidence: 0.25,
@@ -515,12 +539,10 @@ export function genericBridgeBlockedPayload(
       type: 'failure',
       confidence: 0.25,
       evidenceLevel: 'runtime',
-      supportingRefs: [VISION_TOOL_ID],
+      supportingRefs: [VISION_TOOL_ID, ...virtualScreenArtifactRefs],
       opposingRefs: [],
     }],
-    uiManifest: visionSenseTraceOutputViews({
-      refs: { execution: visionSenseTraceIds.execution, trace: visionSenseTraceIds.trace },
-    }),
+    uiManifest,
     executionUnits: [{
       id: `EU-${runId}`,
       tool: VISION_TOOL_ID,
@@ -530,14 +552,44 @@ export function genericBridgeBlockedPayload(
       time: new Date().toISOString(),
       environment: 'SciForge workspace runtime gateway',
       inputData: [request.prompt],
-      outputArtifacts: [],
-      artifacts: [],
+      outputArtifacts: virtualScreenArtifactRefs,
+      artifacts: virtualScreenArtifactRefs,
       failureReason: reason,
       routeDecision,
       requiredInputs: ['ScreenCaptureProvider', ...visionSenseTraceOutputPolicy.requiredInputs.slice(1)],
       recoverActions: [...visionSenseTraceOutputPolicy.bridgeRecoverActions],
       nextStep: 'Configure the generic vision loop dependencies, then rerun the same request.',
     }],
-    artifacts: [],
+    artifacts: virtualScreenArtifact ? [virtualScreenArtifact] : [],
+  };
+}
+
+function genericBridgeBlockedVirtualScreenArtifact(
+  runId: string,
+  projection: GenericBridgeBlockedVirtualScreen,
+) {
+  const id = sanitizeId(projection.artifactId || `computer-use-virtual-screen-${runId}`);
+  return {
+    id,
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    metadata: {
+      title: projection.title ?? 'Computer Use screen',
+      presentationRole: 'primary-deliverable',
+      producer: 'workspace-runtime',
+      runId,
+    },
+    data: projection.data,
+    delivery: {
+      contractId: 'sciforge.artifact-delivery.v1',
+      ref: `artifact:${id}`,
+      role: 'primary-deliverable',
+      declaredMediaType: 'application/vnd.sciforge.computer-use-virtual-screen+json',
+      declaredExtension: '.json',
+      contentShape: 'external-ref',
+      readableRef: `artifact:${id}`,
+      previewPolicy: 'inline',
+    },
   };
 }

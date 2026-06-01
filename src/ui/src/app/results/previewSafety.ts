@@ -12,6 +12,8 @@ const privateUrlPattern = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[:
 const privateUrlTestPattern = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|[^/\s"'<>]*(?:provider|token|secret|api|auth|oauth)[^/\s"'<>]*)[^\s"'<>]*/i;
 const auditLogRefPattern = /(?:file:)?\.sciforge\/[^\s"'<>]*(?:audit|logs?|stdout|stderr|raw)[^\s"'<>]*/gi;
 const auditLogRefTestPattern = /(?:file:)?\.sciforge\/[^\s"'<>]*(?:audit|logs?|stdout|stderr|raw)[^\s"'<>]*/i;
+const internalRuntimeIdPattern = /\b(?:codex-command|runtime-codex|runtime-command)-[A-Za-z0-9._:-]{4,}\b|\bruntime-codex:[^\s"'<>),;\]}]+/gi;
+const internalRuntimeIdTestPattern = /\b(?:codex-command|runtime-codex|runtime-command)-[A-Za-z0-9._:-]{4,}\b|\bruntime-codex:[^\s"'<>),;\]}]+/i;
 const secretKeyPattern = /(?:^|[_\s-])(?:authorization|auth|api[_\s-]?key|access[_\s-]?token|token|secret|password|credential|client[_\s-]?secret|provider|model(?:name)?|endpoint|baseurl|base[_\s-]?url|invokeurl|invoke[_\s-]?url)(?:$|[_\s-])/i;
 const sensitiveBodyKeyPattern = /(?:^|[_-])(?:raw|rawbody|rawpayload|rawresponse|providerpayload|providerresponse|responsebody|stdout|stderr|logs?|logtext|rawoutput|providerrawoutput|html)(?:$|[_-])/i;
 const sensitiveTextPattern = /\b(?:authorization|bearer|api[_\s-]?key|access[_\s-]?token|token|secret|password|credential|invalid token|unauthorized|forbidden)\b|RAW_[A-Z0-9_]+|\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i;
@@ -28,6 +30,7 @@ export function sanitizeRightPaneText(value: string): string {
     .replace(/\bAuthorization\s*:\s*[^\n\r]+/gi, 'Authorization: [redacted-secret]')
     .replace(localAbsolutePathPattern, (_match, prefix: string) => `${prefix}[redacted-local-path]`)
     .replace(auditLogRefPattern, '[redacted-audit-ref]')
+    .replace(internalRuntimeIdPattern, '[redacted-runtime-id]')
     .replace(/RAW_[A-Z0-9_]+/g, '[redacted-raw]')
     .replace(/\b(?:Invalid token|Unauthorized|Forbidden)\b[^\n\r.]*/gi, 'authentication details redacted');
 }
@@ -119,6 +122,7 @@ export function rightPaneTextIsSensitive(value: string): boolean {
   return sensitiveTextPattern.test(value)
     || privateUrlTestPattern.test(value)
     || auditLogRefTestPattern.test(value)
+    || internalRuntimeIdTestPattern.test(value)
     || /(^|[\s"'([{<])(?:\/(?:Applications|Users|private|var|tmp|etc|opt|home)\/|[A-Za-z]:\\)/.test(value);
 }
 

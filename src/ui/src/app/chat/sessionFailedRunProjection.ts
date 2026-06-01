@@ -181,10 +181,22 @@ export function attachProcessRecoveryToFailedSession({
   session,
   failedRunId,
   events,
+  eventCount,
+  retainedEventCount,
+  truncated,
+  refs,
+  summaryDigest,
+  eventSummaries,
 }: {
   session: SciForgeSession;
   failedRunId: string;
   events: Array<Record<string, unknown>>;
+  eventCount?: number;
+  retainedEventCount?: number;
+  truncated?: boolean;
+  refs?: string[];
+  summaryDigest?: Record<string, unknown>;
+  eventSummaries?: Array<Record<string, unknown>>;
 }): SciForgeSession {
   if (!events.length) return session;
   return {
@@ -195,7 +207,12 @@ export function attachProcessRecoveryToFailedSession({
           raw: {
             ...(typeof run.raw === 'object' && run.raw !== null ? run.raw : {}),
             streamProcess: {
-              eventCount: events.length,
+              eventCount: eventCount ?? events.length,
+              retainedEventCount,
+              truncated,
+              refs,
+              summaryDigest,
+              eventSummaries,
               events,
             },
           },

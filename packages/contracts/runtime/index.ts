@@ -2,6 +2,54 @@ import type { ReactNode } from 'react';
 import type { ArtifactDelivery } from './artifacts';
 
 export {
+  CHANNEL_DELIVERY_SCHEMA_VERSION,
+  CHANNEL_LEDGER_EVENT_SCHEMA_VERSION,
+  CHANNEL_MESSAGE_SCHEMA_VERSION,
+  CHANNEL_RESOURCE_RESULT_SCHEMA_VERSION,
+  agentThreadMessageCreatedLedgerEvent,
+  channelDeliveryLedgerEvent,
+  channelMessageEnvelopeToUserMessage,
+  channelMessageMetadataFromProvenance,
+  channelMessageProvenance,
+  channelMessageReceivedLedgerEvent,
+  channelReferencesForEnvelope,
+  channelTitle,
+  isChannelSourcedMessage,
+} from './channel-plugin';
+export type {
+  AgentThreadMessageCreatedLedgerEvent,
+  ChannelApprovalDecision,
+  ChannelApprovalResult,
+  ChannelAuditRecord,
+  ChannelBindingStatus,
+  ChannelDeliveryLedgerEvent,
+  ChannelDeliveryStatus,
+  ChannelHostPorts,
+  ChannelIdempotencyClaim,
+  ChannelIntakeLease,
+  ChannelLedgerEvent,
+  ChannelMessageEnvelope,
+  ChannelMessageReceivedLedgerEvent,
+  ChannelMessageSourceMetadata,
+  ChannelPlugin,
+  ChannelPluginManifest,
+  ChannelPolicyDecision,
+  ChannelResourceItem,
+  ChannelResourceQuery,
+  ChannelResourceRead,
+  ChannelResourceResult,
+  ChannelSessionBinding,
+  ChannelSideEffect,
+  ChannelStoredRef,
+  ChannelThreadAppendInput,
+  ChannelThreadAppendResult,
+  ChannelTransport,
+  DeliveryDraftResult,
+  DeliveryEnvelope,
+  DeliveryResult,
+} from './channel-plugin';
+
+export {
   MODULE_CONTRACT_SCHEMA_VERSION,
   createModuleDescription,
   moduleIntent,
@@ -183,6 +231,8 @@ export type {
   CodexRealtimeSessionEnvelope,
 } from './codex-realtime-session';
 export {
+  BROWSER_HOST_SESSION_PROVIDER_ID,
+  BROWSER_HOST_SESSION_SCHEMA,
   BROWSER_RUNTIME_CAPABILITY_ID,
   BROWSER_RUNTIME_CONTRACT_ID,
   browserRuntimeCodexFeatureMatrix,
@@ -196,6 +246,13 @@ export {
   normalizeBrowserRuntimePageQuery,
 } from './browser-runtime';
 export type {
+  BrowserHostSessionAction,
+  BrowserHostSessionActionRequest,
+  BrowserHostSessionActionTiming,
+  BrowserHostSessionActionTimingSummary,
+  BrowserHostSessionState,
+  BrowserHostSessionStatus,
+  BrowserHostSessionViewport,
   BrowserRuntimeCodexFeature,
   BrowserRuntimeCommand,
   BrowserRuntimeCommandRisk,

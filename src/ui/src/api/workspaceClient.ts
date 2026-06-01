@@ -21,8 +21,15 @@ import type {
 import type { ScenarioLibraryState } from '@sciforge/scenario-core/scenario-library';
 import type { ScenarioPackage } from '@sciforge/scenario-core/scenario-package';
 import { parseWorkspaceState } from '../sessionStore';
-import { defaultSciForgeConfig, normalizeConfig, normalizeWorkspaceRootPath } from '../config';
+import { LEGACY_DEFAULT_WORKSPACE_WRITER_URL, defaultSciForgeConfig, normalizeConfig, normalizeWorkspaceRootPath } from '../config';
 import { SciForgeClientError, reasonFromResponseText, recoverActionsForService } from './clientError';
+export type { AgentHostModuleCallResult as WorkspaceModuleCallResult } from './agentHostModuleClient';
+export {
+  describeAgentHostModule as describeWorkspaceModule,
+  invokeAgentHostModule as invokeWorkspaceModule,
+  queryAgentHostModule as queryWorkspaceModule,
+  readAgentHostModule as readWorkspaceModule,
+} from './agentHostModuleClient';
 
 export interface WorkspaceEntry {
   name: string;
@@ -92,6 +99,8 @@ type WorkspacePreviewCacheEntry<T> = {
 
 const WORKSPACE_PREVIEW_STALE_STATUS_CODES = new Set([400, 404]);
 const WORKSPACE_PREVIEW_STALE_CACHE_TTL_MS = 5 * 60 * 1000;
+export const BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS = 6000;
+export const BROWSER_HOST_WRITER_START_PREFLIGHT_TIMEOUT_MS = 1500;
 const workspaceFileReadCache = new Map<string, WorkspacePreviewCacheEntry<WorkspaceFileContent>>();
 const previewDescriptorReadCache = new Map<string, WorkspacePreviewCacheEntry<PreviewDescriptor>>();
 const previewDerivativeReadCache = new Map<string, WorkspacePreviewCacheEntry<PreviewDerivative>>();
@@ -288,6 +297,281 @@ export interface FeedbackCodexTerminalSession {
 export interface FeedbackCodexPtyTerminalStartResult {
   session: FeedbackCodexTerminalSession;
   repairRun?: FeedbackRepairRunRecord;
+}
+
+export type WorkspaceTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
+export const WORKSPACE_TERMINAL_WEBSOCKET_PTY_CAPABILITY = 'workspace-terminal-websocket-pty';
+export const BROWSER_HOST_SESSION_CAPABILITY = 'browser-host-session';
+export const BROWSER_HOST_SEARCH_CAPABILITY = 'browser-host-search';
+const BROWSER_HOST_REQUIRED_CAPABILITIES = [
+  BROWSER_HOST_SESSION_CAPABILITY,
+  BROWSER_HOST_SEARCH_CAPABILITY,
+] as const;
+const BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS = [
+  'start',
+  'state',
+  'actions',
+  'computer-use-actions',
+  'frame',
+  'frame-stream',
+] as const;
+const BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN = 'browser-host/search';
+
+export interface WorkspaceTerminalSession {
+  schemaVersion: 1;
+  id: string;
+  status: WorkspaceTerminalStatus;
+  workspacePath: string;
+  cwd: string;
+  shell: string;
+  transcriptRef: string;
+  startedAt: string;
+  updatedAt: string;
+  message?: string;
+  webSocketPath: string;
+  workspaceWriterBaseUrl?: string;
+}
+
+export interface WorkspaceTerminalStartResult {
+  session: WorkspaceTerminalSession;
+}
+
+export type WorkspaceTerminalWriterPreflightStatus =
+  | 'ready'
+  | 'invalid-url'
+  | 'offline'
+  | 'ui-html'
+  | 'http-error'
+  | 'invalid-json'
+  | 'unexpected-service'
+  | 'missing-terminal-capability';
+
+export interface WorkspaceTerminalWriterCandidate {
+  label: string;
+  baseUrl: string;
+  displayUrl: string;
+  ok: boolean;
+  status: WorkspaceTerminalWriterPreflightStatus;
+  message: string;
+  health?: SciForgeWorkspaceWriterHealth;
+}
+
+export interface WorkspaceTerminalWriterPreflightResult {
+  ok: boolean;
+  status: WorkspaceTerminalWriterPreflightStatus;
+  configuredBaseUrl: string;
+  configuredDisplayUrl: string;
+  effectiveBaseUrl?: string;
+  effectiveDisplayUrl?: string;
+  recommendedBaseUrl?: string;
+  recommendedDisplayUrl?: string;
+  message: string;
+  diagnosticRef: string;
+  candidates: WorkspaceTerminalWriterCandidate[];
+  health?: SciForgeWorkspaceWriterHealth;
+}
+
+export type BrowserHostSessionWriterPreflightStatus =
+  | 'ready'
+  | 'invalid-url'
+  | 'offline'
+  | 'ui-html'
+  | 'http-error'
+  | 'invalid-json'
+  | 'unexpected-service'
+  | 'missing-browser-host-capability';
+
+export interface BrowserHostSessionWriterCandidate {
+  label: string;
+  baseUrl: string;
+  displayUrl: string;
+  ok: boolean;
+  status: BrowserHostSessionWriterPreflightStatus;
+  message: string;
+  health?: SciForgeWorkspaceWriterHealth;
+}
+
+export interface BrowserHostSessionWriterPreflightResult {
+  ok: boolean;
+  status: BrowserHostSessionWriterPreflightStatus;
+  configuredBaseUrl: string;
+  configuredDisplayUrl: string;
+  effectiveBaseUrl?: string;
+  effectiveDisplayUrl?: string;
+  recommendedBaseUrl?: string;
+  recommendedDisplayUrl?: string;
+  message: string;
+  diagnosticRef: string;
+  candidates: BrowserHostSessionWriterCandidate[];
+  health?: SciForgeWorkspaceWriterHealth;
+}
+
+export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
+export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'snapshot' | 'state' | 'close';
+export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
+export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
+export type BrowserHostSessionLoadingProgressState = 'navigation-start' | 'navigation-committed' | 'interactive' | 'load' | 'network-quiet' | 'stalled' | 'blocked' | 'retry' | 'handoff';
+export type BrowserHostSessionLoadingProgressReason = 'navigation-requested' | 'navigation-committed' | 'page-interactive' | 'page-load' | 'network-quiet' | 'navigation-stalled' | 'navigation-blocked' | 'navigation-retry' | 'user-handoff-required' | 'host-starting' | 'host-loading' | 'host-ready' | 'host-error' | 'host-diagnostic';
+export type BrowserHostSessionLoadingProgressSource = 'host-lifecycle' | 'host-progress' | 'host-navigation' | 'host-action-timing' | 'host-state' | 'host-session' | 'host-error';
+export type BrowserHostComputerUseAction =
+  | { type: 'click'; x?: number; y?: number; targetDescription?: string }
+  | { type: 'double_click'; x?: number; y?: number; targetDescription?: string }
+  | { type: 'drag'; fromX?: number; fromY?: number; toX?: number; toY?: number; targetDescription?: string }
+  | { type: 'mouse_down'; x?: number; y?: number; button?: BrowserHostMouseButton; targetDescription?: string }
+  | { type: 'mouse_move'; x?: number; y?: number; targetDescription?: string }
+  | { type: 'mouse_up'; x?: number; y?: number; button?: BrowserHostMouseButton; targetDescription?: string }
+  | { type: 'type_text'; text: string; targetDescription?: string }
+  | { type: 'press_key'; key: string; targetDescription?: string }
+  | { type: 'hotkey'; keys: string[]; targetDescription?: string }
+  | { type: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; amount?: number; targetDescription?: string }
+  | { type: 'wheel'; deltaX?: number; deltaY?: number; targetDescription?: string }
+  | { type: 'cursor'; x?: number; y?: number; targetDescription?: string }
+  | { type: 'wait'; ms?: number; targetDescription?: string };
+
+export interface BrowserHostSessionLoadingProgress {
+  schemaVersion: 'sciforge.browser-host-session.loading-progress.lifecycle.v1';
+  state: BrowserHostSessionLoadingProgressState;
+  reason: BrowserHostSessionLoadingProgressReason;
+  source: BrowserHostSessionLoadingProgressSource;
+  status: BrowserHostSessionStatus;
+  action?: BrowserHostSessionAction | 'open';
+  updatedAt: string;
+  refs: {
+    session?: string;
+    liveSurface?: string;
+    frameStream?: string;
+    frame?: string;
+    screenshot?: string;
+    domSnapshot?: string;
+    axSnapshot?: string;
+    consoleLog?: string;
+    networkLog?: string;
+    searchResult?: string;
+  };
+  canRetry?: boolean;
+  blocked?: boolean;
+  requiresHandoff?: boolean;
+}
+
+export interface BrowserHostSessionState {
+  schemaVersion: 'sciforge.browser-host-session.state.v1';
+  id: string;
+  owner: 'host';
+  providerId: 'sciforge.browser-host-session';
+  status: BrowserHostSessionStatus;
+  workspacePath: string;
+  requestedUrl: string;
+  url: string;
+  title?: string;
+  startedAt: string;
+  updatedAt: string;
+  viewport: { width: number; height: number };
+  canGoBack: boolean;
+  canGoForward: boolean;
+  liveSurfaceRef?: string;
+  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  nativeAdapterUrl?: string;
+  singleInteractiveTruth?: true;
+  frameStreamRef?: string;
+  frameRef?: string;
+  frameUrl?: string;
+  screenshotRef?: string;
+  domSnapshotRef?: string;
+  axSnapshotRef?: string;
+  consoleLogRef?: string;
+  networkLogRef?: string;
+  searchResultRef?: string;
+  workspaceWriterBaseUrl?: string;
+  cursor?: string;
+  loadingProgress?: BrowserHostSessionLoadingProgress;
+  lastActionTiming?: BrowserHostSessionActionTiming;
+  actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
+  diagnostics: string[];
+}
+
+export interface BrowserHostSessionActionTiming {
+  actionId: string;
+  action: BrowserHostSessionAction | 'open';
+  capture: BrowserHostSessionCaptureMode;
+  status: 'ok' | 'failed';
+  uiEventReceivedAt?: string;
+  adapterSentAt?: string;
+  hostReceivedAt: string;
+  hostStartedAt: string;
+  hostActionEndedAt?: string;
+  evidenceCaptureStartedAt?: string;
+  evidenceCaptureEndedAt?: string;
+  hostCompletedAt: string;
+  adapterToHostMs?: number;
+  queueMs: number;
+  hostActionMs: number;
+  evidenceMs?: number;
+  totalMs: number;
+  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  paintAckSource?: 'native-adapter-action-state' | 'host-stream-frame' | 'none';
+  blockedReason?: string;
+}
+
+export interface BrowserHostSessionActionTimingSummary {
+  action: BrowserHostSessionAction | 'open';
+  count: number;
+  p50Ms: number;
+  p95Ms: number;
+  lastMs: number;
+}
+
+export interface BrowserHostSessionStartResult {
+  session: BrowserHostSessionState;
+  preflight?: BrowserHostSessionWriterPreflightResult;
+  runtimeStart?: { ok: boolean; services: Array<Record<string, unknown>>; error?: string };
+}
+
+export interface BrowserHostComputerUseActionResult {
+  schemaVersion: 'sciforge.browser-host-session.computer-use-action.v1';
+  providerId: 'sciforge.browser-host-session.computer-use-adapter';
+  inputChannel: 'browser-host-session';
+  userDeviceImpact: 'none';
+  sharedSystemInputUsed: false;
+  systemMouseEvents: 'not-sent';
+  systemKeyboardEvents: 'not-sent';
+  liveBrowserOwner?: 'BrowserHostSession';
+  singleInteractiveTruth?: true;
+  hostAction: {
+    action: BrowserHostSessionAction;
+    capture?: BrowserHostSessionCaptureMode;
+    x?: number;
+    y?: number;
+    button?: BrowserHostMouseButton;
+    path?: Array<{ x: number; y: number }>;
+    text?: string;
+    key?: string;
+    deltaX?: number;
+    deltaY?: number;
+  };
+  session: BrowserHostSessionState;
+}
+
+export interface BrowserHostSearchResultItem {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface BrowserHostSearchResult {
+  schemaVersion: 'sciforge.browser-host-session.search-result.v1';
+  query: string;
+  sessionId?: string;
+  engine: 'bing' | 'duckduckgo';
+  searchUrl: string;
+  finalUrl: string;
+  results: BrowserHostSearchResultItem[];
+  session: BrowserHostSessionState;
+  searchResultRef: string;
+  screenshotRef?: string;
+  domSnapshotRef?: string;
+  axSnapshotRef?: string;
+  consoleLogRef?: string;
+  networkLogRef?: string;
 }
 
 export async function loadFileBackedSciForgeConfig(config: SciForgeConfig): Promise<SciForgeConfig | undefined> {
@@ -684,13 +968,138 @@ export async function loadWorkspaceWriterHealth(
   const cleanBaseUrl = workspaceWriterBaseUrl.replace(/\/+$/, '');
   const response = await fetchWorkspace(config, `load workspace writer health ${cleanBaseUrl}`, `${cleanBaseUrl}/health`);
   if (!response.ok) throw new Error(await workspaceResponseError(response, `Load workspace writer health failed: HTTP ${response.status}`));
-  const json = await response.json() as SciForgeWorkspaceWriterHealth;
+  const json = await readWorkspaceJson<SciForgeWorkspaceWriterHealth>(
+    config,
+    `load workspace writer health ${cleanBaseUrl}`,
+    response,
+    `Load workspace writer health failed: HTTP ${response.status}`,
+  );
   if (json.ok !== true || json.service !== 'sciforge-workspace-writer') {
     throw new Error(`Workspace writer health returned unexpected service: ${json.service || 'unknown'}`);
   }
   return {
     ...json,
     capabilities: Array.isArray(json.capabilities) ? json.capabilities : [],
+  };
+}
+
+export async function preflightWorkspaceTerminalWriter(
+  config: SciForgeConfig,
+  input: { workspaceWriterBaseUrl?: string; timeoutMs?: number } = {},
+): Promise<WorkspaceTerminalWriterPreflightResult> {
+  const configuredBaseUrl = normalizeWorkspaceWriterBaseUrl(input.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl);
+  const configuredDisplayUrl = displayWorkspaceWriterUrl(configuredBaseUrl || input.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl);
+  if (!configuredBaseUrl) {
+    return {
+      ok: false,
+      status: 'invalid-url',
+      configuredBaseUrl: '',
+      configuredDisplayUrl,
+      message: `Workspace Writer URL is invalid: ${configuredDisplayUrl || 'empty URL'}.`,
+      diagnosticRef: 'workspace-terminal-writer-invalid-url',
+      candidates: [],
+    };
+  }
+  const primary = await probeWorkspaceTerminalWriter(configuredBaseUrl, {
+    label: 'Configured writer',
+    timeoutMs: input.timeoutMs,
+  });
+  if (primary.ok) {
+    return {
+      ok: true,
+      status: 'ready',
+      configuredBaseUrl,
+      configuredDisplayUrl: primary.displayUrl,
+      effectiveBaseUrl: configuredBaseUrl,
+      effectiveDisplayUrl: primary.displayUrl,
+      message: primary.message,
+      diagnosticRef: 'workspace-terminal-writer-ready',
+      candidates: [],
+      health: primary.health,
+    };
+  }
+
+  const candidates: WorkspaceTerminalWriterCandidate[] = [];
+  for (const candidate of workspaceWriterCandidates(config, configuredBaseUrl)) {
+    candidates.push(await probeWorkspaceTerminalWriter(candidate.baseUrl, {
+      label: candidate.label,
+      timeoutMs: input.timeoutMs,
+    }));
+  }
+  const recommended = candidates.find((candidate) => candidate.ok);
+  return {
+    ok: false,
+    status: primary.status,
+    configuredBaseUrl,
+    configuredDisplayUrl: primary.displayUrl,
+    recommendedBaseUrl: recommended?.baseUrl,
+    recommendedDisplayUrl: recommended?.displayUrl,
+    message: recommended
+      ? `${primary.message} A ready Workspace Writer is available at ${recommended.displayUrl}.`
+      : primary.message,
+    diagnosticRef: primaryDiagnosticRef(primary.status),
+    candidates,
+  };
+}
+
+export async function preflightBrowserHostSessionWriter(
+  config: SciForgeConfig,
+  input: { workspaceWriterBaseUrl?: string; timeoutMs?: number } = {},
+): Promise<BrowserHostSessionWriterPreflightResult> {
+  const timeoutMs = input.timeoutMs ?? BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS;
+  const configuredBaseUrl = normalizeWorkspaceWriterBaseUrl(input.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl);
+  const configuredDisplayUrl = displayWorkspaceWriterUrl(configuredBaseUrl || input.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl);
+  if (!configuredBaseUrl) {
+    return {
+      ok: false,
+      status: 'invalid-url',
+      configuredBaseUrl: '',
+      configuredDisplayUrl,
+      message: `Workspace Writer URL is invalid: ${configuredDisplayUrl || 'empty URL'}.`,
+      diagnosticRef: 'browser-host-writer-invalid-url',
+      candidates: [],
+    };
+  }
+  const primary = await probeBrowserHostSessionWriter(configuredBaseUrl, {
+    label: 'Configured writer',
+    timeoutMs,
+  });
+  if (primary.ok) {
+    return {
+      ok: true,
+      status: 'ready',
+      configuredBaseUrl,
+      configuredDisplayUrl: primary.displayUrl,
+      effectiveBaseUrl: configuredBaseUrl,
+      effectiveDisplayUrl: primary.displayUrl,
+      message: primary.message,
+      diagnosticRef: 'browser-host-writer-ready',
+      candidates: [],
+      health: primary.health,
+    };
+  }
+
+  const candidates: BrowserHostSessionWriterCandidate[] = [];
+  for (const candidate of workspaceWriterCandidates(config, configuredBaseUrl)) {
+    candidates.push(await probeBrowserHostSessionWriter(candidate.baseUrl, {
+      label: candidate.label,
+      timeoutMs,
+    }));
+  }
+  const recommended = candidates.find((candidate) => candidate.ok);
+  return {
+    ok: false,
+    status: primary.status,
+    configuredBaseUrl,
+    configuredDisplayUrl: primary.displayUrl,
+    recommendedBaseUrl: recommended?.baseUrl,
+    recommendedDisplayUrl: recommended?.displayUrl,
+    message: recommended
+      ? `${primary.message} A ready Workspace Writer with BrowserHostSession is available at ${recommended.displayUrl}.`
+      : primary.message,
+    diagnosticRef: browserHostDiagnosticRef(primary.status),
+    candidates,
+    health: primary.health,
   };
 }
 
@@ -899,6 +1308,342 @@ export async function stopFeedbackCodexPtyTerminal(
   return json.session;
 }
 
+export async function startWorkspaceTerminalSession(
+  config: SciForgeConfig,
+  input: {
+    workspacePath?: string;
+    cwd?: string;
+    shell?: string;
+    cols?: number;
+    rows?: number;
+  } = {},
+): Promise<WorkspaceTerminalStartResult> {
+  const response = await fetchWorkspace(config, 'start workspace terminal session', `${config.workspaceWriterBaseUrl}/api/sciforge/terminal/sessions/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || config.workspacePath,
+      cwd: input.cwd,
+      shell: input.shell,
+      cols: input.cols,
+      rows: input.rows,
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Start workspace terminal failed: HTTP ${response.status}`));
+  const json = await response.json() as { session?: WorkspaceTerminalSession };
+  if (!json.session) throw new Error('Start workspace terminal returned no session.');
+  return { session: json.session };
+}
+
+export async function stopWorkspaceTerminalSession(
+  config: SciForgeConfig,
+  sessionId: string,
+  input: { reason?: string; workspacePath?: string } = {},
+): Promise<WorkspaceTerminalSession> {
+  if (!sessionId.trim()) throw new Error('Workspace terminal session id is required');
+  const response = await fetchWorkspace(config, `stop workspace terminal session ${sessionId}`, `${config.workspaceWriterBaseUrl}/api/sciforge/terminal/sessions/${encodeURIComponent(sessionId)}/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || config.workspacePath,
+      reason: input.reason || 'right pane terminal stop',
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Stop workspace terminal failed: HTTP ${response.status}`));
+  const json = await response.json() as { session?: WorkspaceTerminalSession };
+  if (!json.session) throw new Error(`Stop workspace terminal ${sessionId} returned no session.`);
+  return json.session;
+}
+
+export async function startBrowserHostSession(
+  config: SciForgeConfig,
+  input: {
+    url: string;
+    sessionId?: string;
+    workspacePath?: string;
+    width?: number;
+    height?: number;
+    timeoutMs?: number;
+  },
+): Promise<BrowserHostSessionStartResult> {
+  const prepared = await prepareBrowserHostSessionWriter(config, {
+    timeoutMs: BROWSER_HOST_WRITER_START_PREFLIGHT_TIMEOUT_MS,
+    allowConfiguredOfflineFallback: true,
+  });
+  const launchConfig = prepared.config;
+  const response = await fetchWorkspace(launchConfig, 'start BrowserHostSession', `${launchConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/sessions/start`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || launchConfig.workspacePath,
+      url: input.url,
+      sessionId: input.sessionId,
+      width: input.width,
+      height: input.height,
+      timeoutMs: input.timeoutMs,
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Start BrowserHostSession failed: HTTP ${response.status}`));
+  const json = await response.json() as { session?: BrowserHostSessionState };
+  if (!json.session) throw new Error('Start BrowserHostSession returned no session.');
+  return {
+    session: withBrowserHostWriterUrl(json.session, launchConfig.workspaceWriterBaseUrl),
+    preflight: prepared.preflight,
+    runtimeStart: prepared.runtimeStart,
+  };
+}
+
+export async function sendBrowserHostSessionAction(
+  config: SciForgeConfig,
+  sessionId: string,
+  input: {
+    action: BrowserHostSessionAction;
+    capture?: BrowserHostSessionCaptureMode;
+    url?: string;
+    x?: number;
+    y?: number;
+    button?: BrowserHostMouseButton;
+    path?: Array<{ x: number; y: number }>;
+    text?: string;
+    key?: string;
+    deltaX?: number;
+    deltaY?: number;
+    timeoutMs?: number;
+    actionId?: string;
+    uiEventReceivedAt?: string;
+    adapterSentAt?: string;
+    workspacePath?: string;
+    workspaceWriterBaseUrl?: string;
+  },
+): Promise<BrowserHostSessionState> {
+  const operationConfig = input.workspaceWriterBaseUrl ? { ...config, workspaceWriterBaseUrl: input.workspaceWriterBaseUrl } : config;
+  const response = await fetchWorkspace(operationConfig, `send BrowserHostSession ${input.action}`, `${operationConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(sessionId)}/actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || operationConfig.workspacePath,
+      action: input.action,
+      capture: input.capture,
+      url: input.url,
+      x: input.x,
+      y: input.y,
+      button: input.button,
+      path: input.path,
+      text: input.text,
+      key: input.key,
+      deltaX: input.deltaX,
+      deltaY: input.deltaY,
+      timeoutMs: input.timeoutMs,
+      actionId: input.actionId,
+      uiEventReceivedAt: input.uiEventReceivedAt,
+      adapterSentAt: input.adapterSentAt,
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `BrowserHostSession action failed: HTTP ${response.status}`));
+  const json = await response.json() as { session?: BrowserHostSessionState };
+  if (!json.session) throw new Error(`BrowserHostSession ${sessionId} action returned no session.`);
+  return withBrowserHostWriterUrl(json.session, operationConfig.workspaceWriterBaseUrl);
+}
+
+export async function sendBrowserHostComputerUseAction(
+  config: SciForgeConfig,
+  sessionId: string,
+  input: {
+    action: BrowserHostComputerUseAction;
+    capture?: BrowserHostSessionCaptureMode;
+    timeoutMs?: number;
+    actionId?: string;
+    uiEventReceivedAt?: string;
+    adapterSentAt?: string;
+    workspacePath?: string;
+    workspaceWriterBaseUrl?: string;
+  },
+): Promise<BrowserHostComputerUseActionResult> {
+  const operationConfig = input.workspaceWriterBaseUrl ? { ...config, workspaceWriterBaseUrl: input.workspaceWriterBaseUrl } : config;
+  const response = await fetchWorkspace(operationConfig, `send BrowserHostSession Computer Use ${input.action.type}`, `${operationConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(sessionId)}/computer-use-actions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || operationConfig.workspacePath,
+      action: input.action,
+      capture: input.capture,
+      timeoutMs: input.timeoutMs,
+      actionId: input.actionId,
+      uiEventReceivedAt: input.uiEventReceivedAt,
+      adapterSentAt: input.adapterSentAt,
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `BrowserHostSession Computer Use action failed: HTTP ${response.status}`));
+  const json = await response.json() as { result?: BrowserHostComputerUseActionResult };
+  if (!json.result) throw new Error(`BrowserHostSession ${sessionId} Computer Use action returned no result.`);
+  return {
+    ...json.result,
+    session: withBrowserHostWriterUrl(json.result.session, operationConfig.workspaceWriterBaseUrl),
+  };
+}
+
+export async function readBrowserHostSessionState(
+  config: SciForgeConfig,
+  sessionId: string,
+  input: { workspacePath?: string; workspaceWriterBaseUrl?: string } = {},
+): Promise<BrowserHostSessionState> {
+  const operationConfig = input.workspaceWriterBaseUrl ? { ...config, workspaceWriterBaseUrl: input.workspaceWriterBaseUrl } : config;
+  const url = new URL(`${operationConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(sessionId)}/state`);
+  url.searchParams.set('workspacePath', input.workspacePath || operationConfig.workspacePath);
+  const response = await fetchWorkspace(operationConfig, `read BrowserHostSession ${sessionId}`, url);
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `Read BrowserHostSession failed: HTTP ${response.status}`));
+  const json = await response.json() as { session?: BrowserHostSessionState };
+  if (!json.session) throw new Error(`Read BrowserHostSession ${sessionId} returned no session.`);
+  return withBrowserHostWriterUrl(json.session, operationConfig.workspaceWriterBaseUrl);
+}
+
+export async function searchWithBrowserHostSession(
+  config: SciForgeConfig,
+  input: {
+    query: string;
+    sessionId?: string;
+    limit?: number;
+    region?: string;
+    engine?: 'bing' | 'duckduckgo';
+    timeoutMs?: number;
+    workspacePath?: string;
+  },
+): Promise<BrowserHostSearchResult> {
+  const prepared = await prepareBrowserHostSessionWriter(config, {
+    timeoutMs: BROWSER_HOST_WRITER_START_PREFLIGHT_TIMEOUT_MS,
+    allowConfiguredOfflineFallback: true,
+  });
+  const searchConfig = prepared.config;
+  const response = await fetchWorkspace(searchConfig, 'browser host search', `${searchConfig.workspaceWriterBaseUrl}/api/sciforge/browser-host/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workspacePath: input.workspacePath || searchConfig.workspacePath,
+      query: input.query,
+      sessionId: input.sessionId,
+      limit: input.limit,
+      region: input.region,
+      engine: input.engine,
+      timeoutMs: input.timeoutMs,
+    }),
+  });
+  if (!response.ok) throw new Error(await workspaceResponseError(response, `BrowserHostSession search failed: HTTP ${response.status}`));
+  const json = await response.json() as { search?: BrowserHostSearchResult };
+  if (!json.search) throw new Error('BrowserHostSession search returned no result.');
+  return {
+    ...json.search,
+    session: withBrowserHostWriterUrl(json.search.session, searchConfig.workspaceWriterBaseUrl),
+  };
+}
+
+export function browserHostSessionFrameUrl(config: SciForgeConfig, session: BrowserHostSessionState): string {
+  const writerBaseUrl = session.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl;
+  const url = new URL(`${writerBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(session.id)}/frame`);
+  url.searchParams.set('workspacePath', session.workspacePath || config.workspacePath);
+  url.searchParams.set('t', session.updatedAt || String(Date.now()));
+  return url.toString();
+}
+
+export function browserHostSessionFrameStreamUrl(
+  config: SciForgeConfig,
+  session: BrowserHostSessionState,
+  input: { intervalMs?: number; fps?: number; quietWindowMs?: number; maxBufferedBytes?: number } = {},
+): string {
+  const writerBaseUrl = session.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl;
+  const url = new URL(`${writerBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(session.id)}/frame-stream`);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  url.searchParams.set('workspacePath', session.workspacePath || config.workspacePath);
+  if (input.intervalMs) url.searchParams.set('intervalMs', String(input.intervalMs));
+  if (input.fps) url.searchParams.set('fps', String(input.fps));
+  if (input.quietWindowMs !== undefined) url.searchParams.set('quietWindowMs', String(input.quietWindowMs));
+  if (input.maxBufferedBytes !== undefined) url.searchParams.set('maxBufferedBytes', String(input.maxBufferedBytes));
+  return url.toString();
+}
+
+async function prepareBrowserHostSessionWriter(
+  config: SciForgeConfig,
+  input: { timeoutMs?: number; allowConfiguredOfflineFallback?: boolean } = { timeoutMs: BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS },
+): Promise<{
+  config: SciForgeConfig;
+  preflight: BrowserHostSessionWriterPreflightResult;
+  runtimeStart?: BrowserHostSessionStartResult['runtimeStart'];
+}> {
+  const first = await preflightBrowserHostSessionWriter(config, input);
+  const firstReadyBaseUrl = first.ok ? first.effectiveBaseUrl : first.recommendedBaseUrl;
+  if (firstReadyBaseUrl) {
+    return {
+      config: { ...config, workspaceWriterBaseUrl: firstReadyBaseUrl },
+      preflight: first,
+    };
+  }
+  if (input.allowConfiguredOfflineFallback && first.status === 'offline' && first.configuredBaseUrl && !first.recommendedBaseUrl) {
+    return {
+      config: { ...config, workspaceWriterBaseUrl: first.configuredBaseUrl },
+      preflight: first,
+    };
+  }
+
+  let runtimeStart: BrowserHostSessionStartResult['runtimeStart'];
+  try {
+    runtimeStart = await startRuntimeServices();
+  } catch (error) {
+    throw browserHostWriterUnavailableError(first, error);
+  }
+
+  const second = await preflightBrowserHostSessionWriter(config, input);
+  const secondReadyBaseUrl = second.ok ? second.effectiveBaseUrl : second.recommendedBaseUrl;
+  if (secondReadyBaseUrl) {
+    return {
+      config: { ...config, workspaceWriterBaseUrl: secondReadyBaseUrl },
+      preflight: second,
+      runtimeStart,
+    };
+  }
+  throw browserHostWriterUnavailableError(second, runtimeStart?.error);
+}
+
+function withBrowserHostWriterUrl(session: BrowserHostSessionState, workspaceWriterBaseUrl: string): BrowserHostSessionState {
+  return {
+    ...session,
+    workspaceWriterBaseUrl: normalizeWorkspaceWriterBaseUrl(workspaceWriterBaseUrl) || workspaceWriterBaseUrl,
+  };
+}
+
+function browserHostWriterUnavailableError(
+  preflight: BrowserHostSessionWriterPreflightResult,
+  cause?: unknown,
+) {
+  const causeText = cause instanceof Error
+    ? cause.message
+    : typeof cause === 'string'
+      ? cause
+      : '';
+  return new SciForgeClientError({
+    title: 'BrowserHostSession Workspace Writer 未连接',
+    reason: sanitizeWorkspaceDiagnosticText([
+      preflight.message,
+      causeText ? `Runtime autostart: ${causeText}` : '',
+    ].filter(Boolean).join(' ')),
+    recoverActions: [
+      '确认 Workspace Writer URL 指向 writer 服务而不是 Web UI',
+      '启动 npm run workspace:server 或点击启动服务后重试',
+      '检查 /health 是否包含 browser-host-session、browser-host-search，以及 browserHostSession 的 computer-use-actions/frame-stream endpoints',
+    ],
+    diagnosticRef: preflight.diagnosticRef,
+    cause,
+  });
+}
+
+export function workspaceTerminalWebSocketUrl(config: SciForgeConfig, session: WorkspaceTerminalSession): string {
+  if (!session.webSocketPath) throw new Error(`Workspace terminal session ${session.id} has no WebSocket path.`);
+  const base = new URL(session.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl);
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  base.pathname = session.webSocketPath;
+  base.search = '';
+  base.searchParams.set('workspacePath', session.workspacePath || config.workspacePath);
+  return base.toString();
+}
+
 export function feedbackCodexPtyWebSocketUrl(config: SciForgeConfig, session: FeedbackCodexTerminalSession): string {
   if (!session.webSocketPath) throw new Error(`Codex PTY session ${session.id} has no WebSocket path.`);
   const base = new URL(config.workspaceWriterBaseUrl);
@@ -1038,6 +1783,320 @@ async function writeWorkspaceScenario(config: SciForgeConfig, action: 'save' | '
   if (!response.ok) throw new Error(await workspaceResponseError(response, `${action} scenario failed: HTTP ${response.status}`));
 }
 
+async function probeWorkspaceTerminalWriter(
+  baseUrl: string,
+  input: { label: string; timeoutMs?: number },
+): Promise<WorkspaceTerminalWriterCandidate> {
+  const normalized = normalizeWorkspaceWriterBaseUrl(baseUrl);
+  const displayUrl = displayWorkspaceWriterUrl(normalized || baseUrl);
+  if (!normalized) {
+    return {
+      label: input.label,
+      baseUrl,
+      displayUrl,
+      ok: false,
+      status: 'invalid-url',
+      message: `${input.label} has an invalid Workspace Writer URL: ${displayUrl || 'empty URL'}.`,
+    };
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${normalized}/health`, {
+      headers: { Accept: 'application/json' },
+      signal: workspaceTerminalPreflightSignal(input.timeoutMs),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'offline',
+      message: `${input.label} is not reachable at ${displayUrl}: ${sanitizeWorkspaceDiagnosticText(detail)}.`,
+    };
+  }
+  const text = await response.text().catch(() => '');
+  const contentType = response.headers.get('content-type') ?? '';
+  if (workspaceResponseLooksLikeHtml(text, contentType)) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'ui-html',
+      message: `${input.label} at ${displayUrl} returned a SciForge UI/HTML page instead of Workspace Writer JSON.`,
+    };
+  }
+  if (!response.ok) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'http-error',
+      message: `${input.label} at ${displayUrl} failed /health with HTTP ${response.status}.`,
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'invalid-json',
+      message: `${input.label} at ${displayUrl} returned non-JSON health (${contentType || 'unknown content type'}).`,
+    };
+  }
+  const health = normalizeWorkspaceWriterHealth(parsed);
+  if (!health || health.ok !== true || health.service !== 'sciforge-workspace-writer') {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'unexpected-service',
+      message: `${input.label} at ${displayUrl} is not a SciForge Workspace Writer service.`,
+    };
+  }
+  if (!health.capabilities.includes(WORKSPACE_TERMINAL_WEBSOCKET_PTY_CAPABILITY)) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'missing-terminal-capability',
+      message: `${input.label} at ${displayUrl} is a stale Workspace Writer without ${WORKSPACE_TERMINAL_WEBSOCKET_PTY_CAPABILITY}.`,
+      health,
+    };
+  }
+  return {
+    label: input.label,
+    baseUrl: normalized,
+    displayUrl,
+    ok: true,
+    status: 'ready',
+    message: `${input.label} at ${displayUrl} is ready for workspace terminal PTY sessions.`,
+    health,
+  };
+}
+
+async function probeBrowserHostSessionWriter(
+  baseUrl: string,
+  input: { label: string; timeoutMs?: number },
+): Promise<BrowserHostSessionWriterCandidate> {
+  const normalized = normalizeWorkspaceWriterBaseUrl(baseUrl);
+  const displayUrl = displayWorkspaceWriterUrl(normalized || baseUrl);
+  if (!normalized) {
+    return {
+      label: input.label,
+      baseUrl,
+      displayUrl,
+      ok: false,
+      status: 'invalid-url',
+      message: `${input.label} has an invalid Workspace Writer URL: ${displayUrl || 'empty URL'}.`,
+    };
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${normalized}/health`, {
+      headers: { Accept: 'application/json' },
+      signal: workspaceTerminalPreflightSignal(input.timeoutMs),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'offline',
+      message: `${input.label} is not reachable at ${displayUrl}: ${sanitizeWorkspaceDiagnosticText(detail)}.`,
+    };
+  }
+  const text = await response.text().catch(() => '');
+  const contentType = response.headers.get('content-type') ?? '';
+  if (workspaceResponseLooksLikeHtml(text, contentType)) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'ui-html',
+      message: `${input.label} at ${displayUrl} returned a SciForge UI/HTML page instead of Workspace Writer JSON.`,
+    };
+  }
+  if (!response.ok) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'http-error',
+      message: `${input.label} at ${displayUrl} failed /health with HTTP ${response.status}.`,
+    };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'invalid-json',
+      message: `${input.label} at ${displayUrl} returned non-JSON health (${contentType || 'unknown content type'}).`,
+    };
+  }
+  const health = normalizeWorkspaceWriterHealth(parsed);
+  if (!health || health.ok !== true || health.service !== 'sciforge-workspace-writer') {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'unexpected-service',
+      message: `${input.label} at ${displayUrl} is not a SciForge Workspace Writer service.`,
+    };
+  }
+  const missingRequirements = missingBrowserHostSessionRequirements(health);
+  if (missingRequirements.length) {
+    return {
+      label: input.label,
+      baseUrl: normalized,
+      displayUrl,
+      ok: false,
+      status: 'missing-browser-host-capability',
+      message: `${input.label} at ${displayUrl} is a stale Workspace Writer without final BrowserHostSession support: ${missingRequirements.join(', ')}. Restart runtime services so /health advertises computer-use-actions and frame-stream.`,
+      health,
+    };
+  }
+  return {
+    label: input.label,
+    baseUrl: normalized,
+    displayUrl,
+    ok: true,
+    status: 'ready',
+    message: `${input.label} at ${displayUrl} is ready for BrowserHostSession live browser sessions.`,
+    health,
+  };
+}
+
+function workspaceWriterCandidates(config: SciForgeConfig, configuredBaseUrl: string) {
+  const candidates = new Map<string, { label: string; baseUrl: string }>();
+  const defaultBaseUrl = normalizeWorkspaceWriterBaseUrl(defaultSciForgeConfig.workspaceWriterBaseUrl);
+  if (defaultBaseUrl && defaultBaseUrl !== configuredBaseUrl) {
+    candidates.set(defaultBaseUrl, { label: 'Default writer', baseUrl: defaultBaseUrl });
+  }
+  const legacyDefaultBaseUrl = normalizeWorkspaceWriterBaseUrl(LEGACY_DEFAULT_WORKSPACE_WRITER_URL);
+  if (legacyDefaultBaseUrl && legacyDefaultBaseUrl !== configuredBaseUrl && !candidates.has(legacyDefaultBaseUrl)) {
+    candidates.set(legacyDefaultBaseUrl, { label: 'Legacy default writer', baseUrl: legacyDefaultBaseUrl });
+  }
+  for (const peer of config.peerInstances ?? []) {
+    if (peer.enabled === false) continue;
+    const peerBaseUrl = normalizeWorkspaceWriterBaseUrl(peer.workspaceWriterUrl);
+    if (!peerBaseUrl || peerBaseUrl === configuredBaseUrl || candidates.has(peerBaseUrl)) continue;
+    candidates.set(peerBaseUrl, {
+      label: peer.name?.trim() ? `${peer.name.trim()} writer` : 'Peer writer',
+      baseUrl: peerBaseUrl,
+    });
+  }
+  return Array.from(candidates.values());
+}
+
+function normalizeWorkspaceWriterBaseUrl(value: string | undefined) {
+  const trimmed = value?.trim().replace(/\/+$/, '') ?? '';
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function displayWorkspaceWriterUrl(value: string | undefined) {
+  const trimmed = value?.trim().replace(/\/+$/, '') ?? '';
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    const providerHost = /\b(?:api|[a-z0-9-]*(?:openai|anthropic|provider|openrouter|azure|googleapis)[a-z0-9-]*)(?:\.[a-z0-9-]+)+$/i.test(url.hostname);
+    const host = providerHost ? '[host]' : url.host;
+    const pathname = url.pathname === '/' ? '' : redactWorkspaceUrlSecrets(url.pathname);
+    const params = Array.from(url.searchParams.entries()).map(([key, paramValue]) => {
+      const nextValue = /api[_-]?key|authorization|credential|password|secret|token/i.test(key)
+        ? '[redacted]'
+        : redactWorkspaceUrlSecrets(paramValue);
+      return `${encodeURIComponent(key)}=${encodeURIComponent(nextValue)}`;
+    });
+    return `${url.protocol}//${host}${pathname}${params.length ? `?${params.join('&')}` : ''}`;
+  } catch {
+    return sanitizeWorkspaceDiagnosticText(trimmed);
+  }
+}
+
+function redactWorkspaceUrlSecrets(value: string) {
+  return value.replace(/\b(?:sk|rk|pk)-[A-Za-z0-9][A-Za-z0-9_-]{8,}\b/g, '[redacted-token]');
+}
+
+function workspaceTerminalPreflightSignal(timeoutMs = 2500) {
+  const timeout = typeof AbortSignal !== 'undefined'
+    ? (AbortSignal as typeof AbortSignal & { timeout?: (milliseconds: number) => AbortSignal }).timeout
+    : undefined;
+  return typeof timeout === 'function'
+    ? timeout(timeoutMs)
+    : undefined;
+}
+
+function workspaceResponseLooksLikeHtml(text: string, contentType: string) {
+  return /text\/html/i.test(contentType) || /^\s*<!doctype\b|^\s*<html[\s>]/i.test(text);
+}
+
+function normalizeWorkspaceWriterHealth(value: unknown): SciForgeWorkspaceWriterHealth | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Partial<SciForgeWorkspaceWriterHealth>;
+  return {
+    ok: record.ok === true,
+    service: typeof record.service === 'string' ? record.service : '',
+    schemaVersion: 1,
+    pid: typeof record.pid === 'number' ? record.pid : undefined,
+    startedAt: typeof record.startedAt === 'string' ? record.startedAt : undefined,
+    instanceId: typeof record.instanceId === 'string' ? record.instanceId : undefined,
+    lifecycleToken: typeof record.lifecycleToken === 'string' ? record.lifecycleToken : undefined,
+    capabilities: Array.isArray(record.capabilities) ? record.capabilities.filter((item): item is string => typeof item === 'string') : [],
+    endpoints: record.endpoints && typeof record.endpoints === 'object' ? record.endpoints : undefined,
+  };
+}
+
+function missingBrowserHostSessionRequirements(health: SciForgeWorkspaceWriterHealth) {
+  const missingCapabilities = BROWSER_HOST_REQUIRED_CAPABILITIES
+    .filter((capability) => !health.capabilities.includes(capability))
+    .map((capability) => `capability:${capability}`);
+  const endpoints = health.endpoints ?? {};
+  const browserHostSessionEndpoint = typeof endpoints.browserHostSession === 'string' ? endpoints.browserHostSession : '';
+  const missingSessionEndpoints = BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS
+    .filter((token) => !browserHostSessionEndpoint.includes(token))
+    .map((token) => `endpoint:browserHostSession.${token}`);
+  const browserHostSearchEndpoint = typeof endpoints.browserHostSearch === 'string' ? endpoints.browserHostSearch : '';
+  const missingSearchEndpoints = browserHostSearchEndpoint.includes(BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN)
+    ? []
+    : ['endpoint:browserHostSearch'];
+  return [...missingCapabilities, ...missingSessionEndpoints, ...missingSearchEndpoints];
+}
+
+function primaryDiagnosticRef(status: WorkspaceTerminalWriterPreflightStatus) {
+  return `workspace-terminal-writer-${status}`;
+}
+
+function browserHostDiagnosticRef(status: BrowserHostSessionWriterPreflightStatus) {
+  return `browser-host-writer-${status}`;
+}
+
 async function readWorkspaceJson<T>(
   config: SciForgeConfig,
   operation: string,
@@ -1050,7 +2109,7 @@ async function readWorkspaceJson<T>(
   try {
     return JSON.parse(text) as T;
   } catch (error) {
-    const looksLikeHtml = /text\/html/i.test(contentType) || /^\s*<!doctype\b|^\s*<html[\s>]/i.test(text);
+    const looksLikeHtml = workspaceResponseLooksLikeHtml(text, contentType);
     const reason = looksLikeHtml
       ? `${sanitizeWorkspaceDiagnosticText(config.workspaceWriterBaseUrl)} 返回的是 SciForge UI 页面，不是 Workspace Writer JSON；请把 Workspace Writer URL 指向 writer 服务。`
       : `${sanitizeWorkspaceDiagnosticText(operation)} returned a non-JSON response (${contentType || 'unknown content type'}).`;

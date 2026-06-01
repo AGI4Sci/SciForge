@@ -102,13 +102,24 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
   };
 }
 
-export function providerReadinessHealth(config: SciForgeConfig): RuntimeHealthItem {
-  const notice = providerReadinessNoticeFromConfig(config);
+export function providerReadinessHealth(
+  config: SciForgeConfig,
+  preflightNotice?: ProviderReadinessNotice,
+): RuntimeHealthItem {
+  const notice = preflightNotice ?? providerReadinessNoticeFromConfig(config);
   return {
     id: 'model',
-    label: 'Model Provider',
+    label: notice.source === 'runtime-provider-preflight' ? 'Assistant Connection' : 'Model Provider',
+    source: notice.source,
     status: notice.ready ? RUNTIME_HEALTH_STATUS.ONLINE : RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
-    detail: notice.detail,
+    detail: providerHealthDetail(notice),
     recoverAction: notice.recoverAction,
   };
+}
+
+function providerHealthDetail(notice: ProviderReadinessNotice): string {
+  if (notice.source !== 'runtime-provider-preflight') return notice.detail;
+  if (notice.ready) return 'Assistant connection preflight ready';
+  if (notice.value === 'missing') return 'Assistant connection preflight unavailable';
+  return `Assistant connection preflight needs attention (${notice.value})`;
 }

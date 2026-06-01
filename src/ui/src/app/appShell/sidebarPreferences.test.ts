@@ -25,8 +25,10 @@ test('markThreadIdsRead records unique read sidebar threads', () => {
 
 test('moveCurrentProjectDown swaps the current project with the next project', () => {
   const prefs = defaultSidebarPreferences();
+  assert.equal(prefs.projectSort, 'manual');
   const next = moveCurrentProjectDown(prefs, ['current', 'peer:a', 'peer:b'], 'current');
   assert.deepEqual(next.projectOrder, ['peer:a', 'current', 'peer:b']);
+  assert.equal(next.projectSort, 'manual');
 });
 
 test('toggleSidebarVisibleSection changes Cursor-like sidebar filter switches', () => {

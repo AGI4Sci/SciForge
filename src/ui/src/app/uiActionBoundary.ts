@@ -11,7 +11,8 @@ export type UIActionType =
   | 'update-capability-preference'
   | 'cancel-run'
   | 'concurrency-decision'
-  | 'open-debug-audit';
+  | 'open-debug-audit'
+  | 'chat-panel-action';
 
 export interface UIActionBase {
   kind: 'UIAction';
@@ -85,6 +86,16 @@ export type UIAction =
     type: 'open-debug-audit';
     runId?: string;
     auditRefs: string[];
+  })
+  | (UIActionBase & {
+    type: 'chat-panel-action';
+    action: 'split-right' | 'split-down' | 'fork-chat' | 'copy-messages' | 'copy-request-id' | 'archive-chat';
+    effect: 'presentation' | 'thread-lifecycle' | 'clipboard';
+    commandText: string;
+    targetRef?: string;
+    copiedTextKind?: 'messages' | 'request-id';
+    disabledReason?: string;
+    auditRefs: string[];
   });
 
 export type SubmitTurnUIAction = Extract<UIAction, { type: 'submit-turn' }>;
@@ -98,6 +109,7 @@ export type UpdateCapabilityPreferenceUIAction = Extract<UIAction, { type: 'upda
 export type CancelRunUIAction = Extract<UIAction, { type: 'cancel-run' }>;
 export type ConcurrencyDecisionUIAction = Extract<UIAction, { type: 'concurrency-decision' }>;
 export type OpenDebugAuditUIAction = Extract<UIAction, { type: 'open-debug-audit' }>;
+export type ChatPanelActionUIAction = Extract<UIAction, { type: 'chat-panel-action' }>;
 
 type UIActionInput = {
   [Action in UIAction as Action['type']]: Omit<Action, 'kind' | 'id' | 'sessionId' | 'scenarioId' | 'createdAt'>;
@@ -419,6 +431,33 @@ export function createOpenDebugAuditUIAction(input: {
   }) as OpenDebugAuditUIAction;
 }
 
+export function createChatPanelActionUIAction(input: {
+  session: SciForgeSession;
+  id: string;
+  createdAt: string;
+  action: ChatPanelActionUIAction['action'];
+  effect: ChatPanelActionUIAction['effect'];
+  commandText: string;
+  targetRef?: string;
+  copiedTextKind?: ChatPanelActionUIAction['copiedTextKind'];
+  disabledReason?: string;
+  auditRefs?: string[];
+}): ChatPanelActionUIAction {
+  return createUIAction({
+    id: input.id,
+    session: input.session,
+    createdAt: input.createdAt,
+    type: 'chat-panel-action',
+    action: input.action,
+    effect: input.effect,
+    commandText: normalizeCommandText(input.commandText),
+    targetRef: input.targetRef,
+    copiedTextKind: input.copiedTextKind,
+    disabledReason: input.disabledReason ? compactUIActionPromptPreview(input.disabledReason) : undefined,
+    auditRefs: uniqueStringList(input.auditRefs ?? []),
+  }) as ChatPanelActionUIAction;
+}
+
 export function uiActionReferenceRefs(references: SciForgeReference[]): string[] {
   return uniqueStringList(references.map((reference) => reference.ref));
 }
@@ -460,11 +499,12 @@ function isUIAction(value: unknown): value is UIAction {
     && typeof record.scenarioId === 'string'
     && typeof record.createdAt === 'string'
     && typeof record.type === 'string'
-    && ['command-text', 'submit-turn', 'select-object', 'load-artifact-preview', 'request-retry', 'trigger-recover', 'approve-result', 'update-capability-preference', 'cancel-run', 'concurrency-decision', 'open-debug-audit'].includes(record.type);
+    && ['command-text', 'submit-turn', 'select-object', 'load-artifact-preview', 'request-retry', 'trigger-recover', 'approve-result', 'update-capability-preference', 'cancel-run', 'concurrency-decision', 'open-debug-audit', 'chat-panel-action'].includes(record.type);
 }
 
 function scrubPreference(preference: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(preference).filter(([key]) => !/secret|token|api.?key|authorization|password/i.test(key)));
+  const privatePreferenceKey = /(?:secret|token|api.?key|authorization|password|^provider$|providerUrl|providerRoute|providerId|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|invokeUrl|url|workspacePath|profile)/i;
+  return Object.fromEntries(Object.entries(preference).filter(([key]) => !privatePreferenceKey.test(key)));
 }
 
 function normalizeCommandText(commandText: string) {

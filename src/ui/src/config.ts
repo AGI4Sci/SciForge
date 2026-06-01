@@ -7,7 +7,7 @@ const buildDefaults = (import.meta as ImportMeta & {
 const SCIFORGE_INSTANCE_ID = cleanStorageKeySegment(buildDefaults.VITE_SCIFORGE_INSTANCE_ID);
 const CONFIG_STORAGE_KEY = scopedSciForgeStorageKey('sciforge.config.v1');
 const LEGACY_DEFAULT_AGENT_SERVER_URL = 'http://127.0.0.1:18080';
-const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
+export const LEGACY_DEFAULT_WORKSPACE_WRITER_URL = 'http://127.0.0.1:5174';
 const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace';
 const DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1';
 const LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
@@ -34,6 +34,9 @@ type DesktopRuntimeConfigRecord = {
 
 type SciForgeDesktopBridge = {
   getRuntimeConfig?: () => Promise<unknown>;
+  attachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
+  detachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
+  getBrowserHostSessionSurfaceState?: (input: unknown) => Promise<unknown>;
   pickDirectory?: (defaultPath?: string) => Promise<{ ok?: boolean; path?: string }>;
 };
 

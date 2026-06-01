@@ -1,8 +1,21 @@
-import { ChevronDown, ChevronUp, CircleStop, FileUp, Folder, Quote, ShieldCheck, Sparkles } from 'lucide-react';
-import { ActionButton, cx } from '../uiPrimitives';
-import type { ReactNode, RefObject } from 'react';
-import type { SciForgeReference } from '../../domain';
+import { Bot, ChevronDown, ChevronRight, ChevronUp, CircleStop, FileUp, Folder, Image, Mic, Plus, Quote, Send, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { ActionButton } from '../uiPrimitives';
+import { useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import type { SciForgeConfig, SciForgeReference } from '../../domain';
 import { useI18n } from '../../i18nContext';
+import {
+  applyComposerToolDirective,
+  buildComposerCapabilityMenu,
+  buildComposerToolMenu,
+  composerModelSelectionIntents,
+  filterComposerCapabilityMenuItems,
+  filterComposerToolMenuItems,
+  publicComposerModel,
+  type ComposerAgentHostCatalogItem,
+  type ComposerCapabilityMenuItem,
+  type ComposerModelSelectionIntent,
+  type ComposerToolMenuItem,
+} from './composerToolMenu';
 
 export function ChatComposer({
   expanded,
@@ -11,11 +24,14 @@ export function ChatComposer({
   composerHeight,
   referencePickMode,
   pendingReferences,
+  queuedGuidanceCount = 0,
   contextMeter,
   fileInputRef,
   referenceChips,
   topAddon,
   runtimeContext,
+  toolProviderRoutes,
+  agentHostCatalog,
   textareaRef,
   onExpand,
   onCollapse,
@@ -24,6 +40,7 @@ export function ChatComposer({
   onInputChange,
   onSend,
   onAbort,
+  onModelIntentSelect,
   onBeginResize,
   copy,
   disabled = false,
@@ -38,6 +55,7 @@ export function ChatComposer({
   composerHeight: number;
   referencePickMode: boolean;
   pendingReferences: SciForgeReference[];
+  queuedGuidanceCount?: number;
   contextMeter: ReactNode;
   fileInputRef: RefObject<HTMLInputElement | null>;
   referenceChips: ReactNode;
@@ -48,6 +66,8 @@ export function ChatComposer({
     workspacePath: string;
     permissionMode: string;
   };
+  toolProviderRoutes?: SciForgeConfig['toolProviderRoutes'];
+  agentHostCatalog?: ComposerAgentHostCatalogItem[];
   textareaRef?: RefObject<HTMLTextAreaElement | null>;
   onExpand: () => void;
   onCollapse: () => void;
@@ -56,6 +76,7 @@ export function ChatComposer({
   onInputChange: (value: string) => void;
   onSend: () => void;
   onAbort: () => void;
+  onModelIntentSelect?: (intent: ComposerModelSelectionIntent) => void;
   onBeginResize: (event: React.MouseEvent<HTMLDivElement>) => void;
   copy?: {
     collapsedText?: string;
@@ -71,13 +92,22 @@ export function ChatComposer({
   showCollapseButton?: boolean;
   showResizeHandle?: boolean;
 }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const collapsedText = copy?.collapsedText ?? t({ 'zh-CN': '提问，或附加上下文...', 'en-US': 'Ask a question, or attach context...' });
   const referenceHint = copy?.referenceHint ?? t({ 'zh-CN': '选择可见对象作为上下文', 'en-US': 'Select visible objects as context' });
   const placeholder = copy?.placeholder ?? t({ 'zh-CN': '提问，或附加上下文...', 'en-US': 'Ask a question, or attach context...' });
   const sendingPlaceholder = copy?.sendingPlaceholder ?? t({ 'zh-CN': '当前任务运行中，追加指令会排队...', 'en-US': 'Additional guidance will queue while this runs...' });
   const sendLabel = copy?.sendLabel ?? t({ 'zh-CN': '发送', 'en-US': 'Send' });
   const sendingLabel = copy?.sendingLabel ?? t({ 'zh-CN': '排队', 'en-US': 'Queue' });
+  const toolMenu = buildComposerToolMenu(locale);
+  const capabilityMenu = buildComposerCapabilityMenu({ locale, toolProviderRoutes, agentHostCatalog });
+  const [addMenuQuery, setAddMenuQuery] = useState('');
+  const visibleToolMenu = useMemo(() => filterComposerToolMenuItems(toolMenu, addMenuQuery), [toolMenu, addMenuQuery]);
+  const visibleSkills = useMemo(() => filterComposerCapabilityMenuItems(capabilityMenu.skills, addMenuQuery), [capabilityMenu.skills, addMenuQuery]);
+  const visibleMcpServers = useMemo(() => filterComposerCapabilityMenuItems(capabilityMenu.mcpServers, addMenuQuery), [capabilityMenu.mcpServers, addMenuQuery]);
+  const model = publicComposerModel(runtimeContext, locale);
+  const addMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const modelMenuRef = useRef<HTMLDetailsElement | null>(null);
   if (!expanded) {
     return (
       <button
@@ -111,42 +141,74 @@ export function ChatComposer({
       {topAddon}
       {showReferencePicker || showFileUpload || pendingReferences.length ? (
         <div className="reference-composer">
-          {showReferencePicker ? (
-            <button
-              type="button"
-              className={cx('reference-trigger', referencePickMode && 'active')}
-              onClick={onToggleReferencePickMode}
-              title={t({
-                'zh-CN': '选择可见 UI 作为上下文；选中文本可从菜单引用',
-                'en-US': 'Pick visible UI as context; selected text can be referenced from its menu',
-              })}
-            >
-              <Quote size={14} />
-              {t({ 'zh-CN': '拾取', 'en-US': 'Pick' })}
-            </button>
-          ) : null}
-          {showFileUpload ? (
-            <>
-              <button
-                type="button"
-                className="reference-trigger"
-                onClick={() => fileInputRef.current?.click()}
-                title={t({
-                  'zh-CN': '附加 PDF、图片、表格或其他文件',
-                  'en-US': 'Attach PDFs, images, tables, or other files',
-                })}
-              >
-                <FileUp size={14} />
-                {t({ 'zh-CN': '附加', 'en-US': 'Attach' })}
-              </button>
+          <details ref={addMenuRef} className="composer-add-menu">
+            <summary title={t({ 'zh-CN': '添加 agents、context、tools', 'en-US': 'Add agents, context, tools' })}>
+              <Plus size={15} aria-hidden />
+              <span>{t({ 'zh-CN': 'Add agents, context, tools', 'en-US': 'Add agents, context, tools' })}</span>
+            </summary>
+            <div className="composer-add-menu-panel">
               <input
-                ref={fileInputRef}
-                className="sr-only-file-input"
-                type="file"
-                multiple
-                onChange={(event) => onFileUpload(event.currentTarget.files)}
+                aria-label={t({ 'zh-CN': '搜索菜单项', 'en-US': 'Search menu items' })}
+                placeholder={t({ 'zh-CN': 'Add agents, context, tools...', 'en-US': 'Add agents, context, tools...' })}
+                value={addMenuQuery}
+                onChange={(event) => setAddMenuQuery(event.currentTarget.value)}
               />
-            </>
+              {visibleToolMenu.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  data-composer-tool={item.id}
+                  onClick={() => handleToolMenuItem(item)}
+                >
+                  <ComposerToolIcon item={item} />
+                  <span>{item.label}</span>
+                  {(item.id === 'models' || item.id === 'skills' || item.id === 'mcp-servers') ? <ChevronRight size={13} aria-hidden /> : null}
+                </button>
+              ))}
+              {visibleSkills.length ? (
+                <div className="composer-add-menu-section" aria-label={t({ 'zh-CN': '技能', 'en-US': 'Skills' })}>
+                  <small>{t({ 'zh-CN': 'Skills', 'en-US': 'Skills' })}</small>
+                  {visibleSkills.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-composer-capability={item.kind}
+                      onClick={() => handleCapabilityMenuItem(item)}
+                    >
+                      <Wrench size={14} aria-hidden />
+                      <span>{item.label}</span>
+                      <em>{item.detail}</em>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {visibleMcpServers.length ? (
+                <div className="composer-add-menu-section" aria-label={t({ 'zh-CN': 'MCP 服务器', 'en-US': 'MCP Servers' })}>
+                  <small>{t({ 'zh-CN': 'MCP Servers', 'en-US': 'MCP Servers' })}</small>
+                  {visibleMcpServers.map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      data-composer-capability={item.kind}
+                      onClick={() => handleCapabilityMenuItem(item)}
+                    >
+                      <Wrench size={14} aria-hidden />
+                      <span>{item.label}</span>
+                      <em>{item.detail}</em>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </details>
+          {showFileUpload ? (
+            <input
+              ref={fileInputRef}
+              className="sr-only-file-input"
+              type="file"
+              multiple
+              onChange={(event) => onFileUpload(event.currentTarget.files)}
+            />
           ) : null}
           {pendingReferences.length ? referenceChips : <span className="reference-hint">{referenceHint}</span>}
         </div>
@@ -158,7 +220,7 @@ export function ChatComposer({
         </div>
       ) : null}
       {runtimeContext ? (
-        <div className="composer-runtime-row" aria-label={t({ 'zh-CN': '上下文', 'en-US': 'Context' })}>
+        <div className="composer-runtime-row" aria-label={t({ 'zh-CN': '本地环境', 'en-US': 'Local environment' })} data-local-environment="true">
           <span className="composer-runtime-pill" title={workspaceTitle(runtimeContext.workspacePath, t)}>
             <Folder size={13} />
             {workspaceLabel(runtimeContext.workspacePath, t)}
@@ -187,17 +249,90 @@ export function ChatComposer({
         rows={1}
         style={{ height: `${composerHeight}px` }}
       />
-      {contextMeter}
+      <div className="composer-bottom-toolbar">
+        <details ref={modelMenuRef} className="composer-model-menu">
+          <summary title={t({ 'zh-CN': '模型和模式', 'en-US': 'Model and mode' })}>
+            <Bot size={14} aria-hidden />
+            <span>{model.label}</span>
+            <em>{model.speed}</em>
+          </summary>
+          <div className="composer-model-menu-panel">
+            <input aria-label={t({ 'zh-CN': '搜索模型', 'en-US': 'Search models' })} placeholder={t({ 'zh-CN': 'Search models', 'en-US': 'Search models' })} readOnly />
+            {composerModelSelectionIntents(locale).map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                data-model-option={option.id}
+                data-model-intent={option.mode}
+                onClick={() => handleModelIntent(option)}
+              >
+                <span>{option.label}</span>
+                <em>{option.speed}</em>
+              </button>
+            ))}
+          </div>
+        </details>
+        <button type="button" className="composer-icon-button" title={t({ 'zh-CN': '语音输入', 'en-US': 'Start voice input' })} aria-label={t({ 'zh-CN': '语音输入', 'en-US': 'Start voice input' })}>
+          <Mic size={15} aria-hidden />
+        </button>
+        {isSending && queuedGuidanceCount > 0 ? (
+          <span
+            className="composer-queue-status"
+            role="status"
+            aria-live="polite"
+            aria-label={t({ 'zh-CN': '排队中的追加指令', 'en-US': 'Queued guidance' })}
+          >
+            {t({ 'zh-CN': `${queuedGuidanceCount} 条已排队`, 'en-US': `${queuedGuidanceCount} queued` })}
+          </span>
+        ) : null}
+        {contextMeter}
+      </div>
       {isSending ? (
         <ActionButton icon={CircleStop} variant="coral" onClick={onAbort}>
           {t({ 'zh-CN': '停止', 'en-US': 'Stop' })}
         </ActionButton>
       ) : null}
-      <ActionButton icon={Sparkles} onClick={onSend} disabled={disabled || (!input.trim() && !pendingReferences.length)}>
+      <ActionButton icon={isSending ? Sparkles : Send} onClick={onSend} disabled={disabled || (!input.trim() && !pendingReferences.length)}>
         {isSending ? sendingLabel : sendLabel}
       </ActionButton>
     </div>
   );
+
+  function handleToolMenuItem(item: ComposerToolMenuItem) {
+    addMenuRef.current?.removeAttribute('open');
+    if (item.id === 'pick-context') {
+      if (showReferencePicker) onToggleReferencePickMode();
+      return;
+    }
+    if (item.id === 'attach-file' || item.id === 'image') {
+      if (showFileUpload) fileInputRef.current?.click();
+      return;
+    }
+    if (item.id === 'models') {
+      modelMenuRef.current?.setAttribute('open', '');
+      return;
+    }
+    onInputChange(applyComposerToolDirective(input, item));
+  }
+
+  function handleCapabilityMenuItem(item: ComposerCapabilityMenuItem) {
+    addMenuRef.current?.removeAttribute('open');
+    onInputChange(applyComposerToolDirective(input, item));
+  }
+
+  function handleModelIntent(intent: ComposerModelSelectionIntent) {
+    modelMenuRef.current?.removeAttribute('open');
+    onModelIntentSelect?.(intent);
+  }
+}
+
+function ComposerToolIcon({ item }: { item: ComposerToolMenuItem }) {
+  if (item.id === 'image') return <Image size={14} aria-hidden />;
+  if (item.id === 'pick-context') return <Quote size={14} aria-hidden />;
+  if (item.id === 'attach-file') return <FileUp size={14} aria-hidden />;
+  if (item.group === 'agent') return <Sparkles size={14} aria-hidden />;
+  if (item.id === 'models') return <Bot size={14} aria-hidden />;
+  return <Wrench size={14} aria-hidden />;
 }
 
 type Translate = ReturnType<typeof useI18n>['t'];

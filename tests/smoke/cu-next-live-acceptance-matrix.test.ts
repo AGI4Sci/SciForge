@@ -58,6 +58,7 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     CU_NEXT_PRODUCT_SMOKE_CASES.map((item) => item.id),
     [
       'product-path-codex-native-plugin-sidecar',
+      'virtual-app-screen-user-acceptance',
       'real-single-app-input',
       'real-artifact-save',
       'high-risk-confirmation-stop',
@@ -78,7 +79,13 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     ],
   );
   for (const item of CU_NEXT_PRODUCT_SMOKE_CASES) {
-    assert.equal(item.requiredTier, 'product-smoke');
+    if (item.id === 'multi-screen-live-demo') {
+      assert.equal(item.requiredTier, 'historical-regression');
+      assert.equal(item.gateRole, 'historical-opt-in-regression');
+    } else {
+      assert.equal(item.requiredTier, 'product-smoke');
+      assert.notEqual(item.gateRole, 'historical-opt-in-regression');
+    }
     assert.equal(item.requiredExecutionMode, 'opt-in-live-backend');
   }
   const requirements = new Set<string>(CU_NEXT_PRODUCT_SMOKE_CASES.flatMap((item) => item.requirements));
@@ -86,6 +93,8 @@ test('CU-NEXT product smoke matrix distinguishes package diagnostic, platform sm
     'codex-app-server-native-plugin-path',
     'sciforge-computer-use-provider',
     'platform-sidecar-isolation',
+    'virtual-app-screen-user-acceptance',
+    'virtual-app-screen-user-acceptance-manifest',
     'real-single-app-input',
     'real-artifact-save',
     'high-risk-confirmation-stop',
@@ -114,6 +123,7 @@ test('CU-NEXT live matrix dry-run classification covers actor/screen/queue cases
   assert.deepEqual(
     CU_NEXT_LIVE_MATRIX_CLASSIFICATION_CASES.map((item) => item.id).filter((id) => id.includes('screen') || id.includes('queue')),
     [
+      'virtual-app-screen-user-acceptance',
       'single-screen-single-actor',
       'single-screen-multi-actor',
       'multi-screen-single-actor',
@@ -130,13 +140,107 @@ test('CU-NEXT live matrix dry-run classification covers actor/screen/queue cases
   }
 });
 
-test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 pass', () => {
+test('CU-NEXT product smoke matrix accepts VirtualAppScreen user-level manifest as active gate', () => {
+  const manifestRef = ref('CU-NEXT-07', 'virtual-app-screen-user-acceptance-manifest.json');
   const liveCase: CuNextProductSmokeCaseEvidence = {
-    id: 'multi-screen-live-demo',
+    id: 'virtual-app-screen-user-acceptance',
     status: 'passed',
     evidenceTier: 'product-smoke',
     executionMode: 'opt-in-live-backend',
     realBackendExecuted: true,
+    userAcceptanceGate: 'virtual-app-screen-user-acceptance',
+    userAcceptanceEligible: true,
+    productPath: {
+      entrypoint: 'Codex app-server native plugin',
+      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'platform-sidecar'],
+      backendKind: 'platform-sidecar',
+      appServerRunRef: ref('CU-NEXT-07', 'app-server-run.json'),
+      nativePluginInvocationRef: ref('CU-NEXT-07', 'native-plugin-invocation.json'),
+      sciforgeComputerUseRunTaskRef: ref('CU-NEXT-07', 'run-task.json'),
+      platformSidecarIsolationReportRef: ref('CU-NEXT-07', 'sidecar-isolation.json'),
+    },
+    evidenceRefs: {
+      'virtual-app-screen-user-acceptance': [ref('CU-NEXT-07', 'evidence-ledger.json')],
+      'virtual-app-screen-user-acceptance-manifest': [manifestRef],
+      'viewer-real-frames': [ref('CU-NEXT-07', 'frames/after.png')],
+      'real-artifact-save': [ref('CU-NEXT-07', 'artifacts/research-note.md')],
+      'current-bundle-evidence': [ref('CU-NEXT-07', 'current-bundle.json')],
+    },
+    currentRunBundleRef: `.sciforge/vision-runs/${runId('CU-NEXT-07')}`,
+    acceptanceManifestRef: manifestRef,
+    virtualAppScreenUserAcceptanceManifestRef: manifestRef,
+  };
+
+  const result = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [manifestRef]: virtualAppScreenUserAcceptanceManifest('CU-NEXT-07'),
+    },
+  });
+
+  assert.equal(result.ok, true, result.issues.map((issue) => issue.reason).join('\n'));
+  assert.deepEqual(result.passedCaseIds, ['virtual-app-screen-user-acceptance']);
+
+  const m6SubstituteManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07', {
+    evidenceClaims: [
+      {
+        id: 'm6-only',
+        kind: 'm6-native-multi-screen',
+        completionEvidence: true,
+        userAcceptanceEligible: true,
+      },
+    ],
+    validation: {
+      ok: false,
+      issues: ['non-substitute evidence cannot be marked userAcceptanceEligible: m6-native-multi-screen.'],
+      missingRefs: [],
+      rejectedClaimKinds: ['m6-native-multi-screen'],
+    },
+  });
+  const rejected = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [manifestRef]: m6SubstituteManifest,
+    },
+  });
+
+  assert.equal(rejected.ok, false);
+  assert.ok(productSmokeIssue(rejected, 'invalid-virtual-app-screen-user-acceptance-validation'));
+  assert.ok(productSmokeIssue(rejected, 'virtual-app-screen-rejected-substitute-claims'));
+
+  const missingBlockedReasonManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
+  delete missingBlockedReasonManifest.blockedReason;
+  const missingBlockedReason = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [manifestRef]: missingBlockedReasonManifest,
+    },
+  });
+
+  assert.equal(missingBlockedReason.ok, false);
+  assert.ok(productSmokeIssue(missingBlockedReason, 'invalid-virtual-app-screen-user-acceptance-manifest'));
+});
+
+test('CU-NEXT product smoke matrix keeps M6 as historical native multi-screen regression', () => {
+  const liveCase: CuNextProductSmokeCaseEvidence = {
+    id: 'multi-screen-live-demo',
+    status: 'passed',
+    evidenceTier: 'historical-regression',
+    executionMode: 'opt-in-live-backend',
+    realBackendExecuted: true,
+    historicalRegression: true,
     productPath: {
       entrypoint: 'Codex app-server native plugin',
       hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
@@ -157,7 +261,7 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
       'current-bundle-evidence': [ref('CU-NEXT-07', 'current-bundle.json')],
     },
     currentRunBundleRef: `.sciforge/vision-runs/${runId('CU-NEXT-07')}`,
-    acceptanceManifestRef: ref('CU-NEXT-07', 'acceptance.json'),
+    regressionManifestRef: ref('CU-NEXT-07', 'm6-regression-manifest.json'),
   };
   const matrix = buildCuNextProductSmokeMatrix({
     cases: [
@@ -440,6 +544,8 @@ test('CU-NEXT product smoke matrix requires native multi-screen summary for M6 p
   assert.equal(productSmokeIssue(accepted, 'invalid-current-bundle-ref-proof'), false);
   assert.equal(productSmokeIssue(accepted, 'invalid-product-smoke-replay-proof'), false);
   assert.equal(productSmokeIssue(accepted, 'forbidden-placeholder-viewer'), false);
+  assert.equal(accepted.ok, true, accepted.issues.map((issue) => issue.reason).join('\n'));
+  assert.deepEqual(accepted.passedCaseIds, [], 'historical M6 regression must not count as an active user-level product pass');
 
   for (const [name, refToRemove] of Object.entries({
     currentBundleRef,
@@ -2196,6 +2302,74 @@ function withoutSciForgeChatOriginProof(evidence: Record<string, unknown>): Reco
     evidenceClaims: (Array.isArray(evidence.evidenceClaims) ? evidence.evidenceClaims : [])
       .filter((claim) => (claim as Record<string, unknown>).kind !== 'sciForge-chat-origin'),
   };
+}
+
+function virtualAppScreenUserAcceptanceManifest(
+  taskId: CuNextTaskId,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const id = runId(taskId);
+  return deepMerge({
+    schemaVersion: 'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1',
+    taskId: 'P0-CU-UA-FIRST-SCENARIO',
+    scenarioId: 'virtual-app-screen-local-research-note',
+    userIntent: 'Read local research notes in a background app screen, annotate a sentence, and produce research-note.md.',
+    status: 'passed',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    targetAppRefs: [`app:${id}/browser-research-profile`],
+    targetWindowRefs: [`window:${id}/browser-research-profile/main`],
+    sessionRefs: [`computer-use-session:${id}-virtual-app-screen`],
+    adapterReadinessRefs: [ref(taskId, 'adapter-readiness.json')],
+    screenFrameRefs: [ref(taskId, 'frames/before.png'), ref(taskId, 'frames/after.png')],
+    inputIntentRefs: [ref(taskId, 'input-intents/highlight-title.json')],
+    executorEventRefs: [ref(taskId, 'executor-events/highlight-title.json')],
+    beforeAfterFrameRefs: [ref(taskId, 'before-after/highlight-title.json')],
+    annotationProposalRefs: [ref(taskId, 'annotation-proposals/highlight-title.json')],
+    artifactRefs: [ref(taskId, 'artifacts/research-note.md')],
+    verificationRefs: [ref(taskId, 'verifier/research-note.json')],
+    guiPresentRefs: [ref(taskId, 'gui-present/research-note.json')],
+    replayRef: ref(taskId, 'replay.json'),
+    evidenceLedgerRef: ref(taskId, 'evidence-ledger.json'),
+    isolationFlags: {
+      backgroundRenderable: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      physicalDisplayPopup: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      diagnosticOnly: false,
+    },
+    adapterReadinessRecords: [{
+      adapterKind: 'browser-runtime-window',
+      targetScope: 'window',
+      supportedActions: ['click', 'type', 'scroll', 'hotkey', 'annotate'],
+      captureSupported: true,
+      backgroundRenderable: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      schemaRefs: ['schema:computer-use/action-adapter-readiness.v1'],
+    }],
+    evidenceClaims: [{
+      id: 'real-virtual-app-screen',
+      kind: 'real-virtual-app-screen',
+      status: 'present',
+      ref: ref(taskId, 'evidence-ledger.json'),
+      refs: [ref(taskId, 'replay.json')],
+      evidenceRefs: [ref(taskId, 'before-after/highlight-title.json')],
+      sessionRefs: [`computer-use-session:${id}-virtual-app-screen`],
+    }],
+    diagnosticOnly: false,
+    userAcceptanceEligible: true,
+    blockedReason: null,
+    validation: {
+      ok: true,
+      issues: [],
+      missingRefs: [],
+      rejectedClaimKinds: [],
+    },
+  }, overrides);
 }
 
 function mappingFor(taskId: CuNextTaskId): typeof CU_NEXT_TASK_MAPPINGS[number] {

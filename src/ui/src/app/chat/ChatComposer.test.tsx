@@ -33,23 +33,26 @@ test('composer shows Codex-style context hints without provider, model, profile,
   }));
 
   assert.match(html, /Workspace/);
+  assert.match(html, /Local environment/);
+  assert.match(html, /data-local-environment="true"/);
   assert.match(html, /Assistant connected/);
   assert.match(html, /Writable/);
   assert.match(html, /Context/);
+  assert.match(html, /Add agents, context, tools/);
+  assert.match(html, /MCP Servers/);
   for (const term of [
     'sciforge-deepseek-proxy',
     'bailian/deepseek-v4-flash',
     '/Applications/workspace',
     'workspace-write',
     'provider',
-    'model',
-    'profile',
     'runtime codex',
     'run id',
     'workspace command',
   ]) {
     assert.doesNotMatch(html, new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
   }
+  assert.doesNotMatch(html, /\bprofile\b/i);
 });
 
 test('composer keeps unset runtime context generic', () => {
@@ -82,5 +85,66 @@ test('composer keeps unset runtime context generic', () => {
   assert.match(html, /No workspace/);
   assert.match(html, /Connection not configured/);
   assert.match(html, /Permission not set/);
-  assert.doesNotMatch(html, /provider|model|profile|runtime codex|run id/i);
+  assert.doesNotMatch(html, /provider|runtime codex|run id/i);
+  assert.doesNotMatch(html, /\bprofile\b/i);
+});
+
+test('composer folds Cursor-like tools, models, skills, and SciForge references into one add menu', () => {
+  const html = renderToStaticMarkup(React.createElement(ChatComposer, {
+    expanded: true,
+    input: '',
+    isSending: true,
+    composerHeight: 58,
+    referencePickMode: false,
+    pendingReferences: [],
+    queuedGuidanceCount: 2,
+    contextMeter: React.createElement('span', null, 'Context 35%'),
+    fileInputRef: React.createRef<HTMLInputElement>(),
+    referenceChips: null,
+    runtimeContext: {
+      provider: 'private-provider',
+      model: 'gpt-5-fast-private',
+      workspacePath: '/Users/private/workspace',
+      permissionMode: 'ask',
+    },
+    toolProviderRoutes: {
+      'vision-mcp-private-route': {
+        source: 'mcp',
+        capabilityId: 'Vision MCP',
+        primaryProviderId: 'private-provider',
+        endpoint: 'http://127.0.0.1:8931/mcp?token=secret',
+      },
+    },
+    agentHostCatalog: [
+      { label: 'Citation verifier', kind: 'tool', source: 'module.query', detail: 'Claim evidence skill' },
+      { label: 'Notebook Connector', toolType: 'connector', source: 'mcp', detail: 'Notebook refs' },
+    ],
+    onExpand: () => undefined,
+    onCollapse: () => undefined,
+    onToggleReferencePickMode: () => undefined,
+    onFileUpload: () => undefined,
+    onInputChange: () => undefined,
+    onSend: () => undefined,
+    onAbort: () => undefined,
+    onBeginResize: () => undefined,
+  }));
+
+  for (const label of ['Plan', 'Debug', 'Multitask', 'Ask', 'Image', 'Models', 'Skills', 'MCP Servers', 'Pick visible context', 'Attach file']) {
+    assert.match(html, new RegExp(label));
+  }
+  for (const label of ['Literature Research', 'Domain skill', 'Pipeline skill', 'PubMed', 'Tool skill', 'Citation verifier', 'Notebook Connector', 'Vision MCP']) {
+    assert.match(html, new RegExp(label));
+  }
+  assert.match(html, /GPT/);
+  assert.match(html, /Fast/);
+  for (const id of ['auto', 'max', 'assistant-auto', 'assistant-fast', 'assistant-balanced', 'assistant-deep']) {
+    assert.match(html, new RegExp(`data-model-option="${id}"`));
+  }
+  assert.match(html, /data-model-intent="assistant"/);
+  assert.match(html, /Stop/);
+  assert.match(html, /Queue/);
+  assert.match(html, /2 queued/);
+  assert.match(html, /Queued guidance/);
+  assert.doesNotMatch(html, /gpt-5-fast-private|private-provider|\/Users\/private|127\.0\.0\.1|token|secret|provider|runtime codex|run id|raw schema|manifest/i);
+  assert.doesNotMatch(html, /\bprofile\b/i);
 });

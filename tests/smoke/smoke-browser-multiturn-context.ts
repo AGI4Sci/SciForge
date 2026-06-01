@@ -171,8 +171,12 @@ async function openLiteratureScenario(page: Page) {
   if (await composer.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return;
   }
-  await page.locator('.sidebar-activitybar').getByRole('button', { name: '聊天工作台' }).click();
-  await page.getByRole('button', { name: '新聊天' }).waitFor({ timeout: 15_000 });
+  await page.locator('.sidebar.cursor-agent-sidebar').waitFor({ timeout: 15_000 });
+  const expandSidebar = page.getByRole('button', { name: /展开侧边栏|Expand sidebar/i });
+  if (await expandSidebar.isVisible().catch(() => false)) {
+    await expandSidebar.click();
+  }
+  await page.getByLabel(/搜索聊天、项目、页面|Search chats, projects, pages/i).waitFor({ timeout: 15_000 });
   await page.getByLabel('搜索聊天、项目、页面').fill('文献');
   await page.locator('.sidebar-result-row').filter({ hasText: '文献证据评估' }).first().click();
   await openWorkbenchChrome(page);
@@ -202,10 +206,6 @@ async function openWorkbenchChrome(page: Page) {
   const collapsed = page.locator('.chat-panel .composer-collapsed').first();
   if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false) || await collapsed.isVisible({ timeout: 1_000 }).catch(() => false)) {
     return;
-  }
-  const workbenchButton = page.getByRole('button', { name: '聊天工作台' });
-  if (await workbenchButton.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await workbenchButton.click();
   }
   const toggle = page.locator('.workbench-chrome-toggle-main');
   if (await toggle.isVisible({ timeout: 5_000 }).catch(() => false) && (await toggle.getAttribute('aria-expanded')) === 'false') {

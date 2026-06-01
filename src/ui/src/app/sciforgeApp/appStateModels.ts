@@ -1,10 +1,14 @@
 import { scenarios } from '../../data';
 import type { SciForgeSession, SciForgeWorkspaceState, ScenarioInstanceId } from '../../domain';
+import { normalizeWorkspaceRootPath } from '../../config';
 import { isRetainedHistorySession } from '../../workspace/sessionWorkspace';
 import { sessionActivityScore } from '../../sessionStore';
 import { uiModuleRegistry, type RuntimeUIModule } from '../../uiModuleRegistry';
 
 type SidebarWorkspaceChatState = Pick<SciForgeWorkspaceState, 'sessionsByScenario' | 'archivedSessions'>;
+export type WorkspaceScenarioDraftRecord = Record<string, Partial<Record<ScenarioInstanceId, string>>>;
+
+const DEFAULT_WORKSPACE_DRAFT_KEY = 'default';
 
 export function updateDraftRecord(
   current: Record<ScenarioInstanceId, string>,
@@ -13,6 +17,36 @@ export function updateDraftRecord(
 ): Record<ScenarioInstanceId, string> {
   if ((current[scenarioId] ?? '') === value) return current;
   return { ...current, [scenarioId]: value };
+}
+
+export function workspaceDraftKey(workspacePath: string | undefined): string {
+  return normalizeWorkspaceRootPath(workspacePath || '') || DEFAULT_WORKSPACE_DRAFT_KEY;
+}
+
+export function draftForWorkspaceScenario(
+  current: WorkspaceScenarioDraftRecord,
+  workspacePath: string | undefined,
+  scenarioId: ScenarioInstanceId,
+): string {
+  return current[workspaceDraftKey(workspacePath)]?.[scenarioId] ?? '';
+}
+
+export function updateWorkspaceDraftRecord(
+  current: WorkspaceScenarioDraftRecord,
+  workspacePath: string | undefined,
+  scenarioId: ScenarioInstanceId,
+  value: string,
+): WorkspaceScenarioDraftRecord {
+  const key = workspaceDraftKey(workspacePath);
+  const workspaceDrafts = current[key] ?? {};
+  if ((workspaceDrafts[scenarioId] ?? '') === value) return current;
+  return {
+    ...current,
+    [key]: {
+      ...workspaceDrafts,
+      [scenarioId]: value,
+    },
+  };
 }
 
 function newestSessionFirst(left: SciForgeSession, right: SciForgeSession) {

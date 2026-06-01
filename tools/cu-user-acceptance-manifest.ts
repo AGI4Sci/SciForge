@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const CU_USER_ACCEPTANCE_SCHEMA_VERSION = 'sciforge.computer-use.user-acceptance-manifest.v1' as const;
@@ -559,6 +559,11 @@ async function main(): Promise<void> {
   console.log(`[${manifest.status}] wrote ${manifest.schemaVersion} to ${args.outPath}`);
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+function isCuUserAcceptanceManifestCliEntrypoint(argv1 = process.argv[1]): boolean {
+  const entry = argv1 ? basename(argv1) : '';
+  return entry === 'cu-user-acceptance-manifest.ts' || entry === 'cu-user-acceptance-manifest.js';
+}
+
+if (isCuUserAcceptanceManifestCliEntrypoint()) {
   await main();
 }

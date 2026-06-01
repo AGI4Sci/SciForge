@@ -88,7 +88,7 @@ export interface GuidanceQueueRecord {
 
 export type SciForgeMessageProvenance = {
   kind?: string;
-  source?: string;
+  source?: string | { channel?: string; [key: string]: unknown };
   runtimeRequestEligible?: boolean;
   liveAcceptanceEligible?: boolean;
   [key: string]: unknown;

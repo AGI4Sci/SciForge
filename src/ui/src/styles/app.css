@@ -1,4 +1,5 @@
 @import '../../../../packages/presentation/design-system/components.css';
+@import 'katex/dist/katex.min.css';
 @import './app-01.css';
 @import './app-02.css';
 @import './app-settings-page.css';

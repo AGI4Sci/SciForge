@@ -2,7 +2,7 @@ import React, { type RefObject } from 'react';
 import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
 
 export type TerminalMode = 'live' | 'transcript';
-export type TerminalSessionStatus = 'running' | 'completed' | 'stopped' | 'error';
+export type TerminalSessionStatus = 'empty' | 'running' | 'completed' | 'stopped' | 'error';
 type TerminalTheme = 'dark' | 'light' | 'system';
 
 export type TerminalCapabilities = {
@@ -115,6 +115,7 @@ function payloadFromProps(props: UIComponentRendererProps): TerminalSessionPaylo
 }
 
 function normalizeStatus(value: unknown): TerminalSessionStatus {
+  if (value === 'empty' || value === 'idle' || value === 'none' || value === undefined || value === null || value === '') return 'empty';
   if (value === 'running' || value === 'connected' || value === 'active') return 'running';
   if (value === 'completed' || value === 'complete' || value === 'done' || value === 'success' || value === 0) return 'completed';
   if (value === 'error' || value === 'failed' || value === 'failure') return 'error';
@@ -259,7 +260,7 @@ export function renderTerminalSessionViewer(props: UIComponentRendererProps) {
   ].filter(([, value]) => value !== undefined && value !== '') as Array<[string, string]>;
   const selectionText = payload.selection?.text;
   const liveSurfaceLabel = payload.liveSurfaceLabel ?? adapter?.liveSurfaceLabel ?? 'Host-owned live terminal surface';
-  const closedForInput = status === 'stopped' || status === 'completed' || status === 'error';
+  const closedForInput = status === 'empty' || status === 'stopped' || status === 'completed' || status === 'error';
   const canInput = capabilities.input && !closedForInput;
   const canPaste = capabilities.paste && !closedForInput;
   const canResize = capabilities.resize && status === 'running';

@@ -139,6 +139,7 @@ async function streamCodexRealtimeWebSocket(input: {
   };
   const closeStream = async () => {
     try {
+      if (writerClosed) return;
       await writeChain;
       writerClosed = true;
       await writer.close();
@@ -157,6 +158,15 @@ async function streamCodexRealtimeWebSocket(input: {
     });
     return writeChain;
   };
+  const closeSocketAfterTerminalEvent = (reason: string, code = 1000) => {
+    void writeChain.finally(() => {
+      if (ws.readyState === 0 || ws.readyState === 1) {
+        ws.close(code, reason);
+        return;
+      }
+      void closeStream();
+    });
+  };
   const socketDone = new Promise<void>((resolve) => {
     ws.addEventListener('open', () => {
       ws.send(requestBodyWithTransport(input.requestBodyText, 'websocket'));
@@ -166,10 +176,16 @@ async function streamCodexRealtimeWebSocket(input: {
       void (async () => {
         const payload = parseRuntimeSocketMessage(event.data);
         if (!payload) return;
-        if (payload.type === 'event') writeSseBlock(payload.event, payload.data);
+        if (payload.type === 'event') {
+          writeSseBlock(payload.event, payload.data);
+          if (runtimeSocketPayloadIsTerminal(payload.event, payload.data)) {
+            closeSocketAfterTerminalEvent('runtime terminal event');
+          }
+        }
         if (payload.type === 'error') {
           responseError = payload.error;
           writeSseBlock('error', { ok: false, error: payload.error });
+          closeSocketAfterTerminalEvent('runtime error event', 1011);
         }
       })().catch((error: unknown) => {
         responseError = error instanceof Error ? error.message : String(error);
@@ -191,14 +207,21 @@ async function streamCodexRealtimeWebSocket(input: {
     status: responseError ? 500 : 200,
     headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
   });
-  const parsed = await readWorkspaceToolStream(response, (event) => input.onEvent(event as AgentStreamEvent));
-  await socketDone;
-  input.signal?.removeEventListener('abort', abort);
-  return {
-    response,
-    result: parsed.result,
-    error: parsed.error ?? responseError,
-  };
+  let parsed: Awaited<ReturnType<typeof readWorkspaceToolStream>> | undefined;
+  try {
+    parsed = await readWorkspaceToolStream(response, (event) => input.onEvent(event as AgentStreamEvent));
+    await socketDone;
+    return {
+      response,
+      result: parsed.result,
+      error: parsed.error ?? responseError,
+    };
+  } finally {
+    input.signal?.removeEventListener('abort', abort);
+    if (ws.readyState === 0 || ws.readyState === 1) ws.close(1000, 'runtime stream cleanup');
+    await closeStream();
+    await socketDone.catch(() => undefined);
+  }
 }
 
 function commandIdsFromRequestBody(requestBodyText: string): { commandId?: string; attemptId?: string } {
@@ -249,4 +272,17 @@ function parseRuntimeSocketMessage(value: unknown):
     return { type: 'error', error: typeof record.error === 'string' ? record.error : JSON.stringify(record.error) };
   }
   return undefined;
+}
+
+function runtimeSocketPayloadIsTerminal(eventName: string, data: unknown) {
+  const eventType = eventName.trim().toLowerCase();
+  if (eventType === 'done' || eventType === 'failed' || eventType === 'cancelled' || eventType === 'canceled' || eventType === 'error') return true;
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+  const record = data as Record<string, unknown>;
+  const type = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+  return type === 'done'
+    || type === 'failed'
+    || type === 'cancelled'
+    || type === 'canceled'
+    || type === 'error';
 }

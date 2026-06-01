@@ -1,5 +1,5 @@
-import type { SciForgeMessage, SciForgeSession, SciForgeWorkspaceState, ScenarioInstanceId } from '../domain';
-import { createSession, sessionActivityScore, versionSession } from '../sessionStore';
+import { makeId, nowIso, type SciForgeMessage, type SciForgeSession, type SciForgeWorkspaceState, type ScenarioInstanceId } from '../domain';
+import { createSession, sessionActivityScore, versionSession, withSessionWriteGuard } from '../sessionStore';
 
 const DEFAULT_ARCHIVE_LIMIT = 80;
 
@@ -98,6 +98,42 @@ export function archiveActiveSession(
     (session) => archiveSessionCopy(session, 'archived retained chat from sidebar', 'archived'),
     archiveLimit,
   );
+}
+
+export function forkActiveSession(
+  state: SciForgeWorkspaceState,
+  scenarioId: ScenarioInstanceId,
+  archiveLimit = DEFAULT_ARCHIVE_LIMIT,
+): SciForgeWorkspaceState {
+  const active = state.sessionsByScenario[scenarioId];
+  if (!active || sessionActivityScore(active) === 0) return state;
+  const forkedAt = nowIso();
+  const { archiveState: _archiveState, versions: _versions, ...activeSnapshot } = active;
+  const forkedSession = withSessionWriteGuard({
+    ...activeSnapshot,
+    sessionId: makeId(`session-${scenarioId}`),
+    title: forkTitle(active.title),
+    createdAt: forkedAt,
+    updatedAt: forkedAt,
+    versions: [],
+  });
+  return {
+    ...state,
+    archivedSessions: prependSession(
+      state.archivedSessions,
+      retainedSessionCopy(active, 'forked chat retained source session'),
+      archiveLimit,
+    ),
+    sessionsByScenario: {
+      ...state.sessionsByScenario,
+      [scenarioId]: forkedSession,
+    },
+  };
+}
+
+function forkTitle(title: string) {
+  const compact = title.trim() || 'Chat';
+  return /\bFork\b/i.test(compact) ? compact : `${compact} Fork`;
 }
 
 export function archiveAllActiveSessions(

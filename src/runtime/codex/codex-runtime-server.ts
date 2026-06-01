@@ -12,6 +12,7 @@ import {
 } from '@sciforge-ui/runtime-contract/codex-realtime-session';
 
 const CODEX_RUNTIME_HEARTBEAT_MS = 5_000;
+const CODEX_REALTIME_CANCEL_TIMEOUT_MS = 500;
 export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
 export const CODEX_RUNTIME_WEBSOCKET_PATH = '/api/sciforge/runtime/codex/realtime/ws';
 
@@ -297,8 +298,12 @@ async function cancelActiveCodexTurn(
   state: CodexRuntimeControlState,
 ) {
   const turnId = state.turnId ?? state.commandId;
-  if (turnId) await adapter.cancel(turnId);
   abort.abort();
+  if (!turnId) return;
+  await Promise.race([
+    adapter.cancel(turnId),
+    new Promise<void>((resolve) => setTimeout(resolve, CODEX_REALTIME_CANCEL_TIMEOUT_MS)),
+  ]).catch(() => undefined);
 }
 
 function assertControlTargetsCurrentTurn(control: CodexRealtimeClientControl, state: CodexRuntimeControlState) {

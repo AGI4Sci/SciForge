@@ -20,6 +20,7 @@
     "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
     "nativeToolProbe": "python -m sciforge_computer_use.native_tool --tool get_app_state --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
     "platformSidecarProbe": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
+    "virtualDisplayProviderProbe": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>",
     "path": "packages/actions/computer-use",
     "interface": "runTask(request, hostPorts)",
     "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
@@ -130,12 +131,12 @@
     "realDesktopEvidenceRequiredPorts": ["capture", "plan", "locate", "execute", "verify", "writeTrace", "emitEvent"],
     "forbiddenPorts": ["requestApproval", "gui.present", "gui.ask_user"],
     "providerIdPolicy": {
-      "capture": ["display-capture", "target-window-capture"],
+      "capture": ["display-capture", "target-window-capture", "virtual-display-frame-capture"],
       "crop": "host-focus-region-crop",
       "plan": "runtime-codex-tui-text-planner",
       "locate": ["kv-ground", "host-focus-region-crop"],
       "actionRequestExecutor": ["dry-run-generic-gui-executor", "package-target-bound-window-executor", "<desktopPlatform>-host-port-executor"],
-      "execute": ["dry-run-generic-gui-executor", "virtual-input-state-executor", "package-target-bound-window-executor", "<desktopPlatform>-generic-gui-executor"],
+      "execute": ["dry-run-generic-gui-executor", "virtual-input-state-executor", "virtual-display-scoped-input-provider", "package-target-bound-window-executor", "<desktopPlatform>-generic-gui-executor"],
       "verify": "layered-vision-verifier",
       "writeTrace": "workspace-file-ref-trace-writer",
       "emitEvent": "workspace-runtime-events"
@@ -173,6 +174,7 @@
     },
     "diagnosticProbes": {
       "pluginDiscovery": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
+      "virtualDisplayProvider": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>",
       "scriptedHostPorts": "python -m sciforge_computer_use.host_ports_probe --probe-file <file> --output-dir <dir>",
       "nativePreflight": "python -m sciforge_computer_use.desktop_preflight --output-dir <dir>",
       "nativeCaptureOnly": "python -m sciforge_computer_use.native_capture_probe --output-dir <dir>",
@@ -202,7 +204,7 @@
         "nativeM6OptIn": "npm run smoke:cu-native-m6:opt-in",
         "nativeM6OptInHelp": "npm run smoke:cu-native-m6:opt-in -- --help"
       },
-      "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and may mark M6 completed only when capabilities/discovery plus preflight/capture/state/execute are all non-diagnostic current-bundle evidence."
+      "claimLimit": "The native multi-screen live runner may use DOM/AX/Playwright refs only as grounding hints and may mark M6 completed only as historical opt-in regression/diagnostic evidence when capabilities/discovery plus preflight/capture/state/execute are all non-diagnostic current-bundle evidence; it cannot set userAcceptanceEligible=true or satisfy virtual-app-screen-user-acceptance without a separate manifest."
     },
     "traceHandoff": {
       "schemaRef": "sciforge.computer-use.trace-handoff.v1",
@@ -213,6 +215,40 @@
       "forbiddenInlinePayloads": ["rawScreenshot", "base64", "data:image", "rawProviderPayload", "requestBody", "apiKey", "inlineImage"]
     },
     "notes": "Computer Use action provider consumes host-owned platform ports. It never imports GUI implementation and never opens confirmation UI directly."
+  },
+  "virtualDisplayProviderContract": {
+    "schemaRef": "sciforge.virtual-display.provider-contract.v1",
+    "descriptionSchemaRef": "sciforge.virtual-display.provider-description.v1",
+    "readinessSchemaRef": "sciforge.virtual-display.readiness.v1",
+    "probeBundleSchemaRef": "sciforge.virtual-display.provider-probe-bundle.v1",
+    "invokeResultSchemaRef": "sciforge.virtual-display.provider-invoke-result.v1",
+    "manifestHelper": "sciforge_computer_use.virtual_display_provider.build_virtual_display_provider_manifest",
+    "describeHelper": "sciforge_computer_use.virtual_display_provider.describe_virtual_display_providers",
+    "queryHelper": "sciforge_computer_use.virtual_display_provider.query_virtual_display_providers",
+    "readHelper": "sciforge_computer_use.virtual_display_provider.read_virtual_display_provider",
+    "probeHelper": "sciforge_computer_use.virtual_display_provider.probe_virtual_display_providers",
+    "invokeHelper": "sciforge_computer_use.virtual_display_provider.invoke_virtual_display_provider",
+    "readinessValidator": "sciforge_computer_use.virtual_display_provider.validate_virtual_display_readiness",
+    "providerIds": [
+      "virtual-display.macos.cgvirtualdisplay-screencapturekit",
+      "virtual-display.linux.xpra",
+      "virtual-display.windows.idd"
+    ],
+    "platformBackends": {
+      "darwin": ["cgvirtualdisplay-screencapturekit"],
+      "linux": ["xpra-app-session"],
+      "win32": ["windows-indirect-display-driver"]
+    },
+    "supportedTransports": ["webrtc", "native-frame-stream"],
+    "primaryTransport": "webrtc",
+    "fallbackTransports": [],
+    "supportedInputAdapters": ["app-command", "ax", "uia", "at-spi", "virtual-display-input"],
+    "invokeIntents": ["probe", "createSession", "launchApp", "attachSurface", "executeInputIntent", "pause", "resume", "closeSession", "handoff"],
+    "requiredReadinessFields": ["providerId", "platform", "backendKind", "installationStatus", "captureSupported", "liveSurfaceSupported", "inputSupported", "backgroundRenderable", "affectsPhysicalDisplay", "requiresFocusSteal", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent", "singleInteractiveTruth", "permissionRefs", "diagnosticRefs", "installHintRefs"],
+    "requiredFalseFlags": ["affectsPhysicalDisplay", "requiresFocusSteal", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent"],
+    "requiredRefs": ["providerProbeRef", "providerReadinessRef", "adapterReadinessRef", "liveSurfaceRef", "surfaceTransport", "frameStreamRef", "currentFrameRef", "inputIntentRef", "beforeAfterFrameRef", "verificationRef", "evidenceLedgerRef"],
+    "failClosedWhen": ["driver-or-runtime-missing", "permission-missing", "shared-system-input-required", "physical-display-affected", "focus-steal-required", "multiple-interactive-surfaces", "current-session-evidence-missing"],
+    "claimLimit": "The virtual display provider contract proves catalog/probe/readiness/invoke boundaries only. A VirtualAppScreen pass requires current-session provider-executed createSession, launchApp, attachSurface, executeInputIntent, live frame, before/after, GUI-present, and evidence-ledger refs."
   },
   "nativeToolsContract": {
     "schemaRef": "sciforge.computer-use.native-tool-manifest.v1",
@@ -250,21 +286,35 @@
     "schemaRef": "sciforge.computer-use.public-surface-parity.v1",
     "ownershipMapRef": "docs/native-extension-ownership-map.json#entries/computer-use",
     "requiredBacklogIds": [
-      "CU-PKG-22-native-multi-screen-multi-actor-cursor-product-gate",
+      "CU-PKG-22-virtual-app-screen-user-acceptance-product-gate",
       "CU-PKG-23-multi-screen-live-demo",
       "CU-PKG-24-browser-runtime-dom-ax-observation-refs",
       "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
       "CU-PKG-26-public-surface-parity-guard"
     ],
     "requiredNativeSurfaces": [
-      "native multi-screen/multi-actor cursor product gate",
-      "multi-screen live demo",
+      "virtual-app-screen-user-acceptance product gate",
+      "virtual-app-screen-user-acceptance-manifest",
       "BrowserRuntime DOM/AX observation refs",
-      "native multi-app workflow/live acceptance matrix"
+      "native multi-app workflow/live acceptance matrix",
+      "native multi-screen/multi-actor cursor historical opt-in regression",
+      "multi-screen live demo historical diagnostic"
     ],
     "nativeProductGatePolicy": {
+      "activeGate": "virtual-app-screen-user-acceptance",
+      "manifestName": "virtual-app-screen-user-acceptance-manifest",
+      "manifestSchemaRef": "sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1",
       "productionHost": "Codex app-server native tool/plugin/MCP or module.invoke(actions, execute)",
-      "requiredProvenance": ["displayGroupId", "screenId", "windowId", "actorId", "cursorId", "leaseId", "schedulerLeaseRef", "appStateRef", "screenshotRef", "groundingRefs", "traceRefs", "replayRefs", "currentBundleRef", "guiPresentRef when presentation is requested"],
+      "requiredProvenance": ["taskId", "scenarioId", "userIntent", "providerId", "providerProbeRef", "providerReadinessRef", "liveSurfaceRef", "surfaceTransport", "frameStreamRef", "currentFrameRef", "singleInteractiveTruth", "targetAppRefs", "targetWindowRefs", "sessionRefs", "adapterReadinessRefs", "screenFrameRefs", "inputIntentRefs", "executorEventRefs", "beforeAfterFrameRefs", "annotationProposalRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "replayRef", "evidenceLedgerRef", "isolationFlags", "blockedReason", "displayGroupId", "screenId", "windowId", "actorId", "cursorId", "leaseId", "schedulerLeaseRef", "appStateRef", "screenshotRef", "groundingRefs", "traceRefs", "replayRefs", "currentBundleRef", "guiPresentRef when presentation is requested"],
+      "requiredManifestFields": ["taskId", "scenarioId", "userIntent", "targetAppRefs", "targetWindowRefs", "sessionRefs", "adapterReadinessRefs", "screenFrameRefs", "inputIntentRefs", "executorEventRefs", "beforeAfterFrameRefs", "annotationProposalRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "replayRef", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
+      "passStatePolicy": {
+        "passedRequires": ["artifactRefs", "visible Screen frame refs", "action causality", "validator/verifier refs", "gui.present refs", "replay refs", "isolation flags"],
+        "blockedStatuses": ["blocked", "needs-confirmation", "requires-handoff"],
+        "m6NativeMultiScreenUserLevelPassAllowed": false,
+        "packageSmokeUserLevelPassAllowed": false
+      },
+      "historicalRegressionGateIds": ["m6-native-multi-screen", "multi-screen-live-demo"],
+      "forbiddenSubstituteGateIds": ["package-smoke", "m6-native-multi-screen", "target-bound-fixture", "historical-docker-novnc", "single-click-smoke", "dom", "playwright", "accessibility", "shell-direct-artifact", "old-trace", "gui-executor", "shared-system-input"],
       "guiExecutionAllowed": false,
       "runtimeBridgePublicProductionApiAllowed": false,
       "workspaceGatewayProductionFallbackAllowed": false,
@@ -282,7 +332,7 @@
       "activeProductGateEligible": false,
       "historicalEvidenceAllowedWhenRefsFirst": true
     },
-    "claimLimit": "This parity block keeps the action manifest aligned with the ownership map. Native multi-screen, BrowserRuntime DOM/AX observation refs, and native multi-app live acceptance are active backlog/product gates; Docker/noVNC/RDP remain legacy diagnostic or backend packaging and cannot be the product owner."
+    "claimLimit": "This parity block keeps the action manifest aligned with the ownership map. virtual-app-screen-user-acceptance is the active Computer Use product gate and requires a virtual-app-screen-user-acceptance-manifest; M6/native multi-screen is retained only as historical opt-in regression/diagnostic evidence, while Docker/noVNC/RDP remain legacy diagnostic or backend packaging and cannot be the product owner."
   },
   "platformSidecarContract": {
     "schemaRef": "sciforge.computer-use.platform-sidecar-manifest.v1",

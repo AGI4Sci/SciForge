@@ -29,6 +29,7 @@ export const WORKSPACE_INSTANCE_MANIFEST_CAPABILITIES = [
   'repair-handoff-runner',
   'workspace-snapshot',
   'workspace-files',
+  'workspace-terminal-websocket-pty',
   WORKSPACE_RUNTIME_ARTIFACT_PREVIEW_CAPABILITY_ID,
   'sciforge-tools',
 ] as const;

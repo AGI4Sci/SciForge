@@ -40,6 +40,12 @@ export type ComputerUseActionProviderPublicSurface = {
   legacyActiveProductGateEligible?: boolean;
   historicalEvidenceAllowedWhenRefsFirst?: boolean;
   nativeProductGatePolicy: {
+    activeGate?: string;
+    manifestName?: string;
+    manifestSchemaRef?: string;
+    requiredManifestFields: Set<string>;
+    forbiddenSubstituteGateIds: Set<string>;
+    historicalRegressionGateIds: Set<string>;
     productionHost?: string;
     requiredProvenance: Set<string>;
     guiExecutionAllowed?: boolean;
@@ -87,22 +93,62 @@ const requiredComputerUseAdapterClassifications = new Set([
   'legacy-diagnostic-backend-packaging',
 ]);
 const requiredComputerUseProductBacklogSubtasks = new Set([
-  'CU-PKG-22-native-multi-screen-multi-actor-cursor-product-gate',
-  'CU-PKG-23-multi-screen-live-demo',
+  'CU-PKG-22-virtual-app-screen-user-acceptance-product-gate',
   'CU-PKG-24-browser-runtime-dom-ax-observation-refs',
   'CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix',
   'CU-PKG-26-public-surface-parity-guard',
 ]);
+const requiredComputerUseHistoricalRegressionSubtasks = new Set([
+  'CU-PKG-23-multi-screen-live-demo',
+]);
 const requiredComputerUseBoundarySubtasks = new Set([
   'CU-PKG-20-import-boundary-guard',
   ...requiredComputerUseProductBacklogSubtasks,
+  ...requiredComputerUseHistoricalRegressionSubtasks,
 ]);
 const requiredComputerUseNativeSurfaces = [
-  'native multi-screen/multi-actor cursor product gate',
-  'multi-screen live demo',
+  'virtual-app-screen-user-acceptance product gate',
+  'virtual-app-screen-user-acceptance-manifest',
   'BrowserRuntime DOM/AX observation refs',
   'native multi-app workflow/live acceptance matrix',
+  'native multi-screen/multi-actor cursor historical opt-in regression',
+  'multi-screen live demo historical diagnostic',
 ];
+const requiredVirtualAppScreenUserAcceptanceManifestFields = new Set([
+  'taskId',
+  'scenarioId',
+  'userIntent',
+  'targetAppRefs',
+  'targetWindowRefs',
+  'sessionRefs',
+  'adapterReadinessRefs',
+  'screenFrameRefs',
+  'inputIntentRefs',
+  'executorEventRefs',
+  'beforeAfterFrameRefs',
+  'annotationProposalRefs',
+  'artifactRefs',
+  'verificationRefs',
+  'guiPresentRefs',
+  'replayRef',
+  'evidenceLedgerRef',
+  'isolationFlags',
+  'blockedReason',
+]);
+const requiredVirtualAppScreenForbiddenSubstituteGateIds = new Set([
+  'package-smoke',
+  'm6-native-multi-screen',
+  'target-bound-fixture',
+  'historical-docker-novnc',
+  'single-click-smoke',
+  'dom',
+  'playwright',
+  'accessibility',
+  'shell-direct-artifact',
+  'old-trace',
+  'gui-executor',
+  'shared-system-input',
+]);
 const requiredComputerUseNativeTools = new Set([
   'get_app_state',
   'observe',
@@ -470,6 +516,12 @@ export async function loadComputerUseBoundaryPolicy(workspaceRoot = root): Promi
       legacyActiveProductGateEligible: booleanField(legacyBackendPackaging?.activeProductGateEligible),
       historicalEvidenceAllowedWhenRefsFirst: booleanField(legacyBackendPackaging?.historicalEvidenceAllowedWhenRefsFirst),
       nativeProductGatePolicy: {
+        activeGate: stringField(nativeProductGatePolicy?.activeGate),
+        manifestName: stringField(nativeProductGatePolicy?.manifestName),
+        manifestSchemaRef: stringField(nativeProductGatePolicy?.manifestSchemaRef),
+        requiredManifestFields: new Set(stringArray(nativeProductGatePolicy?.requiredManifestFields)),
+        forbiddenSubstituteGateIds: new Set(stringArray(nativeProductGatePolicy?.forbiddenSubstituteGateIds)),
+        historicalRegressionGateIds: new Set(stringArray(nativeProductGatePolicy?.historicalRegressionGateIds)),
         productionHost: stringField(nativeProductGatePolicy?.productionHost),
         requiredProvenance: new Set(stringArray(nativeProductGatePolicy?.requiredProvenance)),
         guiExecutionAllowed: booleanField(nativeProductGatePolicy?.guiExecutionAllowed),
@@ -535,6 +587,36 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
       issues.push(`Computer Use public surface parity is missing backlog id ${id}.`);
     }
   }
+  for (const id of requiredComputerUseHistoricalRegressionSubtasks) {
+    if (!policy.remainingMigrationSubtaskIds.has(id) || !policy.actionProviderPublicSurface.requiredBacklogIds.has(id)) {
+      issues.push(`Computer Use must retain historical opt-in regression subtask ${id}.`);
+    }
+  }
+  const nativePolicy = policy.actionProviderPublicSurface.nativeProductGatePolicy;
+  if (nativePolicy.activeGate !== 'virtual-app-screen-user-acceptance') {
+    issues.push('Computer Use active product gate must be virtual-app-screen-user-acceptance.');
+  }
+  if (nativePolicy.manifestName !== 'virtual-app-screen-user-acceptance-manifest') {
+    issues.push('Computer Use active product gate must name virtual-app-screen-user-acceptance-manifest.');
+  }
+  if (nativePolicy.manifestSchemaRef !== 'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1') {
+    issues.push('Computer Use active product gate must declare the VirtualAppScreen user acceptance manifest schema ref.');
+  }
+  for (const field of requiredVirtualAppScreenUserAcceptanceManifestFields) {
+    if (!nativePolicy.requiredManifestFields.has(field) || !nativePolicy.requiredProvenance.has(field)) {
+      issues.push(`Computer Use VirtualAppScreen user acceptance policy is missing manifest/provenance field ${field}.`);
+    }
+  }
+  for (const gateId of requiredVirtualAppScreenForbiddenSubstituteGateIds) {
+    if (!nativePolicy.forbiddenSubstituteGateIds.has(gateId)) {
+      issues.push(`Computer Use VirtualAppScreen user acceptance policy must reject substitute gate ${gateId}.`);
+    }
+  }
+  for (const historicalGate of ['m6-native-multi-screen', 'multi-screen-live-demo']) {
+    if (!nativePolicy.historicalRegressionGateIds.has(historicalGate)) {
+      issues.push(`Computer Use policy must retain ${historicalGate} only as a historical opt-in regression gate.`);
+    }
+  }
   for (const tool of requiredComputerUseNativeTools) {
     if (!policy.actionProviderPublicSurface.nativeToolsContract.tools.has(tool)) {
       issues.push(`Computer Use native tool public surface is missing tool ${tool}.`);
@@ -592,7 +674,6 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
       issues.push(`Computer Use BrowserRuntime observation policy is missing forbidden use ${forbiddenUse}.`);
     }
   }
-  const nativePolicy = policy.actionProviderPublicSurface.nativeProductGatePolicy;
   if (!nativePolicy.productionHost) {
     issues.push('Computer Use native product gate policy must declare a productionHost.');
   }

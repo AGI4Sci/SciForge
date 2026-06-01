@@ -53,8 +53,15 @@ export type {
   HistoricalMessageEditSession,
 } from './sessionHistoryEdit';
 
-export function titleFromPrompt(prompt: string) {
-  return normalizeScenarioPromptTitle(prompt);
+export function titleFromPrompt(
+  prompt: string,
+  options?: Parameters<typeof normalizeScenarioPromptTitle>[1],
+) {
+  return normalizeScenarioPromptTitle(safePromptTitleSource(prompt), options);
+}
+
+export function shouldDeriveTitleForFirstUserTurn(session: SciForgeSession) {
+  return session.runs.length === 0 && !session.messages.some(isExistingUserAuthoredMessage);
 }
 
 export function createOptimisticUserTurnSession({
@@ -80,15 +87,29 @@ export function createOptimisticUserTurnSession({
     references,
     goalSnapshot,
   };
+  const shouldRetitle = shouldDeriveTitleForFirstUserTurn(baseSession);
   const nextSession: SciForgeSession = {
     ...baseSession,
-    title: baseSession.runs.length || baseSession.messages.some((message) => message.id.startsWith('msg'))
-      ? baseSession.title
-      : titleFromPrompt(prompt),
+    title: shouldRetitle ? titleFromPrompt(prompt) : baseSession.title,
     messages: [...baseSession.messages, userMessage],
-    updatedAt: nowIso(),
+    updatedAt: now,
   };
   return { session: nextSession, userMessage };
+}
+
+function isExistingUserAuthoredMessage(message: SciForgeMessage) {
+  return message.role === 'user' && !message.id.startsWith('seed');
+}
+
+function safePromptTitleSource(prompt: string) {
+  return prompt
+    .replace(/^\s*\/[a-z][\w-]*(?:\s+|$)/i, ' ')
+    .replace(/\b(?:authorization|api[-_\s]?key|access[-_\s]?token|refresh[-_\s]?token|token|secret|password|credential)\b\s*[:=]\s*(?:bearer\s+)?[^\s`"'<>),;]+/gi, '[secret]')
+    .replace(/\b(?:provider|model)\b\s*[:=]\s*["']?[^"'\s,;)]+/gi, '[runtime setting]')
+    .replace(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::\d+)?[^\s`"'<>),;]*/gi, '[local endpoint]')
+    .replace(/https?:\/\/[^\s`"'<>),;]+/gi, '[link]')
+    .replace(/\bfile:[^\s`"'<>),;]+/gi, '[reference]')
+    .replace(/(?:^|[\s(["'])\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s`"'<>),;]+/g, (match) => `${match.match(/^[\s(["']+/)?.[0] ?? ''}[local path]`);
 }
 
 export function appendUploadMessageToSession({

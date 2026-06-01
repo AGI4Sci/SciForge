@@ -3,7 +3,9 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { addRightPaneTabLifecycleState, backendRepairStates, cancelWorkspaceFileEditorEdit, closeRightPaneTabLifecycleState, coerceReportPayload, contractValidationFailures, removeWorkspaceFileEditorForTab, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, setWorkspaceFileEditorForTab, shouldOpenRunAuditDetails, shouldTryRepoRootWorkspaceFallback, workspaceFileFocusRequestKey, type WorkspaceFileEditorState } from './ResultsRenderer';
+import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
+import { addRightPaneTabLifecycleState, closeRightPaneTabLifecycleState } from './results/resultPaneLifecycle';
+import type { WorkspaceFileEditorState } from './results/filesPaneModel';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { MarkdownBlock } from './results/reportContent';
 import { nextPinnedObjectReferences, performObjectReferenceAction, resolveObjectReferenceActionPlan, resultTabForObjectReference } from './results-renderer-object-actions';
@@ -11,6 +13,7 @@ import { RegistrySlot } from './results-renderer-registry-slot';
 import { createResultsRendererViewModel } from './results-renderer-view-model';
 import { applyBackgroundCompletionEventToSession } from './chat/sessionTransforms';
 import { conversationProjectionMigrationAuditFixtureForRun } from './conversation-projection-view-model';
+import { availableObjectActions } from '../../../../packages/support/object-references';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract';
 import type { ObjectReference, RuntimeArtifact, RuntimeExecutionUnit, SciForgeConfig, SciForgeRun, SciForgeSession } from '../domain';
 
@@ -373,7 +376,7 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(screenHtml, /data-component-id="virtual-screen-viewer"/);
   assert.match(screenHtml, /data-render-boundary="presentation-only"/);
   assert.match(screenHtml, /data-status="empty"/);
-  assert.match(screenHtml, /Virtual screen refs are not attached/);
+  assert.match(screenHtml, /VirtualAppScreen attach state: no-session/);
   assert.doesNotMatch(screenHtml, /computer-use:screen\/right-pane\/blocked\/no-current-frame|computer-use:session\/right-pane|providerRoute|executorLease|desktopBridge/);
   assert.match(terminalHtml, /data-testid="right-pane-terminal-tool"/);
   assert.match(terminalHtml, /data-component-id="terminal-session-viewer"/);
@@ -383,6 +386,50 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(filesHtml, /data-component-id="workspace-file-viewer"/);
   assert.match(filesHtml, /data-render-boundary="presentation-only"/);
   assert.match(filesHtml, /workspace-file-viewer-tree/);
+});
+
+test('ResultsRenderer routes focused chat object refs to the matching right-pane tool', () => {
+  const cases: Array<[ObjectReference, RegExp, RegExp]> = [
+    [{
+      id: 'browser-session',
+      title: 'Browser session',
+      kind: 'url',
+      ref: 'browser:session-1',
+      preferredView: 'browser-object',
+    }, /data-testid="right-pane-browser-tool"/, /data-component-id="browser-workbench"/],
+    [{
+      id: 'screen-frame',
+      title: 'Screen frame',
+      kind: 'artifact',
+      ref: 'screen:frame-1',
+      preferredView: 'screen-observation',
+      artifactType: 'screen-observation',
+    }, /data-testid="right-pane-virtual-screen-tool"/, /data-component-id="virtual-screen-viewer"/],
+    [{
+      id: 'terminal-transcript',
+      title: 'Terminal transcript',
+      kind: 'execution-unit',
+      ref: 'terminal-transcript:run-1',
+      preferredView: 'terminal-session-viewer',
+    }, /data-testid="right-pane-terminal-tool"/, /data-component-id="terminal-session-viewer"/],
+    [{
+      id: 'subagent-result',
+      title: 'Subagent result',
+      kind: 'run',
+      ref: 'subagent:worker-1',
+      preferredView: 'subagent-result',
+    }, /data-testid="right-pane-references-tool"/, /Object focus|Subagent result/],
+  ];
+
+  for (const [reference, tabPattern, componentPattern] of cases) {
+    const html = renderResultsRenderer(emptySession(), {
+      initialResultTab: 'primary',
+      focusedObjectReference: reference,
+    });
+    assert.match(html, tabPattern, reference.ref);
+    assert.match(html, componentPattern, reference.ref);
+    assert.doesNotMatch(html, /name="composer"|composer-insertion/i, reference.ref);
+  }
 });
 
 test('ResultsRenderer screen pane renders active Computer Use frame source and refs-first state', () => {
@@ -456,26 +503,26 @@ test('ResultsRenderer screen pane renders active Computer Use frame source and r
   const html = renderResultsRenderer(session, { activeRunId: 'run-screen', initialResultTab: 'screen' });
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(html, /data-presentation-mode="replay-ref-inspector"/);
+  assert.match(html, /Replay\/ref inspector/);
   assert.match(html, /class="virtual-screen-frame-image"/);
   assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png"/);
-  assert.match(html, /data-frame-data-ref="computer-use:session\/run-screen\/frame-data\/after\.json"/);
+  assert.match(html, /data-frame-ref="computer-use:session\/run-screen\/frames\/after\.png"/);
+  assert.match(html, /computer-use:session\/run-screen\/frame-data\/after\.json/);
   assert.match(html, /computer-use:session\/run-screen\/replay\.json/);
   assert.match(html, /computer-use:session\/run-screen\/overlays\/cursors\.json/);
   assert.match(html, /computer-use:session\/run-screen\/leases\/screen-1\.json/);
-  assert.match(html, /data-cursor-state="lease-held"/);
-  assert.match(html, /data-proposal-status="needs-confirmation"/);
-  assert.match(html, /data-control-flag="permission status"/);
-  assert.match(html, /class="virtual-screen-run-summary"/);
-  assert.match(html, /data-run-summary-field="screens">screens: <strong>2<\/strong>/);
-  assert.match(html, /data-run-summary-field="actor cursors">actor cursors: <strong>3<\/strong>/);
-  assert.match(html, /data-run-summary-field="sidecar">sidecar: <strong>macos-native-virtual-screen<\/strong>/);
-  assert.match(html, /data-run-summary-field="validation">validation: <strong>accepted<\/strong>/);
-  assert.match(html, /data-run-summary-field="validation ok">validation ok: <strong>true<\/strong>/);
+  assert.match(html, /data-cursor-state="ref-only"/);
+  assert.match(html, /computer-use:session\/run-screen\/proposals\/click\.json/);
+  assert.match(html, /computer-use:permission\/run-screen\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/sidecar\/binding\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/sidecar\/capabilities\.json/);
+  assert.match(html, /computer-use:session\/run-screen\/sidecar\/discovery\.json/);
   assert.match(html, /computer-use:session\/run-screen\/validation\.json/);
   assert.match(html, /computer-use:session\/run-screen\/evidence\/index\.json/);
-  assert.match(html, /data-status-reason="blocked"/);
-  assert.match(html, /Screen recording permission pending/);
-  assert.match(html, /\/computer-use stop --stop-ref/);
+  assert.match(html, /data-attach-state="blocked"/);
+  assert.match(html, /VirtualAppScreen blocked/);
+  assert.match(html, /\/computer-use stop --session-ref &quot;computer-use:stop\/run-screen&quot;/);
   assert.doesNotMatch(html, /RAW_SCREENSHOT_SHOULD_NOT_RENDER|data:image|providerRoute|desktopBridge/);
 });
 
@@ -517,12 +564,15 @@ test('ResultsRenderer right pane terminal renders execution transcript', () => {
   assert.match(html, /\[stdout\] artifact:terminal-stdout/);
   assert.match(html, /\[output\] artifact:terminal-output/);
   assert.match(html, /\[failed\] unit test failed/);
-  assert.match(html, /<dt>Mode<\/dt>\s*<dd>transcript<\/dd>/);
-  assert.match(html, /data-mode="transcript"/);
+  assert.match(html, /data-terminal-live-pty-exception="host-owned-workspace-writer"/);
+  assert.match(html, /<dt>Mode<\/dt>\s*<dd>live<\/dd>/);
+  assert.match(html, /data-mode="live"/);
+  assert.match(html, /data-terminal-live-surface="host-owned"/);
   assert.match(html, /data-terminal-session-adapter="host-owned-terminal-session"/);
-  assert.match(html, /data-session-id="run-terminal"/);
+  assert.match(html, /data-session-id="right-pane-live"/);
   assert.match(html, /data-transcript-ref="artifact:terminal-stdout"/);
   assert.match(html, /data-pty-transcript-ref="pty-transcript:hash-terminal"/);
+  assert.match(html, /Execution refs/);
   assert.doesNotMatch(html, /\$ EU-raw-id-should-not-be-command/);
 });
 
@@ -559,36 +609,111 @@ test('ResultsRenderer terminal tab contains only terminal session surface', () =
   assert.doesNotMatch(html, /data-component-id="execution-provenance-table"|audit-details-panel|NotebookTimeline/);
 });
 
-test('ResultsRenderer terminal tab falls back to transcript controls without live output', () => {
+test('ResultsRenderer terminal tab redacts internal runtime run ids from public markup', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      id: 'codex-command-private-runtime-123',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'run command',
+      response: 'done',
+      createdAt: '2026-06-01T08:00:00.000Z',
+    }],
+    executionUnits: [{
+      id: 'EU-terminal-private',
+      tool: 'shell_command',
+      params: '{"cmd":"npm test"}',
+      code: 'npm test',
+      hash: 'hash-terminal-private',
+      status: 'done',
+      runId: 'codex-command-private-runtime-123',
+    }],
+  };
+
+  const html = renderResultsRenderer(session, { activeRunId: 'codex-command-private-runtime-123', initialResultTab: 'terminal' });
+
+  assert.match(html, /data-testid="right-pane-terminal-tool"/);
+  assert.match(html, /redacted-runtime-id/);
+  assert.doesNotMatch(html, /codex-command-private-runtime-123/);
+  assert.doesNotMatch(html, /data-session-id="codex-command|terminal-transcript:codex-command|pty-transcript:codex-command/);
+});
+
+test('ResultsRenderer terminal tab opens a host-owned live terminal surface', () => {
   const html = renderResultsRenderer(emptySession(), { initialResultTab: 'terminal' });
 
   assert.match(html, /data-testid="right-pane-terminal-tool"/);
   assert.match(html, /data-component-id="terminal-session-viewer"/);
-  assert.match(html, /data-status="stopped"/);
-  assert.match(html, /data-mode="transcript"/);
-  assert.match(html, /data-requested-mode="transcript"/);
+  assert.match(html, /data-status="empty"/);
+  assert.match(html, /data-terminal-live-pty-exception="host-owned-workspace-writer"/);
+  assert.match(html, /data-mode="live"/);
+  assert.match(html, /data-requested-mode="live"/);
   assert.match(html, /data-terminal-session-adapter="host-owned-terminal-session"/);
   assert.match(html, /data-transcript-ref="terminal-transcript:right-pane"/);
   assert.match(html, /data-pty-transcript-ref="pty-transcript:right-pane"/);
-  assert.match(html, /\$ ask --help/);
-  assert.match(html, /Waiting for an attached terminal session or run output/);
+  assert.match(html, /data-terminal-live-surface="host-owned"/);
+  assert.match(html, />Start</);
+  assert.match(html, /No execution-unit transcript yet/);
+  assert.doesNotMatch(html, /\$ ask --help|Waiting for an attached terminal session or run output/);
   assert.match(html, /name="terminal-input"[^>]*disabled=""/);
   assert.match(html, /data-terminal-event="copy-request"/);
-  assert.match(html, /data-terminal-event="download-request"/);
-  assert.doesNotMatch(html, /data-terminal-live-surface="host-owned"/);
+  assert.doesNotMatch(html, /data-command-text="\/terminal input/);
 });
 
-test('ResultsRenderer right pane terminal callbacks use terminal-equivalent commands', () => {
-  const source = readFileSync(new URL('./ResultsRenderer.tsx', import.meta.url), 'utf8');
+test('ResultsRenderer right pane terminal uses workspace-writer PTY instead of command-text callbacks', () => {
+  const source = readFileSync(new URL('./results/terminalPaneHostAdapter.tsx', import.meta.url), 'utf8');
 
-  assert.match(source, /\/terminal input --session/);
-  assert.match(source, /\/terminal paste --session/);
-  assert.match(source, /\/terminal resize --session/);
-  assert.match(source, /\/terminal copy --session/);
-  assert.match(source, /\/terminal download --session/);
-  assert.match(source, /\/terminal stop --session/);
-  assert.match(source, /\/terminal focus --session/);
+  assert.match(source, /startWorkspaceTerminalSession/);
+  assert.match(source, /workspaceTerminalWebSocketUrl/);
+  assert.match(source, /stopWorkspaceTerminalSession/);
+  assert.match(source, /type: 'input'/);
+  assert.match(source, /type: 'resize'/);
+  assert.match(source, /onDataInput/);
+  assert.match(source, /sendTerminalInput/);
+  assert.match(source, /terminal\.focus\(\)/);
+  assert.match(source, /host-owned-workspace-writer/);
+  assert.doesNotMatch(source, /\/terminal input --session/);
   assert.doesNotMatch(source, /navigator\.clipboard\?\.writeText\(buffer\)/);
+});
+
+test('ResultsRenderer right pane terminal keeps live input routed through WebSocket only', () => {
+  const source = readFileSync(new URL('./results/terminalPaneHostAdapter.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /capabilities: \{ input: isRunning, paste: isRunning/);
+  assert.match(source, /onDataInput: \(input(?:: string)?\) => sendTerminalInput\(socketRef\.current, input\)/);
+  assert.match(source, /onPasteInput: \(input(?:: string)?\) => sendTerminalInput\(socketRef\.current, input\)/);
+  assert.match(source, /JSON\.stringify\(\{ type: 'input', data:/);
+  assert.doesNotMatch(source, /document\.execCommand|eval\(|new Function|child_process|node-pty/);
+});
+
+test('ResultsRenderer right pane terminal close lifecycle stops host-owned PTY sessions', () => {
+  const source = readFileSync(new URL('./results/rightPaneTerminalController.ts', import.meta.url), 'utf8');
+  const rendererSource = readFileSync(new URL('./ResultsRenderer.tsx', import.meta.url), 'utf8');
+  const lifecycleSource = readFileSync(new URL('./results/terminalPaneLifecycle.ts', import.meta.url), 'utf8');
+  const rightPaneLifecycleSource = readFileSync(new URL('./results/rightPaneLifecycleController.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /stopRightPaneTerminalSessionOnce/);
+  assert.match(source, /RIGHT_PANE_TERMINAL_TAB_CLOSE_STOP_REASON/);
+  assert.match(source, /closeTerminalTab[\s\S]*stopRightPaneTerminalSessionOnce/);
+  assert.match(source, /stopRightPaneTerminalSessionsOnce/);
+  assert.match(source, /RIGHT_PANE_TERMINAL_OWNER_CLEANUP_STOP_REASON/);
+  assert.match(rightPaneLifecycleSource, /closeTerminalTab\(tabId\)/);
+  assert.match(rendererSource, /rightPaneLifecycleController\.closeResultTab/);
+  assert.doesNotMatch(rendererSource, /rightPaneTerminalController\.closeTerminalTab\(tabId\)/);
+  assert.doesNotMatch(rendererSource, /stopRightPaneTerminalSessionOnce/);
+  assert.match(lifecycleSource, /rightPaneTerminalSessionIsActive[\s\S]*starting[\s\S]*running/);
+  assert.doesNotMatch(lifecycleSource, /useEffect|window\.addEventListener|unmount/);
+});
+
+test('ResultsRenderer right pane terminal preflights writer URL before opening PTY', () => {
+  const source = readFileSync(new URL('./results/terminalPaneHostAdapter.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /preflightWorkspaceTerminalWriter/);
+  assert.match(source, /data-terminal-writer-diagnostic/);
+  assert.match(source, /startWorkspaceTerminalSession\(launchConfig/);
+  assert.match(source, /onConfigChange\?\.\(\{ workspaceWriterBaseUrl: baseUrl \}\)/);
+  assert.match(source, /onOpenSettings\?\.\('workspace'\)/);
+  assert.match(source, /startRuntimeServicesAndRetry/);
 });
 
 test('ResultsRenderer screen tab derives Computer Use frame and replay refs from current run artifacts', () => {
@@ -626,17 +751,18 @@ test('ResultsRenderer screen tab derives Computer Use frame and replay refs from
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
   assert.match(html, /data-status="ready"/);
+  assert.match(html, /data-attach-state="observe-only"/);
+  assert.match(html, /data-presentation-mode="replay-ref-inspector"/);
+  assert.match(html, /data-screen-surface-mode="replay"/);
   assert.match(html, /.sciforge\/computer-use\/run-cu-screen\/latest\.png/);
   assert.match(html, /computer-use:replay\/run-cu-screen\/replay\.json/);
-  assert.match(html, /data-run-summary-status="ready"/);
   assert.match(html, /computer-use:validation\/run-cu-screen\/validation\.json/);
   assert.match(html, /computer-use:evidence\/run-cu-screen\/index\.json/);
-  assert.match(html, /data-run-summary-field="sidecar">sidecar: <strong>diagnostic-local<\/strong>/);
-  assert.match(html, /data-run-summary-field="validation">validation: <strong>accepted<\/strong>/);
-  assert.match(html, /\/computer-use observe --screen-ref &quot;computer-use:screen\/run-cu-screen\/screen-1\.json&quot;/);
+  assert.match(html, /\/computer-use observe --session-ref &quot;computer-use:session\/run-cu-screen\/session\.json&quot;/);
   assert.match(html, /class="virtual-screen-frame-image"/);
-  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png&amp;workspacePath=%2Ftmp%2Fsciforge"/);
-  assert.match(html, /Agent/);
+  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png"/);
+  assert.match(html, /data-cursor-state="ref-only"/);
+  assert.match(html, /computer-use:cursor\/run-cu-screen\/agent\.json/);
   assert.doesNotMatch(html, /virtual-desktop-session-manifest\.json/);
   assert.doesNotMatch(html, /providerRoute|executorLease|desktopBridge|rawScreenshot|base64/);
 });
@@ -669,7 +795,7 @@ test('ResultsRenderer screen tab does not reuse old session screen when active r
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
   assert.match(html, /data-status="empty"/);
-  assert.match(html, /Virtual screen refs are not attached/);
+  assert.match(html, /VirtualAppScreen attach state: no-session/);
   assert.doesNotMatch(html, /run-old-screen|old-screen|latest\.png|computer-use:replay\/run-old-screen/);
 });
 
@@ -693,7 +819,16 @@ test('ResultsRenderer references tab is an object ref inspector with focus/open 
         ref: 'file:PROJECT.md',
         status: 'available',
         actions: ['focus-right-pane', 'copy-path'],
-      }],
+        provenance: { path: 'PROJECT.md', producer: 'workspace' },
+      }, {
+        id: 'opaque-ref',
+        kind: 'opaque-model-output' as ObjectReference['kind'],
+        title: 'Opaque object',
+        ref: 'mystery:sk-secret-do-not-show',
+        summary: 'unsupported typed object',
+        provenance: { dataRef: 'trace:opaque-ref', producer: 'runtime' },
+        raw: { token: 'sk-secret-do-not-show', body: 'raw JSON should not render' },
+      } as unknown as ObjectReference],
     }],
     artifacts: [artifact],
   };
@@ -703,11 +838,16 @@ test('ResultsRenderer references tab is an object ref inspector with focus/open 
   assert.match(html, /data-testid="right-pane-references-tool"/);
   assert.match(html, /data-reference-kind="artifact"/);
   assert.match(html, /data-reference-kind="file"/);
+  assert.match(html, /data-reference-kind="unsupported"/);
+  assert.match(html, /data-reference-state="unsupported"/);
   assert.match(html, /data-focus-target="primary"/);
   assert.match(html, /data-focus-target="files"/);
   assert.match(html, />Open<\/button>/);
+  assert.match(html, /data-reference-action="copy-ref"/);
+  assert.match(html, /aria-label="Provenance"/);
+  assert.match(html, /trace:opaque-ref/);
   assert.match(html, /PROJECT\.md/);
-  assert.doesNotMatch(html, /supportingRefs|opposingRefs|raw JSON/i);
+  assert.doesNotMatch(html, /supportingRefs|opposingRefs|raw JSON|sk-secret-do-not-show/i);
 });
 
 test('ResultsRenderer browser tool uses normalized urls and typed Browser state', () => {
@@ -716,6 +856,139 @@ test('ResultsRenderer browser tool uses normalized urls and typed Browser state'
   assert.match(browserHtml, /\/browser open &quot;about:blank&quot; --surface workbench/);
   assert.match(browserHtml, /data-browser-state="idle"/);
   assert.doesNotMatch(browserHtml, /src="localhost:/);
+});
+
+test('ResultsRenderer Browser pane projects focused URL refs instead of stale tab addresses', () => {
+  const html = renderResultsRenderer(emptySession(), {
+    initialResultTab: 'browser',
+    focusedObjectReference: {
+      id: 'url-object',
+      kind: 'url',
+      title: 'External page',
+      ref: 'url:https://example.org/focused',
+      actions: ['focus-right-pane', 'open-external', 'copy-path'],
+      provenance: { producer: 'runtime-browser' },
+    },
+  });
+
+  assert.match(html, /value="https:\/\/example\.org\/focused"/);
+  assert.match(html, /data-browser-state="idle"/);
+  assert.match(html, /data-browser-host-surface="browser-host-session"/);
+  assert.match(html, /browser:host-surface\/right-pane\/external/);
+  assert.match(html, /\/browser open-external &quot;https:\/\/example\.org\/focused&quot; --approval required/);
+  assert.match(html, /data-command-text="\/browser open-external &quot;https:\/\/example\.org\/focused&quot; --approval required"/);
+  assert.doesNotMatch(html, /value="about:blank"|src="https:\/\/example\.org\/focused"|<iframe/);
+});
+
+test('ResultsRenderer Browser pane uses BrowserHostSession surface for external URLs in web environments', () => {
+  const previousWindow = globalThis.window;
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      localStorage: new MemoryStorage(),
+      open: () => ({ focus: () => undefined }),
+    },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession(), {
+      initialResultTab: 'browser',
+      focusedObjectReference: {
+        id: 'url-object',
+        kind: 'url',
+        title: 'External page',
+        ref: 'url:https://external.example/search',
+        actions: ['focus-right-pane', 'open-external', 'copy-path'],
+      },
+    });
+
+    assert.match(html, /value="https:\/\/external\.example\/search"/);
+    assert.match(html, /data-browser-state="idle"/);
+    assert.match(html, /data-browser-host-surface="browser-host-session"/);
+    assert.match(html, /\/browser open &quot;https:\/\/external\.example\/search&quot; --surface workbench/);
+    assert.match(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
+    assert.doesNotMatch(html, /<iframe|<webview|src="\/api\/sciforge\/browser\/proxy|src="https:\/\/external\.example\/search/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
+test('ResultsRenderer Browser pane ignores legacy desktop webview ownership for external URLs', () => {
+  const previousWindow = globalThis.window;
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: {
+      localStorage: new MemoryStorage(),
+      sciforgeDesktop: {
+        openNativeBrowser: async () => ({ ok: true }),
+        getNativeBrowserState: async () => ({ ok: true, surface: 'electron-webview', url: 'https://legacy.example' }),
+      },
+    },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession(), {
+      initialResultTab: 'browser',
+      focusedObjectReference: {
+        id: 'url-object',
+        kind: 'url',
+        title: 'External page',
+        ref: 'url:https://external.example',
+        actions: ['focus-right-pane', 'open-external', 'copy-path'],
+      },
+    });
+
+    assert.match(html, /value="https:\/\/external\.example"/);
+    assert.match(html, /data-browser-object-type="browser-state"/);
+    assert.match(html, /data-browser-host-surface="browser-host-session"/);
+    assert.match(html, /\/browser snapshot --url &quot;https:\/\/external\.example&quot; --screenshot --dom --logs/);
+    assert.match(html, /\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
+    assert.doesNotMatch(html, /<iframe|<webview|src="https:\/\/external\.example|electron-webview/);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
+});
+
+test('ResultsRenderer focused refs reopen their matching pane after all right-pane tabs were closed', () => {
+  const previousWindow = globalThis.window;
+  const storage = new MemoryStorage();
+  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    tabs: [],
+    activeTabId: '',
+    browserTabAddresses: {},
+  }));
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { localStorage: storage },
+  });
+
+  try {
+    const html = renderResultsRenderer(emptySession(), {
+      focusedObjectReference: {
+        id: 'browser-session',
+        title: 'Browser session',
+        kind: 'url',
+        ref: 'browser:session-1',
+        preferredView: 'browser-object',
+      },
+    });
+
+    assert.match(html, /data-result-tab="browser"/);
+    assert.match(html, /data-testid="right-pane-browser-tool"/);
+    assert.match(html, /aria-selected="true"[^>]*><span>Browser<\/span>/);
+    assert.doesNotMatch(html, /data-testid="right-pane-empty-workspace"|name="composer"|composer-insertion/i);
+  } finally {
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: previousWindow,
+    });
+  }
 });
 
 test('ResultsRenderer restores right pane tabs and Browser address from localStorage', () => {
@@ -744,14 +1017,15 @@ test('ResultsRenderer restores right pane tabs and Browser address from localSto
     assert.match(html, />Browser 2</);
     assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
     assert.match(html, /value="https:\/\/example\.org"/);
-    assert.match(html, /data-browser-state="blocked"/);
-    assert.match(html, /X-Frame-Options or Content-Security-Policy/);
-    assert.match(html, /data-browser-state-action="open-external"/);
-    assert.match(html, /data-browser-state-action="proxy-fallback"/);
-    assert.match(html, /href="\/api\/sciforge\/browser\/proxy\?url=https%3A%2F%2Fexample\.org"/);
+    assert.match(html, /data-browser-state="idle"/);
+    assert.match(html, /data-browser-host-surface="browser-host-session"/);
+    assert.match(html, /browser:host-surface\/right-pane\/external/);
+    assert.doesNotMatch(html, /data-browser-state-action="proxy-fallback"|Proxy Snapshot/);
+    assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy/);
+    assert.doesNotMatch(html, /href="https:\/\/example\.org"/);
     assert.match(html, /\/browser open-external &quot;https:\/\/example\.org&quot; --approval required/);
     assert.doesNotMatch(html, /src="about:blank"/);
-    assert.doesNotMatch(html, /src="https:\/\/example\.org"/);
+    assert.doesNotMatch(html, /src="https:\/\/example\.org"|<iframe/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
@@ -946,6 +1220,50 @@ test('ResultsRenderer files tab exposes read, edit, and save affordances for sel
   assert.doesNotMatch(html, /workspace-file-inline-viewer/);
 });
 
+test('ResultsRenderer files tab exposes open file tabs and host-provided source preview controls', () => {
+  const html = renderResultsRenderer(emptySession(), {
+    initialResultTab: 'files',
+    workspaceFileEditor: {
+      file: {
+        path: '/tmp/sciforge/PROJECT.md',
+        name: 'PROJECT.md',
+        content: '# Source should stay in source mode\n',
+        previewContent: '<h1>Host preview</h1>',
+        size: 35,
+        language: 'markdown',
+        mimeType: 'text/markdown',
+      },
+      draft: '# Source should stay in source mode\n',
+      workspacePath: '/tmp/sciforge',
+      viewMode: 'preview',
+    },
+  });
+
+  assert.match(html, /role="tablist" aria-label="Open files"/);
+  assert.match(html, /role="tab" aria-selected="true" title="PROJECT\.md"/);
+  assert.match(html, /class="workspace-file-viewer-breadcrumb"/);
+  assert.match(html, /aria-current="page" title="PROJECT\.md"/);
+  assert.match(html, /data-file-view-mode-command="source"/);
+  assert.match(html, /data-file-view-mode-command="preview" aria-pressed="true"/);
+  assert.match(html, /data-file-view-mode="preview"/);
+  assert.match(html, /&lt;h1&gt;Host preview&lt;\/h1&gt;/);
+  assert.doesNotMatch(html, /Source should stay in source mode|<textarea/);
+});
+
+test('ResultsRenderer wires Files open-file tabs through dirty-safe right-pane page lifecycle', () => {
+  const rendererSource = readFileSync(new URL('./ResultsRenderer.tsx', import.meta.url), 'utf8');
+  const controllerSource = readFileSync(new URL('./results/rightPaneWorkspaceFileController.ts', import.meta.url), 'utf8');
+
+  assert.match(rendererSource, /useRightPaneWorkspaceFileController/);
+  assert.match(rendererSource, /onOpenFileEditor=\{\(nextEditor\) => workspaceFileController\.openWorkspaceFileEditorInRightPane/);
+  assert.match(rendererSource, /onCloseFileView=\{workspaceFileController\.closeActiveWorkspaceFileView\}/);
+  assert.match(rendererSource, /workspaceFileController\.closeOpenFile\(path, workspaceFileConfig\.workspacePath, rightPaneLifecycleController\.closeResultTab\)/);
+  assert.match(controllerSource, /planWorkspaceFileTabOpen/);
+  assert.match(controllerSource, /workspaceFileEditorIsDirty/);
+  assert.match(controllerSource, /window\.confirm/);
+  assert.match(controllerSource, /setWorkspaceFileEditorForTab\(editors, nextState\.activeTabId, nextEditor\)/);
+});
+
 test('ResultsRenderer scopes cursor process file views to the originating run workspace', () => {
   const fileReference: ObjectReference = {
     id: 'file-project',
@@ -1012,108 +1330,6 @@ test('ResultsRenderer uses resolved file editor workspace root for fallback prev
   assert.match(html, /sciforge-repo/);
   assert.match(html, /agentserver-stream\.ts/);
   assert.doesNotMatch(html, /tmp\/sciforge"/);
-});
-
-test('ResultsRenderer allows repo-root fallback for safe relative file references from replies', () => {
-  const replyReference: ObjectReference = {
-    id: 'reply-file',
-    kind: 'file',
-    title: 'agentserver-stream.ts',
-    ref: 'file:src/runtime/gateway/agentserver-stream.ts',
-    status: 'available',
-    provenance: { path: 'src/runtime/gateway/agentserver-stream.ts', producer: 'message-inline-reference' },
-  };
-
-  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, 'src/runtime/gateway/agentserver-stream.ts'), true);
-  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '../config.local.json'), false);
-  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '.env'), false);
-  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '.sciforge/workspace-state.json'), false);
-  assert.equal(shouldTryRepoRootWorkspaceFallback(replyReference, '/Applications/workspace/SciForge/PROJECT.md'), false);
-});
-
-test('ResultsRenderer focus request keys stay stable while the file viewer browses another file', () => {
-  const reference: ObjectReference = {
-    id: 'process-file',
-    kind: 'file',
-    title: 'agentserver-stream.ts',
-    ref: 'file:src/runtime/gateway/agentserver-stream.ts',
-    runId: 'run-a',
-    status: 'available',
-    provenance: { path: 'src/runtime/gateway/agentserver-stream.ts', producer: 'cursor-agent-process' },
-  };
-  const key = workspaceFileFocusRequestKey(reference, 'src/runtime/gateway/agentserver-stream.ts');
-  const browsedEditor: WorkspaceFileEditorState = {
-    file: {
-      path: '/tmp/sciforge-repo/src/runtime/gateway/capability-broker.ts',
-      name: 'capability-broker.ts',
-      content: 'export {};\n',
-      size: 11,
-      language: 'typescript',
-    },
-    draft: 'export {};\n',
-    workspacePath: '/tmp/sciforge-repo',
-    focusRequestKey: key,
-  };
-
-  assert.equal(browsedEditor.focusRequestKey, key);
-  assert.notEqual(browsedEditor.file.path, '/tmp/sciforge-repo/src/runtime/gateway/agentserver-stream.ts');
-  assert.notEqual(workspaceFileFocusRequestKey({ ...reference, id: 'other-file' }, 'src/runtime/gateway/agentserver-stream.ts'), key);
-});
-
-test('ResultsRenderer scopes Files editor state by right-pane tab id', () => {
-  const first: WorkspaceFileEditorState = {
-    file: {
-      path: '/tmp/sciforge/first.md',
-      name: 'first.md',
-      content: '# First\n',
-      size: 8,
-      language: 'markdown',
-    },
-    draft: '# First draft\n',
-    workspacePath: '/tmp/sciforge',
-    editMode: true,
-  };
-  const second: WorkspaceFileEditorState = {
-    file: {
-      path: '/tmp/sciforge/second.md',
-      name: 'second.md',
-      content: '# Second\n',
-      size: 9,
-      language: 'markdown',
-    },
-    draft: '# Second draft\n',
-    workspacePath: '/tmp/sciforge',
-    editMode: true,
-  };
-  const withFirst = setWorkspaceFileEditorForTab({}, 'base:files', first);
-  const withBoth = setWorkspaceFileEditorForTab(withFirst, 'custom:files:2', second);
-  const changedFirst = setWorkspaceFileEditorForTab(withBoth, 'base:files', { ...first, draft: '# First changed\n' });
-  const closedFirst = removeWorkspaceFileEditorForTab(changedFirst, 'base:files');
-
-  assert.equal(changedFirst['base:files']?.draft, '# First changed\n');
-  assert.equal(changedFirst['custom:files:2']?.draft, '# Second draft\n');
-  assert.equal(closedFirst['base:files'], undefined);
-  assert.equal(closedFirst['custom:files:2']?.file.path, '/tmp/sciforge/second.md');
-});
-
-test('ResultsRenderer cancel edit restores the original file draft without closing the Files tab', () => {
-  const file = {
-    path: '/tmp/sciforge/PROJECT.md',
-    name: 'PROJECT.md',
-    content: '# Original\n',
-    size: 11,
-    language: 'markdown',
-  };
-  const cancelled = cancelWorkspaceFileEditorEdit({
-    file,
-    draft: '# Changed\n',
-    workspacePath: '/tmp/sciforge',
-    editMode: true,
-  });
-
-  assert.equal(cancelled.file, file);
-  assert.equal(cancelled.draft, '# Original\n');
-  assert.equal(cancelled.editMode, false);
 });
 
 test('ResultsRenderer keeps raw failure text out of the first-screen main summary while preserving audit details', () => {
@@ -2396,6 +2612,45 @@ test('object reference selection actions route through UserActionApi', async () 
   assert.equal(openResult.commandTextAction?.type, 'command-text');
   assert.equal(openResult.commandTextAction?.source, 'open');
   assert.equal(openResult.commandTextAction?.commandText, 'open ".sciforge/artifacts/report.md"');
+});
+
+test('URL object references expose copy URL and browser open-external commands', async () => {
+  const session = emptySession();
+  const reference: ObjectReference = {
+    id: 'url-ref',
+    title: 'External URL',
+    kind: 'url',
+    ref: 'url:https://example.org/paper',
+    actions: ['focus-right-pane', 'open-external', 'copy-path'],
+  };
+
+  const actions = availableObjectActions(reference, session);
+  assert.deepEqual(actions, ['focus-right-pane', 'open-external', 'copy-path']);
+
+  const copied: string[] = [];
+  const copyResult = await performObjectReferenceAction({
+    action: 'copy-path',
+    config: testConfig(),
+    pinnedObjectReferences: [],
+    reference,
+    session,
+    writeClipboard: async (text) => {
+      copied.push(text);
+    },
+  });
+  assert.equal(copyResult.error, undefined);
+  assert.deepEqual(copied, ['https://example.org/paper']);
+
+  const openResult = await performObjectReferenceAction({
+    action: 'open-external',
+    config: testConfig(),
+    pinnedObjectReferences: [],
+    reference,
+    session,
+  });
+  assert.equal(openResult.commandTextAction?.source, 'open');
+  assert.equal(openResult.commandTextAction?.targetRef, 'url:https://example.org/paper');
+  assert.equal(openResult.commandTextAction?.commandText, '/browser open-external "https://example.org/paper" --approval required');
 });
 
 test('artifact inspector drawer renders lineage, reproducible refs, preview, and handoff targets', () => {

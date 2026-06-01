@@ -19,22 +19,11 @@ export function resolveSearchNavigation(query: string, scenarios: ScenarioViewCo
   if (matchedScenario) return { page: 'workbench', scenarioId: matchedScenario.id };
 
   if (
-    normalized.includes('browser')
-    || normalized.includes('浏览器')
-    || normalized.includes('playwright')
-    || normalized.includes('内置浏览器')
+    normalized.includes('feedback')
+    || normalized.includes('反馈')
+    || normalized.includes('inbox')
   ) {
-    return { page: 'browser' };
-  }
-
-  if (
-    normalized.includes('timeline')
-    || normalized.includes('时间线')
-    || normalized.includes('notebook')
-    || normalized.includes('align')
-    || normalized.includes('对齐')
-  ) {
-    return { page: 'timeline' };
+    return { page: 'feedback' };
   }
 
   return { page: 'workbench' };

@@ -37,7 +37,7 @@ export function appendRunningGuidanceRecord(session: SciForgeSession, guidance: 
   const guidanceMessage: SciForgeMessage = {
     id: makeId('msg'),
     role: 'user',
-    content: `运行中引导：${guidance.prompt}`,
+    content: guidance.prompt,
     createdAt: guidance.receivedAt,
     status: 'running',
     references: guidance.references,

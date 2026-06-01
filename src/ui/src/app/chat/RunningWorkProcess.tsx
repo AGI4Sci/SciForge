@@ -25,6 +25,7 @@ import {
   type CursorAgentAction,
   type CursorAgentProcessGroup,
 } from './cursorAgentProcess';
+import { objectReferenceForCursorAction, objectReferenceForCursorRef } from './cursorProcessObjectReferences';
 import { chatText } from './chatI18n';
 
 export function RunningWorkProcess({
@@ -32,6 +33,7 @@ export function RunningWorkProcess({
   counts,
   guidanceCount,
   onObjectFocus,
+  onGuiCommand,
   locale,
 }: {
   events: AgentStreamEvent[];
@@ -40,6 +42,7 @@ export function RunningWorkProcess({
   backend: string;
   guidanceCount: number;
   onObjectFocus?: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
   const process = buildCursorAgentProcessModel(events, { mode: 'live', limit: 48, locale });
@@ -53,6 +56,7 @@ export function RunningWorkProcess({
         mode="live"
         limit={48}
         onObjectFocus={onObjectFocus}
+        onGuiCommand={onGuiCommand}
         locale={locale}
       />
     </div>
@@ -66,6 +70,7 @@ export function NativeEventStream({
   mode = 'recorded',
   limit = 18,
   onObjectFocus,
+  onGuiCommand,
   locale,
   sourceRunId,
 }: {
@@ -75,6 +80,7 @@ export function NativeEventStream({
   mode?: 'live' | 'recorded';
   limit?: number;
   onObjectFocus?: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
   sourceRunId?: string;
 }) {
@@ -82,6 +88,7 @@ export function NativeEventStream({
   const process = buildCursorAgentProcessModel(events, { mode, limit, locale, sourceRunId });
   if (!process.groups.length && !guidanceCount) return null;
   const moreActivityLabel = chatText(locale, { 'zh-CN': '更多活动', 'en-US': 'More activity' });
+  const hiddenAuditCount = Math.max(resolvedCounts.debug, process.hiddenAuditCount);
   return (
     <section
       className={cx('native-event-stream', mode === 'live' ? 'is-live' : 'is-recorded', 'cursor-agent-process')}
@@ -89,16 +96,29 @@ export function NativeEventStream({
     >
       <div className="native-event-list">
         {process.groups.map((group) => (
-          <CursorAgentProcessGroupView key={group.id} group={group} mode={mode} onObjectFocus={onObjectFocus} locale={locale} />
+          <CursorAgentProcessGroupView key={group.id} group={group} mode={mode} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} />
         ))}
       </div>
-      {(guidanceCount || process.hiddenActionCount || resolvedCounts.debug || process.hiddenAuditCount) ? (
-        <div className="native-event-audit-fold cursor-agent-muted-row" aria-label={moreActivityLabel}>
-          <span>{moreActivityLabel}</span>
-          {guidanceCount ? <small>{chatText(locale, { 'zh-CN': `${guidanceCount} 条已排队`, 'en-US': `${guidanceCount} queued` })}</small> : null}
-          {process.hiddenActionCount ? <small>{chatText(locale, { 'zh-CN': `${process.hiddenActionCount} 条较早动作`, 'en-US': `${process.hiddenActionCount} earlier` })}</small> : null}
-          {resolvedCounts.debug || process.hiddenAuditCount ? <small>{chatText(locale, { 'zh-CN': `${Math.max(resolvedCounts.debug, process.hiddenAuditCount)} 条支撑事件`, 'en-US': `${Math.max(resolvedCounts.debug, process.hiddenAuditCount)} supporting events` })}</small> : null}
-        </div>
+      {(guidanceCount || process.hiddenActionCount || hiddenAuditCount) ? (
+        <details
+          className="native-event-audit-fold cursor-agent-muted-row"
+          aria-label={moreActivityLabel}
+          data-guidance-count={guidanceCount}
+          data-hidden-action-count={process.hiddenActionCount}
+          data-hidden-audit-count={hiddenAuditCount}
+        >
+          <summary>
+            <span>{moreActivityLabel}</span>
+            {guidanceCount ? <small>{chatText(locale, { 'zh-CN': `${guidanceCount} 条已排队`, 'en-US': `${guidanceCount} queued` })}</small> : null}
+            {process.hiddenActionCount ? <small>{chatText(locale, { 'zh-CN': `${process.hiddenActionCount} 条较早动作`, 'en-US': `${process.hiddenActionCount} earlier` })}</small> : null}
+            {hiddenAuditCount ? <small>{chatText(locale, { 'zh-CN': `${hiddenAuditCount} 条支撑事件`, 'en-US': `${hiddenAuditCount} supporting events` })}</small> : null}
+          </summary>
+          <div className="native-event-audit-detail">
+            {guidanceCount ? <span>{chatText(locale, { 'zh-CN': `${guidanceCount} 条排队指令`, 'en-US': `${guidanceCount} queued guidance` })}</span> : null}
+            {process.hiddenActionCount ? <span>{chatText(locale, { 'zh-CN': `${process.hiddenActionCount} 条较早动作`, 'en-US': `${process.hiddenActionCount} earlier actions` })}</span> : null}
+            {hiddenAuditCount ? <span>{chatText(locale, { 'zh-CN': `${hiddenAuditCount} 条支撑事件`, 'en-US': `${hiddenAuditCount} supporting events` })}</span> : null}
+          </div>
+        </details>
       ) : null}
     </section>
   );
@@ -108,11 +128,13 @@ function CursorAgentProcessGroupView({
   group,
   mode,
   onObjectFocus,
+  onGuiCommand,
   locale,
 }: {
   group: CursorAgentProcessGroup;
   mode: 'live' | 'recorded';
   onObjectFocus?: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
   const usage = cursorGroupUsageLabel(group);
@@ -130,7 +152,7 @@ function CursorAgentProcessGroupView({
       </summary>
       <div className="native-event-expanded cursor-agent-actions">
         {group.actions.map((action) => (
-          <CursorAgentActionRow key={action.id} action={action} mode={mode} onObjectFocus={onObjectFocus} locale={locale} />
+          <CursorAgentActionRow key={action.id} action={action} mode={mode} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} />
         ))}
       </div>
     </details>
@@ -146,11 +168,13 @@ function CursorAgentActionRow({
   action,
   mode,
   onObjectFocus,
+  onGuiCommand,
   locale,
 }: {
   action: CursorAgentAction;
   mode: 'live' | 'recorded';
   onObjectFocus?: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
   const hasTranscript = action.kind === 'subagent' && Boolean(action.transcriptRef);
@@ -160,6 +184,7 @@ function CursorAgentActionRow({
   const hasTextOutput = shouldShowActionTextDetail(action);
   const hasDetail = action.kind !== 'folded' && Boolean(
     (hasTextOutput && (action.detail || action.outputSummary))
+    || action.commands.length
     || visibleRefs.length
     || action.diff
     || hasTranscript
@@ -167,9 +192,16 @@ function CursorAgentActionRow({
   );
   const focusReference = objectReferenceForCursorAction(action);
   const className = cx('native-event-row cursor-agent-action', `cursor-agent-action-${action.kind}`, `status-${action.status}`, mode === 'live' && action.status === 'running' && 'active', !hasDetail && 'is-leaf');
+  const actionAriaLabel = cursorActionAriaLabel(action, locale);
   if (!hasDetail) {
     return (
-      <div className={className}>
+      <div
+        className={className}
+        data-action-kind={action.kind}
+        data-action-status={action.status}
+        role="group"
+        aria-label={actionAriaLabel}
+      >
         <CursorAgentActionSummary action={action} mode={mode} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} asSummary={false} />
       </div>
     );
@@ -178,10 +210,13 @@ function CursorAgentActionRow({
     <details
       className={className}
       open={action.initiallyExpanded}
+      data-action-kind={action.kind}
+      data-action-status={action.status}
+      aria-label={actionAriaLabel}
     >
       <CursorAgentActionSummary action={action} mode={mode} focusReference={focusReference} onObjectFocus={onObjectFocus} locale={locale} />
       <div className="native-event-expanded">
-        <CursorAgentActionDetail action={action} resultRefs={resultRefs} visibleRefs={visibleRefs} onObjectFocus={onObjectFocus} locale={locale} />
+        <CursorAgentActionDetail action={action} resultRefs={resultRefs} visibleRefs={visibleRefs} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} />
       </div>
     </details>
   );
@@ -206,17 +241,24 @@ function CursorAgentActionSummary({
   const showStatus = mode === 'live'
     ? action.status !== 'unknown' && action.status !== 'completed' && action.status !== 'running'
     : action.status === 'failed' || action.status === 'blocked' || action.status === 'cancelled';
+  const kindLabel = cursorActionKindLabel(action, locale);
+  const summaryLabel = cursorActionAriaLabel(action, locale);
   return (
-    <SummaryTag className="cursor-agent-action-summary">
+    <SummaryTag
+      className="cursor-agent-action-summary"
+      data-action-kind={action.kind}
+      data-action-status={action.status}
+      aria-label={summaryLabel}
+    >
       <span className="native-event-chevron" aria-hidden="true"><ChevronRight size={12} /></span>
       <span className="native-event-dot" aria-hidden="true" />
       <CursorActionIcon action={action} />
-      <span className="native-event-kind" aria-label={cursorActionKindLabel(action, locale)} />
+      <span className="native-event-kind" aria-label={kindLabel}>{kindLabel}</span>
       {focusReference && onObjectFocus ? (
         <button
           type="button"
           className="native-event-title cursor-agent-action-focus"
-          data-sciforge-run-id={focusReference.runId}
+          data-sciforge-run-id={publicRunIdForDom(focusReference)}
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -229,9 +271,20 @@ function CursorAgentActionSummary({
         <span className="native-event-title">{action.title}</span>
       )}
       {showStatus ? <span className="native-event-usage">{cursorActionStatusLabel(action.status, locale)}</span> : null}
-      <time>{formatEventTime(action.createdAt)}</time>
+      <time dateTime={action.createdAt}>{formatEventTime(action.createdAt)}</time>
     </SummaryTag>
   );
+}
+
+function publicRunIdForDom(reference: ObjectReference) {
+  const raw = reference.runId?.trim();
+  if (!raw) return undefined;
+  if (isPrivateRunId(raw)) return undefined;
+  return raw.length > 96 ? `${raw.slice(0, 93)}...` : raw;
+}
+
+function isPrivateRunId(value: string) {
+  return /(?:codex-command|runtime-codex|stdout|stderr|trace|raw|\.sciforge|[\\/]|authorization|api[_-]?key|token|secret|password|credential)/i.test(value);
 }
 
 function CursorAgentActionDetail({
@@ -239,12 +292,14 @@ function CursorAgentActionDetail({
   resultRefs,
   visibleRefs,
   onObjectFocus,
+  onGuiCommand,
   locale,
 }: {
   action: CursorAgentAction;
   resultRefs: string[];
   visibleRefs: string[];
   onObjectFocus?: (reference: ObjectReference) => void;
+  onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
   if (action.kind === 'subagent') {
@@ -292,6 +347,11 @@ function CursorAgentActionDetail({
           {resultRefs.length ? <CursorAgentRefList refs={resultRefs} label={chatText(locale, { 'zh-CN': 'result', 'en-US': 'result' })} onObjectFocus={onObjectFocus} locale={locale} /> : null}
         </ActionDetailSection>
       ) : null}
+      {action.commands.length ? (
+        <ActionDetailSection title={chatText(locale, { 'zh-CN': '确认', 'en-US': 'Confirmation' })}>
+          <CursorAgentCommandChoices choices={action.commands} onCommand={onGuiCommand} />
+        </ActionDetailSection>
+      ) : null}
       {shouldShowActionTextDetail(action) && action.outputSummary ? (
         <ActionDetailSection title={chatText(locale, { 'zh-CN': '输出', 'en-US': 'Output' })}>
           <CursorAgentTextDetail action={action} text={action.outputSummary} />
@@ -316,12 +376,13 @@ function refsForResultDetail(action: CursorAgentAction) {
 }
 
 function refsForActionDetail(action: CursorAgentAction) {
-  const hiddenRefs = new Set([
-    action.kind === 'subagent' ? action.transcriptRef : undefined,
-    action.fileRef,
-    action.diffRef,
-    ...action.resultRefs,
-  ].filter((ref): ref is string => Boolean(ref)));
+  const hiddenRefs = new Set<string>();
+  if (action.kind === 'subagent' && action.transcriptRef) hiddenRefs.add(action.transcriptRef);
+  if (action.kind !== 'diff') {
+    if (action.fileRef) hiddenRefs.add(action.fileRef);
+    if (action.diffRef) hiddenRefs.add(action.diffRef);
+  }
+  for (const ref of action.resultRefs) hiddenRefs.add(ref);
   return hiddenRefs.size ? action.refs.filter((ref) => !hiddenRefs.has(ref)) : action.refs;
 }
 
@@ -347,6 +408,29 @@ function ActionDetailSection({ title, children }: { title: string; children: Rea
   );
 }
 
+function CursorAgentCommandChoices({
+  choices,
+  onCommand,
+}: {
+  choices: CursorAgentAction['commands'];
+  onCommand?: (commandText: string) => void;
+}) {
+  return (
+    <div className="cursor-agent-command-choices">
+      {choices.map((choice) => (
+        <button
+          type="button"
+          key={`${choice.label}-${choice.commandText}`}
+          className={cx('cursor-agent-command-choice', choice.style === 'danger' && 'danger', choice.style === 'primary' && 'primary')}
+          onClick={() => onCommand?.(choice.commandText)}
+        >
+          {choice.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function CursorActionIcon({ action }: { action: CursorAgentAction }) {
   const Icon = cursorActionIcon(action.kind);
   return (
@@ -366,6 +450,8 @@ function cursorActionIcon(kind: CursorAgentAction['kind']): LucideIcon {
   if (kind === 'approval') return ShieldQuestion;
   if (kind === 'subagent') return CircleDashed;
   if (kind === 'validate') return CircleCheck;
+  if (kind === 'verifier') return ShieldQuestion;
+  if (kind === 'repair') return Wrench;
   if (kind === 'artifact') return PackageCheck;
   if (kind === 'folded') return ChevronRight;
   return Wrench;
@@ -406,7 +492,15 @@ function CursorAgentRefItem({
     <div className="cursor-agent-ref">
       <span className="cursor-agent-ref-label">{label}</span>
       {reference && onObjectFocus ? (
-        <button type="button" className="cursor-agent-ref-button" onClick={() => onObjectFocus(reference)}>{displayLabel}</button>
+        <button
+          type="button"
+          className="cursor-agent-ref-button"
+          data-object-kind={reference.kind}
+          data-preferred-view={reference.preferredView}
+          onClick={() => onObjectFocus(reference)}
+        >
+          {displayLabel}
+        </button>
       ) : (
         <code>{displayLabel}</code>
       )}
@@ -418,46 +512,6 @@ function displayCursorRefLabel(refValue: string) {
   if (refValue.startsWith('file:')) return basename(refValue.slice('file:'.length));
   if (refValue.startsWith('artifact:')) return basename(refValue.slice('artifact:'.length));
   return basename(refValue.replace(/^[a-z-]+:{1,2}/i, '')) || refValue;
-}
-
-function objectReferenceForCursorAction(action: CursorAgentAction): ObjectReference | undefined {
-  if (!['read', 'file_edit', 'diff', 'write'].includes(action.kind)) return undefined;
-  const ref = action.fileRef ?? (action.kind === 'diff' ? action.diffRef : undefined);
-  if (!ref) return undefined;
-  const reference = objectReferenceForCursorRef(ref, action.filePath);
-  return reference && action.runId ? { ...reference, runId: action.runId } : reference;
-}
-
-function objectReferenceForCursorRef(ref: string, fallbackPath?: string): ObjectReference | undefined {
-  if (!ref.startsWith('file:') && !ref.startsWith('artifact:')) return undefined;
-  if (!isTrustedCursorObjectRef(ref)) return undefined;
-  const path = ref.startsWith('file:') ? ref.slice('file:'.length) : fallbackPath;
-  return {
-    id: `cursor-action-${safeObjectReferenceId(ref)}`,
-    title: basename(path ?? ref),
-    kind: ref.startsWith('artifact:') ? 'artifact' : 'file',
-    ref,
-    presentationRole: 'supporting-evidence',
-    status: 'available',
-    summary: 'Agent action preview',
-    provenance: path ? { path, producer: 'cursor-agent-process' } : { producer: 'cursor-agent-process' },
-  };
-}
-
-function isTrustedCursorObjectRef(ref: string) {
-  if (/\[local-path\]|\[redacted\]|\[url\]|https?:\/\//i.test(ref)) return false;
-  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(ref)) return false;
-  if (ref.startsWith('artifact:')) return ref.slice('artifact:'.length).trim().length > 0;
-  const filePath = ref.slice('file:'.length).replace(/\\/g, '/').trim();
-  if (!filePath || filePath.startsWith('/') || filePath.includes('://')) return false;
-  if (/[\r\n\t<>|?*:]/.test(filePath)) return false;
-  if (filePath.split('/').some((part) => part === '..')) return false;
-  if (/(?:^|\/)(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:\/|$)/i.test(filePath)) return false;
-  return true;
-}
-
-function safeObjectReferenceId(value: string) {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'preview';
 }
 
 function basename(path: string) {
@@ -476,18 +530,31 @@ function cursorActionKindLabel(action: CursorAgentAction, locale?: SupportedLoca
   if (action.kind === 'subagent') return chatText(locale, { 'zh-CN': '子代理', 'en-US': 'Sub agent' });
   if (action.kind === 'write') return chatText(locale, { 'zh-CN': '写入', 'en-US': 'Write' });
   if (action.kind === 'validate') return chatText(locale, { 'zh-CN': '检查', 'en-US': 'Check' });
+  if (action.kind === 'verifier') return chatText(locale, { 'zh-CN': '验证', 'en-US': 'Verification' });
+  if (action.kind === 'repair') return chatText(locale, { 'zh-CN': '修复', 'en-US': 'Repair' });
   if (action.kind === 'artifact') return chatText(locale, { 'zh-CN': 'Artifact', 'en-US': 'Artifact' });
+  if (action.kind === 'message') return chatText(locale, { 'zh-CN': '消息', 'en-US': 'Message' });
   if (action.kind === 'folded') return chatText(locale, { 'zh-CN': '已折叠', 'en-US': 'Folded' });
   return chatText(locale, { 'zh-CN': '动作', 'en-US': 'Action' });
 }
 
 function cursorActionStatusLabel(status: CursorAgentAction['status'], locale?: SupportedLocale) {
   if (status === 'running') return chatText(locale, { 'zh-CN': '运行中', 'en-US': 'running' });
-  if (status === 'completed') return chatText(locale, { 'zh-CN': '完成', 'en-US': 'done' });
+  if (status === 'completed') return chatText(locale, { 'zh-CN': '完成', 'en-US': 'completed' });
   if (status === 'blocked') return chatText(locale, { 'zh-CN': '被阻止', 'en-US': 'blocked' });
   if (status === 'failed') return chatText(locale, { 'zh-CN': '失败', 'en-US': 'failed' });
   if (status === 'cancelled') return chatText(locale, { 'zh-CN': '已取消', 'en-US': 'cancelled' });
   return '';
+}
+
+function cursorActionAriaLabel(action: CursorAgentAction, locale?: SupportedLocale) {
+  const kind = cursorActionKindLabel(action, locale);
+  const status = cursorActionStatusLabel(action.status, locale) || chatText(locale, { 'zh-CN': '未知', 'en-US': 'unknown' });
+  const title = action.title || action.summary || kind;
+  return chatText(locale, {
+    'zh-CN': `${kind}：${title}；状态：${status}`,
+    'en-US': `${kind}: ${title}; status: ${status}`,
+  });
 }
 
 export function visibleRunningWorkEntries(worklog: StreamWorklogPresentation, limit = 5): StreamWorklogEntry[] {

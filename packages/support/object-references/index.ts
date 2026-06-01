@@ -931,9 +931,11 @@ export function objectReferenceIcon(kind: ObjectReference['kind']) {
 export function availableObjectActions(reference: ObjectReference, session: Pick<ObjectReferenceSessionLike, 'artifacts'>): ObjectAction[] {
   const declared: ObjectAction[] = reference.actions?.length ? reference.actions : ['focus-right-pane', 'pin'];
   const path = pathForObjectReference(reference, session);
+  const hasUrlTarget = reference.kind === 'url' && Boolean(path && /^https?:\/\//i.test(path));
   const hasWorkspacePath = Boolean(path && !/^https?:\/\//i.test(path) && !/^agentserver:\/\//i.test(path) && !/^data:/i.test(path));
   return declared.filter((action) => {
-    if (action === 'open-external' || action === 'reveal-in-folder' || action === 'copy-path') return hasWorkspacePath;
+    if (action === 'open-external' || action === 'copy-path') return hasWorkspacePath || hasUrlTarget;
+    if (action === 'reveal-in-folder') return hasWorkspacePath;
     if (action === 'inspect') return reference.kind === 'artifact';
     return true;
   });

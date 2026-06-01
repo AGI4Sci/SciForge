@@ -24,7 +24,8 @@ import { runtimeInteractionProgressEventFromCompactRecord } from '@sciforge-ui/r
 import type { RuntimeInteractionProgressEvent } from '@sciforge-ui/runtime-contract';
 import type { AgentStreamEvent } from './domain';
 import { joinAssistantTextFragments } from './assistantText';
-import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary } from './runtimeAuditEvents';
+import { isRuntimeAuditOnlyEvent, runtimeAuditOnlyEventSummary, runtimeTextLooksAuditOnly } from './runtimeAuditEvents';
+import { sanitizeRuntimeDebugValue } from './runtimeDebugScrubber';
 import {
   classifyWorkEvent,
   emptyWorkEventCounts,
@@ -77,6 +78,73 @@ export interface StreamWorklogPresentation {
   operationCounts: Record<StreamWorklogOperationKind, number> & { total: number };
   counts: ReturnType<typeof streamEventCounts>;
   initiallyCollapsed: boolean;
+}
+
+export const DEFAULT_LIVE_STREAM_EVENT_LIMIT = 160;
+
+const LIVE_STREAM_DETAIL_LIMIT = 2_400;
+const LIVE_STREAM_TEXT_DELTA_LIMIT = 1_600;
+const LIVE_STREAM_RAW_STRING_LIMIT = 1_200;
+const LIVE_STREAM_RAW_ARRAY_LIMIT = 24;
+const LIVE_STREAM_RAW_KEY_LIMIT = 32;
+const LIVE_STREAM_TOTAL_JSON_LIMIT = 120_000;
+
+export function appendLiveStreamEvent(
+  events: AgentStreamEvent[],
+  next: AgentStreamEvent,
+  options: { limit?: number; totalJsonLimit?: number } = {},
+): AgentStreamEvent[] {
+  return boundLiveStreamEvents(
+    coalesceStreamEvents(events, sanitizeStreamEventForLiveState(next)),
+    options,
+  );
+}
+
+export function boundLiveStreamEvents(
+  events: AgentStreamEvent[],
+  options: { limit?: number; totalJsonLimit?: number } = {},
+): AgentStreamEvent[] {
+  const limit = options.limit ?? DEFAULT_LIVE_STREAM_EVENT_LIMIT;
+  const totalJsonLimit = options.totalJsonLimit ?? LIVE_STREAM_TOTAL_JSON_LIMIT;
+  let bounded = events
+    .slice(-limit)
+    .map(sanitizeStreamEventForLiveState);
+  while (bounded.length > 12 && serializedLength(bounded) > totalJsonLimit) {
+    bounded = bounded.slice(Math.max(1, Math.floor(bounded.length / 4)));
+  }
+  return bounded;
+}
+
+export function sanitizeStreamEventForLiveState(event: AgentStreamEvent): AgentStreamEvent {
+  return {
+    ...event,
+    label: sanitizeLiveText(event.label, 220) || event.type,
+    detail: sanitizeStreamEventDetail(event),
+    usage: event.usage ? {
+      input: event.usage.input,
+      output: event.usage.output,
+      total: event.usage.total,
+      cacheRead: event.usage.cacheRead,
+      cacheWrite: event.usage.cacheWrite,
+      source: sanitizeLiveText(event.usage.source, 80),
+    } : undefined,
+    contextWindowState: event.contextWindowState ? {
+      ...event.contextWindowState,
+      backend: sanitizeLiveText(event.contextWindowState.backend, 80),
+      provider: undefined,
+      model: undefined,
+      auditRefs: sanitizeLiveStringList(event.contextWindowState.auditRefs, 12),
+    } : undefined,
+    contextCompaction: event.contextCompaction ? {
+      ...event.contextCompaction,
+      backend: sanitizeLiveText(event.contextCompaction.backend, 80),
+      auditRefs: sanitizeLiveStringList(event.contextCompaction.auditRefs, 12),
+      message: sanitizeLiveText(event.contextCompaction.message, 500),
+      reason: sanitizeLiveText(event.contextCompaction.reason, 260),
+    } : undefined,
+    workEvidence: sanitizeLiveWorkEvidence(event.workEvidence),
+    raw: sanitizeLiveRawValue(event.raw),
+  };
 }
 
 export function presentStreamEvent(event: AgentStreamEvent, options: StreamEventPresentationOptions = {}): StreamEventPresentation {
@@ -218,7 +286,7 @@ export function formatAgentTokenUsage(usage: AgentStreamEvent['usage'] | undefin
 
 export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStreamEvent) {
   if (next.type !== TEXT_DELTA_EVENT_TYPE) return [...events, next];
-  const detail = normalizeStreamTextDelta(next.detail).trim();
+  const detail = truncateMiddle(normalizeStreamTextDelta(next.detail).trim(), LIVE_STREAM_TEXT_DELTA_LIMIT);
   if (!detail) return events;
   const last = events.at(-1);
   if (!last || last.type !== TEXT_DELTA_EVENT_TYPE) return [...events, { ...next, detail }];
@@ -240,6 +308,137 @@ export function coalesceStreamEvents(events: AgentStreamEvent[], next: AgentStre
       },
     },
   ];
+}
+
+function sanitizeStreamEventDetail(event: AgentStreamEvent) {
+  if (event.detail === undefined) return undefined;
+  if (event.type === TEXT_DELTA_EVENT_TYPE || event.type === OUTPUT_EVENT_TYPE || event.type === 'message_delta' || event.type === 'assistant_delta') {
+    const detail = normalizeStreamTextDelta(event.detail).trim();
+    if (runtimeTextLooksAuditOnly(detail) || looksLikeRawRuntimePayloadText(detail)) return runtimeAuditOnlyEventSummary(event);
+    return truncateMiddle(detail, LIVE_STREAM_TEXT_DELTA_LIMIT);
+  }
+  if (isRawRuntimeAuditEvent(event) || runtimeTextLooksAuditOnly(event.detail) || looksLikeRawRuntimePayloadText(event.detail)) {
+    return runtimeAuditOnlyEventSummary(event);
+  }
+  return sanitizeLiveText(event.detail, LIVE_STREAM_DETAIL_LIMIT);
+}
+
+function sanitizeLiveWorkEvidence(value: AgentStreamEvent['workEvidence']): AgentStreamEvent['workEvidence'] {
+  if (!Array.isArray(value)) return undefined;
+  const records = value
+    .slice(-LIVE_STREAM_RAW_ARRAY_LIMIT)
+    .map((record) => sanitizeLiveRawValue(record))
+    .filter(isRecord);
+  return records.length ? records : undefined;
+}
+
+function sanitizeLiveRawValue(value: unknown, depth = 0): unknown {
+  if (value === undefined || value === null) return value;
+  const sanitized = sanitizeRuntimeDebugValue(value);
+  return boundSanitizedRuntimeValue(sanitized, depth);
+}
+
+function boundSanitizedRuntimeValue(value: unknown, depth = 0): unknown {
+  if (value === undefined || value === null) return value;
+  if (typeof value === 'string') {
+    if (looksLikeRawRuntimePayloadText(value)) return textDigest('runtime-debug-sensitive-body', value);
+    return sanitizeLiveText(value, LIVE_STREAM_RAW_STRING_LIMIT);
+  }
+  if (typeof value !== 'object') return value;
+  if (Array.isArray(value)) {
+    const entries = value.slice(-LIVE_STREAM_RAW_ARRAY_LIMIT).map((entry) => boundSanitizedRuntimeValue(entry, depth + 1));
+    return value.length > LIVE_STREAM_RAW_ARRAY_LIMIT
+      ? [{ omitted: 'earlier-runtime-items', count: value.length - LIVE_STREAM_RAW_ARRAY_LIMIT }, ...entries]
+      : entries;
+  }
+  if (depth > 5) {
+    return {
+      omitted: 'runtime-debug-max-depth',
+      keys: Object.keys(value as Record<string, unknown>).slice(0, 16),
+    };
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>).slice(0, LIVE_STREAM_RAW_KEY_LIMIT)) {
+    const next = boundSanitizedRuntimeValue(entry, depth + 1);
+    if (next !== undefined) out[key] = next;
+  }
+  const omittedKeyCount = Object.keys(value as Record<string, unknown>).length - Object.keys(out).length;
+  if (omittedKeyCount > 0) out.__omittedKeyCount = omittedKeyCount;
+  return out;
+}
+
+function sanitizeLiveStringList(value: string[] | undefined, limit: number) {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value
+    .map((entry) => sanitizeLiveText(entry, 200))
+    .filter((entry): entry is string => Boolean(entry))
+    .slice(0, limit);
+  return entries.length ? entries : undefined;
+}
+
+function sanitizeLiveText(value: string | undefined, limit: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{6,}/gi, 'Bearer [redacted]')
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr|github_pat|sk|rk|pk|pat|token)[_-][A-Za-z0-9_-]{12,}\b/gi, '[redacted]')
+    .replace(
+      /\b(api[-_]?key|apiKey|access[-_]?token|auth[-_]?token|token|secret|password|credential|authorization)\b(\s*[:=]\s*["']?)([^"',\s);}\]]+)/gi,
+      (_match, label: string, separator: string) => `${label}${separator}[redacted]`,
+    )
+    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, '[redacted-url]')
+    .replace(/\/(?:Applications|Users|home|private|var|tmp|Volumes)\/[^\s"'<>\\)]+/gi, '[redacted-path]')
+    .replace(/\b[A-Za-z]:\\Users\\[^\s"'<>]+/gi, '[redacted-path]')
+    .replace(/\b[A-Za-z0-9+/]{240,}={0,2}\b/g, '[redacted-long-token]')
+    .replace(/\r\n/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{4,}/g, '\n\n\n')
+    .trim();
+  if (!text) return undefined;
+  return truncateMiddle(text, limit);
+}
+
+function looksLikeRawRuntimePayloadText(value: string | undefined) {
+  const text = value?.trim();
+  if (!text) return false;
+  return /<!doctype\s+html|<html\b|<body\b|<script\b|cf-ray|cloudflare/i.test(text)
+    || /\bRAW_[A-Z0-9_]+\b/.test(text)
+    || /\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef|raw_jsonl|provider_sse|providerRawOutput|rawOutput)\b/i.test(text)
+    || /\b(?:Invalid token|Unauthorized|Forbidden)\b/i.test(text)
+    || ((text.startsWith('{') || text.startsWith('[')) && /"?(?:raw|stdout|stderr|provider|payload|body|html|authorization|token|secret|password)"?\s*:/.test(text));
+}
+
+function textDigest(kind: string, value: string) {
+  return {
+    omitted: kind,
+    chars: value.length,
+    hash: stableTextHash(value),
+  };
+}
+
+function stableTextHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function truncateMiddle(value: string, limit: number) {
+  if (value.length <= limit) return value;
+  const headLength = Math.max(0, Math.floor(limit * 0.7));
+  const tailLength = Math.max(0, limit - headLength - 24);
+  const head = value.slice(0, headLength).replace(/\s+\S*$/, '');
+  const tail = value.slice(-tailLength);
+  return `${head}\n...\n${tail}`;
+}
+
+function serializedLength(value: unknown) {
+  try {
+    return JSON.stringify(value).length;
+  } catch {
+    return LIVE_STREAM_TOTAL_JSON_LIMIT + 1;
+  }
 }
 
 export function assistantDraftFromStreamEvents(events: AgentStreamEvent[]) {

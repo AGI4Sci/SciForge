@@ -1,3 +1,8 @@
+import type { ObjectReference } from '../../domain';
+import { sanitizeUserProjectionText } from '../conversation-projection-view-model';
+import { objectReferenceForCursorRef } from './cursorProcessObjectReferences';
+import { runtimeGuiChoicesFromEventPayload, type RuntimeGuiChoice } from './runtimeGuiCommands';
+
 export interface RuntimeGuiSurface {
   guiPresentation?: unknown;
   guiAskUser?: unknown;
@@ -16,11 +21,7 @@ interface NormalizedGuiAskUser {
   message?: string;
   risk?: string;
   relatedRefs: string[];
-  choices: Array<{
-    label: string;
-    commandText: string;
-    style?: string;
-  }>;
+  choices: RuntimeGuiChoice[];
 }
 
 export function hasRuntimeGuiSurface(surface: RuntimeGuiSurface | undefined) {
@@ -30,9 +31,11 @@ export function hasRuntimeGuiSurface(surface: RuntimeGuiSurface | undefined) {
 export function RuntimeGuiPanel({
   surface,
   onCommand,
+  onObjectFocus,
 }: {
   surface?: RuntimeGuiSurface;
   onCommand?: (commandText: string) => void;
+  onObjectFocus?: (reference: ObjectReference) => void;
 }) {
   const presentation = normalizeGuiPresentation(surface?.guiPresentation);
   const askUser = normalizeGuiAskUser(surface?.guiAskUser);
@@ -52,7 +55,7 @@ export function RuntimeGuiPanel({
             {presentation.status ? <small>{humanStatusLabel(presentation.status)}</small> : null}
           </div>
           {presentation.text ? <p>{humanGuiMessage(presentation.text)}</p> : null}
-          <RuntimeGuiRefList refs={uniqueStrings([presentation.ref, ...presentation.displayedRefs])} />
+          <RuntimeGuiRefList refs={uniqueStrings([presentation.ref, ...presentation.displayedRefs])} onObjectFocus={onObjectFocus} />
         </section>
       ) : null}
       {askUser ? (
@@ -68,7 +71,7 @@ export function RuntimeGuiPanel({
             {askUser.risk ? <small>{humanRiskLabel(askUser.risk)}</small> : null}
           </div>
           {askUser.message ? <p>{humanGuiMessage(askUser.message)}</p> : null}
-          <RuntimeGuiRefList refs={askUser.relatedRefs} />
+          <RuntimeGuiRefList refs={askUser.relatedRefs} onObjectFocus={onObjectFocus} />
           {askUser.choices.length ? (
             <div className="runtime-gui-choice-row">
               {askUser.choices.map((choice) => (
@@ -90,11 +93,40 @@ export function RuntimeGuiPanel({
   );
 }
 
-function RuntimeGuiRefList({ refs }: { refs: string[] }) {
-  const visibleRefs = uniqueStrings(refs).filter(isSafeUserFacingGuiRef).slice(0, 8);
+function RuntimeGuiRefList({ refs, onObjectFocus }: { refs: string[]; onObjectFocus?: (reference: ObjectReference) => void }) {
+  const visibleRefs = uniqueStrings(refs)
+    .map(runtimeGuiObjectReference)
+    .filter((entry): entry is RuntimeGuiObjectReference => Boolean(entry))
+    .slice(0, 8);
   if (!visibleRefs.length) return null;
   return (
-    <p className="runtime-gui-ref-list">{visibleRefs.length} related item{visibleRefs.length === 1 ? '' : 's'} available.</p>
+    <div className="runtime-gui-ref-list" aria-label="Related references">
+      {visibleRefs.map((entry) => (
+        <RuntimeGuiRefButton key={entry.reference.ref} entry={entry} onObjectFocus={onObjectFocus} />
+      ))}
+    </div>
+  );
+}
+
+interface RuntimeGuiObjectReference {
+  label: string;
+  reference: ObjectReference;
+}
+
+function RuntimeGuiRefButton({ entry, onObjectFocus }: { entry: RuntimeGuiObjectReference; onObjectFocus?: (reference: ObjectReference) => void }) {
+  const { label, reference } = entry;
+  return reference && onObjectFocus ? (
+    <button
+      type="button"
+      className="runtime-gui-ref-button"
+      data-object-kind={reference.kind}
+      data-preferred-view={reference.preferredView}
+      onClick={() => onObjectFocus(reference)}
+    >
+      {label}
+    </button>
+  ) : (
+    <span className="runtime-gui-ref-chip">{label}</span>
   );
 }
 
@@ -102,10 +134,10 @@ function normalizeGuiPresentation(value: unknown): NormalizedGuiPresentation | u
   if (!isRecord(value)) return undefined;
   const displayedRefs = stringList(value.displayedRefs);
   const ref = stringField(value.ref);
-  const text = stringField(value.text);
+  const text = sanitizeRuntimeGuiText(stringField(value.text));
   if (!ref && !displayedRefs.length && !text) return undefined;
   return {
-    title: stringField(value.title),
+    title: sanitizeRuntimeGuiText(stringField(value.title)),
     text,
     ref,
     status: stringField(value.status),
@@ -116,19 +148,14 @@ function normalizeGuiPresentation(value: unknown): NormalizedGuiPresentation | u
 function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
   if (!isRecord(value)) return undefined;
   const approvalRequest = isRecord(value.approvalRequest) ? value.approvalRequest : {};
-  const choices = recordList(value.choices).flatMap((choice) => {
-    const label = stringField(choice.label);
-    const commandText = stringField(choice.commandText);
-    if (!label || !commandText || !isTerminalEquivalentCommandText(commandText)) return [];
-    return [{ label, commandText, style: stringField(choice.style) }];
-  });
-  const title = stringField(value.title) ?? stringField(approvalRequest.title) ?? 'Confirm before continuing';
-  const message = stringField(value.message)
+  const choices = runtimeGuiChoicesFromEventPayload(value);
+  const title = sanitizeRuntimeGuiText(stringField(value.title) ?? stringField(approvalRequest.title)) ?? 'Confirm before continuing';
+  const message = sanitizeRuntimeGuiText(stringField(value.message)
     ?? stringField(approvalRequest.prompt)
     ?? stringField(approvalRequest.message)
     ?? stringField(approvalRequest.confirmationText)
     ?? stringField(approvalRequest.confirmation_text)
-    ?? stringField(approvalRequest.reason);
+    ?? stringField(approvalRequest.reason));
   const relatedRefs = uniqueStrings([
     ...stringList(value.relatedRefs),
     ...stringList(value.displayedRefs),
@@ -148,10 +175,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function recordList(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value) ? value.filter(isRecord) : [];
-}
-
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
@@ -169,6 +192,35 @@ function uniqueStrings(values: Array<string | undefined>) {
 function compactText(value: string, limit: number) {
   const text = value.replace(/\s+/g, ' ').trim();
   return text.length > limit ? `${text.slice(0, limit - 1).trim()}...` : text;
+}
+
+export function sanitizeRuntimeGuiText(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || looksLikeRuntimeGuiRawPayload(trimmed)) return undefined;
+  const sanitized = (sanitizeUserProjectionText(trimmed) ?? trimmed)
+    .replace(/\b(?:raw\s+JSONL?|JSONL|ToolPayload|provider\s+payload|debug\s+payload)\b/gi, 'debug details')
+    .replace(/\b(?:stdoutRef|stderrRef|rawRef|runtimeEventsRef)\b\s*[:=]\s*["']?[^"'\s,;)]+/gi, 'execution log reference')
+    .replace(/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b\s*[:=]\s*["']?[^"'\s,;)]+/gi, 'credential=[redacted]')
+    .replace(/\bsk-[A-Za-z0-9._-]+/g, '[redacted-secret]')
+    .replace(/\bhttps?:\/\/[^\s`"'<>),;]+/gi, '[redacted-url]')
+    .replace(/(^|[\s="'(:])\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s`"'<>),;]+/g, '$1[local path]')
+    .replace(/(^|[\s="'(:])\.sciforge\/[^\s`"'<>),;]+/gi, '$1[internal log]')
+    .replace(/\b(?:stdout|stderr)\s*=\s*["']?[^"'\s,;)]+/gi, 'execution log=[redacted]')
+    .replace(/\bprovider\s*=\s*["']?[^"'\s,;)]+/gi, 'service=[redacted]')
+    .replace(/\bmodel\s*=\s*["']?[^"'\s,;)]+/gi, 'runtime=[redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!sanitized || looksLikeRuntimeGuiRawPayload(sanitized)) return undefined;
+  return sanitized;
+}
+
+function looksLikeRuntimeGuiRawPayload(value: string) {
+  const text = value.trim();
+  if (/^\s*[\[{]/.test(text)) {
+    return /"?(?:provider|model|stdout|stderr|raw|payload|apiKey|token|secret|path|commandText|approvalRequest|displayedRefs)"?\s*:/.test(text);
+  }
+  return /^(?:provider|stdout|stderr|raw|debug|payload|ToolPayload)\b\s*[:=]/i.test(text) && text.length > 80;
 }
 
 function humanGuiTitle(value: string | undefined) {
@@ -209,14 +261,16 @@ function humanRiskLabel(value: string) {
   return compactText(value, 40);
 }
 
-function isTerminalEquivalentCommandText(commandText: string) {
-  return commandText.length > 0
-    && !/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(commandText);
+function runtimeGuiObjectReference(ref: string): RuntimeGuiObjectReference | undefined {
+  const normalized = normalizeRuntimeGuiRef(ref);
+  const reference = normalized ? objectReferenceForCursorRef(normalized) : undefined;
+  return reference ? { label: displayRuntimeGuiRefLabel(normalized), reference } : undefined;
 }
 
-function isSafeUserFacingGuiRef(ref: string) {
-  return /^(?:artifact|file)::?/i.test(ref)
-    && !/(?:^|[:/])(?:audit|raw|logs?|trace|stdout|stderr|codex-command|provider)\b/i.test(ref)
-    && !/^\s*file:(?:\/|~|[A-Za-z]:|\.{2})/.test(ref)
-    && !/^\s*file:\.sciforge\/(?:raw|logs?|audit)\b/i.test(ref);
+function normalizeRuntimeGuiRef(ref: string) {
+  return ref.trim().replace(/^([a-z][a-z0-9+.-]*)::/i, '$1:');
+}
+
+function displayRuntimeGuiRefLabel(ref: string) {
+  return ref.replace(/^[a-z]+:{1,2}/i, '').replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? ref;
 }

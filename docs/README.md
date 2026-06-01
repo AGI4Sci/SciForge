@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-05-29
+最后更新：2026-06-01
 
 当前架构重构的核心结论：
 
@@ -18,6 +18,8 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务必须走 Codex ap
 | [`SemanticModuleEngineering.md`](SemanticModuleEngineering.md) | **软件工程范式设计** | 统一模块函数、Root Agent Host、L1 Module Host、resource graph、UI/memory/skills/tools/project 的关系，以及跨开源项目资源组合原则。 |
 | [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 通过 `module.query/read/invoke(moduleId='gui')` 读取 GUI resource tree 并表达展示/确认意图；迁移期 `gui.*` adapter shim、annotation feedback envelopes、展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
 | [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md) | **内置浏览器运行时设计** | Codex-like browser session、tab、action、snapshot、trace、安全确认和 GUI presentation surface 边界。 |
+| [`runbooks/browser-pane-dogfood-runbook.md`](runbooks/browser-pane-dogfood-runbook.md) | Browser pane dogfood runbook | 右侧 Browser pane 连续冲浪验收流程、bounded evidence 字段、latency/transport/surface/ref 模板和瓶颈分类。 |
+| [`VirtualAppScreenArchitecture.md`](VirtualAppScreenArchitecture.md) | **虚拟屏幕 / App Surface 设计** | VirtualAppScreen、VirtualDisplayProvider、跨平台虚拟显示 backend、WebRTC transport、app surface、输入隔离和用户级验收 evidence 的后续实现指导。 |
 | [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |
 | [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Codex app-server 为默认生产 runtime；`CodexExecJsonAdapter`/`codex exec --json` 仅 legacy/test-only，`ClaudeStreamJsonAdapter` 作为可选 backend；统一归一化为内部事件、module pipeline trace 和 backend presentation profile。 |
 | [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
@@ -57,5 +59,8 @@ GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务必须走 Codex ap
 10. **注释侧栏是连续反馈入口。**
    `AnnotationSidebar` 可以跨工作台和非工作台引用对象；它负责澄清、预览、保存反馈，也可以在低风险条件下触发小改动。复杂改动、GitHub、repair、commit/push/PR/merge 必须进入收件箱确认和审计。
 
-11. **浏览器验收必须覆盖两类页面。**
+11. **浏览器和虚拟屏幕只有一个交互真相源。**
+   Browser pane 必须展示 `BrowserHostSession` 拥有的 native/streaming live surface；桌面 shell 使用同一 session 的 native embedded surface adapter，Web shell 才使用同一 owner 的 frame-stream pixels。Screen pane 必须展示 Computer Use `VirtualAppScreen` 拥有的 app/window/session live surface。frame-stream、WebRTC 或 canvas stream 只是同一个 owner surface 的 transport，`/frame` route 只作 evidence/manual inspection。iframe、proxy、截图、PDF、document、replay、旧 frame 和系统 popup 只能是 evidence/artifact 或显式 handoff，不得作为第二个可交互画面、验收真相源或替代交互路径；live surface attach 失败时必须 blocked / handoff / retry diagnostics。
+
+12. **浏览器验收必须覆盖两类页面。**
    注释、反馈收件箱和 repair UI 的用户级验收必须使用 Codex in-app browser，并同时覆盖工作台页面和至少一个非工作台页面。

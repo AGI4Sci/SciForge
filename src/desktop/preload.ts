@@ -18,6 +18,9 @@ export type SciForgeDesktopPreloadApi = {
   nativeBrowserReload(): Promise<unknown>;
   getNativeBrowserState(): Promise<unknown>;
   captureNativeBrowserScreenshot(): Promise<unknown>;
+  attachBrowserHostSessionSurface(input: unknown): Promise<unknown>;
+  detachBrowserHostSessionSurface(input: unknown): Promise<unknown>;
+  getBrowserHostSessionSurfaceState(input: unknown): Promise<unknown>;
   revealPath(path: string): Promise<unknown>;
   pickDirectory(defaultPath?: string): Promise<{ ok: boolean; path?: string }>;
 };
@@ -37,6 +40,9 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     nativeBrowserReload: () => ipcRenderer.invoke('desktop:native-browser:reload'),
     getNativeBrowserState: () => ipcRenderer.invoke('desktop:native-browser:state'),
     captureNativeBrowserScreenshot: () => ipcRenderer.invoke('desktop:native-browser:screenshot'),
+    attachBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:attach', input),
+    detachBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:detach', input),
+    getBrowserHostSessionSurfaceState: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:state', input),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
     pickDirectory: async (defaultPath?: string) => normalizePickDirectoryResult(
       await ipcRenderer.invoke('platform:pick-directory', defaultPath),

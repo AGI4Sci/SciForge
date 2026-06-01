@@ -302,6 +302,12 @@ export function defaultMacBundleIdForAppName(appName: string | undefined) {
   if (normalized === 'google chrome' || normalized === 'chrome') return 'com.google.Chrome';
   if (normalized === 'firefox') return 'org.mozilla.firefox';
   if (normalized === 'microsoft edge' || normalized === 'edge') return 'com.microsoft.edgemac';
+  if (
+    normalized === 'visual studio code'
+    || normalized === 'vs code'
+    || normalized === 'vscode'
+    || normalized === 'code'
+  ) return 'com.microsoft.VSCode';
   if (normalized === 'preview' || normalized === '\u9884\u89c8') return 'com.apple.Preview';
   if (normalized === 'textedit' || normalized === 'text edit' || normalized === '\u6587\u672c\u7f16\u8f91') return 'com.apple.TextEdit';
   return undefined;

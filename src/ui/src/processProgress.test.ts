@@ -267,7 +267,8 @@ test('maps structured interaction contract events into process progress without 
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.OBSERVE);
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.RUNNING);
   assert.equal(model?.waitingFor, 'approval');
-  assert.match(model?.detail ?? '', /Interaction: human-approval required/);
+  assert.match(model?.detail ?? '', /Waiting for approval before continuing/);
+  assert.doesNotMatch(model?.detail ?? '', /Phase:|Status:|Interaction:/);
   assert.doesNotMatch(normalized.detail ?? '', /PROMPT_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(normalized.detail ?? '', /SCENARIO_TEXT_SHOULD_NOT_DECIDE/);
   assert.doesNotMatch(normalized.detail ?? '', /NATURAL_LANGUAGE_FALLBACK_SHOULD_NOT_DECIDE/);
@@ -288,7 +289,8 @@ test('maps structured run cancellation into process progress cancellation status
   assert.equal(model?.title, 'Run cancelled');
   assert.equal(model?.status, PROCESS_PROGRESS_STATUS.CANCELLED);
   assert.equal(model?.nextStep, 'The run ended; the structured termination reason is saved for the next turn.');
-  assert.match(model?.detail ?? '', /Cancellation: system-aborted/);
+  assert.match(model?.detail ?? '', /The run was cancelled/);
+  assert.doesNotMatch(model?.detail ?? '', /Cancellation:|system-aborted/);
 });
 
 test('restores compact interaction progress streamProcess events without prompt or scenario semantics', () => {

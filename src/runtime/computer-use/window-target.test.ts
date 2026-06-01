@@ -13,6 +13,9 @@ test('window target parsing binds localized Finder by stable bundle id', () => {
   assert.equal(defaultMacBundleIdForAppName('Browser'), 'com.apple.Safari');
   assert.equal(defaultMacBundleIdForAppName('browser'), 'com.apple.Safari');
   assert.equal(defaultMacBundleIdForAppName('\u6d4f\u89c8\u5668'), 'com.apple.Safari');
+  assert.equal(defaultMacBundleIdForAppName('Visual Studio Code'), 'com.microsoft.VSCode');
+  assert.equal(defaultMacBundleIdForAppName('VS Code'), 'com.microsoft.VSCode');
+  assert.equal(defaultMacBundleIdForAppName('Code'), 'com.microsoft.VSCode');
 
   const finderTarget = parseWindowTarget({ windowTarget: { appName: 'Finder' } }, {});
   assert.equal(finderTarget.mode, 'app-window');
@@ -76,6 +79,17 @@ test('open_app alias resolution prefers the resolved app bundle over the generic
       process.env.SCIFORGE_VISION_APP_ALIASES_JSON = previousAliases;
     }
   }
+});
+
+test('open_app resolves VSCode aliases to the stable Code bundle id', () => {
+  assert.deepEqual(resolveMacOpenAppTarget('Visual Studio Code'), {
+    appName: 'Visual Studio Code',
+    bundleId: 'com.microsoft.VSCode',
+  });
+  assert.deepEqual(resolveMacOpenAppTarget('Code'), {
+    appName: 'Code',
+    bundleId: 'com.microsoft.VSCode',
+  });
 });
 
 test('prompt app rebind preserves stable Finder target identity', () => {

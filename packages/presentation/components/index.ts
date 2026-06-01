@@ -68,13 +68,19 @@ export type {
   TerminalSessionPayload,
   TerminalSessionStatus,
 } from './terminal-session-viewer/render';
-export { renderVirtualScreenViewer } from './virtual-screen-viewer/render';
+export {
+  buildVirtualScreenInputIntentCommand,
+  renderVirtualScreenViewer,
+} from './virtual-screen-viewer/render';
 export type {
   VirtualScreenCursor,
   VirtualScreenEvent,
   VirtualScreenFrame,
+  VirtualScreenInputIntentCommand,
+  VirtualScreenInputIntentKind,
   VirtualScreenLeaseOwner,
   VirtualScreenPayload,
+  VirtualScreenPointerButton,
 } from './virtual-screen-viewer/render';
 export {
   WORKSPACE_FILE_VIEWER_DEFAULT_INLINE_TEXT_LIMIT_BYTES,
@@ -86,9 +92,11 @@ export {
   workspaceFileViewerParentPath,
   type WorkspaceFileViewerEntry,
   type WorkspaceFileViewerFile,
+  type WorkspaceFileViewerOpenFileTab,
   type WorkspaceFileViewerFolderContinuation,
   type WorkspaceFileViewerFolderContinuationRequest,
   type WorkspaceFileViewerProps,
+  type WorkspaceFileViewerViewMode,
 } from './workspace-file-viewer/render';
 
 export { interactiveViewManifests, uiComponentManifests } from './manifest-registry';

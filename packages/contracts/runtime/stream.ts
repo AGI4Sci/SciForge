@@ -1,6 +1,16 @@
 export type AgentContextWindowSource = 'native' | 'provider-usage' | 'agentserver-estimate' | 'agentserver' | 'estimate' | 'unknown';
 export type AgentCompactCapability = 'native' | 'agentserver' | 'handoff-only' | 'handoff-slimming' | 'session-rotate' | 'none' | 'unknown';
 
+export interface AgentContextWindowBreakdown {
+  systemPrompt?: number;
+  toolDefinitions?: number;
+  rules?: number;
+  skills?: number;
+  mcp?: number;
+  subagentDefinitions?: number;
+  conversation?: number;
+}
+
 export interface AgentContextWindowState {
   backend?: string;
   provider?: string;
@@ -15,6 +25,7 @@ export interface AgentContextWindowState {
   source: AgentContextWindowSource;
   status?: 'healthy' | 'watch' | 'near-limit' | 'exceeded' | 'compacting' | 'blocked' | 'unknown';
   compactCapability?: AgentCompactCapability;
+  breakdown?: AgentContextWindowBreakdown;
   budget?: {
     rawRef?: string;
     rawSha1?: string;

@@ -32,8 +32,19 @@ type PackageRecord = {
 };
 
 const packageRoot = 'packages';
+const ignoredDirs = new Set([
+  '.codex-runtime',
+  '.sciforge',
+  '.tmp',
+  'node_modules',
+  'dist',
+  'dist-ui',
+  'build',
+  'coverage',
+]);
 const allowedLifecycleLayers = new Set([
   'contracts',
+  'connectors',
   'reasoning',
   'skills',
   'observe',
@@ -119,6 +130,7 @@ async function discoverPackageJson(root: string): Promise<string[]> {
   for (const entry of entries) {
     const path = `${root}/${entry.name}`;
     if (entry.isDirectory()) {
+      if (ignoredDirs.has(entry.name)) continue;
       files.push(...await discoverPackageJson(path));
       continue;
     }

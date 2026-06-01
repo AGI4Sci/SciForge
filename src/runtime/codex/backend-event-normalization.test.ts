@@ -105,6 +105,34 @@ test('normalizes Codex app-server delta, tool, approval, and done events into ne
   assert.match(serialized, /\[redacted-url:sha256:/);
 });
 
+test('normalizes backend assistant deltas without trimming markdown whitespace', () => {
+  const normalized = normalizeBackendEvents([
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '## 多轮 Markdown 验收' },
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '\n\n这是一段中文与 English 混排的段落。' },
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '\n\n- 一级要点' },
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '\n  - 二级要点' },
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '\n\n| 项目 | 状态 |\n| --- | --- |' },
+    { type: 'response.output_text.delta', thread_id: 'thread-md', turn_id: 'turn-md', item_id: 'message-md', delta: '\n\n```ts\nconst ok = true;\n```' },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), [
+    'message_delta',
+    'message_delta',
+    'message_delta',
+    'message_delta',
+    'message_delta',
+    'message_delta',
+  ]);
+  assert.deepEqual(normalized.events.map((event) => event.text), [
+    '## 多轮 Markdown 验收',
+    '\n\n这是一段中文与 English 混排的段落。',
+    '\n\n- 一级要点',
+    '\n  - 二级要点',
+    '\n\n| 项目 | 状态 |\n| --- | --- |',
+    '\n\n```ts\nconst ok = true;\n```',
+  ]);
+});
+
 test('normalizes Claude partial messages and control request/response events', () => {
   const normalized = normalizeBackendEvents([
     {

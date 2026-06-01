@@ -4,6 +4,8 @@ import type { StreamWorklogEntry } from '../../streamEventPresentation';
 import { progressModelFromEvent } from '../../processProgress';
 import type { SupportedLocale } from '../../i18n';
 import { chatCount, chatText } from './chatI18n';
+import { semanticCursorActionKind } from './cursorProcessActionSemantics';
+import { runtimeGuiChoicesFromEventPayload, type RuntimeGuiChoice } from './runtimeGuiCommands';
 
 export type CursorAgentActionKind =
   | 'read'
@@ -18,6 +20,8 @@ export type CursorAgentActionKind =
   | 'write'
   | 'validate'
   | 'artifact'
+  | 'verifier'
+  | 'repair'
   | 'message'
   | 'folded'
   | 'other';
@@ -47,6 +51,7 @@ export interface CursorAgentAction {
   parentAgentId?: string;
   resultSummary?: string;
   resultRefs: string[];
+  commands: RuntimeGuiChoice[];
   foldedGroupKind?: CursorAgentGroupKind;
   foldedActionCount?: number;
   runId?: string;
@@ -205,7 +210,7 @@ function compactCursorEntries(entries: StreamWorklogEntry[]) {
 function keepCursorTimelineAnchors(entries: StreamWorklogEntry[], limit: number) {
   if (entries.length <= limit) return entries;
   const selected = new Set<number>();
-  const anchorKinds = new Set<CursorAgentActionKind>(['search', 'fetch', 'read', 'file_edit', 'write', 'artifact', 'approval', 'subagent']);
+  const anchorKinds = new Set<CursorAgentActionKind>(['search', 'fetch', 'read', 'file_edit', 'write', 'artifact', 'approval', 'verifier', 'repair', 'subagent']);
   selected.add(0);
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
@@ -259,6 +264,7 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
   const resultSummary = actionKind === 'subagent'
     ? cleanSubagentActionSummary(rawResultSummary)
     : cleanCursorActionSummary(rawResultSummary);
+  const commands = actionKind === 'approval' ? runtimeGuiChoicesFromEventPayload(event.raw) : [];
   const resultRefs = resultRefsForEvent(event);
   const itemId = sanitizeCursorIdentifier(nativeString(event, 'itemId') ?? nativeString(event, 'item_id'));
   const traceStepId = sanitizeCursorIdentifier(nativeString(event, 'traceStepId') ?? nativeString(event, 'trace_step_id'));
@@ -317,12 +323,13 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
     parentAgentId,
     resultSummary,
     resultRefs,
+    commands,
     runId,
     itemId,
     traceStepId,
     refs,
     createdAt: event.createdAt,
-    initiallyExpanded: mode === 'live' && (status === 'running' || actionKind === 'approval'),
+    initiallyExpanded: mode === 'live' && (status === 'running' || status === 'blocked' || actionKind === 'approval'),
   };
 }
 
@@ -413,11 +420,12 @@ function foldedCursorActionPlaceholder(actions: CursorAgentAction[], createdAt: 
   return {
     id: `folded-${groupKind}-${createdAt}-${count}`,
     kind: 'folded',
-    status: 'unknown',
+    status: groupStatus(actions),
     title,
     summary: title,
     detail: '',
     resultRefs: [],
+    commands: [],
     foldedGroupKind: groupKind,
     foldedActionCount: count,
     refs: [],
@@ -476,6 +484,7 @@ function mergeCursorActionLifecycle(previous: CursorAgentAction, next: CursorAge
     parentAgentId: next.parentAgentId ?? previous.parentAgentId,
     resultSummary: next.resultSummary ?? previous.resultSummary,
     resultRefs,
+    commands: next.commands.length ? next.commands : previous.commands,
     itemId: next.itemId ?? previous.itemId,
     traceStepId: next.traceStepId ?? previous.traceStepId,
     refs,
@@ -520,11 +529,23 @@ function actionKindForEntry(
   const nativeDiff = nativeString(entry.event, 'diff') ?? nativeString(entry.event, 'patch');
   const text = `${toolName ?? ''}\n${command ?? ''}\n${nativeDiff ?? ''}\n${cursorEntryText(entry)}\n${entry.operationLine}`.toLowerCase();
   if (/^process_summary$/i.test(toolName ?? '')) return 'thought';
+  const semanticKind = semanticCursorActionKind({
+    type,
+    toolName,
+    operationKind: nativeString(entry.event, 'operationKind') ?? nativeString(entry.event, 'operation_kind') ?? entry.operationKind,
+    status: nativeString(entry.event, 'status'),
+    text,
+    hasApprovalChoices: runtimeGuiChoicesFromEventPayload(entry.event.raw).length > 0,
+  });
+  if (semanticKind) return semanticKind;
   if (/^approval$/i.test(toolName ?? '')) return 'approval';
   if (type === 'approval_requested' || type === 'human-approval-required' || type === 'gui_ask_user' || type === 'control_request') return 'approval';
   if (isToolLifecycleEntry(entry, type) && /\b(?:multi_agent_v1\.spawn_agent|spawn_agent|subagent|sub-agent|sub agent)\b/.test(text)) return 'subagent';
   const commandIntent = commandIntentForCursorCommand(command);
   if (commandIntent) return commandIntent;
+  const explicitOperationKind = explicitCursorActionKind(entry);
+  if (explicitOperationKind) return explicitOperationKind;
+  if (/^(?:fetch|web_fetch|http_fetch|browser_fetch|url_fetch|get_url)$/i.test(toolName ?? '')) return 'fetch';
   if (/^(?:read_file|file_read|open_file|read|cat)$/i.test(toolName ?? '')) return 'read';
   if (/^(?:search|grep|rg|ripgrep|glob|find)$/i.test(toolName ?? '')) return 'search';
   if (/\b(?:apply_patch|write_file|edit_file|create_file|delete_file|move_file|file_write)\b|(?:\*\*\* (?:update|add|delete) file:)|\b(?:edited|created|modified|patched)\s+[\w./-]+/i.test(text)) return 'file_edit';
@@ -543,6 +564,29 @@ function actionKindForEntry(
   if (entry.operationKind === 'analyze' || entry.operationKind === 'plan') return 'thought';
   if (entry.operationKind === 'message') return 'message';
   return 'other';
+}
+
+function explicitCursorActionKind(entry: StreamWorklogEntry): CursorAgentActionKind | undefined {
+  const rawKind = nativeString(entry.event, 'operationKind') ?? nativeString(entry.event, 'operation_kind');
+  const kind = rawKind?.trim().toLowerCase().replace(/[-\s]+/g, '_');
+  if (!kind) return undefined;
+  if (kind === 'command' || kind === 'execute' || kind === 'shell') return 'shell_command';
+  if (kind === 'edit' || kind === 'file_write') return 'file_edit';
+  if (kind === 'emit' || kind === 'output') return 'artifact';
+  if (kind === 'analyze' || kind === 'plan') return 'thought';
+  if (kind === 'read') return 'read';
+  if (kind === 'search') return 'search';
+  if (kind === 'fetch') return 'fetch';
+  if (kind === 'diff') return 'diff';
+  if (kind === 'thought') return 'thought';
+  if (kind === 'approval') return 'approval';
+  if (kind === 'subagent' || kind === 'sub_agent') return 'subagent';
+  if (kind === 'write') return 'write';
+  if (kind === 'validate') return 'validate';
+  if (kind === 'artifact') return 'artifact';
+  if (kind === 'message') return 'message';
+  if (kind === 'other') return 'other';
+  return undefined;
 }
 
 function isToolLifecycleEntry(entry: StreamWorklogEntry, type: string) {
@@ -593,6 +637,8 @@ function actionTitle(
       : chatText(locale, { 'zh-CN': `短暂思考${suffix}`, 'en-US': `Thought for a moment${suffix}` });
   }
   if (kind === 'approval') return `${chatText(locale, { 'zh-CN': '确认', 'en-US': 'Approval' })} ${target}${suffix}`;
+  if (kind === 'verifier') return `${chatText(locale, { 'zh-CN': '验证', 'en-US': 'Verification' })} ${target}${suffix}`;
+  if (kind === 'repair') return `${chatText(locale, { 'zh-CN': '修复', 'en-US': 'Repair' })} ${target}${suffix}`;
   if (kind === 'subagent') {
     const base = chatText(locale, { 'zh-CN': '子代理', 'en-US': 'Sub agent' });
     const generic = chatText(locale, { 'zh-CN': '子代理', 'en-US': 'sub agent' });
@@ -615,6 +661,8 @@ function runningActionTitle(kind: CursorAgentActionKind, target: string, locale?
     ? chatText(locale, { 'zh-CN': `正在思考 ${target}`, 'en-US': `Thinking about ${target}` })
     : chatText(locale, { 'zh-CN': '正在思考', 'en-US': 'Thinking' });
   if (kind === 'approval') return `${chatText(locale, { 'zh-CN': '等待确认', 'en-US': 'Waiting for approval' })} ${target}`;
+  if (kind === 'verifier') return `${chatText(locale, { 'zh-CN': '正在验证', 'en-US': 'Verifying' })} ${target}`;
+  if (kind === 'repair') return `${chatText(locale, { 'zh-CN': '正在修复', 'en-US': 'Repairing' })} ${target}`;
   if (kind === 'subagent') return `${chatText(locale, { 'zh-CN': '正在运行子代理', 'en-US': 'Running sub agent' })}${target ? ` ${target}` : ''}`;
   if (kind === 'write') return `${chatText(locale, { 'zh-CN': '正在写入', 'en-US': 'Writing' })} ${target}`;
   if (kind === 'validate') return `${chatText(locale, { 'zh-CN': '正在检查', 'en-US': 'Checking' })} ${target}`;
@@ -899,6 +947,8 @@ function actionSummary(actions: CursorAgentAction[], locale?: SupportedLocale) {
     countPhrase(actions, 'file_edit', { zh: '次编辑', enSingular: 'edit', enPlural: 'edits' }, locale),
     countPhrase(actions, 'diff', { zh: '个 diff', enSingular: 'diff', enPlural: 'diffs' }, locale),
     countPhrase(actions, 'approval', { zh: '次确认', enSingular: 'approval', enPlural: 'approvals' }, locale),
+    countPhrase(actions, 'verifier', { zh: '次验证', enSingular: 'verification', enPlural: 'verifications' }, locale),
+    countPhrase(actions, 'repair', { zh: '次修复', enSingular: 'repair', enPlural: 'repairs' }, locale),
     countPhrase(actions, 'subagent', { zh: '个子代理', enSingular: 'sub agent', enPlural: 'sub agents' }, locale),
   ].filter(Boolean);
   return parts.length ? parts.join(chatText(locale, { 'zh-CN': '、', 'en-US': ', ' })) : chatCount(locale, actions.length, {
@@ -955,7 +1005,7 @@ function actionStatus(
   const failedByResultPayload = nativeFailureSignal(event);
   if (isDiffDifferenceResult(context) && !failedByResultPayload) return 'completed';
   if (status && /^(?:running|in_progress|started|pending)$/.test(status)) return 'running';
-  if (status && /^(?:blocked|approval-required|approval_required|requires_approval|waiting_for_approval|needs-human|needs_human)$/.test(status)) return 'blocked';
+  if (status && /^(?:blocked|approval-required|approval_required|requires_approval|requires-user-confirmation|requires_user_confirmation|waiting_for_approval|needs-human|needs_human|needs-human-verification|needs_human_verification|repair-needed|repair_needed)$/.test(status)) return 'blocked';
   if (status && /^(?:cancelled|canceled|aborted|interrupted)$/.test(status)) return 'cancelled';
   if (status && /^(?:failed|failure|fail|error|errored|rejected|failed-with-reason)$/.test(status)) return 'failed';
   if (failedByResultPayload) return 'failed';
@@ -963,6 +1013,7 @@ function actionStatus(
   if (type.includes('started') || type === 'tool_started' || event.type === 'tool-call') return 'running';
   if (type.includes('completed') || type === 'tool_completed' || event.type === 'tool-result') return 'completed';
   if (type.includes('approval')) return 'blocked';
+  if (type.includes('repair') || type.includes('verifier') || type.includes('verification')) return 'blocked';
   if (type.includes('failed') || type.includes('error')) return 'failed';
   if (type.includes('cancel')) return 'cancelled';
   return 'unknown';
@@ -1593,8 +1644,8 @@ function hasSpecificFileEvidence(event: AgentStreamEvent) {
 function looksLikeUserInstructionEcho(value: string) {
   const text = normalizeText(value);
   if (text.length < 12) return false;
-  return /\b(?:use the .*tool|run exactly|do not (?:read|run|edit|modify|write|infer|use)|only (?:answer|respond)|respond (?:only|in)|after the command runs|say whether|report the exit code|no tables?)\b/.test(text)
-    || /(?:不要\s*(?:读取|读|运行|执行|修改|编辑|写入|使用|列太多)|不要读取文件|不要运行命令|不要修改任何文件|仅用中文回答|只用中文回答|请用\s*\d+\s*个短段落|不要表格|不要列太多项目)/.test(value);
+  return /\b(?:use the .*tool|run exactly|do not (?:read|run|edit|modify|write|create|infer|use|mention|repeat|include)|only (?:answer|respond)|respond (?:only|in)|reply in|answer in|please answer|final answer must include|the final answer must include|after the command runs|say whether|report the exit code|no local paths?|no tables?|keep it short)\b/.test(text)
+    || /(?:不要\s*(?:读取|读|运行|执行|修改|编辑|写入|创建|新建|使用|提及|重复|复述|列太多)|不要读取文件|不要运行命令|不要修改任何文件|不要使用本地路径|不要表格|不要列太多项目|仅用中文回答|只用中文回答|请用\s*\d+\s*个短段落|请.*回答|最终回答.*(?:包括|包含))/i.test(value);
 }
 
 function isAssistantTranscriptEvent(entry: StreamWorklogEntry) {
@@ -1811,6 +1862,9 @@ function sanitizeCursorText(value: string | undefined) {
     .replace(/\b(runtime\s+profile|profile)\b\s*[:=]?\s*["']?[^"'\s,;)]+/gi, '$1 [redacted]')
     .replace(/--model(?:=|\s+)[^\s"'`<>]+/gi, '--model [redacted]')
     .replace(/\bsk-[A-Za-z0-9._-]+/gi, '[redacted-secret]')
+    .replace(/\bRuntime Codex (?:stdout|stderr) output recorded; details are available in the folded run audit\./gi, 'Runtime output recorded; details are folded.')
+    .replace(/\b(?:stdout|stderr) output recorded\b/gi, 'runtime output recorded')
+    .replace(/(?:^|\s)\.sciforge\/[^\s"'`<>]+/gi, ' [diagnostic-ref]')
     .replace(/(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\/[^\s"'`<>]+/g, (match) => `[local-path]/${pathBasename(match)}`)
     .trim();
 }

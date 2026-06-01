@@ -66,6 +66,7 @@ import {
   editSessionMessage,
   archiveActiveSession as archiveScenarioActiveSession,
   archiveAllActiveSessions as archiveAllScenarioActiveSessions,
+  forkActiveSession as forkScenarioActiveSession,
   isRetainedHistorySession,
   restoreArchivedSession as restoreScenarioArchivedSession,
   startNewChat,
@@ -80,9 +81,7 @@ import {
   persistWorkspaceState,
   saveFileBackedSciForgeConfig,
 } from '../api/workspaceClient';
-import { TimelinePage } from './AlignmentPages';
 import { ComponentWorkbenchPage, type ComponentWorkbenchMode } from './ComponentWorkbenchPage';
-import { BrowserRuntimePage } from './BrowserRuntimePage';
 import { previewPackageAutoRunPrompt, type WorkspaceFileEditorState } from './ResultsRenderer';
 import type { HandoffAutoRunRequest } from './results/viewPlanResolver';
 import { useRuntimeHealth } from './runtimeHealthPanel';
@@ -101,6 +100,7 @@ import {
   peerSidebarProjectSessionTargets,
   type SidebarProjectSessionsByPath,
 } from './appShell/sidebarProjectSessions';
+import type { SidebarWorkspaceIntent } from './appShell/sidebarWorkspaceIntent';
 import { sidebarProjectPath } from './appShell/sidebarProjectModel';
 import {
   APP_BUILD_ID,
@@ -120,11 +120,13 @@ import {
 import {
   buildArchivedSessionCountsByScenario,
   buildArchivedSessionsByScenario,
+  draftForWorkspaceScenario,
   defaultPublishedRuntimeComponentIds,
-  updateDraftRecord,
+  updateWorkspaceDraftRecord,
   workspaceCanDiscardSidebarChat,
   workspaceHasArchivableSidebarChat,
   workspaceHasArchivableSidebarChats,
+  type WorkspaceScenarioDraftRecord,
 } from './sciforgeApp/appStateModels';
 import { FeedbackInboxPage } from './sciforgeApp/FeedbackInboxPage';
 import { Workbench } from './sciforgeApp/SciForgeWorkbench';
@@ -181,7 +183,7 @@ export function SciForgeApp() {
   const [configSaveState, setConfigSaveState] = useState<ConfigSaveState>({ status: 'idle' });
   const [scenarioOverrides, setScenarioOverrides] = useState<Partial<Record<ScenarioInstanceId, ScenarioRuntimeOverride>>>({});
   const [selectedRuntimeComponentIds, setSelectedRuntimeComponentIds] = useState<string[]>(() => defaultPublishedRuntimeComponentIds());
-  const [drafts, setDrafts] = useState<Record<ScenarioInstanceId, string>>(() => createBuiltInScenarioRecord(''));
+  const [draftsByWorkspace, setDraftsByWorkspace] = useState<WorkspaceScenarioDraftRecord>(() => ({}));
   const [messageScrollTops, setMessageScrollTops] = useState<Record<ScenarioInstanceId, number>>(() => createBuiltInScenarioRecord(0));
   const [workspaceRecoveryFocusKey, setWorkspaceRecoveryFocusKey] = useState<string | undefined>();
   const [peerProjectSessionsByPath, setPeerProjectSessionsByPath] = useState<SidebarProjectSessionsByPath>({});
@@ -245,48 +247,55 @@ export function SciForgeApp() {
     };
   }, [config, configFileHydrated, peerSessionRefreshKey]);
 
-	  useEffect(() => {
-	    let cancelled = false;
-	    Promise.all([
-	      loadFileBackedSciForgeConfig(config),
-	      loadDesktopRuntimeConfigDefaults(),
-	    ])
-	      .then(([fileConfig, desktopRuntimeConfig]) => {
-	        if (cancelled) return;
-	        if (fileConfig || desktopRuntimeConfig) {
-	          setConfig((current) => {
-	            const fileMerged = fileConfig ? mergeFileBackedConfig(current, fileConfig) : current;
-	            const next = desktopRuntimeConfig ? updateConfig(fileMerged, desktopRuntimeConfig) : fileMerged;
-	            saveSciForgeConfig(next);
-	            return next;
-	          });
-	          const nextWorkspacePath = desktopRuntimeConfig?.workspacePath || fileConfig?.workspacePath;
-	          if (nextWorkspacePath) {
-	            setWorkspaceState((current) => ({
-	              ...current,
-	              workspacePath: normalizeWorkspaceRootPath(nextWorkspacePath || current.workspacePath),
-	            }));
-	          }
-	          setWorkspaceStatus(desktopRuntimeConfig
-	            ? t({
-	              'zh-CN': '已从 Electron runtime config 加载桌面运行时配置',
-	              'en-US': 'Loaded desktop runtime config from Electron runtime config',
-	            })
-	            : t({
-	              'zh-CN': '已从 config.local.json 加载统一配置',
-	              'en-US': 'Loaded unified config from config.local.json',
-	            }));
-	        }
-	      })
-      .catch((err) => {
-        if (!cancelled) setWorkspaceStatus(t({
-          'zh-CN': `config.local.json 未加载：${err instanceof Error ? err.message : String(err)}`,
-          'en-US': `config.local.json was not loaded: ${err instanceof Error ? err.message : String(err)}`,
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      let desktopRuntimeConfig: Partial<SciForgeConfig> | undefined;
+      let fileConfig: SciForgeConfig | undefined;
+      let fileConfigError: unknown;
+      try {
+        desktopRuntimeConfig = await loadDesktopRuntimeConfigDefaults();
+      } catch {
+        desktopRuntimeConfig = undefined;
+      }
+      try {
+        const configForFileLoad = desktopRuntimeConfig ? updateConfig(config, desktopRuntimeConfig) : config;
+        fileConfig = await loadFileBackedSciForgeConfig(configForFileLoad);
+      } catch (error) {
+        fileConfigError = error;
+      }
+      if (cancelled) return;
+      if (fileConfig || desktopRuntimeConfig) {
+        setConfig((current) => {
+          const fileMerged = fileConfig ? mergeFileBackedConfig(current, fileConfig) : current;
+          const next = desktopRuntimeConfig ? updateConfig(fileMerged, desktopRuntimeConfig) : fileMerged;
+          saveSciForgeConfig(next);
+          return next;
+        });
+        const nextWorkspacePath = desktopRuntimeConfig?.workspacePath || fileConfig?.workspacePath;
+        if (nextWorkspacePath) {
+          setWorkspaceState((current) => ({
+            ...current,
+            workspacePath: normalizeWorkspaceRootPath(nextWorkspacePath || current.workspacePath),
+          }));
+        }
+        setWorkspaceStatus(desktopRuntimeConfig
+          ? t({
+            'zh-CN': '已从 Electron runtime config 加载桌面运行时配置',
+            'en-US': 'Loaded desktop runtime config from Electron runtime config',
+          })
+          : t({
+            'zh-CN': '已从 config.local.json 加载统一配置',
+            'en-US': 'Loaded unified config from config.local.json',
+          }));
+      } else if (fileConfigError) {
+        setWorkspaceStatus(t({
+          'zh-CN': `config.local.json 未加载：${fileConfigError instanceof Error ? fileConfigError.message : String(fileConfigError)}`,
+          'en-US': `config.local.json was not loaded: ${fileConfigError instanceof Error ? fileConfigError.message : String(fileConfigError)}`,
         }));
-      })
-      .finally(() => {
-        if (!cancelled) setConfigFileHydrated(true);
-      });
+      }
+      setConfigFileHydrated(true);
+    })();
     return () => {
       cancelled = true;
     };
@@ -923,6 +932,10 @@ export function SciForgeApp() {
     void hydrateWorkspaceSnapshot(nextConfig.workspacePath, nextConfig, 'force');
   }
 
+  function handleSidebarWorkspaceIntent(intent: SidebarWorkspaceIntent) {
+    setWorkspacePath(intent.workspacePath);
+  }
+
   function activateWorkspaceProject(
     project: Parameters<typeof buildWorkspaceProjectActivation>[1],
     thread?: { scenarioId: ScenarioInstanceId; sessionId: string },
@@ -996,7 +1009,8 @@ export function SciForgeApp() {
   }
 
   function updateDraft(nextScenarioId: ScenarioInstanceId, value: string) {
-    setDrafts((current) => updateDraftRecord(current, nextScenarioId, value));
+    const draftWorkspacePath = workspaceState.workspacePath || config.workspacePath;
+    setDraftsByWorkspace((current) => updateWorkspaceDraftRecord(current, draftWorkspacePath, nextScenarioId, value));
   }
 
   function updateMessageScrollTop(nextScenarioId: ScenarioInstanceId, value: number) {
@@ -1020,6 +1034,10 @@ export function SciForgeApp() {
 
   function deleteChat(nextScenarioId: ScenarioInstanceId) {
     updateWorkspace((current) => deleteActiveChat(current, nextScenarioId, `${scenarioLabelForInstance(nextScenarioId)} 新聊天`));
+  }
+
+  function forkChat(nextScenarioId: ScenarioInstanceId) {
+    updateWorkspace((current) => forkScenarioActiveSession(current, nextScenarioId));
   }
 
   function restoreArchivedSession(nextScenarioId: ScenarioInstanceId, sessionId: string) {
@@ -1265,6 +1283,7 @@ export function SciForgeApp() {
   }
 
   function openComponentWorkbench(mode: ComponentWorkbenchMode) {
+    setWorkspaceRecoveryFocusKey((current) => current ?? 'manual-component-navigation');
     setComponentWorkbenchMode(mode);
     setPage('components');
   }
@@ -1312,16 +1331,25 @@ export function SciForgeApp() {
   const activeSession = sessions[scenarioId] ?? createSession(scenarioId, `${scenarioLabelForInstance(scenarioId)} 新聊天`);
   const feedbackActions = createSciForgeFeedbackActions({
     config,
-    page,
-    scenarioId,
-    activeSession,
     workspaceState,
-    feedbackAuthor,
     updateWorkspace,
     setWorkspaceStatus,
-    setPage,
   });
   const appHealthItems = useRuntimeHealth(config, Object.keys(sessions).length);
+  const workspaceLoadingDetail = !configFileHydrated
+    ? t({
+      'zh-CN': '正在加载本地配置...',
+      'en-US': 'Loading local config...',
+    })
+    : !workspaceHydrated
+      ? t({
+        'zh-CN': '正在恢复工作区状态...',
+        'en-US': 'Restoring workspace state...',
+      })
+      : workspaceStatus || t({
+        'zh-CN': '工作区已就绪',
+        'en-US': 'Workspace ready',
+      });
 
   return (
     <I18nProvider locale={config.locale}>
@@ -1362,6 +1390,7 @@ export function SciForgeApp() {
         onOpenAutomations={() => openComponentWorkbench('automations')}
         onOpenCustomize={() => openComponentWorkbench('marketplace')}
         onSettingsOpen={() => openSettings()}
+        onWorkspaceIntent={handleSidebarWorkspaceIntent}
         workspaceStatus={workspaceStatus}
         onWorkspacePathChange={setWorkspacePath}
         onWorkspaceProjectActivate={activateWorkspaceProject}
@@ -1385,17 +1414,24 @@ export function SciForgeApp() {
         />
         <div className="content-shell">
           {page === 'workbench' ? (
+            workspaceLoadingActive ? (
+              <main className="workspace-loading-panel" role="status" aria-busy="true">
+                {workspaceLoadingDetail}
+              </main>
+            ) : (
             <Workbench
               scenarioId={scenarioId}
               config={config}
               session={activeSession}
-              draft={drafts[scenarioId] ?? ''}
+              draft={draftForWorkspaceScenario(draftsByWorkspace, workspaceState.workspacePath || config.workspacePath, scenarioId)}
               savedScrollTop={messageScrollTops[scenarioId] ?? 0}
               onDraftChange={updateDraft}
               onScrollTopChange={updateMessageScrollTop}
               onSessionChange={updateSession}
               onNewChat={newChat}
               onDeleteChat={deleteChat}
+              onForkChat={forkChat}
+              onArchiveChat={(nextScenarioId) => void archiveThread(nextScenarioId, activeSessionFor(workspaceState, nextScenarioId).sessionId)}
               archivedSessions={archivedSessionsByAgent[scenarioId] ?? []}
               onRestoreArchivedSession={restoreArchivedSession}
               onDeleteArchivedSessions={deleteArchivedSessions}
@@ -1409,6 +1445,7 @@ export function SciForgeApp() {
               scenarioOverride={activeScenarioOverride}
               onScenarioOverrideChange={applyScenarioOverride}
               onConfigChange={updateRuntimeConfig}
+              onOpenSettings={openSettings}
               onTimelineEvent={appendTimelineEvent}
               onMarkReusableRun={markReusableRun}
               onPreviewPackageRequest={handlePreviewPackageRequest}
@@ -1419,19 +1456,9 @@ export function SciForgeApp() {
               availableComponentIds={selectedRuntimeComponentIds}
               onAvailableComponentIdsChange={setSelectedRuntimeComponentIds}
             />
+            )
           ) : page === 'components' ? (
-            <ComponentWorkbenchPage mode={componentWorkbenchMode} />
-          ) : page === 'browser' ? (
-            <BrowserRuntimePage
-              onFeedbackSubmit={feedbackActions.submitBrowserFeedbackBundle}
-              onFeedbackRepairRequest={feedbackActions.requestBrowserFeedbackRepair}
-              onOpenFeedbackInbox={openFeedbackInboxFromAnnotation}
-            />
-          ) : page === 'timeline' ? (
-            <TimelinePage alignmentContracts={workspaceState.alignmentContracts ?? []} events={workspaceState.timelineEvents ?? []} onOpenScenario={(id) => {
-              setScenarioId(id);
-              setPage('workbench');
-            }} />
+            <ComponentWorkbenchPage mode={componentWorkbenchMode} config={config} />
           ) : (
             <FeedbackInboxPage
               config={config}
@@ -1454,13 +1481,9 @@ export function SciForgeApp() {
               detectedGithubRepo={detectedFeedbackGithubRepo}
               feedbackGithubToken={config.feedbackGithubToken}
               workspaceLoading={workspaceLoadingVisible}
-              workspaceLoadingDetail={!configFileHydrated
-                ? 'Loading local config. The feedback list will use browser cache until configuration is ready.'
-                : !workspaceHydrated
-                  ? 'Restoring workspace state. Feedback counts, filters, and action scopes will refresh when loading finishes.'
-                  : workspaceLoadingVisible
-                    ? 'Finishing workspace state refresh. Feedback counts, filters, and action scopes are restored.'
-                    : workspaceStatus || 'workspace snapshot loaded'}
+              workspaceLoadingDetail={workspaceLoadingVisible
+                ? workspaceLoadingDetail
+                : workspaceStatus || 'workspace snapshot loaded'}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={feedbackActions.replaceGithubSyncedOpenIssues}
               onImportGithubOpenIssues={feedbackActions.importGithubOpenIssuesAsFeedback}

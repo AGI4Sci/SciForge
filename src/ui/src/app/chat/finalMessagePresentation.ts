@@ -35,7 +35,7 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
   const structured = structuredResultPresentation(resultPresentation);
   if (structured) return presentationFromResultContract(structured, content);
   const displayContent = foldLeadingInlineRawDiagnostic(
-    normalizeFinalMessageMarkdownInput(stripLeadingAssistantScratchpad(content)),
+    foldLeadingRawWebPageDump(normalizeFinalMessageMarkdownInput(stripLeadingAssistantScratchpad(content))),
   );
   const blocks = parseContentBlocks(displayContent);
   const primary: string[] = [];
@@ -170,6 +170,23 @@ function foldLeadingInlineRawDiagnostic(content: string) {
   const split = leadingInlineRawDiagnosticSplit(text);
   if (!split) return content;
   return [split.answer, '## Execution audit', split.diagnostic].filter(Boolean).join('\n\n');
+}
+
+function foldLeadingRawWebPageDump(content: string) {
+  const text = content.trim();
+  if (!looksLikeRawWebPageDump(text)) return content;
+  const split = leadingRawWebPageDumpSplit(text);
+  if (!split) return ['## Tool output', text].join('\n\n');
+  return [split.answer, '## Tool output', split.dump].filter(Boolean).join('\n\n');
+}
+
+function leadingRawWebPageDumpSplit(text: string): { dump: string; answer: string } | undefined {
+  const cue = rawWebPageUserFacingCue(text);
+  if (!cue || cue.index < 300) return undefined;
+  const dump = text.slice(0, cue.index).trim();
+  const answer = text.slice(cue.index).trim();
+  if (!looksLikeRawWebPageDump(dump) || answer.length < 12) return undefined;
+  return { dump, answer };
 }
 
 function leadingInlineRawDiagnosticSplit(text: string): { diagnostic: string; answer: string } | undefined {
@@ -468,6 +485,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   const rawJson = looksLikeRawJson(text);
   const logOutput = looksLikeLogOutput(block.language, text);
   const runtimeAuditLog = looksLikeRuntimeAuditLogBlock(text);
+  const rawWebPageDump = looksLikeRawWebPageDump(text);
   const failureDiagnostic = looksLikeFailureDiagnostic(text) || looksLikeTracebackDiagnostic(text);
   const systemEnvelope = looksLikeSystemEnvelope(text);
   const runtimeMetadata = looksLikeRuntimeMetadataBlock(text);
@@ -475,7 +493,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
   const localPathListing = looksLikeLocalPathListing(text);
   const redactedPathPlanningLeak = looksLikeRedactedPathPlanningLeak(text);
   const userFacingPlanningList = looksLikeUserFacingPlanningList(block.kind, text);
-  const structuralEvidenceType = rawJson ? 'raw-json' : logOutput || runtimeAuditLog ? 'log-output' : undefined;
+  const structuralEvidenceType = rawJson ? 'raw-json' : logOutput || runtimeAuditLog ? 'log-output' : rawWebPageDump ? 'tool-output' : undefined;
   const evidenceType = block.kind === 'code'
     ? structuralEvidenceType ?? auditEvidenceType(haystack) ?? codeEvidenceType(block.language, text)
     : (failureDiagnostic || runtimeMetadata || processTranscript || localPathListing || redactedPathPlanningLeak ? 'execution-audit' : undefined)
@@ -492,6 +510,7 @@ function classifyFinalMessageBlock(block: ContentBlock, pendingAuditHeading: str
       || localPathListing
       || redactedPathPlanningLeak
       || runtimeAuditLog
+      || rawWebPageDump
       || (block.kind === 'code' && (evidenceType || rawJson || logOutput))
       || (block.kind !== 'heading' && failureDiagnostic)
       || (block.kind !== 'heading' && evidenceType && text.length > 240)
@@ -553,6 +572,35 @@ function looksLikeRuntimeAuditLogBlock(text: string) {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (!compact) return false;
   return /(?:\b(?:plugin manifest|manifest warning|invalid plugin|failed to load plugin|raw jsonl|raw_jsonl|provider sse|stdout|stderr|cloudflare|cf-ray)\b|<!doctype\s+html|<html\b|attention required)/i.test(compact);
+}
+
+function looksLikeRawWebPageDump(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return false;
+  if (/(?:<!doctype\s+html|<html\b|<head\b|<body\b)/i.test(compact)) return true;
+  if (/quick links\s+login\s+help\s+pages\s+about/i.test(compact)) return true;
+  const paperSections = compact.match(/---\s*paper\s+\d+\s*---/gi)?.length ?? 0;
+  const metadataLabels = compact.match(/\b(?:ID|Title|Authors?|Abstract|Published|Submitted|Updated|URL|arXiv)\s*:/gi)?.length ?? 0;
+  if (paperSections >= 2 && metadataLabels >= 5 && compact.length > 700) return true;
+  return /\b(?:search results?|arxiv api|semantic scholar|pubmed)\b/i.test(compact)
+    && metadataLabels >= 6
+    && compact.length > 1200;
+}
+
+function rawWebPageUserFacingCue(text: string): { index: number } | undefined {
+  const patterns = [
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:总结|结论|答案|最终回答|简表|表格|要点)\s*[:：]?/,
+    /(?:^|\n)\s*(?:#{1,6}\s*)?(?:Findings|Summary|Conclusion|Answer|Result|Compact table|Key findings)\b\s*[:：]?/i,
+    /(?:^|\n)\s*(?:Based on|I found|The newest|The most recent|Here(?:'s| is)|I actually opened|What I opened)\b/i,
+    /(?:^|\n)\s*\|\s*(?:Title|Paper|Date|URL|arXiv|What I actually opened|Contribution|Confidence)\b/i,
+  ];
+  const matches = patterns
+    .map((pattern) => {
+      const match = pattern.exec(text);
+      return match ? { index: match.index + (match[0].match(/^\n/) ? 1 : 0) } : undefined;
+    })
+    .filter((match): match is { index: number } => Boolean(match));
+  return matches.sort((left, right) => left.index - right.index)[0];
 }
 
 function looksLikeFailureDiagnostic(text: string) {
@@ -656,21 +704,154 @@ function auditSectionsSummary(sections: FinalMessageAuditSection[]) {
 
 function compactAuditFallback(text: string, evidenceType: FinalMessageAuditSection['evidenceType']) {
   const compact = stripCodeFence(text).replace(/\s+/g, ' ').trim();
-  const humanText = extractHumanTextFromRawPayload(text);
-  if (humanText) return humanText;
-  if (looksLikeFailureDiagnostic(compact)) {
-    return 'The task did not finish. Details and recovery hints are folded below.';
+  const recoveryHint = recoveryHintFromDiagnostic(text);
+  if (looksLikeFailureDiagnostic(compact) || looksLikeFailedRawPayload(text)) {
+    return failureAuditFallback(recoveryHint, recoveryHint
+      ? 'The task did not finish. Details are folded below.'
+      : 'The task did not finish. Details and recovery hints are folded below.');
   }
   if (looksLikeTracebackDiagnostic(compact)) {
-    return 'The task did not finish. Error details are folded below.';
+    return failureAuditFallback(recoveryHint, 'The task did not finish. Error details are folded below.');
   }
-  if (looksLikeRuntimeAuditLogBlock(compact)) {
+  const humanText = extractHumanTextFromRawPayload(text);
+  if (humanText) return humanText;
+  if (looksLikeRuntimeAuditLogBlock(compact) || looksLikeRawWebPageDump(compact)) {
     return 'The task returned additional details. Expand below to inspect them.';
   }
   if (looksLikeLocalPathListing(text)) {
     return 'The answer references project context. Details are folded below.';
   }
   return `The task returned ${labelForEvidence(evidenceType)}. ${compact.slice(0, 220)}${compact.length > 220 ? '...' : ''}`;
+}
+
+function failureAuditFallback(recoveryHint: string | undefined, fallback: string) {
+  return [
+    fallback,
+    recoveryHint ? `Next step: ${recoveryHint}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
+function recoveryHintFromDiagnostic(text: string): string | undefined {
+  const candidates = uniqueStrings([
+    ...recoveryHintsFromJsonPayload(text),
+    ...recoveryHintsFromText(text),
+  ].map(sanitizeRecoveryHint).filter(Boolean));
+  return candidates[0];
+}
+
+function recoveryHintsFromJsonPayload(text: string) {
+  const parsed = parseJsonPayload(text);
+  return parsed === undefined ? [] : collectRecoveryHintCandidates(parsed, 0);
+}
+
+function recoveryHintsFromText(text: string) {
+  const compact = stripCodeFence(text).replace(/\s+/g, ' ').trim();
+  if (!compact) return [];
+  const hints: string[] = [];
+  const keyPattern = /\b(?:recoverActions?|recoverableActions?|recovery actions?|repair actions?|nextStep|next step|suggested actions?|suggestions|恢复动作|恢复操作|下一步)\b\s*[:=]\s*/gi;
+  let match: RegExpExecArray | null;
+  while ((match = keyPattern.exec(compact))) {
+    const start = match.index + match[0].length;
+    const rest = compact.slice(start);
+    const nextKey = rest.search(/\b(?:failureReason|selfHealReason|finalText|status|stdoutRef|stderrRef|traceRef|runtimeEventsRef|runId|recoverActions?|recoverableActions?|nextStep)\b\s*[:=]/i);
+    const rawSegment = (nextKey > 0 ? rest.slice(0, nextKey) : rest).trim();
+    hints.push(...splitRecoveryHintSegment(rawSegment));
+  }
+  return hints;
+}
+
+function splitRecoveryHintSegment(segment: string) {
+  const text = segment.trim().replace(/^[\["'`({\s]+|[\]"'`)}\s]+$/g, '');
+  if (!text) return [];
+  const quoted = [...text.matchAll(/"([^"]{4,240})"|'([^']{4,240})'/g)]
+    .map((match) => match[1] ?? match[2])
+    .filter(Boolean);
+  if (quoted.length) return quoted;
+  return text
+    .split(/\s*(?:;|\n|\s\|\s|,\s+(?=(?:retry|rerun|inspect|review|reload|reapply|regenerate|continue|恢复|重试|检查|重新|继续)\b))/i)
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 4);
+}
+
+function collectRecoveryHintCandidates(value: unknown, depth: number): string[] {
+  if (!value || depth > 5) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => collectRecoveryHintCandidates(item, depth + 1));
+  if (typeof value === 'string') return depth > 0 ? [value] : [];
+  if (!isRecord(value)) return [];
+  const candidates: string[] = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (isRecoveryHintKey(key)) {
+      if (typeof entry === 'string') candidates.push(entry);
+      else if (Array.isArray(entry)) {
+        for (const item of entry) {
+          if (typeof item === 'string') candidates.push(item);
+          else candidates.push(...collectRecoveryHintCandidates(item, depth + 1));
+        }
+      } else {
+        candidates.push(...collectRecoveryHintCandidates(entry, depth + 1));
+      }
+      continue;
+    }
+    if (entry && typeof entry === 'object') candidates.push(...collectRecoveryHintCandidates(entry, depth + 1));
+  }
+  return candidates;
+}
+
+function isRecoveryHintKey(key: string) {
+  return /^(?:recoverActions?|recoverableActions?|recoveryActions?|repairActions?|nextActions?|nextSteps?|nextStep|suggestedActions?|suggestions|recovery|repair)$/i.test(key);
+}
+
+function sanitizeRecoveryHint(value: string | undefined) {
+  let text = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  text = text
+    .replace(/^[-*]\s*/, '')
+    .replace(/^["'`]+|["'`,;]+$/g, '')
+    .replace(/\b(?:stdout|stderr|trace|raw|runtimeEvents?|diagnostics?)Ref\s*=?\s*["']?[^"',;\s]+["']?/gi, '')
+    .replace(/\b(?:stdout|stderr|trace|raw|runtime_events?|diagnostics?)_ref\s*=?\s*["']?[^"',;\s]+["']?/gi, '')
+    .replace(/\bagentserver:\/\/[^\s"',;]+/gi, '')
+    .replace(/https?:\/\/[^\s"',;]+/gi, 'the configured service')
+    .replace(/\bsk-[A-Za-z0-9._-]+\b/g, '[redacted]')
+    .replace(/(?:^|\s)\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s"',;]+/g, ' the project context')
+    .replace(/(?:^|\s)\.sciforge\/[^\s"',;]+/g, ' folded diagnostics')
+    .replace(/\b(?:provider|model route|provider route)\b/gi, 'configured service')
+    .replace(/\b(?:api[-_ ]?key|token|secret|password)\b/gi, 'workspace credential')
+    .replace(/\b(?:referenced|saved|preserved)?\s*(?:stderr|stdout|trace|raw logs?|runtime events?|event log|audit refs?)\b/gi, 'folded diagnostics')
+    .replace(/\b(?:inspect|review|check)\s+folded diagnostics\b/gi, 'inspect the folded diagnostics')
+    .replace(/\bfolded diagnostics(?:\s+folded diagnostics)+\b/gi, 'folded diagnostics')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .trim();
+  if (!text || text.length < 4) return '';
+  if (/https?:\/\/|sk-[A-Za-z0-9._-]+|\/(?:Applications|Users|Volumes|private|var|tmp)\/|\.sciforge\/|\b(?:Authorization|stdoutRef|stderrRef|traceRef|runtimeEventsRef)\b/i.test(text)) {
+    return '';
+  }
+  return text.length > 220 ? `${text.slice(0, 217).trim()}...` : text;
+}
+
+function looksLikeFailedRawPayload(text: string) {
+  const parsed = parseJsonPayload(text);
+  if (parsed !== undefined) return rawPayloadHasFailureSignal(parsed, 0);
+  const compact = stripCodeFence(text).replace(/\s+/g, ' ').trim();
+  return /\b(?:status|state|kind)\s*[:=]\s*["']?(?:failed|error|blocked|unauthorized|timeout)/i.test(compact)
+    && /\b(?:recover|retry|repair|401|unauthorized|stderrRef|stdoutRef|runtimeEventsRef|traceRef)\b/i.test(compact);
+}
+
+function rawPayloadHasFailureSignal(value: unknown, depth: number): boolean {
+  if (!value || depth > 5) return false;
+  if (Array.isArray(value)) return value.some((item) => rawPayloadHasFailureSignal(item, depth + 1));
+  if (typeof value === 'string') {
+    return /\b(?:failed|failure|error|unauthorized|timeout|timed out|HTTP 4\d\d|HTTP 5\d\d|stderrRef|stdoutRef|traceRef|runtimeEventsRef)\b/i.test(value);
+  }
+  if (!isRecord(value)) return false;
+  for (const [key, entry] of Object.entries(value)) {
+    const keyLooksRelevant = /^(?:status|state|kind|error|failure|failureReason|finalText|message|recoverActions?|recoverableActions?|nextStep)$/i.test(key);
+    if (keyLooksRelevant && typeof entry === 'string' && /\b(?:failed|failure|error|blocked|unauthorized|timeout|HTTP 4\d\d|HTTP 5\d\d|stderrRef|stdoutRef|traceRef|runtimeEventsRef)\b/i.test(entry)) {
+      return true;
+    }
+    if (entry && typeof entry === 'object' && rawPayloadHasFailureSignal(entry, depth + 1)) return true;
+  }
+  return false;
 }
 
 function safeAuditLabel(label: string | undefined, evidenceType: FinalMessageAuditSection['evidenceType']) {
@@ -684,17 +865,22 @@ function safeAuditLabel(label: string | undefined, evidenceType: FinalMessageAud
 }
 
 function extractHumanTextFromRawPayload(text: string) {
+  const parsed = parseJsonPayload(text);
+  if (parsed === undefined) return '';
+  const candidate = findHumanPayloadText(parsed, 0);
+  if (!candidate) return '';
+  const compact = candidate.trim();
+  if (!compact || looksLikeFailureDiagnostic(compact) || looksLikeSystemEnvelope(compact)) return '';
+  return compact;
+}
+
+function parseJsonPayload(text: string): unknown | undefined {
   const json = stripCodeFence(text).trim();
-  if (!/^[{[]/.test(json)) return '';
+  if (!/^[{[]/.test(json)) return undefined;
   try {
-    const parsed = JSON.parse(json) as unknown;
-    const candidate = findHumanPayloadText(parsed, 0);
-    if (!candidate) return '';
-    const compact = candidate.trim();
-    if (!compact || looksLikeFailureDiagnostic(compact) || looksLikeSystemEnvelope(compact)) return '';
-    return compact;
+    return JSON.parse(json) as unknown;
   } catch {
-    return '';
+    return undefined;
   }
 }
 
@@ -751,4 +937,8 @@ function numberField(value: unknown) {
 
 function stringList(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)];
 }

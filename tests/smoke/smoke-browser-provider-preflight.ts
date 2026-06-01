@@ -48,7 +48,7 @@ try {
     const page = await newProviderPreflightPage(browser, agentServer.baseUrl);
 
     await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
-    await page.locator('.sidebar-activitybar').getByRole('button', { name: '聊天工作台' }).click();
+    await page.locator('.sidebar.cursor-agent-sidebar').waitFor({ timeout: 15_000 });
     await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').first().waitFor({ timeout: 15_000 });
     await waitForComposer(page);

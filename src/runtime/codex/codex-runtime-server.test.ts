@@ -313,6 +313,73 @@ test('WebSocket endpoint accepts structured cancel controls without raw terminal
   }
 });
 
+test('WebSocket cancel aborts the active turn even when adapter cancel hangs', async () => {
+  const adapter = new HangingCancelAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.on('upgrade', (req, socket, head) => {
+    if (!handleCodexRuntimeUpgrade(req, socket, head, adapter)) socket.destroy();
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+  const received: Array<Record<string, unknown>> = [];
+
+  try {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${CODEX_RUNTIME_WEBSOCKET_PATH}`);
+    ws.on('message', (raw) => {
+      const message = JSON.parse(raw.toString()) as Record<string, unknown>;
+      received.push(message);
+      if (message.event === 'turn') {
+        ws.send(JSON.stringify({
+          schemaVersion: 'sciforge.codex-realtime-control.v1',
+          controlType: 'cancel',
+          commandId: 'codex-command-hanging-cancel',
+          attemptId: 'codex-command-hanging-cancel-attempt-1',
+          requestId: 'cancel-hanging',
+          reason: 'test-hanging-cancel',
+          rawTerminal: false,
+        }));
+      }
+    });
+    await once(ws, 'open');
+    ws.send(JSON.stringify({
+      commandText: 'long running task with hanging cancel',
+      workspacePath: '/tmp/workspace',
+      commandId: 'codex-command-hanging-cancel',
+      attemptId: 'codex-command-hanging-cancel-attempt-1',
+      realtimeSession: {
+        schemaVersion: 'sciforge.codex-realtime-session.v1',
+        bridge: 'codex-native-realtime-session',
+        streamKind: 'structured-events-plus-terminal-equivalent-text',
+        eventTransport: 'websocket',
+        eventContract: 'structured-events',
+        inputTextKind: 'terminal-equivalent-text',
+        rawTerminal: false,
+        commandId: 'codex-command-hanging-cancel',
+        attemptId: 'codex-command-hanging-cancel-attempt-1',
+        resumeRequested: false,
+      },
+    }));
+    await Promise.race([
+      once(ws, 'close'),
+      new Promise((_resolve, reject) => setTimeout(() => reject(new Error('cancel did not close websocket')), 1500)),
+    ]);
+
+    const controlAck = received.find((message) => message.event === 'realtime_control')?.data as Record<string, unknown> | undefined;
+    assert.equal(controlAck?.status, 'accepted');
+    assert.deepEqual(adapter.cancelledTurnIds, ['codex-command-hanging-cancel']);
+    assert.equal(adapter.lastInput?.abortSignal?.aborted, true);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('WebSocket endpoint rejects raw terminal shaped controls', async () => {
   const adapter = new BlockingAdapter();
   const server = createServer((req, res) => {
@@ -616,5 +683,12 @@ class BlockingAdapter extends FakeAdapter {
       if (input.abortSignal?.aborted) resolve();
       else input.abortSignal?.addEventListener('abort', () => resolve(), { once: true });
     });
+  }
+}
+
+class HangingCancelAdapter extends BlockingAdapter {
+  override async cancel(turnId: string) {
+    this.cancelledTurnIds.push(turnId);
+    await new Promise<void>(() => undefined);
   }
 }

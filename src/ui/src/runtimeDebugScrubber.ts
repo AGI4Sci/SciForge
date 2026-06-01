@@ -1,7 +1,7 @@
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 
 const sensitiveKeyPattern = /(?:^|[_-])(?:endpoint|baseurl|invokeurl|invokepath|url|authorization|auth|token|secret|password|credential|apikey|api_key|workspacepath|workspaceroots|runtimeLocation|workerId|stdout|stderr|rawOutput|providerRawOutput)(?:$|[_-])/i;
-const sensitiveTextPattern = /\bhttps?:\/\/[^\s"'<>]+|\.sciforge\/(?:sessions\/)?[^\s"'<>]*(?:logs|stdout|stderr|raw)[^\s"'<>]*|\b(?:authorization|bearer|token|secret|api[_-]?key|password|credential)\b|RAW_[A-Z0-9_]+|Invalid token|Unauthorized|Forbidden/i;
+const sensitiveTextPattern = /\bhttps?:\/\/[^\s"'<>]+|\.sciforge\/(?:sessions\/)?[^\s"'<>]*(?:logs|stdout|stderr|raw)[^\s"'<>]*|\b(?:authorization|bearer|token|secret|api[_-]?key|password|credential)\b|RAW_[A-Z0-9_]+|Invalid token|Unauthorized|Forbidden|<!doctype\s+html|<html\b|<body\b|<script\b|cf-ray|cloudflare/i;
 
 export function sanitizeRuntimeDebugValue(value: unknown, key = '', depth = 0): unknown {
   if (value === undefined || value === null) return value;

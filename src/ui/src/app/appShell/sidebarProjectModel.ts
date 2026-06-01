@@ -3,6 +3,7 @@ import type { PeerInstance, SciForgeConfig } from '../../domain';
 import { pathBasename } from './explorerModels';
 
 export const SIDEBAR_CHRONOLOGICAL_PROJECT_ID = 'chronological';
+export const SIDEBAR_HOME_PROJECT_ID = 'home';
 const LEGACY_CURRENT_PROJECT_ID = 'current';
 const LEGACY_PEER_PROJECT_ID_PREFIX = 'peer:';
 
@@ -22,7 +23,7 @@ export function sidebarProjectIdForPath(path: string | undefined): string {
 }
 
 export function sidebarProjectIdForConfig(config: SciForgeConfig): string {
-  return sidebarProjectIdForPath(config.workspacePath);
+  return sidebarProjectIdForPath(config.workspacePath) || SIDEBAR_HOME_PROJECT_ID;
 }
 
 export function sidebarProjectIdForPeer(peer: PeerInstance): string {
@@ -59,11 +60,11 @@ export function sidebarProjectFromConfig(
   fallbackLabel?: string,
 ): SidebarProjectDescriptor {
   const normalizedPath = sidebarProjectPath(path);
-  const label = pathBasename(normalizedPath) || fallbackLabel || (current ? 'Current project' : 'Untitled project');
+  const label = pathBasename(normalizedPath) || fallbackLabel || (current ? 'Home' : 'Untitled project');
   return {
-    id: sidebarProjectIdForPath(normalizedPath || fallbackLabel || ''),
+    id: normalizedPath ? sidebarProjectIdForPath(normalizedPath) : current ? SIDEBAR_HOME_PROJECT_ID : sidebarProjectIdForPath(fallbackLabel || ''),
     label,
-    detail: normalizedPath || fallbackLabel || '',
+    detail: normalizedPath,
     current,
   };
 }

@@ -61,7 +61,7 @@ try {
     const page = await newConfiguredPage(browser, { width: 1440, height: 1050 });
     await page.goto(`http://127.0.0.1:${uiPort}/`, { waitUntil: 'domcontentloaded' });
     logStep('first visit opens workbench and settings diagnostics');
-    await page.getByLabel('聊天工作台').waitFor({ timeout: 15_000 });
+    await page.locator('.sidebar.cursor-agent-sidebar').waitFor({ timeout: 15_000 });
     await expandWorkbenchChrome(page);
     await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     await assertNoRawJsonErrors(page, 'first-visit');
@@ -89,7 +89,7 @@ try {
     await page.getByText(/workspace-state\.json|scenarios|\.sciforge|未找到|Workspace Writer/).first().waitFor({ timeout: 15_000 });
     await page.getByText('.sciforge').first().waitFor({ timeout: 15_000 });
     await page.getByRole('status').filter({ hasText: /已加载|当前目录为空/ }).first().waitFor({ timeout: 15_000 });
-    logStep('workbench composer is available and timeline stays searchable');
+    logStep('workbench composer is available');
     await openNavigationPanel(page);
     await expandWorkbenchChrome(page);
     await expandComposer(page);
@@ -97,18 +97,6 @@ try {
     await page.locator('.chat-panel .composer textarea').fill('browser-smoke-live-run 搜索最新 arXiv 并生成系统性报告，验证 AgentServer offline recovery card');
     await page.locator('.chat-panel .composer').getByRole('button', { name: '发送' }).waitFor({ state: 'visible', timeout: 15_000 });
     const smokeRunAction = 'run.failed';
-    logStep('timeline is reachable from navigation');
-    await openNavigationPanel(page);
-    await page.getByRole('button', { name: '研究时间线' }).click();
-    await page.getByRole('heading', { name: '研究时间线' }).waitFor({ timeout: 15_000 });
-    await page.getByLabel('搜索 Timeline').fill('browser-smoke-run');
-    await page.getByRole('heading', { name: smokeRunAction }).waitFor({ timeout: 15_000 });
-    await page.getByLabel('按事件类型过滤').selectOption(smokeRunAction);
-    await page.getByText('browser-smoke-run').waitFor({ timeout: 15_000 });
-    await page.getByRole('button', { name: '导出当前分支' }).waitFor({ timeout: 15_000 });
-    await page.getByRole('button', { name: '回到场景' }).first().click();
-    await expandWorkbenchChrome(page);
-    await page.getByText('Scenario Builder').waitFor({ timeout: 15_000 });
     logStep('local package import persists to workspace scenario library');
     await saveScenarioPackageViaWriter(workspace, browserSmokeScenarioPackage());
     const libraryResponse = await fetch(`http://127.0.0.1:${workspacePort}/api/sciforge/scenarios/library?workspacePath=${encodeURIComponent(workspace)}`);
@@ -686,8 +674,12 @@ async function selectTextInLocator(page: Page, locator: Locator, phrase: string)
 }
 
 async function openNavigationPanel(page: Page) {
-  await page.locator('.sidebar-activitybar').getByRole('button', { name: '聊天工作台' }).click();
-  await page.getByRole('button', { name: '新聊天' }).waitFor({ timeout: 15_000 });
+  await page.locator('.sidebar.cursor-agent-sidebar').waitFor({ timeout: 15_000 });
+  const expandSidebar = page.getByRole('button', { name: /展开侧边栏|Expand sidebar/i });
+  if (await expandSidebar.isVisible().catch(() => false)) {
+    await expandSidebar.click();
+  }
+  await page.getByLabel(/搜索聊天、项目、页面|Search chats, projects, pages/i).waitFor({ timeout: 15_000 });
 }
 
 async function openBuiltInScenarioViaSidebar(page: Page, query: string, label: string) {

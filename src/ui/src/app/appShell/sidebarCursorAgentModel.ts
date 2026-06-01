@@ -1,8 +1,11 @@
+import { sidebarPreviewLooksLikeRawToolOutput, sidebarPreviewPrimaryText } from './sidebarThreadPreview';
+
 export const SIDEBAR_CURSOR_AGENT_REGION_ID = 'sidebar' as const;
 export const SIDEBAR_CURSOR_AGENT_REGION_PATH = '/gui/regions/sidebar' as const;
 export const SIDEBAR_CURSOR_AGENT_REGION_REF = 'gui:/gui/regions/sidebar' as const;
 
-export type SidebarCursorAgentThreadState = 'active' | 'draft' | 'archived' | 'discarded';
+export type SidebarCursorAgentThreadState = 'done' | 'running' | 'failed' | 'blocked' | 'draft' | 'archived' | 'discarded';
+export type SidebarCursorAgentThreadInputState = SidebarCursorAgentThreadState | 'active';
 export type SidebarCursorAgentSortMode = 'updatedAt' | 'createdAt' | 'manual';
 export type SidebarCursorAgentStatusState = 'ready' | 'syncing' | 'warning' | 'unavailable' | 'unknown';
 export type SidebarCursorAgentActionEffect = 'agent-host-command' | 'local-presentation';
@@ -16,6 +19,9 @@ export type SidebarCursorAgentActionIntent =
   | 'open-automations'
   | 'open-customize'
   | 'open-repositories'
+  | 'hide-sidebar'
+  | 'go-back'
+  | 'go-forward'
   | 'archive-project'
   | 'archive-thread'
   | 'discard-thread'
@@ -45,7 +51,7 @@ export interface SidebarCursorAgentThreadInput {
   createdAt?: string;
   updatedAt?: string;
   messages?: SidebarCursorAgentMessageInput[];
-  state?: SidebarCursorAgentThreadState;
+  state?: SidebarCursorAgentThreadInputState;
   pinned?: boolean;
   archived?: boolean;
   discarded?: boolean;
@@ -225,6 +231,9 @@ export function buildSidebarCursorAgentProjection(
     buildSearchAction(SIDEBAR_CURSOR_AGENT_REGION_REF, input.presentation?.searchQuery),
   ];
   const presentationActions = [
+    buildHideSidebarAction(SIDEBAR_CURSOR_AGENT_REGION_REF),
+    buildNavigationAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'go-back'),
+    buildNavigationAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'go-forward'),
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'updatedAt'),
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'createdAt'),
     buildSortAction(SIDEBAR_CURSOR_AGENT_REGION_REF, 'manual'),
@@ -421,8 +430,11 @@ function resolveThreadState(thread: SidebarCursorAgentThreadInput): SidebarCurso
   if (thread.discarded || thread.state === 'discarded') return 'discarded';
   if (thread.archived || thread.state === 'archived') return 'archived';
   if (thread.state === 'draft') return 'draft';
-  if (thread.state === 'active') return 'active';
-  return hasUserVisibleThreadActivity(thread) ? 'active' : 'draft';
+  if (thread.state === 'running') return 'running';
+  if (thread.state === 'failed') return 'failed';
+  if (thread.state === 'blocked') return 'blocked';
+  if (thread.state === 'done' || thread.state === 'active') return 'done';
+  return hasUserVisibleThreadActivity(thread) ? 'done' : 'draft';
 }
 
 function hasUserVisibleThreadActivity(thread: SidebarCursorAgentThreadInput): boolean {
@@ -439,6 +451,9 @@ function buildThreadTitle(thread: SidebarCursorAgentThreadInput, state: SidebarC
   const firstUser = semanticMessages(thread).find((message) => message.role === 'user')?.content;
   const promptTitle = safeVisibleLine(firstUser, '', 54);
   if (promptTitle) return promptTitle;
+  if (state === 'running') return 'Running chat';
+  if (state === 'failed') return 'Failed chat';
+  if (state === 'blocked') return 'Blocked chat';
   if (state === 'draft') return 'New chat';
   if (state === 'archived') return 'Archived chat';
   if (state === 'discarded') return 'Deleted chat';
@@ -448,6 +463,9 @@ function buildThreadTitle(thread: SidebarCursorAgentThreadInput, state: SidebarC
 function buildThreadDetail(thread: SidebarCursorAgentThreadInput, state: SidebarCursorAgentThreadState): string {
   const detail = safeVisibleLine(thread.detail, '', 72);
   if (detail) return detail;
+  if (state === 'running') return 'Running';
+  if (state === 'failed') return 'Failed';
+  if (state === 'blocked') return 'Needs attention';
   if (state === 'draft') return 'Draft ready';
   if (state === 'archived') return 'Archived';
   if (state === 'discarded') return 'Deleted';
@@ -471,6 +489,9 @@ function semanticMessages(thread: SidebarCursorAgentThreadInput): SidebarCursorA
 function threadBadges(state: SidebarCursorAgentThreadState, pinned: boolean): string[] {
   const badges: string[] = [];
   if (pinned) badges.push('Pinned');
+  if (state === 'running') badges.push('Running');
+  if (state === 'failed') badges.push('Failed');
+  if (state === 'blocked') badges.push('Blocked');
   if (state === 'draft') badges.push('Draft');
   if (state === 'archived') badges.push('Archived');
   if (state === 'discarded') badges.push('Deleted');
@@ -623,6 +644,29 @@ function buildSortAction(targetRef: string, sort: SidebarCursorAgentSortMode): S
     scope: 'sidebar',
     targetRef,
     presentationMutation: 'sort',
+  });
+}
+
+function buildHideSidebarAction(sidebarRef: string): SidebarCursorAgentAction {
+  return localPresentationAction({
+    intent: 'hide-sidebar',
+    label: 'Hide Sidebar',
+    scope: 'sidebar',
+    targetRef: sidebarRef,
+    presentationMutation: 'navigation',
+  });
+}
+
+function buildNavigationAction(
+  sidebarRef: string,
+  intent: 'go-back' | 'go-forward',
+): SidebarCursorAgentAction {
+  return localPresentationAction({
+    intent,
+    label: intent === 'go-back' ? 'Go Back' : 'Go Forward',
+    scope: 'sidebar',
+    targetRef: sidebarRef,
+    presentationMutation: 'navigation',
   });
 }
 
@@ -784,6 +828,9 @@ function sidebarProjectionSummary(projection: SidebarCursorAgentProjection): str
   const projectCount = projection.groups.length;
   const threadCount = projection.groups.reduce((count, group) => count + group.threads.length, 0);
   const draftCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.state === 'draft').length, 0);
+  const runningCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.state === 'running').length, 0);
+  const failedCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.state === 'failed').length, 0);
+  const blockedCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.state === 'blocked').length, 0);
   const pinnedCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.pinned).length, 0);
   const archivedCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.archived).length, 0);
   const discardedCount = projection.groups.reduce((count, group) => count + group.threads.filter((thread) => thread.discarded).length, 0);
@@ -791,6 +838,9 @@ function sidebarProjectionSummary(projection: SidebarCursorAgentProjection): str
     `${projectCount} project${projectCount === 1 ? '' : 's'}`,
     `${threadCount} chat${threadCount === 1 ? '' : 's'}`,
     draftCount ? `${draftCount} draft` : '',
+    runningCount ? `${runningCount} running` : '',
+    failedCount ? `${failedCount} failed` : '',
+    blockedCount ? `${blockedCount} blocked` : '',
     pinnedCount ? `${pinnedCount} pinned` : '',
     archivedCount ? `${archivedCount} archived` : '',
     discardedCount ? `${discardedCount} discarded` : '',
@@ -812,9 +862,12 @@ function sortThreads(threads: SidebarCursorAgentThread[], sort: SidebarCursorAge
 
 function threadStateRank(state: SidebarCursorAgentThreadState): number {
   if (state === 'draft') return 0;
-  if (state === 'active') return 1;
-  if (state === 'archived') return 2;
-  return 3;
+  if (state === 'running') return 1;
+  if (state === 'blocked') return 2;
+  if (state === 'failed') return 3;
+  if (state === 'done') return 4;
+  if (state === 'archived') return 5;
+  return 6;
 }
 
 function formatContextUsage(used: number | undefined, limit: number | undefined): string {
@@ -832,8 +885,8 @@ function formatCompactNumber(value: number): string {
 }
 
 function safeVisibleLine(value: string | undefined, fallback: string, maxLength: number): string {
-  const compact = compactLine(value, maxLength);
-  if (!compact || containsSidebarCursorAgentInternalTerm(compact)) return fallback;
+  const compact = compactLine(sidebarPreviewPrimaryText(value), maxLength);
+  if (!compact || containsSidebarCursorAgentInternalTerm(compact) || sidebarPreviewLooksLikeRawToolOutput(compact)) return fallback;
   return compact;
 }
 

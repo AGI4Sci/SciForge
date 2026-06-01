@@ -103,6 +103,30 @@ test('Codex app-server client routes explicit sub-agent tool requests through ap
   assert.match(JSON.stringify(message), /resultRef: artifact:subagent-result-explicit/);
 });
 
+test('Codex app-server client treats slash terminal turn events as stream completion', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ terminalEvent: 'turn/done', terminalStatus: 'done' });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Finish with slash terminal event.',
+    workspacePath: workspace,
+    commandId: 'slash-terminal-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  assert.equal(events.at(-1)?.method, 'turn/done');
+  assert.equal((events.at(-1)?.params as Record<string, unknown> | undefined)?.['status'], 'done');
+});
+
 test('Codex app-server client preserves runtime dynamic tools when resuming a thread', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -227,7 +251,7 @@ async function* asyncGenerator(values: unknown[]) {
   for (const value of values) yield value;
 }
 
-function fakeAppServer() {
+function fakeAppServer(options: { terminalEvent?: string; terminalStatus?: string } = {}) {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -350,8 +374,13 @@ function fakeAppServer() {
     if (message.id === 'server-tool-call-1') {
       state.toolCallResponse = message.result as Record<string, unknown>;
       write({
-        method: 'turn/completed',
-        params: { threadId: state.threadResumeParams.threadId ?? 'thread-1', turn: { id: 'turn-1', status: 'completed' } },
+        method: options.terminalEvent ?? 'turn/completed',
+        params: {
+          threadId: state.threadResumeParams.threadId ?? 'thread-1',
+          turnId: 'turn-1',
+          status: options.terminalStatus,
+          turn: { id: 'turn-1', status: options.terminalStatus ?? 'completed' },
+        },
       });
     }
   }

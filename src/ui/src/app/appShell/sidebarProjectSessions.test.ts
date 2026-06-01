@@ -84,6 +84,31 @@ test('switching active workspace does not move peer project threads into current
   assert.deepEqual(buildSidebarThreadItems(peerSessions).map((item) => item.sessionId), ['peer-thread']);
 });
 
+test('Home project group keeps active sessions when no workspace path is selected', () => {
+  const homeSessions = {
+    'literature-evidence-review': session({
+      sessionId: 'home-thread',
+      title: 'Home project chat',
+    }),
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: '',
+    peerInstances: [],
+  };
+
+  const projectSessionsByPath = buildSidebarProjectSessionsByPath(
+    config,
+    { workspacePath: '', sessionsByScenario: homeSessions, archivedSessions: [] },
+  );
+  const groups = buildSidebarProjectThreadGroups(config, homeSessions, [], { projectSessionsByPath });
+
+  assert.equal(groups[0]?.id, 'home');
+  assert.equal(groups[0]?.label, 'Home');
+  assert.equal(groups[0]?.current, true);
+  assert.equal(groups[0]?.threads[0]?.sessionId, 'home-thread');
+});
+
 test('project switch mid-hydrate keeps stale sessions under previous workspace path', () => {
   const mainSessions = {
     'literature-evidence-review': session({ sessionId: 'main-thread', title: 'Main project chat' }),

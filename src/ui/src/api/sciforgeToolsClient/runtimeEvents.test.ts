@@ -176,12 +176,12 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
   assert.equal(stream.error, undefined);
   assert.equal(result.message, 'VISIBLE_FROM_CODEX_NATIVE_MESSAGE');
   assert.equal(result.nativeCodexMessage?.source, `codex.native-message:${commandId}`);
-  assert.equal(result.nativeCodexMessage?.liveAcceptanceEligible, false);
+  assert.equal(result.nativeCodexMessage?.liveAcceptanceEligible, true);
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'visible-not-live-acceptance');
-  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, false);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.status, 'unverified');
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.verdict, 'native-message');
-  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, false);
+  assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, true);
 });
 
 test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
@@ -233,6 +233,158 @@ test('SSE reader joins CJK native assistant deltas without inserting word spaces
   assert.equal(stream.error, undefined);
   assert.equal(result.message, '简洁直给 / 少说废话');
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, '简洁直给 / 少说废话');
+});
+
+test('SSE reader preserves assistant markdown structure across text deltas', async () => {
+  const commandId = 'codex-command-native-markdown-message';
+  const expected = [
+    '## 多轮 Markdown 验收',
+    '',
+    '这是一段中文与 English 混排的段落。',
+    '',
+    '- 一级要点：assistant final prose 应该独立于 process rows。',
+    '  - 二级要点：nested list 需要缩进稳定。',
+    '',
+    '| 项目 | 状态 |',
+    '| --- | --- |',
+    '| Markdown | pass |',
+    '',
+    '```ts',
+    'const ok = true;',
+    '```',
+  ].join('\n');
+  const body = [
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '## 多轮 Markdown 验收',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '\n\n这是一段中文与 English 混排的段落。',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '\n\n- 一级要点：assistant final prose 应该独立于 process rows。',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '\n  - 二级要点：nested list 需要缩进稳定。',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '\n\n| 项目 | 状态 |\n| --- | --- |\n| Markdown | pass |',
+      commandId,
+    })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message_delta',
+      text: '\n\n```ts\nconst ok = true;\n```',
+      commandId,
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, expected);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, expected);
+  assert.match(result.message ?? '', /\n\n\| 项目 \| 状态 \|/);
+  assert.match(result.message ?? '', /\n```ts\nconst ok = true;\n```$/);
+  assert.doesNotMatch(result.message ?? '', /验收这是一段/);
+});
+
+test('SSE reader concatenates real assistant deltas exactly instead of repairing word boundaries', async () => {
+  const commandId = 'codex-command-native-markdown-exact-delta';
+  const expected = [
+    '## Markdown sample',
+    '',
+    '```typescript',
+    'function greet(name: string): string {',
+    '  return `hello ${name}`;',
+    '}',
+    '```',
+  ].join('\n');
+  const body = [
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: '## Mark', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: 'down sample', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: '\n\n```', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: 'typescript\n', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: 'function greet', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: '(name: string): string {', commandId })}`,
+    '',
+    'event: message_delta',
+    `data: ${JSON.stringify({ type: 'message_delta', text: '\n  return `hello ${name}`;\n}\n```', commandId })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { text?: string } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.message, expected);
+  assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.text, expected);
+  assert.doesNotMatch(result.message ?? '', /Mark down|```\s+typescript|greet \(/);
 });
 
 test('SSE reader promotes gui.present into the visible Runtime Codex result', async () => {
@@ -445,6 +597,7 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
     guiAskUser?: { approvalRequest?: { id?: string }; relatedRefs?: string[] };
     guiPresentation?: { displayedRefs?: string[] };
     displayIntent?: { conversationProjection?: { visibleAnswer?: { status?: string }; artifacts?: Array<{ ref?: string }> } };
+    artifacts?: Array<{ type?: string; data?: Record<string, unknown> }>;
   };
 
   assert.equal(stream.error, undefined);
@@ -454,12 +607,14 @@ test('SSE reader turns Computer Use TUI host action metadata into visible result
   assert.equal(result.guiAskUser?.approvalRequest?.id, 'approval:computer-use:cu-risk');
   assert.deepEqual(result.guiAskUser?.relatedRefs, [traceRef, screenshotRef]);
   assert.ok(result.guiPresentation?.displayedRefs?.includes(traceRef));
-  assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), [
-    traceRef,
-    screenshotRef,
-    'EU-computer-use-risk',
-    'workEvidence:vision-sense-computer-use:cu-risk',
-  ]);
+  const artifactRefs = result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref) ?? [];
+  assert.ok(artifactRefs.includes(traceRef));
+  assert.ok(artifactRefs.includes(screenshotRef));
+  assert.ok(artifactRefs.includes('EU-computer-use-risk'));
+  assert.ok(artifactRefs.includes('workEvidence:vision-sense-computer-use:cu-risk'));
+  assert.ok(artifactRefs.some((ref) => ref?.startsWith('artifact:computer-use-virtual-screen-')));
+  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
+  assert.equal(screenArtifact?.data?.currentFrameRef, screenshotRef);
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
   assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
 });
@@ -537,6 +692,73 @@ test('NDJSON reader turns Computer Use TUI host action metadata into visible res
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.status, 'needs-human');
   assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, []);
   assert.match((seen[0] as AgentStreamEvent | undefined)?.detail ?? '', /visible GUI confirmation/);
+});
+
+test('NDJSON reader preserves VirtualAppScreen target binding and frame dimensions in gui.present artifacts', async () => {
+  const commandId = 'computer-use-command-screen-carrier';
+  const response = createNdjsonResponse([
+    {
+      event: {
+        type: 'computer-use.tui-host-actions',
+        source: 'computer-use-package-bridge',
+        commandId,
+        attemptId: `${commandId}-attempt-1`,
+        detail: JSON.stringify({
+          actions: [{
+            schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+            port: 'gui.present',
+            target: 'computer-use.trace-summary',
+            payload: {
+              title: 'Computer Use screen',
+              status: 'ready',
+              sessionRef: 'computer-use:session/screen-carrier/session.json',
+              screenRef: 'virtual-app-screen:screen-carrier/main',
+              targetAppRef: 'app:vscode',
+              targetWindowRef: 'window:vscode/main',
+              currentFrameRef: 'computer-use:session/screen-carrier/frames/current.png',
+              frameStreamRef: 'computer-use:session/screen-carrier/frame-stream.json',
+              inputLeaseRef: 'computer-use:session/screen-carrier/leases/active.json',
+              actionAdapterRef: 'computer-use:session/screen-carrier/adapters/native-window.json',
+              adapterReadinessRef: 'computer-use:session/screen-carrier/readiness/native-window.json',
+              evidenceLedgerRef: 'computer-use:session/screen-carrier/evidence-ledger.json',
+              inputIntentRefs: ['computer-use:session/screen-carrier/input-intents/latest.json'],
+              executorEventRefs: ['computer-use:session/screen-carrier/executor-events/latest.json'],
+              screen: { width: 1440, height: 900, label: 'screen-1' },
+            },
+          }],
+        }),
+      },
+    },
+    {
+      result: {
+        status: 'completed',
+        message: 'Raw provider result should not be the visible answer.',
+        commandId,
+      },
+    },
+  ]);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    artifacts?: Array<{ type?: string; data?: Record<string, unknown> }>;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { artifactRefs?: string[] } } };
+  };
+  const screenArtifact = result.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
+  const data = screenArtifact?.data as Record<string, unknown> | undefined;
+
+  assert.equal(stream.error, undefined);
+  assert.ok(data);
+  assert.equal(data?.targetAppRef, 'app:vscode');
+  assert.equal(data?.targetWindowRef, 'window:vscode/main');
+  assert.equal(data?.currentFrameRef, 'computer-use:session/screen-carrier/frames/current.png');
+  assert.equal(data?.frameStreamRef, 'computer-use:session/screen-carrier/frame-stream.json');
+  assert.deepEqual(data?.screen, { width: 1440, height: 900, label: 'screen-1' });
+  assert.equal(data?.inputLeaseRef, 'computer-use:session/screen-carrier/leases/active.json');
+  assert.equal(data?.actionAdapterRef, 'computer-use:session/screen-carrier/adapters/native-window.json');
+  assert.equal(data?.adapterReadinessRef, 'computer-use:session/screen-carrier/readiness/native-window.json');
+  assert.equal(data?.evidenceLedgerRef, 'computer-use:session/screen-carrier/evidence-ledger.json');
+  assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.some((ref) => ref.startsWith('artifact:computer-use-virtual-screen-')));
+  assert.doesNotMatch(JSON.stringify(data), /data:image|base64|providerRoute|desktopBridge|executorLease|schedulerParams/);
 });
 
 test('NDJSON reader exposes Computer Use repair sidecars and continuation action', async () => {
@@ -770,6 +992,25 @@ test('Runtime Codex raw runtime events and stderr warnings normalize to folded a
   assert.doesNotMatch(stderr.detail ?? '', /failed to load plugin|\/tmp\/plugin\.json/);
 });
 
+test('Runtime event normalization folds raw HTML and JSON bodies before presentation', () => {
+  const html = normalizeWorkspaceRuntimeEvent({
+    type: 'status',
+    message: '<!DOCTYPE html><html><title>Attention Required</title><body>CF-RAY provider page</body></html>',
+  });
+  const json = normalizeWorkspaceRuntimeEvent({
+    type: 'status',
+    message: JSON.stringify({
+      stdoutRef: '.sciforge/logs/stdout.log',
+      rawRef: '.sciforge/raw/provider.json',
+      payload: 'RAW_PROVIDER_BODY_SHOULD_NOT_RENDER',
+    }),
+  });
+
+  assert.match(html.detail ?? '', /Runtime event recorded|transport output recorded/i);
+  assert.match(json.detail ?? '', /Runtime event recorded|folded run audit/i);
+  assert.doesNotMatch(`${html.detail}\n${json.detail}`, /Attention Required|CF-RAY|RAW_PROVIDER_BODY|stdoutRef|rawRef|<html/i);
+});
+
 test('Runtime Codex product client does not predeclare raw JSONL audit refs', async () => {
   const source = await readFile(new URL('./client.ts', import.meta.url), 'utf8');
 
@@ -819,4 +1060,38 @@ test('Runtime Codex provider message events summarize native-message layering wi
   assert.match(event.detail ?? '', /native assistant message recorded/i);
   assert.match(event.detail ?? '', /folded in the run audit/i);
   assert.doesNotMatch(event.detail ?? '', /RAW_PROVIDER_MESSAGE_SHOULD_NOT_SURFACE/);
+});
+
+test('Runtime Codex context window events preserve Cursor-like public category breakdown', () => {
+  const event = normalizeWorkspaceRuntimeEvent({
+    schemaVersion: 'sciforge.codex.normalized-event.v1',
+    type: 'contextWindowState',
+    usedTokens: 70500,
+    windowTokens: 200000,
+    source: 'native',
+    provider: 'private-provider-should-not-render',
+    model: 'private-model-should-not-render',
+    contextBreakdown: {
+      system_prompt_tokens: 501,
+      tool_definition_tokens: 7500,
+      rules_tokens: 3100,
+      skills_tokens: 1500,
+      mcp_tokens: 3100,
+      subagent_definition_tokens: 577,
+      conversation_tokens: 54100,
+    },
+  });
+
+  assert.equal(event.type, 'contextWindowState');
+  assert.deepEqual(event.contextWindowState?.breakdown, {
+    systemPrompt: 501,
+    toolDefinitions: 7500,
+    rules: 3100,
+    skills: 1500,
+    mcp: 3100,
+    subagentDefinitions: 577,
+    conversation: 54100,
+  });
+  assert.equal(event.contextWindowState?.provider, 'private-provider-should-not-render');
+  assert.equal(event.contextWindowState?.model, 'private-model-should-not-render');
 });

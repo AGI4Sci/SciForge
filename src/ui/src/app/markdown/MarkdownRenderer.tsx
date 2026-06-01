@@ -1,12 +1,17 @@
 import { Fragment, cloneElement, isValidElement, type ReactElement, type ReactNode } from 'react';
 import ReactMarkdown, { type Components } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
 import type { ObjectReference } from '../../domain';
 import {
   referenceForObjectReference,
   resolveInlineObjectReferenceToken,
   sciForgeReferenceAttribute,
 } from '../../../../../packages/support/object-references';
+
+const CJK_AUTOLINK_BOUNDARY_PATTERN = /[、，。；：！？）】》」』]/u;
+const TRAILING_INLINE_REFERENCE_PUNCTUATION_PATTERN = /[.,;，。；、：！？）】》」』]+$/u;
 
 export function MarkdownRenderer({
   markdown,
@@ -21,7 +26,20 @@ export function MarkdownRenderer({
 }) {
   const components: Components = {
     a({ href, children }) {
-      return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
+      const autolinkBoundary = splitAutolinkLiteralBoundary(children);
+      if (autolinkBoundary) {
+        const safeHref = safeMarkdownHref(autolinkBoundary.href);
+        if (!safeHref) return <span className="markdown-disabled-link">{children}</span>;
+        return (
+          <>
+            <a href={safeHref} target="_blank" rel="noreferrer">{autolinkBoundary.label}</a>
+            {autolinkBoundary.suffix}
+          </>
+        );
+      }
+      const safeHref = safeMarkdownHref(href);
+      if (!safeHref) return <span className="markdown-disabled-link">{children}</span>;
+      return <a href={safeHref} target="_blank" rel="noreferrer">{children}</a>;
     },
     p({ children }) {
       return <p>{linkExplicitReferenceText(children, objectReferences, onObjectReferenceFocus)}</p>;
@@ -65,15 +83,44 @@ export function MarkdownRenderer({
   return (
     <div className={className}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[[rehypeKatex, { throwOnError: false, strict: false, trust: false }]]}
         components={components}
         skipHtml
-        urlTransform={(url) => url}
+        urlTransform={(url) => safeMarkdownHref(url) ?? ''}
       >
         {markdown ?? ''}
       </ReactMarkdown>
     </div>
   );
+}
+
+function safeMarkdownHref(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('#')) return trimmed;
+  if (/^mailto:[^\s"'<>]+$/i.test(trimmed)) return trimmed;
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? trimmed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function splitAutolinkLiteralBoundary(children: ReactNode): { href: string; label: string; suffix: string } | undefined {
+  const label = textFromReactNode(children);
+  const protocol = /^https?:\/\//i.exec(label)?.[0];
+  if (!protocol) return undefined;
+  const boundaryIndex = label.search(CJK_AUTOLINK_BOUNDARY_PATTERN);
+  if (boundaryIndex <= protocol.length) return undefined;
+  const href = label.slice(0, boundaryIndex);
+  const suffix = label.slice(boundaryIndex);
+  return suffix ? { href, label: href, suffix } : undefined;
 }
 
 function textFromReactNode(value: ReactNode): string {
@@ -114,7 +161,7 @@ function linkExplicitReferenceString(
   const pieces: ReactNode[] = [];
   let cursor = 0;
   for (const match of value.matchAll(inlineReferenceTextPattern())) {
-    const token = match[0].replace(/[.,;，。；、]+$/, '');
+    const token = match[0].replace(TRAILING_INLINE_REFERENCE_PUNCTUATION_PATTERN, '');
     const index = match.index ?? 0;
     if (index < cursor) continue;
     const reference = resolveInlineObjectReferenceToken(token, references);
@@ -139,7 +186,7 @@ function linkExplicitReferenceString(
 }
 
 function inlineReferenceTextPattern() {
-  return /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、,;]+|https?:\/\/[^\s)\]）>，。；、]+|(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:md|markdown|txt|log|jsonl?|csv|tsv|html?|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|pdb|cif|mmcif))(?![A-Za-z0-9_./-])/gi;
+  return /\b(?:(?:artifact|file|folder|run|execution-unit|scenario-package)::?[^\s)\]）>，。；、：！？】》」』,;]+|https?:\/\/[^\s)\]）>，。；、：！？】》」』]+|(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.(?:md|markdown|txt|log|jsonl?|csv|tsv|html?|pdf|docx?|xlsx?|pptx?|png|jpe?g|gif|webp|svg|pdb|cif|mmcif))(?![A-Za-z0-9_./-])/gi;
 }
 
 function referenceWithObjectPayload(reference: ObjectReference) {

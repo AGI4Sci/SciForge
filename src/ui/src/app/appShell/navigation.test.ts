@@ -10,9 +10,9 @@ test('routes search queries matching scenario metadata to that scenario workbenc
   });
 });
 
-test('routes timeline search aliases to the timeline page', () => {
-  assert.deepEqual(resolveSearchNavigation('打开 notebook 时间线', scenarios), { page: 'timeline' });
-  assert.deepEqual(resolveSearchNavigation('alignment history', scenarios), { page: 'timeline' });
+test('routes feedback search aliases to the feedback page', () => {
+  assert.deepEqual(resolveSearchNavigation('打开 feedback inbox', scenarios), { page: 'feedback' });
+  assert.deepEqual(resolveSearchNavigation('用户反馈', scenarios), { page: 'feedback' });
 });
 
 test('keeps unknown non-empty searches on the workbench', () => {

@@ -93,6 +93,71 @@ classifyMappingForConfirmation = classify_mapping_for_confirmation
 validateConfirmationBoundary = validate_confirmation_boundary
 
 
+def build_virtual_display_provider_manifest(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import build_virtual_display_provider_manifest as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def build_virtual_display_screen_payload(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import build_virtual_display_screen_payload as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def describe_virtual_display_providers(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    from .virtual_display_provider import describe_virtual_display_providers as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def query_virtual_display_providers(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    from .virtual_display_provider import query_virtual_display_providers as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def read_virtual_display_provider(*args: Any, **kwargs: Any) -> dict[str, Any] | None:
+    from .virtual_display_provider import read_virtual_display_provider as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def probe_virtual_display_providers(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import probe_virtual_display_providers as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def invoke_virtual_display_provider(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import invoke_virtual_display_provider as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def validate_virtual_display_readiness(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import validate_virtual_display_readiness as _impl
+
+    return _impl(*args, **kwargs)
+
+
+def virtual_display_readiness_to_action_adapter_readiness(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from .virtual_display_provider import virtual_display_readiness_to_action_adapter_readiness as _impl
+
+    return _impl(*args, **kwargs)
+
+
+buildVirtualDisplayProviderManifest = build_virtual_display_provider_manifest
+buildVirtualDisplayScreenPayload = build_virtual_display_screen_payload
+describeVirtualDisplayProviders = describe_virtual_display_providers
+queryVirtualDisplayProviders = query_virtual_display_providers
+readVirtualDisplayProvider = read_virtual_display_provider
+probeVirtualDisplayProviders = probe_virtual_display_providers
+invokeVirtualDisplayProvider = invoke_virtual_display_provider
+validateVirtualDisplayReadiness = validate_virtual_display_readiness
+virtualDisplayReadinessToActionAdapterReadiness = virtual_display_readiness_to_action_adapter_readiness
+
+
 def get_native_tool_manifest() -> dict[str, Any]:
     from .native_tool import get_native_tool_manifest as _get_native_tool_manifest
 
@@ -213,6 +278,24 @@ __all__ = [
     "buildTargetBoundRealWindowProbeEvidence",
     "build_target_bound_input_adapter_manifest",
     "buildTargetBoundInputAdapterManifest",
+    "build_virtual_display_provider_manifest",
+    "buildVirtualDisplayProviderManifest",
+    "build_virtual_display_screen_payload",
+    "buildVirtualDisplayScreenPayload",
+    "describe_virtual_display_providers",
+    "describeVirtualDisplayProviders",
+    "query_virtual_display_providers",
+    "queryVirtualDisplayProviders",
+    "read_virtual_display_provider",
+    "readVirtualDisplayProvider",
+    "probe_virtual_display_providers",
+    "probeVirtualDisplayProviders",
+    "invoke_virtual_display_provider",
+    "invokeVirtualDisplayProvider",
+    "validate_virtual_display_readiness",
+    "validateVirtualDisplayReadiness",
+    "virtual_display_readiness_to_action_adapter_readiness",
+    "virtualDisplayReadinessToActionAdapterReadiness",
     "compact_result",
     "compactResult",
     "get_manifest",

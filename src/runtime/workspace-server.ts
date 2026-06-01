@@ -25,6 +25,8 @@ import {
   previewRequestBaseUrl,
   streamWorkspacePreviewFile,
 } from './server/file-preview.js';
+import { handleBrowserHostSessionRoutes, handleBrowserHostSessionUpgrade } from './workspace-server-browser-host.js';
+import { handleWorkspaceModuleRoutes } from './workspace-server-modules.js';
 import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js';
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { buildWorkspaceWriterHealth } from './workspace-server-health.js';
@@ -161,8 +163,33 @@ interface ActiveFeedbackCodexTerminalSession extends FeedbackCodexTerminalSessio
   ptySockets?: Set<WebSocket>;
 }
 
+type WorkspaceTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
+
+interface WorkspaceTerminalSession {
+  schemaVersion: 1;
+  id: string;
+  status: WorkspaceTerminalStatus;
+  workspacePath: string;
+  cwd: string;
+  shell: string;
+  transcriptRef: string;
+  startedAt: string;
+  updatedAt: string;
+  message?: string;
+  webSocketPath: string;
+}
+
+interface ActiveWorkspaceTerminalSession extends WorkspaceTerminalSession {
+  ptyProcess?: IPty;
+  ptyBacklog?: string[];
+  ptySockets?: Set<WebSocket>;
+  transcriptPath?: string;
+}
+
 const activeFeedbackCodexTerminalSessions = new Map<string, ActiveFeedbackCodexTerminalSession>();
 const feedbackCodexPtyWss = new WebSocketServer({ noServer: true });
+const activeWorkspaceTerminalSessions = new Map<string, ActiveWorkspaceTerminalSession>();
+const workspaceTerminalWss = new WebSocketServer({ noServer: true });
 
 const workspaceServer = createServer(async (req, res) => {
   if (handleWorkspaceCors(req, res)) return;
@@ -176,6 +203,10 @@ const workspaceServer = createServer(async (req, res) => {
     return;
   }
   const url = workspaceRequestUrl(req);
+  if (await handleBrowserHostSessionRoutes(req, res, url, {
+    workspaceRootFromRequest,
+    workspaceRootFromBodyOrRequest,
+  })) return;
   if (url.pathname === '/api/sciforge/config' && req.method === 'GET') {
     try {
       writeJson(res, 200, { ok: true, config: await readLocalSciForgeConfig() });
@@ -348,6 +379,42 @@ const workspaceServer = createServer(async (req, res) => {
     }
     return;
   }
+  if (url.pathname === '/api/sciforge/terminal/sessions/start' && req.method === 'POST') {
+    try {
+      const body = await readJson(req);
+      const root = await workspaceRootFromBodyOrRequest(body, url);
+      const session = await startWorkspaceTerminalSession(root, body);
+      writeJson(res, 200, { ok: true, workspacePath: root, session: workspaceTerminalPublicSession(session) });
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  const workspaceTerminalSessionMatch = /^\/api\/sciforge\/terminal\/sessions\/([^/]+)\/(stop|tail)$/.exec(url.pathname);
+  if (workspaceTerminalSessionMatch) {
+    try {
+      const sessionId = decodeURIComponent(workspaceTerminalSessionMatch[1]);
+      const action = workspaceTerminalSessionMatch[2];
+      if (action === 'tail' && req.method === 'GET') {
+        const root = await workspaceRootFromRequest(url);
+        const cursor = Number(url.searchParams.get('cursor') || url.searchParams.get('after') || 0);
+        const limit = Number(url.searchParams.get('limit') || 200);
+        const result = await loadWorkspaceTerminalTail(root, sessionId, { cursor, limit });
+        writeJson(res, 200, { ok: true, workspacePath: root, ...result });
+        return;
+      }
+      if (action === 'stop' && req.method === 'POST') {
+        const body = await readJson(req);
+        const root = await workspaceRootFromBodyOrRequest(body, url);
+        const session = await stopWorkspaceTerminalSession(root, sessionId, body);
+        writeJson(res, 200, { ok: true, workspacePath: root, session });
+        return;
+      }
+    } catch (err) {
+      writeJson(res, 400, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+  }
   const feedbackCodexPtyTerminalMatch = /^\/api\/sciforge\/feedback\/codex-pty\/([^/]+)\/(stop|tail)$/.exec(url.pathname);
   if (feedbackCodexPtyTerminalMatch) {
     try {
@@ -504,6 +571,9 @@ const workspaceServer = createServer(async (req, res) => {
     }
     return;
   }
+  if (await handleWorkspaceModuleRoutes(req, res, url, {
+    workspaceRootFromBodyOrRequest,
+  })) return;
   if (await handleWorkspaceFileApiRoutes(req, res, url, {
     stateDir: STATE_DIR,
     workspaceOpenDryRun: process.env.SCIFORGE_WORKSPACE_OPEN_DRY_RUN === '1',
@@ -597,7 +667,24 @@ function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buff
     })().catch(() => socket.destroy());
     return;
   }
+  if (handleBrowserHostSessionUpgrade(req, socket, head, {
+    workspaceRootFromRequest,
+  })) return;
+  if (handleWorkspaceTerminalUpgrade(req, socket, head)) return;
   handleFeedbackCodexPtyUpgrade(req, socket, head);
+}
+
+function handleWorkspaceTerminalUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
+  const url = workspaceRequestUrl(req);
+  const match = /^\/api\/sciforge\/terminal\/sessions\/([^/]+)\/ws$/.exec(url.pathname);
+  if (!match) return false;
+  workspaceTerminalWss.handleUpgrade(req, socket, head, (ws) => {
+    void connectWorkspaceTerminalSocket(ws, decodeURIComponent(match[1]), url).catch((err: unknown) => {
+      ws.send(JSON.stringify({ type: 'error', message: err instanceof Error ? err.message : String(err) }));
+      ws.close(1011, 'workspace terminal unavailable');
+    });
+  });
+  return true;
 }
 
 function handleFeedbackCodexPtyUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer) {
@@ -613,6 +700,51 @@ function handleFeedbackCodexPtyUpgrade(req: IncomingMessage, socket: Duplex, hea
       ws.close(1011, 'codex pty unavailable');
     });
   });
+}
+
+async function connectWorkspaceTerminalSocket(ws: WebSocket, sessionId: string, url: URL) {
+  const requestedRoot = url.searchParams.get('workspacePath')?.trim();
+  const session = activeWorkspaceTerminalSessions.get(sessionId)
+    ?? (requestedRoot ? await activeOrStoredWorkspaceTerminalSession(normalizeWorkspaceRootPath(resolve(requestedRoot)), sessionId) : undefined);
+  if (!session) {
+    ws.send(JSON.stringify({ type: 'error', message: `Workspace terminal session not found: ${sessionId}` }));
+    ws.close(1011, 'workspace terminal session not found');
+    return;
+  }
+  session.ptySockets = session.ptySockets ?? new Set();
+  session.ptySockets.add(ws);
+  ws.send(JSON.stringify({ type: 'status', session: workspaceTerminalPublicSession(session) }));
+  for (const chunk of session.ptyBacklog ?? []) {
+    ws.send(JSON.stringify({ type: 'output', data: chunk }));
+  }
+  ws.on('message', (raw) => {
+    const message = parseFeedbackCodexPtyClientMessage(raw.toString());
+    if (!message) return;
+    if (message.type === 'input') {
+      if (session.ptyProcess) session.ptyProcess.write(message.data);
+      else ws.send(JSON.stringify({ type: 'error', message: 'Workspace terminal process is not running.' }));
+    }
+    if (message.type === 'resize' && session.ptyProcess) {
+      session.ptyProcess.resize(message.cols, message.rows);
+    }
+    if (message.type === 'stop') {
+      void stopWorkspaceTerminalSession(session.workspacePath, session.id, { reason: 'websocket stop request' }).catch(() => undefined);
+    }
+  });
+  ws.on('close', () => {
+    session.ptySockets?.delete(ws);
+  });
+}
+
+function broadcastWorkspaceTerminal(session: ActiveWorkspaceTerminalSession, payload: Record<string, unknown>) {
+  const text = JSON.stringify(payload);
+  for (const socket of session.ptySockets ?? []) {
+    if (socket.readyState === WebSocket.OPEN) socket.send(text);
+  }
+}
+
+function broadcastWorkspaceTerminalStatus(session: ActiveWorkspaceTerminalSession) {
+  broadcastWorkspaceTerminal(session, { type: 'status', session: workspaceTerminalPublicSession(session) });
 }
 
 async function connectFeedbackCodexPtySocket(ws: WebSocket, sessionId: string, url: URL) {
@@ -1339,6 +1471,219 @@ function tryParseJson(value: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+async function startWorkspaceTerminalSession(root: string, body: Record<string, unknown>) {
+  const now = new Date().toISOString();
+  const sessionId = `terminal-session-${Date.now().toString(36)}-${safeName(basename(root) || 'workspace')}`;
+  const cwd = workspaceTerminalCwd(root, stringField(body.cwd));
+  const shell = workspaceTerminalShell(stringField(body.shell));
+  const transcriptRef = workspaceTerminalTranscriptRef(sessionId);
+  const transcriptPath = workspaceTerminalTranscriptPath(root, sessionId);
+  const webSocketPath = `/api/sciforge/terminal/sessions/${encodeURIComponent(sessionId)}/ws`;
+  const session: ActiveWorkspaceTerminalSession = {
+    schemaVersion: 1,
+    id: sessionId,
+    status: 'starting',
+    workspacePath: root,
+    cwd,
+    shell,
+    transcriptRef,
+    startedAt: now,
+    updatedAt: now,
+    message: 'Workspace terminal is starting.',
+    webSocketPath,
+    transcriptPath,
+    ptyBacklog: [],
+    ptySockets: new Set(),
+  };
+  activeWorkspaceTerminalSessions.set(session.id, session);
+  await persistWorkspaceTerminalSession(session);
+  await appendRepairTerminalMirrorEntry(transcriptPath, 'event', `Workspace terminal session started. cwd=${cwd}; shell=${shell}`);
+  try {
+    const cols = ptyDimension(body.cols, 110, 40, 240);
+    const rows = ptyDimension(body.rows, 28, 12, 80);
+    const ptyProcess = spawnPty(shell, [], {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd,
+      env: {
+        ...process.env,
+        TERM: process.env.TERM || 'xterm-256color',
+        SCIFORGE_WORKSPACE_PATH: root,
+      },
+    });
+    session.ptyProcess = ptyProcess;
+    session.status = 'running';
+    session.message = 'Workspace terminal is running.';
+    session.updatedAt = new Date().toISOString();
+    await persistWorkspaceTerminalSession(session);
+    broadcastWorkspaceTerminalStatus(session);
+    ptyProcess.onData((data) => {
+      const chunk = data.slice(0, 12_000);
+      session.ptyBacklog = [...(session.ptyBacklog ?? []), chunk].slice(-250);
+      broadcastWorkspaceTerminal(session, { type: 'output', data: chunk });
+      void appendRepairTerminalMirrorEntry(workspaceTerminalTranscriptPath(session.workspacePath, session.id), 'stdout', chunk).catch(() => undefined);
+    });
+    ptyProcess.onExit((event) => {
+      void finishWorkspaceTerminalSession(session.id, event.exitCode, event.signal).catch(() => undefined);
+    });
+    return session;
+  } catch (err) {
+    const message = `Workspace terminal dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+    session.status = 'failed';
+    session.message = message;
+    session.updatedAt = new Date().toISOString();
+    await appendRepairTerminalMirrorEntry(transcriptPath, 'stderr', message);
+    await persistWorkspaceTerminalSession(session);
+    broadcastWorkspaceTerminalStatus(session);
+    throw err;
+  }
+}
+
+async function finishWorkspaceTerminalSession(sessionId: string, exitCode: number, signal?: number) {
+  const session = activeWorkspaceTerminalSessions.get(sessionId);
+  if (!session) return;
+  session.ptyProcess = undefined;
+  const wasCancelled = session.status === 'cancelled';
+  const finalStatus: WorkspaceTerminalStatus = wasCancelled ? 'cancelled' : exitCode === 0 ? 'idle' : 'failed';
+  const message = wasCancelled
+    ? session.message || 'Workspace terminal cancelled.'
+    : exitCode === 0
+    ? 'Workspace terminal exited.'
+    : `Workspace terminal exited with code ${exitCode}${signal ? ` signal ${signal}` : ''}.`;
+  session.status = finalStatus;
+  session.message = message;
+  session.updatedAt = new Date().toISOString();
+  await appendRepairTerminalMirrorEntry(workspaceTerminalTranscriptPath(session.workspacePath, session.id), finalStatus === 'idle' ? 'event' : 'stderr', message);
+  await persistWorkspaceTerminalSession(session);
+  broadcastWorkspaceTerminal(session, { type: 'exit', exitCode, signal, session: workspaceTerminalPublicSession(session) });
+  broadcastWorkspaceTerminalStatus(session);
+}
+
+async function stopWorkspaceTerminalSession(root: string, sessionId: string, body: Record<string, unknown>) {
+  const session = await activeOrStoredWorkspaceTerminalSession(root, sessionId);
+  const reason = stringField(body.reason) || 'right pane terminal stop';
+  const message = session.ptyProcess
+    ? `Stop requested for workspace terminal ${session.id}: ${reason}`
+    : `Stop requested for workspace terminal ${session.id}, but no active PTY process is attached.`;
+  await appendRepairTerminalMirrorEntry(workspaceTerminalTranscriptPath(root, session.id), 'stderr', message);
+  if (session.ptyProcess) {
+    session.ptyProcess.kill();
+    session.ptyProcess = undefined;
+    session.status = 'cancelled';
+  } else {
+    session.status = session.status === 'running' || session.status === 'starting' ? 'idle' : session.status;
+  }
+  session.message = message;
+  session.updatedAt = new Date().toISOString();
+  await persistWorkspaceTerminalSession(session);
+  broadcastWorkspaceTerminalStatus(session);
+  return workspaceTerminalPublicSession(session);
+}
+
+async function loadWorkspaceTerminalTail(root: string, sessionId: string, options: { cursor?: number; limit?: number }) {
+  const session = activeWorkspaceTerminalSessions.get(sessionId) ?? await readWorkspaceTerminalSession(root, sessionId);
+  const terminalPath = workspaceTerminalTranscriptPath(root, sessionId);
+  const text = await readFile(terminalPath, 'utf8').catch((err: unknown) => {
+    if (isNodeErrorCode(err, 'ENOENT')) return '';
+    throw err;
+  });
+  return {
+    session: session ? workspaceTerminalPublicSession(session) : undefined,
+    tail: parseRepairTerminalMirrorNdjson(text, {
+      cursor: Number.isFinite(options.cursor) ? options.cursor : 0,
+      limit: Number.isFinite(options.limit) ? options.limit : 200,
+      terminalMirrorRef: session?.transcriptRef ?? workspaceTerminalTranscriptRef(sessionId),
+    }),
+  };
+}
+
+function workspaceTerminalPublicSession(session: ActiveWorkspaceTerminalSession | WorkspaceTerminalSession): WorkspaceTerminalSession {
+  return {
+    schemaVersion: 1,
+    id: session.id,
+    status: workspaceTerminalStatus(session.status),
+    workspacePath: session.workspacePath,
+    cwd: session.cwd,
+    shell: session.shell,
+    transcriptRef: session.transcriptRef,
+    startedAt: session.startedAt,
+    updatedAt: session.updatedAt,
+    message: session.message,
+    webSocketPath: session.webSocketPath,
+  };
+}
+
+function workspaceTerminalStatus(value: unknown): WorkspaceTerminalStatus {
+  return value === 'starting' || value === 'running' || value === 'idle' || value === 'failed' || value === 'cancelled'
+    ? value
+    : 'idle';
+}
+
+function workspaceTerminalDir(root: string, sessionId: string) {
+  return join(root, '.sciforge', 'terminal-sessions', normalizeFeedbackBundleId(sessionId));
+}
+
+function workspaceTerminalTranscriptRef(sessionId: string) {
+  return `terminal-transcript:${normalizeFeedbackBundleId(sessionId)}`;
+}
+
+function workspaceTerminalTranscriptPath(root: string, sessionId: string) {
+  return join(workspaceTerminalDir(root, sessionId), 'terminal-mirror.ndjson');
+}
+
+function workspaceTerminalManifestRef(root: string, sessionId: string) {
+  return join(workspaceTerminalDir(root, sessionId), 'workspace-terminal.json');
+}
+
+async function activeOrStoredWorkspaceTerminalSession(root: string, sessionId: string): Promise<ActiveWorkspaceTerminalSession> {
+  const active = activeWorkspaceTerminalSessions.get(sessionId);
+  if (active) return active;
+  const stored = await readWorkspaceTerminalSession(root, sessionId);
+  if (!stored) throw new Error(`Workspace terminal session not found: ${sessionId}`);
+  return { ...stored, ptyBacklog: [], ptySockets: new Set() };
+}
+
+async function readWorkspaceTerminalSession(root: string, sessionId: string): Promise<WorkspaceTerminalSession | undefined> {
+  const manifest = await readOptionalJson(workspaceTerminalManifestRef(root, sessionId)).catch(() => undefined);
+  if (!isRecord(manifest) || typeof manifest.id !== 'string') return undefined;
+  return {
+    schemaVersion: 1,
+    id: manifest.id,
+    status: workspaceTerminalStatus(manifest.status),
+    workspacePath: stringField(manifest.workspacePath) || root,
+    cwd: stringField(manifest.cwd) || root,
+    shell: workspaceTerminalShell(stringField(manifest.shell)),
+    transcriptRef: workspaceTerminalTranscriptRef(manifest.id),
+    startedAt: stringField(manifest.startedAt) || new Date().toISOString(),
+    updatedAt: stringField(manifest.updatedAt) || stringField(manifest.startedAt) || new Date().toISOString(),
+    message: stringField(manifest.message),
+    webSocketPath: stringField(manifest.webSocketPath) || `/api/sciforge/terminal/sessions/${encodeURIComponent(manifest.id)}/ws`,
+  };
+}
+
+async function persistWorkspaceTerminalSession(session: WorkspaceTerminalSession) {
+  await mkdir(dirname(workspaceTerminalManifestRef(session.workspacePath, session.id)), { recursive: true });
+  await writeFile(workspaceTerminalManifestRef(session.workspacePath, session.id), JSON.stringify(workspaceTerminalPublicSession(session), null, 2));
+}
+
+function workspaceTerminalCwd(root: string, value: string | undefined) {
+  const requested = value?.trim();
+  if (!requested) return root;
+  const target = isAbsolute(requested) ? resolve(requested) : resolve(root, requested);
+  const rel = relative(root, target);
+  if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    throw new Error('Workspace terminal refused a cwd outside the active workspace.');
+  }
+  return target;
+}
+
+function workspaceTerminalShell(value: string | undefined) {
+  const candidate = value?.trim() || process.env.SHELL || '/bin/zsh';
+  if (!isAbsolute(candidate) || candidate.includes('\0')) return '/bin/zsh';
+  return candidate;
 }
 
 async function startFeedbackCodexPtyTerminal(root: string, issueId: string, body: Record<string, unknown>) {

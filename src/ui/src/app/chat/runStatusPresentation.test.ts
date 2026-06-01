@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { PROCESS_PROGRESS_EVENT_TYPE, PROCESS_PROGRESS_PHASE, PROCESS_PROGRESS_STATUS } from '@sciforge-ui/runtime-contract';
 
 import { defaultSciForgeConfig, updateConfig } from '../../config';
 import type { AgentStreamEvent } from '../../domain';
-import { runReadiness, runningMessageContentFromStream } from './runStatusPresentation';
+import { liveProgressSentenceFromStream, runReadiness, runningMessageContentFromStream } from './runStatusPresentation';
 
 test('running message uses user-facing waiting status for audit-only stderr warnings', () => {
   const events: AgentStreamEvent[] = [{
@@ -131,6 +132,82 @@ test('running message folds dense inline local path drafts into concise status c
   assert.doesNotMatch(content, /\/Applications\/workspace|node_modules|scenarioDemoData/);
 });
 
+test('live progress sentence prefers Cursor-style process action over assistant draft prose', () => {
+  const content = liveProgressSentenceFromStream('FINAL_ANSWER_SHOULD_NOT_STREAM_IN_PROGRESS', [{
+    id: 'evt-live-shell',
+    type: 'tool-call',
+    label: 'Tool call',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    raw: {
+      native: {
+        rawType: 'tool_started',
+        toolName: 'shell',
+        status: 'running',
+        command: 'npm test',
+      },
+    },
+  }]);
+
+  assert.equal(content, 'Running npm test');
+  assert.doesNotMatch(content, /FINAL_ANSWER_SHOULD_NOT_STREAM/);
+});
+
+test('live progress sentence is one safe line for structured progress and transport placeholders', () => {
+  const structured = liveProgressSentenceFromStream('', [{
+    id: 'evt-structured-progress-live',
+    type: PROCESS_PROGRESS_EVENT_TYPE,
+    label: '过程',
+    detail: 'PROMPT_TEXT_SHOULD_NOT_DECIDE',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    raw: {
+      progress: {
+        phase: PROCESS_PROGRESS_PHASE.WAIT,
+        title: '结构化等待状态',
+        detail: 'structured progress detail should stay in process detail',
+        reading: ['/structured/read.csv'],
+        waitingFor: 'structured backend event',
+        nextStep: 'structured next step',
+        status: PROCESS_PROGRESS_STATUS.RUNNING,
+      },
+    },
+  }]);
+  const transport = liveProgressSentenceFromStream('', [{
+    id: 'evt-app-server-progress-live',
+    type: 'process-progress',
+    label: 'Progress',
+    detail: 'Codex app-server stream 仍然连接；正在等待下一条 rich-client 事件。',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    raw: {
+      progress: {
+        title: 'Codex app-server 正在运行',
+        waitingFor: '下一条 Codex app-server rich-client 事件',
+        nextStep: '收到事件后继续按顺序展示执行轨迹。',
+        reason: 'app-server-waiting',
+      },
+    },
+  }]);
+
+  assert.equal(structured, '结构化等待状态');
+  assert.doesNotMatch(structured, /Reading|Next|PROMPT_TEXT_SHOULD_NOT_DECIDE/);
+  assert.equal(transport, 'Working on your request.');
+  assert.doesNotMatch(transport, /Codex app-server|rich-client|下一条/);
+});
+
+test('live progress sentence does not stream final prose or local-path drafts into the running answer slot', () => {
+  const finalDraft = liveProgressSentenceFromStream('This is a complete answer paragraph that should only appear after the run finishes.', []);
+  const pathDraft = liveProgressSentenceFromStream([
+    '/Applications/workspace/ailab/research/app/SciForge/tools/a.ts',
+    '/Applications/workspace/ailab/research/app/SciForge/tools/b.ts',
+    '/Applications/workspace/ailab/research/app/SciForge/tools/c.ts',
+    '/Applications/workspace/ailab/research/app/SciForge/tools/d.ts',
+  ].join('\n'), [], 'zh-CN');
+
+  assert.equal(finalDraft, 'Drafting the response.');
+  assert.doesNotMatch(finalDraft, /complete answer paragraph/);
+  assert.match(pathDraft, /正在整理工作区上下文/);
+  assert.doesNotMatch(pathDraft, /\/Applications\/workspace|tools\/a/);
+});
+
 test('run readiness displays provider setup as a non-routing notice', () => {
   const readiness = runReadiness({
     input: 'run the task',
@@ -151,9 +228,41 @@ test('run readiness displays provider setup as a non-routing notice', () => {
 
   assert.equal(readiness.ok, true);
   assert.equal(readiness.severity, 'warning');
-  assert.match(readiness.message, /Connection notice/);
-  assert.match(readiness.message, /Set an API Key/);
-  assert.doesNotMatch(readiness.message, /OpenAI provider|fallback/i);
+  assert.match(readiness.message, /Assistant connection needs setup/);
+  assert.match(readiness.message, /credential/);
+  assert.doesNotMatch(readiness.message, /OpenAI provider|openrouter|qwen|Base URL|API Key|fallback|https?:\/\//i);
+});
+
+test('run readiness surfaces provider preflight as generic assistant setup without leaks', () => {
+  const readiness = runReadiness({
+    input: 'run the task',
+    isSending: false,
+    config: updateConfig(defaultSciForgeConfig, {
+      locale: 'en-US',
+      modelProvider: 'openrouter',
+      modelBaseUrl: 'https://openrouter.ai/api/v1',
+      modelName: 'qwen/qwen3.6-plus:free',
+      apiKey: 'configured-key',
+      workspacePath: '/tmp/ws',
+    }),
+    runtimeHealth: [
+      { id: 'workspace', label: 'Workspace Writer', status: 'online', detail: 'ok' },
+      { id: 'codex-runtime', label: 'Codex Runtime', status: 'online', detail: 'ok' },
+      {
+        id: 'model',
+        label: 'Assistant Connection',
+        source: 'runtime-provider-preflight',
+        status: 'not-configured',
+        detail: 'Assistant connection preflight needs attention (missing-runtime-env)',
+        recoverAction: 'npm run smoke:runtime-provider-preflight',
+      },
+    ],
+  });
+
+  assert.equal(readiness.ok, true);
+  assert.equal(readiness.severity, 'warning');
+  assert.match(readiness.message, /Assistant connection preflight needs attention/);
+  assert.doesNotMatch(readiness.message, /SCIFORGE_RUNTIME_API_KEY|openrouter|qwen|Base URL|API Key|provider|https?:\/\//i);
 });
 
 test('run readiness treats runtime checking as a non-blocking send notice', () => {

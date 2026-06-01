@@ -13,6 +13,7 @@ import {
   createApproveResultUIAction,
   compactUIActionPromptPreview,
   createCancelRunUIAction,
+  createChatPanelActionUIAction,
   createCommandTextUIAction,
   createConcurrencyDecisionUIAction,
   createLoadArtifactPreviewUIAction,
@@ -165,6 +166,16 @@ test('UIAction creators cover every final write intent and can be recorded on th
       runId: 'run-active',
       auditRefs: ['execution-unit:EU-1', 'execution-unit:EU-1'],
     }),
+    createChatPanelActionUIAction({
+      id: 'ui-action-chat-action',
+      session,
+      createdAt: '2026-05-16T00:01:05.000Z',
+      action: 'copy-messages',
+      effect: 'clipboard',
+      commandText: '/chat copy --messages --semantic-transcript',
+      copiedTextKind: 'messages',
+      auditRefs: ['chat-action:copy-messages', 'chat-action:copy-messages'],
+    }),
   ];
 
   const sessionWithLog = actions.reduce((current, action) => recordUIActionInSession(current, action, 16), session);
@@ -182,6 +193,7 @@ test('UIAction creators cover every final write intent and can be recorded on th
     'cancel-run',
     'concurrency-decision',
     'open-debug-audit',
+    'chat-panel-action',
   ]);
   assert.deepEqual(log[0].type === 'command-text' ? log[0].auditRefs : [], ['audit:run']);
   assert.deepEqual(log[2].type === 'trigger-recover' ? log[2].auditRefs : [], ['audit:run']);
@@ -192,6 +204,8 @@ test('UIAction creators cover every final write intent and can be recorded on th
   assert.deepEqual(log[7].type === 'update-capability-preference' ? log[7].preference : {}, { prefer: 'web_search' });
   assert.deepEqual(log[8].type === 'cancel-run' ? log[8].rejectedGuidanceIds : [], ['guidance-1']);
   assert.deepEqual(log[10].type === 'open-debug-audit' ? log[10].auditRefs : [], ['execution-unit:EU-1']);
+  assert.equal(log[11].type === 'chat-panel-action' ? log[11].action : '', 'copy-messages');
+  assert.deepEqual(log[11].type === 'chat-panel-action' ? log[11].auditRefs : [], ['chat-action:copy-messages']);
 });
 
 test('commandText generators produce terminal-equivalent text for GUI affordances', () => {
@@ -210,6 +224,37 @@ test('commandText generators produce terminal-equivalent text for GUI affordance
     commandTextForCapabilityPreference({ prefer: ['literature.search', 'pdf.extract'], apiKey: 'SHOULD_NOT_LEAK' }),
     '/capabilities plan --prefer "literature.search" "pdf.extract"',
   );
+});
+
+test('model picker preferences are declared public intents rather than provider config', () => {
+  const action = createUpdateCapabilityPreferenceUIAction({
+    id: 'ui-action-model-intent',
+    session,
+    createdAt: '2026-05-16T00:02:00.000Z',
+    preference: {
+      intent: 'composer-model-selection',
+      source: 'composer-model-menu',
+      modelIntentId: 'assistant-fast',
+      publicLabel: 'Assistant Fast',
+      mode: 'assistant',
+      capabilityTier: 'fast',
+      provider: 'SHOULD_NOT_PERSIST',
+      modelName: 'SHOULD_NOT_PERSIST',
+      baseUrl: 'https://provider.example/private',
+      apiKey: 'SHOULD_NOT_PERSIST',
+      token: 'SHOULD_NOT_PERSIST',
+    },
+  });
+
+  assert.equal(action.type, 'update-capability-preference');
+  assert.deepEqual(action.preference, {
+    intent: 'composer-model-selection',
+    source: 'composer-model-menu',
+    modelIntentId: 'assistant-fast',
+    publicLabel: 'Assistant Fast',
+    mode: 'assistant',
+    capabilityTier: 'fast',
+  });
 });
 
 test('capability command text only uses native discovery verbs', () => {
@@ -234,6 +279,7 @@ test('UI action boundary is the only app-level creator surface for final write i
   assert.match(chatPanel, /createSubmitTurnUIAction/);
   assert.match(chatPanel, /createCancelRunUIAction/);
   assert.match(chatPanel, /createConcurrencyDecisionUIAction/);
+  assert.match(chatPanel, /createChatPanelActionUIAction/);
   assert.match(resultsRenderer, /requestRecoverCommandTextAction/);
   assert.doesNotMatch(resultsRenderer, /requestRecoverActionThroughUserActionApi/);
   assert.match(resultsRenderer, /requestOpenDebugAuditThroughUserActionApi/);

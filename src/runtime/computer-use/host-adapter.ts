@@ -85,6 +85,21 @@ export type ComputerUsePresentationSummary = {
   confirmedRequestRefs: string[];
   approvalDecisionRefs: string[];
   sourceApprovalRefs: string[];
+  attachState?: 'attached' | 'replay' | 'no-session' | 'adapter-unavailable' | 'observe-only' | 'blocked' | 'requires-handoff' | 'error';
+  surfaceMode?: 'replay' | 'empty';
+  displayGroupRef?: string;
+  screenRef?: string;
+  visibleScreenRefs?: string[];
+  targetAppRef?: string;
+  targetWindowRef?: string;
+  currentFrameRef?: string;
+  frameRef?: string;
+  frameRefs?: string[];
+  frames?: Record<string, unknown>[];
+  screen?: { width?: number; height?: number; label?: string };
+  replayRef?: string;
+  isolationFlags?: Record<string, unknown>;
+  runSummary?: Record<string, unknown>;
 };
 
 export function gatewayRequestToComputerUseRequest(
@@ -721,6 +736,8 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
   ]);
   const status = stringAt(result, 'status') ?? firstExecutionUnitStatus(result.executionUnits);
   const message = stringAt(result, 'message');
+  const virtualScreen = computerUseVirtualScreenFromResult(result, { traceRefs, status });
+  const virtualScreenRefs = computerUseVirtualScreenRefs(virtualScreen);
   const hasRefs = traceRefs.length > 0
     || screenshotRefs.length > 0
     || artifactRefs.length > 0
@@ -736,7 +753,8 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
     || riskAuditRefs.length > 0
     || confirmedRequestRefs.length > 0
     || approvalDecisionRefs.length > 0
-    || sourceApprovalRefs.length > 0;
+    || sourceApprovalRefs.length > 0
+    || virtualScreenRefs.length > 0;
   if (!hasRefs && !status && !message) return undefined;
   return {
     title: 'Computer Use result',
@@ -758,6 +776,7 @@ function computerUsePresentationSummary(result: Record<string, unknown>): Comput
     confirmedRequestRefs,
     approvalDecisionRefs,
     sourceApprovalRefs,
+    ...virtualScreen,
   };
 }
 
@@ -786,7 +805,22 @@ function summaryRefs(summary: ComputerUsePresentationSummary) {
     ...summary.confirmedRequestRefs,
     ...summary.approvalDecisionRefs,
     ...summary.sourceApprovalRefs,
+    ...computerUseVirtualScreenRefs(summary),
   ]);
+}
+
+function computerUseVirtualScreenRefs(value: Partial<ComputerUsePresentationSummary>) {
+  return uniqueStrings([
+    value.displayGroupRef,
+    value.screenRef,
+    ...(value.visibleScreenRefs ?? []),
+    value.targetAppRef,
+    value.targetWindowRef,
+    value.currentFrameRef,
+    value.frameRef,
+    ...(value.frameRefs ?? []),
+    value.replayRef,
+  ].filter((ref): ref is string => Boolean(ref)));
 }
 
 function refsFromRecord(record: Record<string, unknown>, predicate: (key: string, value?: string) => boolean = () => true): string[] {
@@ -845,6 +879,158 @@ function screenshotRefsFromArtifacts(value: unknown) {
       ...screenshotRefs,
     ];
   });
+}
+
+function computerUseVirtualScreenFromResult(
+  result: Record<string, unknown>,
+  context: { traceRefs: string[]; status?: string },
+): Partial<ComputerUsePresentationSummary> {
+  const screenshots = traceScreenshotRecordsFromArtifacts(result.artifacts);
+  const currentScreenshot = [...screenshots].reverse().find((ref) => isRelativeFrameRef(stringAt(ref, 'path')));
+  const frameRefs = uniqueStrings(screenshots
+    .map((ref) => stringAt(ref, 'path'))
+    .filter((ref): ref is string => Boolean(ref && isRelativeFrameRef(ref))));
+  const currentFrameRef = stringAt(currentScreenshot, 'path') ?? frameRefs.at(-1);
+  const windowTarget = windowTargetFromScreenshot(currentScreenshot)
+    ?? [...screenshots].reverse().map(windowTargetFromScreenshot).find(Boolean)
+    ?? windowTargetFromResult(result);
+  if (!currentFrameRef && !windowTarget) return {};
+
+  const displayId = numberAt(currentScreenshot, 'displayId') ?? numberAt(windowTarget, 'displayId');
+  const displayGroupRef = stringAt(currentScreenshot, 'displayGroupId')
+    ?? stringAt(windowTarget, 'displayGroupId')
+    ?? (displayId !== undefined ? `display-group:${displayId}` : undefined);
+  const screenRef = stringAt(currentScreenshot, 'screenId')
+    ?? stringAt(windowTarget, 'screenId')
+    ?? (displayId !== undefined ? `screen:${displayId}` : undefined);
+  const targetAppRef = virtualScreenTargetAppRef(windowTarget);
+  const targetWindowRef = virtualScreenTargetWindowRef(windowTarget);
+  const screenLabel = stringAt(windowTarget, 'title')
+    ?? stringAt(windowTarget, 'appName')
+    ?? screenRef;
+  const frames = screenshots
+    .map((screenshot, index) => {
+      const ref = stringAt(screenshot, 'path');
+      if (!ref || !isRelativeFrameRef(ref)) return undefined;
+      return compactRecord({
+        ref,
+        frameRef: ref,
+        screenshotRef: ref,
+        screenRef: stringAt(screenshot, 'screenId') ?? screenRef,
+        label: ref === currentFrameRef ? screenLabel : stringAt(screenshot, 'id') ?? `frame-${index + 1}`,
+        status: ref === currentFrameRef ? 'current' : undefined,
+        evidenceRef: context.traceRefs[0],
+      });
+    })
+    .filter((frame): frame is Record<string, unknown> => Boolean(frame));
+  const screen = compactRecord({
+    width: numberAt(currentScreenshot, 'width'),
+    height: numberAt(currentScreenshot, 'height'),
+    label: screenLabel,
+  }) as NonNullable<ComputerUsePresentationSummary['screen']>;
+  const screenInfo = Object.keys(screen).length ? screen : undefined;
+  const runId = stringAt(firstArtifactMetadata(result.artifacts), 'runId')
+    ?? runIdFromTraceRef(context.traceRefs[0]);
+  const runSummary = compactRecord({
+    schemaVersion: 'sciforge.computer-use.run-summary.v1',
+    status: context.status,
+    runId,
+    replayRef: context.traceRefs[0],
+    screenCount: screenRef || targetWindowRef || targetAppRef ? 1 : undefined,
+    frameCount: frameRefs.length || undefined,
+    blockedReason: stringAt(result, 'reason') ?? stringAt(recordAt(result, 'failureDiagnostics'), 'reason'),
+  });
+  return compactRecord({
+    attachState: currentFrameRef ? 'observe-only' : 'no-session',
+    surfaceMode: currentFrameRef ? 'replay' : 'empty',
+    displayGroupRef,
+    screenRef,
+    visibleScreenRefs: screenRef ? [screenRef] : undefined,
+    targetAppRef,
+    targetWindowRef,
+    currentFrameRef,
+    frameRef: currentFrameRef,
+    frameRefs,
+    frames,
+    screen: screenInfo,
+    replayRef: context.traceRefs[0],
+    isolationFlags: virtualScreenIsolationFlags(windowTarget),
+    runSummary,
+  });
+}
+
+function traceScreenshotRecordsFromArtifacts(value: unknown) {
+  return recordList(value).flatMap((record) => {
+    const metadata = recordAt(record, 'metadata');
+    return metadata && Array.isArray(metadata.screenshotRefs)
+      ? recordList(metadata.screenshotRefs)
+      : [];
+  });
+}
+
+function firstArtifactMetadata(value: unknown) {
+  return recordList(value).map((record) => recordAt(record, 'metadata')).find(Boolean);
+}
+
+function windowTargetFromScreenshot(screenshot: Record<string, unknown> | undefined) {
+  return recordAt(screenshot, 'windowTarget');
+}
+
+function windowTargetFromResult(result: Record<string, unknown>) {
+  return recordAt(result, 'windowTarget')
+    ?? recordAt(recordAt(result, 'metadata'), 'windowTarget')
+    ?? recordList(result.workEvidence).map((record) => recordAt(recordAt(record, 'input'), 'windowTarget')).find(Boolean)
+    ?? recordList(result.executionUnits).map((record) => recordAt(record, 'windowTarget')).find(Boolean);
+}
+
+function virtualScreenTargetAppRef(windowTarget: Record<string, unknown> | undefined) {
+  const bundleId = stringAt(windowTarget, 'bundleId');
+  if (bundleId) return `app:${safeRefFragment(bundleId)}`;
+  const appName = stringAt(windowTarget, 'appName');
+  return appName ? `app:${safeRefFragment(appName)}` : undefined;
+}
+
+function virtualScreenTargetWindowRef(windowTarget: Record<string, unknown> | undefined) {
+  const windowId = numberAt(windowTarget, 'windowId');
+  if (windowId !== undefined) return `window:${windowId}`;
+  const virtualWindowId = stringAt(windowTarget, 'virtualWindowId');
+  if (virtualWindowId) return `window:${safeRefFragment(virtualWindowId)}`;
+  const title = stringAt(windowTarget, 'title');
+  const appName = stringAt(windowTarget, 'appName') ?? stringAt(windowTarget, 'bundleId');
+  return title || appName ? `window:${safeRefFragment([appName, title].filter(Boolean).join('-'))}` : undefined;
+}
+
+function virtualScreenIsolationFlags(windowTarget: Record<string, unknown> | undefined) {
+  const inputIsolation = stringAt(windowTarget, 'inputIsolation');
+  return compactRecord({
+    requiresFocusSteal: inputIsolation === 'require-focused-target' ? true : undefined,
+    backgroundRenderable: false,
+    diagnosticOnly: true,
+  });
+}
+
+function isRelativeFrameRef(value: string | undefined) {
+  return Boolean(value
+    && !value.startsWith('/')
+    && !value.startsWith('~')
+    && !/^(?:data:|blob:|file:|https?:|javascript:)/i.test(value)
+    && /\.(?:png|jpe?g|webp)$/i.test(value));
+}
+
+function safeRefFragment(value: string) {
+  const fragment = value
+    .trim()
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 96);
+  return fragment || 'unknown';
+}
+
+function runIdFromTraceRef(ref: string | undefined) {
+  if (!ref) return undefined;
+  const parts = ref.split('/').filter(Boolean);
+  const visionRunsIndex = parts.lastIndexOf('vision-runs');
+  return visionRunsIndex >= 0 ? parts[visionRunsIndex + 1] : undefined;
 }
 
 function artifactRefsFromArtifacts(value: unknown) {

@@ -51,6 +51,16 @@ export interface WorkspaceFileViewerFile {
   previewSegment?: WorkspaceFileViewerFileSegment;
 }
 
+export type WorkspaceFileViewerViewMode = 'source' | 'preview';
+
+export interface WorkspaceFileViewerOpenFileTab {
+  path: string;
+  name: string;
+  dirty?: boolean;
+  readOnly?: boolean;
+  unsupportedKind?: WorkspaceFileViewerFile['unsupportedKind'];
+}
+
 export interface WorkspaceFileViewerLabels {
   title: string;
   treeLabel: string;
@@ -83,6 +93,11 @@ export interface WorkspaceFileViewerLabels {
   fileSize: string;
   inlineLimit: string;
   previewSegment: string;
+  openFiles: string;
+  source: string;
+  preview: string;
+  noPreview: string;
+  pathBreadcrumb: string;
 }
 
 export interface WorkspaceFileViewerProps {
@@ -96,6 +111,8 @@ export interface WorkspaceFileViewerProps {
   searchResultLimit?: number;
   inlineTextLimitBytes?: number;
   folderContinuations?: Record<string, WorkspaceFileViewerFolderContinuation | undefined>;
+  openFileTabs?: readonly WorkspaceFileViewerOpenFileTab[];
+  viewMode?: WorkspaceFileViewerViewMode;
   draft?: string;
   dirty?: boolean;
   editMode?: boolean;
@@ -116,6 +133,9 @@ export interface WorkspaceFileViewerProps {
   onSave?: () => void;
   onCancel?: () => void;
   onClose?: () => void;
+  onSelectOpenFile?: (path: string) => void;
+  onCloseOpenFile?: (path: string) => void;
+  onViewModeChange?: (viewMode: WorkspaceFileViewerViewMode) => void;
   onCopyPath?: (path: string) => void;
   onCopyContents?: (content: string) => void;
   onLoadMoreFolder?: (request: WorkspaceFileViewerFolderContinuationRequest) => void;
@@ -156,6 +176,11 @@ const defaultLabels: WorkspaceFileViewerLabels = {
   fileSize: 'Size',
   inlineLimit: 'Inline limit',
   previewSegment: 'Preview segment',
+  openFiles: 'Open files',
+  source: 'Source',
+  preview: 'Preview',
+  noPreview: 'No host-provided preview is available for this file.',
+  pathBreadcrumb: 'File path',
 };
 
 export function sortWorkspaceFileViewerEntries(entries: readonly WorkspaceFileViewerEntry[]) {
@@ -183,6 +208,26 @@ function workspaceFileViewerRelativeParent(rootPath: string, path: string) {
   const parent = normalizeComparablePath(workspaceFileViewerParentPath(path));
   if (!parent || parent === root) return '';
   return root && parent.startsWith(`${root}/`) ? parent.slice(root.length + 1) : parent;
+}
+
+export function workspaceFileViewerPathSegments(rootPath: string, path: string) {
+  const root = normalizeComparablePath(rootPath);
+  const filePath = normalizeComparablePath(path);
+  if (!filePath) return [];
+  const relative = root && filePath.startsWith(`${root}/`) ? filePath.slice(root.length + 1) : filePath;
+  const parts = relative.split('/').filter(Boolean);
+  const rootLabel = workspaceFileViewerBasename(root) || root || '.';
+  const segments = root ? [{ label: rootLabel, path: root, current: parts.length === 0 }] : [];
+  let currentPath = root;
+  for (const [index, part] of parts.entries()) {
+    currentPath = currentPath ? `${currentPath}/${part}` : part;
+    segments.push({
+      label: part,
+      path: currentPath,
+      current: index === parts.length - 1,
+    });
+  }
+  return segments;
 }
 
 function normalizeComparablePath(path: string | undefined) {
@@ -266,6 +311,13 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
   const largeFilePreviewContent = unsupportedKind === 'too-large' && typeof props.file?.previewContent === 'string'
     ? props.file.previewContent
     : undefined;
+  const hostPreviewContent = !unsupportedKind && typeof props.file?.previewContent === 'string'
+    ? props.file.previewContent
+    : undefined;
+  const previewAvailable = hostPreviewContent !== undefined;
+  const effectiveViewMode: WorkspaceFileViewerViewMode = editMode || unsupportedKind || props.viewMode !== 'preview' || !previewAvailable
+    ? 'source'
+    : 'preview';
   const expanded = new Set(props.expandedFolderPaths.map(normalizeComparablePath));
   const selectedPath = normalizeComparablePath(props.selectedPath ?? props.file?.path);
   const rootPath = normalizeComparablePath(props.rootPath);
@@ -501,6 +553,78 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
     setEditMode(false);
   }
 
+  function renderOpenFileTabs(): ReactNode {
+    const tabs = props.openFileTabs?.filter((tab) => tab.path.trim()) ?? [];
+    if (!tabs.length) return null;
+    return (
+      <div className="workspace-file-viewer-open-tabs" role="tablist" aria-label={labels.openFiles}>
+        {tabs.map((tab) => {
+          const selected = normalizeComparablePath(tab.path) === selectedPath;
+          return (
+            <div
+              key={tab.path}
+              className={`workspace-file-viewer-open-tab${selected ? ' is-selected' : ''}${tab.dirty ? ' is-dirty' : ''}`}
+              data-open-file-tab={tab.path}
+              data-open-file-state={tab.unsupportedKind ? `unsupported-${tab.unsupportedKind}` : tab.readOnly ? 'readonly' : tab.dirty ? 'dirty' : 'clean'}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={Boolean(selected)}
+                title={displayPathForPath(tab.path)}
+                onClick={() => props.onSelectOpenFile?.(tab.path)}
+                disabled={props.disabled || !props.onSelectOpenFile}
+              >
+                <span>{tab.name || workspaceFileViewerBasename(tab.path)}</span>
+                {tab.dirty ? <span aria-hidden>*</span> : null}
+              </button>
+              {props.onCloseOpenFile ? (
+                <button
+                  type="button"
+                  className="workspace-file-viewer-open-tab-close"
+                  aria-label={`${labels.close}: ${tab.name || workspaceFileViewerBasename(tab.path)}`}
+                  onClick={() => props.onCloseOpenFile?.(tab.path)}
+                  disabled={props.disabled}
+                >
+                  x
+                </button>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  function renderBreadcrumb(file: WorkspaceFileViewerFile): ReactNode {
+    const segments = workspaceFileViewerPathSegments(props.rootPath, file.path);
+    if (!segments.length) return null;
+    return (
+      <nav className="workspace-file-viewer-breadcrumb" aria-label={labels.pathBreadcrumb}>
+        {segments.map((segment, index) => (
+          <span
+            key={`${segment.path}:${index}`}
+            className={`workspace-file-viewer-breadcrumb-item${segment.current ? ' is-current' : ''}`}
+          >
+            {index > 0 ? <span className="workspace-file-viewer-breadcrumb-separator" aria-hidden>/</span> : null}
+            {segment.current ? (
+              <span aria-current="page" title={displayPathForPath(segment.path)}>{segment.label}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => props.onToggleFolder?.(segment.path)}
+                disabled={props.disabled || !props.onToggleFolder}
+                title={displayPathForPath(segment.path)}
+              >
+                {segment.label}
+              </button>
+            )}
+          </span>
+        ))}
+      </nav>
+    );
+  }
+
   return (
     <div
       className="workspace-file-viewer"
@@ -552,6 +676,7 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
         )}
       </aside>
       <section className="workspace-file-viewer-editor" aria-label={labels.editorLabel}>
+        {renderOpenFileTabs()}
         {currentFile ? (
           <div
             className="workspace-file-viewer-editor-document"
@@ -576,6 +701,28 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
                 )}
               </span>
               <div className="workspace-file-viewer-editor-actions">
+                {!unsupportedKind ? (
+                  <span className="workspace-file-viewer-view-toggle" role="group" aria-label={`${currentFile.name} view`}>
+                    <button
+                      type="button"
+                      data-file-view-mode-command="source"
+                      aria-pressed={effectiveViewMode === 'source'}
+                      onClick={() => props.onViewModeChange?.('source')}
+                      disabled={props.disabled || !props.onViewModeChange}
+                    >
+                      {labels.source}
+                    </button>
+                    <button
+                      type="button"
+                      data-file-view-mode-command="preview"
+                      aria-pressed={effectiveViewMode === 'preview'}
+                      onClick={() => props.onViewModeChange?.('preview')}
+                      disabled={props.disabled || editMode || !previewAvailable || !props.onViewModeChange}
+                    >
+                      {labels.preview}
+                    </button>
+                  </span>
+                ) : null}
                 <button type="button" onClick={() => props.onCopyPath?.(copyPathForPath(currentFile.path))} disabled={!props.onCopyPath} title={labels.copyPath} aria-label={labels.copyPath}>P</button>
                 <button type="button" onClick={() => props.onCopyContents?.(largeFilePreviewContent ?? props.draft ?? currentFile.content ?? '')} disabled={!props.onCopyContents || Boolean(unsupportedKind && !largeFilePreviewContent)} title={labels.copyContents} aria-label={labels.copyContents}>Copy</button>
                 <button type="button" onClick={() => setEditMode(true)} disabled={props.disabled || editMode || !canEditFile} title={labels.edit} aria-label={labels.edit}>Edit</button>
@@ -587,6 +734,7 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
                 )}
               </div>
             </div>
+            {renderBreadcrumb(currentFile)}
             {props.saveError ? <div className="workspace-file-viewer-error">{props.saveError}</div> : null}
             {unsupportedKind ? (
               <div className="workspace-file-viewer-unsupported" role="status">
@@ -615,8 +763,22 @@ export function WorkspaceFileViewer(props: WorkspaceFileViewerProps) {
                   </button>
                 ) : null}
               </div>
+            ) : effectiveViewMode === 'preview' ? (
+              <div
+                className="workspace-file-viewer-preview"
+                data-file-view-mode="preview"
+                role="document"
+                aria-label={`${currentFile.name} ${labels.preview}`}
+              >
+                {hostPreviewContent ? (
+                  <pre>{hostPreviewContent}</pre>
+                ) : (
+                  <div className="workspace-file-viewer-empty">{labels.noPreview}</div>
+                )}
+              </div>
             ) : (
               <textarea
+                data-file-view-mode="source"
                 value={props.draft ?? currentFile.content}
                 spellCheck={false}
                 readOnly={!editMode}
@@ -673,6 +835,8 @@ export function renderWorkspaceFileViewer(props: UIComponentRendererProps) {
       searchResultLimit={record.searchResultLimit}
       inlineTextLimitBytes={record.inlineTextLimitBytes}
       folderContinuations={record.folderContinuations}
+      openFileTabs={record.openFileTabs}
+      viewMode={record.viewMode}
       onToggleFolder={record.onToggleFolder}
       onOpenFile={record.onOpenFile}
       onRefresh={record.onRefresh}
@@ -682,6 +846,9 @@ export function renderWorkspaceFileViewer(props: UIComponentRendererProps) {
       onSave={record.onSave}
       onCancel={record.onCancel}
       onClose={record.onClose}
+      onSelectOpenFile={record.onSelectOpenFile}
+      onCloseOpenFile={record.onCloseOpenFile}
+      onViewModeChange={record.onViewModeChange}
       onCopyPath={record.onCopyPath}
       onCopyContents={record.onCopyContents}
       onLoadMoreFolder={record.onLoadMoreFolder}

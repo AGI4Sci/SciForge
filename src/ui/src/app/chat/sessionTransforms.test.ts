@@ -88,6 +88,34 @@ test('creates optimistic user turns and only derives a title for the first real 
   assert.equal(followup.session.title, first.session.title);
 });
 
+test('chat title derivation is generic, bounded, and leak-safe', () => {
+  const safeTitle = titleFromPrompt(
+    '/plan Use provider=https://runtime.example.invalid/v1 token=sk-secret /Users/me/.config/private.json https://paper.example.org/a',
+    { maxLength: 160 },
+  );
+  const existingUser = createOptimisticUserTurnSession({
+    baseSession: session({
+      title: 'Existing human title',
+      messages: [message('user-existing', 'user', 'keep this thread title', '2026-05-07T00:00:00.000Z')],
+    }),
+    prompt: 'do not overwrite',
+    references: [],
+  });
+  const uploadThenPrompt = createOptimisticUserTurnSession({
+    baseSession: session({
+      title: '新聊天',
+      messages: [message('upload-1', 'system', 'Uploaded file reference', '2026-05-07T00:00:00.000Z')],
+    }),
+    prompt: 'summarize the uploaded table',
+    references: [],
+  });
+
+  assert.equal(safeTitle, 'Use [runtime setting] [secret] [local path] [link]');
+  assert.equal(existingUser.session.title, 'Existing human title');
+  assert.equal(uploadThenPrompt.session.title, 'summarize the uploaded table');
+  assert.doesNotMatch(safeTitle, /provider|token|sk-secret|\/Users|https?:\/\//i);
+});
+
 test('builds minimal first-turn payload but retains prior work and explicit references', () => {
   const userMessage = message('msg-user', 'user', 'hello', '2026-05-07T00:00:00.000Z');
   const seeded = session({ messages: [message('seed-1', 'scenario', 'seed', '2026-05-07T00:00:00.000Z'), userMessage] });
@@ -173,7 +201,7 @@ test('compacts prior work payloads for multi-turn requests', () => {
   assert.ok((payload.executionUnits[0]?.params.length ?? 0) < 1_600);
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /event-39/);
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /recent status recent status/);
-  assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
+  assert.match((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest?.hash ?? '', /^fnv1a-/);
 });
 
 test('compact prior run payload drops legacy stream transcript bodies', () => {
@@ -202,6 +230,62 @@ test('compact prior run payload drops legacy stream transcript bodies', () => {
   assert.doesNotMatch(JSON.stringify(payload.runs[0]?.raw), /最近 读取/);
   assert.equal((payload.runs[0]?.raw as { streamProcess?: { summaryDigest?: { hash?: string } } }).streamProcess?.summaryDigest, undefined);
   assert.equal(model, undefined);
+});
+
+test('next-turn payload carries stream process digest summaries without replay bodies', () => {
+  const userMessage = message('msg-user', 'user', 'continue safely', '2026-05-07T01:00:00.000Z');
+  const priorRun: SciForgeRun = {
+    id: 'run-bounded-process',
+    scenarioId: 'literature-evidence-review',
+    status: 'failed',
+    prompt: 'run long task',
+    response: 'backend stopped',
+    createdAt: '2026-05-07T00:00:00.000Z',
+    raw: {
+      streamProcess: {
+        eventCount: 120,
+        retainedEventCount: 48,
+        truncated: true,
+        summaryDigest: { omitted: 'stream-process-text', chars: 4096, hash: 'fnv1a-deadbeef' },
+        refs: ['artifact:summary-report', 'https://provider.example/v1/debug'],
+        eventSummaries: [{
+          type: 'tool-result',
+          label: 'Read PROJECT.md',
+          status: 'completed',
+          ref: 'file:PROJECT.md',
+          detailDigest: { omitted: 'stream-process-text', chars: 1200, hash: 'fnv1a-feedface' },
+        }],
+        events: [{
+          type: 'tool-result',
+          label: 'RAW_EVENT_BODY_SHOULD_NOT_TRAVEL',
+          detail: 'RAW_STREAM_DETAIL_SHOULD_NOT_TRAVEL'.repeat(100),
+          native: {
+            outputSummary: '<html>RAW_HTML_SHOULD_NOT_TRAVEL</html>'.repeat(100),
+            stdout: 'RAW_STDOUT_SHOULD_NOT_TRAVEL'.repeat(100),
+            stderr: 'RAW_STDERR_SHOULD_NOT_TRAVEL'.repeat(100),
+            providerUrl: 'https://provider.example/v1',
+            apiKey: 'sk-request-secret-1234567890',
+          },
+        }],
+      },
+    },
+  };
+  const payload = requestPayloadForTurn(session({
+    messages: [message('msg-old', 'user', 'old', '2026-05-07T00:00:00.000Z'), userMessage],
+    runs: [priorRun],
+  }), userMessage, []);
+  const streamProcess = (payload.runs[0]?.raw as { streamProcess?: { eventCount?: number; retainedEventCount?: number; truncated?: boolean; events?: unknown[]; eventSummaries?: unknown[]; summaryDigest?: { hash?: string }; refs?: string[] } }).streamProcess;
+  const serialized = JSON.stringify(payload.runs[0]?.raw);
+
+  assert.equal(streamProcess?.eventCount, 120);
+  assert.equal(streamProcess?.retainedEventCount, 48);
+  assert.equal(streamProcess?.truncated, true);
+  assert.equal(streamProcess?.summaryDigest?.hash, 'fnv1a-deadbeef');
+  assert.equal(streamProcess?.events, undefined);
+  assert.match(JSON.stringify(streamProcess?.eventSummaries), /fnv1a-feedface/);
+  assert.match(streamProcess?.refs?.join('\n') ?? '', /artifact:summary-report/);
+  assert.doesNotMatch(serialized, /RAW_EVENT_BODY_SHOULD_NOT_TRAVEL|RAW_STREAM_DETAIL_SHOULD_NOT_TRAVEL|RAW_HTML_SHOULD_NOT_TRAVEL|RAW_STDOUT_SHOULD_NOT_TRAVEL|RAW_STDERR_SHOULD_NOT_TRAVEL/);
+  assert.doesNotMatch(serialized, /provider\.example|sk-request-secret|<html/i);
 });
 
 test('next-turn payload prefers conversation projection and keeps raw execution state audit-only', () => {
@@ -927,8 +1011,9 @@ test('appends running guidance as a queued user message', () => {
 
   assert.equal(guided.messages[0].role, 'user');
   assert.equal(guided.messages[0].status, 'running');
-  assert.equal(guided.messages[0].content, '运行中引导：add controls');
+  assert.equal(guided.messages[0].content, 'add controls');
   assert.equal(guided.messages[0].guidanceQueue?.status, 'queued');
+  assert.equal(guided.messages[0].guidanceQueue?.prompt, 'add controls');
 });
 
 test('running guidance keeps queue status in UI message, event transcript, final run, and next payload context', () => {

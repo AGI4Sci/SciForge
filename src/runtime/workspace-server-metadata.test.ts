@@ -76,6 +76,7 @@ test('buildWorkspaceInstanceManifest preserves the public instance manifest shap
     stableVersion: { version: 'v1' },
     capabilities: [...WORKSPACE_INSTANCE_MANIFEST_CAPABILITIES],
   });
+  assert.ok(manifest.capabilities.includes('workspace-terminal-websocket-pty'));
 });
 
 test('instance manifest chooses explicit agent id and falls back to hashed workspace ids', () => {

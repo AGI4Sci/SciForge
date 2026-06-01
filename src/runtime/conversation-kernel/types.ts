@@ -89,6 +89,10 @@ export interface RefConversationEvent extends ConversationEventBase {
 export type ConversationEvent = InlineConversationEvent | RefConversationEvent;
 
 export type ConversationEventType =
+  | 'ChannelMessageReceived'
+  | 'ChannelDeliveryQueued'
+  | 'ChannelDeliverySent'
+  | 'ChannelDeliveryFailed'
   | 'TurnReceived'
   | 'Planned'
   | 'HarnessDecisionRecorded'

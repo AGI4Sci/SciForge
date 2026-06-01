@@ -44,6 +44,11 @@ export function applyConversationEvent(state: ConversationState, event: Conversa
   };
 
   switch (event.type) {
+    case 'ChannelMessageReceived':
+    case 'ChannelDeliveryQueued':
+    case 'ChannelDeliverySent':
+    case 'ChannelDeliveryFailed':
+      return { ...next, terminal: false };
     case 'TurnReceived':
       return { ...next, status: 'planned', terminal: false };
     case 'Planned':

@@ -839,11 +839,27 @@ function isTerminalTurnEvent(event: unknown, threadId: string, turnId: string) {
   const eventTurnId = stringAt(params, 'turnId') ?? stringAt(params, 'turn_id') ?? stringAt(turn, 'id');
   if (eventThreadId && eventThreadId !== threadId) return false;
   if (eventTurnId && eventTurnId !== turnId) return false;
-  return method === 'turn/completed'
-    || method === 'turn.done'
-    || method === 'turn.completed'
-    || method === 'error'
-    || method === 'thread/closed';
+  const normalizedMethod = method.trim().toLowerCase().replace(/\./g, '/');
+  const status = (stringAt(params, 'status') ?? stringAt(turn, 'status') ?? '').trim().toLowerCase();
+  const isTurnScopedStatus = normalizedMethod.startsWith('turn/') || Boolean(turn);
+  return normalizedMethod === 'turn/completed'
+    || normalizedMethod === 'turn/done'
+    || normalizedMethod === 'turn/finished'
+    || normalizedMethod === 'turn/failed'
+    || normalizedMethod === 'turn/cancelled'
+    || normalizedMethod === 'turn/canceled'
+    || normalizedMethod === 'error'
+    || normalizedMethod === 'thread/closed'
+    || (isTurnScopedStatus && (
+      status === 'completed'
+      || status === 'complete'
+      || status === 'done'
+      || status === 'finished'
+      || status === 'failed'
+      || status === 'error'
+      || status === 'cancelled'
+      || status === 'canceled'
+    ));
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {

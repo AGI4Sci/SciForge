@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { basicWorkspaceFileViewerFixture } from './fixtures/basic';
 import { emptyWorkspaceFileViewerFixture } from './fixtures/empty';
 import { manifest } from './manifest';
-import { renderWorkspaceFileViewer, WorkspaceFileViewer, workspaceFileViewerCanEditFile, workspaceFileViewerUnsupportedKind } from './render';
+import { renderWorkspaceFileViewer, WorkspaceFileViewer, workspaceFileViewerCanEditFile, workspaceFileViewerPathSegments, workspaceFileViewerUnsupportedKind } from './render';
 
 test('workspace-file-viewer package exposes manifest and renders tree plus draft editor', () => {
   assert.equal(manifest.componentId, 'workspace-file-viewer');
@@ -89,6 +89,36 @@ test('workspace-file-viewer can render workspace-relative display paths', () => 
 
   assert.match(html, /title="docs\/README\.md"/);
   assert.doesNotMatch(html, /title="\/workspace\/SciForge/);
+});
+
+test('workspace-file-viewer renders workspace-relative breadcrumbs for selected files', () => {
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    selectedPath: '/workspace/SciForge/src/app/ResultsRenderer.tsx',
+    entriesByFolder: { '/workspace/SciForge': [] },
+    file: {
+      path: '/workspace/SciForge/src/app/ResultsRenderer.tsx',
+      name: 'ResultsRenderer.tsx',
+      content: 'export {};\n',
+      size: 10,
+      language: 'typescript',
+    },
+    draft: 'export {};\n',
+    onToggleFolder: () => {},
+  }));
+
+  assert.deepEqual(workspaceFileViewerPathSegments('/workspace/SciForge', '/workspace/SciForge/src/app/ResultsRenderer.tsx').map((segment) => segment.label), [
+    'SciForge',
+    'src',
+    'app',
+    'ResultsRenderer.tsx',
+  ]);
+  assert.match(html, /class="workspace-file-viewer-breadcrumb"/);
+  assert.match(html, /aria-label="File path"/);
+  assert.match(html, /title="\/workspace\/SciForge\/src"/);
+  assert.match(html, /aria-current="page" title="\/workspace\/SciForge\/src\/app\/ResultsRenderer\.tsx"/);
 });
 
 test('workspace-file-viewer package renderer preserves display and copy path helpers', () => {
@@ -272,6 +302,74 @@ test('workspace-file-viewer enables editing controls only in edit mode', () => {
   assert.match(html, /aria-label="Save file"(?:(?!disabled).)*>Save<\/button>/);
   assert.match(html, /aria-label="Cancel"[^>]*>Cancel<\/button>/);
   assert.doesNotMatch(html, /aria-label="Close file view"/);
+});
+
+test('workspace-file-viewer renders Cursor-like open file tabs and host-provided preview mode', () => {
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: '/workspace/SciForge/PROJECT.md',
+    openFileTabs: [
+      { path: '/workspace/SciForge/README.md', name: 'README.md', dirty: true },
+      { path: '/workspace/SciForge/PROJECT.md', name: 'PROJECT.md' },
+    ],
+    file: {
+      path: '/workspace/SciForge/PROJECT.md',
+      name: 'PROJECT.md',
+      content: '# raw source should stay behind source mode',
+      previewContent: '<h1>Host preview</h1>',
+      size: 38,
+      language: 'markdown',
+      mimeType: 'text/markdown',
+    },
+    draft: '# raw source should stay behind source mode',
+    viewMode: 'preview',
+    onSelectOpenFile: () => {},
+    onCloseOpenFile: () => {},
+    onViewModeChange: () => {},
+  }));
+
+  assert.match(html, /role="tablist" aria-label="Open files"/);
+  assert.match(html, /data-open-file-tab="\/workspace\/SciForge\/README\.md"/);
+  assert.match(html, /data-open-file-state="dirty"/);
+  assert.match(html, /role="tab" aria-selected="true" title="\/workspace\/SciForge\/PROJECT\.md"/);
+  assert.match(html, /data-file-view-mode-command="source"/);
+  assert.match(html, /data-file-view-mode-command="preview" aria-pressed="true"/);
+  assert.match(html, /data-file-view-mode="preview"/);
+  assert.match(html, /&lt;h1&gt;Host preview&lt;\/h1&gt;/);
+  assert.doesNotMatch(html, /raw source should stay behind source mode/);
+  assert.doesNotMatch(html, /<textarea/);
+});
+
+test('workspace-file-viewer forces source mode while editing and disables preview switching', () => {
+  const html = renderToStaticMarkup(React.createElement(WorkspaceFileViewer, {
+    rootPath: '/workspace/SciForge',
+    rootLabel: 'SciForge',
+    expandedFolderPaths: ['/workspace/SciForge'],
+    entriesByFolder: { '/workspace/SciForge': [] },
+    selectedPath: '/workspace/SciForge/PROJECT.md',
+    file: {
+      path: '/workspace/SciForge/PROJECT.md',
+      name: 'PROJECT.md',
+      content: '# editable',
+      previewContent: '<h1>Host preview</h1>',
+      size: 10,
+      language: 'markdown',
+    },
+    draft: '# editable draft',
+    editMode: true,
+    viewMode: 'preview',
+    onSave: () => {},
+    onCancel: () => {},
+    onViewModeChange: () => {},
+  }));
+
+  assert.match(html, /data-file-view-mode="source"/);
+  assert.match(html, /# editable draft/);
+  assert.match(html, /data-file-view-mode-command="preview"[^>]*disabled=""/);
+  assert.doesNotMatch(html, /Host preview/);
 });
 
 test('workspace-file-viewer renders binary files as typed unsupported read-only previews', () => {

@@ -1159,13 +1159,13 @@ function textFromClaudeMessage(raw: Record<string, unknown>): string | undefined
 function textFromRaw(value: Record<string, unknown>): string | undefined {
   const delta = recordField(value.delta);
   const error = recordField(value.error);
-  return stringField(value.text)
-    ?? stringField(value.delta)
-    ?? stringField(delta?.text)
-    ?? stringField(value.message)
-    ?? stringField(error?.message)
-    ?? stringField(value.output_text)
-    ?? stringField(value.content)
+  return textField(value.text)
+    ?? textField(value.delta)
+    ?? textField(delta?.text)
+    ?? textField(value.message)
+    ?? textField(error?.message)
+    ?? textField(value.output_text)
+    ?? textField(value.content)
     ?? textFromContent(value.content);
 }
 
@@ -1175,7 +1175,7 @@ function textFromContent(value: unknown): string | undefined {
   const text = value.map((entry) => {
     if (typeof entry === 'string') return entry;
     if (!isRecord(entry)) return undefined;
-    return stringField(entry.text) ?? stringField(entry.content);
+    return textField(entry.text) ?? textField(entry.content);
   }).filter((entry): entry is string => Boolean(entry)).join('');
   return text || undefined;
 }
@@ -1185,10 +1185,10 @@ function textFromDynamicContentItems(value: unknown): string | undefined {
   const text = value.map((entry) => {
     if (typeof entry === 'string') return entry;
     if (!isRecord(entry)) return undefined;
-    return stringField(entry.text)
-      ?? stringField(entry.content)
-      ?? stringField(entry.inputText)
-      ?? stringField(entry.input_text);
+    return textField(entry.text)
+      ?? textField(entry.content)
+      ?? textField(entry.inputText)
+      ?? textField(entry.input_text);
   }).filter((entry): entry is string => Boolean(entry)).join('');
   return text || undefined;
 }
@@ -1284,6 +1284,10 @@ function isProviderKey(key: string): boolean {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function textField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function numberField(value: unknown): number | undefined {

@@ -5,6 +5,7 @@ import { objectActions } from '../../runtimeContracts';
 import {
   RESULT_PANE_CONTRACTS,
   RESULT_PANE_LIFECYCLE_STATES,
+  RESULT_PANE_SCREEN_ATTACH_STATES,
   RESULT_PANE_TABS,
   allowedActionsForResultPaneObject,
   focusResultPaneRouteForObjectReference,
@@ -33,15 +34,121 @@ test('result pane contracts declare states, refs, actions, and redaction hints f
   }
 });
 
+test('screen result pane declares VirtualAppScreen refs-first attach contract', () => {
+  const screen = resultPaneContractForTab('screen');
+  const requiredNames = screen.requiredRefs.map((ref) => ref.name);
+
+  assert.deepEqual(Object.keys(screen.attachStates ?? {}).sort(), [...RESULT_PANE_SCREEN_ATTACH_STATES].sort());
+  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('attached'));
+  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('replay'));
+  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('error'));
+  for (const state of RESULT_PANE_SCREEN_ATTACH_STATES) {
+    assert.equal(screen.attachStates?.[state].placeholderEvidence, false, `${state} is not frame evidence`);
+  }
+  for (const field of [
+    'targetAppRef',
+    'targetWindowRef',
+    'sessionRef',
+    'frameStreamRef',
+    'frameRef',
+    'frameRefs',
+    'currentFrameRef',
+    'screenRef',
+    'liveSurfaceRef',
+    'surfaceTransport',
+    'displayGroupRef',
+    'beforeFrameRef',
+    'afterFrameRef',
+    'beforeAfterFrameRefs',
+    'actorCursorRefs',
+    'annotationOverlayRefs',
+    'annotationProposalRefs',
+    'inputIntentRefs',
+    'executorEventRefs',
+    'inputLeaseRef',
+    'actionAdapterRef',
+    'adapterReadinessRef',
+    'replayRef',
+    'evidenceLedgerRef',
+    'artifactRefs',
+    'verificationRefs',
+    'guiPresentRefs',
+    'blockedRef',
+    'errorRef',
+    'stopRef',
+    'handoffRef',
+  ]) {
+    assert.ok(screen.acceptedPayloadRefs?.includes(field), `Screen accepts ${field}`);
+  }
+  for (const field of [
+    'targetAppRef',
+    'targetWindowRef',
+    'sessionRef',
+    'currentFrameRef',
+    'actorCursorRefs',
+    'annotationOverlayRefs',
+    'adapterReadinessRef',
+    'replayRef',
+    'evidenceLedgerRef',
+    'blockedRef',
+    'errorRef',
+  ]) {
+    assert.ok(requiredNames.includes(field), `Screen declares required ref ${field}`);
+  }
+  for (const field of [
+    'rawScreenshot',
+    'screenshotBase64',
+    'providerParams',
+    'providerRoute',
+    'executorLeaseParams',
+    'executorParams',
+    'frameUrl',
+    'rawTrace',
+  ]) {
+    assert.ok(screen.rejectedPayloadFields?.includes(field), `Screen rejects ${field}`);
+  }
+  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'frameStreamRef')?.requiredFor.includes('ready'), false);
+  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'liveSurfaceRef')?.requiredFor.includes('ready'), false);
+  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'inputLeaseRef')?.requiredFor.includes('ready'), false);
+  assert.ok(screen.redactionHints.includes('no-raw-screenshot-bytes'));
+  assert.ok(screen.redactionHints.includes('no-provider-payloads'));
+  assert.ok(screen.redactionHints.includes('no-executor-params'));
+  assert.ok(screen.redactionHints.includes('terminal-equivalent-only'));
+  assert.ok(screen.redactionHints.includes('no-gui-computer-use-execution'));
+  assert.match(screen.attachStates?.attached.description ?? '', /InputIntent/);
+  assert.match(screen.attachStates?.attached.description ?? '', /never executes Computer Use actions/);
+  assert.equal(screen.allowedActions.includes('open-external'), false);
+  assert.equal(screen.allowedActions.includes('copy-path'), false);
+});
+
+test('browser result pane declares BrowserHostSession refs-first evidence contract', () => {
+  const browser = resultPaneContractForTab('browser');
+
+  assert.ok(browser.refPrefixes.includes('browser-host-session:'));
+  for (const field of ['frameRef', 'screenshotRef', 'domSnapshotRef', 'axSnapshotRef', 'consoleLogRef', 'networkLogRef', 'searchResultRef']) {
+    assert.ok(browser.acceptedPayloadRefs?.includes(field), `Browser accepts ${field}`);
+  }
+  assert.ok(browser.redactionHints.includes('no-full-dom'));
+  assert.ok(browser.redactionHints.includes('no-auth-headers'));
+});
+
 test('result pane route helper maps preferred view, ref prefix, and object kind to shell tabs', () => {
   const cases: Array<[string, Partial<ObjectReference>, string, string]> = [
     ['primary artifact', { kind: 'artifact', ref: 'artifact:report-1' }, 'primary', 'ref-prefix'],
     ['browser url', { kind: 'url', ref: 'https://example.test/paper' }, 'browser', 'ref-prefix'],
     ['screen ref', { kind: 'artifact', ref: 'screen:attempt:before' }, 'screen', 'ref-prefix'],
+    ['virtual app ref', { kind: 'artifact', ref: 'app:browser-research-profile' }, 'screen', 'ref-prefix'],
+    ['virtual window ref', { kind: 'artifact', ref: 'window:browser-research-profile/main' }, 'screen', 'ref-prefix'],
     ['terminal execution', { kind: 'execution-unit', ref: 'execution-unit:EU-1' }, 'terminal', 'ref-prefix'],
     ['workspace file', { kind: 'file', ref: 'file:.sciforge/artifacts/report.md' }, 'files', 'ref-prefix'],
+    ['workspace diff preferred view', { kind: 'file', ref: 'file:patches/update.diff', preferredView: 'workspace-diff-viewer' }, 'files', 'preferred-view'],
     ['run evidence', { kind: 'run', ref: 'run:latest' }, 'evidence', 'ref-prefix'],
+    ['subagent evidence', { kind: 'run', ref: 'subagent:worker-1' }, 'evidence', 'ref-prefix'],
     ['preferred view override', { kind: 'file', ref: 'file:trace.txt', preferredView: 'terminal-session-viewer' }, 'terminal', 'preferred-view'],
+    ['subagent preferred view', { kind: 'run', ref: 'run:worker-1', preferredView: 'subagent-result' }, 'evidence', 'preferred-view'],
+    ['screen artifact type', { kind: 'artifact', ref: 'artifact:screen-run', artifactType: 'computer-use-virtual-screen' }, 'screen', 'artifact-type'],
+    ['browser artifact type', { kind: 'artifact', ref: 'artifact:browser-run', artifactType: 'browser-runtime-snapshot' }, 'browser', 'artifact-type'],
+    ['terminal artifact type', { kind: 'artifact', ref: 'artifact:terminal-run', artifactType: 'terminal-transcript' }, 'terminal', 'artifact-type'],
   ];
 
   for (const [name, reference, pane, reason] of cases) {
@@ -105,4 +212,43 @@ test('known object states use lifecycle status and pane-filtered actions', () =>
     actions: ['focus-right-pane', 'reveal-in-folder', 'copy-path', 'pin'],
   }, 'terminal');
   assert.deepEqual(terminalActions, ['focus-right-pane', 'copy-path', 'pin']);
+});
+
+test('terminal and references contracts separate terminal sessions from provenance refs', () => {
+  const terminal = resultPaneContractForTab('terminal');
+  assert.ok(terminal.refPrefixes.includes('terminal-session:'));
+  assert.ok(terminal.refPrefixes.includes('terminal-transcript:'));
+  assert.ok(terminal.refPrefixes.includes('pty-transcript:'));
+  assert.equal(terminal.refPrefixes.includes('trace:'), false);
+  assert.equal(terminal.refPrefixes.includes('log:'), false);
+
+  const references = resultPaneContractForTab('evidence');
+  for (const kind of ['file', 'folder', 'execution-unit'] as const) {
+    assert.ok(references.objectKinds.includes(kind), `References inspector accepts ${kind}`);
+  }
+  assert.ok(references.refPrefixes.includes('file:'));
+  assert.ok(references.refPrefixes.includes('execution-unit:'));
+  assert.ok(references.refPrefixes.includes('subagent:'));
+  assert.ok(references.refPrefixes.includes('agent-result:'));
+});
+
+test('object focus/open routes cover chat, process, references, and tool panes without composer insertion', () => {
+  const routeCases: Array<[string, Partial<ObjectReference>, string]> = [
+    ['chat citation reference', { kind: 'run', ref: 'citation:paper-1', title: 'Paper citation' }, 'evidence'],
+    ['process file action', { kind: 'file', ref: 'file:src/ui/src/app/ResultsRenderer.tsx', title: 'Edited file' }, 'files'],
+    ['process browser action', { kind: 'url', ref: 'https://example.test/result', title: 'Opened page' }, 'browser'],
+    ['process terminal action', { kind: 'execution-unit', ref: 'terminal-transcript:right-pane', title: 'Terminal transcript' }, 'terminal'],
+    ['references inspector object', { kind: 'run', ref: 'subagent:reviewer', title: 'Subagent review' }, 'evidence'],
+    ['browser host object', { kind: 'url', ref: 'browser-host-session:session-1', title: 'Host session' }, 'browser'],
+    ['screen replay object', { kind: 'artifact', ref: 'replay:computer-use-run', title: 'Screen replay' }, 'screen'],
+  ];
+
+  for (const [label, reference, pane] of routeCases) {
+    const focusRoute = focusResultPaneRouteForObjectReference(reference);
+    const openRoute = openResultPaneRouteForObjectReference(reference);
+    assert.equal(focusRoute.pane, pane, label);
+    assert.equal(openRoute.pane, pane, label);
+    assert.equal(focusRoute.composerInsertion, false, label);
+    assert.equal(openRoute.composerInsertion, false, label);
+  }
 });

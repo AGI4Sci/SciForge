@@ -3,7 +3,7 @@ import { ChevronDown, ChevronUp, Eye } from 'lucide-react';
 import { compileScenarioIRFromSelection } from '@sciforge/scenario-core/scenario-element-compiler';
 import { builtInScenarioIdForRuntimeInput, scenarioRuntimeOverrideForBuiltInScenario } from '@sciforge/scenario-core/scenario-routing-policy';
 import { scenarios, type ScenarioId } from '../../data';
-import { nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type ScenarioInstanceId, type ScenarioRuntimeOverride, type SciForgeConfig, type SciForgeReference, type SciForgeSession, type TimelineEventRecord } from '../../domain';
+import { makeId, nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type ScenarioInstanceId, type ScenarioRuntimeOverride, type SciForgeConfig, type SciForgeReference, type SciForgeSession, type TimelineEventRecord } from '../../domain';
 import { listWorkspace, type WorkspaceEntry } from '../../api/workspaceClient';
 import {
   artifactTypeForPath,
@@ -14,6 +14,7 @@ import {
 } from '../../../../../packages/support/object-references';
 import { ChatPanel } from '../ChatPanel';
 import { ResultsRenderer, type WorkspaceFileEditorState } from '../ResultsRenderer';
+import type { SettingsSectionId } from '../appShell/settingsPageModel';
 import { recoverableRunFocusForSession } from '../appShell/workspaceState';
 import { runPresentationState } from '../results-renderer-execution-model';
 import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
@@ -22,6 +23,7 @@ import { scopedResultSlotId } from '../results/viewPlanResolver';
 import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
 import { useRuntimeHealth } from '../runtimeHealthPanel';
 import { cx } from '../uiPrimitives';
+import { createWorkbenchObjectFocusUIAction } from './workbenchObjectFocus';
 
 const WORKSPACE_REFERENCE_SCAN_MAX_FILES = 600;
 const WORKSPACE_REFERENCE_SCAN_MAX_FOLDERS = 180;
@@ -54,6 +56,8 @@ export function Workbench({
   onSessionChange,
   onNewChat,
   onDeleteChat,
+  onForkChat,
+  onArchiveChat,
   archivedSessions,
   onRestoreArchivedSession,
   onDeleteArchivedSessions,
@@ -67,6 +71,7 @@ export function Workbench({
   scenarioOverride,
   onScenarioOverrideChange,
   onConfigChange,
+  onOpenSettings,
   onTimelineEvent,
   onMarkReusableRun,
   onPreviewPackageRequest,
@@ -87,6 +92,8 @@ export function Workbench({
   onSessionChange: (session: SciForgeSession) => void;
   onNewChat: (scenarioId: ScenarioInstanceId) => void;
   onDeleteChat: (scenarioId: ScenarioInstanceId) => void;
+  onForkChat: (scenarioId: ScenarioInstanceId) => void;
+  onArchiveChat: (scenarioId: ScenarioInstanceId) => void;
   archivedSessions: SciForgeSession[];
   onRestoreArchivedSession: (scenarioId: ScenarioInstanceId, sessionId: string) => void;
   onDeleteArchivedSessions: (scenarioId: ScenarioInstanceId, sessionIds: string[]) => void;
@@ -100,6 +107,7 @@ export function Workbench({
   scenarioOverride?: ScenarioRuntimeOverride;
   onScenarioOverrideChange: (scenarioId: ScenarioInstanceId, override: ScenarioRuntimeOverride) => void;
   onConfigChange: (patch: Partial<SciForgeConfig>) => void;
+  onOpenSettings?: (section?: SettingsSectionId) => void;
   onTimelineEvent: (event: TimelineEventRecord) => void;
   onMarkReusableRun: (scenarioId: ScenarioInstanceId, runId: string) => void;
   onPreviewPackageRequest: (scenarioId: ScenarioInstanceId, reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
@@ -222,6 +230,12 @@ export function Workbench({
   }, [activeResultPresentation?.kind, activeResultRun, session.sessionId, workspaceFilePathForLayout]);
 
   function handleObjectFocus(reference: ObjectReference) {
+    recordWorkbenchUIAction(createWorkbenchObjectFocusUIAction({
+      session,
+      reference,
+      id: makeId('ui-action'),
+      createdAt: nowIso(),
+    }));
     const referenceRun = reference.runId ? session.runs.find((run) => run.id === reference.runId) : undefined;
     if (referenceRun && runPresentationState(session, referenceRun).kind === 'empty') {
       autoCollapsedEmptyRunKeyRef.current = emptyRunAutoCollapseKey(session.sessionId, referenceRun);
@@ -376,6 +390,8 @@ export function Workbench({
             onSessionChange={onSessionChange}
             onNewChat={() => onNewChat(scenarioId)}
             onDeleteChat={() => onDeleteChat(scenarioId)}
+            onForkChat={() => onForkChat(scenarioId)}
+            onArchiveChat={() => onArchiveChat(scenarioId)}
             archivedSessions={archivedSessions}
             onRestoreArchivedSession={(sessionId) => onRestoreArchivedSession(scenarioId, sessionId)}
             onDeleteArchivedSessions={(sessionIds) => onDeleteArchivedSessions(scenarioId, sessionIds)}
@@ -426,6 +442,8 @@ export function Workbench({
             onPreviewPackageRequest={(reference, path, descriptor) => onPreviewPackageRequest(scenarioId, reference, path, descriptor)}
             workspaceFileEditor={workspaceFileEditor}
             onWorkspaceFileEditorChange={onWorkspaceFileEditorChange}
+            onConfigChange={onConfigChange}
+            onOpenSettings={onOpenSettings}
             onCommandTextAction={handleCommandTextAction}
             onOpenDebugAuditAction={handleOpenDebugAuditAction}
             onDismissResultSlotPresentation={(presentationId) => {

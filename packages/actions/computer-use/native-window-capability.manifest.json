@@ -1,0 +1,405 @@
+{
+  "schemaVersion": "sciforge.computer-use.native-window-capability-manifest.v1",
+  "id": "sciforge.computer-use.native-window-capability",
+  "version": "0.1.0",
+  "productGate": "P1-CU-UA-BACKGROUND-NATIVE-WINDOW",
+  "manifestRef": "packages/actions/computer-use/native-window-capability.manifest.json",
+  "summary": "Contract-only manifest for refs-first native app/window capability discovery, background frame refs, accessibility hit-test/action refs, offscreen display-like probing, and lifecycle diagnostics.",
+  "refsFirst": true,
+  "failClosed": true,
+  "contractOnly": true,
+  "diagnosticOnlyUntilRuntimeEvidence": true,
+  "userAcceptanceEligible": false,
+  "livePassClaimsAllowed": false,
+  "providerManifestSchemaRef": "sciforge.computer-use.native-window-provider-manifest.v1",
+  "nativeWindowRecordSchemaRef": "sciforge.computer-use.native-window-record.v1",
+  "accessibilityContractSchemaRef": "sciforge.computer-use.native-window-accessibility-contract.v1",
+  "displayProbeSchemaRef": "sciforge.computer-use.native-window-display-like-probe.v1",
+  "lifecycleSchemaRef": "sciforge.computer-use.native-window-lifecycle-manager.v1",
+  "claimLimit": "This manifest is a package contract and test base only. It cannot execute OS APIs, cannot prove a live task pass, and cannot set userAcceptanceEligible=true without separate current-run native runtime evidence.",
+  "providers": [
+    {
+      "providerId": "sciforge.native-window.common-provider",
+      "providerRef": "native-window-provider:common/background-window",
+      "providerKind": "native-window-capability-provider",
+      "status": "contract-only",
+      "diagnosticOnly": true,
+      "userAcceptanceEligible": false,
+      "platforms": ["darwin", "win32", "linux"],
+      "platformAccessibilityApis": ["AX", "UIA", "AT-SPI"],
+      "capabilityIds": [
+        "window.identity",
+        "window.frame-ref",
+        "permission.diagnostics",
+        "accessibility.hit-test",
+        "accessibility.action",
+        "display-like.offscreen-hidden-probe",
+        "app.lifecycle",
+        "handoff.dialog-focus"
+      ],
+      "requiredPorts": [
+        "nativeWindow.describe",
+        "nativeWindow.resolveIdentity",
+        "nativeWindow.captureFrameRef",
+        "nativeWindow.permissionDiagnostics",
+        "nativeWindow.accessibilityHitTest",
+        "nativeWindow.proposeAccessibilityAction",
+        "nativeWindow.executeScopedAction",
+        "nativeWindow.probeDisplayLikeCapability",
+        "nativeWindow.lifecycle"
+      ],
+      "forbiddenPorts": [
+        "shared-system-input",
+        "system-pointer",
+        "system-keyboard",
+        "raw-screenshot-capture",
+        "clipboard-shortcut",
+        "app-private-shortcut"
+      ],
+      "sideEffectFlags": {
+        "realOsInputExecuted": false,
+        "sharedSystemInputUsed": false,
+        "systemPointerMoved": false,
+        "systemKeyboardEventsSent": false,
+        "physicalPopupShown": false,
+        "requiresFocusSteal": false,
+        "rawScreenshotAllowed": false,
+        "rawPayloadWritten": false,
+        "inlineImageWritten": false
+      },
+      "claimLimit": "Provider availability is readiness metadata. It is not live completion evidence and must remain diagnostic until a separate runtime writes current frame, action, verifier, artifact, replay, and ledger refs."
+    }
+  ],
+  "capabilities": [
+    {
+      "capabilityId": "window.identity",
+      "capabilityRef": "native-window-capability:identity",
+      "operationIds": ["native-window.resolve-identity"],
+      "requiredRefs": ["targetAppRef", "targetWindowRef", "windowIdentityRef", "appIdentityRef"],
+      "failureDiagnostic": "target-ambiguous"
+    },
+    {
+      "capabilityId": "window.frame-ref",
+      "capabilityRef": "native-window-capability:frame-ref",
+      "operationIds": ["native-window.capture-frame-ref"],
+      "requiredRefs": ["targetWindowRef", "frameRef", "previewRef", "frameMetadataRef", "permissionDiagnosticsRef"],
+      "requiredFields": ["capturedAt", "frameHash", "previewHash", "bounds"],
+      "failureDiagnostic": "background-capture-unavailable"
+    },
+    {
+      "capabilityId": "permission.diagnostics",
+      "capabilityRef": "native-window-capability:permission-diagnostics",
+      "operationIds": ["native-window.permission-diagnostics"],
+      "requiredRefs": ["permissionDiagnosticsRef", "sessionPermissionRef", "appWindowAllowlistRef", "riskPreviewRef"],
+      "failureDiagnostic": "permission-missing"
+    },
+    {
+      "capabilityId": "accessibility.hit-test",
+      "capabilityRef": "native-window-capability:accessibility-hit-test",
+      "operationIds": ["native-window.accessibility.hit-test"],
+      "platformAccessibilityApis": ["AX", "UIA", "AT-SPI"],
+      "requiredRefs": ["targetWindowRef", "frameRef", "coordinateRef", "hitTestRef", "accessibilityElementRef"],
+      "failureDiagnostic": "hit-test-unavailable"
+    },
+    {
+      "capabilityId": "accessibility.action",
+      "capabilityRef": "native-window-capability:accessibility-action",
+      "operationIds": ["native-window.accessibility.action"],
+      "platformAccessibilityApis": ["AX", "UIA", "AT-SPI"],
+      "requiredRefs": ["hitTestRef", "accessibilityElementRef", "inputIntentRef", "schedulerLeaseRef", "permissionDiagnosticsRef", "executorEventRef", "beforeAfterFrameRef", "verificationRef"],
+      "failureDiagnostic": "action-unavailable"
+    },
+    {
+      "capabilityId": "display-like.offscreen-hidden-probe",
+      "capabilityRef": "native-window-capability:display-like-offscreen-hidden-probe",
+      "operationIds": ["native-window.probe-display-like-capability"],
+      "requiredRefs": ["targetWindowRef", "permissionDiagnosticsRef", "capabilityProbeRef", "probeFrameRef", "probePreviewRef", "isolationReportRef"],
+      "failureDiagnostic": "display-like-probe-unavailable"
+    },
+    {
+      "capabilityId": "app.lifecycle",
+      "capabilityRef": "native-window-capability:app-lifecycle",
+      "operationIds": ["native-window.lifecycle.open", "native-window.lifecycle.attach", "native-window.lifecycle.reuse", "native-window.lifecycle.close"],
+      "requiredRefs": ["lifecycleEventRef", "targetAppRef", "targetWindowRef", "permissionDiagnosticsRef"],
+      "failureDiagnostic": "lifecycle-unavailable"
+    },
+    {
+      "capabilityId": "handoff.dialog-focus",
+      "capabilityRef": "native-window-capability:handoff-dialog-focus",
+      "operationIds": ["native-window.handoff.dialog-focus"],
+      "requiredRefs": ["handoffRef", "blockedRef", "permissionDiagnosticsRef", "targetWindowRef"],
+      "failureDiagnostic": "handoff-required"
+    }
+  ],
+  "operations": {
+    "describe": {
+      "operationId": "native-window.describe",
+      "returns": ["schemaVersion", "providerRefs", "capabilityRefs", "diagnosticTaxonomyRef"],
+      "payloadPolicy": "refs-and-compact-summaries-only"
+    },
+    "resolveIdentity": {
+      "operationId": "native-window.resolve-identity",
+      "inputRequiredRefs": ["targetSelectorRef", "sessionPermissionRef", "appWindowAllowlistRef"],
+      "returnsRefs": ["targetAppRef", "targetWindowRef", "windowIdentityRef", "appIdentityRef", "permissionDiagnosticsRef"],
+      "emptyResultPolicy": "blocked-diagnostic",
+      "ambiguousResultPolicy": "blocked-diagnostic"
+    },
+    "captureFrameRef": {
+      "operationId": "native-window.capture-frame-ref",
+      "inputRequiredRefs": ["targetWindowRef", "permissionDiagnosticsRef"],
+      "returnsRefs": ["frameRef", "previewRef", "frameMetadataRef", "captureDiagnosticsRef"],
+      "payloadPolicy": "refs-and-metadata-only",
+      "forbiddenInlinePayloads": ["rawScreenshot", "rawScreenshots", "base64", "data:image", "inlineImage", "rawProviderPayload"]
+    },
+    "permissionDiagnostics": {
+      "operationId": "native-window.permission-diagnostics",
+      "inputRequiredRefs": ["sessionPermissionRef", "appWindowAllowlistRef", "riskPreviewRef", "dataVisibilityRef"],
+      "returnsRefs": ["permissionDiagnosticsRef", "isolationReportRef", "blockedRef"],
+      "failClosedWhen": ["permission-state-unknown", "screen-recording-denied", "accessibility-denied", "automation-denied", "app-not-allowlisted"]
+    },
+    "accessibilityHitTest": {
+      "operationId": "native-window.accessibility.hit-test",
+      "inputRequiredRefs": ["targetWindowRef", "frameRef", "coordinateRef", "permissionDiagnosticsRef"],
+      "returnsRefs": ["hitTestRef", "accessibilityElementRef", "groundingRef"],
+      "platformAccessibilityApis": ["AX", "UIA", "AT-SPI"],
+      "payloadPolicy": "role-bounds-and-ref-summary-only",
+      "failClosedWhen": ["element-outside-target-window", "accessibility-permission-missing", "hit-test-ambiguous", "stale-frame-ref"]
+    },
+    "accessibilityAction": {
+      "operationId": "native-window.accessibility.action",
+      "inputRequiredRefs": ["hitTestRef", "accessibilityElementRef", "inputIntentRef", "schedulerLeaseRef", "permissionDiagnosticsRef"],
+      "returnsRefs": ["actionProposalRef", "executorEventRef", "beforeAfterFrameRef", "verificationRef", "isolationReportRef"],
+      "platformAccessibilityApis": ["AX", "UIA", "AT-SPI"],
+      "actionKinds": ["press", "set_value", "select", "increment", "decrement", "scroll", "menu_command", "hotkey"],
+      "executionPolicy": "proposal-first-lease-bound-provider-action",
+      "failClosedWhen": ["action-would-focus-window", "modal-dialog-detected", "shared-system-input-required", "system-pointer-required", "system-keyboard-required", "no-after-frame-or-verifier-ref"]
+    },
+    "probeDisplayLikeCapability": {
+      "operationId": "native-window.probe-display-like-capability",
+      "inputRequiredRefs": ["targetWindowRef", "permissionDiagnosticsRef", "probePlanRef"],
+      "returnsRefs": ["capabilityProbeRef", "probeFrameRef", "probePreviewRef", "isolationReportRef", "blockedRef"],
+      "probeTargets": ["offscreen-window", "hidden-window", "occluded-window", "minimized-window"],
+      "successMeaning": "readiness-metadata-only",
+      "failClosedWhen": ["background-frame-unavailable", "requires-focus-steal", "physical-popup-shown", "shared-system-input-required", "raw-screenshot-only-provider"]
+    },
+    "lifecycle": {
+      "operationId": "native-window.lifecycle",
+      "subOperations": ["open", "attach", "reuse", "close"],
+      "payloadPolicy": "refs-and-compact-summaries-only",
+      "returnsRefs": ["lifecycleEventRef", "targetAppRef", "targetWindowRef", "permissionDiagnosticsRef", "handoffRef"],
+      "failClosedWhen": ["open-would-steal-focus", "modal-dialog-detected", "unowned-window-close-requested", "target-window-ambiguous"]
+    },
+    "handoff": {
+      "operationId": "native-window.handoff.dialog-focus",
+      "inputRequiredRefs": ["targetWindowRef", "permissionDiagnosticsRef", "blockedRef"],
+      "returnsRefs": ["handoffRef", "blockedRef", "errorRef"],
+      "status": "requires-handoff"
+    }
+  },
+  "nativeWindowRecord": {
+    "requiredGroups": {
+      "appIdentity": ["appId", "appRef", "appKind", "bundleIdHash", "ownerHash", "processIdentityHash"],
+      "windowIdentity": ["windowId", "windowRef", "targetWindowRef", "displayGroupId", "screenId", "titleHash", "activationState"],
+      "bounds": ["bounds", "contentBounds", "coordinateSpace", "scaleFactor", "occlusionState", "visibilityState"],
+      "frameEvidence": ["frameRef", "previewRef", "frameMetadataRef", "frameHash", "previewHash", "capturedAt", "observedAt"],
+      "permissionDiagnostics": ["permissionDiagnosticsRef", "screenRecording", "accessibility", "automation", "inputMonitoring", "appAllowlist", "blockedReason"]
+    },
+    "timestampFields": ["observedAt", "capturedAt", "permissionCheckedAt", "stateHashComputedAt"],
+    "hashFields": ["titleHash", "ownerHash", "bundleIdHash", "processIdentityHash", "frameHash", "previewHash", "stateHash"],
+    "coordinatePolicy": "window-local-first",
+    "forbiddenFields": ["rawScreenshot", "rawScreenshots", "base64", "data:image", "rawProviderPayload"]
+  },
+  "accessibilityContract": {
+    "platformAdapters": [
+      {
+        "platform": "darwin",
+        "api": "AX",
+        "providerRef": "native-window-accessibility-provider:darwin-ax"
+      },
+      {
+        "platform": "win32",
+        "api": "UIA",
+        "providerRef": "native-window-accessibility-provider:win32-uia"
+      },
+      {
+        "platform": "linux",
+        "api": "AT-SPI",
+        "providerRef": "native-window-accessibility-provider:linux-at-spi"
+      }
+    ],
+    "hitTest": {
+      "operationId": "native-window.accessibility.hit-test",
+      "inputRequiredRefs": ["targetWindowRef", "frameRef", "coordinateRef", "permissionDiagnosticsRef"],
+      "returnsRefs": ["hitTestRef", "accessibilityElementRef", "groundingRef"],
+      "allowedElementSummaryFields": ["role", "nameHash", "bounds", "enabled", "focused", "actionIds", "valueKind", "textRangeRef"],
+      "forbiddenElementPayloadFields": ["rawAccessibilityTree", "rawElementText", "rawProviderPayload"],
+      "failClosedWhen": ["element-outside-target-window", "accessibility-permission-missing", "hit-test-ambiguous", "stale-frame-ref"]
+    },
+    "action": {
+      "operationId": "native-window.accessibility.action",
+      "inputRequiredRefs": ["hitTestRef", "accessibilityElementRef", "inputIntentRef", "schedulerLeaseRef", "permissionDiagnosticsRef"],
+      "returnsRefs": ["actionProposalRef", "executorEventRef", "beforeAfterFrameRef", "verificationRef", "isolationReportRef"],
+      "policy": {
+        "proposalFirst": true,
+        "leaseRequired": true,
+        "targetWindowBindingRequired": true,
+        "beforeAfterFrameRefsRequired": true,
+        "verifierRefRequired": true,
+        "directAccessibilityMutationWithoutLeaseAllowed": false,
+        "directAxMutationWithoutLeaseAllowed": false,
+        "directUiaMutationWithoutLeaseAllowed": false,
+        "directAtSpiMutationWithoutLeaseAllowed": false,
+        "realOsInputExecuted": false,
+        "sharedSystemInputUsed": false,
+        "systemPointerMoved": false,
+        "systemKeyboardEventsSent": false
+      },
+      "failClosedWhen": ["action-would-focus-window", "modal-dialog-detected", "shared-system-input-required", "system-pointer-required", "system-keyboard-required", "no-after-frame-or-verifier-ref"],
+      "handoffDiagnostics": ["dialog-or-focus-steal", "permission-missing", "action-unavailable"]
+    }
+  },
+  "displayLikeCapabilityProbe": {
+    "operationId": "native-window.probe-display-like-capability",
+    "probeTargets": ["offscreen-window", "hidden-window", "occluded-window", "minimized-window"],
+    "requiredInputRefs": ["targetWindowRef", "permissionDiagnosticsRef", "probePlanRef"],
+    "returnsRefs": ["capabilityProbeRef", "probeFrameRef", "probePreviewRef", "isolationReportRef", "blockedRef"],
+    "requiredEvidenceFields": ["probeStartedAt", "probeCompletedAt", "bounds", "visibilityState", "frameHash", "previewHash", "stateHash", "backgroundRenderable"],
+    "readyWhen": ["frame-ref-written", "preview-ref-written", "hashes-stable", "bounds-resolved", "no-focus-steal", "no-shared-system-input", "no-system-pointer-keyboard"],
+    "successMeaning": "capability-readiness-only",
+    "userAcceptanceEligible": false,
+    "failClosedWhen": ["background-frame-unavailable", "hidden-window-state-unreadable", "requires-focus-steal", "physical-popup-shown", "shared-system-input-required", "raw-screenshot-only-provider"]
+  },
+  "appLifecycleManager": {
+    "schemaRef": "sciforge.computer-use.native-window-lifecycle-manager.v1",
+    "operations": {
+      "open": {
+        "inputRequiredRefs": ["appLaunchRequestRef", "sessionPermissionRef", "appWindowAllowlistRef", "riskPreviewRef"],
+        "returnsRefs": ["lifecycleEventRef", "targetAppRef", "targetWindowRef", "permissionDiagnosticsRef"],
+        "failClosedWhen": ["open-would-steal-focus", "modal-dialog-detected", "permission-missing"]
+      },
+      "attach": {
+        "inputRequiredRefs": ["targetSelectorRef", "sessionPermissionRef", "appWindowAllowlistRef"],
+        "returnsRefs": ["lifecycleEventRef", "targetAppRef", "targetWindowRef", "permissionDiagnosticsRef"],
+        "failClosedWhen": ["target-window-ambiguous", "permission-missing"]
+      },
+      "reuse": {
+        "inputRequiredRefs": ["targetAppRef", "targetWindowRef", "sessionReusePolicyRef"],
+        "returnsRefs": ["lifecycleEventRef", "targetWindowRef", "reuseDecisionRef", "permissionDiagnosticsRef"],
+        "failClosedWhen": ["stale-window-ref", "target-window-ambiguous", "permission-missing"]
+      },
+      "close": {
+        "inputRequiredRefs": ["targetAppRef", "targetWindowRef", "lifecycleLeaseRef", "closeIntentRef"],
+        "returnsRefs": ["lifecycleEventRef", "closeDecisionRef", "permissionDiagnosticsRef"],
+        "failClosedWhen": ["unowned-window-close-requested", "destructive-close-without-confirmation", "modal-dialog-detected"]
+      }
+    },
+    "dialogAndFocusPolicy": {
+      "detects": ["modal-dialog", "permission-dialog", "focus-steal-request", "foreground-only-action", "system-prompt"],
+      "statusOnDetection": "requires-handoff",
+      "returnsRefs": ["handoffRef", "blockedRef", "errorRef", "permissionDiagnosticsRef"],
+      "userAcceptanceEligible": false
+    }
+  },
+  "permissionDiagnostics": {
+    "schemaRef": "sciforge.computer-use.native-window-permission-diagnostics.v1",
+    "requiredChecks": ["screen-recording-or-display-capture", "accessibility-or-uia-or-at-spi", "automation-control", "input-isolation", "app-window-allowlist", "data-visibility", "stop-cancel-lease"],
+    "returnsRefs": ["permissionDiagnosticsRef", "isolationReportRef", "blockedRef"],
+    "statusValues": ["ready", "blocked", "requires-handoff", "needs-confirmation", "unknown"],
+    "unknownStatusPolicy": "blocked",
+    "failClosedWhen": ["permission-state-unknown", "screen-recording-denied", "accessibility-denied", "automation-denied", "app-not-allowlisted", "shared-system-input-required"]
+  },
+  "handoffPolicy": {
+    "schemaRef": "sciforge.computer-use.native-window-handoff.v1",
+    "requiredWhen": ["modal-dialog-detected", "permission-dialog-detected", "focus-steal-required", "shared-system-input-required", "system-pointer-required", "system-keyboard-required", "physical-popup-shown"],
+    "status": "requires-handoff",
+    "requiredRefs": ["handoffRef", "blockedRef", "errorRef", "targetWindowRef", "permissionDiagnosticsRef"],
+    "userAcceptanceEligible": false
+  },
+  "sourceBoundaryPolicy": {
+    "allowedAsObservationHints": ["AX", "UIA", "AT-SPI", "window-inventory", "ocr", "frame-hash", "permission-diagnostics"],
+    "forbiddenAsLivePass": ["AX", "UIA", "AT-SPI", "accessibility-tree", "raw-screenshot", "fixture", "diagnostic-only", "shell-only", "app-private-api", "shared-system-input"],
+    "requiredForCompletionOutsideThisManifest": ["current-run-frame-refs", "input-intent-ref", "scheduler-lease-ref", "executor-event-ref", "before-after-frame-ref", "verification-ref", "artifact-ref", "gui-present-ref", "replay-ref", "evidence-ledger-ref"]
+  },
+  "securityPolicy": {
+    "payloadPolicy": "refs-and-compact-summaries-only",
+    "forbiddenInlinePayloads": ["rawScreenshot", "rawScreenshots", "base64", "data:image", "inlineImage", "rawProviderPayload", "Authorization", "token", "secret", "password"],
+    "forbiddenInputChannels": ["shared-system-input", "system-pointer", "system-keyboard", "clipboard-shortcut", "global-coordinate-input"],
+    "requiredFalseFlags": ["realOsInputExecuted", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent", "physicalPopupShown", "rawScreenshotAllowed", "rawPayloadWritten", "inlineImageWritten"]
+  },
+  "diagnosticTaxonomy": {
+    "schemaRef": "sciforge.computer-use.native-window-diagnostic-taxonomy.v1",
+    "taxonomyRef": "native-window-capability:diagnostics/background-native-window",
+    "categories": [
+      {
+        "category": "target-ambiguous",
+        "status": "blocked",
+        "blockedReasonTemplate": "Native app/window identity could not be resolved to one stable target ref.",
+        "requiredRefs": ["targetSelectorRef", "blockedRef", "permissionDiagnosticsRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "permission-missing",
+        "status": "blocked",
+        "blockedReasonTemplate": "Required capture, accessibility, automation, or app allowlist permission is missing or unknown.",
+        "requiredRefs": ["permissionDiagnosticsRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "background-capture-unavailable",
+        "status": "blocked",
+        "blockedReasonTemplate": "Provider could not write frameRef and previewRef for the target window without raw screenshots or display side effects.",
+        "requiredRefs": ["targetWindowRef", "captureDiagnosticsRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "hit-test-unavailable",
+        "status": "blocked",
+        "blockedReasonTemplate": "AX/UIA/AT-SPI hit-test did not produce a stable element ref inside the target window.",
+        "requiredRefs": ["targetWindowRef", "hitTestRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "action-unavailable",
+        "status": "blocked",
+        "blockedReasonTemplate": "Accessibility action could not be bound to a lease, before/after frame refs, and verifier refs.",
+        "requiredRefs": ["inputIntentRef", "schedulerLeaseRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "display-like-probe-unavailable",
+        "status": "blocked",
+        "blockedReasonTemplate": "Offscreen, hidden, occluded, or minimized window probing could not establish display-like background frame capability.",
+        "requiredRefs": ["capabilityProbeRef", "isolationReportRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "lifecycle-unavailable",
+        "status": "blocked",
+        "blockedReasonTemplate": "Open, attach, reuse, or close could not be completed under target-window and permission constraints.",
+        "requiredRefs": ["lifecycleEventRef", "permissionDiagnosticsRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "dialog-or-focus-steal",
+        "status": "requires-handoff",
+        "blockedReasonTemplate": "The native app showed a dialog, system prompt, popup, or focus-steal requirement that must be handed to the user.",
+        "requiredRefs": ["handoffRef", "blockedRef", "errorRef", "permissionDiagnosticsRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "shared-system-input-forbidden",
+        "status": "requires-handoff",
+        "blockedReasonTemplate": "The provider requested shared system input, system pointer movement, or system keyboard events.",
+        "requiredRefs": ["isolationReportRef", "handoffRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      },
+      {
+        "category": "raw-screenshot-forbidden",
+        "status": "blocked",
+        "blockedReasonTemplate": "Provider attempted to expose raw screenshot payloads instead of refs and hashes.",
+        "requiredRefs": ["captureDiagnosticsRef", "blockedRef"],
+        "userAcceptanceEligible": false
+      }
+    ]
+  }
+}

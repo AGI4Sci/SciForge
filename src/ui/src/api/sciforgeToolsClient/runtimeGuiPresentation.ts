@@ -1,4 +1,5 @@
 import type { NormalizedAgentResponse, ObjectReference } from '../../domain';
+import { runtimeNativeMessageLiveAcceptanceEligible } from './runtimeNativeMessage';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -113,17 +114,20 @@ export function attachRuntimeGuiPresentationToResponse(
       ? result.output.nativeCodexMessage
       : undefined;
   const nativeSource = asString(nativeMessage?.source);
-  if (!nativeSource?.startsWith('codex.native-message:')) return response;
+  if (!nativeMessage || !nativeSource?.startsWith('codex.native-message:')) return response;
+  const nativeLiveAcceptanceEligible = typeof nativeMessage.liveAcceptanceEligible === 'boolean'
+    ? nativeMessage.liveAcceptanceEligible
+    : runtimeNativeMessageLiveAcceptanceEligible(asString(nativeMessage.text) ?? response.message.content, result);
   return {
     ...response,
     message: {
       ...response.message,
-      provenance: {
-        ...(response.message.provenance ?? {}),
-        kind: 'live-runtime-codex',
-        source: nativeSource,
-        runtimeRequestEligible: false,
-        liveAcceptanceEligible: false,
+        provenance: {
+          ...(response.message.provenance ?? {}),
+          kind: 'live-runtime-codex',
+          source: nativeSource,
+          runtimeRequestEligible: false,
+          liveAcceptanceEligible: nativeLiveAcceptanceEligible,
         commandId: asString(nativeMessage?.commandId),
         attemptId: asString(nativeMessage?.attemptId),
         provider: asString(nativeMessage?.provider),

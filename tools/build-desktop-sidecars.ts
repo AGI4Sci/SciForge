@@ -42,6 +42,14 @@ for (const sidecar of sidecars) {
     external: [
       // Playwright keeps these optional bidi modules behind runtime branches.
       'chromium-bidi/*',
+      // node-pty ships platform-native .node binaries; keep it as a runtime
+      // dependency so Electron sidecars load the correct prebuilt artifact.
+      '@homebridge/node-pty-prebuilt-multiarch',
+      '@homebridge/node-pty-prebuilt-multiarch/*',
+      // ws is CommonJS and contains dynamic requires of Node builtins; leaving
+      // it external avoids ESM bundle shims that fail inside Electron sidecars.
+      'ws',
+      'ws/*',
     ],
     banner: {
       js: '// Bundled by tools/build-desktop-sidecars.ts for SciForge Electron sidecar cold start.\n',

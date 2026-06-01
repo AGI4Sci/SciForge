@@ -16,6 +16,7 @@ import {
   findSidebarThreadSearchTarget,
   sidebarThreadTitle,
 } from './ShellPanels';
+import { createOptimisticUserTurnSession } from '../chat/sessionTransforms';
 
 test('archived sessions stay out of the active sidebar thread list', () => {
   const active = session({
@@ -46,6 +47,65 @@ test('sidebar thread list stays empty for seed-only default chats', () => {
   };
 
   assert.deepEqual(buildSidebarThreadItems(sessions), []);
+});
+
+test('sidebar thread items expose strict runtime states for row status and actions', () => {
+  const items = buildSidebarThreadItems({
+    running: session({
+      scenarioId: 'running' as ScenarioInstanceId,
+      sessionId: 'running-thread',
+      title: 'Running thread',
+      runs: [{
+        id: 'run-running',
+        scenarioId: 'running' as ScenarioInstanceId,
+        status: 'running',
+        prompt: 'run analysis',
+        response: '',
+        createdAt: '2026-05-21T00:03:00.000Z',
+      }],
+      updatedAt: '2026-05-21T00:03:00.000Z',
+    }),
+    blocked: session({
+      scenarioId: 'blocked' as ScenarioInstanceId,
+      sessionId: 'blocked-thread',
+      title: 'Blocked thread',
+      executionUnits: [{
+        id: 'unit-blocked',
+        tool: 'analysis.task',
+        params: '{}',
+        status: 'needs-human',
+        hash: 'hash-blocked',
+      }],
+      updatedAt: '2026-05-21T00:02:00.000Z',
+    }),
+    failed: session({
+      scenarioId: 'failed' as ScenarioInstanceId,
+      sessionId: 'failed-thread',
+      title: 'Failed thread',
+      runs: [{
+        id: 'run-failed',
+        scenarioId: 'failed' as ScenarioInstanceId,
+        status: 'failed',
+        prompt: 'run analysis',
+        response: 'failed',
+        createdAt: '2026-05-21T00:01:00.000Z',
+      }],
+      updatedAt: '2026-05-21T00:01:00.000Z',
+    }),
+    done: session({
+      scenarioId: 'done' as ScenarioInstanceId,
+      sessionId: 'done-thread',
+      title: 'Done thread',
+      messages: [{ id: 'user-1', role: 'user', content: 'finished prompt', createdAt: '2026-05-21T00:00:00.000Z' }],
+      updatedAt: '2026-05-21T00:00:00.000Z',
+    }),
+  }, { limit: 10 });
+
+  const states = new Map(items.map((item) => [item.sessionId, item.state]));
+  assert.equal(states.get('running-thread'), 'running');
+  assert.equal(states.get('blocked-thread'), 'blocked');
+  assert.equal(states.get('failed-thread'), 'failed');
+  assert.equal(states.get('done-thread'), 'done');
 });
 
 test('sidebar thread title falls back from evidence refs to the user prompt', () => {
@@ -104,6 +164,27 @@ test('sidebar thread detail folds internal-only latest messages', () => {
   assert.doesNotMatch(`${items[0]?.title} ${items[0]?.detail}`, /provider|model|raw JSONL|stdout|stderr|run-internal/i);
 });
 
+test('sidebar thread detail folds raw webpage dumps before previewing latest answer', () => {
+  const items = buildSidebarThreadItems({
+    'literature-evidence-review': session({
+      sessionId: 'raw-webpage-latest-thread',
+      title: '单细胞论文检索',
+      messages: [
+        { id: 'user-1', role: 'user', content: '检索最近单细胞基础模型论文', createdAt: '2026-06-01T00:00:00.000Z' },
+        {
+          id: 'scenario-1',
+          role: 'scenario',
+          content: '<title>Scoring gene importance by interpreting single-cell foundation models</title>\nQuick links Login Help Pages About\n--- Paper 1 ---\nmetadata abstract search result\n\n## 总结\n最新单细胞基础模型论文概览：SIGnature 和 CITE-VAE 是主要候选。',
+          createdAt: '2026-06-01T00:01:00.000Z',
+        },
+      ],
+    }),
+  });
+
+  assert.match(items[0]?.detail ?? '', /Last answer: .*最新单细胞基础模型/);
+  assert.doesNotMatch(items[0]?.detail ?? '', /<title|Quick links|--- Paper|metadata abstract search result/i);
+});
+
 test('sidebar project groups show current project, peer projects, and top-k threads', () => {
   const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
     const n = index + 1;
@@ -156,6 +237,84 @@ test('sidebar project groups keep full repository history for See more paging', 
   assert.equal(groups[0]?.threads.length, 15);
   assert.deepEqual(groups[0]?.threads.slice(0, 3).map((thread) => thread.title), ['Thread 15', 'Thread 14', 'Thread 13']);
   assert.equal(groups[0]?.threads.at(-1)?.title, 'Thread 1');
+});
+
+test('sidebar project groups support Cursor-like workspace updated status environment and manual ordering', () => {
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: '/workspace/current',
+    peerInstances: [{
+      name: 'alpha',
+      appUrl: '',
+      workspaceWriterUrl: '',
+      workspacePath: '/workspace/alpha',
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }, {
+      name: 'beta',
+      appUrl: '',
+      workspaceWriterUrl: '',
+      workspacePath: '/workspace/beta',
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }],
+  };
+  const current = session({
+    scenarioId: 'current-scenario' as ScenarioInstanceId,
+    sessionId: 'current-thread',
+    title: 'Current finished',
+    messages: [{ id: 'user-current', role: 'user', content: 'current done', createdAt: '2026-05-21T00:00:00.000Z' }],
+    updatedAt: '2026-05-21T00:02:00.000Z',
+  });
+  const alpha = session({
+    scenarioId: 'alpha-scenario' as ScenarioInstanceId,
+    sessionId: 'alpha-running',
+    title: 'Alpha running',
+    runs: [{
+      id: 'run-alpha',
+      scenarioId: 'alpha-scenario' as ScenarioInstanceId,
+      status: 'running',
+      prompt: 'run alpha',
+      response: '',
+      createdAt: '2026-05-21T00:03:00.000Z',
+    }],
+    updatedAt: '2026-05-21T00:03:00.000Z',
+  });
+  const beta = session({
+    scenarioId: 'beta-scenario' as ScenarioInstanceId,
+    sessionId: 'beta-failed',
+    title: 'Beta failed',
+    runs: [{
+      id: 'run-beta',
+      scenarioId: 'beta-scenario' as ScenarioInstanceId,
+      status: 'failed',
+      prompt: 'run beta',
+      response: 'failed',
+      createdAt: '2026-05-21T00:01:00.000Z',
+    }],
+    updatedAt: '2026-05-21T00:01:00.000Z',
+  });
+  const projectSessionsByPath = {
+    '/workspace/current': { sessionsByScenario: { [current.scenarioId]: current }, archivedSessions: [] },
+    '/workspace/alpha': { sessionsByScenario: { [alpha.scenarioId]: alpha }, archivedSessions: [] },
+    '/workspace/beta': { sessionsByScenario: { [beta.scenarioId]: beta }, archivedSessions: [] },
+  };
+  const labelsFor = (projectSort: 'manual' | 'workspace' | 'updated' | 'status' | 'environment', projectOrder: string[] = []) => buildSidebarProjectThreadGroups(config, {
+    [current.scenarioId]: current,
+  }, [], {
+    projectSessionsByPath,
+    activeWorkspacePath: config.workspacePath,
+    projectSort,
+    projectOrder,
+  }).map((project) => project.label);
+
+  assert.deepEqual(labelsFor('manual', ['/workspace/beta', '/workspace/current', '/workspace/alpha']), ['beta', 'current', 'alpha']);
+  assert.deepEqual(labelsFor('workspace'), ['current', 'alpha', 'beta']);
+  assert.deepEqual(labelsFor('updated'), ['alpha', 'current', 'beta']);
+  assert.deepEqual(labelsFor('status'), ['alpha', 'beta', 'current']);
+  assert.deepEqual(labelsFor('environment'), ['current', 'alpha', 'beta']);
 });
 
 test('shell sidebar publishes Cursor Agent-like projection without local path refs', () => {
@@ -256,6 +415,36 @@ test('shell sidebar projection keeps seed-only active chat as draft without rend
   assert.doesNotMatch(JSON.stringify(projection), /provider|model|bootstrap|\/tmp\/sciforge-project/i);
 });
 
+test('shell sidebar selected thread shares the chat title derived from the active session', () => {
+  const firstTurn = createOptimisticUserTurnSession({
+    baseSession: session({
+      sessionId: 'active-first-turn',
+      title: 'New chat',
+      messages: [],
+    }),
+    prompt: 'Compare CRISPR delivery evidence',
+    references: [],
+  });
+  const sessions = {
+    'literature-evidence-review': firstTurn.session,
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = { ...defaultSciForgeConfig, workspacePath: '/tmp/sciforge-project' };
+  const groups = buildSidebarProjectThreadGroups(config, sessions, [], {
+    activeSessionId: firstTurn.session.sessionId,
+    activeWorkspacePath: config.workspacePath,
+  });
+  const projection = buildSidebarCursorAgentProjectionForShell(config, groups, {
+    activeProjectId: groups[0]?.id,
+    activeThreadId: firstTurn.session.sessionId,
+  });
+  const selectedThread = projection.groups[0]?.threads.find((thread) => thread.selected);
+
+  assert.equal(firstTurn.session.title, 'Compare CRISPR delivery evidence');
+  assert.equal(groups[0]?.threads[0]?.title, firstTurn.session.title);
+  assert.equal(selectedThread?.title, firstTurn.session.title);
+  assert.equal(selectedThread?.selected, true);
+});
+
 test('shell sidebar hides inactive default drafts from other scenarios', () => {
   const sessions = {
     'literature-evidence-review': session({
@@ -320,7 +509,7 @@ test('sidebar shell DOM renders active and draft rows while archived and discard
     scenarioId: 'structure-exploration',
     setScenarioId: () => undefined,
     config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
-    sessionsByScenario: {
+    sessionsByScenario: sessionMap({
       'literature-evidence-review': session({
         scenarioId: 'literature-evidence-review',
         sessionId: 'active-thread',
@@ -332,7 +521,7 @@ test('sidebar shell DOM renders active and draft rows while archived and discard
         sessionId: 'draft-thread',
         messages: [{ id: 'seed-structure', role: 'scenario', content: 'seed prompt', createdAt: '2026-05-21T00:00:00.000Z' }],
       }),
-    } as Record<ScenarioInstanceId, SciForgeSession>,
+    }),
     archivedSessions: [
       session({
         scenarioId: 'paper-qa',
@@ -370,6 +559,100 @@ test('sidebar shell DOM renders active and draft rows while archived and discard
   assert.doesNotMatch(html, /aria-label="Delete chat: Active research thread"/);
   assert.match(html, /aria-label="Discard draft: New chat"/);
   assert.doesNotMatch(html, /aria-label="Archive chat: New chat"/);
+});
+
+test('sidebar shell DOM publishes multi-row thread state and action contracts', () => {
+  const html = renderToStaticMarkup(React.createElement(Sidebar, {
+    page: 'workbench',
+    setPage: () => undefined,
+    scenarioId: 'draft-scenario' as ScenarioInstanceId,
+    setScenarioId: () => undefined,
+    config: { ...defaultSciForgeConfig, workspacePath: '/tmp/SciForge' },
+    sessionsByScenario: {
+      running: session({
+        scenarioId: 'running' as ScenarioInstanceId,
+        sessionId: 'running-thread',
+        title: 'Running thread',
+        runs: [{
+          id: 'run-running',
+          scenarioId: 'running' as ScenarioInstanceId,
+          status: 'running',
+          prompt: 'run analysis',
+          response: '',
+          createdAt: '2026-05-21T00:04:00.000Z',
+        }],
+        updatedAt: '2026-05-21T00:04:00.000Z',
+      }),
+      blocked: session({
+        scenarioId: 'blocked' as ScenarioInstanceId,
+        sessionId: 'blocked-thread',
+        title: 'Blocked thread',
+        executionUnits: [{
+          id: 'unit-blocked',
+          tool: 'analysis.task',
+          params: '{}',
+          status: 'needs-human',
+          hash: 'hash-blocked',
+        }],
+        updatedAt: '2026-05-21T00:03:00.000Z',
+      }),
+      failed: session({
+        scenarioId: 'failed' as ScenarioInstanceId,
+        sessionId: 'failed-thread',
+        title: 'Failed thread',
+        runs: [{
+          id: 'run-failed',
+          scenarioId: 'failed' as ScenarioInstanceId,
+          status: 'failed',
+          prompt: 'run analysis',
+          response: 'failed',
+          createdAt: '2026-05-21T00:02:00.000Z',
+        }],
+        updatedAt: '2026-05-21T00:02:00.000Z',
+      }),
+      done: session({
+        scenarioId: 'done' as ScenarioInstanceId,
+        sessionId: 'done-thread',
+        title: 'Done thread',
+        messages: [{ id: 'user-done', role: 'user', content: 'finished prompt', createdAt: '2026-05-21T00:01:00.000Z' }],
+        updatedAt: '2026-05-21T00:01:00.000Z',
+      }),
+      'draft-scenario': session({
+        scenarioId: 'draft-scenario' as ScenarioInstanceId,
+        sessionId: 'draft-thread',
+        title: 'New chat',
+        messages: [],
+        updatedAt: '2026-05-21T00:00:00.000Z',
+      }),
+    } as unknown as Record<ScenarioInstanceId, SciForgeSession>,
+    archivedSessions: [],
+    onProjectNewChat: () => undefined,
+    onArchiveThread: () => undefined,
+    onDiscardThread: () => undefined,
+    onRestoreThread: () => undefined,
+    onSearchNavigate: () => undefined,
+    onSettingsOpen: () => undefined,
+    workspaceStatus: 'Connected',
+    onWorkspacePathChange: () => undefined,
+  }));
+
+  assert.equal((html.match(/data-sidebar-thread-row="true"/g) ?? []).length, 5);
+  for (const state of ['running', 'blocked', 'failed', 'done', 'draft']) {
+    assert.match(html, new RegExp(`data-sidebar-thread-state="${state}"`));
+  }
+  for (const label of ['Running', 'Blocked', 'Failed', 'Done', 'Draft']) {
+    assert.match(html, new RegExp(`aria-label="${label}"`));
+  }
+  assert.equal((html.match(/data-sidebar-thread-actions="true"/g) ?? []).length, 5);
+  assert.match(html, /data-sidebar-thread-action="pin"/);
+  for (const title of ['Running thread', 'Blocked thread', 'Failed thread', 'Done thread']) {
+    assert.match(html, new RegExp(`aria-label="Archive chat: ${title}"`));
+  }
+  assert.match(html, /data-sidebar-thread-action="archive"/);
+  assert.match(html, /data-sidebar-thread-action="discard"/);
+  assert.match(html, /aria-label="Discard draft: New chat"/);
+  assert.doesNotMatch(html, /aria-label="Archive chat: New chat"/);
+  assert.doesNotMatch(html, /data-sidebar-thread-action="restore"/);
 });
 
 test('sidebar shell keeps retained previous chats visible after starting a new chat', () => {
@@ -533,7 +816,7 @@ test('sidebar shell renders Codex-style navigation labels without internal runti
     }),
   ));
 
-  for (const label of ['Navigation', 'Chat', 'Browser', 'Timeline', 'Feedback', 'Agents', 'Tools', 'Search chats, projects, pages', 'Repositories', 'Customize Sidebar', 'Open Workspace', 'New Agent', 'Apps', 'Automations', 'Settings', 'Annotate', 'SciForge · Ready', 'No branch', 'Local environment', 'Context']) {
+  for (const label of ['Navigation', 'Feedback', 'Agents', 'Tools', 'Search files, actions, agents', 'Repositories', 'Customize Sidebar', 'Open Workspace', 'New Agent', 'Automations', 'Settings', 'Annotate', 'SciForge · Ready', 'No branch', 'Local environment', 'Context']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.doesNotMatch(html, /Workspace file tree|sidebar-panel-block-explorer|>Files</);
@@ -578,11 +861,11 @@ test('sidebar shell follows the selected app locale', () => {
     ),
   }));
 
-  for (const label of ['导航', '聊天', '浏览器', '时间线', '反馈', '智能体', '工具', '搜索聊天、项目、页面', '仓库', '打开工作区', '新建智能体', '应用', '自动化', '设置', '标注', 'SciForge · 就绪']) {
+  for (const label of ['导航', '反馈', '智能体', '工具', '搜索文件、动作、智能体', '仓库', '打开工作区', '新建智能体', '自动化', '设置', '标注', 'SciForge · 就绪']) {
     assert.match(html, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
   assert.doesNotMatch(html, /工作区文件树|sidebar-panel-block-explorer|>文件</);
-  assert.doesNotMatch(html, /Search chats, projects, pages|Repositories|New Agent|SciForge · Ready/);
+  assert.doesNotMatch(html, /Search files, actions, agents|Repositories|New Agent|SciForge · Ready/);
 });
 
 test('sidebar search returns concise matches and empty arrays for misses', () => {
@@ -597,8 +880,8 @@ test('sidebar search returns concise matches and empty arrays for misses', () =>
 
   const proteinMatch = buildSidebarSearchMatches('protein', sessions).find((match) => match.id === 'thread:protein-thread');
   assert.equal(proteinMatch?.sessionId, 'protein-thread');
-  assert.equal(proteinMatch?.threadState, 'active');
-  assert.ok(buildSidebarSearchMatches('timeline', sessions).some((match) => match.page === 'timeline'));
+  assert.equal(proteinMatch?.threadState, 'done');
+  assert.ok(buildSidebarSearchMatches('feedback', sessions).some((match) => match.page === 'feedback'));
   assert.deepEqual(buildSidebarSearchMatches('zzzz-no-result', sessions), []);
 });
 
@@ -614,11 +897,98 @@ test('sidebar search exposes Automations, Customize, and Repositories as local s
   assert.equal(automations?.page, 'components');
   assert.equal(customize?.label, 'Customize');
   assert.equal(customize?.detail, 'Sidebar action');
+  assert.equal(customize?.page, 'workbench');
   assert.equal(repositories?.label, 'Repositories');
   assert.equal(repositories?.detail, 'Sidebar section');
   assert.equal(repositories?.page, 'workbench');
   assert.equal(localized?.label, '自动化');
   assert.doesNotMatch(JSON.stringify([automations, customize, repositories, localized]), /provider|model|Authorization|secret|token|\/tmp|\/Applications/i);
+});
+
+test('sidebar search keeps Customize for sidebar presentation and exposes Marketplace separately', () => {
+  const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
+  const customize = buildSidebarSearchMatches('customize sidebar', sessions).find((match) => match.action === 'open-customize');
+  const marketplace = buildSidebarSearchMatches('marketplace plugins', sessions).find((match) => match.action === 'open-marketplace');
+
+  assert.equal(customize?.page, 'workbench');
+  assert.equal(customize?.kind, 'action');
+  assert.equal(marketplace?.label, 'Open Marketplace');
+  assert.equal(marketplace?.page, 'components');
+  assert.equal(marketplace?.kind, 'skill');
+  assert.doesNotMatch(JSON.stringify([customize, marketplace]), /provider|Authorization|secret|token|\/tmp|\/Applications/i);
+});
+
+test('sidebar search behaves like a unified command palette without leaking runtime paths', () => {
+  const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: '/Applications/private/sciforge',
+    modelName: 'private-model-name',
+    toolProviderRoutes: {
+      'vision-mcp': {
+        source: 'mcp' as const,
+        capabilityId: 'Vision MCP',
+        endpoint: 'http://127.0.0.1:8931/mcp?token=secret',
+      },
+    },
+  };
+
+  const newAgent = buildSidebarSearchMatches('agent', sessions).find((match) => match.action === 'new-agent');
+  const fileAction = buildSidebarSearchMatches('files', sessions).find((match) => match.kind === 'file');
+  const mode = buildSidebarSearchMatches('plan', sessions).find((match) => match.kind === 'mode');
+  const model = buildSidebarSearchMatches('model', sessions, { config }).find((match) => match.kind === 'model');
+  const skill = buildSidebarSearchMatches('plot', sessions, { config }).find((match) => match.kind === 'skill');
+  const mcpMatches = buildSidebarSearchMatches('mcp', sessions, { config });
+  const mcp = mcpMatches.find((match) => match.kind === 'mcp' && match.label === 'Vision MCP');
+  const mcpSettings = mcpMatches.find((match) => match.action === 'open-mcp-settings');
+  const groupWorkspace = buildSidebarSearchMatches('workspace', sessions).find((match) => match.action === 'group-by-workspace');
+  const groupStatus = buildSidebarSearchMatches('status', sessions).find((match) => match.action === 'group-by-status');
+  const groupEnvironment = buildSidebarSearchMatches('environment', sessions).find((match) => match.action === 'group-by-environment');
+
+  assert.equal(newAgent?.label, 'New Agent');
+  assert.equal(newAgent?.kind, 'agent');
+  assert.equal(newAgent?.shortcut, '⌘N');
+  assert.equal(fileAction?.detail, 'File action');
+  assert.equal(mode?.detail, 'Chat mode');
+  assert.equal(model?.action, 'open-settings');
+  assert.ok(skill?.label);
+  assert.equal(mcp?.label, 'Vision MCP');
+  assert.equal(mcpSettings?.action, 'open-mcp-settings');
+  assert.equal(groupWorkspace?.label, 'Group by Workspace');
+  assert.equal(groupStatus?.label, 'Group by Status');
+  assert.equal(groupEnvironment?.label, 'Group by Environment');
+  assert.doesNotMatch(
+    JSON.stringify([newAgent, fileAction, mode, model, skill, mcp, groupWorkspace, groupStatus, groupEnvironment]),
+    /\/Applications|private-model-name|127\.0\.0\.1|secret|token|Authorization|api key/i,
+  );
+});
+
+test('sidebar search includes safe workspace file projections as relative command palette results', () => {
+  const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
+  const workspaceRootPath = '/Applications/private/sciforge';
+  const matches = buildSidebarSearchMatches('ShellPanels', sessions, {
+    workspaceRootPath,
+    workspaceEntries: [{
+      kind: 'file',
+      name: 'ShellPanels.tsx',
+      path: '/Applications/private/sciforge/src/ui/src/app/appShell/ShellPanels.tsx',
+    }, {
+      kind: 'file',
+      name: 'config.local.json',
+      path: '/Applications/private/sciforge/config.local.json',
+    }, {
+      kind: 'file',
+      name: 'trace.jsonl',
+      path: '/Applications/private/sciforge/.sciforge/sessions/run-1/trace.jsonl',
+    }],
+  });
+  const file = matches.find((match) => match.workspaceRelativePath === 'src/ui/src/app/appShell/ShellPanels.tsx');
+
+  assert.equal(file?.kind, 'file');
+  assert.equal(file?.label, 'ShellPanels.tsx');
+  assert.equal(file?.detail, 'Workspace file · src/ui/src/app/appShell');
+  assert.equal(file?.page, 'workbench');
+  assert.doesNotMatch(JSON.stringify(matches), /\/Applications|private|\.sciforge|config\.local|trace\.jsonl|token|secret/i);
 });
 
 test('sidebar search includes projects and archived threads without exposing local paths', () => {
@@ -667,4 +1037,8 @@ function session(patch: Partial<SciForgeSession> = {}): SciForgeSession {
     updatedAt: '2026-05-21T00:01:00.000Z',
     ...patch,
   };
+}
+
+function sessionMap(record: Record<string, SciForgeSession>): Record<ScenarioInstanceId, SciForgeSession> {
+  return record as unknown as Record<ScenarioInstanceId, SciForgeSession>;
 }

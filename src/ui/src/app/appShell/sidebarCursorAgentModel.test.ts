@@ -35,6 +35,63 @@ test('seed-only and empty sessions become draft threads', () => {
   assert.ok(threads.every((thread) => thread.actions.every((action) => action.intent !== 'archive-thread')));
 });
 
+test('thread projection exposes done running failed blocked draft archive and discard states', () => {
+  const projection = buildSidebarCursorAgentProjection({
+    workspace: { id: 'lab', path: '/tmp/lab' },
+    projects: [{
+      id: 'project-a',
+      label: 'Project A',
+      threads: [{
+        sessionId: 'legacy-active',
+        title: 'Legacy active alias',
+        state: 'active',
+      }, {
+        sessionId: 'running-thread',
+        title: 'Running thread',
+        state: 'running',
+      }, {
+        sessionId: 'failed-thread',
+        title: 'Failed thread',
+        state: 'failed',
+      }, {
+        sessionId: 'blocked-thread',
+        title: 'Blocked thread',
+        state: 'blocked',
+      }, {
+        sessionId: 'draft-thread',
+        title: 'Draft thread',
+        state: 'draft',
+      }, {
+        sessionId: 'archived-thread',
+        title: 'Archived thread',
+        archived: true,
+      }, {
+        sessionId: 'discarded-thread',
+        title: 'Discarded thread',
+        discarded: true,
+      }],
+    }],
+  });
+
+  const threads = projection.groups[0]?.threads ?? [];
+  const byTitle = new Map(threads.map((thread) => [thread.title, thread]));
+
+  assert.equal(byTitle.get('Legacy active alias')?.state, 'done');
+  assert.equal(byTitle.get('Running thread')?.state, 'running');
+  assert.equal(byTitle.get('Failed thread')?.state, 'failed');
+  assert.equal(byTitle.get('Blocked thread')?.state, 'blocked');
+  assert.equal(byTitle.get('Draft thread')?.state, 'draft');
+  assert.equal(byTitle.get('Archived thread')?.state, 'archived');
+  assert.equal(byTitle.get('Discarded thread')?.state, 'discarded');
+  assert.deepEqual(byTitle.get('Running thread')?.badges, ['Running']);
+  assert.deepEqual(byTitle.get('Failed thread')?.badges, ['Failed']);
+  assert.deepEqual(byTitle.get('Blocked thread')?.badges, ['Blocked']);
+  assert.deepEqual(byTitle.get('Legacy active alias')?.actions.map((action) => action.intent), ['pin-thread', 'archive-thread']);
+  assert.deepEqual(byTitle.get('Draft thread')?.actions.map((action) => action.intent), ['pin-thread', 'discard-thread']);
+  assert.deepEqual(byTitle.get('Archived thread')?.actions.map((action) => action.intent), ['restore-thread']);
+  assert.deepEqual(byTitle.get('Discarded thread')?.actions.map((action) => action.intent), ['restore-thread']);
+});
+
 test('pinned archived and discarded visible state does not leak internal runtime terms', () => {
   const projection = buildSidebarCursorAgentProjection({
     workspace: { id: 'lab', path: '/tmp/lab' },

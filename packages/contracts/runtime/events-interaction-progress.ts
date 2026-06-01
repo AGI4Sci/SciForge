@@ -232,24 +232,60 @@ export function runtimeInteractionProgressEventFromCompactRecord(value: unknown)
 export function runtimeInteractionProgressPresentation(value: unknown): RuntimeInteractionProgressPresentation | undefined {
   const event = runtimeInteractionProgressEventFromUnknown(value);
   if (!event) return undefined;
-  const phase = event.phase ?? event.type;
-  const parts = [
-    `Phase: ${phase}`,
-    event.status ? `Status: ${event.status}` : '',
-    event.reason ? `Reason: ${event.reason}` : '',
-    event.cancellationReason ? `Cancellation: ${event.cancellationReason}` : '',
-    event.interaction ? `Interaction: ${event.interaction.kind}${event.interaction.required === undefined ? '' : event.interaction.required ? ' required' : ' optional'}` : '',
-    runtimeInteractionProgressBudgetSummary(event.budget),
-  ].filter(Boolean);
   return {
     label: interactionProgressEventLabel(event.type),
-    detail: parts.join('\n'),
+    detail: runtimeInteractionProgressPublicDetail(event),
     phase: event.phase,
     status: event.status,
     reason: event.reason,
     interaction: event.interaction,
     termination: event.termination,
   };
+}
+
+function runtimeInteractionProgressPublicDetail(event: RuntimeInteractionProgressEvent) {
+  const detail = compactInteractionProgressSentence(event);
+  const budget = runtimeInteractionProgressBudgetSummary(event.budget);
+  return [detail, budget].filter(Boolean).join('\n');
+}
+
+function compactInteractionProgressSentence(event: RuntimeInteractionProgressEvent) {
+  if (event.type === GUIDANCE_QUEUED_EVENT_TYPE || event.interaction?.kind === 'guidance') {
+    return 'Queued follow-up will merge after the current run ends.';
+  }
+  if (event.type === HUMAN_APPROVAL_REQUIRED_EVENT_TYPE || event.interaction?.kind === 'human-approval') {
+    return event.interaction?.required === false
+      ? 'Approval is optional before continuing.'
+      : 'Waiting for approval before continuing.';
+  }
+  if (event.type === CLARIFICATION_NEEDED_EVENT_TYPE || event.interaction?.kind === 'clarification') {
+    return 'Waiting for clarification before continuing.';
+  }
+  if (event.type === RUN_CANCELLED_EVENT_TYPE || event.status === 'cancelled') {
+    return 'The run was cancelled; details are saved in activity.';
+  }
+  if (event.type === PROCESS_PROGRESS_EVENT_TYPE) {
+    return processProgressSentence(event.phase, event.status);
+  }
+  if (event.status === 'failed') return 'The step did not finish; details are saved in activity.';
+  if (event.status === 'blocked') return 'Waiting for the next required interaction.';
+  if (event.status === 'completed') return 'Interaction step completed.';
+  return 'Waiting for workspace activity.';
+}
+
+function processProgressSentence(phase: string | undefined, status: RuntimeInteractionProgressStatus | undefined) {
+  const label = readableProgressPhase(phase);
+  if (status === 'completed') return `${label} completed.`;
+  if (status === 'failed') return `${label} did not finish.`;
+  if (status === 'blocked') return `${label} is waiting for input.`;
+  if (status === 'cancelled') return `${label} was cancelled.`;
+  return `${label} in progress.`;
+}
+
+function readableProgressPhase(phase: string | undefined) {
+  const normalized = phase?.trim().replace(/[-_]+/g, ' ');
+  if (!normalized) return 'Workspace activity';
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
 export function runtimeInteractionProgressBudgetSummary(budget: RuntimeInteractionProgressBudget | undefined) {

@@ -1,5 +1,7 @@
 export const BROWSER_RUNTIME_CAPABILITY_ID = 'browser_runtime' as const;
 export const BROWSER_RUNTIME_CONTRACT_ID = 'sciforge.browser-runtime.v1' as const;
+export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' as const;
+export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
 
 export type BrowserRuntimeMode = 'agent-headless' | 'visible-takeover';
 export type BrowserRuntimeTabStatus = 'new' | 'loading' | 'ready' | 'failed' | 'closed';
@@ -51,7 +53,100 @@ export type BrowserRuntimeCommandType =
   | 'browser.close';
 
 export type BrowserRuntimeRiskLevel = 'low' | 'medium' | 'high';
-export type BrowserRuntimeTraceRefKind = 'screenshot' | 'dom-snapshot' | 'console-log' | 'network-log' | 'download';
+export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-snapshot' | 'ax-snapshot' | 'console-log' | 'network-log' | 'search-result' | 'download';
+export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
+export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'snapshot' | 'state' | 'close';
+export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
+export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
+
+export interface BrowserHostSessionViewport {
+  width: number;
+  height: number;
+}
+
+export interface BrowserHostSessionActionTiming {
+  actionId: string;
+  action: BrowserHostSessionAction | 'open';
+  capture: BrowserHostSessionCaptureMode;
+  status: 'ok' | 'failed';
+  uiEventReceivedAt?: string;
+  adapterSentAt?: string;
+  hostReceivedAt: string;
+  hostStartedAt: string;
+  hostActionEndedAt?: string;
+  evidenceCaptureStartedAt?: string;
+  evidenceCaptureEndedAt?: string;
+  hostCompletedAt: string;
+  adapterToHostMs?: number;
+  queueMs: number;
+  hostActionMs: number;
+  evidenceMs?: number;
+  totalMs: number;
+  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  paintAckSource?: 'native-adapter-action-state' | 'host-stream-frame' | 'none';
+  blockedReason?: string;
+}
+
+export interface BrowserHostSessionActionTimingSummary {
+  action: BrowserHostSessionAction | 'open';
+  count: number;
+  p50Ms: number;
+  p95Ms: number;
+  lastMs: number;
+}
+
+export interface BrowserHostSessionState {
+  schemaVersion: typeof BROWSER_HOST_SESSION_SCHEMA;
+  id: string;
+  owner: 'host';
+  providerId: typeof BROWSER_HOST_SESSION_PROVIDER_ID;
+  status: BrowserHostSessionStatus;
+  workspacePath?: string;
+  requestedUrl?: string;
+  url: string;
+  title?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  viewport?: BrowserHostSessionViewport;
+  canGoBack?: boolean;
+  canGoForward?: boolean;
+  liveSurfaceRef?: string;
+  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  nativeAdapterUrl?: string;
+  singleInteractiveTruth?: true;
+  frameStreamRef?: string;
+  frameRef?: string;
+  frameUrl?: string;
+  screenshotRef?: string;
+  domSnapshotRef?: string;
+  axSnapshotRef?: string;
+  consoleLogRef?: string;
+  networkLogRef?: string;
+  searchResultRef?: string;
+  workspaceWriterBaseUrl?: string;
+  cursor?: string;
+  lastActionTiming?: BrowserHostSessionActionTiming;
+  actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
+  diagnostics?: string[];
+}
+
+export interface BrowserHostSessionActionRequest {
+  sessionId: string;
+  action: BrowserHostSessionAction;
+  capture?: BrowserHostSessionCaptureMode;
+  url?: string;
+  x?: number;
+  y?: number;
+  button?: BrowserHostMouseButton;
+  path?: Array<{ x: number; y: number }>;
+  text?: string;
+  key?: string;
+  deltaX?: number;
+  deltaY?: number;
+  actionId?: string;
+  uiEventReceivedAt?: string;
+  adapterSentAt?: string;
+}
 
 export interface BrowserRuntimeTab {
   id: string;
@@ -124,8 +219,10 @@ export interface BrowserRuntimeSnapshot {
   textPreview?: string;
   screenshotRef?: string;
   domSnapshotRef?: string;
+  axSnapshotRef?: string;
   consoleLogRef?: string;
   networkLogRef?: string;
+  searchResultRef?: string;
 }
 
 export interface BrowserRuntimeProjection {
@@ -133,6 +230,7 @@ export interface BrowserRuntimeProjection {
   session: BrowserRuntimeSession;
   activeTab?: BrowserRuntimeTab;
   snapshot?: BrowserRuntimeSnapshot;
+  hostSession?: BrowserHostSessionState;
   traceRefs: BrowserRuntimeTraceRef[];
   guiBoundary: {
     taskReasoning: false;
@@ -145,7 +243,7 @@ export interface BrowserRuntimeProjection {
 export interface BrowserRuntimeCodexFeature {
   codexFeature: string;
   sciforgeSurface: string;
-  owner: 'browser_runtime' | 'playwright_browser_automation' | 'playwright_edge_browser' | 'computer_use' | 'gui';
+  owner: 'browser_runtime' | 'browser_host_session' | 'playwright_browser_automation' | 'playwright_edge_browser' | 'computer_use' | 'gui';
   notes: string;
 }
 
@@ -283,9 +381,9 @@ export function browserRuntimeCodexFeatureMatrix(): BrowserRuntimeCodexFeature[]
     },
     {
       codexFeature: 'browser visibility and viewport capabilities',
-      sciforgeSurface: 'browser.visibility.set and browser.viewport.* commands',
-      owner: 'gui',
-      notes: 'GUI may present the browser panel or viewport controls, while TUI/runtime still owns browser state and command dispatch.',
+      sciforgeSurface: 'BrowserHostSession frame viewer and browser.viewport.* commands',
+      owner: 'browser_host_session',
+      notes: 'The host owns live page pixels, navigation state, and viewport sizing; GUI renders the frame refs and sends viewer input as host actions.',
     },
     {
       codexFeature: 'browser.user.openTabs',
@@ -307,15 +405,15 @@ export function browserRuntimeCodexFeatureMatrix(): BrowserRuntimeCodexFeature[]
     },
     {
       codexFeature: 'CUA coordinate actions',
-      sciforgeSurface: 'cua.click/cua.double_click/cua.drag/cua.move/cua.scroll/cua.type command contract',
-      owner: 'computer_use',
-      notes: 'Coordinate actions remain fallback for browser pages and should stay target-bound with action trace.',
+      sciforgeSurface: 'BrowserHostSession computer-use-actions click/double_click/mouse_down/mouse_move/mouse_up/wheel/type/press/cursor contract',
+      owner: 'browser_host_session',
+      notes: 'Browser coordinate actions enter the same host-owned live browser session and do not create a second interactive surface.',
     },
     {
       codexFeature: 'screenshots and DOM snapshots',
-      sciforgeSurface: 'BrowserRuntimeSnapshot refs',
-      owner: 'browser_runtime',
-      notes: 'Screenshots, DOM snapshots, console logs, and network logs are refs-first and never stored as base64 in workspace state.',
+      sciforgeSurface: 'BrowserHostSession / BrowserRuntimeSnapshot refs',
+      owner: 'browser_host_session',
+      notes: 'Page frames, screenshots, DOM/AX snapshots, console logs, and network logs are refs-first and never stored as base64 in workspace state.',
     },
     {
       codexFeature: 'clipboard API',
@@ -348,10 +446,10 @@ export function browserRuntimeCodexFeatureMatrix(): BrowserRuntimeCodexFeature[]
       notes: 'Visible browser is opt-in for login/manual takeover and requires approval before persistent-profile or account actions.',
     },
     {
-      codexFeature: 'coordinate CUA fallback',
+      codexFeature: 'coordinate CUA handoff',
       sciforgeSurface: 'Computer Use action provider',
       owner: 'computer_use',
-      notes: 'Coordinate actions are fallback for non-DOM software surfaces; browser pages should prefer browser_runtime.',
+      notes: 'Computer Use may own non-browser app/window surfaces; browser pages keep their own BrowserHostSession live surface.',
     },
   ];
 }
@@ -469,6 +567,7 @@ export function browserRuntimeTraceForCommand(input: {
 export function browserRuntimeProjection(input: {
   session: BrowserRuntimeSession;
   snapshot?: BrowserRuntimeSnapshot;
+  hostSession?: BrowserHostSessionState;
   trace?: BrowserRuntimeTrace;
 }): BrowserRuntimeProjection {
   return {
@@ -476,6 +575,7 @@ export function browserRuntimeProjection(input: {
     session: input.session,
     activeTab: input.session.tabs.find((tab) => tab.id === input.session.activeTabId),
     snapshot: input.snapshot,
+    hostSession: input.hostSession,
     traceRefs: input.trace?.refs ?? [],
     guiBoundary: {
       taskReasoning: false,
@@ -492,8 +592,10 @@ export function browserRuntimeSnapshotFromRefs(input: {
   textPreview?: string;
   screenshotRef?: string;
   domSnapshotRef?: string;
+  axSnapshotRef?: string;
   consoleLogRef?: string;
   networkLogRef?: string;
+  searchResultRef?: string;
 }): BrowserRuntimeSnapshot {
   return {
     schemaVersion: 'sciforge.browser-runtime.snapshot.v1',
@@ -556,10 +658,13 @@ export function browserRuntimePageQueryRisk(query: BrowserRuntimePageQuery): Bro
 
 function refsFromRaw(raw: Record<string, unknown>): BrowserRuntimeTraceRef[] {
   const refs: BrowserRuntimeTraceRef[] = [];
+  pushTraceRef(refs, 'browser-frame', raw.frameRef);
   pushTraceRef(refs, 'screenshot', raw.screenshotRef);
   pushTraceRef(refs, 'dom-snapshot', raw.domSnapshotRef);
+  pushTraceRef(refs, 'ax-snapshot', raw.axSnapshotRef);
   pushTraceRef(refs, 'console-log', raw.consoleLogRef);
   pushTraceRef(refs, 'network-log', raw.networkLogRef);
+  pushTraceRef(refs, 'search-result', raw.searchResultRef);
   return refs;
 }
 

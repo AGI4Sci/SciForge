@@ -4,9 +4,10 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SidebarToolsStrip } from './SidebarToolsStrip';
 
-test('sidebar tools strip renders app entry and automation placeholder', () => {
+test('sidebar tools strip renders app and automation entries', () => {
   const html = renderToStaticMarkup(React.createElement(SidebarToolsStrip, {
     onOpenComponents: () => undefined,
+    onOpenAutomations: () => undefined,
   }));
 
   assert.match(html, /aria-label="Tools"/);
@@ -14,5 +15,5 @@ test('sidebar tools strip renders app entry and automation placeholder', () => {
   assert.match(html, />Apps</);
   assert.match(html, /aria-label="Automations"/);
   assert.match(html, />Automations</);
-  assert.match(html, />Soon</);
+  assert.doesNotMatch(html, />Soon</);
 });

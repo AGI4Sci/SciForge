@@ -13,6 +13,8 @@ import {
   type ModuleResultEnvelope,
 } from '@sciforge-ui/runtime-contract/modules';
 import { createResourceModuleHandlers } from './resource-modules.js';
+import { createFilesModuleHandler } from './files-module-handler.js';
+import { createAutomationsModuleHandler } from './automations-module-handler.js';
 
 export interface RuntimeModuleHandler {
   describe(): ModuleDescription | Promise<ModuleDescription>;
@@ -42,6 +44,8 @@ export const RUNTIME_MODULE_IDS = [
   'gui',
   'skills',
   'memory',
+  'files',
+  'automations',
   'capabilities',
   'browser',
   'verifier',
@@ -58,6 +62,8 @@ export function createRuntimeModuleRegistry(
   const defaults: Partial<Record<string, RuntimeModuleHandler>> = {
     skills: resourceHandlers.skills,
     memory: resourceHandlers.memory,
+    files: createFilesModuleHandler(),
+    automations: createAutomationsModuleHandler(),
     capabilities: resourceHandlers.capabilities,
   };
   const merged = new Map<string, RuntimeModuleHandler>();
@@ -108,9 +114,9 @@ export function createRuntimeModuleDispatcher(registry = createRuntimeModuleRegi
       inputSummary: summarizeForTrace(input),
     };
     if (isRecord(input)) {
-      if (typeof input.intent === 'string') step.intent = input.intent;
-      if (typeof input.query === 'string') step.query = input.query;
-      if (typeof input.ref === 'string') step.ref = input.ref;
+      if (typeof input.intent === 'string') step.intent = scrubTraceText(input.intent);
+      if (typeof input.query === 'string') step.query = scrubTraceText(input.query);
+      if (typeof input.ref === 'string') step.ref = scrubTraceText(input.ref);
       if (typeof input.traceParent === 'string') step.parentId = input.traceParent;
     }
     traceSteps.push(step);
@@ -256,6 +262,12 @@ function defaultModuleDescription(moduleId: RuntimeModuleId): ModuleDescription 
       limits: { maxInlineBytes: 32_000, expectedLatencyMs: 100 },
     });
   }
+  if (moduleId === 'files') {
+    return createFilesModuleHandler().describe() as ModuleDescription;
+  }
+  if (moduleId === 'automations') {
+    return createAutomationsModuleHandler().describe() as ModuleDescription;
+  }
   if (moduleId === 'capabilities') {
     return createModuleDescription({
       moduleId,
@@ -298,7 +310,8 @@ function defaultModuleDescription(moduleId: RuntimeModuleId): ModuleDescription 
       limits: { maxInlineBytes: 16_000, expectedLatencyMs: 500 },
     });
   }
-  const staticDescriptions: Record<Exclude<RuntimeModuleId, 'gui' | 'skills' | 'memory' | 'capabilities' | 'actions'>, {
+  type StaticModuleId = Extract<RuntimeModuleId, 'browser' | 'verifier' | 'artifacts'>;
+  const staticDescriptions: Record<StaticModuleId, {
     title: string;
     summary: string;
     kind: string;
@@ -323,7 +336,7 @@ function defaultModuleDescription(moduleId: RuntimeModuleId): ModuleDescription 
       refPrefix: 'artifact:',
     },
   };
-  const current = staticDescriptions[moduleId];
+  const current = staticDescriptions[moduleId as StaticModuleId];
   return createModuleDescription({
     moduleId,
     title: current.title,
@@ -364,6 +377,8 @@ export function scrubTraceText(value: string): string {
   return value
     .replace(/\bBearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted-secret]')
     .replace(/\b(api[_-]?key|token|secret|password|authorization)=([^&\s]+)/gi, '$1=[redacted-secret]')
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/gi, '[redacted-secret]')
+    .replace(/(^|[\s"'([{<])(?:file:)?((?:\/(?:Applications|Users|private|var|tmp|etc|opt|home)\/[^\s"'<>),;\]}]+)|(?:[A-Za-z]:\\[^\s"'<>),;\]}]+))/gi, '$1[redacted-local-path]')
     .replace(/https?:\/\/[^\s"')]+/gi, '[redacted-url]');
 }
 
