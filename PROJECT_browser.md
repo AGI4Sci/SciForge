@@ -95,14 +95,14 @@
 
 - [x] 建立 Browser latency instrumentation。
   验收：每个 BrowserHostSession action 都有轻量 timing：UI event received、adapter sent、host action start/end、surface paint/ack、evidence capture start/end；日志 refs-first 且脱敏。
-  完成（2026-06-02）：`BrowserHostSessionState.lastActionTiming` 记录 `uiEventReceivedAt`、`adapterSentAt`、`hostReceivedAt`、`hostStartedAt`、`hostActionEndedAt`、`evidenceCaptureStartedAt`、`evidenceCaptureEndedAt`、`totalMs`、`paintAckSource`、`blockedReason`；`actionTimingSummary` 按 action 汇总 p50/p95；UI adapter 透传 action timing；Browser Workbench diagnostics 展示 transport、native adapter URL、last action timing 和 latency summary。
-  Evidence：`browser-host-session:*` state refs；`.browser-workbench-viewer-diagnostics[data-browser-last-action]`；`nativeAdapterUrl` 只接受 local HTTP adapter URL。
+  完成（2026-06-02）：`BrowserHostSessionState.lastActionTiming` 记录 `uiEventReceivedAt`、`adapterSentAt`、`hostReceivedAt`、`hostStartedAt`、`hostActionEndedAt`、`evidenceCaptureStartedAt`、`evidenceCaptureEndedAt`、`totalMs`、`paintAckSource`、`blockedReason`；`actionTimingSummary` 按 action 汇总 p50/p95；UI adapter 透传 action timing；Browser Workbench diagnostics 展示 transport、native adapter URL、last action timing 和 latency summary。补充 blocked/error/offline actionable diagnostics：只展示本地 writer/native adapter origin、health capability、transport、last action timing、last blocked reason、bounded diagnostics；错误 state 的 reason/detail 同样走清洗，不输出 raw DOM/base64/screenshot/secrets/provider payload。
+  Evidence：`browser-host-session:*` state refs；`.browser-workbench-viewer-diagnostics[data-browser-last-action]`；`.browser-workbench-viewer-diagnostics[data-browser-writer-url]`；`data-browser-health-capability`；`data-browser-native-adapter-url`；`data-browser-last-action-timing`；`nativeAdapterUrl` 只接受 local HTTP adapter URL。
   验证命令：`npm run typecheck --silent`；`node --import tsx --test src/runtime/browser-host-session.test.ts packages/presentation/components/browser-workbench/render.test.tsx src/ui/src/app/results/browserPaneHostAdapter.test.ts src/ui/src/api/workspaceClient.browser-host-preflight.test.ts`。
-  最终状态：contract / UI diagnostics complete；真实 p50/p95 dogfood 数据待真实 runbook 记录。
+  最终状态：contract / UI diagnostics / blocked-state actionable diagnostics complete；真实 p50/p95 dogfood 数据待真实 runbook 记录。
   TODO：
   - 为 open/click/type/press/scroll/drag/cursor 分别记录 p50/p95。
   - 区分 live surface paint latency 和 evidence refs latency。
-  - 在 UI 错误态展示可执行诊断：writer URL、health capability、native adapter URL、transport、last action timing、last blocked reason。
+  - [x] 在 UI 错误态展示可执行诊断：writer URL、health capability、native adapter URL、transport、last action timing、last blocked reason。
 
 - [ ] 真实复测当前“右侧栏浏览器不够流畅、实时性不好”的卡点。
   验收：给出当前最大瓶颈排序，并用真实 SciForge Browser pane 操作证据支撑；不能只给架构猜测。
@@ -222,15 +222,16 @@
   - [x] 搜索结果点击后的页面 navigation 必须继续使用同一 owner。
   - [x] 搜索摘要生成不能阻塞用户继续浏览。
 
-- [ ] 搜索页面输入完成度验收。
+- [x] 搜索页面输入完成度验收。
   验收：在真实搜索框中输入长查询不丢字、不提前提交、不被聊天 composer 捕获。
-  状态（2026-06-02）：deterministic 搜索输入 smoke 已覆盖长 query、中文/英文/符号混合输入、Backspace 删除重输、Enter 提交；新增真实 SciForge UI + Workspace Writer + `.test` fixture dogfood，只通过右栏 Browser pane 地址栏、visible BrowserHostSession host frame 和 hidden keyboard path 操作，覆盖长 mixed query、Backspace 删除重输、Enter 提交；输入经 `BrowserHostSession` / `browser-host-session` channel，`systemKeyboardEvents=not-sent`、`shellComposerCapturedCharacters=0`，bounded report 只记录长度/hash/refs/timing summary/inputChannel，不记录 raw DOM/base64。真实搜索输入 dogfood passed；IME/clipboard/selection range 仍归入键盘编辑项。
-  Evidence refs / selectors：`tests/smoke/smoke-browser-search-input-completion.test.ts`、`tests/smoke/smoke-browser-search-input-dogfood.test.ts`、`docs/test-artifacts/browser-search-input-dogfood/manifest.json`、`.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]`、`BrowserHostComputerUseActionResult.inputChannel='browser-host-session'`。
+  状态（2026-06-02）：deterministic 搜索输入 smoke 已覆盖长 query、中文/英文/符号混合输入、Backspace 删除重输、Enter 提交；新增真实 SciForge UI + Workspace Writer + `.test` fixture dogfood，只通过右栏 Browser pane 地址栏、visible BrowserHostSession host frame 和 hidden keyboard path 操作，覆盖长 mixed query、Backspace 删除重输、Enter 提交；输入经 `BrowserHostSession` / `browser-host-session` channel，`systemKeyboardEvents=not-sent`、`shellComposerCapturedCharacters=0`，bounded report 只记录长度/hash/refs/timing summary/inputChannel，不记录 raw DOM/base64。补充 failure-focused diagnostics：deterministic 与真实 dogfood manifest 都记录 focused element/hidden-input state、action timing summary、recent action types、fixture event trace 和 hash/length，不记录 raw query/DOM/base64/screenshot。真实搜索输入 dogfood passed；IME/clipboard/selection range 仍归入键盘编辑项。
+  Evidence refs / selectors：`tests/smoke/smoke-browser-search-input-completion.test.ts`、`tests/smoke/smoke-browser-search-input-dogfood.test.ts`、`docs/test-artifacts/browser-search-input-dogfood/manifest.json`、`.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]`、`BrowserHostComputerUseActionResult.inputChannel='browser-host-session'`、`failureFocusedDiagnostic.focusedElement.kind`、`failureFocusedDiagnostic.actionTrace.recentActionTypes`。
   验证命令：`npm run smoke:browser-search-input-dogfood --silent`；`node --import tsx --test tests/smoke/smoke-browser-search-input-completion.test.ts packages/presentation/components/browser-workbench/render.test.tsx src/ui/src/app/results/browserPaneHostAdapter.test.ts`；`npm run typecheck --silent`。
+  最终状态：deterministic + product dogfood search input completion passed；failure diagnostics bounded；IME/clipboard/selection live evidence remains under keyboard editing item.
   TODO：
   - [x] 设计长 query、中文输入、英文输入、符号输入、删除重输的 fixture（deterministic BrowserHostSession searchbox smoke）。
   - [x] 记录 query 字符串与页面内实际 value 的一致性（测试内断言 raw value；bounded report 只输出长度/hash/match）。
-  - 失败时输出 action timing 和 focused element diagnostic。
+  - [x] 失败时输出 action timing 和 focused element diagnostic。
 
 ## P1：Web Shell Transport
 
@@ -269,13 +270,13 @@
 
 - [x] 建立 Browser performance lab。
   验收：有一套本地 deterministic 页面和真实公网 smoke，能重复测量 navigation/input/scroll/drag/search。
-  状态（2026-06-02 Worker E + follow-up）：本地 deterministic BrowserHostSession performance-lab smoke 使用内存 fixture driver 覆盖 navigation/type(input)/scroll/drag/search timing summary，并输出 bounded before/after manifest；本地 fixture coverage 进一步覆盖 contenteditable、iframe target、shadow DOM control、deterministic slow-network navigation 四类 capability matrix，均为 refs-first timing summary，不记录 raw DOM/base64/screenshot bytes，也不声称公网或真实长测。frame-stream metrics/backpressure lab 覆盖 bounded `websocket-binary` drop/skip summary 与 p95/drop summary；新增公网/可配置 URL smoke，从 `SCIFORGE_BROWSER_PUBLIC_SMOKE_URLS` 读取目标（默认 example.com + IANA 文档 URL），真实 BrowserHostSession 覆盖 open/navigate/type/scroll/search/frame-drop probe，公网或浏览器不可用时写 typed blocked/skipped evidence，不记录 raw DOM/base64/screenshot bytes。本次实测 2 个 URL ready，search passed，frame-drop probe 记录 recent-input skip；本地 deterministic manifest 明确 `publicNetworkUsed=false`、`realThirtyMinuteBenchmark=false`。
+  状态（2026-06-02 Worker E + follow-up）：本地 deterministic BrowserHostSession performance-lab smoke 使用内存 fixture driver 覆盖 navigation/type(input)/scroll/drag/search timing summary，并输出 bounded before/after manifest；本地 fixture coverage 进一步覆盖 contenteditable、iframe target、shadow DOM control、deterministic slow-network navigation 四类 capability matrix，均为 refs-first timing summary，不记录 raw DOM/base64/screenshot bytes，也不声称公网或真实长测。frame-stream metrics/backpressure lab 覆盖 bounded `websocket-binary` drop/skip summary 与 p95/drop summary；新增公网/可配置 URL smoke，从 `SCIFORGE_BROWSER_PUBLIC_SMOKE_URLS` 读取目标（默认 example.com + IANA 文档 URL），真实 BrowserHostSession 覆盖 open/navigate/type/scroll/search/frame-drop probe，公网或浏览器不可用时写 typed blocked/skipped evidence，不记录 raw DOM/base64/screenshot bytes；manifest 补充 bounded `finalStatus` guard，记录 requested/ready/blocked counts、search status、timing/drop refs 和 reason hash，禁止 raw payload。本次实测 2 个 URL ready，search passed，frame-drop probe 记录 recent-input skip；本地 deterministic manifest 明确 `publicNetworkUsed=false`、`realThirtyMinuteBenchmark=false`。
   Evidence：`tests/smoke/smoke-browser-host-session-performance-lab.test.ts`、`tests/smoke/smoke-browser-host-session-frame-stream-backpressure-lab.test.ts`、`tests/smoke/smoke-browser-host-session-public-performance-lab.test.ts`、`docs/test-artifacts/browser-host-session-performance-lab/manifest.json`、`docs/test-artifacts/browser-host-session-public-performance-lab/manifest.json`。
   验证命令：`npm run smoke:browser-host-session-performance-lab --silent`；`npm run smoke:browser-host-session-frame-stream-lab --silent`；`npm run smoke:browser-host-session-public-performance-lab --silent`。
   最终状态：local deterministic lab + public/configurable bounded smoke complete；真实 30 分钟 benchmark 与平台对比仍归入对应父项。
   TODO：
   - 本地 fixture：输入框、长列表、canvas/drag、contenteditable、iframe、shadow DOM、slow network。
-  - 公网 smoke：只记录 bounded timing 和最终状态，不依赖具体搜索结果排名。
+  - [x] 公网 smoke：只记录 bounded timing 和最终状态，不依赖具体搜索结果排名。
 
 - [ ] 长会话稳定性。
   验收：连续 30 分钟冲浪、多 tab、reload、back/forward、右栏 resize、workspace writer restart 后不丢 session 或给出明确恢复状态。

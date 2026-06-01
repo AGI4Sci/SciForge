@@ -2261,7 +2261,7 @@ export function Sidebar({
       return;
     }
     if (match.action === 'open-customize') {
-      openSidebarCustomize();
+      openSidebarMarketplace();
       return;
     }
     if (match.action === 'open-marketplace') {
@@ -2518,7 +2518,7 @@ export function Sidebar({
                 onShowMoreProjectThreads={showMoreProjectThreads}
                 onOpenProjectNewChat={openProjectNewChat}
                 onOpenAutomations={openSidebarAutomations}
-                onOpenCustomize={openSidebarCustomize}
+                onOpenCustomize={openSidebarMarketplace}
                 renderSidebarThreadRow={renderSidebarThreadRow}
                 canGoBack={sidebarBackStack.length > 0}
                 canGoForward={sidebarForwardStack.length > 0}

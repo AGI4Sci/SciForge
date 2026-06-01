@@ -133,6 +133,41 @@ type SearchInputDogfoodManifest = {
     screenshot: false;
     directFixtureDomPass: false;
   };
+  failureFocusedDiagnostic: {
+    schemaVersion: 'sciforge.browser-search-input-dogfood.failure-diagnostic.v1';
+    focus: {
+      keyboardPath: 'hidden-input';
+      hiddenKeyboardFocused: true;
+      browserSurface: 'browser-host-session';
+    };
+    session: {
+      status: string;
+      liveSurfaceRef?: string;
+      observedUrlHash?: string;
+      urlMatchedResults: boolean;
+    };
+    fixtureEventTrace: {
+      recentEventTypes: string[];
+      lastInputLength: number;
+      lastInputHash: string;
+      submitSeen: boolean;
+      resultsSeen: boolean;
+    };
+    actionTrace: {
+      recentActionTypes: string[];
+      recentPressKeys: string[];
+      recentTypeLengths: number[];
+      actionCount: number;
+    };
+    timingSummary: Array<Record<string, unknown>>;
+    forbiddenEvidence: {
+      rawQuery: false;
+      rawDom: false;
+      base64: false;
+      screenshot: false;
+      systemInputPayload: false;
+    };
+  };
   verificationCommand: string;
 };
 
@@ -340,12 +375,20 @@ async function waitForKeyboardHostFrame(surface: Locator, expectedUrl: RegExp) {
 }
 
 async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
-  await surface.page().waitForFunction(({ source, flags }) => {
-    const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
-    const state = viewer?.getAttribute('data-browser-state');
-    const url = viewer?.querySelector('header p')?.textContent ?? '';
-    return state === 'ready' && new RegExp(source, flags).test(url);
-  }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
+  try {
+    await surface.page().waitForFunction(({ source, flags }) => {
+      const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
+      const state = viewer?.getAttribute('data-browser-state');
+      const url = viewer?.querySelector('header p')?.textContent ?? '';
+      return state === 'ready' && new RegExp(source, flags).test(url);
+    }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
+  } catch (error) {
+    const diagnostic = await browserWorkbenchFailureDiagnostic(surface, expectedUrl)
+      .catch((diagnosticError: unknown) => ({
+        diagnosticError: scrubDiagnostic(errorMessage(diagnosticError)),
+      }));
+    throw new Error(`Timed out waiting for Browser workbench URL: ${JSON.stringify(diagnostic)}; cause=${scrubDiagnostic(errorMessage(error))}`);
+  }
 }
 
 async function clickHostPoint(page: Page, hostFrame: Locator, x: number, y: number) {
@@ -363,6 +406,35 @@ async function hiddenKeyboardFocusState(page: Page): Promise<{ keyboardPath: str
       hiddenKeyboardFocused: Boolean(input && document.activeElement === input && input.dataset.browserHostKeyboardFocus === 'active'),
     };
   });
+}
+
+async function browserWorkbenchFailureDiagnostic(surface: Locator, expectedUrl: RegExp): Promise<JsonRecord> {
+  const snapshot = await surface.page().evaluate(() => {
+    const viewer = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-viewer');
+    const frame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
+    const input = frame?.querySelector<HTMLTextAreaElement>('.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]') ?? null;
+    return {
+      viewerState: viewer?.getAttribute('data-browser-state') ?? '',
+      displayedUrl: viewer?.querySelector('header p')?.textContent ?? '',
+      liveSurfaceRef: frame?.getAttribute('data-browser-live-surface-ref') ?? '',
+      frameStreamRef: frame?.getAttribute('data-browser-frame-stream-ref') ?? '',
+      keyboardPath: frame?.getAttribute('data-browser-host-keyboard-path') ?? '',
+      hiddenKeyboardFocused: Boolean(input && document.activeElement === input && input.dataset.browserHostKeyboardFocus === 'active'),
+    };
+  });
+  return {
+    schemaVersion: 'sciforge.browser-workbench-url-timeout-diagnostic.v1',
+    expectedUrlPatternHash: hashText(`${expectedUrl.source}/${expectedUrl.flags}`),
+    viewerState: snapshot.viewerState,
+    displayedUrlLength: snapshot.displayedUrl.length,
+    displayedUrlHash: snapshot.displayedUrl ? hashText(snapshot.displayedUrl) : '',
+    liveSurfaceRef: snapshot.liveSurfaceRef || undefined,
+    frameStreamRef: snapshot.frameStreamRef || undefined,
+    keyboardPath: snapshot.keyboardPath,
+    hiddenKeyboardFocused: snapshot.hiddenKeyboardFocused,
+    rawUrlCaptured: false,
+    rawDomCaptured: false,
+  };
 }
 
 async function currentBrowserHostSession(page: Page, writerUrl: string, workspacePath: string): Promise<JsonRecord> {
@@ -592,7 +664,58 @@ function buildManifest(input: {
       screenshot: false,
       directFixtureDomPass: false,
     },
+    failureFocusedDiagnostic: searchInputDogfoodFailureDiagnostic({
+      session: input.session,
+      events: input.events,
+      actions: input.actions,
+    }),
     verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-search-input-dogfood.test.ts',
+  };
+}
+
+function searchInputDogfoodFailureDiagnostic(input: {
+  session: JsonRecord;
+  events: SearchInputFixtureEvent[];
+  actions: BoundedComputerUseAction[];
+}): SearchInputDogfoodManifest['failureFocusedDiagnostic'] {
+  const inputEvents = input.events.filter((event) => event.type === 'search-input');
+  const lastInput = inputEvents[inputEvents.length - 1];
+  const pressActions = input.actions.filter((action) => action.hostAction.action === 'press');
+  const typeActions = input.actions.filter((action) => action.hostAction.action === 'type');
+  return {
+    schemaVersion: 'sciforge.browser-search-input-dogfood.failure-diagnostic.v1',
+    focus: {
+      keyboardPath: 'hidden-input',
+      hiddenKeyboardFocused: true,
+      browserSurface: 'browser-host-session',
+    },
+    session: {
+      status: stringField(input.session.status),
+      liveSurfaceRef: stringField(input.session.liveSurfaceRef),
+      observedUrlHash: stringField(input.session.observedUrlHash) || (stringField(input.session.url) ? hashText(stringField(input.session.url)) : undefined),
+      urlMatchedResults: /\/results\?/.test(stringField(input.session.url)),
+    },
+    fixtureEventTrace: {
+      recentEventTypes: input.events.slice(-12).map((event) => event.type),
+      lastInputLength: lastInput?.valueLength ?? 0,
+      lastInputHash: lastInput?.valueHash ?? '',
+      submitSeen: input.events.some((event) => event.type === 'search-submit'),
+      resultsSeen: input.events.some((event) => event.type === 'results-load'),
+    },
+    actionTrace: {
+      recentActionTypes: input.actions.slice(-16).map((action) => action.hostAction.action),
+      recentPressKeys: pressActions.slice(-12).map((action) => action.hostAction.key ?? '').filter(Boolean),
+      recentTypeLengths: typeActions.slice(-4).map((action) => action.hostAction.textLength ?? 0),
+      actionCount: input.actions.length,
+    },
+    timingSummary: boundedTimingSummary(input.session.actionTimingSummary),
+    forbiddenEvidence: {
+      rawQuery: false,
+      rawDom: false,
+      base64: false,
+      screenshot: false,
+      systemInputPayload: false,
+    },
   };
 }
 
@@ -629,6 +752,12 @@ function assertSearchInputDogfoodManifest(
   assert.ok(manifest.inputActionEvidence.pressKeys.filter((key) => key === 'Backspace').length >= BACKSPACE_COUNT);
   assert.ok(manifest.inputActionEvidence.pressKeys.includes('Enter'));
   assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false]);
+  assert.equal(manifest.failureFocusedDiagnostic.focus.keyboardPath, 'hidden-input');
+  assert.equal(manifest.failureFocusedDiagnostic.focus.hiddenKeyboardFocused, true);
+  assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.submitSeen, true);
+  assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.resultsSeen, true);
+  assert.ok(manifest.failureFocusedDiagnostic.actionTrace.recentActionTypes.includes('type'));
+  assert.ok(manifest.failureFocusedDiagnostic.timingSummary.length > 0);
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /<!doctype|<html|<body|<input|<form|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)/i);
   assertNoRawQuery(serialized, queries.initialQuery);
@@ -745,18 +874,37 @@ async function waitForFixtureEvent(
   label: string,
 ): Promise<SearchInputFixtureEvent> {
   const deadline = Date.now() + timeoutMs;
+  let lastEvents: SearchInputFixtureEvent[] = [];
   while (Date.now() < deadline) {
     const events = await fetchFixtureEvents(baseUrl);
+    lastEvents = events;
     const event = events.find(predicate);
     if (event) return event;
     await delay(250);
   }
-  throw new Error(`Timed out waiting for fixture event: ${label}`);
+  throw new Error(`Timed out waiting for fixture event: ${label}; diagnostic=${JSON.stringify(fixtureEventTimeoutDiagnostic(label, lastEvents))}`);
 }
 
 async function fetchFixtureEvents(baseUrl: string): Promise<SearchInputFixtureEvent[]> {
   const json = await fetchJson(`${baseUrl}/__events`);
   return Array.isArray(json.events) ? json.events.filter(isSearchInputFixtureEvent) : [];
+}
+
+function fixtureEventTimeoutDiagnostic(label: string, events: SearchInputFixtureEvent[]): JsonRecord {
+  const inputEvents = events.filter((event) => event.type === 'search-input');
+  const lastInput = inputEvents[inputEvents.length - 1];
+  return {
+    schemaVersion: 'sciforge.browser-search-input-dogfood.fixture-event-timeout.v1',
+    label,
+    eventCount: events.length,
+    recentEventTypes: events.slice(-12).map((event) => event.type),
+    lastInputLength: lastInput?.valueLength ?? 0,
+    lastInputHash: lastInput?.valueHash ?? '',
+    submitSeen: events.some((event) => event.type === 'search-submit'),
+    resultsSeen: events.some((event) => event.type === 'results-load'),
+    rawQueryCaptured: false,
+    rawDomCaptured: false,
+  };
 }
 
 function isSearchInputFixtureEvent(value: unknown): value is SearchInputFixtureEvent {
@@ -894,9 +1042,37 @@ function boundedUnique<T>(values: T[]): T[] {
   return [...new Set(values)].slice(0, 24);
 }
 
+function boundedTimingSummary(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value)
+    ? value
+      .map(recordField)
+      .filter((entry): entry is JsonRecord => Boolean(entry))
+      .map((entry) => ({
+        action: stringField(entry.action),
+        count: typeof entry.count === 'number' ? entry.count : 0,
+        p95Ms: typeof entry.p95Ms === 'number' ? entry.p95Ms : 0,
+        lastMs: typeof entry.lastMs === 'number' ? entry.lastMs : 0,
+      }))
+      .slice(0, 16)
+    : [];
+}
+
 function assertNoRawQuery(serialized: string, query: string) {
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(query)));
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(encodeURIComponent(query))));
+}
+
+function scrubDiagnostic(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>]+/g, (url) => `[url:${hashText(url)}]`)
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/ig, '[data-image-redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 360);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function escapeRegExp(value: string): string {

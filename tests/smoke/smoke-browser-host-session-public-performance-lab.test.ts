@@ -49,6 +49,20 @@ type DropDiagnosticsEvidence = {
   droppedOperations: Array<{ operation: PublicPerformanceOperation; targetHash?: string; reason: string }>;
 };
 
+type PublicPerformanceFinalStatusEvidence = {
+  status: PublicPerformanceStatus;
+  requestedUrlCount: number;
+  readyUrlCount: number;
+  blockedTargetCount: number;
+  searchStatus?: SearchEvidence['status'];
+  blockedDiagnosticsCount: number;
+  reasonHash?: string;
+  timingSummaryRef?: string;
+  dropDiagnosticsRef?: string;
+  boundedFinalStatus: true;
+  rawPayloadCaptured: false;
+};
+
 type BoundedDiagnostic = {
   scope: 'browser' | 'network' | 'action' | 'search' | 'frame-drop-probe';
   targetHash?: string;
@@ -99,6 +113,7 @@ type PublicPerformanceEvidence =
     reason: string;
     browser: BrowserEvidence;
     requestedUrlCount: number;
+    finalStatus: PublicPerformanceFinalStatusEvidence;
     verificationCommand: string;
   }
   | {
@@ -113,6 +128,7 @@ type PublicPerformanceEvidence =
       blockedTargetCount: number;
       searchStatus: SearchEvidence['status'];
     };
+    finalStatus: PublicPerformanceFinalStatusEvidence;
     targets: TargetEvidence[];
     search: SearchEvidence;
     timingSummary: OperationTimingSummary[];
@@ -199,6 +215,7 @@ test('BrowserHostSession public performance lab opens configurable public URLs a
       reason,
       browser: { engine: 'chromium' },
       requestedUrlCount: publicUrls.length,
+      finalStatus: skippedFinalStatus(publicUrls.length, reason),
       verificationCommand,
     });
     t.skip(reason);
@@ -339,6 +356,18 @@ test('BrowserHostSession public performance lab opens configurable public URLs a
         blockedTargetCount,
         searchStatus: searchEvidence.status,
       },
+      finalStatus: {
+        status,
+        requestedUrlCount: publicUrls.length,
+        readyUrlCount,
+        blockedTargetCount,
+        searchStatus: searchEvidence.status,
+        blockedDiagnosticsCount: blockedDiagnostics.length,
+        timingSummaryRef: 'manifest.timingSummary',
+        dropDiagnosticsRef: 'manifest.dropDiagnostics',
+        boundedFinalStatus: true,
+        rawPayloadCaptured: false,
+      },
       targets,
       search: searchEvidence,
       timingSummary: summarizeOperationTimings(operationTimings),
@@ -370,6 +399,7 @@ test('BrowserHostSession public performance lab opens configurable public URLs a
         reason,
         browser: browserEvidence(executablePath),
         requestedUrlCount: publicUrls.length,
+        finalStatus: skippedFinalStatus(publicUrls.length, reason),
         verificationCommand,
       });
       t.skip(reason);
@@ -382,6 +412,10 @@ test('BrowserHostSession public performance lab opens configurable public URLs a
     assert.equal(evidence.rawPayloadsInManifest, false);
     assert.equal(evidence.forbiddenEvidence.rawDom, false);
     assert.equal(evidence.forbiddenEvidence.encodedImagePayload, false);
+    assert.equal(evidence.finalStatus.status, status);
+    assert.equal(evidence.finalStatus.boundedFinalStatus, true);
+    assert.equal(evidence.finalStatus.rawPayloadCaptured, false);
+    assert.equal(evidence.finalStatus.readyUrlCount, evidence.publicNetwork.readyUrlCount);
     assert.ok(evidence.timingSummary.some((row) => row.operation === 'open'), 'public lab must report open timing');
     assert.ok(evidence.timingSummary.some((row) => row.operation === 'search'), 'public lab must report search timing');
     assert.equal(evidence.targets.length, publicUrls.length);
@@ -757,8 +791,22 @@ function looksLikeBrowserLaunchFailure(blockedDiagnostics: BoundedDiagnostic[]):
   return blockedDiagnostics.some((item) => /executable|browser.*launch|playwright.*browser|spawn|enoent/i.test(item.reason));
 }
 
+function skippedFinalStatus(requestedUrlCount: number, reason: string): PublicPerformanceFinalStatusEvidence {
+  return {
+    status: 'skipped',
+    requestedUrlCount,
+    readyUrlCount: 0,
+    blockedTargetCount: requestedUrlCount,
+    blockedDiagnosticsCount: 0,
+    reasonHash: sha256(reason),
+    boundedFinalStatus: true,
+    rawPayloadCaptured: false,
+  };
+}
+
 async function writeEvidence(evidence: PublicPerformanceEvidence): Promise<void> {
   await mkdir(artifactDir, { recursive: true });
+  assertPublicPerformanceFinalStatus(evidence);
   const text = `${JSON.stringify(evidence, null, 2)}\n`;
   assertNoRawPayloads(text);
   await writeFile(manifestPath, text, 'utf8');
@@ -767,6 +815,33 @@ async function writeEvidence(evidence: PublicPerformanceEvidence): Promise<void>
 async function assertEvidenceIsBounded(path: string): Promise<void> {
   const text = await readFile(path, 'utf8');
   assertNoRawPayloads(text);
+  assertPublicPerformanceFinalStatus(JSON.parse(text) as PublicPerformanceEvidence);
+}
+
+function assertPublicPerformanceFinalStatus(evidence: PublicPerformanceEvidence): void {
+  assert.equal(evidence.finalStatus.status, evidence.status);
+  assert.equal(evidence.finalStatus.boundedFinalStatus, true);
+  assert.equal(evidence.finalStatus.rawPayloadCaptured, false);
+  assert.equal(evidence.finalStatus.requestedUrlCount, evidence.status === 'skipped'
+    ? evidence.requestedUrlCount
+    : evidence.publicNetwork.requestedUrlCount);
+  if (evidence.status === 'skipped') {
+    assert.equal(evidence.finalStatus.readyUrlCount, 0);
+    assert.equal(evidence.finalStatus.blockedTargetCount, evidence.requestedUrlCount);
+    assert.ok(evidence.finalStatus.reasonHash);
+    return;
+  }
+  assert.equal(evidence.finalStatus.readyUrlCount, evidence.publicNetwork.readyUrlCount);
+  assert.equal(evidence.finalStatus.blockedTargetCount, evidence.publicNetwork.blockedTargetCount);
+  assert.equal(evidence.finalStatus.searchStatus, evidence.publicNetwork.searchStatus);
+  assert.equal(evidence.finalStatus.timingSummaryRef, 'manifest.timingSummary');
+  assert.equal(evidence.finalStatus.dropDiagnosticsRef, 'manifest.dropDiagnostics');
+  if (evidence.status === 'blocked') {
+    assert.ok(
+      evidence.finalStatus.blockedDiagnosticsCount > 0 || evidence.dropDiagnostics.droppedOperationCount > 0,
+      'blocked public smoke final status must point at bounded diagnostics',
+    );
+  }
 }
 
 function assertNoRawPayloads(text: string): void {

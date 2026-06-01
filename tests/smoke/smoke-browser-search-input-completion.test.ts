@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  BROWSER_HOST_SESSION_PROVIDER_ID,
+  BROWSER_HOST_SESSION_SCHEMA,
   BrowserHostSessionManager,
   type BrowserHostMouseButton,
   type BrowserHostSessionDriver,
@@ -142,11 +144,41 @@ test('BrowserHostSession search page input completion accepts long mixed queries
     assert.equal(report.queryMatchesPageValue, true);
     assert.equal(report.shellComposerCapturedCharacters, 0);
     assert.equal(report.systemKeyboardEvents, 'not-sent');
+    assert.equal(report.failureFocusedDiagnostic.focusedElement.kind, 'searchbox');
+    assert.ok(report.failureFocusedDiagnostic.actionTimingSummary.some((row) => row.action === 'type'));
 
     console.log(`[ok] Browser search input completion ${JSON.stringify(report)}`);
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
+});
+
+test('BrowserHostSession search input failure diagnostic is focus/timing oriented and bounded', () => {
+  const driver = new DeterministicSearchInputDriver();
+  driver.focusTarget = 'shell-composer';
+  driver.searchValue = LONG_MIXED_QUERY.slice(0, 24);
+  driver.shellComposerDraft = 'captured-by-shell';
+  driver.shellComposerKeys.push('Enter');
+  driver.actions.push(
+    `type:${LONG_MIXED_QUERY.length}:shell-composer`,
+    'press:Enter:shell-composer',
+  );
+
+  const diagnostic = boundedSearchInputFailureDiagnostic(
+    diagnosticSessionStateFixture(),
+    driver,
+    `${LONG_MIXED_QUERY}${RETYPE_SUFFIX}`,
+  );
+  const serialized = JSON.stringify(diagnostic);
+  assert.equal(diagnostic.focusedElement.kind, 'shell-composer');
+  assert.equal(diagnostic.query.matchesPageValue, false);
+  assert.equal(diagnostic.shellComposer.capturedCharacters, 'captured-by-shell'.length);
+  assert.ok(diagnostic.actionTimingSummary.some((row) => row.action === 'type' && row.count === 1));
+  assert.ok(diagnostic.recentActions.includes(`type:${LONG_MIXED_QUERY.length}:shell-composer`));
+  assert.doesNotMatch(serialized, /<\s*(?:!doctype|html|body|input|form)\b/i);
+  assert.doesNotMatch(serialized, /data:image|base64|iVBORw0KGgo/i);
+  assert.doesNotMatch(serialized, new RegExp(escapeRegExp(LONG_MIXED_QUERY)));
+  assert.doesNotMatch(serialized, /captured-by-shell/);
 });
 
 function deterministicSearchInputDriverFactory(): {
@@ -302,6 +334,7 @@ function boundedSearchInputReport(
     prematureSubmitCount: Math.max(0, driver.submittedQueries.length - 1),
     shellComposerCapturedCharacters: driver.shellComposerDraft.length,
     shellComposerCapturedKeys: driver.shellComposerKeys.length,
+    failureFocusedDiagnostic: boundedSearchInputFailureDiagnostic(state, driver, expectedFinalQuery),
     session: {
       id: state.id,
       owner: state.owner,
@@ -313,6 +346,126 @@ function boundedSearchInputReport(
     },
     timingSummary: state.actionTimingSummary?.filter((row) => row.action === 'click' || row.action === 'type' || row.action === 'press') ?? [],
   };
+}
+
+function boundedSearchInputFailureDiagnostic(
+  state: BrowserHostSessionState,
+  driver: DeterministicSearchInputDriver,
+  expectedFinalQuery: string,
+) {
+  return {
+    schemaVersion: 'sciforge.browser-search-input-completion-failure-diagnostic.v1',
+    source: 'bounded-browser-host-session-driver-state',
+    focusedElement: {
+      kind: driver.focusTarget,
+      source: 'driver-focus-target',
+    },
+    query: {
+      expectedLength: expectedFinalQuery.length,
+      expectedHash: sha256(expectedFinalQuery),
+      pageValueLength: driver.searchValue.length,
+      pageValueHash: sha256(driver.searchValue),
+      matchesPageValue: driver.searchValue === expectedFinalQuery,
+      submittedQueryCount: driver.submittedQueries.length,
+      prematureSubmitCount: Math.max(0, driver.submittedQueries.length - 1),
+    },
+    shellComposer: {
+      capturedCharacters: driver.shellComposerDraft.length,
+      capturedKeys: driver.shellComposerKeys.length,
+    },
+    actionTimingSummary: (state.actionTimingSummary ?? [])
+      .filter((row) => row.action === 'click' || row.action === 'type' || row.action === 'press')
+      .map((row) => ({
+        action: row.action,
+        count: row.count,
+        p95Ms: row.p95Ms,
+        lastMs: row.lastMs,
+      })),
+    lastActionTiming: state.lastActionTiming
+      ? {
+        action: state.lastActionTiming.action,
+        status: state.lastActionTiming.status,
+        capture: state.lastActionTiming.capture,
+        totalMs: state.lastActionTiming.totalMs,
+        hostActionMs: state.lastActionTiming.hostActionMs,
+        paintAckSource: state.lastActionTiming.paintAckSource,
+      }
+      : undefined,
+    recentActions: driver.actions.slice(-12).map(boundedDriverAction),
+    diagnostics: state.diagnostics.map(scrubDiagnostic).slice(-8),
+    forbiddenEvidence: {
+      rawQuery: false,
+      rawDom: false,
+      encodedImagePayload: false,
+      screenshot: false,
+      systemInputPayload: false,
+    },
+  };
+}
+
+function diagnosticSessionStateFixture(): BrowserHostSessionState {
+  return {
+    schemaVersion: BROWSER_HOST_SESSION_SCHEMA,
+    id: 'search-input-completion',
+    owner: 'host',
+    providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+    status: 'ready',
+    workspacePath: '/tmp/sciforge-browser-search-input-diagnostic',
+    requestedUrl: 'http://localhost/search-input-fixture',
+    url: 'http://localhost/search-input-fixture',
+    title: 'Deterministic search input fixture',
+    startedAt: '2026-06-02T00:00:00.000Z',
+    updatedAt: '2026-06-02T00:00:01.000Z',
+    viewport: { width: 960, height: 640 },
+    canGoBack: false,
+    canGoForward: false,
+    liveSurfaceRef: 'browser-host-session:search-input-completion/live-surface',
+    liveSurfaceTransport: 'host-stream',
+    singleInteractiveTruth: true,
+    frameStreamRef: 'browser-host-session:search-input-completion/frame-stream',
+    frameRef: 'browser-host-session:search-input-completion/frame.png',
+    screenshotRef: 'browser-host-session:search-input-completion/screenshot.png',
+    domSnapshotRef: 'browser-host-session:search-input-completion/dom.html',
+    axSnapshotRef: 'browser-host-session:search-input-completion/ax.json',
+    consoleLogRef: 'browser-host-session:search-input-completion/console.jsonl',
+    networkLogRef: 'browser-host-session:search-input-completion/network.jsonl',
+    diagnostics: ['focus target remained outside the searchbox'],
+    actionTimingSummary: [{
+      action: 'click',
+      count: 1,
+      p50Ms: 4,
+      p95Ms: 4,
+      lastMs: 4,
+    }, {
+      action: 'type',
+      count: 1,
+      p50Ms: 12,
+      p95Ms: 12,
+      lastMs: 12,
+    }, {
+      action: 'press',
+      count: 1,
+      p50Ms: 3,
+      p95Ms: 3,
+      lastMs: 3,
+    }],
+  };
+}
+
+function boundedDriverAction(action: string): string {
+  if (action.startsWith('goto:')) return `goto-url-hash:${sha256(action.slice('goto:'.length)).slice(0, 16)}`;
+  if (/^(?:type:\d+|press:[^:]+|click:[^:]+:\d+,\d+|scroll:|drag:)/.test(action)) {
+    return action.slice(0, 96);
+  }
+  return `action-hash:${sha256(action).slice(0, 16)}`;
+}
+
+function scrubDiagnostic(value: string): string {
+  return value
+    .replace(/https?:\/\/[^\s"'<>]+/g, (url) => `[url:${sha256(url).slice(0, 12)}]`)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
 }
 
 function sha256(value: string): string {

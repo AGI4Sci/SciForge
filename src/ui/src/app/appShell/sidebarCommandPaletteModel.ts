@@ -81,10 +81,10 @@ function sidebarSearchActions(locale?: SupportedLocale): Array<{
   }, {
     action: 'open-customize',
     label: customizeLabel,
-    detail: actionDetail,
-    page: 'workbench',
-    kind: 'action',
-    haystack: `${customizeLabel} Customize custom preferences appearance sidebar Customize Sidebar 自定义 偏好 外观 侧边栏`,
+    detail: text(locale, { 'zh-CN': '应用入口', 'en-US': 'App entry' }),
+    page: 'components',
+    kind: 'skill',
+    haystack: `${customizeLabel} Customize Marketplace plugins skills rules subagents apps channels tools MCP 自定义 插件市场 技能 规则 子智能体 应用 频道 工具`,
   }, {
     action: 'open-marketplace',
     label: marketplaceLabel,

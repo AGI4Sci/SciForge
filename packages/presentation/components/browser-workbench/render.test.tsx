@@ -305,6 +305,86 @@ test('browser-workbench renders BrowserHostSession timing diagnostics with trans
   assert.match(html, /latencySummary<\/dt><dd>click:p50=42ms,p95=95ms \| scroll:p50=31ms,p95=64ms/);
 });
 
+test('browser-workbench renders bounded actionable diagnostics for blocked host errors', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/private',
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'blocked-session-1',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'failed',
+          url: 'https://external.example/private',
+          requestedUrl: 'https://external.example/private',
+          workspacePath: '/tmp/sciforge',
+          workspaceWriterBaseUrl: 'http://127.0.0.1:6173/api/sciforge?token=sk-writer-secret-123456',
+          startedAt: '2026-06-02T00:00:00.000Z',
+          updatedAt: '2026-06-02T00:00:01.000Z',
+          viewport: { width: 1365, height: 900 },
+          canGoBack: false,
+          canGoForward: false,
+          liveSurfaceRef: 'browser-host-session:blocked-session-1/live-surface',
+          liveSurfaceTransport: 'native-embedded',
+          nativeAdapterUrl: 'http://127.0.0.1:6180/native?apiKey=sk-native-secret-123456',
+          singleInteractiveTruth: true,
+          diagnostics: [
+            'data:image/png;base64,AAAA',
+            'Retry same native surface through http://127.0.0.1:6173/api?token=sk-retry-secret-123456',
+          ],
+          lastActionTiming: {
+            actionId: 'ui-click-blocked',
+            action: 'click',
+            capture: 'none',
+            status: 'failed',
+            uiEventReceivedAt: '2026-06-02T00:00:00.100Z',
+            adapterSentAt: '2026-06-02T00:00:00.120Z',
+            hostReceivedAt: '2026-06-02T00:00:00.130Z',
+            hostStartedAt: '2026-06-02T00:00:00.140Z',
+            hostActionEndedAt: '2026-06-02T00:00:00.180Z',
+            hostCompletedAt: '2026-06-02T00:00:00.260Z',
+            adapterToHostMs: 10,
+            queueMs: 10,
+            hostActionMs: 40,
+            totalMs: 130,
+            liveSurfaceTransport: 'native-embedded',
+            paintAckSource: 'native-adapter-action-state',
+            blockedReason: 'Native adapter blocked https://external.example/private?token=sk-page-secret-123456',
+          },
+        },
+        writerDiagnostic: {
+          status: 'missing-browser-host-capability',
+          configuredDisplayUrl: 'http://127.0.0.1:6173/ui?token=sk-config-secret-123456',
+          diagnosticRef: 'browser-host-writer-missing-browser-host-capability',
+          message: 'Writer missing BrowserHostSession for http://127.0.0.1:6173/ui?token=sk-message-secret-123456',
+          health: {
+            ok: true,
+            service: 'sciforge-workspace-writer',
+            capabilities: ['workspace-files', 'browser-host-session'],
+          },
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-status="error"/);
+  assert.match(html, /browser-workbench-viewer-diagnostics/);
+  assert.match(html, /data-browser-writer-url="http:\/\/127\.0\.0\.1:6173"/);
+  assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-search:missing"/);
+  assert.match(html, /data-browser-native-adapter-url="http:\/\/127\.0\.0\.1:6180"/);
+  assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
+  assert.match(html, /data-browser-last-action-timing="click:130ms:failed"/);
+  assert.match(html, /writerUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6173/);
+  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-search:missing/);
+  assert.match(html, /nativeAdapterUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6180/);
+  assert.match(html, /blockedReason<\/dt><dd>Native adapter blocked \[url-redacted\]/);
+  assert.match(html, /diagnostics<\/dt><dd>Retry same native surface through http:\/\/127\.0\.0\.1:6173/);
+  assert.doesNotMatch(html, /token=|apiKey=|sk-(?:writer|native|page|config|message|retry)-secret|data:image|base64|external\.example\/private\?token|<iframe|<webview/);
+});
+
 test('browser-workbench renders system-browser host handoff as state, not a fake iframe', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,

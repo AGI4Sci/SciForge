@@ -64,6 +64,23 @@ export interface BrowserWorkbenchCapabilities {
   canOpenExternal?: boolean;
 }
 
+export interface BrowserWorkbenchWriterDiagnostic {
+  status?: string;
+  configuredBaseUrl?: string;
+  configuredDisplayUrl?: string;
+  effectiveBaseUrl?: string;
+  effectiveDisplayUrl?: string;
+  recommendedBaseUrl?: string;
+  recommendedDisplayUrl?: string;
+  diagnosticRef?: string;
+  message?: string;
+  health?: {
+    ok?: boolean;
+    service?: string;
+    capabilities?: unknown;
+  };
+}
+
 export type BrowserWorkbenchMouseButton = 'left' | 'right' | 'middle';
 
 export interface BrowserWorkbenchHostAction {
@@ -82,6 +99,8 @@ export type BrowserWorkbenchFrameRenderer = 'image-blob' | 'canvas-binary';
 
 const BROWSER_WORKBENCH_POINTER_MOVE_FLUSH_MS = 24;
 const BROWSER_WORKBENCH_KEYBOARD_FOCUS_STORAGE_PREFIX = 'sciforge.browser-workbench.keyboard-focus.v1';
+const BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX = 240;
+const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-search'] as const;
 
 export interface BrowserWorkbenchPayload {
   projection?: BrowserRuntimeProjection;
@@ -111,6 +130,7 @@ export interface BrowserWorkbenchPayload {
   title?: string;
   status?: string;
   notes?: string[];
+  writerDiagnostic?: BrowserWorkbenchWriterDiagnostic;
   addressValue?: string;
   addressPlaceholder?: string;
   onAddressChange?: (value: string) => void;
@@ -150,6 +170,42 @@ function isInlinePayloadRef(value: string) {
     || normalized.includes(';base64,')
     || normalized.startsWith('{')
     || normalized.startsWith('[');
+}
+
+function isLocalHttpUrl(value: string) {
+  try {
+    const parsed = new URL(normalizeBrowserWorkbenchUrl(value));
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+    const host = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '::1';
+  } catch {
+    return false;
+  }
+}
+
+function safeLocalHttpOrigin(value: unknown) {
+  const raw = asString(value);
+  if (!raw || !isLocalHttpUrl(raw)) return undefined;
+  try {
+    return new URL(normalizeBrowserWorkbenchUrl(raw)).origin;
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeBrowserWorkbenchDiagnosticText(value: unknown) {
+  const raw = asString(value);
+  if (!raw) return undefined;
+  if (isInlinePayloadRef(raw)) return undefined;
+  if (/(?:<!doctype|<html\b|<body\b|<script\b|data:image\/|;base64,)/i.test(raw)) return 'inline-payload-redacted';
+  const scrubbed = raw
+    .replace(/data:[^\s"'<>]+/gi, '[inline-payload-redacted]')
+    .replace(/\b(?:api[-_]?key|token|secret|password|authorization|cookie)=([^&\s]+)/gi, (match) => `${match.split('=')[0]}=[redacted]`)
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[secret-redacted]')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (match) => safeLocalHttpOrigin(match) ?? '[url-redacted]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return scrubbed ? scrubbed.slice(0, BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX) : undefined;
 }
 
 function asRefString(value: unknown): string | undefined {
@@ -742,33 +798,143 @@ function renderStateValue(label: string, value: string | undefined) {
   );
 }
 
-function renderHostSessionDiagnostics(hostSession: BrowserHostSessionState | undefined) {
-  if (!hostSession) return null;
-  const timing = hostSession.lastActionTiming;
-  const summary = hostSession.actionTimingSummary ?? [];
-  if (!timing && !summary.length && !hostSession.diagnostics?.length) return null;
+function renderBrowserWorkbenchStateReason(state: BrowserWorkbenchState) {
+  if (!state.reason) return null;
+  if (state.status !== 'blocked' && state.status !== 'error' && state.status !== 'offline') return <p>{state.reason}</p>;
+  return <p>{sanitizeBrowserWorkbenchDiagnosticText(state.reason) ?? 'Diagnostic payload redacted.'}</p>;
+}
+
+function browserWorkbenchDiagnosticsDetail(values: string[] | undefined) {
+  const diagnostics = (values ?? [])
+    .map((diagnostic) => sanitizeBrowserWorkbenchDiagnosticText(diagnostic))
+    .filter((diagnostic): diagnostic is string => Boolean(diagnostic));
+  return diagnostics.length ? diagnostics.join('\n') : undefined;
+}
+
+interface BrowserWorkbenchBoundedDiagnostics {
+  writerUrl?: string;
+  healthCapability?: string;
+  writerDiagnosticStatus?: string;
+  writerDiagnosticRef?: string;
+  nativeAdapterUrl?: string;
+  transport?: string;
+  timing?: BrowserHostSessionState['lastActionTiming'];
+  summary: NonNullable<BrowserHostSessionState['actionTimingSummary']>;
+  lastBlockedReason?: string;
+  diagnostics: string[];
+}
+
+function browserWorkbenchWriterUrl(payload: BrowserWorkbenchPayload, hostSession: BrowserHostSessionState | undefined) {
+  return safeLocalHttpOrigin(hostSession?.workspaceWriterBaseUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.effectiveBaseUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.effectiveDisplayUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.configuredBaseUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.configuredDisplayUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.recommendedBaseUrl)
+    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.recommendedDisplayUrl);
+}
+
+function browserWorkbenchHealthCapability(payload: BrowserWorkbenchPayload) {
+  const capabilities = payload.writerDiagnostic?.health?.capabilities;
+  if (!Array.isArray(capabilities)) return undefined;
+  const capabilitySet = new Set(capabilities.filter((capability): capability is string => typeof capability === 'string'));
+  return BROWSER_WORKBENCH_HEALTH_CAPABILITIES
+    .map((capability) => `${capability}:${capabilitySet.has(capability) ? 'ready' : 'missing'}`)
+    .join(',');
+}
+
+function browserWorkbenchLastBlockedReason(
+  state: BrowserWorkbenchState,
+  hostSession: BrowserHostSessionState | undefined,
+  payload: BrowserWorkbenchPayload,
+) {
+  return sanitizeBrowserWorkbenchDiagnosticText(hostSession?.lastActionTiming?.blockedReason)
+    ?? sanitizeBrowserWorkbenchDiagnosticText(hostSession?.diagnostics?.[Math.max(0, (hostSession.diagnostics?.length ?? 1) - 1)])
+    ?? sanitizeBrowserWorkbenchDiagnosticText(payload.writerDiagnostic?.message)
+    ?? (state.status === 'blocked' || state.status === 'error' || state.status === 'offline'
+      ? sanitizeBrowserWorkbenchDiagnosticText(state.reason)
+      : undefined);
+}
+
+function browserWorkbenchBoundedDiagnostics(
+  state: BrowserWorkbenchState,
+  payload: BrowserWorkbenchPayload,
+  hostSession: BrowserHostSessionState | undefined,
+): BrowserWorkbenchBoundedDiagnostics | undefined {
+  const timing = hostSession?.lastActionTiming;
+  const summary = hostSession?.actionTimingSummary ?? [];
+  const diagnostics = (hostSession?.diagnostics ?? [])
+    .slice(-3)
+    .map((diagnostic) => sanitizeBrowserWorkbenchDiagnosticText(diagnostic))
+    .filter((diagnostic): diagnostic is string => Boolean(diagnostic));
+  const bounded = {
+    writerUrl: browserWorkbenchWriterUrl(payload, hostSession),
+    healthCapability: browserWorkbenchHealthCapability(payload),
+    writerDiagnosticStatus: sanitizeBrowserWorkbenchDiagnosticText(payload.writerDiagnostic?.status),
+    writerDiagnosticRef: asRefString(payload.writerDiagnostic?.diagnosticRef),
+    nativeAdapterUrl: safeLocalHttpOrigin(hostSession?.nativeAdapterUrl),
+    transport: hostSession?.liveSurfaceTransport ?? timing?.liveSurfaceTransport,
+    timing,
+    summary,
+    lastBlockedReason: browserWorkbenchLastBlockedReason(state, hostSession, payload),
+    diagnostics,
+  };
+  if (
+    bounded.writerUrl
+    || bounded.healthCapability
+    || bounded.writerDiagnosticStatus
+    || bounded.writerDiagnosticRef
+    || bounded.nativeAdapterUrl
+    || bounded.transport
+    || bounded.timing
+    || bounded.summary.length
+    || bounded.lastBlockedReason
+    || bounded.diagnostics.length
+  ) return bounded;
+  return undefined;
+}
+
+function renderBrowserWorkbenchDiagnostics(
+  state: BrowserWorkbenchState,
+  payload: BrowserWorkbenchPayload,
+  hostSession: BrowserHostSessionState | undefined,
+) {
+  const diagnostics = browserWorkbenchBoundedDiagnostics(state, payload, hostSession);
+  if (!diagnostics) return null;
+  const timing = diagnostics.timing;
+  const lastActionTiming = timing ? `${timing.action}:${timing.totalMs}ms:${timing.status}` : undefined;
   return (
     <section
       className="browser-workbench-viewer-diagnostics"
       aria-label="Browser diagnostics"
-      data-browser-live-surface-transport={hostSession.liveSurfaceTransport}
+      data-browser-writer-url={diagnostics.writerUrl}
+      data-browser-health-capability={diagnostics.healthCapability}
+      data-browser-native-adapter-url={diagnostics.nativeAdapterUrl}
+      data-browser-live-surface-transport={diagnostics.transport}
       data-browser-last-action={timing?.action}
       data-browser-last-action-total-ms={timing?.totalMs}
+      data-browser-last-action-timing={lastActionTiming}
       data-browser-last-action-status={timing?.status}
-      data-browser-last-blocked-reason={timing?.blockedReason}
+      data-browser-last-blocked-reason={diagnostics.lastBlockedReason}
+      data-browser-writer-diagnostic={diagnostics.writerDiagnosticStatus}
+      data-browser-writer-diagnostic-ref={diagnostics.writerDiagnosticRef}
     >
       <dl>
-        {renderStateValue('transport', hostSession.liveSurfaceTransport)}
-        {renderStateValue('nativeAdapterUrl', hostSession.nativeAdapterUrl)}
+        {renderStateValue('writerUrl', diagnostics.writerUrl)}
+        {renderStateValue('healthCapability', diagnostics.healthCapability)}
+        {renderStateValue('writerDiagnostic', diagnostics.writerDiagnosticStatus)}
+        {renderStateValue('writerDiagnosticRef', diagnostics.writerDiagnosticRef)}
+        {renderStateValue('transport', diagnostics.transport)}
+        {renderStateValue('nativeAdapterUrl', diagnostics.nativeAdapterUrl)}
         {timing ? renderStateValue('lastAction', timing.action) : null}
         {timing ? renderStateValue('lastActionTotalMs', String(timing.totalMs)) : null}
         {timing?.adapterToHostMs !== undefined ? renderStateValue('adapterToHostMs', String(timing.adapterToHostMs)) : null}
         {timing ? renderStateValue('hostActionMs', String(timing.hostActionMs)) : null}
         {timing?.evidenceMs !== undefined ? renderStateValue('evidenceMs', String(timing.evidenceMs)) : null}
         {timing?.paintAckSource ? renderStateValue('paintAckSource', timing.paintAckSource) : null}
-        {timing?.blockedReason ? renderStateValue('blockedReason', timing.blockedReason) : null}
-        {summary.length ? renderStateValue('latencySummary', summary.map((row) => `${row.action}:p50=${row.p50Ms}ms,p95=${row.p95Ms}ms`).join(' | ')) : null}
-        {hostSession.diagnostics?.length ? renderStateValue('diagnostics', hostSession.diagnostics.slice(-3).join(' | ')) : null}
+        {renderStateValue('blockedReason', diagnostics.lastBlockedReason)}
+        {diagnostics.summary.length ? renderStateValue('latencySummary', diagnostics.summary.map((row) => `${row.action}:p50=${row.p50Ms}ms,p95=${row.p95Ms}ms`).join(' | ')) : null}
+        {diagnostics.diagnostics.length ? renderStateValue('diagnostics', diagnostics.diagnostics.join(' | ')) : null}
       </dl>
     </section>
   );
@@ -795,11 +961,11 @@ function renderBrowserState(
       role={state.status === 'loading' ? 'status' : undefined}
     >
       <strong>{state.status}</strong>
-      {state.reason ? <p>{state.reason}</p> : null}
+      {renderBrowserWorkbenchStateReason(state)}
       <dl>
         {renderStateValue('url', state.url)}
         {renderStateValue('title', state.title)}
-        {renderStateValue('detail', state.detail)}
+        {renderStateValue('detail', sanitizeBrowserWorkbenchDiagnosticText(state.detail))}
         {renderStateValue('hostSurface', state.hostSurface)}
         {renderStateValue('checkedAt', state.checkedAt)}
         {renderStateValue('ref', state.ref)}
@@ -878,7 +1044,7 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
         url: asString(hostSession.url),
         title: asString(hostSession.title),
         reason: hostSession.status === 'failed' ? 'BrowserHostSession reported a failed live browser state.' : undefined,
-        detail: hostSession.diagnostics?.join('\n'),
+        detail: browserWorkbenchDiagnosticsDetail(hostSession.diagnostics),
         ref: `browser-host-session:${hostSession.id}`,
         checkedAt: hostSession.updatedAt,
         canRenderFrame: false,
@@ -1488,7 +1654,7 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
           {snapshot?.textPreview ? <p>{snapshot.textPreview}</p> : null}
         </section>
       ) : null}
-      {renderHostBrowser ? renderHostSessionDiagnostics(hostSession) : null}
+      {renderBrowserWorkbenchDiagnostics(state, payload, hostSession)}
       {renderHostBrowser ? renderRefs(refs, payload.onCopyRefRequest) : null}
       <section className="browser-workbench-viewer-command-list" aria-label="Terminal-equivalent browser commands">
         {commands.map((command) => (

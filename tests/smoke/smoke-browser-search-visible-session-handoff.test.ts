@@ -115,6 +115,7 @@ test('browser_search reuses the visible BrowserHostSession refs and focused proj
 
 test('browser_search result click and typing stay on the visible owner while summary evidence is refs-first bounded', async () => {
   const searchDeferred = createDeferred<BrowserHostSearchOutput>();
+  const summaryOrder: string[] = [];
   const calls: Array<
     | { kind: 'search'; workspacePath: string; input: BrowserHostSearchInput }
     | { kind: 'act'; workspacePath: string; sessionId: string; input: BrowserHostSessionActionInput }
@@ -122,6 +123,7 @@ test('browser_search result click and typing stay on the visible owner while sum
   const state = visibleHostSession();
   const manager = {
     async search(workspacePath: string, input: BrowserHostSearchInput) {
+      summaryOrder.push('summary-started');
       calls.push({ kind: 'search', workspacePath, input });
       return searchDeferred.promise;
     },
@@ -151,17 +153,21 @@ test('browser_search result click and typing stay on the visible owner while sum
   assert.equal(calls[0]?.kind, 'search');
   assert.equal(calls[0]?.input.sessionId, VISIBLE_SESSION_ID);
 
+  summaryOrder.push('user-input-before-summary-start');
   const typedWhileSummaryPending = await manager.act(WORKSPACE_PATH, VISIBLE_SESSION_ID, {
     action: 'type',
     text: 'continue browsing while refs-first summary is pending',
     capture: 'none',
     actionId: 'user-type-while-browser-search-summary-pending',
   });
+  summaryOrder.push('user-input-before-summary-accepted');
   assert.equal(typedWhileSummaryPending.id, VISIBLE_SESSION_ID);
   assert.equal(runtimeSettled, false, 'summary generation must not be required before user input continues');
 
+  summaryOrder.push('summary-resolved');
   searchDeferred.resolve(browserSearchOutput());
   const payload = await runtimePromise;
+  summaryOrder.push('summary-payload-returned');
   assert.ok(payload);
   assert.equal(runtimeSettled, true);
 
@@ -179,12 +185,14 @@ test('browser_search result click and typing stay on the visible owner while sum
     timeoutMs: 45_000,
     actionId: 'user-click-search-result-after-summary',
   });
+  summaryOrder.push('result-click-after-summary-navigated');
   const typedAfterClickState = await manager.act(WORKSPACE_PATH, VISIBLE_SESSION_ID, {
     action: 'type',
     text: 'annotate clicked result in the live page',
     capture: 'none',
     actionId: 'user-type-after-search-result-click',
   });
+  summaryOrder.push('user-input-after-summary-accepted');
   assert.equal(clickedResultState.id, VISIBLE_SESSION_ID);
   assert.equal(typedAfterClickState.id, VISIBLE_SESSION_ID);
 
@@ -219,6 +227,15 @@ test('browser_search result click and typing stay on the visible owner while sum
       postSummaryActions: actionCalls.map((call) => call.input.action),
       clickedResultUrlHash: hashBoundedUrl(CLICKED_RESULT_URL),
     },
+    summaryNonblockingEvidence: {
+      boundedOrder: summaryOrder,
+      inputAcceptedBeforeSummaryPayload: indexOfRequired(summaryOrder, 'user-input-before-summary-accepted')
+        < indexOfRequired(summaryOrder, 'summary-payload-returned'),
+      summaryResolvedBeforePayload: indexOfRequired(summaryOrder, 'summary-resolved')
+        < indexOfRequired(summaryOrder, 'summary-payload-returned'),
+      runtimeEvents: events,
+      rawSummaryPayloadCaptured: false,
+    },
     payloadPolicy: {
       refsFirst: true,
       inlineDomPayloadCaptured: false,
@@ -227,6 +244,17 @@ test('browser_search result click and typing stay on the visible owner while sum
     },
   };
   assert.equal(report.userContinuation.runtimeSettledAfterInput, false);
+  assert.equal(report.summaryNonblockingEvidence.inputAcceptedBeforeSummaryPayload, true);
+  assert.equal(report.summaryNonblockingEvidence.summaryResolvedBeforePayload, true);
+  assert.deepEqual(report.summaryNonblockingEvidence.boundedOrder, [
+    'summary-started',
+    'user-input-before-summary-start',
+    'user-input-before-summary-accepted',
+    'summary-resolved',
+    'summary-payload-returned',
+    'result-click-after-summary-navigated',
+    'user-input-after-summary-accepted',
+  ]);
   assert.equal(report.payloadPolicy.refsFirst, true);
   assertRefsFirstAndNoSecondTruth(payload, '', report);
   console.log(`[ok] Browser search visible session owner continuation ${JSON.stringify(report)}`);
@@ -435,6 +463,12 @@ function uniqueAttrValues(html: string, attr: string) {
 
 function countMatches(html: string, pattern: RegExp) {
   return [...html.matchAll(pattern)].length;
+}
+
+function indexOfRequired(values: string[], value: string): number {
+  const index = values.indexOf(value);
+  assert.notEqual(index, -1, `missing ordered evidence step: ${value}`);
+  return index;
 }
 
 function createDeferred<T>() {

@@ -89,6 +89,7 @@ test('browser host adapter owns BrowserHostSession rendering extraction from Res
   assert.match(adapterSource, /hostBusy: busy/);
   assert.match(adapterSource, /setCommittedUrl\(nextUrl\);[\s\S]*pendingHostOpenUrlRef\.current = nextUrl;[\s\S]*await startBrowserHostSession/);
   assert.match(adapterSource, /const currentOpenHostSession = hostSession && hostSession\.status !== 'closed' && hostSession\.status !== 'failed'[\s\S]*if \(currentOpenHostSession\) return;/);
+  assert.match(adapterSource, /writerDiagnostic: writerDiagnostic \? \{[\s\S]*status: writerDiagnostic\.status,[\s\S]*configuredBaseUrl: writerDiagnostic\.configuredBaseUrl,[\s\S]*diagnosticRef: writerDiagnostic\.diagnosticRef,[\s\S]*message: writerDiagnostic\.message,[\s\S]*health: writerDiagnostic\.health \? \{[\s\S]*ok: writerDiagnostic\.health\.ok,[\s\S]*service: writerDiagnostic\.health\.service,[\s\S]*capabilities: writerDiagnostic\.health\.capabilities/);
   assert.doesNotMatch(adapterSource, /type: 'drag', fromX/);
   assert.match(adapterSource, /sendBrowserHostComputerUseAction\([\s\S]*action: computerUseAction,[\s\S]*capture,[\s\S]*actionId: action\.actionId,[\s\S]*uiEventReceivedAt: action\.uiEventReceivedAt,[\s\S]*adapterSentAt,[\s\S]*workspaceWriterBaseUrl/);
   assert.match(adapterSource, /sendBrowserHostSessionAction\([\s\S]*\.\.\.action,[\s\S]*capture,[\s\S]*adapterSentAt,[\s\S]*workspaceWriterBaseUrl/);
@@ -107,6 +108,12 @@ test('browser host adapter owns BrowserHostSession rendering extraction from Res
   assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-actions\s*\{[\s\S]*?display: none/);
   assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-refs\s*\{[\s\S]*?display: none/);
   assert.match(browserWorkbenchSource, /browser-workbench-host-keyboard-input/);
+  assert.match(browserWorkbenchSource, /sanitizeBrowserWorkbenchDiagnosticText/);
+  assert.match(browserWorkbenchSource, /data-browser-writer-url/);
+  assert.match(browserWorkbenchSource, /data-browser-health-capability/);
+  assert.match(browserWorkbenchSource, /data-browser-native-adapter-url/);
+  assert.match(browserWorkbenchSource, /data-browser-last-action-timing/);
+  assert.match(browserWorkbenchSource, /data-browser-last-blocked-reason/);
   assert.match(browserWorkbenchSource, /data-browser-host-keyboard-path="hidden-input"/);
   assert.match(browserWorkbenchSource, /data-browser-host-keyboard-focus-key=\{hostKeyboardFocusKey\}/);
   assert.match(browserWorkbenchSource, /data-browser-host-keyboard-restore="session-storage"/);

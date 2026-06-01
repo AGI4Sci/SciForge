@@ -885,7 +885,7 @@ test('sidebar search returns concise matches and empty arrays for misses', () =>
   assert.deepEqual(buildSidebarSearchMatches('zzzz-no-result', sessions), []);
 });
 
-test('sidebar search exposes Automations, Customize, and Repositories as local sidebar actions', () => {
+test('sidebar search exposes Automations, Customize Marketplace, and Repositories as sidebar entries', () => {
   const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
   const automations = buildSidebarSearchMatches('automation', sessions).find((match) => match.action === 'open-automations');
   const customize = buildSidebarSearchMatches('customize', sessions).find((match) => match.action === 'open-customize');
@@ -896,8 +896,9 @@ test('sidebar search exposes Automations, Customize, and Repositories as local s
   assert.equal(automations?.detail, 'Sidebar action');
   assert.equal(automations?.page, 'components');
   assert.equal(customize?.label, 'Customize');
-  assert.equal(customize?.detail, 'Sidebar action');
-  assert.equal(customize?.page, 'workbench');
+  assert.equal(customize?.detail, 'App entry');
+  assert.equal(customize?.page, 'components');
+  assert.equal(customize?.kind, 'skill');
   assert.equal(repositories?.label, 'Repositories');
   assert.equal(repositories?.detail, 'Sidebar section');
   assert.equal(repositories?.page, 'workbench');
@@ -905,13 +906,14 @@ test('sidebar search exposes Automations, Customize, and Repositories as local s
   assert.doesNotMatch(JSON.stringify([automations, customize, repositories, localized]), /provider|model|Authorization|secret|token|\/tmp|\/Applications/i);
 });
 
-test('sidebar search keeps Customize for sidebar presentation and exposes Marketplace separately', () => {
+test('sidebar search routes top-level Customize to Marketplace while preserving Open Marketplace', () => {
   const sessions = {} as Record<ScenarioInstanceId, SciForgeSession>;
-  const customize = buildSidebarSearchMatches('customize sidebar', sessions).find((match) => match.action === 'open-customize');
+  const customize = buildSidebarSearchMatches('customize', sessions).find((match) => match.action === 'open-customize');
   const marketplace = buildSidebarSearchMatches('marketplace plugins', sessions).find((match) => match.action === 'open-marketplace');
 
-  assert.equal(customize?.page, 'workbench');
-  assert.equal(customize?.kind, 'action');
+  assert.equal(customize?.page, 'components');
+  assert.equal(customize?.kind, 'skill');
+  assert.equal(customize?.detail, 'App entry');
   assert.equal(marketplace?.label, 'Open Marketplace');
   assert.equal(marketplace?.page, 'components');
   assert.equal(marketplace?.kind, 'skill');
