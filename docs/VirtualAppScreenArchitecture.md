@@ -1,4 +1,4 @@
-# VirtualAppScreen / Virtual Display Provider 设计
+# VirtualAppScreen / Native Host / Virtual Display Provider 设计
 
 最后更新：2026-06-02
 
@@ -14,34 +14,37 @@ app 真实运行在 agent-owned virtual display / app surface 中
 -> evidence 证明 frame、输入、产物和隔离性来自同一当前会话
 ```
 
-产品层统一叫 `VirtualAppScreen`。底层不要押宝一个跨平台虚拟显示器驱动，因为 macOS、Linux、Windows 的显示栈不同；要押宝统一的 `VirtualDisplayProvider` contract，再为每个平台实现最强 backend。
+产品层统一叫 `VirtualAppScreen`。终局 C 的权威边界是 `packages/` 下模块化的 `NativeVirtualAppScreenHost`，它拥有 session、surface、input、permission、grant 和 evidence writer。底层不要押宝一个跨平台虚拟显示器驱动，因为 macOS、Linux、Windows 的显示栈不同；要押宝统一的 host protocol，再把 `VirtualDisplayProvider` 降级为 host 内部平台 adapter。
 
 推荐主线：
 
 ```text
 VirtualAppScreen
--> VirtualDisplayProvider
+-> NativeVirtualAppScreenHost
+   -> host-owned session / surface / input queue / evidence writer
+   -> platform adapters
    -> macOS CGVirtualDisplay / ScreenCaptureKit provider
    -> Windows Indirect Display Driver provider
    -> Linux Xpra / headless compositor provider
--> WebRTC low-latency frame transport
--> InputIntent data channel / host adapter
--> before/after evidence + verifier
+-> native presented surface or WebRTC low-latency frame transport
+-> human fire-and-release input + automation barrier
+-> before/after evidence + verifier + evidence ledger
 ```
 
-当前实现只接受本地原生 app + 平台虚拟显示这一条真相源。`serve-web`、code-server、OpenVSCode、Xvfb/noVNC、RDP、QEMU/VM 和 shell/browser shortcut 都不能替代 native provider 通过验收。高性能产品默认应使用 native embedded surface、WebRTC 或等价低延迟 streaming transport；失败时进入 blocked/handoff/retry。
+当前实现只接受本地原生 app + Host-owned 平台虚拟显示/app surface 这一条真相源。`serve-web`、code-server、OpenVSCode、Xvfb/noVNC、RDP、QEMU/VM 和 shell/browser shortcut 都不能替代 Native Host 通过验收。高性能产品默认应使用 native presented surface、WebRTC 或等价低延迟 streaming transport；失败时进入 blocked/handoff/retry。
 
-## Reuse-First 原则
+## Host-Owned, Reuse Under The Hood 原则
 
-VirtualAppScreen 的 backend 应优先复用并直接安装成熟工具，而不是重写显示驱动、远程桌面、编码器、VM 或窗口转发栈。
+VirtualAppScreen 应自建 SciForge Native Host 作为权威控制面，但底层应优先复用成熟 OS API、驱动、编码库或开源组件，而不是重写显示驱动、远程桌面、编码器、VM 或窗口转发栈。
 
 优先级固定为：
 
 ```text
-1. 直接安装并调用成熟工具/驱动/服务
-2. 写最薄 provider adapter，负责 probe、lifecycle、refs、evidence 和 policy
-3. 只在工具缺口明确、许可证/权限/性能不满足时自研最小 backend
-4. 不 fork 大型工具，除非必须修复 upstream 缺陷并有退出计划
+1. SciForge Host protocol / grant / input / evidence control plane 自己拥有
+2. 直接调用成熟 OS API、驱动、编码库或服务
+3. 写最薄 platform adapter，负责 probe、lifecycle、refs、evidence 和 policy glue
+4. 只在工具缺口明确、许可证/权限/性能不满足时自研最小 backend
+5. 不 fork 大型工具，除非必须修复 upstream 缺陷并有退出计划
 ```
 
 SciForge 自己不应该实现：
@@ -54,6 +57,7 @@ SciForge 自己不应该实现：
 
 SciForge 应该实现：
 
+- `NativeVirtualAppScreenHost` protocol、grant、session ownership、input queue 和 evidence writer。
 - provider discovery、install check、health check 和 readiness refs。
 - VirtualAppScreen session lifecycle。
 - app/window/session/display refs。
@@ -76,16 +80,17 @@ SciForge 应该实现：
 - 普通用户态工具可以给出自动安装命令或在用户确认后执行，例如 `brew install`、`apt install`、`winget install`、`npm install`、下载 release binary。
 - 驱动、系统扩展、Screen Recording、Accessibility、kernel/system permission 必须显式 handoff 给用户确认，不能静默安装或授权。
 - 工具版本、安装路径、health 输出、权限状态和 license family 必须写入 `adapterReadinessRef`。
-- CI 和本地 smoke 可以写 readiness/blocked 诊断，但不能用 fixture、Xvfb/noVNC、web app surface 或 shell-only runner 代替本地原生 virtual display provider 通过用户级验收。
+- CI 和本地 smoke 可以写 readiness/blocked 诊断，但不能用 fixture、Xvfb/noVNC、web app surface 或 shell-only runner 代替 Host-owned 本地原生 virtual display/app surface 通过用户级验收。
 
-### Provider 安装清单
+### Provider / Reference Tool 清单
 
 | 平台 | 首选复用工具 | 安装方式建议 | SciForge 只写什么 |
 |---|---|---|---|
-| macOS | `node-mac-virtual-display` 或等价 CGVirtualDisplay bridge | npm/package dependency 或 bundled native helper；必要权限走用户 handoff | provider adapter、ScreenCaptureKit capture sidecar、window placement、permission probe |
-| Linux | Xpra | 系统包管理器安装 | session lifecycle、app launch、frame transport bridge、input/evidence refs |
-| Windows | Windows IDD virtual display driver / Virtual-Display-Driver 类项目 | 用户确认安装驱动 | provider probe、display/session lifecycle、Windows capture/input adapter |
-| Low-latency reference | Sunshine/Moonlight style stack | dev-only install | performance benchmark/reference，不作为默认 provider API |
+| macOS | SciForge Swift/native helper + ScreenCaptureKit；`node-mac-virtual-display` 类 bridge 仅作 PoC/reference | bundled native helper 或 npm/native dependency；必要权限走用户 handoff | Host adapter、ScreenCaptureKit capture、window placement、permission probe、evidence writer |
+| Linux | Xpra 或 headless compositor | 系统包管理器安装 | Host adapter、session lifecycle、app launch、frame transport bridge、input/evidence refs |
+| Windows | Windows IDD virtual display driver / Virtual-Display-Driver 类项目 | 用户确认安装驱动 | Host adapter、display/session lifecycle、Windows capture/input adapter |
+| Low-latency reference | Sunshine/Moonlight style stack | dev-only install | performance benchmark/reference，不作为 host control plane |
+| Third-party virtual screen UI | DeskPad / BetterDisplay / Mirage | manual research only | 调研、benchmark、诊断；不 mint host grant、不作为 acceptance owner |
 
 ### 不把工具成功当成验收成功
 
@@ -104,8 +109,9 @@ SciForge 应该实现：
 | 名称 | 含义 |
 |---|---|
 | `VirtualAppScreen` | 用户在 SciForge 右侧 `Screen` pane 看到和操作的一块 app 级虚拟屏幕。一个 screen 绑定一个 app/session/window。 |
+| `NativeVirtualAppScreenHost` | Native surface/display/session 的权威 owner。负责 permission、session lifecycle、surface presentation、input queue、automation barrier、grant 和 evidence writer。React viewer、runtime command 和 provider adapter 都不是 live truth owner。 |
 | `App Surface` | app 的可渲染、可输入、可验证界面层。VirtualAppScreen 用户级验收只接受原生虚拟 display、Xpra window、Windows IDD display 或 app protocol 绑定到同一 native provider 的 surface。 |
-| `VirtualDisplayProvider` | L1 resource adapter。负责创建/销毁虚拟显示资源、启动 app、绑定窗口、输出 frame stream、接收 input intent、产出 readiness/evidence refs。 |
+| `VirtualDisplayProvider` | Host 内部平台 adapter。负责创建/销毁虚拟显示资源、启动 app、绑定窗口、输出 frame stream、接收 scoped input、产出 readiness/evidence refs。 |
 | `SurfaceTransport` | 把 provider frame 送到 GUI 的 transport。当前用户级验收只接受 WebRTC 或 native frame stream。 |
 | `InputIntent` | GUI 产生的终端等价鼠标/键盘/滚动/拖拽/菜单意图。GUI 不直接执行输入，只提交给 Computer Use action provider。 |
 | `ActionAdapter` | 将 `InputIntent` 变成 app/window scoped action 的执行器，例如 AX/UIA/AT-SPI、app command、isolated virtual-display input。 |
@@ -117,7 +123,7 @@ SciForge 应该实现：
 因此能力顺序必须是：
 
 ```text
-1. backend/host 创建 agent-owned display/session
+1. Native Host 创建 agent-owned display/session
 2. app 在这个 session 中真实运行并渲染
 3. input 进入这个 session，而不是用户物理桌面
 4. GUI viewer 把同一 live surface 展示到 Screen
@@ -177,27 +183,55 @@ packages/presentation/components/virtual-screen-viewer/
 Provider/backend 代码必须放在 Computer Use 或 runtime adapter owner 下，例如：
 
 ```text
-packages/actions/computer-use/virtual-display-provider/
-src/runtime/computer-use/virtual-display-provider/
+packages/actions/computer-use/virtual-app-screen-host/
+src/runtime/computer-use/virtual-display-provider/   # migration shim / host-port implementation only
 ```
 
 如果未来把 `virtual-screen-viewer` 发布成可复用 GUI package，它也只能通过 props/callback/ref contract 与 host 通信，不携带任何平台 provider。这样才能迁移到 Electron、Tauri、Web、Codex Desktop 或其它 GUI shell。
 
-## Provider Contract
+## Packages Module Boundary
 
-`VirtualDisplayProvider` 是 Computer Use 的 L1 resource adapter，通过 `module.describe/query/read/invoke` 或 action-provider host port 暴露能力。公共能力必须是声明式、refs-first、fail-closed。
+终局模块边界固定为：
+
+```text
+packages/contracts/runtime
+  -> shared VirtualAppScreenHost refs, schemas, pure validators
+
+packages/actions/computer-use
+  -> Computer Use action provider, scheduler, lease, approval, trace, acceptance
+
+packages/actions/computer-use/virtual-app-screen-host
+  -> NativeVirtualAppScreenHost package
+  -> display/session/surface ownership
+  -> permission/preflight/isolation
+  -> frame/input transport
+  -> host-owned evidence writer
+
+packages/presentation/components/virtual-screen-viewer
+  -> presentation only
+  -> render native surface slot, replay, evidence, controls and overlay
+
+src/runtime/computer-use
+  -> workspace/current-run host adapter and migration shim only
+```
+
+`VirtualDisplayProvider` 是 Host 内部 platform adapter，不是产品级 truth owner。第三方虚拟屏幕软件可以成为 reference adapter 或 diagnostic adapter，但不能 mint `liveBindingAttachGrantRef`、不能直接执行产品输入、不能把自己的 UI/stream 当成 user-level acceptance。
+
+## Host Protocol / Provider Adapter Contract
+
+`NativeVirtualAppScreenHost` 是 Computer Use 的 L1 resource adapter，通过 Codex native tool/plugin/MCP、`module.describe/query/read/invoke` 或 action-provider host port 暴露能力。公共能力必须是声明式、refs-first、fail-closed。`VirtualDisplayProvider` 是 Host 内部 platform adapter；它不能绕过 host 直接面向 GUI 或 user-level acceptance。
 
 ### describe
 
 必须返回：
 
 ```ts
-type VirtualDisplayProviderDescription = {
-  providerId: string;
+type NativeVirtualAppScreenHostDescription = {
+  hostId: string;
   platform: 'darwin' | 'linux' | 'win32';
   backendKind: string;
   supportedApps?: string[];
-  supportedTransports: Array<'webrtc' | 'native-frame-stream'>;
+  supportedTransports: Array<'native-presented-surface' | 'webrtc' | 'native-frame-stream'>;
   supportedInputAdapters: Array<'app-command' | 'ax' | 'uia' | 'at-spi' | 'virtual-display-input'>;
   capabilities: {
     createDisplay: boolean;
@@ -205,7 +239,10 @@ type VirtualDisplayProviderDescription = {
     attachWindow: boolean;
     captureFrame: boolean;
     streamFrames: boolean;
-    executeInputIntent: boolean;
+    sendHumanInput: boolean;
+    executeAutomationIntent: boolean;
+    validateGrant: boolean;
+    writeEvidenceLedger: boolean;
     backgroundRenderable: boolean;
     affectsPhysicalDisplay: boolean;
     requiresFocusSteal: boolean;
@@ -224,10 +261,15 @@ type VirtualDisplayProviderDescription = {
 | `createSession` | 创建 agent-owned display/session，不启动任务 app。 | `sessionRef`, `displayGroupRef`, `screenRef` |
 | `launchApp` | 在 session/display 中启动 app，或 attach 到已有目标 app。 | `targetAppRef`, `targetWindowRef`, lifecycle event ref |
 | `attachSurface` | 绑定 live frame stream。 | `liveSurfaceRef`, `frameStreamRef`, `currentFrameRef` |
-| `executeInputIntent` | 在 lease 下执行 scoped input。 | `inputIntentRef`, `executorEventRef`, before/after frame refs |
+| `presentSurface` | 根据 host-issued grant 把 live surface present 到右侧 Screen。 | `surfacePresentationRef`, `guiPresentRef` |
+| `sendHumanInput` | 真人热路径输入，host queue accepted 后立即返回。 | `inputAcceptedRef`, `inputSequence` |
+| `executeAutomationIntent` | 自动化动作，在 lease 下执行 scoped input 并等待 barrier/evidence。 | `inputIntentRef`, `automationBarrierRef`, `executorEventRef`, before/after frame refs |
+| `validateGrant` | dereference / validate live attach grant 与当前 host session record。 | `grantValidationRef` |
 | `pause` / `resume` | 暂停或恢复 capture/input。 | lifecycle event ref |
 | `closeSession` | 安全关闭 session/display/app，避免关闭用户窗口。 | lifecycle event ref |
 | `handoff` | 把无法隔离完成的动作交给用户。 | `handoffRef`, reason |
+
+真人输入不能等待 evidence 完整性；自动化动作不能只凭真人输入 ack 宣称完成。后台 evidence worker 负责把 frame/input/action ledger 追上当前 sequence。
 
 ### Readiness Record
 
@@ -262,13 +304,13 @@ type VirtualDisplayReadiness = {
 
 ### macOS
 
-主线：`CGVirtualDisplay` / virtual display provider + `ScreenCaptureKit` frame capture。
+主线：SciForge Native Host helper 管理 virtual display / app surface + `ScreenCaptureKit` frame capture。
 
 推荐顺序：
 
-1. `node-mac-virtual-display` 类 Node/native bridge，快速验证 create/destroy virtual display。
-2. 自研 Swift sidecar，直接管理 virtual display、window placement、ScreenCaptureKit stream、permission probe。
-3. DeskPad / BetterDisplay / Mirage 类工具只作为人工对照验证，不作为 provider 或验收路径。
+1. 自研 Swift/native helper，直接管理 virtual display、window placement、ScreenCaptureKit stream、permission probe 和 evidence writer。
+2. `node-mac-virtual-display` 类 Node/native bridge，只作为 PoC/reference adapter，验证 create/destroy virtual display。
+3. DeskPad / BetterDisplay / Mirage 类工具只作为人工对照、benchmark 或诊断验证，不作为 provider owner、host grant 或验收路径。
 
 输入策略：
 
@@ -278,7 +320,7 @@ type VirtualDisplayReadiness = {
 
 ### Linux
 
-主线：Xpra 或 headless compositor。
+主线：Native Host adapter + Xpra 或 headless compositor。
 
 推荐顺序：
 
@@ -292,7 +334,7 @@ type VirtualDisplayReadiness = {
 
 ### Windows
 
-主线：Windows Indirect Display Driver (IDD) provider + Windows Graphics Capture / DXGI path。
+主线：Native Host adapter + Windows Indirect Display Driver (IDD) provider + Windows Graphics Capture / DXGI path。
 
 推荐顺序：
 
@@ -309,11 +351,12 @@ type VirtualDisplayReadiness = {
 
 | Transport | 角色 | 是否主线 |
 |---|---|---|
-| WebRTC | 低延迟 frame + data channel input，适合嵌入 SciForge Screen。 | 是 |
-| native frame stream | 本机 Electron/Tauri/WebView 内部 transport，可作为 WebRTC 前的本地优化。 | 是 |
+| native presented surface | 桌面 shell 的最低延迟路径，host 把 native surface/texture/window bounds 交给 shell present。 | 是，桌面优先 |
+| WebRTC | 低延迟 frame + data channel input，适合 Web shell、远程 shell 或跨进程边界。 | 是，非桌面/跨进程优先 |
+| native frame stream | 本机 Electron/Tauri/WebView 内部 transport，可作为 native surface 与 WebRTC 之间的本地优化。 | 是 |
 | Sunshine/Moonlight style | 高性能编码/低延迟设计参考，可用于实验。 | 参考，不作为默认 API |
 
-WebRTC 是默认主线，因为它天然适合 browser-embedded low-latency media + data channel；SciForge Screen 可以直接消费同一 live surface，不需要第二个 viewer。
+桌面 shell 支持时优先 native presented surface；WebRTC 仍是 Web shell、远程 shell 或跨进程 transport 的主线。无论 transport 是 native surface、WebRTC 还是 frame stream，它都只能呈现同一个 Host-owned live surface，不能成为第二套交互 truth。
 
 ## 状态机
 
@@ -405,43 +448,51 @@ type VirtualDisplayIsolationFlags = {
 - damage region / dirty rect 优先，避免全帧无脑传输。
 - GPU encoder 优先：VideoToolbox(macOS)、Media Foundation/Direct3D(Windows)、VAAPI/NVENC/Linux 可选。
 - pointer/cursor overlay 走 metadata/data channel，必要时 GUI 叠加 actor cursor，不强制编码进视频帧。
-- input intent 和 frame ack 同步，保留 action index、timestamp、before/after frame refs。
+- 真人 input accepted ack 与 frame/evidence ack 解耦，保留 input sequence 和 timestamp；自动化 action 才要求 barrier、before/after frame refs 和 verifier refs 同步完成。
 
 ## 推荐实现阶段
 
-### Phase 0：Provider Inventory 和安装探测
+### Phase 0：Native Host Package Boundary
 
-- 建立 provider registry，先登记可复用工具，而不是实现 backend。
+- 建立 `packages/actions/computer-use/virtual-app-screen-host` package README、manifest、contract 和 validators。
+- 定义 host protocol、grant validation、human input hot path、automation barrier 和 host-owned evidence writer。
+- `src/runtime/computer-use` 只保留 host-port adapter / migration shim。
+
+验收：文档、ownership manifest 和 package boundary 都指向 Native Host；没有 Host record 时 right pane 必须 blocked，不能用 artifact-shaped payload live attach。
+
+### Phase 1：Provider Inventory 和安装探测
+
+- 建立 host platform adapter registry，先登记可复用工具，而不是实现完整 backend。
 - 为每个平台实现只读 `probe`：查找命令、库、驱动、服务、权限、版本和许可证摘要。
 - 输出 `installed` / `installable` / `unsupported`，并给出 refs-first install hint。
 - 不自动安装驱动或请求系统权限；这些必须走 explicit handoff。
 
 验收：在没有安装工具时，Screen 返回清晰 `adapter-unavailable`；安装工具后能进入下一阶段 probe，不需要改代码。
 
-### Phase 1：Contract 和 fail-closed gate
+### Phase 2：Contract 和 fail-closed gate
 
-- 落地 `VirtualDisplayProviderDescription`、readiness record、session lifecycle、transport refs。
+- 落地 `NativeVirtualAppScreenHostDescription`、readiness record、session lifecycle、transport refs。
 - Screen pane 只接受 refs-first live surface 或 blocked/observe-only 状态。
-- 没有真实 provider 时必须 blocked，不启动或抢占用户桌面 app。
+- 没有真实 Host grant/provider record 时必须 blocked，不启动或抢占用户桌面 app。
 
-### Phase 2：macOS PoC
+### Phase 3：macOS Native Host PoC
 
-- 直接复用 `node-mac-virtual-display` 类 Node/native bridge 创建 virtual display；只有 API 不满足时再写 Swift helper。
+- 优先写 SciForge Swift/native helper 创建 virtual display；`node-mac-virtual-display` 类 bridge 仅作 spike/reference。
 - 启动低风险 app 到 virtual display。
 - 用 ScreenCaptureKit 捕获 virtual display/window frame。
-- 在 Screen pane 显示 current frame。
-- 输入先用 AX/app protocol；系统输入路径仅 diagnostic。
+- 在 Screen pane present host-owned surface/current frame。
+- 真人输入走 fire-and-release queue；自动化输入走 AX/app protocol + barrier。系统输入路径仅 diagnostic。
 
 验收：app 窗口存在于 virtual display，用户物理屏不弹窗；Screen 能显示 current frame，blocked reason 清晰。
 
-### Phase 3：Linux Provider
+### Phase 4：Linux Provider
 
 - 直接复用 Xpra app session 优先。
 - 验证输入只进入 agent-owned DISPLAY。
 
 验收：Linux GUI app 可在虚拟 session 中启动、显示、输入、before/after capture。
 
-### Phase 4：Windows Provider
+### Phase 5：Windows Provider
 
 - 复用 Windows IDD virtual display driver 或 Virtual-Display-Driver 类项目。
 - 捕获 virtual display frame。
@@ -449,17 +500,18 @@ type VirtualDisplayIsolationFlags = {
 
 验收：Windows app 窗口可进入虚拟显示器，Screen 显示 live frame，不影响用户当前桌面。
 
-### Phase 5：WebRTC Transport
+### Phase 6：Native/WebRTC Transport
 
-- 优先复用成熟 WebRTC library 或 browser/native stack，不自研传输协议。
-- provider -> WebRTC media track。
+- 桌面 shell 优先 native presented surface。
+- Web shell / remote shell 优先复用成熟 WebRTC library 或 browser/native stack，不自研传输协议。
+- Host -> native surface or WebRTC media track。
 - Screen pane 消费 live surface。
-- InputIntent 走 WebRTC data channel 或 host route。
+- Human input 走 host route/data channel fire-and-release；automation intent 走 host route/data channel + barrier。
 - VNC/noVNC、RDP、MJPEG 和 web app surface 只能出现在历史诊断文档中，不能作为当前用户级验收 transport。
 
 验收：本地 30fps、低延迟输入、断线重连、single interactive truth。
 
-### Phase 6：User-Level Acceptance
+### Phase 7：User-Level Acceptance
 
 - 多 app profiles：Browser、VSCode/editor、Terminal、Notebook、PDF、CSV/table viewer。
 - user-facing artifact 必须由当前 VirtualAppScreen action causality 生成。
@@ -470,9 +522,10 @@ type VirtualDisplayIsolationFlags = {
 ### 主线
 
 1. Platform-native virtual display provider + WebRTC transport.
-2. macOS: CGVirtualDisplay / ScreenCaptureKit provider.
-3. Linux: Xpra or headless compositor provider.
-4. Windows: Indirect Display Driver provider.
+2. NativeVirtualAppScreenHost package + native presented surface or WebRTC transport.
+3. macOS: SciForge native helper + CGVirtualDisplay / ScreenCaptureKit provider.
+4. Linux: Xpra or headless compositor provider.
+5. Windows: Indirect Display Driver provider.
 
 ### 参考工具
 
@@ -482,6 +535,7 @@ type VirtualDisplayIsolationFlags = {
 | Xpra | Linux app/window session provider. |
 | Virtual-Display-Driver / IDD sample | Windows provider reference. |
 | Sunshine/Moonlight | low-latency streaming architecture reference. |
+| DeskPad / BetterDisplay / Mirage | macOS virtual display UX/reference/diagnostic only. |
 
 ## 外部资料
 
@@ -496,6 +550,7 @@ type VirtualDisplayIsolationFlags = {
 ## 和现有文档的关系
 
 - `PROJECT_CU.md` 是 Computer Use 任务板和验收规则真相源。
+- `VirtualAppScreenNativeHost.md` 是终局 C Native Host、packages 模块边界、输入热路径和 automation barrier 的设计真相源。
 - `vision_computer_use_agent_mvp.md` 是 VirtualAppScreen 设计原则和 action/evidence 链路说明。
-- 本文专门约束 virtual display/app surface backend 选择、跨平台策略、transport 和 provider contract。
-- `NativeExtensionOwnershipMap.md` 继续约束 GUI/TUI/Computer Use 的 ownership：GUI presentation 不执行 Computer Use，provider/adapter 不做 L2 planning。
+- 本文专门约束 virtual display/app surface backend 选择、跨平台策略、transport、Host protocol 和 provider adapter contract。
+- `NativeExtensionOwnershipMap.md` 继续约束 GUI/TUI/Computer Use 的 ownership：GUI presentation 不执行 Computer Use，Host/provider/adapter 不做 L2 planning。

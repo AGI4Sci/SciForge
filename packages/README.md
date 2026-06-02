@@ -37,6 +37,7 @@
 - `skills/meta_skills`：skill 创建、调试、沉淀、自进化和能力选择工作流。
 - `observe`：observe 层。输入是 `instruction + 其它模态`，输出是可审计 `text-response`，例如视觉摘要、OCR、区域描述、坐标、置信度和失败边界。Observe 不产生副作用。
 - `actions`：action 层。对环境产生影响的执行 provider，例如 Computer Use、浏览器沙箱、远程桌面、文件编辑、notebook/kernel 或未来实验设备动作。
+- `actions/computer-use/virtual-app-screen-host`：VirtualAppScreen 终局 C 的 Native Host / control-plane target package。它拥有 virtual display/app surface lifecycle、permission/preflight、frame/input transport、host grant、human fire-and-release input queue、automation barrier 和 host-owned evidence writer；平台 provider 和第三方工具只能在它背后作为 adapter/reference/diagnostic。
 - `verifiers`：verify 层。输入是 result、trace、artifact、环境状态和验证 instruction，输出 verdict、reward、critique、evidence refs、repair hints 和 confidence；provider 可以是人类、其它 agent、规则测试、schema、环境观察或 simulator。
 - `presentation/components`：interactive views/renderers。面向用户和 agent 呈现 artifact 数据，并暴露鼠标、键盘、对象引用、事件和代码交互边界；它们不是 action provider。
 - `contracts/runtime`：运行时共享契约。
@@ -75,7 +76,7 @@ package 只能声明能力和 provider 变体，不能声明自己拥有 runtime
 
 ## 单一真相源
 
-- Computer Use 的 Python action loop、contract、safety、trace 和 action provider manifest 都保留在 `packages/actions/computer-use`。runtime 只能把它作为 action provider 接入，不应复制 loop 或 safety policy。
+- Computer Use 的 Python action loop、contract、safety、trace 和 action provider manifest 都保留在 `packages/actions/computer-use`。VirtualAppScreen native surface/control-plane 语义应收敛到 `packages/actions/computer-use/virtual-app-screen-host`。runtime 只能把它们作为 action provider / host adapter 接入，不应复制 loop、safety policy、host grant、input hot path 或 evidence writer。
 - Vision observe 的 provider 实现和 pytest 保留在 `packages/observe/vision`；`src/runtime/vision-sense` 只做 SciForge Gateway adapter、workspace refs、runtime event 和 guard 接入。能力 id 可继续兼容 `local.vision-sense`。
 - Interactive renderer registry 的当前真相源仍是 `packages/presentation/components`；`packages/presentation/interactive-views` 是语义化别名和未来迁移目标。`packages/presentation/design-system` 只提供低层 primitives/tokens，不承载 artifact renderer registry。
 - Runtime/UI/Package 共享协议的真相源是 `packages/contracts/runtime`。`packages/support/artifact-preview` 和 `packages/support/object-references` 只保留便捷 helper、normalizer 和转换函数；若发现纯 contract 类型，应上移到 `runtime-contract` 后再由 helper 消费。
@@ -91,6 +92,8 @@ packages/contracts/tool-worker/
 packages/skills/            SKILL.md-facing abilities and catalogs
 packages/observe/           observe: instruction + modality -> text-response
 packages/actions/           environment-changing action providers
+packages/actions/computer-use/virtual-app-screen-host/
+                            NativeVirtualAppScreenHost control plane target package
 packages/verifiers/         result/trace/artifact/state -> verdict/reward/critique
 packages/presentation/components/ or packages/presentation/interactive-views/
                             artifact presentation and interactive data surfaces

@@ -7,9 +7,9 @@
 
 ## 1. 核心目标
 
-Computer Use 的产品目标调整为 **科研应用级虚拟屏幕 + native/streaming live surface 单一真相源**，而不是完整虚拟电脑或多物理显示器模拟。
+Computer Use 的产品目标调整为 **科研应用级虚拟屏幕 + package-owned Native Host + native/streaming live surface 单一真相源**，而不是完整虚拟电脑或多物理显示器模拟。
 
-每个虚拟屏幕绑定一个 app/session/window，用户和 agent 在 SciForge 右侧 `Screen` 里看到它、注释它、介入它，并用看起来等效鼠标键盘的方式操纵它。这个 Screen 的唯一交互真相源是 owner session 的 native/streaming live surface；截图、replay、PDF、document export 或旧 frame 只能是 evidence/artifact，不能成为第二个可交互画面，也不能作为替代交互路径。底层执行优先走 app-scoped / window-scoped adapter，不移动用户真实鼠标，不抢用户当前物理屏焦点，不把应用窗口弹到用户正在使用的桌面上。
+每个虚拟屏幕绑定一个 app/session/window，用户和 agent 在 SciForge 右侧 `Screen` 里看到它、注释它、介入它，并用看起来等效鼠标键盘的方式操纵它。这个 Screen 的唯一交互真相源是 `NativeVirtualAppScreenHost` 拥有的 native/streaming live surface；截图、replay、PDF、document export 或旧 frame 只能是 evidence/artifact，不能成为第二个可交互画面，也不能作为替代交互路径。底层执行优先走 Host 背后的 app-scoped / window-scoped adapter，不移动用户真实鼠标，不抢用户当前物理屏焦点，不把应用窗口弹到用户正在使用的桌面上。
 
 推荐抽象：
 
@@ -41,7 +41,7 @@ UserControlPlane
 - `currentFrameRef`、`beforeFrameRef`、`afterFrameRef`、PDF、document、replay 只能作为证据和审计材料。
 - 无法 attach live surface 时必须返回 `blocked`、`needs-permission`、`requires-handoff` 或 `observe-only`，不能自动切到截图/proxy/replay 来冒充可操作屏幕。
 
-性能路线和 Browser pane 一致：桌面 shell 优先采用 native embedded surface（Browser 对应 Electron `WebContentsView`，Screen 对应 app/window/session scoped native surface、WebView/WebContents、offscreen display 或独立 surface）；Web shell 只能采用同一 owner stream 的 binary frame / WebRTC / canvas transport，而不是让 viewer 反复拉静态 frame URL。静态 frame route 只能服务 evidence、manual inspection 和 replay materialization；如果 native/live stream 不可用，Screen 必须进入 blocked/handoff/retry 状态，不能启用第二个截图 viewer 作为替代交互路径。
+性能路线和 Browser pane 一致：桌面 shell 优先采用 native embedded/presented surface（Browser 对应 Electron `WebContentsView`，Screen 对应 Host-owned app/window/session scoped native surface、WebView/WebContents、offscreen display 或独立 surface）；Web shell 只能采用同一 Host owner stream 的 binary frame / WebRTC / canvas transport，而不是让 viewer 反复拉静态 frame URL。静态 frame route 只能服务 evidence、manual inspection 和 replay materialization；如果 native/live stream 不可用，Screen 必须进入 blocked/handoff/retry 状态，不能启用第二个截图 viewer 作为替代交互路径。
 
 这个方向服务自动化科研场景：
 
@@ -54,7 +54,7 @@ UserControlPlane
 
 不把 VM / 完整独立桌面作为默认路线。VM 可以作为未来高隔离或不可信任务 backend，但不是当前产品主路径。
 
-当前 active gate 命名为 `virtual-app-screen-user-acceptance`。它不是单次 click smoke，也不是 M6/native multi-screen 的继续推进；只有当前 run bundle 内的 VirtualAppScreen session、live surface readiness、adapter readiness、frame/input/before-after evidence、artifact/verifier refs、`gui.present` 记录、single-interactive-truth flags 和 isolation flags 同时成立，才可写入用户级验收 manifest。
+当前 active gate 命名为 `virtual-app-screen-user-acceptance`。它不是单次 click smoke，也不是 M6/native multi-screen 的继续推进；只有当前 run bundle 内的 Native Host session、live surface readiness、adapter readiness、human input accepted 或 automation barrier、frame/input/before-after evidence、artifact/verifier refs、`gui.present` 记录、single-interactive-truth flags 和 isolation flags 同时成立，才可写入用户级验收 manifest。
 
 ---
 
@@ -87,6 +87,7 @@ L2 Root Agent Host
   -> owns cross-module planning, approval, repair, completion, pipeline trace
 
 L1 Computer Use Resource Adapter
+  -> packages/actions/computer-use/virtual-app-screen-host Native Host
   -> VirtualAppScreen session refs
   -> target app/window/session refs
   -> single live surface / frame / input / replay / evidence refs
@@ -97,7 +98,7 @@ L0 Handlers
   -> capture | crop | ground | propose | execute | verify | writeTrace | emitEvent
 ```
 
-L1 可以管理同一 Computer Use 资源域内的 session、cache、refs、events、adapter readiness、backend lifecycle 和 L0 routing。L1 不做跨模块 planning，不做 capability ranking，不选择 provider，不直接调用 GUI renderer，不宣布用户级完成。
+L1 可以管理同一 Computer Use 资源域内的 session、cache、refs、events、Host grant、human input queue、automation barrier、adapter readiness、backend lifecycle 和 L0 routing。L1 不做跨模块 planning，不做 capability ranking，不选择跨模块 provider，不直接调用 GUI renderer，不宣布用户级完成。
 
 GUI 只渲染 `VirtualAppScreen` 的 single live surface、overlay、cursor、timeline、approval/control refs 和 terminal-equivalent text。GUI 不执行 Computer Use action，也不把 snapshot/replay 变成第二个可交互屏幕。
 
@@ -150,16 +151,25 @@ secondInteractiveSurfacePresent: false
 
 ## 5. Adapter-first 执行模型
 
-用户在 Screen tab 里点击、拖动、输入或按快捷键；这些交互先变成结构化 input intent，然后由 adapter 执行：
+用户在 Screen tab 里点击、拖动、输入或按快捷键；这些交互先变成结构化 input intent，然后按真人热路径或自动化 barrier 路径执行：
 
 ```text
-Screen canvas input
+Human Screen canvas input
+-> InputIntent
+-> Host sendHumanInput
+-> inputAcceptedRef / inputSequence immediately
+-> background frame/evidence worker
+```
+
+```text
+Automation action
 -> InputIntent
 -> target binding / hit test
 -> scheduler lease
--> action adapter
+-> Host executeAutomationIntent
+-> automationBarrierRef
 -> before/after capture
--> evidence ledger + replay
+-> verifier + evidence ledger + replay
 ```
 
 推荐 adapter 顺序：
@@ -169,7 +179,7 @@ Screen canvas input
 3. **terminal adapter**：PTY session、shell command、terminal buffer，不模拟 GUI 键盘。
 4. **accessibility adapter**：macOS Accessibility / Windows UIA / Linux AT-SPI，用于标准原生控件。
 5. **vision+OCR grounded adapter**：窗口截图 + OCR/VLM/KV-Ground 找目标，再交给可用执行 backend。
-6. **native/streaming surface adapter**：WebContents/WebView、offscreen display、window compositor stream、WebRTC/canvas stream，用于提供高性能 live surface。
+6. **Native Host surface adapter**：WebContents/WebView、offscreen display、window compositor stream、WebRTC/canvas stream，用于提供高性能 live surface；真人输入 fire-and-release，自动化输入走 barrier。
 7. **system-input handoff / diagnostic escape**：最后手段，必须显式标记非隔离、需要授权、全局串行，不得作为后台隔离成功证据，也不得替代 live surface。
 
 这意味着“虚拟鼠标键盘”是统一交互模型，不要求底层真的存在独立 OS 鼠标键盘。

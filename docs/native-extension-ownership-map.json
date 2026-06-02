@@ -110,14 +110,25 @@
       "migrationNote": "Browser, terminal, and workspace file surfaces are package-owned presentation modules. src/ui may connect host helpers and view-local events, but package renderers must remain presentation-only."
     },
     {
+      "id": "virtual-app-screen-native-host",
+      "status": "target",
+      "owner": "packages-actions-computer-use-native-host-control-plane",
+      "targetNativeSurfaces": ["NativeVirtualAppScreenHost protocol", "host session/surface/input/grant/evidence refs", "platform adapter registry", "permission/preflight/isolation report", "native presented surface", "WebRTC/frame-stream transport", "human fire-and-release input queue", "automation barrier", "host-owned evidence writer"],
+      "currentImplementationPaths": ["src/runtime/computer-use", "src/ui/src/app/results/screenPaneHostAdapter.tsx", "packages/presentation/components/virtual-screen-viewer"],
+      "targetImplementationPaths": ["packages/actions/computer-use/virtual-app-screen-host", "packages/contracts/runtime", "src/runtime host adapter only", "packages/presentation/components/virtual-screen-viewer presentation only"],
+      "enforcementScripts": ["npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership", "npm run smoke:module-boundaries"],
+      "forbiddenOwners": ["React/UI Computer Use executor", "runtime-only host truth", "third-party virtual screen UI as product truth", "noVNC/RDP/VNC acceptance owner", "DeskPad/BetterDisplay/Mirage/Sunshine as host grant issuer", "GUI-owned live surface replacement", "snapshot/replay second interactive truth"],
+      "migrationNote": "VirtualAppScreen final C is a package-owned Native Host/control plane. The host owns permission preflight, virtual display/app surface lifecycle, target app attach, surface presentation, human fire-and-release input, automation barriers, live attach grants, and host-owned evidence writing. Platform providers and third-party virtual screen tools are adapters, references, benchmarks, or diagnostics only; they cannot bypass host grants, execute product input directly, or mint user-level acceptance."
+    },
+    {
       "id": "computer-use",
       "status": "migrating",
       "owner": "codex-tui-native-action-provider",
-      "targetNativeSurfaces": ["Codex app-server native tool/plugin/MCP production path", "Codex CLI/native plugin debug path", "module.invoke(moduleId='actions', intent='execute')", "packages/actions/computer-use runTask(request, hostPorts)", "packages/observe/vision sense provider", "VirtualAppScreen native/streaming single live surface", "desktop/remote/dry-run host ports", "GUI module replay/overlay presentation via refs only", "virtual-app-screen-user-acceptance product gate", "virtual-app-screen-user-acceptance-manifest", "BrowserRuntime DOM/AX observation refs", "native multi-app workflow/live acceptance matrix", "native multi-screen/multi-actor cursor historical opt-in regression", "multi-screen live demo historical diagnostic"],
-      "currentImplementationPaths": ["packages/actions/computer-use", "packages/observe/vision", "src/runtime/computer-use", "src/runtime/vision-sense", "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts", "src/ui/src/api/sciforgeToolsClient/client.ts"],
-      "targetImplementationPaths": ["packages/actions/computer-use", "packages/observe/vision", "src/runtime host adapter only", "packages/presentation/components or src/ui host presentation for replay overlay only", "Codex app-server native Computer Use surface"],
+      "targetNativeSurfaces": ["Codex app-server native tool/plugin/MCP production path", "Codex CLI/native plugin debug path", "module.invoke(moduleId='actions', intent='execute')", "packages/actions/computer-use runTask(request, hostPorts)", "packages/actions/computer-use/virtual-app-screen-host NativeVirtualAppScreenHost", "packages/observe/vision sense provider", "VirtualAppScreen native/streaming single live surface", "desktop/remote/dry-run host ports", "GUI module replay/overlay presentation via refs only", "virtual-app-screen-user-acceptance product gate", "virtual-app-screen-user-acceptance-manifest", "BrowserRuntime DOM/AX observation refs", "native multi-app workflow/live acceptance matrix", "native multi-screen/multi-actor cursor historical opt-in regression", "multi-screen live demo historical diagnostic"],
+      "currentImplementationPaths": ["packages/actions/computer-use", "packages/actions/computer-use/virtual-app-screen-host", "packages/observe/vision", "src/runtime/computer-use", "src/runtime/vision-sense", "src/ui/src/api/sciforgeToolsClient/computerUseWorkspaceGatewayRequest.ts", "src/ui/src/api/sciforgeToolsClient/client.ts"],
+      "targetImplementationPaths": ["packages/actions/computer-use", "packages/actions/computer-use/virtual-app-screen-host", "packages/observe/vision", "src/runtime host adapter only", "packages/presentation/components or src/ui host presentation for replay overlay only", "Codex app-server native Computer Use surface"],
       "enforcementScripts": ["python -m pytest packages/actions/computer-use/tests", "npm run smoke:vision-sense-runtime", "npm run smoke:package-runtime-boundary", "npm run smoke:native-extension-ownership", "npm run smoke:module-boundaries"],
-      "forbiddenOwners": ["React/UI Computer Use executor", "GUI desktop bridge", "Playwright/DOM shortcut as Computer Use success", "snapshot/replay/PDF/document second Screen truth", "Computer Use as second L2 Root Agent Host", "runtime gateway as production Computer Use public API", "Workspace Gateway /computer-use as production entry", "Codex exec JSON as production fallback", "Docker/container as Computer Use concurrency model", "Docker/noVNC/RDP as active product gate or acceptance owner", "M6/native multi-screen evidence as user-level acceptance pass"],
+      "forbiddenOwners": ["React/UI Computer Use executor", "GUI desktop bridge", "Playwright/DOM shortcut as Computer Use success", "snapshot/replay/PDF/document second Screen truth", "Computer Use as second L2 Root Agent Host", "runtime gateway as production Computer Use public API", "Workspace Gateway /computer-use as production entry", "Codex exec JSON as production fallback", "Docker/container as Computer Use concurrency model", "Docker/noVNC/RDP as active product gate or acceptance owner", "DeskPad/BetterDisplay/Mirage/Sunshine as host control plane or acceptance owner", "M6/native multi-screen evidence as user-level acceptance pass"],
       "ownershipLayers": [
         {
           "layer": "L2",
@@ -127,8 +138,8 @@
         },
         {
           "layer": "L1",
-          "owner": "packages/actions/computer-use resource/session adapter",
-          "allowed": "display group, screen, single live surface, actor cursor, input queue, screen/window lease, evidence ledger, replay refs, adapter readiness, backend lifecycle, L0 routing",
+          "owner": "packages/actions/computer-use resource/session adapter plus packages/actions/computer-use/virtual-app-screen-host Native Host",
+          "allowed": "display group, screen, single live surface, actor cursor, human input queue, automation barrier, screen/window lease, evidence ledger, replay refs, adapter readiness, backend lifecycle, host grant validation, L0 routing",
           "forbidden": "planning, capability ranking, prompt route, workspace write policy, GUI renderer dependency, cross-module calls, user-level completion"
         },
         {
@@ -147,6 +158,7 @@
       "importBoundaries": [
         "src/ui may import shared contract and GUI presentation only, never packages/actions/computer-use, packages/observe/vision provider implementation, src/runtime/computer-use bridge, executor, or scheduler",
         "packages/actions/computer-use may import shared contracts and host-port types, never React/UI, renderer registry, Workbench, AnnotationSidebar, or src/ui private state",
+        "packages/actions/computer-use/virtual-app-screen-host may import shared contracts and platform adapter host-port types, never React/UI, renderer registry, Workbench, AnnotationSidebar, or src/runtime private implementation",
         "packages/observe/vision remains read-only sense and grounding, never executor, scheduler, desktop bridge, or GUI dependency",
         "src/runtime/computer-use keeps host-port adaptation and legacy diagnostics only; generic Computer Use policy belongs in packages/actions/computer-use"
       ],
@@ -304,6 +316,12 @@
       "currentPath": "packages/contracts/runtime/browser-runtime.ts, packages/observe/web/browser-runtime.ts, packages/actions/computer-use observation inputs",
       "targetOwner": "BrowserRuntime observe capability for DOM/AX refs and packages/actions/computer-use for consuming refs as hints only",
       "runtimeBoundary": "BrowserRuntime DOM/AX snapshots may enter Computer Use only as observation refs, stable target hints, freshness evidence, or verifier context; BrowserHostSession/browser runtime may execute through a scoped Computer Use lease as the screen's live surface adapter, but raw DOM/AX/Playwright shortcuts must not bypass Computer Use evidence or count as Computer Use success"
+    },
+    {
+      "id": "CU-PKG-24B-native-virtual-app-screen-host",
+      "currentPath": "src/runtime/computer-use native executor/provider/session manager and src/ui screen host adapter",
+      "targetOwner": "packages/actions/computer-use/virtual-app-screen-host NativeVirtualAppScreenHost package",
+      "runtimeBoundary": "runtime keeps only workspace/current-run host adapter and process lifecycle; package-owned host owns permission preflight, virtual display/app surface lifecycle, surface grants, human fire-and-release input, automation barriers, pause/resume/stop, and host-owned evidence writer"
     },
     {
       "id": "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
