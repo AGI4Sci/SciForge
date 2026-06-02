@@ -128,6 +128,12 @@ type BrowserHostNavigationProgressEvent = Parameters<NonNullable<BrowserHostSess
   ? Progress
   : never;
 
+type BrowserHostSessionLoadingProgressUrlHints = {
+  requestedUrl?: string;
+  currentUrl?: string;
+  finalUrl?: string;
+};
+
 export class BrowserHostSessionManager {
   private readonly sessions = new Map<string, ActiveBrowserHostSession>();
   private readonly sessionOperationQueues = new Map<string, Promise<unknown>>();
@@ -168,6 +174,7 @@ export class BrowserHostSessionManager {
       reason: 'host-starting',
       source: 'host-session',
       action: 'open',
+      urlHints: browserHostNavigationControlUrlHints(session, 'open'),
     });
     this.sessions.set(session.id, session);
     await persistBrowserHostSession(session);
@@ -189,6 +196,7 @@ export class BrowserHostSessionManager {
         reason: 'navigation-requested',
         source: 'host-navigation',
         action: 'open',
+        urlHints: browserHostNavigationControlUrlHints(session, 'open'),
       });
       await persistBrowserHostSession(session);
       await session.driver.goto(requestedUrl, timeoutMs(input.timeoutMs));
@@ -204,12 +212,14 @@ export class BrowserHostSessionManager {
       session.updatedAt = new Date().toISOString();
       session.diagnostics.push(browserHostErrorMessage(error));
       setBrowserHostSessionLoadingProgress(session, {
-        state: 'blocked',
+        state: browserHostErrorRequiresHandoff(error) ? 'handoff' : 'blocked',
         reason: 'host-error',
         source: 'host-error',
         action: 'open',
         canRetry: true,
         blocked: true,
+        requiresHandoff: browserHostErrorRequiresHandoff(error),
+        urlHints: browserHostNavigationControlUrlHints(session, 'open'),
       });
       finishBrowserHostActionTiming(session, timing, 'failed', browserHostErrorMessage(error));
       await persistBrowserHostSession(session);
@@ -276,6 +286,7 @@ export class BrowserHostSessionManager {
           reason: 'navigation-requested',
           source: 'host-navigation',
           action: 'navigate',
+          urlHints: browserHostNavigationControlUrlHints(session, 'navigate'),
         });
         await persistBrowserHostSession(session);
         await session.driver.goto(nextUrl, timeout);
@@ -288,6 +299,7 @@ export class BrowserHostSessionManager {
           reason: 'navigation-requested',
           source: 'host-navigation',
           action: 'back',
+          urlHints: browserHostNavigationControlUrlHints(session, 'back'),
         });
         await persistBrowserHostSession(session);
         await session.driver.back(timeout);
@@ -300,6 +312,7 @@ export class BrowserHostSessionManager {
           reason: 'navigation-requested',
           source: 'host-navigation',
           action: 'forward',
+          urlHints: browserHostNavigationControlUrlHints(session, 'forward'),
         });
         await persistBrowserHostSession(session);
         await session.driver.forward(timeout);
@@ -312,6 +325,7 @@ export class BrowserHostSessionManager {
           reason: 'navigation-requested',
           source: 'host-navigation',
           action: 'reload',
+          urlHints: browserHostNavigationControlUrlHints(session, 'reload'),
         });
         await persistBrowserHostSession(session);
         await session.driver.reload(timeout);
@@ -325,6 +339,7 @@ export class BrowserHostSessionManager {
           source: 'host-action-timing',
           action: 'stop',
           canRetry: true,
+          urlHints: browserHostNavigationControlUrlHints(session, 'stop'),
         });
         await persistBrowserHostSession(session);
         await session.driver.stop();
@@ -336,6 +351,7 @@ export class BrowserHostSessionManager {
           reason: 'host-ready',
           source: 'host-session',
           action: 'stop',
+          urlHints: browserHostNavigationControlUrlHints(session, 'stop'),
         });
       } else if (input.action === 'click') {
         await session.driver.click(requiredNumber(input.x, 'x'), requiredNumber(input.y, 'y'), button);
@@ -405,12 +421,14 @@ export class BrowserHostSessionManager {
       session.updatedAt = new Date().toISOString();
       session.diagnostics.push(browserHostErrorMessage(error));
       setBrowserHostSessionLoadingProgress(session, {
-        state: 'blocked',
+        state: browserHostErrorRequiresHandoff(error) ? 'handoff' : 'blocked',
         reason: 'host-error',
         source: 'host-error',
         action: input.action,
         canRetry: browserHostErrorCanRetry(error) || browserHostLoadingProgressActionCanRetry(input.action),
         blocked: true,
+        requiresHandoff: browserHostErrorRequiresHandoff(error),
+        urlHints: browserHostNavigationControlUrlHints(session, input.action),
       });
       finishBrowserHostActionTiming(session, timing, 'failed', browserHostErrorMessage(error));
       await persistBrowserHostSession(session);
@@ -514,7 +532,7 @@ export class BrowserHostSessionManager {
   }
 
   private driverFactory(): BrowserHostSessionDriverFactory {
-    return this.options.driverFactory ?? defaultPlaywrightBrowserHostDriverFactory();
+    return this.options.driverFactory ?? defaultNativeBrowserHostDriverFactory();
   }
 
   private noteSessionInputReceived(sessionId: string, atMs = Date.now()): void {
@@ -833,21 +851,40 @@ export function browserHostNavigationCommittedAfterTimeout(targetUrl: string, cu
 }
 
 function browserHostNavigationProgressFromNativeState(state: Record<string, unknown>): BrowserHostNavigationProgressEvent | undefined {
+  const stateUrlHints = browserHostNativeStateUrlHints(state);
   for (const candidate of [state.loadingProgress, state.progress, state.navigation]) {
     if (!isBrowserHostRecord(candidate)) continue;
-    const progress = browserHostNavigationProgressFromRecord(candidate);
+    const progress = browserHostNavigationProgressFromRecord(candidate, stateUrlHints);
     if (progress) return progress;
+  }
+  const loading = booleanField(state.loading);
+  if (loading !== undefined) {
+    return {
+      state: loading ? 'navigation-committed' : 'network-quiet',
+      reason: loading ? 'navigation-committed' : 'network-quiet',
+      source: 'host-state',
+      requestedUrl: stateUrlHints.requestedUrl,
+      currentUrl: stateUrlHints.currentUrl,
+      finalUrl: loading ? undefined : stateUrlHints.finalUrl ?? stateUrlHints.currentUrl,
+    };
   }
   return undefined;
 }
 
-function browserHostNavigationProgressFromRecord(record: Record<string, unknown>): BrowserHostNavigationProgressEvent | undefined {
+function browserHostNavigationProgressFromRecord(
+  record: Record<string, unknown>,
+  fallbackUrlHints: BrowserHostSessionLoadingProgressUrlHints = {},
+): BrowserHostNavigationProgressEvent | undefined {
   const state = browserHostLoadingProgressState(record.state ?? record.phase ?? record.stage);
   if (!state) return undefined;
+  const urlHints = browserHostNativeStateUrlHints(record, fallbackUrlHints);
   return {
     state,
     reason: browserHostLoadingProgressReason(record.reason) ?? browserHostDefaultLoadingProgressReason(state),
     source: browserHostLoadingProgressSource(record.source) ?? 'host-state',
+    requestedUrl: urlHints.requestedUrl,
+    currentUrl: urlHints.currentUrl,
+    finalUrl: urlHints.finalUrl,
     canRetry: record.canRetry === true || record.retryable === true ? true : undefined,
     blocked: record.blocked === true ? true : undefined,
     requiresHandoff: record.requiresHandoff === true ? true : undefined,
@@ -859,10 +896,25 @@ function browserHostNavigationProgressKey(progress: BrowserHostNavigationProgres
     progress.state,
     progress.reason,
     progress.source ?? '',
+    browserHostUrlKey(progress.requestedUrl),
+    browserHostUrlKey(progress.currentUrl),
+    browserHostUrlKey(progress.finalUrl),
     progress.canRetry === true ? 'retry' : '',
     progress.blocked === true ? 'blocked' : '',
     progress.requiresHandoff === true ? 'handoff' : '',
   ].join(':');
+}
+
+function browserHostNativeStateUrlHints(
+  record: Record<string, unknown>,
+  fallback: BrowserHostSessionLoadingProgressUrlHints = {},
+): BrowserHostSessionLoadingProgressUrlHints {
+  const currentUrl = browserHostUrlField(record.currentUrl ?? record.url ?? record.href) ?? fallback.currentUrl;
+  return {
+    requestedUrl: browserHostUrlField(record.requestedUrl ?? record.targetUrl) ?? fallback.requestedUrl,
+    currentUrl,
+    finalUrl: browserHostUrlField(record.finalUrl) ?? fallback.finalUrl ?? (booleanField(record.loading) === false ? currentUrl : undefined),
+  };
 }
 
 function browserHostDefaultLoadingProgressReason(state: BrowserHostSessionLoadingProgressState): BrowserHostSessionLoadingProgressReason {
@@ -881,12 +933,20 @@ function isBrowserHostRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function defaultPlaywrightBrowserHostDriverFactory(): BrowserHostSessionDriverFactory {
+function browserHostNativeActionRequiresLoadingProgress(action: unknown): boolean {
+  return action === 'back' || action === 'forward' || action === 'reload' || action === 'stop';
+}
+
+function defaultNativeBrowserHostDriverFactory(): BrowserHostSessionDriverFactory {
   const nativeAdapterUrl = browserHostNativeAdapterUrl();
   if (nativeAdapterUrl) return createNativeEmbeddedBrowserHostDriverFactory(nativeAdapterUrl);
   return {
-    async create(input) {
-      return createPlaywrightBrowserHostDriver(input);
+    async create(_input) {
+      throw new NativeEmbeddedBrowserHostAdapterError(
+        'Native embedded BrowserHostSession adapter is required; set SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL to a loopback native adapter. Legacy host-stream fallback is disabled.',
+        true,
+        true,
+      );
     },
   };
 }
@@ -951,7 +1011,9 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
   }
 
   async goto(url: string, timeoutMs: number): Promise<void> {
-    this.cacheState(await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/navigate`, { url, timeoutMs }));
+    const state = await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/navigate`, { url, timeoutMs });
+    const emittedProgress = this.cacheState(state);
+    if (!emittedProgress) this.emitMissingNativeProgress('navigate', state);
   }
 
   url(): string {
@@ -1069,34 +1131,60 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     this.navigationProgressListeners.add(listener);
   }
 
-  private lastState?: { url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean };
+  private lastState?: { url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean; loading?: boolean };
 
-  private async state(): Promise<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean }> {
-    const state = await this.get<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean }>(`/sessions/${encodeURIComponent(this.sessionId)}/state`);
+  private async state(): Promise<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean; loading?: boolean }> {
+    const state = await this.get<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean; loading?: boolean }>(`/sessions/${encodeURIComponent(this.sessionId)}/state`);
     this.cacheState(state);
     return state;
   }
 
   private async action(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const state = await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/actions`, body);
-    this.cacheState(state);
+    const emittedProgress = this.cacheState(state);
+    if (!emittedProgress && browserHostNativeActionRequiresLoadingProgress(body.action)) {
+      this.emitMissingNativeProgress(String(body.action), state);
+    }
     return state;
   }
 
-  private cacheState(state: Record<string, unknown>): void {
+  private cacheState(state: Record<string, unknown>): boolean {
     this.lastState = {
       url: typeof state.url === 'string' ? state.url : this.lastState?.url,
       title: typeof state.title === 'string' ? state.title : this.lastState?.title,
       canGoBack: state.canGoBack === true,
       canGoForward: state.canGoForward === true,
+      loading: booleanField(state.loading) ?? this.lastState?.loading,
     };
     const progress = browserHostNavigationProgressFromNativeState(state);
     if (progress) {
       const progressKey = browserHostNavigationProgressKey(progress);
-      if (this.lastNavigationProgressKey === progressKey) return;
+      if (this.lastNavigationProgressKey === progressKey) return true;
       this.lastNavigationProgressKey = progressKey;
       for (const listener of this.navigationProgressListeners) listener(progress);
+      return true;
     }
+    return false;
+  }
+
+  private emitMissingNativeProgress(action: string, state: Record<string, unknown>): void {
+    const urlHints = browserHostNativeStateUrlHints(state, {
+      currentUrl: this.lastState?.url,
+    });
+    const progress: BrowserHostNavigationProgressEvent = {
+      state: 'blocked',
+      reason: 'host-diagnostic',
+      source: 'host-state',
+      requestedUrl: urlHints.requestedUrl,
+      currentUrl: urlHints.currentUrl,
+      finalUrl: urlHints.finalUrl,
+      canRetry: true,
+      blocked: true,
+    };
+    const progressKey = browserHostNavigationProgressKey(progress);
+    if (this.lastNavigationProgressKey === progressKey) return;
+    this.lastNavigationProgressKey = progressKey;
+    for (const listener of this.navigationProgressListeners) listener(progress);
   }
 
   private async get<T extends Record<string, unknown>>(path: string): Promise<T> {
@@ -1124,7 +1212,7 @@ async function nativeEmbeddedJson<T extends Record<string, unknown>>(url: string
 }
 
 class NativeEmbeddedBrowserHostAdapterError extends Error {
-  constructor(message: string, readonly retryable: boolean) {
+  constructor(message: string, readonly retryable: boolean, readonly requiresHandoff = false) {
     super(message);
     this.name = 'NativeEmbeddedBrowserHostAdapterError';
   }
@@ -1575,6 +1663,7 @@ function attachDriverDiagnostics(session: ActiveBrowserHostSession) {
   session.driver?.onNavigationProgress?.((progress) => {
     if (session.status === 'closed' || session.status === 'failed') return;
     const existingAction = session.loadingProgress?.action;
+    applyBrowserHostNavigationProgressUrls(session, progress);
     session.status = browserHostSessionStatusForNavigationProgress(session, progress);
     session.updatedAt = new Date().toISOString();
     setBrowserHostSessionLoadingProgress(session, {
@@ -1585,9 +1674,33 @@ function attachDriverDiagnostics(session: ActiveBrowserHostSession) {
       canRetry: progress.canRetry,
       blocked: progress.blocked,
       requiresHandoff: progress.requiresHandoff,
+      urlHints: browserHostUrlHintsForNavigationProgress(session, progress),
     });
     void persistBrowserHostSession(session).catch(() => undefined);
   });
+}
+
+function applyBrowserHostNavigationProgressUrls(
+  session: ActiveBrowserHostSession,
+  progress: BrowserHostNavigationProgressEvent,
+): void {
+  const requestedUrl = browserHostUrlField(progress.requestedUrl);
+  const currentUrl = browserHostUrlField(progress.currentUrl);
+  const finalUrl = browserHostUrlField(progress.finalUrl);
+  if (requestedUrl) session.requestedUrl = requestedUrl;
+  if (finalUrl) session.url = finalUrl;
+  else if (currentUrl) session.url = currentUrl;
+}
+
+function browserHostUrlHintsForNavigationProgress(
+  session: ActiveBrowserHostSession,
+  progress: BrowserHostNavigationProgressEvent,
+): BrowserHostSessionLoadingProgressUrlHints {
+  return {
+    requestedUrl: browserHostUrlField(progress.requestedUrl) ?? session.requestedUrl,
+    currentUrl: browserHostUrlField(progress.currentUrl) ?? session.url,
+    finalUrl: browserHostUrlField(progress.finalUrl) ?? (progress.state === 'network-quiet' ? browserHostUrlField(progress.currentUrl) ?? session.url : undefined),
+  };
 }
 
 function browserHostSessionStatusForNavigationProgress(
@@ -1665,7 +1778,7 @@ async function readStoredBrowserHostSession(workspacePath: string, sessionId: st
       canGoBack: record.canGoBack === true,
       canGoForward: record.canGoForward === true,
       liveSurfaceRef: stringField(record.liveSurfaceRef),
-      liveSurfaceTransport: record.liveSurfaceTransport === 'native-embedded' ? 'native-embedded' : record.liveSurfaceTransport === 'host-stream' ? 'host-stream' : undefined,
+      liveSurfaceTransport: record.liveSurfaceTransport === 'native-embedded' ? 'native-embedded' : undefined,
       nativeAdapterUrl: localHttpUrlField(record.nativeAdapterUrl),
       singleInteractiveTruth: record.singleInteractiveTruth === true ? true : undefined,
       frameStreamRef: stringField(record.frameStreamRef),
@@ -1737,7 +1850,7 @@ async function browserHostCaptureValue<T>(
 }
 
 function publicBrowserHostSessionState(session: ActiveBrowserHostSession): BrowserHostSessionState {
-  const liveSurfaceTransport = session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport ?? 'host-stream';
+  const liveSurfaceTransport = browserHostNativeLiveSurfaceTransport(session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport);
   const state: BrowserHostSessionState = {
     schemaVersion: BROWSER_HOST_SESSION_SCHEMA,
     id: session.id,
@@ -1757,8 +1870,8 @@ function publicBrowserHostSessionState(session: ActiveBrowserHostSession): Brows
     liveSurfaceTransport,
     nativeAdapterUrl: localHttpUrlField(session.driver?.nativeAdapterUrl ?? session.nativeAdapterUrl),
     singleInteractiveTruth: true,
-    frameStreamRef: liveSurfaceTransport === 'host-stream' ? browserHostFrameStreamRef(session.id) : undefined,
-    frameRef: liveSurfaceTransport === 'host-stream' ? session.frameRef : undefined,
+    frameStreamRef: undefined,
+    frameRef: undefined,
     screenshotRef: session.screenshotRef,
     domSnapshotRef: session.domSnapshotRef,
     axSnapshotRef: session.axSnapshotRef,
@@ -1782,6 +1895,7 @@ type BrowserHostSessionLoadingProgressInput = {
   canRetry?: boolean;
   blocked?: boolean;
   requiresHandoff?: boolean;
+  urlHints?: BrowserHostSessionLoadingProgressUrlHints;
 };
 
 const BROWSER_HOST_LOADING_PROGRESS_STATES = new Set<BrowserHostSessionLoadingProgressState>([
@@ -1844,6 +1958,7 @@ function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, 
       canRetry: progress.canRetry,
       blocked: progress.blocked,
       requiresHandoff: progress.requiresHandoff,
+      urlHints: browserHostNavigationControlUrlHints(session, action),
     });
     return;
   }
@@ -1854,6 +1969,7 @@ function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, 
     reason: progress?.reason === 'network-quiet' ? 'network-quiet' : 'host-ready',
     source: progress?.reason === 'network-quiet' ? progress.source : 'host-session',
     action,
+    urlHints: browserHostNavigationControlUrlHints(session, action, true),
   });
 }
 
@@ -1877,6 +1993,22 @@ function buildBrowserHostSessionLoadingProgress(
   };
 }
 
+function browserHostNavigationControlUrlHints(
+  session: Pick<ActiveBrowserHostSession, 'requestedUrl' | 'url'>,
+  action: BrowserHostSessionAction | 'open' | undefined,
+  final = false,
+): BrowserHostSessionLoadingProgressUrlHints {
+  const currentUrl = browserHostUrlField(session.url) ?? browserHostUrlField(session.requestedUrl);
+  const requestedUrl = action === 'reload' || action === 'stop' || action === 'back' || action === 'forward'
+    ? currentUrl
+    : browserHostUrlField(session.requestedUrl) ?? currentUrl;
+  return {
+    requestedUrl,
+    currentUrl,
+    finalUrl: final ? currentUrl : undefined,
+  };
+}
+
 function publicBrowserHostSessionLoadingProgress(
   session: ActiveBrowserHostSession,
   state: BrowserHostSessionState,
@@ -1894,21 +2026,35 @@ function browserHostLoadingProgressInputForPublicState(
   action: BrowserHostSessionAction | 'open' | undefined,
 ): BrowserHostSessionLoadingProgressInput | undefined {
   if (state.status === 'failed') {
+    const requiresHandoff = existing?.requiresHandoff === true || existing?.state === 'handoff';
+    if (existing?.state === 'blocked' || existing?.state === 'handoff' || existing?.state === 'retry') {
+      return {
+        state: existing.state,
+        reason: existing.reason,
+        source: existing.source,
+        action: existing.action ?? action,
+        canRetry: existing.canRetry === true || browserHostLoadingProgressActionCanRetry(action),
+        blocked: existing.blocked ?? (existing.state === 'blocked' ? true : undefined),
+        requiresHandoff,
+      };
+    }
     return {
-      state: 'blocked',
+      state: requiresHandoff ? 'handoff' : 'blocked',
       reason: 'host-error',
       source: 'host-error',
       action,
       canRetry: existing?.canRetry === true || browserHostLoadingProgressActionCanRetry(action),
       blocked: true,
+      requiresHandoff,
     };
   }
   if (state.status === 'ready') {
     return {
       state: 'network-quiet',
-      reason: 'host-ready',
-      source: 'host-session',
-      action,
+      reason: existing?.state === 'network-quiet' ? existing.reason : 'host-ready',
+      source: existing?.state === 'network-quiet' ? existing.source : 'host-session',
+      action: existing?.action ?? action,
+      urlHints: browserHostNavigationControlUrlHints(state, action, true),
     };
   }
   if (existing) {
@@ -1928,6 +2074,7 @@ function browserHostLoadingProgressInputForPublicState(
       reason: 'host-starting',
       source: 'host-session',
       action: 'open',
+      urlHints: browserHostNavigationControlUrlHints(state, 'open'),
     };
   }
   if (state.status === 'loading') {
@@ -1936,6 +2083,7 @@ function browserHostLoadingProgressInputForPublicState(
       reason: 'host-loading',
       source: 'host-session',
       action,
+      urlHints: browserHostNavigationControlUrlHints(state, action),
     };
   }
   return undefined;
@@ -1969,12 +2117,12 @@ function browserHostSessionLoadingProgress(value: unknown): BrowserHostSessionLo
 function browserHostLoadingProgressRefs(
   session: Pick<ActiveBrowserHostSession, 'id' | 'driver' | 'liveSurfaceTransport' | 'frameRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef' | 'searchResultRef'>,
 ): BrowserHostSessionLoadingProgress['refs'] {
-  const liveSurfaceTransport = session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport ?? 'host-stream';
+  const liveSurfaceTransport = browserHostNativeLiveSurfaceTransport(session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport);
   return {
     session: browserHostRef(session.id, 'session.json'),
     liveSurface: browserHostLiveSurfaceRef(session.id),
-    frameStream: liveSurfaceTransport === 'host-stream' ? browserHostFrameStreamRef(session.id) : undefined,
-    frame: liveSurfaceTransport === 'host-stream' ? session.frameRef : undefined,
+    frameStream: undefined,
+    frame: undefined,
     screenshot: session.screenshotRef,
     domSnapshot: session.domSnapshotRef,
     axSnapshot: session.axSnapshotRef,
@@ -2003,11 +2151,12 @@ function browserHostLoadingProgressRefsFromUnknown(value: unknown): BrowserHostS
 
 function browserHostLoadingProgressUrls(
   session: Pick<ActiveBrowserHostSession, 'requestedUrl' | 'url' | 'status'>,
-  input: Pick<BrowserHostSessionLoadingProgressInput, 'state'>,
+  input: Pick<BrowserHostSessionLoadingProgressInput, 'state' | 'urlHints'>,
 ): BrowserHostSessionLoadingProgressUrls | undefined {
-  const requested = browserHostUrlDigest(session.requestedUrl);
-  const current = browserHostUrlDigest(session.url);
-  const final = input.state === 'network-quiet' && session.status === 'ready' ? current : undefined;
+  const requested = browserHostUrlDigest(input.urlHints?.requestedUrl ?? session.requestedUrl);
+  const current = browserHostUrlDigest(input.urlHints?.currentUrl ?? session.url);
+  const final = browserHostUrlDigest(input.urlHints?.finalUrl)
+    ?? (input.state === 'network-quiet' && session.status === 'ready' ? current : undefined);
   if (!requested && !current && !final) return undefined;
   return { requested, current, final };
 }
@@ -2301,6 +2450,20 @@ function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
+function booleanField(value: unknown): boolean | undefined {
+  return value === true ? true : value === false ? false : undefined;
+}
+
+function browserHostUrlField(value: unknown): string | undefined {
+  const field = stringField(value);
+  return field ? normalizeBrowserHostUrl(field) : undefined;
+}
+
+function browserHostUrlKey(value: unknown): string {
+  const url = browserHostUrlField(value);
+  return url ? sha1(url).slice(0, 12) : '';
+}
+
 function sleep(ms: number): Promise<void> {
   return ms <= 0 ? Promise.resolve() : new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -2311,6 +2474,14 @@ function browserHostErrorMessage(error: unknown) {
 
 function browserHostErrorCanRetry(error: unknown) {
   return error instanceof NativeEmbeddedBrowserHostAdapterError && error.retryable === true;
+}
+
+function browserHostErrorRequiresHandoff(error: unknown) {
+  return error instanceof NativeEmbeddedBrowserHostAdapterError && error.requiresHandoff === true;
+}
+
+function browserHostNativeLiveSurfaceTransport(value: unknown): BrowserHostSessionState['liveSurfaceTransport'] {
+  return value === 'native-embedded' ? 'native-embedded' : undefined;
 }
 
 function scrubBrowserHostLogEntry(entry: Record<string, unknown>) {

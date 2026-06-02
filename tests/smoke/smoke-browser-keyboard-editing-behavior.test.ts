@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import test from 'node:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 
@@ -65,6 +65,8 @@ const ORDINARY_TEXT_DELTA = ' +delta';
 const COMPOSITION_POLICY_EVENTS = ['compositionstart', 'compositionupdate', 'compositionend'] as const;
 const ADDRESS_BAR_FOCUS_TEXT = 'http://localhost/browser-keyboard-address-focus-contract';
 const ADDRESS_BAR_SHORTCUT_KEYS = ['Meta+A', 'Control+A', 'Enter'] as const;
+const artifactPath = resolve(process.cwd(), 'docs/test-artifacts/browser-keyboard-editing-behavior/manifest.json');
+const MAX_KEYBOARD_ARTIFACT_BYTES = 56 * 1024;
 
 type KeyboardFocusTarget = 'page' | 'editor' | 'address-bar' | 'shell-composer';
 
@@ -83,7 +85,9 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     });
     assert.equal(opened.owner, 'host');
     assert.equal(opened.singleInteractiveTruth, true);
-    assert.equal(opened.liveSurfaceTransport, 'host-stream');
+    assert.equal(opened.liveSurfaceTransport, 'native-embedded');
+    assert.equal(opened.frameStreamRef, undefined);
+    assert.equal(opened.frameRef, undefined);
 
     const driver = requiredDriver(drivers);
     driver.focusAddressBar('address-input-focus');
@@ -161,6 +165,8 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     assert.ok(driver.clipboardPolicyEvents.every((event) => event.confirmationPolicy === 'required-before-system-clipboard'));
     assert.ok(driver.clipboardPolicyEvents.every((event) => event.editorValueLengthBefore === event.editorValueLengthAfter));
     assert.ok(driver.clipboardPolicyEvents.every((event) => event.selectedLength === driver.editorValue.length));
+    assert.ok(driver.clipboardPolicyEvents.every((event) => isSha256(event.selectedHashSha256)));
+    assert.ok(driver.clipboardPolicyEvents.every((event) => event.selectedHashSha256 === sha256(driver.editorValue)));
     const pastePolicyEvents = driver.clipboardPolicyEvents.filter((event) => event.shortcut === 'paste');
     assert.equal(pastePolicyEvents.length, 2);
     assert.ok(pastePolicyEvents.every((event) => event.owner === 'BrowserHostSession' || event.typedPayloadPolicy === 'blocked' || event.typedPayloadPolicy === 'confirmation-needed'));
@@ -173,7 +179,13 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
 
     const report = boundedKeyboardEditingReport(finalState, driver);
     const reportText = JSON.stringify(report);
+    assert.equal(report.status, 'blocked');
+    assert.equal(report.canClaimRealKeyboardImeClipboardSelectionPass, false);
     assert.equal(report.inputChannel, 'browser-host-session');
+    assert.equal(report.liveBrowserOwner, 'BrowserHostSession');
+    assert.equal(report.liveSurfaceTransport, 'native-embedded');
+    assert.equal(report.singleInteractiveTruth, true);
+    assert.equal(report.secondTruthSource, false);
     assert.equal(report.systemKeyboardEvents, 'not-sent');
     assert.equal(report.shellComposerCapturedCharacters, 0);
     assert.equal(report.shellComposerCapturedKeys, 0);
@@ -191,7 +203,7 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     assert.equal(report.focusContract.addressBar.shellComposerCapturedCharacters, 0);
     assert.equal(report.focusContract.addressBar.shellComposerCapturedKeys, 0);
     assert.equal(report.focusContract.pageFocus.owner, 'BrowserHostSession');
-    assert.equal(report.focusContract.pageFocus.focusRestoredBy, 'host-frame-click-hidden-input');
+    assert.equal(report.focusContract.pageFocus.focusRestoredBy, 'native-embedded-surface-click');
     assert.equal(report.focusContract.pageFocus.ordinaryInputOwner, 'BrowserHostSession');
     assert.equal(report.focusContract.pageFocus.shortcutOwner, 'BrowserHostSession');
     assert.equal(report.focusContract.addressToPageSwitchCovered, true);
@@ -202,8 +214,11 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     assert.equal(report.clipboardPolicy.highRiskPathsOwnedOrBlocked, true);
     assert.equal(report.clipboardPolicy.typedPastePayloadPolicy, 'blocked-or-confirmation-needed');
     assert.equal(report.clipboardPolicy.rawClipboardPayloadRecorded, false);
+    assert.ok(report.clipboardPolicy.confirmationAuditRefs.length >= 3);
+    assert.ok(report.clipboardPolicy.shortcutIntentsObserved.every((event) => isSha256(event.selectedHashSha256)));
     assert.equal(report.imePolicy.realImeCandidateWindowVerified, false);
     assert.equal(report.imePolicy.syntheticCompositionPassClaimed, false);
+    assert.equal(report.imePolicy.compositionEventsRoutedByNativeInput, true);
     assert.equal(report.imePolicy.shellComposerCompositionCapture, 'not-observed');
     assert.equal(report.imePolicy.rawCompositionPayloadRecorded, false);
     assert.deepEqual(report.imePolicy.compositionEvents.map((event) => event.event), [...COMPOSITION_POLICY_EVENTS]);
@@ -212,11 +227,23 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     assert.equal(report.selectionRangePolicy.rawSelectionTextRecorded, false);
     assert.equal(report.selectionRangePolicy.rawDomRecorded, false);
     assert.ok(report.selectionRangePolicy.evidenceRefs.length >= 1);
+    assert.equal(report.selectionRangePolicy.selectedHashSha256, sha256(driver.editorValue.slice(driver.selectionStart, driver.selectionEnd)));
+    assert.ok(report.selectionRangePolicy.requiredProofs.every((proof) => proof.rangeRef.startsWith(`browser-host-session:${finalState.id}/`)));
     assert.equal(report.selectionRangePolicy.editingKeysCovered, true);
+    assert.equal(report.productAcceptance.status, 'blocked');
+    assert.equal(report.productAcceptance.blocker, 'real-product-native-os-ui-run-not-executed');
+    assert.equal(report.realOsUiRunHandoff.status, 'blocked');
+    assert.equal(report.realOsUiRunHandoff.passClaim, false);
+    assert.ok(report.productAcceptance.requiredProofs.every((proof) => proof.proofRef.startsWith(`browser-host-session:${finalState.id}/`)));
     assert.doesNotMatch(reportText, /data:image|base64|<\s*(?:!doctype|html|body|textarea|input|iframe|webview)\b/i);
     assert.doesNotMatch(reportText, new RegExp(escapeRegExp(ORDINARY_TEXT_INITIAL)));
     assert.doesNotMatch(reportText, new RegExp(escapeRegExp(ORDINARY_TEXT_DELTA)));
     assert.doesNotMatch(reportText, new RegExp(escapeRegExp(ADDRESS_BAR_FOCUS_TEXT)));
+
+    await writeBoundedKeyboardArtifact(report);
+    const artifactText = await readFile(artifactPath, 'utf8');
+    assertNoRawKeyboardArtifactPayload(artifactText, 'bounded keyboard artifact');
+    assert.ok(Buffer.byteLength(artifactText, 'utf8') <= MAX_KEYBOARD_ARTIFACT_BYTES);
 
     console.log(`[ok] Browser keyboard editing behavior ${JSON.stringify(report)}`);
   } finally {
@@ -240,8 +267,6 @@ function assertBrowserPaneKeyboardSourceGuards(): void {
           hostSurface: 'browser-host-session',
         },
         externalUrl: 'https://external.example/editor',
-        frameUrl: 'blob:http://127.0.0.1/browser-keyboard-frame',
-        frameTransport: 'websocket-binary',
         hostSession: {
           schemaVersion: 'sciforge.browser-host-session.state.v1',
           id: 'keyboard-source-guard',
@@ -257,10 +282,9 @@ function assertBrowserPaneKeyboardSourceGuards(): void {
           canGoBack: false,
           canGoForward: false,
           liveSurfaceRef: 'browser-host-session:keyboard-source-guard/live-surface',
-          liveSurfaceTransport: 'host-stream',
+          liveSurfaceTransport: 'native-embedded',
+          nativeAdapterUrl: 'http://127.0.0.1:39303',
           singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:keyboard-source-guard/frame-stream',
-          frameRef: 'browser-host-session:keyboard-source-guard/frame.png',
           diagnostics: [],
         } satisfies BrowserHostSessionState,
       },
@@ -277,29 +301,20 @@ function assertBrowserPaneKeyboardSourceGuards(): void {
   assert.match(html, /class="browser-workbench-viewer-address"/);
   assert.match(html, /aria-label="Browser URL"/);
   assert.match(html, /data-browser-object-type="host-browser"/);
-  assert.match(html, /data-browser-host-keyboard-path="hidden-input"/);
-  assert.match(html, /browser-workbench-host-keyboard-input/);
-  assert.match(html, /data-browser-host-keyboard-input="true"/);
-  assert.doesNotMatch(html, /<iframe|<webview|system-browser-window|\/api\/sciforge\/browser\/proxy/i);
+  assert.match(html, /data-browser-native-surface="true"/);
+  assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
+  assert.match(html, /data-browser-single-interactive-truth="true"/);
+  assert.match(html, /data-browser-frame-transport="native-embedded"/);
+  assert.doesNotMatch(html, /browser-workbench-host-keyboard-input|hidden-input|<canvas\b|<iframe|<webview|system-browser-window|\/api\/sciforge\/browser\/proxy|data:image|base64/i);
 
-  assert.match(workbenchSource, /function sendBrowserWorkbenchInputText\([\s\S]*const sentValue = input\.dataset\.sentValue \?\? '';[\s\S]*const text = value\.startsWith\(sentValue\) \? value\.slice\(sentValue\.length\) : value \|\| fallbackText;[\s\S]*onHostActionRequest\?\.\(\{ action: 'type', text \}\);/);
-  assert.match(workbenchSource, /onInput=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*if \(event\.currentTarget\.dataset\.composing === 'true'\) return;[\s\S]*sendBrowserWorkbenchInputText\(event\.currentTarget, payload\.onHostActionRequest\);[\s\S]*\}\}/);
-  assert.match(workbenchSource, /onKeyDown=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*const action = browserWorkbenchKeyboardPressAction\(event\);[\s\S]*if \(!action\) return;[\s\S]*event\.preventDefault\(\);[\s\S]*payload\.onHostActionRequest\?\.\(action\);[\s\S]*\}\}/);
-  assert.match(workbenchSource, /event\.ctrlKey \? 'Control' : ''/);
-  assert.match(workbenchSource, /event\.metaKey \? 'Meta' : ''/);
-  assert.match(workbenchSource, /return action\?\.action === 'press' \? action : undefined;/);
-  for (const key of REQUIRED_EDIT_KEYS) {
-    assert.match(workbenchSource, new RegExp(`['"]${escapeRegExp(key)}['"]`), `Browser workbench should allow ${key} as a press action`);
-  }
-  assert.match(workbenchSource, /\^\[a-z0-9\]\$/i);
-  assert.match(workbenchSource, /key\.toUpperCase\(\)/);
-  assert.match(workbenchSource, /onCompositionStart=\{\(event\) => \{[\s\S]*event\.currentTarget\.dataset\.composing = 'true';[\s\S]*\}\}/);
-  assert.match(workbenchSource, /onCompositionEnd=\{\(event\) => \{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*sendBrowserWorkbenchInputText\(event\.currentTarget, payload\.onHostActionRequest, event\.data\);[\s\S]*\}\}/);
+  assert.match(workbenchSource, /function canRenderHostBrowser\([\s\S]*hostSession\?\.liveSurfaceTransport === 'native-embedded'[\s\S]*hostSession\.singleInteractiveTruth === true[\s\S]*Boolean\(hostSession\.liveSurfaceRef\);/);
+  assert.match(workbenchSource, /const hostFrameTransport = renderHostBrowser \? 'native-embedded' : undefined;/);
+  assert.match(workbenchSource, /data-browser-native-surface="true"/);
+  assert.match(workbenchSource, /data-browser-live-surface-transport=\{hostSession\?\.liveSurfaceTransport\}/);
+  assert.doesNotMatch(workbenchSource, /browser-workbench-host-keyboard-input|hidden-input|canvas-binary|websocket-binary|<iframe|<webview|navigator\.clipboard\.(?:readText|writeText)/);
   assert.match(workbenchSource, /className="browser-workbench-viewer-address"[\s\S]*event\.preventDefault\(\);[\s\S]*const value = normalizeBrowserWorkbenchUrl[\s\S]*payload\.onAddressSubmit\?\.\(value\);/);
   assert.match(workbenchSource, /aria-label="Browser URL"[\s\S]*onChange=\{\(event\) => payload\.onAddressChange\?\.\(event\.currentTarget\.value\)\}/);
-  assert.match(workbenchSource, /onFocus=\{\(event\) => \{[\s\S]*focusBrowserWorkbenchKeyboardInput\(event\.currentTarget\);[\s\S]*\}\}/);
-  assert.match(workbenchSource, /onClickCapture=\{\(event\) => \{[\s\S]*focusBrowserWorkbenchKeyboardInput\(event\.currentTarget, event\);[\s\S]*\}\}/);
-  assert.doesNotMatch(workbenchSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|window\.dispatchEvent\([\s\S]*KeyboardEvent|navigator\.clipboard\.(?:readText|writeText)/);
+  assert.doesNotMatch(workbenchSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|window\.dispatchEvent\([\s\S]*KeyboardEvent/);
 
   assert.match(adapterSource, /if \(timedAction\.action === 'type' && timedAction\.text\) \{[\s\S]*bufferedTextRef\.current \+= timedAction\.text;[\s\S]*scheduleBufferedHostActionFlush\(\);[\s\S]*return;[\s\S]*\}/);
   assert.match(adapterSource, /if \(timedAction\.action === 'press'\) \{[\s\S]*flushBufferedHostActions\(\);[\s\S]*dispatchHostAction\(timedAction, 'none'\);[\s\S]*return;[\s\S]*\}/);
@@ -397,8 +412,10 @@ class KeyboardEditingDriver implements BrowserHostSessionDriver {
     confirmationPolicy: 'required-before-system-clipboard';
     editorValueLengthBefore: number;
     editorValueLengthAfter: number;
+    selectedHashSha256: string;
   }> = [];
-  readonly liveSurfaceTransport = 'host-stream' as const;
+  readonly liveSurfaceTransport = 'native-embedded' as const;
+  readonly nativeAdapterUrl = 'http://127.0.0.1:39303';
 
   url(): string {
     return this.currentUrl;
@@ -490,6 +507,7 @@ class KeyboardEditingDriver implements BrowserHostSessionDriver {
         confirmationPolicy: 'required-before-system-clipboard',
         editorValueLengthBefore,
         editorValueLengthAfter: this.editorValue.length,
+        selectedHashSha256: this.selectedHashSha256(),
       });
       return;
     }
@@ -648,6 +666,16 @@ class KeyboardEditingDriver implements BrowserHostSessionDriver {
     return Math.abs(this.selectionEnd - this.selectionStart);
   }
 
+  selectedTextHashSha256(): string {
+    return this.selectedHashSha256();
+  }
+
+  private selectedHashSha256(): string {
+    const start = Math.min(this.selectionStart, this.selectionEnd);
+    const end = Math.max(this.selectionStart, this.selectionEnd);
+    return sha256(this.editorValue.slice(start, end));
+  }
+
   private setFocusTarget(to: KeyboardFocusTarget, source: KeyboardEditingDriver['focusTransitions'][number]['source']): void {
     const from = this.focusTarget;
     this.focusTarget = to;
@@ -666,6 +694,11 @@ function assertBrowserHostOnly(result: BrowserHostComputerUseActionResult, expec
   assert.equal(result.hostAction.action, expectedAction);
   assert.equal(result.hostAction.capture, 'none');
   assert.equal(result.session.singleInteractiveTruth, true);
+  assert.equal(result.session.liveSurfaceTransport, 'native-embedded');
+  assert.equal(result.session.frameStreamRef, undefined);
+  assert.equal(result.session.frameRef, undefined);
+  assert.equal(result.session.lastActionTiming?.liveSurfaceTransport, 'native-embedded');
+  assert.equal(result.session.lastActionTiming?.paintAckSource, 'native-adapter-action-state');
 }
 
 function assertTimingSummary(state: BrowserHostSessionState, action: 'click' | 'type' | 'press'): void {
@@ -676,15 +709,21 @@ function assertTimingSummary(state: BrowserHostSessionState, action: 'click' | '
 }
 
 function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: KeyboardEditingDriver) {
+  const sessionScope = `browser-host-session:${state.id}`;
   return {
     schemaVersion: 'sciforge.browser-keyboard-editing-behavior-smoke.v1',
-    source: 'local-deterministic-browser-host-session-editor',
+    status: 'blocked',
+    source: 'deterministic-native-browser-host-session-editor-no-real-os-ui-run',
+    canClaimRealKeyboardImeClipboardSelectionPass: false,
     publicNetworkUsed: false,
     refsOnly: true,
     inputChannel: 'browser-host-session',
     liveBrowserOwner: 'BrowserHostSession',
-    singleInteractiveTruth: true,
+    liveSurfaceTransport: state.liveSurfaceTransport,
+    singleInteractiveTruth: state.singleInteractiveTruth,
+    secondTruthSource: false,
     systemKeyboardEvents: 'not-sent',
+    realOsUiRunHandoff: keyboardOsUiRunHandoff(state),
     focusContract: {
       refsFirst: true,
       evidenceRefs: [
@@ -727,7 +766,7 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
       },
       pageFocus: {
         owner: 'BrowserHostSession',
-        focusRestoredBy: 'host-frame-click-hidden-input',
+        focusRestoredBy: 'native-embedded-surface-click',
         focusTransitions: driver.focusTransitions.map((event) => ({
           from: event.from,
           to: event.to,
@@ -735,7 +774,7 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
         })),
         ordinaryInputOwner: driver.typeDeltas.length >= 2 ? 'BrowserHostSession' : 'unknown',
         shortcutOwner: CMD_OR_CTRL_SHORTCUTS.every((key) => driver.pressKeys.includes(key)) ? 'BrowserHostSession' : 'unknown',
-        keyboardInputPath: 'hidden-input',
+        keyboardInputPath: 'native-embedded-surface',
         systemKeyboardEvents: 'not-sent',
         shellComposerCapturedCharacters: driver.shellComposerDraft.length,
         shellComposerCapturedKeys: driver.shellComposerKeys.length,
@@ -768,14 +807,22 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
       shortcutIntentsObserved: driver.clipboardPolicyEvents.map((event) => ({
         shortcut: event.shortcut,
         selectedLength: event.selectedLength,
+        selectedHashSha256: event.selectedHashSha256,
         mode: event.mode,
         owner: event.owner,
         systemClipboardReadWrite: event.systemClipboardReadWrite,
         typedPayloadPolicy: event.typedPayloadPolicy,
         confirmationPolicy: event.confirmationPolicy,
+        confirmationAuditRef: `${sessionScope}/clipboard-audit/${event.shortcut}/${event.key.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
         editorValueLengthBefore: event.editorValueLengthBefore,
         editorValueLengthAfter: event.editorValueLengthAfter,
       })),
+      confirmationAuditRefs: [
+        `${sessionScope}/clipboard-audit/copy-confirmation-required`,
+        `${sessionScope}/clipboard-audit/paste-confirmation-required`,
+        `${sessionScope}/clipboard-audit/cut-confirmation-required`,
+      ],
+      requiredProofs: keyboardClipboardRequiredProofs(state),
       realClipboardRoundTripVerified: false,
       systemClipboardReadWrite: 'not-performed',
       highRiskPathsOwnedOrBlocked: driver.clipboardPolicyEvents.every((event) => (
@@ -789,7 +836,7 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
     },
     imePolicy: {
       boundedPolicyOnly: true,
-      compositionEventsRoutedByHiddenInput: true,
+      compositionEventsRoutedByNativeInput: true,
       realImeCandidateWindowVerified: false,
       syntheticCompositionPassClaimed: false,
       shellComposerCompositionCapture: 'not-observed',
@@ -797,7 +844,7 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
       compositionEvents: COMPOSITION_POLICY_EVENTS.map((event) => ({
         event,
         owner: 'BrowserHostSession',
-        hiddenInputPolicy: 'composition-buffered-until-end',
+        nativeInputPolicy: 'composition-buffered-until-end',
         shellComposerTarget: 'not-targeted',
         rawPayloadRecorded: false,
       })),
@@ -806,14 +853,16 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
     selectionRangePolicy: {
       refsFirst: true,
       evidenceRefs: [
-        `browser-host-session:${state.id}/ax-snapshot`,
-        `browser-host-session:${state.id}/keyboard-selection-policy`,
+        `${sessionScope}/ax-snapshot`,
+        `${sessionScope}/keyboard-selection-policy`,
       ],
       selectedLength: Math.abs(driver.selectionEnd - driver.selectionStart),
+      selectedHashSha256: driver.selectedTextHashSha256(),
       rawSelectionTextRecorded: false,
       rawDomRecorded: false,
       editingKeysCovered: REQUIRED_EDIT_KEYS.every((key) => driver.pressKeys.includes(key)),
       shortcutSelectionOwner: 'BrowserHostSession',
+      requiredProofs: keyboardSelectionRequiredProofs(state),
     },
     session: {
       id: state.id,
@@ -823,8 +872,104 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
       liveSurfaceTransport: state.liveSurfaceTransport,
       frameStreamRef: state.frameStreamRef,
       frameRef: state.frameRef,
+      nativeAdapterUrl: state.nativeAdapterUrl,
+    },
+    productAcceptance: {
+      status: 'blocked',
+      blocker: 'real-product-native-os-ui-run-not-executed',
+      handoffRef: `${sessionScope}/os-ui-handoff/keyboard-input-fidelity`,
+      requiredRealProofs: [
+        'right-pane-native-surface-keyboard-focus',
+        'real-ime-candidate-window-and-composition',
+        'system-clipboard-round-trip-with-confirmation-audit',
+        'input-contenteditable-page-selection-range',
+        'shell-composer-not-targeted',
+      ],
+      requiredProofs: keyboardRequiredProofs(state),
     },
     timingSummary: state.actionTimingSummary?.filter((row) => row.action === 'click' || row.action === 'type' || row.action === 'press') ?? [],
+  };
+}
+
+function keyboardOsUiRunHandoff(state: BrowserHostSessionState) {
+  const sessionScope = `browser-host-session:${state.id}`;
+  return {
+    status: 'blocked' as const,
+    passClaim: false,
+    blocker: 'real-product-native-os-ui-run-not-executed' as const,
+    requiredRunner: 'right-pane-native-os-ui-run' as const,
+    productSurface: 'right-pane-browser' as const,
+    owner: 'BrowserHostSession' as const,
+    inputChannel: 'browser-host-session' as const,
+    liveSurfaceTransport: 'native-embedded' as const,
+    browserHostSessionRef: `${sessionScope}/session`,
+    liveSurfaceRef: state.liveSurfaceRef,
+    handoffRef: `${sessionScope}/os-ui-handoff/keyboard-input-fidelity`,
+    auditRefs: [
+      `${sessionScope}/audit/window-focus-owner`,
+      `${sessionScope}/audit/ime-candidate-window-owner`,
+      `${sessionScope}/audit/system-clipboard-owner`,
+      `${sessionScope}/audit/selection-range-owner`,
+      `${sessionScope}/audit/shell-composer-not-targeted`,
+    ],
+    rawPayloadsCaptured: false,
+    refsFirst: true,
+  };
+}
+
+function keyboardRequiredProofs(state: BrowserHostSessionState) {
+  return [
+    keyboardRequiredProof('right-pane-native-surface-keyboard-focus', state),
+    keyboardRequiredProof('real-ime-candidate-window-and-composition', state),
+    keyboardRequiredProof('system-clipboard-round-trip-with-confirmation-audit', state),
+    keyboardRequiredProof('input-contenteditable-page-selection-range', state, {
+      selectionPayloadPolicy: 'length-and-hash-only',
+    }),
+    keyboardRequiredProof('shell-composer-not-targeted', state),
+  ];
+}
+
+function keyboardClipboardRequiredProofs(state: BrowserHostSessionState) {
+  return ['copy', 'paste', 'cut'].map((operation) => ({
+    operation,
+    status: 'blocked' as const,
+    blocker: 'real-product-native-os-ui-run-not-executed' as const,
+    owner: 'BrowserHostSession' as const,
+    actionRef: `browser-host-session:${state.id}/clipboard/${operation}/action`,
+    confirmationAuditRef: `browser-host-session:${state.id}/clipboard/${operation}/confirmation-audit`,
+    roundTripRef: `browser-host-session:${state.id}/clipboard/${operation}/round-trip-required`,
+    payloadPolicy: 'length-and-hash-only' as const,
+    rawClipboardPayloadRecorded: false as const,
+    shellComposerTarget: 'not-targeted' as const,
+  }));
+}
+
+function keyboardSelectionRequiredProofs(state: BrowserHostSessionState) {
+  return (['input', 'contenteditable', 'page-text'] as const).map((target) => ({
+    target,
+    status: 'blocked' as const,
+    blocker: 'real-product-native-os-ui-run-not-executed' as const,
+    owner: 'BrowserHostSession' as const,
+    rangeRef: `browser-host-session:${state.id}/selection/${target}/range`,
+    requiredFields: ['selectedLength', 'selectedHashSha256'] as const,
+    rawSelectionTextRecorded: false as const,
+    rawDomRecorded: false as const,
+  }));
+}
+
+function keyboardRequiredProof(kind: string, state: BrowserHostSessionState, extra: Record<string, unknown> = {}) {
+  return {
+    kind,
+    status: 'blocked' as const,
+    blocker: 'real-product-native-os-ui-run-not-executed' as const,
+    owner: 'BrowserHostSession' as const,
+    productSurface: 'right-pane-browser' as const,
+    browserHostSessionRef: `browser-host-session:${state.id}/session`,
+    liveSurfaceRef: state.liveSurfaceRef,
+    proofRef: `browser-host-session:${state.id}/required-proof/${kind}`,
+    rawPayloadRecorded: false as const,
+    secondTruthSource: false as const,
+    ...extra,
   };
 }
 
@@ -846,6 +991,29 @@ function requiredDriver(drivers: KeyboardEditingDriver[]): KeyboardEditingDriver
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+async function writeBoundedKeyboardArtifact(report: unknown): Promise<void> {
+  await mkdir(dirname(artifactPath), { recursive: true });
+  const text = `${JSON.stringify(report, null, 2)}\n`;
+  assert.ok(Buffer.byteLength(text, 'utf8') <= MAX_KEYBOARD_ARTIFACT_BYTES);
+  await writeFile(artifactPath, text, 'utf8');
+}
+
+function assertNoRawKeyboardArtifactPayload(text: string, label: string): void {
+  assert.doesNotMatch(text, /data:image|base64|<\s*(?:!doctype|html|body|textarea|input|iframe|webview)\b/i, `${label} must not include raw DOM or base64`);
+  assert.doesNotMatch(
+    text,
+    /"(?:clipboardText|clipboardPayload|selectionText|selectionPayload|compositionText|compositionPayload|typedText|typedPayload|rawDom|rawHtml|rawClipboard|rawSelection|rawComposition)"\s*:/i,
+    `${label} must stay refs-first without raw input payload fields`,
+  );
+  assert.doesNotMatch(text, new RegExp(escapeRegExp(ORDINARY_TEXT_INITIAL)), `${label} must not include typed raw text`);
+  assert.doesNotMatch(text, new RegExp(escapeRegExp(ORDINARY_TEXT_DELTA)), `${label} must not include typed raw text`);
+  assert.doesNotMatch(text, new RegExp(escapeRegExp(ADDRESS_BAR_FOCUS_TEXT)), `${label} must not include raw address text`);
+}
+
+function isSha256(value: string): boolean {
+  return /^[a-f0-9]{64}$/.test(value);
 }
 
 function recentAdapterTimestamp(): string {

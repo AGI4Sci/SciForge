@@ -14,6 +14,13 @@ import {
   recordVirtualAppScreenProviderSession,
   type VirtualAppScreenProviderSessionReconnectReason,
 } from './virtual-app-screen-provider-session-store.js';
+import {
+  readVirtualAppScreenNativeHostSessionRecord,
+} from './virtual-app-screen-native-host-session-store.js';
+import type {
+  NativeHostLedgerEntry,
+  NativeHostResult,
+} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 
 export const VIRTUAL_APP_SCREEN_SESSION_MANAGER_SCHEMA =
   'sciforge.computer-use.virtual-app-screen-session-manager.v1' as const;
@@ -55,14 +62,24 @@ export interface VirtualAppScreenSessionManagerRefs {
   dataChannelRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
+  providerLifecycleSessionRef?: string;
   liveBindingAttachGrantRef?: string;
+  grantValidationRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   screenRef?: string;
   targetAppRef?: string;
   targetWindowRef?: string;
   displayGroupRef?: string;
   inputLeaseRef?: string;
+  actionAdapterRef?: string;
   adapterReadinessRef: string;
+  platformDriverRef?: string;
+  permissionRef?: string;
   evidenceLedgerRef?: string;
+  hostEvidenceLedgerRef?: string;
+  permissionHandoffLedgerEntryRef?: string;
+  permissionRecheckLedgerEntryRef?: string;
   guiPresentRef?: string;
   blockedRef?: string;
   permissionHandoffRef?: string;
@@ -77,6 +94,12 @@ export interface VirtualAppScreenSessionManagerEvidence {
   currentFrameMaterialized: boolean;
   guiPresented: boolean;
   isolationVerified: boolean;
+  providerSessionGrantValidated?: boolean;
+  platformDriverReady?: boolean;
+  permissionRequired?: boolean;
+  permissionGranted?: boolean;
+  backgroundRenderable?: boolean;
+  diagnosticOnly?: boolean;
   affectsPhysicalDisplay: false;
   requiresFocusSteal: false;
   sharedSystemInputUsed: false;
@@ -119,10 +142,32 @@ export async function attachVirtualAppScreenSession(
   options: VirtualAppScreenSessionManagerAttachOptions = {},
 ): Promise<VirtualAppScreenSessionManagerAttachResult> {
   if (command.action === 'permission-handoff') {
-    return blockedVirtualAppScreenSessionManagerResult(
-      command,
-      'VirtualAppScreen permission handoff is presentation-only; native provider attach must wait for an explicit permission recheck or screen attach command.',
+    const permissionLedger = recordNativeHostPermissionLedgerCommand(command, 'permission.handoff');
+    if (permissionLedger?.status === 'blocked') {
+      return blockedVirtualAppScreenSessionManagerResult(
+        command,
+        `VirtualAppScreen permission handoff could not be recorded by Native Host: ${permissionLedger.error.message}`,
+      );
+    }
+    return withPermissionLedgerResult(
+      blockedVirtualAppScreenSessionManagerResult(
+        command,
+        'VirtualAppScreen permission handoff is presentation-only; native provider attach must wait for an explicit permission recheck or screen attach command.',
+      ),
+      permissionLedger,
+      'permission.handoff',
     );
+  }
+  const permissionRecheckLedger = command.action === 'permission-recheck'
+    ? recordNativeHostPermissionLedgerCommand(command, 'permission.recheck')
+    : undefined;
+  if (command.action === 'permission-recheck') {
+    if (permissionRecheckLedger?.status === 'blocked') {
+      return blockedVirtualAppScreenSessionManagerResult(
+        command,
+        `VirtualAppScreen permission recheck could not be recorded by Native Host: ${permissionRecheckLedger.error.message}`,
+      );
+    }
   }
   const executor = selectVirtualAppScreenSessionExecutor(command, options.executors ?? listVirtualAppScreenSessionExecutors());
   if (!executor || options.dryRun === true) {
@@ -134,7 +179,11 @@ export async function attachVirtualAppScreenSession(
     );
   }
   const result = await executor.attach(command);
-  return attachProviderSessionOwnerRefs(command, validateVirtualAppScreenSessionManagerResult(command, result));
+  return withPermissionLedgerResult(
+    attachProviderSessionOwnerRefs(command, validateVirtualAppScreenSessionManagerResult(command, result)),
+    permissionRecheckLedger,
+    'permission.recheck',
+  );
 }
 
 export async function reconnectVirtualAppScreenSession(
@@ -161,6 +210,7 @@ export async function reconnectVirtualAppScreenSession(
     providerSessionOwnerRef: refs.providerSessionOwnerRef,
     providerSessionReconnectRef: refs.providerSessionReconnectRef,
     liveBindingAttachGrantRef: refs.liveBindingAttachGrantRef,
+    grantValidationRef: refs.grantValidationRef,
     adapterReadinessRef: command.refs.readinessRef,
     evidenceLedgerRef: command.refs.evidenceLedgerRef,
     guiPresentRef: command.refs.guiPresentRef,
@@ -211,14 +261,20 @@ export async function reconnectVirtualAppScreenSession(
       dataChannelRef: record.dataChannelRef,
       providerSessionOwnerRef: record.providerSessionOwnerRef,
       providerSessionReconnectRef: record.reconnectRef,
+      providerLifecycleSessionRef: record.providerLifecycleSessionRef,
       liveBindingAttachGrantRef: record.liveBindingAttachGrantRef,
+      grantValidationRef: record.grantValidationRef,
       screenRef: record.screenRef,
       targetAppRef: record.targetAppRef,
       targetWindowRef: record.targetWindowRef,
       displayGroupRef: record.displayGroupRef,
       inputLeaseRef: record.inputLeaseRef,
+      actionAdapterRef: record.actionAdapterRef,
       adapterReadinessRef: record.adapterReadinessRef,
+      platformDriverRef: record.platformDriverRef,
+      permissionRef: record.permissionRef,
       evidenceLedgerRef: record.evidenceLedgerRef,
+      hostEvidenceLedgerRef: record.evidenceLedgerRef,
       guiPresentRef: record.guiPresentRef,
     },
     evidence: {
@@ -229,6 +285,12 @@ export async function reconnectVirtualAppScreenSession(
       currentFrameMaterialized: true,
       guiPresented: Boolean(record.guiPresentRef),
       isolationVerified: true,
+      providerSessionGrantValidated: true,
+      platformDriverReady: Boolean(record.platformDriverRef),
+      permissionRequired: Boolean(record.permissionRef),
+      permissionGranted: true,
+      backgroundRenderable: true,
+      diagnosticOnly: false,
       affectsPhysicalDisplay: false,
       requiresFocusSteal: false,
       sharedSystemInputUsed: false,
@@ -239,7 +301,9 @@ export async function reconnectVirtualAppScreenSession(
         ...reconnect.evidence.evidenceRefs,
         record.providerSessionOwnerRef,
         record.reconnectRef,
+        record.providerLifecycleSessionRef,
         record.liveBindingAttachGrantRef,
+        record.grantValidationRef,
         record.surfaceTransportRef,
         record.frameTransportContractRef,
         record.currentFrameRef,
@@ -282,6 +346,11 @@ export function validateVirtualAppScreenSessionManagerResult(
       ? undefined
       : 'currentFrameSequence',
     refs.adapterReadinessRef ? undefined : 'adapterReadinessRef',
+    refs.platformDriverRef ? undefined : 'platformDriverRef',
+    evidence.platformDriverReady ? undefined : 'platformDriverReady',
+    evidence.permissionRequired === false || evidence.permissionGranted === true ? undefined : 'permissionGranted',
+    evidence.backgroundRenderable === true ? undefined : 'backgroundRenderable',
+    evidence.diagnosticOnly === false ? undefined : 'diagnosticOnly',
     evidence.providerExecuted ? undefined : 'providerExecuted',
     evidence.nativeSessionCreated ? undefined : 'nativeSessionCreated',
     evidence.liveFrameAttached ? undefined : 'liveFrameAttached',
@@ -327,6 +396,16 @@ export function virtualAppScreenSessionManagerResultToVirtualScreenData(
       ...virtualAppScreenRuntimeCommandVirtualScreenData(command),
       status: result.status === 'permission-missing' || result.status === 'requires-handoff' ? 'requires-handoff' : 'blocked',
       attachState: result.status,
+      evidenceLedgerRef: result.refs.hostEvidenceLedgerRef ?? result.refs.evidenceLedgerRef ?? command.refs.evidenceLedgerRef,
+      hostEvidenceLedgerRef: result.refs.hostEvidenceLedgerRef,
+      permissionHandoffLedgerEntryRef: result.refs.permissionHandoffLedgerEntryRef,
+      permissionRecheckLedgerEntryRef: result.refs.permissionRecheckLedgerEntryRef,
+      verificationRefs: uniqueRefs([
+        ...result.evidence.evidenceRefs,
+        result.refs.hostEvidenceLedgerRef,
+        result.refs.permissionHandoffLedgerEntryRef,
+        result.refs.permissionRecheckLedgerEntryRef,
+      ]),
       blockedReason: result.blockedReason ?? virtualAppScreenRuntimeCommandBlockedReason(command),
       runSummary: {
         status: result.status,
@@ -355,11 +434,18 @@ export function virtualAppScreenSessionManagerResultToVirtualScreenData(
     targetAppRef: result.refs.targetAppRef ?? command.refs.targetAppRef,
     targetWindowRef: result.refs.targetWindowRef,
     sessionRef: result.refs.sessionRef,
+    hostSessionRef: result.refs.sessionRef,
     liveSurfaceRef: result.refs.liveSurfaceRef,
     surfaceTransportRef: result.refs.surfaceTransportRef,
+    surfaceOwnerRef: result.refs.surfaceOwnerRef,
+    displayOwnerRef: result.refs.displayOwnerRef,
     providerSessionOwnerRef: result.refs.providerSessionOwnerRef,
     providerSessionReconnectRef: result.refs.providerSessionReconnectRef,
     liveBindingAttachGrantRef: result.refs.liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus: result.evidence.providerSessionGrantValidated ? 'validated' : undefined,
+    grantValidationRef: result.refs.grantValidationRef,
+    grantValidationStatus: result.evidence.providerSessionGrantValidated ? 'validated' : undefined,
+    providerSessionRevalidated: !result.evidence.nativeSessionCreated,
     surfaceTransport: surfaceTransport?.transport,
     surfaceTransportDescriptor: surfaceTransport,
     frameStreamRef: result.refs.frameStreamRef,
@@ -389,8 +475,23 @@ export function virtualAppScreenSessionManagerResultToVirtualScreenData(
       }
       : undefined,
     inputLeaseRef: result.refs.inputLeaseRef,
+    actionAdapterRef: result.refs.actionAdapterRef,
     adapterReadinessRef: result.refs.adapterReadinessRef,
-    evidenceLedgerRef: result.refs.evidenceLedgerRef,
+    platformDriverRef: result.refs.platformDriverRef,
+    platformDriverStatus: result.evidence.platformDriverReady ? 'ready' : undefined,
+    permissionRef: result.refs.permissionRef,
+    permissionStatus: result.evidence.permissionGranted === true
+      ? 'granted'
+      : result.evidence.permissionRequired === false
+        ? 'not-required'
+        : undefined,
+    permissionRequired: result.evidence.permissionRequired,
+    permissionGranted: result.evidence.permissionGranted,
+    sharedInputAllowed: false,
+    evidenceLedgerRef: result.refs.hostEvidenceLedgerRef ?? result.refs.evidenceLedgerRef,
+    hostEvidenceLedgerRef: result.refs.hostEvidenceLedgerRef,
+    permissionHandoffLedgerEntryRef: result.refs.permissionHandoffLedgerEntryRef,
+    permissionRecheckLedgerEntryRef: result.refs.permissionRecheckLedgerEntryRef,
     guiPresentRefs: result.refs.guiPresentRef ? [result.refs.guiPresentRef] : [],
     verificationRefs: result.evidence.evidenceRefs,
     isolationFlags: {
@@ -399,6 +500,8 @@ export function virtualAppScreenSessionManagerResultToVirtualScreenData(
       sharedSystemInputUsed: false,
       systemPointerMoved: false,
       systemKeyboardEventsSent: false,
+      backgroundRenderable: result.evidence.backgroundRenderable === true,
+      diagnosticOnly: result.evidence.diagnosticOnly === false ? false : true,
       singleInteractiveTruth: true,
       secondInteractiveSurfacePresent: false,
       providerExecuted: result.evidence.providerExecuted,
@@ -515,21 +618,83 @@ function attachProviderSessionOwnerRefs(
       providerSessionOwnerRef: record.providerSessionOwnerRef,
       providerSessionReconnectRef: record.reconnectRef,
       liveBindingAttachGrantRef: record.liveBindingAttachGrantRef,
+      grantValidationRef: record.grantValidationRef,
     },
     evidence: {
       ...result.evidence,
+      providerSessionGrantValidated: true,
       evidenceRefs: uniqueRefs([
         ...result.evidence.evidenceRefs,
         record.providerSessionOwnerRef,
         record.reconnectRef,
+        record.providerLifecycleSessionRef,
         record.liveBindingAttachGrantRef,
+        record.grantValidationRef,
       ]),
     },
   };
 }
 
-function uniqueRefs(refs: string[]) {
-  return [...new Set(refs.filter((ref) => ref.trim()))];
+function recordNativeHostPermissionLedgerCommand(
+  command: VirtualAppScreenRuntimeCommand,
+  type: 'permission.handoff' | 'permission.recheck',
+): NativeHostResult<{ entry: NativeHostLedgerEntry; evidenceLedgerRef: string }> | undefined {
+  const record = readVirtualAppScreenNativeHostSessionRecord({
+    sessionRef: command.refs.sessionRef,
+    screenRef: command.refs.screenRef,
+  });
+  if (!record) return undefined;
+  const request = {
+    permissionHandoffRef: command.refs.permissionHandoffRef,
+    recheckRef: command.refs.permissionRecheckRef,
+    permissionRef: command.refs.permissionRef,
+    adapterReadinessRef: command.refs.readinessRef,
+    platformDriverRef: command.refs.platformDriverRef,
+    blockedRef: command.refs.blockedRef,
+  };
+  const result = type === 'permission.handoff'
+    ? record.host.recordPermissionHandoff(record.sessionId, request)
+    : record.host.recordPermissionRecheck(record.sessionId, request);
+  if (result.status === 'blocked') return result;
+  return {
+    status: 'ok',
+    value: {
+      entry: result.value,
+      evidenceLedgerRef: record.host.getLedger(record.sessionId)?.ledgerRef ?? record.evidenceLedgerRef,
+    },
+  };
+}
+
+function withPermissionLedgerResult(
+  result: VirtualAppScreenSessionManagerAttachResult,
+  permissionLedger: NativeHostResult<{ entry: NativeHostLedgerEntry; evidenceLedgerRef: string }> | undefined,
+  type: 'permission.handoff' | 'permission.recheck',
+): VirtualAppScreenSessionManagerAttachResult {
+  if (!permissionLedger || permissionLedger.status === 'blocked') return result;
+  const entryRefKey = type === 'permission.handoff'
+    ? 'permissionHandoffLedgerEntryRef'
+    : 'permissionRecheckLedgerEntryRef';
+  return {
+    ...result,
+    refs: {
+      ...result.refs,
+      hostEvidenceLedgerRef: permissionLedger.value.evidenceLedgerRef,
+      evidenceLedgerRef: result.refs.evidenceLedgerRef ?? permissionLedger.value.evidenceLedgerRef,
+      [entryRefKey]: permissionLedger.value.entry.eventRef,
+    },
+    evidence: {
+      ...result.evidence,
+      evidenceRefs: uniqueRefs([
+        ...result.evidence.evidenceRefs,
+        permissionLedger.value.evidenceLedgerRef,
+        permissionLedger.value.entry.eventRef,
+      ]),
+    },
+  };
+}
+
+function uniqueRefs(refs: Array<string | undefined>) {
+  return [...new Set(refs.filter((ref): ref is string => Boolean(ref?.trim())))];
 }
 
 function reconnectReasonFromCommand(command: VirtualAppScreenRuntimeCommand): VirtualAppScreenProviderSessionReconnectReason {
@@ -551,6 +716,7 @@ function reconnectCommandRefs(command: VirtualAppScreenRuntimeCommand) {
     providerSessionOwnerRef?: string;
     providerSessionReconnectRef?: string;
     liveBindingAttachGrantRef?: string;
+    grantValidationRef?: string;
   };
   return {
     liveSurfaceRef: refs.liveSurfaceRef ?? refs.surfaceRef,
@@ -560,6 +726,7 @@ function reconnectCommandRefs(command: VirtualAppScreenRuntimeCommand) {
     providerSessionOwnerRef: refs.providerSessionOwnerRef,
     providerSessionReconnectRef: refs.providerSessionReconnectRef,
     liveBindingAttachGrantRef: refs.liveBindingAttachGrantRef,
+    grantValidationRef: refs.grantValidationRef,
   };
 }
 

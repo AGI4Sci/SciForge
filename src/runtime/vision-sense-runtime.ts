@@ -181,7 +181,12 @@ export async function tryRunVisionSenseRuntime(
           permissionRef: command.refs.permissionRef,
           recheckRef: command.refs.permissionRecheckRef,
           platformDriverRef: command.refs.platformDriverRef,
-          evidenceLedgerRef: command.refs.evidenceLedgerRef,
+          evidenceLedgerRef: sessionManagerResult.refs.hostEvidenceLedgerRef
+            ?? sessionManagerResult.refs.evidenceLedgerRef
+            ?? command.refs.evidenceLedgerRef,
+          hostEvidenceLedgerRef: sessionManagerResult.refs.hostEvidenceLedgerRef,
+          permissionHandoffLedgerEntryRef: sessionManagerResult.refs.permissionHandoffLedgerEntryRef,
+          permissionRecheckLedgerEntryRef: sessionManagerResult.refs.permissionRecheckLedgerEntryRef,
           guiPresentRef: command.refs.guiPresentRef,
           desktopBridgeEnabled: config.desktopBridgeEnabled,
           safetyVerifierContract: visionSenseSafetyVerifierContract,

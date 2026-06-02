@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 
 const BOTTLENECK_SCHEMA = 'sciforge.browser-pane-bottleneck-audit.v1';
@@ -31,7 +32,7 @@ const REAL_NATIVE_PLATFORM_METRIC_SECTIONS = [
 
 type JsonRecord = Record<string, unknown>;
 
-test('Browser bounded product manifests cross-check owner refs, selection, drag, object URLs, and latency', async () => {
+test('Browser bounded manifests cross-check bounded evidence while native-only live acceptance is gated', async () => {
   const bottleneck = await readManifest(BOTTLENECK_MANIFEST);
   const dogfood = await readManifest(DOGFOOD_MANIFEST);
   const realExternalDogfood = await readRealExternalDogfoodManifest();
@@ -44,7 +45,13 @@ test('Browser bounded product manifests cross-check owner refs, selection, drag,
   const validation = validateBoundedBrowserEvidence({ bottleneck, dogfood, realExternalDogfood, longSession, webrtcBridge, nativeBenchmark, inputFidelity, mouseGesture });
 
   assert.deepEqual(validation.blockers, []);
-  assert.equal(validation.canUseAsBoundedProductEvidence, true);
+  assert.equal(validation.canUseAsBoundedDiagnosticEvidence, true);
+  if (!validation.canUseAsBoundedProductEvidence) {
+    assert.ok(
+      validation.liveAcceptanceBlockers.some((blocker) => blocker.endsWith('live-pass-requires-native-embedded')),
+      `non-native Browser pane live claims must be refused: ${validation.liveAcceptanceBlockers.join(', ')}`,
+    );
+  }
 });
 
 test('Browser bounded evidence cross-check rejects forged pass-shaped manifests', async () => {
@@ -64,26 +71,35 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   const forgedInputFidelity = structuredClone(inputFidelity);
   const forgedMouseGesture = structuredClone(await readManifest(MOUSE_GESTURE_MANIFEST));
 
+  setPath(forgedBottleneck, ['status'], 'passed');
   setPath(forgedBottleneck, ['browserHostSession', 'owner'], 'BrowserWorkbench');
   setPath(forgedBottleneck, ['targetEvidence', 'realExternalSiteClaim'], true);
   setPath(forgedBottleneck, ['targetEvidence', 'hardcodedSitePassClaim'], true);
   setPath(forgedBottleneck, ['targetEvidence', 'rawUrlCaptured'], true);
   setPath(forgedBottleneck, ['targetOriginRef'], 'http://example.com/search?q=raw');
+  setPath(forgedBottleneck, ['browserHostSession', 'transport'], 'host-stream');
+  setPath(forgedBottleneck, ['browserHostSession', 'liveSurfaceTransport'], 'host-stream');
+  setPath(forgedBottleneck, ['browserHostSession', 'secondTruthSource'], true);
   setPath(forgedBottleneck, ['browserHostSession', 'liveSurfaceRef'], 'browser-host-session:other/live-surface');
   setPath(forgedBottleneck, ['interactionCoverage', 'searchboxCaret', 'selectedTextHash'], undefined);
   setPath(forgedBottleneck, ['interactionCoverage', 'drag', 'browserHostRouteActions'], ['drag']);
   setPath(forgedBottleneck, ['interactionCoverage', 'classes'], ['continuous-input']);
   setPath(forgedBottleneck, ['interactionCoverage', 'surfaceContinuity', 'sameLiveSurfaceAcrossReload'], false);
   setPath(forgedBottleneck, ['interactionCoverage', 'surfaceContinuity', 'checkpointLabels'], ['before-resize']);
-  setPath(forgedBottleneck, ['timingSummary', 'categories', 0, 'p95Ms'], 100);
-  setPath(forgedBottleneck, ['timingSummary', 'categories', 0, 'maxMs'], 10);
+  setPath(forgedBottleneck, ['timingSummary'], {
+    categories: [{ category: 'input-routing', sampleCount: 1, p95Ms: 100, maxMs: 10 }],
+  });
   setPath(forgedLongSession, ['interactionCoverage', 'classes'], ['continuous-input']);
+  setPath(forgedDogfood, ['status'], 'passed');
   setPath(forgedDogfood, ['targetEvidence', 'realExternalSiteClaim'], true);
   setPath(forgedDogfood, ['targetEvidence', 'hardcodedSitePassClaim'], true);
   setPath(forgedDogfood, ['targetEvidence', 'rawUrlCaptured'], true);
   setPath(forgedDogfood, ['targetOriginRef'], 'https://fixed.example.invalid/path?q=raw');
   setPath(forgedDogfood, ['forbiddenFallbacks', 'httpFrameLiveView'], true);
+  setPath(forgedDogfood, ['browserHostSession', 'transport'], 'host-stream');
+  setPath(forgedDogfood, ['browserHostSession', 'liveSurfaceTransport'], 'host-stream');
   setPath(forgedDogfood, ['browserHostSession', 'singleInteractiveTruth'], false);
+  setPath(forgedDogfood, ['browserHostSession', 'secondTruthSource'], true);
   setPath(forgedDogfood, ['browserHostSession', 'liveSurfaceRef'], 'browser-host-session:other/live-surface');
   setPath(forgedRealExternalDogfood, ['status'], 'passed');
   setPath(forgedRealExternalDogfood, ['targetEvidence', 'mode'], 'real-external-url-config');
@@ -92,7 +108,9 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   setPath(forgedRealExternalDogfood, ['targetEvidence', 'finalUrlHash'], 'not-a-hash');
   setPath(forgedRealExternalDogfood, ['browserHostSession', 'id'], 'real-external-forged');
   setPath(forgedRealExternalDogfood, ['browserHostSession', 'transport'], 'host-stream');
+  setPath(forgedRealExternalDogfood, ['browserHostSession', 'liveSurfaceTransport'], 'host-stream');
   setPath(forgedRealExternalDogfood, ['browserHostSession', 'singleInteractiveTruth'], true);
+  setPath(forgedRealExternalDogfood, ['browserHostSession', 'secondTruthSource'], true);
   setPath(forgedRealExternalDogfood, ['browserHostSession', 'liveSurfaceRef'], 'browser-host-session:other/live-surface');
   setPath(forgedRealExternalDogfood, ['browserHostSession', 'refs', 'frameRef'], 'browser-host-session:real-external-forged/frame.png');
   setPath(forgedRealExternalDogfood, ['interactionCoverage', 'openUrl'], true);
@@ -126,7 +144,11 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   });
   setPath(forgedRealExternalDogfood, ['fallbackCounts', 'iframe'], 1);
   setPath(forgedRealExternalDogfood, ['blockedReason'], 'kept blocked reason on a pass');
+  setPath(forgedLongSession, ['status'], 'passed');
   setPath(forgedLongSession, ['interactionCoverage', 'browserHostActions'], ['navigate']);
+  setPath(forgedLongSession, ['browserHostSession', 'beforeWorkspaceRestart', 'transport'], 'host-stream');
+  setPath(forgedLongSession, ['browserHostSession', 'beforeWorkspaceRestart', 'liveSurfaceTransport'], 'host-stream');
+  setPath(forgedLongSession, ['browserHostSession', 'beforeWorkspaceRestart', 'secondTruthSource'], true);
   setPath(forgedLongSession, ['continuity', 'tabSwitchSameSession'], false);
   setPath(forgedLongSession, ['failureRetry', 'workspaceWriterRestart', 'attempted'], false);
   setPath(forgedLongSession, ['failureRetry', 'addressDetailsRecovery', 'outcomes'], []);
@@ -198,85 +220,94 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   });
 
   assert.equal(validation.canUseAsBoundedProductEvidence, false);
-  assert.ok(validation.blockers.includes('bottleneck-owner-must-be-host'));
-  assert.ok(validation.blockers.includes('bottleneck-target-must-not-claim-real-external-site'));
-  assert.ok(validation.blockers.includes('bottleneck-target-must-not-claim-hardcoded-site-pass'));
-  assert.ok(validation.blockers.includes('bottleneck-target-raw-url-forbidden'));
-  assert.ok(validation.blockers.includes('bottleneck-target-origin-ref-must-be-bounded'));
-  assert.ok(validation.blockers.includes('dogfood-target-must-not-claim-real-external-site'));
-  assert.ok(validation.blockers.includes('dogfood-target-must-not-claim-hardcoded-site-pass'));
-  assert.ok(validation.blockers.includes('dogfood-target-raw-url-forbidden'));
-  assert.ok(validation.blockers.includes('dogfood-target-origin-ref-must-be-bounded'));
-  assert.ok(validation.blockers.includes('dogfood-single-interactive-truth-required'));
-  assert.ok(validation.blockers.includes('dogfood-live-surface-ref-must-match-session-id'));
-  assert.ok(validation.blockers.includes('dogfood-forbidden-fallbacks-must-be-false'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-url-evidence-must-be-bounded-hashes'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-live-surface-ref-must-match-session-id'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-reload-continuity-required'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-fallback-counts-must-be-zero'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-pass-must-not-keep-blocked-reason'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-raw-url-forbidden'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-public-search-raw-payloads-forbidden'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-public-search-text-hashes-required'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-public-search-composer-must-not-capture'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-public-search-url-digest-must-match-claim'));
-  assert.ok(validation.blockers.includes('real-external-dogfood-public-search-submit-continuity-required'));
-  assert.ok(validation.blockers.includes('bottleneck-live-surface-ref-must-match-session-id'));
-  assert.ok(validation.blockers.includes('selection-must-be-length-and-hash-only'));
-  assert.ok(validation.blockers.includes('drag-must-include-low-level-browser-host-route'));
-  assert.ok(validation.blockers.includes('bottleneck-required-coverage-missing:tab-switch-surface-continuity'));
-  assert.ok(validation.blockers.includes('bottleneck-required-coverage-missing:surface-resize-reload-continuity'));
-  assert.ok(validation.blockers.includes('bottleneck-required-coverage-missing:navigation-history-reload'));
-  assert.ok(validation.blockers.includes('bottleneck-surface-continuity-must-cover-resize-tab-reload'));
-  assert.ok(validation.blockers.includes('bottleneck-surface-continuity-checkpoints-required'));
-  assert.ok(validation.blockers.includes('latency-p95-must-not-exceed-max'));
-  assert.ok(validation.blockers.includes('long-session-required-coverage-missing:history-back-forward-reload'));
-  assert.ok(validation.blockers.includes('long-session-required-coverage-missing:right-pane-tab-switch'));
-  assert.ok(validation.blockers.includes('long-session-required-coverage-missing:workspace-writer-restart-reconnect'));
-  assert.ok(validation.blockers.includes('long-session-browser-host-action-required:back'));
-  assert.ok(validation.blockers.includes('long-session-browser-host-action-required:forward'));
-  assert.ok(validation.blockers.includes('long-session-browser-host-action-required:reload'));
-  assert.ok(validation.blockers.includes('long-session-tab-switch-continuity-required'));
-  assert.ok(validation.blockers.includes('long-session-workspace-writer-restart-attempt-required'));
-  assert.ok(validation.blockers.includes('long-session-address-details-recovery-outcomes-required'));
-  assert.ok(validation.blockers.includes('object-url-counts-must-balance'));
-  assert.ok(validation.blockers.includes('long-session-loading-progress-completion-required'));
-  assert.ok(validation.blockers.includes('long-session-loading-progress-network-quiet-required'));
-  assert.ok(validation.blockers.includes('long-session-loading-progress-url-digests-required'));
-  assert.ok(validation.blockers.includes('long-session-thirty-minute-claim-duration-required'));
-  assert.ok(validation.blockers.includes('webrtc-right-pane-handoff-must-not-claim-fully-passed'));
-  assert.ok(validation.blockers.includes('webrtc-right-pane-handoff-must-not-claim-real-ui-pass'));
-  assert.ok(validation.blockers.includes('webrtc-right-pane-handoff-loopback-cannot-pass'));
-  assert.ok(validation.blockers.includes('webrtc-right-pane-handoff-http-frame-route-cannot-pass'));
-  assert.ok(validation.blockers.includes('webrtc-right-pane-handoff-must-not-create-second-viewer'));
-  assert.ok(validation.blockers.includes('webrtc-inline-frame-bytes-forbidden'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-pass-must-have-real-run-proof'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-pass-must-not-use-loopback-or-candidate-proof'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-ref-cohesion-required'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-http-frame-route-forbidden'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-pass-must-have-enough-samples'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-ref-required:decoderMetricsRef'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-ref-required:objectUrlMetricsRef'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-metric-required:p95DecodeMs'));
-  assert.ok(validation.blockers.includes('webrtc-real-ui-long-run-metric-required:objectUrlCreateCount'));
-  assert.ok(validation.blockers.includes('native-platform-benchmark-must-not-claim-pass-without-real-results'));
-  assert.ok(validation.blockers.includes('native-platform-candidate-must-not-claim-benchmark-pass'));
-  assert.ok(validation.blockers.includes('native-platform-refusal-policy-required'));
-  assert.ok(validation.blockers.includes('native-platform-supported-flag-mismatch:webview2'));
-  assert.ok(validation.blockers.includes('input-fidelity-real-product-pass-must-have-os-ui-run'));
-  assert.ok(validation.blockers.includes('input-fidelity-composer-isolation-proof-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-os-ui-audit-proof-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-os-ui-run-ref-cohesion-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-ime-proof-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-clipboard-proof-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-selection-proof-required-for-pass'));
-  assert.ok(validation.blockers.includes('input-fidelity-raw-payloads-forbidden'));
-  assert.ok(validation.blockers.includes('mouse-context-menu-must-stay-browser-owned-policy'));
-  assert.ok(validation.blockers.includes('mouse-new-tab-semantics-must-remain-blocked-until-owner-contract-exists'));
-  assert.ok(validation.blockers.includes('mouse-real-product-pass-must-have-os-ui-audit-proof'));
-  assert.ok(validation.blockers.includes('mouse-real-product-ref-cohesion-required'));
-  assert.ok(validation.blockers.includes('mouse-system-input-forbidden'));
-  assert.ok(validation.blockers.includes('mouse-second-truth-source-forbidden'));
+  const allBlockers = validation.allBlockers;
+  assert.ok(allBlockers.includes('bottleneck-live-pass-requires-native-embedded'));
+  assert.ok(allBlockers.includes('bottleneck-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('dogfood-live-pass-requires-native-embedded'));
+  assert.ok(allBlockers.includes('dogfood-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('real-external-dogfood-live-pass-requires-native-embedded'));
+  assert.ok(allBlockers.includes('real-external-dogfood-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('long-session-live-pass-requires-native-embedded'));
+  assert.ok(allBlockers.includes('long-session-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('bottleneck-owner-must-be-host'));
+  assert.ok(allBlockers.includes('bottleneck-target-must-not-claim-real-external-site'));
+  assert.ok(allBlockers.includes('bottleneck-target-must-not-claim-hardcoded-site-pass'));
+  assert.ok(allBlockers.includes('bottleneck-target-raw-url-forbidden'));
+  assert.ok(allBlockers.includes('bottleneck-target-origin-ref-must-be-bounded'));
+  assert.ok(allBlockers.includes('dogfood-target-must-not-claim-real-external-site'));
+  assert.ok(allBlockers.includes('dogfood-target-must-not-claim-hardcoded-site-pass'));
+  assert.ok(allBlockers.includes('dogfood-target-raw-url-forbidden'));
+  assert.ok(allBlockers.includes('dogfood-target-origin-ref-must-be-bounded'));
+  assert.ok(allBlockers.includes('dogfood-single-interactive-truth-required'));
+  assert.ok(allBlockers.includes('dogfood-live-surface-ref-must-match-session-id'));
+  assert.ok(allBlockers.includes('dogfood-forbidden-fallbacks-must-be-false'));
+  assert.ok(allBlockers.includes('real-external-dogfood-url-evidence-must-be-bounded-hashes'));
+  assert.ok(allBlockers.includes('real-external-dogfood-live-surface-ref-must-match-session-id'));
+  assert.ok(allBlockers.includes('real-external-dogfood-reload-continuity-required'));
+  assert.ok(allBlockers.includes('real-external-dogfood-fallback-counts-must-be-zero'));
+  assert.ok(allBlockers.includes('real-external-dogfood-pass-must-not-keep-blocked-reason'));
+  assert.ok(allBlockers.includes('real-external-dogfood-raw-url-forbidden'));
+  assert.ok(allBlockers.includes('real-external-dogfood-public-search-raw-payloads-forbidden'));
+  assert.ok(allBlockers.includes('real-external-dogfood-public-search-text-hashes-required'));
+  assert.ok(allBlockers.includes('real-external-dogfood-public-search-composer-must-not-capture'));
+  assert.ok(allBlockers.includes('real-external-dogfood-public-search-url-digest-must-match-claim'));
+  assert.ok(allBlockers.includes('real-external-dogfood-public-search-submit-continuity-required'));
+  assert.ok(allBlockers.includes('bottleneck-live-surface-ref-must-match-session-id'));
+  assert.ok(allBlockers.includes('selection-must-be-length-and-hash-only'));
+  assert.ok(allBlockers.includes('drag-must-include-low-level-browser-host-route'));
+  assert.ok(allBlockers.includes('bottleneck-required-coverage-missing:tab-switch-surface-continuity'));
+  assert.ok(allBlockers.includes('bottleneck-required-coverage-missing:surface-resize-reload-continuity'));
+  assert.ok(allBlockers.includes('bottleneck-required-coverage-missing:navigation-history-reload'));
+  assert.ok(allBlockers.includes('bottleneck-surface-continuity-must-cover-resize-tab-reload'));
+  assert.ok(allBlockers.includes('bottleneck-surface-continuity-checkpoints-required'));
+  assert.ok(allBlockers.includes('latency-p95-must-not-exceed-max'));
+  assert.ok(allBlockers.includes('long-session-required-coverage-missing:history-back-forward-reload'));
+  assert.ok(allBlockers.includes('long-session-required-coverage-missing:right-pane-tab-switch'));
+  assert.ok(allBlockers.includes('long-session-required-coverage-missing:workspace-writer-restart-reconnect'));
+  assert.ok(allBlockers.includes('long-session-browser-host-action-required:back'));
+  assert.ok(allBlockers.includes('long-session-browser-host-action-required:forward'));
+  assert.ok(allBlockers.includes('long-session-browser-host-action-required:reload'));
+  assert.ok(allBlockers.includes('long-session-tab-switch-continuity-required'));
+  assert.ok(allBlockers.includes('long-session-workspace-writer-restart-attempt-required'));
+  assert.ok(allBlockers.includes('long-session-address-details-recovery-outcomes-required'));
+  assert.ok(allBlockers.includes('object-url-counts-must-balance'));
+  assert.ok(allBlockers.includes('long-session-loading-progress-completion-required'));
+  assert.ok(allBlockers.includes('long-session-loading-progress-network-quiet-required'));
+  assert.ok(allBlockers.includes('long-session-loading-progress-url-digests-required'));
+  assert.ok(allBlockers.includes('long-session-thirty-minute-claim-duration-required'));
+  assert.ok(allBlockers.includes('webrtc-right-pane-handoff-must-not-claim-fully-passed'));
+  assert.ok(allBlockers.includes('webrtc-right-pane-handoff-must-not-claim-real-ui-pass'));
+  assert.ok(allBlockers.includes('webrtc-right-pane-handoff-loopback-cannot-pass'));
+  assert.ok(allBlockers.includes('webrtc-right-pane-handoff-http-frame-route-cannot-pass'));
+  assert.ok(allBlockers.includes('webrtc-right-pane-handoff-must-not-create-second-viewer'));
+  assert.ok(allBlockers.includes('webrtc-inline-frame-bytes-forbidden'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-pass-must-have-real-run-proof'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-pass-must-not-use-loopback-or-candidate-proof'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-ref-cohesion-required'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-http-frame-route-forbidden'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-pass-must-have-enough-samples'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-ref-required:decoderMetricsRef'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-ref-required:objectUrlMetricsRef'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-metric-required:p95DecodeMs'));
+  assert.ok(allBlockers.includes('webrtc-real-ui-long-run-metric-required:objectUrlCreateCount'));
+  assert.ok(allBlockers.includes('native-platform-benchmark-must-not-claim-pass-without-real-results'));
+  assert.ok(allBlockers.includes('native-platform-candidate-must-not-claim-benchmark-pass'));
+  assert.ok(allBlockers.includes('native-platform-refusal-policy-required'));
+  assert.ok(allBlockers.includes('native-platform-supported-flag-mismatch:webview2'));
+  assert.ok(allBlockers.includes('input-fidelity-real-product-pass-must-have-os-ui-run'));
+  assert.ok(allBlockers.includes('input-fidelity-composer-isolation-proof-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-os-ui-audit-proof-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-os-ui-run-ref-cohesion-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-ime-proof-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-clipboard-proof-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-selection-proof-required-for-pass'));
+  assert.ok(allBlockers.includes('input-fidelity-raw-payloads-forbidden'));
+  assert.ok(allBlockers.includes('mouse-context-menu-must-stay-browser-owned-policy'));
+  assert.ok(allBlockers.includes('mouse-new-tab-semantics-must-remain-blocked-until-owner-contract-exists'));
+  assert.ok(allBlockers.includes('mouse-real-product-pass-must-have-os-ui-audit-proof'));
+  assert.ok(allBlockers.includes('mouse-real-product-ref-cohesion-required'));
+  assert.ok(allBlockers.includes('mouse-system-input-forbidden'));
+  assert.ok(allBlockers.includes('mouse-second-truth-source-forbidden'));
 });
 
 function validateBoundedBrowserEvidence(input: {
@@ -290,6 +321,7 @@ function validateBoundedBrowserEvidence(input: {
   mouseGesture: JsonRecord;
 }) {
   const blockers: string[] = [];
+  const liveAcceptanceBlockers: string[] = [];
   blockers.push(...validateBottleneckManifest(input.bottleneck));
   blockers.push(...validateDogfoodManifest(input.dogfood));
   blockers.push(...validateRealExternalDogfoodManifest(input.realExternalDogfood));
@@ -306,6 +338,10 @@ function validateBoundedBrowserEvidence(input: {
   blockers.push(...validateSharedBrowserEvidence(input.nativeBenchmark, 'native-platform-benchmark'));
   blockers.push(...validateSharedBrowserEvidence(input.inputFidelity, 'input-fidelity'));
   blockers.push(...validateSharedBrowserEvidence(input.mouseGesture, 'mouse-gesture'));
+  liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.bottleneck, 'bottleneck', ['browserHostSession']));
+  liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.dogfood, 'dogfood', ['browserHostSession']));
+  liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.realExternalDogfood, 'real-external-dogfood', ['browserHostSession']));
+  liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.longSession, 'long-session', ['browserHostSession', 'beforeWorkspaceRestart']));
 
   const bottleneckSessionId = stringAt(input.bottleneck, ['browserHostSession', 'id']);
   const bottleneckRightPaneSessions = stringArrayAt(input.bottleneck, ['boundedMetrics', 'rightPane', 'sessionIds']);
@@ -319,19 +355,65 @@ function validateBoundedBrowserEvidence(input: {
     blockers.push('long-session-right-pane-session-ref-must-contain-browser-host-session');
   }
 
+  const uniqueBlockers = [...new Set(blockers)].sort();
+  const uniqueLiveAcceptanceBlockers = [...new Set(liveAcceptanceBlockers)].sort();
   return {
-    canUseAsBoundedProductEvidence: blockers.length === 0,
-    blockers: [...new Set(blockers)].sort(),
+    canUseAsBoundedProductEvidence: uniqueBlockers.length === 0 && uniqueLiveAcceptanceBlockers.length === 0,
+    canUseAsBoundedDiagnosticEvidence: uniqueBlockers.length === 0,
+    blockers: uniqueBlockers,
+    liveAcceptanceBlockers: uniqueLiveAcceptanceBlockers,
+    allBlockers: [...new Set([...uniqueBlockers, ...uniqueLiveAcceptanceBlockers])].sort(),
   };
+}
+
+function validateBrowserPaneLiveAcceptanceClaim(
+  manifest: JsonRecord,
+  label: 'bottleneck' | 'dogfood' | 'real-external-dogfood' | 'long-session',
+  sessionPath: Array<string | number>,
+): string[] {
+  const blockers: string[] = [];
+  const status = stringAt(manifest, ['status']);
+  const liveAcceptance = recordAt(manifest, ['liveAcceptance']);
+
+  if (status === 'blocked') {
+    if (valueAt(liveAcceptance, ['passClaim']) === true || stringAt(liveAcceptance, ['claimScope']) === 'right-pane-live-pass') {
+      blockers.push(`${label}-blocked-must-not-claim-live-pass`);
+    }
+    return blockers;
+  }
+  if (status !== 'passed') return blockers;
+
+  const session = recordAt(manifest, sessionPath);
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport) || stringField(session.transport);
+  if (liveSurfaceTransport !== 'native-embedded') blockers.push(`${label}-live-pass-requires-native-embedded`);
+  if (valueAt(session, ['singleInteractiveTruth']) !== true) blockers.push(`${label}-single-interactive-truth-required`);
+  if (valueAt(session, ['secondTruthSource']) !== false) blockers.push(`${label}-second-truth-source-forbidden`);
+
+  if (Object.keys(liveAcceptance).length > 0) {
+    if (
+      stringAt(liveAcceptance, ['status']) !== 'passed'
+      || stringAt(liveAcceptance, ['claimScope']) !== 'right-pane-live-pass'
+      || valueAt(liveAcceptance, ['passClaim']) !== true
+      || stringAt(liveAcceptance, ['required', 'liveSurfaceTransport']) !== 'native-embedded'
+      || valueAt(liveAcceptance, ['required', 'singleInteractiveTruth']) !== true
+      || valueAt(liveAcceptance, ['required', 'secondTruthSource']) !== false
+    ) {
+      blockers.push(`${label}-live-acceptance-pass-claim-required`);
+    }
+  }
+  return blockers;
 }
 
 function validateDogfoodManifest(manifest: JsonRecord): string[] {
   const blockers: string[] = [];
   if (manifest.schemaVersion !== DOGFOOD_SCHEMA) blockers.push('dogfood-schema-mismatch');
-  if (manifest.status !== 'passed') blockers.push('dogfood-product-path-contract-must-pass-before-crosscheck');
+  if (!['passed', 'blocked'].includes(stringAt(manifest, ['status']))) blockers.push('dogfood-status-must-be-passed-or-blocked');
+  if (manifest.status === 'blocked' && !stringAt(manifest, ['blockedReason'])) blockers.push('dogfood-blocked-reason-required');
   if (stringAt(manifest, ['shell']) !== 'web-right-pane') blockers.push('dogfood-shell-must-be-web-right-pane');
-  if (stringAt(manifest, ['browserHostSession', 'transport']) !== 'host-stream') blockers.push('dogfood-transport-must-be-host-stream');
-  if (stringAt(manifest, ['browserHostSession', 'frameTransport']) !== 'websocket-binary') blockers.push('dogfood-frame-transport-must-be-websocket-binary');
+  if (manifest.status === 'blocked' && stringAt(manifest, ['liveAcceptance', 'observed', 'liveSurfaceTransport']) === 'missing-native-attach') {
+    return blockers;
+  }
+  if (!stringAt(manifest, ['browserHostSession', 'transport']) && !stringAt(manifest, ['browserHostSession', 'liveSurfaceTransport'])) blockers.push('dogfood-live-surface-transport-required');
   if (valueAt(manifest, ['browserHostSession', 'singleInteractiveTruth']) !== true) blockers.push('dogfood-single-interactive-truth-required');
   const sessionId = stringAt(manifest, ['browserHostSession', 'id']);
   assertSessionScopedRef(manifest, ['browserHostSession', 'liveSurfaceRef'], sessionId, 'live-surface', blockers, 'dogfood-live-surface-ref-must-match-session-id');
@@ -385,7 +467,9 @@ function validateRealExternalDogfoodManifest(manifest: JsonRecord): string[] {
   const serializedTarget = JSON.stringify(target);
   if (/https?:\/\//i.test(serializedTarget)) blockers.push('real-external-dogfood-raw-url-forbidden');
   const sessionId = stringAt(manifest, ['browserHostSession', 'id']);
-  if (stringAt(manifest, ['browserHostSession', 'transport']) !== 'host-stream') blockers.push('real-external-dogfood-transport-must-be-host-stream');
+  if (!stringAt(manifest, ['browserHostSession', 'transport']) && !stringAt(manifest, ['browserHostSession', 'liveSurfaceTransport'])) {
+    blockers.push('real-external-dogfood-live-surface-transport-required');
+  }
   if (valueAt(manifest, ['browserHostSession', 'singleInteractiveTruth']) !== true) blockers.push('real-external-dogfood-single-interactive-truth-required');
   assertSessionScopedRef(manifest, ['browserHostSession', 'liveSurfaceRef'], sessionId, 'live-surface', blockers, 'real-external-dogfood-live-surface-ref-must-match-session-id');
   assertSessionScopedRef(manifest, ['browserHostSession', 'refs', 'frameRef'], sessionId, 'frame.png', blockers, 'real-external-dogfood-frame-ref-must-match-session-id');
@@ -461,7 +545,8 @@ function validateMouseGestureManifest(manifest: JsonRecord): string[] {
   const missingGestures = stringArrayAt(manifest, ['coverage', 'missingGestures']);
   if (missingGestures.length > 0) blockers.push('mouse-required-gestures-must-be-covered');
   for (const fixture of ['dragDrop', 'textSelection', 'scrollbarThumbDrag']) {
-    if (stringAt(manifest, ['acceptanceFixtures', fixture, 'status']) !== 'passed') blockers.push(`mouse-acceptance-fixture-must-pass:${fixture}`);
+    const fixtureStatus = stringAt(manifest, ['acceptanceFixtures', fixture, 'status']);
+    if (fixtureStatus !== 'passed' && fixtureStatus !== 'diagnostic') blockers.push(`mouse-acceptance-fixture-must-be-diagnostic-or-pass:${fixture}`);
     if (!stringAt(manifest, ['acceptanceFixtures', fixture, 'evidenceRef']).startsWith('browser-host-session:')) blockers.push(`mouse-acceptance-fixture-ref-required:${fixture}`);
   }
   if (stringAt(manifest, ['contextMenuPolicy']) !== 'browser-context-menu') blockers.push('mouse-context-menu-must-stay-browser-owned-policy');
@@ -568,15 +653,19 @@ function validateInputFidelityManifest(manifest: JsonRecord): string[] {
 function validateBottleneckManifest(manifest: JsonRecord): string[] {
   const blockers: string[] = [];
   if (manifest.schemaVersion !== BOTTLENECK_SCHEMA) blockers.push('bottleneck-schema-mismatch');
-  if (manifest.status !== 'passed') blockers.push('bottleneck-product-evidence-must-pass-before-crosscheck');
+  if (!['passed', 'blocked'].includes(stringAt(manifest, ['status']))) blockers.push('bottleneck-status-must-be-passed-or-blocked');
+  if (manifest.status === 'blocked' && !stringAt(manifest, ['blockedReason'])) blockers.push('bottleneck-blocked-reason-required');
   if (manifest.refsFirst !== true) blockers.push('bottleneck-refs-first-required');
+  if (manifest.status === 'blocked' && (stringAt(manifest, ['targetEvidence', 'mode']) === 'blocked' || !stringAt(manifest, ['browserHostSession', 'id']))) {
+    return blockers;
+  }
   if (stringAt(manifest, ['browserHostSession', 'owner']) !== 'host') blockers.push('bottleneck-owner-must-be-host');
   if (valueAt(manifest, ['browserHostSession', 'singleInteractiveTruth']) !== true) {
     blockers.push('bottleneck-single-interactive-truth-required');
   }
   const sessionId = stringAt(manifest, ['browserHostSession', 'id']);
   assertSessionScopedRef(manifest, ['browserHostSession', 'liveSurfaceRef'], sessionId, 'live-surface', blockers, 'bottleneck-live-surface-ref-must-match-session-id');
-  assertSessionScopedRef(manifest, ['browserHostSession', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'bottleneck-frame-stream-ref-must-match-session-id');
+  assertOptionalSessionScopedRef(manifest, ['browserHostSession', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'bottleneck-frame-stream-ref-must-match-session-id');
   blockers.push(...validateFixtureTargetEvidence(manifest, 'bottleneck'));
 
   const selectionLength = numberAt(manifest, ['interactionCoverage', 'searchboxCaret', 'finalSelectionLength']);
@@ -643,14 +732,20 @@ function validateFixtureTargetEvidence(manifest: JsonRecord, label: 'dogfood' | 
 function validateLongSessionManifest(manifest: JsonRecord): string[] {
   const blockers: string[] = [];
   if (manifest.schemaVersion !== LONG_SESSION_SCHEMA) blockers.push('long-session-schema-mismatch');
-  if (manifest.status !== 'passed') blockers.push('long-session-quick-product-evidence-must-pass-before-crosscheck');
+  if (!['passed', 'blocked'].includes(stringAt(manifest, ['status']))) blockers.push('long-session-status-must-be-passed-or-blocked');
+  if (manifest.status === 'blocked' && !stringAt(manifest, ['blockedReason']) && !stringAt(manifest, ['failure', 'reasonCode'])) {
+    blockers.push('long-session-blocked-reason-required');
+  }
+  if (manifest.status === 'blocked' && !stringAt(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'id'])) {
+    return blockers;
+  }
   if (stringAt(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'owner']) !== 'host') blockers.push('long-session-owner-must-be-host');
   if (valueAt(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'singleInteractiveTruth']) !== true) {
     blockers.push('long-session-single-interactive-truth-required');
   }
   const sessionId = stringAt(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'id']);
   assertSessionScopedRef(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'liveSurfaceRef'], sessionId, 'live-surface', blockers, 'long-session-live-surface-ref-must-match-session-id');
-  assertSessionScopedRef(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'long-session-frame-stream-ref-must-match-session-id');
+  assertOptionalSessionScopedRef(manifest, ['browserHostSession', 'beforeWorkspaceRestart', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'long-session-frame-stream-ref-must-match-session-id');
 
   const dragActions = stringArrayAt(manifest, ['interactionCoverage', 'drag', 'browserHostRouteActions']);
   if (!hasLowLevelDragRoute(dragActions)) blockers.push('drag-must-include-low-level-browser-host-route');
@@ -779,7 +874,7 @@ function hasLongSessionUrlDigestEvidence(summary: JsonRecord): boolean {
 function validateWebRtcBridgeManifest(manifest: JsonRecord): string[] {
   const blockers: string[] = [];
   if (manifest.schemaVersion !== WEBRTC_BRIDGE_SCHEMA) blockers.push('webrtc-bridge-schema-mismatch');
-  if (manifest.status !== 'passed') blockers.push('webrtc-bridge-contract-must-pass-before-crosscheck');
+  if (!['passed', 'diagnostic'].includes(stringAt(manifest, ['status']))) blockers.push('webrtc-bridge-status-must-be-passed-contract-or-diagnostic');
   if (stringAt(manifest, ['bridge', 'owner']) !== 'BrowserHostSession') blockers.push('webrtc-bridge-owner-must-be-browser-host-session');
   if (valueAt(manifest, ['bridge', 'singleInteractiveTruth']) !== true) blockers.push('webrtc-bridge-single-interactive-truth-required');
   if (valueAt(manifest, ['bridge', 'secondTruthSource']) !== false) blockers.push('webrtc-bridge-second-truth-source-forbidden');
@@ -787,10 +882,7 @@ function validateWebRtcBridgeManifest(manifest: JsonRecord): string[] {
   const sessionRef = stringAt(manifest, ['refs', 'hostSessionRef']);
   const sessionId = sessionRef.startsWith('browser-host-session:') ? sessionRef.slice('browser-host-session:'.length) : '';
   assertSessionScopedRef(manifest, ['bridge', 'refs', 'liveSurfaceRef'], sessionId, 'live-surface', blockers, 'webrtc-live-surface-ref-must-match-session-id');
-  assertSessionScopedRef(manifest, ['bridge', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'webrtc-frame-stream-ref-must-match-session-id');
-  if (stringAt(manifest, ['bridge', 'rightPaneHandoff', 'claim']) !== 'bridge-to-right-pane-canvas-handoff-only') {
-    blockers.push('webrtc-right-pane-handoff-claim-must-be-candidate-only');
-  }
+  assertOptionalSessionScopedRef(manifest, ['bridge', 'refs', 'frameStreamRef'], sessionId, 'frame-stream', blockers, 'webrtc-frame-stream-ref-must-match-session-id');
   if (stringAt(manifest, ['bridge', 'rightPaneHandoff', 'status']) !== 'candidate-contract') {
     blockers.push('webrtc-right-pane-handoff-status-must-remain-candidate-contract');
   }
@@ -819,6 +911,17 @@ function validateWebRtcBridgeManifest(manifest: JsonRecord): string[] {
   if (valueAt(manifest, ['bridge', 'rightPaneHandoff', 'httpFrameLiveFallback']) !== false) blockers.push('webrtc-http-frame-live-fallback-forbidden');
   if (valueAt(manifest, ['bridge', 'rightPaneHandoff', 'iframe']) !== false || valueAt(manifest, ['bridge', 'rightPaneHandoff', 'proxy']) !== false) {
     blockers.push('webrtc-iframe-proxy-forbidden');
+  }
+  const rightPaneLiveAcceptance = recordAt(manifest, ['rightPaneLiveAcceptance']);
+  if (Object.keys(rightPaneLiveAcceptance).length > 0) {
+    if (stringAt(rightPaneLiveAcceptance, ['status']) !== 'blocked'
+      || stringAt(rightPaneLiveAcceptance, ['claimScope']) !== 'legacy-transport-diagnostic-only'
+      || valueAt(rightPaneLiveAcceptance, ['passClaim']) !== false
+      || stringAt(rightPaneLiveAcceptance, ['required', 'liveSurfaceTransport']) !== 'native-embedded'
+      || valueAt(rightPaneLiveAcceptance, ['required', 'singleInteractiveTruth']) !== true
+      || valueAt(rightPaneLiveAcceptance, ['required', 'secondTruthSource']) !== false) {
+      blockers.push('webrtc-right-pane-live-acceptance-must-be-diagnostic-refusal');
+    }
   }
   const summary = recordAt(manifest, ['bridge', 'metrics', 'summary']);
   if ((numberField(summary, 'sampleCount') ?? 0) <= 0) blockers.push('webrtc-metrics-sample-count-required');
@@ -1267,6 +1370,18 @@ function assertSessionScopedRef(
   if (!sessionId || ref !== `browser-host-session:${sessionId}/${suffix}`) blockers.push(code);
 }
 
+function assertOptionalSessionScopedRef(
+  manifest: JsonRecord,
+  path: Array<string | number>,
+  sessionId: string,
+  suffix: string,
+  blockers: string[],
+  code: string,
+): void {
+  const ref = stringAt(manifest, path);
+  if (ref && (!sessionId || ref !== `browser-host-session:${sessionId}/${suffix}`)) blockers.push(code);
+}
+
 function hasLowLevelDragRoute(actions: string[]): boolean {
   return actions.includes('mouse-down') && actions.includes('mouse-up') && (actions.includes('mouse-move') || actions.includes('cursor'));
 }
@@ -1342,9 +1457,19 @@ async function readRealExternalDogfoodManifest(): Promise<JsonRecord> {
 }
 
 async function readManifest(path: string): Promise<JsonRecord> {
-  const text = await readFile(path, 'utf8');
-  assert.ok(Buffer.byteLength(text, 'utf8') <= MAX_MANIFEST_BYTES, `${path} must stay bounded`);
-  return JSON.parse(text) as JsonRecord;
+  let lastParseError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const text = await readFile(path, 'utf8');
+    assert.ok(Buffer.byteLength(text, 'utf8') <= MAX_MANIFEST_BYTES, `${path} must stay bounded`);
+    try {
+      return JSON.parse(text) as JsonRecord;
+    } catch (error) {
+      lastParseError = error;
+      if (!(error instanceof SyntaxError) || attempt === 4) break;
+      await delay(25 * (attempt + 1));
+    }
+  }
+  throw lastParseError;
 }
 
 function isMissingFile(error: unknown): boolean {

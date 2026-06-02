@@ -9,6 +9,28 @@ export type DesktopBrowserNativeLiveAcceptanceBounds = {
   height: number;
 };
 
+export type DesktopBrowserNativeLiveAcceptanceBenchmarkSection =
+  | 'latency'
+  | 'cpu'
+  | 'memory'
+  | 'inputCompleteness'
+  | 'lifecycle'
+  | 'reconnect';
+
+export type DesktopBrowserNativeLiveAcceptanceBenchmarkMetricSection = {
+  status: 'passed' | 'blocked';
+  resultRef: string;
+  numericSummary?: Record<string, number | boolean>;
+};
+
+export type DesktopBrowserNativeLiveAcceptanceBenchmarkMetrics = {
+  schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.benchmark-metrics.v1';
+  source: 'desktop-native-browser-pane-smoke';
+  evidenceMode: 'bounded-summary-ref';
+  inlineEvidence: 'forbidden';
+  metricSections: Partial<Record<DesktopBrowserNativeLiveAcceptanceBenchmarkSection, DesktopBrowserNativeLiveAcceptanceBenchmarkMetricSection>>;
+};
+
 export type DesktopBrowserNativeLiveAcceptanceEvidence = {
   schemaVersion: typeof DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE_SCHEMA;
   status: DesktopBrowserNativeLiveAcceptanceStatus;
@@ -117,6 +139,7 @@ export type DesktopBrowserNativeLiveAcceptanceEvidence = {
     systemPopup: false;
     externalBrowser: false;
   };
+  benchmarkMetrics?: DesktopBrowserNativeLiveAcceptanceBenchmarkMetrics;
   verificationCommand: string;
   strictVerificationCommand: string;
 };

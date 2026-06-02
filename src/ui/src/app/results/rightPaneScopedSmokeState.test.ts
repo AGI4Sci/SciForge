@@ -104,6 +104,9 @@ test('right pane scoped smoke evidence is bounded and redacts payload-like label
     browserSystemWindowSurfaceCount: 0,
     browserProxyIframeCount: 0,
     browserDirectExternalAnchorCount: 0,
+    browserLegacyLiveSurfaceCount: 0,
+    browserCanvasSurfaceCount: 0,
+    browserHttpFrameImageCount: 0,
     screenViewerCount: 1,
     screenStatusLabel: 'empty',
     terminalViewerCount: 1,
@@ -136,6 +139,9 @@ test('right pane scoped smoke evidence is bounded and redacts payload-like label
   assert.equal(evidence.terminalWriterDiagnosticCount, 1);
   assert.equal(evidence.browserAddressValue, 'about:blank');
   assert.equal(evidence.browserProxyIframeCount, 0);
+  assert.equal(evidence.browserLegacyLiveSurfaceCount, 0);
+  assert.equal(evidence.browserCanvasSurfaceCount, 0);
+  assert.equal(evidence.browserHttpFrameImageCount, 0);
   assert.equal(rightPaneScopedSmokeEvidenceHasDefaultTabs(evidence), true);
 });
 
@@ -192,12 +198,39 @@ test('right pane scoped smoke signal collector returns bounded selector facts on
   assert.equal(evidence.browserSystemWindowSurfaceCount, 0);
   assert.equal(evidence.browserProxyIframeCount, 0);
   assert.equal(evidence.browserDirectExternalAnchorCount, 0);
+  assert.equal(evidence.browserLegacyLiveSurfaceCount, 0);
+  assert.equal(evidence.browserCanvasSurfaceCount, 0);
+  assert.equal(evidence.browserHttpFrameImageCount, 0);
   assert.equal(evidence.screenStatusLabel, 'empty');
   assert.equal(evidence.terminalWriterDiagnosticCount, 1);
   assert.equal(evidence.referencesStateLabel, 'empty');
   assert.equal('innerHTML' in evidence, false);
   assert.equal('screenshot' in evidence, false);
   assert.equal('rawDom' in evidence, false);
+});
+
+test('right pane scoped smoke signal collector counts forbidden Browser live fallback selectors', () => {
+  const selectors = RIGHT_PANE_SCOPED_SMOKE_SELECTORS;
+  const documentLike = fakeDocument({
+    [selectors.browserLegacyLiveSurface]: [
+      fakeElement('', { 'data-browser-frame-stream-ref': 'browser-host-session:legacy/frame-stream' }),
+      fakeElement('', { 'data-browser-frame-renderer': 'canvas-binary' }),
+    ],
+    [selectors.browserCanvasSurface]: [
+      fakeElement('', { 'data-browser-frame-renderer': 'canvas-binary' }),
+    ],
+    [selectors.browserHttpFrameImage]: [
+      fakeElement('', { src: '/api/sciforge/browser-host/sessions/legacy/frame' }),
+    ],
+  });
+
+  const evidence = collectRightPaneScopedSmokeSignals(documentLike);
+
+  assert.equal(evidence.browserLegacyLiveSurfaceCount, 2);
+  assert.equal(evidence.browserCanvasSurfaceCount, 1);
+  assert.equal(evidence.browserHttpFrameImageCount, 1);
+  assert.equal('innerHTML' in evidence, false);
+  assert.equal('screenshot' in evidence, false);
 });
 
 test('right pane scoped smoke default-tab evidence fails closed when tabstrip is missing', () => {

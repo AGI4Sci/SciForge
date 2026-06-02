@@ -1,8 +1,15 @@
 import {
+  VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE,
   VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE,
   type VirtualScreenInputIntentCommand,
   type VirtualScreenInputIntentSource,
 } from './input-intent-command.js';
+import type {
+  NativeHostAutomationBarrier,
+  NativeHostHumanInputEvent,
+  NativeHostSession,
+} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
+import type { GenericVisionAction } from './types.js';
 import { sanitizeId } from './utils.js';
 import {
   isVirtualDisplayReadinessControllable,
@@ -12,6 +19,12 @@ import {
   type VirtualDisplayProviderReadinessStatus,
   type VirtualDisplayReadiness,
 } from './virtual-display-provider.js';
+import { readVirtualAppScreenProviderSessionRecord } from './virtual-app-screen-provider-session-store.js';
+import {
+  readVirtualAppScreenNativeHostSessionRecord,
+  updateVirtualAppScreenNativeHostSessionFrame,
+  type VirtualAppScreenNativeHostSessionRecord,
+} from './virtual-app-screen-native-host-session-store.js';
 
 export const VIRTUAL_APP_SCREEN_INPUT_RUNTIME_SCHEMA =
   'sciforge.computer-use.virtual-app-screen-input-runtime.v1' as const;
@@ -64,6 +77,11 @@ export interface VirtualAppScreenInputRuntimeProviderExecutorOptions {
   provider: VirtualDisplayProviderL1Contract;
 }
 
+export interface VirtualAppScreenInputRuntimeNativeHostExecutorOptions {
+  executorId: string;
+  providerId: string;
+}
+
 export interface VirtualAppScreenInputRuntimeOptions {
   executors?: VirtualAppScreenInputRuntimeExecutor[];
   dryRun?: boolean;
@@ -80,6 +98,12 @@ interface InputRuntimeRefs {
   safeStopRef?: string;
 }
 
+interface NativeHostControlEvidence {
+  agentQueueRef?: string;
+  currentFrameRefreshRef?: string;
+  safeStopRef?: string;
+}
+
 const registeredVirtualAppScreenInputRuntimeExecutors = new Map<string, VirtualAppScreenInputRuntimeExecutor>();
 
 export function createVirtualAppScreenInputRuntimeProviderExecutor(
@@ -91,6 +115,23 @@ export function createVirtualAppScreenInputRuntimeProviderExecutor(
     supportedSources: options.supportedSources,
     execute: (command) => executeInputRuntimeWithProvider(command, options),
   };
+}
+
+export async function tryRunVirtualAppScreenInputRuntimeNativeHost(
+  command: VirtualScreenInputIntentCommand,
+  options: VirtualAppScreenInputRuntimeNativeHostExecutorOptions,
+): Promise<VirtualAppScreenInputRuntimeProjection | undefined> {
+  const binding = nativeHostInputBinding(command);
+  if (binding.status === 'no-host-binding') return undefined;
+  if (binding.status === 'blocked') {
+    return nativeHostBlockedProjection(command, options, binding.reason, binding.record);
+  }
+  const result = await (
+    command.source === VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE
+      ? executeNativeHostControlInput(command, options, binding.record)
+      : executeNativeHostCanvasInput(command, options, binding.record)
+  );
+  return validateVirtualAppScreenInputRuntimeResult(command, result);
 }
 
 export function registerVirtualAppScreenInputRuntimeExecutor(
@@ -284,7 +325,15 @@ async function executeInputRuntimeWithProvider(
   options: VirtualAppScreenInputRuntimeProviderExecutorOptions,
 ): Promise<VirtualAppScreenInputRuntimeProjection> {
   const runId = virtualAppScreenInputRuntimeRunId(command);
-  const operationOptions = inputRuntimeOperationOptions(command, runId);
+  const providerSessionRecord = readVirtualAppScreenProviderSessionRecord({
+    screenRef: command.refs.screenRef,
+    sessionRef: command.refs.sessionRef,
+  });
+  const providerSessionRef = providerSessionRecord?.providerLifecycleSessionRef ?? command.refs.sessionRef;
+  const providerCommand = providerSessionRef === command.refs.sessionRef
+    ? command
+    : inputRuntimeCommandWithSessionRef(command, providerSessionRef);
+  const operationOptions = inputRuntimeOperationOptions(providerCommand, runId);
   const probe = await options.provider.probe(operationOptions);
   const probeBlocked = blockedProviderInputRuntimeResult(command, options, 'probe', probe, probe.readiness);
   if (probeBlocked) return probeBlocked;
@@ -295,7 +344,7 @@ async function executeInputRuntimeWithProvider(
     const sendBlocked = blockedProviderInputRuntimeResult(command, options, 'sendInputIntent', sendInputIntent, probe.readiness);
     if (sendBlocked) return sendBlocked;
     operationResults.push(sendInputIntent);
-    return executedInputRuntimeResult(command, options, runId, operationResults);
+    return executedInputRuntimeResult(command, options, runId, operationResults, providerSessionRef);
   }
 
   const control = command.controlKind === 'stop-session'
@@ -314,7 +363,7 @@ async function executeInputRuntimeWithProvider(
     operationResults.push(readFrame);
   }
 
-  return executedInputRuntimeResult(command, options, runId, operationResults);
+  return executedInputRuntimeResult(command, options, runId, operationResults, providerSessionRef);
 }
 
 function blockedProviderInputRuntimeResult(
@@ -400,10 +449,11 @@ function executedInputRuntimeResult(
   options: Pick<VirtualAppScreenInputRuntimeProviderExecutorOptions, 'executorId' | 'providerId'>,
   runId: string,
   results: VirtualDisplayProviderInvokeResult[],
+  providerSessionRef = command.refs.sessionRef,
 ): VirtualAppScreenInputRuntimeProjection {
   const runtimeRefs = inputRuntimeRefs(command, runId);
   const refs = executedRefs(results);
-  const inconsistentProviderEvidence = validateExecutedProviderRefs(command, results, refs);
+  const inconsistentProviderEvidence = validateExecutedProviderRefs(command, results, refs, providerSessionRef);
   if (inconsistentProviderEvidence) {
     return virtualAppScreenInputRuntimeProjection(
       command,
@@ -451,7 +501,7 @@ function executedInputRuntimeResult(
     executorId: options.executorId,
     providerId: providerId(options, results),
     status: 'executed',
-    sessionRef: refs.sessionRef,
+    sessionRef: command.refs.sessionRef,
     providerExecuted: true,
     mutatingActionExecuted: evidence.mutatingActionExecuted,
     inputIntentRefs,
@@ -495,7 +545,7 @@ function executedInputRuntimeResult(
       visibleScreenRefs: [command.refs.screenRef].filter((ref): ref is string => Boolean(ref)),
       targetAppRef: command.refs.targetAppRef,
       targetWindowRef: command.refs.targetWindowRef,
-      sessionRef: refs.sessionRef,
+      sessionRef: command.refs.sessionRef,
       frameRef: currentFrameRef,
       currentFrameRef,
       beforeFrameRef: refs.beforeFrameRef,
@@ -531,7 +581,7 @@ function executedInputRuntimeResult(
         providerExecuted: true,
         mutatingActionExecuted: evidence.mutatingActionExecuted,
         refs: {
-          sessionRef: refs.sessionRef,
+          sessionRef: command.refs.sessionRef,
           screenRef: command.refs.screenRef,
           frameRef: currentFrameRef,
           inputLeaseRef: refs.inputLeaseRef,
@@ -594,6 +644,162 @@ function executedInputRuntimeResult(
       },
     },
   };
+}
+
+async function executeNativeHostCanvasInput(
+  command: Extract<VirtualScreenInputIntentCommand, { source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE }>,
+  options: VirtualAppScreenInputRuntimeNativeHostExecutorOptions,
+  record: VirtualAppScreenNativeHostSessionRecord,
+): Promise<VirtualAppScreenInputRuntimeProjection> {
+  const runId = virtualAppScreenInputRuntimeRunId(command);
+  const runtimeRefs = inputRuntimeRefs(command, runId);
+  const inputEvent = nativeHostHumanInputEvent(command, runtimeRefs);
+  if ('reason' in inputEvent) return nativeHostBlockedProjection(command, options, inputEvent.reason, record);
+
+  const accepted = await record.host.sendHumanInput(record.sessionId, inputEvent.event);
+  if (accepted.status !== 'ok') {
+    return nativeHostBlockedProjection(command, options, `Native Host blocked input: ${accepted.error.message}`, record);
+  }
+
+  const afterFrame = record.host.readFrame(record.sessionId, accepted.value.inputAcceptedRef);
+  if (afterFrame.status !== 'ok') {
+    return nativeHostBlockedProjection(command, options, `Native Host could not refresh the frame after input: ${afterFrame.error.message}`, record);
+  }
+  updateVirtualAppScreenNativeHostSessionFrame({ sessionRef: record.sessionRef, frame: afterFrame.value });
+
+  const ledgerValidation = record.host.validateLedger(record.sessionId, {
+    requireFrame: true,
+    requireHumanInput: true,
+    requireGrantValidation: true,
+  });
+  if (!ledgerValidation.ok) {
+    return nativeHostBlockedProjection(
+      command,
+      options,
+      `Native Host input ledger failed validation: ${ledgerValidation.issues.join(' ')}`,
+      record,
+    );
+  }
+
+  const beforeFrameRef = command.refs.frameRef ?? record.currentFrameRef;
+  const actionResult = nativeHostInputInvokeResult({
+    command,
+    options,
+    record,
+    intent: 'sendInputIntent',
+    runtimeRefs,
+    beforeFrameRef,
+    afterFrameRef: afterFrame.value.frameRef,
+    executorEventRefs: [accepted.value.inputAcceptedRef],
+    mutatingActionExecuted: true,
+  });
+  const readFrameResult = nativeHostInputInvokeResult({
+    command,
+    options,
+    record,
+    intent: 'readFrame',
+    runtimeRefs,
+    beforeFrameRef,
+    afterFrameRef: afterFrame.value.frameRef,
+    currentFrameRef: afterFrame.value.frameRef,
+    mutatingActionExecuted: false,
+  });
+  return executedInputRuntimeResult(command, options, runId, [actionResult, readFrameResult]);
+}
+
+async function executeNativeHostControlInput(
+  command: Extract<VirtualScreenInputIntentCommand, { source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE }>,
+  options: VirtualAppScreenInputRuntimeNativeHostExecutorOptions,
+  record: VirtualAppScreenNativeHostSessionRecord,
+): Promise<VirtualAppScreenInputRuntimeProjection> {
+  const runId = virtualAppScreenInputRuntimeRunId(command);
+  const runtimeRefs = inputRuntimeRefs(command, runId);
+  const beforeFrameRef = record.currentFrameRef ?? command.refs.frameRef;
+  if (!beforeFrameRef) return nativeHostBlockedProjection(command, options, 'Native Host control requires a current frame.', record);
+
+  const barrier = nativeHostControlBarrier(command, record, beforeFrameRef);
+  const control = await (
+    command.controlKind === 'stop-session'
+      ? record.host.closeSession(record.sessionId)
+      : command.controlKind === 'resume-agent'
+        ? record.host.resumeAgent(record.sessionId, barrier)
+        : record.host.pauseAgent(record.sessionId, command.controlKind)
+  );
+  if (control.status !== 'ok') {
+    return nativeHostBlockedProjection(command, options, `Native Host blocked control "${command.controlKind}": ${control.error.message}`, record);
+  }
+  const controlEvidence = nativeHostControlEvidenceFromSession(control.value);
+  const missingControlEvidence = [
+    controlEvidence.agentQueueRef ? undefined : 'agentQueueRef',
+    command.controlKind === 'resume-agent' && !controlEvidence.currentFrameRefreshRef ? 'currentFrameRefreshRef' : undefined,
+    command.controlKind === 'stop-session' && !controlEvidence.safeStopRef ? 'safeStopRef' : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (missingControlEvidence.length) {
+    return nativeHostBlockedProjection(
+      command,
+      options,
+      `Native Host control adapter did not return provider-validated control evidence: ${missingControlEvidence.join(', ')}.`,
+      record,
+    );
+  }
+
+  const refreshedFrame = command.controlKind === 'resume-agent'
+    ? record.host.readFrame(record.sessionId, runtimeRefs.currentFrameRefreshRef)
+    : undefined;
+  if (refreshedFrame?.status === 'blocked') {
+    return nativeHostBlockedProjection(command, options, `Native Host could not refresh the frame after resume: ${refreshedFrame.error.message}`, record);
+  }
+  if (refreshedFrame?.status === 'ok') {
+    updateVirtualAppScreenNativeHostSessionFrame({ sessionRef: record.sessionRef, frame: refreshedFrame.value });
+  }
+
+  const ledgerValidation = record.host.validateLedger(record.sessionId, {
+    requireFrame: true,
+    requireGrantValidation: true,
+  });
+  if (!ledgerValidation.ok) {
+    return nativeHostBlockedProjection(
+      command,
+      options,
+      `Native Host control ledger failed validation: ${ledgerValidation.issues.join(' ')}`,
+      record,
+    );
+  }
+
+  const afterFrameRef = refreshedFrame?.status === 'ok'
+    ? refreshedFrame.value.frameRef
+    : beforeFrameRef;
+  const controlResult = nativeHostInputInvokeResult({
+    command,
+    options,
+    record,
+    intent: command.controlKind === 'stop-session' ? 'closeSession' : command.controlKind === 'resume-agent' ? 'resume' : 'pause',
+    runtimeRefs,
+    beforeFrameRef,
+    afterFrameRef,
+    currentFrameRef: afterFrameRef,
+    executorEventRefs: [nativeHostRuntimeRef(record, 'control-events', `${command.controlKind}.json`)],
+    controlEvidence,
+    mutatingActionExecuted: true,
+  });
+  const results = refreshedFrame?.status === 'ok'
+    ? [
+        controlResult,
+        nativeHostInputInvokeResult({
+          command,
+          options,
+          record,
+          intent: 'readFrame',
+          runtimeRefs,
+          beforeFrameRef,
+          afterFrameRef,
+          currentFrameRef: afterFrameRef,
+          controlEvidence,
+          mutatingActionExecuted: false,
+        }),
+      ]
+    : [controlResult];
+  return executedInputRuntimeResult(command, options, runId, results);
 }
 
 function virtualAppScreenInputRuntimeVirtualScreenData(
@@ -852,13 +1058,22 @@ function validateExecutedProviderRefs(
   command: VirtualScreenInputIntentCommand,
   results: VirtualDisplayProviderInvokeResult[],
   refs: ReturnType<typeof executedRefs>,
+  providerSessionRef = command.refs.sessionRef,
 ) {
   const providerActionResults = results.filter((result) => result.intent !== 'probe');
   if (!providerActionResults.length) return 'no mutating provider operation returned evidence';
-  const sessionRef = command.refs.sessionRef;
-  if (!sessionRef) return 'command.sessionRef was missing';
+  const publicSessionRef = command.refs.sessionRef;
+  if (!publicSessionRef) return 'command.sessionRef was missing';
+  if (!providerSessionRef) return 'provider lifecycle sessionRef was missing';
+  const providerSessionRefLabel = providerSessionRef === publicSessionRef
+    ? 'command.sessionRef'
+    : 'provider lifecycle sessionRef';
   if (!refs.sessionRef) return 'provider sessionRef was missing';
-  if (refs.sessionRef !== sessionRef) return 'provider sessionRef did not match command.sessionRef';
+  if (refs.sessionRef !== providerSessionRef) {
+    return providerSessionRef === publicSessionRef
+      ? 'provider sessionRef did not match command.sessionRef'
+      : 'provider sessionRef did not match recorded provider lifecycle sessionRef';
+  }
   if (command.refs.inputLeaseRef && !refs.inputLeaseRef) return 'provider inputLeaseRef was missing';
   if (command.refs.inputLeaseRef && refs.inputLeaseRef !== command.refs.inputLeaseRef) {
     return 'provider inputLeaseRef did not match command.inputLeaseRef';
@@ -881,7 +1096,7 @@ function validateExecutedProviderRefs(
     const operation = result.intent;
     const runMismatch = requireProviderResultRef(result, operation, 'currentRunRef', expectedCurrentRunRef, 'first provider operation currentRunRef');
     if (runMismatch) return runMismatch;
-    const sessionMismatch = requireProviderResultRef(result, operation, 'sessionRef', sessionRef, 'command.sessionRef');
+    const sessionMismatch = requireProviderResultRef(result, operation, 'sessionRef', providerSessionRef, providerSessionRefLabel);
     if (sessionMismatch) return sessionMismatch;
     if (command.refs.inputLeaseRef) {
       const leaseMismatch = requireProviderResultRef(result, operation, 'inputLeaseRef', command.refs.inputLeaseRef, 'command.inputLeaseRef');
@@ -926,6 +1141,318 @@ function controlEvidenceRefsFromProvider(
   };
 }
 
+type NativeHostInputBinding =
+  | { status: 'no-host-binding' }
+  | { status: 'blocked'; reason: string; record?: VirtualAppScreenNativeHostSessionRecord }
+  | { status: 'ready'; record: VirtualAppScreenNativeHostSessionRecord };
+
+function nativeHostInputBinding(command: VirtualScreenInputIntentCommand): NativeHostInputBinding {
+  const providerSessionRecord = readVirtualAppScreenProviderSessionRecord({
+    screenRef: command.refs.screenRef,
+    sessionRef: command.refs.sessionRef,
+  });
+  if (!providerSessionRecord) {
+    return isNativeHostSessionRef(command.refs.sessionRef)
+      ? { status: 'blocked', reason: 'Native Host InputIntent has no recorded current-session provider ownership record.' }
+      : { status: 'no-host-binding' };
+  }
+  if (providerSessionRecord.owner !== 'NativeVirtualAppScreenHost') return { status: 'no-host-binding' };
+
+  const record = readVirtualAppScreenNativeHostSessionRecord({
+    screenRef: command.refs.screenRef,
+    sessionRef: command.refs.sessionRef,
+  });
+  if (!record) {
+    return {
+      status: 'blocked',
+      reason: 'Native Host InputIntent found Host-owned public refs but no live Host session binding in this runtime.',
+    };
+  }
+
+  const mismatches = [
+    command.refs.sessionRef !== record.sessionRef ? 'sessionRef' : undefined,
+    command.refs.screenRef && command.refs.screenRef !== record.screenRef ? 'screenRef' : undefined,
+    command.refs.targetWindowRef && record.targetWindowRef && command.refs.targetWindowRef !== record.targetWindowRef ? 'targetWindowRef' : undefined,
+    command.refs.inputLeaseRef !== record.inputLeaseRef ? 'inputLeaseRef' : undefined,
+    command.refs.actionAdapterRef && command.refs.actionAdapterRef !== record.actionAdapterRef ? 'actionAdapterRef' : undefined,
+    command.refs.adapterReadinessRef && command.refs.adapterReadinessRef !== record.adapterReadinessRef ? 'adapterReadinessRef' : undefined,
+    command.refs.evidenceLedgerRef && command.refs.evidenceLedgerRef !== record.evidenceLedgerRef ? 'evidenceLedgerRef' : undefined,
+    command.refs.frameRef && record.currentFrameRef && command.refs.frameRef !== record.currentFrameRef ? 'currentFrameRef' : undefined,
+    providerSessionRecord.sessionRef !== record.sessionRef ? 'providerSessionRecord.sessionRef' : undefined,
+    providerSessionRecord.liveSurfaceRef !== record.liveSurfaceRef ? 'liveSurfaceRef' : undefined,
+    providerSessionRecord.frameStreamRef !== record.frameStreamRef ? 'frameStreamRef' : undefined,
+    providerSessionRecord.adapterReadinessRef !== record.adapterReadinessRef ? 'providerSessionRecord.adapterReadinessRef' : undefined,
+    providerSessionRecord.evidenceLedgerRef !== record.evidenceLedgerRef ? 'providerSessionRecord.evidenceLedgerRef' : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (mismatches.length) {
+    return {
+      status: 'blocked',
+      reason: `Native Host InputIntent refs do not match the recorded current Host session: ${mismatches.join(', ')}.`,
+      record,
+    };
+  }
+
+  if (!record.liveBindingAttachGrantRef) {
+    return { status: 'blocked', reason: 'Native Host InputIntent has no recorded live binding grant ref.', record };
+  }
+  const grant = record.host.validateGrant(record.liveBindingAttachGrantRef);
+  if (!grant.ok) {
+    return {
+      status: 'blocked',
+      reason: `Native Host InputIntent grant validation failed: ${grant.issues.join(' ')}`,
+      record,
+    };
+  }
+  if (record.grantValidationRef && grant.validationLedgerEntryRef !== record.grantValidationRef) {
+    return {
+      status: 'blocked',
+      reason: 'Native Host InputIntent grant validation ref does not match the recorded attach validation.',
+      record,
+    };
+  }
+
+  return { status: 'ready', record };
+}
+
+function nativeHostBlockedProjection(
+  command: VirtualScreenInputIntentCommand,
+  options: VirtualAppScreenInputRuntimeNativeHostExecutorOptions,
+  reason: string,
+  record?: VirtualAppScreenNativeHostSessionRecord,
+): VirtualAppScreenInputRuntimeProjection {
+  const runId = virtualAppScreenInputRuntimeRunId(command);
+  const runtimeRefs = inputRuntimeRefs(command, runId);
+  const projection = virtualAppScreenInputRuntimeProjection(command, reason);
+  return {
+    ...projection,
+    status: 'blocked',
+    executorId: options.executorId,
+    providerId: options.providerId,
+    evidence: {
+      ...projection.evidence,
+      evidenceRefs: uniqueRefs([
+        ...projection.evidence.evidenceRefs,
+        record?.liveBindingAttachGrantRef,
+        record?.grantValidationRef,
+        record?.liveSurfaceRef,
+        record?.frameStreamRef,
+        record?.currentFrameRef,
+      ]),
+    },
+    routeDecision: {
+      ...projection.routeDecision,
+      executorId: options.executorId,
+      providerId: options.providerId,
+      status: 'blocked',
+      blockedReason: reason,
+      providerExecuted: false,
+      mutatingActionExecuted: false,
+      adapterReadinessRef: record?.adapterReadinessRef ?? command.refs.adapterReadinessRef,
+      evidenceLedgerRef: record?.evidenceLedgerRef ?? runtimeRefs.evidenceLedgerRef,
+    },
+    virtualScreenData: {
+      ...projection.virtualScreenData,
+      status: 'blocked',
+      attachState: 'blocked',
+      adapterReadinessRef: record?.adapterReadinessRef ?? command.refs.adapterReadinessRef,
+      evidenceLedgerRef: record?.evidenceLedgerRef ?? runtimeRefs.evidenceLedgerRef,
+      blockedReason: reason,
+      runSummary: {
+        ...recordValue(projection.virtualScreenData.runSummary),
+        status: 'blocked',
+        providerExecuted: false,
+        mutatingActionExecuted: false,
+        completionEligible: false,
+        blockedReason: reason,
+      },
+    },
+  };
+}
+
+function nativeHostHumanInputEvent(
+  command: Extract<VirtualScreenInputIntentCommand, { source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE }>,
+  runtimeRefs: InputRuntimeRefs,
+): { event: NativeHostHumanInputEvent } | { reason: string } {
+  if (!command.refs.screenRef) return { reason: 'Native Host canvas input requires screenRef.' };
+  const action = command.action;
+  const base = {
+    screenRef: command.refs.screenRef,
+    targetWindowRef: command.refs.targetWindowRef,
+    inputIntentRef: runtimeRefs.inputIntentRef,
+  };
+  if (action.type === 'click' || action.type === 'double_click') {
+    const point = pointRatios(command, action.x, action.y, 'x-ratio', 'y-ratio');
+    if ('reason' in point) return point;
+    return {
+      event: {
+        ...base,
+        kind: action.type === 'double_click' ? 'double-click' : 'click',
+        xRatio: point.xRatio,
+        yRatio: point.yRatio,
+      },
+    };
+  }
+  if (action.type === 'drag') {
+    const start = pointRatios(command, action.fromX, action.fromY, 'start-x-ratio', 'start-y-ratio');
+    if ('reason' in start) return start;
+    const end = pointRatios(command, action.toX, action.toY, 'end-x-ratio', 'end-y-ratio');
+    if ('reason' in end) return end;
+    return {
+      event: {
+        ...base,
+        kind: 'drag',
+        xRatio: start.xRatio,
+        yRatio: start.yRatio,
+        endXRatio: end.xRatio,
+        endYRatio: end.yRatio,
+      },
+    };
+  }
+  if (action.type === 'scroll') {
+    const amount = Math.max(1, action.amount ?? 1);
+    const delta = 120 * amount;
+    return {
+      event: {
+        ...base,
+        kind: 'scroll',
+        deltaX: action.direction === 'left' ? -delta : action.direction === 'right' ? delta : 0,
+        deltaY: action.direction === 'up' ? -delta : action.direction === 'down' ? delta : 0,
+      },
+    };
+  }
+  if (action.type === 'type_text') {
+    return {
+      event: {
+        ...base,
+        kind: 'type-text',
+        textRef: `${runtimeRefs.inputIntentRef}#text`,
+      },
+    };
+  }
+  if (action.type === 'press_key') {
+    return {
+      event: {
+        ...base,
+        kind: 'key-down',
+        key: action.key,
+      },
+    };
+  }
+  if (action.type === 'hotkey') {
+    return {
+      event: {
+        ...base,
+        kind: 'key-down',
+        keySequence: action.keys,
+      },
+    };
+  }
+  return { reason: `Native Host canvas input does not support action type "${(action as GenericVisionAction).type}".` };
+}
+
+function nativeHostControlBarrier(
+  command: Extract<VirtualScreenInputIntentCommand, { source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE }>,
+  record: VirtualAppScreenNativeHostSessionRecord,
+  beforeFrameRef: string,
+): NativeHostAutomationBarrier {
+  return {
+    barrierRef: command.refs.leaseControlRef ?? nativeHostRuntimeRef(record, 'barriers', `${command.controlKind}.json`),
+    currentRunRef: record.currentRunRef,
+    requiredReadinessRef: record.adapterReadinessRef,
+    beforeFrameRef,
+  };
+}
+
+function nativeHostControlEvidenceFromSession(session: NativeHostSession): NativeHostControlEvidence {
+  const evidence = recordValue(session.profile.metadata?.nativeHostControlEvidence);
+  return {
+    agentQueueRef: stringValue(evidence.agentQueueRef),
+    currentFrameRefreshRef: stringValue(evidence.currentFrameRefreshRef),
+    safeStopRef: stringValue(evidence.safeStopRef),
+  };
+}
+
+function nativeHostInputInvokeResult(params: {
+  command: VirtualScreenInputIntentCommand;
+  options: VirtualAppScreenInputRuntimeNativeHostExecutorOptions;
+  record: VirtualAppScreenNativeHostSessionRecord;
+  intent: VirtualDisplayProviderInvokeResult['intent'];
+  runtimeRefs: InputRuntimeRefs;
+  beforeFrameRef?: string;
+  afterFrameRef?: string;
+  currentFrameRef?: string;
+  executorEventRefs?: string[];
+  controlEvidence?: NativeHostControlEvidence;
+  mutatingActionExecuted: boolean;
+}): VirtualDisplayProviderInvokeResult {
+  return {
+    schemaVersion: 'sciforge.virtual-display.provider-invoke-result.v1',
+    intent: params.intent,
+    providerId: params.options.providerId,
+    status: 'ready',
+    refs: {
+      currentRunRef: params.record.currentRunRef,
+      sessionRef: params.command.refs.sessionRef,
+      inputLeaseRef: params.command.refs.inputLeaseRef,
+      actionAdapterRef: params.command.refs.actionAdapterRef,
+      adapterReadinessRef: params.record.adapterReadinessRef,
+      evidenceLedgerRef: params.record.evidenceLedgerRef,
+      currentFrameRef: params.currentFrameRef ?? params.afterFrameRef ?? params.record.currentFrameRef,
+      beforeFrameRef: params.beforeFrameRef ?? params.record.currentFrameRef,
+      afterFrameRef: params.afterFrameRef ?? params.beforeFrameRef ?? params.record.currentFrameRef,
+      beforeAfterFrameRefs: [
+        nativeHostRuntimeRef(params.record, 'before-after', `${sanitizeId(params.command.intentKind)}.json`),
+      ],
+      inputIntentRefs: [params.runtimeRefs.inputIntentRef],
+      executorEventRefs: params.executorEventRefs ?? [params.runtimeRefs.executorEventRef],
+      verificationRefs: [
+        nativeHostRuntimeRef(params.record, 'verification', `${sanitizeId(params.command.intentKind)}.json`),
+      ],
+      agentQueueRef: params.controlEvidence?.agentQueueRef,
+      currentFrameRefreshRef: params.controlEvidence?.currentFrameRefreshRef,
+      safeStopRef: params.controlEvidence?.safeStopRef,
+    },
+    providerExecuted: true,
+    mutatingActionExecuted: params.mutatingActionExecuted,
+    rawPayloadWritten: false,
+  };
+}
+
+function pointRatios(
+  command: VirtualScreenInputIntentCommand,
+  x: number | undefined,
+  y: number | undefined,
+  xRatioKey: string,
+  yRatioKey: string,
+): { xRatio: number; yRatio: number } | { reason: string } {
+  const xRatio = command.ratios[xRatioKey] ?? ratioFromCoordinate(x, command.frame?.width);
+  const yRatio = command.ratios[yRatioKey] ?? ratioFromCoordinate(y, command.frame?.height);
+  if (xRatio === undefined || yRatio === undefined) {
+    return { reason: `Native Host pointer input requires ${xRatioKey}/${yRatioKey} or frame-space coordinates.` };
+  }
+  return {
+    xRatio: clampRatio(xRatio),
+    yRatio: clampRatio(yRatio),
+  };
+}
+
+function ratioFromCoordinate(value: number | undefined, size: number | undefined) {
+  if (value === undefined || size === undefined || size <= 0) return undefined;
+  return value / size;
+}
+
+function clampRatio(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function nativeHostRuntimeRef(record: VirtualAppScreenNativeHostSessionRecord, scope: string, leaf: string) {
+  return `computer-use:native-host/input-runtime/${record.sessionId}/${scope}/${leaf}`;
+}
+
+function isNativeHostSessionRef(value: string | undefined) {
+  return value?.startsWith('computer-use:native-host/sessions/') === true;
+}
+
 function inputRuntimeOperationOptions(
   command: VirtualScreenInputIntentCommand,
   runId: string,
@@ -946,8 +1473,25 @@ function inputRuntimeOperationOptions(
   } as VirtualDisplayProviderOperationOptions & { inputIntent: Record<string, unknown> };
 }
 
+function inputRuntimeCommandWithSessionRef(
+  command: VirtualScreenInputIntentCommand,
+  sessionRef: string,
+): VirtualScreenInputIntentCommand {
+  return {
+    ...command,
+    refs: {
+      ...command.refs,
+      sessionRef,
+    },
+  } as VirtualScreenInputIntentCommand;
+}
+
 function firstStringRef(results: VirtualDisplayProviderInvokeResult[], key: string) {
   return results.map((result) => stringRef(result, key)).find((ref): ref is string => Boolean(ref));
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
 function firstStringListRef(results: VirtualDisplayProviderInvokeResult[], key: string) {
@@ -992,4 +1536,8 @@ function statusReason(status: VirtualDisplayProviderReadinessStatus) {
 
 function uniqueRefs(refs: Array<string | undefined>) {
   return [...new Set(refs.filter((ref): ref is string => Boolean(ref?.trim())))];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }

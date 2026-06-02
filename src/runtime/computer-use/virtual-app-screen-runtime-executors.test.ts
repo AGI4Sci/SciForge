@@ -237,9 +237,10 @@ test('runtime executor bootstrap can opt into native driver hook factories with 
         assert.equal(result.evidence.surfaceTransport?.owner, 'VirtualDisplayProvider');
         assert.equal(result.evidence.surfaceTransport?.productFallback, false);
         assert.equal(result.evidence.surfaceTransport?.singleInteractiveTruth, true);
-        assert.match(result.refs.sessionRef ?? '', /^\.sciforge\/vision-runs\/.+\/virtual-display-provider\/session\.json$/);
-        assert.match(result.refs.liveSurfaceRef ?? '', /^\.sciforge\/vision-runs\/.+\/virtual-display-provider\/live-surface\.json$/);
-        assert.match(result.refs.currentFrameRef ?? '', /^\.sciforge\/vision-runs\/.+\/virtual-display-provider\/frames\/current\.json$/);
+        assert.match(result.refs.sessionRef ?? '', /^computer-use:native-host\/sessions\/session-1\/session\.json$/);
+        assert.match(result.refs.liveSurfaceRef ?? '', /^computer-use:native-host\/surfaces\//);
+        assert.match(result.refs.currentFrameRef ?? '', /^computer-use:native-host\/frames\//);
+        assert.match(result.refs.platformDriverRef ?? '', /^computer-use:native-host\/platform-drivers\//);
         assert.equal(data.attachState, 'attached');
       } finally {
         resetVirtualAppScreenRuntimeExecutorsForTests();
@@ -656,7 +657,10 @@ test('runtime executor bootstrap does not take precedence over an already regist
         screenRef: command.refs.screenRef,
         targetAppRef: command.refs.targetAppRef,
         targetWindowRef: 'window:product-test/main',
+        inputLeaseRef: 'computer-use:session/product-test/input-lease.json',
+        actionAdapterRef: 'computer-use:session/product-test/action-adapter.json',
         adapterReadinessRef: command.refs.readinessRef,
+        platformDriverRef: 'computer-use:session/product-test/platform-driver.json',
         evidenceLedgerRef: 'computer-use:session/product-test/evidence-ledger.json',
         guiPresentRef: command.refs.guiPresentRef,
       },
@@ -668,6 +672,11 @@ test('runtime executor bootstrap does not take precedence over an already regist
         currentFrameMaterialized: true,
         guiPresented: true,
         isolationVerified: true,
+        platformDriverReady: true,
+        permissionRequired: false,
+        permissionGranted: true,
+        backgroundRenderable: true,
+        diagnosticOnly: false,
         affectsPhysicalDisplay: false,
         requiresFocusSteal: false,
         sharedSystemInputUsed: false,
@@ -693,6 +702,7 @@ test('runtime executor bootstrap does not take precedence over an already regist
         },
         evidenceRefs: [
           'computer-use:session/product-test/surface-transport.json',
+          'computer-use:session/product-test/platform-driver.json',
           'computer-use:session/product-test/evidence-ledger.json',
         ],
       },
@@ -706,6 +716,212 @@ test('runtime executor bootstrap does not take precedence over an already regist
     assert.equal(driverTouched, false);
   } finally {
     unregister();
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+  }
+});
+
+test('runtime executor bootstrap routes attached Host input through Host binding before provider fallback', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      enabled: true,
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached');
+    assert.ok(attachResult.refs.sessionRef);
+    assert.ok(attachResult.refs.screenRef);
+    assert.ok(attachResult.refs.targetAppRef);
+    assert.ok(attachResult.refs.targetWindowRef);
+    assert.ok(attachResult.refs.currentFrameRef);
+    assert.ok(attachResult.refs.inputLeaseRef);
+    assert.ok(attachResult.refs.actionAdapterRef);
+    assert.ok(attachResult.refs.evidenceLedgerRef);
+
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: attachResult.refs.sessionRef,
+      screenRef: attachResult.refs.screenRef,
+      targetAppRef: attachResult.refs.targetAppRef,
+      targetWindowRef: attachResult.refs.targetWindowRef,
+      frameRef: attachResult.refs.currentFrameRef,
+      inputLeaseRef: attachResult.refs.inputLeaseRef,
+      actionAdapterRef: attachResult.refs.actionAdapterRef,
+      adapterReadinessRef: attachResult.refs.adapterReadinessRef,
+      evidenceLedgerRef: attachResult.refs.evidenceLedgerRef,
+    }));
+
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.executorId, 'input-runtime:macos-virtual-display-provider');
+    assert.equal(result.providerId, 'native-virtual-app-screen-host');
+    assert.equal(result.evidence.providerExecuted, false);
+    assert.equal(result.evidence.mutatingActionExecuted, false);
+    assert.match(result.message, /isolated input\/control hook is not registered/);
+    assert.doesNotMatch(result.message, /Provider readiness evidence/);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+  }
+});
+
+test('runtime executor bootstrap executes attached Host input through provider-backed Host adapter', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  let hookCalls = 0;
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      enabled: true,
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies({
+          sendInputIntent: (context) => {
+            hookCalls += 1;
+            assert.equal(context.operation, 'sendInputIntent');
+            assert.equal(context.inputIntent.sessionRef, context.refs.sessionRef);
+            const providerRootRef = stringRecordRef(context.refs, 'providerRootRef') ?? '.sciforge/vision-runs/runtime-executor-test/virtual-display-provider';
+            return {
+              ok: true,
+              mutatingActionExecuted: true,
+              providerEvidenceWritten: true,
+              refs: {
+                inputIntentRefs: [`${providerRootRef}/input-intents/host-click.json`],
+                executorEventRefs: [`${providerRootRef}/executor-events/host-click.json`],
+                beforeFrameRef: stringRecordRef(context.refs, 'currentFrameRef') ?? `${providerRootRef}/frames/host-click-before.json`,
+                afterFrameRef: `${providerRootRef}/frames/host-click-after.json`,
+                beforeAfterFrameRefs: [`${providerRootRef}/before-after/host-click.json`],
+                verificationRefs: [`${providerRootRef}/verification/host-click.json`],
+              },
+            };
+          },
+        }),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached');
+    assert.ok(attachResult.refs.sessionRef);
+    assert.ok(attachResult.refs.screenRef);
+    assert.ok(attachResult.refs.targetAppRef);
+    assert.ok(attachResult.refs.targetWindowRef);
+    assert.ok(attachResult.refs.currentFrameRef);
+    assert.ok(attachResult.refs.inputLeaseRef);
+    assert.ok(attachResult.refs.actionAdapterRef);
+    assert.ok(attachResult.refs.adapterReadinessRef);
+    assert.ok(attachResult.refs.evidenceLedgerRef);
+
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: attachResult.refs.sessionRef,
+      screenRef: attachResult.refs.screenRef,
+      targetAppRef: attachResult.refs.targetAppRef,
+      targetWindowRef: attachResult.refs.targetWindowRef,
+      frameRef: attachResult.refs.currentFrameRef,
+      inputLeaseRef: attachResult.refs.inputLeaseRef,
+      actionAdapterRef: attachResult.refs.actionAdapterRef,
+      adapterReadinessRef: attachResult.refs.adapterReadinessRef,
+      evidenceLedgerRef: attachResult.refs.evidenceLedgerRef,
+    }));
+
+    assert.equal(hookCalls, 1);
+    assert.equal(result.status, 'executed');
+    assert.equal(result.executorId, 'input-runtime:macos-virtual-display-provider');
+    assert.equal(result.providerId, 'native-virtual-app-screen-host');
+    assert.equal(result.evidence.providerExecuted, true);
+    assert.equal(result.evidence.mutatingActionExecuted, true);
+    assert.match(String(result.routeDecision.sessionRef), /^computer-use:native-host\/sessions\//);
+    assert.match(String(result.routeDecision.currentFrameRef), /^computer-use:native-host\/frames\//);
+    const runSummary = result.virtualScreenData.runSummary as { completionEligible?: unknown };
+    assert.equal(runSummary.completionEligible, false);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+  }
+});
+
+test('runtime executor bootstrap executes attached Host controls through provider-backed Host adapter', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const controlCalls: string[] = [];
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      enabled: true,
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies({
+          pauseAgentQueue: (context) => {
+            controlCalls.push(context.operation);
+            assert.equal(context.operation, 'pause');
+            assert.equal(context.inputIntent.sessionRef, context.refs.sessionRef);
+            return providerControlHookResult(context.refs, 'takeover');
+          },
+          resumeAgentQueue: (context) => {
+            controlCalls.push(context.operation);
+            assert.equal(context.operation, 'resume');
+            assert.equal(context.inputIntent.sessionRef, context.refs.sessionRef);
+            return providerControlHookResult(context.refs, 'resume-agent');
+          },
+          safeStopSession: (context) => {
+            controlCalls.push(context.operation);
+            assert.equal(context.operation, 'closeSession');
+            assert.equal(context.inputIntent.sessionRef, context.refs.sessionRef);
+            return providerControlHookResult(context.refs, 'stop-session');
+          },
+        }),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached');
+    assert.ok(attachResult.refs.sessionRef);
+    assert.ok(attachResult.refs.screenRef);
+    assert.ok(attachResult.refs.targetAppRef);
+    assert.ok(attachResult.refs.targetWindowRef);
+    assert.ok(attachResult.refs.inputLeaseRef);
+    assert.ok(attachResult.refs.actionAdapterRef);
+    assert.ok(attachResult.refs.adapterReadinessRef);
+    assert.ok(attachResult.refs.evidenceLedgerRef);
+
+    const baseRefs = {
+      sessionRef: attachResult.refs.sessionRef,
+      screenRef: attachResult.refs.screenRef,
+      targetAppRef: attachResult.refs.targetAppRef,
+      targetWindowRef: attachResult.refs.targetWindowRef,
+      inputLeaseRef: attachResult.refs.inputLeaseRef,
+      actionAdapterRef: attachResult.refs.actionAdapterRef,
+      adapterReadinessRef: attachResult.refs.adapterReadinessRef,
+      evidenceLedgerRef: attachResult.refs.evidenceLedgerRef,
+    };
+
+    const takeover = await runVirtualAppScreenInputRuntime(parsedControlInputCommandFromRefs('takeover', baseRefs));
+    assert.equal(takeover.status, 'executed', takeover.message);
+    assert.match(String(takeover.routeDecision.agentQueueRef), /^computer-use:native-host\/provider-adapter-control\//);
+    assert.equal(takeover.routeDecision.currentFrameRefreshRef, undefined);
+    assert.equal(takeover.routeDecision.safeStopRef, undefined);
+
+    const resume = await runVirtualAppScreenInputRuntime(parsedControlInputCommandFromRefs('resume-agent', baseRefs));
+    assert.equal(resume.status, 'executed', resume.message);
+    assert.match(String(resume.routeDecision.agentQueueRef), /^computer-use:native-host\/provider-adapter-control\//);
+    assert.match(String(resume.routeDecision.currentFrameRefreshRef), /^computer-use:native-host\/provider-adapter-control\//);
+    assert.match(String(resume.routeDecision.currentFrameRef), /^computer-use:native-host\/frames\//);
+
+    const stop = await runVirtualAppScreenInputRuntime(parsedControlInputCommandFromRefs('stop-session', baseRefs));
+    assert.equal(stop.status, 'executed', stop.message);
+    assert.match(String(stop.routeDecision.agentQueueRef), /^computer-use:native-host\/provider-adapter-control\//);
+    assert.match(String(stop.routeDecision.safeStopRef), /^computer-use:native-host\/provider-adapter-control\//);
+    assert.equal((stop.virtualScreenData.runSummary as Record<string, unknown>).closesUserRealApp, false);
+
+    assert.deepEqual(controlCalls, ['pause', 'resume', 'closeSession']);
+  } finally {
     resetVirtualAppScreenRuntimeExecutorsForTests();
   }
 });
@@ -785,6 +1001,76 @@ function parsedCanvasInputCommand() {
   ].join(' '));
   assert.equal(parsed.kind, 'parsed');
   if (parsed.kind !== 'parsed') throw new Error('expected parsed input command');
+  return parsed.command;
+}
+
+function parsedCanvasInputCommandFromRefs(refs: {
+  sessionRef: string;
+  screenRef: string;
+  targetAppRef: string;
+  targetWindowRef: string;
+  frameRef: string;
+  inputLeaseRef: string;
+  actionAdapterRef: string;
+  adapterReadinessRef: string;
+  evidenceLedgerRef: string;
+}) {
+  const parsed = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-canvas',
+    '--kind click',
+    `--session-ref "${refs.sessionRef}"`,
+    `--screen-ref "${refs.screenRef}"`,
+    `--target-app-ref "${refs.targetAppRef}"`,
+    `--target-window-ref "${refs.targetWindowRef}"`,
+    `--frame-ref "${refs.frameRef}"`,
+    `--input-lease-ref "${refs.inputLeaseRef}"`,
+    `--action-adapter-ref "${refs.actionAdapterRef}"`,
+    `--adapter-readiness-ref "${refs.adapterReadinessRef}"`,
+    `--evidence-ledger-ref "${refs.evidenceLedgerRef}"`,
+    '--frame-width 1440',
+    '--frame-height 900',
+    '--x-ratio 0.125',
+    '--y-ratio 0.5',
+  ].join(' '));
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') throw new Error('expected parsed input command');
+  return parsed.command;
+}
+
+function parsedControlInputCommandFromRefs(
+  controlKind: 'takeover' | 'resume-agent' | 'stop-session',
+  refs: {
+    sessionRef: string;
+    screenRef: string;
+    targetAppRef: string;
+    targetWindowRef: string;
+    inputLeaseRef: string;
+    actionAdapterRef: string;
+    adapterReadinessRef: string;
+    evidenceLedgerRef: string;
+  },
+) {
+  const parsed = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-control',
+    `--kind "${controlKind}"`,
+    `--session-ref "${refs.sessionRef}"`,
+    `--screen-ref "${refs.screenRef}"`,
+    `--target-app-ref "${refs.targetAppRef}"`,
+    `--target-window-ref "${refs.targetWindowRef}"`,
+    `--input-lease-ref "${refs.inputLeaseRef}"`,
+    '--user-lease-ref "computer-use:session/runtime-executor-test/leases/user.json"',
+    '--agent-lease-ref "computer-use:session/runtime-executor-test/leases/agent.json"',
+    '--active-lease-owner-ref "computer-use:session/runtime-executor-test/leases/owner-agent.json"',
+    '--active-lease-owner-role agent',
+    `--lease-control-ref "computer-use:session/runtime-executor-test/leases/${controlKind}.json"`,
+    `--action-adapter-ref "${refs.actionAdapterRef}"`,
+    `--adapter-readiness-ref "${refs.adapterReadinessRef}"`,
+    `--evidence-ledger-ref "${refs.evidenceLedgerRef}"`,
+  ].join(' '));
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') throw new Error('expected parsed control command');
   return parsed.command;
 }
 
@@ -897,6 +1183,46 @@ function fakeMacosDriverDependencies(overrides: Partial<MacosVirtualDisplayDrive
       writes.push({ ref, data });
     },
     ...overrides,
+  };
+}
+
+function stringRecordRef(record: Record<string, string | string[] | undefined>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function providerControlHookResult(
+  refs: Record<string, string | string[] | undefined>,
+  controlKind: 'takeover' | 'resume-agent' | 'stop-session',
+) {
+  const providerRootRef = stringRecordRef(refs, 'providerRootRef')
+    ?? '.sciforge/vision-runs/runtime-executor-test/virtual-display-provider';
+  const slug = controlKind.replace(/[^a-z0-9-]/giu, '-');
+  return {
+    ok: true,
+    refs: {
+      currentRunRef: stringRecordRef(refs, 'currentRunRef') ?? `${providerRootRef}/current-run.json`,
+      sessionRef: stringRecordRef(refs, 'sessionRef') ?? `${providerRootRef}/session.json`,
+      inputLeaseRef: stringRecordRef(refs, 'inputLeaseRef') ?? `${providerRootRef}/leases/input.json`,
+      actionAdapterRef: stringRecordRef(refs, 'actionAdapterRef') ?? `${providerRootRef}/adapters/action.json`,
+      adapterReadinessRef: stringRecordRef(refs, 'adapterReadinessRef') ?? `${providerRootRef}/readiness/action.json`,
+      evidenceLedgerRef: stringRecordRef(refs, 'evidenceLedgerRef') ?? `${providerRootRef}/evidence-ledger.json`,
+      beforeFrameRef: stringRecordRef(refs, 'currentFrameRef') ?? `${providerRootRef}/frames/${slug}-before.json`,
+      afterFrameRef: `${providerRootRef}/frames/${slug}-after.json`,
+      inputIntentRefs: [`${providerRootRef}/input-intents/${slug}.json`],
+      executorEventRefs: [`${providerRootRef}/executor-events/${slug}.json`],
+      beforeAfterFrameRefs: [`${providerRootRef}/before-after/${slug}.json`],
+      verificationRefs: [`${providerRootRef}/verification/${slug}.json`],
+      agentQueueRef: `${providerRootRef}/control-plane/${slug}/agent-queue.json`,
+      currentFrameRefreshRef: controlKind === 'resume-agent'
+        ? `${providerRootRef}/control-plane/${slug}/current-frame-refresh.json`
+        : undefined,
+      safeStopRef: controlKind === 'stop-session'
+        ? `${providerRootRef}/control-plane/${slug}/safe-stop.json`
+        : undefined,
+    },
+    mutatingActionExecuted: true,
+    providerEvidenceWritten: true,
   };
 }
 

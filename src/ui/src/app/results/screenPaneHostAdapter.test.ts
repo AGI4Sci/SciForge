@@ -176,6 +176,9 @@ test('screen pane host adapter builds refs-only live presentation attach request
     providerSessionOwnerRef: 'computer-use:provider-session/run-live/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/run-live/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/run-live/live-binding-attach-grant.json',
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: 'computer-use:provider-session/run-live/grant-validation.json',
+    grantValidationStatus: 'validated',
     surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
     surfaceTransport: 'native-frame-stream',
     platformDriverRef: 'computer-use:session/run-live/platform-driver.json',
@@ -208,6 +211,26 @@ test('screen pane host adapter builds refs-only live presentation attach request
   assert.equal(JSON.stringify(request).includes('executor'), false);
 });
 
+test('screen pane host adapter accepts revalidated provider sessions without faking provider execution', () => {
+  const payload = attachedHostPresentationPayload() as VirtualScreenPayload & {
+    providerExecuted?: boolean;
+    providerSessionRevalidated?: boolean;
+  };
+  delete payload.providerExecuted;
+  payload.providerSessionRevalidated = true;
+
+  const request = rightPaneVirtualScreenHostPresentationAttachRequest(payload, {
+    x: 1,
+    y: 2,
+    width: 640,
+    height: 480,
+  });
+
+  assert.equal(request?.providerExecuted, undefined);
+  assert.equal(request?.providerSessionRevalidated, true);
+  assert.equal(request?.visible, true);
+});
+
 test('screen pane host adapter fails closed without live complete safe refs', () => {
   assert.equal(rightPaneVirtualScreenHostPresentationAttachRequest({
     ...attachedHostPresentationPayload(),
@@ -232,6 +255,10 @@ test('screen pane host adapter fails closed without live complete safe refs', ()
   assert.equal(rightPaneVirtualScreenHostPresentationAttachRequest({
     ...attachedHostPresentationPayload(),
     liveBindingAttachGrantRef: undefined,
+  }, { x: 0, y: 0, width: 640, height: 480 }), undefined);
+  assert.equal(rightPaneVirtualScreenHostPresentationAttachRequest({
+    ...attachedHostPresentationPayload(),
+    grantValidationRef: undefined,
   }, { x: 0, y: 0, width: 640, height: 480 }), undefined);
   assert.equal(rightPaneVirtualScreenHostPresentationAttachRequest({
     ...attachedHostPresentationPayload(),
@@ -306,6 +333,9 @@ function screenArtifactFixture(): RuntimeArtifact {
     producerScenario: 'computer-use',
     schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
     data: {
+      status: 'ready',
+      attachState: 'replay',
+      surfaceMode: 'replay',
       sessionRef: 'computer-use:session/run-screen/session.json',
       frameRefs: ['computer-use:session/run-screen/frames/after.png'],
       replayRef: 'computer-use:replay/run-screen/replay.json',
@@ -331,6 +361,9 @@ function attachedHostPresentationPayload(): VirtualScreenPayload {
     providerSessionOwnerRef: 'computer-use:provider-session/run-live/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/run-live/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/run-live/live-binding-attach-grant.json',
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: 'computer-use:provider-session/run-live/grant-validation.json',
+    grantValidationStatus: 'validated',
     surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
     surfaceTransport: 'native-frame-stream',
     evidenceLedgerRef: 'computer-use:session/run-live/evidence-ledger.json',

@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { promisify } from 'node:util';
 import { _electron as electron, type Page } from 'playwright-core';
 
 import {
   type DesktopBrowserNativeLiveAcceptanceBounds,
+  type DesktopBrowserNativeLiveAcceptanceBenchmarkMetrics,
   type DesktopBrowserNativeLiveAcceptanceEvidence,
   assertDesktopBrowserNativeLiveAcceptanceCanClaimPass,
   rejectedDesktopLiveSubstitutes,
@@ -36,6 +39,7 @@ const rendererPath = resolve(projectRoot, 'dist-ui', 'index.html');
 const requireLive = process.env.SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE === '1';
 const verificationCommand = 'npm run smoke:desktop-browser-native-live-acceptance --silent';
 const strictVerificationCommand = 'SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE=1 npm run smoke:desktop-browser-native-live-acceptance --silent';
+const execFileAsync = promisify(execFile);
 
 class BlockedDesktopBrowserNativeLiveSmoke extends Error {
   constructor(message: string, readonly blockers: string[] = [message]) {
@@ -60,6 +64,12 @@ try {
   scratchRoot = await mkdtemp(join(tmpdir(), 'sciforge-desktop-browser-native-live-'));
   fixture = await startBrowserFixture();
   dummyProvider = await startDummyProvider();
+  const resourceSamples: ProcessResourceSample[] = [];
+  const rendererHeapSamplesMb: number[] = [];
+  const actionAckSamples: number[] = [];
+  let openStartedAt = Date.now();
+  let nativeSurfaceVisibleAt = openStartedAt;
+  let navigationHeartbeatAt = openStartedAt;
   electronApp = await electron.launch({
     args: [mainPath],
     env: {
@@ -75,9 +85,12 @@ try {
       SCIFORGE_PROXY_QUIET: '1',
     },
   });
+  const electronPid = electronProcessId(electronApp);
+  await recordProcessResourceSample(resourceSamples, electronPid);
 
   page = await electronApp.firstWindow();
   await page.waitForLoadState('domcontentloaded', { timeout: 30_000 });
+  await recordRendererHeapSample(rendererHeapSamplesMb, page);
   await page.waitForFunction(() => typeof (globalThis as typeof globalThis & {
     sciforgeDesktop?: { getRuntimeConfig?: () => Promise<unknown> };
   }).sciforgeDesktop?.getRuntimeConfig === 'function', undefined, { timeout: 10_000 });
@@ -89,9 +102,11 @@ try {
   assert.equal(config.schemaVersion, 'sciforge.desktop.runtime-config.v1');
   await waitForWorkspaceWriter(config.workspaceWriterBaseUrl);
 
+  openStartedAt = Date.now();
   await openBrowserPaneAt(page, fixture.url);
   const nativeFrame = page.locator('[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"]');
   await nativeFrame.waitFor({ state: 'visible', timeout: 30_000 });
+  nativeSurfaceVisibleAt = Date.now();
   const liveSurfaceRef = await nativeFrame.getAttribute('data-browser-live-surface-ref');
   const sessionId = sessionIdFromLiveSurfaceRef(liveSurfaceRef);
   const frameBounds = await nativeFrame.boundingBox();
@@ -115,25 +130,87 @@ try {
 
   const typedToken = `SCIFORGE_NATIVE_LIVE_${Date.now().toString(36)}`;
   const nativeAuditBeforeAction = await readNativeSurfaceAudit(nativeAdapterBaseUrl, sessionId);
-  const paintAckState = await sendBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+  const paintAckAction = await timedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
     action: 'click',
     x: 36,
     y: 38,
     actionId: 'desktop-native-live-click-paint-ack',
   });
+  const paintAckState = paintAckAction.state;
+  actionAckSamples.push(paintAckAction.durationMs);
   const nativeAuditAfterActionAck = await readNativeSurfaceAudit(nativeAdapterBaseUrl, sessionId);
   const nativeHeartbeatState = await getJson(`${nativeAdapterBaseUrl}/sessions/${encodeURIComponent(sessionId)}/state`);
   const heartbeatSessionState = await readBrowserHostSessionState(config.workspaceWriterBaseUrl, config.workspacePath, sessionId);
+  navigationHeartbeatAt = Date.now();
   const nativeAuditAfterHeartbeat = await readNativeSurfaceAudit(nativeAdapterBaseUrl, sessionId);
-  await sendBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+  const typeAction = await timedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
     action: 'type',
     text: typedToken,
     capture: 'none',
     actionId: 'desktop-native-live-type-text-probe',
   });
+  actionAckSamples.push(typeAction.durationMs);
   await sleep(250);
   const textProbe = await getJson(`${nativeAdapterBaseUrl}/sessions/${encodeURIComponent(sessionId)}/text`);
   const typedTokenObserved = typeof textProbe.text === 'string' && textProbe.text.includes(typedToken);
+  const scrollAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'scroll',
+    deltaX: 0,
+    deltaY: 180,
+    capture: 'none',
+    actionId: 'desktop-native-live-scroll-probe',
+  });
+  if (scrollAction.ok) actionAckSamples.push(scrollAction.durationMs);
+  const dragAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'drag',
+    path: [
+      { x: 48, y: 56 },
+      { x: 96, y: 64 },
+      { x: 140, y: 64 },
+    ],
+    capture: 'none',
+    actionId: 'desktop-native-live-drag-probe',
+  });
+  if (dragAction.ok) actionAckSamples.push(dragAction.durationMs);
+  const reloadAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'reload',
+    capture: 'none',
+    actionId: 'desktop-native-live-reload-probe',
+  });
+  if (reloadAction.ok) actionAckSamples.push(reloadAction.durationMs);
+  const historyUrl = new URL('/history-probe', fixture.url).href;
+  const navigateAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'navigate',
+    url: historyUrl,
+    capture: 'none',
+    actionId: 'desktop-native-live-navigate-probe',
+  });
+  if (navigateAction.ok) actionAckSamples.push(navigateAction.durationMs);
+  const backAction = navigateAction.ok
+    ? await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+        action: 'back',
+        capture: 'none',
+        actionId: 'desktop-native-live-back-probe',
+      })
+    : { ok: false as const, reasonHash: 'navigate-not-observed' };
+  if (backAction.ok) actionAckSamples.push(backAction.durationMs);
+  const forwardAction = backAction.ok
+    ? await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+        action: 'forward',
+        capture: 'none',
+        actionId: 'desktop-native-live-forward-probe',
+      })
+    : { ok: false as const, reasonHash: 'back-not-observed' };
+  if (forwardAction.ok) actionAckSamples.push(forwardAction.durationMs);
+  const lifecycleProbe = await desktopNativeLifecycleProbe({
+    electronApp,
+    page,
+    sessionId,
+    liveSurfaceRef,
+    nativeSurfaceSelector: '[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"]',
+  });
+  await recordProcessResourceSample(resourceSamples, electronPid);
+  await recordRendererHeapSample(rendererHeapSamplesMb, page);
   const ackDelta = nativeSurfaceAuditDelta(nativeAuditBeforeAction, nativeAuditAfterActionAck);
   const heartbeatDelta = nativeSurfaceAuditDelta(nativeAuditAfterActionAck, nativeAuditAfterHeartbeat);
   const paintAckTiming = recordField(paintAckState.lastActionTiming);
@@ -163,6 +240,26 @@ try {
     && actionAck.frameStreamRequestsDuringAck === 0;
   const stateHeartbeatOk = stateHeartbeat.lightweightStateUpdated === true;
   const canClaimPass = typedTokenObserved && actionAckOk && stateHeartbeatOk;
+  const benchmarkMetrics = desktopNativeLiveBenchmarkMetrics({
+    sessionId,
+    frameBounds,
+    openAckMs: nativeSurfaceVisibleAt - openStartedAt,
+    navigationAckMs: navigationHeartbeatAt - openStartedAt,
+    inputAckMs: typeAction.durationMs,
+    paintAckLagMs: numberField(paintAckTiming?.totalMs) ?? paintAckAction.durationMs,
+    actionAckSamples,
+    resourceSamples,
+    rendererHeapSamplesMb,
+    lifecycle: lifecycleProbe,
+    inputCompleteness: {
+      keyboard: typeAction.durationMs >= 0,
+      textEditing: typedTokenObserved,
+      pointerClick: actionAckOk,
+      drag: dragAction.ok,
+      scroll: scrollAction.ok,
+      navigationControls: reloadAction.ok && navigateAction.ok && backAction.ok && forwardAction.ok,
+    },
+  });
 
   const evidence: DesktopBrowserNativeLiveAcceptanceEvidence = {
     schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
@@ -233,6 +330,7 @@ try {
       stateHeartbeat,
     },
     rejectedDesktopLiveSubstitutes: rejectedDesktopLiveSubstitutes(),
+    benchmarkMetrics,
     verificationCommand,
     strictVerificationCommand,
   };
@@ -313,6 +411,128 @@ async function sendBrowserAction(baseUrl: string, workspacePath: string, session
   return session;
 }
 
+async function timedBrowserAction(
+  baseUrl: string,
+  workspacePath: string,
+  sessionId: string,
+  body: JsonRecord,
+): Promise<{ state: JsonRecord; durationMs: number }> {
+  const startedAt = Date.now();
+  const state = await sendBrowserAction(baseUrl, workspacePath, sessionId, body);
+  return {
+    state,
+    durationMs: Math.max(0, Date.now() - startedAt),
+  };
+}
+
+async function tryTimedBrowserAction(
+  baseUrl: string,
+  workspacePath: string,
+  sessionId: string,
+  body: JsonRecord,
+): Promise<{ ok: true; state: JsonRecord; durationMs: number } | { ok: false; reasonHash: string }> {
+  try {
+    const result = await timedBrowserAction(baseUrl, workspacePath, sessionId, body);
+    return { ok: true, ...result };
+  } catch (error) {
+    return { ok: false, reasonHash: boundedHash(error instanceof Error ? error.message : String(error)) };
+  }
+}
+
+type DesktopNativeLifecycleProbe = {
+  status: 'passed' | 'blocked';
+  operationsCompleted: number;
+  sameLiveSurfaceRefAfterResize: boolean;
+  sameLiveSurfaceRefAfterRestore: boolean;
+  visibleAfterResize: boolean;
+  visibleAfterRestore: boolean;
+  surfaceStateOkAfterRestore: boolean;
+  reasonHash?: string;
+};
+
+async function desktopNativeLifecycleProbe(input: {
+  electronApp: Awaited<ReturnType<typeof electron.launch>>;
+  page: Page;
+  sessionId: string;
+  liveSurfaceRef: string | null;
+  nativeSurfaceSelector: string;
+}): Promise<DesktopNativeLifecycleProbe> {
+  let operationsCompleted = 0;
+  try {
+    const nativeSurface = input.page.locator(input.nativeSurfaceSelector);
+    const resizeResult = await input.electronApp.evaluate(({ BrowserWindow }) => {
+      const activeWindow = BrowserWindow.getAllWindows()[0];
+      if (!activeWindow) return { ok: false, reason: 'missing-browser-window' };
+      const [width, height] = activeWindow.getSize();
+      activeWindow.setSize(Math.max(900, width + 24), Math.max(640, height + 16));
+      return { ok: true };
+    }) as { ok?: boolean; reason?: string };
+    if (resizeResult.ok !== true) throw new Error(resizeResult.reason ?? 'desktop-native-lifecycle-resize-failed');
+    operationsCompleted += 1;
+    await nativeSurface.waitFor({ state: 'visible', timeout: 5_000 });
+    const liveSurfaceRefAfterResize = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+    const visibleAfterResize = await nativeSurface.isVisible();
+
+    const minimizeResult = await input.electronApp.evaluate(({ BrowserWindow }) => {
+      const activeWindow = BrowserWindow.getAllWindows()[0];
+      if (!activeWindow) return { ok: false, reason: 'missing-browser-window' };
+      activeWindow.minimize();
+      return { ok: true };
+    }) as { ok?: boolean; reason?: string };
+    if (minimizeResult.ok !== true) throw new Error(minimizeResult.reason ?? 'desktop-native-lifecycle-minimize-failed');
+    await sleep(250);
+    const restoreResult = await input.electronApp.evaluate(({ BrowserWindow }) => {
+      const activeWindow = BrowserWindow.getAllWindows()[0];
+      if (!activeWindow) return { ok: false, reason: 'missing-browser-window' };
+      activeWindow.restore();
+      activeWindow.focus();
+      return { ok: true };
+    }) as { ok?: boolean; reason?: string };
+    if (restoreResult.ok !== true) throw new Error(restoreResult.reason ?? 'desktop-native-lifecycle-restore-failed');
+    operationsCompleted += 1;
+    await nativeSurface.waitFor({ state: 'visible', timeout: 10_000 });
+    const liveSurfaceRefAfterRestore = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+    const visibleAfterRestore = await nativeSurface.isVisible();
+    const surfaceStateAfterRestore = await input.page.evaluate((id) =>
+      (globalThis as typeof globalThis & {
+        sciforgeDesktop?: { getBrowserHostSessionSurfaceState(input: unknown): Promise<unknown> };
+      }).sciforgeDesktop?.getBrowserHostSessionSurfaceState({ sessionId: id }),
+    input.sessionId) as JsonRecord | undefined;
+    const surfaceStateOkAfterRestore = surfaceStateAfterRestore?.ok === true
+      && stringField(surfaceStateAfterRestore.owner) === 'BrowserHostSession'
+      && stringField(surfaceStateAfterRestore.liveSurfaceTransport) === 'native-embedded'
+      && surfaceStateAfterRestore.singleInteractiveTruth === true
+      && surfaceStateAfterRestore.secondTruthSource === false;
+    const sameLiveSurfaceRefAfterResize = liveSurfaceRefAfterResize === input.liveSurfaceRef;
+    const sameLiveSurfaceRefAfterRestore = liveSurfaceRefAfterRestore === input.liveSurfaceRef;
+    const passed = sameLiveSurfaceRefAfterResize
+      && sameLiveSurfaceRefAfterRestore
+      && visibleAfterResize
+      && visibleAfterRestore
+      && surfaceStateOkAfterRestore;
+    return {
+      status: passed ? 'passed' : 'blocked',
+      operationsCompleted,
+      sameLiveSurfaceRefAfterResize,
+      sameLiveSurfaceRefAfterRestore,
+      visibleAfterResize,
+      visibleAfterRestore,
+      surfaceStateOkAfterRestore,
+    };
+  } catch (error) {
+    return {
+      status: 'blocked',
+      operationsCompleted,
+      sameLiveSurfaceRefAfterResize: false,
+      sameLiveSurfaceRefAfterRestore: false,
+      visibleAfterResize: false,
+      visibleAfterRestore: false,
+      surfaceStateOkAfterRestore: false,
+      reasonHash: boundedHash(error instanceof Error ? error.message : String(error)),
+    };
+  }
+}
+
 async function readNativeSurfaceAudit(baseUrl: string, sessionId: string): Promise<NativeSurfaceAuditSummary> {
   const json = await getJson(`${baseUrl.replace(/\/+$/, '')}/sessions/${encodeURIComponent(sessionId)}/audit`);
   const counters = recordField(json.counters) ?? {};
@@ -325,6 +545,210 @@ async function readNativeSurfaceAudit(baseUrl: string, sessionId: string): Promi
     text: numberField(counters.text) ?? 0,
     recentRequestCount: Array.isArray(json.recentRequests) ? json.recentRequests.length : 0,
   };
+}
+
+function desktopNativeLiveBenchmarkMetrics(input: {
+  sessionId: string;
+  frameBounds: { width: number; height: number };
+  openAckMs: number;
+  navigationAckMs: number;
+  inputAckMs: number;
+  paintAckLagMs: number;
+  actionAckSamples: number[];
+  resourceSamples: ProcessResourceSample[];
+  rendererHeapSamplesMb: number[];
+  lifecycle: DesktopNativeLifecycleProbe;
+  inputCompleteness: {
+    keyboard: boolean;
+    textEditing: boolean;
+    pointerClick: boolean;
+    drag: boolean;
+    scroll: boolean;
+    navigationControls: boolean;
+  };
+}): DesktopBrowserNativeLiveAcceptanceBenchmarkMetrics {
+  const suffix = boundedHash([
+    input.sessionId,
+    input.openAckMs,
+    input.navigationAckMs,
+    input.inputAckMs,
+    input.paintAckLagMs,
+    input.resourceSamples.length,
+    input.rendererHeapSamplesMb.length,
+    input.lifecycle.status,
+    input.lifecycle.operationsCompleted,
+  ].join('|'));
+  const resourceSamples = input.resourceSamples.filter((sample) => (
+    Number.isFinite(sample.cpuPercent) && Number.isFinite(sample.rssMb)
+  ));
+  const cpuSamples = resourceSamples.map((sample) => sample.cpuPercent);
+  const rssSamples = resourceSamples.map((sample) => sample.rssMb);
+  const heapSamples = input.rendererHeapSamplesMb.filter((value) => Number.isFinite(value));
+  return {
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.benchmark-metrics.v1',
+    source: 'desktop-native-browser-pane-smoke',
+    evidenceMode: 'bounded-summary-ref',
+    inlineEvidence: 'forbidden',
+    metricSections: {
+      latency: {
+        status: 'passed',
+        resultRef: `benchmark-result:electron-web-contents-view:latency:${suffix}`,
+        numericSummary: {
+          openAckMs: boundedMs(input.openAckMs),
+          navigationAckMs: boundedMs(input.navigationAckMs),
+          inputAckMs: boundedMs(input.inputAckMs),
+          paintAckLagMs: boundedMs(input.paintAckLagMs),
+          p95ActionAckMs: boundedMs(percentile(input.actionAckSamples, 0.95)),
+        },
+      },
+      cpu: cpuSamples.length > 0
+        ? {
+            status: 'passed',
+            resultRef: `benchmark-result:electron-web-contents-view:cpu:${suffix}`,
+            numericSummary: {
+              processCpuAveragePercent: roundedNumber(average(cpuSamples)),
+              processCpuP95Percent: roundedNumber(percentile(cpuSamples, 0.95)),
+              sampleCount: cpuSamples.length,
+            },
+          }
+        : {
+            status: 'blocked',
+            resultRef: `benchmark-result:electron-web-contents-view:cpu:${suffix}`,
+          },
+      memory: rssSamples.length > 0 && heapSamples.length > 0
+        ? {
+            status: 'passed',
+            resultRef: `benchmark-result:electron-web-contents-view:memory:${suffix}`,
+            numericSummary: {
+              rssMb: roundedNumber(average(rssSamples)),
+              heapUsedMb: roundedNumber(Math.max(...heapSamples)),
+              nativeSurfaceMb: roundedNumber(nativeSurfaceApproxMb(input.frameBounds)),
+              peakRssMb: roundedNumber(Math.max(...rssSamples)),
+            },
+          }
+        : {
+            status: 'blocked',
+            resultRef: `benchmark-result:electron-web-contents-view:memory:${suffix}`,
+          },
+      inputCompleteness: {
+        status: Object.values(input.inputCompleteness).every((value) => value === true) ? 'passed' : 'blocked',
+        resultRef: `benchmark-result:electron-web-contents-view:inputCompleteness:${suffix}`,
+        numericSummary: {
+          keyboard: input.inputCompleteness.keyboard,
+          textEditing: input.inputCompleteness.textEditing,
+          pointerClick: input.inputCompleteness.pointerClick,
+          drag: input.inputCompleteness.drag,
+          scroll: input.inputCompleteness.scroll,
+          navigationControls: input.inputCompleteness.navigationControls,
+        },
+      },
+      lifecycle: input.lifecycle.status === 'passed'
+        ? {
+            status: 'passed',
+            resultRef: `benchmark-result:electron-web-contents-view:lifecycle:${suffix}`,
+            numericSummary: {
+              operationsCompleted: input.lifecycle.operationsCompleted,
+              sameLiveSurfaceRefAfterResize: input.lifecycle.sameLiveSurfaceRefAfterResize,
+              sameLiveSurfaceRefAfterRestore: input.lifecycle.sameLiveSurfaceRefAfterRestore,
+              visibleAfterResize: input.lifecycle.visibleAfterResize,
+              visibleAfterRestore: input.lifecycle.visibleAfterRestore,
+              surfaceStateOkAfterRestore: input.lifecycle.surfaceStateOkAfterRestore,
+            },
+          }
+        : {
+            status: 'blocked',
+            resultRef: `benchmark-result:electron-web-contents-view:lifecycle:${suffix}`,
+          },
+      reconnect: {
+        status: 'blocked',
+        resultRef: `benchmark-result:electron-web-contents-view:reconnect:${suffix}`,
+      },
+    },
+  };
+}
+
+type ProcessResourceSample = {
+  cpuPercent: number;
+  rssMb: number;
+};
+
+function electronProcessId(app: unknown): number | undefined {
+  const processAccessor = (app as { process?: unknown }).process;
+  if (typeof processAccessor !== 'function') return undefined;
+  const childProcess = processAccessor.call(app) as { pid?: unknown } | undefined;
+  return typeof childProcess?.pid === 'number' && Number.isFinite(childProcess.pid)
+    ? childProcess.pid
+    : undefined;
+}
+
+async function recordProcessResourceSample(samples: ProcessResourceSample[], pid: number | undefined): Promise<void> {
+  if (!pid) return;
+  try {
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', '%cpu=', '-o', 'rss='], {
+      timeout: 2_000,
+      maxBuffer: 4_000,
+    });
+    const [cpuRaw, rssRaw] = stdout.trim().split(/\s+/);
+    const cpuPercent = Number(cpuRaw);
+    const rssKb = Number(rssRaw);
+    if (Number.isFinite(cpuPercent) && Number.isFinite(rssKb)) {
+      samples.push({
+        cpuPercent: roundedNumber(cpuPercent),
+        rssMb: roundedNumber(rssKb / 1024),
+      });
+    }
+  } catch {
+    // Resource sampling is diagnostic evidence only; the benchmark section remains blocked when unavailable.
+  }
+}
+
+async function recordRendererHeapSample(samples: number[], page: Page): Promise<void> {
+  try {
+    const heapUsedMb = await page.evaluate(() => {
+      const memory = (performance as Performance & { memory?: { usedJSHeapSize?: number } }).memory;
+      return typeof memory?.usedJSHeapSize === 'number' && Number.isFinite(memory.usedJSHeapSize)
+        ? memory.usedJSHeapSize / 1024 / 1024
+        : undefined;
+    });
+    if (typeof heapUsedMb === 'number' && Number.isFinite(heapUsedMb)) {
+      samples.push(roundedNumber(heapUsedMb));
+    }
+  } catch {
+    // Browser heap sampling is optional and bounded; absent samples do not create a pass claim.
+  }
+}
+
+function boundedMs(value: number): number {
+  return roundedNumber(Math.max(0, value));
+}
+
+function nativeSurfaceApproxMb(bounds: { width: number; height: number }): number {
+  return Math.max(0, bounds.width * bounds.height * 4 / 1024 / 1024);
+}
+
+function average(values: number[]): number {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function percentile(values: number[], rank: number): number {
+  if (!values.length) return 0;
+  const sorted = values.map((value) => Math.max(0, value)).sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * rank) - 1));
+  return sorted[index] ?? 0;
+}
+
+function roundedNumber(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function boundedHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 function nativeSurfaceAuditDelta(before: NativeSurfaceAuditSummary, after: NativeSurfaceAuditSummary): NativeSurfaceAuditSummary {

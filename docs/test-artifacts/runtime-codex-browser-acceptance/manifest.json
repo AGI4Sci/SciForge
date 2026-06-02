@@ -2,7 +2,7 @@
   "schemaVersion": "sciforge.runtime-codex.browser-acceptance.v1",
   "status": "blocked",
   "source": "codex-in-app-browser",
-  "observedAt": "2026-06-02T06:14:57.010Z",
+  "observedAt": "2026-06-02T10:35:15.270Z",
   "requestedRolePort": 5173,
   "actualWorkspaceWriterPort": 6173,
   "actualWorkspaceWriterUrl": "http://127.0.0.1:6173",
@@ -111,7 +111,7 @@
   "expectedRetestCommand": "npm run smoke:runtime-codex-browser-acceptance",
   "providerPreflightRef": "docs/test-artifacts/runtime-provider-preflight/manifest.json",
   "providerPreflightCategory": "config-secret-source",
-  "providerPreflightCheckedAt": "2026-06-02T06:14:57.007Z",
+  "providerPreflightCheckedAt": "2026-06-02T10:35:15.267Z",
   "providerPreflightReleaseAcceptance": "not-evaluated",
   "providerPreflightEvidenceMode": "current-env-diagnostic-only",
   "runtimeApiKeyPresentInServiceEnv": false,
@@ -140,7 +140,7 @@
     "runtimeCodex": {
       "host": "127.0.0.1",
       "port": 18080,
-      "listening": false
+      "listening": true
     },
     "providerProxy": {
       "host": "127.0.0.1",

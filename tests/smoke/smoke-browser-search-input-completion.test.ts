@@ -55,7 +55,8 @@ test('BrowserHostSession search page input completion accepts long mixed queries
     });
     assert.equal(opened.owner, 'host');
     assert.equal(opened.singleInteractiveTruth, true);
-    assert.equal(opened.liveSurfaceTransport, 'host-stream');
+    assert.equal(opened.liveSurfaceTransport, 'native-embedded');
+    assert.equal(opened.frameStreamRef, undefined);
 
     const driver = drivers[0];
     assert.ok(driver, 'deterministic search input driver should be created');
@@ -206,7 +207,8 @@ class DeterministicSearchInputDriver implements BrowserHostSessionDriver {
   shellComposerDraft = '';
   shellComposerKeys: string[] = [];
   actions: string[] = [];
-  readonly liveSurfaceTransport = 'host-stream' as const;
+  readonly liveSurfaceTransport = 'native-embedded' as const;
+  readonly nativeAdapterUrl = 'http://127.0.0.1:61234';
 
   url(): string {
     return this.currentUrl;
@@ -303,6 +305,8 @@ function assertBrowserHostOnly(result: BrowserHostComputerUseActionResult, expec
   assert.equal(result.hostAction.action, expectedAction);
   assert.equal(result.hostAction.capture, 'none');
   assert.equal(result.session.singleInteractiveTruth, true);
+  assert.equal(result.session.liveSurfaceTransport, 'native-embedded');
+  assert.equal(result.session.frameStreamRef, undefined);
 }
 
 function assertTimingSummary(state: BrowserHostSessionState, action: string): void {
@@ -324,7 +328,12 @@ function boundedSearchInputReport(
     refsOnly: true,
     inputChannel: 'browser-host-session',
     liveBrowserOwner: 'BrowserHostSession',
+    liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
+    productLiveSurfacePass: state.liveSurfaceTransport === 'native-embedded'
+      && state.singleInteractiveTruth === true
+      && state.frameStreamRef === undefined,
     systemKeyboardEvents: 'not-sent',
     queryDimensions: ['long', 'zh-en-symbols', 'delete-retype'],
     queryLength: expectedFinalQuery.length,
@@ -341,8 +350,9 @@ function boundedSearchInputReport(
       status: state.status,
       finalUrl: state.url,
       liveSurfaceTransport: state.liveSurfaceTransport,
-      frameStreamRef: state.frameStreamRef,
-      frameRef: state.frameRef,
+      nativeAdapterUrl: state.nativeAdapterUrl,
+      frameStreamRefPresent: Boolean(state.frameStreamRef),
+      frameRefPresent: Boolean(state.frameRef),
     },
     timingSummary: state.actionTimingSummary?.filter((row) => row.action === 'click' || row.action === 'type' || row.action === 'press') ?? [],
   };
@@ -420,10 +430,8 @@ function diagnosticSessionStateFixture(): BrowserHostSessionState {
     canGoBack: false,
     canGoForward: false,
     liveSurfaceRef: 'browser-host-session:search-input-completion/live-surface',
-    liveSurfaceTransport: 'host-stream',
-    singleInteractiveTruth: true,
-    frameStreamRef: 'browser-host-session:search-input-completion/frame-stream',
-    frameRef: 'browser-host-session:search-input-completion/frame.png',
+    liveSurfaceTransport: undefined,
+    singleInteractiveTruth: undefined,
     screenshotRef: 'browser-host-session:search-input-completion/screenshot.png',
     domSnapshotRef: 'browser-host-session:search-input-completion/dom.html',
     axSnapshotRef: 'browser-host-session:search-input-completion/ax.json',

@@ -408,6 +408,9 @@ test('screen pane model preserves host-owned live surface refs for attached scre
               providerSessionOwnerRef: 'computer-use:provider-session/run-live-vscode/owner.json',
               providerSessionReconnectRef: 'computer-use:provider-session/run-live-vscode/reconnect.json',
               liveBindingAttachGrantRef: 'computer-use:provider-session/run-live-vscode/live-binding-attach-grant.json',
+              liveBindingAttachGrantStatus: 'validated',
+              grantValidationRef: 'computer-use:provider-session/run-live-vscode/grant-validation.json',
+              grantValidationStatus: 'validated',
               platformDriverRef: 'computer-use:session/run-live-vscode/platform-driver.json',
               platformDriverStatus: 'ready',
               permissionStatus: 'granted',
@@ -451,6 +454,7 @@ test('screen pane model preserves host-owned live surface refs for attached scre
   assert.equal(payload.providerSessionOwnerRef, 'computer-use:provider-session/run-live-vscode/owner.json');
   assert.equal(payload.providerSessionReconnectRef, 'computer-use:provider-session/run-live-vscode/reconnect.json');
   assert.equal(payload.liveBindingAttachGrantRef, 'computer-use:provider-session/run-live-vscode/live-binding-attach-grant.json');
+  assert.equal(payload.grantValidationRef, 'computer-use:provider-session/run-live-vscode/grant-validation.json');
   assert.deepEqual(payload.currentFrameSequence, {
     ref: 'computer-use:session/run-live-vscode/frame-sequence.json',
     label: undefined,
@@ -489,6 +493,9 @@ test('screen pane model extracts live binding refs from surface transport descri
         ownerRef: 'computer-use:provider-session/descriptor/owner.json',
         reconnectRef: 'computer-use:provider-session/descriptor/reconnect.json',
         attachGrantRef: 'computer-use:provider-session/descriptor/live-binding-attach-grant.json',
+        attachGrantStatus: 'validated',
+        validationRef: 'computer-use:provider-session/descriptor/grant-validation.json',
+        validationStatus: 'validated',
       },
       surfaceTransportDescriptor: {
         owner: 'VirtualDisplayProvider',
@@ -532,6 +539,7 @@ test('screen pane model extracts live binding refs from surface transport descri
   assert.equal(payload?.providerSessionOwnerRef, 'computer-use:provider-session/descriptor/owner.json');
   assert.equal(payload?.providerSessionReconnectRef, 'computer-use:provider-session/descriptor/reconnect.json');
   assert.equal(payload?.liveBindingAttachGrantRef, 'computer-use:provider-session/descriptor/live-binding-attach-grant.json');
+  assert.equal(payload?.grantValidationRef, 'computer-use:provider-session/descriptor/grant-validation.json');
   assert.deepEqual(payload?.currentFrameSequence, {
     ref: 'computer-use:session/descriptor/frames/current.png',
     label: undefined,

@@ -7,8 +7,19 @@ import {
   registerVirtualAppScreenInputRuntimeProviderExecutor,
   resetVirtualAppScreenInputRuntimeExecutorsForTests,
   runVirtualAppScreenInputRuntime,
+  tryRunVirtualAppScreenInputRuntimeNativeHost,
 } from './virtual-app-screen-input-runtime.js';
+import { parseVirtualAppScreenRuntimeCommand } from './virtual-app-screen-command.js';
 import {
+  recordVirtualAppScreenProviderSession,
+  resetVirtualAppScreenProviderSessionStoreForTests,
+} from './virtual-app-screen-provider-session-store.js';
+import {
+  recordVirtualAppScreenNativeHostSession,
+  resetVirtualAppScreenNativeHostSessionStoreForTests,
+} from './virtual-app-screen-native-host-session-store.js';
+import {
+  buildVirtualDisplaySurfaceTransportDescriptor,
   createVirtualDisplayProviderContract,
   probeVirtualDisplayProviders,
   type VirtualDisplayProviderInvokeIntent,
@@ -18,6 +29,10 @@ import {
   type VirtualDisplayProviderReadinessStatus,
   type VirtualDisplayReadiness,
 } from './virtual-display-provider.js';
+import {
+  ContractSmokeNativeHostPlatformAdapter,
+  InMemoryNativeVirtualAppScreenHost,
+} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 
 test('VirtualAppScreen input runtime executes canvas input through a provider executor with bounded evidence refs', async () => {
   const command = parsedCanvasInputCommand();
@@ -56,6 +71,37 @@ test('VirtualAppScreen input runtime executes canvas input through a provider ex
   } finally {
     unregister();
     resetVirtualAppScreenInputRuntimeExecutorsForTests();
+  }
+});
+
+test('VirtualAppScreen input runtime executes canvas input through a recorded Native Host binding', async () => {
+  const fixture = nativeHostInputFixture();
+  try {
+    const result = await tryRunVirtualAppScreenInputRuntimeNativeHost(fixture.command, {
+      executorId: 'input-runtime:native-host-test',
+      providerId: 'native-virtual-app-screen-host',
+    });
+
+    assert.ok(result);
+    assert.equal(result.status, 'executed');
+    assert.equal(result.executorId, 'input-runtime:native-host-test');
+    assert.equal(result.providerId, 'native-virtual-app-screen-host');
+    assert.deepEqual(result.routeDecision.providerOperations, ['sendInputIntent', 'readFrame']);
+    assert.equal(result.evidence.providerExecuted, true);
+    assert.equal(result.evidence.mutatingActionExecuted, true);
+    assert.match(String(result.routeDecision.evidenceLedgerRef), /^computer-use:native-host\/ledgers\//);
+    assert.equal(result.virtualScreenData.evidenceLedgerRef, fixture.evidenceLedgerRef);
+    assert.equal((result.virtualScreenData.runSummary as Record<string, unknown>).completionEligible, false);
+
+    const ledger = fixture.host.getLedger(fixture.sessionId);
+    assert.ok(ledger);
+    assert.equal(ledger.entries.some((entry) => entry.type === 'human-input.accepted'), true);
+    assert.equal(ledger.entries.filter((entry) => entry.type === 'frame.read').length, 2);
+    const inputIntentRefs = result.routeDecision.inputIntentRefs as string[];
+    assert.equal(ledger.entries.at(-2)?.refs.inputIntentRef, inputIntentRefs[0]);
+  } finally {
+    resetVirtualAppScreenProviderSessionStoreForTests();
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
   }
 });
 
@@ -332,6 +378,138 @@ test('VirtualAppScreen stop fails closed without safe stop evidence', async () =
   assert.equal(result.routeDecision.closesUserRealApp, false);
 });
 
+function nativeHostInputFixture() {
+  const host = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter());
+  const created = host.createSession(
+    { profileId: 'native-host-input-runtime', defaultSurfaceTransport: 'native-frame-stream' },
+    { allowBackgroundRendering: true, allowSharedSystemInput: false },
+    {
+      currentRunRef: 'computer-use:run/native-host-input-runtime/current-run.json',
+      evidenceRootRef: 'computer-use:run/native-host-input-runtime/evidence',
+      guiPresentRef: 'gui.present:native-host-input-runtime/screen-pane',
+    },
+  );
+  assert.equal(created.status, 'ok');
+  assert.equal(host.launchOrAttachApp(created.value.sessionId, {
+    appId: 'contract-smoke',
+    appRef: 'app:contract-smoke',
+  }).status, 'ok');
+  const attached = host.attachSurface(created.value.sessionId, {
+    screenRef: 'virtual-app-screen:native-host-input-runtime/screen',
+    targetWindowRef: 'window:native-host-input-runtime/main',
+    transport: 'native-frame-stream',
+  });
+  assert.equal(attached.status, 'ok');
+  const presented = host.presentSurface(created.value.sessionId, attached.value.liveBindingAttachGrantRef);
+  assert.equal(presented.status, 'ok');
+  const firstFrame = host.readFrame(created.value.sessionId);
+  assert.equal(firstFrame.status, 'ok');
+
+  const inputLeaseRef = 'computer-use:native-host/input-runtime/leases/active.json';
+  const actionAdapterRef = 'computer-use:native-host/input-runtime/adapters/contract-smoke.json';
+  const evidenceLedgerRef = created.value.ledgerRef;
+  const command = parsedNativeHostCanvasInputCommand({
+    sessionRef: created.value.sessionRef,
+    screenRef: attached.value.screenRef,
+    targetAppRef: 'app:contract-smoke',
+    targetWindowRef: attached.value.targetWindowRef,
+    frameRef: firstFrame.value.frameRef,
+    inputLeaseRef,
+    actionAdapterRef,
+    adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+    evidenceLedgerRef,
+  });
+
+  recordVirtualAppScreenNativeHostSession({
+    host,
+    session: created.value,
+    surface: attached.value,
+    frame: firstFrame.value,
+    refs: {
+      inputLeaseRef,
+      actionAdapterRef,
+      adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+      evidenceLedgerRef,
+      grantValidationRef: presented.value.validationLedgerEntryRef,
+    },
+  });
+  recordVirtualAppScreenProviderSession(parsedNativeHostAttachCommand({
+    screenRef: attached.value.screenRef,
+    targetAppRef: 'app:contract-smoke',
+    adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+    evidenceLedgerRef,
+  }), {
+    schemaVersion: 'sciforge.computer-use.virtual-app-screen-session-manager.v1',
+    status: 'attached',
+    executorId: 'native-session-manager:native-host-input-runtime-test',
+    providerId: 'native-virtual-app-screen-host',
+    refs: {
+      currentRunRef: created.value.evidenceContext.currentRunRef,
+      sessionRef: created.value.sessionRef,
+      liveSurfaceRef: attached.value.liveSurfaceRef,
+      surfaceTransportRef: attached.value.surfaceTransportRef,
+      frameStreamRef: attached.value.frameStreamRef,
+      currentFrameRef: firstFrame.value.frameRef,
+      frameTransportContractRef: attached.value.frameTransportContractRef,
+      frameTelemetryRef: attached.value.frameTelemetryRef,
+      mediaChannelRef: attached.value.mediaChannelRef,
+      dataChannelRef: attached.value.dataChannelRef,
+      liveBindingAttachGrantRef: attached.value.liveBindingAttachGrantRef,
+      grantValidationRef: presented.value.validationLedgerEntryRef,
+      surfaceOwnerRef: attached.value.surfaceOwnerRef,
+      displayOwnerRef: attached.value.displayOwnerRef,
+      screenRef: attached.value.screenRef,
+      targetAppRef: 'app:contract-smoke',
+      targetWindowRef: attached.value.targetWindowRef,
+      inputLeaseRef,
+      actionAdapterRef,
+      adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+      evidenceLedgerRef,
+      guiPresentRef: created.value.evidenceContext.guiPresentRef,
+    },
+    evidence: {
+      providerExecuted: true,
+      mutatingActionExecuted: false,
+      nativeSessionCreated: true,
+      liveFrameAttached: true,
+      currentFrameMaterialized: true,
+      guiPresented: true,
+      isolationVerified: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      surfaceTransport: buildVirtualDisplaySurfaceTransportDescriptor({
+        providerId: 'native-virtual-app-screen-host',
+        transport: 'native-frame-stream',
+        surfaceTransportRef: attached.value.surfaceTransportRef,
+        liveSurfaceRef: attached.value.liveSurfaceRef,
+        frameStreamRef: attached.value.frameStreamRef,
+        currentFrameRef: firstFrame.value.frameRef,
+        frameTransportContractRef: attached.value.frameTransportContractRef!,
+        frameTelemetryRef: attached.value.frameTelemetryRef,
+        mediaChannelRef: attached.value.mediaChannelRef,
+        dataChannelRef: attached.value.dataChannelRef,
+        currentFrameSequence: firstFrame.value.frameSequence,
+      }),
+      evidenceRefs: [
+        attached.value.liveBindingAttachGrantRef,
+        presented.value.validationLedgerEntryRef!,
+        evidenceLedgerRef,
+        firstFrame.value.frameRef,
+      ],
+    },
+  });
+
+  return {
+    host,
+    sessionId: created.value.sessionId,
+    command,
+    evidenceLedgerRef,
+  };
+}
+
 function parsedCanvasInputCommand() {
   const parsed = parseVirtualScreenInputIntentCommand([
     '/computer-use input-intent',
@@ -346,6 +524,62 @@ function parsedCanvasInputCommand() {
     '--action-adapter-ref "computer-use:session/input-runtime-test/adapters/native-window.json"',
     '--adapter-readiness-ref "computer-use:session/input-runtime-test/readiness/native-window.json"',
     '--evidence-ledger-ref "computer-use:session/input-runtime-test/evidence-ledger.json"',
+    '--frame-width 1440',
+    '--frame-height 900',
+    '--x-ratio 0.125',
+    '--y-ratio 0.5',
+  ].join(' '));
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') throw new Error('expected parsed input command');
+  return parsed.command;
+}
+
+function parsedNativeHostAttachCommand(refs: {
+  screenRef: string;
+  targetAppRef: string;
+  adapterReadinessRef: string;
+  evidenceLedgerRef: string;
+}) {
+  const parsed = parseVirtualAppScreenRuntimeCommand([
+    '/computer-use screen attach',
+    '--source right-pane-screen',
+    '--profile "contract-smoke"',
+    `--target-app-ref "${refs.targetAppRef}"`,
+    `--screen-ref "${refs.screenRef}"`,
+    '--activation-ref "computer-use:native-host/input-runtime/activation.json"',
+    `--adapter-readiness-ref "${refs.adapterReadinessRef}"`,
+    `--evidence-ledger-ref "${refs.evidenceLedgerRef}"`,
+    '--gui-present-ref "gui.present:native-host-input-runtime/screen-pane"',
+  ].join(' '));
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') throw new Error('expected parsed attach command');
+  return parsed.command;
+}
+
+function parsedNativeHostCanvasInputCommand(refs: {
+  sessionRef: string;
+  screenRef: string;
+  targetAppRef: string;
+  targetWindowRef: string;
+  frameRef: string;
+  inputLeaseRef: string;
+  actionAdapterRef: string;
+  adapterReadinessRef: string;
+  evidenceLedgerRef: string;
+}) {
+  const parsed = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-canvas',
+    '--kind click',
+    `--session-ref "${refs.sessionRef}"`,
+    `--screen-ref "${refs.screenRef}"`,
+    `--target-app-ref "${refs.targetAppRef}"`,
+    `--target-window-ref "${refs.targetWindowRef}"`,
+    `--frame-ref "${refs.frameRef}"`,
+    `--input-lease-ref "${refs.inputLeaseRef}"`,
+    `--action-adapter-ref "${refs.actionAdapterRef}"`,
+    `--adapter-readiness-ref "${refs.adapterReadinessRef}"`,
+    `--evidence-ledger-ref "${refs.evidenceLedgerRef}"`,
     '--frame-width 1440',
     '--frame-height 900',
     '--x-ratio 0.125',

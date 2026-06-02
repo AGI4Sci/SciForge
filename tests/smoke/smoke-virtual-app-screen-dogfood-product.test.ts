@@ -14,6 +14,7 @@ import {
 
 const EDGE_EXECUTABLE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const SCHEMA = 'sciforge.computer-use.virtual-app-screen-dogfood-product.v1' as const;
+const NATIVE_HOST_SCHEMA = 'sciforge.computer-use.native-virtual-app-screen-host.v1' as const;
 const DEFAULT_BOOTSTRAP_MS = 8_000;
 
 type DogfoodPhase =
@@ -28,11 +29,18 @@ type DogfoodPhase =
 type ManifestStatus = 'passed' | 'blocked';
 
 type DogfoodRefs = {
+  hostSessionRef?: string;
   screenRef?: string;
   targetAppRef?: string;
   targetWindowRef?: string;
   sessionRef?: string;
   liveSurfaceRef?: string;
+  liveBindingAttachGrantRef?: string;
+  grantValidationRef?: string;
+  grantValidationStatus?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
+  surfaceTransportRef?: string;
   frameStreamRef?: string;
   currentFrameRef?: string;
   beforeFrameRef?: string;
@@ -53,8 +61,12 @@ type DogfoodRefs = {
   leaseControlReady?: boolean;
   guiPresentRefs?: string[];
   inputIntentRefs?: string[];
+  humanInputHotPathRefs?: string[];
+  inputAcceptedRefs?: string[];
   executorEventRefs?: string[];
   beforeAfterFrameRefs?: string[];
+  automationBarrierRefs?: string[];
+  backgroundEvidenceRefs?: string[];
   permissionRefs?: string[];
   takeoverRefs?: string[];
   pauseRefs?: string[];
@@ -71,6 +83,41 @@ type VirtualAppScreenDogfoodManifest = {
   observedAt: string;
   phase: DogfoodPhase;
   reason: string | null;
+  nativeHost: {
+    schemaVersion: typeof NATIVE_HOST_SCHEMA;
+    required: true;
+    status: 'ready' | 'blocked';
+    failClosed: true;
+    providerExecuted: false;
+    hostSessionRef: string | null;
+    surfaceOwnerRef: string | null;
+    displayOwnerRef: string | null;
+    liveSurfaceRef: string | null;
+    liveBindingAttachGrantRef: string | null;
+    grantValidationRef: string | null;
+    surfaceTransportRef: string | null;
+    frameStreamRef: string | null;
+    currentFrameRef: string | null;
+    evidenceLedgerRef: string | null;
+    readinessRefs: string[];
+    missingRequiredFields: string[];
+  };
+  hostSessionRef: string | null;
+  surfaceOwnerRef: string | null;
+  displayOwnerRef: string | null;
+  humanInputHotPath: {
+    method: 'sendHumanInput';
+    refsFirst: true;
+    fireAndRelease: true;
+    evidenceWillCatchUp: true;
+    waitsForAutomationBarrier: false;
+    waitsForAfterFrame: false;
+    accepted: boolean;
+    refs: string[];
+  };
+  inputAcceptedRefs: string[];
+  automationBarrierRefs: string[];
+  backgroundEvidenceRefs: string[];
   rightPane: {
     openedSciForge: boolean;
     enteredScreen: boolean;
@@ -170,6 +217,11 @@ test('VirtualAppScreen dogfood blocked manifest is refs-first and phase-specific
   assert.deepEqual(manifest.permissionRefs, ['computer-use:screen-activation/contract/permissions/accessibility.json']);
   assert.deepEqual(manifest.lastFrameRefs, []);
   assert.deepEqual(manifest.lastInputRefs, []);
+  assert.equal(manifest.nativeHost.status, 'blocked');
+  assert.equal(manifest.hostSessionRef, null);
+  assert.deepEqual(manifest.inputAcceptedRefs, []);
+  assert.deepEqual(manifest.automationBarrierRefs, []);
+  assert.deepEqual(manifest.backgroundEvidenceRefs, []);
   assertDogfoodManifest(manifest);
 });
 
@@ -216,11 +268,59 @@ test('VirtualAppScreen dogfood manifest accepts generic permission handoff with 
   assert.deepEqual(manifest.providerReadiness.refs, ['computer-use:screen-activation/generic-workbench/provider-readiness.json']);
   assert.deepEqual(manifest.permissionRefs, ['permission:macos/accessibility']);
   assert.equal(manifest.rightPane.activationRequested, true);
+  assert.equal(manifest.nativeHost.status, 'blocked');
+  assertDogfoodManifest(manifest);
+});
+
+test('VirtualAppScreen dogfood attached manifest without Native Host refs remains blocked', () => {
+  const manifest = buildDogfoodManifest({
+    runId: 'vas-dogfood-contract-attached-without-native-host',
+    phase: 'operate-vscode-input-intent',
+    reason: 'attached screen lacks Native Host owner/input/barrier/background evidence refs',
+    openedSciForge: true,
+    enteredScreen: true,
+    refs: {
+      attachState: 'attached',
+      status: 'ready',
+      surfaceMode: 'live',
+      screenRef: 'virtual-app-screen:dogfood/screen-without-native-host',
+      targetAppRef: 'app:profile/vscode-editor',
+      targetWindowRef: 'window:vscode-editor/main',
+      sessionRef: 'computer-use:session/dogfood/session-without-native-host.json',
+      liveSurfaceRef: 'computer-use:session/dogfood/live-surface.json',
+      frameStreamRef: 'computer-use:session/dogfood/frame-stream.json',
+      currentFrameRef: 'computer-use:session/dogfood/frames/after.json',
+      inputLeaseRef: 'computer-use:session/dogfood/leases/active.json',
+      adapterReadinessRef: 'computer-use:session/dogfood/readiness/native-app-window.json',
+      evidenceLedgerRef: 'computer-use:session/dogfood/evidence-ledger.json',
+      guiPresentRefs: ['gui.present:dogfood/screen-pane'],
+      inputIntentRefs: ['computer-use:session/dogfood/input-intents/type-marker.json'],
+      executorEventRefs: ['computer-use:session/dogfood/executor-events/type-marker.json'],
+      beforeAfterFrameRefs: ['computer-use:session/dogfood/before-after/type-marker.json'],
+      takeoverRefs: ['computer-use:session/dogfood/leases/takeover.json'],
+      resumeRefs: ['computer-use:session/dogfood/leases/resume-agent.json'],
+      inputIntentReady: true,
+      leaseControlReady: true,
+    },
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.nativeHost.status, 'blocked');
+  assert.equal(manifest.hostSessionRef, 'computer-use:session/dogfood/session-without-native-host.json');
+  assert.ok(manifest.nativeHost.missingRequiredFields.includes('surfaceOwnerRef'));
+  assert.ok(manifest.nativeHost.missingRequiredFields.includes('displayOwnerRef'));
+  assert.ok(manifest.nativeHost.missingRequiredFields.includes('inputAcceptedRefs'));
+  assert.ok(manifest.nativeHost.missingRequiredFields.includes('automationBarrierRefs'));
+  assert.ok(manifest.nativeHost.missingRequiredFields.includes('backgroundEvidenceRefs'));
+  assert.deepEqual(manifest.inputAcceptedRefs, []);
+  assert.deepEqual(manifest.automationBarrierRefs, []);
+  assert.deepEqual(manifest.backgroundEvidenceRefs, []);
   assertDogfoodManifest(manifest);
 });
 
 test('VirtualAppScreen dogfood passed manifest requires Screen UI, InputIntent, and human resume refs', () => {
   const refs: DogfoodRefs = {
+    hostSessionRef: 'computer-use:session/dogfood/session.json',
     attachState: 'attached',
     status: 'ready',
     surfaceMode: 'live',
@@ -229,6 +329,12 @@ test('VirtualAppScreen dogfood passed manifest requires Screen UI, InputIntent, 
     targetWindowRef: 'window:vscode-editor/main',
     sessionRef: 'computer-use:session/dogfood/session.json',
     liveSurfaceRef: 'computer-use:session/dogfood/live-surface.json',
+    liveBindingAttachGrantRef: 'computer-use:provider-session/dogfood/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/dogfood/grant-validation.json',
+    grantValidationStatus: 'validated',
+    surfaceOwnerRef: 'computer-use:session/dogfood/surfaces/screen-a/surface-owner.json',
+    displayOwnerRef: 'computer-use:session/dogfood/surfaces/screen-a/display-owner.json',
+    surfaceTransportRef: 'computer-use:session/dogfood/surface-transport.json',
     frameStreamRef: 'computer-use:session/dogfood/frame-stream.json',
     currentFrameRef: 'computer-use:session/dogfood/frames/after.json',
     beforeFrameRef: 'computer-use:session/dogfood/frames/before.json',
@@ -241,8 +347,15 @@ test('VirtualAppScreen dogfood passed manifest requires Screen UI, InputIntent, 
     evidenceLedgerRef: 'computer-use:session/dogfood/evidence-ledger.json',
     guiPresentRefs: ['gui.present:dogfood/screen-pane'],
     inputIntentRefs: ['computer-use:session/dogfood/input-intents/type-marker.json'],
+    humanInputHotPathRefs: ['computer-use:session/dogfood/input-hot-path/human-input.json'],
+    inputAcceptedRefs: ['computer-use:session/dogfood/inputs/0001-type-text.json'],
     executorEventRefs: ['computer-use:session/dogfood/executor-events/type-marker.json'],
     beforeAfterFrameRefs: ['computer-use:session/dogfood/before-after/type-marker.json'],
+    automationBarrierRefs: [
+      'computer-use:session/dogfood/barriers/type-marker.json',
+      'computer-use:session/dogfood/barriers/resume-agent.json',
+    ],
+    backgroundEvidenceRefs: ['computer-use:session/dogfood/background-rendering/native-frame-stream.json'],
     takeoverRefs: ['computer-use:session/dogfood/leases/takeover.json'],
     resumeRefs: ['computer-use:session/dogfood/leases/resume-agent.json'],
     inputIntentReady: true,
@@ -258,6 +371,17 @@ test('VirtualAppScreen dogfood passed manifest requires Screen UI, InputIntent, 
   });
 
   assert.equal(manifest.status, 'passed');
+  assert.equal(manifest.nativeHost.status, 'ready');
+  assert.equal(manifest.hostSessionRef, 'computer-use:session/dogfood/session.json');
+  assert.equal(manifest.surfaceOwnerRef, 'computer-use:session/dogfood/surfaces/screen-a/surface-owner.json');
+  assert.equal(manifest.displayOwnerRef, 'computer-use:session/dogfood/surfaces/screen-a/display-owner.json');
+  assert.deepEqual(manifest.inputAcceptedRefs, ['computer-use:session/dogfood/inputs/0001-type-text.json']);
+  assert.deepEqual(manifest.automationBarrierRefs, [
+    'computer-use:session/dogfood/barriers/type-marker.json',
+    'computer-use:session/dogfood/barriers/resume-agent.json',
+  ]);
+  assert.deepEqual(manifest.backgroundEvidenceRefs, ['computer-use:session/dogfood/background-rendering/native-frame-stream.json']);
+  assert.equal(manifest.humanInputHotPath.accepted, true);
   assert.equal(manifest.vscodeOperation.attemptedViaInputIntent, true);
   assert.equal(manifest.humanIntervention.takeoverAttempted, true);
   assert.equal(manifest.humanIntervention.resumeAttempted, true);
@@ -398,6 +522,11 @@ function buildDogfoodManifest({
   enteredScreen: boolean;
   refs: DogfoodRefs;
 }): VirtualAppScreenDogfoodManifest {
+  const nativeHost = nativeHostShape(refs);
+  const inputAcceptedRefs = uniqueRefs(refs.inputAcceptedRefs ?? []);
+  const automationBarrierRefs = uniqueRefs(refs.automationBarrierRefs ?? []);
+  const backgroundEvidenceRefs = uniqueRefs(refs.backgroundEvidenceRefs ?? []);
+  const humanInputHotPathRefs = uniqueRefs([...(refs.humanInputHotPathRefs ?? []), ...inputAcceptedRefs]);
   const status: ManifestStatus = canPass(refs) && openedSciForge && enteredScreen && reason === null ? 'passed' : 'blocked';
   const activationCommandRefs = uniqueRefs([
     refs.handoffRef,
@@ -419,7 +548,10 @@ function buildDogfoodManifest({
     refs.userLeaseRef,
     refs.agentLeaseRef,
     ...(refs.inputIntentRefs ?? []),
+    ...(refs.humanInputHotPathRefs ?? []),
+    ...(refs.inputAcceptedRefs ?? []),
     ...(refs.executorEventRefs ?? []),
+    ...(refs.automationBarrierRefs ?? []),
     ...(refs.takeoverRefs ?? []),
     ...(refs.pauseRefs ?? []),
     ...(refs.resumeRefs ?? []),
@@ -433,6 +565,23 @@ function buildDogfoodManifest({
     observedAt: new Date().toISOString(),
     phase: status === 'passed' ? 'manifest-output' : phase,
     reason: status === 'passed' ? null : boundedReason(reason || 'dogfood product path is blocked'),
+    nativeHost,
+    hostSessionRef: nativeHost.hostSessionRef,
+    surfaceOwnerRef: nativeHost.surfaceOwnerRef,
+    displayOwnerRef: nativeHost.displayOwnerRef,
+    humanInputHotPath: {
+      method: 'sendHumanInput',
+      refsFirst: true,
+      fireAndRelease: true,
+      evidenceWillCatchUp: true,
+      waitsForAutomationBarrier: false,
+      waitsForAfterFrame: false,
+      accepted: inputAcceptedRefs.length > 0,
+      refs: humanInputHotPathRefs,
+    },
+    inputAcceptedRefs,
+    automationBarrierRefs,
+    backgroundEvidenceRefs,
     rightPane: {
       openedSciForge,
       enteredScreen,
@@ -481,23 +630,89 @@ function canPass(refs: DogfoodRefs) {
   return Boolean(
     refs.attachState === 'attached'
     && refs.surfaceMode === 'live'
-    && refs.sessionRef
+    && nativeHostShape(refs).missingRequiredFields.length === 0
     && (refs.liveSurfaceRef || refs.frameStreamRef)
     && refs.currentFrameRef
     && refs.adapterReadinessRef
     && refs.inputLeaseRef
     && refs.inputIntentRefs?.length
+    && refs.inputAcceptedRefs?.length
     && refs.executorEventRefs?.length
     && refs.beforeAfterFrameRefs?.length
+    && refs.automationBarrierRefs?.length
+    && refs.backgroundEvidenceRefs?.length
     && refs.takeoverRefs?.length
     && refs.resumeRefs?.length
     && refs.guiPresentRefs?.length
   );
 }
 
+function nativeHostShape(refs: DogfoodRefs): VirtualAppScreenDogfoodManifest['nativeHost'] {
+  const hostSessionRef = refs.hostSessionRef ?? refs.sessionRef ?? null;
+  const surfaceOwnerRef = refs.surfaceOwnerRef ?? null;
+  const displayOwnerRef = refs.displayOwnerRef ?? null;
+  const inputAcceptedRefs = uniqueRefs(refs.inputAcceptedRefs ?? []);
+  const automationBarrierRefs = uniqueRefs(refs.automationBarrierRefs ?? []);
+  const backgroundEvidenceRefs = uniqueRefs(refs.backgroundEvidenceRefs ?? []);
+  const requiredFields: Array<[string, string | null | undefined]> = [
+    ['hostSessionRef', hostSessionRef],
+    ['surfaceOwnerRef', surfaceOwnerRef],
+    ['displayOwnerRef', displayOwnerRef],
+    ['liveSurfaceRef', refs.liveSurfaceRef],
+    ['frameStreamRef', refs.frameStreamRef],
+    ['currentFrameRef', refs.currentFrameRef],
+    ['evidenceLedgerRef', refs.evidenceLedgerRef],
+    ['inputAcceptedRefs', inputAcceptedRefs.length ? 'present' : undefined],
+    ['automationBarrierRefs', automationBarrierRefs.length ? 'present' : undefined],
+    ['backgroundEvidenceRefs', backgroundEvidenceRefs.length ? 'present' : undefined],
+  ];
+  const missingRequiredFields = requiredFields.flatMap(([field, value]) => value ? [] : [field]);
+
+  return {
+    schemaVersion: NATIVE_HOST_SCHEMA,
+    required: true,
+    status: missingRequiredFields.length ? 'blocked' : 'ready',
+    failClosed: true,
+    providerExecuted: false,
+    hostSessionRef,
+    surfaceOwnerRef,
+    displayOwnerRef,
+    liveSurfaceRef: refs.liveSurfaceRef ?? null,
+    liveBindingAttachGrantRef: refs.liveBindingAttachGrantRef ?? null,
+    grantValidationRef: refs.grantValidationRef ?? null,
+    surfaceTransportRef: refs.surfaceTransportRef ?? null,
+    frameStreamRef: refs.frameStreamRef ?? null,
+    currentFrameRef: refs.currentFrameRef ?? null,
+    evidenceLedgerRef: refs.evidenceLedgerRef ?? null,
+    readinessRefs: uniqueRefs([refs.adapterReadinessRef]),
+    missingRequiredFields,
+  };
+}
+
 function assertDogfoodManifest(manifest: VirtualAppScreenDogfoodManifest) {
   assert.equal(manifest.schemaVersion, SCHEMA);
   assert.equal(manifest.source, 'product-ui-right-pane');
+  assert.equal(manifest.nativeHost.schemaVersion, NATIVE_HOST_SCHEMA);
+  assert.equal(manifest.nativeHost.required, true);
+  assert.equal(manifest.nativeHost.failClosed, true);
+  assert.equal(manifest.nativeHost.providerExecuted, false);
+  assert.equal(manifest.hostSessionRef, manifest.nativeHost.hostSessionRef);
+  assert.equal(manifest.surfaceOwnerRef, manifest.nativeHost.surfaceOwnerRef);
+  assert.equal(manifest.displayOwnerRef, manifest.nativeHost.displayOwnerRef);
+  assert.ok(Array.isArray(manifest.nativeHost.readinessRefs));
+  assert.ok(Array.isArray(manifest.nativeHost.missingRequiredFields));
+  assert.equal(manifest.humanInputHotPath.method, 'sendHumanInput');
+  assert.equal(manifest.humanInputHotPath.refsFirst, true);
+  assert.equal(manifest.humanInputHotPath.fireAndRelease, true);
+  assert.equal(manifest.humanInputHotPath.evidenceWillCatchUp, true);
+  assert.equal(manifest.humanInputHotPath.waitsForAutomationBarrier, false);
+  assert.equal(manifest.humanInputHotPath.waitsForAfterFrame, false);
+  assert.equal(manifest.humanInputHotPath.accepted, manifest.inputAcceptedRefs.length > 0);
+  assert.ok(Array.isArray(manifest.humanInputHotPath.refs));
+  assert.equal(manifest.humanInputHotPath.refs.every(isSafeProductRef), true);
+  assert.ok(Array.isArray(manifest.inputAcceptedRefs));
+  assert.ok(Array.isArray(manifest.automationBarrierRefs));
+  assert.ok(Array.isArray(manifest.backgroundEvidenceRefs));
   assert.equal(manifest.bounded.refsFirst, true);
   assert.equal(manifest.bounded.rawPayloadsCaptured, false);
   assert.equal(manifest.bounded.providerInternalsUsed, false);
@@ -522,6 +737,15 @@ function assertDogfoodManifest(manifest: VirtualAppScreenDogfoodManifest) {
     assert.ok(Array.isArray(manifest.permissionRefs));
     assert.ok(Array.isArray(manifest.lastFrameRefs));
     assert.ok(Array.isArray(manifest.lastInputRefs));
+  } else {
+    assert.equal(manifest.nativeHost.status, 'ready');
+    assert.equal(manifest.nativeHost.missingRequiredFields.length, 0);
+    assert.ok(manifest.hostSessionRef);
+    assert.ok(manifest.surfaceOwnerRef);
+    assert.ok(manifest.displayOwnerRef);
+    assert.ok(manifest.inputAcceptedRefs.length);
+    assert.ok(manifest.automationBarrierRefs.length);
+    assert.ok(manifest.backgroundEvidenceRefs.length);
   }
   const text = JSON.stringify(manifest);
   assert.doesNotMatch(text, /data:image|;base64,|rawScreenshot|screenshotBase64|providerUrl|providerRoute|Authorization|apiKey|password|secret|token/i);
@@ -557,10 +781,17 @@ async function readScreenRefs(page: Page): Promise<DogfoodRefs> {
       const match = entries.find((entry) => entry.textContent?.toLowerCase().startsWith(label.toLowerCase()));
       return match?.querySelector('code')?.textContent?.trim();
     };
+    const unique = (values: Array<string | undefined>) =>
+      [...new Set(values.filter((value): value is string => Boolean(value && value.trim())).map((value) => value.trim()))];
+    const refsFromOption = (commandText: string, option: string) => {
+      const escaped = option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return [...commandText.matchAll(new RegExp(`--${escaped}\\s+"([^"]+)"`, 'g'))].map((match) => match[1]);
+    };
     const commandTexts = Array.from(document.querySelectorAll<HTMLElement>('[data-event="virtual-screen-terminal-equivalent-text"]'))
       .map((element) => element.getAttribute('data-command-text') || element.textContent || '')
       .filter((value) => value.includes('/computer-use'));
     return {
+      hostSessionRef: refText('host session') || frame?.getAttribute('data-host-session-ref') || image?.getAttribute('data-host-session-ref') || undefined,
       attachState: viewer?.getAttribute('data-attach-state') || undefined,
       status: viewer?.getAttribute('data-status') || undefined,
       surfaceMode: viewer?.getAttribute('data-screen-surface-mode') || undefined,
@@ -569,6 +800,12 @@ async function readScreenRefs(page: Page): Promise<DogfoodRefs> {
       targetWindowRef: refText('target window') || image?.getAttribute('data-target-window-ref') || undefined,
       sessionRef: refText('session'),
       liveSurfaceRef: refText('live surface') || frame?.getAttribute('data-live-surface-ref') || image?.getAttribute('data-live-surface-ref') || undefined,
+      liveBindingAttachGrantRef: refText('live binding attach grant') || image?.getAttribute('data-live-binding-attach-grant-ref') || undefined,
+      grantValidationRef: refText('grant validation') || image?.getAttribute('data-grant-validation-ref') || undefined,
+      grantValidationStatus: image?.getAttribute('data-grant-validation-status') || undefined,
+      surfaceOwnerRef: refText('surface owner') || frame?.getAttribute('data-surface-owner-ref') || image?.getAttribute('data-surface-owner-ref') || undefined,
+      displayOwnerRef: refText('display owner') || frame?.getAttribute('data-display-owner-ref') || image?.getAttribute('data-display-owner-ref') || undefined,
+      surfaceTransportRef: refText('surface transport') || image?.getAttribute('data-surface-transport-ref') || undefined,
       frameStreamRef: refText('frame stream') || image?.getAttribute('data-frame-stream-ref') || undefined,
       currentFrameRef: refText('current frame') || image?.getAttribute('data-frame-ref') || undefined,
       beforeFrameRef: refText('before'),
@@ -586,8 +823,38 @@ async function readScreenRefs(page: Page): Promise<DogfoodRefs> {
       leaseControlReady: frame?.getAttribute('data-lease-control-ready') === 'true',
       guiPresentRefs: refsByKind('gui.present'),
       inputIntentRefs: refsByKind('input-intent'),
+      humanInputHotPathRefs: unique([
+        refText('human input hot path'),
+        refText('input hot path'),
+        frame?.getAttribute('data-input-hot-path-ref') || undefined,
+        image?.getAttribute('data-input-hot-path-ref') || undefined,
+        ...refsByKind('input-hot-path'),
+      ]),
+      inputAcceptedRefs: unique([
+        refText('input accepted'),
+        frame?.getAttribute('data-input-accepted-ref') || undefined,
+        image?.getAttribute('data-input-accepted-ref') || undefined,
+        ...refsByKind('input-accepted'),
+        ...refsByKind('human-input.accepted'),
+        ...commandTexts.flatMap((text) => refsFromOption(text, 'input-accepted-ref')),
+      ]),
       executorEventRefs: refsByKind('executor-event'),
       beforeAfterFrameRefs: refsByKind('before-after'),
+      automationBarrierRefs: unique([
+        refText('automation barrier'),
+        frame?.getAttribute('data-automation-barrier-ref') || undefined,
+        image?.getAttribute('data-automation-barrier-ref') || undefined,
+        ...refsByKind('automation-barrier'),
+        ...refsByKind('automation.barrier-completed'),
+        ...commandTexts.flatMap((text) => refsFromOption(text, 'automation-barrier-ref')),
+      ]),
+      backgroundEvidenceRefs: unique([
+        refText('background evidence'),
+        frame?.getAttribute('data-background-evidence-ref') || undefined,
+        image?.getAttribute('data-background-evidence-ref') || undefined,
+        ...refsByKind('background-evidence'),
+        ...commandTexts.flatMap((text) => refsFromOption(text, 'background-evidence-ref')),
+      ]),
       permissionRefs: [...refsByKind('permission'), ...refsByKind('permission-handoff'), ...refsByKind('permission-recheck')],
       takeoverRefs: refsByKind('takeover'),
       pauseRefs: refsByKind('pause-agent'),
@@ -631,6 +898,11 @@ function providerStatus(refs: DogfoodRefs): VirtualAppScreenDogfoodManifest['pro
 
 function refsFromCommandText(commandText: string) {
   return [...commandText.matchAll(/--[a-z-]*ref\s+"([^"]+)"/g)].map((match) => match[1]);
+}
+
+function refsFromCommandOption(commandText: string, option: string) {
+  const escaped = option.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return [...commandText.matchAll(new RegExp(`--${escaped}\\s+"([^"]+)"`, 'g'))].map((match) => match[1]);
 }
 
 function runtimeCommandAcceptanceFromTexts(commandTexts: string[]): VirtualAppScreenDogfoodManifest['runtimeCommandAcceptance'] {

@@ -506,8 +506,9 @@ test('ResultsRenderer screen pane renders active Computer Use frame source and r
   const html = renderResultsRenderer(session, { activeRunId: 'run-screen', initialResultTab: 'screen' });
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
-  assert.match(html, /data-presentation-mode="replay-ref-inspector"/);
-  assert.match(html, /Replay\/ref inspector/);
+  assert.match(html, /data-presentation-mode="permission-gate"/);
+  assert.match(html, /data-screen-presentation-state="permission"/);
+  assert.match(html, /Permission gate/);
   assert.match(html, /class="virtual-screen-frame-image"/);
   assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png"/);
   assert.match(html, /data-frame-ref="computer-use:session\/run-screen\/frames\/after\.png"/);
@@ -756,8 +757,8 @@ test('ResultsRenderer screen tab derives Computer Use frame and replay refs from
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
   assert.match(html, /data-status="ready"/);
-  assert.match(html, /data-attach-state="observe-only"/);
-  assert.match(html, /data-presentation-mode="replay-ref-inspector"/);
+  assert.match(html, /data-attach-state="adapter-unavailable"/);
+  assert.match(html, /data-presentation-mode="blocked-gate"/);
   assert.match(html, /data-screen-surface-mode="replay"/);
   assert.match(html, /.sciforge\/computer-use\/run-cu-screen\/latest\.png/);
   assert.match(html, /computer-use:replay\/run-cu-screen\/replay\.json/);
@@ -1114,8 +1115,10 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
 
     assert.match(firstHtml, /aria-selected="true"[^>]*><span>Browser<\/span>/);
     assert.match(firstHtml, /value="localhost:4173\/first"/);
-    assert.match(firstHtml, /src="http:\/\/localhost:4173\/first"/);
+    assert.match(firstHtml, /data-browser-state="ready"/);
+    assert.match(firstHtml, /<dd>http:\/\/localhost:4173\/first<\/dd>/);
     assert.doesNotMatch(firstHtml, /value="https:\/\/example\.org\/second"|\/browser open-external &quot;https:\/\/example\.org\/second/);
+    assert.doesNotMatch(firstHtml, /<iframe|src="http:\/\/localhost:4173\/first"/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
@@ -1150,8 +1153,10 @@ test('ResultsRenderer restores persisted New/Close state and Browser URL without
     assert.match(html, /class="result-active-tab-close"[^>]*aria-label="Close Browser 2"/);
     assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
     assert.match(html, /value="localhost:4173\/preview"/);
-    assert.match(html, /src="http:\/\/localhost:4173\/preview"/);
+    assert.match(html, /data-browser-state="ready"/);
+    assert.match(html, /<dd>http:\/\/localhost:4173\/preview<\/dd>/);
     assert.match(html, /\/browser open &quot;http:\/\/localhost:4173\/preview&quot; --surface workbench/);
+    assert.doesNotMatch(html, /<iframe|src="http:\/\/localhost:4173\/preview"/);
     assert.doesNotMatch(html, /closed\.example\.test|result-tab-base-primary/);
   } finally {
     Object.defineProperty(globalThis, 'window', {

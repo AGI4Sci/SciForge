@@ -16,17 +16,43 @@ export const REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS = {
   'standalone-chromium-surface': 'cross-platform',
 } as const satisfies Record<BrowserNativeAdapterCandidateId, BrowserNativeAdapterPlatform>;
 
-export const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS = [
+export const REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS = [
   'latency',
   'cpu',
   'memory',
   'inputCompleteness',
   'lifecycle',
   'reconnect',
+] as const;
+
+export const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS = [
+  ...REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS,
   'secondTruthSource',
 ] as const;
 
 export type BrowserNativeAdapterMetricSection = typeof REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS[number];
+export type BrowserNativeAdapterBenchmarkMetricSection = typeof REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS[number];
+
+export const REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES = [
+  'iframe',
+  'proxy',
+  'snapshot',
+  'legacy-frame',
+  'host-stream',
+  'frame-stream',
+  'canvas',
+  'canvas-binary',
+  'webrtc',
+  'websocket-binary',
+  'http-frame',
+  'webview-tag',
+  'system-popup',
+  'external-browser',
+  'second-viewer',
+] as const;
+
+export type RejectedBrowserNativeAdapterPassEvidenceSubstitute =
+  typeof REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES[number];
 
 const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_FIELDS: Record<BrowserNativeAdapterMetricSection, readonly string[]> = {
   latency: [
@@ -137,6 +163,7 @@ export type BrowserNativeAdapterDimension = {
   owner: 'BrowserHostSession';
   adapterRole: 'display-input-adapter';
   liveSurfaceTransport: 'native-embedded';
+  singleInteractiveTruth: true;
   secondTruthSource: false;
   metrics: BrowserNativeAdapterMetricsContract;
   comparisonRefs: string[];
@@ -171,13 +198,15 @@ export type BrowserNativeAdapterComparisonManifest = {
   purpose: 'contract-only-no-real-benchmark';
   benchmarkMode: 'contract-fixture';
   owner: 'BrowserHostSession';
+  liveSurfaceTransport: 'native-embedded';
   singleInteractiveTruth: true;
+  secondTruthSource: false;
   candidates: BrowserNativeAdapterDimension[];
   productLongSession: BrowserNativeProductLongSessionContract;
   decision: BrowserNativeAdapterComparisonDecision;
   invariants: BrowserNativeAdapterComparisonInvariant[];
   evidenceRefs: string[];
-  rejectedSubstitutes: Array<'iframe' | 'proxy' | 'snapshot' | 'legacy-frame' | 'webview-tag' | 'system-popup' | 'second-viewer'>;
+  rejectedSubstitutes: RejectedBrowserNativeAdapterPassEvidenceSubstitute[];
 };
 
 export type BrowserNativeAdapterComparisonValidationIssue = {
@@ -198,6 +227,7 @@ export function defaultBrowserNativeAdapterCandidates(): BrowserNativeAdapterDim
     owner: 'BrowserHostSession',
     adapterRole: 'display-input-adapter',
     liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
     secondTruthSource: false,
     metrics: defaultBrowserNativeAdapterMetrics(),
     comparisonRefs: ['docs:electron-webcontentsview-contract'],
@@ -213,6 +243,7 @@ export function defaultBrowserNativeAdapterCandidates(): BrowserNativeAdapterDim
     owner: 'BrowserHostSession',
     adapterRole: 'display-input-adapter',
     liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
     secondTruthSource: false,
     metrics: defaultBrowserNativeAdapterMetrics(),
     comparisonRefs: ['docs:webview2-contract'],
@@ -228,6 +259,7 @@ export function defaultBrowserNativeAdapterCandidates(): BrowserNativeAdapterDim
     owner: 'BrowserHostSession',
     adapterRole: 'display-input-adapter',
     liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
     secondTruthSource: false,
     metrics: defaultBrowserNativeAdapterMetrics(),
     comparisonRefs: ['docs:wkwebview-contract'],
@@ -243,6 +275,7 @@ export function defaultBrowserNativeAdapterCandidates(): BrowserNativeAdapterDim
     owner: 'BrowserHostSession',
     adapterRole: 'display-input-adapter',
     liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
     secondTruthSource: false,
     metrics: defaultBrowserNativeAdapterMetrics(),
     comparisonRefs: ['docs:standalone-chromium-surface-contract'],
@@ -303,13 +336,15 @@ export function buildBrowserNativeAdapterComparisonManifest(input: {
     purpose: 'contract-only-no-real-benchmark',
     benchmarkMode: 'contract-fixture',
     owner: 'BrowserHostSession',
+    liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
     candidates: input.candidates ?? defaultBrowserNativeAdapterCandidates(),
     productLongSession: input.productLongSession ?? defaultBrowserNativeProductLongSessionContract(),
     decision,
     invariants: [],
     evidenceRefs: input.evidenceRefs ?? ['browser-native-adapter-comparison:contract-fixture'],
-    rejectedSubstitutes: ['iframe', 'proxy', 'snapshot', 'legacy-frame', 'webview-tag', 'system-popup', 'second-viewer'],
+    rejectedSubstitutes: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
   };
   manifest.invariants = browserNativeAdapterComparisonInvariants(manifest);
   return manifest;
@@ -327,6 +362,12 @@ export function validateBrowserNativeAdapterComparisonManifest(
   }
   if (manifest.owner !== 'BrowserHostSession' || manifest.singleInteractiveTruth !== true) {
     issues.push({ path: 'owner', message: 'BrowserHostSession must remain the single interactive truth source' });
+  }
+  if (manifest.liveSurfaceTransport !== 'native-embedded') {
+    issues.push({ path: 'liveSurfaceTransport', message: 'comparison manifest must declare liveSurfaceTransport=native-embedded' });
+  }
+  if (manifest.secondTruthSource !== false) {
+    issues.push({ path: 'secondTruthSource', message: 'comparison manifest must declare secondTruthSource=false' });
   }
   if (manifest.evidenceRefs.length === 0) {
     issues.push({ path: 'evidenceRefs', message: 'manifest evidence must be refs-first' });
@@ -350,6 +391,9 @@ export function validateBrowserNativeAdapterComparisonManifest(
     }
     if (candidate.liveSurfaceTransport !== 'native-embedded') {
       issues.push({ path: `${path}.liveSurfaceTransport`, message: 'candidate must describe the native embedded live surface path' });
+    }
+    if (candidate.singleInteractiveTruth !== true) {
+      issues.push({ path: `${path}.singleInteractiveTruth`, message: 'candidate must keep singleInteractiveTruth=true' });
     }
     if (candidate.secondTruthSource !== false) {
       issues.push({ path: `${path}.secondTruthSource`, message: 'candidate must explicitly reject a second truth source' });
@@ -382,11 +426,15 @@ export function browserNativeAdapterComparisonInvariants(
     candidate.owner === 'BrowserHostSession'
     && candidate.adapterRole === 'display-input-adapter'
     && candidate.liveSurfaceTransport === 'native-embedded'
-  ));
+    && candidate.singleInteractiveTruth === true
+  )) && manifest.liveSurfaceTransport === 'native-embedded';
   const noSecondTruthSource = manifest.owner === 'BrowserHostSession'
     && manifest.singleInteractiveTruth === true
+    && manifest.secondTruthSource === false
     && manifest.candidates.every((candidate) => candidate.secondTruthSource === false)
-    && manifest.rejectedSubstitutes.includes('second-viewer');
+    && REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES.every((substitute) => (
+      manifest.rejectedSubstitutes.includes(substitute)
+    ));
   const refsFirst = manifest.evidenceRefs.length > 0
     && manifest.decision.rationaleRefs.length > 0
     && manifest.candidates.every((candidate) => candidate.comparisonRefs.length > 0)

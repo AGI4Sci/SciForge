@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  CODEX_RUNTIME_STREAM_PATH,
+  CODEX_RUNTIME_WEBSOCKET_PATH,
   CODEX_REALTIME_SESSION_STREAM_KIND,
   assertCodexRealtimeSessionEnvelope,
   createCodexRealtimeClientControl,
@@ -8,6 +10,11 @@ import {
   createCodexRealtimeSessionEnvelope,
   normalizeCodexRealtimeClientControl,
 } from './codex-realtime-session';
+
+test('Codex runtime route constants are the shared workspace/UI/server contract', () => {
+  assert.equal(CODEX_RUNTIME_STREAM_PATH, '/api/sciforge/runtime/codex/stream');
+  assert.equal(CODEX_RUNTIME_WEBSOCKET_PATH, '/api/sciforge/runtime/codex/realtime/ws');
+});
 
 test('Codex realtime session contract names structured events plus terminal-equivalent text, not raw terminal', () => {
   const envelope = createCodexRealtimeSessionEnvelope({

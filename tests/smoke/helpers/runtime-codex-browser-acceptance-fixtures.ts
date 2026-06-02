@@ -135,6 +135,7 @@ export const rejectedBrowserAcceptanceFixtureFiles = [
   'fake-passed-missing-task-result.json',
   'fake-passed-unparseable-evidence.json',
   'fake-passed-native-outside-default-chat.json',
+  'fake-passed-raw-payload.json',
   'blocked-status.json',
   'failed-status.json',
   'partial-status.json',
@@ -245,6 +246,10 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
     'fake-passed-native-outside-default-chat.json',
     passedFixtureManifest(context, nativeOutsideDefaultChatDom, notes, screenshot, 'native-default-chat'),
   );
+  writeJsonFixture(fixtureDir, 'fake-passed-raw-payload.json', {
+    ...passedFixtureManifest(context, nativeDefaultChatDom, notes, screenshot, 'native-default-chat'),
+    rawProviderBody: 'data:image/png;base64,AAAA',
+  });
   writeJsonFixture(fixtureDir, 'blocked-status.json', {
     ...passedFixtureManifest(context, validDom, notes, screenshot),
     status: 'blocked',

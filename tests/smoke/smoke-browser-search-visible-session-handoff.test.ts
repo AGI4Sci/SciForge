@@ -90,9 +90,13 @@ test('browser_search reuses the visible BrowserHostSession refs and focused proj
   assert.match(html, /data-component-id="browser-workbench"/);
   assert.match(html, /data-browser-state="ready"/);
   assert.match(html, /data-browser-host-surface="browser-host-session"/);
+  assert.match(html, /data-browser-native-surface="true"/);
   assert.match(html, /data-browser-live-surface-ref="browser-host-session:visible-browser-host-session\/live-surface"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:visible-browser-host-session\/frame-stream"/);
+  assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
+  assert.match(html, /data-browser-frame-transport="native-embedded"/);
   assert.match(html, /data-browser-single-interactive-truth="true"/);
+  assert.doesNotMatch(html, /data-browser-frame-stream-ref=/);
+  assert.doesNotMatch(html, /data-browser-frame-ref=/);
   assert.deepEqual(uniqueBrowserHostSessionIds(html), [VISIBLE_SESSION_ID]);
   assert.equal(countMatches(html, /data-browser-object-type="host-browser"/g), 1);
 
@@ -107,8 +111,12 @@ test('browser_search reuses the visible BrowserHostSession refs and focused proj
     rightPane: boundedRightPaneReport(html),
   };
   assert.equal(report.runtime.reusedSessionId, VISIBLE_SESSION_ID);
+  assert.deepEqual(report.rightPane.transports, ['native-embedded']);
+  assert.deepEqual(report.rightPane.singleInteractiveTruthValues, ['true']);
+  assert.equal(report.rightPane.nativeSurfaces, 1);
   assert.equal(report.rightPane.secondTruthSource, false);
   assert.equal(report.rightPane.inlinePayloadsCaptured, false);
+  assert.equal(report.rightPane.productLiveSurfacePass, true);
   assertRefsFirstAndNoSecondTruth(payload, html, report);
   console.log(`[ok] Browser search visible session handoff ${JSON.stringify(report)}`);
 });
@@ -338,10 +346,9 @@ function visibleHostSession(): BrowserHostSessionState {
     canGoBack: true,
     canGoForward: false,
     liveSurfaceRef: `browser-host-session:${VISIBLE_SESSION_ID}/live-surface`,
-    liveSurfaceTransport: 'host-stream',
+    liveSurfaceTransport: 'native-embedded',
+    nativeAdapterUrl: 'http://127.0.0.1:61234',
     singleInteractiveTruth: true,
-    frameStreamRef: `browser-host-session:${VISIBLE_SESSION_ID}/frame-stream`,
-    frameRef: `browser-host-session:${VISIBLE_SESSION_ID}/frame.png`,
     screenshotRef: `browser-host-session:${VISIBLE_SESSION_ID}/screenshot.png`,
     domSnapshotRef: `browser-host-session:${VISIBLE_SESSION_ID}/dom.html`,
     axSnapshotRef: `browser-host-session:${VISIBLE_SESSION_ID}/ax.json`,
@@ -432,12 +439,18 @@ function boundedRightPaneReport(html: string) {
     frameStreamRefs: uniqueAttrValues(html, 'data-browser-frame-stream-ref'),
     frameRefs: uniqueAttrValues(html, 'data-browser-frame-ref'),
     transports: uniqueAttrValues(html, 'data-browser-live-surface-transport'),
+    singleInteractiveTruthValues: uniqueAttrValues(html, 'data-browser-single-interactive-truth'),
     hostBrowserObjects: countMatches(html, /data-browser-object-type="host-browser"/g),
+    nativeSurfaces: countMatches(html, /data-browser-native-surface="true"/g),
     iframeSurfaces: countMatches(html, /<iframe\b/g),
     proxyFallbacks: countMatches(html, /\/api\/sciforge\/browser\/proxy/g),
     systemPopupSurfaces: countMatches(html, /system-browser-window/g),
     secondTruthSource: /<iframe|<webview|data-browser-object-type="browser-embedded-frame"|\/api\/sciforge\/browser\/proxy|system-browser-window/i.test(html),
     inlinePayloadsCaptured: /data:image|base64|<\s*(?:!doctype|html|body|iframe|webview)\b/i.test(html),
+    productLiveSurfacePass: uniqueAttrValues(html, 'data-browser-live-surface-transport').includes('native-embedded')
+      && uniqueAttrValues(html, 'data-browser-single-interactive-truth').includes('true')
+      && countMatches(html, /data-browser-native-surface="true"/g) === 1
+      && !/<iframe|<webview|data-browser-object-type="browser-embedded-frame"|\/api\/sciforge\/browser\/proxy|system-browser-window/i.test(html),
   };
 }
 
@@ -445,11 +458,12 @@ function assertRefsFirstAndNoSecondTruth(payload: ToolPayload, html: string, rep
   const serialized = JSON.stringify({ payload, html, report });
   assert.doesNotMatch(serialized, /data:image|base64|screenshotBase64|raw(?:Dom|DOM|Html|HTML|Screenshot|Payload)|<\s*(?:!doctype|html|body|iframe|webview)\b/i);
   assert.doesNotMatch(serialized, /\/api\/sciforge\/browser\/proxy|system-browser-window|data-browser-object-type="browser-embedded-frame"|<webview\b/i);
+  assert.doesNotMatch(serialized, /host-stream|websocket-binary|data-browser-frame-stream-ref=/i);
 }
 
 function uniqueBrowserHostSessionIds(html: string) {
-  return [...new Set([...html.matchAll(/browser-host-session:([^/"<\s]+)/g)]
-    .map((match) => match[1]?.split('/')[0])
+  return [...new Set([...html.matchAll(/browser-host-session:([^:/"<\s]+)\//g)]
+    .map((match) => match[1])
     .filter((id): id is string => Boolean(id)))
   ].sort();
 }

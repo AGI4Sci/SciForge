@@ -44,6 +44,7 @@ export type ResultPaneRedactionHint =
   | 'workspace-relative-only'
   | 'no-absolute-paths'
   | 'no-provider-payloads'
+  | 'native-only-live-surface'
   | 'no-full-dom'
   | 'no-auth-headers'
   | 'no-raw-screenshot-bytes'
@@ -182,8 +183,38 @@ export const RESULT_PANE_CONTRACTS: Record<ResultPaneTab, ResultPaneContract> = 
       prefixes: ['url:', 'http://', 'https://', 'browser:', 'browser-runtime:', 'browser-session:', 'browser-snapshot:', 'browser-host-session:'],
       requiredFor: ['ready', 'error', 'blocked'],
     }],
-    acceptedPayloadRefs: ['frameRef', 'screenshotRef', 'domSnapshotRef', 'axSnapshotRef', 'consoleLogRef', 'networkLogRef', 'searchResultRef'],
-    redactionHints: [...COMMON_REDACTION_HINTS, 'no-full-dom', 'no-auth-headers', 'bounded-preview'],
+    acceptedPayloadRefs: [
+      'liveSurfaceRef',
+      'frameStreamRef',
+      'frameRef',
+      'screenshotRef',
+      'domSnapshotRef',
+      'axSnapshotRef',
+      'consoleLogRef',
+      'networkLogRef',
+      'searchResultRef',
+    ],
+    rejectedPayloadFields: [
+      'frameUrl',
+      'framePreviewUrl',
+      'frameRenderer',
+      'frameTransport',
+      'liveTransportHandoff',
+      'rawFrame',
+      'frameData',
+      'frameBytes',
+      'frameBase64',
+      'screenshotBase64',
+      'rawScreenshot',
+      'rawDom',
+      'domHtml',
+      'rawConsoleLog',
+      'rawNetworkLog',
+      'proxyUrl',
+      'webviewTag',
+      'webrtcCandidate',
+    ],
+    redactionHints: [...COMMON_REDACTION_HINTS, 'native-only-live-surface', 'no-full-dom', 'no-auth-headers', 'bounded-preview'],
   }),
   screen: defineResultPaneContract({
     pane: 'screen',

@@ -348,6 +348,25 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     stringField(artifact.dataRef),
   );
   const sessionRef = firstNonEmptyString(stringField(data.sessionRef), stringField(metadata.sessionRef));
+  const hostSessionRef = firstNonEmptyString(
+    stringField(data.hostSessionRef),
+    stringField(metadata.hostSessionRef),
+    refFromValue(data.nativeHost, ['hostSessionRef', 'sessionRef']),
+    refFromValue(metadata.nativeHost, ['hostSessionRef', 'sessionRef']),
+    sessionRef,
+  );
+  const surfaceOwnerRef = firstNonEmptyString(
+    stringField(data.surfaceOwnerRef),
+    stringField(metadata.surfaceOwnerRef),
+    refFromValue(data.nativeHost, ['surfaceOwnerRef']),
+    refFromValue(metadata.nativeHost, ['surfaceOwnerRef']),
+  );
+  const displayOwnerRef = firstNonEmptyString(
+    stringField(data.displayOwnerRef),
+    stringField(metadata.displayOwnerRef),
+    refFromValue(data.nativeHost, ['displayOwnerRef']),
+    refFromValue(metadata.nativeHost, ['displayOwnerRef']),
+  );
   const providerSessionOwnerRef = firstNonEmptyString(
     stringField(data.providerSessionOwnerRef),
     stringField(metadata.providerSessionOwnerRef),
@@ -369,6 +388,30 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refFromValue(metadata.providerSession, ['liveBindingAttachGrantRef', 'attachGrantRef']),
     refFromValue(data.liveBinding, ['attachGrantRef', 'liveBindingAttachGrantRef']),
     refFromValue(metadata.liveBinding, ['attachGrantRef', 'liveBindingAttachGrantRef']),
+  );
+  const liveBindingAttachGrantStatus = firstNonEmptyString(
+    stringField(data.liveBindingAttachGrantStatus),
+    stringField(metadata.liveBindingAttachGrantStatus),
+    refFromValue(data.providerSession, ['liveBindingAttachGrantStatus', 'attachGrantStatus']),
+    refFromValue(metadata.providerSession, ['liveBindingAttachGrantStatus', 'attachGrantStatus']),
+    refFromValue(data.liveBinding, ['status', 'liveBindingAttachGrantStatus', 'attachGrantStatus']),
+    refFromValue(metadata.liveBinding, ['status', 'liveBindingAttachGrantStatus', 'attachGrantStatus']),
+  );
+  const grantValidationRef = firstNonEmptyString(
+    stringField(data.grantValidationRef),
+    stringField(metadata.grantValidationRef),
+    refFromValue(data.providerSession, ['grantValidationRef', 'validationRef']),
+    refFromValue(metadata.providerSession, ['grantValidationRef', 'validationRef']),
+    refFromValue(data.liveBinding, ['grantValidationRef', 'validationRef']),
+    refFromValue(metadata.liveBinding, ['grantValidationRef', 'validationRef']),
+  );
+  const grantValidationStatus = firstNonEmptyString(
+    stringField(data.grantValidationStatus),
+    stringField(metadata.grantValidationStatus),
+    refFromValue(data.providerSession, ['grantValidationStatus', 'validationStatus']),
+    refFromValue(metadata.providerSession, ['grantValidationStatus', 'validationStatus']),
+    refFromValue(data.liveBinding, ['grantValidationStatus', 'validationStatus']),
+    refFromValue(metadata.liveBinding, ['grantValidationStatus', 'validationStatus']),
   );
   const surfaceTransportRef = firstNonEmptyString(
     stringField(data.surfaceTransportRef),
@@ -401,6 +444,11 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     booleanFromRecord(metadata.isolationFlags, 'providerExecuted'),
     booleanFromRecord(data.isolation, 'providerExecuted'),
     booleanFromRecord(metadata.isolation, 'providerExecuted'),
+  );
+  const providerSessionRevalidated = firstBoolean(
+    booleanField(data.providerSessionRevalidated),
+    booleanField(metadata.providerSessionRevalidated),
+    booleanField(runSummary.providerSessionRevalidated),
   );
   const blockedRef = firstNonEmptyString(stringField(data.blockedRef), stringField(metadata.blockedRef));
   const errorRef = firstNonEmptyString(stringField(data.errorRef), stringField(metadata.errorRef));
@@ -560,6 +608,9 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
       providerSessionOwnerRef,
       providerSessionReconnectRef,
       liveBindingAttachGrantRef,
+      liveBindingAttachGrantStatus,
+      grantValidationRef,
+      grantValidationStatus,
       currentFrameSequence,
       surfaceTransportDescriptor,
       platformDriverRef,
@@ -569,6 +620,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
       permissionStatus,
       evidenceLedgerRef,
       providerExecuted,
+      providerSessionRevalidated,
       replayRef,
       frameRecords,
       isolationFlags,
@@ -583,13 +635,20 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     targetAppRef,
     targetWindowRef,
     sessionRef,
+    hostSessionRef,
+    surfaceOwnerRef,
+    displayOwnerRef,
     providerSessionOwnerRef,
     providerSessionReconnectRef,
     liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus,
+    grantValidationRef,
+    grantValidationStatus,
     surfaceTransportRef,
     currentFrameSequence,
     ...(surfaceTransportDescriptor ? { surfaceTransportDescriptor } : {}),
     ...(providerExecuted === undefined ? {} : { providerExecuted }),
+    ...(providerSessionRevalidated === undefined ? {} : { providerSessionRevalidated }),
     frameStreamRef,
     screen,
     frameRefs: frameRecords,
@@ -917,6 +976,9 @@ function deriveVirtualScreenSurfaceMode(options: {
   providerSessionOwnerRef: string;
   providerSessionReconnectRef: string;
   liveBindingAttachGrantRef: string;
+  liveBindingAttachGrantStatus: string;
+  grantValidationRef: string;
+  grantValidationStatus: string;
   currentFrameSequence: VirtualScreenPayload['currentFrameSequence'];
   surfaceTransportDescriptor: RightPaneVirtualScreenSurfaceTransportDescriptorEvidence | undefined;
   platformDriverRef: string;
@@ -926,6 +988,7 @@ function deriveVirtualScreenSurfaceMode(options: {
   permissionStatus: string;
   evidenceLedgerRef: string;
   providerExecuted: boolean | undefined;
+  providerSessionRevalidated: boolean | undefined;
   replayRef: string;
   frameRecords: VirtualScreenFrame[];
   isolationFlags: VirtualScreenPayload['isolationFlags'];
@@ -941,6 +1004,7 @@ function deriveVirtualScreenSurfaceMode(options: {
     && options.providerSessionOwnerRef
     && options.providerSessionReconnectRef
     && options.liveBindingAttachGrantRef
+    && virtualScreenLiveBindingGrantValidated(options)
     && options.currentFrameSequence?.ref
     && typeof options.currentFrameSequence.sequence === 'number'
     && Number.isFinite(options.currentFrameSequence.sequence)
@@ -949,7 +1013,7 @@ function deriveVirtualScreenSurfaceMode(options: {
     && isReadyGateStatus(options.platformDriverStatus)
     && virtualScreenPermissionReady(options)
     && options.evidenceLedgerRef
-    && options.providerExecuted === true
+    && (options.providerExecuted === true || options.providerSessionRevalidated === true)
     && virtualScreenSurfaceTransportDescriptorMatchesLiveRefs(options)
     && options.isolationFlags?.backgroundRenderable === true
     && options.isolationFlags?.affectsPhysicalDisplay === false
@@ -965,6 +1029,19 @@ function deriveVirtualScreenSurfaceMode(options: {
   if (options.explicitSurfaceMode === 'empty' && !options.currentFrameRef && !options.replayRef && !options.frameStreamRef && !options.liveSurfaceRef && !options.frameRecords.length) return 'empty';
   if (options.explicitSurfaceMode === 'replay') return 'replay';
   return options.currentFrameRef || options.replayRef || options.frameStreamRef || options.liveSurfaceRef || options.frameRecords.length ? 'replay' : 'empty';
+}
+
+function virtualScreenLiveBindingGrantValidated(options: {
+  liveBindingAttachGrantRef: string;
+  liveBindingAttachGrantStatus: string;
+  grantValidationRef: string;
+  grantValidationStatus: string;
+}) {
+  return Boolean(
+    options.liveBindingAttachGrantRef
+    && options.grantValidationRef
+    && (isReadyGateStatus(options.liveBindingAttachGrantStatus) || isReadyGateStatus(options.grantValidationStatus) || /^valid(?:ated)?$/i.test(options.liveBindingAttachGrantStatus) || /^valid(?:ated)?$/i.test(options.grantValidationStatus)),
+  );
 }
 
 function virtualScreenPermissionReady(options: {

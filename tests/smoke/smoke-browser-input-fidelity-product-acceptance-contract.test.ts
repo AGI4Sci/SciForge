@@ -10,6 +10,9 @@ type BrowserInputFidelityCapability = {
   status: 'blocked' | 'passed';
   required: string[];
   evidenceRefs: string[];
+  handoffRef?: string;
+  auditRefs?: string[];
+  requiredProofs?: BrowserInputFidelityRequiredProof[];
   productActionRefs?: string[];
   boundedLatencyMs?: number[];
   rawDomRecorded?: false;
@@ -22,6 +25,43 @@ type BrowserInputFidelityCapability = {
   shellComposerCapturedCharacters?: number;
   systemClipboardRoundTripVerified?: boolean;
   details?: BrowserInputFidelityCapabilityDetails;
+};
+
+type BrowserInputFidelityRequiredProof = {
+  kind: string;
+  status: 'blocked' | 'passed';
+  owner: 'BrowserHostSession';
+  productSurface: 'right-pane-browser';
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  proofRef: string;
+  auditRef?: string;
+  actionRef?: string;
+  rangeRef?: string;
+  confirmationAuditRef?: string;
+  roundTripRef?: string;
+  payloadPolicy?: 'length-and-hash-only';
+  rawPayloadRecorded: false;
+  shellComposerTarget: 'not-targeted';
+  blocker?: string;
+};
+
+type BrowserInputFidelityOsUiHandoff = {
+  status: 'blocked' | 'passed';
+  passClaim: boolean;
+  blocker?: string;
+  requiredRunner: 'right-pane-native-os-ui-run';
+  productSurface: 'right-pane-browser';
+  owner: 'BrowserHostSession';
+  inputChannel: 'browser-host-session';
+  liveSurfaceTransport: 'native-embedded';
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  handoffRef: string;
+  auditRefs: string[];
+  requiredProofs: BrowserInputFidelityRequiredProof[];
+  rawPayloadsCaptured: false;
+  refsFirst: true;
 };
 
 type BrowserInputFidelityCapabilityDetails =
@@ -80,6 +120,7 @@ type BrowserInputFidelityProductAcceptanceEvidence = {
   inputChannel: 'browser-host-session';
   rawPayloadsCaptured: false;
   refsFirst: true;
+  realOsUiRunHandoff: BrowserInputFidelityOsUiHandoff;
   capabilities: Record<'cursorCaret' | 'mouse' | 'keyboard' | 'ime' | 'clipboard' | 'selectionRange', BrowserInputFidelityCapability>;
   osUiRun?: {
     runId: string;
@@ -128,12 +169,22 @@ test('Browser input fidelity product acceptance contract is bounded and cannot c
   assert.equal(evidence.status, 'blocked');
   assert.equal(evidence.canClaimProductInputFidelityPass, false);
   assert.equal(evidence.owner, 'BrowserHostSession');
+  assert.equal(evidence.liveSurfaceTransport, 'native-embedded');
   assert.equal(evidence.singleInteractiveTruth, true);
   assert.equal(evidence.secondTruthSource, false);
+  assert.equal(evidence.inputChannel, 'browser-host-session');
+  assert.equal(evidence.refsFirst, true);
   assert.equal(evidence.rawPayloadsCaptured, false);
+  assert.equal(evidence.realOsUiRunHandoff.status, 'blocked');
+  assert.equal(evidence.realOsUiRunHandoff.passClaim, false);
+  assert.equal(evidence.realOsUiRunHandoff.requiredProofs.length, 6);
+  assert.ok(evidence.capabilities.mouse.required.includes('modifier-click tab owner/handoff'));
+  assert.ok(evidence.capabilities.clipboard.requiredProofs?.every((proof) => proof.confirmationAuditRef?.startsWith('browser-host-session:input-fidelity-product-contract/')));
+  assert.ok(evidence.capabilities.selectionRange.requiredProofs?.every((proof) => proof.rangeRef?.startsWith('browser-host-session:input-fidelity-product-contract/')));
+  assert.deepEqual(validateBlockedInputFidelityHandoffSchema(evidence), []);
 
   const text = JSON.stringify(evidence);
-  assert.doesNotMatch(text, /data:image|base64|<\s*(?:html|body|input|textarea|iframe|webview)\b/i);
+  assertNoRawInputFidelityPayload(text, 'blocked evidence');
   assert.deepEqual(forbiddenPayloadKeys(evidence), []);
   assert.ok(allEvidenceRefs(evidence).every((ref) => ref.startsWith('browser-host-session:input-fidelity-product-contract/')));
 });
@@ -147,13 +198,17 @@ test('Browser input fidelity product acceptance writes blocked bounded manifest 
   assert.ok(validation.blockers.includes('ime-real-composition-proof-required'));
   assert.ok(validation.blockers.includes('clipboard-round-trip-proof-required'));
   assert.ok(validation.blockers.includes('selection-range-proof-required'));
+  assert.deepEqual(validateBlockedInputFidelityHandoffSchema(evidence), []);
 
-  await mkdir(dirname(MANIFEST_PATH), { recursive: true });
-  await writeFile(MANIFEST_PATH, `${JSON.stringify({
+  const manifestText = `${JSON.stringify(boundedInputFidelityManifest({
     ...evidence,
     validation,
     generatedAt: '2026-06-02T00:00:00.000Z',
-  }, null, 2)}\n`);
+  }), null, 2)}\n`;
+  assertNoRawInputFidelityManifestPayload(manifestText, 'blocked bounded manifest');
+
+  await mkdir(dirname(MANIFEST_PATH), { recursive: true });
+  await writeFile(MANIFEST_PATH, manifestText);
 });
 
 test('Browser input fidelity contract rejects forged pass without real IME, clipboard, and selection proofs', () => {
@@ -194,6 +249,49 @@ test('Browser input fidelity contract rejects forged pass without real IME, clip
   assert.ok(validation.blockers.includes('selection-range-proof-required'));
 });
 
+test('Browser input fidelity contract rejects pass outside native embedded BrowserHostSession truth', () => {
+  const cases: Array<{ label: string; evidence: BrowserInputFidelityProductAcceptanceEvidence }> = [
+    {
+      label: 'host-stream-transport',
+      evidence: forgedP1Envelope({ liveSurfaceTransport: 'host-stream' }),
+    },
+    {
+      label: 'non-browser-host-owner',
+      evidence: forgedP1Envelope({ owner: 'LegacyInputWorker' }),
+    },
+    {
+      label: 'not-single-interactive-truth',
+      evidence: forgedP1Envelope({ singleInteractiveTruth: false }),
+    },
+    {
+      label: 'second-truth-source',
+      evidence: forgedP1Envelope({ secondTruthSource: true }),
+    },
+    {
+      label: 'shell-composer-input-channel',
+      evidence: forgedP1Envelope({ inputChannel: 'shell-composer' }),
+    },
+    {
+      label: 'native-pass-with-frame-stream',
+      evidence: forgedP1Envelope({
+        osUiRun: {
+          ...boundedPassedInputFidelityEvidence().osUiRun!,
+          frameStreamRef: 'browser-host-session:input-fidelity-os-ui/frame-stream',
+        },
+      }),
+    },
+  ];
+
+  for (const { label, evidence } of cases) {
+    const validation = validateBrowserInputFidelityProductAcceptance(evidence);
+    assert.equal(validation.canClaimPass, false, `${label} must not pass`);
+    assert.ok(
+      validation.blockers.includes('browser-host-session-native-embedded-single-truth-required'),
+      `${label} should require BrowserHostSession native embedded single truth`,
+    );
+  }
+});
+
 test('Browser input fidelity contract rejects real pass proofs split across BrowserHostSession refs', () => {
   const forged = boundedPassedInputFidelityEvidence();
   forged.osUiRun!.composerAudit.composerAuditRef = 'browser-host-session:other-input-fidelity-run/composer-audit';
@@ -218,10 +316,16 @@ test('Browser input fidelity contract allows only bounded real OS UI pass eviden
   assert.equal(validation.canClaimPass, true);
   assert.deepEqual(validation.blockers, []);
   assert.equal(evidence.canClaimProductInputFidelityPass, true);
+  assert.equal(evidence.owner, 'BrowserHostSession');
+  assert.equal(evidence.liveSurfaceTransport, 'native-embedded');
+  assert.equal(evidence.singleInteractiveTruth, true);
+  assert.equal(evidence.secondTruthSource, false);
+  assert.equal(evidence.inputChannel, 'browser-host-session');
+  assert.equal(evidence.osUiRun?.frameStreamRef, undefined);
   assert.equal(evidence.capabilities.ime.details?.kind, 'ime-composition');
   assert.equal(evidence.capabilities.clipboard.details?.kind, 'clipboard-round-trip');
   assert.equal(evidence.capabilities.selectionRange.details?.kind, 'selection-range');
-  assert.doesNotMatch(text, /data:image|base64|<\s*(?:!doctype|html|body|input|textarea|iframe|webview)\b/i);
+  assertNoRawInputFidelityPayload(text, 'passed evidence');
   assert.doesNotMatch(text, /"(?:clipboardText|selectionText|compositionText|candidatePayload|domPayload)"\s*:/i);
   assert.deepEqual(forbiddenPayloadKeys(evidence), []);
 });
@@ -233,9 +337,7 @@ function validateBrowserInputFidelityProductAcceptance(evidence: BrowserInputFid
   if (evidence.status !== 'passed' || evidence.source !== 'real-product-os-ui-run' || evidence.canClaimProductInputFidelityPass !== true) {
     blockers.push('real-product-os-ui-run-required');
   }
-  if (evidence.owner !== 'BrowserHostSession' || evidence.singleInteractiveTruth !== true || evidence.secondTruthSource !== false) {
-    blockers.push('browser-host-session-single-owner-required');
-  }
+  if (!hasNativeEmbeddedBrowserHostSingleTruth(evidence)) blockers.push('browser-host-session-native-embedded-single-truth-required');
 	  if (evidence.rawPayloadsCaptured !== false || forbiddenPayloadKeys(evidence).length > 0) blockers.push('raw-payloads-forbidden');
 	  if (!hasValidOsUiRun(evidence)) blockers.push('real-os-ui-run-refs-required');
 	  if (!hasOsUiAuditProofs(evidence)) blockers.push('real-os-ui-audit-proof-required');
@@ -251,14 +353,67 @@ function validateBrowserInputFidelityProductAcceptance(evidence: BrowserInputFid
     && evidence.status === 'passed'
     && evidence.source === 'real-product-os-ui-run'
     && evidence.canClaimProductInputFidelityPass === true
-    && evidence.owner === 'BrowserHostSession'
-    && evidence.singleInteractiveTruth === true
-    && evidence.secondTruthSource === false
+    && hasNativeEmbeddedBrowserHostSingleTruth(evidence)
     && evidence.rawPayloadsCaptured === false
     && capabilities.length === 6
     && capabilities.every((capability) => capability.status === 'passed' && capability.evidenceRefs.length > 0)
     && blockers.length === 0;
   return { canClaimPass, blockers };
+}
+
+function validateBlockedInputFidelityHandoffSchema(evidence: BrowserInputFidelityProductAcceptanceEvidence): string[] {
+  const blockers: string[] = [];
+  const handoff = evidence.realOsUiRunHandoff;
+  const runScope = browserHostRefScope(handoff.browserHostSessionRef);
+  if (handoff.status !== 'blocked' || handoff.passClaim !== false) blockers.push('blocked-handoff-must-not-claim-pass');
+  if (handoff.requiredRunner !== 'right-pane-native-os-ui-run') blockers.push('blocked-handoff-runner-required');
+  if (handoff.productSurface !== 'right-pane-browser') blockers.push('blocked-handoff-product-surface-required');
+  if (handoff.owner !== 'BrowserHostSession' || handoff.inputChannel !== 'browser-host-session') blockers.push('blocked-handoff-browser-host-owner-required');
+  if (handoff.liveSurfaceTransport !== 'native-embedded') blockers.push('blocked-handoff-native-embedded-required');
+  if (!runScope || !browserHostRefBelongsToScope(handoff.liveSurfaceRef, runScope)) blockers.push('blocked-handoff-ref-scope-required');
+  if (!runScope || !browserHostRefBelongsToScope(handoff.handoffRef, runScope)) blockers.push('blocked-handoff-ref-required');
+  if (handoff.auditRefs.length < 4 || !handoff.auditRefs.every((ref) => browserHostRefBelongsToScope(ref, runScope ?? ''))) {
+    blockers.push('blocked-handoff-audit-refs-required');
+  }
+  if (handoff.rawPayloadsCaptured !== false || handoff.refsFirst !== true) blockers.push('blocked-handoff-refs-first-required');
+
+  const requiredProofs = [
+    ...handoff.requiredProofs,
+    ...Object.values(evidence.capabilities).flatMap((capability) => capability.requiredProofs ?? []),
+  ];
+  const proofKinds = new Set(requiredProofs.map((proof) => proof.kind));
+  for (const kind of [
+    'cursor-caret-parity',
+    'mouse-owner-contract',
+    'keyboard-editing-owner',
+    'ime-candidate-window-owner',
+    'clipboard-confirmation-audit',
+    'selection-range-length-hash',
+    'modifier-click-tab-owner-or-handoff',
+  ]) {
+    if (!proofKinds.has(kind)) blockers.push(`blocked-required-proof-missing:${kind}`);
+  }
+  for (const proof of requiredProofs) {
+    if (proof.status !== 'blocked') blockers.push(`blocked-required-proof-must-be-blocked:${proof.kind}`);
+    if (proof.owner !== 'BrowserHostSession' || proof.productSurface !== 'right-pane-browser') blockers.push(`blocked-required-proof-owner-required:${proof.kind}`);
+    if (!browserHostRefBelongsToScope(proof.browserHostSessionRef, runScope ?? '')) blockers.push(`blocked-required-proof-session-scope-required:${proof.kind}`);
+    if (!browserHostRefBelongsToScope(proof.liveSurfaceRef, runScope ?? '')) blockers.push(`blocked-required-proof-live-surface-scope-required:${proof.kind}`);
+    for (const ref of [proof.proofRef, proof.auditRef, proof.actionRef, proof.rangeRef, proof.confirmationAuditRef, proof.roundTripRef].filter((ref): ref is string => typeof ref === 'string')) {
+      if (!browserHostRefBelongsToScope(ref, runScope ?? '')) blockers.push(`blocked-required-proof-ref-scope-required:${proof.kind}`);
+    }
+    if (proof.rawPayloadRecorded !== false || proof.shellComposerTarget !== 'not-targeted') blockers.push(`blocked-required-proof-refs-first-required:${proof.kind}`);
+  }
+  return [...new Set(blockers)].sort();
+}
+
+function hasNativeEmbeddedBrowserHostSingleTruth(evidence: BrowserInputFidelityProductAcceptanceEvidence): boolean {
+  return evidence.owner === 'BrowserHostSession'
+    && evidence.liveSurfaceTransport === 'native-embedded'
+    && evidence.singleInteractiveTruth === true
+    && evidence.secondTruthSource === false
+    && evidence.inputChannel === 'browser-host-session'
+    && evidence.refsFirst === true
+    && evidence.osUiRun?.frameStreamRef === undefined;
 }
 
 function allEvidenceRefs(value: unknown): string[] {
@@ -272,8 +427,10 @@ function allEvidenceRefs(value: unknown): string[] {
 
 function forbiddenPayloadKeys(value: unknown): string[] {
   const forbidden = new Set([
+    'base64',
     'clipboardText',
     'clipboardPayload',
+    'clipboardHtml',
     'selectionText',
     'selectionPayload',
     'compositionText',
@@ -281,6 +438,7 @@ function forbiddenPayloadKeys(value: unknown): string[] {
     'typedText',
     'typedPayload',
     'domPayload',
+    'domSnapshotPayload',
     'rawDom',
     'rawHtml',
     'rawClipboard',
@@ -295,7 +453,58 @@ function forbiddenPayloadKeys(value: unknown): string[] {
   ]);
 }
 
+function assertNoRawInputFidelityPayload(text: string, label: string): void {
+  assert.doesNotMatch(text, /data:image|base64/i, `${label} must not include base64 payloads`);
+  assert.doesNotMatch(text, /<\s*(?:!doctype|html|body|input|textarea|iframe|webview)\b/i, `${label} must not include captured DOM`);
+  assert.doesNotMatch(
+    text,
+    /"(?:clipboardText|clipboardPayload|clipboardHtml|selectionText|selectionPayload|compositionText|compositionPayload|typedText|typedPayload|candidatePayload|domPayload|domSnapshotPayload|rawDom|rawHtml|rawClipboard|rawSelection|rawComposition|base64)"\s*:/i,
+    `${label} must not include raw input fidelity payload keys`,
+  );
+}
+
+function assertNoRawInputFidelityManifestPayload(text: string, label: string): void {
+  assertNoRawInputFidelityPayload(text, label);
+  assert.doesNotMatch(
+    text,
+    /"raw(?:Dom|Clipboard|Selection|Composition|TypedText)[^"]*"\s*:/i,
+    `${label} must not record raw clipboard/selection/DOM manifest fields`,
+  );
+}
+
+function boundedInputFidelityManifest(value: unknown): unknown {
+  return omitManifestRawPayloadFields(value);
+}
+
+function omitManifestRawPayloadFields(value: unknown): unknown {
+  const rawPayloadPolicyKeys = new Set([
+    'rawDomRecorded',
+    'rawTypedTextRecorded',
+    'rawCompositionPayloadRecorded',
+    'rawClipboardPayloadRecorded',
+    'rawSelectionTextRecorded',
+    'rawPayloadRecorded',
+  ]);
+  if (!value || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(omitManifestRawPayloadFields);
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !rawPayloadPolicyKeys.has(key))
+      .map(([key, item]) => [key, omitManifestRawPayloadFields(item)]),
+  );
+}
+
+function forgedP1Envelope(overrides: Record<string, unknown>): BrowserInputFidelityProductAcceptanceEvidence {
+  return {
+    ...boundedPassedInputFidelityEvidence(),
+    ...overrides,
+  } as unknown as BrowserInputFidelityProductAcceptanceEvidence;
+}
+
 function blockedInputFidelityEvidence(): BrowserInputFidelityProductAcceptanceEvidence {
+  const scope = 'browser-host-session:input-fidelity-product-contract';
+  const sessionRef = `${scope}/session`;
+  const liveSurfaceRef = `${scope}/live-surface`;
   return {
     schemaVersion: SCHEMA,
     status: 'blocked',
@@ -308,30 +517,87 @@ function blockedInputFidelityEvidence(): BrowserInputFidelityProductAcceptanceEv
     inputChannel: 'browser-host-session',
     rawPayloadsCaptured: false,
     refsFirst: true,
+    realOsUiRunHandoff: {
+      status: 'blocked',
+      passClaim: false,
+      blocker: 'real-product-os-ui-run-not-executed',
+      requiredRunner: 'right-pane-native-os-ui-run',
+      productSurface: 'right-pane-browser',
+      owner: 'BrowserHostSession',
+      inputChannel: 'browser-host-session',
+      liveSurfaceTransport: 'native-embedded',
+      browserHostSessionRef: sessionRef,
+      liveSurfaceRef,
+      handoffRef: `${scope}/os-ui-handoff/input-fidelity`,
+      auditRefs: [
+        `${scope}/audit/window-focus-owner`,
+        `${scope}/audit/ime-candidate-window-owner`,
+        `${scope}/audit/system-clipboard-owner`,
+        `${scope}/audit/selection-range-owner`,
+        `${scope}/audit/shell-composer-not-targeted`,
+      ],
+      requiredProofs: [
+        inputFidelityRequiredProof('cursor-caret-parity', scope),
+        inputFidelityRequiredProof('mouse-owner-contract', scope),
+        inputFidelityRequiredProof('keyboard-editing-owner', scope),
+        inputFidelityRequiredProof('ime-candidate-window-owner', scope),
+        inputFidelityRequiredProof('clipboard-confirmation-audit', scope, {
+          auditRef: `${scope}/audit/system-clipboard-owner`,
+          payloadPolicy: 'length-and-hash-only',
+        }),
+        inputFidelityRequiredProof('selection-range-length-hash', scope, {
+          auditRef: `${scope}/audit/selection-range-owner`,
+          payloadPolicy: 'length-and-hash-only',
+        }),
+      ],
+      rawPayloadsCaptured: false,
+      refsFirst: true,
+    },
     capabilities: {
       cursorCaret: {
         status: 'blocked',
         required: ['pointer', 'text-cursor', 'default-cursor', 'input-caret', 'contenteditable-caret'],
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/cursor-caret'],
+        evidenceRefs: [`${scope}/cursor-caret`],
+        handoffRef: `${scope}/os-ui-handoff/cursor-caret`,
+        requiredProofs: [
+          inputFidelityRequiredProof('cursor-caret-parity', scope, { auditRef: `${scope}/audit/cursor-caret-owner` }),
+        ],
         rawDomRecorded: false,
       },
       mouse: {
         status: 'blocked',
-        required: ['left-click', 'right-click', 'middle-click', 'double-click', 'drag-drop', 'text-selection', 'wheel', 'scrollbar-thumb-drag'],
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/mouse'],
+        required: ['left-click', 'right-click', 'middle-click', 'modifier-click tab owner/handoff', 'double-click', 'drag-drop', 'text-selection', 'wheel', 'scrollbar-thumb-drag'],
+        evidenceRefs: [`${scope}/mouse`],
+        handoffRef: `${scope}/os-ui-handoff/mouse-owner-contract`,
+        requiredProofs: [
+          inputFidelityRequiredProof('middle-click-tab-owner-or-handoff', scope, {
+            auditRef: `${scope}/audit/middle-click-tab-owner-or-handoff`,
+          }),
+          inputFidelityRequiredProof('modifier-click-tab-owner-or-handoff', scope, {
+            auditRef: `${scope}/audit/modifier-click-tab-owner-or-handoff`,
+          }),
+        ],
         rawDomRecorded: false,
       },
       keyboard: {
         status: 'blocked',
         required: ['type', 'Backspace', 'Delete', 'Enter', 'Tab', 'arrows', 'Home', 'End', 'PageUp', 'PageDown', 'Escape', 'CmdOrCtrl+A/C/V/X'],
         shellComposerCapturedCharacters: 0,
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/keyboard'],
+        evidenceRefs: [`${scope}/keyboard`],
+        handoffRef: `${scope}/os-ui-handoff/keyboard-owner`,
+        requiredProofs: [
+          inputFidelityRequiredProof('keyboard-editing-owner', scope, { auditRef: `${scope}/audit/keyboard-focus-owner` }),
+        ],
         rawTypedTextRecorded: false,
       },
       ime: {
         status: 'blocked',
         required: ['candidate-window', 'compositionstart', 'compositionupdate', 'compositionend', 'candidate-selection'],
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/ime'],
+        evidenceRefs: [`${scope}/ime`],
+        handoffRef: `${scope}/os-ui-handoff/ime`,
+        requiredProofs: [
+          inputFidelityRequiredProof('ime-candidate-window-owner', scope, { auditRef: `${scope}/audit/ime-candidate-window-owner` }),
+        ],
         rawCompositionPayloadRecorded: false,
         details: {
           kind: 'ime-composition',
@@ -343,7 +609,19 @@ function blockedInputFidelityEvidence(): BrowserInputFidelityProductAcceptanceEv
         status: 'blocked',
         required: ['copy-round-trip', 'paste-round-trip', 'cut-policy', 'high-risk-write-confirmation'],
         systemClipboardRoundTripVerified: false,
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/clipboard'],
+        evidenceRefs: [`${scope}/clipboard`],
+        handoffRef: `${scope}/os-ui-handoff/clipboard`,
+        auditRefs: [
+          `${scope}/audit/clipboard-copy-confirmation`,
+          `${scope}/audit/clipboard-paste-confirmation`,
+          `${scope}/audit/clipboard-cut-confirmation`,
+        ],
+        requiredProofs: ['copy', 'paste', 'cut'].map((operation) => inputFidelityRequiredProof('clipboard-confirmation-audit', scope, {
+          actionRef: `${scope}/clipboard/${operation}/action`,
+          confirmationAuditRef: `${scope}/clipboard/${operation}/confirmation-audit`,
+          roundTripRef: `${scope}/clipboard/${operation}/round-trip-required`,
+          payloadPolicy: 'length-and-hash-only',
+        })),
         rawClipboardPayloadRecorded: false,
         details: {
           kind: 'clipboard-round-trip',
@@ -355,7 +633,18 @@ function blockedInputFidelityEvidence(): BrowserInputFidelityProductAcceptanceEv
       selectionRange: {
         status: 'blocked',
         required: ['input-selection', 'contenteditable-selection', 'page-text-selection'],
-        evidenceRefs: ['browser-host-session:input-fidelity-product-contract/selection-range'],
+        evidenceRefs: [`${scope}/selection-range`],
+        handoffRef: `${scope}/os-ui-handoff/selection-range`,
+        auditRefs: [
+          `${scope}/audit/input-selection-range`,
+          `${scope}/audit/contenteditable-selection-range`,
+          `${scope}/audit/page-text-selection-range`,
+        ],
+        requiredProofs: (['input', 'contenteditable', 'page-text'] as const).map((target) => inputFidelityRequiredProof('selection-range-length-hash', scope, {
+          rangeRef: `${scope}/selection/${target}/range`,
+          auditRef: `${scope}/audit/${target}-selection-range`,
+          payloadPolicy: 'length-and-hash-only',
+        })),
         selectedLengthOnly: true,
         selectedHashOnly: true,
         rawSelectionTextRecorded: false,
@@ -378,7 +667,7 @@ function boundedPassedInputFidelityEvidence(): BrowserInputFidelityProductAccept
     status: 'passed',
     source: 'real-product-os-ui-run',
     canClaimProductInputFidelityPass: true,
-    liveSurfaceTransport: 'host-stream',
+    liveSurfaceTransport: 'native-embedded',
     blocker: undefined,
     osUiRun: {
       runId: 'input-fidelity-os-ui-20260602T000000Z',
@@ -388,7 +677,6 @@ function boundedPassedInputFidelityEvidence(): BrowserInputFidelityProductAccept
       completedAt: '2026-06-02T00:03:00.000Z',
       browserHostSessionRef: 'browser-host-session:input-fidelity-os-ui/session',
       liveSurfaceRef: 'browser-host-session:input-fidelity-os-ui/live-surface',
-      frameStreamRef: 'browser-host-session:input-fidelity-os-ui/frame-stream',
 	      auditRefs: [
 	        'browser-host-session:input-fidelity-os-ui/ime-audit',
 	        'browser-host-session:input-fidelity-os-ui/clipboard-audit',
@@ -532,6 +820,26 @@ function boundedSelectionRange(
     rawDomRecorded: false,
 	  };
 	}
+
+function inputFidelityRequiredProof(
+  kind: string,
+  scope: string,
+  extra: Partial<BrowserInputFidelityRequiredProof> = {},
+): BrowserInputFidelityRequiredProof {
+  return {
+    kind,
+    status: 'blocked',
+    owner: 'BrowserHostSession',
+    productSurface: 'right-pane-browser',
+    browserHostSessionRef: `${scope}/session`,
+    liveSurfaceRef: `${scope}/live-surface`,
+    proofRef: `${scope}/required-proof/${kind}`,
+    rawPayloadRecorded: false,
+    shellComposerTarget: 'not-targeted',
+    blocker: 'real-product-os-ui-run-not-executed',
+    ...extra,
+  };
+}
 
 function boundedOsUiAuditProof(kind: BrowserInputFidelityOsUiAuditProof['kind']): BrowserInputFidelityOsUiAuditProof {
   return {

@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import {
+  ContractSmokeNativeHostPlatformAdapter,
+  InMemoryNativeVirtualAppScreenHost,
+} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 import { parseVirtualAppScreenRuntimeCommand } from './virtual-app-screen-command.js';
+import {
+  recordVirtualAppScreenNativeHostSession,
+  resetVirtualAppScreenNativeHostSessionStoreForTests,
+} from './virtual-app-screen-native-host-session-store.js';
 import {
   readVirtualAppScreenProviderSessionRecord,
   resetVirtualAppScreenProviderSessionStoreForTests,
@@ -111,9 +119,13 @@ test('VirtualAppScreen session manager materializes live refs only from complete
   assert.match(result.refs.providerSessionOwnerRef ?? '', /^computer-use:provider-session\//);
   assert.match(result.refs.providerSessionReconnectRef ?? '', /^computer-use:provider-session\//);
   assert.match(result.refs.liveBindingAttachGrantRef ?? '', /^computer-use:provider-session\//);
+  assert.match(result.refs.grantValidationRef ?? '', /^computer-use:provider-session\//);
   assert.equal(data.providerSessionOwnerRef, result.refs.providerSessionOwnerRef);
   assert.equal(data.providerSessionReconnectRef, result.refs.providerSessionReconnectRef);
   assert.equal(data.liveBindingAttachGrantRef, result.refs.liveBindingAttachGrantRef);
+  assert.equal(data.grantValidationRef, result.refs.grantValidationRef);
+  assert.equal(data.liveBindingAttachGrantStatus, 'validated');
+  assert.equal(data.grantValidationStatus, 'validated');
   assert.equal(data.surfaceTransport, 'native-frame-stream');
   assert.deepEqual(data.surfaceTransportDescriptor, validSurfaceTransport());
   assert.deepEqual(data.frameTransport, {
@@ -130,6 +142,7 @@ test('VirtualAppScreen session manager materializes live refs only from complete
     providerSessionOwnerRef: result.refs.providerSessionOwnerRef,
     reconnectRef: result.refs.providerSessionReconnectRef,
     liveBindingAttachGrantRef: result.refs.liveBindingAttachGrantRef,
+    grantValidationRef: result.refs.grantValidationRef,
     screenRef: command.refs.screenRef,
     providerId: 'provider:test',
     executorId: 'native-session-manager:test',
@@ -147,7 +160,9 @@ test('VirtualAppScreen session manager materializes live refs only from complete
     targetAppRef: command.refs.targetAppRef,
     targetWindowRef: 'window:test/vscode/main',
     inputLeaseRef: 'computer-use:session/test/input-lease.json',
+    actionAdapterRef: 'computer-use:session/test/action-adapter.json',
     adapterReadinessRef: command.refs.readinessRef,
+    platformDriverRef: 'computer-use:session/test/platform-driver.json',
     evidenceLedgerRef: 'computer-use:session/test/evidence-ledger.json',
     guiPresentRef: 'gui.present:test/screen-pane',
     currentFrameSequence: 11,
@@ -176,6 +191,7 @@ test('VirtualAppScreen session manager revalidates provider session reconnect wi
     providerSessionOwnerRef: attached.refs.providerSessionOwnerRef!,
     providerSessionReconnectRef: attached.refs.providerSessionReconnectRef!,
     liveBindingAttachGrantRef: attached.refs.liveBindingAttachGrantRef!,
+    grantValidationRef: attached.refs.grantValidationRef!,
     currentFrameRef: 'computer-use:session/test/frames/current-12.png',
     currentFrameSequence: 12,
   });
@@ -203,6 +219,7 @@ test('VirtualAppScreen session manager revalidates provider session reconnect wi
   assert.equal(result.refs.providerSessionOwnerRef, attached.refs.providerSessionOwnerRef);
   assert.equal(result.refs.providerSessionReconnectRef, attached.refs.providerSessionReconnectRef);
   assert.equal(result.refs.liveBindingAttachGrantRef, attached.refs.liveBindingAttachGrantRef);
+  assert.equal(result.refs.grantValidationRef, attached.refs.grantValidationRef);
   assert.equal(result.refs.currentFrameRef, 'computer-use:session/test/frames/current-12.png');
   assert.equal(result.evidence.surfaceTransport?.currentFrameSequence, 12);
   assert.equal(data.status, 'ready');
@@ -237,6 +254,7 @@ test('VirtualAppScreen session manager blocks reconnect refs that do not match t
     providerSessionOwnerRef: 'computer-use:provider-session/other/owner.json',
     providerSessionReconnectRef: attached.refs.providerSessionReconnectRef!,
     liveBindingAttachGrantRef: attached.refs.liveBindingAttachGrantRef!,
+    grantValidationRef: attached.refs.grantValidationRef!,
     currentFrameRef: 'computer-use:session/test/frames/current-12.png',
     currentFrameSequence: 12,
   });
@@ -268,6 +286,7 @@ test('VirtualAppScreen session manager blocks reconnect owner and reconnect refs
     providerSessionOwnerRef: attached.refs.providerSessionOwnerRef!,
     providerSessionReconnectRef: 'computer-use:provider-session/other/reconnect.json',
     liveBindingAttachGrantRef: attached.refs.liveBindingAttachGrantRef!,
+    grantValidationRef: attached.refs.grantValidationRef!,
     currentFrameRef: 'computer-use:session/test/frames/current-12.png',
     currentFrameSequence: 12,
   });
@@ -299,6 +318,39 @@ test('VirtualAppScreen session manager blocks reconnect attach grants from anoth
     providerSessionOwnerRef: attached.refs.providerSessionOwnerRef!,
     providerSessionReconnectRef: attached.refs.providerSessionReconnectRef!,
     liveBindingAttachGrantRef: 'computer-use:provider-session/other/live-binding-attach-grant.json',
+    grantValidationRef: attached.refs.grantValidationRef!,
+    currentFrameRef: 'computer-use:session/test/frames/current-12.png',
+    currentFrameSequence: 12,
+  });
+  const result = await reconnectVirtualAppScreenSession(reconnectCommand);
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.evidence.providerExecuted, false);
+  assert.equal(result.evidence.nativeSessionCreated, false);
+  assert.match(result.blockedReason ?? '', /do not match/);
+  assert.equal(readVirtualAppScreenProviderSessionRecord({
+    screenRef: attachCommand.refs.screenRef,
+  })?.currentFrameRef, 'computer-use:session/test/frames/current.png');
+});
+
+test('VirtualAppScreen session manager blocks reconnect grant validation refs from another binding', async () => {
+  resetVirtualAppScreenProviderSessionStoreForTests();
+  const attachCommand = parsedAttachCommand();
+  const attached = await attachVirtualAppScreenSession(attachCommand, {
+    executors: [{
+      executorId: 'native-session-manager:test',
+      providerId: 'provider:test',
+      supportedProfiles: ['vscode-editor'],
+      attach: () => validAttachedResult(attachCommand),
+    }],
+  });
+  assert.equal(attached.status, 'attached');
+
+  const reconnectCommand = parsedReconnectCommand({
+    providerSessionOwnerRef: attached.refs.providerSessionOwnerRef!,
+    providerSessionReconnectRef: attached.refs.providerSessionReconnectRef!,
+    liveBindingAttachGrantRef: attached.refs.liveBindingAttachGrantRef!,
+    grantValidationRef: 'computer-use:provider-session/other/grant-validation.json',
     currentFrameRef: 'computer-use:session/test/frames/current-12.png',
     currentFrameSequence: 12,
   });
@@ -391,7 +443,7 @@ test('VirtualAppScreen session manager can attach through a registered runtime e
     const result = await attachVirtualAppScreenSession(command);
     const data = virtualAppScreenSessionManagerResultToVirtualScreenData(command, result);
 
-    assert.equal(result.status, 'attached');
+    assert.equal(result.status, 'attached', result.blockedReason);
     assert.equal(result.executorId, 'native-session-manager:registered-test');
     assert.equal(data.attachState, 'attached');
     assert.equal(data.liveSurfaceRef, 'computer-use:session/test/live-surface.json');
@@ -422,7 +474,9 @@ test('VirtualAppScreen session manager dry-run blocks even when a registered exe
 });
 
 test('VirtualAppScreen session manager never executes native attach during permission handoff', async () => {
+  resetVirtualAppScreenNativeHostSessionStoreForTests();
   const command = parsedPermissionHandoffCommand();
+  const { host, session } = createRecordedNativeHostSession();
   let attachCalled = false;
   const unregister = registerVirtualAppScreenSessionExecutor({
     executorId: 'native-session-manager:handoff-test',
@@ -440,8 +494,66 @@ test('VirtualAppScreen session manager never executes native attach during permi
     assert.equal(result.status, 'requires-handoff');
     assert.equal(result.evidence.providerExecuted, false);
     assert.match(result.blockedReason ?? '', /presentation-only/);
+    const ledger = host.getLedger(session.sessionId);
+    assert.ok(ledger);
+    assert.equal(ledger.entries.at(-1)?.type, 'permission.handoff');
+    assert.equal(ledger.entries.at(-1)?.refs.permissionHandoffRef, command.refs.permissionHandoffRef);
+    assert.equal(result.refs.hostEvidenceLedgerRef, ledger.ledgerRef);
+    assert.equal(result.refs.permissionHandoffLedgerEntryRef, ledger.entries.at(-1)?.eventRef);
+    assert.ok(result.evidence.evidenceRefs.includes(ledger.ledgerRef));
+    assert.ok(result.evidence.evidenceRefs.includes(ledger.entries.at(-1)?.eventRef ?? ''));
+    const data = virtualAppScreenSessionManagerResultToVirtualScreenData(command, result);
+    assert.equal(data.hostEvidenceLedgerRef, ledger.ledgerRef);
+    assert.equal(data.permissionHandoffLedgerEntryRef, ledger.entries.at(-1)?.eventRef);
+    assert.equal(host.validateLedger(session.sessionId, { requirePermissionHandoff: true }).ok, true);
   } finally {
     unregister();
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
+  }
+});
+
+test('VirtualAppScreen session manager records permission recheck before native attach resumes', async () => {
+  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  const callOrder: string[] = [];
+  class RecordingHost extends InMemoryNativeVirtualAppScreenHost {
+    recordPermissionRecheck(
+      ...args: Parameters<InMemoryNativeVirtualAppScreenHost['recordPermissionRecheck']>
+    ): ReturnType<InMemoryNativeVirtualAppScreenHost['recordPermissionRecheck']> {
+      callOrder.push('permission.recheck');
+      return super.recordPermissionRecheck(...args);
+    }
+  }
+  const { host, session } = createRecordedNativeHostSession(new RecordingHost(new ContractSmokeNativeHostPlatformAdapter()));
+  const command = parsedPermissionRecheckCommand(session.sessionRef);
+  const unregister = registerVirtualAppScreenSessionExecutor({
+    executorId: 'native-session-manager:recheck-test',
+    providerId: 'provider:recheck-test',
+    supportedProfiles: ['*'],
+    attach: () => {
+      callOrder.push('attach');
+      const attached = validAttachedResult(parsedAttachCommand());
+      attached.refs.sessionRef = session.sessionRef;
+      return attached;
+    },
+  });
+  try {
+    const result = await attachVirtualAppScreenSession(command);
+
+    assert.equal(result.status, 'attached', result.blockedReason);
+    assert.deepEqual(callOrder, ['permission.recheck', 'attach']);
+    const ledger = host.getLedger(session.sessionId);
+    assert.ok(ledger);
+    assert.equal(ledger.entries.at(-1)?.type, 'permission.recheck');
+    assert.equal(ledger.entries.at(-1)?.refs.recheckRef, command.refs.permissionRecheckRef);
+    assert.equal(result.refs.hostEvidenceLedgerRef, ledger.ledgerRef);
+    assert.equal(result.refs.permissionRecheckLedgerEntryRef, ledger.entries.at(-1)?.eventRef);
+    const data = virtualAppScreenSessionManagerResultToVirtualScreenData(command, result);
+    assert.equal(data.hostEvidenceLedgerRef, ledger.ledgerRef);
+    assert.equal(data.permissionRecheckLedgerEntryRef, ledger.entries.at(-1)?.eventRef);
+    assert.equal(host.validateLedger(session.sessionId, { requirePermissionRecheck: true }).ok, false);
+  } finally {
+    unregister();
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
   }
 });
 
@@ -454,6 +566,7 @@ function parsedAttachCommand() {
     '--screen-ref "virtual-app-screen:test/screen"',
     '--activation-ref "computer-use:test/attach-request.json"',
     '--adapter-readiness-ref "computer-use:test/provider-readiness.json"',
+    '--platform-driver-ref "computer-use:session/test/platform-driver.json"',
     '--evidence-ledger-ref "ledger:computer-use/test/screen-activation.json"',
     '--gui-present-ref "gui.present:test/screen-pane"',
   ].join(' '));
@@ -480,10 +593,31 @@ function parsedPermissionHandoffCommand() {
   return parsed.command;
 }
 
+function parsedPermissionRecheckCommand(sessionRef: string) {
+  const parsed = parseVirtualAppScreenRuntimeCommand([
+    '/computer-use permission-recheck',
+    '--source right-pane-screen',
+    '--profile "vscode-editor"',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--screen-ref "virtual-app-screen:test/screen"',
+    `--session-ref "${sessionRef}"`,
+    '--permission-handoff-ref "computer-use:test/permission-handoff.json"',
+    '--permission-recheck-ref "computer-use:test/permission-recheck.json"',
+    '--permission-ref "permission:macos/accessibility"',
+    '--adapter-readiness-ref "computer-use:test/provider-readiness.json"',
+    '--evidence-ledger-ref "ledger:computer-use/test/screen-activation.json"',
+    '--gui-present-ref "gui.present:test/screen-pane"',
+  ].join(' '));
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') throw new Error('expected parsed command');
+  return parsed.command;
+}
+
 function parsedReconnectCommand(options: {
   providerSessionOwnerRef: string;
   providerSessionReconnectRef: string;
   liveBindingAttachGrantRef: string;
+  grantValidationRef: string;
   currentFrameRef: string;
   currentFrameSequence: number;
 }) {
@@ -500,6 +634,7 @@ function parsedReconnectCommand(options: {
     `--provider-session-owner-ref "${options.providerSessionOwnerRef}"`,
     `--provider-session-reconnect-ref "${options.providerSessionReconnectRef}"`,
     `--live-binding-attach-grant-ref "${options.liveBindingAttachGrantRef}"`,
+    `--grant-validation-ref "${options.grantValidationRef}"`,
     '--surface-transport-ref "computer-use:session/test/surface-transport.json"',
     '--evidence-ledger-ref "ledger:computer-use/test/screen-reconnect.json"',
     '--gui-present-ref "gui.present:test/screen-pane"',
@@ -507,6 +642,43 @@ function parsedReconnectCommand(options: {
   assert.equal(parsed.kind, 'parsed');
   if (parsed.kind !== 'parsed') throw new Error('expected parsed command');
   return parsed.command;
+}
+
+function createRecordedNativeHostSession(
+  host: InMemoryNativeVirtualAppScreenHost = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter()),
+) {
+  const created = host.createSession(
+    { profileId: 'vscode-editor', defaultSurfaceTransport: 'native-frame-stream' },
+    { allowBackgroundRendering: true, allowSharedSystemInput: false },
+    {
+      currentRunRef: 'computer-use:run/session-manager-native-host/current-run.json',
+      evidenceRootRef: 'computer-use:run/session-manager-native-host/evidence',
+    },
+  );
+  assert.equal(created.status, 'ok');
+  assert.equal(host.launchOrAttachApp(created.value.sessionId, {
+    appId: 'vscode',
+    appRef: 'app:profile/vscode-editor',
+  }).status, 'ok');
+  const attached = host.attachSurface(created.value.sessionId, {
+    screenRef: 'virtual-app-screen:test/screen',
+    targetWindowRef: 'window:test/vscode/main',
+    transport: 'native-frame-stream',
+  });
+  assert.equal(attached.status, 'ok');
+  const frame = host.readFrame(created.value.sessionId);
+  assert.equal(frame.status, 'ok');
+  recordVirtualAppScreenNativeHostSession({
+    host,
+    session: created.value,
+    surface: attached.value,
+    frame: frame.value,
+    refs: {
+      adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+      evidenceLedgerRef: created.value.ledgerRef,
+    },
+  });
+  return { host, session: created.value };
 }
 
 function validAttachedResult(
@@ -534,7 +706,9 @@ function validAttachedResult(
       targetAppRef: command.refs.targetAppRef,
       targetWindowRef: 'window:test/vscode/main',
       inputLeaseRef: 'computer-use:session/test/input-lease.json',
+      actionAdapterRef: 'computer-use:session/test/action-adapter.json',
       adapterReadinessRef: command.refs.readinessRef,
+      platformDriverRef: 'computer-use:session/test/platform-driver.json',
       evidenceLedgerRef: 'computer-use:session/test/evidence-ledger.json',
       guiPresentRef: 'gui.present:test/screen-pane',
     },
@@ -546,6 +720,11 @@ function validAttachedResult(
       currentFrameMaterialized: true,
       guiPresented: true,
       isolationVerified: true,
+      platformDriverReady: true,
+      permissionRequired: false,
+      permissionGranted: true,
+      backgroundRenderable: true,
+      diagnosticOnly: false,
       affectsPhysicalDisplay: false,
       requiresFocusSteal: false,
       sharedSystemInputUsed: false,

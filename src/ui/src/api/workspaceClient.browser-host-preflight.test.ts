@@ -3,6 +3,7 @@ import { afterEach, describe, it } from 'node:test';
 
 import type { SciForgeConfig } from '../domain';
 import {
+  BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
   BROWSER_HOST_SEARCH_CAPABILITY,
   BROWSER_HOST_SESSION_CAPABILITY,
   browserHostSessionFrameStreamUrl,
@@ -24,7 +25,7 @@ describe('browser host session writer preflight', () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
       calls.push(String(input));
-      return jsonResponse(writerHealth([BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY]));
+      return jsonResponse(writerHealth(currentBrowserHostCapabilities()));
     }) as typeof fetch;
 
     const result = await preflightBrowserHostSessionWriter(testConfig(), { timeoutMs: 1_000 });
@@ -44,7 +45,7 @@ describe('browser host session writer preflight', () => {
       if (url.startsWith('http://127.0.0.1:5173/')) {
         return htmlResponse('<!doctype html><html><body>SciForge UI</body></html>');
       }
-      return jsonResponse(writerHealth([BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY]));
+      return jsonResponse(writerHealth(currentBrowserHostCapabilities()));
     }) as typeof fetch;
 
     const result = await preflightBrowserHostSessionWriter({
@@ -60,7 +61,7 @@ describe('browser host session writer preflight', () => {
     assert.deepEqual(calls, ['http://127.0.0.1:5173/health', 'http://127.0.0.1:5174/health']);
   });
 
-  it('starts BrowserHostSession on the recommended writer and carries the effective writer URL for frame reads', async () => {
+  it('starts BrowserHostSession on the recommended writer and carries the effective writer URL for diagnostic frame reads', async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = String(input);
@@ -69,7 +70,7 @@ describe('browser host session writer preflight', () => {
         return htmlResponse('<html><body>Vite app shell</body></html>');
       }
       if (url === 'http://127.0.0.1:5174/health') {
-        return jsonResponse(writerHealth([BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY]));
+        return jsonResponse(writerHealth(currentBrowserHostCapabilities()));
       }
       if (url === 'http://127.0.0.1:5174/api/sciforge/browser-host/sessions/start') {
         return jsonResponse({
@@ -165,14 +166,15 @@ describe('browser host session writer preflight', () => {
     assert.equal(result.ok, false);
     assert.equal(result.status, 'missing-browser-host-capability');
     assert.match(result.message, /browser-host-session/);
+    assert.match(result.message, /browser-host-native-surface/);
     assert.match(result.message, /browser-host-search/);
   });
 
-  it('blocks stale Workspace Writers that lack final BrowserHostSession live-stream endpoints', async () => {
+  it('blocks stale Workspace Writers that only advertise diagnostic frame transports without native surface endpoints', async () => {
     globalThis.fetch = (async () => jsonResponse(writerHealth(
-      [BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY],
+      currentBrowserHostCapabilities(),
       {
-        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,frame}',
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
         browserHostSearch: '/api/sciforge/browser-host/search',
       },
     ))) as typeof fetch;
@@ -181,8 +183,26 @@ describe('browser host session writer preflight', () => {
 
     assert.equal(result.ok, false);
     assert.equal(result.status, 'missing-browser-host-capability');
-    assert.match(result.message, /computer-use-actions/);
-    assert.match(result.message, /frame-stream/);
+    assert.match(result.message, /browserHostNativeSurface/);
+    assert.match(result.message, /native surface health, attach, and state/);
+    assert.doesNotMatch(result.message, /frame-stream/);
+  });
+
+  it('accepts native BrowserHostSession surface readiness without frame or frame-stream endpoints', async () => {
+    globalThis.fetch = (async () => jsonResponse(writerHealth(
+      currentBrowserHostCapabilities(),
+      {
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+        browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+        browserHostSearch: '/api/sciforge/browser-host/search',
+      },
+    ))) as typeof fetch;
+
+    const result = await preflightBrowserHostSessionWriter(testConfig());
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'ready');
+    assert.doesNotMatch(result.message, /frame-stream/);
   });
 
   it('sends requested capture mode with BrowserHostSession actions', async () => {
@@ -260,7 +280,8 @@ describe('browser host session writer preflight', () => {
               canGoBack: false,
               canGoForward: false,
               liveSurfaceRef: 'browser-host-session:session-a/live-surface',
-              liveSurfaceTransport: 'host-stream',
+              liveSurfaceTransport: 'native-embedded',
+              nativeAdapterUrl: 'http://127.0.0.1:4999',
               singleInteractiveTruth: true,
               frameRef: 'browser-host-session:session-a/frame.png',
               diagnostics: [],
@@ -356,9 +377,10 @@ describe('browser host session writer preflight', () => {
     );
 
     globalThis.fetch = (async () => jsonResponse(writerHealth(
-      [BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY],
+      currentBrowserHostCapabilities(),
       {
-        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+        browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
         browserHostSearch: '/api/sciforge/browser-host/search',
       },
     ))) as typeof fetch;
@@ -389,7 +411,9 @@ function testConfig(): SciForgeConfig {
 }
 
 function writerHealth(capabilities: string[], endpoints: Record<string, string> = {
-  browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+  browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+  browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+  browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
   browserHostSearch: '/api/sciforge/browser-host/search',
 }) {
   return {
@@ -399,6 +423,14 @@ function writerHealth(capabilities: string[], endpoints: Record<string, string> 
     capabilities,
     endpoints,
   };
+}
+
+function currentBrowserHostCapabilities() {
+  return [
+    BROWSER_HOST_SESSION_CAPABILITY,
+    BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
+    BROWSER_HOST_SEARCH_CAPABILITY,
+  ];
 }
 
 function jsonResponse(body: unknown, status = 200) {

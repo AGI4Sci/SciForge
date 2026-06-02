@@ -36,6 +36,9 @@ function visualRegressionFixtureWithLiveBindingRefs() {
         providerSessionOwnerRef: 'computer-use:provider-session/visual-regression/owner.json',
         providerSessionReconnectRef: 'computer-use:provider-session/visual-regression/reconnect.json',
         liveBindingAttachGrantRef: 'computer-use:provider-session/visual-regression/live-binding-attach-grant.json',
+        liveBindingAttachGrantStatus: 'validated',
+        grantValidationRef: 'computer-use:provider-session/visual-regression/grant-validation.json',
+        grantValidationStatus: 'validated',
         currentFrameSequence: {
           ref: 'computer-use:session/visual-regression/frame-sequence.json',
           sequence: 17,
@@ -52,10 +55,14 @@ test('virtual-screen-viewer renders VirtualAppScreen refs-first state and actor 
   assert.equal(manifest.componentId, 'virtual-screen-viewer');
   assert.match(html, /virtual-screen-viewer/);
   assert.match(html, /data-render-boundary="presentation-only"/);
-  assert.match(html, /data-presentation-mode="replay-ref-inspector"/);
-  assert.match(html, /data-screen-presentation-mode="replay-ref-inspector"/);
-  assert.match(html, /Replay\/ref inspector/);
+  assert.match(html, /data-presentation-mode="permission-gate"/);
+  assert.match(html, /data-presentation-state="permission"/);
+  assert.match(html, /data-screen-presentation-state="permission"/);
+  assert.match(html, /data-screen-presentation-mode="permission-gate"/);
+  assert.match(html, /Permission gate/);
+  assert.doesNotMatch(html, /data-screen-presentation-mode="replay-ref-inspector"/);
   assert.match(html, /data-attach-state="blocked"/);
+  assert.match(html, /data-screen-surface-mode="fallback"/);
   assert.match(html, /app:native-research-app/);
   assert.match(html, /window:native-research-app\/main/);
   assert.match(html, /computer-use:session\/basic\/app-screen-session\.json/);
@@ -115,10 +122,16 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.match(imageMatch?.[0] ?? '', /data-surface-transport="native-frame-stream"/);
   assert.match(imageMatch?.[0] ?? '', /data-provider-session-owner-ref="computer-use:provider-session\/visual-regression\/owner\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-provider-session-reconnect-ref="computer-use:provider-session\/visual-regression\/reconnect\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-live-binding-attach-grant-ref="computer-use:provider-session\/visual-regression\/live-binding-attach-grant\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-live-binding-attach-grant-status="validated"/);
+  assert.match(imageMatch?.[0] ?? '', /data-grant-validation-ref="computer-use:provider-session\/visual-regression\/grant-validation\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-grant-validation-status="validated"/);
   assert.match(imageMatch?.[0] ?? '', /data-surface-transport-ref="computer-use:session\/visual-regression\/surface-transport\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-current-frame-sequence-ref="computer-use:session\/visual-regression\/frame-sequence\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-platform-driver-ref="computer-use:session\/visual-regression\/platform-driver\.json"/);
   assert.match(html, /data-presentation-mode="live-surface-ref"/);
+  assert.match(html, /data-presentation-state="live"/);
+  assert.match(html, /data-screen-presentation-state="live"/);
   assert.match(html, /data-screen-surface-mode="live"/);
   assert.match(imageMatch?.[0] ?? '', /data-target-app-ref="app:native-research-app"/);
   assert.match(stageHtml, /data-command-boundary="terminal-equivalent-input-intent"/);
@@ -139,6 +152,8 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.match(footerHtml, /computer-use:session\/visual-regression\/proposals\/click-confirm\.json/);
   assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/owner\.json/);
   assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/reconnect\.json/);
+  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/live-binding-attach-grant\.json/);
+  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/grant-validation\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/surface-transport\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/frame-sequence\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/input-leases\/main-held\.json/);
@@ -422,6 +437,9 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
         providerSessionOwnerRef: 'computer-use:provider-session/vscode/owner.json',
         providerSessionReconnectRef: 'computer-use:provider-session/vscode/reconnect.json',
         liveBindingAttachGrantRef: 'computer-use:provider-session/vscode/live-binding-attach-grant.json',
+        liveBindingAttachGrantStatus: 'validated',
+        grantValidationRef: 'computer-use:provider-session/vscode/grant-validation.json',
+        grantValidationStatus: 'validated',
         currentFrameSequence: {
           ref: 'computer-use:session/vscode/frame-sequence.json',
           sequence: 8,
@@ -450,8 +468,14 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   }));
 
   assert.match(html, /data-presentation-mode="live-surface-ref"/);
+  assert.match(html, /data-presentation-state="live"/);
+  assert.match(html, /data-screen-presentation-state="live"/);
   assert.match(html, /data-screen-surface-mode="live"/);
   assert.match(html, /data-live-surface-ref="computer-use:session\/vscode\/live-surface\.json"/);
+  assert.match(html, /data-live-binding-attach-grant-ref="computer-use:provider-session\/vscode\/live-binding-attach-grant\.json"/);
+  assert.match(html, /data-live-binding-attach-grant-status="validated"/);
+  assert.match(html, /data-grant-validation-ref="computer-use:provider-session\/vscode\/grant-validation\.json"/);
+  assert.match(html, /data-grant-validation-status="validated"/);
   assert.match(html, /data-surface-transport="native-frame-stream"/);
   assert.match(html, /data-provider-session-owner-ref="computer-use:provider-session\/vscode\/owner\.json"/);
   assert.match(html, /data-provider-session-reconnect-ref="computer-use:provider-session\/vscode\/reconnect\.json"/);
@@ -464,6 +488,62 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   assert.match(html, /data-isolation-flag="single interactive truth" data-isolation-value="true"/);
   assert.match(html, /data-isolation-flag="second interactive surface" data-isolation-value="false"/);
   assert.doesNotMatch(html, /providerRoute|streamUrl|iceCandidates|data:image|base64/);
+});
+
+test('virtual-screen-viewer rejects fixture or replay refs as live surface bindings', () => {
+  const payload = {
+    ...attachedInputIntentPayload(),
+    liveSurfaceRef: 'fixture:screen/live-surface.json',
+    liveBindingAttachGrantRef: 'replay:screen/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:session/replay/grant-validation.json',
+    surfaceMode: 'live',
+  };
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Fixture live rejection' },
+    artifact: {
+      id: 'fixture-live-rejection',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.equal(buildVirtualScreenInputIntentCommand(payload, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
+  assert.match(html, /data-presentation-state="fallback"/);
+  assert.match(html, /data-screen-presentation-state="fallback"/);
+  assert.match(html, /data-screen-surface-mode="fallback"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="liveSurfaceRef"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="liveBindingAttachGrantRef"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="grantValidationRef"/);
+  assert.match(html, /data-input-intent-ready="false"/);
+  assert.doesNotMatch(html, /data-screen-presentation-mode="live-surface-ref"|data-live-surface-ref="fixture:|data-live-binding-attach-grant-ref="replay:/);
+});
+
+test('virtual-screen-viewer requires validated live attach grant before live presentation', () => {
+  const payload = {
+    ...attachedInputIntentPayload(),
+    grantValidationRef: undefined,
+    grantValidationStatus: undefined,
+  };
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Unvalidated grant' },
+    artifact: {
+      id: 'unvalidated-live-grant',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.equal(buildVirtualScreenInputIntentCommand(payload, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
+  assert.match(html, /data-presentation-state="fallback"/);
+  assert.match(html, /data-screen-presentation-state="fallback"/);
+  assert.match(html, /data-screen-surface-mode="fallback"/);
+  assert.match(html, /data-rejection-kind="unvalidated-live-grant" data-rejected-field="grantValidationRef"/);
+  assert.match(html, /data-input-intent-ready="false"/);
+  assert.doesNotMatch(html, /data-screen-presentation-mode="live-surface-ref"/);
 });
 
 test('virtual-screen-viewer does not present live mode with incomplete provider binding refs', () => {
@@ -486,7 +566,9 @@ test('virtual-screen-viewer does not present live mode with incomplete provider 
   }));
 
   assert.equal(buildVirtualScreenInputIntentCommand(payload, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
-  assert.match(html, /data-screen-surface-mode="replay"/);
+  assert.match(html, /data-presentation-state="fallback"/);
+  assert.match(html, /data-screen-presentation-state="fallback"/);
+  assert.match(html, /data-screen-surface-mode="fallback"/);
   assert.match(html, /data-input-intent-ready="false"/);
   assert.doesNotMatch(html, /data-screen-presentation-mode="live-surface-ref"/);
 });
@@ -628,6 +710,9 @@ test('virtual-screen-viewer fails closed for missing platform driver and incompl
         providerSessionOwnerRef: 'computer-use:provider-session/isolation-incomplete/owner.json',
         providerSessionReconnectRef: 'computer-use:provider-session/isolation-incomplete/reconnect.json',
         liveBindingAttachGrantRef: 'computer-use:provider-session/isolation-incomplete/live-binding-attach-grant.json',
+        liveBindingAttachGrantStatus: 'validated',
+        grantValidationRef: 'computer-use:provider-session/isolation-incomplete/grant-validation.json',
+        grantValidationStatus: 'validated',
         currentFrameSequence: {
           ref: 'computer-use:session/isolation-incomplete/frame-sequence.json',
           sequence: 9,
@@ -653,8 +738,11 @@ test('virtual-screen-viewer fails closed for missing platform driver and incompl
   }));
 
   assert.match(observeOnlyHtml, /data-attach-state="observe-only"/);
-  assert.match(observeOnlyHtml, /data-screen-surface-mode="live"/);
+  assert.match(observeOnlyHtml, /data-presentation-state="fallback"/);
+  assert.match(observeOnlyHtml, /data-screen-presentation-state="fallback"/);
+  assert.match(observeOnlyHtml, /data-screen-surface-mode="fallback"/);
   assert.match(observeOnlyHtml, /data-input-intent-ready="false"/);
+  assert.doesNotMatch(observeOnlyHtml, /data-screen-presentation-mode="live-surface-ref"/);
 });
 
 test('virtual-screen-viewer rejects non-platform live transports without enabling input', () => {
@@ -870,6 +958,9 @@ function attachedInputIntentPayload(): VirtualScreenPayload {
     providerSessionOwnerRef: 'computer-use:provider-session/input/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/input/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/input/live-binding-attach-grant.json',
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: 'computer-use:provider-session/input/grant-validation.json',
+    grantValidationStatus: 'validated',
     currentFrameSequence: {
       ref: 'computer-use:session/input/frame-sequence.json',
       sequence: 3,

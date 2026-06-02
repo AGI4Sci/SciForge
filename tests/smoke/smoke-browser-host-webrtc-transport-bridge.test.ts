@@ -22,6 +22,30 @@ const MAX_BRIDGE_SMOKE_ARTIFACT_BYTES = 48_000;
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-host-webrtc-transport-bridge');
 const manifestPath = resolve(artifactDir, 'manifest.json');
 
+type WebRtcBridgeRightPaneRefusal = {
+  status: 'blocked';
+  claimScope: 'legacy-transport-diagnostic-only';
+  passClaim: false;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    transportEvidenceKind: 'webrtc-bridge-candidate';
+    liveSurfaceTransport: 'host-stream';
+    liveSurfaceTransportCandidate: 'webrtc-data-channel';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  passRefusalPolicy: {
+    candidateContractDoesNotPass: true;
+    loopbackSmokeDoesNotPass: true;
+    httpFrameRouteDoesNotPass: true;
+    secondTruthSourceDoesNotPass: true;
+  };
+};
+
 test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame messages, metrics, and input refs-first', () => {
   const candidate = createBrowserHostWebRtcTransportCandidate({
     session: deterministicSession('webrtc-bridge-positive'),
@@ -97,13 +121,15 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
   assert.doesNotMatch(serialized, /data:image|;base64,|<\s*(?:!doctype|html|body|iframe|webview)\b/i);
   assert.doesNotMatch(serialized, /\bv=0\r?\n|a=candidate:|candidate:[0-9]+ [0-9]+ udp/i);
 
-  const evidence = {
-    schemaVersion: BRIDGE_SMOKE_SCHEMA,
-    status: 'passed',
-    observedAt: new Date().toISOString(),
-    refsFirst: true,
-    artifactPayloadMode: BRIDGE_SMOKE_ARTIFACT_MODE,
-    refs: {
+	  const evidence = {
+	    schemaVersion: BRIDGE_SMOKE_SCHEMA,
+	    status: 'diagnostic',
+	    observedAt: new Date().toISOString(),
+	    refsFirst: true,
+	    artifactPayloadMode: BRIDGE_SMOKE_ARTIFACT_MODE,
+	    claimScope: 'legacy-transport-diagnostic-only',
+	    rightPaneLiveAcceptance: legacyWebRtcBridgeRightPaneRefusal(),
+	    refs: {
       hostSessionRef: manifest.refs.hostSessionRef,
       bridgeRef: manifest.refs.bridgeRef,
       candidateRef: manifest.refs.candidateRef,
@@ -279,12 +305,13 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
   assert.equal(evidence.rightPaneHandoffContract.fullyPassedClaim, false);
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.status, 'blocked');
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.benchmarkClaim, false);
-  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realUiRun, false);
-  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realRunProofRequirements.minSampleCount, 120);
-  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalDroppedFrames, 4);
-  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalSkippedBackpressure, 1);
-  return writeEvidence(evidence);
-});
+	  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realUiRun, false);
+	  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realRunProofRequirements.minSampleCount, 120);
+	  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalDroppedFrames, 4);
+	  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalSkippedBackpressure, 1);
+	  assertLegacyWebRtcBridgeRightPaneRefusal(evidence.rightPaneLiveAcceptance);
+	  return writeEvidence(evidence);
+	});
 
 test('BrowserHostSession WebRTC transport bridge validator rejects inline payloads and second viewers', () => {
   const candidate = createBrowserHostWebRtcTransportCandidate({
@@ -389,10 +416,55 @@ function deterministicSamples(): BrowserHostWebRtcMetricSample[] {
   }));
 }
 
+function legacyWebRtcBridgeRightPaneRefusal(): WebRtcBridgeRightPaneRefusal {
+  return {
+    status: 'blocked',
+    claimScope: 'legacy-transport-diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      transportEvidenceKind: 'webrtc-bridge-candidate',
+      liveSurfaceTransport: 'host-stream',
+      liveSurfaceTransportCandidate: 'webrtc-data-channel',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    passRefusalPolicy: {
+      candidateContractDoesNotPass: true,
+      loopbackSmokeDoesNotPass: true,
+      httpFrameRouteDoesNotPass: true,
+      secondTruthSourceDoesNotPass: true,
+    },
+  };
+}
+
+function assertLegacyWebRtcBridgeRightPaneRefusal(refusal: WebRtcBridgeRightPaneRefusal): void {
+  assert.equal(refusal.status, 'blocked');
+  assert.equal(refusal.claimScope, 'legacy-transport-diagnostic-only');
+  assert.equal(refusal.passClaim, false);
+  assert.equal(refusal.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(refusal.required.singleInteractiveTruth, true);
+  assert.equal(refusal.required.secondTruthSource, false);
+  assert.equal(refusal.observed.transportEvidenceKind, 'webrtc-bridge-candidate');
+  assert.equal(refusal.observed.liveSurfaceTransport, 'host-stream');
+  assert.equal(refusal.observed.liveSurfaceTransportCandidate, 'webrtc-data-channel');
+  assert.equal(refusal.observed.singleInteractiveTruth, true);
+  assert.equal(refusal.observed.secondTruthSource, false);
+  assert.deepEqual(Object.values(refusal.passRefusalPolicy), [true, true, true, true]);
+}
+
 async function writeEvidence(evidence: unknown): Promise<void> {
   await mkdir(artifactDir, { recursive: true });
   const text = `${JSON.stringify(evidence, null, 2)}\n`;
   assertBoundedRefsFirstArtifact(evidence);
+  const record = objectRecord(evidence);
+  if (record?.rightPaneLiveAcceptance) {
+    assertLegacyWebRtcBridgeRightPaneRefusal(record.rightPaneLiveAcceptance as WebRtcBridgeRightPaneRefusal);
+  }
   assertNoRawPayloads(text);
   await writeFile(manifestPath, text, 'utf8');
   const persistedText = await readFile(manifestPath, 'utf8');

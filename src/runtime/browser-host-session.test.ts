@@ -72,7 +72,9 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
     assert.equal(session.loadingProgress?.status, 'ready');
     assert.equal(session.loadingProgress?.action, 'open');
     assert.equal(session.loadingProgress?.refs.session, 'browser-host-session:session-a/session.json');
-    assert.match(session.frameRef ?? '', /^browser-host-session:session-a\/frame\.png$/);
+    assert.equal(session.liveSurfaceTransport, undefined);
+    assert.equal(session.frameStreamRef, undefined);
+    assert.equal(session.frameRef, undefined);
     assert.match(session.screenshotRef ?? '', /^browser-host-session:session-a\/screenshot-/);
     assert.match(session.domSnapshotRef ?? '', /^browser-host-session:session-a\/dom-/);
     assert.match(session.axSnapshotRef ?? '', /^browser-host-session:session-a\/ax-/);
@@ -82,7 +84,7 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
     assert.equal(session.lastActionTiming?.capture, 'full');
     assert.equal(session.lastActionTiming?.status, 'ok');
     assert.ok((session.lastActionTiming?.totalMs ?? -1) >= 0);
-    assert.equal(session.lastActionTiming?.paintAckSource, 'host-stream-frame');
+    assert.equal(session.lastActionTiming?.paintAckSource, 'none');
     assert.ok(session.actionTimingSummary?.some((row) => row.action === 'open' && row.count === 1));
 
     const framePath = await manager.framePath(workspacePath, 'session-a');
@@ -94,7 +96,11 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
     const manifest = JSON.parse(await readFile(join(sessionDir, 'session.json'), 'utf8')) as BrowserHostSessionState;
     assert.equal(manifest.url, 'https://example.org/start');
     assert.equal(manifest.loadingProgress?.state, 'network-quiet');
-    assert.equal(manifest.loadingProgress?.refs.frame, manifest.frameRef);
+    assert.equal(manifest.liveSurfaceTransport, undefined);
+    assert.equal(manifest.frameStreamRef, undefined);
+    assert.equal(manifest.frameRef, undefined);
+    assert.equal(manifest.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(manifest.loadingProgress?.refs.frame, undefined);
     assert.doesNotMatch(JSON.stringify(manifest), /base64|data:image/i);
 
     const consoleLog = await readRefFile(sessionDir, session.consoleLogRef);
@@ -304,8 +310,8 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
     const settled = await manager.act(workspacePath, opened.id, { action: 'state' });
     assert.equal(settled.status, 'ready');
     assert.equal(settled.loadingProgress?.state, 'network-quiet');
-    assert.equal(settled.loadingProgress?.reason, 'host-ready');
-    assert.equal(settled.loadingProgress?.source, 'host-session');
+    assert.equal(settled.loadingProgress?.reason, 'network-quiet');
+    assert.equal(settled.loadingProgress?.source, 'host-progress');
     assert.deepEqual(settled.loadingProgress?.urls?.final, settled.loadingProgress?.urls?.current);
 
     for (const action of ['back', 'forward', 'reload'] as const) {
@@ -411,6 +417,44 @@ test('BrowserHostSession stop publishes an immediate bounded control state befor
   }
 });
 
+test('BrowserHostSession navigation controls publish immediate bounded URL digests before driver ACK', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-control-progress-'));
+  const { factory, drivers } = fakeDriverFactory();
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const opened = await manager.openSession(workspacePath, {
+      url: 'https://progress.example/controls?token=secret-value',
+      sessionId: 'control-progress-session',
+    });
+
+    for (const action of ['reload', 'back', 'forward'] as const) {
+      drivers[0]?.holdNextNavigation();
+      const pending = manager.act(workspacePath, opened.id, { action });
+      await waitFor(() => drivers[0]?.isHoldingAction() === true);
+
+      const controlState = await manager.sessionState(workspacePath, opened.id);
+      assert.equal(controlState?.status, 'loading', action);
+      assert.equal(controlState?.loadingProgress?.state, 'navigation-start', action);
+      assert.equal(controlState?.loadingProgress?.reason, 'navigation-requested', action);
+      assert.equal(controlState?.loadingProgress?.source, 'host-navigation', action);
+      assert.equal(controlState?.loadingProgress?.action, action);
+      assert.equal(controlState?.loadingProgress?.urls?.requested?.length, opened.url.length, action);
+      assert.equal(controlState?.loadingProgress?.urls?.current?.length, opened.url.length, action);
+      assert.equal(controlState?.loadingProgress?.urls?.final, undefined, action);
+      assert.match(controlState?.loadingProgress?.urls?.current?.sha1 ?? '', /^[a-f0-9]{40}$/, action);
+      assert.doesNotMatch(JSON.stringify(controlState?.loadingProgress), /progress\.example|secret-value|<html|Ready/, action);
+
+      drivers[0]?.releaseHeldAction();
+      const completed = await pending;
+      assert.equal(completed.status, 'ready', action);
+      assert.equal(completed.loadingProgress?.action, action);
+    }
+  } finally {
+    drivers[0]?.releaseHeldAction();
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('BrowserHostSessionManager can drive a native embedded BrowserHostSession adapter without frame-stream live fallback', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-'));
   const calls: Array<{ route: string; body: Record<string, unknown> }> = [];
@@ -506,6 +550,142 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
   }
 });
 
+test('BrowserHostSession native loading state ACK drives lifecycle and missing loading signal blocks instead of faking ready', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-loading-'));
+  let currentUrl = 'about:blank';
+  let actionResponseMode: 'loading-false' | 'missing-loading' = 'loading-false';
+  const server = createServer((req, res) => {
+    void (async () => {
+      const route = req.url ?? '/';
+      const body = req.method === 'POST' ? await readJsonRequest(req) : {};
+      if (route === '/sessions/start') {
+        writeJsonResponse(res, { ok: true, sessionId: body.sessionId });
+      } else if (route.endsWith('/navigate')) {
+        currentUrl = normalizeBrowserHostUrl(String(body.url ?? 'about:blank'));
+        writeJsonResponse(res, {
+          ok: true,
+          url: currentUrl,
+          title: 'Native loading state page',
+          canGoBack: false,
+          canGoForward: false,
+          loading: false,
+        });
+      } else if (route.endsWith('/state')) {
+        writeJsonResponse(res, {
+          ok: true,
+          url: currentUrl,
+          title: 'Native loading state page',
+          canGoBack: true,
+          canGoForward: false,
+          loading: false,
+        });
+      } else if (route.endsWith('/screenshot')) {
+        writeJsonResponse(res, { ok: true, dataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}` });
+      } else if (route.endsWith('/content')) {
+        writeJsonResponse(res, { ok: true, content: '<!-- bounded native loading fixture -->' });
+      } else if (route.endsWith('/ax')) {
+        writeJsonResponse(res, { ok: true, snapshot: { role: 'document', name: 'Native loading state page' } });
+      } else if (route.endsWith('/actions')) {
+        currentUrl = 'https://example.org/native-loading/reloaded';
+        if (actionResponseMode === 'missing-loading') {
+          writeJsonResponse(res, {
+            ok: true,
+            url: currentUrl,
+            title: 'Native loading signal missing',
+            canGoBack: true,
+            canGoForward: false,
+          });
+        } else {
+          writeJsonResponse(res, {
+            ok: true,
+            url: currentUrl,
+            title: 'Native loading state ACK',
+            canGoBack: true,
+            canGoForward: false,
+            loading: false,
+          });
+        }
+      } else {
+        writeJsonResponse(res, { ok: false, reason: `unexpected route ${route}` }, 404);
+      }
+    })().catch((error) => writeJsonResponse(res, { ok: false, reason: error instanceof Error ? error.message : String(error) }, 500));
+  });
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const manager = new BrowserHostSessionManager({
+      driverFactory: createNativeEmbeddedBrowserHostDriverFactory(`http://127.0.0.1:${address.port}`),
+    });
+
+    const opened = await manager.openSession(workspacePath, {
+      url: 'example.org/native-loading?token=secret-value',
+      sessionId: 'native-loading-session',
+    });
+    assert.equal(opened.status, 'ready');
+    assert.equal(opened.loadingProgress?.state, 'network-quiet');
+    assert.equal(opened.loadingProgress?.reason, 'network-quiet');
+    assert.equal(opened.loadingProgress?.source, 'host-state');
+    assert.equal(opened.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(opened.loadingProgress?.refs.frame, undefined);
+
+    const reloaded = await manager.act(workspacePath, opened.id, { action: 'reload', capture: 'none' });
+    assert.equal(reloaded.status, 'ready');
+    assert.equal(reloaded.url, 'https://example.org/native-loading/reloaded');
+    assert.equal(reloaded.loadingProgress?.state, 'network-quiet');
+    assert.equal(reloaded.loadingProgress?.reason, 'network-quiet');
+    assert.equal(reloaded.loadingProgress?.source, 'host-state');
+    assert.deepEqual(reloaded.loadingProgress?.urls?.final, reloaded.loadingProgress?.urls?.current);
+
+    actionResponseMode = 'missing-loading';
+    const blocked = await manager.act(workspacePath, opened.id, { action: 'reload', capture: 'none' });
+    assert.equal(blocked.status, 'failed');
+    assert.equal(blocked.loadingProgress?.state, 'blocked');
+    assert.equal(blocked.loadingProgress?.reason, 'host-diagnostic');
+    assert.equal(blocked.loadingProgress?.source, 'host-state');
+    assert.equal(blocked.loadingProgress?.blocked, true);
+    assert.equal(blocked.loadingProgress?.canRetry, true);
+    assert.equal(blocked.loadingProgress?.requiresHandoff, undefined);
+    assert.equal(blocked.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(blocked.loadingProgress?.refs.frame, undefined);
+    assert.match(blocked.loadingProgress?.urls?.current?.sha1 ?? '', /^[a-f0-9]{40}$/);
+    assert.doesNotMatch(JSON.stringify(blocked.loadingProgress), /example\.org\/native-loading|secret-value|<html|base64|data:image/i);
+  } finally {
+    server.close();
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSessionManager default product path blocks when native adapter is missing', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-missing-native-'));
+  const previousNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  try {
+    delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+    const manager = new BrowserHostSessionManager();
+    const session = await manager.openSession(workspacePath, {
+      url: 'example.org/no-native',
+      sessionId: 'missing-native-session',
+    });
+
+    assert.equal(session.status, 'failed');
+    assert.equal(session.liveSurfaceTransport, undefined);
+    assert.equal(session.nativeAdapterUrl, undefined);
+    assert.equal(session.frameStreamRef, undefined);
+    assert.equal(session.frameRef, undefined);
+    assert.equal(session.loadingProgress?.state, 'handoff');
+    assert.equal(session.loadingProgress?.blocked, true);
+    assert.equal(session.loadingProgress?.requiresHandoff, true);
+    assert.equal(session.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(session.loadingProgress?.refs.frame, undefined);
+    assert.match(session.diagnostics.join('\n'), /Native embedded BrowserHostSession adapter is required/);
+    assert.match(session.diagnostics.join('\n'), /Legacy host-stream fallback is disabled/);
+  } finally {
+    if (previousNativeAdapterUrl === undefined) delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+    else process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = previousNativeAdapterUrl;
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('BrowserHostSession search persists bounded search refs and excludes search-engine self links', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-search-'));
   const { factory, drivers } = fakeDriverFactory();
@@ -554,7 +734,8 @@ test('BrowserHostSession keeps ready state with placeholder evidence refs when s
     });
 
     assert.equal(session.status, 'ready');
-    assert.match(session.frameRef ?? '', /^browser-host-session:placeholder-session\/frame\.png$/);
+    assert.equal(session.frameStreamRef, undefined);
+    assert.equal(session.frameRef, undefined);
     assert.match(session.screenshotRef ?? '', /^browser-host-session:placeholder-session\/screenshot-/);
     assert.match(session.diagnostics.join('\n'), /capture placeholder|timeout placeholder evidence ref/);
     assert.doesNotMatch(session.diagnostics.join('\n'), /secret-value/);
@@ -799,7 +980,7 @@ test('BrowserHostSession frame stream skips capture instead of queueing behind a
     assert.equal(skipped.captured, false);
     assert.equal(skipped.skippedReason, 'busy');
     assert.equal(driver.screenshotCalls, screenshotCallsAfterOpen);
-    assert.equal(skipped.session.frameStreamRef, 'browser-host-session:stream-session/frame-stream');
+    assert.equal(skipped.session.frameStreamRef, undefined);
 
     driver.releaseHeldAction();
     await typing;

@@ -217,6 +217,17 @@ src/runtime/computer-use
 
 `VirtualDisplayProvider` 是 Host 内部 platform adapter，不是产品级 truth owner。第三方虚拟屏幕软件可以成为 reference adapter 或 diagnostic adapter，但不能 mint `liveBindingAttachGrantRef`、不能直接执行产品输入、不能把自己的 UI/stream 当成 user-level acceptance。
 
+## 当前 Contract / Smoke 对齐点
+
+当前 contract/smoke 已经把 Native Host 路线收敛到 package-owned host，产品 runtime 也已进入 Host-backed attach 迁移期：
+
+- `packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json` 是 host package 的 single-truth manifest：session、surface、frame、permission、grant、ledger 都必须 host-owned；UI、fixture、replay、第三方 viewer 都是 forbidden live truth source。
+- `src/contracts.ts` 是完整包级 contract；`src/in-memory-host.ts` + `src/ledger.ts` 是当前可运行的 fail-closed / contract-smoke host。顶层 `types.ts`、`errors.ts`、`evidence-ledger.ts` 只 re-export 该唯一 contract。默认无平台 adapter 时返回 blocked，contract-smoke adapter `diagnosticOnly=true`，只能证明 API/ledger/grant/barrier 形状。
+- Dogfood smoke 当前从产品 UI 右侧 `Screen` 读取 DOM/ref chips/terminal-equivalent command，而不是直接调用 provider internals。它校验 `rightPane`、`runtimeCommandAcceptance`、`providerReadiness`、`permissionRefs`、`lastFrameRefs`、`lastInputRefs`、`vscodeOperation`、`humanIntervention`、`bounded`、`nativeHost`、`humanInputHotPath`、`automationBarrierRefs` 和 `backgroundEvidenceRefs`。
+- `nativeHost`、`humanInputHotPath`、`automationBarrierRefs` 和 `backgroundEvidenceRefs` 已是 current smoke 的 passed gate：缺 Host session/surface/display refs、缺 fire-and-release input accepted refs、缺 automation barrier refs 或缺 background evidence refs 时，即使 Screen 呈 attached-shaped 状态也必须 blocked。它们是 fail-closed gate，不是用户级通过声明；真实通过仍需要 `diagnosticOnly=false` 的 platform provider evidence、live frame transport、hot-path input、automation barrier、takeover/resume 和 current-run ledger replay。
+
+这意味着当前可声明的进展是 “Native Host package contract、manifest、error taxonomy、ledger validator、Host-owned public attach refs、viewer/runtime grant validation 和 dogfood Native Host gates 已对齐”；还不能声明 “真实 Native Host 产品路径已通过”。
+
 ## Host Protocol / Provider Adapter Contract
 
 `NativeVirtualAppScreenHost` 是 Computer Use 的 L1 resource adapter，通过 Codex native tool/plugin/MCP、`module.describe/query/read/invoke` 或 action-provider host port 暴露能力。公共能力必须是声明式、refs-first、fail-closed。`VirtualDisplayProvider` 是 Host 内部 platform adapter；它不能绕过 host 直接面向 GUI 或 user-level acceptance。
@@ -227,10 +238,26 @@ src/runtime/computer-use
 
 ```ts
 type NativeVirtualAppScreenHostDescription = {
+  schemaVersion: 'sciforge.computer-use.native-virtual-app-screen-host.v1';
   hostId: string;
-  platform: 'darwin' | 'linux' | 'win32';
+  platform: 'darwin' | 'linux' | 'win32' | 'unknown';
   backendKind: string;
-  supportedApps?: string[];
+  protocol: Array<
+    | 'describe'
+    | 'probe'
+    | 'createSession'
+    | 'launchOrAttachApp'
+    | 'attachSurface'
+    | 'presentSurface'
+    | 'readFrame'
+    | 'sendHumanInput'
+    | 'executeAutomationIntent'
+    | 'pauseAgent'
+    | 'resumeAgent'
+    | 'closeSession'
+    | 'validateGrant'
+  >;
+  supportedApps: string[];
   supportedTransports: Array<'native-presented-surface' | 'webrtc' | 'native-frame-stream'>;
   supportedInputAdapters: Array<'app-command' | 'ax' | 'uia' | 'at-spi' | 'virtual-display-input'>;
   capabilities: {
@@ -248,8 +275,10 @@ type NativeVirtualAppScreenHostDescription = {
     requiresFocusSteal: boolean;
     sharedSystemInputUsed: boolean;
   };
-  permissionRefs?: string[];
+  permissionRefs: string[];
   blockedReason?: string;
+  diagnosticOnly: boolean;
+  thirdPartyToolsRole: 'adapter-diagnostic-or-fallback-only';
 };
 ```
 
@@ -257,17 +286,19 @@ type NativeVirtualAppScreenHostDescription = {
 
 | Intent | 作用 | 输出 |
 |---|---|---|
-| `probe` | 只读检测 provider、权限、虚拟显示、capture 和 input 能力。 | `adapterReadinessRef` |
-| `createSession` | 创建 agent-owned display/session，不启动任务 app。 | `sessionRef`, `displayGroupRef`, `screenRef` |
-| `launchApp` | 在 session/display 中启动 app，或 attach 到已有目标 app。 | `targetAppRef`, `targetWindowRef`, lifecycle event ref |
-| `attachSurface` | 绑定 live frame stream。 | `liveSurfaceRef`, `frameStreamRef`, `currentFrameRef` |
-| `presentSurface` | 根据 host-issued grant 把 live surface present 到右侧 Screen。 | `surfacePresentationRef`, `guiPresentRef` |
-| `sendHumanInput` | 真人热路径输入，host queue accepted 后立即返回。 | `inputAcceptedRef`, `inputSequence` |
-| `executeAutomationIntent` | 自动化动作，在 lease 下执行 scoped input 并等待 barrier/evidence。 | `inputIntentRef`, `automationBarrierRef`, `executorEventRef`, before/after frame refs |
-| `validateGrant` | dereference / validate live attach grant 与当前 host session record。 | `grantValidationRef` |
-| `pause` / `resume` | 暂停或恢复 capture/input。 | lifecycle event ref |
-| `closeSession` | 安全关闭 session/display/app，避免关闭用户窗口。 | lifecycle event ref |
-| `handoff` | 把无法隔离完成的动作交给用户。 | `handoffRef`, reason |
+| `probe` | 只读检测 provider、权限、虚拟显示、capture 和 input 能力。 | `adapterReadinessRef`, `permissionRefs`, `driverRefs`, `providerRefs`, optional `handoffRef` / `recheckRef` |
+| `createSession` | 创建 agent-owned display/session，不启动任务 app。 | `sessionRef` / `hostSessionRef`, `currentRunPointerRef`, `evidenceLedgerRef` |
+| `launchOrAttachApp` | 在 session/display 中启动 app，或 attach 到已有目标 app。 | `targetAppRef`, `targetWindowRef`, `app.launched` ledger event |
+| `attachSurface` | 绑定 live frame stream 并 mint host grant。 | `liveSurfaceRef`, `liveBindingAttachGrantRef`, `surfaceTransportRef`, `frameStreamRef` |
+| `presentSurface` | 根据 host-issued grant 把 live surface present 到右侧 Screen。 | `presentedSurfaceRef` 或 `grant.validated` ledger event，plus `guiPresentRef` from evidence context |
+| `readFrame` | 读取当前 host surface frame。 | `frameRef`, `currentFrameRef`, `frameHash`, `frameSequence`, `frameStreamRef` |
+| `sendHumanInput` | 真人热路径输入，host queue accepted 后立即返回。 | `inputAcceptedRef`, `inputSequence`, `fireAndRelease=true`, `evidenceWillCatchUp=true` |
+| `executeAutomationIntent` | 自动化动作，在 lease 下执行 scoped input 并等待 barrier/evidence。 | `automationBarrierRef`, before/after frame refs, `verifierRef`, `evidenceLedgerRef` |
+| `validateGrant` | dereference / validate live attach grant 与当前 host session record。 | `grant.validated` ledger event 或 blocked `invalid-grant` |
+| `pauseAgent` / `resumeAgent` | 暂停或恢复 agent queue；resume 必须带 readiness barrier。 | `agent.paused` / `agent.resumed` ledger event |
+| `closeSession` | 安全关闭 session/display/app，避免关闭用户窗口。 | `session.closed` ledger event |
+
+Permission handoff 当前通过 UI/terminal-equivalent `/computer-use permission-handoff` route、`permission.handoff` / `permission.recheck` ledger event 和 `handoffRef` / `recheckRef` 表达；它不是当前 `capability.manifest.json` 中单独的 Host public method。
 
 真人输入不能等待 evidence 完整性；自动化动作不能只凭真人输入 ack 宣称完成。后台 evidence worker 负责把 frame/input/action ledger 追上当前 sequence。
 
@@ -276,27 +307,21 @@ type NativeVirtualAppScreenHostDescription = {
 每个 provider 在执行前必须产出：
 
 ```ts
-type VirtualDisplayReadiness = {
-  schemaVersion: 'sciforge.virtual-display.readiness.v1';
-  providerId: string;
-  platform: string;
-  backendKind: string;
-  appIdentity?: Record<string, unknown>;
-  windowIdentity?: Record<string, unknown>;
-  displayIdentity?: Record<string, unknown>;
-  captureSupported: boolean;
-  liveSurfaceSupported: boolean;
-  inputSupported: boolean;
-  backgroundRenderable: boolean;
-  affectsPhysicalDisplay: boolean;
-  requiresFocusSteal: boolean;
-  sharedSystemInputUsed: boolean;
-  systemPointerMoved: boolean;
-  systemKeyboardEventsSent: boolean;
-  singleInteractiveTruth: boolean;
+type NativeHostReadinessRecord = {
+  schemaVersion: 'sciforge.computer-use.native-virtual-app-screen-host.v1';
+  status: 'ready' | 'blocked' | 'requires-handoff' | 'installable' | 'unsupported';
+  adapterKind: string;
+  platform: 'darwin' | 'linux' | 'win32' | 'unknown';
+  checkedAt: string;
+  adapterReadinessRef: string;
   permissionRefs: string[];
-  diagnosticRefs: string[];
+  driverRefs: string[];
+  providerRefs: string[];
+  capabilities: NativeHostCapabilityFlags;
+  diagnosticOnly: boolean;
   blockedReason?: string;
+  handoffRef?: string;
+  recheckRef?: string;
 };
 ```
 
@@ -359,6 +384,8 @@ type VirtualDisplayReadiness = {
 桌面 shell 支持时优先 native presented surface；WebRTC 仍是 Web shell、远程 shell 或跨进程 transport 的主线。无论 transport 是 native surface、WebRTC 还是 frame stream，它都只能呈现同一个 Host-owned live surface，不能成为第二套交互 truth。
 
 ## 状态机
+
+这里的状态机描述 Screen UI 的 attach/control state；Host package 自身的 session status 更窄，当前 contract 使用 `created`、`app-attached`、`surface-attached`、`presented`、`paused`、`stopped`、`closed`、`blocked`。Dogfood manifest 的 `status` 又只有 `passed` 或 `blocked`。三者必须通过 refs 串联，不能互相冒充。
 
 ```text
 no-session

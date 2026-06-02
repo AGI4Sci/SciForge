@@ -33,10 +33,8 @@ export type NativeVirtualDisplayDriverInputControlHook = (
 export function nativeDriverInputIntentProjection(
   operationOptions: VirtualDisplayProviderOperationOptions,
 ): Record<string, unknown> {
-  const inputIntent = isRecord(
-    (operationOptions as VirtualDisplayProviderOperationOptions & { inputIntent?: unknown }).inputIntent,
-  )
-    ? (operationOptions as VirtualDisplayProviderOperationOptions & { inputIntent: Record<string, unknown> }).inputIntent
+  const inputIntent = isRecord(operationOptions.inputIntent)
+    ? operationOptions.inputIntent as Record<string, unknown>
     : {};
   const action = isRecord(inputIntent.action) ? inputIntent.action : {};
   return {

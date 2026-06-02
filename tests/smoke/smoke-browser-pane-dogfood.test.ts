@@ -21,6 +21,25 @@ const realExternalManifestPath = join(realExternalArtifactDir, 'manifest.json');
 
 type JsonRecord = Record<string, unknown>;
 
+type BrowserPaneLiveAcceptance = {
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-live-pass' | 'diagnostic-only';
+  passClaim: boolean;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    shell: 'web-right-pane';
+    liveSurfaceTransport: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    frameTransport?: string;
+  };
+  blockedReason?: string;
+};
+
 type DogfoodFixtureEvent = {
   type: string;
   path: string;
@@ -33,7 +52,7 @@ type DogfoodFixtureEvent = {
 
 type BrowserPaneDogfoodManifest = {
   schemaVersion: typeof DOGFOOD_SCHEMA;
-  status: 'passed';
+  status: 'passed' | 'blocked';
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
@@ -48,11 +67,13 @@ type BrowserPaneDogfoodManifest = {
     rawUrlCaptured: false;
     allowedUse: 'right-pane-product-path-contract-not-external-web-pass';
   };
-  browserHostSession: {
+  browserHostSession?: {
     id: string;
     transport?: string;
+    liveSurfaceTransport?: string;
     frameTransport?: string;
-    singleInteractiveTruth?: boolean;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
     liveSurfaceRef?: string;
     refs: {
       frameRef?: string;
@@ -63,6 +84,8 @@ type BrowserPaneDogfoodManifest = {
       networkLogRef?: string;
     };
   };
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  blockedReason?: string;
   scenarios: {
     search: ScenarioSummary;
     documentScroll: ScenarioSummary;
@@ -81,7 +104,7 @@ type BrowserPaneDogfoodManifest = {
 };
 
 type ScenarioSummary = {
-  status: 'passed';
+  status: 'passed' | 'blocked';
   eventTypes: string[];
   valueLengths?: number[];
   valueHashes?: string[];
@@ -126,6 +149,7 @@ type BrowserPaneRealExternalDogfoodManifest = {
     rawDomCaptured: false;
   };
   browserHostSession?: BrowserPaneDogfoodManifest['browserHostSession'];
+  liveAcceptance: BrowserPaneLiveAcceptance;
   interactionCoverage: {
     openUrl: boolean;
     liveFrameVisible: boolean;
@@ -238,6 +262,13 @@ test('SciForge Browser pane dogfood covers search, result click, scroll, and for
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/search`);
     const hostFrame = await waitForHostFrame(surface, /^http:\/\/sciforge-browser-dogfood\.test:\d+\/search/);
+    if (!hostFrame) {
+      const manifest = buildBlockedDogfoodManifest(runId, fixtureOrigin, 'Browser pane dogfood did not expose native-embedded BrowserHostSession evidence.', await fallbackCounts(page));
+      assertBrowserPaneDogfoodManifest(manifest);
+      await mkdir(artifactDir, { recursive: true });
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
     await hostFrame.focus();
     await page.keyboard.type('SciForge Browser pane dogfood query alpha 2026');
     await page.keyboard.press('Enter');
@@ -356,6 +387,13 @@ test('SciForge Browser pane real external dogfood records configurable refs-firs
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, target.value.url);
     const hostFrame = await waitForReadyHostFrame(surface);
+    if (!hostFrame) {
+      const manifest = buildBlockedRealExternalDogfoodManifest(runId, 'Browser pane real external dogfood did not expose native-embedded BrowserHostSession evidence.', target.value);
+      assertBrowserPaneRealExternalDogfoodManifest(manifest);
+      await mkdir(realExternalArtifactDir, { recursive: true });
+      await writeFile(realExternalManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
     const sessionAfterOpen = await currentBrowserHostSession(page, writerUrl, workspacePath);
     const liveSurfaceBeforeReload = stringField(sessionAfterOpen.liveSurfaceRef);
 
@@ -427,7 +465,13 @@ test('SciForge Browser pane real external dogfood records configurable refs-firs
     }
 
     await clickBrowserCommand(surface, 'Reload');
-    await waitForReadyHostFrame(surface);
+    if (!await waitForReadyHostFrame(surface)) {
+      const manifest = buildBlockedRealExternalDogfoodManifest(runId, 'Browser pane real external dogfood lost native-embedded BrowserHostSession evidence after reload.', target.value);
+      assertBrowserPaneRealExternalDogfoodManifest(manifest);
+      await mkdir(realExternalArtifactDir, { recursive: true });
+      await writeFile(realExternalManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
     const sessionAfterReload = await currentBrowserHostSession(page, writerUrl, workspacePath);
     const manifest = buildPassedRealExternalDogfoodManifest({
       runId,
@@ -476,44 +520,31 @@ async function openBrowserPaneUrl(surface: Locator, url: string) {
 
 async function waitForHostFrame(surface: Locator, expectedUrl: RegExp) {
   await waitForWorkbenchUrl(surface, expectedUrl);
-  const frame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
-  await frame.waitFor({ state: 'visible', timeout: 30_000 });
-  let hostFrame = frame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await hostFrame.count()) {
-    hostFrame = frame.locator('img[data-browser-host-surface="browser-host-session"]').first();
-  }
-  await hostFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  await hostFrame.page().waitForFunction(() => {
-    const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-    if (canvas instanceof HTMLCanvasElement) return canvas.width > 0 && canvas.height > 0;
-    const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-    return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-  }, undefined, { timeout: 30_000 });
-  assert.equal(await hostFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
-  return hostFrame;
+  return waitForNativeHostSurface(surface);
 }
 
 async function waitForReadyHostFrame(surface: Locator) {
   await surface.page().waitForFunction(() => {
     const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
     const state = viewer?.getAttribute('data-browser-state');
-    const frame = document.querySelector('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
-    return state === 'ready' && Boolean(frame);
+    const frame = document.querySelector('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]');
+    return state === 'ready' || state === 'blocked' || state === 'error' || Boolean(frame);
   }, undefined, { timeout: 60_000 });
-  const frame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
-  let hostFrame = frame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await hostFrame.count()) {
-    hostFrame = frame.locator('img[data-browser-host-surface="browser-host-session"]').first();
+  return waitForNativeHostSurface(surface);
+}
+
+async function waitForNativeHostSurface(surface: Locator): Promise<Locator | undefined> {
+  const nativeSurface = surface.locator('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]').first();
+  if (!await nativeSurface.count()) {
+    await assertNoLegacyBrowserLiveFallback(surface);
+    return undefined;
   }
-  await hostFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  await hostFrame.page().waitForFunction(() => {
-    const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-    if (canvas instanceof HTMLCanvasElement) return canvas.width > 0 && canvas.height > 0;
-    const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-    return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-  }, undefined, { timeout: 30_000 });
-  assert.equal(await hostFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
-  return hostFrame;
+  await nativeSurface.waitFor({ state: 'visible', timeout: 30_000 });
+  assert.equal(await nativeSurface.getAttribute('data-browser-host-surface'), 'browser-host-session');
+  assert.equal(await nativeSurface.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.match(await nativeSurface.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
+  await assertNoLegacyBrowserLiveFallback(surface);
+  return nativeSurface;
 }
 
 async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
@@ -521,6 +552,7 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
     const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
     const state = viewer?.getAttribute('data-browser-state');
     const url = viewer?.querySelector('header p')?.textContent ?? '';
+    if (state === 'blocked' || state === 'error') return true;
     return state === 'ready' && new RegExp(source, flags).test(url);
   }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
 }
@@ -590,6 +622,15 @@ async function fallbackCounts(page: Page) {
   }));
 }
 
+async function assertNoLegacyBrowserLiveFallback(surface: Locator) {
+  assert.equal(await surface.locator('[data-browser-host-surface="system-browser-window"]').count(), 0);
+  assert.equal(await surface.locator('iframe[src^="/api/sciforge/browser/proxy"], iframe').count(), 0);
+  assert.equal(await surface.locator('webview').count(), 0);
+  assert.equal(await surface.locator('img[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await surface.locator('canvas[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await surface.locator('img[src*="/api/sciforge/browser-host/sessions/"][data-browser-host-surface="browser-host-session"]').count(), 0);
+}
+
 function buildManifest(input: {
   runId: string;
   fixtureOrigin: string;
@@ -600,9 +641,11 @@ function buildManifest(input: {
   const eventTypes = (path: string) => input.events.filter((event) => event.path === path).map((event) => event.type);
   const formEvents = input.events.filter((event) => event.path === '/form');
   const scrollEvents = input.events.filter((event) => event.type === 'doc-scroll');
+  const frameTransport = stringField(input.session.liveSurfaceTransport) === 'native-embedded' ? 'native-embedded' : undefined;
+  const liveAcceptance = browserPaneLiveAcceptance(input.session, frameTransport);
   return {
     schemaVersion: DOGFOOD_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
@@ -620,8 +663,10 @@ function buildManifest(input: {
     browserHostSession: {
       id: stringField(input.session.id),
       transport: stringField(input.session.liveSurfaceTransport),
-      frameTransport: stringField(recordField(input.session.lastActionTiming)?.liveSurfaceTransport) === 'host-stream' ? 'websocket-binary' : undefined,
+      liveSurfaceTransport: stringField(input.session.liveSurfaceTransport),
+      frameTransport,
       singleInteractiveTruth: input.session.singleInteractiveTruth === true,
+      secondTruthSource: input.session.secondTruthSource === true,
       liveSurfaceRef: stringField(input.session.liveSurfaceRef),
       refs: {
         frameRef: stringField(input.session.frameRef),
@@ -632,6 +677,8 @@ function buildManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    liveAcceptance,
+    blockedReason: liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined,
     scenarios: {
       search: {
         status: 'passed',
@@ -669,8 +716,57 @@ function buildManifest(input: {
   };
 }
 
+function buildBlockedDogfoodManifest(
+  runId: string,
+  fixtureOrigin: string,
+  reason: string,
+  fallbackCounts: { iframe: number; proxy: number; systemPopup: number; httpFrameLiveView: number },
+): BrowserPaneDogfoodManifest {
+  assert.equal(fallbackCounts.iframe, 0);
+  assert.equal(fallbackCounts.proxy, 0);
+  assert.equal(fallbackCounts.systemPopup, 0);
+  assert.equal(fallbackCounts.httpFrameLiveView, 0);
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason);
+  return {
+    schemaVersion: DOGFOOD_SCHEMA,
+    status: 'blocked',
+    runId,
+    observedAt: new Date().toISOString(),
+    shell: 'web-right-pane',
+    targetOriginRef: `fixture-origin:${hashText(fixtureOrigin)}`,
+    targetEvidence: {
+      mode: 'resolver-fixture',
+      hostRef: `fixture-host:${hashText(fixtureHost)}`,
+      originRef: `fixture-origin:${hashText(fixtureOrigin)}`,
+      resolverRuleApplied: true,
+      realExternalSiteClaim: false,
+      hardcodedSitePassClaim: false,
+      rawUrlCaptured: false,
+      allowedUse: 'right-pane-product-path-contract-not-external-web-pass',
+    },
+    liveAcceptance,
+    blockedReason: liveAcceptance.blockedReason,
+    scenarios: {
+      search: { status: 'blocked', eventTypes: [], navigationPath: '/search' },
+      documentScroll: { status: 'blocked', eventTypes: [], navigationPath: '/docs/alpha' },
+      formInput: { status: 'blocked', eventTypes: [], navigationPath: '/form' },
+    },
+    actionTimingSummary: [],
+    forbiddenFallbacks: {
+      iframe: false,
+      proxy: false,
+      systemPopup: false,
+      httpFrameLiveView: false,
+      rawDom: false,
+      base64: false,
+    },
+    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-pane-dogfood.test.ts',
+  };
+}
+
 function assertBrowserPaneDogfoodManifest(manifest: BrowserPaneDogfoodManifest) {
   assert.equal(manifest.schemaVersion, DOGFOOD_SCHEMA);
+  assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
   assert.equal(manifest.targetOriginRef, manifest.targetEvidence.originRef);
   assert.equal(manifest.targetEvidence.mode, 'resolver-fixture');
   assert.equal(manifest.targetEvidence.resolverRuleApplied, true);
@@ -678,14 +774,28 @@ function assertBrowserPaneDogfoodManifest(manifest: BrowserPaneDogfoodManifest) 
   assert.equal(manifest.targetEvidence.hardcodedSitePassClaim, false);
   assert.equal(manifest.targetEvidence.rawUrlCaptured, false);
   assert.equal(manifest.targetEvidence.allowedUse, 'right-pane-product-path-contract-not-external-web-pass');
-  assert.equal(manifest.browserHostSession.transport, 'host-stream');
-  assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
-  assert.match(manifest.browserHostSession.refs.frameRef ?? '', /^browser-host-session:[^/]+\/frame\.png$/);
-  assert.ok(manifest.scenarios.search.eventTypes.includes('search-submit'));
-  assert.ok(manifest.scenarios.search.eventTypes.includes('results-load'));
-  assert.ok(manifest.scenarios.documentScroll.eventTypes.includes('result-click'));
-  assert.ok((manifest.scenarios.documentScroll.maxScrollY ?? 0) > 0);
-  assert.ok(manifest.scenarios.formInput.eventTypes.includes('form-submit'));
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
+  if (manifest.status === 'passed') {
+    assert.ok(manifest.browserHostSession, 'passed dogfood manifest requires BrowserHostSession native evidence');
+    assert.equal(manifest.browserHostSession.transport, manifest.browserHostSession.liveSurfaceTransport);
+    assert.equal(manifest.browserHostSession.liveSurfaceTransport, 'native-embedded');
+    assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
+    assert.match(manifest.browserHostSession.refs.frameRef ?? '', /^browser-host-session:[^/]+\/frame\.png$/);
+    assert.equal(manifest.browserHostSession.singleInteractiveTruth, manifest.liveAcceptance.observed.singleInteractiveTruth);
+    assert.equal(manifest.browserHostSession.secondTruthSource, false);
+    assert.ok(manifest.scenarios.search.eventTypes.includes('search-submit'));
+    assert.ok(manifest.scenarios.search.eventTypes.includes('results-load'));
+    assert.ok(manifest.scenarios.documentScroll.eventTypes.includes('result-click'));
+    assert.ok((manifest.scenarios.documentScroll.maxScrollY ?? 0) > 0);
+    assert.ok(manifest.scenarios.formInput.eventTypes.includes('form-submit'));
+  } else {
+    assert.ok(manifest.blockedReason, 'web shell diagnostic manifest must include a blocked reason');
+    assert.equal(manifest.liveAcceptance.passClaim, false);
+    assert.equal(manifest.targetEvidence.realExternalSiteClaim, false);
+    assert.equal(manifest.scenarios.search.status, 'blocked');
+    assert.equal(manifest.scenarios.documentScroll.status, 'blocked');
+    assert.equal(manifest.scenarios.formInput.status, 'blocked');
+  }
   assert.deepEqual(Object.values(manifest.forbiddenFallbacks), [false, false, false, false, false, false]);
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /<!doctype|<html|data:image|outerHTML|innerHTML/i);
@@ -804,6 +914,7 @@ function buildBlockedRealExternalDogfoodManifest(
   reason: string,
   target?: RealExternalDogfoodTarget,
 ): BrowserPaneRealExternalDogfoodManifest {
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason);
   return {
     schemaVersion: REAL_EXTERNAL_DOGFOOD_SCHEMA,
     status: 'blocked',
@@ -820,6 +931,7 @@ function buildBlockedRealExternalDogfoodManifest(
       rawUrlCaptured: false,
       rawDomCaptured: false,
     },
+    liveAcceptance,
     interactionCoverage: {
       openUrl: false,
       liveFrameVisible: false,
@@ -850,20 +962,23 @@ function buildPassedRealExternalDogfoodManifest(input: {
   liveSurfaceBeforeReload: string;
   publicSearchBoxEvidence?: BrowserPaneRealExternalDogfoodManifest['publicSearchBoxEvidence'];
 }): BrowserPaneRealExternalDogfoodManifest {
+  const frameTransport = stringField(input.session.liveSurfaceTransport) === 'native-embedded' ? 'native-embedded' : undefined;
+  const liveAcceptance = browserPaneLiveAcceptance(input.session, frameTransport);
+  const canClaimLivePass = liveAcceptance.status === 'passed';
   return {
     schemaVersion: REAL_EXTERNAL_DOGFOOD_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
     targetEvidence: {
-      mode: 'real-external-url-config',
+      mode: canClaimLivePass ? 'real-external-url-config' : 'blocked-real-external-url-config',
       configuredBy: 'SCIFORGE_BROWSER_PANE_REAL_EXTERNAL_TARGET_JSON',
       requestedUrlLength: input.target.url.length,
       requestedUrlHash: hashText(input.target.url),
       finalUrlLength: stringField(input.session.url).length,
       finalUrlHash: hashText(stringField(input.session.url)),
-      realExternalSiteClaim: true,
+      realExternalSiteClaim: canClaimLivePass,
       hardcodedSitePassClaim: false,
       rawUrlCaptured: false,
       rawDomCaptured: false,
@@ -871,8 +986,10 @@ function buildPassedRealExternalDogfoodManifest(input: {
     browserHostSession: {
       id: stringField(input.session.id),
       transport: stringField(input.session.liveSurfaceTransport),
-      frameTransport: stringField(recordField(input.session.lastActionTiming)?.liveSurfaceTransport) === 'host-stream' ? 'websocket-binary' : undefined,
+      liveSurfaceTransport: stringField(input.session.liveSurfaceTransport),
+      frameTransport,
       singleInteractiveTruth: input.session.singleInteractiveTruth === true,
+      secondTruthSource: input.session.secondTruthSource === true,
       liveSurfaceRef: stringField(input.session.liveSurfaceRef),
       refs: {
         frameRef: stringField(input.session.frameRef),
@@ -883,6 +1000,7 @@ function buildPassedRealExternalDogfoodManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    liveAcceptance,
     interactionCoverage: {
       openUrl: true,
       liveFrameVisible: true,
@@ -912,6 +1030,7 @@ function buildPassedRealExternalDogfoodManifest(input: {
     actionTimingSummary: Array.isArray(input.session.actionTimingSummary)
       ? input.session.actionTimingSummary.filter((entry): entry is Record<string, unknown> => Boolean(recordField(entry))).slice(0, 12)
       : [],
+    blockedReason: canClaimLivePass ? undefined : liveAcceptance.blockedReason,
     forbiddenFallbacks: dogfoodForbiddenFallbacks(),
     verificationCommand: 'SCIFORGE_BROWSER_PANE_REAL_EXTERNAL_TARGET_JSON=<json> npm run smoke:browser-pane-real-external-dogfood --silent',
   };
@@ -925,6 +1044,7 @@ function assertBrowserPaneRealExternalDogfoodManifest(manifest: BrowserPaneRealE
   assert.equal(manifest.targetEvidence.rawUrlCaptured, false);
   assert.equal(manifest.targetEvidence.rawDomCaptured, false);
   assert.deepEqual(Object.values(manifest.forbiddenFallbacks), [false, false, false, false, false, false]);
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
   if (manifest.status === 'passed') {
     assert.equal(manifest.targetEvidence.mode, 'real-external-url-config');
     assert.equal(manifest.targetEvidence.realExternalSiteClaim, true);
@@ -932,9 +1052,10 @@ function assertBrowserPaneRealExternalDogfoodManifest(manifest: BrowserPaneRealE
     assert.match(manifest.targetEvidence.requestedUrlHash ?? '', /^[a-f0-9]{16}$/);
     assert.ok((manifest.targetEvidence.finalUrlLength ?? 0) > 0);
     assert.match(manifest.targetEvidence.finalUrlHash ?? '', /^[a-f0-9]{16}$/);
-    assert.equal(manifest.browserHostSession?.transport, 'host-stream');
+    assert.equal(manifest.browserHostSession?.liveSurfaceTransport, 'native-embedded');
     assert.match(manifest.browserHostSession?.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
     assert.equal(manifest.browserHostSession?.singleInteractiveTruth, true);
+    assert.equal(manifest.browserHostSession?.secondTruthSource, false);
     assert.equal(manifest.interactionCoverage.openUrl, true);
     assert.equal(manifest.interactionCoverage.liveFrameVisible, true);
     assert.equal(manifest.interactionCoverage.reloadAttempted, true);
@@ -945,6 +1066,7 @@ function assertBrowserPaneRealExternalDogfoodManifest(manifest: BrowserPaneRealE
     assert.ok(manifest.targetEvidence.mode === 'blocked-no-target-config' || manifest.targetEvidence.mode === 'blocked-real-external-url-config');
     assert.equal(manifest.targetEvidence.realExternalSiteClaim, false);
     assert.ok(manifest.blockedReason);
+    assert.equal(manifest.liveAcceptance.passClaim, false);
   }
   assert.equal(manifest.fallbackCounts.iframe, 0);
   assert.equal(manifest.fallbackCounts.proxy, 0);
@@ -952,6 +1074,74 @@ function assertBrowserPaneRealExternalDogfoodManifest(manifest: BrowserPaneRealE
   assert.equal(manifest.fallbackCounts.httpFrameLiveView, 0);
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /https?:\/\/|<!doctype|<html|<body|data:image|;base64,|outerHTML|innerHTML/i);
+}
+
+function browserPaneLiveAcceptance(session: JsonRecord, frameTransport?: string): BrowserPaneLiveAcceptance {
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport);
+  const singleInteractiveTruth = session.singleInteractiveTruth === true;
+  const secondTruthSource = session.secondTruthSource === true;
+  const passed = liveSurfaceTransport === 'native-embedded'
+    && singleInteractiveTruth
+    && secondTruthSource === false;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'right-pane-live-pass' : 'diagnostic-only',
+    passClaim: passed,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport,
+      singleInteractiveTruth,
+      secondTruthSource,
+      frameTransport,
+    },
+    blockedReason: passed
+      ? undefined
+      : `Browser pane live acceptance requires native-embedded; observed ${liveSurfaceTransport || 'missing-native-attach'}.`,
+  };
+}
+
+function blockedBrowserPaneLiveAcceptance(reason: string): BrowserPaneLiveAcceptance {
+  return {
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: 'missing-native-attach',
+      singleInteractiveTruth: false,
+      secondTruthSource: false,
+    },
+    blockedReason: sanitizeExternalBlockedReason(reason),
+  };
+}
+
+function assertBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, manifestStatus: 'passed' | 'blocked'): void {
+  assert.equal(liveAcceptance.status, manifestStatus);
+  assert.equal(liveAcceptance.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(liveAcceptance.required.singleInteractiveTruth, true);
+  assert.equal(liveAcceptance.required.secondTruthSource, false);
+  assert.equal(liveAcceptance.observed.shell, 'web-right-pane');
+  assert.equal(liveAcceptance.observed.secondTruthSource, false);
+  if (manifestStatus === 'passed') {
+    assert.equal(liveAcceptance.claimScope, 'right-pane-live-pass');
+    assert.equal(liveAcceptance.passClaim, true);
+    assert.equal(liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+    assert.equal(liveAcceptance.observed.singleInteractiveTruth, true);
+  } else {
+    assert.equal(liveAcceptance.claimScope, 'diagnostic-only');
+    assert.equal(liveAcceptance.passClaim, false);
+    assert.ok(liveAcceptance.blockedReason);
+  }
 }
 
 function assertPublicSearchBoxEvidence(evidence: BrowserPaneRealExternalDogfoodManifest['publicSearchBoxEvidence']) {

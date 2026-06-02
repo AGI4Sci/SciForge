@@ -167,7 +167,7 @@ export interface RightPaneBrowserHostSessionState {
   canGoBack?: boolean;
   canGoForward?: boolean;
   liveSurfaceRef?: string;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
+  liveSurfaceTransport?: 'native-embedded' | 'host-stream' | 'webrtc-data-channel';
   singleInteractiveTruth?: true;
   frameStreamRef?: string;
   frameRef?: string;
@@ -265,7 +265,7 @@ function browserHostSessionStatus(value: unknown): RightPaneBrowserHostSessionSt
 }
 
 function browserHostLiveSurfaceTransport(value: unknown): RightPaneBrowserHostSessionState['liveSurfaceTransport'] {
-  return value === 'host-stream' || value === 'native-embedded' ? value : undefined;
+  return value === 'native-embedded' ? value : undefined;
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

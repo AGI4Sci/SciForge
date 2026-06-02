@@ -87,6 +87,7 @@ type MouseGestureOsUiAuditProofKind =
   | 'window-focus-owner'
   | 'right-click-context-menu-owner'
   | 'middle-click-tab-owner-or-handoff'
+  | 'modifier-click-tab-owner-or-handoff'
   | 'selection-range-owner'
   | 'scrollbar-thumb-owner'
   | 'shell-composer-not-targeted';
@@ -315,7 +316,8 @@ test('BrowserHostSession mouse gesture completeness is single-owner and refs-fir
     for (const state of actionStates) {
       assert.equal(state.lastActionTiming?.capture, 'none', `${state.lastActionTiming?.action} should ACK without evidence capture`);
       assert.equal(state.lastActionTiming?.status, 'ok');
-      assert.equal(state.lastActionTiming?.paintAckSource, 'none');
+      assert.equal(state.lastActionTiming?.liveSurfaceTransport, 'native-embedded');
+      assert.equal(state.lastActionTiming?.paintAckSource, 'native-adapter-action-state');
     }
 
     assertTimingSummary(finalState, 'open', 1);
@@ -328,13 +330,23 @@ test('BrowserHostSession mouse gesture completeness is single-owner and refs-fir
     assertTimingSummary(finalState, 'scroll', 2);
 
     const report = boundedMouseGestureReport(finalState, driver.trace);
+    assert.equal(report.status, 'blocked');
+    assert.equal(report.canClaimRealMouseFidelityPass, false);
+    assert.equal(report.liveBrowserOwner, 'BrowserHostSession');
+    assert.equal(report.liveSurfaceTransport, 'native-embedded');
+    assert.equal(report.singleInteractiveTruth, true);
+    assert.equal(report.secondTruthSource, false);
     assert.deepEqual(report.coverage.missingGestures, []);
-    assert.equal(report.acceptanceFixtures.dragDrop.status, 'passed');
-    assert.equal(report.acceptanceFixtures.textSelection.status, 'passed');
-    assert.equal(report.acceptanceFixtures.scrollbarThumbDrag.status, 'passed');
+    assert.equal(report.acceptanceFixtures.dragDrop.status, 'diagnostic');
+    assert.equal(report.acceptanceFixtures.textSelection.status, 'diagnostic');
+    assert.equal(report.acceptanceFixtures.scrollbarThumbDrag.status, 'diagnostic');
     assert.equal(report.newTabSemantics.status, 'blocked');
     assert.equal(report.newTabSemantics.middleClick.reasonCode, 'middle-click-has-no-browser-host-tab-owner-contract');
     assert.equal(report.newTabSemantics.modifierClick.reasonCode, 'click-action-has-no-modifier-fields');
+    assert.equal(report.newTabSemantics.ownerContract.status, 'blocked');
+    assert.equal(report.newTabSemantics.ownerContract.middleClick.requiredProofKind, 'middle-click-tab-owner-or-handoff');
+    assert.equal(report.newTabSemantics.ownerContract.modifierClick.requiredProofKind, 'modifier-click-tab-owner-or-handoff');
+    assert.ok(report.newTabSemantics.ownerContract.requiredProofRefs.every((ref) => ref.startsWith(`browser-host-session:${finalState.id}/`)));
     assert.equal(report.contextMenuPolicy, 'browser-context-menu');
     assert.equal(report.middleClickPolicy, 'browser-host-session-owned-middle-button');
     assert.equal(report.productAcceptance.canClaimRealMouseFidelityPass, false);
@@ -404,18 +416,22 @@ test('BrowserHostSession mouse gesture product claim rejects split BrowserHostSe
   const liveSurfaceRef = `browser-host-session:${state.id}/live-surface`;
   const report = {
     source: 'real-product-os-ui-run',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
     productAcceptance: {
       status: 'passed',
       source: 'real-product-os-ui-run',
       canClaimRealMouseFidelityPass: true,
       requiredRealProofs: [],
-      auditProofsRequired: [
-        'window-focus-owner',
-        'right-click-context-menu-owner',
-        'middle-click-tab-owner-or-handoff',
-        'selection-range-owner',
-        'scrollbar-thumb-owner',
-        'shell-composer-not-targeted',
+        auditProofsRequired: [
+          'window-focus-owner',
+          'right-click-context-menu-owner',
+          'middle-click-tab-owner-or-handoff',
+          'modifier-click-tab-owner-or-handoff',
+          'selection-range-owner',
+          'scrollbar-thumb-owner',
+          'shell-composer-not-targeted',
       ] satisfies MouseGestureOsUiAuditProofKind[],
       realContextMenuVerified: true,
       realMiddleClickNewTabOrHandoffVerified: true,
@@ -440,6 +456,7 @@ test('BrowserHostSession mouse gesture product claim rejects split BrowserHostSe
           mouseGestureAuditProof('window-focus-owner', runRef, liveSurfaceRef),
           mouseGestureAuditProof('right-click-context-menu-owner', runRef, liveSurfaceRef),
           mouseGestureAuditProof('middle-click-tab-owner-or-handoff', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('modifier-click-tab-owner-or-handoff', runRef, liveSurfaceRef),
           mouseGestureAuditProof('selection-range-owner', runRef, liveSurfaceRef),
           mouseGestureAuditProof('scrollbar-thumb-owner', runRef, liveSurfaceRef),
           mouseGestureAuditProof('shell-composer-not-targeted', runRef, liveSurfaceRef),
@@ -469,10 +486,11 @@ function assertBrowserHostState(state: BrowserHostSessionState, label: string): 
   assert.equal(state.owner, 'host', `${label}: BrowserHostSession state should be host-owned`);
   assert.equal(state.providerId, BROWSER_HOST_SESSION_PROVIDER_ID, `${label}: provider should be BrowserHostSession`);
   assert.equal(state.singleInteractiveTruth, true, `${label}: session should remain the single interactive truth`);
-  assert.equal(state.liveSurfaceTransport, 'host-stream', `${label}: smoke should use BrowserHostSession host stream`);
+  assert.equal(state.liveSurfaceTransport, 'native-embedded', `${label}: smoke should use the native embedded BrowserHostSession surface`);
   assert.equal(state.liveSurfaceRef, `browser-host-session:${state.id}/live-surface`);
-  assert.equal(state.frameStreamRef, `browser-host-session:${state.id}/frame-stream`);
-  assert.equal(state.nativeAdapterUrl, undefined);
+  assert.equal(state.frameStreamRef, undefined);
+  assert.equal(state.frameRef, undefined);
+  assert.equal(state.nativeAdapterUrl, 'http://127.0.0.1:39302');
 }
 
 function assertComputerUseBrowserHostResult(result: BrowserHostComputerUseActionResult, label: string): void {
@@ -514,6 +532,8 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
   axSnapshotCalls = 0;
   private pendingTextSelectionPath: BrowserHostMousePoint[] | undefined;
   private pendingPointerPath: BrowserHostMousePoint[] | undefined;
+  readonly liveSurfaceTransport = 'native-embedded' as const;
+  readonly nativeAdapterUrl = 'http://127.0.0.1:39302';
 
   async goto(url: string): Promise<void> {
     this.currentUrl = url;
@@ -781,7 +801,9 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
   const scrollbarThumbDrag = trace.find((row) => row.gesture === 'scrollbar-thumb-drag');
   return {
     schemaVersion: 'sciforge.browser-host-session.mouse-gesture-completeness-smoke.v1',
-    source: 'local-deterministic-browser-host-session-fixture',
+    status: 'blocked',
+    source: 'deterministic-native-browser-host-session-fixture-no-real-os-ui-run',
+    canClaimRealMouseFidelityPass: false,
     artifactPayloadMode: 'bounded-refs-and-policy-only',
     liveBrowserOwner: 'BrowserHostSession' as const,
     stateOwner: state.owner,
@@ -811,21 +833,21 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
     },
     acceptanceFixtures: {
       dragDrop: {
-        status: dragDrop ? 'passed' as const : 'blocked' as const,
+        status: dragDrop ? 'diagnostic' as const : 'blocked' as const,
         evidenceRef: `browser-host-session:${state.id}/mouse-fixture/drag-drop`,
         hostAction: dragDrop?.hostAction,
         pointCount: dragDrop?.path?.length ?? 0,
         policy: dragDrop?.policy,
       },
       textSelection: {
-        status: textSelection ? 'passed' as const : 'blocked' as const,
+        status: textSelection ? 'diagnostic' as const : 'blocked' as const,
         evidenceRef: `browser-host-session:${state.id}/mouse-fixture/text-selection`,
         hostAction: textSelection?.hostAction,
         pointCount: textSelection?.path?.length ?? 0,
         policy: textSelection?.policy,
       },
       scrollbarThumbDrag: {
-        status: scrollbarThumbDrag ? 'passed' as const : 'blocked' as const,
+        status: scrollbarThumbDrag ? 'diagnostic' as const : 'blocked' as const,
         evidenceRef: `browser-host-session:${state.id}/mouse-fixture/scrollbar-thumb-drag`,
         hostAction: scrollbarThumbDrag?.hostAction,
         pointCount: scrollbarThumbDrag?.path?.length ?? 0,
@@ -838,6 +860,7 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
       status: 'blocked' as const,
       policy: 'typed-bounded-policy',
       evidenceMode: 'refs-first-no-tab-payload',
+      ownerContract: mouseGestureNewTabOwnerContract(state),
       middleClick: {
         status: 'blocked' as const,
         reasonCode: 'middle-click-has-no-browser-host-tab-owner-contract',
@@ -866,6 +889,7 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
         'real-right-pane-os-ui-run',
         'right-click-context-menu-owner',
         'middle-click-tab-owner-or-handoff',
+        'modifier-click-tab-owner-or-handoff',
         'selection-range-owner',
         'scrollbar-thumb-owner',
         'shell-composer-not-targeted',
@@ -874,6 +898,7 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
         'window-focus-owner',
         'right-click-context-menu-owner',
         'middle-click-tab-owner-or-handoff',
+        'modifier-click-tab-owner-or-handoff',
         'selection-range-owner',
         'scrollbar-thumb-owner',
         'shell-composer-not-targeted',
@@ -909,6 +934,14 @@ async function writeBoundedMouseGestureArtifact(report: ReturnType<typeof bounde
 function validateMouseGestureProductAcceptance(report: { source: string; productAcceptance: MouseGestureProductAcceptance }): string[] {
   const blockers: string[] = [];
   const acceptance = report.productAcceptance;
+  const transport = (report as { liveSurfaceTransport?: BrowserHostSessionState['liveSurfaceTransport'] }).liveSurfaceTransport;
+  const singleInteractiveTruth = (report as { singleInteractiveTruth?: true }).singleInteractiveTruth;
+  const secondTruthSource = (report as { secondTruthSource?: boolean }).secondTruthSource;
+  const liveBrowserOwner = (report as { liveBrowserOwner?: string }).liveBrowserOwner;
+  const stateOwner = (report as { stateOwner?: string }).stateOwner;
+  if (liveBrowserOwner !== 'BrowserHostSession' || stateOwner !== 'host') blockers.push('browser-host-session-owner-required');
+  if (transport !== 'native-embedded') blockers.push('native-embedded-live-surface-required');
+  if (singleInteractiveTruth !== true || secondTruthSource !== false) blockers.push('browser-host-session-single-owner-required');
   if (!acceptance.canClaimRealMouseFidelityPass) {
     if (acceptance.status !== 'blocked') blockers.push('nonpass-must-be-blocked');
     if (acceptance.source !== 'real-product-os-ui-run') blockers.push('real-product-os-ui-run-required');
@@ -945,6 +978,7 @@ function hasMouseGestureOsUiAuditProofs(acceptance: MouseGestureProductAcceptanc
     'window-focus-owner',
     'right-click-context-menu-owner',
     'middle-click-tab-owner-or-handoff',
+    'modifier-click-tab-owner-or-handoff',
     'selection-range-owner',
     'scrollbar-thumb-owner',
     'shell-composer-not-targeted',
@@ -1002,6 +1036,44 @@ function mouseGestureAuditProof(
   };
 }
 
+function mouseGestureNewTabOwnerContract(state: BrowserHostSessionState) {
+  const sessionRef = `browser-host-session:${state.id}/session`;
+  const liveSurfaceRef = state.liveSurfaceRef ?? `browser-host-session:${state.id}/live-surface`;
+  const middleClickProofRef = `browser-host-session:${state.id}/mouse-fixture/middle-click-owner-handoff-required`;
+  const modifierClickProofRef = `browser-host-session:${state.id}/mouse-fixture/modifier-click-owner-handoff-required`;
+  return {
+    status: 'blocked' as const,
+    blocker: 'real-product-os-ui-run-not-executed' as const,
+    productSurface: 'right-pane-browser' as const,
+    owner: 'BrowserHostSession' as const,
+    browserHostSessionRef: sessionRef,
+    liveSurfaceRef,
+    handoffRef: `browser-host-session:${state.id}/os-ui-handoff/mouse-new-tab-owner`,
+    requiredProofRefs: [middleClickProofRef, modifierClickProofRef],
+    middleClick: {
+      status: 'blocked' as const,
+      observedOwner: 'BrowserHostSession' as const,
+      observedButton: 'middle' as const,
+      requiredProofKind: 'middle-click-tab-owner-or-handoff' as const,
+      proofRef: middleClickProofRef,
+      acceptableOutcomes: ['browser-host-tab-created', 'typed-handoff-to-browser-tab-owner'] as const,
+      rawTabPayloadCaptured: false,
+    },
+    modifierClick: {
+      status: 'blocked' as const,
+      observedOwner: 'BrowserHostSession' as const,
+      requiredProofKind: 'modifier-click-tab-owner-or-handoff' as const,
+      proofRef: modifierClickProofRef,
+      currentRuntimeGap: 'click-action-has-no-modifier-fields' as const,
+      requiredModifierFields: ['altKey', 'ctrlKey', 'metaKey', 'shiftKey'] as const,
+      acceptableOutcomes: ['browser-host-tab-created', 'typed-handoff-to-browser-tab-owner'] as const,
+      rawTabPayloadCaptured: false,
+    },
+    rawPayloadsCaptured: false,
+    secondTruthSource: false,
+  };
+}
+
 function browserHostRefScope(ref: string | undefined): string | undefined {
   if (!ref?.startsWith('browser-host-session:')) return undefined;
   const slash = ref.lastIndexOf('/');
@@ -1015,7 +1087,7 @@ function browserHostRefBelongsToScope(ref: string | undefined, scope: string): b
 function assertNoRawMouseArtifactPayload(text: string, label: string): void {
   assert.doesNotMatch(text, /data:image|base64|rawDom|raw DOM|domSnapshotPayload|screenshotPayload|systemMousePayload/i, `${label} must not include raw payloads`);
   assert.doesNotMatch(text, /<\s*(?:!doctype|html|body|iframe|webview)\b/i, `${label} must not include captured markup`);
-  assert.doesNotMatch(text, /\b(?:iframe|proxy|webview)\b/i, `${label} must not mention alternate live-browser owners`);
+  assert.doesNotMatch(text, /\b(?:iframe|proxy|webview|host-stream|frame-stream|webrtc|websocket-binary)\b/i, `${label} must not mention alternate live-browser owners`);
 }
 
 function pathsEqual(left: BrowserHostMousePoint[], right: BrowserHostMousePoint[]): boolean {
@@ -1041,13 +1113,12 @@ function syntheticBrowserHostState(): BrowserHostSessionState {
     updatedAt: '2026-06-02T00:00:00.000Z',
     viewport: { width: 960, height: 640 },
     screenshotRef: `browser-host-session:mouse-gesture-product-claim-forged/screenshot`,
-    frameRef: `browser-host-session:mouse-gesture-product-claim-forged/frame`,
-    frameStreamRef: `browser-host-session:mouse-gesture-product-claim-forged/frame-stream`,
     domSnapshotRef: `browser-host-session:mouse-gesture-product-claim-forged/dom`,
     axSnapshotRef: `browser-host-session:mouse-gesture-product-claim-forged/ax`,
     consoleLogRef: `browser-host-session:mouse-gesture-product-claim-forged/console`,
     networkLogRef: `browser-host-session:mouse-gesture-product-claim-forged/network`,
-    liveSurfaceTransport: 'host-stream',
+    nativeAdapterUrl: 'http://127.0.0.1:39302',
+    liveSurfaceTransport: 'native-embedded',
     liveSurfaceRef: `browser-host-session:mouse-gesture-product-claim-forged/live-surface`,
     singleInteractiveTruth: true,
     canGoBack: false,

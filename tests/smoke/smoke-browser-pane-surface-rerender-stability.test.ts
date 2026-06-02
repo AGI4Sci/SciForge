@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -13,91 +16,160 @@ const SESSION_ID = 'surface-rerender-stability';
 const TARGET_URL = 'https://external.example/browser-surface';
 const WORKSPACE_PATH = '/tmp/sciforge-browser-surface-rerender-stability';
 const WRITER_URL = 'http://127.0.0.1:61234';
+const STABILITY_SCHEMA = 'sciforge.browser-pane-surface-rerender-stability.v1';
+const ARTIFACT_DIR = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-surface-rerender-stability');
+const MANIFEST_PATH = join(ARTIFACT_DIR, 'manifest.json');
+const VERIFICATION_COMMAND = 'node --import tsx --test tests/smoke/smoke-browser-pane-surface-rerender-stability.test.ts';
+const MAX_MANIFEST_BYTES = 48_000;
 
-test('Browser pane rerenders preserve one host-stream BrowserHostSession owner across right-pane refreshes', () => {
-  const currentObjectUrl = 'blob:http://127.0.0.1/browser-host-current-frame';
-  const phases = [
-    {
-      phase: 'initial',
-      addressDraft: TARGET_URL,
-      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
-      hostSession: hostStreamSession({ frameUrl: currentObjectUrl }),
-    },
-    {
-      phase: 'react-rerender',
-      addressDraft: `${TARGET_URL}`,
-      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
-      hostSession: hostStreamSession({ frameUrl: currentObjectUrl, updatedAt: '2026-06-02T00:00:02.000Z' }),
-    },
-    {
-      phase: 'config-refresh',
-      addressDraft: TARGET_URL,
-      config: configFixture({ workspaceWriterBaseUrl: `${WRITER_URL}/` }),
-      hostSession: hostStreamSession({ frameUrl: currentObjectUrl, updatedAt: '2026-06-02T00:00:03.000Z' }),
-    },
-    {
-      phase: 'focused-object-refresh',
-      addressDraft: TARGET_URL,
-      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
-      hostSession: hostStreamSession({
-        frameUrl: currentObjectUrl,
-        updatedAt: '2026-06-02T00:00:04.000Z',
-        searchResultRef: `browser-host-session:${SESSION_ID}/search-results-v2.json`,
-        diagnostics: ['refs refreshed without remount'],
-      }),
-    },
-    {
-      phase: 'loading-busy',
-      addressDraft: TARGET_URL,
-      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
-      hostSession: hostStreamSession({
-        status: 'loading',
-        frameUrl: currentObjectUrl,
-        updatedAt: '2026-06-02T00:00:05.000Z',
-      }),
-      hostBusy: true,
-    },
-  ];
+type SurfacePhaseTrigger =
+  | 'initial'
+  | 'topbar-address-draft'
+  | 'tab-state'
+  | 'refs-update'
+  | 'diagnostic-expanded'
+  | 'loading-state';
 
+type SurfaceRenderPhase = {
+  phase: string;
+  trigger: SurfacePhaseTrigger;
+  addressDraft: string;
+  config: SciForgeConfig;
+  hostSession: BrowserHostSessionState;
+  hostBusy?: boolean;
+};
+
+type SurfacePhaseEvidence = ReturnType<typeof boundedSurfaceEvidence> & {
+  trigger: SurfacePhaseTrigger;
+  status: 'ready' | 'loading';
+  stabilityKey?: string;
+  stabilityKeyHash?: string;
+  frameTransport?: string;
+  refsRenderedCount: number;
+};
+
+type SurfaceRerenderStabilityManifest = {
+  schemaVersion: typeof STABILITY_SCHEMA;
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-native-surface-rerender-stability' | 'contract-diagnostic-only';
+  passClaim: boolean;
+  runId: string;
+  observedAt: string;
+  refsFirst: true;
+  targetUrlDigest: {
+    length: number;
+    hash: string;
+    rawUrlCaptured: false;
+  };
+  required: {
+    owner: 'BrowserHostSession';
+    liveSurfaceTransport: 'native-embedded';
+    frameTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+    sameSessionId: true;
+    sameLiveSurfaceRef: true;
+    sameNativeSurfaceStabilityKey: true;
+    inferredNativeRemountCount: 0;
+    repeatedFocusRequestsAcrossSameSession: 0;
+  };
+  observed: {
+    owner: 'BrowserHostSession';
+    liveSurfaceTransport: string;
+    frameTransport: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sameSessionId: boolean;
+    sameLiveSurfaceRef: boolean;
+    sameNativeSurfaceStabilityKey: boolean;
+    phaseCount: number;
+    identityChangeCount: number;
+    liveSurfaceRefChangeCount: number;
+    stabilityKeyChangeCount: number;
+    inferredNativeRemountCount: number;
+    realNativeRemountCount: number | null;
+    repeatedFocusRequestsAcrossSameSession: number;
+    realNativeFocusLossCount: number | null;
+    maxHostBrowserObjectsPerPhase: number;
+    maxNativeSurfaceMountsPerPhase: number;
+    blockedReason?: string;
+  };
+  updateCounts: {
+    topbarAddressDraftChanges: number;
+    tabStateChanges: number;
+    refsUpdates: number;
+    diagnosticUpdates: number;
+    loadingStateChanges: number;
+    totalRerenderUpdates: number;
+  };
+  nativeAttach: {
+    state: 'attached' | 'blocked' | 'handoff';
+    observed: 'native-embedded' | 'missing-native-attach';
+    proofRef?: string;
+    canRetry: boolean;
+    handoffRequired: boolean;
+    blockedReason?: string;
+  };
+  contractEvidence: {
+    source: 'react-static-render-contract';
+    sourceGuardRefs: string[];
+    phases: SurfacePhaseEvidence[];
+  };
+  refs: {
+    liveSurfaceRef?: string;
+    surfaceIdentityTraceRef: string;
+    adapterFocusPolicyRef: string;
+  };
+  forbiddenEvidence: {
+    secondViewer: false;
+    legacyStreamSurface: false;
+    frameStreamRef: false;
+    canvasSurface: false;
+    httpFrameImage: false;
+    iframe: false;
+    proxy: false;
+    webview: false;
+    systemPopup: false;
+    rawDom: false;
+    rawLogs: false;
+    base64: false;
+  };
+  verificationCommand: typeof VERIFICATION_COMMAND;
+};
+
+test('Browser pane rerenders preserve one native-embedded BrowserHostSession owner across loading refs diagnostics and topbar changes', () => {
   const busyProjection = rightPaneBrowserProjectionForUrl(TARGET_URL, {
     hostExternalBrowserAvailable: true,
     hostSurface: 'browser-host-session',
     hostBusy: true,
-    hostSession: hostStreamSession({ frameUrl: currentObjectUrl }),
+    hostSession: nativeSession(),
   });
   assert.equal(busyProjection.status, 'loading');
   assert.equal(busyProjection.hostSurface, 'browser-host-session');
 
-  const evidence = phases.map((phase) => {
-    const html = renderBrowserPanePhase(phase);
-    assertStableBrowserHostSurface(html, {
-      phase: phase.phase,
-      sessionId: SESSION_ID,
-      expectedTransport: 'host-stream',
-      expectedFrameTransport: 'websocket-binary',
-      expectedSurface: 'canvas',
-      expectedStatus: phase.hostSession.status === 'loading' ? 'loading' : 'ready',
-    });
-    return boundedSurfaceEvidence(phase.phase, html);
-  });
+  const evidence = nativeSurfaceContractEvidence();
 
   assert.equal(new Set(evidence.map((item) => item.liveSurfaceRef)).size, 1);
+  assert.equal(new Set(evidence.map((item) => item.stabilityKey)).size, 1);
   assert.deepEqual([...new Set(evidence.flatMap((item) => item.sessionIds))], [SESSION_ID]);
   assert.ok(evidence.every((item) => item.secondTruthSource === false));
+  assert.equal(countValueChanges(evidence.map((item) => item.stabilityKey)), 0);
+  assert.equal(countValueChanges(evidence.map((item) => item.liveSurfaceRef)), 0);
+  assert.equal(Math.max(...evidence.map((item) => item.nativeSurfaces)), 1);
   assertRefsOnlyReport(evidence);
-  console.log(`[ok] Browser pane host-stream rerender stability ${JSON.stringify(evidence)}`);
+  console.log(`[ok] Browser pane native rerender stability ${JSON.stringify(evidence)}`);
 });
 
-test('Browser pane rerenders preserve canvas-binary and native surface attrs for the same BrowserHostSession', () => {
-  const canvasPhases = [
+test('Browser pane rejects legacy stream/canvas fixtures while preserving native surface attrs for the same BrowserHostSession', () => {
+  const legacyPhases = [
     {
-      phase: 'canvas-initial',
+      phase: 'legacy-frame-url',
       addressDraft: TARGET_URL,
       config: configFixture(),
-      hostSession: hostStreamSession({ frameUrl: undefined, viewport: { width: 1280, height: 720 } }),
+      hostSession: hostStreamSession({ viewport: { width: 1280, height: 720 } }),
     },
     {
-      phase: 'canvas-focused-object-refresh',
+      phase: 'legacy-frame-stream-only',
       addressDraft: TARGET_URL,
       config: configFixture({ workspaceWriterBaseUrl: `${WRITER_URL}/refresh` }),
       hostSession: hostStreamSession({
@@ -108,7 +180,7 @@ test('Browser pane rerenders preserve canvas-binary and native surface attrs for
       }),
     },
     {
-      phase: 'canvas-loading',
+      phase: 'legacy-loading',
       addressDraft: TARGET_URL,
       config: configFixture(),
       hostSession: hostStreamSession({
@@ -120,19 +192,9 @@ test('Browser pane rerenders preserve canvas-binary and native surface attrs for
       hostBusy: true,
     },
   ];
-  const canvasEvidence = canvasPhases.map((phase) => {
+  const legacyEvidence = legacyPhases.map((phase) => {
     const html = renderBrowserPanePhase(phase);
-    assertStableBrowserHostSurface(html, {
-      phase: phase.phase,
-      sessionId: SESSION_ID,
-      expectedTransport: 'host-stream',
-      expectedFrameTransport: 'websocket-binary',
-      expectedSurface: 'canvas',
-      expectedStatus: phase.hostSession.status === 'loading' ? 'loading' : 'ready',
-    });
-    assert.match(html, /data-browser-frame-renderer="canvas-binary"/);
-    assert.match(html, /data-browser-frame-source="browser-host-session-frame-stream-binary"/);
-    assert.match(html, /data-browser-frame-session-id="surface-rerender-stability"/);
+    assertLegacyBrowserSurfaceRefOnly(html, phase.phase);
     return boundedSurfaceEvidence(phase.phase, html);
   });
 
@@ -164,7 +226,6 @@ test('Browser pane rerenders preserve canvas-binary and native surface attrs for
       sessionId: SESSION_ID,
       expectedTransport: 'native-embedded',
       expectedFrameTransport: 'native-embedded',
-      expectedSurface: 'native',
       expectedStatus: phase.hostSession.status === 'loading' ? 'loading' : 'ready',
     });
     assert.match(html, /data-browser-native-surface="true"/);
@@ -172,29 +233,170 @@ test('Browser pane rerenders preserve canvas-binary and native surface attrs for
     return boundedSurfaceEvidence(phase.phase, html);
   });
 
-  const evidence = [...canvasEvidence, ...nativeEvidence];
-  assert.deepEqual([...new Set(evidence.flatMap((item) => item.sessionIds))], [SESSION_ID]);
+  const evidence = [...legacyEvidence, ...nativeEvidence];
+  assert.deepEqual([...new Set(nativeEvidence.flatMap((item) => item.sessionIds))], [SESSION_ID]);
+  assert.ok(legacyEvidence.every((item) => item.hostBrowserObjects === 0));
+  assert.ok(legacyEvidence.every((item) => item.legacyLiveSurfaceCount === 0));
   assert.ok(evidence.every((item) => item.secondTruthSource === false));
   assertRefsOnlyReport(evidence);
-  console.log(`[ok] Browser pane canvas/native rerender stability ${JSON.stringify(evidence)}`);
+  console.log(`[ok] Browser pane legacy-refusal/native rerender stability ${JSON.stringify(evidence)}`);
 });
 
-test('Browser pane adapter keeps session start attach and object URL revoke guards session-scoped', () => {
+test('Browser pane adapter keeps native session start and attach guards session-scoped', () => {
   const adapterSource = readFileSync(new URL('../../src/ui/src/app/results/browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
 
   assert.match(adapterSource, /const initialHostSession = browserHostSessionForFocusedObjectReference\(focusedObjectReference, session\) as BrowserHostSessionState \| undefined;/);
   assert.match(adapterSource, /useState<BrowserHostSessionState \| undefined>\(\(\) => \{[\s\S]*browserHostSessionMatchesTarget\(initialHostSession, normalizedUrl\)[\s\S]*initialHostSession[\s\S]*cachedRightPaneBrowserHostSession\(hostSessionCacheKey, normalizedUrl\)/);
   assert.match(adapterSource, /setHostSession\(\(current\) => current && current\.id === focusedHostSession\.id && current\.updatedAt === focusedHostSession\.updatedAt \? current : focusedHostSession\)/);
-  assert.match(adapterSource, /if \(browserHostSessionMatchesTarget\(hostSession, normalizedUrl\)\) return;[\s\S]*startBrowserHostSession\(config, \{ url: normalizedUrl, \.\.\.viewportRef\.current \}\)/);
-  assert.match(adapterSource, /frameUrl: hostSession && !browserHostSessionUsesNativeSurface\(hostSession\) && hostFrameObjectSessionRef\.current === hostSession\.id \? hostFrameObjectUrl : undefined/);
-  assert.match(adapterSource, /frameTransport:[\s\S]*hostFrameObjectSessionRef\.current === hostSession\?\.id && hostFrameObjectUrl \? 'websocket-binary' : undefined/);
-  assert.match(adapterSource, /if \(pendingBinaryFrameSessionRef\.current !== sessionId \|\| hostSessionRef\.current\?\.id !== sessionId\) return true;/);
-  assert.match(adapterSource, /const previousObjectUrl = hostFrameObjectUrlRef\.current;[\s\S]*hostFrameObjectUrlRef\.current = objectUrl;[\s\S]*hostFrameObjectSessionRef\.current = sessionId;[\s\S]*setHostFrameObjectUrl\(objectUrl\);[\s\S]*if \(previousObjectUrl && previousObjectUrl !== objectUrl && typeof URL\.revokeObjectURL === 'function'\) URL\.revokeObjectURL\(previousObjectUrl\)/);
+  assert.match(adapterSource, /if \(browserHostSessionMatchesTarget\(hostSession, normalizedUrl\) && browserHostSessionHasUsableLiveSurface\(hostSession\)\) return;/);
+  assert.match(adapterSource, /startBrowserHostSession\(operationConfig, \{ url: normalizedUrl, sessionId: pendingSessionId, \.\.\.viewportRef\.current \}\)/);
+  assert.match(adapterSource, /function browserHostSessionHasUsableLiveSurface\(session: BrowserHostSessionState \| undefined\) \{\s*return browserHostSessionUsesNativeSurface\(session\)[\s\S]*&& session\?\.singleInteractiveTruth === true[\s\S]*&& Boolean\(session\.liveSurfaceRef\);[\s\S]*\}/);
+  assert.match(adapterSource, /frameTransport: browserHostSessionHasUsableLiveSurface\(hostSession\) \? 'native-embedded' : undefined/);
   assert.match(adapterSource, /focus: nativeSurfaceSessionRef\.current !== sessionState\.id/);
   assert.match(adapterSource, /nativeSurfaceSessionRef\.current = sessionState\.id/);
-  assert.match(adapterSource, /}, \[hostSession\?\.id, hostSession\?\.liveSurfaceTransport, hostSession\?\.status, needsBrowserHost\]\);/);
-  assert.doesNotMatch(adapterSource, /window\.open\(|system-browser-window|\/api\/sciforge\/browser\/proxy|<iframe|<webview/);
+  assert.match(adapterSource, /if \(hostError \|\| !needsBrowserHost \|\| !hostSession \|\| !browserHostSessionHasUsableLiveSurface\(hostSession\)/);
+  assert.match(adapterSource, /void attachNativeBrowserSurface\(hostSession\)/);
+  assert.match(adapterSource, /}, \[hostError, hostSession\?\.id, hostSession\?\.liveSurfaceRef, hostSession\?\.liveSurfaceTransport, hostSession\?\.singleInteractiveTruth, hostSession\?\.status, needsBrowserHost\]\);/);
+  assert.doesNotMatch(adapterSource, /browserHostSessionFrameStreamUrl|hostFrameObjectUrl|pendingBinaryFrame|frameRenderer|canvas-binary|websocket-binary|webrtc-data-channel|window\.open\(|system-browser-window|\/api\/sciforge\/browser\/proxy|<iframe|<webview/);
 });
+
+test('Browser pane surface stability manifest stays typed blocked/handoff without real native attach proof', async () => {
+  const evidence = nativeSurfaceContractEvidence();
+  const manifest = buildSurfaceRerenderStabilityManifest(evidence, {
+    state: 'handoff',
+    observed: 'missing-native-attach',
+    canRetry: true,
+    handoffRequired: true,
+    blockedReason: 'Real right-pane native attach/remount/focus dogfood proof is unavailable in this smoke; contract evidence is diagnostic only.',
+  });
+
+  assertSurfaceRerenderStabilityManifest(manifest);
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.claimScope, 'contract-diagnostic-only');
+  assert.equal(manifest.passClaim, false);
+  assert.equal(manifest.nativeAttach.state, 'handoff');
+  assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
+
+  const forgedPassWithoutAttach = {
+    ...manifest,
+    status: 'passed',
+    claimScope: 'right-pane-native-surface-rerender-stability',
+    passClaim: true,
+  } satisfies SurfaceRerenderStabilityManifest;
+  assert.throws(
+    () => assertSurfaceRerenderStabilityManifest(forgedPassWithoutAttach),
+    /attached|real native attach proof/,
+  );
+
+  await mkdir(ARTIFACT_DIR, { recursive: true });
+  await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+});
+
+function nativeSurfaceContractPhases(): SurfaceRenderPhase[] {
+  return [
+    {
+      phase: 'initial',
+      trigger: 'initial',
+      addressDraft: TARGET_URL,
+      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
+      hostSession: nativeSession(),
+    },
+    {
+      phase: 'topbar-address-draft-normalized',
+      trigger: 'topbar-address-draft',
+      addressDraft: TARGET_URL.replace(/^https:\/\//, ''),
+      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
+      hostSession: nativeSession({ updatedAt: '2026-06-02T00:00:02.000Z' }),
+    },
+    {
+      phase: 'tab-state-refresh',
+      trigger: 'tab-state',
+      addressDraft: TARGET_URL,
+      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
+      hostSession: nativeSession({
+        updatedAt: '2026-06-02T00:00:03.000Z',
+        title: 'Surface rerender target tab state',
+        canGoBack: false,
+        canGoForward: true,
+      }),
+    },
+    {
+      phase: 'refs-update',
+      trigger: 'refs-update',
+      addressDraft: TARGET_URL,
+      config: configFixture({ workspaceWriterBaseUrl: `${WRITER_URL}/` }),
+      hostSession: nativeSession({
+        updatedAt: '2026-06-02T00:00:04.000Z',
+        screenshotRef: `browser-host-session:${SESSION_ID}/screenshot-v2.png`,
+        domSnapshotRef: `browser-host-session:${SESSION_ID}/dom-v2.html`,
+        axSnapshotRef: `browser-host-session:${SESSION_ID}/ax-v2.json`,
+        consoleLogRef: `browser-host-session:${SESSION_ID}/console-v2.jsonl`,
+        networkLogRef: `browser-host-session:${SESSION_ID}/network-v2.jsonl`,
+        searchResultRef: `browser-host-session:${SESSION_ID}/search-results-v2.json`,
+      }),
+    },
+    {
+      phase: 'diagnostic-expanded',
+      trigger: 'diagnostic-expanded',
+      addressDraft: TARGET_URL,
+      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
+      hostSession: nativeSession({
+        updatedAt: '2026-06-02T00:00:05.000Z',
+        diagnostics: [
+          'bounded diagnostic expansion keeps the native surface key stable',
+          'refs remain copyable without creating a second viewer',
+        ],
+      }),
+    },
+    {
+      phase: 'loading-state',
+      trigger: 'loading-state',
+      addressDraft: TARGET_URL,
+      config: configFixture({ workspaceWriterBaseUrl: WRITER_URL }),
+      hostSession: nativeSession({
+        status: 'loading',
+        updatedAt: '2026-06-02T00:00:06.000Z',
+        loadingProgress: {
+          schemaVersion: 'sciforge.browser-host-session.loading-progress.lifecycle.v1',
+          state: 'navigation-start',
+          reason: 'navigation-requested',
+          source: 'host-session',
+          status: 'loading',
+          updatedAt: '2026-06-02T00:00:06.000Z',
+          refs: {
+            session: `browser-host-session:${SESSION_ID}`,
+            liveSurface: `browser-host-session:${SESSION_ID}/live-surface`,
+          },
+        },
+      }),
+      hostBusy: true,
+    },
+  ];
+}
+
+function nativeSurfaceContractEvidence(): SurfacePhaseEvidence[] {
+  return nativeSurfaceContractPhases().map((phase) => {
+    const html = renderBrowserPanePhase(phase);
+    assertStableBrowserHostSurface(html, {
+      phase: phase.phase,
+      sessionId: SESSION_ID,
+      expectedTransport: 'native-embedded',
+      expectedFrameTransport: 'native-embedded',
+      expectedStatus: phase.hostSession.status === 'loading' ? 'loading' : 'ready',
+    });
+    const evidence = boundedSurfaceEvidence(phase.phase, html);
+    const stabilityKey = uniqueAttrValues(html, 'data-browser-native-surface-stability-key')[0];
+    return {
+      ...evidence,
+      trigger: phase.trigger,
+      status: phase.hostSession.status === 'loading' ? 'loading' : 'ready',
+      stabilityKey,
+      stabilityKeyHash: stabilityKey ? hashText(stabilityKey) : undefined,
+      frameTransport: uniqueAttrValues(html, 'data-browser-frame-transport')[0],
+      refsRenderedCount: countMatches(html, /data-browser-ref=/g),
+    };
+  });
+}
 
 function renderBrowserPanePhase(phase: {
   phase: string;
@@ -221,14 +423,12 @@ function renderBrowserPanePhase(phase: {
 
 function assertStableBrowserHostSurface(
   html: string,
-  expected: {
+    expected: {
     phase: string;
     sessionId: string;
-    expectedTransport: 'host-stream' | 'native-embedded';
-    expectedFrameTransport: 'websocket-binary' | 'native-embedded';
-    expectedSurface: 'image' | 'canvas' | 'native';
+    expectedTransport: 'native-embedded';
+    expectedFrameTransport: 'native-embedded';
     expectedStatus: 'ready' | 'loading';
-    expectedFrameUrl?: string;
   },
 ) {
   assert.equal(countMatches(html, /data-browser-object-type="host-browser"/g), 1, `${expected.phase}: one host-browser object`);
@@ -236,28 +436,19 @@ function assertStableBrowserHostSurface(
   assert.deepEqual(uniqueAttrValues(html, 'data-browser-live-surface-ref'), [`browser-host-session:${expected.sessionId}/live-surface`], `${expected.phase}: stable live surface ref`);
   assert.deepEqual(uniqueAttrValues(html, 'data-browser-live-surface-transport'), [expected.expectedTransport], `${expected.phase}: stable transport`);
   assert.deepEqual(uniqueAttrValues(html, 'data-browser-single-interactive-truth'), ['true'], `${expected.phase}: single truth attr`);
+  assert.deepEqual(uniqueAttrValues(html, 'data-browser-native-surface-stability-key'), [`${expected.sessionId}:browser-host-session:${expected.sessionId}/live-surface`], `${expected.phase}: stable native surface key`);
   assert.match(html, new RegExp(`data-status="${expected.expectedStatus}"`), `${expected.phase}: status`);
   assert.match(html, new RegExp(`data-browser-state="${expected.expectedStatus}"`), `${expected.phase}: browser state`);
-  assert.doesNotMatch(html, /<iframe|<webview|data-browser-object-type="browser-embedded-frame"|data-browser-state-action="proxy-fallback"|\/api\/sciforge\/browser\/proxy|system-browser-window|data:image|base64/i, `${expected.phase}: no live fallback or raw payload`);
+  assert.doesNotMatch(html, /<iframe|<webview|<canvas|<img\b|data-browser-object-type="browser-embedded-frame"|data-browser-state-action="proxy-fallback"|data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-frame-source|host-stream|websocket-binary|webrtc-data-channel|\/api\/sciforge\/browser\/proxy|system-browser-window|data:image|base64/i, `${expected.phase}: no legacy live fallback or raw payload`);
+  assert.equal(countMatches(html, /data-browser-native-surface="true"/g), 1, `${expected.phase}: one native mount`);
+  assert.deepEqual(uniqueAttrValues(html, 'data-browser-frame-transport'), [expected.expectedFrameTransport], `${expected.phase}: native frame transport`);
+}
 
-  if (expected.expectedSurface === 'image') {
-    assert.equal(countMatches(html, /<img\b/g), 1, `${expected.phase}: one image host stream surface`);
-    assert.equal(countMatches(html, /<canvas\b/g), 0, `${expected.phase}: no canvas fallback`);
-    assert.equal(countMatches(html, /data-browser-native-surface="true"/g), 0, `${expected.phase}: no native fallback`);
-    assert.deepEqual(uniqueAttrValues(html, 'data-browser-frame-transport'), [expected.expectedFrameTransport], `${expected.phase}: frame transport`);
-    assert.match(html, new RegExp(`src="${escapeRegExp(expected.expectedFrameUrl ?? '')}"`), `${expected.phase}: current object URL is retained`);
-  } else if (expected.expectedSurface === 'canvas') {
-    assert.equal(countMatches(html, /<canvas\b/g), 1, `${expected.phase}: one canvas surface`);
-    assert.equal(countMatches(html, /<img\b/g), 0, `${expected.phase}: no object URL image fallback`);
-    assert.equal(countMatches(html, /data-browser-native-surface="true"/g), 0, `${expected.phase}: no native fallback`);
-    assert.deepEqual(uniqueAttrValues(html, 'data-browser-frame-stream-ref'), [`browser-host-session:${expected.sessionId}/frame-stream`], `${expected.phase}: stable stream ref`);
-    assert.deepEqual(uniqueAttrValues(html, 'data-browser-frame-transport'), [expected.expectedFrameTransport], `${expected.phase}: frame transport`);
-  } else {
-    assert.equal(countMatches(html, /data-browser-native-surface="true"/g), 1, `${expected.phase}: one native mount`);
-    assert.equal(countMatches(html, /<img\b/g), 0, `${expected.phase}: no image fallback`);
-    assert.equal(countMatches(html, /<canvas\b/g), 0, `${expected.phase}: no canvas fallback`);
-    assert.deepEqual(uniqueAttrValues(html, 'data-browser-frame-transport'), [expected.expectedFrameTransport], `${expected.phase}: native frame transport`);
-  }
+function assertLegacyBrowserSurfaceRefOnly(html: string, phase: string) {
+  assert.equal(countMatches(html, /data-browser-object-type="host-browser"/g), 0, `${phase}: no legacy host-browser object`);
+  assert.equal(countMatches(html, /data-browser-native-surface="true"/g), 0, `${phase}: no native surface is forged`);
+  assert.match(html, /data-browser-object-type="browser-state"/, `${phase}: legacy projection stays typed state`);
+  assert.doesNotMatch(html, /data-browser-live-surface-ref|data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-frame-source|data-browser-frame-transport="(?:host-stream|websocket-binary|webrtc-data-channel)"|<canvas|<img\b|<iframe|<webview|data:image|base64/i, `${phase}: no legacy live fallback materialized`);
 }
 
 function boundedSurfaceEvidence(phase: string, html: string) {
@@ -277,14 +468,291 @@ function boundedSurfaceEvidence(phase: string, html: string) {
     imageSurfaces: countMatches(html, /<img\b/g),
     canvasSurfaces: countMatches(html, /<canvas\b/g),
     nativeSurfaces: countMatches(html, /data-browser-native-surface="true"/g),
-    secondTruthSource: /<iframe|<webview|data-browser-object-type="browser-embedded-frame"|\/api\/sciforge\/browser\/proxy|system-browser-window/i.test(html),
+    legacyLiveSurfaceCount: countMatches(html, /data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-frame-source|data-browser-frame-transport="(?:host-stream|websocket-binary|webrtc-data-channel)"|<canvas\b|<img\b/g),
+    secondTruthSource: /<iframe|<webview|<canvas\b|<img\b|data-browser-object-type="browser-embedded-frame"|data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-frame-source|data-browser-frame-transport="(?:host-stream|websocket-binary|webrtc-data-channel)"|\/api\/sciforge\/browser\/proxy|system-browser-window/i.test(html),
     rawPayloadsCaptured: /data:image|base64|<\s*(?:!doctype|html|body)\b/i.test(html),
   };
 }
 
+function buildSurfaceRerenderStabilityManifest(
+  phases: SurfacePhaseEvidence[],
+  nativeAttach: SurfaceRerenderStabilityManifest['nativeAttach'],
+): SurfaceRerenderStabilityManifest {
+  const sessionIds = uniqueFlat(phases.flatMap((item) => item.sessionIds));
+  const liveSurfaceRefs = uniqueFlat(phases.map((item) => item.liveSurfaceRef).filter(isNonEmptyString));
+  const stabilityKeys = uniqueFlat(phases.map((item) => item.stabilityKey).filter(isNonEmptyString));
+  const transports = uniqueFlat(phases.map((item) => item.transport).filter(isNonEmptyString));
+  const frameTransports = uniqueFlat(phases.map((item) => item.frameTransport).filter(isNonEmptyString));
+  const sameSessionId = sessionIds.length === 1;
+  const sameLiveSurfaceRef = liveSurfaceRefs.length === 1;
+  const sameNativeSurfaceStabilityKey = stabilityKeys.length === 1;
+  const liveSurfaceRefChangeCount = countValueChanges(phases.map((item) => item.liveSurfaceRef));
+  const stabilityKeyChangeCount = countValueChanges(phases.map((item) => item.stabilityKey));
+  const inferredNativeRemountCount = stabilityKeyChangeCount;
+  const repeatedFocusRequestsAcrossSameSession = sameSessionId ? 0 : Math.max(0, sessionIds.length - 1);
+  const secondTruthSource = phases.some((item) => item.secondTruthSource);
+  const hasForbiddenNativeContractEvidence = phases.some((item) => (
+    item.hostBrowserObjects !== 1
+    || item.nativeSurfaces !== 1
+    || item.legacyLiveSurfaceCount !== 0
+    || item.rawPayloadsCaptured
+    || item.imageSurfaces !== 0
+    || item.canvasSurfaces !== 0
+  ));
+  const contractStable = sameSessionId
+    && sameLiveSurfaceRef
+    && sameNativeSurfaceStabilityKey
+    && liveSurfaceRefChangeCount === 0
+    && inferredNativeRemountCount === 0
+    && repeatedFocusRequestsAcrossSameSession === 0
+    && !secondTruthSource
+    && !hasForbiddenNativeContractEvidence
+    && transports.length === 1
+    && transports[0] === 'native-embedded'
+    && frameTransports.length === 1
+    && frameTransports[0] === 'native-embedded';
+  const canClaimPass = contractStable
+    && nativeAttach.state === 'attached'
+    && nativeAttach.observed === 'native-embedded'
+    && Boolean(nativeAttach.proofRef)
+    && !nativeAttach.handoffRequired;
+  const blockedReason = canClaimPass
+    ? undefined
+    : nativeAttach.blockedReason ?? blockedReasonForSurfaceStability({
+      contractStable,
+      sameSessionId,
+      sameLiveSurfaceRef,
+      sameNativeSurfaceStabilityKey,
+      liveSurfaceRefChangeCount,
+      inferredNativeRemountCount,
+      repeatedFocusRequestsAcrossSameSession,
+      secondTruthSource,
+      transports,
+      frameTransports,
+      hasForbiddenNativeContractEvidence,
+      nativeAttach,
+    });
+
+  return {
+    schemaVersion: STABILITY_SCHEMA,
+    status: canClaimPass ? 'passed' : 'blocked',
+    claimScope: canClaimPass ? 'right-pane-native-surface-rerender-stability' : 'contract-diagnostic-only',
+    passClaim: canClaimPass,
+    runId: `browser-pane-surface-rerender-stability-${hashText(`${Date.now()}:${sessionIds.join(':')}:${nativeAttach.observed}`)}`,
+    observedAt: new Date().toISOString(),
+    refsFirst: true,
+    targetUrlDigest: {
+      length: TARGET_URL.length,
+      hash: hashText(TARGET_URL),
+      rawUrlCaptured: false,
+    },
+    required: {
+      owner: 'BrowserHostSession',
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+      sameSessionId: true,
+      sameLiveSurfaceRef: true,
+      sameNativeSurfaceStabilityKey: true,
+      inferredNativeRemountCount: 0,
+      repeatedFocusRequestsAcrossSameSession: 0,
+    },
+    observed: {
+      owner: 'BrowserHostSession',
+      liveSurfaceTransport: transports[0] ?? 'missing-native-attach',
+      frameTransport: frameTransports[0] ?? 'missing-native-attach',
+      singleInteractiveTruth: phases.every((item) => item.transport === 'native-embedded'),
+      secondTruthSource,
+      sameSessionId,
+      sameLiveSurfaceRef,
+      sameNativeSurfaceStabilityKey,
+      phaseCount: phases.length,
+      identityChangeCount: Math.max(sessionIds.length - 1, 0) + liveSurfaceRefChangeCount + stabilityKeyChangeCount,
+      liveSurfaceRefChangeCount,
+      stabilityKeyChangeCount,
+      inferredNativeRemountCount,
+      realNativeRemountCount: canClaimPass ? 0 : null,
+      repeatedFocusRequestsAcrossSameSession,
+      realNativeFocusLossCount: canClaimPass ? 0 : null,
+      maxHostBrowserObjectsPerPhase: Math.max(...phases.map((item) => item.hostBrowserObjects)),
+      maxNativeSurfaceMountsPerPhase: Math.max(...phases.map((item) => item.nativeSurfaces)),
+      blockedReason,
+    },
+    updateCounts: {
+      topbarAddressDraftChanges: countTriggers(phases, 'topbar-address-draft'),
+      tabStateChanges: countTriggers(phases, 'tab-state'),
+      refsUpdates: countTriggers(phases, 'refs-update'),
+      diagnosticUpdates: countTriggers(phases, 'diagnostic-expanded'),
+      loadingStateChanges: countTriggers(phases, 'loading-state'),
+      totalRerenderUpdates: phases.filter((item) => item.trigger !== 'initial').length,
+    },
+    nativeAttach: {
+      ...nativeAttach,
+      blockedReason,
+    },
+    contractEvidence: {
+      source: 'react-static-render-contract',
+      sourceGuardRefs: [
+        'source:packages/presentation/components/browser-workbench/render.tsx#browserWorkbenchNativeSurfaceStabilityKey',
+        'source:src/ui/src/app/results/browserPaneHostAdapter.tsx#attachNativeBrowserSurface-focus-session-scoped',
+      ],
+      phases,
+    },
+    refs: {
+      liveSurfaceRef: canClaimPass ? liveSurfaceRefs[0] : undefined,
+      surfaceIdentityTraceRef: `browser-host-session:${SESSION_ID}/surface-rerender-stability-trace.json`,
+      adapterFocusPolicyRef: `browser-host-session:${SESSION_ID}/native-attach-focus-policy.json`,
+    },
+    forbiddenEvidence: {
+      secondViewer: false,
+      legacyStreamSurface: false,
+      frameStreamRef: false,
+      canvasSurface: false,
+      httpFrameImage: false,
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+      rawDom: false,
+      rawLogs: false,
+      base64: false,
+    },
+    verificationCommand: VERIFICATION_COMMAND,
+  };
+}
+
+function assertSurfaceRerenderStabilityManifest(manifest: SurfaceRerenderStabilityManifest) {
+  assert.equal(manifest.schemaVersion, STABILITY_SCHEMA);
+  assert.equal(manifest.refsFirst, true);
+  assert.equal(manifest.required.owner, 'BrowserHostSession');
+  assert.equal(manifest.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(manifest.required.frameTransport, 'native-embedded');
+  assert.equal(manifest.required.singleInteractiveTruth, true);
+  assert.equal(manifest.required.secondTruthSource, false);
+  assert.equal(manifest.required.inferredNativeRemountCount, 0);
+  assert.equal(manifest.required.repeatedFocusRequestsAcrossSameSession, 0);
+  assert.equal(manifest.targetUrlDigest.rawUrlCaptured, false);
+  assert.equal(manifest.verificationCommand, VERIFICATION_COMMAND);
+  assert.deepEqual(Object.values(manifest.forbiddenEvidence), Array(Object.values(manifest.forbiddenEvidence).length).fill(false));
+  assert.equal(manifest.updateCounts.topbarAddressDraftChanges, 1);
+  assert.equal(manifest.updateCounts.tabStateChanges, 1);
+  assert.equal(manifest.updateCounts.refsUpdates, 1);
+  assert.equal(manifest.updateCounts.diagnosticUpdates, 1);
+  assert.equal(manifest.updateCounts.loadingStateChanges, 1);
+  assert.equal(manifest.updateCounts.totalRerenderUpdates, 5);
+  assert.equal(manifest.observed.sameSessionId, true);
+  assert.equal(manifest.observed.sameLiveSurfaceRef, true);
+  assert.equal(manifest.observed.sameNativeSurfaceStabilityKey, true);
+  assert.equal(manifest.observed.identityChangeCount, 0);
+  assert.equal(manifest.observed.liveSurfaceRefChangeCount, 0);
+  assert.equal(manifest.observed.stabilityKeyChangeCount, 0);
+  assert.equal(manifest.observed.inferredNativeRemountCount, 0);
+  assert.equal(manifest.observed.repeatedFocusRequestsAcrossSameSession, 0);
+  assert.equal(manifest.observed.maxHostBrowserObjectsPerPhase, 1);
+  assert.equal(manifest.observed.maxNativeSurfaceMountsPerPhase, 1);
+  assert.equal(manifest.contractEvidence.phases.length, 6);
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.transport === 'native-embedded'));
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.frameTransport === 'native-embedded'));
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.hostBrowserObjects === 1));
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.nativeSurfaces === 1));
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.legacyLiveSurfaceCount === 0));
+  assert.ok(manifest.contractEvidence.phases.every((phase) => phase.secondTruthSource === false));
+  if (manifest.status === 'passed') {
+    assert.equal(manifest.claimScope, 'right-pane-native-surface-rerender-stability');
+    assert.equal(manifest.passClaim, true);
+    assert.equal(manifest.nativeAttach.state, 'attached');
+    assert.equal(manifest.nativeAttach.observed, 'native-embedded');
+    assert.ok(manifest.nativeAttach.proofRef, 'passed manifest requires real native attach proof');
+    assert.equal(manifest.nativeAttach.handoffRequired, false);
+    assert.equal(manifest.observed.realNativeRemountCount, 0);
+    assert.equal(manifest.observed.realNativeFocusLossCount, 0);
+    assert.match(manifest.refs.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
+  } else {
+    assert.equal(manifest.claimScope, 'contract-diagnostic-only');
+    assert.equal(manifest.passClaim, false);
+    assert.notEqual(manifest.nativeAttach.state, 'attached');
+    assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
+    assert.equal(manifest.nativeAttach.handoffRequired, true);
+    assert.ok(manifest.observed.blockedReason);
+    assert.equal(manifest.observed.realNativeRemountCount, null);
+    assert.equal(manifest.observed.realNativeFocusLossCount, null);
+    assert.equal(manifest.refs.liveSurfaceRef, undefined);
+  }
+  assertBoundedSurfaceRerenderManifest(manifest);
+}
+
+function blockedReasonForSurfaceStability(input: {
+  contractStable: boolean;
+  sameSessionId: boolean;
+  sameLiveSurfaceRef: boolean;
+  sameNativeSurfaceStabilityKey: boolean;
+  liveSurfaceRefChangeCount: number;
+  inferredNativeRemountCount: number;
+  repeatedFocusRequestsAcrossSameSession: number;
+  secondTruthSource: boolean;
+  transports: string[];
+  frameTransports: string[];
+  hasForbiddenNativeContractEvidence: boolean;
+  nativeAttach: SurfaceRerenderStabilityManifest['nativeAttach'];
+}) {
+  if (input.nativeAttach.state !== 'attached' || input.nativeAttach.observed !== 'native-embedded' || !input.nativeAttach.proofRef) {
+    return 'Surface stability pass requires real native attach proof; current evidence is typed handoff/blocked diagnostic only.';
+  }
+  if (!input.sameSessionId) return 'Surface stability pass requires one BrowserHostSession id across rerender updates.';
+  if (!input.sameLiveSurfaceRef || input.liveSurfaceRefChangeCount > 0) return 'Surface stability pass requires one liveSurfaceRef across rerender updates.';
+  if (!input.sameNativeSurfaceStabilityKey || input.inferredNativeRemountCount > 0) return 'Surface stability pass requires a stable native surface key and zero inferred remounts.';
+  if (input.repeatedFocusRequestsAcrossSameSession > 0) return 'Surface stability pass requires zero repeated focus requests for the same session.';
+  if (input.secondTruthSource || input.hasForbiddenNativeContractEvidence) return 'Surface stability pass forbids second viewers, legacy streams, raw payloads, and fallback surfaces.';
+  if (input.transports.length !== 1 || input.transports[0] !== 'native-embedded') return 'Surface stability pass requires native-embedded live surface transport.';
+  if (input.frameTransports.length !== 1 || input.frameTransports[0] !== 'native-embedded') return 'Surface stability pass requires native-embedded frame transport.';
+  if (!input.contractStable) return 'Surface stability contract evidence is incomplete.';
+  return 'Surface stability pass requires bounded native surface evidence.';
+}
+
+function assertBoundedSurfaceRerenderManifest(manifest: SurfaceRerenderStabilityManifest) {
+  const serialized = JSON.stringify(manifest);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') <= MAX_MANIFEST_BYTES, 'manifest must stay bounded');
+  assert.doesNotMatch(serialized, /<!doctype|<html|<body|<iframe|<webview|<canvas|<img|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)/i);
+  assert.doesNotMatch(serialized, /host-stream|websocket-binary|webrtc-data-channel|\/api\/sciforge\/browser\/proxy|system-browser-window/i);
+  assert.doesNotMatch(serialized, new RegExp(escapeRegExp(TARGET_URL)));
+  assert.doesNotMatch(serialized, /candidate-secret|api[_-]?key|sk-[a-z0-9-]+/i);
+}
+
+function countTriggers(phases: SurfacePhaseEvidence[], trigger: SurfacePhaseTrigger) {
+  return phases.filter((item) => item.trigger === trigger).length;
+}
+
+function countValueChanges(values: Array<string | undefined>) {
+  let count = 0;
+  let previous: string | undefined;
+  for (const value of values) {
+    if (!value) continue;
+    if (previous && previous !== value) count += 1;
+    previous = value;
+  }
+  return count;
+}
+
+function uniqueFlat(values: string[]) {
+  return [...new Set(values)].sort();
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function hashText(value: string) {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function assertRefsOnlyReport(value: unknown) {
   const text = JSON.stringify(value);
-  assert.doesNotMatch(text, /data:image|base64|<\s*(?:!doctype|html|body|iframe|webview)\b|\/api\/sciforge\/browser\/proxy|system-browser-window/i);
+  assert.doesNotMatch(text, /data:image|base64|<\s*(?:!doctype|html|body|iframe|webview|canvas|img)\b|host-stream|websocket-binary|webrtc-data-channel|\/api\/sciforge\/browser\/proxy|system-browser-window/i);
 }
 
 function hostStreamSession(overrides: Partial<BrowserHostSessionState> = {}): BrowserHostSessionState {
@@ -427,8 +895,4 @@ function uniqueAttrValues(html: string, attr: string) {
 
 function countMatches(html: string, pattern: RegExp) {
   return [...html.matchAll(pattern)].length;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

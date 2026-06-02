@@ -28,7 +28,6 @@ export type {
   BrowserWorkbenchCommand,
   BrowserWorkbenchDefaultCommandOptions,
   BrowserWorkbenchEmbedPolicy,
-  BrowserWorkbenchLiveTransportHandoff,
   BrowserWorkbenchPayload,
   BrowserWorkbenchState,
   BrowserWorkbenchStateStatus,

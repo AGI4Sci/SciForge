@@ -29,6 +29,8 @@ import {
   registerVirtualAppScreenNativeExecutor,
   type VirtualAppScreenNativeExecutorOptions,
 } from './virtual-app-screen-native-executor.js';
+import { resetVirtualAppScreenNativeHostSessionStoreForTests } from './virtual-app-screen-native-host-session-store.js';
+import { resetVirtualAppScreenProviderSessionStoreForTests } from './virtual-app-screen-provider-session-store.js';
 import {
   createVirtualAppScreenInputRuntimeProviderExecutor,
   listVirtualAppScreenInputRuntimeExecutors,
@@ -36,6 +38,7 @@ import {
   type VirtualAppScreenInputRuntimeExecutor,
   type VirtualAppScreenInputRuntimeProjection,
   type VirtualAppScreenInputRuntimeProviderExecutorOptions,
+  tryRunVirtualAppScreenInputRuntimeNativeHost,
   virtualAppScreenInputRuntimeBlockedReason,
 } from './virtual-app-screen-input-runtime.js';
 
@@ -579,6 +582,8 @@ export function resetVirtualAppScreenRuntimeExecutorsForTests(): void {
   while (unregisterRuntimeExecutors.length) {
     unregisterRuntimeExecutors.pop()?.();
   }
+  resetVirtualAppScreenProviderSessionStoreForTests();
+  resetVirtualAppScreenNativeHostSessionStoreForTests();
   runtimeExecutorsRegistered = false;
 }
 
@@ -593,6 +598,11 @@ function registerLowPriorityInputRuntimeProviderExecutor(
     execute: async (command) => {
       const preferred = preferredRegisteredInputExecutor(fallback, command.source);
       if (preferred) return preferred.execute(command);
+      const nativeHost = await tryRunVirtualAppScreenInputRuntimeNativeHost(command, {
+        executorId: fallback.executorId,
+        providerId: 'native-virtual-app-screen-host',
+      });
+      if (nativeHost) return nativeHost;
       const result = await fallback.execute(command);
       return result.status === 'executed' ? result : withBootstrapInputBlockedMessage(command, result);
     },

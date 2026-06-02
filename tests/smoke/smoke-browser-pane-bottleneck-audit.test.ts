@@ -38,6 +38,36 @@ const EXPECTED_AFTER_BACKSPACE = INPUT_TEXT.slice(0, -BACKSPACE_COUNT);
 const EXPECTED_FINAL_INPUT = `${EXPECTED_AFTER_BACKSPACE}${RETYPE_SUFFIX}`;
 
 type JsonRecord = Record<string, unknown>;
+type BrowserPaneLiveAcceptance = {
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-live-pass' | 'diagnostic-only';
+  passClaim: boolean;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    frameTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+    sameLiveSurfaceRef: true;
+    rightPaneNativeEvidence: true;
+    legacyFallbackObserved: false;
+  };
+  observed: {
+    shell: 'web-right-pane';
+    liveSurfaceTransport: string;
+    frameTransport?: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sameLiveSurfaceRef: boolean;
+    rightPaneNativeEvidence: boolean;
+    legacyFallbackObserved: boolean;
+  };
+  handoff?: {
+    state: 'needs-native-attach' | 'native-proof-incomplete';
+    canRetry: true;
+    legacyFallbackAllowed: false;
+  };
+  blockedReason?: string;
+};
 type BottleneckCategory =
   | 'input-routing'
   | 'surface-attach'
@@ -45,6 +75,61 @@ type BottleneckCategory =
   | 'state-polling'
   | 'navigation'
   | 'react-rerender';
+const REQUIRED_BOTTLENECK_CATEGORIES: BottleneckCategory[] = [
+  'input-routing',
+  'surface-attach',
+  'frame-capture',
+  'state-polling',
+  'navigation',
+  'react-rerender',
+];
+
+type InteractionCoverageClass =
+  | 'continuous-input'
+  | 'searchbox-caret-selection'
+  | 'long-page-scroll'
+  | 'slider-drag'
+  | 'text-selection-drag'
+  | 'drag-mouse-move'
+  | 'tab-switch-surface-continuity'
+  | 'surface-resize-reload-continuity'
+  | 'navigation-history-reload';
+const REQUIRED_INTERACTION_COVERAGE: InteractionCoverageClass[] = [
+  'continuous-input',
+  'searchbox-caret-selection',
+  'long-page-scroll',
+  'slider-drag',
+  'text-selection-drag',
+  'drag-mouse-move',
+  'tab-switch-surface-continuity',
+  'surface-resize-reload-continuity',
+  'navigation-history-reload',
+];
+
+type CoverageGapSummary = {
+  status: 'complete' | 'blocked';
+  blockedReason?: string;
+  categories: Array<{
+    category: BottleneckCategory;
+    sampleCount: number;
+    covered: boolean;
+  }>;
+  interactions: Array<{
+    class: InteractionCoverageClass;
+    covered: boolean;
+    evidenceCount: number;
+  }>;
+  nativeEvidence: {
+    liveSurfaceTransport: string;
+    frameTransport?: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sameLiveSurfaceRef: boolean;
+    rightPaneNativeEvidence: boolean;
+    legacyFallbackObserved: boolean;
+  };
+};
+type NativeRightPaneEvidence = CoverageGapSummary['nativeEvidence'];
 
 type AuditFixtureEvent = {
   type: string;
@@ -136,9 +221,12 @@ type RightPaneBoundedEvidence = {
   attachChanges: number;
   detachChanges: number;
   maxHostFrames: number;
+  maxNativeSurfaces: number;
   sessionIds: string[];
   liveSurfaceRefs: string[];
   frameStreamRefs: string[];
+  liveSurfaceTransports: string[];
+  frameTransports: string[];
   renderers: string[];
   browserStates: string[];
   iframeSurfaces: number;
@@ -158,6 +246,10 @@ type BrowserPaneBottleneckAuditManifest = {
     mode: 'resolver-fixture' | 'blocked';
     hostRef: string;
     originRef: string;
+    requestedUrlLength?: number;
+    requestedUrlHash?: string;
+    finalUrlLength?: number;
+    finalUrlHash?: string;
     resolverRuleApplied: boolean;
     realExternalSiteClaim: false;
     hardcodedSitePassClaim: false;
@@ -166,17 +258,7 @@ type BrowserPaneBottleneckAuditManifest = {
   };
   blockedReason?: string;
   interactionCoverage: {
-    classes: Array<
-      | 'continuous-input'
-      | 'searchbox-caret-selection'
-      | 'long-page-scroll'
-      | 'slider-drag'
-      | 'text-selection-drag'
-      | 'drag-mouse-move'
-      | 'tab-switch-surface-continuity'
-      | 'surface-resize-reload-continuity'
-      | 'navigation-history-reload'
-    >;
+    classes: InteractionCoverageClass[];
     eventTypes: string[];
     eventPaths: string[];
     input: {
@@ -234,8 +316,10 @@ type BrowserPaneBottleneckAuditManifest = {
     owner: string;
     status: string;
     transport?: string;
+    liveSurfaceTransport?: string;
     frameTransport?: string;
     singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
     liveSurfaceRef?: string;
     refs: {
       frameStreamRef?: string;
@@ -247,6 +331,8 @@ type BrowserPaneBottleneckAuditManifest = {
       networkLogRef?: string;
     };
   };
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  coverageGaps: CoverageGapSummary;
   bottleneckRanking: BottleneckRankingEntry[];
   timingSummary: TimingSummary;
   boundedMetrics: {
@@ -278,10 +364,13 @@ type RightPaneAuditObserverState = {
   attachChanges: number;
   detachChanges: number;
   maxHostFrames: number;
+  maxNativeSurfaces: number;
   lastHostFrameSignature: string;
   sessionIds: string[];
   liveSurfaceRefs: string[];
   frameStreamRefs: string[];
+  liveSurfaceTransports: string[];
+  frameTransports: string[];
   renderers: string[];
   browserStates: string[];
   iframeSurfaces: number;
@@ -313,8 +402,13 @@ declare global {
 test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real right-pane interactions', { timeout: 180_000 }, async () => {
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
   if (!existsSync(browserExecutable)) {
-    await writeBlockedBottleneckManifest(`missing-browser-executable:${hashText(browserExecutable)}`);
-    throw new Error(`Browser pane bottleneck audit blocked: no browser executable found; wrote ${MANIFEST_PATH}`);
+    const blockedReason = `missing-browser-executable:${hashText(browserExecutable)}`;
+    await writeBlockedBottleneckManifest(blockedReason);
+    console.log(`[blocked] Browser pane bottleneck audit ${JSON.stringify({
+      reason: blockedReason,
+      manifestPath: 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json',
+    })}`);
+    return;
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-browser-pane-bottleneck-audit-'));
@@ -326,10 +420,17 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
   const writerUrl = `http://127.0.0.1:${writerPort}`;
   const uiUrl = `http://127.0.0.1:${uiPort}`;
   const fixtureOrigin = `http://${FIXTURE_HOST}:${fixturePort}`;
+  const targetUrl = `${fixtureOrigin}/audit`;
   const runId = `browser-pane-bottleneck-audit-${Date.now().toString(36)}`;
   const children: ChildProcess[] = [];
   let browser: Browser | undefined;
+  let page: Page = undefined as unknown as Page;
   let fixture: Awaited<ReturnType<typeof startBottleneckFixture>> | undefined;
+  const metrics = new BottleneckMetrics();
+  let networkRecorder: ReturnType<typeof recordBrowserHostNetwork> = undefined as unknown as ReturnType<typeof recordBrowserHostNetwork>;
+  let frameStream: ReturnType<typeof recordFrameStreamStats> = undefined as unknown as ReturnType<typeof recordFrameStreamStats>;
+  const surfaceCheckpoints: SurfaceContinuityCheckpoint[] = [];
+  let latestSession: JsonRecord = {};
 
   await mkdir(workspacePath);
   await writeFile(configPath, JSON.stringify({
@@ -370,35 +471,38 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
 
     browser = await chromium.launch({ executablePath: browserExecutable, headless: true });
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
-    const page = await context.newPage();
-    const metrics = new BottleneckMetrics();
-    const networkRecorder = recordBrowserHostNetwork(page, metrics);
-    const frameStream = recordFrameStreamStats(page, metrics);
-    const surfaceCheckpoints: SurfaceContinuityCheckpoint[] = [];
+    const activePage = await context.newPage();
+    page = activePage;
+    networkRecorder = recordBrowserHostNetwork(activePage, metrics);
+    frameStream = recordFrameStreamStats(activePage, metrics);
+    if (!networkRecorder || !frameStream) {
+      throw new Error('Browser pane bottleneck audit failed to initialize browser instrumentation.');
+    }
 
-    await page.goto(uiUrl, { waitUntil: 'domcontentloaded' });
-    await page.locator('.results-panel').waitFor({ state: 'visible', timeout: 30_000 });
+    await activePage.goto(uiUrl, { waitUntil: 'domcontentloaded' });
+    await activePage.locator('.results-panel').waitFor({ state: 'visible', timeout: 30_000 });
 
-    await ensureBrowserPane(page);
-    await installRightPaneObserver(page);
-    const surface = page.locator('.right-pane-browser-surface');
+    await ensureBrowserPane(activePage);
+    await installRightPaneObserver(activePage);
+    const surface = activePage.locator('.right-pane-browser-surface');
 
-    await openBrowserPaneUrl(surface, `${fixtureOrigin}/audit`);
+    await openBrowserPaneUrl(surface, targetUrl);
     await metrics.measure('surface-attach', 'open-audit-surface-ready', async () => {
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
     });
     let host = await waitForKeyboardHostFrame(surface, 'initial-audit-frame', metrics);
-    const openedSession = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-open');
+    const openedSession = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'state-after-open');
+    latestSession = openedSession;
     assert.ok(stringField(openedSession.id), 'opened BrowserHostSession should expose an id');
 
     await metrics.measure('input-routing', 'focus-audit-input-through-host-frame', async () => {
-      await clickHostPoint(page, host.visualFrame, 148, 72);
+      await clickHostPoint(activePage, host.visualFrame, 148, 72);
       await waitForFixtureEvent(fixtureServer.url, (event) => event.type === 'audit-focus', 15_000, 'audit input focus');
     });
-    await waitForReactRerenderQuiet(page, metrics, 'after-focus');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-focus');
 
     await metrics.measure('input-routing', 'continuous-input-insert-text', async () => {
-      await page.keyboard.insertText(INPUT_TEXT);
+      await activePage.keyboard.insertText(INPUT_TEXT);
       await waitForFixtureEvent(
         fixtureServer.url,
         (event) => event.type === 'audit-input' && event.valueLength === INPUT_TEXT.length && event.valueHash === hashText(INPUT_TEXT),
@@ -408,7 +512,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     });
     await metrics.measure('input-routing', 'continuous-input-edit-retype-and-caret-selection', async () => {
       for (let index = 0; index < BACKSPACE_COUNT; index += 1) {
-        await page.keyboard.press('Backspace');
+        await activePage.keyboard.press('Backspace');
       }
       await waitForFixtureEvent(
         fixtureServer.url,
@@ -416,15 +520,15 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
         30_000,
         'backspace input update',
       );
-      await page.keyboard.insertText(RETYPE_SUFFIX);
+      await activePage.keyboard.insertText(RETYPE_SUFFIX);
       await waitForFixtureEvent(
         fixtureServer.url,
         (event) => event.type === 'audit-input' && event.valueLength === EXPECTED_FINAL_INPUT.length && event.valueHash === hashText(EXPECTED_FINAL_INPUT),
         30_000,
         'final retyped input update',
       );
-      await page.keyboard.press('Shift+ArrowLeft');
-      await page.keyboard.press('Shift+ArrowLeft');
+      await activePage.keyboard.press('Shift+ArrowLeft');
+      await activePage.keyboard.press('Shift+ArrowLeft');
       await waitForFixtureEvent(
         fixtureServer.url,
         (event) => event.type === 'audit-selection' && event.selectionLength === 2,
@@ -433,10 +537,10 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       );
     });
     await waitForFrameCaptureReady(surface, 'after-continuous-input', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-continuous-input');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-continuous-input');
 
     await metrics.measure('input-routing', 'slider-drag-route', async () => {
-      await dragHostPoints(page, host.visualFrame, [
+      await dragHostPoints(activePage, host.visualFrame, [
         { x: 120, y: 190 },
         { x: 220, y: 190 },
         { x: 330, y: 190 },
@@ -450,10 +554,10 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       );
     });
     await waitForFrameCaptureReady(surface, 'after-slider-drag', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-slider-drag');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-slider-drag');
 
     await metrics.measure('input-routing', 'text-selection-drag-route', async () => {
-      await dragHostPoints(page, host.visualFrame, [
+      await dragHostPoints(activePage, host.visualFrame, [
         { x: 118, y: 231 },
         { x: 178, y: 231 },
         { x: 250, y: 231 },
@@ -467,11 +571,11 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       );
     });
     await waitForFrameCaptureReady(surface, 'after-text-selection-drag', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-text-selection-drag');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-text-selection-drag');
 
     await metrics.measure('input-routing', 'long-page-wheel-scroll-route', async () => {
       await host.visualFrame.hover();
-      await page.mouse.wheel(0, 1600);
+      await activePage.mouse.wheel(0, 1600);
       await waitForFixtureEvent(
         fixtureServer.url,
         (event) => event.type === 'audit-scroll' && (event.maxScrollY ?? 0) >= 900,
@@ -480,89 +584,95 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       );
     });
     await waitForFrameCaptureReady(surface, 'after-long-scroll', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-long-scroll');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-long-scroll');
 
     await metrics.measure('input-routing', 'drag-and-continuous-mouse-move-route', async () => {
-      await dragHostPoints(page, host.visualFrame, [
+      await dragHostPoints(activePage, host.visualFrame, [
         { x: 80, y: 100 },
         { x: 120, y: 114 },
         { x: 160, y: 128 },
         { x: 210, y: 142 },
       ]);
-      await networkRecorder.waitForAction('cursor', 10_000, 'drag mouse cursor BrowserHostSession ACK');
-      await networkRecorder.waitForAction('mouse-up', 10_000, 'drag mouse-up BrowserHostSession ACK');
+      await networkRecorder!.waitForAction('cursor', 10_000, 'drag mouse cursor BrowserHostSession ACK');
+      await networkRecorder!.waitForAction('mouse-up', 10_000, 'drag mouse-up BrowserHostSession ACK');
     });
     await waitForFrameCaptureReady(surface, 'after-drag-route', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-drag-route');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-drag-route');
 
-    const sessionBeforeResize = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-before-resize');
+    const sessionBeforeResize = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'state-before-resize');
+    latestSession = sessionBeforeResize;
     const liveSurfaceBeforeResize = stringField(sessionBeforeResize.liveSurfaceRef);
-    surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionBeforeResize, 'before-resize'));
+    surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(activePage, surface, sessionBeforeResize, 'before-resize'));
     await metrics.measure('surface-attach', 'right-pane-resize-keeps-session-surface', async () => {
-      await page.setViewportSize({ width: 1180, height: 900 });
+      await activePage.setViewportSize({ width: 1180, height: 900 });
       await waitForWorkbenchAttachedUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
       await waitForFrameCaptureReady(surface, 'after-right-pane-resize', metrics);
-      const sessionAfterResize = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-resize');
+      const sessionAfterResize = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'state-after-resize');
+      latestSession = sessionAfterResize;
       assert.equal(stringField(sessionAfterResize.id), stringField(sessionBeforeResize.id), 'resize must keep the BrowserHostSession owner');
       assert.equal(stringField(sessionAfterResize.liveSurfaceRef), liveSurfaceBeforeResize, 'resize must keep the same live surface ref');
-      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterResize, 'after-resize'));
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(activePage, surface, sessionAfterResize, 'after-resize'));
     });
 
     await metrics.measure('surface-attach', 'right-pane-tab-switch-keeps-session-surface', async () => {
-      await activateRightPaneTab(page, 'Results');
-      await activateRightPaneTab(page, 'Browser');
-      await page.getByTestId('right-pane-browser-tool').waitFor({ state: 'visible', timeout: 20_000 });
+      await activateRightPaneTab(activePage, 'Results');
+      await activateRightPaneTab(activePage, 'Browser');
+      await activePage.getByTestId('right-pane-browser-tool').waitFor({ state: 'visible', timeout: 20_000 });
       await waitForWorkbenchAttachedUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
       host = await waitForKeyboardHostFrame(surface, 'after-right-pane-tab-return', metrics);
-      const sessionAfterTabReturn = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-tab-return');
+      const sessionAfterTabReturn = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'state-after-tab-return');
+      latestSession = sessionAfterTabReturn;
       assert.equal(stringField(sessionAfterTabReturn.id), stringField(sessionBeforeResize.id), 'tab switch must keep the BrowserHostSession owner');
       assert.equal(stringField(sessionAfterTabReturn.liveSurfaceRef), liveSurfaceBeforeResize, 'tab switch must keep the same live surface ref');
-      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterTabReturn, 'after-tab-return'));
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(activePage, surface, sessionAfterTabReturn, 'after-tab-return'));
     });
 
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/details`);
     await metrics.measure('navigation', 'address-navigation-details', async () => {
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/details`));
-      await waitForSessionUrl(page, writerUrl, workspacePath, /\/details$/, metrics, 'state-details-url');
+      await waitForSessionUrl(activePage, writerUrl, workspacePath, /\/details$/, metrics, 'state-details-url');
       await waitForFixtureEvent(fixtureServer.url, (event) => event.type === 'page-load' && event.path === '/details', 30_000, 'details page load');
     });
     host = await waitForKeyboardHostFrame(surface, 'details-frame', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-details-navigation');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-details-navigation');
 
     await metrics.measure('navigation', 'toolbar-back-to-audit', async () => {
       await clickBrowserCommand(surface, 'Back');
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
-      await waitForSessionAction(page, writerUrl, workspacePath, 'back', metrics, 'state-after-back');
+      await waitForSessionAction(activePage, writerUrl, workspacePath, 'back', metrics, 'state-after-back');
     });
     await metrics.measure('navigation', 'toolbar-forward-to-details', async () => {
       await clickBrowserCommand(surface, 'Forward');
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/details`));
-      await waitForSessionAction(page, writerUrl, workspacePath, 'forward', metrics, 'state-after-forward');
+      await waitForSessionAction(activePage, writerUrl, workspacePath, 'forward', metrics, 'state-after-forward');
     });
     await metrics.measure('navigation', 'toolbar-reload-details', async () => {
       await clickBrowserCommand(surface, 'Reload');
-      await waitForSessionAction(page, writerUrl, workspacePath, 'reload', metrics, 'state-after-reload');
+      await waitForSessionAction(activePage, writerUrl, workspacePath, 'reload', metrics, 'state-after-reload');
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/details`));
-      const sessionAfterReload = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-reload-live-surface');
+      const sessionAfterReload = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'state-after-reload-live-surface');
+      latestSession = sessionAfterReload;
       assert.equal(stringField(sessionAfterReload.liveSurfaceRef), liveSurfaceBeforeResize, 'reload must keep the same live surface ref');
-      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterReload, 'after-reload'));
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(activePage, surface, sessionAfterReload, 'after-reload'));
     });
     await waitForFrameCaptureReady(surface, 'after-history-and-reload', metrics);
-    await waitForReactRerenderQuiet(page, metrics, 'after-history-and-reload');
+    await waitForReactRerenderQuiet(activePage, metrics, 'after-history-and-reload');
 
-    await networkRecorder.drain();
-    const finalSession = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'final-state');
+    await networkRecorder!.drain();
+    const finalSession = await currentBrowserHostSession(activePage, writerUrl, workspacePath, metrics, 'final-state');
+    latestSession = finalSession;
     assert.ok(stringField(finalSession.id), 'final BrowserHostSession should expose an id');
 
     const events = await fetchFixtureEvents(fixtureServer.url);
     const manifest = buildManifest({
       runId,
       fixtureOrigin,
+      targetUrl,
       session: finalSession,
       events,
       metrics: metrics.samples,
-      networkSamples: networkRecorder.samples,
-      frameStream: frameStream.stats,
+      networkSamples: networkRecorder!.samples,
+      frameStream: frameStream!.stats,
       rightPane: await collectRightPaneEvidence(page),
       surfaceCheckpoints,
     });
@@ -576,8 +686,31 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       manifestPath: 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json',
     })}`);
   } catch (error) {
-    await writeBlockedBottleneckManifest(`run-blocked:${hashText(error instanceof Error ? error.message : String(error))}`);
-    throw error;
+    const blockedReason = `run-blocked:${hashText(error instanceof Error ? error.message : String(error))}`;
+    await networkRecorder?.drain().catch(() => undefined);
+    const rightPane = page
+      ? await collectRightPaneEvidence(page).catch(() => emptyRightPaneEvidence())
+      : emptyRightPaneEvidence();
+    const events = fixture
+      ? await fetchFixtureEvents(fixture.url).catch(() => [])
+      : [];
+    await writeBlockedBottleneckManifest(blockedReason, {
+      runId,
+      targetUrl,
+      targetOrigin: fixtureOrigin,
+      resolverRuleApplied: Boolean(fixture),
+      session: latestSession,
+      events,
+      metrics: metrics.samples,
+      networkSamples: networkRecorder?.samples ?? [],
+      frameStream: frameStream?.stats ?? emptyFrameStreamStats(),
+      rightPane,
+      surfaceCheckpoints,
+    });
+    console.log(`[blocked] Browser pane bottleneck audit ${JSON.stringify({
+      reason: blockedReason,
+      manifestPath: 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json',
+    })}`);
   } finally {
     await browser?.close().catch(() => undefined);
     for (const child of children.reverse()) await stopProcess(child);
@@ -606,21 +739,25 @@ class BottleneckMetrics {
     });
   }
 
-  ranking(): BottleneckRankingEntry[] {
+  ranking(requiredCategories: BottleneckCategory[] = REQUIRED_BOTTLENECK_CATEGORIES): BottleneckRankingEntry[] {
     const groups = new Map<BottleneckCategory, MetricSample[]>();
     for (const sample of this.samples) {
       groups.set(sample.category, [...(groups.get(sample.category) ?? []), sample]);
     }
+    for (const category of requiredCategories) {
+      if (!groups.has(category)) groups.set(category, []);
+    }
     return [...groups.entries()]
       .map(([category, samples]) => {
         const durations = samples.map((sample) => sample.durationMs).sort((left, right) => left - right);
+        const maxMs = durations[durations.length - 1] ?? 0;
         return {
           rank: 0,
           category,
           sampleCount: samples.length,
           p50Ms: percentile(durations, 0.5),
           p95Ms: percentile(durations, 0.95),
-          maxMs: durations[durations.length - 1] ?? 0,
+          maxMs,
           sampleLabels: boundedUnique(samples.map((sample) => sample.label), 8),
         };
       })
@@ -659,28 +796,22 @@ async function openBrowserPaneUrl(surface: Locator, url: string) {
 }
 
 async function waitForKeyboardHostFrame(surface: Locator, label: string, metrics: BottleneckMetrics) {
-  const frame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
+  const frame = surface.locator('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]').first();
   await frame.waitFor({ state: 'visible', timeout: 30_000 });
-  assert.equal(await frame.getAttribute('data-browser-host-keyboard-path'), 'hidden-input');
-  const hiddenInput = frame.locator('.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]').first();
-  assert.ok(await hiddenInput.count(), 'BrowserHostSession host frame must include hidden keyboard input');
-  let visualFrame = frame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await visualFrame.count()) {
-    visualFrame = frame.locator('img[data-browser-host-surface="browser-host-session"]').first();
-  }
-  await visualFrame.waitFor({ state: 'visible', timeout: 30_000 });
+  assert.equal(await frame.getAttribute('data-browser-host-surface'), 'browser-host-session');
+  assert.equal(await frame.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.match(await frame.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   await waitForFrameCaptureReady(surface, label, metrics);
-  assert.equal(await visualFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
-  return { frame, visualFrame };
+  return { frame, visualFrame: frame };
 }
 
 async function waitForFrameCaptureReady(surface: Locator, label: string, metrics: BottleneckMetrics) {
   await metrics.measure('frame-capture', label, async () => {
     await surface.page().waitForFunction(() => {
-      const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-      if (canvas instanceof HTMLCanvasElement) return canvas.width > 0 && canvas.height > 0;
-      const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-      return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+      const root = document.querySelector('.right-pane-browser-surface');
+      const nativeSurface = root?.querySelector<HTMLElement>('[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]');
+      const liveSurfaceRef = nativeSurface?.getAttribute('data-browser-live-surface-ref') ?? '';
+      return liveSurfaceRef.startsWith('browser-host-session:');
     }, undefined, { timeout: 30_000 });
   });
 }
@@ -826,10 +957,13 @@ async function installRightPaneObserver(page: Page) {
       attachChanges: 0,
       detachChanges: 0,
       maxHostFrames: 0,
+      maxNativeSurfaces: 0,
       lastHostFrameSignature: '',
       sessionIds: [],
       liveSurfaceRefs: [],
       frameStreamRefs: [],
+      liveSurfaceTransports: [],
+      frameTransports: [],
       renderers: [],
       browserStates: [],
       iframeSurfaces: 0,
@@ -843,6 +977,7 @@ async function installRightPaneObserver(page: Page) {
       const currentSurface = document.querySelector('.right-pane-browser-surface');
       if (!currentSurface) return;
       const frames = Array.from(currentSurface.querySelectorAll('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]'));
+      const nativeFrames = Array.from(currentSurface.querySelectorAll('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"]'));
       const liveRefs = [];
       for (const frame of frames) {
         const liveRef = frame.getAttribute('data-browser-live-surface-ref') || '';
@@ -853,6 +988,7 @@ async function installRightPaneObserver(page: Page) {
       if (!signature && state.lastHostFrameSignature) state.detachChanges += 1;
       state.lastHostFrameSignature = signature;
       state.maxHostFrames = Math.max(state.maxHostFrames, frames.length);
+      state.maxNativeSurfaces = Math.max(state.maxNativeSurfaces, nativeFrames.length);
       for (const frame of frames) {
         const liveRef = frame.getAttribute('data-browser-live-surface-ref') || '';
         let sessionId = '';
@@ -864,6 +1000,8 @@ async function installRightPaneObserver(page: Page) {
         pushUnique(state.sessionIds, sessionId);
         pushUnique(state.liveSurfaceRefs, liveRef);
         pushUnique(state.frameStreamRefs, frame.getAttribute('data-browser-frame-stream-ref') || '');
+        pushUnique(state.liveSurfaceTransports, frame.getAttribute('data-browser-live-surface-transport') || '');
+        pushUnique(state.frameTransports, frame.getAttribute('data-browser-frame-transport') || '');
         pushUnique(state.renderers, frame.getAttribute('data-browser-frame-renderer') || 'image-blob');
       }
       const viewer = currentSurface.querySelector('.browser-workbench-viewer');
@@ -883,7 +1021,9 @@ async function installRightPaneObserver(page: Page) {
       attributes: true,
       attributeFilter: [
         'data-browser-live-surface-ref',
+        'data-browser-live-surface-transport',
         'data-browser-frame-stream-ref',
+        'data-browser-frame-transport',
         'data-browser-frame-renderer',
         'data-browser-state',
         'src',
@@ -907,9 +1047,12 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
         attachChanges: 0,
         detachChanges: 0,
         maxHostFrames: 0,
+        maxNativeSurfaces: 0,
         sessionIds: [],
         liveSurfaceRefs: [],
         frameStreamRefs: [],
+        liveSurfaceTransports: [],
+        frameTransports: [],
         renderers: [],
         browserStates: [],
         iframeSurfaces: 0,
@@ -922,9 +1065,12 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
       attachChanges: state.attachChanges,
       detachChanges: state.detachChanges,
       maxHostFrames: state.maxHostFrames,
+      maxNativeSurfaces: state.maxNativeSurfaces,
       sessionIds: state.sessionIds,
       liveSurfaceRefs: state.liveSurfaceRefs,
       frameStreamRefs: state.frameStreamRefs,
+      liveSurfaceTransports: state.liveSurfaceTransports,
+      frameTransports: state.frameTransports,
       renderers: state.renderers,
       browserStates: state.browserStates,
       iframeSurfaces: state.iframeSurfaces,
@@ -951,7 +1097,7 @@ async function collectSurfaceContinuityCheckpoint(
       hostFrameCount: frames.length,
       liveSurfaceRef: firstFrame?.getAttribute('data-browser-live-surface-ref') || '',
       frameStreamRef: firstFrame?.getAttribute('data-browser-frame-stream-ref') || '',
-      hiddenKeyboardPath: firstFrame?.getAttribute('data-browser-host-keyboard-path') || '',
+      hiddenKeyboardPath: firstFrame?.getAttribute('data-browser-live-surface-transport') || '',
       browserState: viewer?.getAttribute('data-browser-state') || '',
     };
   });
@@ -1098,15 +1244,22 @@ function buildTimingSummary(
   samples: MetricSample[],
   networkSamples: BrowserHostNetworkSample[],
   frameStream: FrameStreamStats,
+  requiredCategories: BottleneckCategory[] = REQUIRED_BOTTLENECK_CATEGORIES,
 ): TimingSummary {
   const groups = new Map<BottleneckCategory, MetricSample[]>();
   for (const sample of samples) {
     groups.set(sample.category, [...(groups.get(sample.category) ?? []), sample]);
   }
+  for (const category of requiredCategories) {
+    if (!groups.has(category)) groups.set(category, []);
+  }
   const categories = [...groups.entries()]
     .map(([category, categorySamples]) => {
       const durations = categorySamples.map((sample) => sample.durationMs).sort((left, right) => left - right);
-      const slowest = categorySamples.reduce((current, next) => next.durationMs > current.durationMs ? next : current, categorySamples[0]);
+      const slowest = categorySamples.reduce<MetricSample | undefined>((current, next) => {
+        if (!current || next.durationMs > current.durationMs) return next;
+        return current;
+      }, undefined);
       return {
         category,
         sampleCount: categorySamples.length,
@@ -1157,9 +1310,100 @@ function sameCheckpointField<K extends keyof SurfaceContinuityCheckpoint>(
   return Boolean(before && after && before[field] && before[field] === after[field]);
 }
 
+function nativeRightPaneEvidence(
+  session: JsonRecord,
+  rightPane: RightPaneBoundedEvidence,
+  surfaceCheckpoints: SurfaceContinuityCheckpoint[],
+  frameTransport?: string,
+): NativeRightPaneEvidence {
+  const liveSurfaceRef = stringField(session.liveSurfaceRef);
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport)
+    || rightPane.liveSurfaceTransports.find((transport) => transport === 'native-embedded')
+    || 'missing-native-attach';
+  const observedFrameTransport = frameTransport
+    || rightPane.frameTransports.find((transport) => transport === 'native-embedded')
+    || rightPane.frameTransports[0]
+    || undefined;
+  const checkpointRefs = surfaceCheckpoints.map((checkpoint) => checkpoint.liveSurfaceRef).filter(Boolean);
+  const sameCheckpointRef = checkpointRefs.length >= 4
+    && new Set(checkpointRefs).size === 1
+    && checkpointRefs[0] === liveSurfaceRef;
+  const sessionRefObserved = Boolean(liveSurfaceRef) && rightPane.liveSurfaceRefs.includes(liveSurfaceRef);
+  const legacyFallbackObserved = rightPane.iframeSurfaces > 0
+    || rightPane.proxySurfaces > 0
+    || rightPane.dataImageSurfaces > 0
+    || rightPane.frameStreamRefs.length > 0
+    || rightPane.liveSurfaceTransports.some(isLegacyLiveTransport)
+    || rightPane.frameTransports.some(isLegacyLiveTransport);
+  const rightPaneNativeEvidence = rightPane.maxHostFrames === 1
+    && rightPane.maxNativeSurfaces === 1
+    && sessionRefObserved
+    && rightPane.liveSurfaceTransports.includes('native-embedded')
+    && (rightPane.frameTransports.includes('native-embedded') || observedFrameTransport === 'native-embedded')
+    && !legacyFallbackObserved;
+  return {
+    liveSurfaceTransport,
+    frameTransport: observedFrameTransport,
+    singleInteractiveTruth: session.singleInteractiveTruth === true,
+    secondTruthSource: session.secondTruthSource === true,
+    sameLiveSurfaceRef: sameCheckpointRef && sessionRefObserved,
+    rightPaneNativeEvidence,
+    legacyFallbackObserved,
+  };
+}
+
+function isLegacyLiveTransport(value: string): boolean {
+  return Boolean(value && value !== 'native-embedded');
+}
+
+function buildCoverageGaps(
+  blockedReason: string | undefined,
+  samples: MetricSample[],
+  events: AuditFixtureEvent[],
+  networkSamples: BrowserHostNetworkSample[],
+  surfaceCheckpoints: SurfaceContinuityCheckpoint[],
+  nativeEvidence: NativeRightPaneEvidence,
+): CoverageGapSummary {
+  const sampleCounts = new Map<BottleneckCategory, number>();
+  for (const sample of samples) sampleCounts.set(sample.category, (sampleCounts.get(sample.category) ?? 0) + 1);
+  const inputEvents = events.filter((event) => event.type === 'audit-input');
+  const selectionEvents = events.filter((event) => event.type === 'audit-selection');
+  const scrollEvents = events.filter((event) => event.type === 'audit-scroll');
+  const sliderEvents = events.filter((event) => event.type === 'audit-slider-input');
+  const textSelectionEvents = events.filter((event) => event.type === 'audit-text-selection');
+  const dragMoveEvents = events.filter((event) => event.type === 'audit-pointer-move');
+  const dragRouteEvents = networkSamples.filter((sample) => sample.endpoint === 'computer-use-action' && ['cursor', 'mouse-move', 'mouse-up'].includes(sample.action ?? ''));
+  const checkpointLabels = new Set(surfaceCheckpoints.map((checkpoint) => checkpoint.label));
+  const interactionCounts: Record<InteractionCoverageClass, number> = {
+    'continuous-input': inputEvents.length,
+    'searchbox-caret-selection': selectionEvents.length,
+    'long-page-scroll': scrollEvents.filter((event) => (event.maxScrollY ?? 0) > 0).length,
+    'slider-drag': sliderEvents.length,
+    'text-selection-drag': textSelectionEvents.length,
+    'drag-mouse-move': dragMoveEvents.length + dragRouteEvents.length,
+    'tab-switch-surface-continuity': checkpointLabels.has('after-tab-return') ? 1 : 0,
+    'surface-resize-reload-continuity': checkpointLabels.has('after-resize') && checkpointLabels.has('after-reload') ? 1 : 0,
+    'navigation-history-reload': events.some((event) => event.type === 'page-load' && event.path === '/details') ? 1 : 0,
+  };
+  return {
+    status: blockedReason ? 'blocked' : 'complete',
+    blockedReason,
+    categories: REQUIRED_BOTTLENECK_CATEGORIES.map((category) => {
+      const sampleCount = sampleCounts.get(category) ?? 0;
+      return { category, sampleCount, covered: sampleCount > 0 };
+    }),
+    interactions: REQUIRED_INTERACTION_COVERAGE.map((coverageClass) => {
+      const evidenceCount = interactionCounts[coverageClass] ?? 0;
+      return { class: coverageClass, covered: evidenceCount > 0, evidenceCount };
+    }),
+    nativeEvidence,
+  };
+}
+
 function buildManifest(input: {
   runId: string;
   fixtureOrigin: string;
+  targetUrl: string;
   session: JsonRecord;
   events: AuditFixtureEvent[];
   metrics: MetricSample[];
@@ -1191,9 +1435,15 @@ function buildManifest(input: {
   const afterResize = checkpointByLabel(input.surfaceCheckpoints, 'after-resize');
   const afterTabReturn = checkpointByLabel(input.surfaceCheckpoints, 'after-tab-return');
   const afterReload = checkpointByLabel(input.surfaceCheckpoints, 'after-reload');
+  const frameTransport = observedFrameTransport(input.session);
+  const nativeEvidence = nativeRightPaneEvidence(input.session, input.rightPane, input.surfaceCheckpoints, frameTransport);
+  const liveAcceptance = browserPaneLiveAcceptance(input.session, nativeEvidence);
+  const targetUrlDigest = boundedUrlDigest(input.targetUrl);
+  const finalUrl = stringField(input.session.url);
+  const blockedReason = liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined;
   return {
     schemaVersion: AUDIT_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     refsFirst: true,
     runId: input.runId,
     observedAt: new Date().toISOString(),
@@ -1203,24 +1453,19 @@ function buildManifest(input: {
       mode: 'resolver-fixture',
       hostRef: `fixture-host:${hashText(FIXTURE_HOST)}`,
       originRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+      requestedUrlLength: targetUrlDigest.length,
+      requestedUrlHash: targetUrlDigest.hash,
+      finalUrlLength: finalUrl ? finalUrl.length : undefined,
+      finalUrlHash: finalUrl ? hashText(finalUrl) : undefined,
       resolverRuleApplied: true,
       realExternalSiteClaim: false,
       hardcodedSitePassClaim: false,
       rawUrlCaptured: false,
       allowedUse: 'right-pane-product-path-contract-not-external-web-pass',
     },
+    blockedReason,
     interactionCoverage: {
-      classes: [
-        'continuous-input',
-        'searchbox-caret-selection',
-        'long-page-scroll',
-        'slider-drag',
-        'text-selection-drag',
-        'drag-mouse-move',
-        'tab-switch-surface-continuity',
-        'surface-resize-reload-continuity',
-        'navigation-history-reload',
-      ],
+      classes: REQUIRED_INTERACTION_COVERAGE,
       eventTypes: boundedUnique(input.events.map((event) => event.type), 24),
       eventPaths: boundedUnique(input.events.map((event) => event.path), 8),
       input: {
@@ -1278,8 +1523,10 @@ function buildManifest(input: {
       owner: stringField(input.session.owner),
       status: stringField(input.session.status),
       transport: stringField(input.session.liveSurfaceTransport),
-      frameTransport: 'websocket-binary',
+      liveSurfaceTransport: stringField(input.session.liveSurfaceTransport),
+      frameTransport,
       singleInteractiveTruth: input.session.singleInteractiveTruth === true,
+      secondTruthSource: input.session.secondTruthSource === true,
       liveSurfaceRef: stringField(input.session.liveSurfaceRef),
       refs: {
         frameStreamRef: stringField(input.session.frameStreamRef),
@@ -1291,6 +1538,8 @@ function buildManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    liveAcceptance,
+    coverageGaps: buildCoverageGaps(blockedReason, input.metrics, input.events, input.networkSamples, input.surfaceCheckpoints, nativeEvidence),
     bottleneckRanking,
     timingSummary,
     boundedMetrics: {
@@ -1320,33 +1569,39 @@ function buildManifest(input: {
 
 function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottleneckAuditManifest) {
   assert.equal(manifest.schemaVersion, AUDIT_SCHEMA);
-  assert.equal(manifest.status, 'passed');
+  assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
   assert.equal(manifest.refsFirst, true);
   assert.equal(manifest.verificationCommand, VERIFICATION_COMMAND);
   assert.equal(manifest.targetOriginRef, manifest.targetEvidence.originRef);
   assert.equal(manifest.targetEvidence.mode, 'resolver-fixture');
   assert.equal(manifest.targetEvidence.resolverRuleApplied, true);
+  assert.ok((manifest.targetEvidence.requestedUrlLength ?? 0) > 0, 'target URL evidence must include only length/hash');
+  assert.match(manifest.targetEvidence.requestedUrlHash ?? '', /^[a-f0-9]{16}$/);
   assert.equal(manifest.targetEvidence.realExternalSiteClaim, false);
   assert.equal(manifest.targetEvidence.hardcodedSitePassClaim, false);
   assert.equal(manifest.targetEvidence.rawUrlCaptured, false);
   assert.equal(manifest.targetEvidence.allowedUse, 'right-pane-product-path-contract-not-external-web-pass');
   assert.equal(manifest.browserHostSession.owner, 'host');
   assert.equal(manifest.browserHostSession.status, 'ready');
-  assert.equal(manifest.browserHostSession.transport, 'host-stream');
-  assert.equal(manifest.browserHostSession.singleInteractiveTruth, true);
+  assert.equal(manifest.browserHostSession.transport, manifest.browserHostSession.liveSurfaceTransport);
+  assert.equal(manifest.browserHostSession.singleInteractiveTruth, manifest.liveAcceptance.observed.singleInteractiveTruth);
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
+  assert.deepEqual(manifest.coverageGaps.nativeEvidence, {
+    liveSurfaceTransport: manifest.liveAcceptance.observed.liveSurfaceTransport,
+    frameTransport: manifest.liveAcceptance.observed.frameTransport,
+    singleInteractiveTruth: manifest.liveAcceptance.observed.singleInteractiveTruth,
+    secondTruthSource: manifest.liveAcceptance.observed.secondTruthSource,
+    sameLiveSurfaceRef: manifest.liveAcceptance.observed.sameLiveSurfaceRef,
+    rightPaneNativeEvidence: manifest.liveAcceptance.observed.rightPaneNativeEvidence,
+    legacyFallbackObserved: manifest.liveAcceptance.observed.legacyFallbackObserved,
+  });
+  if (manifest.status === 'passed') assert.equal(manifest.browserHostSession.secondTruthSource, false);
+  if (manifest.status === 'blocked') assert.ok(manifest.blockedReason, 'diagnostic bottleneck manifest must include a blocked reason');
   assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
-  assert.match(manifest.browserHostSession.refs.frameStreamRef ?? '', /^browser-host-session:[^/]+\/frame-stream$/);
-  assert.deepEqual(manifest.interactionCoverage.classes, [
-    'continuous-input',
-    'searchbox-caret-selection',
-    'long-page-scroll',
-    'slider-drag',
-    'text-selection-drag',
-    'drag-mouse-move',
-    'tab-switch-surface-continuity',
-    'surface-resize-reload-continuity',
-    'navigation-history-reload',
-  ]);
+  if (manifest.browserHostSession.refs.frameStreamRef) {
+    assert.match(manifest.browserHostSession.refs.frameStreamRef, /^browser-host-session:[^/]+\/frame-stream$/);
+  }
+  assert.deepEqual(manifest.interactionCoverage.classes, REQUIRED_INTERACTION_COVERAGE);
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-focus'));
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-input'));
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-selection'));
@@ -1380,24 +1635,25 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
   assert.equal(manifest.interactionCoverage.surfaceContinuity.sameLiveSurfaceAcrossTabSwitch, true);
   assert.equal(manifest.interactionCoverage.surfaceContinuity.sameLiveSurfaceAcrossReload, true);
   assert.deepEqual(manifest.interactionCoverage.surfaceContinuity.checkpointLabels, ['before-resize', 'after-resize', 'after-tab-return', 'after-reload']);
-  assert.equal(manifest.interactionCoverage.surfaceContinuity.hiddenKeyboardPathAfterTabReturn, 'hidden-input');
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.hiddenKeyboardPathAfterTabReturn, 'native-embedded');
   assert.equal(manifest.interactionCoverage.surfaceContinuity.maxHostFrames, 1);
   assert.equal(manifest.interactionCoverage.surfaceContinuity.detachChanges, 0);
-  assert.ok(manifest.boundedMetrics.frameStream.streamsOpened >= 1);
-  assert.ok(manifest.boundedMetrics.frameStream.framesReceived >= 1);
   assert.ok(manifest.boundedMetrics.rightPane.maxHostFrames === 1);
+  assert.ok(manifest.boundedMetrics.rightPane.maxNativeSurfaces === 1);
   assert.equal(manifest.boundedMetrics.rightPane.iframeSurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPane.proxySurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPane.dataImageSurfaces, 0);
   const rankedCategories = new Set(manifest.bottleneckRanking.map((entry) => entry.category));
-  for (const category of ['input-routing', 'surface-attach', 'frame-capture', 'state-polling', 'navigation', 'react-rerender'] satisfies BottleneckCategory[]) {
+  for (const category of REQUIRED_BOTTLENECK_CATEGORIES) {
     assert.ok(rankedCategories.has(category), `missing bottleneck category ${category}`);
   }
+  assert.deepEqual(manifest.coverageGaps.categories.map((entry) => entry.category), REQUIRED_BOTTLENECK_CATEGORIES);
+  assert.deepEqual(manifest.coverageGaps.interactions.map((entry) => entry.class), REQUIRED_INTERACTION_COVERAGE);
   for (let index = 1; index < manifest.bottleneckRanking.length; index += 1) {
     assert.ok(manifest.bottleneckRanking[index - 1].p95Ms >= manifest.bottleneckRanking[index].p95Ms, 'bottleneck ranking must be sorted by p95');
   }
   for (const entry of manifest.bottleneckRanking) {
-    assert.ok(entry.sampleCount > 0, `${entry.category} should include samples`);
+    if (manifest.status === 'passed') assert.ok(entry.sampleCount > 0, `${entry.category} should include samples`);
     assert.ok(entry.maxMs <= manifest.boundedMetrics.maxAllowedSampleMs, `${entry.category} must stay bounded`);
     assert.ok(entry.sampleLabels.length <= MAX_SAMPLE_LABELS_PER_CATEGORY, `${entry.category} sample labels must stay bounded`);
   }
@@ -1422,39 +1678,80 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(encodeURIComponent(INPUT_TEXT))));
 }
 
-async function writeBlockedBottleneckManifest(blockedReason: string): Promise<void> {
+type BlockedBottleneckManifestOptions = {
+  runId?: string;
+  targetUrl?: string;
+  targetOrigin?: string;
+  resolverRuleApplied?: boolean;
+  session?: JsonRecord;
+  events?: AuditFixtureEvent[];
+  metrics?: MetricSample[];
+  networkSamples?: BrowserHostNetworkSample[];
+  frameStream?: FrameStreamStats;
+  rightPane?: RightPaneBoundedEvidence;
+  surfaceCheckpoints?: SurfaceContinuityCheckpoint[];
+};
+
+async function writeBlockedBottleneckManifest(blockedReason: string, options: BlockedBottleneckManifestOptions = {}): Promise<void> {
+  const session = options.session ?? {};
+  const events = options.events ?? [];
+  const metrics = options.metrics ?? [];
+  const networkSamples = options.networkSamples ?? [];
+  const frameStream = options.frameStream ?? emptyFrameStreamStats();
+  const rightPane = options.rightPane ?? emptyRightPaneEvidence();
+  const surfaceCheckpoints = options.surfaceCheckpoints ?? [];
+  const frameTransport = observedFrameTransport(session);
+  const nativeEvidence = nativeRightPaneEvidence(session, rightPane, surfaceCheckpoints, frameTransport);
+  const liveAcceptance = forceBlockedBrowserPaneLiveAcceptance(browserPaneLiveAcceptance(session, nativeEvidence), blockedReason);
+  const targetUrlDigest = options.targetUrl ? boundedUrlDigest(options.targetUrl) : undefined;
+  const targetOriginRef = options.targetOrigin ? `fixture-origin:${hashText(options.targetOrigin)}` : 'blocked:no-real-product-evidence';
+  const targetHostRef = options.targetOrigin ? `fixture-host:${hashText(FIXTURE_HOST)}` : 'blocked:no-real-product-evidence';
+  const inputEvents = events.filter((event) => event.type === 'audit-input');
+  const scrollEvents = events.filter((event) => event.type === 'audit-scroll');
+  const selectionEvents = events.filter((event) => event.type === 'audit-selection');
+  const sliderEvents = events.filter((event) => event.type === 'audit-slider-input');
+  const textSelectionEvents = events.filter((event) => event.type === 'audit-text-selection');
+  const dragMoveEvents = events.filter((event) => event.type === 'audit-pointer-move');
+  const lastSelectionEvent = selectionEvents[selectionEvents.length - 1];
+  const maxTextSelectionLength = Math.max(0, ...textSelectionEvents.map((event) => event.selectionLength ?? 0));
+  const strongestTextSelection = textSelectionEvents.reduce<AuditFixtureEvent | undefined>((current, next) => {
+    if (!current || (next.selectionLength ?? 0) > (current.selectionLength ?? 0)) return next;
+    return current;
+  }, undefined);
+  const beforeResize = checkpointByLabel(surfaceCheckpoints, 'before-resize');
+  const afterResize = checkpointByLabel(surfaceCheckpoints, 'after-resize');
+  const afterTabReturn = checkpointByLabel(surfaceCheckpoints, 'after-tab-return');
+  const afterReload = checkpointByLabel(surfaceCheckpoints, 'after-reload');
+  const summary = buildTimingSummary(metrics, networkSamples, frameStream);
+  const ranking = new BottleneckMetrics();
+  for (const sample of metrics) ranking.add(sample.category, sample.label, sample.durationMs);
   const manifest: BrowserPaneBottleneckAuditManifest = {
     schemaVersion: AUDIT_SCHEMA,
     status: 'blocked',
     refsFirst: true,
-    runId: `browser-pane-bottleneck-audit-blocked-${Date.now().toString(36)}`,
+    runId: options.runId ?? `browser-pane-bottleneck-audit-blocked-${Date.now().toString(36)}`,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
-    targetOriginRef: 'blocked:no-real-product-evidence',
+    targetOriginRef,
     targetEvidence: {
-      mode: 'blocked',
-      hostRef: 'blocked:no-real-product-evidence',
-      originRef: 'blocked:no-real-product-evidence',
-      resolverRuleApplied: false,
+      mode: options.targetUrl ? 'resolver-fixture' : 'blocked',
+      hostRef: targetHostRef,
+      originRef: targetOriginRef,
+      requestedUrlLength: targetUrlDigest?.length,
+      requestedUrlHash: targetUrlDigest?.hash,
+      finalUrlLength: stringField(session.url) ? stringField(session.url).length : undefined,
+      finalUrlHash: stringField(session.url) ? hashText(stringField(session.url)) : undefined,
+      resolverRuleApplied: options.resolverRuleApplied === true,
       realExternalSiteClaim: false,
       hardcodedSitePassClaim: false,
       rawUrlCaptured: false,
-      allowedUse: 'blocked-no-real-product-evidence',
+      allowedUse: options.targetUrl ? 'right-pane-product-path-contract-not-external-web-pass' : 'blocked-no-real-product-evidence',
     },
     blockedReason,
     interactionCoverage: {
-      classes: [
-        'continuous-input',
-        'searchbox-caret-selection',
-        'long-page-scroll',
-        'slider-drag',
-        'text-selection-drag',
-        'drag-mouse-move',
-        'surface-resize-reload-continuity',
-        'navigation-history-reload',
-      ],
-      eventTypes: [],
-      eventPaths: [],
+      classes: REQUIRED_INTERACTION_COVERAGE,
+      eventTypes: boundedUnique(events.map((event) => event.type), 24),
+      eventPaths: boundedUnique(events.map((event) => event.path), 8),
       input: {
         initialLength: INPUT_TEXT.length,
         initialHash: hashText(INPUT_TEXT),
@@ -1464,93 +1761,83 @@ async function writeBlockedBottleneckManifest(blockedReason: string): Promise<vo
         finalHash: hashText(EXPECTED_FINAL_INPUT),
       },
       scroll: {
-        maxScrollY: 0,
-        scrollEvents: 0,
+        maxScrollY: Math.max(0, ...scrollEvents.map((event) => event.maxScrollY ?? 0)),
+        scrollEvents: scrollEvents.length,
       },
       searchboxCaret: {
-        focused: false,
+        focused: events.some((event) => event.type === 'audit-focus'),
+        finalSelectionStart: lastSelectionEvent?.selectionStart,
+        finalSelectionEnd: lastSelectionEvent?.selectionEnd,
+        finalSelectionLength: lastSelectionEvent?.selectionLength,
+        selectedTextHash: lastSelectionEvent?.selectionHash,
         evidenceSource: 'fixture-selection-event',
       },
       slider: {
-        inputEvents: 0,
+        inputEvents: sliderEvents.length,
+        maxValue: Math.max(0, ...sliderEvents.map((event) => event.sliderValue ?? 0)),
         evidenceSource: 'fixture-input-event',
       },
       textSelection: {
-        selectionEvents: 0,
-        maxSelectionLength: 0,
+        selectionEvents: textSelectionEvents.length,
+        maxSelectionLength: maxTextSelectionLength,
+        selectionHash: strongestTextSelection?.selectionHash,
         evidenceSource: 'fixture-selectionchange-event',
       },
       drag: {
-        fixturePointerMoveEvents: 0,
-        browserHostRouteActions: [],
-        fixtureDragUpObserved: false,
+        fixturePointerMoveEvents: dragMoveEvents.length,
+        browserHostRouteActions: boundedUnique(networkSamples
+          .filter((sample) => sample.endpoint === 'computer-use-action' && ['cursor', 'drag', 'mouse-down', 'mouse-move', 'mouse-up'].includes(sample.action ?? ''))
+          .map((sample) => sample.action ?? 'unknown'), 8),
+        fixtureDragUpObserved: events.some((event) => event.type === 'audit-drag-up'),
         evidenceSource: 'browser-host-action',
       },
       surfaceContinuity: {
-        sameSessionAcrossResize: false,
-        sameLiveSurfaceAcrossResize: false,
-        sameSessionAcrossTabSwitch: false,
-        sameLiveSurfaceAcrossTabSwitch: false,
-        sameLiveSurfaceAcrossReload: false,
-        checkpointLabels: [],
-        maxHostFrames: 0,
-        detachChanges: 0,
+        sameSessionAcrossResize: sameCheckpointField(beforeResize, afterResize, 'sessionId'),
+        sameLiveSurfaceAcrossResize: sameCheckpointField(beforeResize, afterResize, 'liveSurfaceRef'),
+        sameSessionAcrossTabSwitch: sameCheckpointField(beforeResize, afterTabReturn, 'sessionId'),
+        sameLiveSurfaceAcrossTabSwitch: sameCheckpointField(beforeResize, afterTabReturn, 'liveSurfaceRef'),
+        sameLiveSurfaceAcrossReload: sameCheckpointField(beforeResize, afterReload, 'liveSurfaceRef'),
+        checkpointLabels: surfaceCheckpoints.map((checkpoint) => checkpoint.label),
+        hiddenKeyboardPathAfterTabReturn: afterTabReturn?.hiddenKeyboardPath,
+        maxHostFrames: rightPane.maxHostFrames,
+        detachChanges: rightPane.detachChanges,
         evidenceSource: 'right-pane-observer-and-browser-host-state',
       },
     },
     browserHostSession: {
-      id: '',
-      owner: '',
-      status: 'blocked',
-      singleInteractiveTruth: false,
-      refs: {},
-    },
-    bottleneckRanking: [],
-    timingSummary: {
-      totalSamples: 0,
-      totalMeasuredMs: 0,
-      categories: [],
-      slowestSample: { category: 'input-routing', label: 'blocked', durationMs: 0 },
-      network: {
-        sampleCount: 0,
-        maxDurationMs: 0,
-        statusCodes: [],
-      },
-      frameStream: {
-        streamsOpened: 0,
-        framesReceived: 0,
-        binaryFramesReceived: 0,
-        maxPayloadBytes: 0,
+      id: stringField(session.id),
+      owner: stringField(session.owner),
+      status: stringField(session.status) || 'blocked',
+      transport: stringField(session.liveSurfaceTransport),
+      liveSurfaceTransport: stringField(session.liveSurfaceTransport),
+      frameTransport,
+      singleInteractiveTruth: session.singleInteractiveTruth === true,
+      secondTruthSource: session.secondTruthSource === true,
+      liveSurfaceRef: stringField(session.liveSurfaceRef),
+      refs: {
+        frameStreamRef: stringField(session.frameStreamRef),
+        frameRef: stringField(session.frameRef),
+        screenshotRef: stringField(session.screenshotRef),
+        domSnapshotRef: stringField(session.domSnapshotRef),
+        axSnapshotRef: stringField(session.axSnapshotRef),
+        consoleLogRef: stringField(session.consoleLogRef),
+        networkLogRef: stringField(session.networkLogRef),
       },
     },
+    liveAcceptance,
+    coverageGaps: buildCoverageGaps(blockedReason, metrics, events, networkSamples, surfaceCheckpoints, nativeEvidence),
+    bottleneckRanking: ranking.ranking(),
+    timingSummary: summary,
     boundedMetrics: {
-      totalSamples: 0,
+      totalSamples: metrics.length,
       maxAllowedSampleMs: 60_000,
       maxManifestBytes: MAX_MANIFEST_BYTES,
       maxNetworkSamples: MAX_NETWORK_SAMPLES,
       maxSampleLabelsPerCategory: MAX_SAMPLE_LABELS_PER_CATEGORY,
       maxRightPaneRefCount: MAX_RIGHT_PANE_REF_COUNT,
-      networkSamples: [],
-      frameStream: {
-        streamsOpened: 0,
-        framesReceived: 0,
-        binaryFramesReceived: 0,
-        maxPayloadBytes: 0,
-      },
-      rightPane: {
-        mutationCount: 0,
-        attachChanges: 0,
-        detachChanges: 0,
-        maxHostFrames: 0,
-        sessionIds: [],
-        liveSurfaceRefs: [],
-        frameStreamRefs: [],
-        renderers: [],
-        browserStates: [],
-        iframeSurfaces: 0,
-        proxySurfaces: 0,
-        dataImageSurfaces: 0,
-      },
+      networkSamples: networkSamples.slice(-MAX_NETWORK_SAMPLES),
+      frameStream,
+      rightPane,
     },
     forbiddenEvidence: {
       rawDom: false,
@@ -1574,11 +1861,30 @@ function assertBlockedBottleneckManifest(manifest: BrowserPaneBottleneckAuditMan
   assert.equal(manifest.status, 'blocked');
   assert.equal(manifest.refsFirst, true);
   assert.ok(manifest.blockedReason, 'blocked manifest must record bounded reason');
-  assert.equal(manifest.browserHostSession.singleInteractiveTruth, false);
-  assert.equal(manifest.boundedMetrics.frameStream.streamsOpened, 0);
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, 'blocked');
+  assert.equal(manifest.liveAcceptance.passClaim, false);
+  assert.equal(manifest.coverageGaps.status, 'blocked');
+  assert.deepEqual(manifest.coverageGaps.categories.map((entry) => entry.category), REQUIRED_BOTTLENECK_CATEGORIES);
+  assert.deepEqual(manifest.coverageGaps.interactions.map((entry) => entry.class), REQUIRED_INTERACTION_COVERAGE);
+  assert.deepEqual(manifest.coverageGaps.nativeEvidence, {
+    liveSurfaceTransport: manifest.liveAcceptance.observed.liveSurfaceTransport,
+    frameTransport: manifest.liveAcceptance.observed.frameTransport,
+    singleInteractiveTruth: manifest.liveAcceptance.observed.singleInteractiveTruth,
+    secondTruthSource: manifest.liveAcceptance.observed.secondTruthSource,
+    sameLiveSurfaceRef: manifest.liveAcceptance.observed.sameLiveSurfaceRef,
+    rightPaneNativeEvidence: manifest.liveAcceptance.observed.rightPaneNativeEvidence,
+    legacyFallbackObserved: manifest.liveAcceptance.observed.legacyFallbackObserved,
+  });
+  if (manifest.targetEvidence.requestedUrlLength !== undefined) {
+    assert.ok(manifest.targetEvidence.requestedUrlLength > 0);
+    assert.match(manifest.targetEvidence.requestedUrlHash ?? '', /^[a-f0-9]{16}$/);
+  }
+  assert.equal(manifest.targetEvidence.rawUrlCaptured, false);
   assert.equal(manifest.boundedMetrics.rightPane.iframeSurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPane.proxySurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPane.dataImageSurfaces, 0);
+  assert.ok(manifest.bottleneckRanking.length >= REQUIRED_BOTTLENECK_CATEGORIES.length);
+  assert.ok(manifest.timingSummary.categories.length >= REQUIRED_BOTTLENECK_CATEGORIES.length);
   assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false, false, false, false]);
   const serialized = JSON.stringify(manifest);
   assert.ok(Buffer.byteLength(serialized, 'utf8') <= MAX_MANIFEST_BYTES, 'blocked manifest must stay bounded');
@@ -1586,6 +1892,145 @@ function assertBlockedBottleneckManifest(manifest: BrowserPaneBottleneckAuditMan
   assert.doesNotMatch(serialized, /"(?:screenshotData|screenshotBase64|screenshotInline|screenshotBytes|domSnapshotPayload|rawDomPayload|providerBody|providerRequest|providerResponse|rawProviderResponse|toolPayload|rawPayload)"\s*:/i);
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(INPUT_TEXT)));
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(EXPECTED_FINAL_INPUT)));
+}
+
+function forceBlockedBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, reason: string): BrowserPaneLiveAcceptance {
+  return {
+    ...liveAcceptance,
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    handoff: liveAcceptance.handoff ?? {
+      state: 'native-proof-incomplete',
+      canRetry: true,
+      legacyFallbackAllowed: false,
+    },
+    blockedReason: reason.slice(0, 240) || 'blocked',
+  };
+}
+
+function browserPaneLiveAcceptance(session: JsonRecord, nativeEvidence: NativeRightPaneEvidence): BrowserPaneLiveAcceptance {
+  const passed = nativeEvidence.liveSurfaceTransport === 'native-embedded'
+    && nativeEvidence.frameTransport === 'native-embedded'
+    && nativeEvidence.singleInteractiveTruth
+    && nativeEvidence.secondTruthSource === false
+    && nativeEvidence.sameLiveSurfaceRef
+    && nativeEvidence.rightPaneNativeEvidence
+    && nativeEvidence.legacyFallbackObserved === false;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'right-pane-live-pass' : 'diagnostic-only',
+    passClaim: passed,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+      sameLiveSurfaceRef: true,
+      rightPaneNativeEvidence: true,
+      legacyFallbackObserved: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: nativeEvidence.liveSurfaceTransport,
+      frameTransport: nativeEvidence.frameTransport,
+      singleInteractiveTruth: nativeEvidence.singleInteractiveTruth,
+      secondTruthSource: nativeEvidence.secondTruthSource,
+      sameLiveSurfaceRef: nativeEvidence.sameLiveSurfaceRef,
+      rightPaneNativeEvidence: nativeEvidence.rightPaneNativeEvidence,
+      legacyFallbackObserved: nativeEvidence.legacyFallbackObserved,
+    },
+    handoff: passed ? undefined : {
+      state: nativeEvidence.liveSurfaceTransport === 'missing-native-attach' ? 'needs-native-attach' : 'native-proof-incomplete',
+      canRetry: true,
+      legacyFallbackAllowed: false,
+    },
+    blockedReason: passed
+      ? undefined
+      : boundedLiveAcceptanceBlocker(session, nativeEvidence),
+  };
+}
+
+function observedFrameTransport(session: JsonRecord): string | undefined {
+  return stringField(session.frameTransport) || undefined;
+}
+
+function boundedLiveAcceptanceBlocker(session: JsonRecord, nativeEvidence: NativeRightPaneEvidence): string {
+  const missing: string[] = [];
+  if (nativeEvidence.liveSurfaceTransport !== 'native-embedded') missing.push('native-embedded-live-surface');
+  if (nativeEvidence.frameTransport !== 'native-embedded') missing.push('native-embedded-frame-transport');
+  if (!nativeEvidence.singleInteractiveTruth) missing.push('single-interactive-truth');
+  if (nativeEvidence.secondTruthSource !== false) missing.push('no-second-truth-source');
+  if (!nativeEvidence.sameLiveSurfaceRef) missing.push('same-live-surface-ref');
+  if (!nativeEvidence.rightPaneNativeEvidence) missing.push('right-pane-native-evidence');
+  if (nativeEvidence.legacyFallbackObserved) missing.push('no-legacy-fallback');
+  const sessionId = stringField(session.id);
+  const sessionRef = sessionId ? ` sessionRef=${hashText(sessionId)}` : '';
+  return `missing-native-right-pane-proof:${boundedUnique(missing, 8).join('|') || 'unknown'}; observed=${nativeEvidence.liveSurfaceTransport || 'missing-native-attach'}${sessionRef}`;
+}
+
+function blockedBrowserPaneLiveAcceptance(reason: string): BrowserPaneLiveAcceptance {
+  return {
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+      sameLiveSurfaceRef: true,
+      rightPaneNativeEvidence: true,
+      legacyFallbackObserved: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: 'missing-native-attach',
+      frameTransport: 'missing-native-attach',
+      singleInteractiveTruth: false,
+      secondTruthSource: false,
+      sameLiveSurfaceRef: false,
+      rightPaneNativeEvidence: false,
+      legacyFallbackObserved: false,
+    },
+    handoff: {
+      state: 'needs-native-attach',
+      canRetry: true,
+      legacyFallbackAllowed: false,
+    },
+    blockedReason: reason.slice(0, 240) || 'blocked',
+  };
+}
+
+function assertBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, manifestStatus: 'passed' | 'blocked'): void {
+  assert.equal(liveAcceptance.status, manifestStatus);
+  assert.equal(liveAcceptance.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(liveAcceptance.required.frameTransport, 'native-embedded');
+  assert.equal(liveAcceptance.required.singleInteractiveTruth, true);
+  assert.equal(liveAcceptance.required.secondTruthSource, false);
+  assert.equal(liveAcceptance.required.sameLiveSurfaceRef, true);
+  assert.equal(liveAcceptance.required.rightPaneNativeEvidence, true);
+  assert.equal(liveAcceptance.required.legacyFallbackObserved, false);
+  assert.equal(liveAcceptance.observed.shell, 'web-right-pane');
+  if (manifestStatus === 'passed') {
+    assert.equal(liveAcceptance.claimScope, 'right-pane-live-pass');
+    assert.equal(liveAcceptance.passClaim, true);
+    assert.equal(liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+    assert.equal(liveAcceptance.observed.frameTransport, 'native-embedded');
+    assert.equal(liveAcceptance.observed.singleInteractiveTruth, true);
+    assert.equal(liveAcceptance.observed.secondTruthSource, false);
+    assert.equal(liveAcceptance.observed.sameLiveSurfaceRef, true);
+    assert.equal(liveAcceptance.observed.rightPaneNativeEvidence, true);
+    assert.equal(liveAcceptance.observed.legacyFallbackObserved, false);
+    assert.equal(liveAcceptance.handoff, undefined);
+  } else {
+    assert.equal(liveAcceptance.claimScope, 'diagnostic-only');
+    assert.equal(liveAcceptance.passClaim, false);
+    assert.ok(liveAcceptance.handoff, 'blocked live acceptance must include typed handoff');
+    assert.equal(liveAcceptance.handoff?.canRetry, true);
+    assert.equal(liveAcceptance.handoff?.legacyFallbackAllowed, false);
+    assert.ok(liveAcceptance.blockedReason);
+  }
 }
 
 async function startBottleneckFixture(port: number): Promise<{ url: string; close(): Promise<void> }> {
@@ -1931,6 +2376,42 @@ function stringField(value: unknown): string {
 
 function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function boundedUrlDigest(value: string): { length: number; hash: string } {
+  return {
+    length: value.length,
+    hash: hashText(value),
+  };
+}
+
+function emptyFrameStreamStats(): FrameStreamStats {
+  return {
+    streamsOpened: 0,
+    framesReceived: 0,
+    binaryFramesReceived: 0,
+    maxPayloadBytes: 0,
+  };
+}
+
+function emptyRightPaneEvidence(): RightPaneBoundedEvidence {
+  return {
+    mutationCount: 0,
+    attachChanges: 0,
+    detachChanges: 0,
+    maxHostFrames: 0,
+    maxNativeSurfaces: 0,
+    sessionIds: [],
+    liveSurfaceRefs: [],
+    frameStreamRefs: [],
+    liveSurfaceTransports: [],
+    frameTransports: [],
+    renderers: [],
+    browserStates: [],
+    iframeSurfaces: 0,
+    proxySurfaces: 0,
+    dataImageSurfaces: 0,
+  };
 }
 
 function hashText(value: string) {

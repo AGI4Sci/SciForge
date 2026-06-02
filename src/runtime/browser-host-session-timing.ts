@@ -80,7 +80,7 @@ export function finishBrowserHostActionTiming(
     ? roundedMs(timing.evidenceCaptureEndedAtMs - timing.evidenceCaptureStartedAtMs)
     : undefined;
   const totalMs = roundedMs(hostCompletedAtMs - timing.hostReceivedAtMs);
-  const liveSurfaceTransport = session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport ?? 'host-stream';
+  const liveSurfaceTransport = browserHostNativeLiveSurfaceTransport(session.driver?.liveSurfaceTransport ?? session.liveSurfaceTransport);
   const actionTiming: BrowserHostSessionActionTiming = {
     actionId: timing.actionId,
     action: timing.action,
@@ -146,9 +146,7 @@ export function browserHostActionTiming(value: unknown): BrowserHostSessionActio
   if (!action || !status || !hostReceivedAt || !hostStartedAt || !hostCompletedAt) return undefined;
   const liveSurfaceTransport = record.liveSurfaceTransport === 'native-embedded'
     ? 'native-embedded'
-    : record.liveSurfaceTransport === 'host-stream'
-      ? 'host-stream'
-      : undefined;
+    : undefined;
   const paintAckSource = record.paintAckSource === 'native-adapter-action-state' || record.paintAckSource === 'host-stream-frame' || record.paintAckSource === 'none'
     ? record.paintAckSource
     : undefined;
@@ -222,11 +220,14 @@ const BROWSER_HOST_ACTION_TIMING_ORDER: Array<BrowserHostSessionAction | 'open'>
 
 function browserHostPaintAckSource(
   transport: BrowserHostSessionActionTiming['liveSurfaceTransport'],
-  capture: BrowserHostSessionCaptureMode,
+  _capture: BrowserHostSessionCaptureMode,
 ): BrowserHostSessionActionTiming['paintAckSource'] {
   if (transport === 'native-embedded') return 'native-adapter-action-state';
-  if (capture === 'frame' || capture === 'full') return 'host-stream-frame';
   return 'none';
+}
+
+function browserHostNativeLiveSurfaceTransport(value: unknown): BrowserHostSessionActionTiming['liveSurfaceTransport'] {
+  return value === 'native-embedded' ? 'native-embedded' : undefined;
 }
 
 function browserHostTimingAction(value: unknown): BrowserHostSessionAction | 'open' | undefined {

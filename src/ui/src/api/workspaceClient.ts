@@ -302,9 +302,11 @@ export interface FeedbackCodexPtyTerminalStartResult {
 export type WorkspaceTerminalStatus = 'starting' | 'running' | 'idle' | 'failed' | 'cancelled';
 export const WORKSPACE_TERMINAL_WEBSOCKET_PTY_CAPABILITY = 'workspace-terminal-websocket-pty';
 export const BROWSER_HOST_SESSION_CAPABILITY = 'browser-host-session';
+export const BROWSER_HOST_NATIVE_SURFACE_CAPABILITY = 'browser-host-native-surface';
 export const BROWSER_HOST_SEARCH_CAPABILITY = 'browser-host-search';
 const BROWSER_HOST_REQUIRED_CAPABILITIES = [
   BROWSER_HOST_SESSION_CAPABILITY,
+  BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
   BROWSER_HOST_SEARCH_CAPABILITY,
 ] as const;
 const BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS = [
@@ -312,8 +314,11 @@ const BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS = [
   'state',
   'actions',
   'computer-use-actions',
-  'frame',
-  'frame-stream',
+] as const;
+const BROWSER_HOST_NATIVE_SURFACE_REQUIRED_ENDPOINT_TOKENS = [
+  'health',
+  'attach',
+  'state',
 ] as const;
 const BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN = 'browser-host/search';
 
@@ -1646,7 +1651,7 @@ function browserHostWriterUnavailableError(
     recoverActions: [
       '确认 Workspace Writer URL 指向 writer 服务而不是 Web UI',
       '启动 npm run workspace:server 或点击启动服务后重试',
-      '检查 /health 是否包含 browser-host-session、browser-host-search，以及 browserHostSession 的 computer-use-actions/frame-stream endpoints',
+      '检查 /health 是否包含 browser-host-session、browser-host-native-surface、browser-host-search，以及 native surface health/attach/state endpoints',
     ],
     diagnosticRef: preflight.diagnosticRef,
     cause,
@@ -1990,7 +1995,7 @@ async function probeBrowserHostSessionWriter(
       displayUrl,
       ok: false,
       status: 'missing-browser-host-capability',
-      message: `${input.label} at ${displayUrl} is a stale Workspace Writer without final BrowserHostSession support: ${missingRequirements.join(', ')}. Restart runtime services so /health advertises computer-use-actions and frame-stream.`,
+      message: `${input.label} at ${displayUrl} is a stale Workspace Writer without native BrowserHostSession surface support: ${missingRequirements.join(', ')}. Restart runtime services so /health advertises native surface health, attach, and state support.`,
       health,
     };
   }
@@ -2101,11 +2106,30 @@ function missingBrowserHostSessionRequirements(health: SciForgeWorkspaceWriterHe
   const missingSessionEndpoints = BROWSER_HOST_SESSION_REQUIRED_ENDPOINT_TOKENS
     .filter((token) => !browserHostSessionEndpoint.includes(token))
     .map((token) => `endpoint:browserHostSession.${token}`);
+  const browserHostNativeSurfaceEndpoint = browserHostNativeSurfaceEndpointFromHealth(endpoints, browserHostSessionEndpoint);
+  const missingNativeSurfaceEndpoints = browserHostNativeSurfaceEndpoint
+    ? BROWSER_HOST_NATIVE_SURFACE_REQUIRED_ENDPOINT_TOKENS
+      .filter((token) => !browserHostNativeSurfaceEndpoint.includes(token))
+      .map((token) => `endpoint:browserHostNativeSurface.${token}`)
+    : ['endpoint:browserHostNativeSurface'];
   const browserHostSearchEndpoint = typeof endpoints.browserHostSearch === 'string' ? endpoints.browserHostSearch : '';
   const missingSearchEndpoints = browserHostSearchEndpoint.includes(BROWSER_HOST_SEARCH_REQUIRED_ENDPOINT_TOKEN)
     ? []
     : ['endpoint:browserHostSearch'];
-  return [...missingCapabilities, ...missingSessionEndpoints, ...missingSearchEndpoints];
+  return [...missingCapabilities, ...missingSessionEndpoints, ...missingNativeSurfaceEndpoints, ...missingSearchEndpoints];
+}
+
+function browserHostNativeSurfaceEndpointFromHealth(
+  endpoints: Record<string, unknown>,
+  browserHostSessionEndpoint: string,
+) {
+  const explicitEndpoint = typeof endpoints.browserHostNativeSurface === 'string'
+    ? endpoints.browserHostNativeSurface
+    : typeof endpoints.browserHostSessionNativeSurface === 'string'
+      ? endpoints.browserHostSessionNativeSurface
+      : '';
+  if (explicitEndpoint) return explicitEndpoint;
+  return /native[-.]?surface|nativeSurface/i.test(browserHostSessionEndpoint) ? browserHostSessionEndpoint : '';
 }
 
 function primaryDiagnosticRef(status: WorkspaceTerminalWriterPreflightStatus) {

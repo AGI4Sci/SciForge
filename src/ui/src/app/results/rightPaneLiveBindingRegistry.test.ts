@@ -21,6 +21,7 @@ test('active VirtualAppScreen registry maps screen refs to live binding refs', (
     providerSessionOwnerRef: 'computer-use:provider-session/run-a/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/run-a/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/run-a/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/run-a/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/run-a/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/run-a/frame-sequence.json',
@@ -49,6 +50,7 @@ test('active VirtualAppScreen registry maps screen refs to live binding refs', (
     providerSessionOwnerRef: 'computer-use:provider-session/run-a/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/run-a/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/run-a/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/run-a/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/run-a/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/run-a/frame-sequence.json',
@@ -77,6 +79,7 @@ test('active VirtualAppScreen registry preserves per-screen refs across restore 
     providerSessionOwnerRef: 'computer-use:provider-session/restore/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/restore/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/restore/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/restore/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/restore/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/restore/frame-sequence.json',
@@ -100,6 +103,7 @@ test('active VirtualAppScreen registry preserves per-screen refs across restore 
   assert.equal(binding?.providerSessionOwnerRef, 'computer-use:provider-session/restore/owner.json');
   assert.equal(binding?.providerSessionReconnectRef, 'computer-use:provider-session/restore/reconnect.json');
   assert.equal(binding?.liveBindingAttachGrantRef, 'computer-use:provider-session/restore/live-binding-attach-grant.json');
+  assert.equal(binding?.grantValidationRef, 'computer-use:provider-session/restore/grant-validation.json');
   assert.equal(binding?.surfaceTransportRef, 'computer-use:session/restore/surface-transport.json');
   assert.deepEqual(binding?.currentFrameSequence, {
     ref: 'computer-use:session/restore/frame-sequence.json',
@@ -122,6 +126,7 @@ test('active VirtualAppScreen registry preserves per-screen refs across restore 
     providerSessionOwnerRef: 'computer-use:provider-session/restore/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/restore/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/restore/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/restore/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/restore/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/restore/frame-sequence.json',
@@ -145,6 +150,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
     providerSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/reconnect/frame-sequence.json',
@@ -168,6 +174,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
       providerSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
       providerSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
       liveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+      grantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
       surfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
       currentFrameSequence: {
         ref: 'computer-use:session/reconnect/frame-sequence.json',
@@ -186,6 +193,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
       providerSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
       providerSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
       liveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+      grantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
       surfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
       currentFrameSequence: {
         ref: 'computer-use:session/reconnect/frame-sequence.json',
@@ -208,6 +216,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
     providerSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
     currentFrameSequence: {
       ref: 'computer-use:session/reconnect/frame-sequence.json',
@@ -219,6 +228,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
     observedProviderSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
     observedProviderSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
     observedLiveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+    observedGrantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
     observedSurfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
     observedCurrentFrameSequence: {
       ref: 'computer-use:session/reconnect/frame-sequence.json',
@@ -232,6 +242,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
     sameProviderSessionOwnerRef: true,
     sameProviderSessionReconnectRef: true,
     sameLiveBindingAttachGrantRef: true,
+    sameGrantValidationRef: true,
     missingRefEvidence: [],
     mismatchedRefEvidence: [],
     singleInteractiveTruth: true,
@@ -244,6 +255,7 @@ test('active VirtualAppScreen registry writes reconnect checkpoints across tab s
   assert.equal(resizeCheckpoint?.sameProviderSessionOwnerRef, true);
   assert.equal(resizeCheckpoint?.sameProviderSessionReconnectRef, true);
   assert.equal(resizeCheckpoint?.sameLiveBindingAttachGrantRef, true);
+  assert.equal(resizeCheckpoint?.sameGrantValidationRef, true);
   assert.deepEqual(resizeCheckpoint?.missingRefEvidence, []);
   assert.equal(resizeCheckpoint?.secondInteractiveSurfacePresent, false);
 });
@@ -258,6 +270,7 @@ test('active VirtualAppScreen reconnect checkpoints expose blocked evidence for 
     providerSessionOwnerRef: 'computer-use:provider-session/blocked-reconnect/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/blocked-reconnect/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/blocked-reconnect/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/blocked-reconnect/grant-validation.json',
   });
 
   const checkpoint = rightPaneVirtualAppScreenReconnectCheckpoint(registry, {
@@ -276,11 +289,13 @@ test('active VirtualAppScreen reconnect checkpoints expose blocked evidence for 
   assert.equal(checkpoint?.sameProviderSessionOwnerRef, false);
   assert.equal(checkpoint?.sameProviderSessionReconnectRef, false);
   assert.equal(checkpoint?.sameLiveBindingAttachGrantRef, false);
+  assert.equal(checkpoint?.sameGrantValidationRef, false);
   assert.deepEqual(checkpoint?.mismatchedRefEvidence, ['sessionRef']);
   assert.deepEqual(checkpoint?.missingRefEvidence, [
     'providerSessionOwnerRef:observed',
     'providerSessionReconnectRef:observed',
     'liveBindingAttachGrantRef:observed',
+    'grantValidationRef:observed',
   ]);
   assert.equal(checkpoint?.blockedRef, 'computer-use:screen-reconnect/virtual-app-screen-blocked-reconnect-screen-1/blocked/ref-evidence.json');
   assert.match(checkpoint?.blockedReason ?? '', /expected and observed refs match/);

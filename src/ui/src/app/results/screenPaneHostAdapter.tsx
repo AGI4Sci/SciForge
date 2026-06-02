@@ -32,6 +32,9 @@ export interface RightPaneVirtualScreenHostPresentationBounds {
 
 interface RightPaneVirtualScreenHostPresentationBinding {
   sessionRef: string;
+  hostSessionRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   screenRef: string;
   liveSurfaceRef: string;
   frameStreamRef: string;
@@ -39,13 +42,17 @@ interface RightPaneVirtualScreenHostPresentationBinding {
   providerSessionOwnerRef: string;
   providerSessionReconnectRef: string;
   liveBindingAttachGrantRef: string;
+  liveBindingAttachGrantStatus: string;
+  grantValidationRef: string;
+  grantValidationStatus: string;
   surfaceTransportRef: string;
   surfaceTransport?: VirtualScreenPayload['surfaceTransport'];
   currentFrameSequence: NonNullable<VirtualScreenPayload['currentFrameSequence']>;
   platformDriverRef: string;
   platformDriverStatus: string;
   evidenceLedgerRef: string;
-  providerExecuted: true;
+  providerExecuted?: true;
+  providerSessionRevalidated?: true;
   surfaceTransportDescriptor: RightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor;
 }
 
@@ -247,6 +254,10 @@ function useRightPaneVirtualScreenHostPresentation({
     payload.providerSessionOwnerRef,
     payload.providerSessionReconnectRef,
     (payload as Record<string, unknown>).liveBindingAttachGrantRef,
+    (payload as Record<string, unknown>).liveBindingAttachGrantStatus,
+    (payload as Record<string, unknown>).grantValidationRef,
+    (payload as Record<string, unknown>).grantValidationStatus,
+    (payload as Record<string, unknown>).providerSessionRevalidated,
     payload.screenRef,
     payload.sessionRef,
     payload.surfaceMode,
@@ -293,6 +304,9 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
   if (!rightPaneVirtualScreenHostPresentationPlatformDriverReady(payload)) return undefined;
   if (!rightPaneVirtualScreenHostPresentationCompleteIsolation(payload.isolationFlags)) return undefined;
   const sessionRef = rightPaneVirtualScreenHostPresentationRef(payload.sessionRef);
+  const explicitHostSessionRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'hostSessionRef'));
+  const surfaceOwnerRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'surfaceOwnerRef'));
+  const displayOwnerRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'displayOwnerRef'));
   const screenRef = rightPaneVirtualScreenHostPresentationRef(payload.screenRef);
   const liveSurfaceRef = rightPaneVirtualScreenHostPresentationRef(payload.liveSurfaceRef);
   const frameStreamRef = rightPaneVirtualScreenHostPresentationRef(payload.frameStreamRef);
@@ -300,6 +314,9 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
   const providerSessionOwnerRef = rightPaneVirtualScreenHostPresentationRef(payload.providerSessionOwnerRef);
   const providerSessionReconnectRef = rightPaneVirtualScreenHostPresentationRef(payload.providerSessionReconnectRef);
   const liveBindingAttachGrantRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'liveBindingAttachGrantRef'));
+  const liveBindingAttachGrantStatus = rightPaneVirtualScreenHostPresentationText(virtualScreenStringProp(payload, 'liveBindingAttachGrantStatus'));
+  const grantValidationRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'grantValidationRef'));
+  const grantValidationStatus = rightPaneVirtualScreenHostPresentationText(virtualScreenStringProp(payload, 'grantValidationStatus'));
   const surfaceTransportRef = rightPaneVirtualScreenHostPresentationRef(payload.surfaceTransportRef);
   const surfaceTransport = rightPaneVirtualScreenHostPresentationSurfaceTransport(payload.surfaceTransport);
   const currentFrameSequence = rightPaneVirtualScreenHostPresentationCurrentFrameSequence(payload.currentFrameSequence);
@@ -307,6 +324,7 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
   const platformDriverStatus = rightPaneVirtualScreenHostPresentationText(payload.platformDriverStatus);
   const evidenceLedgerRef = rightPaneVirtualScreenHostPresentationRef(payload.evidenceLedgerRef);
   const providerExecuted = rightPaneVirtualScreenHostPresentationProviderExecuted(payload);
+  const providerSessionRevalidated = rightPaneVirtualScreenHostPresentationProviderSessionRevalidated(payload);
   const surfaceTransportDescriptor = rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor(payload);
   if (
     !sessionRef
@@ -317,13 +335,15 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
     || !providerSessionOwnerRef
     || !providerSessionReconnectRef
     || !liveBindingAttachGrantRef
+    || !grantValidationRef
+    || !rightPaneVirtualScreenHostPresentationLiveBindingGrantValidated({ liveBindingAttachGrantStatus, grantValidationStatus })
     || !surfaceTransportRef
     || !surfaceTransport
     || !currentFrameSequence
     || !platformDriverRef
     || !platformDriverStatus
     || !evidenceLedgerRef
-    || !providerExecuted
+    || (!providerExecuted && !providerSessionRevalidated)
     || !surfaceTransportDescriptor
   ) return undefined;
   if (!rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptorMatches({
@@ -337,6 +357,9 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
   })) return undefined;
   return {
     sessionRef,
+    ...(explicitHostSessionRef ? { hostSessionRef: explicitHostSessionRef } : {}),
+    ...(surfaceOwnerRef ? { surfaceOwnerRef } : {}),
+    ...(displayOwnerRef ? { displayOwnerRef } : {}),
     screenRef,
     liveSurfaceRef,
     frameStreamRef,
@@ -344,13 +367,17 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
     providerSessionOwnerRef,
     providerSessionReconnectRef,
     liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus: liveBindingAttachGrantStatus ?? 'validated',
+    grantValidationRef,
+    grantValidationStatus: grantValidationStatus ?? 'validated',
     surfaceTransportRef,
     surfaceTransport,
     currentFrameSequence,
     platformDriverRef,
     platformDriverStatus,
     evidenceLedgerRef,
-    providerExecuted,
+    ...(providerExecuted ? { providerExecuted } : {}),
+    ...(providerSessionRevalidated ? { providerSessionRevalidated } : {}),
     surfaceTransportDescriptor,
   };
 }
@@ -493,6 +520,18 @@ function rightPaneVirtualScreenHostPresentationReadyStatus(value: string | undef
   return Boolean(value && /^(attached|available|granted|not-required|ready|running)$/i.test(value.trim()));
 }
 
+function rightPaneVirtualScreenHostPresentationLiveBindingGrantValidated(value: {
+  liveBindingAttachGrantStatus: string | undefined;
+  grantValidationStatus: string | undefined;
+}) {
+  return Boolean(
+    rightPaneVirtualScreenHostPresentationReadyStatus(value.liveBindingAttachGrantStatus)
+    || rightPaneVirtualScreenHostPresentationReadyStatus(value.grantValidationStatus)
+    || /^(?:valid|validated)$/i.test(value.liveBindingAttachGrantStatus?.trim() ?? '')
+    || /^(?:valid|validated)$/i.test(value.grantValidationStatus?.trim() ?? ''),
+  );
+}
+
 function rightPaneVirtualScreenHostPresentationBlockedStatus(value: string | undefined) {
   return Boolean(value && /^(blocked|denied|disabled|error|failed|missing|not-granted|not-installed|revoked|unavailable)$/i.test(value.trim()));
 }
@@ -506,12 +545,16 @@ function rightPaneVirtualScreenHostPresentationKey(binding: RightPaneVirtualScre
     binding.providerSessionOwnerRef,
     binding.providerSessionReconnectRef,
     binding.liveBindingAttachGrantRef,
+    binding.liveBindingAttachGrantStatus,
+    binding.grantValidationRef,
+    binding.grantValidationStatus,
     binding.surfaceTransportRef,
     binding.surfaceTransport ?? '',
     binding.platformDriverRef,
     binding.platformDriverStatus,
     binding.evidenceLedgerRef,
     String(binding.providerExecuted),
+    String(binding.providerSessionRevalidated),
     binding.surfaceTransportDescriptor.owner,
     binding.surfaceTransportDescriptor.providerId ?? '',
     binding.surfaceTransportDescriptor.currentFrameRef,
@@ -529,6 +572,11 @@ function rightPaneVirtualScreenHostPresentationProviderExecuted(payload: Virtual
   const record = payload as Record<string, unknown>;
   const isolation = payload.isolationFlags as Record<string, unknown> | undefined;
   return record.providerExecuted === true || isolation?.providerExecuted === true ? true : undefined;
+}
+
+function rightPaneVirtualScreenHostPresentationProviderSessionRevalidated(payload: VirtualScreenPayload) {
+  const record = payload as Record<string, unknown>;
+  return record.providerSessionRevalidated === true ? true : undefined;
 }
 
 function rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor(

@@ -19,6 +19,19 @@ SciForge Screen pane
 
 React viewer 只展示 host-owned surface 和 refs-first overlay。Runtime 只装配 workspace/current-run context、host lifecycle 和 command routing。Computer Use action provider 拥有 scheduler、lease、risk、approval、automation barrier 和 completion candidate，但不直接实现 OS display/capture/input。
 
+## 当前 Contract / Smoke 状态
+
+当前工作区已经有 `packages/actions/computer-use/virtual-app-screen-host` 包边界、contract smoke 骨架和 Host-backed runtime attach 迁移 shim。产品 attach 的 public session/surface/frame/grant/owner refs 已是 `computer-use:native-host/...`，provider lifecycle refs 只能作为 Host evidence；真实 macOS / Linux / Windows `diagnosticOnly=false` provider user-level pass 仍未完成。
+
+- `capability.manifest.json` 声明 package 是 product truth owner，并把 `session`、`surface`、`frame`、`permission`、`grant`、`ledger` 的 single truth source 固定为 host-owned。
+- `src/contracts.ts` 定义包级 public API、session model、error taxonomy、grant model、permission/readiness model 和 ledger event taxonomy。
+- `src/in-memory-host.ts` 和 `src/ledger.ts` 是当前 smoke 可运行的 fail-closed / contract-smoke 形态：无平台 adapter 时返回 blocked；human input / automation 会先经过 platform adapter gate，再由 Host 写入 public ledger refs；contract-smoke adapter 只能证明 API、grant、ledger 和 barrier contract，不等于真实平台通过。
+- 顶层 `types.ts`、`errors.ts` 和 `evidence-ledger.ts` 只是兼容 re-export，不能成为第二套 contract 或实现源。
+- `npm run smoke:virtual-app-screen-native-host --silent`、`smoke:computer-use-provider-readiness`、`smoke:computer-use-viewer`、`smoke:computer-use-fixtures` 和 `smoke:computer-use-user-acceptance` 是当前 contract/gate evidence；它们验证 fail-closed、manifest/API parity、grant validation、ledger negative cases 和 viewer live-state guard。
+- `smoke:virtual-app-screen-dogfood-product` 已把 `nativeHost`、`humanInputHotPath`、`automationBarrierRefs` 和 `backgroundEvidenceRefs` 纳入 passed gate；缺真实 Host refs 时 smoke 应保持 blocked，不能把 attached-shaped payload 当通过。
+
+因此文档里的 “Native Host 已存在” 只表示 package contract、manifest、ledger validator、Host-owned public attach refs 和 fail-closed smoke 路线已落位；用户级产品通过仍必须拿到真实 platform adapter 的 session/surface/frame/input/evidence，并证明 `diagnosticOnly=false`、hot-path input、automation barrier 和 current-run ledger replay。
+
 ## Package 边界
 
 目标 package：
@@ -56,20 +69,21 @@ packages/actions/computer-use/virtual-app-screen-host/
 describe()
 probe()
 createSession()
-launchApp()
+launchOrAttachApp()
 attachSurface()
 presentSurface()
+readFrame()
 sendHumanInput()
 executeAutomationIntent()
-readFrame()
-pause()
-resume()
-stop()
+pauseAgent()
+resumeAgent()
 closeSession()
 validateGrant()
 ```
 
-`presentSurface` 只接受 host-issued grant 和 safe surface descriptor。仅 artifact 字段完整不能触发 live presentation。
+这是 `capability.manifest.json` 和当前 `src/contracts.ts` smoke 认可的最小 public API。`getLedger` 这类 package-local validator helper 可以存在于实现接口中，但不能作为产品 public surface；任何新增 public method 进入产品前都必须同步 manifest、ownership map 和 smoke。
+
+`presentSurface` 只接受 host-issued `liveBindingAttachGrantRef`，并写入 `grant.validated` ledger event。仅 artifact 字段完整不能触发 live presentation。
 
 ## 输入路径
 
@@ -98,7 +112,7 @@ Computer Use 自动化仍然 evidence-first。它不能把 `inputAcceptedRef` �
 
 Host-owned evidence writer 至少写：
 
-- `hostSessionRef`
+- `sessionRef` / `hostSessionRef`
 - `surfaceOwnerRef`
 - `displayOwnerRef`
 - `targetAppRef`
@@ -112,8 +126,28 @@ Host-owned evidence writer 至少写：
 - `beforeFrameRef` / `afterFrameRef`
 - `permissionHandoffRef` / `recheckRef`
 - `evidenceLedgerRef`
+- `currentRunPointerRef`
 
 Runtime 和 validators 必须复验 ledger entry existence、hash、current-run ownership、session/surface consistency 和 sequence monotonicity。Shell hook 的 `providerEvidenceWritten=true` 只能是 contract hint，不能单独证明 user-level pass。
+
+当前 contract ledger event type 固定为：
+
+```text
+session.created
+app.launched
+surface.attached
+grant.validated
+frame.read
+human-input.accepted
+automation.barrier-completed
+permission.handoff
+permission.recheck
+agent.paused
+agent.resumed
+session.closed
+```
+
+Ledger entry 必须由 `native-virtual-app-screen-host` 写入，按 sequence 形成 sha256 chain，并拒绝 `ui:`、`gui-viewer:`、fixture、replay-fixture、snapshot-fixture 或 inline base64/data URL 作为 live truth。
 
 ## Transport
 
@@ -138,8 +172,9 @@ Frame stream 不能成为第二个交互真相源。Replay、snapshot、PDF、do
 Native Host 相关实现不能只证明 “看见一帧”。最低 product path evidence：
 
 - right pane 通过 Host provision/attach/present。
-- Host grant 被 dereference/validated，不信任 artifact-shaped payload。
-- 真人输入 fire-and-release，并记录 input accepted sequence。
-- 自动化动作产生 automation barrier、after frame、verification 和 ledger。
+- Host grant 被 dereference/validated，并产生 `grant.validated` ledger event；不信任 artifact-shaped payload。
+- 真人输入 fire-and-release，并记录 `inputAcceptedRef`、`inputSequence` 和 `human-input.accepted` ledger event。
+- 自动化动作产生 `automationBarrierRef`、before/after frame、verification 和 `automation.barrier-completed` ledger event。
 - `gui.presentRef` 证明同一 Host surface 展示在右侧 Screen。
 - 第三方虚拟屏工具若参与，只能出现在 diagnostic/reference 字段。
+- Contract-smoke / in-memory host 可以证明 package contract，但只有真实 platform adapter 的 `diagnosticOnly=false`、background isolated rendering、single interactive truth 和当前 run ledger 才能成为产品通过。

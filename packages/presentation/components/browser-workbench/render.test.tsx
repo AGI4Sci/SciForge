@@ -18,6 +18,80 @@ function htmlFor(fixture = basicBrowserWorkbenchFixture) {
   return renderToStaticMarkup(renderBrowserWorkbench(fixture));
 }
 
+function assertNoProductFallbackSurface(html: string) {
+  assert.doesNotMatch(html, /<iframe|<webview|<canvas|<img/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|browser-workbench-host-frame-image/);
+  assert.doesNotMatch(html, /data-browser-frame-renderer=|data-browser-frame-source=|data-browser-frame-stream-ref=/);
+  assert.doesNotMatch(html, /data-browser-webrtc-handoff=|data-browser-http-frame-live-fallback=/);
+  assert.doesNotMatch(html, /data-browser-frame-transport="(?:host-stream|websocket-binary|webrtc-data-channel)"/);
+  assert.doesNotMatch(html, /src="(?:blob:|\/api\/sciforge\/browser-host\/sessions\/[^"]+\/frame)/);
+}
+
+function legacyHostSession(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 'sciforge.browser-host-session.state.v1',
+    id: 'legacy-session-1',
+    owner: 'host',
+    providerId: 'sciforge.browser-host-session',
+    status: 'ready',
+    url: 'https://external.example/search',
+    requestedUrl: 'https://external.example/search',
+    workspacePath: '/tmp/sciforge',
+    startedAt: '2026-06-01T00:00:00.000Z',
+    updatedAt: '2026-06-01T00:00:01.000Z',
+    viewport: { width: 1365, height: 900 },
+    canGoBack: false,
+    canGoForward: false,
+    liveSurfaceRef: 'browser-host-session:legacy-session-1/live-surface',
+    liveSurfaceTransport: 'host-stream',
+    singleInteractiveTruth: true,
+    frameStreamRef: 'browser-host-session:legacy-session-1/frame-stream',
+    frameRef: 'browser-host-session:legacy-session-1/frame.png',
+    screenshotRef: 'browser-host-session:legacy-session-1/screenshot.png',
+    domSnapshotRef: 'browser-host-session:legacy-session-1/dom.html',
+    axSnapshotRef: 'browser-host-session:legacy-session-1/ax.json',
+    consoleLogRef: 'browser-host-session:legacy-session-1/console.jsonl',
+    networkLogRef: 'browser-host-session:legacy-session-1/network.jsonl',
+    diagnostics: [],
+    ...overrides,
+  };
+}
+
+function nativeHostSession(overrides: Record<string, unknown> = {}) {
+  return {
+    schemaVersion: 'sciforge.browser-host-session.state.v1',
+    id: 'native-session-1',
+    owner: 'host',
+    providerId: 'sciforge.browser-host-session',
+    status: 'ready',
+    url: 'https://external.example/native',
+    requestedUrl: 'https://external.example/native',
+    workspacePath: '/tmp/sciforge',
+    startedAt: '2026-06-02T00:00:00.000Z',
+    updatedAt: '2026-06-02T00:00:01.000Z',
+    viewport: { width: 1365, height: 900 },
+    canGoBack: false,
+    canGoForward: false,
+    liveSurfaceRef: 'browser-host-session:native-session-1/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    nativeAdapterUrl: 'http://127.0.0.1:61234',
+    singleInteractiveTruth: true,
+    screenshotRef: 'browser-host-session:native-session-1/screenshot.png',
+    domSnapshotRef: 'browser-host-session:native-session-1/dom.html',
+    axSnapshotRef: 'browser-host-session:native-session-1/ax.json',
+    consoleLogRef: 'browser-host-session:native-session-1/console.jsonl',
+    networkLogRef: 'browser-host-session:native-session-1/network.jsonl',
+    diagnostics: [],
+    ...overrides,
+  };
+}
+
+function nativeSurfaceStabilityKey(html: string) {
+  const match = html.match(/data-browser-native-surface-stability-key="([^"]+)"/);
+  assert.ok(match?.[1], 'expected native surface stability key');
+  return match[1];
+}
+
 test('browser-workbench package exposes manifest and renders browser_runtime refs', () => {
   assert.equal(manifest.componentId, 'browser-workbench');
   const html = htmlFor();
@@ -32,7 +106,7 @@ test('browser-workbench package exposes manifest and renders browser_runtime ref
   assert.match(html, /data-event="browser-command-request"/);
   assert.match(html, /data-browser-command-id="open-external"/);
   assert.match(html, /\/browser snapshot --url &quot;http:\/\/localhost:5173\/&quot; --screenshot --dom --logs/);
-  assert.doesNotMatch(html, /Presentation only: browser_runtime owns provider routing/);
+  assertNoProductFallbackSurface(html);
 });
 
 test('browser-workbench renders an empty state without pretending to own browser execution', () => {
@@ -43,15 +117,17 @@ test('browser-workbench renders an empty state without pretending to own browser
   assert.match(html, /No browser runtime projection is attached/);
   assert.match(html, /\/browser open &quot;about:blank&quot; --surface workbench/);
   assert.doesNotMatch(html, /playwright_browser_automation/);
+  assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench supports host-declared preview and approval-tagged commands', () => {
+test('browser-workbench keeps host-declared previews as typed state plus approval-tagged commands', () => {
   const html = htmlFor(selectionBrowserWorkbenchFixture);
 
-  assert.match(html, /<iframe/);
-  assert.match(html, /sandbox="allow-downloads allow-forms allow-modals allow-same-origin allow-scripts allow-storage-access-by-user-activation"/);
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.match(html, /http:\/\/localhost:5173\//);
   assert.match(html, /data-browser-risk="needs-approval"/);
   assert.match(html, /Visible takeover requires TUI-host approval/);
+  assertNoProductFallbackSurface(html);
 });
 
 test('browser-workbench default commands are terminal-equivalent text', () => {
@@ -87,7 +163,7 @@ test('browser-workbench default commands are terminal-equivalent text', () => {
   });
 });
 
-test('browser-workbench normalizes scheme-less urls for commands and iframe previews', () => {
+test('browser-workbench normalizes scheme-less urls without iframe materialization', () => {
   assert.equal(normalizeBrowserWorkbenchUrl('localhost:5175'), 'http://localhost:5175');
   assert.equal(normalizeBrowserWorkbenchUrl('example.org/docs'), 'https://example.org/docs');
   assert.equal(normalizeBrowserWorkbenchUrl('/api/sciforge/browser/proxy?url=https%3A%2F%2Fexample.org'), '/api/sciforge/browser/proxy?url=https%3A%2F%2Fexample.org');
@@ -103,7 +179,9 @@ test('browser-workbench normalizes scheme-less urls for commands and iframe prev
       },
     },
   }));
-  assert.match(html, /src="http:\/\/localhost:5175"/);
+  assert.match(html, /http:\/\/localhost:5175/);
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assertNoProductFallbackSurface(html);
 });
 
 test('browser-workbench keeps proxy materialization out of the interactive browser surface', () => {
@@ -127,9 +205,10 @@ test('browser-workbench keeps proxy materialization out of the interactive brows
   assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy/);
   assert.doesNotMatch(html, /href="https:\/\/external\.example/);
   assert.doesNotMatch(html, /https:\/\/\/api\/sciforge\/browser\/proxy/);
+  assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench renders host-owned browser surfaces for external pages without direct external anchors', () => {
+test('browser-workbench preserves legacy host-stream refs as typed state, not a live surface', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
     slot: {
@@ -138,56 +217,19 @@ test('browser-workbench renders host-owned browser surfaces for external pages w
         externalUrl: 'https://external.example/search',
         frameUrl: 'blob:http://127.0.0.1:5173/browser-host-session-frame',
         frameTransport: 'websocket-binary',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'session-1',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/search',
-          requestedUrl: 'https://external.example/search',
-          workspacePath: '/tmp/sciforge',
-          startedAt: '2026-06-01T00:00:00.000Z',
-          updatedAt: '2026-06-01T00:00:01.000Z',
-          viewport: { width: 1365, height: 900 },
-          canGoBack: false,
-          canGoForward: false,
-          liveSurfaceRef: 'browser-host-session:session-1/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:session-1/frame-stream',
-          frameRef: 'browser-host-session:session-1/frame.png',
-          screenshotRef: 'browser-host-session:session-1/screenshot.png',
-          domSnapshotRef: 'browser-host-session:session-1/dom.html',
-          axSnapshotRef: 'browser-host-session:session-1/ax.json',
-          consoleLogRef: 'browser-host-session:session-1/console.jsonl',
-          networkLogRef: 'browser-host-session:session-1/network.jsonl',
-          diagnostics: [],
-        },
+        hostSession: legacyHostSession({ id: 'session-1' }),
       },
     },
   }));
 
-  assert.match(html, /data-browser-object-type="host-browser"/);
+  assert.match(html, /data-browser-object-type="browser-state"/);
   assert.match(html, /data-browser-host-surface="browser-host-session"/);
-  assert.match(html, /data-browser-live-surface-ref="browser-host-session:session-1\/live-surface"/);
-  assert.match(html, /data-browser-live-surface-transport="host-stream"/);
-  assert.match(html, /data-browser-single-interactive-truth="true"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:session-1\/frame-stream"/);
-  assert.match(html, /data-browser-frame-transport="websocket-binary"/);
-  assert.match(html, /browser-workbench-host-frame/);
-  assert.match(html, /data-browser-host-keyboard-focus-key="browser-host-session:session-1"/);
-  assert.match(html, /browser-workbench-host-keyboard-input/);
-  assert.match(html, /aria-label="Browser keyboard input"/);
-  assert.match(html, /data-browser-host-keyboard-path="hidden-input"/);
-  assert.match(html, /data-browser-host-keyboard-input="true"/);
-  assert.match(html, /data-browser-host-keyboard-restore="session-storage"/);
-  assert.match(html, /<img/);
-  assert.match(html, /src="blob:http:\/\/127\.0\.0\.1:5173\/browser-host-session-frame"/);
-  assert.match(html, /browser-host-session:session-1\/frame\.png/);
-  assert.match(html, /browser-host-session:session-1\/ax\.json/);
+  assert.match(html, /browser-host-session:session-1/);
+  assert.match(html, /browser-host-session:legacy-session-1\/frame\.png/);
+  assert.match(html, /browser-host-session:legacy-session-1\/ax\.json/);
   assert.match(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
-  assert.doesNotMatch(html, /\/api\/sciforge\/browser-host\/sessions\/session-1\/frame|href="https:\/\/external\.example|<iframe|<webview/);
+  assert.doesNotMatch(html, /data-browser-live-surface-ref="browser-host-session:session-1\/live-surface"/);
+  assertNoProductFallbackSurface(html);
 });
 
 test('browser-workbench renders native embedded BrowserHostSession mount without img iframe or webview', () => {
@@ -198,30 +240,7 @@ test('browser-workbench renders native embedded BrowserHostSession mount without
       props: {
         externalUrl: 'https://external.example/native',
         frameTransport: 'native-embedded',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'native-session-1',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/native',
-          requestedUrl: 'https://external.example/native',
-          workspacePath: '/tmp/sciforge',
-          startedAt: '2026-06-02T00:00:00.000Z',
-          updatedAt: '2026-06-02T00:00:01.000Z',
-          viewport: { width: 1365, height: 900 },
-          canGoBack: false,
-          canGoForward: false,
-          liveSurfaceRef: 'browser-host-session:native-session-1/live-surface',
-          liveSurfaceTransport: 'native-embedded',
-          singleInteractiveTruth: true,
-          screenshotRef: 'browser-host-session:native-session-1/screenshot.png',
-          domSnapshotRef: 'browser-host-session:native-session-1/dom.html',
-          axSnapshotRef: 'browser-host-session:native-session-1/ax.json',
-          consoleLogRef: 'browser-host-session:native-session-1/console.jsonl',
-          networkLogRef: 'browser-host-session:native-session-1/network.jsonl',
-          diagnostics: [],
-        },
+        hostSession: nativeHostSession(),
       },
     },
   }));
@@ -232,74 +251,168 @@ test('browser-workbench renders native embedded BrowserHostSession mount without
   assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-single-interactive-truth="true"/);
   assert.match(html, /browser-host-session:native-session-1\/live-surface/);
-  assert.doesNotMatch(html, /<img|<iframe|<webview|data-browser-frame-stream-ref="browser-host-session:native-session-1\/frame-stream/);
+  assert.doesNotMatch(html, /<img|<iframe|<canvas|<webview|data-browser-frame-stream-ref=/);
 });
 
-test('browser-workbench renders BrowserHostSession timing diagnostics with transport latency summary', () => {
+test('browser-workbench keeps native surface stable across loading refs diagnostics and topbar state changes', () => {
+  const baseHostSession = nativeHostSession({
+    status: 'loading',
+    canGoBack: false,
+    canGoForward: false,
+    diagnostics: ['initial bounded diagnostic'],
+    loadingProgress: {
+      state: 'navigation-committed',
+      reason: 'host-loading',
+      source: 'host-session',
+      status: 'loading',
+    },
+  });
+  const updatedHostSession = nativeHostSession({
+    status: 'loading',
+    canGoBack: true,
+    canGoForward: true,
+    diagnostics: ['updated bounded diagnostic', 'refs updated without surface remount'],
+    loadingProgress: {
+      state: 'retry',
+      reason: 'navigation-retry',
+      source: 'host-progress',
+      status: 'loading',
+      canRetry: true,
+    },
+    screenshotRef: 'browser-host-session:native-session-1/screenshot-updated.png',
+    domSnapshotRef: 'browser-host-session:native-session-1/dom-updated.html',
+  });
+  const baseHtml = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        hostSession: baseHostSession,
+      },
+    },
+  }));
+  const updatedHtml = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        hostSession: updatedHostSession,
+        traceRefs: [
+          { kind: 'console-log', ref: 'browser-host-session:native-session-1/console-updated.jsonl' },
+        ],
+        commands: browserWorkbenchDefaultCommands('https://external.example/native', {
+          status: 'loading',
+          canGoBack: true,
+          canGoForward: true,
+        }),
+        writerDiagnostic: {
+          status: 'ok',
+          effectiveDisplayUrl: 'http://127.0.0.1:6173',
+        },
+      },
+    },
+  }));
+
+  assert.equal(nativeSurfaceStabilityKey(baseHtml), nativeSurfaceStabilityKey(updatedHtml));
+  assert.match(updatedHtml, /data-status="loading"/);
+  assert.match(updatedHtml, /data-browser-object-type="host-browser"/);
+  assert.match(updatedHtml, /data-browser-loading-progress-state="retry"/);
+  assert.match(updatedHtml, /data-browser-native-surface-stability-key="native-session-1:browser-host-session:native-session-1\/live-surface"/);
+  assert.match(updatedHtml, /browser-host-session:native-session-1\/dom-updated\.html/);
+  assertNoProductFallbackSurface(baseHtml);
+  assertNoProductFallbackSurface(updatedHtml);
+});
+
+test('browser-workbench renders missing native attach as typed blocked handoff retry refs only', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        hostSession: nativeHostSession({
+          diagnostics: ['Native attach bridge unavailable; retry BrowserHostSession or request handoff.'],
+          frameRef: 'browser-host-session:native-session-1/frame-evidence.png',
+          screenshotRef: 'browser-host-session:native-session-1/screenshot-evidence.png',
+        }),
+        state: {
+          status: 'blocked',
+          url: 'https://external.example/native',
+          hostSurface: 'browser-host-session',
+          canRenderFrame: false,
+          reason: 'Native embedded BrowserHostSession attach bridge is unavailable.',
+          ref: 'browser:host-surface/right-pane/blocked',
+          loadingProgress: {
+            state: 'handoff',
+            reason: 'user-handoff-required',
+            source: 'host-error',
+            status: 'blocked',
+            canRetry: true,
+            blocked: true,
+            requiresHandoff: true,
+          },
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.match(html, /data-browser-host-surface="browser-host-session"/);
+  assert.match(html, /data-browser-loading-progress-state="handoff"/);
+  assert.match(html, /data-browser-loading-progress-can-retry="true"/);
+  assert.match(html, /data-browser-loading-progress-requires-handoff="true"/);
+  assert.match(html, /data-browser-state-action="retry"/);
+  assert.match(html, /data-browser-state-action="handoff"/);
+  assert.match(html, /browser-host-session:native-session-1\/frame-evidence\.png/);
+  assert.doesNotMatch(html, /data-browser-native-surface="true"|data-browser-live-surface-ref=|data-browser-frame-transport="native-embedded"/);
+  assertNoProductFallbackSurface(html);
+});
+
+test('browser-workbench renders native BrowserHostSession timing diagnostics with transport latency summary', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
     slot: {
       ...emptyBrowserWorkbenchFixture.slot,
       props: {
         externalUrl: 'https://external.example/timing',
-        frameUrl: 'blob:http://127.0.0.1:5173/browser-host-session-timing-frame',
-        frameTransport: 'websocket-binary',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        frameTransport: 'native-embedded',
+        hostSession: nativeHostSession({
           id: 'timing-session-1',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/timing',
-          requestedUrl: 'https://external.example/timing',
-          workspacePath: '/tmp/sciforge',
-          startedAt: '2026-06-02T00:00:00.000Z',
-          updatedAt: '2026-06-02T00:00:01.000Z',
-          viewport: { width: 1365, height: 900 },
-          canGoBack: false,
-          canGoForward: false,
           liveSurfaceRef: 'browser-host-session:timing-session-1/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          nativeAdapterUrl: 'http://127.0.0.1:61234',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:timing-session-1/frame-stream',
-          frameRef: 'browser-host-session:timing-session-1/frame.png',
-          diagnostics: [],
           lastActionTiming: {
             actionId: 'ui-click-1',
             action: 'click',
-            capture: 'frame',
+            capture: 'none',
             status: 'ok',
             uiEventReceivedAt: '2026-06-02T00:00:00.100Z',
             adapterSentAt: '2026-06-02T00:00:00.120Z',
             hostReceivedAt: '2026-06-02T00:00:00.130Z',
             hostStartedAt: '2026-06-02T00:00:00.140Z',
             hostActionEndedAt: '2026-06-02T00:00:00.180Z',
-            evidenceCaptureStartedAt: '2026-06-02T00:00:00.190Z',
-            evidenceCaptureEndedAt: '2026-06-02T00:00:00.250Z',
             hostCompletedAt: '2026-06-02T00:00:00.260Z',
             adapterToHostMs: 10,
             queueMs: 10,
             hostActionMs: 40,
-            evidenceMs: 60,
             totalMs: 130,
-            liveSurfaceTransport: 'host-stream',
-            paintAckSource: 'host-stream-frame',
+            liveSurfaceTransport: 'native-embedded',
+            paintAckSource: 'native-adapter-action-state',
           },
           actionTimingSummary: [
             { action: 'click', count: 3, p50Ms: 42, p95Ms: 95, lastMs: 130 },
             { action: 'scroll', count: 2, p50Ms: 31, p95Ms: 64, lastMs: 52 },
           ],
-        },
+        }),
       },
     },
   }));
 
   assert.match(html, /browser-workbench-viewer-diagnostics/);
-  assert.match(html, /data-browser-live-surface-transport="host-stream"/);
+  assert.match(html, /data-browser-diagnostic-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-last-action="click"/);
   assert.match(html, /data-browser-last-action-total-ms="130"/);
-  assert.match(html, /transport<\/dt><dd>host-stream/);
+  assert.match(html, /transport<\/dt><dd>native-embedded/);
   assert.match(html, /nativeAdapterUrl<\/dt><dd>http:\/\/127\.0\.0\.1:61234/);
   assert.match(html, /lastActionTotalMs<\/dt><dd>130/);
   assert.match(html, /latencySummary<\/dt><dd>click:p50=42ms,p95=95ms \| scroll:p50=31ms,p95=64ms/);
@@ -312,25 +425,14 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
       ...emptyBrowserWorkbenchFixture.slot,
       props: {
         externalUrl: 'https://external.example/private',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        hostSession: nativeHostSession({
           id: 'blocked-session-1',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
           status: 'failed',
           url: 'https://external.example/private',
           requestedUrl: 'https://external.example/private',
-          workspacePath: '/tmp/sciforge',
           workspaceWriterBaseUrl: 'http://127.0.0.1:6173/api/sciforge?token=sk-writer-secret-123456',
-          startedAt: '2026-06-02T00:00:00.000Z',
-          updatedAt: '2026-06-02T00:00:01.000Z',
-          viewport: { width: 1365, height: 900 },
-          canGoBack: false,
-          canGoForward: false,
           liveSurfaceRef: 'browser-host-session:blocked-session-1/live-surface',
-          liveSurfaceTransport: 'native-embedded',
           nativeAdapterUrl: 'http://127.0.0.1:6180/native?apiKey=sk-native-secret-123456',
-          singleInteractiveTruth: true,
           diagnostics: [
             'data:image/png;base64,AAAA',
             'Retry same native surface through http://127.0.0.1:6173/api?token=sk-retry-secret-123456',
@@ -354,7 +456,7 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
             paintAckSource: 'native-adapter-action-state',
             blockedReason: 'Native adapter blocked https://external.example/private?token=sk-page-secret-123456',
           },
-        },
+        }),
         writerDiagnostic: {
           status: 'missing-browser-host-capability',
           configuredDisplayUrl: 'http://127.0.0.1:6173/ui?token=sk-config-secret-123456',
@@ -375,7 +477,7 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
   assert.match(html, /data-browser-writer-url="http:\/\/127\.0\.0\.1:6173"/);
   assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-search:missing"/);
   assert.match(html, /data-browser-native-adapter-url="http:\/\/127\.0\.0\.1:6180"/);
-  assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
+  assert.match(html, /data-browser-diagnostic-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-last-action-timing="click:130ms:failed"/);
   assert.match(html, /writerUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6173/);
   assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-search:missing/);
@@ -408,10 +510,10 @@ test('browser-workbench renders system-browser host handoff as state, not a fake
   assert.match(html, /External pages require BrowserHostSession/);
   assert.match(html, /\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
   assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy|data-browser-state-action="proxy-fallback"|Proxy Snapshot/);
-  assert.doesNotMatch(html, /<iframe|<webview|href="https:\/\/external\.example/);
+  assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench renders BrowserHostSession frames as host-owned image projections with refs', () => {
+test('browser-workbench keeps legacy frame material as refs-first state only', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
     slot: {
@@ -419,126 +521,59 @@ test('browser-workbench renders BrowserHostSession frames as host-owned image pr
       props: {
         addressValue: 'https://external.example/live',
         frameUrl: '/api/sciforge/browser-host/sessions/host-1/frame',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        hostSession: legacyHostSession({
           id: 'host-1',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
           url: 'https://external.example/live',
           title: 'External page',
           liveSurfaceRef: 'browser-host-session:host-1/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
           frameStreamRef: 'browser-host-session:host-1/frame-stream',
           frameRef: 'browser-host-session:host-1/frame.png',
           screenshotRef: 'browser-host-session:host-1/screenshot.png',
-          domSnapshotRef: 'browser-host-session:host-1/dom.html',
-          axSnapshotRef: 'browser-host-session:host-1/ax.json',
-          consoleLogRef: 'browser-host-session:host-1/console.jsonl',
-          networkLogRef: 'browser-host-session:host-1/network.jsonl',
-          updatedAt: '2026-06-01T00:00:00.000Z',
-        },
+        }),
       },
     },
   }));
 
-  assert.match(html, /data-browser-object-type="host-browser"/);
-  assert.match(html, /data-browser-host-surface="browser-host-session"/);
-  assert.match(html, /data-browser-live-surface-ref="browser-host-session:host-1\/live-surface"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:host-1\/frame-stream"/);
-  assert.match(html, /<img/);
-  assert.match(html, /src="\/api\/sciforge\/browser-host\/sessions\/host-1\/frame"/);
-  assert.match(html, /data-browser-frame-ref="browser-host-session:host-1\/frame\.png"/);
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.match(html, /browser-host-session:host-1\/frame\.png/);
   assert.match(html, /browser-frame/);
   assert.match(html, /browser-host-session:host-1\/screenshot\.png/);
-  assert.doesNotMatch(html, /<iframe|<webview|\/api\/sciforge\/browser\/proxy/);
+  assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench accepts websocket-binary blob frames as the live host surface transport', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
+test('browser-workbench rejects websocket, canvas, and WebRTC fallback claims as product live surfaces', () => {
+  const cases = [
+    {
+      name: 'websocket blob',
       props: {
         addressValue: 'https://external.example/live',
         frameUrl: 'blob:http://localhost/browser-host-live-frame',
         frameTransport: 'websocket-binary',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        hostSession: legacyHostSession({
           id: 'host-binary',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/live',
           liveSurfaceRef: 'browser-host-session:host-binary/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
           frameStreamRef: 'browser-host-session:host-binary/frame-stream',
           frameRef: 'browser-host-session:host-binary/frame.png',
-          updatedAt: '2026-06-01T00:00:00.000Z',
-        },
+        }),
       },
     },
-  }));
-
-  assert.match(html, /data-browser-object-type="host-browser"/);
-  assert.match(html, /src="blob:http:\/\/localhost\/browser-host-live-frame"/);
-  assert.match(html, /data-browser-frame-transport="websocket-binary"/);
-  assert.match(html, /data-browser-single-interactive-truth="true"/);
-  assert.doesNotMatch(html, /<iframe|<webview|\/api\/sciforge\/browser\/proxy/);
-});
-
-test('browser-workbench canvas-binary experiment is constrained to the same BrowserHostSession frame stream', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
+    {
+      name: 'canvas-binary',
       props: {
         addressValue: 'https://external.example/canvas-live',
         frameRenderer: 'canvas-binary',
         frameTransport: 'websocket-binary',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        hostSession: legacyHostSession({
           id: 'host-canvas',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/canvas-live',
           liveSurfaceRef: 'browser-host-session:host-canvas/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
           frameStreamRef: 'browser-host-session:host-canvas/frame-stream',
           frameRef: 'browser-host-session:host-canvas/frame.png',
           viewport: { width: 1024, height: 768 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
+        }),
       },
     },
-  }));
-
-  assert.match(html, /data-browser-object-type="host-browser"/);
-  assert.match(html, /browser-workbench-host-frame-canvas/);
-  assert.match(html, /<canvas/);
-  assert.match(html, /width="1024"/);
-  assert.match(html, /height="768"/);
-  assert.match(html, /data-browser-frame-renderer="canvas-binary"/);
-  assert.match(html, /data-browser-frame-source="browser-host-session-frame-stream-binary"/);
-  assert.match(html, /data-browser-frame-session-id="host-canvas"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:host-canvas\/frame-stream"/);
-  assert.match(html, /data-browser-frame-transport="websocket-binary"/);
-  assert.match(html, /data-browser-single-interactive-truth="true"/);
-  assert.match(html, /data-browser-host-keyboard-path="hidden-input"/);
-  assert.match(html, /browser-workbench-host-keyboard-input/);
-  assert.match(html, /data-browser-host-keyboard-input="true"/);
-  assert.doesNotMatch(html, /<img|<iframe|<webview|html2canvas|\/api\/sciforge\/browser\/proxy|\/api\/sciforge\/browser-host\/sessions\/host-canvas\/frame|src=/);
-});
-
-test('browser-workbench accepts webrtc-data-channel only as a same-session canvas transport candidate', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
+    {
+      name: 'webrtc candidate',
       props: {
         addressValue: 'https://external.example/webrtc-live',
         frameRenderer: 'canvas-binary',
@@ -568,273 +603,28 @@ test('browser-workbench accepts webrtc-data-channel only as a same-session canva
           loopbackEvidenceOnly: false,
           httpFrameRouteClaim: false,
         },
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
+        hostSession: legacyHostSession({
           id: 'host-webrtc',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/webrtc-live',
           liveSurfaceRef: 'browser-host-session:host-webrtc/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
           frameStreamRef: 'browser-host-session:host-webrtc/frame-stream',
           frameRef: 'browser-host-session:host-webrtc/frame.png',
           viewport: { width: 1280, height: 720 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
+        }),
       },
     },
-  }));
+  ];
 
-  assert.match(html, /data-browser-object-type="host-browser"/);
-  assert.match(html, /browser-workbench-host-frame-canvas/);
-  assert.match(html, /<canvas/);
-  assert.match(html, /data-browser-live-surface-transport="host-stream"/);
-  assert.match(html, /data-browser-frame-transport="webrtc-data-channel"/);
-  assert.match(html, /data-browser-frame-source="browser-host-session-frame-stream-binary"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:host-webrtc\/frame-stream"/);
-  assert.match(html, /data-browser-single-interactive-truth="true"/);
-  assert.match(html, /data-browser-webrtc-handoff="candidate-only"/);
-  assert.match(html, /data-browser-webrtc-claim="bridge-to-right-pane-canvas-handoff-only"/);
-  assert.match(html, /data-browser-webrtc-fully-passed-claim="false"/);
-  assert.match(html, /data-browser-second-viewer="false"/);
-  assert.match(html, /data-browser-http-frame-live-fallback="false"/);
-  assert.doesNotMatch(html, /<img|<iframe|<webview|\/api\/sciforge\/browser\/proxy|src=/);
-});
-
-test('browser-workbench refuses WebRTC candidate rendering without the typed right-pane handoff', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
-      props: {
-        addressValue: 'https://external.example/webrtc-live',
-        frameRenderer: 'canvas-binary',
-        frameTransport: 'webrtc-data-channel',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'host-webrtc-untyped',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/webrtc-live',
-          liveSurfaceRef: 'browser-host-session:host-webrtc-untyped/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:host-webrtc-untyped/frame-stream',
-          frameRef: 'browser-host-session:host-webrtc-untyped/frame.png',
-          viewport: { width: 1280, height: 720 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
+  for (const item of cases) {
+    const html = renderToStaticMarkup(renderBrowserWorkbench({
+      ...emptyBrowserWorkbenchFixture,
+      slot: {
+        ...emptyBrowserWorkbenchFixture.slot,
+        props: item.props,
       },
-    },
-  }));
-
-  assert.match(html, /data-browser-object-type="browser-state"/);
-  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
-});
-
-test('browser-workbench refuses WebRTC candidate rendering when the handoff claims real UI pass evidence', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
-      props: {
-        addressValue: 'https://external.example/webrtc-live',
-        frameRenderer: 'canvas-binary',
-        frameTransport: 'webrtc-data-channel',
-        liveTransportHandoff: {
-          status: 'candidate-contract',
-          claim: 'bridge-to-right-pane-canvas-handoff-only',
-          claimScope: 'candidate-only',
-          owner: 'BrowserHostSession',
-          rightPaneSurfaceOwner: 'BrowserHostSession',
-          productSurface: 'right-pane-browser',
-          renderTarget: 'canvas',
-          frameRenderer: 'canvas-binary',
-          frameTransport: 'webrtc-data-channel',
-          fallbackTransport: 'websocket-binary',
-          liveSurfaceTransportCandidate: 'webrtc-data-channel',
-          hostSessionRef: 'browser-host-session:host-webrtc-forged',
-          liveSurfaceRef: 'browser-host-session:host-webrtc-forged/live-surface',
-          frameStreamRef: 'browser-host-session:host-webrtc-forged/frame-stream',
-          inlineFrameBytes: false,
-          inlineSignals: false,
-          secondViewer: false,
-          secondTruthSource: false,
-          httpFrameLiveFallback: false,
-          fullyPassedClaim: false,
-          realUiWebRtcPassClaim: true as false,
-          loopbackEvidenceOnly: false,
-          httpFrameRouteClaim: false,
-        },
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'host-webrtc-forged',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/webrtc-live',
-          liveSurfaceRef: 'browser-host-session:host-webrtc-forged/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:host-webrtc-forged/frame-stream',
-          frameRef: 'browser-host-session:host-webrtc-forged/frame.png',
-          viewport: { width: 1280, height: 720 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
-      },
-    },
-  }));
-
-  assert.match(html, /data-browser-object-type="browser-state"/);
-  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
-});
-
-test('browser-workbench refuses WebRTC canvas when the BrowserHostSession owner is not host-stream', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
-      props: {
-        addressValue: 'https://external.example/webrtc-live',
-        frameRenderer: 'canvas-binary',
-        frameTransport: 'webrtc-data-channel',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'host-webrtc-second-viewer',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/webrtc-live',
-          liveSurfaceRef: 'browser-host-session:host-webrtc-second-viewer/live-surface',
-          liveSurfaceTransport: 'webrtc-data-channel',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:host-webrtc-second-viewer/frame-stream',
-          frameRef: 'browser-host-session:host-webrtc-second-viewer/frame.png',
-          viewport: { width: 1280, height: 720 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
-      },
-    },
-  }));
-
-  assert.match(html, /data-browser-object-type="browser-state"/);
-  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
-});
-
-test('browser-workbench refuses canvas-binary rendering for mismatched BrowserHostSession frame streams', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
-      props: {
-        addressValue: 'https://external.example/canvas-live',
-        frameRenderer: 'canvas-binary',
-        frameTransport: 'websocket-binary',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'host-canvas',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/canvas-live',
-          liveSurfaceRef: 'browser-host-session:host-canvas/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:other-session/frame-stream',
-          frameRef: 'browser-host-session:host-canvas/frame.png',
-          viewport: { width: 1024, height: 768 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
-      },
-    },
-  }));
-
-  assert.match(html, /data-browser-object-type="browser-state"/);
-  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-frame-renderer="canvas-binary"|<img|<iframe|<webview/);
-});
-
-test('browser-workbench refuses WebRTC candidate fallback to HTTP frame when session refs mismatch', () => {
-  const html = renderToStaticMarkup(renderBrowserWorkbench({
-    ...emptyBrowserWorkbenchFixture,
-    slot: {
-      ...emptyBrowserWorkbenchFixture.slot,
-      props: {
-        addressValue: 'https://external.example/webrtc-live',
-        frameRenderer: 'canvas-binary',
-        frameTransport: 'webrtc-data-channel',
-        frameUrl: 'https://workspace.example/api/sciforge/browser-host/sessions/host-webrtc/frame',
-        hostSession: {
-          schemaVersion: 'sciforge.browser-host-session.state.v1',
-          id: 'host-webrtc',
-          owner: 'host',
-          providerId: 'sciforge.browser-host-session',
-          status: 'ready',
-          url: 'https://external.example/webrtc-live',
-          liveSurfaceRef: 'browser-host-session:host-webrtc/live-surface',
-          liveSurfaceTransport: 'host-stream',
-          singleInteractiveTruth: true,
-          frameStreamRef: 'browser-host-session:other-session/frame-stream',
-          frameUrl: 'https://workspace.example/api/sciforge/browser-host/sessions/host-webrtc/frame',
-          viewport: { width: 1280, height: 720 },
-          updatedAt: '2026-06-02T00:00:00.000Z',
-        },
-      },
-    },
-  }));
-
-  assert.match(html, /data-browser-object-type="browser-state"/);
-  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|browser-workbench-host-frame-image|<canvas|<img|<iframe|<webview/);
-  assert.doesNotMatch(html, /data-browser-frame-transport="webrtc-data-channel"|\/api\/sciforge\/browser-host\/sessions\/host-webrtc\/frame/);
-});
-
-test('browser-workbench forwards host pointer gestures without owning browser execution', () => {
-  const source = readFileSync(new URL('./render.tsx', import.meta.url), 'utf8');
-
-  assert.match(source, /onPointerDown/);
-  assert.match(source, /setPointerCapture/);
-  assert.match(source, /action: 'mouse-down'/);
-  assert.match(source, /onPointerMove/);
-  assert.match(source, /action: 'mouse-move'/);
-  assert.match(source, /onPointerUp/);
-  assert.match(source, /action: 'mouse-up'/);
-  assert.match(source, /onContextMenu/);
-  assert.match(source, /browserWorkbenchMouseButton/);
-});
-
-test('browser-workbench pins host-stream keyboard focus to the hidden input after page clicks', () => {
-  const source = readFileSync(new URL('./render.tsx', import.meta.url), 'utf8');
-
-  assert.match(source, /browserWorkbenchHostFrameForTarget/);
-  assert.match(source, /target\.closest<HTMLElement>\('\.browser-workbench-host-frame'\)/);
-  assert.match(source, /data-browser-host-keyboard-path="hidden-input"/);
-  assert.match(source, /data-browser-host-keyboard-focus-key=\{hostKeyboardFocusKey\}/);
-  assert.match(source, /data-browser-host-keyboard-restore="session-storage"/);
-  assert.match(source, /BROWSER_WORKBENCH_KEYBOARD_FOCUS_STORAGE_PREFIX/);
-  assert.match(source, /rememberBrowserWorkbenchKeyboardFocus\(frame\)/);
-  assert.match(source, /restoreBrowserWorkbenchKeyboardFocus/);
-  assert.match(source, /window\.sessionStorage\.setItem\(key, 'active'\)/);
-  assert.match(source, /window\.sessionStorage\.getItem\(key\) !== 'active'/);
-  assert.match(source, /data-browser-host-keyboard-input="true"/);
-  assert.match(source, /onPointerDownCapture/);
-  assert.match(source, /onMouseDownCapture/);
-  assert.match(source, /onClickCapture/);
-  assert.match(source, /focusBrowserWorkbenchKeyboardInputNow\(input\)/);
-  assert.match(source, /window\.requestAnimationFrame\?\.\(\(\) => focusBrowserWorkbenchKeyboardInputNow\(input\)\)/);
-  assert.match(source, /setTimeout\(\(\) => focusBrowserWorkbenchKeyboardInputNow\(input\), 0\)/);
-});
-
-test('browser-workbench keeps search-box text and edit keys on the BrowserHostSession keyboard path', () => {
-  const source = readFileSync(new URL('./render.tsx', import.meta.url), 'utf8');
-
-  assert.match(source, /function sendBrowserWorkbenchInputText\([\s\S]*const sentValue = input\.dataset\.sentValue \?\? '';[\s\S]*const text = value\.startsWith\(sentValue\) \? value\.slice\(sentValue\.length\) : value \|\| fallbackText;[\s\S]*onHostActionRequest\?\.\(\{ action: 'type', text \}\);/);
-  assert.match(source, /onCompositionEnd=\{\(event\) => \{[\s\S]*event\.preventDefault\(\);[\s\S]*event\.stopPropagation\(\);[\s\S]*sendBrowserWorkbenchInputText\(event\.currentTarget, payload\.onHostActionRequest, event\.data\);[\s\S]*\}\}/);
-  assert.match(source, /onInput=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*if \(event\.currentTarget\.dataset\.composing === 'true'\) return;[\s\S]*sendBrowserWorkbenchInputText\(event\.currentTarget, payload\.onHostActionRequest\);[\s\S]*\}\}/);
-  assert.match(source, /onKeyDown=\{\(event\) => \{[\s\S]*event\.stopPropagation\(\);[\s\S]*const action = browserWorkbenchKeyboardPressAction\(event\);[\s\S]*if \(!action\) return;[\s\S]*event\.preventDefault\(\);[\s\S]*mirrorBrowserWorkbenchSpecialKey\(event\.currentTarget, event\.key\);[\s\S]*payload\.onHostActionRequest\?\.\(action\);[\s\S]*\}\}/);
-  assert.match(source, /function browserWorkbenchKeyboardPressAction\(event: React\.KeyboardEvent\): \{ action: 'press'; key: string \} \| undefined \{[\s\S]*const action = browserWorkbenchKeyAction\(event\);[\s\S]*return action\?\.action === 'press' \? action : undefined;[\s\S]*\}/);
-  assert.match(source, /function mirrorBrowserWorkbenchSpecialKey\(input: HTMLTextAreaElement, key: string\) \{[\s\S]*key === 'Backspace'[\s\S]*input\.dataset\.sentValue = input\.value;[\s\S]*key === 'Delete'[\s\S]*input\.dataset\.sentValue = input\.value;/);
+    }));
+    assert.match(html, /data-browser-object-type="browser-state"/, item.name);
+    assertNoProductFallbackSurface(html);
+  }
 });
 
 test('browser-workbench normalizes idle/loading/ready/blocked/error/offline state machine inputs', () => {
@@ -867,7 +657,7 @@ test('browser-workbench renders blocked/error/offline as typed state instead of 
     assert.match(html, /data-browser-object-type="browser-state"/);
     assert.match(html, new RegExp(`${status} reason`));
     assert.match(html, new RegExp(`blob://browser/${status}\\.json`));
-    assert.doesNotMatch(html, /<iframe/);
+    assertNoProductFallbackSurface(html);
   }
 });
 
@@ -890,7 +680,7 @@ test('browser-workbench uses embed policy to show external blocked state without
   assert.match(html, /data-status="blocked"/);
   assert.match(html, /X-Frame-Options or CSP denied embedding/);
   assert.match(html, /blob:\/\/browser\/embed-policy\.json/);
-  assert.doesNotMatch(html, /<iframe/);
+  assertNoProductFallbackSurface(html);
   assert.equal(
     browserWorkbenchStateFromPayload(
       { status: 'ready', embedPolicy: { embeddable: false } },
@@ -931,8 +721,22 @@ test('browser-workbench rejects inline large refs and keeps safe object refs', (
   assert.doesNotMatch(html, /inline/);
 });
 
+test('browser-workbench source has no product live fallback DOM/input transport', () => {
+  const source = readFileSync(new URL('./render.tsx', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /<iframe|<webview|<canvas|<img/);
+  assert.doesNotMatch(source, /BrowserWorkbenchFrameRenderer|BrowserWorkbenchLiveTransportHandoff|frameRenderer|liveTransportHandoff/);
+  assert.doesNotMatch(source, /browser-workbench-host-keyboard-input|browserWorkbenchFramePoint|setPointerCapture|onPointerDown|onPointerMove|onPointerUp/);
+  assert.doesNotMatch(source, /canvas-binary|webrtc-data-channel|websocket-binary|host-stream/);
+  assert.match(source, /browser-workbench-host-frame-native/);
+  assert.match(source, /data-browser-native-surface/);
+  assert.match(source, /data-browser-native-surface-stability-key/);
+  assert.match(source, /data-browser-loading-progress-state/);
+  assert.match(source, /data-browser-live-surface-transport=\{hostSession\?\.liveSurfaceTransport\}/);
+});
+
 test('browser-workbench imports no TUI runtime or browser provider packages', () => {
   const source = readFileSync(new URL('./render.tsx', import.meta.url), 'utf8');
 
-  assert.doesNotMatch(source, /@sciforge-observe\/web|playwright|computer-use|computer_use|child_process|WebSocket|from 'ws'|from "ws"|writeFile|appendFile|execFile|spawn\(|html2canvas|toDataURL|captureStream|getDisplayMedia/);
+  assert.doesNotMatch(source, /@sciforge-observe\/web|playwright|computer-use|computer_use|child_process|WebSocket|from 'ws'|from "ws"|writeFile|appendFile|execFile|spawn\(|html2canvas|toDataURL|captureStream|getDisplayMedia|createObjectURL|createImageBitmap/);
 });

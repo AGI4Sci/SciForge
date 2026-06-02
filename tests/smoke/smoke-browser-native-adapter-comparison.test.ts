@@ -4,9 +4,11 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES,
+  REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES,
   buildBrowserNativeAdapterComparisonManifest,
   validateBrowserNativeAdapterComparisonManifest,
   type BrowserNativeAdapterDimension,
@@ -32,7 +34,9 @@ test('browser native adapter comparison contract accepts refs-first candidate an
   assert.equal(manifest.purpose, 'contract-only-no-real-benchmark');
   assert.equal(manifest.benchmarkMode, 'contract-fixture');
   assert.equal(manifest.owner, 'BrowserHostSession');
+  assert.equal(manifest.liveSurfaceTransport, 'native-embedded');
   assert.equal(manifest.singleInteractiveTruth, true);
+  assert.equal(manifest.secondTruthSource, false);
   assert.equal(manifest.productLongSession.durationMinutes, 30);
   assert.equal(manifest.productLongSession.benchmarkClaim, false);
   assert.equal(manifest.productLongSession.mode, 'schema-only-no-real-platform-benchmark');
@@ -42,14 +46,21 @@ test('browser native adapter comparison contract accepts refs-first candidate an
   assert.deepEqual(manifest.candidates.map((candidate) => candidate.id), [...REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES]);
   assert.ok(manifest.invariants.every((invariant) => invariant.status === 'pass'));
   assert.ok(manifest.rejectedSubstitutes.includes('second-viewer'));
+  assert.ok(REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES.every((substitute) => (
+    manifest.rejectedSubstitutes.includes(substitute)
+  )));
   for (const candidate of manifest.candidates) {
     assert.equal(candidate.owner, 'BrowserHostSession');
     assert.equal(candidate.adapterRole, 'display-input-adapter');
     assert.equal(candidate.liveSurfaceTransport, 'native-embedded');
+    assert.equal(candidate.singleInteractiveTruth, true);
     assert.equal(candidate.secondTruthSource, false);
     assert.equal(candidate.platform, REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidate.id]);
     assert.ok(candidate.comparisonRefs.length > 0);
     assert.deepEqual(Object.keys(candidate.metrics), [...REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS]);
+    assert.ok(REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS.every((section) => (
+      candidate.metrics[section].section === section
+    )));
     assert.equal(candidate.metrics.secondTruthSource.value, false);
     for (const section of REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS) {
       assert.equal(candidate.metrics[section].evidenceMode, 'bounded-summary-ref');
@@ -67,6 +78,7 @@ test('browser native adapter comparison contract rejects raw payloads and second
   const issueText = issues.map((issue) => `${issue.path}: ${issue.message}`).join('\n');
 
   assert.match(issueText, /candidates\[1\]\.secondTruthSource/);
+  assert.match(issueText, /candidates\[1\]\.singleInteractiveTruth/);
   assert.match(issueText, /candidates\[1\]\.metrics\.secondTruthSource\.value/);
   assert.match(issueText, /candidates\[1\]\.comparisonRefs/);
   assert.match(issueText, /invariants\.no-second-truth-source/);
@@ -147,7 +159,9 @@ test('browser native adapter comparison smoke writes bounded refs-first evidence
       schemaVersion: manifest.schemaVersion,
       purpose: manifest.purpose,
       owner: manifest.owner,
+      liveSurfaceTransport: manifest.liveSurfaceTransport,
       singleInteractiveTruth: manifest.singleInteractiveTruth,
+      secondTruthSource: manifest.secondTruthSource,
       evidenceRefs: manifest.evidenceRefs,
       invariantStatus: manifest.invariants.map((invariant) => ({
         id: invariant.id,
@@ -171,6 +185,7 @@ test('browser native adapter comparison smoke writes bounded refs-first evidence
       owner: candidate.owner,
       adapterRole: candidate.adapterRole,
       liveSurfaceTransport: candidate.liveSurfaceTransport,
+      singleInteractiveTruth: candidate.singleInteractiveTruth,
       secondTruthSource: candidate.secondTruthSource,
       comparisonRefs: candidate.comparisonRefs,
       metricSections: REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS.map((section) => ({
@@ -244,6 +259,7 @@ function rawPayloadAndSecondTruthFixtureIssues() {
         owner: 'BrowserHostSession' as const,
         adapterRole: 'display-input-adapter' as const,
         liveSurfaceTransport: 'native-embedded' as const,
+        singleInteractiveTruth: false as true,
         secondTruthSource: true as false,
         metrics: {
           ...candidate.metrics,

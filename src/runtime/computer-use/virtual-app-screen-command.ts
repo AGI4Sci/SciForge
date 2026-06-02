@@ -43,6 +43,7 @@ export interface VirtualAppScreenRuntimeCommandRefs {
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
   liveBindingAttachGrantRef?: string;
+  grantValidationRef?: string;
   activationRef?: string;
   permissionHandoffRef?: string;
   permissionRef?: string;
@@ -137,6 +138,7 @@ export function virtualAppScreenRuntimeCommandRunId(command: VirtualAppScreenRun
     command.refs.permissionRecheckRef,
     command.refs.providerSessionReconnectRef,
     command.refs.liveBindingAttachGrantRef,
+    command.refs.grantValidationRef,
     command.refs.sessionRef,
     command.refs.currentFrameRef,
     command.refs.targetAppRef,
@@ -196,6 +198,7 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       providerSessionOwnerRef: refs.providerSessionOwnerRef,
       providerSessionReconnectRef: refs.providerSessionReconnectRef,
       liveBindingAttachGrantRef: refs.liveBindingAttachGrantRef,
+      grantValidationRef: refs.grantValidationRef,
       surfaceTransportRef: refs.surfaceTransportRef,
       frameStreamRef: refs.frameStreamRef,
       currentFrameRef: refs.currentFrameRef,
@@ -239,6 +242,7 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       refs.providerSessionOwnerRef,
       refs.providerSessionReconnectRef,
       refs.liveBindingAttachGrantRef,
+      refs.grantValidationRef,
       refs.displayGroupRef,
     ]),
     verificationRefs: uniqueStrings([
@@ -251,6 +255,7 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       reconnectCommand ? refs.providerSessionOwnerRef : undefined,
       reconnectCommand ? refs.providerSessionReconnectRef : undefined,
       reconnectCommand ? refs.liveBindingAttachGrantRef : undefined,
+      reconnectCommand ? refs.grantValidationRef : undefined,
       reconnectCommand ? refs.surfaceTransportRef : undefined,
     ]),
     blockedReason,
@@ -345,6 +350,7 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
     ...(optionalSafeRef(flags, 'provider-session-owner-ref') ? { providerSessionOwnerRef: optionalSafeRef(flags, 'provider-session-owner-ref') } : {}),
     ...(providerSessionReconnectRef ? { providerSessionReconnectRef } : {}),
     ...(optionalSafeRef(flags, 'live-binding-attach-grant-ref') ? { liveBindingAttachGrantRef: optionalSafeRef(flags, 'live-binding-attach-grant-ref') } : {}),
+    ...(optionalSafeRef(flags, 'grant-validation-ref') ? { grantValidationRef: optionalSafeRef(flags, 'grant-validation-ref') } : {}),
     activationRef: firstSafeRef(flags, ['activation-ref', 'attach-ref']),
     permissionHandoffRef: firstSafeRef(flags, ['handoff-ref', 'permission-handoff-ref']),
     permissionRef: optionalSafeRef(flags, 'permission-ref'),
@@ -371,6 +377,7 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
       refs.providerSessionOwnerRef ? undefined : '--provider-session-owner-ref',
       refs.providerSessionReconnectRef ? undefined : '--provider-session-reconnect-ref or --reconnect-ref',
       refs.liveBindingAttachGrantRef ? undefined : '--live-binding-attach-grant-ref',
+      refs.grantValidationRef ? undefined : '--grant-validation-ref',
       refs.surfaceTransportRef ? undefined : '--surface-transport-ref',
     ].filter((item): item is string => Boolean(item));
     if (missing.length) return { reason: `VirtualAppScreen screen reconnect requires ${missing[0]}.` };
@@ -424,6 +431,11 @@ function virtualAppScreenRuntimeCommandEvents(command: VirtualAppScreenRuntimeCo
     refs.liveBindingAttachGrantRef ? {
       label: 'live-binding-attach-grant',
       ref: refs.liveBindingAttachGrantRef,
+      status: command.action === 'screen-reconnect' ? 'requires-runtime-revalidation' : 'referenced',
+    } : undefined,
+    refs.grantValidationRef ? {
+      label: 'grant-validation',
+      ref: refs.grantValidationRef,
       status: command.action === 'screen-reconnect' ? 'requires-runtime-revalidation' : 'referenced',
     } : undefined,
   ].filter((event): event is { label: string; ref: string; status: string } => Boolean(event));

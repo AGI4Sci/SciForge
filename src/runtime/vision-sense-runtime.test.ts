@@ -10,6 +10,10 @@ import {
   VIRTUAL_APP_SCREEN_SESSION_MANAGER_SCHEMA,
   type VirtualAppScreenSessionManagerAttachResult,
 } from './computer-use/virtual-app-screen-session-manager.js';
+import {
+  recordVirtualAppScreenNativeHostSession,
+  resetVirtualAppScreenNativeHostSessionStoreForTests,
+} from './computer-use/virtual-app-screen-native-host-session-store.js';
 import { resetVirtualAppScreenProviderSessionStoreForTests } from './computer-use/virtual-app-screen-provider-session-store.js';
 import type { VirtualAppScreenRuntimeCommand } from './computer-use/virtual-app-screen-command.js';
 import {
@@ -20,6 +24,10 @@ import {
 } from './computer-use/virtual-app-screen-input-runtime.js';
 import type { VirtualScreenInputIntentCommand } from './computer-use/input-intent-command.js';
 import { resetVirtualAppScreenRuntimeExecutorsForTests } from './computer-use/virtual-app-screen-runtime-executors.js';
+import {
+  ContractSmokeNativeHostPlatformAdapter,
+  InMemoryNativeVirtualAppScreenHost,
+} from '../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 
 test('vision-sense wires native driver hook opt-in through env without importing smoke drivers', async () => {
   const runtimeSource = await readFile(new URL('./vision-sense-runtime.ts', import.meta.url), 'utf8');
@@ -474,6 +482,7 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
         `--provider-session-owner-ref "${stringField(seedScreenData?.providerSessionOwnerRef)}"`,
         `--provider-session-reconnect-ref "${stringField(seedScreenData?.providerSessionReconnectRef)}"`,
         `--live-binding-attach-grant-ref "${stringField(seedScreenData?.liveBindingAttachGrantRef)}"`,
+        `--grant-validation-ref "${stringField(seedScreenData?.grantValidationRef)}"`,
         `--surface-transport-ref "${stringField(seedScreenData?.surfaceTransportRef)}"`,
       ].join(' '),
       workspacePath: workspace,
@@ -608,6 +617,7 @@ test('vision-sense fails closed when reconnect refs do not match the provider-ow
         `--provider-session-owner-ref "${stringField(seedScreenData?.providerSessionOwnerRef)}"`,
         `--provider-session-reconnect-ref "${stringField(seedScreenData?.providerSessionReconnectRef)}"`,
         `--live-binding-attach-grant-ref "${stringField(seedScreenData?.liveBindingAttachGrantRef)}"`,
+        `--grant-validation-ref "${stringField(seedScreenData?.grantValidationRef)}"`,
         `--surface-transport-ref "${stringField(seedScreenData?.surfaceTransportRef)}"`,
       ].join(' '),
       workspacePath: workspace,
@@ -724,6 +734,76 @@ test('vision-sense permission handoff keeps provider attach gated behind readine
     unregister();
     resetVirtualAppScreenRuntimeExecutorsForTests();
     resetVirtualAppScreenInputRuntimeExecutorsForTests();
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('vision-sense exposes Host permission handoff ledger refs for an existing Host session', async () => {
+  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-right-pane-permission-handoff-ledger-'));
+  const { ledgerRef, sessionRef } = createRecordedVisionNativeHostSession();
+  let attachCalls = 0;
+  const unregister = registerVirtualAppScreenSessionExecutor({
+    executorId: 'native-session-manager:permission-handoff-ledger-tripwire',
+    providerId: 'provider:permission-handoff-ledger-tripwire',
+    supportedProfiles: ['*'],
+    attach: (command) => {
+      attachCalls += 1;
+      return validVirtualAppScreenAttachResult(command);
+    },
+  });
+  try {
+    const payload = await tryRunVisionSenseRuntime({
+      skillDomain: 'knowledge',
+      prompt: [
+        '/computer-use permission-handoff',
+        '--source right-pane-screen',
+        '--profile "generic-workbench"',
+        '--target-app-ref "app:profile/generic-workbench"',
+        '--screen-ref "virtual-app-screen:permission-handoff-ledger/screen-request"',
+        `--session-ref "${sessionRef}"`,
+        '--permission-handoff-ref "computer-use:screen-activation/permission-handoff-ledger/accessibility-handoff.json"',
+        '--permission-ref "permission:macos/accessibility"',
+        '--adapter-readiness-ref "computer-use:screen-activation/permission-handoff-ledger/provider-readiness.json"',
+        '--evidence-ledger-ref "ledger:computer-use/permission-handoff-ledger/screen-activation.json"',
+        '--gui-present-ref "gui.present:permission-handoff-ledger/screen-pane-activation"',
+      ].join(' '),
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      selectedActionIds: ['action.sciforge.computer-use'],
+      artifacts: [],
+      uiState: {
+        selectedToolIds: ['local.vision-sense'],
+        selectedActionIds: ['action.sciforge.computer-use'],
+        visionSenseConfig: {
+          desktopBridgeEnabled: true,
+          dryRun: false,
+        },
+      },
+    });
+
+    assert.equal(attachCalls, 0);
+    const routeDecision = payload?.executionUnits[0]?.routeDecision as Record<string, unknown> | undefined;
+    assert.equal(routeDecision?.route, 'virtual-app-screen-permission-handoff');
+    assert.equal(routeDecision?.hostEvidenceLedgerRef, ledgerRef);
+    assert.equal(routeDecision?.evidenceLedgerRef, ledgerRef);
+    assert.match(
+      stringField(routeDecision?.permissionHandoffLedgerEntryRef),
+      /^computer-use:native-host\/ledgers\/session-\d+\/evidence-ledger\.json\/events\/\d+-permission\.handoff\.json$/,
+    );
+    assert.equal(routeDecision?.providerExecuted, false);
+
+    const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
+    const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
+    assert.equal(screenData?.status, 'requires-handoff');
+    assert.equal(screenData?.hostEvidenceLedgerRef, ledgerRef);
+    assert.equal(screenData?.evidenceLedgerRef, ledgerRef);
+    assert.equal(screenData?.permissionHandoffLedgerEntryRef, routeDecision?.permissionHandoffLedgerEntryRef);
+  } finally {
+    unregister();
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    resetVirtualAppScreenInputRuntimeExecutorsForTests();
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -1231,7 +1311,9 @@ function validVirtualAppScreenAttachResult(
       targetAppRef: command.refs.targetAppRef,
       targetWindowRef: 'window:vision-runtime-test/main',
       inputLeaseRef: 'computer-use:session/vision-runtime-test/input-lease.json',
+      actionAdapterRef: 'computer-use:session/vision-runtime-test/action-adapter.json',
       adapterReadinessRef: command.refs.readinessRef,
+      platformDriverRef: 'computer-use:session/vision-runtime-test/platform-driver.json',
       evidenceLedgerRef: 'computer-use:session/vision-runtime-test/evidence-ledger.json',
       guiPresentRef: command.refs.guiPresentRef,
     },
@@ -1243,6 +1325,11 @@ function validVirtualAppScreenAttachResult(
       currentFrameMaterialized: true,
       guiPresented: true,
       isolationVerified: true,
+      platformDriverReady: true,
+      permissionRequired: false,
+      permissionGranted: true,
+      backgroundRenderable: true,
+      diagnosticOnly: false,
       affectsPhysicalDisplay: false,
       requiresFocusSteal: false,
       sharedSystemInputUsed: false,
@@ -1268,6 +1355,7 @@ function validVirtualAppScreenAttachResult(
       },
       evidenceRefs: [
         'computer-use:session/vision-runtime-test/surface-transport.json',
+        'computer-use:session/vision-runtime-test/platform-driver.json',
         'computer-use:session/vision-runtime-test/evidence-ledger.json',
         'computer-use:session/vision-runtime-test/frames/current.png',
       ],

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import { join, resolve } from 'node:path';
+import { CODEX_RUNTIME_STREAM_PATH as SHARED_CODEX_RUNTIME_STREAM_PATH } from '@sciforge-ui/runtime-contract/codex-realtime-session';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import { normalizeInstanceName, parallelProfile } from '../../src/runtime/parallel-instance-profile.js';
 import { blockedOnForReason } from './helpers/runtime-codex-browser-acceptance-blockers.js';
@@ -229,6 +230,17 @@ const requireLiveBrowserAcceptance = process.env.SCIFORGE_REQUIRE_LIVE_BROWSER_A
 const validateOnly = process.env.SCIFORGE_BROWSER_ACCEPTANCE_VALIDATE_ONLY === '1';
 const passedManifestMaxAgeMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_MAX_AGE_MINUTES, 30) * 60 * 1000;
 const evidenceMtimeToleranceMs = positiveNumberFromEnv(process.env.SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_MTIME_TOLERANCE_MINUTES, 10) * 60 * 1000;
+const FORBIDDEN_MANIFEST_PAYLOAD_KEYS = new Set([
+  'rawdom',
+  'rawhtml',
+  'rawproviderbody',
+  'providerrawbody',
+  'rawproviderpayload',
+  'providerpayload',
+  'base64payload',
+  'screenshotbase64',
+  'imagebase64',
+]);
 
 assertRuntimeCodexBrowserAcceptanceNegativeFixtures({
   root,
@@ -503,6 +515,7 @@ function exactServiceEnvCommands(): {
 function assertBrowserAcceptanceManifest(manifest: BrowserAcceptanceManifest): void {
   assert.equal(manifest.schemaVersion, 'sciforge.runtime-codex.browser-acceptance.v1');
   assert.equal(manifest.source, 'codex-in-app-browser');
+  assertBoundedManifestPayload(manifest);
   assert.notEqual(manifest.automationSubstituteUsed, true, 'system browser, macOS open, external Chrome, or non-user-level automation cannot be acceptance evidence');
   assert.notEqual(manifest.seedDemoFixtureEvidenceUsed, true, 'seed/demo/fixture messages cannot be live browser acceptance evidence');
   assert.match(manifest.actualUrl ?? '', /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\//, 'actual browser URL must be recorded');
@@ -1194,6 +1207,35 @@ function assertDoesNotUseSeedDemoOrRawEvidence(text: string, label: string): voi
   assert.doesNotMatch(text, /\b(?:RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stdout|stderr|jsonl)\b/i, `${label} must not use raw stdout/jsonl/stderr/provider logs as main-answer proof`);
 }
 
+function assertBoundedManifestPayload(manifest: BrowserAcceptanceManifest): void {
+  const serialized = JSON.stringify(manifest);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') <= 64 * 1024, 'browser acceptance manifest must stay bounded under 64 KiB');
+  assertBoundedManifestValue(manifest as unknown, 'manifest');
+}
+
+function assertBoundedManifestValue(value: unknown, path: string): void {
+  if (typeof value === 'string') {
+    assert.ok(Buffer.byteLength(value, 'utf8') <= 4096, `${path} must stay bounded under 4 KiB`);
+    assert.doesNotMatch(value, /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i, `${path} must not embed base64/data-url payloads`);
+    assert.doesNotMatch(value, /(?:<!doctype\s+html|<html[\s>]|<body[\s>])/i, `${path} must not embed raw DOM/HTML payloads`);
+    assert.doesNotMatch(value, /\b(?:rawProviderBody|providerRawBody|raw_provider_body)\b/i, `${path} must not embed provider payload labels`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    assert.ok(value.length <= 64, `${path} array must stay bounded`);
+    value.forEach((item, index) => assertBoundedManifestValue(item, `${path}[${index}]`));
+    return;
+  }
+  if (!isRecord(value)) return;
+  const entries = Object.entries(value);
+  assert.ok(entries.length <= 128, `${path} object must stay bounded`);
+  for (const [key, item] of entries) {
+    const normalizedKey = key.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    assert.ok(!FORBIDDEN_MANIFEST_PAYLOAD_KEYS.has(normalizedKey), `${path}.${key} must be stored as a bounded evidence ref, not raw payload`);
+    assertBoundedManifestValue(item, `${path}.${key}`);
+  }
+}
+
 function assertLiveRuntimeCodexRenderedEvidence(evidence: BrowserAcceptanceEvidence | undefined, label: string): void {
   const domText = evidence?.domSnapshotPath ? readIfExists(evidence.domSnapshotPath) : '';
   assert.ok(domText.trim(), `${label} DOM evidence is required for live Runtime Codex output proof`);
@@ -1444,7 +1486,8 @@ function readIfExists(path: string): string {
 
 function runtimeStreamPathFromText(text: string): string | undefined {
   return /CODEX_RUNTIME_STREAM_PATH\s*=\s*['"]([^'"]+)['"]/.exec(text)?.[1]
-    ?? /['"]((?:\/api\/sciforge\/runtime\/codex\/stream))['"]/.exec(text)?.[1];
+    ?? /['"]((?:\/api\/sciforge\/runtime\/codex\/stream))['"]/.exec(text)?.[1]
+    ?? (/\bCODEX_RUNTIME_STREAM_PATH\b/.test(text) ? SHARED_CODEX_RUNTIME_STREAM_PATH : undefined);
 }
 
 function escapeRegExp(value: string): string {

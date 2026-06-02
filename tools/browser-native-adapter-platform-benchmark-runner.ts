@@ -6,12 +6,15 @@ import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import {
+  REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES,
+  REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES,
   type BrowserNativeAdapterCandidateId,
+  type BrowserNativeAdapterBenchmarkMetricSection,
   type BrowserNativeAdapterComparisonManifest,
-  type BrowserNativeAdapterMetricSection,
   type BrowserNativeAdapterPlatform,
+  type RejectedBrowserNativeAdapterPassEvidenceSubstitute,
 } from '../src/desktop/browser-native-adapter-comparison.js';
 
 const execFileAsync = promisify(execFile);
@@ -29,19 +32,12 @@ export const DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF =
 
 const MAX_RESULT_BYTES = 96_000;
 const DEFAULT_ADAPTER_TIMEOUT_MS = 120_000;
-const REAL_METRIC_SECTIONS = [
-  'latency',
-  'cpu',
-  'memory',
-  'inputCompleteness',
-  'lifecycle',
-  'reconnect',
-] as const satisfies ReadonlyArray<Exclude<BrowserNativeAdapterMetricSection, 'secondTruthSource'>>;
+const REAL_METRIC_SECTIONS = REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS;
 
 type EnvRecord = Record<string, string | undefined>;
 type RunnerCandidateStatus = 'passed' | 'blocked' | 'failed';
 type RunnerStatus = 'passed' | 'blocked' | 'failed' | 'not-run';
-type RealMetricSection = typeof REAL_METRIC_SECTIONS[number];
+type RealMetricSection = BrowserNativeAdapterBenchmarkMetricSection;
 
 const REQUIRED_REAL_METRIC_SUMMARY_KEYS = {
   latency: [
@@ -106,6 +102,7 @@ export type BrowserNativeAdapterPlatformBenchmarkExternalSection = {
 export type BrowserNativeAdapterPlatformBenchmarkExternalAdapterRun = {
   resultKind?: 'real-native-adapter-run' | 'schema-validation-only';
   realAdapterResult?: boolean;
+  liveSurfaceTransport?: 'native-embedded';
   browserHostSessionRef?: string;
   liveSurfaceRef?: string;
   nativeAdapterSurfaceRef?: string;
@@ -120,7 +117,9 @@ export type BrowserNativeAdapterPlatformBenchmarkExternalResult = {
   candidateId?: BrowserNativeAdapterCandidateId;
   platform?: BrowserNativeAdapterPlatform;
   owner?: 'BrowserHostSession';
+  liveSurfaceTransport?: 'native-embedded';
   singleInteractiveTruth?: true;
+  secondTruthSource?: false;
   adapterRun?: BrowserNativeAdapterPlatformBenchmarkExternalAdapterRun;
   status?: RunnerCandidateStatus;
   benchmarkClaim?: boolean;
@@ -131,6 +130,9 @@ export type BrowserNativeAdapterPlatformBenchmarkExternalResult = {
 export type BrowserNativeAdapterPlatformBenchmarkCandidateResult = {
   id: BrowserNativeAdapterCandidateId;
   platform: BrowserNativeAdapterPlatform;
+  liveSurfaceTransport: 'native-embedded';
+  singleInteractiveTruth: true;
+  secondTruthSource: false;
   status: RunnerCandidateStatus;
   benchmarkClaim: boolean;
   realAdapterResult: boolean;
@@ -165,7 +167,9 @@ export type BrowserNativeAdapterPlatformBenchmarkResult = {
   status: Exclude<RunnerStatus, 'not-run'>;
   benchmarkClaim: boolean;
   owner: 'BrowserHostSession';
+  liveSurfaceTransport: 'native-embedded';
   singleInteractiveTruth: true;
+  secondTruthSource: false;
   runner: {
     runnerId: 'browser-native-adapter-platform-benchmark-runner';
     status: RunnerStatus;
@@ -178,12 +182,27 @@ export type BrowserNativeAdapterPlatformBenchmarkResult = {
   externalAdapterCommandContract: {
     stdoutSchemaVersion: typeof BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_EXTERNAL_RESULT_SCHEMA;
     stdoutMaxBytes: number;
-    requiredStdoutFields: Array<'schemaVersion' | 'candidateId' | 'platform' | 'owner' | 'singleInteractiveTruth' | 'status' | 'benchmarkClaim' | 'metricSections'>;
+    requiredStdoutFields: Array<
+      | 'schemaVersion'
+      | 'candidateId'
+      | 'platform'
+      | 'owner'
+      | 'liveSurfaceTransport'
+      | 'singleInteractiveTruth'
+      | 'secondTruthSource'
+      | 'status'
+      | 'benchmarkClaim'
+      | 'metricSections'
+    >;
     passRequiresAdapterRunProof: {
       resultKind: 'real-native-adapter-run';
       realAdapterResult: true;
+      liveSurfaceTransport: 'native-embedded';
+      singleInteractiveTruth: true;
+      secondTruthSource: false;
       requiredRefs: string[];
       forbiddenResultKinds: Array<'schema-validation-only'>;
+      forbiddenPassEvidenceTokens: RejectedBrowserNativeAdapterPassEvidenceSubstitute[];
     };
     realProofRefusalPolicy: {
       currentProcessPlatform: NodeJS.Platform;
@@ -258,7 +277,9 @@ export async function runBrowserNativeAdapterPlatformBenchmark(
     status: allPassed ? 'passed' : anyFailed ? 'failed' : 'blocked',
     benchmarkClaim: allPassed,
     owner: 'BrowserHostSession',
+    liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
     runner: {
       runnerId: 'browser-native-adapter-platform-benchmark-runner',
       status: optIn ? (allPassed ? 'passed' : anyFailed ? 'failed' : 'blocked') : 'not-run',
@@ -296,14 +317,40 @@ async function readPlatformBenchmarkManifest(path: string): Promise<{
   candidates: Array<{
     id: BrowserNativeAdapterCandidateId;
     platform: BrowserNativeAdapterPlatform;
+    liveSurfaceTransport?: string;
+    singleInteractiveTruth?: boolean;
+    secondTruthSource?: boolean;
   }>;
 }> {
   const text = await readFile(path, 'utf8');
   assertBoundedArtifact(text);
   const manifest = JSON.parse(text) as BrowserNativeAdapterComparisonManifest & {
-    candidates: Array<{ id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform }>;
+    liveSurfaceTransport?: string;
+    secondTruthSource?: boolean;
+    candidates: Array<{
+      id: BrowserNativeAdapterCandidateId;
+      platform: BrowserNativeAdapterPlatform;
+      liveSurfaceTransport?: string;
+      singleInteractiveTruth?: boolean;
+      secondTruthSource?: boolean;
+    }>;
   };
   assert.ok(Array.isArray(manifest.candidates), 'platform benchmark manifest must list candidates');
+  assert.equal(
+    manifest.singleInteractiveTruth,
+    true,
+    'platform benchmark manifest must declare singleInteractiveTruth=true',
+  );
+  assert.equal(
+    manifest.liveSurfaceTransport,
+    'native-embedded',
+    'platform benchmark manifest must declare liveSurfaceTransport=native-embedded',
+  );
+  assert.equal(
+    manifest.secondTruthSource,
+    false,
+    'platform benchmark manifest must declare secondTruthSource=false',
+  );
   for (const candidateId of REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES) {
     const candidate = manifest.candidates.find((item) => item.id === candidateId);
     assert.ok(candidate, `platform benchmark manifest missing candidate ${candidateId}`);
@@ -311,6 +358,21 @@ async function readPlatformBenchmarkManifest(path: string): Promise<{
       candidate.platform,
       REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidateId],
       `platform benchmark manifest candidate ${candidateId} must keep canonical platform ${REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidateId]}`,
+    );
+    assert.equal(
+      candidate.liveSurfaceTransport,
+      'native-embedded',
+      `platform benchmark manifest candidate ${candidateId} must declare liveSurfaceTransport=native-embedded`,
+    );
+    assert.equal(
+      candidate.singleInteractiveTruth,
+      true,
+      `platform benchmark manifest candidate ${candidateId} must declare singleInteractiveTruth=true`,
+    );
+    assert.equal(
+      candidate.secondTruthSource,
+      false,
+      `platform benchmark manifest candidate ${candidateId} must declare secondTruthSource=false`,
     );
   }
   return manifest;
@@ -392,6 +454,9 @@ function normalizeExternalCandidateResult(
   return {
     id: candidate.id,
     platform: candidate.platform,
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
     status,
     benchmarkClaim: status === 'passed',
     realAdapterResult,
@@ -419,7 +484,9 @@ function assertExternalCandidateResultSchema(
   assert.equal(external.candidateId, candidate.id, 'external adapter stdout candidateId must match the runner candidate');
   assert.equal(external.platform, candidate.platform, 'external adapter stdout platform must match the runner candidate');
   assert.equal(external.owner, 'BrowserHostSession', 'external adapter stdout owner must remain BrowserHostSession');
+  assert.equal(external.liveSurfaceTransport, 'native-embedded', 'external adapter stdout must declare liveSurfaceTransport=native-embedded');
   assert.equal(external.singleInteractiveTruth, true, 'external adapter stdout must keep a single interactive truth');
+  assert.equal(external.secondTruthSource, false, 'external adapter stdout must declare secondTruthSource=false');
   assert.ok(
     external.status === 'passed' || external.status === 'blocked' || external.status === 'failed',
     'external adapter stdout status must be passed, blocked, or failed',
@@ -428,6 +495,10 @@ function assertExternalCandidateResultSchema(
   assert.ok(external.metricSections && typeof external.metricSections === 'object', 'external adapter stdout must include metricSections');
   const metricSections = external.metricSections as Partial<Record<RealMetricSection, BrowserNativeAdapterPlatformBenchmarkExternalSection>>;
   if (external.status === 'passed' || external.benchmarkClaim === true) {
+    assert.ok(
+      !hasLegacyPassEvidenceTokens(external),
+      'external adapter stdout pass evidence must not use legacy frame-stream/canvas/WebRTC tokens',
+    );
     assert.ok(
       hasRealExternalAdapterRunProof(candidate, external),
       'external adapter stdout must include real native adapter result proof before claiming benchmark pass',
@@ -463,7 +534,9 @@ function buildExternalAdapterCommandContract(
       'candidateId',
       'platform',
       'owner',
+      'liveSurfaceTransport',
       'singleInteractiveTruth',
+      'secondTruthSource',
       'status',
       'benchmarkClaim',
       'metricSections',
@@ -471,6 +544,9 @@ function buildExternalAdapterCommandContract(
     passRequiresAdapterRunProof: {
       resultKind: 'real-native-adapter-run',
       realAdapterResult: true,
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
       requiredRefs: [
         'browser-host-session:<id>',
         'browser-host-session:<id>/live-surface',
@@ -479,6 +555,7 @@ function buildExternalAdapterCommandContract(
         'benchmark-result:<candidate>:platform-summary',
       ],
       forbiddenResultKinds: ['schema-validation-only'],
+      forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
     },
     realProofRefusalPolicy: {
       currentProcessPlatform: process.platform,
@@ -515,6 +592,9 @@ function blockedCandidate(
   return {
     id: candidate.id,
     platform: candidate.platform,
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
     status: 'blocked',
     benchmarkClaim: false,
     realAdapterResult: false,
@@ -546,10 +626,22 @@ function hasRealExternalAdapterRunProof(
   external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
 ): boolean {
   const adapterRun = external.adapterRun;
+  if (
+    external.owner !== 'BrowserHostSession'
+    || external.liveSurfaceTransport !== 'native-embedded'
+    || external.singleInteractiveTruth !== true
+    || external.secondTruthSource !== false
+  ) {
+    return false;
+  }
   if (!adapterRun || adapterRun.resultKind !== 'real-native-adapter-run' || adapterRun.realAdapterResult !== true) {
     return false;
   }
-  if (adapterRun.secondTruthSource !== false || adapterRun.rawPayloadsCaptured !== false) {
+  if (
+    adapterRun.liveSurfaceTransport !== 'native-embedded'
+    || adapterRun.secondTruthSource !== false
+    || adapterRun.rawPayloadsCaptured !== false
+  ) {
     return false;
   }
   if (!isSessionRef(adapterRun.browserHostSessionRef)
@@ -576,6 +668,19 @@ function hasRealExternalAdapterRunProof(
     return false;
   }
   return true;
+}
+
+function hasLegacyPassEvidenceTokens(external: BrowserNativeAdapterPlatformBenchmarkExternalResult): boolean {
+  const refs = [
+    external.adapterRun?.browserHostSessionRef,
+    external.adapterRun?.liveSurfaceRef,
+    external.adapterRun?.nativeAdapterSurfaceRef,
+    external.adapterRun?.actionTraceRef,
+    external.adapterRun?.platformResultRef,
+    ...REAL_METRIC_SECTIONS.flatMap((section) => external.metricSections?.[section]?.resultRefs ?? []),
+    ...(external.diagnosticRefs ?? []),
+  ];
+  return refs.some((ref) => hasLegacyPassEvidenceToken(ref));
 }
 
 function externalAdapterProofRefs(
@@ -683,7 +788,15 @@ function hasRequiredMetricSummary(section: RealMetricSection, value: unknown): b
 
 function hasNonRealBenchmarkProofToken(value: unknown): boolean {
   return typeof value === 'string'
-    && /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial/i.test(value);
+    && (
+      /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial/i.test(value)
+      || hasLegacyPassEvidenceToken(value)
+    );
+}
+
+function hasLegacyPassEvidenceToken(value: unknown): boolean {
+  return typeof value === 'string'
+    && /(?:^|[/:_-])(?:host-stream|frame-stream|legacy-frame|canvas|canvas-binary|webrtc|web-rtc|websocket-binary|http-frame|iframe|proxy|snapshot|webview|webview-tag|system-popup|external-browser|second-viewer)(?:$|[/:_-])/i.test(value);
 }
 
 function adapterEnvName(candidateId: BrowserNativeAdapterCandidateId, suffix: 'COMMAND' | 'ARGS_JSON'): string {

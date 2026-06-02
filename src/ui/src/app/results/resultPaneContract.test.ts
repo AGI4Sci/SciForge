@@ -125,9 +125,28 @@ test('browser result pane declares BrowserHostSession refs-first evidence contra
   const browser = resultPaneContractForTab('browser');
 
   assert.ok(browser.refPrefixes.includes('browser-host-session:'));
-  for (const field of ['frameRef', 'screenshotRef', 'domSnapshotRef', 'axSnapshotRef', 'consoleLogRef', 'networkLogRef', 'searchResultRef']) {
+  for (const field of ['liveSurfaceRef', 'frameStreamRef', 'frameRef', 'screenshotRef', 'domSnapshotRef', 'axSnapshotRef', 'consoleLogRef', 'networkLogRef', 'searchResultRef']) {
     assert.ok(browser.acceptedPayloadRefs?.includes(field), `Browser accepts ${field}`);
   }
+  for (const field of [
+    'frameUrl',
+    'framePreviewUrl',
+    'frameRenderer',
+    'frameTransport',
+    'liveTransportHandoff',
+    'rawFrame',
+    'frameData',
+    'frameBase64',
+    'screenshotBase64',
+    'rawDom',
+    'domHtml',
+    'proxyUrl',
+    'webviewTag',
+    'webrtcCandidate',
+  ]) {
+    assert.ok(browser.rejectedPayloadFields?.includes(field), `Browser rejects ${field}`);
+  }
+  assert.ok(browser.redactionHints.includes('native-only-live-surface'));
   assert.ok(browser.redactionHints.includes('no-full-dom'));
   assert.ok(browser.redactionHints.includes('no-auth-headers'));
 });

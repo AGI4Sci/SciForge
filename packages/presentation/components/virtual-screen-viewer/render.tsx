@@ -17,8 +17,21 @@ export const VIRTUAL_APP_SCREEN_ATTACH_STATES = [
 ] as const;
 
 export type VirtualAppScreenAttachState = typeof VIRTUAL_APP_SCREEN_ATTACH_STATES[number];
+export const VIRTUAL_SCREEN_PRESENTATION_STATES = [
+  'live',
+  'blocked',
+  'permission',
+  'replay',
+  'fallback',
+  'empty',
+] as const;
+
+export type VirtualScreenPresentationState = typeof VIRTUAL_SCREEN_PRESENTATION_STATES[number];
 export const VIRTUAL_SCREEN_REPLAY_PRESENTATION_MODE = 'replay-ref-inspector' as const;
 export const VIRTUAL_SCREEN_LIVE_PRESENTATION_MODE = 'live-surface-ref' as const;
+export const VIRTUAL_SCREEN_FALLBACK_PRESENTATION_MODE = 'fallback-ref-inspector' as const;
+export const VIRTUAL_SCREEN_BLOCKED_PRESENTATION_MODE = 'blocked-gate' as const;
+export const VIRTUAL_SCREEN_PERMISSION_PRESENTATION_MODE = 'permission-gate' as const;
 
 export type VirtualScreenRejectedInputKind =
   | 'inline-screenshot'
@@ -32,6 +45,8 @@ export type VirtualScreenRejectedInputKind =
   | 'scheduler-params'
   | 'unsafe-ref'
   | 'unsupported-transport'
+  | 'non-host-live-ref'
+  | 'unvalidated-live-grant'
   | 'unsupported-payload-field';
 
 export interface VirtualScreenRejectedInput {
@@ -142,7 +157,8 @@ export interface VirtualScreenPayload {
   title?: string;
   status?: string;
   attachState?: VirtualAppScreenAttachState;
-  surfaceMode?: 'live' | 'replay' | 'empty';
+  presentationState?: VirtualScreenPresentationState;
+  surfaceMode?: 'live' | 'replay' | 'fallback' | 'empty';
   displayGroupRef?: string;
   screenRef?: string;
   liveSurfaceRef?: string;
@@ -159,9 +175,16 @@ export interface VirtualScreenPayload {
   targetAppRef?: string;
   targetWindowRef?: string;
   sessionRef?: string;
+  hostSessionRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
   liveBindingAttachGrantRef?: string;
+  liveBindingAttachGrantStatus?: string;
+  grantValidationRef?: string;
+  grantValidationStatus?: string;
+  providerSessionRevalidated?: boolean;
   surfaceTransportRef?: string;
   frameStreamRef?: string;
   frameRef?: string;
@@ -230,6 +253,7 @@ const allowedPayloadFields = new Set([
   'title',
   'status',
   'attachState',
+  'presentationState',
   'surfaceMode',
   'displayGroupRef',
   'screenRef',
@@ -250,6 +274,10 @@ const allowedPayloadFields = new Set([
   'providerSessionOwnerRef',
   'providerSessionReconnectRef',
   'liveBindingAttachGrantRef',
+  'liveBindingAttachGrantStatus',
+  'grantValidationRef',
+  'grantValidationStatus',
+  'providerSessionRevalidated',
   'surfaceTransportRef',
   'frameStreamRef',
   'frameRef',
@@ -408,6 +436,47 @@ function safeRef(value: unknown, field: string, rejected: VirtualScreenRejectedI
   return ref;
 }
 
+function isFixtureOrReplayLiveRef(ref: string) {
+  const normalized = ref.toLowerCase();
+  return (
+    normalized.startsWith('fixture:')
+    || normalized.startsWith('fixtures:')
+    || normalized.startsWith('replay:')
+    || /(^|[:/])(?:fixtures?|replays?|snapshots?)(?:[:/]|$)/.test(normalized)
+  );
+}
+
+function isHostOwnedLiveSurfaceRef(ref: string) {
+  return (ref.startsWith('computer-use:session/') || ref.startsWith('computer-use:native-host/')) && !isFixtureOrReplayLiveRef(ref);
+}
+
+function isHostOwnedLiveGrantRef(ref: string) {
+  return (
+    (ref.startsWith('computer-use:session/') || ref.startsWith('computer-use:provider-session/') || ref.startsWith('computer-use:native-host/'))
+    && !isFixtureOrReplayLiveRef(ref)
+  );
+}
+
+function safeHostLiveSurfaceRef(value: unknown, field: string, rejected: VirtualScreenRejectedInput[]): string | undefined {
+  const ref = safeRef(value, field, rejected);
+  if (!ref) return undefined;
+  if (!isHostOwnedLiveSurfaceRef(ref)) {
+    rejected.push({ field, label: 'live surface ref must be host-owned and not fixture/replay evidence', kind: 'non-host-live-ref' });
+    return undefined;
+  }
+  return ref;
+}
+
+function safeHostLiveGrantRef(value: unknown, field: string, rejected: VirtualScreenRejectedInput[]): string | undefined {
+  const ref = safeRef(value, field, rejected);
+  if (!ref) return undefined;
+  if (!isHostOwnedLiveGrantRef(ref)) {
+    rejected.push({ field, label: 'live attach grant ref must be host-owned and not fixture/replay evidence', kind: 'non-host-live-ref' });
+    return undefined;
+  }
+  return ref;
+}
+
 function safeRefArray(value: unknown, field: string, rejected: VirtualScreenRejectedInput[]): string[] {
   if (!Array.isArray(value)) return [];
   return uniqueStrings(value.map((entry, index) => safeRef(entry, `${field}[${index}]`, rejected)));
@@ -433,7 +502,14 @@ function normalizeSurfaceTransport(value: unknown, rejected: VirtualScreenReject
 
 function normalizeSurfaceMode(value: unknown): VirtualScreenPayload['surfaceMode'] {
   const mode = s(value);
-  return mode === 'live' || mode === 'replay' || mode === 'empty' ? mode : undefined;
+  return mode === 'live' || mode === 'replay' || mode === 'fallback' || mode === 'empty' ? mode : undefined;
+}
+
+function normalizePresentationState(value: unknown): VirtualScreenPresentationState | undefined {
+  const state = s(value);
+  return VIRTUAL_SCREEN_PRESENTATION_STATES.includes(state as VirtualScreenPresentationState)
+    ? state as VirtualScreenPresentationState
+    : undefined;
 }
 
 function normalizeStatus(value: unknown) {
@@ -702,10 +778,58 @@ function permissionReady(payload: Pick<VirtualScreenPayload, 'permissionGranted'
   return hasGateStatus(payload.permissionStatus, ['available', 'granted', 'ready']);
 }
 
+function permissionGateActive(payload: Pick<VirtualScreenPayload, 'permissionGranted' | 'permissionRequired' | 'permissionStatus' | 'permissionRef' | 'permissionHandoffRef' | 'permissionHandoffRefs'>) {
+  return Boolean(
+    (payload.permissionRequired === true && !permissionReady(payload))
+    || payload.permissionGranted === false
+    || hasGateStatus(payload.permissionStatus, ['denied', 'missing', 'not-granted', 'pending', 'revoked', 'waiting'])
+    || (payload.permissionRef && isBlockedGateStatus(payload.permissionStatus))
+    || payload.permissionHandoffRef
+    || payload.permissionHandoffRefs?.length,
+  );
+}
+
 function platformDriverReady(payload: Pick<VirtualScreenPayload, 'platformDriverRef' | 'platformDriverStatus'>) {
   return Boolean(
     payload.platformDriverRef
     && hasGateStatus(payload.platformDriverStatus, ['attached', 'available', 'ready', 'running']),
+  );
+}
+
+function liveBindingGrantValidated(
+  payload: Pick<
+    VirtualScreenPayload,
+    | 'liveBindingAttachGrantRef'
+    | 'liveBindingAttachGrantStatus'
+    | 'grantValidationRef'
+    | 'grantValidationStatus'
+  >,
+) {
+  return Boolean(
+    payload.liveBindingAttachGrantRef
+    && payload.grantValidationRef
+    && (
+      hasGateStatus(payload.grantValidationStatus, ['valid', 'validated', 'ready', 'granted'])
+      || hasGateStatus(payload.liveBindingAttachGrantStatus, ['valid', 'validated', 'ready', 'granted'])
+    ),
+  );
+}
+
+function liveBindingRefsHostOwned(
+  payload: Pick<
+    VirtualScreenPayload,
+    | 'liveSurfaceRef'
+    | 'liveBindingAttachGrantRef'
+    | 'grantValidationRef'
+  >,
+) {
+  return Boolean(
+    payload.liveSurfaceRef
+    && isHostOwnedLiveSurfaceRef(payload.liveSurfaceRef)
+    && payload.liveBindingAttachGrantRef
+    && isHostOwnedLiveGrantRef(payload.liveBindingAttachGrantRef)
+    && payload.grantValidationRef
+    && isHostOwnedLiveGrantRef(payload.grantValidationRef),
   );
 }
 
@@ -753,6 +877,7 @@ function hasObserveOnlyPlatformGate(payload: Omit<VirtualScreenPayload, 'attachS
     || !platformDriverReady(payload)
     || !payload.liveSurfaceRef
     || !payload.surfaceTransport
+    || !liveBindingGrantValidated(payload)
     || !hasCompleteNativeIsolation(payload.isolationFlags),
   );
 }
@@ -761,13 +886,73 @@ function deriveAttachState(payload: Omit<VirtualScreenPayload, 'attachState' | '
   if (payload.errorRef || payload.status === 'error' || explicit === 'error') return 'error';
   if (payload.blockedRef || payload.status === 'blocked' || explicit === 'blocked' || hasBlockedPlatformGate(payload)) return 'blocked';
   if (payload.status === 'requires-handoff' || explicit === 'requires-handoff') return 'requires-handoff';
+  if (explicit === 'replay' && hasFrameOrReplayEvidence(payload)) return 'replay';
   if (!payload.sessionRef && (payload.currentFrameRef || payload.replayRef || payload.frameRefs?.length)) return 'replay';
   if (!payload.sessionRef) return 'no-session';
+  if (!payload.adapterReadinessRef || payload.status === 'adapter-unavailable') return 'adapter-unavailable';
   if (payload.status === 'observe-only' || explicit === 'observe-only' || hasObserveOnlyPlatformGate(payload)) return 'observe-only';
   if (explicit && explicit !== 'attached') return explicit;
-  if (!payload.adapterReadinessRef || payload.status === 'adapter-unavailable') return 'adapter-unavailable';
   if (!payload.inputLeaseRef || !payload.actionAdapterRef) return 'observe-only';
   return 'attached';
+}
+
+function hasFrameOrReplayEvidence(payload: Pick<VirtualScreenPayload, 'currentFrameRef' | 'replayRef' | 'frameRefs' | 'frameStreamRef'>) {
+  return Boolean(payload.currentFrameRef || payload.replayRef || payload.frameRefs?.length || payload.frameStreamRef);
+}
+
+function liveGrantRejectionField(payload: Pick<VirtualScreenPayload, 'liveBindingAttachGrantRef' | 'grantValidationRef'>) {
+  if (!payload.liveBindingAttachGrantRef) return 'liveBindingAttachGrantRef';
+  if (!payload.grantValidationRef) return 'grantValidationRef';
+  return 'grantValidationStatus';
+}
+
+function collectLiveContractRejections(
+  payload: Omit<VirtualScreenPayload, 'attachState' | 'rejectedInputs'>,
+  rejected: VirtualScreenRejectedInput[],
+) {
+  if (!payload.liveSurfaceRef) return;
+  if (liveBindingGrantValidated(payload)) return;
+  rejected.push({
+    field: liveGrantRejectionField(payload),
+    label: 'live surface requires a validated host attach grant',
+    kind: 'unvalidated-live-grant',
+  });
+}
+
+function deriveSurfaceMode(
+  payload: Omit<VirtualScreenPayload, 'attachState' | 'rejectedInputs' | 'surfaceMode' | 'presentationState'>,
+  attachState: VirtualAppScreenAttachState,
+  explicit: VirtualScreenPayload['surfaceMode'],
+): VirtualScreenPayload['surfaceMode'] {
+  if (canRepresentLiveSurface(payload, attachState)) return 'live';
+  if (explicit === 'empty' && !hasFrameOrReplayEvidence(payload) && !payload.liveSurfaceRef) return 'empty';
+  if (explicit === 'replay') return 'replay';
+  if (attachState === 'no-session' && !hasFrameOrReplayEvidence(payload)) return 'empty';
+  if (!payload.sessionRef && hasFrameOrReplayEvidence(payload)) return 'replay';
+  return hasFrameOrReplayEvidence(payload) ? 'fallback' : 'empty';
+}
+
+function derivePresentationState(
+  payload: Omit<VirtualScreenPayload, 'attachState' | 'rejectedInputs' | 'surfaceMode' | 'presentationState'>,
+  attachState: VirtualAppScreenAttachState,
+  surfaceMode: VirtualScreenPayload['surfaceMode'],
+  explicit: VirtualScreenPresentationState | undefined,
+): VirtualScreenPresentationState {
+  if (surfaceMode === 'live' && canRepresentLiveSurface(payload, attachState)) return 'live';
+  if (permissionGateActive(payload)) return 'permission';
+  if (
+    attachState === 'blocked'
+    || attachState === 'error'
+    || attachState === 'adapter-unavailable'
+    || payload.blockedRef
+    || payload.errorRef
+    || explicit === 'blocked'
+  ) return 'blocked';
+  if (explicit === 'replay' && hasFrameOrReplayEvidence(payload)) return 'replay';
+  if (surfaceMode === 'replay') return 'replay';
+  if (explicit === 'fallback' && hasFrameOrReplayEvidence(payload)) return 'fallback';
+  if (surfaceMode === 'fallback') return 'fallback';
+  return 'empty';
 }
 
 function payloadFromProps(props: UIComponentRendererProps): VirtualScreenPayload {
@@ -791,7 +976,7 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
     status: normalizeStatus(value.status),
     displayGroupRef: safeRef(value.displayGroupRef, 'displayGroupRef', rejectedInputs),
     screenRef: safeRef(value.screenRef, 'screenRef', rejectedInputs),
-    liveSurfaceRef: safeRef(value.liveSurfaceRef, 'liveSurfaceRef', rejectedInputs),
+    liveSurfaceRef: safeHostLiveSurfaceRef(value.liveSurfaceRef, 'liveSurfaceRef', rejectedInputs),
     surfaceTransport: normalizeSurfaceTransport(value.surfaceTransport, rejectedInputs),
     platformDriverRef: safeRef(value.platformDriverRef, 'platformDriverRef', rejectedInputs),
     platformDriverStatus: normalizeStatus(value.platformDriverStatus),
@@ -805,9 +990,16 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
     targetAppRef: safeRef(value.targetAppRef, 'targetAppRef', rejectedInputs),
     targetWindowRef: safeRef(value.targetWindowRef, 'targetWindowRef', rejectedInputs),
     sessionRef: safeRef(value.sessionRef, 'sessionRef', rejectedInputs),
+    hostSessionRef: safeRef(value.hostSessionRef, 'hostSessionRef', rejectedInputs),
+    surfaceOwnerRef: safeRef(value.surfaceOwnerRef, 'surfaceOwnerRef', rejectedInputs),
+    displayOwnerRef: safeRef(value.displayOwnerRef, 'displayOwnerRef', rejectedInputs),
     providerSessionOwnerRef: safeRef(value.providerSessionOwnerRef, 'providerSessionOwnerRef', rejectedInputs),
     providerSessionReconnectRef: safeRef(value.providerSessionReconnectRef, 'providerSessionReconnectRef', rejectedInputs),
-    liveBindingAttachGrantRef: safeRef(value.liveBindingAttachGrantRef, 'liveBindingAttachGrantRef', rejectedInputs),
+    liveBindingAttachGrantRef: safeHostLiveGrantRef(value.liveBindingAttachGrantRef, 'liveBindingAttachGrantRef', rejectedInputs),
+    liveBindingAttachGrantStatus: normalizeStatus(value.liveBindingAttachGrantStatus),
+    grantValidationRef: safeHostLiveGrantRef(value.grantValidationRef, 'grantValidationRef', rejectedInputs),
+    grantValidationStatus: normalizeStatus(value.grantValidationStatus),
+    providerSessionRevalidated: typeof value.providerSessionRevalidated === 'boolean' ? value.providerSessionRevalidated : undefined,
     surfaceTransportRef: safeRef(value.surfaceTransportRef, 'surfaceTransportRef', rejectedInputs),
     frameStreamRef: safeRef(value.frameStreamRef, 'frameStreamRef', rejectedInputs),
     frameRef,
@@ -871,32 +1063,28 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
       ? value.onTerminalEquivalentText as VirtualScreenPayload['onTerminalEquivalentText']
       : undefined,
   };
+  collectLiveContractRejections(payloadWithoutAttachState, rejectedInputs);
   const attachState = deriveAttachState(payloadWithoutAttachState, normalizeAttachState(value.attachState ?? value.status));
+  const surfaceMode = deriveSurfaceMode(payloadWithoutAttachState, attachState, normalizeSurfaceMode(value.surfaceMode));
   return {
     ...payloadWithoutAttachState,
     attachState,
-    surfaceMode: deriveSurfaceMode(payloadWithoutAttachState, attachState, normalizeSurfaceMode(value.surfaceMode)),
+    surfaceMode,
+    presentationState: derivePresentationState(
+      payloadWithoutAttachState,
+      attachState,
+      surfaceMode,
+      normalizePresentationState(value.presentationState),
+    ),
     rejectedInputs: uniqueRejectedInputs(rejectedInputs),
   };
-}
-
-function deriveSurfaceMode(
-  payload: Omit<VirtualScreenPayload, 'attachState' | 'rejectedInputs' | 'surfaceMode'>,
-  attachState: VirtualAppScreenAttachState,
-  explicit: VirtualScreenPayload['surfaceMode'],
-): VirtualScreenPayload['surfaceMode'] {
-  if (canRepresentLiveSurface(payload, attachState)) return 'live';
-  if (explicit === 'empty' && !payload.currentFrameRef && !payload.replayRef && !payload.frameRefs?.length && !payload.frameStreamRef && !payload.liveSurfaceRef) return 'empty';
-  if (explicit === 'replay') return 'replay';
-  if (attachState === 'no-session' && !payload.currentFrameRef && !payload.replayRef && !payload.frameRefs?.length && !payload.frameStreamRef) return 'empty';
-  return payload.currentFrameRef || payload.replayRef || payload.frameRefs?.length || payload.frameStreamRef ? 'replay' : 'empty';
 }
 
 function canRepresentLiveSurface(
   payload: Omit<VirtualScreenPayload, 'attachState' | 'rejectedInputs' | 'surfaceMode'>,
   attachState: VirtualAppScreenAttachState,
 ) {
-  if (attachState !== 'attached' && attachState !== 'observe-only') return false;
+  if (attachState !== 'attached') return false;
   if (!hasCompleteLiveSurfaceRefs(payload)) return false;
   if (!platformDriverReady(payload) || hasBlockedPlatformGate(payload)) return false;
   return true;
@@ -965,6 +1153,9 @@ function hasCompleteLiveSurfaceRefs(
     | 'providerSessionOwnerRef'
     | 'providerSessionReconnectRef'
     | 'liveBindingAttachGrantRef'
+    | 'liveBindingAttachGrantStatus'
+    | 'grantValidationRef'
+    | 'grantValidationStatus'
     | 'currentFrameSequence'
   >,
 ) {
@@ -977,7 +1168,8 @@ function hasCompleteLiveSurfaceRefs(
     && payload.currentFrameRef
     && payload.providerSessionOwnerRef
     && payload.providerSessionReconnectRef
-    && payload.liveBindingAttachGrantRef
+    && liveBindingRefsHostOwned(payload)
+    && liveBindingGrantValidated(payload)
     && payload.currentFrameSequence?.ref
     && typeof payload.currentFrameSequence.sequence === 'number'
     && Number.isFinite(payload.currentFrameSequence.sequence)
@@ -1405,6 +1597,9 @@ function frameTimeline(payload: VirtualScreenPayload) {
   pushTimelineRow(rows, 'screen', payload.screenRef);
   pushTimelineRow(rows, 'target-app', payload.targetAppRef);
   pushTimelineRow(rows, 'target-window', payload.targetWindowRef);
+  pushTimelineRow(rows, 'host-session', payload.hostSessionRef ?? payload.sessionRef);
+  pushTimelineRow(rows, 'surface-owner', payload.surfaceOwnerRef);
+  pushTimelineRow(rows, 'display-owner', payload.displayOwnerRef);
   pushTimelineRow(rows, 'live-surface', payload.liveSurfaceRef);
   pushTimelineRow(rows, 'platform-driver', payload.platformDriverRef);
   pushTimelineRow(rows, 'frame-transport', payload.frameTransport?.ref);
@@ -1412,6 +1607,8 @@ function frameTimeline(payload: VirtualScreenPayload) {
   pushTimelineRow(rows, 'current-frame-sequence', payload.currentFrameSequence?.ref, true);
   pushTimelineRow(rows, 'reconnect', payload.reconnect?.ref);
   pushTimelineRow(rows, 'input-hot-path', payload.inputHotPath?.ref);
+  pushTimelineRow(rows, 'live-binding-attach-grant', payload.liveBindingAttachGrantRef);
+  pushTimelineRow(rows, 'grant-validation', payload.grantValidationRef);
   pushTimelineRow(rows, 'frame-stream', payload.frameStreamRef);
   for (const frame of payload.frameRefs ?? []) pushTimelineRow(rows, frame.ref === payload.currentFrameRef ? 'current-frame' : 'frame', frame.ref, frame.ref === payload.currentFrameRef);
   pushTimelineRow(rows, 'before', payload.beforeFrameRef);
@@ -1457,11 +1654,20 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
   const currentFrameUrl = materializedFrameUrl(payload.currentFrameRef);
   const attachState = payload.attachState ?? 'no-session';
   const surfaceMode = payload.surfaceMode ?? (payload.currentFrameRef || payload.replayRef || payload.frameRefs?.length || payload.frameStreamRef ? 'replay' : 'empty');
-  const presentationMode = surfaceMode === 'live'
+  const presentationState = payload.presentationState ?? (
+    surfaceMode === 'live' ? 'live' : surfaceMode === 'replay' ? 'replay' : surfaceMode === 'fallback' ? 'fallback' : 'empty'
+  );
+  const presentationMode = presentationState === 'live'
     ? VIRTUAL_SCREEN_LIVE_PRESENTATION_MODE
-    : surfaceMode === 'replay'
+    : presentationState === 'replay'
       ? VIRTUAL_SCREEN_REPLAY_PRESENTATION_MODE
-      : 'empty';
+      : presentationState === 'fallback'
+        ? VIRTUAL_SCREEN_FALLBACK_PRESENTATION_MODE
+        : presentationState === 'permission'
+          ? VIRTUAL_SCREEN_PERMISSION_PRESENTATION_MODE
+          : presentationState === 'blocked'
+            ? VIRTUAL_SCREEN_BLOCKED_PRESENTATION_MODE
+            : 'empty';
   const attachCopy = attachStateCopy(attachState);
   const title = payload.title ?? props.slot.title ?? 'VirtualAppScreen';
   const timeline = frameTimeline(payload);
@@ -1503,8 +1709,10 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
         data-component-id={VIRTUAL_SCREEN_VIEWER_COMPONENT_ID}
         data-render-boundary="presentation-only"
         data-presentation-mode="empty"
+        data-presentation-state="empty"
         data-status="empty"
         data-attach-state="no-session"
+        data-screen-presentation-state="empty"
         data-screen-surface-mode="empty"
         data-placeholder-evidence="false"
       >
@@ -1523,12 +1731,21 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
       data-component-id={VIRTUAL_SCREEN_VIEWER_COMPONENT_ID}
       data-render-boundary="presentation-only"
       data-presentation-mode={presentationMode}
+      data-presentation-state={presentationState}
       data-status={payload.status ?? attachState}
       data-attach-state={attachState}
+      data-screen-presentation-state={presentationState}
       data-screen-surface-mode={surfaceMode}
       data-platform-driver-status={payload.platformDriverStatus}
+      data-host-session-ref={payload.hostSessionRef ?? payload.sessionRef}
+      data-surface-owner-ref={payload.surfaceOwnerRef}
+      data-display-owner-ref={payload.displayOwnerRef}
       data-provider-session-owner-ref={payload.providerSessionOwnerRef}
       data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
+      data-live-binding-attach-grant-ref={payload.liveBindingAttachGrantRef}
+      data-live-binding-attach-grant-status={payload.liveBindingAttachGrantStatus}
+      data-grant-validation-ref={payload.grantValidationRef}
+      data-grant-validation-status={payload.grantValidationStatus}
       data-surface-transport-ref={payload.surfaceTransportRef}
       data-frame-transport-ref={payload.frameTransport?.ref}
       data-frame-transport={payload.frameTransport?.transport}
@@ -1566,8 +1783,11 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           {attachState === 'requires-handoff'
             ? command('Handoff', `/computer-use handoff --session-ref ${JSON.stringify(handoffTargetRef ?? '')}`, handoffTargetRef, payload.onTerminalEquivalentText)
             : null}
-          {surfaceMode === 'live' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_LIVE_PRESENTATION_MODE}>Live surface</span> : null}
-          {surfaceMode === 'replay' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_REPLAY_PRESENTATION_MODE}>Replay/ref inspector</span> : null}
+          {presentationState === 'live' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_LIVE_PRESENTATION_MODE}>Live surface</span> : null}
+          {presentationState === 'replay' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_REPLAY_PRESENTATION_MODE}>Replay/ref inspector</span> : null}
+          {presentationState === 'fallback' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_FALLBACK_PRESENTATION_MODE}>Fallback/ref inspector</span> : null}
+          {presentationState === 'permission' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_PERMISSION_PRESENTATION_MODE}>Permission gate</span> : null}
+          {presentationState === 'blocked' ? <span data-screen-presentation-mode={VIRTUAL_SCREEN_BLOCKED_PRESENTATION_MODE}>Blocked gate</span> : null}
           <span>{attachState}</span>
         </div>
       </header>
@@ -1578,6 +1798,13 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           data-input-intent-ready={inputIntentReady ? 'true' : 'false'}
           data-command-boundary="terminal-equivalent-input-intent"
           data-live-surface-ref={payload.liveSurfaceRef}
+          data-host-session-ref={payload.hostSessionRef ?? payload.sessionRef}
+          data-surface-owner-ref={payload.surfaceOwnerRef}
+          data-display-owner-ref={payload.displayOwnerRef}
+          data-live-binding-attach-grant-ref={payload.liveBindingAttachGrantRef}
+          data-live-binding-attach-grant-status={payload.liveBindingAttachGrantStatus}
+          data-grant-validation-ref={payload.grantValidationRef}
+          data-grant-validation-status={payload.grantValidationStatus}
           data-surface-transport={payload.surfaceTransport}
           data-provider-session-owner-ref={payload.providerSessionOwnerRef}
           data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
@@ -1611,6 +1838,13 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
                 data-frame-stream-ref={payload.frameStreamRef}
                 data-frame-stream-mode="ref-only"
                 data-live-surface-ref={payload.liveSurfaceRef}
+                data-host-session-ref={payload.hostSessionRef ?? payload.sessionRef}
+                data-surface-owner-ref={payload.surfaceOwnerRef}
+                data-display-owner-ref={payload.displayOwnerRef}
+                data-live-binding-attach-grant-ref={payload.liveBindingAttachGrantRef}
+                data-live-binding-attach-grant-status={payload.liveBindingAttachGrantStatus}
+                data-grant-validation-ref={payload.grantValidationRef}
+                data-grant-validation-status={payload.grantValidationStatus}
                 data-surface-transport={payload.surfaceTransport}
                 data-provider-session-owner-ref={payload.providerSessionOwnerRef}
                 data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
@@ -1832,6 +2066,10 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           {refChip('provider session owner', payload.providerSessionOwnerRef)}
           {refChip('provider session reconnect', payload.providerSessionReconnectRef)}
           {refChip('live surface', payload.liveSurfaceRef)}
+          {refChip('live attach grant', payload.liveBindingAttachGrantRef)}
+          {statusChip('live attach grant status', payload.liveBindingAttachGrantStatus)}
+          {refChip('grant validation', payload.grantValidationRef)}
+          {statusChip('grant validation status', payload.grantValidationStatus)}
           {statusChip('surface transport', payload.surfaceTransport)}
           {refChip('surface transport ref', payload.surfaceTransportRef)}
           {refChip('platform driver', payload.platformDriverRef)}

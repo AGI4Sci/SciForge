@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS,
-  browserHostSessionFrameStreamUrl,
   preflightBrowserHostSessionWriter,
   readBrowserHostSessionState,
   sendBrowserHostComputerUseAction,
@@ -17,7 +16,6 @@ import {
   browserWorkbenchDefaultCommands,
   renderBrowserWorkbench,
   type BrowserWorkbenchCommand,
-  type BrowserWorkbenchLiveTransportHandoff,
 } from '../../../../../packages/presentation/components';
 import {
   browserAddressForFocusedObjectReference,
@@ -50,12 +48,8 @@ type RightPaneBrowserHostAction = {
   uiEventReceivedAt?: string;
 };
 
-type BrowserHostCanvasBinaryFrame = Blob | ArrayBuffer | ArrayBufferView;
-
 const BROWSER_HOST_ACTION_FLUSH_MS = 50;
 const BROWSER_HOST_CURSOR_FLUSH_MS = 80;
-const BROWSER_HOST_FRAME_STREAM_INTERVAL_MS = 200;
-const BROWSER_HOST_FRAME_STREAM_QUIET_WINDOW_MS = 80;
 const rightPaneBrowserHostSessionCache = new Map<string, BrowserHostSessionState>();
 
 export function RightPaneBrowserTool({
@@ -96,13 +90,9 @@ export function RightPaneBrowserTool({
   const [writerDiagnostic, setWriterDiagnostic] = useState<BrowserHostSessionWriterPreflightResult | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [hostCursor, setHostCursor] = useState('default');
-  const [hostFrameObjectUrl, setHostFrameObjectUrl] = useState<string | undefined>(undefined);
-  const [canvasFrameVersion, setCanvasFrameVersion] = useState(0);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef({ width: 1365, height: 900 });
   const hostSessionRef = useRef<BrowserHostSessionState | undefined>(undefined);
-  const hostFrameObjectUrlRef = useRef<string | undefined>(undefined);
-  const hostFrameObjectSessionRef = useRef<string | undefined>(undefined);
   const configRef = useRef(config);
   const bufferedTextRef = useRef('');
   const bufferedTextReceivedAtRef = useRef<string | undefined>(undefined);
@@ -110,12 +100,6 @@ export function RightPaneBrowserTool({
   const bufferedScrollReceivedAtRef = useRef<string | undefined>(undefined);
   const actionFlushTimerRef = useRef<number | undefined>(undefined);
   const cursorFlushTimerRef = useRef<number | undefined>(undefined);
-  const frameStreamSocketRef = useRef<WebSocket | null>(null);
-  const frameStreamReceivedBinaryRef = useRef(false);
-  const frameStreamCandidateTransportRef = useRef<string | undefined>(undefined);
-  const pendingBinaryFrameSessionRef = useRef<string | undefined>(undefined);
-  const pendingCanvasBinaryFrameRef = useRef<{ sessionId: string; frame: BrowserHostCanvasBinaryFrame; sequence: number } | undefined>(undefined);
-  const canvasFrameSequenceRef = useRef(0);
   const pendingCursorRef = useRef<RightPaneBrowserHostAction | undefined>(undefined);
   const cursorRequestInFlightRef = useRef(false);
   const pendingMouseMoveRef = useRef<RightPaneBrowserHostAction | undefined>(undefined);
@@ -158,9 +142,7 @@ export function RightPaneBrowserTool({
     if (cursorFlushTimerRef.current !== undefined && typeof window !== 'undefined') {
       window.clearTimeout(cursorFlushTimerRef.current);
     }
-    closeHostFrameStream();
     detachNativeBrowserSurface();
-    clearHostFrameObjectUrl();
   }, []);
 
   useEffect(() => {
@@ -190,7 +172,6 @@ export function RightPaneBrowserTool({
       setBusy(false);
       pendingHostOpenUrlRef.current = undefined;
       detachNativeBrowserSurface();
-      clearHostFrameObjectUrl();
       return;
     }
     if (browserHostSessionMatchesTarget(hostSession, normalizedUrl) && browserHostSessionHasUsableLiveSurface(hostSession)) return;
@@ -258,21 +239,7 @@ export function RightPaneBrowserTool({
   }, [config, hostSession?.requestedUrl, hostSession?.status, hostSession?.url, needsBrowserHost, normalizedUrl, tabId]);
 
   useEffect(() => {
-    const currentHostSession = hostSession;
-    if (!needsBrowserHost || !currentHostSession || !browserHostSessionCanUseHostFrameStream(currentHostSession) || browserHostSessionUsesNativeSurface(currentHostSession)) {
-      closeHostFrameStream();
-      return;
-    }
-    connectHostFrameStream(currentHostSession);
-    return () => closeHostFrameStream();
-  }, [hostSession?.id, hostSession?.status, hostSession?.workspaceWriterBaseUrl, needsBrowserHost]);
-
-  useEffect(() => {
-    void drawPendingBrowserHostCanvasFrame();
-  }, [canvasFrameVersion, hostSession?.id]);
-
-  useEffect(() => {
-    if (!needsBrowserHost || !hostSession || !browserHostSessionUsesNativeSurface(hostSession) || hostSession.status === 'closed' || hostSession.status === 'failed') {
+    if (hostError || !needsBrowserHost || !hostSession || !browserHostSessionHasUsableLiveSurface(hostSession) || hostSession.status === 'closed' || hostSession.status === 'failed') {
       detachNativeBrowserSurface();
       return;
     }
@@ -292,14 +259,21 @@ export function RightPaneBrowserTool({
       observer?.disconnect();
       window.removeEventListener('resize', syncSurface);
     };
-  }, [hostSession?.id, hostSession?.liveSurfaceTransport, hostSession?.status, needsBrowserHost]);
+  }, [hostError, hostSession?.id, hostSession?.liveSurfaceRef, hostSession?.liveSurfaceTransport, hostSession?.singleInteractiveTruth, hostSession?.status, needsBrowserHost]);
 
+  const hostSurfaceError = needsBrowserHost
+    && hostSession
+    && hostSession.status !== 'starting'
+    && hostSession.status !== 'loading'
+    && !browserHostSessionHasUsableLiveSurface(hostSession)
+    ? 'Native embedded BrowserHostSession surface is blocked because the session has no attachable native live surface ref.'
+    : hostError;
   const browserState = rightPaneBrowserProjectionForUrl(normalizedUrl, needsBrowserHost ? {
     hostExternalBrowserAvailable: true,
     hostSurface: 'browser-host-session',
     hostBusy: busy,
     hostSession,
-    hostError,
+    hostError: hostSurfaceError,
   } : {});
   const commands = browserWorkbenchDefaultCommands(normalizedUrl, {
     status: browserState.status,
@@ -587,105 +561,6 @@ export function RightPaneBrowserTool({
     setHostError('');
   }
 
-  function connectHostFrameStream(sessionState: BrowserHostSessionState) {
-    if (typeof WebSocket === 'undefined') return;
-    closeHostFrameStream();
-    clearHostFrameObjectUrl();
-    const socket = new WebSocket(browserHostSessionFrameStreamUrl(browserHostSessionConfig(configRef.current, sessionState), sessionState, {
-      intervalMs: BROWSER_HOST_FRAME_STREAM_INTERVAL_MS,
-      quietWindowMs: BROWSER_HOST_FRAME_STREAM_QUIET_WINDOW_MS,
-    }));
-    socket.binaryType = 'blob';
-    frameStreamSocketRef.current = socket;
-    frameStreamReceivedBinaryRef.current = false;
-    socket.addEventListener('message', (event) => {
-      if (applyBrowserHostFrameStreamBinary(event.data, sessionState.id)) return;
-      const message = parseBrowserHostFrameStreamMessage(event.data);
-      if (!message || message.type !== 'frame' || message.session?.id !== sessionState.id) return;
-      const current = hostSessionRef.current;
-      if (!current || current.id !== sessionState.id) return;
-      frameStreamCandidateTransportRef.current = browserHostSameSessionCandidateFrameTransport(message.session, message.frameTransport);
-      pendingBinaryFrameSessionRef.current = frameStreamCandidateTransportRef.current && message.binaryFrameId
-        ? sessionState.id
-        : undefined;
-      const nextSession: BrowserHostSessionState = {
-        ...message.session,
-        workspaceWriterBaseUrl: current.workspaceWriterBaseUrl,
-      };
-      hostSessionRef.current = nextSession;
-      setHostSession(nextSession);
-      setHostError('');
-    });
-    socket.addEventListener('close', () => {
-      reportHostFrameStreamIssue(socket, sessionState, 'BrowserHostSession live frame stream closed before a real browser frame arrived.');
-    });
-    socket.addEventListener('error', () => {
-      reportHostFrameStreamIssue(socket, sessionState, 'BrowserHostSession live frame stream is unavailable.');
-    });
-  }
-
-  function closeHostFrameStream() {
-    frameStreamSocketRef.current?.close();
-    frameStreamSocketRef.current = null;
-    pendingBinaryFrameSessionRef.current = undefined;
-    pendingCanvasBinaryFrameRef.current = undefined;
-    frameStreamReceivedBinaryRef.current = false;
-    frameStreamCandidateTransportRef.current = undefined;
-  }
-
-  function reportHostFrameStreamIssue(socket: WebSocket, sessionState: BrowserHostSessionState, message: string) {
-    if (frameStreamSocketRef.current !== socket) return;
-    frameStreamSocketRef.current = null;
-    pendingBinaryFrameSessionRef.current = undefined;
-    frameStreamCandidateTransportRef.current = undefined;
-    if (frameStreamReceivedBinaryRef.current || hostSessionRef.current?.id !== sessionState.id) return;
-    setHostError(message);
-    void refreshWriterDiagnostic();
-  }
-
-  function applyBrowserHostFrameStreamBinary(value: unknown, sessionId: string) {
-    if (!browserHostFrameStreamBinaryLike(value)) return false;
-    if (pendingBinaryFrameSessionRef.current !== sessionId || hostSessionRef.current?.id !== sessionId) return true;
-    pendingBinaryFrameSessionRef.current = undefined;
-    const frame = value as BrowserHostCanvasBinaryFrame;
-    pendingCanvasBinaryFrameRef.current = { sessionId, frame, sequence: ++canvasFrameSequenceRef.current };
-    const blob = typeof Blob !== 'undefined'
-      ? value instanceof Blob ? value : new Blob([value as BlobPart], { type: 'image/png' })
-      : undefined;
-    frameStreamReceivedBinaryRef.current = true;
-    void drawPendingBrowserHostCanvasFrame();
-    setCanvasFrameVersion((version) => version + 1);
-    if (browserHostSessionUsesCanvasBinaryRenderer(hostSessionRef.current)) return true;
-    if (typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return true;
-    if (!blob) return true;
-    const objectUrl = URL.createObjectURL(blob);
-    const previousObjectUrl = hostFrameObjectUrlRef.current;
-    hostFrameObjectUrlRef.current = objectUrl;
-    hostFrameObjectSessionRef.current = sessionId;
-    setHostFrameObjectUrl(objectUrl);
-    if (previousObjectUrl && previousObjectUrl !== objectUrl && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(previousObjectUrl);
-    return true;
-  }
-
-  async function drawPendingBrowserHostCanvasFrame() {
-    const pending = pendingCanvasBinaryFrameRef.current;
-    if (!pending || hostSessionRef.current?.id !== pending.sessionId) return;
-    const canvas = browserHostCanvasBinaryElement(surfaceRef.current, pending.sessionId);
-    if (!canvas) return;
-    const drawn = await drawBrowserHostCanvasBinaryFrame(canvas, pending.frame);
-    if (drawn && pendingCanvasBinaryFrameRef.current?.sequence === pending.sequence) {
-      pendingCanvasBinaryFrameRef.current = undefined;
-    }
-  }
-
-  function clearHostFrameObjectUrl() {
-    const previousObjectUrl = hostFrameObjectUrlRef.current;
-    hostFrameObjectUrlRef.current = undefined;
-    hostFrameObjectSessionRef.current = undefined;
-    setHostFrameObjectUrl(undefined);
-    if (previousObjectUrl && typeof URL !== 'undefined' && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(previousObjectUrl);
-  }
-
   function requestHostCursor(action: RightPaneBrowserHostAction) {
     if (!hostSessionRef.current) {
       setHostCursor('default');
@@ -769,7 +644,16 @@ export function RightPaneBrowserTool({
 
   async function attachNativeBrowserSurface(sessionState: BrowserHostSessionState) {
     const bridge = desktopBrowserHostSurfaceBridge();
-    if (!bridge?.attachBrowserHostSessionSurface) return;
+    if (!browserHostSessionHasUsableLiveSurface(sessionState)) {
+      detachNativeBrowserSurface(sessionState.id);
+      setHostError('Native embedded BrowserHostSession surface is blocked because the session has no attachable native live surface ref.');
+      return;
+    }
+    if (!bridge?.attachBrowserHostSessionSurface) {
+      detachNativeBrowserSurface(sessionState.id);
+      setHostError('Native embedded BrowserHostSession attach bridge is unavailable; retry the BrowserHostSession or hand off externally.');
+      return;
+    }
     const bounds = browserHostNativeSurfaceBounds(surfaceRef.current);
     if (!bounds) return;
     try {
@@ -780,13 +664,15 @@ export function RightPaneBrowserTool({
         visible: true,
         focus: nativeSurfaceSessionRef.current !== sessionState.id,
       });
-      nativeSurfaceSessionRef.current = sessionState.id;
       if (nativeBrowserHostSurfaceResultFailed(result)) {
-        setHostError(nativeBrowserHostSurfaceReason(result) ?? 'Native embedded BrowserHostSession surface could not attach.');
+        detachNativeBrowserSurface(sessionState.id);
+        setHostError(nativeBrowserHostSurfaceReason(result) ?? 'Native embedded BrowserHostSession surface attach blocked; retry the same session or hand off externally.');
       } else {
+        nativeSurfaceSessionRef.current = sessionState.id;
         setHostError('');
       }
     } catch (error) {
+      detachNativeBrowserSurface(sessionState.id);
       setHostError(error instanceof Error ? error.message : String(error));
     }
   }
@@ -873,19 +759,13 @@ export function RightPaneBrowserTool({
               ref: browserState.ref,
               canRenderFrame: browserState.canRenderFrame,
               hostSurface: browserState.hostSurface,
+              loadingProgress: browserState.loadingProgress,
             },
             embedPolicy: browserState.embedPolicy,
             addressValue: addressDraft,
             addressPlaceholder: 'https://example.org',
             previewUrl: browserState.previewUrl,
-            frameUrl: hostSession && !browserHostSessionUsesNativeSurface(hostSession) && hostFrameObjectSessionRef.current === hostSession.id ? hostFrameObjectUrl : undefined,
-            frameTransport: browserHostSessionUsesNativeSurface(hostSession)
-              ? 'native-embedded'
-              : browserHostSessionUsesCanvasBinaryRenderer(hostSession)
-                ? browserHostCanvasBinaryFrameTransport(hostSession, frameStreamCandidateTransportRef.current)
-                : hostFrameObjectSessionRef.current === hostSession?.id && hostFrameObjectUrl ? 'websocket-binary' : undefined,
-            frameRenderer: browserHostSessionUsesCanvasBinaryRenderer(hostSession) ? 'canvas-binary' : undefined,
-            liveTransportHandoff: browserHostWebRtcRightPaneHandoff(hostSession, frameStreamCandidateTransportRef.current),
+            frameTransport: browserHostSessionHasUsableLiveSurface(hostSession) ? 'native-embedded' : undefined,
             previewSandbox: browserState.previewSandbox,
             externalUrl: browserState.externalUrl,
             hostSession: hostSession ? { ...hostSession, cursor: hostCursor } : undefined,
@@ -978,17 +858,10 @@ function browserHostSessionIdHash(value: string) {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
-function browserHostSessionCanUseHostFrameStream(session: BrowserHostSessionState | undefined) {
-  return Boolean(session
-    && session.status !== 'closed'
-    && session.status !== 'failed'
-    && session.liveSurfaceTransport === 'host-stream'
-    && session.singleInteractiveTruth === true
-    && session.frameStreamRef === `browser-host-session:${session.id}/frame-stream`);
-}
-
 function browserHostSessionHasUsableLiveSurface(session: BrowserHostSessionState | undefined) {
-  return browserHostSessionCanUseHostFrameStream(session) || browserHostSessionUsesNativeSurface(session);
+  return browserHostSessionUsesNativeSurface(session)
+    && session?.singleInteractiveTruth === true
+    && Boolean(session.liveSurfaceRef);
 }
 
 function rightPaneBrowserHostSessionCacheKey(config: SciForgeConfig, tabId: string, normalizedUrl: string) {
@@ -1035,173 +908,8 @@ function browserHostComputerUseKeyAction(key: string | undefined): BrowserHostCo
   return keys.length > 1 ? { type: 'hotkey', keys } : { type: 'press_key', key: normalized };
 }
 
-function parseBrowserHostFrameStreamMessage(value: unknown): { type?: string; session?: BrowserHostSessionState; frameTransport?: string; binaryFrameId?: string } | undefined {
-  try {
-    const text = typeof value === 'string'
-      ? value
-      : typeof Blob !== 'undefined' && value instanceof Blob
-        ? ''
-        : String(value ?? '');
-    const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== 'object') return undefined;
-    const record = parsed as { type?: unknown; session?: unknown };
-    return {
-      type: typeof record.type === 'string' ? record.type : undefined,
-      session: record.session && typeof record.session === 'object' ? record.session as BrowserHostSessionState : undefined,
-      frameTransport: typeof (record as { frameTransport?: unknown }).frameTransport === 'string' ? (record as { frameTransport: string }).frameTransport : undefined,
-      binaryFrameId: typeof (record as { binaryFrameId?: unknown }).binaryFrameId === 'string' ? (record as { binaryFrameId: string }).binaryFrameId : undefined,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function browserHostFrameStreamBinaryLike(value: unknown) {
-  return typeof Blob !== 'undefined' && value instanceof Blob
-    || typeof ArrayBuffer !== 'undefined' && value instanceof ArrayBuffer
-    || typeof ArrayBuffer !== 'undefined' && ArrayBuffer.isView(value);
-}
-
-function browserHostFrameTransportCarriesBinary(frameTransport: string | undefined) {
-  return frameTransport === 'websocket-binary' || frameTransport === 'webrtc-data-channel';
-}
-
-function browserHostSameSessionCandidateFrameTransport(
-  session: BrowserHostSessionState | undefined,
-  frameTransport: string | undefined,
-) {
-  if (!browserHostSessionUsesCanvasBinaryRenderer(session)) return undefined;
-  return browserHostFrameTransportCarriesBinary(frameTransport) ? frameTransport : undefined;
-}
-
-export async function drawBrowserHostCanvasBinaryFrame(
-  canvas: HTMLCanvasElement,
-  frame: BrowserHostCanvasBinaryFrame,
-) {
-  const context = canvas.getContext('2d');
-  if (!context) return false;
-  const blob = browserHostCanvasBinaryFrameBlob(frame);
-  if (!blob) return false;
-  if (typeof createImageBitmap === 'function') {
-    try {
-      const bitmap = await createImageBitmap(blob);
-      drawBrowserHostCanvasImage(canvas, context, bitmap.width, bitmap.height, bitmap);
-      bitmap.close?.();
-      return true;
-    } catch {
-      // Some runtimes expose createImageBitmap but cannot decode every Blob type.
-    }
-  }
-  return drawBrowserHostCanvasImageFallback(canvas, context, blob);
-}
-
-function browserHostCanvasBinaryFrameBlob(frame: BrowserHostCanvasBinaryFrame) {
-  if (typeof Blob === 'undefined') return undefined;
-  if (typeof Blob !== 'undefined' && frame instanceof Blob) return frame;
-  if (typeof ArrayBuffer !== 'undefined' && frame instanceof ArrayBuffer) {
-    return new Blob([frame], { type: 'image/png' });
-  }
-  const view = frame as ArrayBufferView;
-  const source = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-  const copy = new Uint8Array(source.byteLength);
-  copy.set(source);
-  const bytes = copy.buffer.slice(copy.byteOffset, copy.byteOffset + copy.byteLength);
-  return new Blob([bytes], { type: 'image/png' });
-}
-
-function drawBrowserHostCanvasImage(
-  canvas: HTMLCanvasElement,
-  context: CanvasRenderingContext2D,
-  width: number,
-  height: number,
-  image: CanvasImageSource,
-) {
-  const nextWidth = Math.max(1, Math.round(width || canvas.width || 1));
-  const nextHeight = Math.max(1, Math.round(height || canvas.height || 1));
-  if (canvas.width !== nextWidth) canvas.width = nextWidth;
-  if (canvas.height !== nextHeight) canvas.height = nextHeight;
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.drawImage(image, 0, 0, canvas.width, canvas.height);
-}
-
-function drawBrowserHostCanvasImageFallback(
-  canvas: HTMLCanvasElement,
-  context: CanvasRenderingContext2D,
-  blob: Blob,
-) {
-  if (typeof Image === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') return Promise.resolve(false);
-  const objectUrl = URL.createObjectURL(blob);
-  return new Promise<boolean>((resolve) => {
-    const image = new Image();
-    const finish = (drawn: boolean) => {
-      if (typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(objectUrl);
-      resolve(drawn);
-    };
-    image.onload = () => {
-      drawBrowserHostCanvasImage(canvas, context, image.naturalWidth, image.naturalHeight, image);
-      finish(true);
-    };
-    image.onerror = () => finish(false);
-    image.src = objectUrl;
-  });
-}
-
-function browserHostCanvasBinaryElement(root: HTMLElement | null, sessionId: string) {
-  return root?.querySelector<HTMLCanvasElement>(`canvas[data-browser-frame-renderer="canvas-binary"][data-browser-frame-session-id="${cssEscapeValue(sessionId)}"]`) ?? null;
-}
-
-function cssEscapeValue(value: string) {
-  return typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
-    ? CSS.escape(value)
-    : value.replace(/["\\]/g, '\\$&');
-}
-
 function browserHostSessionUsesNativeSurface(session: BrowserHostSessionState | undefined) {
   return session?.liveSurfaceTransport === 'native-embedded';
-}
-
-function browserHostSessionUsesCanvasBinaryRenderer(session: BrowserHostSessionState | undefined) {
-  return session?.liveSurfaceTransport === 'host-stream'
-    && session.singleInteractiveTruth === true
-    && session.frameStreamRef === `browser-host-session:${session.id}/frame-stream`;
-}
-
-function browserHostCanvasBinaryFrameTransport(session: BrowserHostSessionState | undefined, candidateTransport: string | undefined) {
-  if (!browserHostSessionUsesCanvasBinaryRenderer(session)) return undefined;
-  return candidateTransport === 'webrtc-data-channel' ? 'webrtc-data-channel' : 'websocket-binary';
-}
-
-function browserHostWebRtcRightPaneHandoff(
-  session: BrowserHostSessionState | undefined,
-  candidateTransport: string | undefined,
-): BrowserWorkbenchLiveTransportHandoff | undefined {
-  if (!session || candidateTransport !== 'webrtc-data-channel' || !browserHostSessionUsesCanvasBinaryRenderer(session)) return undefined;
-  if (!session.liveSurfaceRef || !session.frameStreamRef) return undefined;
-  return {
-    status: 'candidate-contract',
-    claim: 'bridge-to-right-pane-canvas-handoff-only',
-    claimScope: 'candidate-only',
-    owner: 'BrowserHostSession',
-    rightPaneSurfaceOwner: 'BrowserHostSession',
-    productSurface: 'right-pane-browser',
-    renderTarget: 'canvas',
-    frameRenderer: 'canvas-binary',
-    frameTransport: 'webrtc-data-channel',
-    fallbackTransport: 'websocket-binary',
-    liveSurfaceTransportCandidate: 'webrtc-data-channel',
-    hostSessionRef: `browser-host-session:${session.id}`,
-    liveSurfaceRef: session.liveSurfaceRef,
-    frameStreamRef: session.frameStreamRef,
-    inlineFrameBytes: false,
-    inlineSignals: false,
-    secondViewer: false,
-    secondTruthSource: false,
-    httpFrameLiveFallback: false,
-    fullyPassedClaim: false,
-    realUiWebRtcPassClaim: false,
-    loopbackEvidenceOnly: false,
-    httpFrameRouteClaim: false,
-  };
 }
 
 function browserHostActionWithUiTiming(action: RightPaneBrowserHostAction): RightPaneBrowserHostAction {

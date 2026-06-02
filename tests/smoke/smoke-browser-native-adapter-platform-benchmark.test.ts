@@ -5,14 +5,15 @@ import { tmpdir } from 'node:os';
 import test from 'node:test';
 
 import {
+  REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES,
-  REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS,
+  REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES,
   buildBrowserNativeAdapterComparisonManifest,
   validateBrowserNativeAdapterComparisonManifest,
+  type BrowserNativeAdapterBenchmarkMetricSection,
   type BrowserNativeAdapterCandidateId,
   type BrowserNativeAdapterComparisonManifest,
   type BrowserNativeAdapterMetricFieldContract,
-  type BrowserNativeAdapterMetricSection,
 } from '../../src/desktop/browser-native-adapter-comparison.js';
 import {
   DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE_SCHEMA,
@@ -42,7 +43,7 @@ const REAL_RUNNER_COMMAND_REF = 'tsx tools/browser-native-adapter-platform-bench
 const MAX_PLATFORM_BENCHMARK_MANIFEST_BYTES = 96_000;
 const EXTERNAL_FIXTURE_CANDIDATE: BrowserNativeAdapterCandidateId = 'electron-web-contents-view';
 
-type RealPlatformBenchmarkMetricSection = Exclude<BrowserNativeAdapterMetricSection, 'secondTruthSource'>;
+type RealPlatformBenchmarkMetricSection = BrowserNativeAdapterBenchmarkMetricSection;
 type PlatformBenchmarkStatus = 'blocked' | 'not-run';
 type PlatformBenchmarkRunnerStatus = 'not-run';
 type PlatformBenchmarkFieldRequirement = Pick<BrowserNativeAdapterMetricFieldContract, 'field' | 'unit' | 'required' | 'source'> & {
@@ -73,6 +74,9 @@ type PlatformBenchmarkCandidatePlan = {
   platform: BrowserNativeAdapterComparisonManifest['candidates'][number]['platform'];
   surfaceApi: string;
   inputApi: string;
+  liveSurfaceTransport: 'native-embedded';
+  singleInteractiveTruth: true;
+  secondTruthSource: false;
   status: 'blocked';
   benchmarkClaim: false;
   blockedByRefs: string[];
@@ -88,6 +92,9 @@ type PlatformBenchmarkManifest = {
   benchmarkClaim: false;
   comparisonManifestRef: string;
   sourceComparisonManifestId: string;
+  liveSurfaceTransport: 'native-embedded';
+  singleInteractiveTruth: true;
+  secondTruthSource: false;
   refsFirst: true;
   artifactPayloadMode: 'bounded-summary-refs-only';
   payloadPolicy: {
@@ -119,8 +126,12 @@ type PlatformBenchmarkManifest = {
       passRequiresAdapterRunProof: {
         resultKind: 'real-native-adapter-run';
         realAdapterResult: true;
+        liveSurfaceTransport: 'native-embedded';
+        singleInteractiveTruth: true;
+        secondTruthSource: false;
         requiredRefs: string[];
         forbiddenResultKinds: Array<'schema-validation-only'>;
+        forbiddenPassEvidenceTokens: typeof REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES[number][];
       };
       realProofRefusalPolicy: {
         currentProcessPlatform: NodeJS.Platform;
@@ -170,7 +181,7 @@ type PlatformBenchmarkManifest = {
 };
 
 const REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS: RealPlatformBenchmarkMetricSection[] =
-  REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS.filter(isRealPlatformBenchmarkMetricSection);
+  [...REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS];
 
 test('browser native adapter platform benchmark manifest is opt-in, refs-first, and not-run by default', async () => {
   const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
@@ -204,9 +215,16 @@ test('browser native adapter platform benchmark manifest is opt-in, refs-first, 
   assert.equal(defaultRunnerResult.runner.status, 'not-run');
   assert.equal(defaultRunnerResult.runner.optIn, false);
   assert.equal(defaultRunnerResult.owner, 'BrowserHostSession');
+  assert.equal(defaultRunnerResult.liveSurfaceTransport, 'native-embedded');
   assert.equal(defaultRunnerResult.singleInteractiveTruth, true);
+  assert.equal(defaultRunnerResult.secondTruthSource, false);
   assert.ok(defaultRunnerResult.candidates.every((candidate) => candidate.status === 'blocked'));
   assert.ok(defaultRunnerResult.candidates.every((candidate) => candidate.benchmarkClaim === false));
+  assert.ok(defaultRunnerResult.candidates.every((candidate) => (
+    candidate.liveSurfaceTransport === 'native-embedded'
+    && candidate.singleInteractiveTruth === true
+    && candidate.secondTruthSource === false
+  )));
   assert.ok(defaultRunnerResult.candidates.every((candidate) => (
     candidate.blockerRefs.includes(`env:${REAL_RUNNER_OPT_IN_ENV}:not-set`)
   )));
@@ -245,6 +263,7 @@ test('browser native adapter platform benchmark runner validates sample external
   const invalidSchemaOutputPath = join(tempDir, 'invalid-schema-results.json');
   const falsePassOutputPath = join(tempDir, 'false-pass-results.json');
   const partialProofRefsFalsePassOutputPath = join(tempDir, 'partial-proof-refs-false-pass-results.json');
+  const legacyPassEvidenceFalsePassOutputPath = join(tempDir, 'legacy-pass-evidence-false-pass-results.json');
   const fixtureMetricRefsFalsePassOutputPath = join(tempDir, 'fixture-metric-refs-false-pass-results.json');
   const missingMetricSummaryFalsePassOutputPath = join(tempDir, 'missing-metric-summary-false-pass-results.json');
   const wrongTypeMetricSummaryFalsePassOutputPath = join(tempDir, 'wrong-type-metric-summary-false-pass-results.json');
@@ -300,6 +319,10 @@ test('browser native adapter platform benchmark runner validates sample external
   );
   assert.ok(fixtureResult.externalAdapterCommandContract.stdoutMaxBytes <= MAX_PLATFORM_BENCHMARK_MANIFEST_BYTES);
   assert.ok(fixtureResult.externalAdapterCommandContract.injectedEnv.includes('SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON'));
+  assert.deepEqual(
+    fixtureResult.externalAdapterCommandContract.passRequiresAdapterRunProof.forbiddenPassEvidenceTokens,
+    [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
+  );
   assert.equal(
     fixtureResult.externalAdapterCommandContract.perCandidateCommandEnv[EXTERNAL_FIXTURE_CANDIDATE].commandEnv,
     'SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND',
@@ -310,6 +333,9 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(fixtureCandidate.status, 'blocked');
   assert.equal(fixtureCandidate.benchmarkClaim, false);
   assert.equal(fixtureCandidate.realAdapterResult, false);
+  assert.equal(fixtureCandidate.liveSurfaceTransport, 'native-embedded');
+  assert.equal(fixtureCandidate.singleInteractiveTruth, true);
+  assert.equal(fixtureCandidate.secondTruthSource, false);
   assert.ok(fixtureCandidate.blockerRefs.some((ref) => ref.includes('schema-validation-only-not-a-benchmark')));
   assert.ok(fixtureCandidate.metricSections.every((section) => section.status === 'blocked'));
   assert.ok(fixtureCandidate.metricSections.every((section) => (
@@ -344,11 +370,33 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(electronExternalCandidate.status, 'blocked');
   assert.equal(electronExternalCandidate.benchmarkClaim, false);
   assert.equal(electronExternalCandidate.realAdapterResult, true);
+  assert.equal(electronExternalCandidate.liveSurfaceTransport, 'native-embedded');
+  assert.equal(electronExternalCandidate.singleInteractiveTruth, true);
+  assert.equal(electronExternalCandidate.secondTruthSource, false);
   assert.equal(electronExternalCandidate.adapterProofRefs.proofMode, 'real-native-adapter-run');
   assert.match(electronExternalCandidate.adapterProofRefs.browserHostSessionRef ?? '', /^browser-host-session:/);
   assert.match(electronExternalCandidate.adapterProofRefs.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   assert.match(electronExternalCandidate.adapterRunRef, /^benchmark-result:electron-web-contents-view:platform-summary:/);
-  assert.ok(electronExternalCandidate.metricSections.every((section) => section.status === 'blocked'));
+  assert.deepEqual(
+    electronExternalCandidate.metricSections
+      .filter((section) => section.status === 'passed')
+      .map((section) => section.section)
+      .sort(),
+    ['cpu', 'inputCompleteness', 'latency', 'lifecycle', 'memory'],
+  );
+  assert.deepEqual(
+    electronExternalCandidate.metricSections
+      .filter((section) => section.status === 'blocked')
+      .map((section) => section.section)
+      .sort(),
+    ['reconnect'],
+  );
+  assert.ok(electronExternalCandidate.metricSections
+    .filter((section) => section.status === 'passed')
+    .every((section) => section.numericSummary !== undefined));
+  assert.ok(electronExternalCandidate.metricSections
+    .filter((section) => section.status === 'blocked')
+    .every((section) => section.numericSummary === undefined));
   assert.ok(electronExternalCandidate.metricSections.every((section) => (
     section.resultRefs.every((ref) => ref.startsWith(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:${section.section}:`))
   )));
@@ -356,6 +404,28 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.ok(!electronExternalCandidate.blockerRefs.includes(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`));
   assert.ok(electronExternalResult.candidates.some((candidate) => candidate.id !== EXTERNAL_FIXTURE_CANDIDATE && candidate.status === 'blocked'));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(electronExternalResult));
+  const persistedElectronExternalText = await readFile(electronExternalOutputPath, 'utf8');
+  assertPlatformBenchmarkArtifactIsBounded(persistedElectronExternalText);
+  const persistedElectronExternalResult = JSON.parse(persistedElectronExternalText) as typeof electronExternalResult;
+  const persistedElectronExternalCandidate = persistedElectronExternalResult.candidates.find((candidate) => (
+    candidate.id === EXTERNAL_FIXTURE_CANDIDATE
+  ));
+  assert.ok(persistedElectronExternalCandidate, 'persisted Electron external adapter candidate should be present');
+  assert.equal(persistedElectronExternalResult.status, 'blocked');
+  assert.equal(persistedElectronExternalResult.benchmarkClaim, false);
+  assert.equal(persistedElectronExternalResult.decisionGate.status, 'blocked');
+  assert.equal(persistedElectronExternalCandidate.realAdapterResult, true);
+  assert.equal(persistedElectronExternalCandidate.benchmarkClaim, false);
+  assert.deepEqual(
+    persistedElectronExternalCandidate.metricSections
+      .filter((section) => section.status === 'passed')
+      .map((section) => section.section)
+      .sort(),
+    ['cpu', 'inputCompleteness', 'latency', 'lifecycle', 'memory'],
+  );
+  assert.ok(persistedElectronExternalCandidate.blockerRefs.includes(
+    `benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-required-metric-section-results`,
+  ));
 
   const invalidSchemaResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {
@@ -415,6 +485,30 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(partialProofRefsCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
   assert.ok(partialProofRefsCandidate.diagnosticRefs.some((ref) => ref.includes('real native adapter result proof')));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(partialProofRefsFalsePassResult));
+
+  const legacyPassEvidenceFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify(buildFalsePassWithLegacyEvidenceArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: legacyPassEvidenceFalsePassOutputPath,
+    now: '2026-06-02T00:00:05.500Z',
+  });
+  assert.equal(legacyPassEvidenceFalsePassResult.status, 'failed');
+  assert.equal(legacyPassEvidenceFalsePassResult.benchmarkClaim, false);
+  const legacyPassEvidenceCandidate = legacyPassEvidenceFalsePassResult.candidates.find((candidate) => (
+    candidate.id === EXTERNAL_FIXTURE_CANDIDATE
+  ));
+  assert.ok(legacyPassEvidenceCandidate, 'legacy pass evidence false pass candidate should be present');
+  assert.equal(legacyPassEvidenceCandidate.status, 'failed');
+  assert.equal(legacyPassEvidenceCandidate.benchmarkClaim, false);
+  assert.equal(legacyPassEvidenceCandidate.realAdapterResult, false);
+  assert.ok(legacyPassEvidenceCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('legacy frame-stream/canvas/WebRTC tokens')
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(legacyPassEvidenceFalsePassResult));
 
   const fixtureMetricRefsFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {
@@ -491,6 +585,9 @@ function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapter
     benchmarkClaim: false,
     comparisonManifestRef,
     sourceComparisonManifestId: comparisonManifest.manifestId,
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
     refsFirst: true,
     artifactPayloadMode: 'bounded-summary-refs-only',
     payloadPolicy: {
@@ -547,6 +644,9 @@ function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapter
         passRequiresAdapterRunProof: {
           resultKind: 'real-native-adapter-run',
           realAdapterResult: true,
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
           requiredRefs: [
             'browser-host-session:<id>',
             'browser-host-session:<id>/live-surface',
@@ -555,6 +655,7 @@ function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapter
             'benchmark-result:<candidate>:platform-summary',
           ],
           forbiddenResultKinds: ['schema-validation-only'],
+          forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
         },
         realProofRefusalPolicy: {
           currentProcessPlatform: process.platform,
@@ -606,6 +707,9 @@ function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapter
       platform: candidate.platform,
       surfaceApi: candidate.surfaceApi,
       inputApi: candidate.inputApi,
+      liveSurfaceTransport: candidate.liveSurfaceTransport,
+      singleInteractiveTruth: candidate.singleInteractiveTruth,
+      secondTruthSource: candidate.secondTruthSource,
       status: 'blocked',
       benchmarkClaim: false,
       blockedByRefs: [
@@ -656,6 +760,9 @@ function assertPlatformBenchmarkManifest(
   assert.equal(manifest.status, 'blocked');
   assert.equal(manifest.platformRunner.status, 'not-run');
   assert.equal(manifest.benchmarkClaim, false);
+  assert.equal(manifest.liveSurfaceTransport, 'native-embedded');
+  assert.equal(manifest.singleInteractiveTruth, true);
+  assert.equal(manifest.secondTruthSource, false);
   assert.equal(manifest.refsFirst, true);
   assert.equal(manifest.payloadPolicy.refsFirst, true);
   assert.equal(manifest.payloadPolicy.maxInlineEvidenceBytes, 0);
@@ -679,6 +786,9 @@ function assertPlatformBenchmarkManifest(
   assert.deepEqual(manifest.platformRunner.externalAdapterCommandContract.passRequiresAdapterRunProof, {
     resultKind: 'real-native-adapter-run',
     realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
     requiredRefs: [
       'browser-host-session:<id>',
       'browser-host-session:<id>/live-surface',
@@ -687,6 +797,7 @@ function assertPlatformBenchmarkManifest(
       'benchmark-result:<candidate>:platform-summary',
     ],
     forbiddenResultKinds: ['schema-validation-only'],
+    forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
   });
   assert.deepEqual(manifest.platformRunner.externalAdapterCommandContract.realProofRefusalPolicy, {
     currentProcessPlatform: process.platform,
@@ -721,6 +832,9 @@ function assertPlatformBenchmarkManifest(
     assert.ok(comparisonCandidate, `${candidatePlan.id} should come from the comparison manifest`);
     assert.equal(candidatePlan.status, 'blocked');
     assert.equal(candidatePlan.benchmarkClaim, false);
+    assert.equal(candidatePlan.liveSurfaceTransport, 'native-embedded');
+    assert.equal(candidatePlan.singleInteractiveTruth, true);
+    assert.equal(candidatePlan.secondTruthSource, false);
     assert.equal(candidatePlan.candidateRef, candidateRef(candidatePlan.id));
     assert.ok(candidatePlan.comparisonRefs.length > 0);
     assert.deepEqual(candidatePlan.metricRequirements.map((requirement) => requirement.section), REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS);
@@ -764,12 +878,6 @@ async function writePlatformBenchmarkManifest(manifest: PlatformBenchmarkManifes
   assert.equal(persisted.platformRunner.status, 'not-run');
   assert.equal(persisted.candidates.length, REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES.length);
   assert.deepEqual(persisted.requiredMetricSections, REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS);
-}
-
-function isRealPlatformBenchmarkMetricSection(
-  section: BrowserNativeAdapterMetricSection,
-): section is RealPlatformBenchmarkMetricSection {
-  return section !== 'secondTruthSource';
 }
 
 function candidateRef(candidateId: BrowserNativeAdapterCandidateId): string {
@@ -889,6 +997,72 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
       },
     },
     rejectedDesktopLiveSubstitutes: rejectedDesktopLiveSubstitutes(),
+    benchmarkMetrics: {
+      schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.benchmark-metrics.v1',
+      source: 'desktop-native-browser-pane-smoke',
+      evidenceMode: 'bounded-summary-ref',
+      inlineEvidence: 'forbidden',
+      metricSections: {
+        latency: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:latency:realrun',
+          numericSummary: {
+            openAckMs: 240,
+            navigationAckMs: 320,
+            inputAckMs: 18,
+            paintAckLagMs: 21,
+            p95ActionAckMs: 44,
+          },
+        },
+        cpu: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:cpu:realrun',
+          numericSummary: {
+            processCpuAveragePercent: 3.5,
+            processCpuP95Percent: 8,
+            sampleCount: 2,
+          },
+        },
+        memory: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:memory:realrun',
+          numericSummary: {
+            rssMb: 180,
+            heapUsedMb: 52,
+            nativeSurfaceMb: 2.34,
+            peakRssMb: 190,
+          },
+        },
+        inputCompleteness: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:inputCompleteness:realrun',
+          numericSummary: {
+            keyboard: true,
+            textEditing: true,
+            pointerClick: true,
+            drag: true,
+            scroll: true,
+            navigationControls: true,
+          },
+        },
+        lifecycle: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:lifecycle:realrun',
+          numericSummary: {
+            operationsCompleted: 2,
+            sameLiveSurfaceRefAfterResize: true,
+            sameLiveSurfaceRefAfterRestore: true,
+            visibleAfterResize: true,
+            visibleAfterRestore: true,
+            surfaceStateOkAfterRestore: true,
+          },
+        },
+        reconnect: {
+          status: 'blocked',
+          resultRef: 'benchmark-result:electron-web-contents-view:reconnect:realrun',
+        },
+      },
+    },
     verificationCommand: 'npm run smoke:desktop-browser-native-live-acceptance --silent',
     strictVerificationCommand: 'SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE=1 npm run smoke:desktop-browser-native-live-acceptance --silent',
   };
@@ -914,10 +1088,13 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   adapterRun: {
     resultKind: 'schema-validation-only',
     realAdapterResult: false,
+    liveSurfaceTransport: 'native-embedded',
     secondTruthSource: false,
     rawPayloadsCaptured: false,
   },
@@ -949,7 +1126,9 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   status: 'passed',
   benchmarkClaim: true,
   metricSections,
@@ -978,10 +1157,13 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   adapterRun: {
     resultKind: 'real-native-adapter-run',
     realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
     browserHostSessionRef: 'browser-host-session:native-adapter-metric-ref-proof',
     liveSurfaceRef: 'browser-host-session:native-adapter-metric-ref-proof/live-surface',
     nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface',
@@ -1018,10 +1200,13 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   adapterRun: {
     resultKind: 'real-native-adapter-run',
     realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
     browserHostSessionRef: 'browser-host-session:native-adapter-proof-run',
     liveSurfaceRef: 'browser-host-session:native-adapter-proof-run/live-surface',
     nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:partial',
@@ -1034,6 +1219,92 @@ process.stdout.write(JSON.stringify({
   benchmarkClaim: true,
   metricSections,
   diagnosticRefs: ['benchmark-result:' + candidateId + ':attempted-partial-adapter-proof-refs'],
+}));
+`;
+  return ['-e', fixtureSource];
+}
+
+function buildFalsePassWithLegacyEvidenceArgs(): string[] {
+  const fixtureSource = `
+const sections = JSON.parse(process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON || '[]');
+const candidateId = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE;
+const platform = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM;
+const summaryBySection = {
+  latency: {
+    openAckMs: 10,
+    navigationAckMs: 20,
+    inputAckMs: 4,
+    paintAckLagMs: 12,
+    p95ActionAckMs: 25,
+  },
+  cpu: {
+    processCpuAveragePercent: 3,
+    processCpuP95Percent: 8,
+    sampleCount: 30,
+  },
+  memory: {
+    rssMb: 120,
+    heapUsedMb: 40,
+    nativeSurfaceMb: 35,
+    peakRssMb: 130,
+  },
+  inputCompleteness: {
+    keyboard: true,
+    textEditing: true,
+    pointerClick: true,
+    drag: true,
+    scroll: true,
+    navigationControls: true,
+  },
+  lifecycle: {
+    open: true,
+    navigationStart: true,
+    navigationCommitted: true,
+    interactive: true,
+    load: true,
+    networkQuiet: true,
+    blocked: true,
+    retry: true,
+    close: true,
+  },
+  reconnect: {
+    disconnectDetected: true,
+    sameBrowserHostSessionOwner: true,
+    stateHeartbeatRestored: true,
+    inputRoutedAfterReconnect: true,
+  },
+};
+const metricSections = Object.fromEntries(sections.map((section) => [section, {
+  status: 'passed',
+  resultRefs: [
+    'benchmark-result:' + candidateId + ':' + section + ':frame-stream',
+  ],
+  numericSummary: summaryBySection[section],
+}]));
+process.stdout.write(JSON.stringify({
+  schemaVersion: process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA,
+  candidateId,
+  platform,
+  owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
+  singleInteractiveTruth: true,
+  secondTruthSource: false,
+  adapterRun: {
+    resultKind: 'real-native-adapter-run',
+    realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    browserHostSessionRef: 'browser-host-session:native-adapter-legacy-proof-run',
+    liveSurfaceRef: 'browser-host-session:native-adapter-legacy-proof-run/live-surface',
+    nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:canvas-binary',
+    actionTraceRef: 'benchmark-result:' + candidateId + ':action-trace:webrtc',
+    platformResultRef: 'benchmark-result:' + candidateId + ':platform-summary:frame-stream',
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+  },
+  status: 'passed',
+  benchmarkClaim: true,
+  metricSections,
+  diagnosticRefs: ['benchmark-result:' + candidateId + ':attempted-pass-with-legacy-frame-stream-canvas-webrtc'],
 }));
 `;
   return ['-e', fixtureSource];
@@ -1055,10 +1326,13 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   adapterRun: {
     resultKind: 'real-native-adapter-run',
     realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
     browserHostSessionRef: 'browser-host-session:native-adapter-summary-proof-run',
     liveSurfaceRef: 'browser-host-session:native-adapter-summary-proof-run/live-surface',
     nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface',
@@ -1138,10 +1412,13 @@ process.stdout.write(JSON.stringify({
   candidateId,
   platform,
   owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
   singleInteractiveTruth: true,
+  secondTruthSource: false,
   adapterRun: {
     resultKind: 'real-native-adapter-run',
     realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
     browserHostSessionRef: 'browser-host-session:native-adapter-wrong-summary-proof-run',
     liveSurfaceRef: 'browser-host-session:native-adapter-wrong-summary-proof-run/live-surface',
     nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface',

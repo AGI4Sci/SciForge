@@ -2,6 +2,8 @@ export const CODEX_REALTIME_SESSION_SCHEMA_VERSION = 'sciforge.codex-realtime-se
 export const CODEX_REALTIME_SESSION_BRIDGE = 'codex-native-realtime-session' as const;
 export const CODEX_REALTIME_SESSION_STREAM_KIND = 'structured-events-plus-terminal-equivalent-text' as const;
 export const CODEX_REALTIME_CONTROL_SCHEMA_VERSION = 'sciforge.codex-realtime-control.v1' as const;
+export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream' as const;
+export const CODEX_RUNTIME_WEBSOCKET_PATH = '/api/sciforge/runtime/codex/realtime/ws' as const;
 
 export type CodexRealtimeControlType = 'cancel' | 'interrupt' | 'input_response' | 'approval_response';
 export type CodexRealtimeInterruptMode = 'queue-next-turn' | 'cancel-current';

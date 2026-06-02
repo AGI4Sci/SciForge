@@ -1060,13 +1060,54 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
   const inputLeaseRef = safeRef(value.inputLeaseRef) ?? safeRef(value.schedulerLeaseRef) ?? schedulerLeaseRefs[0];
   const actionAdapterRef = safeRef(value.actionAdapterRef) ?? sidecarBindingRef;
   const adapterReadinessRef = safeRef(value.adapterReadinessRef) ?? sidecarCapabilitiesRef;
+  const platformDriverRef = safeRef(value.platformDriverRef) ?? safeRef(value.driverRef);
+  const platformDriverStatus = safeSummaryText(value.platformDriverStatus) ?? safeSummaryText(value.driverStatus);
   const evidenceLedgerRef = safeRef(value.evidenceLedgerRef) ?? evidenceBundleIndexRef;
   const stopRef = safeRef(value.stopRef);
   const cancelLeaseRef = safeRef(value.cancelLeaseRef);
   const sessionRef = safeRef(value.sessionRef) ?? safeRef(value.sessionManifestRef);
   const displayGroupRef = safeRef(value.displayGroupRef) ?? safeRef(value.currentBundleRef);
   const screenRef = safeRef(value.screenRef) ?? visibleScreenRefs[0];
+  const currentRunRef = safeRef(value.currentRunRef);
+  const liveSurfaceRef = safeRef(value.liveSurfaceRef) ?? safeRef(value.surfaceRef);
+  const surfaceTransportRef = safeRef(value.surfaceTransportRef);
+  const surfaceTransport = normalizeVirtualScreenSurfaceTransport(value.surfaceTransport ?? value.transport);
+  const surfaceTransportDescriptor = normalizeVirtualScreenSurfaceTransportDescriptor(value.surfaceTransportDescriptor);
+  const frameTransport = normalizeVirtualScreenQualityRef(value.frameTransport, currentFrameRef);
+  const frameTelemetry = normalizeVirtualScreenQualityRef(value.frameTelemetry, currentFrameRef);
+  const currentFrameSequence = normalizeVirtualScreenQualityRef(value.currentFrameSequence, currentFrameRef)
+    ?? normalizeVirtualScreenQualityRef(surfaceTransportDescriptor, currentFrameRef);
+  const inputHotPath = normalizeVirtualScreenQualityRef(value.inputHotPath ?? value.inputHotPathRef, inputLeaseRef);
+  const providerExecuted = asBoolean(value.providerExecuted)
+    ?? (isRecord(value.isolationFlags) ? asBoolean(value.isolationFlags.providerExecuted) : undefined)
+    ?? (isRecord(value.isolation) ? asBoolean(value.isolation.providerExecuted) : undefined);
+  const providerSessionRevalidated = asBoolean(value.providerSessionRevalidated);
+  const hostSessionRef = safeRef(value.hostSessionRef) ?? sessionRef;
+  const surfaceOwnerRef = safeRef(value.surfaceOwnerRef);
+  const displayOwnerRef = safeRef(value.displayOwnerRef);
+  const providerSessionOwnerRef = safeRef(value.providerSessionOwnerRef);
+  const providerSessionReconnectRef = safeRef(value.providerSessionReconnectRef) ?? safeRef(value.reconnectRef);
+  const liveBindingAttachGrantRef = safeRef(value.liveBindingAttachGrantRef);
+  const liveBindingAttachGrantStatus = safeSummaryText(value.liveBindingAttachGrantStatus);
+  const grantValidationRef = safeRef(value.grantValidationRef);
+  const grantValidationStatus = safeSummaryText(value.grantValidationStatus);
   const permissionRef = safeRef(value.permissionRef) ?? safeRef(value.sessionPermissionRef);
+  const permissionStatus = safeSummaryText(value.permissionStatus);
+  const permissionRequired = asBoolean(value.permissionRequired) ?? asBoolean(value.requiresPermission);
+  const permissionGranted = asBoolean(value.permissionGranted) ?? asBoolean(value.permissionsGranted);
+  const sharedInputAllowed = asBoolean(value.sharedInputAllowed);
+  const handoffRef = safeRef(value.handoffRef);
+  const permissionHandoffRef = safeRef(value.permissionHandoffRef) ?? safeRef(value.handoffRef);
+  const permissionHandoffRefs = safeRefArray(value.permissionHandoffRefs) ?? [];
+  const permissionRecheckRef = safeRef(value.permissionRecheckRef) ?? safeRef(value.recheckRef);
+  const permissionRecheckRefs = safeRefArray(value.permissionRecheckRefs) ?? [];
+  const recheckRef = safeRef(value.recheckRef) ?? permissionRecheckRef;
+  const guiPresentRefs = uniqueStrings([
+    ...(safeRefArray(value.guiPresentRefs) ?? []),
+    ...safeRefList(value.guiPresentRef),
+  ]);
+  const artifactRefs = safeRefArray(value.artifactRefs) ?? [];
+  const verificationRefs = safeRefArray(value.verificationRefs) ?? [];
   const sidecarBinding = isRecord(value.sidecarBinding) ? value.sidecarBinding : {};
   const actorCursors = sanitizeRecordArray(value.actorCursors);
   const frames = sanitizeRecordArray(value.frames)
@@ -1084,9 +1125,17 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     sessionRef
     || displayGroupRef
     || screenRef
+    || currentRunRef
+    || liveSurfaceRef
+    || surfaceTransportRef
     || targetAppRef
     || targetWindowRef
     || frameStreamRef
+    || currentFrameSequence
+    || providerSessionOwnerRef
+    || providerSessionReconnectRef
+    || liveBindingAttachGrantRef
+    || grantValidationRef
     || replayRef
     || currentFrameRef
     || explicitFrameRefs.length
@@ -1105,14 +1154,12 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     ...screenshotFrameRefs,
   ]);
   const events = sanitizeRecordArray(value.events);
-  const isolation = isRecord(value.isolation) ? compactRecord({
-    sharedSystemInputUsed: asBoolean(value.isolation.sharedSystemInputUsed),
-    systemPointerMoved: asBoolean(value.isolation.systemPointerMoved),
-    systemKeyboardEventsSent: asBoolean(value.isolation.systemKeyboardEventsSent),
-    virtualInputExecuted: asBoolean(value.isolation.virtualInputExecuted),
-    realOsInputExecuted: asBoolean(value.isolation.realOsInputExecuted),
-    diagnosticOnly: asBoolean(value.isolation.diagnosticOnly),
-  }) : undefined;
+  const isolationSource = isRecord(value.isolationFlags)
+    ? value.isolationFlags
+    : isRecord(value.isolation)
+      ? value.isolation
+      : undefined;
+  const isolation = normalizeVirtualScreenIsolationFlags(isolationSource);
   const runSummary = normalizeComputerUseRunSummary(value.runSummary, {
     status: asString(value.status),
     runId: asString(value.runId),
@@ -1127,6 +1174,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     sidecarDiscoveryRef,
     sidecarBindingKind: asString(value.sidecarBindingKind) ?? asString(sidecarBinding.bindingKind),
     realNativeSidecarExecuted: asBoolean(value.realNativeSidecarExecuted),
+    providerSessionRevalidated: asBoolean(value.providerSessionRevalidated),
     completionEligible: asBoolean(value.completionEligible),
     screenCount: positiveInteger(value.screenCount) ?? visibleScreenRefs.length,
     actorCursorCount: positiveInteger(value.actorCursorCount) ?? Math.max(actorCursors.length, visibleCursorRefs.length),
@@ -1143,9 +1191,19 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     schemaVersion: COMPUTER_USE_VIRTUAL_SCREEN_SCHEMA_VERSION,
     title: asString(value.title) ?? 'Computer Use Virtual Screen',
     status: asString(value.status),
+    attachState: asString(value.attachState),
+    presentationState: asString(value.presentationState),
+    surfaceMode: asString(value.surfaceMode),
+    currentRunRef,
     sessionRef,
     displayGroupRef,
     screenRef,
+    liveSurfaceRef,
+    surfaceTransport,
+    surfaceTransportRef,
+    surfaceTransportDescriptor,
+    platformDriverRef,
+    platformDriverStatus,
     visibleScreenRefs,
     visibleCursorRefs,
     targetAppRef,
@@ -1162,6 +1220,10 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     targetRefs,
     schedulerLeaseRefs,
     frameStreamRef,
+    frameTransport,
+    frameTelemetry,
+    currentFrameSequence,
+    inputHotPath,
     currentFrameRef: currentFrameRef ?? frameRefs[0],
     frameRef: currentFrameRef ?? frameRefs[0],
     frameRefs,
@@ -1171,10 +1233,34 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     actionAdapterRef,
     adapterReadinessRef,
     evidenceLedgerRef,
+    hostSessionRef,
+    surfaceOwnerRef,
+    displayOwnerRef,
+    providerSessionOwnerRef,
+    providerSessionReconnectRef,
+    liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus,
+    grantValidationRef,
+    grantValidationStatus,
+    ...(providerExecuted === undefined ? {} : { providerExecuted }),
+    ...(providerSessionRevalidated === undefined ? {} : { providerSessionRevalidated }),
     replayRef,
     permissionRef,
+    permissionStatus,
+    permissionRequired,
+    permissionGranted,
+    sharedInputAllowed,
     stopRef,
     cancelLeaseRef,
+    handoffRef,
+    permissionHandoffRef,
+    permissionHandoffRefs,
+    permissionRecheckRef,
+    permissionRecheckRefs,
+    recheckRef,
+    artifactRefs,
+    verificationRefs,
+    guiPresentRefs,
     completionEvidenceRef,
     blockedRef,
     errorRef,
@@ -1187,6 +1273,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     frames,
     events,
     isolation,
+    isolationFlags: isolation,
     runSummary,
   });
 }
@@ -1211,6 +1298,7 @@ function normalizeComputerUseRunSummary(
     sidecarDiscoveryRef: safeRef(raw.sidecarDiscoveryRef) ?? safeRef(fallback.sidecarDiscoveryRef),
     sidecarBindingKind: safeSummaryText(raw.sidecarBindingKind) ?? safeSummaryText(fallback.sidecarBindingKind),
     realNativeSidecarExecuted: asBoolean(raw.realNativeSidecarExecuted) ?? asBoolean(fallback.realNativeSidecarExecuted),
+    providerSessionRevalidated: asBoolean(raw.providerSessionRevalidated) ?? asBoolean(fallback.providerSessionRevalidated),
     completionEligible: asBoolean(raw.completionEligible) ?? asBoolean(fallback.completionEligible),
     screenCount: positiveInteger(raw.screenCount) ?? positiveInteger(fallback.screenCount),
     actorCursorCount: positiveInteger(raw.actorCursorCount) ?? positiveInteger(fallback.actorCursorCount),
@@ -1239,11 +1327,22 @@ function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> 
     safeRef(payload.sessionRef),
     safeRef(payload.displayGroupRef),
     safeRef(payload.screenRef),
+    safeRef(payload.currentRunRef),
+    safeRef(payload.liveSurfaceRef),
+    safeRef(payload.surfaceTransportRef),
+    safeRef(payload.providerSessionOwnerRef),
+    safeRef(payload.providerSessionReconnectRef),
+    safeRef(payload.liveBindingAttachGrantRef),
+    safeRef(payload.grantValidationRef),
     safeRef(payload.targetAppRef),
     safeRef(payload.targetWindowRef),
     safeRef(payload.frameStreamRef),
     safeRef(payload.currentFrameRef),
     safeRef(payload.inputLeaseRef),
+    safeRef(payload.platformDriverRef),
+    safeRef(payload.permissionRef),
+    safeRef(payload.permissionHandoffRef),
+    safeRef(payload.permissionRecheckRef),
     safeRef(payload.actionAdapterRef),
     safeRef(payload.adapterReadinessRef),
     safeRef(payload.evidenceLedgerRef),
@@ -1257,6 +1356,9 @@ function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> 
     safeRef(payload.completionEvidenceRef),
     safeRef(payload.blockedRef),
     safeRef(payload.errorRef),
+    ...(safeRefArray(payload.guiPresentRefs) ?? []),
+    ...(safeRefArray(payload.permissionHandoffRefs) ?? []),
+    ...(safeRefArray(payload.permissionRecheckRefs) ?? []),
     safeRef(runSummary.validationRef),
     safeRef(runSummary.currentBundleRef),
     safeRef(runSummary.evidenceBundleIndexRef),
@@ -1279,6 +1381,7 @@ function computerUseVirtualScreenSummaryLines(payload: Record<string, unknown> |
     asString(runSummary.validationStatus) ? `validation status \`${asString(runSummary.validationStatus)}\`` : undefined,
     typeof runSummary.validationOk === 'boolean' ? `validation ok: \`${String(runSummary.validationOk)}\`` : undefined,
     typeof runSummary.realNativeSidecarExecuted === 'boolean' ? `real native sidecar executed: \`${String(runSummary.realNativeSidecarExecuted)}\`` : undefined,
+    typeof runSummary.providerSessionRevalidated === 'boolean' ? `provider session revalidated: \`${String(runSummary.providerSessionRevalidated)}\`` : undefined,
     typeof runSummary.completionEligible === 'boolean' ? `completion eligible: \`${String(runSummary.completionEligible)}\`` : undefined,
     asString(runSummary.validationRef) ? `validation ref \`${asString(runSummary.validationRef)}\`` : undefined,
     asString(runSummary.evidenceBundleIndexRef) ? `evidence index \`${asString(runSummary.evidenceBundleIndexRef)}\`` : undefined,
@@ -1498,6 +1601,88 @@ function compactRecord(record: Record<string, unknown>): Record<string, unknown>
   }));
 }
 
+function normalizeVirtualScreenSurfaceTransport(value: unknown): string | undefined {
+  const transport = asString(value);
+  return transport === 'webrtc' || transport === 'native-frame-stream' ? transport : undefined;
+}
+
+function normalizeVirtualScreenQualityRef(value: unknown, fallbackRef?: string): Record<string, unknown> | undefined {
+  if (typeof value === 'string') {
+    const ref = safeRef(value);
+    return ref ? { ref } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const ref = safeRef(value.ref)
+    ?? safeRef(value.currentFrameSequenceRef)
+    ?? safeRef(value.frameSequenceRef)
+    ?? safeRef(value.sequenceRef)
+    ?? safeRef(value.currentFrameRef)
+    ?? fallbackRef;
+  if (!ref) return undefined;
+  return compactRecord({
+    ref,
+    label: safeSummaryText(value.label),
+    status: safeSummaryText(value.status),
+    transport: normalizeVirtualScreenSurfaceTransport(value.transport ?? value.protocol),
+    diagnosticOnly: asBoolean(value.diagnosticOnly),
+    sequence: nonNegativeInteger(value.sequence ?? value.currentFrameSequence),
+  });
+}
+
+function normalizeVirtualScreenSurfaceTransportDescriptor(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const descriptor = compactRecord({
+    schemaVersion: safeSummaryText(value.schemaVersion),
+    owner: asString(value.owner),
+    providerId: safeSummaryText(value.providerId),
+    transport: normalizeVirtualScreenSurfaceTransport(value.transport),
+    surfaceTransportRef: safeRef(value.surfaceTransportRef),
+    liveSurfaceRef: safeRef(value.liveSurfaceRef),
+    frameStreamRef: safeRef(value.frameStreamRef),
+    currentFrameRef: safeRef(value.currentFrameRef),
+    frameTransportContractRef: safeRef(value.frameTransportContractRef),
+    frameTelemetryRef: safeRef(value.frameTelemetryRef),
+    mediaChannelRef: safeRef(value.mediaChannelRef),
+    dataChannelRef: safeRef(value.dataChannelRef),
+    currentFrameSequence: nonNegativeInteger(value.currentFrameSequence),
+    diagnosticOnly: asBoolean(value.diagnosticOnly),
+    productFallback: asBoolean(value.productFallback),
+    singleInteractiveTruth: asBoolean(value.singleInteractiveTruth),
+  });
+  if (
+    descriptor.owner !== 'VirtualDisplayProvider'
+    || !descriptor.surfaceTransportRef
+    || !descriptor.liveSurfaceRef
+    || !descriptor.frameStreamRef
+    || !descriptor.currentFrameRef
+    || descriptor.currentFrameSequence === undefined
+    || descriptor.diagnosticOnly !== false
+    || descriptor.productFallback !== false
+    || descriptor.singleInteractiveTruth !== true
+  ) return undefined;
+  return descriptor;
+}
+
+function normalizeVirtualScreenIsolationFlags(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const flags = compactRecord({
+    affectsPhysicalDisplay: asBoolean(value.affectsPhysicalDisplay),
+    requiresFocusSteal: asBoolean(value.requiresFocusSteal),
+    sharedSystemInputUsed: asBoolean(value.sharedSystemInputUsed),
+    systemPointerMoved: asBoolean(value.systemPointerMoved),
+    systemKeyboardEventsSent: asBoolean(value.systemKeyboardEventsSent),
+    backgroundRenderable: asBoolean(value.backgroundRenderable),
+    singleInteractiveTruth: asBoolean(value.singleInteractiveTruth),
+    secondInteractiveSurfacePresent: asBoolean(value.secondInteractiveSurfacePresent),
+    diagnosticOnly: asBoolean(value.diagnosticOnly),
+    providerExecuted: asBoolean(value.providerExecuted),
+    failClosedByDefault: asBoolean(value.failClosedByDefault),
+    virtualInputExecuted: asBoolean(value.virtualInputExecuted),
+    realOsInputExecuted: asBoolean(value.realOsInputExecuted),
+  });
+  return Object.keys(flags).length ? flags : undefined;
+}
+
 function parseJsonObject(value: unknown): Record<string, unknown> | undefined {
   if (isRecord(value)) return value;
   if (typeof value !== 'string' || !value.trim()) return undefined;
@@ -1538,6 +1723,10 @@ function safeRefArray(value: unknown): string[] | undefined {
 
 function positiveInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
 function safeSummaryText(value: unknown): string | undefined {

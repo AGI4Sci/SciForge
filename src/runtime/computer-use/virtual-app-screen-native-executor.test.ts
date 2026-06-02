@@ -11,6 +11,10 @@ import {
   registerVirtualAppScreenNativeExecutor,
 } from './virtual-app-screen-native-executor.js';
 import {
+  readVirtualAppScreenNativeHostSessionRecord,
+  resetVirtualAppScreenNativeHostSessionStoreForTests,
+} from './virtual-app-screen-native-host-session-store.js';
+import {
   createVirtualDisplayProviderContract,
   probeVirtualDisplayProviders,
   type VirtualDisplayProviderInvokeIntent,
@@ -93,26 +97,37 @@ test('VirtualAppScreen native executor attaches only after provider create launc
     assert.equal(result.evidence.liveFrameAttached, true);
     assert.equal(result.evidence.currentFrameMaterialized, true);
     assert.equal(result.evidence.isolationVerified, true);
+    assert.equal(result.evidence.providerSessionGrantValidated, true);
+    assert.equal(result.evidence.platformDriverReady, true);
+    assert.equal(result.evidence.permissionRequired, true);
+    assert.equal(result.evidence.permissionGranted, true);
+    assert.equal(result.evidence.backgroundRenderable, true);
+    assert.equal(result.evidence.diagnosticOnly, false);
     assert.equal(result.evidence.affectsPhysicalDisplay, false);
     assert.equal(result.evidence.requiresFocusSteal, false);
     assert.equal(result.evidence.sharedSystemInputUsed, false);
     assert.equal(result.evidence.systemPointerMoved, false);
     assert.equal(result.evidence.systemKeyboardEventsSent, false);
-    assert.equal(result.refs.sessionRef, 'computer-use:session/native-executor-test/session.json');
+    assert.match(result.refs.sessionRef ?? '', /^computer-use:native-host\/sessions\/session-1\/session\.json$/);
     assert.equal(result.refs.targetWindowRef, 'window:native-executor-test/vscode/main');
-    assert.equal(result.refs.liveSurfaceRef, 'computer-use:session/native-executor-test/live-surface.json');
-    assert.equal(result.refs.surfaceTransportRef, '.sciforge/vision-runs/native-executor-test/virtual-display-provider/surface-transport.json');
-    assert.equal(result.refs.frameStreamRef, 'computer-use:session/native-executor-test/frame-stream.json');
-    assert.equal(result.refs.currentFrameRef, 'computer-use:session/native-executor-test/frames/current.png');
-    assert.equal(result.refs.frameTransportContractRef, '.sciforge/vision-runs/native-executor-test/virtual-display-provider/frame-transport-contract.json');
+    assert.match(result.refs.liveSurfaceRef ?? '', /^computer-use:native-host\/surfaces\//);
+    assert.match(result.refs.surfaceTransportRef ?? '', /^computer-use:native-host\/surfaces\//);
+    assert.match(result.refs.frameStreamRef ?? '', /^computer-use:native-host\/surfaces\//);
+    assert.match(result.refs.currentFrameRef ?? '', /^computer-use:native-host\/frames\//);
+    assert.match(result.refs.frameTransportContractRef ?? '', /^computer-use:native-host\/surfaces\//);
     assert.equal(result.refs.adapterReadinessRef, '.sciforge/vision-runs/native-executor-test/virtual-display-provider/adapter-readiness.json');
-    assert.equal(result.refs.evidenceLedgerRef, '.sciforge/vision-runs/native-executor-test/virtual-display-provider/evidence-ledger.json');
+    assert.equal(result.refs.platformDriverRef, 'computer-use:session/native-executor-test/platform-driver.json');
+    assert.equal(result.refs.permissionRef, 'permission:macos/screen-recording');
+    assert.equal(result.refs.evidenceLedgerRef, 'computer-use:native-host/ledgers/session-1/evidence-ledger.json');
     assert.equal(result.refs.guiPresentRef, 'gui.present:native-executor-test/screen-pane');
-    assert.equal(result.refs.liveBindingAttachGrantRef, 'computer-use:provider-session/virtual-app-screen-native-executor-test-screen-computer-use-session-native-execu/live-binding-attach-grant.json');
+    assert.match(result.refs.liveBindingAttachGrantRef ?? '', /^computer-use:native-host\/grants\//);
+    assert.match(result.refs.grantValidationRef ?? '', /^computer-use:native-host\/ledgers\/session-1\/evidence-ledger\.json\/events\/\d+-grant\.validated\.json$/);
+    assert.match(result.refs.surfaceOwnerRef ?? '', /^computer-use:native-host\/surfaces\//);
+    assert.match(result.refs.displayOwnerRef ?? '', /^computer-use:native-host\/surfaces\//);
     assert.equal(result.evidence.surfaceTransport?.transport, 'webrtc');
-    assert.equal(result.evidence.surfaceTransport?.surfaceTransportRef, '.sciforge/vision-runs/native-executor-test/virtual-display-provider/surface-transport.json');
+    assert.equal(result.evidence.surfaceTransport?.surfaceTransportRef, result.refs.surfaceTransportRef);
     assert.equal(result.evidence.surfaceTransport?.currentFrameSequence, 7);
-    assert.deepEqual(result.evidence.evidenceRefs, [
+    for (const ref of [
       '.sciforge/vision-runs/native-executor-test/virtual-display-provider/adapter-readiness.json',
       '.sciforge/vision-runs/native-executor-test/virtual-display-provider/lifecycle-ledger.json#createSession',
       '.sciforge/vision-runs/native-executor-test/virtual-display-provider/lifecycle-ledger.json#launchApp',
@@ -121,25 +136,72 @@ test('VirtualAppScreen native executor attaches only after provider create launc
       '.sciforge/vision-runs/native-executor-test/virtual-display-provider/frame-transport-contract.json',
       'computer-use:session/native-executor-test/frames/current.png',
       '.sciforge/vision-runs/native-executor-test/virtual-display-provider/evidence-ledger.json',
+      'computer-use:session/native-executor-test/platform-driver.json',
+      'permission:macos/screen-recording',
       'gui.present:native-executor-test/screen-pane',
-      'computer-use:provider-session/virtual-app-screen-native-executor-test-screen-computer-use-session-native-execu/owner.json',
-      'computer-use:provider-session/virtual-app-screen-native-executor-test-screen-computer-use-session-native-execu/reconnect.json',
-      'computer-use:provider-session/virtual-app-screen-native-executor-test-screen-computer-use-session-native-execu/live-binding-attach-grant.json',
-    ]);
+    ]) {
+      assert.ok(result.evidence.evidenceRefs.includes(ref), `missing evidence ref ${ref}`);
+    }
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.evidenceLedgerRef));
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.liveBindingAttachGrantRef!));
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.grantValidationRef!));
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.providerSessionOwnerRef!));
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.providerSessionReconnectRef!));
     assert.equal(data.status, 'ready');
     assert.equal(data.attachState, 'attached');
     assert.equal(data.surfaceMode, 'live');
     assert.equal(data.surfaceTransport, 'webrtc');
+    assert.equal(data.hostSessionRef, result.refs.sessionRef);
+    assert.equal(data.surfaceOwnerRef, result.refs.surfaceOwnerRef);
+    assert.equal(data.displayOwnerRef, result.refs.displayOwnerRef);
     assert.equal(data.liveBindingAttachGrantRef, result.refs.liveBindingAttachGrantRef);
+    assert.equal(data.grantValidationRef, result.refs.grantValidationRef);
+    assert.equal(data.liveBindingAttachGrantStatus, 'validated');
+    assert.equal(data.grantValidationStatus, 'validated');
     assert.deepEqual(data.frameTransport, {
-      ref: '.sciforge/vision-runs/native-executor-test/virtual-display-provider/frame-transport-contract.json',
+      ref: result.refs.frameTransportContractRef,
       transport: 'webrtc',
       diagnosticOnly: false,
       sequence: 7,
     });
-    assert.equal(data.currentFrameRef, 'computer-use:session/native-executor-test/frames/current.png');
+    assert.equal(data.currentFrameRef, result.refs.currentFrameRef);
   } finally {
     unregister();
+  }
+});
+
+test('VirtualAppScreen native executor registers the Host binding for returned public session refs', async () => {
+  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  const command = parsedAttachCommand();
+  const executor = createVirtualAppScreenNativeExecutor({
+    executorId: 'native-executor:host-binding-test',
+    providerId: 'provider:host-binding-test',
+    provider: fakeProvider({ calls: [], readiness: readyReadiness() }),
+  });
+  try {
+    const result = await executor.attach(command);
+    assert.equal(result.status, 'attached');
+    assert.ok(result.refs.sessionRef);
+    assert.ok(result.refs.screenRef);
+
+    const record = readVirtualAppScreenNativeHostSessionRecord({
+      sessionRef: result.refs.sessionRef,
+      screenRef: result.refs.screenRef,
+    });
+    assert.ok(record);
+    assert.equal(record.sessionRef, result.refs.sessionRef);
+    assert.equal(record.screenRef, result.refs.screenRef);
+    assert.equal(record.liveSurfaceRef, result.refs.liveSurfaceRef);
+    assert.equal(record.frameStreamRef, result.refs.frameStreamRef);
+    assert.equal(record.currentFrameRef, result.refs.currentFrameRef);
+    assert.equal(record.adapterReadinessRef, result.refs.adapterReadinessRef);
+    assert.equal(record.evidenceLedgerRef, result.refs.evidenceLedgerRef);
+    assert.equal(record.liveBindingAttachGrantRef, result.refs.liveBindingAttachGrantRef);
+    assert.equal(record.grantValidationRef, result.refs.grantValidationRef);
+    assert.equal(record.owner, 'NativeVirtualAppScreenHost');
+    assert.equal(record.singleInteractiveTruth, true);
+  } finally {
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
   }
 });
 
@@ -437,6 +499,7 @@ function parsedAttachCommand() {
     '--screen-ref "virtual-app-screen:native-executor-test/screen"',
     '--activation-ref "computer-use:native-executor-test/attach-request.json"',
     '--adapter-readiness-ref "computer-use:native-executor-test/provider-readiness.json"',
+    '--platform-driver-ref "computer-use:session/native-executor-test/platform-driver.json"',
     '--evidence-ledger-ref "ledger:computer-use/native-executor-test/screen-activation.json"',
     '--gui-present-ref "gui.present:native-executor-test/screen-pane"',
   ].join(' '));

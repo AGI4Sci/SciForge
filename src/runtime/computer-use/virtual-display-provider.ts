@@ -333,6 +333,33 @@ export interface VirtualDisplayProviderL1SyncContract {
   closeSession(options: VirtualDisplayProviderOperationOptions): VirtualDisplayProviderInvokeResult;
 }
 
+export interface VirtualDisplayProviderInputIntent {
+  source: string;
+  kind: string;
+  action?: unknown;
+  controlKind?: string;
+  refs: {
+    sessionRef?: string;
+    screenRef?: string;
+    targetAppRef?: string;
+    targetWindowRef?: string;
+    frameRef?: string;
+    inputLeaseRef?: string;
+    leaseControlRef?: string;
+    actionAdapterRef?: string;
+    adapterReadinessRef?: string;
+    evidenceLedgerRef?: string;
+    automationBarrierRef?: string;
+    verifierRef?: string;
+    [key: string]: unknown;
+  };
+  frame?: {
+    width?: number;
+    height?: number;
+  };
+  ratios?: Record<string, number>;
+}
+
 export interface VirtualDisplayProviderOperationOptions {
   runId: string;
   targetAppKind?: string;
@@ -340,6 +367,7 @@ export interface VirtualDisplayProviderOperationOptions {
   probeOptions?: VirtualDisplayProviderProbeOptions;
   probeBundle?: VirtualDisplayProviderProbeBundle;
   blockedReason?: string;
+  inputIntent?: VirtualDisplayProviderInputIntent;
 }
 
 export type VirtualDisplayProviderProjectionMap = Record<VirtualDisplayProviderMethod, readonly string[]>;
@@ -397,10 +425,10 @@ export const VIRTUAL_DISPLAY_PROVIDER_L1_PROJECTIONS: VirtualDisplayProviderProj
     'beforeAfterFrameRefs',
     'verificationRefs',
   ],
-  pause: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef'],
-  resume: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef'],
+  pause: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'agentQueueRef', 'inputIntentRefs', 'executorEventRefs', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef', 'beforeAfterFrameRefs', 'verificationRefs'],
+  resume: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'agentQueueRef', 'currentFrameRefreshRef', 'inputIntentRefs', 'executorEventRefs', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef', 'beforeAfterFrameRefs', 'verificationRefs'],
   handoff: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'handoffRef', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef'],
-  closeSession: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef'],
+  closeSession: ['currentRunRef', 'sessionRef', 'sessionLeaseRef', 'agentQueueRef', 'safeStopRef', 'inputIntentRefs', 'executorEventRefs', 'lifecycleEventRef', 'lifecycleLedgerRef', 'evidenceLedgerRef', 'beforeFrameRef', 'afterFrameRef', 'beforeAfterFrameRefs', 'verificationRefs'],
 } as const;
 
 export interface VirtualDisplayScreenPayload {
@@ -1359,6 +1387,7 @@ function readyInvokeResult(
     screenRef: payload.screenRef,
     targetAppRef: payload.targetAppRef,
     targetWindowRef: payload.targetWindowRef,
+    actionAdapterRef: payload.actionAdapterRef,
     evidenceLedgerRef: payload.evidenceLedgerRef,
   };
   const evidenceRefs = {

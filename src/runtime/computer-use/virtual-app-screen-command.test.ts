@@ -156,6 +156,7 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--provider-session-reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
+    '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
   ].join(' '));
 
@@ -175,6 +176,7 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
   assert.equal(parsed.command.refs.providerSessionOwnerRef, 'computer-use:provider-session/reconnect/owner.json');
   assert.equal(parsed.command.refs.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
   assert.equal(parsed.command.refs.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
+  assert.equal(parsed.command.refs.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   assert.equal(parsed.command.refs.surfaceTransportRef, 'computer-use:session/reconnect/surface-transport.json');
 
   assert.deepEqual(virtualAppScreenRuntimeCommandTraceDetail(parsed.command), {
@@ -201,6 +203,7 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
   assert.equal(data.providerSessionOwnerRef, 'computer-use:provider-session/reconnect/owner.json');
   assert.equal(data.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
   assert.equal(data.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
+  assert.equal(data.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   assert.equal(data.surfaceTransportRef, 'computer-use:session/reconnect/surface-transport.json');
   assert.deepEqual(data.currentFrameSequence, {
     ref: 'computer-use:session/reconnect/frames/current.png',
@@ -223,6 +226,7 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
+    '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
   ].join(' '));
 
@@ -231,6 +235,7 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     assert.equal(alias.command.reconnectReason, 'provider-reconnect');
     assert.equal(alias.command.refs.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
     assert.equal(alias.command.refs.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
+    assert.equal(alias.command.refs.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   }
 
   assert.deepEqual(parseVirtualAppScreenRuntimeCommand([
@@ -256,6 +261,7 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
+    '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
   ].join(' ')), {
     kind: 'invalid',
     reason: 'VirtualAppScreen screen reconnect requires --surface-transport-ref.',
@@ -274,6 +280,7 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "javascript:alert(1)"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
+    '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
   ].join(' ')), {
     kind: 'invalid',

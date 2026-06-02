@@ -38,6 +38,18 @@ export const RIGHT_PANE_SCOPED_SMOKE_SELECTORS = {
   browserSystemWindowSurface: '[data-browser-host-surface="system-browser-window"]',
   browserProxyIframe: '[data-component-id="browser-workbench"] iframe[src^="/api/sciforge/browser/proxy"]',
   browserDirectExternalAnchor: '[data-component-id="browser-workbench"] a[href^="http://"], [data-component-id="browser-workbench"] a[href^="https://"]',
+  browserLegacyLiveSurface: [
+    '[data-component-id="browser-workbench"] [data-browser-frame-stream-ref]',
+    '[data-component-id="browser-workbench"] [data-browser-frame-source]',
+    '[data-component-id="browser-workbench"] [data-browser-frame-renderer]',
+    '[data-component-id="browser-workbench"] [data-browser-http-frame-live-fallback]',
+    '[data-component-id="browser-workbench"] [data-browser-webrtc-handoff]',
+    '[data-component-id="browser-workbench"] [data-browser-frame-transport="host-stream"]',
+    '[data-component-id="browser-workbench"] [data-browser-frame-transport="websocket-binary"]',
+    '[data-component-id="browser-workbench"] [data-browser-frame-transport="webrtc-data-channel"]',
+  ].join(', '),
+  browserCanvasSurface: '[data-component-id="browser-workbench"] canvas, [data-component-id="browser-workbench"] [data-browser-frame-renderer="canvas-binary"]',
+  browserHttpFrameImage: '[data-component-id="browser-workbench"] img[src^="blob:"], [data-component-id="browser-workbench"] img[src^="/api/sciforge/browser-host/"][src*="/frame"]',
   screenViewer: '[data-component-id="virtual-screen-viewer"]',
   terminalViewer: '[data-component-id="terminal-session-viewer"]',
   terminalTool: '[data-testid="right-pane-terminal-tool"]',
@@ -106,6 +118,9 @@ export interface RightPaneScopedSmokeEvidenceInput {
   browserSystemWindowSurfaceCount?: unknown;
   browserProxyIframeCount?: unknown;
   browserDirectExternalAnchorCount?: unknown;
+  browserLegacyLiveSurfaceCount?: unknown;
+  browserCanvasSurfaceCount?: unknown;
+  browserHttpFrameImageCount?: unknown;
   screenViewerCount?: unknown;
   screenStatusLabel?: unknown;
   terminalViewerCount?: unknown;
@@ -146,6 +161,9 @@ export interface RightPaneScopedSmokeEvidence {
   browserSystemWindowSurfaceCount: number;
   browserProxyIframeCount: number;
   browserDirectExternalAnchorCount: number;
+  browserLegacyLiveSurfaceCount: number;
+  browserCanvasSurfaceCount: number;
+  browserHttpFrameImageCount: number;
   screenViewerCount: number;
   screenStatusLabel: string;
   terminalViewerCount: number;
@@ -274,6 +292,9 @@ export function createRightPaneScopedSmokeEvidence(input: RightPaneScopedSmokeEv
     browserSystemWindowSurfaceCount: boundedSmokeCount(input.browserSystemWindowSurfaceCount),
     browserProxyIframeCount: boundedSmokeCount(input.browserProxyIframeCount),
     browserDirectExternalAnchorCount: boundedSmokeCount(input.browserDirectExternalAnchorCount),
+    browserLegacyLiveSurfaceCount: boundedSmokeCount(input.browserLegacyLiveSurfaceCount),
+    browserCanvasSurfaceCount: boundedSmokeCount(input.browserCanvasSurfaceCount),
+    browserHttpFrameImageCount: boundedSmokeCount(input.browserHttpFrameImageCount),
     screenViewerCount: boundedSmokeCount(input.screenViewerCount),
     screenStatusLabel: boundedSmokeLabel(input.screenStatusLabel),
     terminalViewerCount: boundedSmokeCount(input.terminalViewerCount),
@@ -340,6 +361,9 @@ export function collectRightPaneScopedSmokeSignals(
     browserSystemWindowSurfaceCount: count(documentLike, selectors.browserSystemWindowSurface),
     browserProxyIframeCount: count(documentLike, selectors.browserProxyIframe),
     browserDirectExternalAnchorCount: count(documentLike, selectors.browserDirectExternalAnchor),
+    browserLegacyLiveSurfaceCount: count(documentLike, selectors.browserLegacyLiveSurface),
+    browserCanvasSurfaceCount: count(documentLike, selectors.browserCanvasSurface),
+    browserHttpFrameImageCount: count(documentLike, selectors.browserHttpFrameImage),
     screenViewerCount: count(documentLike, selectors.screenViewer),
     screenStatusLabel: attr(screenViewer, 'data-status'),
     terminalViewerCount: count(documentLike, selectors.terminalViewer),

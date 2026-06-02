@@ -1,5 +1,7 @@
 import type { AgentStreamEvent } from '../../domain';
 import {
+  CODEX_RUNTIME_STREAM_PATH,
+  CODEX_RUNTIME_WEBSOCKET_PATH,
   assertCodexRealtimeSessionEnvelope,
   createCodexRealtimeClientControl,
   type CodexRealtimeClientControlInput,
@@ -7,8 +9,7 @@ import {
 } from '@sciforge-ui/runtime-contract/codex-realtime-session';
 import { readWorkspaceToolStream } from './runtimeEvents';
 
-export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
-export const CODEX_RUNTIME_WEBSOCKET_PATH = '/api/sciforge/runtime/codex/realtime/ws';
+export { CODEX_RUNTIME_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH };
 
 export const CODEX_REALTIME_SESSION_TRANSPORT_STATUS = {
   rtGapId: 'RT-02',

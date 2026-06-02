@@ -23,7 +23,7 @@ import {
   type NativeVirtualDisplayDriverInputControlContext,
 } from './native-driver-input-control.js';
 
-test('Windows IDD opt-in driver hooks can drive native attach with current-session surface transport refs', async () => {
+test('Windows IDD opt-in driver hooks can drive native attach with Host-backed surface transport refs', async () => {
   const writes: Array<{ ref: string; data: unknown }> = [];
   const deps = fakeDriverDependencies({ writes });
   const provider = createWindowsIddVirtualDisplayProvider({
@@ -52,25 +52,10 @@ test('Windows IDD opt-in driver hooks can drive native attach with current-sessi
   assert.equal(result.status, 'attached');
   assert.equal(result.providerId, WINDOWS_IDD_VIRTUAL_DISPLAY_PROVIDER_ID);
   assert.equal(result.evidence.providerExecuted, true);
-  assert.equal(result.refs.sessionRef, `${providerRoot}/session.json`);
   assert.equal(result.refs.targetWindowRef, `window:${runId}/generic-editor/main`);
-  assert.equal(result.refs.liveSurfaceRef, `${providerRoot}/live-surface.json`);
-  assert.equal(result.refs.frameStreamRef, `${providerRoot}/frame-stream.json`);
-  assert.equal(result.refs.currentFrameRef, `${providerRoot}/frames/current.json`);
-  assert.equal(result.refs.surfaceTransportRef, `${providerRoot}/surface-transport.json`);
-  assert.equal(result.refs.frameTransportContractRef, `${providerRoot}/frame-transport-contract.json`);
-  assert.equal(result.evidence.surfaceTransport?.owner, 'VirtualDisplayProvider');
-  assert.equal(result.evidence.surfaceTransport?.providerId, WINDOWS_IDD_VIRTUAL_DISPLAY_PROVIDER_ID);
-  assert.equal(result.evidence.surfaceTransport?.diagnosticOnly, false);
-  assert.equal(result.evidence.surfaceTransport?.productFallback, false);
-  assert.equal(result.evidence.surfaceTransport?.singleInteractiveTruth, true);
-  assert.equal(result.evidence.surfaceTransport?.currentFrameSequence, 1);
-  assert.ok(writes.some((write) => write.ref.endsWith('/session.json')));
-  assert.ok(writes.some((write) => write.ref.endsWith('/display.json')));
-  assert.ok(writes.some((write) => write.ref.includes('/generic-editor/main')));
-  assert.ok(writes.some((write) => write.ref.endsWith('/surface-transport.json')));
-  assert.ok(writes.some((write) => write.ref.endsWith('/frame-transport-contract.json')));
-  assert.ok(writes.some((write) => write.ref.endsWith('/frames/current.json')));
+  assertNativeHostAttachRefs(result, WINDOWS_IDD_VIRTUAL_DISPLAY_PROVIDER_ID);
+  assertProviderEvidenceRefs(result.evidence.evidenceRefs, providerRoot);
+  assertProviderWrites(writes, providerRoot, `window:${runId}/generic-editor/main`);
 });
 
 test('Windows IDD opt-in driver readFrame stays anchored to attached session refs across operation run ids', async () => {
@@ -106,7 +91,8 @@ test('Windows IDD opt-in driver readFrame stays anchored to attached session ref
     targetAppKind: 'generic-editor',
   });
   const attachResult = await executor.attach(parsedAttachCommand());
-  const providerRoot = requiredString(attachResult.refs.sessionRef).replace(/\/session\.json$/u, '');
+  assert.match(requiredString(attachResult.refs.sessionRef), /^computer-use:native-host\/sessions\//u);
+  const providerRoot = providerRootFromEvidenceRefs(attachResult.evidence.evidenceRefs);
   const attachedRunDir = providerRoot.replace(/\/virtual-display-provider$/u, '');
 
   const readFrame = await provider.readFrame({
@@ -146,7 +132,7 @@ test('Windows IDD opt-in driver exposes provider-owned input and control hook ev
     targetAppKind: 'generic-editor',
   });
   const attachResult = await executor.attach(parsedAttachCommand());
-  const sessionRef = requiredString(attachResult.refs.sessionRef);
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
   const providerRoot = sessionRef.replace(/\/session\.json$/u, '');
 
   const sendInput = await provider.sendInputIntent(inputOperationOptions('windows-idd-driver-input', 'tap', sessionRef));
@@ -186,11 +172,12 @@ test('Windows IDD opt-in driver input hook fails closed without provider-owned e
     targetAppKind: 'generic-editor',
   });
   const attachResult = await executor.attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
 
   const result = await provider.sendInputIntent(inputOperationOptions(
     'windows-idd-driver-input-missing-refs',
     'tap',
-    requiredString(attachResult.refs.sessionRef),
+    sessionRef,
   ));
 
   assert.equal(result.status, 'blocked');
@@ -218,11 +205,12 @@ test('Windows IDD opt-in driver input hook fails closed without evidence-written
     targetAppKind: 'generic-editor',
   });
   const attachResult = await executor.attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
 
   const result = await provider.sendInputIntent(inputOperationOptions(
     'windows-idd-driver-input-no-evidence-written',
     'tap',
-    requiredString(attachResult.refs.sessionRef),
+    sessionRef,
   ));
 
   assert.equal(result.status, 'blocked');
@@ -250,6 +238,7 @@ test('Windows IDD opt-in driver input hook fails closed for a stale session or m
     targetAppKind: 'generic-editor',
   });
   const attachResult = await executor.attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
 
   const staleSession = await provider.sendInputIntent(inputOperationOptions('windows-idd-driver-input-stale-session', 'tap', 'computer-use:session/stale/session.json'));
   assert.equal(staleSession.status, 'blocked');
@@ -258,7 +247,7 @@ test('Windows IDD opt-in driver input hook fails closed for a stale session or m
   const missingMutation = await provider.sendInputIntent(inputOperationOptions(
     'windows-idd-driver-input-missing-mutation',
     'tap',
-    requiredString(attachResult.refs.sessionRef),
+    sessionRef,
   ));
   assert.equal(missingMutation.status, 'blocked');
   assert.match(missingMutation.blockedReason ?? '', /mutatingActionExecuted=true/);
@@ -413,6 +402,134 @@ function parsedAttachCommand() {
   assert.equal(parsed.kind, 'parsed');
   if (parsed.kind !== 'parsed') throw new Error('expected parsed command');
   return parsed.command;
+}
+
+type AttachResultLike = {
+  refs: {
+    sessionRef?: string | string[];
+    liveSurfaceRef?: string | string[];
+    surfaceTransportRef?: string | string[];
+    frameStreamRef?: string | string[];
+    currentFrameRef?: string | string[];
+    frameTransportContractRef?: string | string[];
+    frameTelemetryRef?: string | string[];
+    mediaChannelRef?: string | string[];
+    dataChannelRef?: string | string[];
+    liveBindingAttachGrantRef?: string | string[];
+    grantValidationRef?: string | string[];
+    surfaceOwnerRef?: string | string[];
+    displayOwnerRef?: string | string[];
+    evidenceLedgerRef?: string | string[];
+  };
+  evidence: {
+    surfaceTransport?: {
+      owner?: string;
+      providerId?: string;
+      transport?: string;
+      surfaceTransportRef?: string;
+      liveSurfaceRef?: string;
+      frameStreamRef?: string;
+      currentFrameRef?: string;
+      frameTransportContractRef?: string;
+      frameTelemetryRef?: string;
+      mediaChannelRef?: string;
+      dataChannelRef?: string;
+      currentFrameSequence?: number;
+      diagnosticOnly?: boolean;
+      productFallback?: boolean;
+      singleInteractiveTruth?: boolean;
+    };
+    evidenceRefs: string[];
+  };
+};
+
+function assertNativeHostAttachRefs(result: AttachResultLike, providerId: string) {
+  assert.match(requiredString(result.refs.sessionRef), /^computer-use:native-host\/sessions\/session-\d+\/session\.json$/u);
+  assert.match(requiredString(result.refs.liveSurfaceRef), /^computer-use:native-host\/surfaces\/.+\/live-surface\.json$/u);
+  assert.match(requiredString(result.refs.surfaceTransportRef), /^computer-use:native-host\/surfaces\/.+\/surface-transport\.json$/u);
+  assert.match(requiredString(result.refs.frameStreamRef), /^computer-use:native-host\/surfaces\/.+\/frame-stream\.json$/u);
+  assert.match(requiredString(result.refs.currentFrameRef), /^computer-use:native-host\/frames\/.+\/\d{4}\.png$/u);
+  assert.match(requiredString(result.refs.frameTransportContractRef), /^computer-use:native-host\/surfaces\/.+\/frame-transport-contract\.json$/u);
+  assert.match(requiredString(result.refs.frameTelemetryRef), /^computer-use:native-host\/surfaces\/.+\/frame-telemetry\.json$/u);
+  assert.match(requiredString(result.refs.mediaChannelRef), /^computer-use:native-host\/surfaces\/.+\/webrtc-video-track\/live$/u);
+  assert.match(requiredString(result.refs.dataChannelRef), /^computer-use:native-host\/surfaces\/.+\/webrtc-data-channel\/control$/u);
+  assert.match(requiredString(result.refs.liveBindingAttachGrantRef), /^computer-use:native-host\/grants\/.+\/live-binding-attach-grant\.json$/u);
+  assert.match(requiredString(result.refs.grantValidationRef), /^computer-use:native-host\/ledgers\/session-\d+\/evidence-ledger\.json\/events\/\d+-grant\.validated\.json$/u);
+  assert.match(requiredString(result.refs.surfaceOwnerRef), /^computer-use:native-host\/surfaces\/.+\/surface-owner\.json$/u);
+  assert.match(requiredString(result.refs.displayOwnerRef), /^computer-use:native-host\/surfaces\/.+\/display-owner\.json$/u);
+  assert.match(requiredString(result.refs.evidenceLedgerRef), /^computer-use:native-host\/ledgers\/session-\d+\/evidence-ledger\.json$/u);
+  assert.equal(result.evidence.surfaceTransport?.owner, 'VirtualDisplayProvider');
+  assert.equal(result.evidence.surfaceTransport?.providerId, providerId);
+  assert.equal(result.evidence.surfaceTransport?.transport, 'webrtc');
+  assert.equal(result.evidence.surfaceTransport?.diagnosticOnly, false);
+  assert.equal(result.evidence.surfaceTransport?.productFallback, false);
+  assert.equal(result.evidence.surfaceTransport?.singleInteractiveTruth, true);
+  assert.equal(result.evidence.surfaceTransport?.currentFrameSequence, 1);
+  assert.equal(result.evidence.surfaceTransport?.surfaceTransportRef, result.refs.surfaceTransportRef);
+  assert.equal(result.evidence.surfaceTransport?.liveSurfaceRef, result.refs.liveSurfaceRef);
+  assert.equal(result.evidence.surfaceTransport?.frameStreamRef, result.refs.frameStreamRef);
+  assert.equal(result.evidence.surfaceTransport?.currentFrameRef, result.refs.currentFrameRef);
+  assert.equal(result.evidence.surfaceTransport?.frameTransportContractRef, result.refs.frameTransportContractRef);
+  assert.equal(result.evidence.surfaceTransport?.frameTelemetryRef, result.refs.frameTelemetryRef);
+  assert.equal(result.evidence.surfaceTransport?.mediaChannelRef, result.refs.mediaChannelRef);
+  assert.equal(result.evidence.surfaceTransport?.dataChannelRef, result.refs.dataChannelRef);
+  for (const ref of [
+    result.refs.evidenceLedgerRef,
+    result.refs.liveBindingAttachGrantRef,
+    result.refs.grantValidationRef,
+    result.refs.surfaceOwnerRef,
+    result.refs.displayOwnerRef,
+    result.refs.surfaceTransportRef,
+    result.refs.frameTransportContractRef,
+    result.refs.currentFrameRef,
+  ]) {
+    assert.ok(result.evidence.evidenceRefs.includes(requiredString(ref)));
+  }
+}
+
+function assertProviderEvidenceRefs(evidenceRefs: string[], providerRoot: string) {
+  for (const ref of [
+    `${providerRoot}/adapter-readiness.json`,
+    `${providerRoot}/lifecycle-ledger.json#createSession`,
+    `${providerRoot}/lifecycle-ledger.json#launchApp`,
+    `${providerRoot}/lifecycle-ledger.json#attachSurface`,
+    `${providerRoot}/surface-transport.json`,
+    `${providerRoot}/frame-transport-contract.json`,
+    `${providerRoot}/frames/current.json`,
+    `${providerRoot}/evidence-ledger.json`,
+  ]) {
+    assert.ok(evidenceRefs.includes(ref), `missing provider evidence ref ${ref}`);
+  }
+}
+
+function assertProviderWrites(
+  writes: Array<{ ref: string; data: unknown }>,
+  providerRoot: string,
+  targetWindowRef: string,
+) {
+  for (const ref of [
+    `${providerRoot}/session.json`,
+    `${providerRoot}/display.json`,
+    targetWindowRef,
+    `${providerRoot}/live-surface.json`,
+    `${providerRoot}/surface-transport.json`,
+    `${providerRoot}/frame-transport-contract.json`,
+    `${providerRoot}/frames/current.json`,
+  ]) {
+    assert.ok(writes.some((write) => write.ref === ref), `missing provider write ${ref}`);
+  }
+}
+
+function providerRootFromEvidenceRefs(evidenceRefs: string[]) {
+  const currentFrameRef = evidenceRefs.find((ref) => ref.endsWith('/virtual-display-provider/frames/current.json'));
+  if (typeof currentFrameRef !== 'string') {
+    throw new Error('missing provider current frame evidence ref');
+  }
+  return currentFrameRef.replace(/\/frames\/current\.json$/u, '');
+}
+
+function providerSessionRefFromAttachEvidence(result: AttachResultLike) {
+  return `${providerRootFromEvidenceRefs(result.evidence.evidenceRefs)}/session.json`;
 }
 
 function inputOperationOptions(runId: string, kind: string, sessionRef: string) {

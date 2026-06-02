@@ -2,11 +2,11 @@
 
 最后更新：2026-06-02
 
-本 runbook 用于真实 dogfood SciForge 右侧 Browser pane 的连续冲浪体验。它只验证用户可见的 Browser pane，不用外部浏览器、iframe/proxy/snapshot/旧 frame 或系统 popup 冒充 live browser。所有场景都必须保持通用：可以选择任意公开、低风险、无需登录的网站或搜索入口，但不能把通过某个固定站点、固定 URL、固定截图或固定搜索结果当成通过条件。
+本 runbook 用于真实 dogfood SciForge 右侧 Browser pane 的连续冲浪体验。它只验证用户可见的 Browser pane，且产品验收只接受同一个 `BrowserHostSession` owning `native-embedded` live surface。不得用外部浏览器、host-stream、frame-stream、WebRTC、canvas、HTTP `/frame`、iframe/proxy/snapshot/旧 frame 或系统 popup 冒充 live browser。所有场景都必须保持通用：可以选择任意公开、低风险、无需登录的网站或搜索入口，但不能把通过某个固定站点、固定 URL、固定截图或固定搜索结果当成通过条件。
 
 ## 适用范围
 
-每次 run 必须从 SciForge 工作区内的右侧 Browser pane 开始，使用同一个 `BrowserHostSession` 完成导航、输入、点击、滚动、返回、前进、刷新、复制 URL 和 open-external handoff。Desktop shell 以 `native-embedded` live surface 为优先验收面；Web shell 只能用同一 owner 的低延迟 stream transport。证据 artifact 只做审计和 manual inspection，不能作为第二个可交互画面。
+每次 run 必须从 SciForge 工作区内的右侧 Browser pane 开始，使用同一个 `BrowserHostSession` 完成导航、输入、点击、滚动、返回、前进、刷新、复制 URL 和 open-external handoff。产品通过条件必须同时满足：`BrowserHostSession` owner、`native-embedded` surface、`singleInteractiveTruth=true`、`secondTruthSource=false`、证据 `refs-first`。Desktop 或 Web shell 只要缺少 native attach，都只能记录 typed `blocked` / `retry` / `handoff` / refusal diagnostic，不能把 stream、canvas、WebRTC 或 HTTP frame 当作 handoff pass。证据 artifact 只做审计和 manual inspection，不能作为第二个可交互画面。
 
 通过条件不是“页面内容正确”，而是 Browser pane 像正常浏览器一样连续可用：动作有可见反馈、输入不丢字、不乱序，滚动和拖拽不出现用户可感知的队列堆积，state/refs 可以滞后但不能阻塞热路径。
 
@@ -15,13 +15,14 @@
 - 不记录 raw DOM、raw AX tree、raw screenshot bytes、base64、完整 console/network logs、provider payload、cookie、token、password、session secret、机器本地绝对路径或用户私有内容。
 - 不把当前页面、当前 URL、当前搜索引擎、当前结果排名、当前截图像素或某次历史网络状态写成验收硬编码。
 - 不在 live surface 不可用时切换到 iframe、proxy、静态截图、PDF、document、replay、旧 frame 或系统 popup 继续声称通过。
+- 不把 host-stream、frame-stream、WebRTC、canvas、HTTP `/frame`、snapshot、iframe、proxy、`<webview>` 或系统 popup 写成产品 live surface、fallback、handoff pass 或第二个可交互入口；它们只能出现在 forbidden fallback、diagnostic、migration audit 或 refusal 记录中。
 - 不让 screenshot、DOM、AX、console/network、search summary 或 state polling 阻塞 click/type/drag/scroll/cursor 热路径。
 
 ## 运行前检查
 
 1. 打开 SciForge 工作区，确认右侧 Browser pane 可见。
-2. 记录 shell 类型：`desktop` 或 `web`。
-3. 记录 `sessionId`、writer health、native adapter health、transport 和 surface type。
+2. 记录 shell 类型：`desktop` 或 `web`；如果当前 shell 无法 attach native surface，本 run 的产品 live acceptance 必须是 `blocked`，不能降级到 legacy stream。
+3. 记录 `sessionId`、writer health、native adapter health、transport、surface type、`singleInteractiveTruth` 和 `secondTruthSource`。
 4. 确认 Browser pane topbar 的地址栏、back、forward、reload/stop、open-external 控件可见或可通过正常 UI 到达。
 5. 准备一个公开、非敏感查询主题。查询内容必须能写入 evidence；不要使用账号、内部项目名、私有 URL 或个人资料。
 
@@ -45,7 +46,7 @@
 
 - 输入完整，caret 可见，Enter 或点击提交没有被聊天输入框截获。
 - back/forward 后地址栏、title、loading、canGoBack/canGoForward 状态可预测。
-- open-external 是显式 handoff，不改变 Browser pane 的唯一真相源。
+- open-external 是显式 handoff 诊断，不改变 Browser pane 的唯一真相源，也不能替代 `native-embedded` pass。
 
 ### 场景 B：长文档阅读与页面内查找
 
@@ -96,9 +97,11 @@
 - `workspace`: 工作区名或脱敏路径别名，不写机器本地绝对路径。
 - `shell`: `desktop` 或 `web`。
 - `sessionId`: `BrowserHostSession` ID。
-- `transport`: 例如 `native-embedded`、`frame-stream`、`webrtc-stream`、`canvas-stream`。
-- `surfaceType`: 例如 `BrowserHostSession/native-surface` 或 `BrowserHostSession/stream-surface`。
-- `surfaceOwnerCheck`: 是否同一个 `BrowserHostSession` owner，是否发现 iframe/proxy/snapshot/旧 frame 伪装。
+- `transport`: 产品通过时必须是 `native-embedded`；host-stream、frame-stream、WebRTC、canvas 或 HTTP `/frame` 只能记录为 forbidden/diagnostic/refusal。
+- `surfaceType`: 产品通过时必须是 `BrowserHostSession/native-surface`；stream/canvas/frame/snapshot surface 不能作为 live surface。
+- `singleInteractiveTruth`: 产品通过时必须是 `true`。
+- `secondTruthSource`: 产品通过时必须是 `false`。
+- `surfaceOwnerCheck`: 是否同一个 `BrowserHostSession` owner，是否发现 iframe/proxy/snapshot/旧 frame/legacy stream 伪装。
 - `writerHealth`: `healthy`、`degraded`、`blocked`，附短 reason。
 - `nativeAdapterHealth`: `healthy`、`unavailable`、`degraded`，附短 reason。
 - `scenario`: `A-search-research`、`B-long-doc` 或 `C-form-drag-recovery`。
@@ -109,6 +112,7 @@
 - `visibleLabels`: 最多 5 个公开可见短标签，每个不超过 80 字符。
 - `latency`: 只记录 timing 数字和 p50/p95，不记录 raw logs。
 - `refs`: 只记录 `stateRef`、`screenshotRef`、`traceRef`、`consoleLogRef`、`networkLogRef`、`domSnapshotRef`、`axSnapshotRef` 等 ref ID；禁止粘贴 ref 内容。
+- `forbiddenFallbacks`: 若发现 host-stream、frame-stream、WebRTC、canvas、HTTP `/frame`、snapshot、iframe、proxy、`<webview>` 或系统 popup，记录短名称和 refusal reason；产品验收必须 fail 或 blocked。
 - `diagnostics`: 最多 10 条短诊断，每条不超过 160 字符。
 - `result`: `pass`、`partial`、`blocked` 或 `fail`。
 
@@ -121,8 +125,10 @@ operator: "worker-or-human"
 workspace: "sciforge-workspace-alias"
 shell: "desktop | web"
 sessionId: "browser-host-session-id"
-transport: "native-embedded | frame-stream | webrtc-stream | canvas-stream"
-surfaceType: "BrowserHostSession/native-surface | BrowserHostSession/stream-surface"
+transport: "native-embedded"
+surfaceType: "BrowserHostSession/native-surface"
+singleInteractiveTruth: true
+secondTruthSource: false
 surfaceOwnerCheck:
   sameBrowserHostSession: true
   liveSurfaceVisible: true
@@ -165,8 +171,13 @@ scenarioResults:
       networkLogRef: "ref:..."
       domSnapshotRef: "ref:..."
       axSnapshotRef: "ref:..."
+    forbiddenFallbacks:
+      - name: "host-stream | frame-stream | webrtc | canvas | http-frame | snapshot | iframe | proxy | webview | system-popup"
+        observed: false
+        disposition: "forbidden | diagnostic-only | refusal"
+        reason: "short bounded reason; never a handoff pass"
     bottlenecks:
-      - category: "input-routing | surface-attach | frame-capture | state-polling | network-navigation | react-rerender | workspace-writer | native-adapter | unknown"
+      - category: "input-routing | surface-attach | forbidden-legacy-stream | state-polling | network-navigation | react-rerender | workspace-writer | native-adapter | unknown"
         severity: "none | low | medium | high | blocker"
         evidence: "bounded timing/ref note only"
     diagnostics:
@@ -181,7 +192,7 @@ scenarioResults:
 |---|---|---|
 | `input-routing` | click/type/press/drag/scroll 到 host action start 前延迟高，或焦点进入聊天 composer | 记录 action timing、focused target 摘要、stable selector |
 | `surface-attach` | pane resize、tab 切换、reload 后 live surface 消失、重建或失焦 | 记录 sessionId 是否变化、surface owner check、attach/reconnect ref |
-| `frame-capture` | 输入或滚动后等待截图/stream frame，过期画面排队 | 记录 frame/drop/backpressure timing 和 screenshot/state refs |
+| `forbidden-legacy-stream` | 发现 host-stream、frame-stream、WebRTC、canvas 或 HTTP `/frame` 被当作 live/fallback/handoff pass，或输入/滚动等待旧 stream frame | 记录 forbidden fallback 名称、refusal reason、bounded timing 和 refs；产品结果必须 `blocked` 或 `fail` |
 | `state-polling` | URL/title/loading/refs 更新导致 UI 卡顿或 surface remount | 记录 stateRefsLagP95Ms、render count 摘要、traceRef |
 | `network-navigation` | 慢站点、重定向、证书、CORS、DNS 或离线导致 loading/stalled | 记录 finalUrl 脱敏摘要、navigation timing、networkLogRef |
 | `react-rerender` | refs、diagnostics、topbar 状态更新导致 pane remount 或焦点丢失 | 记录 mount stability、sessionId、traceRef |
@@ -191,18 +202,19 @@ scenarioResults:
 
 ## 通过、部分通过和失败
 
-- `pass`: 三个场景都完成，Browser pane 始终由同一 `BrowserHostSession` owning live surface；无高严重度卡顿；所有证据 refs-first 且脱敏。
-- `partial`: 用户任务完成，但出现低/中严重度卡顿、state/refs 明显滞后、某个非关键控件不可用，或 evidence 字段缺少一部分。
-- `blocked`: live surface、transport、writer、native adapter、网络策略或安全确认阻止继续；必须给出 typed blocked/retry/handoff diagnostic。
-- `fail`: 出现第二真相源、输入丢失/乱序、焦点频繁错投、surface remount 破坏 session、或证据包含 raw DOM/base64/secret。
+- `pass`: 三个场景都完成，Browser pane 始终由同一 `BrowserHostSession` owning `native-embedded` live surface；`singleInteractiveTruth=true`；`secondTruthSource=false`；无高严重度卡顿；所有证据 refs-first 且脱敏。
+- `partial`: 用户任务完成，且仍满足 `BrowserHostSession` + `native-embedded` + `singleInteractiveTruth=true` + `secondTruthSource=false` + refs-first，但出现低/中严重度卡顿、state/refs 明显滞后、某个非关键控件不可用，或 evidence 字段缺少一部分。
+- `blocked`: native live surface、writer、native adapter、网络策略或安全确认阻止继续；必须给出 typed blocked/retry/handoff/refusal diagnostic。host-stream、frame-stream、WebRTC、canvas 或 HTTP `/frame` 只能导致 blocked/refusal diagnostic，不能作为 handoff pass。
+- `fail`: 出现第二真相源、legacy stream/canvas/frame 被当作产品 live pass、输入丢失/乱序、焦点频繁错投、surface remount 破坏 session、或证据包含 raw DOM/base64/secret。
 
 ## 收尾检查
 
 1. 确认没有把 raw DOM、base64、secret、完整截图、完整日志或一次性页面内容写入任务文档。
 2. 确认证据均为 bounded fields 和 refs。
-3. 确认每个场景都记录 latency、transport、surface、refs 和瓶颈分类。
-4. 确认 `sessionId`、surface owner、transport 与 shell 类型一致。
-5. 对文档改动运行：
+3. 确认每个场景都记录 latency、transport、surface、single interactive truth、second truth source、refs 和瓶颈分类。
+4. 确认 `sessionId`、surface owner、transport 与 shell 类型一致；产品 pass 只能是 `native-embedded`，Web shell 缺 native attach 时只能 blocked/refusal。
+5. 确认 host-stream、frame-stream、WebRTC、canvas 和 HTTP `/frame` 没有作为 handoff pass、fallback pass 或第二个可交互画面。
+6. 对文档改动运行：
 
 ```bash
 git diff --check

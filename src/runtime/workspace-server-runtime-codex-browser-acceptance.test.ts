@@ -96,6 +96,7 @@ test('readRuntimeCodexBrowserAcceptanceManifest normalizes passed manifest and f
     cwd,
     env: {
       SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR: evidenceDir,
+      SCIFORGE_RUNTIME_API_KEY: 'test-service-env-key',
       SCIFORGE_BROWSER_ACCEPTANCE_MAX_AGE_MINUTES: '30',
       SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_MTIME_TOLERANCE_MINUTES: '10',
     },
@@ -156,6 +157,61 @@ test('readRuntimeCodexBrowserAcceptanceManifest omits freshness for blocked mani
   assert.equal(manifest?.status, 'blocked');
   assert.equal(manifest?.reason, 'missing runtime env');
   assert.equal(manifest?.freshness, undefined);
+});
+
+test('readRuntimeCodexBrowserAcceptanceManifest downgrades stale passed evidence when service env key is missing', async () => {
+  const cwd = await mkdtemp(join(tmpdir(), 'sciforge-browser-acceptance-env-gate-'));
+  const evidenceDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-acceptance-env-manifest-'));
+  const screenshotRef = 'docs/evidence/browser.png';
+  const domRef = 'docs/evidence/dom.txt';
+  const notesRef = 'docs/evidence/notes.md';
+  await mkdir(join(cwd, 'docs', 'evidence'), { recursive: true });
+  await writeFile(join(cwd, screenshotRef), 'png');
+  await writeFile(join(cwd, domRef), '- main: Runtime Codex answer rendered\n');
+  await writeFile(join(cwd, notesRef), '# Acceptance\n');
+  await writeFile(join(evidenceDir, 'manifest.json'), JSON.stringify({
+    schemaVersion: RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION,
+    status: 'passed',
+    source: 'codex-in-app-browser',
+    observedAt: '2026-05-29T00:00:00.000Z',
+    startedFromDefaultChatEntry: true,
+    submittedThroughRuntimeCodex: true,
+    providerModelProfileVisible: true,
+    mainAnswerVisible: true,
+    rawAuditFoldedByDefault: true,
+    acceptanceConclusionFromRealBrowser: true,
+    currentRunEvidenceScope: 'live-browser-current-run',
+    runtimeApiKeyPresentInServiceEnv: true,
+    releaseBlocking: false,
+    releaseEligible: true,
+    evidence: {
+      screenshotPath: screenshotRef,
+      domSnapshotPath: domRef,
+      notesPath: notesRef,
+    },
+  }));
+
+  const manifest = await readRuntimeCodexBrowserAcceptanceManifest({
+    cwd,
+    env: { SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR: evidenceDir },
+    parallelProfileId: 'p1',
+    nowMs: () => Date.parse('2026-05-29T00:02:00.000Z'),
+  });
+
+  assert.equal(manifest?.status, 'blocked');
+  assert.equal(manifest?.submittedThroughRuntimeCodex, false);
+  assert.equal(manifest?.providerModelProfileVisible, false);
+  assert.equal(manifest?.mainAnswerVisible, false);
+  assert.equal(manifest?.acceptanceConclusionFromRealBrowser, false);
+  assert.equal(manifest?.currentRunEvidenceScope, 'preflight-only');
+  assert.equal(manifest?.runtimeApiKeyPresentInServiceEnv, false);
+  assert.equal(manifest?.releaseBlocking, true);
+  assert.equal(manifest?.releaseEligible, false);
+  assert.deepEqual(manifest?.missingEnv, ['SCIFORGE_RUNTIME_API_KEY']);
+  assert.deepEqual(manifest?.evidence, { notesPath: notesRef });
+  assert.deepEqual((manifest as { staleEvidenceRefs?: string[] } | undefined)?.staleEvidenceRefs, [screenshotRef, domRef]);
+  assert.equal(manifest?.freshness, undefined);
+  assert.match(manifest?.reason ?? '', /service environment is missing SCIFORGE_RUNTIME_API_KEY/);
 });
 
 test('readRuntimeCodexBrowserAcceptanceManifest rejects non-object manifests', async () => {

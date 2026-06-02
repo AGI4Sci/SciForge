@@ -55,7 +55,7 @@ test('right pane surface adapter routes Browser presentation while preserving co
   assert.doesNotMatch(html, /data:image|base64|providerRoute|executorLease/);
 });
 
-test('right pane browser product flow renders browser_search projection with one host session owner', () => {
+test('right pane browser product flow renders native browser_search projection with one host session owner', () => {
   const hostSessionId = 'browser-search-session-1';
   const finalUrl = 'https://search.example.test/results?q=host+owned';
   const focusedObjectReference: ObjectReference = {
@@ -102,12 +102,9 @@ test('right pane browser product flow renders browser_search projection with one
             requestedUrl: finalUrl,
             url: finalUrl,
             title: 'Search results',
-            liveSurfaceRef: `browser-host-session:${hostSessionId}/live`,
-            liveSurfaceTransport: 'host-stream',
+            liveSurfaceRef: `browser-host-session:${hostSessionId}/live-surface`,
+            liveSurfaceTransport: 'native-embedded',
             singleInteractiveTruth: true,
-            frameStreamRef: `browser-host-session:${hostSessionId}/frame-stream`,
-            frameRef: `browser-host-session:${hostSessionId}/frame.png`,
-            frameUrl: 'blob:browser-search-session-1-frame',
             searchResultRef: `browser-host-session:${hostSessionId}/search-results.json`,
             screenshotRef: `browser-host-session:${hostSessionId}/screenshot.png`,
             domSnapshotRef: `browser-host-session:${hostSessionId}/dom.html`,
@@ -131,15 +128,73 @@ test('right pane browser product flow renders browser_search projection with one
   assert.match(html, /data-browser-state="ready"/);
   assert.match(html, /name="browser-url" value="https:\/\/search\.example\.test\/results\?q=host\+owned"/);
   assert.match(html, /data-browser-host-surface="browser-host-session"/);
-  assert.match(html, /data-browser-live-surface-ref="browser-host-session:browser-search-session-1\/live"/);
-  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:browser-search-session-1\/frame-stream"/);
+  assert.match(html, /data-browser-native-surface="true"/);
+  assert.match(html, /data-browser-live-surface-ref="browser-host-session:browser-search-session-1\/live-surface"/);
+  assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-single-interactive-truth="true"/);
-  assert.match(html, /data-browser-frame-renderer="canvas-binary"/);
-  assert.match(html, /data-browser-host-keyboard-path="hidden-input"/);
-  assert.match(html, /data-browser-ref="browser-host-session:browser-search-session-1\/frame\.png"/);
+  assert.match(html, /data-browser-frame-transport="native-embedded"/);
   assert.match(html, /browser-host-session:browser-search-session-1\/search-results\.json/);
   assert.deepEqual(uniqueBrowserHostSessionIds(html), [hostSessionId]);
-  assert.doesNotMatch(html, /system-browser-window|\/api\/sciforge\/browser\/proxy|<iframe|<webview|data:image|base64/);
+  assert.doesNotMatch(html, /data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-host-keyboard-path|canvas-binary|host-stream|webrtc-data-channel|websocket-binary/);
+  assert.doesNotMatch(html, /system-browser-window|\/api\/sciforge\/browser\/proxy|<iframe|<canvas|<webview|data:image|base64/);
+});
+
+test('right pane browser product flow keeps legacy host-stream projection ref-only', () => {
+  const hostSessionId = 'browser-search-session-legacy';
+  const finalUrl = 'https://search.example.test/results?q=legacy';
+  const focusedObjectReference: ObjectReference = {
+    id: 'obj-browser-host-session-legacy',
+    kind: 'artifact',
+    title: 'Legacy BrowserHostSession search projection',
+    ref: 'artifact:browser-host-projection-legacy',
+    artifactType: 'browser-runtime-projection',
+    preferredView: 'browser-workbench',
+    status: 'available',
+  };
+  const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
+    ...baseProps(),
+    resultTab: 'browser',
+    focusedObjectReference,
+    session: {
+      ...sessionFixture(),
+      artifacts: [{
+        id: 'browser-host-projection-legacy',
+        type: 'browser-runtime-projection',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: 'sciforge.browser-runtime.projection.v1',
+        metadata: {
+          source: 'browser_search',
+          browserSessionRef: `browser-host-session:${hostSessionId}`,
+          finalUrl,
+        },
+        data: {
+          hostSession: {
+            id: hostSessionId,
+            status: 'ready',
+            requestedUrl: finalUrl,
+            url: finalUrl,
+            title: 'Legacy search results',
+            liveSurfaceRef: `browser-host-session:${hostSessionId}/live`,
+            liveSurfaceTransport: 'host-stream',
+            singleInteractiveTruth: true,
+            frameStreamRef: `browser-host-session:${hostSessionId}/frame-stream`,
+            frameRef: `browser-host-session:${hostSessionId}/frame.png`,
+            frameUrl: 'blob:browser-search-session-legacy-frame',
+            searchResultRef: `browser-host-session:${hostSessionId}/search-results.json`,
+          },
+        },
+      }],
+    },
+  }));
+
+  assert.match(html, /data-testid="right-pane-browser-tool"/);
+  assert.match(html, /data-component-id="browser-workbench"/);
+  assert.match(html, /data-browser-state="idle"/);
+  assert.match(html, /name="browser-url" value="https:\/\/search\.example\.test\/results\?q=legacy"/);
+  assert.match(html, /data-browser-host-surface="browser-host-session"/);
+  assert.doesNotMatch(html, /data-browser-native-surface="true"/);
+  assert.doesNotMatch(html, /data-browser-live-surface-ref|data-browser-frame-stream-ref|data-browser-frame-renderer|data-browser-host-keyboard-path/);
+  assert.doesNotMatch(html, /canvas-binary|webrtc-data-channel|websocket-binary|<iframe|<canvas|<webview|data:image|base64/);
 });
 
 test('right pane empty workspace can be rendered independently by locale', () => {

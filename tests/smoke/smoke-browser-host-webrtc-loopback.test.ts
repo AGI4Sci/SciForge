@@ -45,6 +45,29 @@ type LoopbackBrowserResult = {
   samples: BrowserHostWebRtcMetricSample[];
 };
 
+type WebRtcLegacyRightPaneRefusal = {
+  status: 'blocked';
+  claimScope: 'legacy-transport-diagnostic-only';
+  passClaim: false;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    transportEvidenceKind: 'webrtc-loopback-data-channel';
+    liveSurfaceTransport: 'host-stream';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  passRefusalPolicy: {
+    candidateContractDoesNotPass: true;
+    loopbackSmokeDoesNotPass: true;
+    httpFrameRouteDoesNotPass: true;
+    secondTruthSourceDoesNotPass: true;
+  };
+};
+
 type LoopbackEvidence =
   | {
     schemaVersion: typeof LOOPBACK_SCHEMA;
@@ -69,23 +92,27 @@ type LoopbackEvidence =
       executableBasename?: string;
       version?: string;
     };
-    loopback: Omit<LoopbackBrowserResult, 'samples'>;
-    rawPayloadsCaptured: false;
-    refsFirst: true;
-    verificationCommand: string;
-  }
-  | {
-    schemaVersion: typeof LOOPBACK_SCHEMA;
-    status: 'passed';
-    observedAt: string;
-    browser: {
+	    loopback: Omit<LoopbackBrowserResult, 'samples'>;
+	    rawPayloadsCaptured: false;
+	    refsFirst: true;
+	    claimScope: 'legacy-transport-diagnostic-only';
+	    rightPaneLiveAcceptance: WebRtcLegacyRightPaneRefusal;
+	    verificationCommand: string;
+	  }
+	  | {
+	    schemaVersion: typeof LOOPBACK_SCHEMA;
+	    status: 'diagnostic';
+	    observedAt: string;
+	    browser: {
       engine: 'chromium';
       executablePath: string;
       executableBasename: string;
       version: string;
     };
-    loopback: Omit<LoopbackBrowserResult, 'samples'>;
-    candidate: ReturnType<typeof createBrowserHostWebRtcTransportCandidate>;
+	    loopback: Omit<LoopbackBrowserResult, 'samples'>;
+	    claimScope: 'legacy-transport-diagnostic-only';
+	    rightPaneLiveAcceptance: WebRtcLegacyRightPaneRefusal;
+	    candidate: ReturnType<typeof createBrowserHostWebRtcTransportCandidate>;
     report: ReturnType<typeof browserHostWebRtcTransportFeasibilityReport>;
     forbiddenEvidence: {
       inlineSdp: false;
@@ -176,18 +203,20 @@ test('BrowserHostSession WebRTC data-channel loopback validates refs-first trans
     assert.equal(report.rawPayloadsCaptured, false);
     assert.equal(report.secondTruthSource, false);
 
-    const evidence: LoopbackEvidence = {
-      schemaVersion: LOOPBACK_SCHEMA,
-      status: 'passed',
-      observedAt: new Date().toISOString(),
+	    const evidence: LoopbackEvidence = {
+	      schemaVersion: LOOPBACK_SCHEMA,
+	      status: 'diagnostic',
+	      observedAt: new Date().toISOString(),
       browser: {
         engine: 'chromium',
         executablePath: browserExecutable,
         executableBasename: basename(browserExecutable),
         version: browserVersion,
-      },
-      loopback: withoutSamples(result),
-      candidate,
+	      },
+	      loopback: withoutSamples(result),
+	      claimScope: 'legacy-transport-diagnostic-only',
+	      rightPaneLiveAcceptance: legacyWebRtcRightPaneRefusal(),
+	      candidate,
       report,
       forbiddenEvidence: {
         inlineSdp: false,
@@ -200,9 +229,10 @@ test('BrowserHostSession WebRTC data-channel loopback validates refs-first trans
         systemPopup: false,
       },
       verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-host-webrtc-loopback.test.ts',
-    };
-    await writeEvidence(evidence);
-    assertNoRawPayloads(JSON.stringify(evidence));
+	    };
+	    await writeEvidence(evidence);
+	    assertLegacyWebRtcRightPaneRefusal(evidence.rightPaneLiveAcceptance);
+	    assertNoRawPayloads(JSON.stringify(evidence));
   } catch (error) {
     if (browser && !blockedEvidenceWritten) {
       const result = blockedLoopbackResult(error);
@@ -459,18 +489,60 @@ async function writeBlockedEvidence(
       executableBasename: basename(executablePath),
       version: browserVersion,
     },
-    loopback: withoutSamples(result),
-    rawPayloadsCaptured: false,
-    refsFirst: true,
-    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-host-webrtc-loopback.test.ts',
-  });
+	    loopback: withoutSamples(result),
+	    rawPayloadsCaptured: false,
+	    refsFirst: true,
+	    claimScope: 'legacy-transport-diagnostic-only',
+	    rightPaneLiveAcceptance: legacyWebRtcRightPaneRefusal(),
+	    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-host-webrtc-loopback.test.ts',
+	  });
 }
 
 async function writeEvidence(evidence: LoopbackEvidence): Promise<void> {
   await mkdir(artifactDir, { recursive: true });
   const text = `${JSON.stringify(evidence, null, 2)}\n`;
   assertNoRawPayloads(text);
+  if ('rightPaneLiveAcceptance' in evidence) assertLegacyWebRtcRightPaneRefusal(evidence.rightPaneLiveAcceptance);
   await writeFile(manifestPath, text, 'utf8');
+}
+
+function legacyWebRtcRightPaneRefusal(): WebRtcLegacyRightPaneRefusal {
+  return {
+    status: 'blocked',
+    claimScope: 'legacy-transport-diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      transportEvidenceKind: 'webrtc-loopback-data-channel',
+      liveSurfaceTransport: 'host-stream',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    passRefusalPolicy: {
+      candidateContractDoesNotPass: true,
+      loopbackSmokeDoesNotPass: true,
+      httpFrameRouteDoesNotPass: true,
+      secondTruthSourceDoesNotPass: true,
+    },
+  };
+}
+
+function assertLegacyWebRtcRightPaneRefusal(refusal: WebRtcLegacyRightPaneRefusal): void {
+  assert.equal(refusal.status, 'blocked');
+  assert.equal(refusal.claimScope, 'legacy-transport-diagnostic-only');
+  assert.equal(refusal.passClaim, false);
+  assert.equal(refusal.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(refusal.required.singleInteractiveTruth, true);
+  assert.equal(refusal.required.secondTruthSource, false);
+  assert.equal(refusal.observed.transportEvidenceKind, 'webrtc-loopback-data-channel');
+  assert.equal(refusal.observed.liveSurfaceTransport, 'host-stream');
+  assert.equal(refusal.observed.singleInteractiveTruth, true);
+  assert.equal(refusal.observed.secondTruthSource, false);
+  assert.deepEqual(Object.values(refusal.passRefusalPolicy), [true, true, true, true]);
 }
 
 function withoutSamples(result: LoopbackBrowserResult): Omit<LoopbackBrowserResult, 'samples'> {

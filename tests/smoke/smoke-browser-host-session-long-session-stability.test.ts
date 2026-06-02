@@ -51,7 +51,7 @@ const LOOP_ACTIONS: Array<BrowserHostSessionAction | 'open'> = [
 test('BrowserHostSession long-session stability smoke keeps deterministic refs-first evidence bounded', async () => {
   const config = longSessionSmokeConfig();
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-long-session-'));
-  const { factory, drivers } = deterministicLongSessionDriverFactory();
+  const { factory, drivers } = deterministicLongSessionDriverFactory({ liveSurfaceTransport: 'native-embedded' });
   const resourceGuard = new LongSessionSurfaceResourceGuard();
   try {
     const manager = new BrowserHostSessionManager({ driverFactory: factory });
@@ -67,7 +67,8 @@ test('BrowserHostSession long-session stability smoke keeps deterministic refs-f
     assert.equal(opened.owner, 'host');
     assert.equal(opened.providerId, BROWSER_HOST_SESSION_PROVIDER_ID);
     assert.equal(opened.singleInteractiveTruth, true);
-    assert.equal(opened.frameStreamRef, 'browser-host-session:long-session-stability/frame-stream');
+    assert.equal(opened.liveSurfaceTransport, 'native-embedded');
+    assert.equal(opened.frameStreamRef, undefined);
     resourceGuard.attachSurface(opened, 'tab-open');
     resourceGuard.replaceObjectUrlFromFrame(opened, 'open-capture');
 
@@ -228,7 +229,7 @@ test('BrowserHostSession long-session stability smoke keeps deterministic refs-f
 });
 
 function deterministicLongSessionDriverFactory(
-  options: { liveSurfaceTransport?: LongSessionSurfaceTransport } = {},
+  options: { liveSurfaceTransport?: LongSessionSurfaceTransport } = { liveSurfaceTransport: 'native-embedded' },
 ): { factory: BrowserHostSessionDriverFactory; drivers: DeterministicLongSessionDriver[] } {
   const drivers: DeterministicLongSessionDriver[] = [];
   return {
@@ -261,9 +262,10 @@ class DeterministicLongSessionDriver implements BrowserHostSessionDriver {
   networkListenerCount = 0;
   closed = false;
 
-  constructor(options: { liveSurfaceTransport?: LongSessionSurfaceTransport } = {}) {
-    this.liveSurfaceTransport = options.liveSurfaceTransport;
-    this.nativeAdapterUrl = options.liveSurfaceTransport === 'native-embedded'
+  constructor(options: { liveSurfaceTransport?: LongSessionSurfaceTransport } = { liveSurfaceTransport: 'native-embedded' }) {
+    const liveSurfaceTransport = options.liveSurfaceTransport ?? 'native-embedded';
+    this.liveSurfaceTransport = liveSurfaceTransport;
+    this.nativeAdapterUrl = liveSurfaceTransport === 'native-embedded'
       ? 'http://127.0.0.1:65535'
       : undefined;
   }
@@ -401,7 +403,8 @@ class LongSessionSurfaceResourceGuard {
     const liveSurfaceRef = state.liveSurfaceRef ?? browserHostLiveSurfaceRef(state.id);
     assert.equal(liveSurfaceRef, browserHostLiveSurfaceRef(state.id));
     assert.equal(this.attachedSurfaceBySession.has(state.id), false, `${state.id} surface should not attach twice without detach`);
-    const liveSurfaceTransport = state.liveSurfaceTransport ?? 'host-stream';
+    const liveSurfaceTransport = state.liveSurfaceTransport;
+    assert.equal(liveSurfaceTransport, 'native-embedded');
     this.attachedSurfaceBySession.set(state.id, {
       sessionRef: browserHostSessionRef(state.id),
       liveSurfaceRef,
@@ -432,12 +435,13 @@ class LongSessionSurfaceResourceGuard {
     this.revokeObjectUrl(state.id, reason);
     const detached = this.detachSurface(state.id, reason);
     const liveSurfaceRef = detached?.liveSurfaceRef ?? state.liveSurfaceRef ?? browserHostLiveSurfaceRef(state.id);
-    const liveSurfaceTransport = detached?.liveSurfaceTransport ?? state.liveSurfaceTransport ?? 'host-stream';
+    const liveSurfaceTransport = detached?.liveSurfaceTransport ?? state.liveSurfaceTransport;
+    assert.equal(liveSurfaceTransport, 'native-embedded');
     const release = {
       sessionRef: browserHostSessionRef(state.id),
       finalStatus: state.status,
       liveSurfaceRef,
-      liveSurfaceTransport,
+      liveSurfaceTransport: liveSurfaceTransport as LongSessionSurfaceTransport,
       driverClosed: driver.closed,
       surfaceDetached: Boolean(detached),
       nativeSurfaceDetached: liveSurfaceTransport === 'native-embedded' ? Boolean(detached) : true,
@@ -589,7 +593,7 @@ async function boundedLongSessionReport(
       owner: primary.owner,
       providerId: primary.providerId,
       finalUrlHash: sha256Text(primary.url),
-      liveSurfaceTransport: primary.liveSurfaceTransport ?? 'host-stream',
+      liveSurfaceTransport: primary.liveSurfaceTransport,
       frameStreamRef: primary.frameStreamRef,
       actionsCovered: LOOP_ACTIONS,
       evidenceRefs: await evidenceRefSummaries(workspacePath, primary),
@@ -598,7 +602,7 @@ async function boundedLongSessionReport(
     reopen: {
       id: reopenedClosed.id,
       status: reopenedClosed.status,
-      liveSurfaceTransport: reopenedClosed.liveSurfaceTransport ?? 'host-stream',
+      liveSurfaceTransport: reopenedClosed.liveSurfaceTransport,
       frameStreamRef: reopenedClosed.frameStreamRef,
       timingSummary: ['open', 'type', 'close'].map((action) => requiredTimingSummary(reopenedClosed, action as BrowserHostSessionAction | 'open')),
     },
@@ -728,15 +732,14 @@ function assertResourceGuards(resourceGuards: LongSessionResourceGuards): void {
   assert.ok(resourceGuards.listenerRegistrations.every((entry) => entry.console === 1 && entry.network === 1));
   assert.equal(resourceGuards.objectUrlRevoke.created, resourceGuards.objectUrlRevoke.released);
   assert.equal(resourceGuards.objectUrlRevoke.outstanding, 0);
-  assert.ok(resourceGuards.objectUrlRevoke.created > 0, 'host-stream loop should exercise object URL revoke guard');
-  assert.ok(resourceGuards.objectUrlRevoke.maxOutstanding <= 1, 'object URL replacement should revoke the previous frame first');
+  assert.equal(resourceGuards.objectUrlRevoke.created, 0, 'native embedded product loop must not allocate host-stream object URLs');
+  assert.equal(resourceGuards.objectUrlRevoke.maxOutstanding, 0);
   assert.equal(resourceGuards.surfaceDetach.created, resourceGuards.surfaceDetach.released);
   assert.equal(resourceGuards.surfaceDetach.outstanding, 0);
   assert.ok(resourceGuards.surfaceDetach.created >= 2, 'tab lifecycle should attach and detach each deterministic surface');
   assert.match(resourceGuards.objectUrlRevoke.eventRef, /^browser-host-session:/);
   assert.match(resourceGuards.surfaceDetach.eventRef, /^browser-host-session:/);
   assert.ok(resourceGuards.tabCloseReleases.some((entry) => entry.liveSurfaceTransport === 'native-embedded'));
-  assert.ok(resourceGuards.tabCloseReleases.some((entry) => entry.objectUrlsCreated > 0));
   for (const release of resourceGuards.tabCloseReleases) {
     assert.match(release.sessionRef, /^browser-host-session:/);
     assert.match(release.liveSurfaceRef, /^browser-host-session:[^/]+\/live-surface$/);
@@ -744,11 +747,11 @@ function assertResourceGuards(resourceGuards: LongSessionResourceGuards): void {
     assert.equal(release.driverClosed, true);
     assert.equal(release.surfaceDetached, true);
     assert.equal(release.objectUrlsCreated, release.objectUrlsRevoked);
+    assert.equal(release.objectUrlsCreated, 0, 'native embedded release should not depend on host-stream object URLs');
     assert.equal(release.outstandingObjectUrls, 0);
     assert.equal(release.outstandingSurfaces, 0);
     if (release.liveSurfaceTransport === 'native-embedded') {
       assert.equal(release.nativeSurfaceDetached, true);
-      assert.equal(release.objectUrlsCreated, 0, 'native embedded release should not depend on host-stream object URLs');
     }
   }
 }

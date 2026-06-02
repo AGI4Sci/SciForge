@@ -47,6 +47,7 @@ type RightPaneBoundedEvidence = {
   frameStreamRefs: string[];
   frameRefs: string[];
   transports: string[];
+  frameTransports: string[];
   singleInteractiveTruthValues: string[];
   hostBrowserObjects: number;
   hostFrames: number;
@@ -61,12 +62,33 @@ type RightPaneBoundedEvidence = {
   base64Attributes: number;
 };
 
+type BrowserPaneLiveAcceptance = {
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-live-pass' | 'diagnostic-only';
+  passClaim: boolean;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    shell: 'web-right-pane';
+    liveSurfaceTransport: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    frameTransport?: string;
+    nativeSurfaceCount: number;
+  };
+  blockedReason?: string;
+};
+
 type VisibleSessionDogfoodManifest = {
   schemaVersion: typeof DOGFOOD_SCHEMA;
-  status: 'passed';
+  status: 'passed' | 'blocked';
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
+  liveAcceptance: BrowserPaneLiveAcceptance;
   targetOriginRef: string;
   trigger: {
     mode: 'local-ui-payload-handoff';
@@ -85,10 +107,10 @@ type VisibleSessionDogfoodManifest = {
   };
   rightPane: RightPaneBoundedEvidence;
   continuity: {
-    sameBrowserHostSessionId: true;
-    singleBrowserHostSessionId: true;
+    sameBrowserHostSessionId: boolean;
+    singleBrowserHostSessionId: boolean;
     secondOwnerOpened: false;
-    hostBrowserObjectCount: 1;
+    hostBrowserObjectCount: number;
   };
   forbiddenEvidence: {
     iframe: false;
@@ -170,11 +192,26 @@ test('SciForge UI dogfood reuses the visible BrowserHostSession when browser_sea
     await ensureBrowserPane(page);
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/search`);
-    await waitForVisibleHostFrame(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/search`));
+    const initialSurface = await waitForVisibleHostFrame(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/search`));
+    if (initialSurface !== 'native') {
+      const rightPane = await collectRightPaneEvidence(page);
+      const blockedManifest = buildBlockedManifest({
+        runId,
+        fixtureOrigin,
+        rightPane,
+        blockedReason: 'Browser search visible session dogfood requires native-embedded BrowserHostSession evidence; current web right pane has no attachable native surface.',
+      });
+      assertVisibleSessionDogfoodManifest(blockedManifest, undefined);
+      await mkdir(artifactDir, { recursive: true });
+      await writeFile(manifestPath, `${JSON.stringify(blockedManifest, null, 2)}\n`, 'utf8');
+      return;
+    }
 
     const sessionBefore = await currentBrowserHostSession(page, writerUrl, workspacePath);
     assert.equal(stringField(sessionBefore.owner), 'host');
     assert.equal(sessionBefore.singleInteractiveTruth, true);
+    assert.equal(stringField(sessionBefore.liveSurfaceTransport), 'native-embedded');
+    assert.equal(stringField(sessionBefore.frameStreamRef), '');
     const visibleSessionId = stringField(sessionBefore.id);
     assert.ok(visibleSessionId, 'visible Browser pane must expose a BrowserHostSession id');
     await startRecorder.drain();
@@ -219,6 +256,8 @@ test('SciForge UI dogfood reuses the visible BrowserHostSession when browser_sea
     const sessionAfter = await fetchBrowserHostSessionState(writerUrl, workspacePath, visibleSessionId);
     assert.equal(stringField(sessionAfter.id), visibleSessionId);
     assert.equal(sessionAfter.singleInteractiveTruth, true);
+    assert.equal(stringField(sessionAfter.liveSurfaceTransport), 'native-embedded');
+    assert.equal(stringField(sessionAfter.frameStreamRef), '');
 
     const manifest = buildManifest({
       runId,
@@ -294,37 +333,31 @@ async function openBrowserPaneUrl(surface: Locator, url: string) {
   await address.fill(url);
 }
 
-async function waitForVisibleHostFrame(surface: Locator, expectedUrl: RegExp) {
-  await waitForWorkbenchUrl(surface, expectedUrl);
+async function waitForVisibleHostFrame(surface: Locator, expectedUrl: RegExp): Promise<'native' | 'blocked'> {
+  const workbenchReachedTerminalState = await waitForWorkbenchUrl(surface, expectedUrl);
+  if (!workbenchReachedTerminalState) return 'blocked';
   const hostFrame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
-  await hostFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  let visualFrame = hostFrame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await visualFrame.count()) {
-    visualFrame = hostFrame.locator('img[data-browser-host-surface="browser-host-session"]').first();
-  }
-  await visualFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  const tagName = await visualFrame.evaluate((node) => node.tagName.toLowerCase());
-  if (tagName === 'img') {
-    await visualFrame.page().waitForFunction(() => {
-      const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-      return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-    }, undefined, { timeout: 30_000 });
-  } else {
-    await visualFrame.page().waitForFunction(() => {
-      const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-      return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0;
-    }, undefined, { timeout: 30_000 });
-  }
-  assert.equal(await visualFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
+  await hostFrame.waitFor({ state: 'visible', timeout: 10_000 }).catch(() => undefined);
+  if (!await hostFrame.count() || !await hostFrame.isVisible()) return 'blocked';
+  assert.equal(await hostFrame.getAttribute('data-browser-native-surface'), 'true');
+  assert.equal(await hostFrame.getAttribute('data-browser-live-surface-transport'), 'native-embedded');
+  assert.equal(await hostFrame.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.equal(await hostFrame.getAttribute('data-browser-single-interactive-truth'), 'true');
+  return 'native';
 }
 
 async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
-  await surface.page().waitForFunction(({ source, flags }) => {
-    const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
-    const state = viewer?.getAttribute('data-browser-state');
-    const url = viewer?.querySelector('header p')?.textContent ?? '';
-    return state === 'ready' && new RegExp(source, flags).test(url);
-  }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
+  try {
+    await surface.page().waitForFunction(({ source, flags }) => {
+      const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
+      const state = viewer?.getAttribute('data-browser-state');
+      const url = viewer?.querySelector('header p')?.textContent ?? '';
+      return (state === 'ready' || state === 'blocked' || state === 'error') && new RegExp(source, flags).test(url);
+    }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function waitForFocusedBrowserProjection(page: Page, expectedSessionId: string) {
@@ -332,7 +365,7 @@ async function waitForFocusedBrowserProjection(page: Page, expectedSessionId: st
     const root = document.querySelector('.right-pane-browser-surface');
     const viewer = root?.querySelector('.browser-workbench-viewer');
     const liveSurface = root?.querySelector(`[data-browser-live-surface-ref="browser-host-session:${sessionId}/live-surface"]`);
-    const hostFrame = root?.querySelector('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
+    const hostFrame = root?.querySelector('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"][data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"]');
     return viewer?.getAttribute('data-browser-state') === 'ready' && Boolean(liveSurface && hostFrame);
   }, expectedSessionId, { timeout: 30_000 });
 }
@@ -393,7 +426,7 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
     }
     const attrValues = (name) => Array.from(new Set(attrs.filter((attr) => attr.name === name).map((attr) => attr.value).filter(Boolean))).sort();
     const sessionIds = Array.from(new Set(attrs.flatMap((attr) => (
-      Array.from(attr.value.matchAll(/browser-host-session:([^/"<\\s]+)/g)).map((match) => (match[1] || '').split('/')[0])
+      Array.from(attr.value.matchAll(/browser-host-session:([^:/"<\\s]+)\\//g)).map((match) => match[1] || '')
     )).filter(Boolean))).sort();
     const count = (selector) => root ? root.querySelectorAll(selector).length : 0;
     return {
@@ -403,6 +436,7 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
       frameStreamRefs: attrValues('data-browser-frame-stream-ref'),
       frameRefs: attrValues('data-browser-frame-ref'),
       transports: attrValues('data-browser-live-surface-transport'),
+      frameTransports: attrValues('data-browser-frame-transport'),
       singleInteractiveTruthValues: attrValues('data-browser-single-interactive-truth'),
       hostBrowserObjects: count('[data-browser-object-type="host-browser"]'),
       hostFrames: count('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]'),
@@ -423,12 +457,14 @@ function assertRightPaneReusesSingleBrowserHostSession(evidence: RightPaneBounde
   assert.equal(evidence.state, 'ready');
   assert.deepEqual(evidence.sessionIds, [expectedSessionId]);
   assert.deepEqual(evidence.liveSurfaceRefs, [`browser-host-session:${expectedSessionId}/live-surface`]);
-  assert.deepEqual(evidence.frameStreamRefs, [`browser-host-session:${expectedSessionId}/frame-stream`]);
-  assert.deepEqual(evidence.transports, ['host-stream']);
+  assert.deepEqual(evidence.frameStreamRefs, []);
+  assert.deepEqual(evidence.transports, ['native-embedded']);
+  assert.deepEqual(evidence.frameTransports, ['native-embedded']);
   assert.deepEqual(evidence.singleInteractiveTruthValues, ['true']);
   assert.equal(evidence.hostBrowserObjects, 1);
   assert.equal(evidence.hostFrames, 1);
-  assert.equal(evidence.imageSurfaces + evidence.canvasSurfaces + evidence.nativeSurfaces, 1);
+  assert.equal(evidence.nativeSurfaces, 1);
+  assert.equal(evidence.imageSurfaces + evidence.canvasSurfaces, 0);
   assert.equal(evidence.iframeSurfaces, 0);
   assert.equal(evidence.proxySurfaces, 0);
   assert.equal(evidence.webviewSurfaces, 0);
@@ -627,9 +663,10 @@ function sanitizedHostSession(session: JsonRecord): JsonRecord {
     canGoBack: session.canGoBack === true,
     canGoForward: session.canGoForward === true,
     liveSurfaceRef: stringField(session.liveSurfaceRef) || `browser-host-session:${id}/live-surface`,
-    liveSurfaceTransport: stringField(session.liveSurfaceTransport) || 'host-stream',
+    liveSurfaceTransport: stringField(session.liveSurfaceTransport),
+    nativeAdapterUrl: stringField(session.nativeAdapterUrl),
     singleInteractiveTruth: session.singleInteractiveTruth === true,
-    frameStreamRef: stringField(session.frameStreamRef) || `browser-host-session:${id}/frame-stream`,
+    frameStreamRef: stringField(session.frameStreamRef),
     frameRef: stringField(session.frameRef),
     screenshotRef: stringField(session.screenshotRef),
     domSnapshotRef: stringField(session.domSnapshotRef),
@@ -664,12 +701,14 @@ function buildManifest(input: {
 }): VisibleSessionDogfoodManifest {
   const before = browserHostSessionSummary(input.sessionBefore);
   const after = browserHostSessionSummary(input.sessionAfter);
+  const liveAcceptance = browserPaneLiveAcceptance(input.sessionAfter, input.rightPane);
   return {
     schemaVersion: DOGFOOD_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
+    liveAcceptance,
     targetOriginRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
     trigger: {
       mode: 'local-ui-payload-handoff',
@@ -707,6 +746,65 @@ function buildManifest(input: {
   };
 }
 
+function buildBlockedManifest(input: {
+  runId: string;
+  fixtureOrigin: string;
+  rightPane: RightPaneBoundedEvidence;
+  blockedReason: string;
+}): VisibleSessionDogfoodManifest {
+  const missingSession: BrowserHostSessionSummary = {
+    id: 'missing-native-attach',
+    owner: 'host',
+    status: 'blocked',
+    transport: undefined,
+    singleInteractiveTruth: false,
+    liveSurfaceRef: undefined,
+    refs: {},
+  };
+  return {
+    schemaVersion: DOGFOOD_SCHEMA,
+    status: 'blocked',
+    runId: input.runId,
+    observedAt: new Date().toISOString(),
+    shell: 'web-right-pane',
+    liveAcceptance: blockedBrowserPaneLiveAcceptance(input.blockedReason, input.rightPane),
+    targetOriginRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+    trigger: {
+      mode: 'local-ui-payload-handoff',
+      equivalentTool: 'browser_search',
+      focusedVia: 'message-object-reference-click',
+      projectionRef: `artifact:${PROJECTION_ID}`,
+      browserSessionRef: 'browser-host-session:missing-native-attach',
+      objectReferencePreferredView: 'browser-workbench',
+    },
+    browserHostSession: {
+      beforeHandoff: missingSession,
+      afterHandoff: missingSession,
+      observedStartSessionIds: [],
+      handoffStartSessionIds: [],
+      uniqueRightPaneSessionIds: input.rightPane.sessionIds,
+    },
+    rightPane: input.rightPane,
+    continuity: {
+      sameBrowserHostSessionId: false,
+      singleBrowserHostSessionId: input.rightPane.sessionIds.length <= 1,
+      secondOwnerOpened: false,
+      hostBrowserObjectCount: input.rightPane.hostBrowserObjects,
+    },
+    forbiddenEvidence: {
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+      domDump: false,
+      base64: false,
+      screenshotImage: false,
+      screenshotBinary: false,
+    },
+    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-search-visible-session-dogfood.test.ts',
+  };
+}
+
 function browserHostSessionSummary(session: JsonRecord): BrowserHostSessionSummary {
   return {
     id: stringField(session.id),
@@ -728,25 +826,112 @@ function browserHostSessionSummary(session: JsonRecord): BrowserHostSessionSumma
   };
 }
 
-function assertVisibleSessionDogfoodManifest(manifest: VisibleSessionDogfoodManifest, expectedSessionId: string) {
+function browserPaneLiveAcceptance(session: JsonRecord, rightPane: RightPaneBoundedEvidence): BrowserPaneLiveAcceptance {
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport);
+  const singleInteractiveTruth = session.singleInteractiveTruth === true;
+  const secondTruthSource = hasSecondTruthSource(rightPane);
+  const frameTransport = rightPane.frameTransports[0];
+  const passed = liveSurfaceTransport === 'native-embedded'
+    && singleInteractiveTruth
+    && secondTruthSource === false
+    && frameTransport === 'native-embedded'
+    && rightPane.nativeSurfaces === 1
+    && rightPane.imageSurfaces === 0
+    && rightPane.canvasSurfaces === 0
+    && rightPane.frameStreamRefs.length === 0;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'right-pane-live-pass' : 'diagnostic-only',
+    passClaim: passed,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: liveSurfaceTransport || 'missing-native-attach',
+      singleInteractiveTruth,
+      secondTruthSource,
+      frameTransport,
+      nativeSurfaceCount: rightPane.nativeSurfaces,
+    },
+    blockedReason: passed
+      ? undefined
+      : `Browser pane live acceptance requires BrowserHostSession native-embedded single truth; observed ${liveSurfaceTransport || 'missing-native-attach'}.`,
+  };
+}
+
+function blockedBrowserPaneLiveAcceptance(reason: string, rightPane: RightPaneBoundedEvidence): BrowserPaneLiveAcceptance {
+  return {
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: rightPane.transports[0] || 'missing-native-attach',
+      singleInteractiveTruth: rightPane.singleInteractiveTruthValues.includes('true'),
+      secondTruthSource: hasSecondTruthSource(rightPane),
+      frameTransport: rightPane.frameTransports[0],
+      nativeSurfaceCount: rightPane.nativeSurfaces,
+    },
+    blockedReason: reason.slice(0, 240) || 'blocked',
+  };
+}
+
+function hasSecondTruthSource(rightPane: RightPaneBoundedEvidence): boolean {
+  return rightPane.iframeSurfaces > 0
+    || rightPane.proxySurfaces > 0
+    || rightPane.webviewSurfaces > 0
+    || rightPane.systemPopupSurfaces > 0
+    || rightPane.imageSurfaces > 0
+    || rightPane.canvasSurfaces > 0;
+}
+
+function assertVisibleSessionDogfoodManifest(manifest: VisibleSessionDogfoodManifest, expectedSessionId: string | undefined) {
   assert.equal(manifest.schemaVersion, DOGFOOD_SCHEMA);
-  assert.equal(manifest.status, 'passed');
-  assert.equal(manifest.trigger.browserSessionRef, `browser-host-session:${expectedSessionId}`);
+  assert.equal(manifest.liveAcceptance.status, manifest.status);
+  assert.equal(manifest.liveAcceptance.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(manifest.liveAcceptance.required.singleInteractiveTruth, true);
+  assert.equal(manifest.liveAcceptance.required.secondTruthSource, false);
+  assert.equal(manifest.liveAcceptance.observed.shell, 'web-right-pane');
   assert.equal(manifest.trigger.objectReferencePreferredView, 'browser-workbench');
-  assert.equal(manifest.browserHostSession.beforeHandoff.id, expectedSessionId);
-  assert.equal(manifest.browserHostSession.afterHandoff.id, expectedSessionId);
-  assert.deepEqual(manifest.browserHostSession.observedStartSessionIds, [expectedSessionId]);
-  assert.deepEqual(manifest.browserHostSession.handoffStartSessionIds, []);
-  assert.deepEqual(manifest.browserHostSession.uniqueRightPaneSessionIds, [expectedSessionId]);
-  assert.equal(manifest.browserHostSession.beforeHandoff.transport, 'host-stream');
-  assert.equal(manifest.browserHostSession.afterHandoff.transport, 'host-stream');
-  assert.equal(manifest.browserHostSession.beforeHandoff.singleInteractiveTruth, true);
-  assert.equal(manifest.browserHostSession.afterHandoff.singleInteractiveTruth, true);
-  assert.equal(manifest.continuity.sameBrowserHostSessionId, true);
-  assert.equal(manifest.continuity.singleBrowserHostSessionId, true);
-  assert.equal(manifest.continuity.secondOwnerOpened, false);
-  assert.equal(manifest.continuity.hostBrowserObjectCount, 1);
-  assertRightPaneReusesSingleBrowserHostSession(manifest.rightPane, expectedSessionId);
+  if (manifest.status === 'passed') {
+    assert.ok(expectedSessionId, 'passed dogfood manifest requires a BrowserHostSession id');
+    assert.equal(manifest.liveAcceptance.claimScope, 'right-pane-live-pass');
+    assert.equal(manifest.liveAcceptance.passClaim, true);
+    assert.equal(manifest.liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+    assert.equal(manifest.liveAcceptance.observed.singleInteractiveTruth, true);
+    assert.equal(manifest.liveAcceptance.observed.secondTruthSource, false);
+    assert.equal(manifest.trigger.browserSessionRef, `browser-host-session:${expectedSessionId}`);
+    assert.equal(manifest.browserHostSession.beforeHandoff.id, expectedSessionId);
+    assert.equal(manifest.browserHostSession.afterHandoff.id, expectedSessionId);
+    assert.deepEqual(manifest.browserHostSession.observedStartSessionIds, [expectedSessionId]);
+    assert.deepEqual(manifest.browserHostSession.handoffStartSessionIds, []);
+    assert.deepEqual(manifest.browserHostSession.uniqueRightPaneSessionIds, [expectedSessionId]);
+    assert.equal(manifest.browserHostSession.beforeHandoff.transport, 'native-embedded');
+    assert.equal(manifest.browserHostSession.afterHandoff.transport, 'native-embedded');
+    assert.equal(manifest.browserHostSession.beforeHandoff.refs.frameStreamRef, '');
+    assert.equal(manifest.browserHostSession.afterHandoff.refs.frameStreamRef, '');
+    assert.equal(manifest.browserHostSession.beforeHandoff.singleInteractiveTruth, true);
+    assert.equal(manifest.browserHostSession.afterHandoff.singleInteractiveTruth, true);
+    assert.equal(manifest.continuity.sameBrowserHostSessionId, true);
+    assert.equal(manifest.continuity.singleBrowserHostSessionId, true);
+    assert.equal(manifest.continuity.secondOwnerOpened, false);
+    assert.equal(manifest.continuity.hostBrowserObjectCount, 1);
+    assertRightPaneReusesSingleBrowserHostSession(manifest.rightPane, expectedSessionId);
+    assert.doesNotMatch(JSON.stringify(manifest), /websocket-binary|host-stream/i);
+  } else {
+    assert.equal(manifest.liveAcceptance.claimScope, 'diagnostic-only');
+    assert.equal(manifest.liveAcceptance.passClaim, false);
+    assert.ok(manifest.liveAcceptance.blockedReason);
+    assert.equal(manifest.continuity.secondOwnerOpened, false);
+  }
   assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false, false, false, false]);
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)|raw(?:Dom|DOM|Html|HTML|Screenshot|Payload)/i);

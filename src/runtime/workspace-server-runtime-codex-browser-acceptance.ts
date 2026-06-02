@@ -16,23 +16,84 @@ interface RuntimeCodexBrowserAcceptanceReadOptions {
 }
 
 interface RuntimeCodexBrowserAcceptanceManifest {
+  schemaVersion?: string;
   status: string;
   observedAt?: string;
+  source?: string;
+  actualUrl?: string;
+  actualPort?: number;
+  requestedRolePort?: number;
+  actualWorkspaceWriterPort?: number;
+  actualWorkspaceWriterUrl?: string;
+  actualRuntimeCodexPort?: number;
+  actualRuntimeCodexUrl?: string;
+  profile?: string;
+  workspacePath?: string;
+  provider?: string;
+  model?: string;
+  commandId?: string;
+  startedFromDefaultChatEntry?: boolean;
+  submittedThroughRuntimeCodex?: boolean;
+  providerModelProfileVisible?: boolean;
+  mainAnswerVisible?: boolean;
+  rawAuditFoldedByDefault?: boolean;
+  acceptanceConclusionFromRealBrowser?: boolean;
+  currentRunEvidenceScope?: string;
+  reason?: string;
+  blocker?: string;
+  blockedOn?: string[];
+  failureClass?: string;
+  owner?: string;
+  policyViolations?: string[];
+  missingEnv?: string[];
+  expectedRetestCommand?: string;
+  releaseBlocking?: boolean;
+  releaseEligible?: boolean;
+  providerPreflightRef?: string;
+  providerPreflightCategory?: string;
+  providerPreflightCheckedAt?: string;
+  providerPreflightReleaseAcceptance?: string;
+  providerPreflightEvidenceMode?: string;
+  runtimeApiKeyPresentInServiceEnv?: boolean;
+  upstreamBaseUrlPresent?: boolean;
+  upstreamKeySourceKind?: string;
+  upstreamBaseUrlSourceKind?: string;
+  configPathsChecked?: string[];
+  configSecretFallbackPaths?: string[];
+  staleEvidenceRefs?: string[];
+  nextActions?: Array<{
+    label: string;
+    command?: string;
+    expected?: string;
+    writesRepo?: boolean;
+  }>;
   evidence?: {
     screenshotPath?: string;
     domSnapshotPath?: string;
     notesPath?: string;
     runtimeAuditPath?: string;
   };
+  freshness?: RuntimeCodexBrowserAcceptanceFreshness;
 }
 
-export async function readRuntimeCodexBrowserAcceptanceManifest(options: RuntimeCodexBrowserAcceptanceReadOptions) {
+interface RuntimeCodexBrowserAcceptanceFreshness {
+  checkedAt: string;
+  observedAtFresh: boolean;
+  evidenceFresh: boolean;
+  staleEvidenceRefs: string[];
+}
+
+export async function readRuntimeCodexBrowserAcceptanceManifest(
+  options: RuntimeCodexBrowserAcceptanceReadOptions,
+): Promise<RuntimeCodexBrowserAcceptanceManifest | undefined> {
   const manifestPath = runtimeCodexBrowserAcceptanceManifestPath(options);
   const parsed = await readOptionalJson(manifestPath);
   if (!parsed) return undefined;
   if (!isRecord(parsed)) throw new Error('runtime codex browser acceptance manifest is invalid');
   assertRuntimeCodexBrowserAcceptanceManifest(parsed);
   const manifest = normalizeRuntimeCodexBrowserAcceptanceManifest(parsed);
+  const currentEnvBlocked = currentServiceEnvBlockedManifest(manifest, options.env);
+  if (currentEnvBlocked) return currentEnvBlocked;
   return {
     ...manifest,
     freshness: await runtimeCodexBrowserAcceptanceFreshness(manifest, options),
@@ -126,6 +187,54 @@ function assertRuntimeCodexBrowserAcceptanceManifest(parsed: Record<string, unkn
   }
 }
 
+function currentServiceEnvBlockedManifest(
+  manifest: RuntimeCodexBrowserAcceptanceManifest,
+  env: NodeJS.ProcessEnv,
+) {
+  if (manifest.status !== 'passed') return undefined;
+  if (env.SCIFORGE_RUNTIME_API_KEY?.trim()) return undefined;
+  const reason = 'Runtime Codex service environment is missing SCIFORGE_RUNTIME_API_KEY; current workspace/UI route must remain blocked and cannot claim a Browser live pass from prior evidence.';
+  const staleEvidenceRefs = [
+    manifest.evidence?.screenshotPath,
+    manifest.evidence?.domSnapshotPath,
+    manifest.evidence?.runtimeAuditPath,
+  ].filter((value): value is string => Boolean(value?.trim()));
+  return {
+    ...manifest,
+    status: 'blocked',
+    startedFromDefaultChatEntry: false,
+    submittedThroughRuntimeCodex: false,
+    providerModelProfileVisible: false,
+    mainAnswerVisible: false,
+    acceptanceConclusionFromRealBrowser: false,
+    currentRunEvidenceScope: 'preflight-only',
+    reason,
+    blocker: reason,
+    blockedOn: [
+      'Runtime Codex service environment secret configuration',
+      'current Codex in-app browser execution',
+    ],
+    failureClass: 'missing-runtime-env',
+    owner: 'environment',
+    missingEnv: uniqueStrings([...(manifest.missingEnv ?? []), 'SCIFORGE_RUNTIME_API_KEY']),
+    releaseBlocking: true,
+    releaseEligible: false,
+    runtimeApiKeyPresentInServiceEnv: false,
+    expectedRetestCommand: manifest.expectedRetestCommand || 'npm run smoke:runtime-codex-browser-acceptance',
+    nextActions: [
+      {
+        label: 'Set SCIFORGE_RUNTIME_API_KEY in the service environment, then rerun Runtime Codex browser acceptance.',
+        command: 'npm run smoke:runtime-codex-browser-acceptance',
+        expected: 'Workspace/UI route reports a current live-browser passed manifest only after the service env is present.',
+        writesRepo: false,
+      },
+      ...(manifest.nextActions ?? []),
+    ],
+    staleEvidenceRefs,
+    evidence: manifest.evidence?.notesPath ? { notesPath: manifest.evidence.notesPath } : undefined,
+  };
+}
+
 async function runtimeCodexBrowserAcceptanceFreshness(
   manifest: RuntimeCodexBrowserAcceptanceManifest,
   options: RuntimeCodexBrowserAcceptanceReadOptions,
@@ -174,4 +283,8 @@ function stringValue(value: unknown) {
 
 function stringArray(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values)];
 }

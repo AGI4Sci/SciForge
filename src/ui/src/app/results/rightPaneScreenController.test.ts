@@ -2,7 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import type { VirtualScreenPayload } from '../../../../../packages/presentation/components';
-import { rightPaneVirtualScreenActivationCommand } from './rightPaneScreenController';
+import {
+  rightPaneVirtualScreenActivationCommand,
+  rightPaneVirtualScreenPayloadWithLiveBindingRegistry,
+} from './rightPaneScreenController';
+import {
+  createRightPaneActiveVirtualAppScreenRegistry,
+  updateRightPaneActiveVirtualAppScreenRegistry,
+} from './rightPaneLiveBindingRegistry';
 
 test('right pane screen controller owns Screen activation without executing Computer Use directly', () => {
   const controllerSource = readFileSync(new URL('./rightPaneScreenController.ts', import.meta.url), 'utf8');
@@ -105,6 +112,7 @@ test('right pane screen activation command reconnects blocked current-session re
     providerSessionOwnerRef: 'computer-use:provider-session/reconnect/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/reconnect/reconnect.json',
     liveBindingAttachGrantRef: 'computer-use:provider-session/reconnect/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/reconnect/grant-validation.json',
     surfaceTransportRef: 'computer-use:session/reconnect/surface-transport.json',
     adapterReadinessRef: 'computer-use:session/reconnect/provider-readiness.json',
     evidenceLedgerRef: 'ledger:computer-use/reconnect/screen-reconnect.json',
@@ -115,7 +123,7 @@ test('right pane screen activation command reconnects blocked current-session re
 
   assert.equal(command?.label, 'Reconnect VirtualAppScreen');
   assert.equal(command?.targetRef, 'computer-use:provider-session/reconnect/reconnect.json');
-  assert.equal(command?.commandKey, 'computer-use:provider-session/reconnect/reconnect.json:computer-use:provider-session/reconnect/live-binding-attach-grant.json:computer-use:session/reconnect/frames/current.png:9');
+  assert.equal(command?.commandKey, 'computer-use:provider-session/reconnect/reconnect.json:computer-use:provider-session/reconnect/live-binding-attach-grant.json:computer-use:provider-session/reconnect/grant-validation.json:computer-use:session/reconnect/frames/current.png:9');
   assert.equal(command?.commandText, [
     '/computer-use screen reconnect',
     '--source right-pane-screen',
@@ -129,6 +137,7 @@ test('right pane screen activation command reconnects blocked current-session re
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--provider-session-reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
+    '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
     '--adapter-readiness-ref "computer-use:session/reconnect/provider-readiness.json"',
     '--evidence-ledger-ref "ledger:computer-use/reconnect/screen-reconnect.json"',
@@ -149,6 +158,10 @@ test('right pane screen activation command reconnects blocked current-session re
   assert.equal(rightPaneVirtualScreenActivationCommand({
     ...payload,
     liveBindingAttachGrantRef: undefined,
+  }), undefined);
+  assert.equal(rightPaneVirtualScreenActivationCommand({
+    ...payload,
+    grantValidationRef: undefined,
   }), undefined);
 });
 
@@ -194,4 +207,101 @@ test('right pane screen activation command routes authorization-incomplete paylo
     '--gui-present-ref "gui.present:permission-screen/permission-handoff"',
   ].join(' '));
   assert.doesNotMatch(command?.commandText ?? '', /noVNC|desktop fallback|shell fallback|desktopBridge|runComputerUse|executeScoped/i);
+});
+
+test('right pane screen activation command auto rechecks restored permissions when gates are ready', () => {
+  const payload: VirtualScreenPayload = {
+    status: 'requires-handoff',
+    attachState: 'requires-handoff',
+    targetAppRef: 'app:profile/vscode-editor',
+    screenRef: 'virtual-app-screen:permission-restored/screen-request',
+    sessionRef: 'computer-use:session/permission-restored/session.json',
+    adapterReadinessRef: 'computer-use:session/permission-restored/provider-readiness.json',
+    platformDriverRef: 'computer-use:session/permission-restored/platform-driver.json',
+    platformDriverStatus: 'ready',
+    blockedRef: 'computer-use:session/permission-restored/blocked/permission.json',
+    permissionRef: 'computer-use:session/permission-restored/permissions/platform-gates.json',
+    permissionStatus: 'granted',
+    permissionRequired: true,
+    permissionGranted: true,
+    permissionHandoffRef: 'computer-use:session/permission-restored/handoff/platform-gates.json',
+    permissionRecheckRef: 'computer-use:session/permission-restored/recheck/platform-gates.json',
+    evidenceLedgerRef: 'ledger:computer-use/permission-restored/permission-recheck.json',
+    guiPresentRefs: ['gui.present:permission-restored/permission-recheck'],
+  };
+
+  const command = rightPaneVirtualScreenActivationCommand(payload);
+
+  assert.equal(command?.label, 'Recheck Screen Permissions');
+  assert.equal(command?.targetRef, 'computer-use:session/permission-restored/recheck/platform-gates.json');
+  assert.equal(command?.commandKey, 'computer-use:session/permission-restored/recheck/platform-gates.json:computer-use:session/permission-restored/provider-readiness.json:permission-ready');
+  assert.equal(command?.commandText, [
+    '/computer-use permission-recheck',
+    '--source right-pane-screen',
+    '--target-ref "computer-use:session/permission-restored/recheck/platform-gates.json"',
+    '--adapter-readiness-ref "computer-use:session/permission-restored/provider-readiness.json"',
+    '--permission-ref "computer-use:session/permission-restored/permissions/platform-gates.json"',
+    '--platform-driver-ref "computer-use:session/permission-restored/platform-driver.json"',
+    '--screen-ref "virtual-app-screen:permission-restored/screen-request"',
+    '--session-ref "computer-use:session/permission-restored/session.json"',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--blocked-ref "computer-use:session/permission-restored/blocked/permission.json"',
+    '--evidence-ledger-ref "ledger:computer-use/permission-restored/permission-recheck.json"',
+    '--gui-present-ref "gui.present:permission-restored/permission-recheck"',
+  ].join(' '));
+  assert.doesNotMatch(command?.commandText ?? '', /permission-handoff|screen attach|runComputerUse|executeScoped/);
+
+  const missingPermissionCommand = rightPaneVirtualScreenActivationCommand({
+    ...payload,
+    permissionStatus: 'missing',
+    permissionGranted: false,
+  });
+
+  assert.equal(missingPermissionCommand?.label, 'Resolve Screen Permissions');
+  assert.match(missingPermissionCommand?.commandText ?? '', /^\/computer-use permission-handoff /);
+});
+
+test('right pane screen controller merges same-screen live registry refs before reconnecting restored payloads', () => {
+  const registry = updateRightPaneActiveVirtualAppScreenRegistry(createRightPaneActiveVirtualAppScreenRegistry(), {
+    screenRef: 'virtual-app-screen:restore-reconnect/screen-request',
+    tabId: 'custom:screen:restore:1',
+    sessionRef: 'computer-use:session/restore-reconnect/session.json',
+    liveSurfaceRef: 'computer-use:session/restore-reconnect/live-surface.json',
+    frameStreamRef: 'computer-use:session/restore-reconnect/frame-stream.json',
+    currentFrameRef: 'computer-use:session/restore-reconnect/frames/current.png',
+    providerSessionOwnerRef: 'computer-use:provider-session/restore-reconnect/owner.json',
+    providerSessionReconnectRef: 'computer-use:provider-session/restore-reconnect/reconnect.json',
+    liveBindingAttachGrantRef: 'computer-use:provider-session/restore-reconnect/live-binding-attach-grant.json',
+    grantValidationRef: 'computer-use:provider-session/restore-reconnect/grant-validation.json',
+    surfaceTransportRef: 'computer-use:session/restore-reconnect/surface-transport.json',
+    currentFrameSequence: {
+      ref: 'computer-use:session/restore-reconnect/frame-sequence.json',
+      sequence: 14,
+    },
+    adapterReadinessRef: 'computer-use:session/restore-reconnect/provider-readiness.json',
+    evidenceLedgerRef: 'ledger:computer-use/restore-reconnect/reconnect.json',
+  });
+
+  const restored = rightPaneVirtualScreenPayloadWithLiveBindingRegistry({
+    status: 'blocked',
+    attachState: 'blocked',
+    surfaceMode: 'empty',
+    targetAppRef: 'app:profile/vscode-editor',
+    screenRef: 'virtual-app-screen:restore-reconnect/screen-request',
+    blockedRef: 'computer-use:session/restore-reconnect/blocked/restored.json',
+    blockedReason: 'Restored screen is waiting for provider reconnect.',
+  }, registry, 'custom:screen:restore:1').payload;
+  const command = rightPaneVirtualScreenActivationCommand(restored);
+
+  assert.equal(restored.sessionRef, 'computer-use:session/restore-reconnect/session.json');
+  assert.equal(restored.liveSurfaceRef, 'computer-use:session/restore-reconnect/live-surface.json');
+  assert.equal(restored.providerSessionReconnectRef, 'computer-use:provider-session/restore-reconnect/reconnect.json');
+  assert.equal(restored.liveBindingAttachGrantRef, 'computer-use:provider-session/restore-reconnect/live-binding-attach-grant.json');
+  assert.equal(restored.grantValidationRef, 'computer-use:provider-session/restore-reconnect/grant-validation.json');
+  assert.equal(command?.label, 'Reconnect VirtualAppScreen');
+  assert.equal(command?.targetRef, 'computer-use:provider-session/restore-reconnect/reconnect.json');
+  assert.match(command?.commandText ?? '', /^\/computer-use screen reconnect /);
+  assert.match(command?.commandText ?? '', /--live-binding-attach-grant-ref "computer-use:provider-session\/restore-reconnect\/live-binding-attach-grant\.json"/);
+  assert.match(command?.commandText ?? '', /--grant-validation-ref "computer-use:provider-session\/restore-reconnect\/grant-validation\.json"/);
+  assert.doesNotMatch(command?.commandText ?? '', /screen attach|permission-handoff|runComputerUse|executeScoped/);
 });

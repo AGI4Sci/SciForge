@@ -105,15 +105,20 @@ export async function buildElectronWebContentsViewExternalBenchmarkResult(
     evidence.surface?.surface ?? '',
   ].join('|'));
   const browserHostSessionRef = `browser-host-session:${evidence.browserHostSession?.id}`;
+  const metricSections = metricSectionsFromDesktopEvidence(evidence, candidateId, requiredSections, proofSuffix);
+  const allMetricSectionsPassed = requiredSections.every((section) => metricSections[section].status === 'passed');
   return {
     schemaVersion: schemaFromEnv(env),
     candidateId,
     platform,
     owner: 'BrowserHostSession',
+    liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
     adapterRun: {
       resultKind: 'real-native-adapter-run',
       realAdapterResult: true,
+      liveSurfaceTransport: 'native-embedded',
       browserHostSessionRef,
       liveSurfaceRef: `${browserHostSessionRef}/live-surface`,
       nativeAdapterSurfaceRef: `benchmark-result:${candidateId}:native-adapter-surface:${proofSuffix}`,
@@ -122,13 +127,15 @@ export async function buildElectronWebContentsViewExternalBenchmarkResult(
       secondTruthSource: false,
       rawPayloadsCaptured: false,
     },
-    status: 'blocked',
-    benchmarkClaim: false,
-    metricSections: metricSectionGaps(candidateId, requiredSections, proofSuffix),
+    status: allMetricSectionsPassed ? 'passed' : 'blocked',
+    benchmarkClaim: allMetricSectionsPassed,
+    metricSections,
     diagnosticRefs: [
       ...diagnostics,
       'desktop-native-live-acceptance:pass',
-      'benchmark-metrics:required-sections-pending',
+      allMetricSectionsPassed
+        ? 'benchmark-metrics:required-sections-passed'
+        : 'benchmark-metrics:required-sections-pending',
     ],
   };
 }
@@ -144,10 +151,13 @@ function blockedExternalResult(input: {
     candidateId: input.candidateId,
     platform: input.platform,
     owner: 'BrowserHostSession',
+    liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
     adapterRun: {
       resultKind: 'schema-validation-only',
       realAdapterResult: false,
+      liveSurfaceTransport: 'native-embedded',
       secondTruthSource: false,
       rawPayloadsCaptured: false,
     },
@@ -167,6 +177,36 @@ function metricSectionGaps(
     status: 'blocked',
     resultRefs: [`benchmark-result:${candidateId}:${section}:${suffix}`],
   }])) as Record<RequiredSection, BrowserNativeAdapterPlatformBenchmarkExternalSection>;
+}
+
+function metricSectionsFromDesktopEvidence(
+  evidence: DesktopBrowserNativeLiveAcceptanceEvidence,
+  candidateId: BrowserNativeAdapterCandidateId,
+  sections: RequiredSection[],
+  suffix: string,
+): Record<RequiredSection, BrowserNativeAdapterPlatformBenchmarkExternalSection> {
+  const metricSections = metricSectionGaps(candidateId, sections, suffix);
+  const sourceSections = evidence.benchmarkMetrics?.metricSections;
+  if (!sourceSections || evidence.benchmarkMetrics?.evidenceMode !== 'bounded-summary-ref') {
+    return metricSections;
+  }
+  for (const section of sections) {
+    const source = sourceSections[section];
+    if (
+      source?.status !== 'passed'
+      || typeof source.resultRef !== 'string'
+      || !source.resultRef.startsWith(`benchmark-result:${candidateId}:${section}:`)
+      || !source.numericSummary
+    ) {
+      continue;
+    }
+    metricSections[section] = {
+      status: 'passed',
+      resultRefs: [source.resultRef],
+      numericSummary: source.numericSummary,
+    };
+  }
+  return metricSections;
 }
 
 async function readDesktopNativeLiveEvidence(path: string): Promise<DesktopBrowserNativeLiveAcceptanceEvidence> {

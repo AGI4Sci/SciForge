@@ -1,6 +1,6 @@
 # Runtime Codex browser acceptance blocked
 
-Observed at: 2026-06-02T06:14:57.008Z
+Observed at: 2026-06-02T10:35:15.268Z
 Requested UI port: 5173
 Requested workspace writer port: 6173
 Actual/intended URL: http://127.0.0.1:5173/
@@ -13,7 +13,7 @@ Model: bailian/deepseek-v4-flash
 Reason: Runtime Codex environment is not fully configured; missing SCIFORGE_RUNTIME_API_KEY and Runtime Codex secret must be supplied by service environment, not config file debug fallback. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass. Checked config paths: workspace/parallel/p1/.sciforge/config.local.json, config.local.json. Runtime secret-like keys were found in ignored config files (workspace/parallel/p1/.sciforge/config.local.json, config.local.json); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.
 Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json
 Provider preflight category: config-secret-source
-Provider preflight checked at: 2026-06-02T06:14:57.007Z
+Provider preflight checked at: 2026-06-02T10:35:15.267Z
 Provider preflight release acceptance: not-evaluated
 Runtime key in service env: missing
 Provider upstream base URL: present

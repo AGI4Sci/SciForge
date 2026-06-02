@@ -27,6 +27,25 @@ const RETYPE_SUFFIX = ' 修订 refined+v2!? [tail]';
 
 type JsonRecord = Record<string, unknown>;
 
+type BrowserPaneLiveAcceptance = {
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-live-pass' | 'diagnostic-only';
+  passClaim: boolean;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    shell: 'web-right-pane';
+    liveSurfaceTransport: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    frameTransport?: string;
+  };
+  blockedReason?: string;
+};
+
 type SearchInputFixtureEvent = {
   type: string;
   path: string;
@@ -55,16 +74,16 @@ type BoundedComputerUseAction = {
 
 type SearchInputDogfoodManifest = {
   schemaVersion: typeof DOGFOOD_SCHEMA;
-  status: 'passed';
+  status: 'passed' | 'blocked';
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
   targetOriginRef: string;
   inputPath: {
     browserSurface: 'browser-host-session';
-    visualHostFrame: 'visible';
-    keyboardPath: 'hidden-input';
-    hiddenKeyboardFocused: true;
+    visualHostFrame: 'visible' | 'blocked';
+    keyboardPath: 'native-embedded' | 'blocked';
+    hiddenKeyboardFocused: boolean;
     inputChannel: 'browser-host-session';
   };
   query: {
@@ -84,14 +103,15 @@ type SearchInputDogfoodManifest = {
     owner: string;
     status: string;
     transport?: string;
+    liveSurfaceTransport?: string;
     frameTransport?: string;
     singleInteractiveTruth?: boolean;
+    secondTruthSource?: boolean;
     liveSurfaceRef?: string;
     urlMatchedResults: boolean;
     observedUrlLag: boolean;
     observedUrlHash?: string;
     refs: {
-      frameStreamRef?: string;
       frameRef?: string;
       screenshotRef?: string;
       domSnapshotRef?: string;
@@ -113,6 +133,8 @@ type SearchInputDogfoodManifest = {
       hash: string;
     };
   };
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  blockedReason?: string;
   inputActionEvidence: {
     inputChannel: 'browser-host-session';
     systemKeyboardEvents: 'not-sent';
@@ -136,8 +158,8 @@ type SearchInputDogfoodManifest = {
   failureFocusedDiagnostic: {
     schemaVersion: 'sciforge.browser-search-input-dogfood.failure-diagnostic.v1';
     focus: {
-      keyboardPath: 'hidden-input';
-      hiddenKeyboardFocused: true;
+      keyboardPath: 'native-embedded' | 'blocked';
+      hiddenKeyboardFocused: boolean;
       browserSurface: 'browser-host-session';
     };
     session: {
@@ -171,7 +193,7 @@ type SearchInputDogfoodManifest = {
   verificationCommand: string;
 };
 
-test('SciForge Browser pane search input dogfood completes long mixed query through hidden keyboard path', { timeout: 180_000 }, async () => {
+test('SciForge Browser pane search input dogfood gates long mixed query on native embedded input evidence', { timeout: 180_000 }, async () => {
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
   if (!existsSync(browserExecutable)) {
     throw new Error(`No browser executable found for Browser pane search input dogfood: ${browserExecutable}`);
@@ -241,13 +263,26 @@ test('SciForge Browser pane search input dogfood completes long mixed query thro
     await ensureBrowserPane(page);
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/search`);
-    const { frame, visualFrame } = await waitForKeyboardHostFrame(surface, /^http:\/\/sciforge-browser-search-input-dogfood\.test:\d+\/search/);
+    const keyboardSurface = await waitForKeyboardHostFrame(surface, /^http:\/\/sciforge-browser-search-input-dogfood\.test:\d+\/search/);
+    if (!keyboardSurface) {
+      const manifest = buildBlockedSearchInputDogfoodManifest(runId, fixtureOrigin, 'Browser pane search input dogfood requires native-embedded BrowserHostSession input evidence; current web-right-pane run did not expose it.');
+      assertSearchInputDogfoodManifest(manifest, {
+        initialQuery: LONG_MIXED_QUERY,
+        afterBackspaceQuery,
+        expectedFinalQuery,
+        retypeSuffix: RETYPE_SUFFIX,
+      });
+      await mkdir(artifactDir, { recursive: true });
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
+    const { frame, visualFrame } = keyboardSurface;
 
     await clickHostPoint(page, visualFrame, 144, 52);
     await waitForFixtureEvent(fixture.url, (event) => event.type === 'search-focus', 15_000, 'search-focus');
     const keyboardFocus = await hiddenKeyboardFocusState(page);
-    assert.equal(keyboardFocus.keyboardPath, 'hidden-input');
-    assert.equal(keyboardFocus.hiddenKeyboardFocused, true, 'Browser pane hidden keyboard input must own focus before typing');
+    assert.equal(keyboardFocus.keyboardPath, 'native-embedded');
+    assert.equal(keyboardFocus.hiddenKeyboardFocused, false, 'Browser pane search input smoke must not rely on a hidden keyboard fallback');
     assert.equal(await frame.getAttribute('data-browser-host-surface'), 'browser-host-session');
 
     await page.keyboard.insertText(LONG_MIXED_QUERY);
@@ -345,33 +380,19 @@ async function openBrowserPaneUrl(surface: Locator, url: string) {
   await address.press('Enter');
 }
 
-async function waitForKeyboardHostFrame(surface: Locator, expectedUrl: RegExp) {
+async function waitForKeyboardHostFrame(surface: Locator, expectedUrl: RegExp): Promise<{ frame: Locator; visualFrame: Locator } | undefined> {
   await waitForWorkbenchUrl(surface, expectedUrl);
-  const frame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
+  const frame = surface.locator('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]').first();
+  if (!await frame.count()) {
+    await assertNoLegacyBrowserLiveFallback(surface);
+    return undefined;
+  }
   await frame.waitFor({ state: 'visible', timeout: 30_000 });
-  const keyboardPath = await frame.getAttribute('data-browser-host-keyboard-path');
-  assert.equal(keyboardPath, 'hidden-input', 'BrowserHostSession host frame must expose the hidden keyboard path');
-  const hiddenInput = frame.locator('.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]').first();
-  assert.ok(await hiddenInput.count(), 'BrowserHostSession host frame must include a hidden keyboard input');
-  let visualFrame = frame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await visualFrame.count()) {
-    visualFrame = frame.locator('img[data-browser-host-surface="browser-host-session"]').first();
-  }
-  await visualFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  const tagName = await visualFrame.evaluate((node) => node.tagName.toLowerCase());
-  if (tagName === 'img') {
-    await visualFrame.page().waitForFunction(() => {
-      const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-      return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-    }, undefined, { timeout: 30_000 });
-  } else {
-    await visualFrame.page().waitForFunction(() => {
-      const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-      return canvas instanceof HTMLCanvasElement && canvas.width > 0 && canvas.height > 0;
-    }, undefined, { timeout: 30_000 });
-  }
-  assert.equal(await visualFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
-  return { frame, visualFrame };
+  assert.equal(await frame.getAttribute('data-browser-host-surface'), 'browser-host-session');
+  assert.equal(await frame.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.match(await frame.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
+  await assertNoLegacyBrowserLiveFallback(surface);
+  return { frame, visualFrame: frame };
 }
 
 async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
@@ -380,6 +401,7 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
       const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
       const state = viewer?.getAttribute('data-browser-state');
       const url = viewer?.querySelector('header p')?.textContent ?? '';
+      if (state === 'blocked' || state === 'error') return true;
       return state === 'ready' && new RegExp(source, flags).test(url);
     }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
   } catch (error) {
@@ -397,12 +419,21 @@ async function clickHostPoint(page: Page, hostFrame: Locator, x: number, y: numb
   await page.mouse.click(Math.round(box.x + x), Math.round(box.y + y));
 }
 
+async function assertNoLegacyBrowserLiveFallback(surface: Locator) {
+  assert.equal(await surface.locator('[data-browser-host-surface="system-browser-window"]').count(), 0);
+  assert.equal(await surface.locator('iframe[src^="/api/sciforge/browser/proxy"], iframe').count(), 0);
+  assert.equal(await surface.locator('webview').count(), 0);
+  assert.equal(await surface.locator('img[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await surface.locator('canvas[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await surface.locator('img[src*="/api/sciforge/browser-host/sessions/"][data-browser-host-surface="browser-host-session"]').count(), 0);
+}
+
 async function hiddenKeyboardFocusState(page: Page): Promise<{ keyboardPath: string; hiddenKeyboardFocused: boolean }> {
   return page.evaluate(() => {
-    const frame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
+    const frame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-native-surface="true"]');
     const input = frame?.querySelector<HTMLTextAreaElement>('.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]') ?? null;
     return {
-      keyboardPath: frame?.getAttribute('data-browser-host-keyboard-path') ?? '',
+      keyboardPath: frame?.getAttribute('data-browser-live-surface-transport') === 'native-embedded' ? 'native-embedded' : '',
       hiddenKeyboardFocused: Boolean(input && document.activeElement === input && input.dataset.browserHostKeyboardFocus === 'active'),
     };
   });
@@ -417,8 +448,7 @@ async function browserWorkbenchFailureDiagnostic(surface: Locator, expectedUrl: 
       viewerState: viewer?.getAttribute('data-browser-state') ?? '',
       displayedUrl: viewer?.querySelector('header p')?.textContent ?? '',
       liveSurfaceRef: frame?.getAttribute('data-browser-live-surface-ref') ?? '',
-      frameStreamRef: frame?.getAttribute('data-browser-frame-stream-ref') ?? '',
-      keyboardPath: frame?.getAttribute('data-browser-host-keyboard-path') ?? '',
+      keyboardPath: frame?.getAttribute('data-browser-live-surface-transport') === 'native-embedded' ? 'native-embedded' : '',
       hiddenKeyboardFocused: Boolean(input && document.activeElement === input && input.dataset.browserHostKeyboardFocus === 'active'),
     };
   });
@@ -429,7 +459,6 @@ async function browserWorkbenchFailureDiagnostic(surface: Locator, expectedUrl: 
     displayedUrlLength: snapshot.displayedUrl.length,
     displayedUrlHash: snapshot.displayedUrl ? hashText(snapshot.displayedUrl) : '',
     liveSurfaceRef: snapshot.liveSurfaceRef || undefined,
-    frameStreamRef: snapshot.frameStreamRef || undefined,
     keyboardPath: snapshot.keyboardPath,
     hiddenKeyboardFocused: snapshot.hiddenKeyboardFocused,
     rawUrlCaptured: false,
@@ -582,9 +611,10 @@ function buildManifest(input: {
   const inputEvents = input.events.filter((event) => event.type === 'search-input');
   const typeActions = input.actions.filter((action) => action.hostAction.action === 'type');
   const pressActions = input.actions.filter((action) => action.hostAction.action === 'press');
+  const liveAcceptance = browserPaneLiveAcceptance(input.session);
   return {
     schemaVersion: DOGFOOD_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
@@ -592,8 +622,8 @@ function buildManifest(input: {
     inputPath: {
       browserSurface: 'browser-host-session',
       visualHostFrame: 'visible',
-      keyboardPath: 'hidden-input',
-      hiddenKeyboardFocused: true,
+      keyboardPath: 'native-embedded',
+      hiddenKeyboardFocused: false,
       inputChannel: 'browser-host-session',
     },
     query: {
@@ -613,14 +643,15 @@ function buildManifest(input: {
       owner: stringField(input.session.owner),
       status: stringField(input.session.status),
       transport: stringField(input.session.liveSurfaceTransport),
-      frameTransport: 'websocket-binary',
+      liveSurfaceTransport: stringField(input.session.liveSurfaceTransport),
+      frameTransport: stringField(input.session.liveSurfaceTransport) === 'native-embedded' ? 'native-embedded' : undefined,
       singleInteractiveTruth: input.session.singleInteractiveTruth === true,
+      secondTruthSource: input.session.secondTruthSource === true,
       liveSurfaceRef: stringField(input.session.liveSurfaceRef),
       urlMatchedResults: /\/results\?/.test(stringField(input.session.url)),
       observedUrlLag: input.session.observedUrlLag === true,
       observedUrlHash: stringField(input.session.observedUrlHash) || (stringField(input.session.url) ? hashText(stringField(input.session.url)) : undefined),
       refs: {
-        frameStreamRef: stringField(input.session.frameStreamRef),
         frameRef: stringField(input.session.frameRef),
         screenshotRef: stringField(input.session.screenshotRef),
         domSnapshotRef: stringField(input.session.domSnapshotRef),
@@ -629,6 +660,8 @@ function buildManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    liveAcceptance,
+    blockedReason: liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined,
     fixtureEvidence: {
       eventTypes: input.events.map((event) => event.type),
       inputLengthTrace: boundedUnique(inputEvents.map((event) => event.valueLength ?? 0)),
@@ -673,6 +706,118 @@ function buildManifest(input: {
   };
 }
 
+function buildBlockedSearchInputDogfoodManifest(
+  runId: string,
+  fixtureOrigin: string,
+  reason: string,
+): SearchInputDogfoodManifest {
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason);
+  return {
+    schemaVersion: DOGFOOD_SCHEMA,
+    status: 'blocked',
+    runId,
+    observedAt: new Date().toISOString(),
+    shell: 'web-right-pane',
+    targetOriginRef: `fixture-origin:${hashText(fixtureOrigin)}`,
+    inputPath: {
+      browserSurface: 'browser-host-session',
+      visualHostFrame: 'blocked',
+      keyboardPath: 'blocked',
+      hiddenKeyboardFocused: false,
+      inputChannel: 'browser-host-session',
+    },
+    query: {
+      dimensions: ['long', 'zh-en-symbols', 'backspace-delete-retype', 'enter-submit'],
+      initialLength: LONG_MIXED_QUERY.length,
+      initialHash: hashText(LONG_MIXED_QUERY),
+      afterBackspaceLength: LONG_MIXED_QUERY.slice(0, -BACKSPACE_COUNT).length,
+      afterBackspaceHash: hashText(LONG_MIXED_QUERY.slice(0, -BACKSPACE_COUNT)),
+      retypeSuffixLength: RETYPE_SUFFIX.length,
+      retypeSuffixHash: hashText(RETYPE_SUFFIX),
+      finalLength: `${LONG_MIXED_QUERY.slice(0, -BACKSPACE_COUNT)}${RETYPE_SUFFIX}`.length,
+      finalHash: hashText(`${LONG_MIXED_QUERY.slice(0, -BACKSPACE_COUNT)}${RETYPE_SUFFIX}`),
+      backspaceCount: BACKSPACE_COUNT,
+    },
+    browserHostSession: {
+      id: '',
+      owner: 'BrowserHostSession',
+      status: 'blocked',
+      transport: 'missing-native-attach',
+      liveSurfaceTransport: 'missing-native-attach',
+      frameTransport: undefined,
+      singleInteractiveTruth: false,
+      secondTruthSource: false,
+      liveSurfaceRef: undefined,
+      urlMatchedResults: false,
+      observedUrlLag: false,
+      refs: {},
+    },
+    liveAcceptance,
+    blockedReason: liveAcceptance.blockedReason,
+    fixtureEvidence: {
+      eventTypes: [],
+      inputLengthTrace: [],
+      inputHashTrace: [],
+      submitted: { length: 0, hash: '' },
+      resultsLoad: { length: 0, hash: '' },
+    },
+    inputActionEvidence: {
+      inputChannel: 'browser-host-session',
+      systemKeyboardEvents: 'not-sent',
+      sharedSystemInputUsed: false,
+      userDeviceImpact: 'none',
+      shellComposerCapturedCharacters: 0,
+      actionTypes: [],
+      typeActionTextLengths: [],
+      typeActionTextHashes: [],
+      pressKeys: [],
+      actionCount: 0,
+    },
+    timingSummary: [],
+    forbiddenEvidence: {
+      fixtureDomRead: false,
+      rawDom: false,
+      base64: false,
+      screenshot: false,
+      directFixtureDomPass: false,
+    },
+    failureFocusedDiagnostic: {
+      schemaVersion: 'sciforge.browser-search-input-dogfood.failure-diagnostic.v1',
+      focus: {
+        keyboardPath: 'blocked',
+        hiddenKeyboardFocused: false,
+        browserSurface: 'browser-host-session',
+      },
+      session: {
+        status: 'blocked',
+        urlMatchedResults: false,
+      },
+      fixtureEventTrace: {
+        recentEventTypes: [],
+        lastInputLength: 0,
+        lastInputHash: '',
+        submitSeen: false,
+        resultsSeen: false,
+      },
+      actionTrace: {
+        recentActionTypes: [],
+        recentPressKeys: [],
+        recentTypeLengths: [],
+        actionCount: 0,
+      },
+      timingSummary: [],
+      forbiddenEvidence: {
+        rawQuery: false,
+        rawDom: false,
+        base64: false,
+        screenshot: false,
+        systemInputPayload: false,
+      },
+    },
+    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-search-input-dogfood.test.ts',
+  };
+}
+
 function searchInputDogfoodFailureDiagnostic(input: {
   session: JsonRecord;
   events: SearchInputFixtureEvent[];
@@ -685,8 +830,8 @@ function searchInputDogfoodFailureDiagnostic(input: {
   return {
     schemaVersion: 'sciforge.browser-search-input-dogfood.failure-diagnostic.v1',
     focus: {
-      keyboardPath: 'hidden-input',
-      hiddenKeyboardFocused: true,
+      keyboardPath: 'native-embedded',
+      hiddenKeyboardFocused: false,
       browserSurface: 'browser-host-session',
     },
     session: {
@@ -724,46 +869,128 @@ function assertSearchInputDogfoodManifest(
   queries: { initialQuery: string; afterBackspaceQuery: string; expectedFinalQuery: string; retypeSuffix: string },
 ) {
   assert.equal(manifest.schemaVersion, DOGFOOD_SCHEMA);
-  assert.equal(manifest.status, 'passed');
-  assert.equal(manifest.inputPath.keyboardPath, 'hidden-input');
-  assert.equal(manifest.inputPath.hiddenKeyboardFocused, true);
-  assert.equal(manifest.browserHostSession.transport, 'host-stream');
-  assert.equal(manifest.browserHostSession.singleInteractiveTruth, true);
-  assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
-  assert.match(manifest.browserHostSession.refs.frameStreamRef ?? '', /^browser-host-session:[^/]+\/frame-stream$/);
+  assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
+  assert.equal(manifest.browserHostSession.transport, manifest.browserHostSession.liveSurfaceTransport);
   assert.equal(typeof manifest.browserHostSession.urlMatchedResults, 'boolean');
   assert.equal(typeof manifest.browserHostSession.observedUrlLag, 'boolean');
-  assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-focus'));
-  assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-input'));
-  assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-submit'));
-  assert.ok(manifest.fixtureEvidence.eventTypes.includes('results-load'));
-  assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.initialQuery.length));
-  assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.afterBackspaceQuery.length));
-  assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.expectedFinalQuery.length));
-  assert.equal(manifest.fixtureEvidence.submitted.length, queries.expectedFinalQuery.length);
-  assert.equal(manifest.fixtureEvidence.submitted.hash, hashText(queries.expectedFinalQuery));
-  assert.equal(manifest.fixtureEvidence.resultsLoad.hash, hashText(queries.expectedFinalQuery));
+  if (manifest.status === 'passed') {
+    assert.equal(manifest.inputPath.keyboardPath, 'native-embedded');
+    assert.equal(manifest.inputPath.hiddenKeyboardFocused, false);
+    assert.equal(manifest.browserHostSession.liveSurfaceTransport, 'native-embedded');
+    assert.equal(manifest.browserHostSession.frameTransport, 'native-embedded');
+    assert.equal(manifest.browserHostSession.singleInteractiveTruth, true);
+    assert.equal(manifest.browserHostSession.secondTruthSource, false);
+    assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
+    assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-focus'));
+    assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-input'));
+    assert.ok(manifest.fixtureEvidence.eventTypes.includes('search-submit'));
+    assert.ok(manifest.fixtureEvidence.eventTypes.includes('results-load'));
+    assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.initialQuery.length));
+    assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.afterBackspaceQuery.length));
+    assert.ok(manifest.fixtureEvidence.inputLengthTrace.includes(queries.expectedFinalQuery.length));
+    assert.equal(manifest.fixtureEvidence.submitted.length, queries.expectedFinalQuery.length);
+    assert.equal(manifest.fixtureEvidence.submitted.hash, hashText(queries.expectedFinalQuery));
+    assert.equal(manifest.fixtureEvidence.resultsLoad.hash, hashText(queries.expectedFinalQuery));
+    assert.ok(manifest.inputActionEvidence.typeActionTextHashes.includes(hashText(queries.initialQuery)));
+    assert.ok(manifest.inputActionEvidence.typeActionTextHashes.includes(hashText(queries.retypeSuffix)));
+    assert.ok(manifest.inputActionEvidence.pressKeys.filter((key) => key === 'Backspace').length >= BACKSPACE_COUNT);
+    assert.ok(manifest.inputActionEvidence.pressKeys.includes('Enter'));
+    assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.submitSeen, true);
+    assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.resultsSeen, true);
+    assert.ok(manifest.failureFocusedDiagnostic.actionTrace.recentActionTypes.includes('type'));
+    assert.ok(manifest.failureFocusedDiagnostic.timingSummary.length > 0);
+  } else {
+    assert.equal(manifest.inputPath.visualHostFrame, 'blocked');
+    assert.equal(manifest.inputPath.keyboardPath, 'blocked');
+    assert.equal(manifest.liveAcceptance.passClaim, false);
+    assert.ok(manifest.blockedReason);
+  }
   assert.equal(manifest.inputActionEvidence.inputChannel, 'browser-host-session');
   assert.equal(manifest.inputActionEvidence.systemKeyboardEvents, 'not-sent');
   assert.equal(manifest.inputActionEvidence.sharedSystemInputUsed, false);
   assert.equal(manifest.inputActionEvidence.shellComposerCapturedCharacters, 0);
-  assert.ok(manifest.inputActionEvidence.typeActionTextHashes.includes(hashText(queries.initialQuery)));
-  assert.ok(manifest.inputActionEvidence.typeActionTextHashes.includes(hashText(queries.retypeSuffix)));
-  assert.ok(manifest.inputActionEvidence.pressKeys.filter((key) => key === 'Backspace').length >= BACKSPACE_COUNT);
-  assert.ok(manifest.inputActionEvidence.pressKeys.includes('Enter'));
   assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false]);
-  assert.equal(manifest.failureFocusedDiagnostic.focus.keyboardPath, 'hidden-input');
-  assert.equal(manifest.failureFocusedDiagnostic.focus.hiddenKeyboardFocused, true);
-  assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.submitSeen, true);
-  assert.equal(manifest.failureFocusedDiagnostic.fixtureEventTrace.resultsSeen, true);
-  assert.ok(manifest.failureFocusedDiagnostic.actionTrace.recentActionTypes.includes('type'));
-  assert.ok(manifest.failureFocusedDiagnostic.timingSummary.length > 0);
   const serialized = JSON.stringify(manifest);
-  assert.doesNotMatch(serialized, /<!doctype|<html|<body|<input|<form|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)/i);
+  assert.doesNotMatch(serialized, /host-stream|frame-stream|websocket-binary|canvas-binary|webrtc|<!doctype|<html|<body|<input|<form|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)/i);
   assertNoRawQuery(serialized, queries.initialQuery);
   assertNoRawQuery(serialized, queries.afterBackspaceQuery);
   assertNoRawQuery(serialized, queries.expectedFinalQuery);
   assertNoRawQuery(serialized, queries.retypeSuffix);
+}
+
+function browserPaneLiveAcceptance(session: JsonRecord): BrowserPaneLiveAcceptance {
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport);
+  const singleInteractiveTruth = session.singleInteractiveTruth === true;
+  const secondTruthSource = session.secondTruthSource === true;
+  const passed = liveSurfaceTransport === 'native-embedded'
+    && singleInteractiveTruth
+    && secondTruthSource === false;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'right-pane-live-pass' : 'diagnostic-only',
+    passClaim: passed,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport,
+      singleInteractiveTruth,
+      secondTruthSource,
+      frameTransport: passed ? 'native-embedded' : undefined,
+    },
+    blockedReason: passed
+      ? undefined
+      : `Browser pane search input live acceptance requires native-embedded; observed ${liveSurfaceTransport || 'missing-native-attach'}.`,
+  };
+}
+
+function blockedBrowserPaneLiveAcceptance(reason: string): BrowserPaneLiveAcceptance {
+  return {
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: 'missing-native-attach',
+      singleInteractiveTruth: false,
+      secondTruthSource: false,
+    },
+    blockedReason: sanitizeBlockedReason(reason),
+  };
+}
+
+function assertBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, manifestStatus: 'passed' | 'blocked'): void {
+  assert.equal(liveAcceptance.status, manifestStatus);
+  assert.equal(liveAcceptance.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(liveAcceptance.required.singleInteractiveTruth, true);
+  assert.equal(liveAcceptance.required.secondTruthSource, false);
+  assert.equal(liveAcceptance.observed.shell, 'web-right-pane');
+  assert.equal(liveAcceptance.observed.secondTruthSource, false);
+  if (manifestStatus === 'passed') {
+    assert.equal(liveAcceptance.claimScope, 'right-pane-live-pass');
+    assert.equal(liveAcceptance.passClaim, true);
+    assert.equal(liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+    assert.equal(liveAcceptance.observed.singleInteractiveTruth, true);
+    assert.equal(liveAcceptance.observed.frameTransport, 'native-embedded');
+  } else {
+    assert.equal(liveAcceptance.claimScope, 'diagnostic-only');
+    assert.equal(liveAcceptance.passClaim, false);
+    assert.ok(liveAcceptance.blockedReason);
+  }
+}
+
+function sanitizeBlockedReason(reason: string) {
+  const bounded = reason.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => `url:${hashText(url)}`);
+  return bounded.slice(0, 240) || 'blocked';
 }
 
 async function startSearchInputFixture(port: number): Promise<{ url: string; close(): Promise<void> }> {

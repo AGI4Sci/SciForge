@@ -4,6 +4,14 @@ import type { SciForgeConfig, SciForgeRun, SciForgeSession } from '../../domain'
 import type { ResultPaneTab } from './ResultShell';
 import { rightPaneVirtualScreenPayload } from './screenPaneModel';
 import type { ResultLocale } from './resultLocale';
+import {
+  createRightPaneActiveVirtualAppScreenRegistry,
+  mergeRightPaneActiveVirtualAppScreenBinding,
+  rightPaneActiveVirtualAppScreenBindingFor,
+  rightPaneActiveVirtualAppScreenBindingFromPayload,
+  updateRightPaneActiveVirtualAppScreenRegistry,
+  type RightPaneActiveVirtualAppScreenRegistry,
+} from './rightPaneLiveBindingRegistry';
 
 export interface RightPaneVirtualScreenActivationCommand {
   commandText: string;
@@ -27,6 +35,11 @@ export interface RightPaneScreenController {
   activationCommand?: RightPaneVirtualScreenActivationCommand;
 }
 
+export interface RightPaneVirtualScreenPayloadRegistryResult {
+  payload: VirtualScreenPayload;
+  registry: RightPaneActiveVirtualAppScreenRegistry;
+}
+
 export function useRightPaneScreenController({
   config,
   session,
@@ -36,19 +49,30 @@ export function useRightPaneScreenController({
   locale,
   onCommandRequest,
 }: UseRightPaneScreenControllerOptions): RightPaneScreenController {
-  const payload = useMemo(() => rightPaneVirtualScreenPayload(session, activeRun, config, locale, { activeTabId }), [
+  const activeScreenRegistryRef = useRef(createRightPaneActiveVirtualAppScreenRegistry());
+  const basePayload = useMemo(() => rightPaneVirtualScreenPayload(session, activeRun, config, locale, { activeTabId }), [
     activeRun,
     activeTabId,
     config,
     locale,
     session,
   ]);
+  const payload = useMemo(() => {
+    const next = rightPaneVirtualScreenPayloadWithLiveBindingRegistry(
+      basePayload,
+      activeScreenRegistryRef.current,
+      activeTabId,
+    );
+    activeScreenRegistryRef.current = next.registry;
+    return next.payload;
+  }, [activeTabId, basePayload]);
   const activationCommand = useMemo(() => rightPaneVirtualScreenActivationCommand(payload), [
     payload.adapterReadinessRef,
     payload.attachState,
     payload.evidenceLedgerRef,
     payload.frameStreamRef,
     payload.guiPresentRefs?.[0],
+    (payload as Record<string, unknown>).grantValidationRef,
     payload.handoffRef,
     (payload as Record<string, unknown>).liveBindingAttachGrantRef,
     payload.liveSurfaceRef,
@@ -61,6 +85,7 @@ export function useRightPaneScreenController({
     payload.permissionRequired,
     payload.permissionStatus,
     payload.platformDriverRef,
+    payload.platformDriverStatus,
     payload.providerSessionOwnerRef,
     payload.providerSessionReconnectRef,
     payload.recheckRef,
@@ -85,8 +110,29 @@ export function useRightPaneScreenController({
   return { payload, activationCommand };
 }
 
+export function rightPaneVirtualScreenPayloadWithLiveBindingRegistry(
+  payload: VirtualScreenPayload,
+  registry: RightPaneActiveVirtualAppScreenRegistry,
+  activeTabId?: string,
+): RightPaneVirtualScreenPayloadRegistryResult {
+  const binding = rightPaneActiveVirtualAppScreenBindingFor(registry, {
+    screenRef: payload.screenRef,
+    tabId: activeTabId,
+  });
+  const mergedPayload = mergeRightPaneActiveVirtualAppScreenBinding(payload, binding);
+  return {
+    payload: mergedPayload,
+    registry: updateRightPaneActiveVirtualAppScreenRegistry(
+      registry,
+      rightPaneActiveVirtualAppScreenBindingFromPayload(mergedPayload, activeTabId),
+    ),
+  };
+}
+
 export function rightPaneVirtualScreenActivationCommand(payload: VirtualScreenPayload): RightPaneVirtualScreenActivationCommand | undefined {
   const attachCommand = rightPaneVirtualScreenAttachCommand(payload);
+  const permissionRecheckCommand = rightPaneVirtualScreenPermissionRecheckCommand(payload);
+  if (permissionRecheckCommand) return permissionRecheckCommand;
   if (attachCommand && !rightPaneVirtualScreenExplicitPermissionBlock(payload)) return attachCommand;
   const permissionHandoffCommand = rightPaneVirtualScreenPermissionHandoffCommand(payload);
   if (permissionHandoffCommand) return permissionHandoffCommand;
@@ -107,6 +153,8 @@ function rightPaneVirtualScreenAttachCommand(payload: VirtualScreenPayload): Rig
     payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
     `--activation-ref ${terminalQuote(payload.handoffRef)}`,
     `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}`,
+    payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
+    payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
     payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
     payload.guiPresentRefs?.[0] ? `--gui-present-ref ${terminalQuote(payload.guiPresentRefs[0])}` : undefined,
   ].filter(Boolean);
@@ -127,6 +175,7 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
   if (payload.surfaceMode === 'live' && (payload.attachState === 'attached' || payload.attachState === 'observe-only')) return undefined;
   if (payload.status !== 'blocked' && payload.attachState !== 'blocked') return undefined;
   const liveBindingAttachGrantRef = virtualScreenStringProp(payload, 'liveBindingAttachGrantRef');
+  const grantValidationRef = virtualScreenStringProp(payload, 'grantValidationRef');
   if (
     !payload.screenRef
     || !payload.liveSurfaceRef
@@ -138,6 +187,7 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
     || !payload.providerSessionOwnerRef
     || !payload.providerSessionReconnectRef
     || !liveBindingAttachGrantRef
+    || !grantValidationRef
     || !payload.surfaceTransportRef
   ) return undefined;
   const parts = [
@@ -153,6 +203,7 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
     `--provider-session-owner-ref ${terminalQuote(payload.providerSessionOwnerRef)}`,
     `--provider-session-reconnect-ref ${terminalQuote(payload.providerSessionReconnectRef)}`,
     `--live-binding-attach-grant-ref ${terminalQuote(liveBindingAttachGrantRef)}`,
+    `--grant-validation-ref ${terminalQuote(grantValidationRef)}`,
     `--surface-transport-ref ${terminalQuote(payload.surfaceTransportRef)}`,
     payload.adapterReadinessRef ? `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}` : undefined,
     payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
@@ -162,7 +213,34 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
     commandText: parts.join(' '),
     label: 'Reconnect VirtualAppScreen',
     targetRef: payload.providerSessionReconnectRef,
-    commandKey: `${payload.providerSessionReconnectRef}:${liveBindingAttachGrantRef}:${payload.currentFrameRef}:${Math.round(payload.currentFrameSequence.sequence)}`,
+    commandKey: `${payload.providerSessionReconnectRef}:${liveBindingAttachGrantRef}:${grantValidationRef}:${payload.currentFrameRef}:${Math.round(payload.currentFrameSequence.sequence)}`,
+  };
+}
+
+function rightPaneVirtualScreenPermissionRecheckCommand(payload: VirtualScreenPayload): RightPaneVirtualScreenActivationCommand | undefined {
+  if (!rightPaneVirtualScreenPermissionRecheckReady(payload)) return undefined;
+  const permissionRecheckRef = payload.permissionRecheckRef ?? payload.permissionRecheckRefs?.[0] ?? payload.recheckRef;
+  if (!permissionRecheckRef || !payload.adapterReadinessRef) return undefined;
+  if (payload.attachState !== 'blocked' && payload.attachState !== 'requires-handoff' && payload.status !== 'blocked' && payload.status !== 'requires-handoff') return undefined;
+  const parts = [
+    '/computer-use permission-recheck',
+    '--source right-pane-screen',
+    `--target-ref ${terminalQuote(permissionRecheckRef)}`,
+    `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}`,
+    payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
+    payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
+    payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
+    payload.sessionRef ? `--session-ref ${terminalQuote(payload.sessionRef)}` : undefined,
+    payload.targetAppRef ? `--target-app-ref ${terminalQuote(payload.targetAppRef)}` : undefined,
+    payload.blockedRef ? `--blocked-ref ${terminalQuote(payload.blockedRef)}` : undefined,
+    payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
+    payload.guiPresentRefs?.[0] ? `--gui-present-ref ${terminalQuote(payload.guiPresentRefs[0])}` : undefined,
+  ].filter(Boolean);
+  return {
+    commandText: parts.join(' '),
+    label: 'Recheck Screen Permissions',
+    targetRef: permissionRecheckRef,
+    commandKey: `${permissionRecheckRef}:${payload.adapterReadinessRef}:permission-ready`,
   };
 }
 
@@ -208,6 +286,29 @@ function rightPaneVirtualScreenAuthorizationIncomplete(payload: VirtualScreenPay
 
 function isBlockedGateStatus(value: string | undefined) {
   return /^(blocked|denied|disabled|error|failed|missing|not-granted|not-installed|revoked|unavailable)$/i.test(value?.trim() ?? '');
+}
+
+function rightPaneVirtualScreenPermissionRecheckReady(payload: VirtualScreenPayload) {
+  return Boolean(
+    rightPaneVirtualScreenPermissionReady(payload)
+    && rightPaneVirtualScreenPlatformDriverReady(payload)
+    && payload.adapterReadinessRef,
+  );
+}
+
+function rightPaneVirtualScreenPermissionReady(payload: VirtualScreenPayload) {
+  if (payload.permissionGranted === true) return true;
+  if (payload.permissionRequired === false && !isBlockedGateStatus(payload.permissionStatus)) return true;
+  return isReadyGateStatus(payload.permissionStatus);
+}
+
+function rightPaneVirtualScreenPlatformDriverReady(payload: VirtualScreenPayload) {
+  if (!payload.platformDriverRef && !payload.platformDriverStatus) return true;
+  return isReadyGateStatus(payload.platformDriverStatus);
+}
+
+function isReadyGateStatus(value: string | undefined) {
+  return /^(attached|available|granted|not-required|ready|running)$/i.test(value?.trim() ?? '');
 }
 
 function terminalQuote(value: string) {

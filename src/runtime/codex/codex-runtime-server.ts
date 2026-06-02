@@ -4,6 +4,8 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import {
+  CODEX_RUNTIME_STREAM_PATH,
+  CODEX_RUNTIME_WEBSOCKET_PATH,
   assertCodexRealtimeSessionEnvelope,
   createCodexRealtimeControlAck,
   createCodexRealtimeSessionEnvelope,
@@ -13,8 +15,7 @@ import {
 
 const CODEX_RUNTIME_HEARTBEAT_MS = 5_000;
 const CODEX_REALTIME_CANCEL_TIMEOUT_MS = 500;
-export const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream';
-export const CODEX_RUNTIME_WEBSOCKET_PATH = '/api/sciforge/runtime/codex/realtime/ws';
+export { CODEX_RUNTIME_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH };
 
 const codexRuntimeWss = new WebSocketServer({ noServer: true });
 

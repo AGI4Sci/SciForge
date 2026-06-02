@@ -55,7 +55,7 @@ test('browser pane model resolves BrowserRuntime refs from provenance without lo
   }
 });
 
-test('browser pane model reuses focused browser runtime projection host sessions', () => {
+test('browser pane model keeps legacy host-stream projection refs without reusing live transport', () => {
   const session: SciForgeSession = {
     ...emptySession(),
     artifacts: [{
@@ -93,12 +93,57 @@ test('browser pane model reuses focused browser runtime projection host sessions
   assert.equal(browserAddressForFocusedObjectReference(reference, session), 'https://example.org/search?q=host');
   const hostSession = browserHostSessionForFocusedObjectReference(reference, session);
   assert.equal(hostSession?.id, 'browser-host-search-1');
-  assert.equal(hostSession?.liveSurfaceTransport, 'host-stream');
+  assert.equal(hostSession?.liveSurfaceTransport, undefined);
   assert.equal(hostSession?.singleInteractiveTruth, true);
+  assert.equal(hostSession?.frameStreamRef, 'browser-host-session:browser-host-search-1/frame-stream');
   assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-search-1/search-results.json');
   assert.equal(hostSession?.reason, 'search projection ready');
   assert.equal(hostSession?.loadingProgress?.state, 'network-quiet');
   assert.equal(hostSession?.loadingProgress?.reason, 'host-ready');
+});
+
+test('browser pane model reuses focused native embedded browser runtime projection host sessions', () => {
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [{
+      id: 'browser-native-projection-1',
+      type: 'browser-runtime-projection',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'sciforge.browser-runtime.projection.v1',
+      metadata: { finalUrl: 'https://example.org/search?q=native' },
+      data: {
+        hostSession: {
+          id: 'browser-host-native-1',
+          status: 'ready',
+          requestedUrl: 'https://example.org/search?q=native',
+          url: 'https://example.org/search?q=native',
+          title: 'Native search results',
+          liveSurfaceRef: 'browser-host-session:browser-host-native-1/live-surface',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          searchResultRef: 'browser-host-session:browser-host-native-1/search-results.json',
+          reason: 'native projection ready',
+        },
+      },
+    }],
+  };
+  const reference: ObjectReference = {
+    id: 'browser-native-ref',
+    kind: 'artifact',
+    title: 'Native browser search projection',
+    ref: 'artifact:browser-native-projection-1',
+    artifactType: 'browser-runtime-projection',
+  };
+
+  assert.equal(browserAddressForFocusedObjectReference(reference, session), 'https://example.org/search?q=native');
+  const hostSession = browserHostSessionForFocusedObjectReference(reference, session);
+  assert.equal(hostSession?.id, 'browser-host-native-1');
+  assert.equal(hostSession?.liveSurfaceTransport, 'native-embedded');
+  assert.equal(hostSession?.singleInteractiveTruth, true);
+  assert.equal(hostSession?.liveSurfaceRef, 'browser-host-session:browser-host-native-1/live-surface');
+  assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-native-1/search-results.json');
+  assert.equal(hostSession?.reason, 'native projection ready');
+  assert.equal(hostSession?.loadingProgress?.state, 'network-quiet');
 });
 
 test('browser pane model exposes a bounded loading/progress lifecycle contract', () => {

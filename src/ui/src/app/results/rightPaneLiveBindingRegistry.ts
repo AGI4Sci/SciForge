@@ -11,6 +11,7 @@ export interface RightPaneActiveVirtualAppScreenBinding {
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
   liveBindingAttachGrantRef?: string;
+  grantValidationRef?: string;
   surfaceTransportRef?: string;
   currentFrameSequence?: VirtualScreenPayload['currentFrameSequence'];
   adapterReadinessRef?: string;
@@ -44,6 +45,7 @@ type RightPaneVirtualAppScreenPayloadRefs =
     providerSessionOwnerRef?: string;
     providerSessionReconnectRef?: string;
     liveBindingAttachGrantRef?: string;
+    grantValidationRef?: string;
   };
 
 export type RightPaneVirtualAppScreenReconnectReason =
@@ -66,6 +68,7 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
   liveBindingAttachGrantRef?: string;
+  grantValidationRef?: string;
   surfaceTransportRef?: string;
   currentFrameSequence?: VirtualScreenPayload['currentFrameSequence'];
   observedSessionRef?: string;
@@ -74,6 +77,7 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   observedProviderSessionOwnerRef?: string;
   observedProviderSessionReconnectRef?: string;
   observedLiveBindingAttachGrantRef?: string;
+  observedGrantValidationRef?: string;
   observedSurfaceTransportRef?: string;
   observedCurrentFrameSequence?: VirtualScreenPayload['currentFrameSequence'];
   adapterReadinessRef?: string;
@@ -84,6 +88,7 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   sameProviderSessionOwnerRef: boolean;
   sameProviderSessionReconnectRef: boolean;
   sameLiveBindingAttachGrantRef: boolean;
+  sameGrantValidationRef: boolean;
   missingRefEvidence: string[];
   mismatchedRefEvidence: string[];
   blockedRef?: string;
@@ -112,6 +117,7 @@ export function rightPaneActiveVirtualAppScreenBindingFromPayload(
     providerSessionOwnerRef: virtualScreenStringProp(payload, 'providerSessionOwnerRef'),
     providerSessionReconnectRef: virtualScreenStringProp(payload, 'providerSessionReconnectRef'),
     liveBindingAttachGrantRef: virtualScreenStringProp(payload, 'liveBindingAttachGrantRef'),
+    grantValidationRef: virtualScreenStringProp(payload, 'grantValidationRef'),
     surfaceTransportRef: payload.surfaceTransportRef,
     currentFrameSequence: payload.currentFrameSequence,
     adapterReadinessRef: payload.adapterReadinessRef,
@@ -140,6 +146,7 @@ export function updateRightPaneActiveVirtualAppScreenRegistry(
     providerSessionOwnerRef: binding.providerSessionOwnerRef ?? previous?.providerSessionOwnerRef,
     providerSessionReconnectRef: binding.providerSessionReconnectRef ?? previous?.providerSessionReconnectRef,
     liveBindingAttachGrantRef: binding.liveBindingAttachGrantRef ?? previous?.liveBindingAttachGrantRef,
+    grantValidationRef: binding.grantValidationRef ?? previous?.grantValidationRef,
     surfaceTransportRef: binding.surfaceTransportRef ?? previous?.surfaceTransportRef,
     currentFrameSequence: binding.currentFrameSequence ?? previous?.currentFrameSequence,
     adapterReadinessRef: binding.adapterReadinessRef ?? previous?.adapterReadinessRef,
@@ -181,6 +188,7 @@ export function mergeRightPaneActiveVirtualAppScreenBinding(
     providerSessionOwnerRef: virtualScreenStringProp(payload, 'providerSessionOwnerRef') ?? binding.providerSessionOwnerRef,
     providerSessionReconnectRef: virtualScreenStringProp(payload, 'providerSessionReconnectRef') ?? binding.providerSessionReconnectRef,
     liveBindingAttachGrantRef: virtualScreenStringProp(payload, 'liveBindingAttachGrantRef') ?? binding.liveBindingAttachGrantRef,
+    grantValidationRef: virtualScreenStringProp(payload, 'grantValidationRef') ?? binding.grantValidationRef,
     surfaceTransportRef: payload.surfaceTransportRef ?? binding.surfaceTransportRef,
     currentFrameSequence: payload.currentFrameSequence ?? binding.currentFrameSequence,
     adapterReadinessRef: payload.adapterReadinessRef ?? binding.adapterReadinessRef,
@@ -221,6 +229,7 @@ export function rightPaneVirtualAppScreenReconnectCheckpoint(
     providerSessionOwnerRef: binding.providerSessionOwnerRef,
     providerSessionReconnectRef: binding.providerSessionReconnectRef,
     liveBindingAttachGrantRef: binding.liveBindingAttachGrantRef,
+    grantValidationRef: binding.grantValidationRef,
     surfaceTransportRef: binding.surfaceTransportRef,
     currentFrameSequence: binding.currentFrameSequence,
     observedSessionRef: observed.sessionRef,
@@ -229,6 +238,7 @@ export function rightPaneVirtualAppScreenReconnectCheckpoint(
     observedProviderSessionOwnerRef: observed.providerSessionOwnerRef,
     observedProviderSessionReconnectRef: observed.providerSessionReconnectRef,
     observedLiveBindingAttachGrantRef: observed.liveBindingAttachGrantRef,
+    observedGrantValidationRef: observed.grantValidationRef,
     observedSurfaceTransportRef: observed.surfaceTransportRef,
     observedCurrentFrameSequence: observed.currentFrameSequence,
     adapterReadinessRef: binding.adapterReadinessRef,
@@ -239,6 +249,7 @@ export function rightPaneVirtualAppScreenReconnectCheckpoint(
     sameProviderSessionOwnerRef: refEvidence.sameProviderSessionOwnerRef,
     sameProviderSessionReconnectRef: refEvidence.sameProviderSessionReconnectRef,
     sameLiveBindingAttachGrantRef: refEvidence.sameLiveBindingAttachGrantRef,
+    sameGrantValidationRef: refEvidence.sameGrantValidationRef,
     missingRefEvidence: refEvidence.missingRefEvidence,
     mismatchedRefEvidence: refEvidence.mismatchedRefEvidence,
     blockedRef: binding.blockedRef ?? refEvidence.blockedRef,
@@ -290,6 +301,7 @@ function rightPaneVirtualAppScreenObservedRefs(observed: Partial<RightPaneVirtua
     providerSessionOwnerRef: virtualScreenStringProp(observed, 'providerSessionOwnerRef'),
     providerSessionReconnectRef: virtualScreenStringProp(observed, 'providerSessionReconnectRef'),
     liveBindingAttachGrantRef: virtualScreenStringProp(observed, 'liveBindingAttachGrantRef'),
+    grantValidationRef: virtualScreenStringProp(observed, 'grantValidationRef'),
     surfaceTransportRef: virtualScreenStringProp(observed, 'surfaceTransportRef'),
     currentFrameSequence: observed.currentFrameSequence,
   });
@@ -306,6 +318,7 @@ function rightPaneVirtualAppScreenReconnectRefEvidence(
     rightPaneVirtualAppScreenReconnectRefCheck('providerSessionOwnerRef', expected.providerSessionOwnerRef, observed.providerSessionOwnerRef),
     rightPaneVirtualAppScreenReconnectRefCheck('providerSessionReconnectRef', expected.providerSessionReconnectRef, observed.providerSessionReconnectRef),
     rightPaneVirtualAppScreenReconnectRefCheck('liveBindingAttachGrantRef', expected.liveBindingAttachGrantRef, observed.liveBindingAttachGrantRef),
+    rightPaneVirtualAppScreenReconnectRefCheck('grantValidationRef', expected.grantValidationRef, observed.grantValidationRef),
   ];
   const missingRefEvidence = checks.flatMap((check) => check.missing);
   const mismatchedRefEvidence = checks.flatMap((check) => check.mismatch);
@@ -321,6 +334,7 @@ function rightPaneVirtualAppScreenReconnectRefEvidence(
     sameProviderSessionOwnerRef: checks[3]?.same ?? false,
     sameProviderSessionReconnectRef: checks[4]?.same ?? false,
     sameLiveBindingAttachGrantRef: checks[5]?.same ?? false,
+    sameGrantValidationRef: checks[6]?.same ?? false,
     missingRefEvidence,
     mismatchedRefEvidence,
     blockedRef: hasBlockedEvidence ? `computer-use:screen-reconnect/${safeRefPathSegment(expected.screenRef)}/blocked/ref-evidence.json` : undefined,

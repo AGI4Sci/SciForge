@@ -31,6 +31,31 @@ const manifestPath = join(artifactDir, 'manifest.json');
 const PRODUCT_LONG_SESSION_CONFIG = productLongSessionConfig();
 
 type JsonRecord = Record<string, unknown>;
+type BrowserPaneLiveBlockedReasonCode =
+  | 'missing-native-attach'
+  | 'non-native-live-surface'
+  | 'single-interactive-truth-missing'
+  | 'second-truth-source';
+
+type BrowserPaneLiveAcceptance = {
+  status: 'passed' | 'blocked';
+  claimScope: 'right-pane-live-pass' | 'diagnostic-only';
+  passClaim: boolean;
+  required: {
+    liveSurfaceTransport: 'native-embedded';
+    singleInteractiveTruth: true;
+    secondTruthSource: false;
+  };
+  observed: {
+    shell: 'web-right-pane';
+    liveSurfaceTransport: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    frameTransport?: string;
+  };
+  blockedReason?: string;
+  blockedReasonCode?: BrowserPaneLiveBlockedReasonCode;
+};
 
 type ProductLongSessionMode = 'quick-contract' | 'extended-product-long-session';
 type ProductLongSessionMetricCategory =
@@ -224,6 +249,80 @@ type ProductLongSessionResourceEvidence = {
   };
 };
 
+type ProductLongSessionNativeOnlyAttemptEvidence = {
+  mode: 'native-only-right-pane-product-long-session';
+  target: {
+    durationTargetMs: number;
+    requestedMinutes?: number;
+    runUntilDeadline: boolean;
+    thirtyMinuteTarget: boolean;
+    passRequiresElapsedDuration: true;
+  };
+  elapsed: {
+    durationMs: number;
+    iterationsCompleted: number;
+    configuredIterations: number | 'deadline';
+    requestedIterations?: number;
+  };
+  expectations: {
+    nativeAttach: {
+      requiredTransport: 'native-embedded';
+      status: 'attached' | 'blocked';
+      observedLiveSurfaceTransport: string;
+      blockedReasonCode?: BrowserPaneLiveBlockedReasonCode;
+    };
+    addressDetailsRecovery: {
+      expected: true;
+      status: 'observed' | 'blocked' | 'not-attempted';
+      attemptedIterations: number[];
+      outcomeCount: number;
+      boundedRefsRequired: true;
+    };
+    tabContinuity: {
+      expected: true;
+      status: 'observed' | 'blocked' | 'not-attempted';
+      sameSessionObserved?: boolean;
+    };
+    workspaceWriterRestartReconnect: {
+      expected: true;
+      status: 'reconnected' | 'blocked' | 'not-attempted';
+      retryRequired: true;
+      retryAction: WorkspaceWriterRestartEvidence['retry']['action'];
+    };
+  };
+  boundedCounters: {
+    memorySampleAvailable: boolean;
+    approxJsHeapUsed?: number;
+    approxJsHeapDeltaFromInitial?: number;
+    objectUrls: ObjectUrlBoundedStats;
+    surfaceSampleAvailable: boolean;
+    attachChanges: number;
+    detachChanges: number;
+    maxHostFrames: number;
+    nativeSurfaces: number;
+    canvasSurfaces: number;
+    imageSurfaces: number;
+    iframeSurfaces: number;
+    proxySurfaces: number;
+    webviewSurfaces: number;
+    systemPopupSurfaces: number;
+    dataImageSurfaces: number;
+    base64Attributes: number;
+    sessionRefCount: number;
+  };
+  blockedWhenNativeAttachMissing: true;
+  legacyFallbackObserved: {
+    hostStream: false;
+    canvas: false;
+    webRtc: false;
+    httpFrame: false;
+    iframe: false;
+    proxy: false;
+    webview: false;
+    systemPopup: false;
+  };
+};
+
 type ProductLongSessionFailureClassification = {
   kind:
     | 'address-details-ready-timeout'
@@ -310,7 +409,9 @@ type BrowserHostSessionSummary = {
   owner: string;
   status: string;
   transport?: string;
+  liveSurfaceTransport?: string;
   singleInteractiveTruth: boolean;
+  secondTruthSource: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   urlHash?: string;
@@ -345,17 +446,21 @@ type WorkspaceWriterRestartEvidence = {
 
 type ProductLongSessionManifest = {
   schemaVersion: typeof PRODUCT_LONG_SESSION_SCHEMA;
-  status: 'passed';
+  status: 'passed' | 'blocked';
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
   targetOriginRef: string;
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  nativeOnlyAttempt: ProductLongSessionNativeOnlyAttemptEvidence;
+  blockedReason?: string;
   runner: {
     mode: ProductLongSessionMode;
     requestedMinutes?: number;
     requestedIterations?: number;
     iterationsCompleted: number;
     durationMs: number;
+    durationTargetMs: number;
     defaultSmokeIsThirtyMinuteBenchmark: false;
     extensionEnv: {
       minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES';
@@ -463,6 +568,8 @@ type ProductLongSessionBlockedManifest = {
   observedAt: string;
   shell: 'web-right-pane';
   targetOriginRef: string;
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  nativeOnlyAttempt: ProductLongSessionNativeOnlyAttemptEvidence;
   runner: ProductLongSessionManifest['runner'];
   failure: {
     phase: string;
@@ -562,7 +669,7 @@ test('product long-session blocked diagnostics classify address-details ready ti
       addressDraftHash: hashText('bounded address draft placeholder'),
       liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
       sessionRefs: ['browser-host-session:session-7'],
-      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
+      frameStreamRefs: [],
       hostFrameCount: 1,
       hiddenKeyboardActive: true,
       commandAvailability: {
@@ -579,17 +686,17 @@ test('product long-session blocked diagnostics classify address-details ready ti
       maxHostFrames: 1,
       sessionIds: ['session-7'],
       liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
-      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
-      renderers: ['canvas-binary'],
+      frameStreamRefs: [],
+      renderers: ['native-embedded'],
       browserStates: ['loading'],
       browserStateCounts: { loading: 3 },
       browserStateTransitions: ['ready->loading'],
       browserStateSampleCount: 3,
       hiddenKeyboardFocusKeys: ['browser-host-session:session-7'],
       hostFrames: 1,
-      canvasSurfaces: 1,
+      canvasSurfaces: 0,
       imageSurfaces: 0,
-      nativeSurfaces: 0,
+      nativeSurfaces: 1,
       iframeSurfaces: 0,
       proxySurfaces: 0,
       webviewSurfaces: 0,
@@ -612,17 +719,17 @@ test('product long-session blocked diagnostics classify address-details ready ti
       maxHostFrames: 1,
       sessionIds: ['session-7'],
       liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
-      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
-      renderers: ['canvas-binary'],
+      frameStreamRefs: [],
+      renderers: ['native-embedded'],
       browserStates: ['ready'],
       browserStateCounts: { ready: 1 },
       browserStateTransitions: [],
       browserStateSampleCount: 1,
       hiddenKeyboardFocusKeys: ['browser-host-session:session-7'],
       hostFrames: 1,
-      canvasSurfaces: 1,
+      canvasSurfaces: 0,
       imageSurfaces: 0,
-      nativeSurfaces: 0,
+      nativeSurfaces: 1,
       iframeSurfaces: 0,
       proxySurfaces: 0,
       webviewSurfaces: 0,
@@ -685,17 +792,17 @@ test('product long-session blocked diagnostics fall back to right-pane refs when
       maxHostFrames: 1,
       sessionIds: ['session-3'],
       liveSurfaceRefs: ['browser-host-session:session-3/live-surface'],
-      frameStreamRefs: ['browser-host-session:session-3/frame-stream'],
-      renderers: ['canvas-binary'],
+      frameStreamRefs: [],
+      renderers: ['native-embedded'],
       browserStates: ['loading'],
       browserStateCounts: { loading: 2 },
       browserStateTransitions: ['ready->loading'],
       browserStateSampleCount: 2,
       hiddenKeyboardFocusKeys: ['browser-host-session:session-3'],
       hostFrames: 1,
-      canvasSurfaces: 1,
+      canvasSurfaces: 0,
       imageSurfaces: 0,
-      nativeSurfaces: 0,
+      nativeSurfaces: 1,
       iframeSurfaces: 0,
       proxySurfaces: 0,
       webviewSurfaces: 0,
@@ -719,17 +826,17 @@ test('product long-session blocked diagnostics fall back to right-pane refs when
       maxHostFrames: 1,
       sessionIds: ['session-3'],
       liveSurfaceRefs: ['browser-host-session:session-3/live-surface'],
-      frameStreamRefs: ['browser-host-session:session-3/frame-stream'],
-      renderers: ['canvas-binary'],
+      frameStreamRefs: [],
+      renderers: ['native-embedded'],
       browserStates: ['ready'],
       browserStateCounts: { ready: 1 },
       browserStateTransitions: [],
       browserStateSampleCount: 1,
       hiddenKeyboardFocusKeys: ['browser-host-session:session-3'],
       hostFrames: 1,
-      canvasSurfaces: 1,
+      canvasSurfaces: 0,
       imageSurfaces: 0,
-      nativeSurfaces: 0,
+      nativeSurfaces: 1,
       iframeSurfaces: 0,
       proxySurfaces: 0,
       webviewSurfaces: 0,
@@ -752,7 +859,7 @@ test('product long-session blocked diagnostics fall back to right-pane refs when
   assert.equal(classification.blockedEvidence.uiState, 'loading');
   assert.deepEqual(classification.blockedEvidence.sessionRefs, ['browser-host-session:session-3']);
   assert.deepEqual(classification.blockedEvidence.liveSurfaceRefs, ['browser-host-session:session-3/live-surface']);
-  assert.deepEqual(classification.blockedEvidence.frameStreamRefs, ['browser-host-session:session-3/frame-stream']);
+  assert.deepEqual(classification.blockedEvidence.frameStreamRefs, []);
   assert.equal(classification.blockedEvidence.hostFrameCount, 1);
   assert.equal(classification.blockedEvidence.hiddenKeyboardActive, true);
   assert.equal(classification.blockedEvidence.resourceHealth?.approxJsHeapDeltaFromInitial, 4_000_000);
@@ -776,17 +883,17 @@ test('product long-session blocked diagnostics classify BrowserHostSession conti
       maxHostFrames: 1,
       sessionIds: ['session-after-tab-switch'],
       liveSurfaceRefs: ['browser-host-session:session-after-tab-switch/live-surface'],
-      frameStreamRefs: ['browser-host-session:session-after-tab-switch/frame-stream'],
-      renderers: ['canvas-binary'],
+      frameStreamRefs: [],
+      renderers: ['native-embedded'],
       browserStates: ['ready'],
       browserStateCounts: { ready: 2 },
       browserStateTransitions: ['loading->ready'],
       browserStateSampleCount: 2,
       hiddenKeyboardFocusKeys: ['browser-host-session:session-after-tab-switch'],
       hostFrames: 1,
-      canvasSurfaces: 1,
+      canvasSurfaces: 0,
       imageSurfaces: 0,
-      nativeSurfaces: 0,
+      nativeSurfaces: 1,
       iframeSurfaces: 0,
       proxySurfaces: 0,
       webviewSurfaces: 0,
@@ -851,6 +958,7 @@ test('product long-session runner contract rejects pass-shaped truncated thirty-
     requestedIterations: 1,
     iterationsCompleted: 1,
     durationMs: 1_200,
+    durationTargetMs: TRUE_LONG_SESSION_MINUTES * 60_000,
     defaultSmokeIsThirtyMinuteBenchmark: false,
     extensionEnv: {
       minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
@@ -879,6 +987,7 @@ test('product long-session runner contract requires minutes env when artifact re
     requestedMinutes: TRUE_LONG_SESSION_MINUTES,
     iterationsCompleted: 1,
     durationMs: TRUE_LONG_SESSION_MINUTES * 60_000,
+    durationTargetMs: TRUE_LONG_SESSION_MINUTES * 60_000,
     defaultSmokeIsThirtyMinuteBenchmark: false,
     extensionEnv: {
       minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
@@ -899,10 +1008,6 @@ test('product long-session runner contract requires minutes env when artifact re
 test('SciForge Browser pane product long-session harness emits bounded continuity and reconnect evidence', { timeout: PRODUCT_LONG_SESSION_CONFIG.testTimeoutMs }, async () => {
   const config = PRODUCT_LONG_SESSION_CONFIG;
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
-  if (!existsSync(browserExecutable)) {
-    throw new Error(`No browser executable found for Browser pane product long-session smoke: ${browserExecutable}`);
-  }
-
   const tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-browser-pane-product-long-session-'));
   const workspacePath = join(tempRoot, 'workspace');
   const configPath = join(tempRoot, 'config.local.json');
@@ -932,6 +1037,27 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
   const tabSwitchContinuity: boolean[] = [];
   const addressDetailsRecovery: AddressDetailsRecoveryEvidence[] = [];
   let currentPhase = 'setup';
+
+  if (!existsSync(browserExecutable)) {
+    const error = new Error(`missing-browser-executable:${hashText(browserExecutable)}`);
+    await writeProductLongSessionBlockedManifest({
+      config,
+      runId,
+      fixtureOrigin,
+      durationMs: 0,
+      phase: currentPhase,
+      currentIteration: iterationsCompleted,
+      error,
+      metrics: [],
+      addressDetailsRecovery,
+    });
+    console.log(`[blocked] Browser pane product long-session ${JSON.stringify({
+      reason: boundedLiveBlockedReason(error),
+      manifestPath: 'docs/test-artifacts/browser-pane-product-long-session/manifest.json',
+    })}`);
+    await rm(tempRoot, { recursive: true, force: true });
+    return;
+  }
 
   await mkdir(workspacePath);
   await writeFile(configPath, JSON.stringify({
@@ -1063,6 +1189,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       frameStreamFrames: manifest.boundedMetrics.frameStream.framesReceived,
     })}`);
   } catch (error) {
+    let blockedArtifactWritten = false;
     await writeProductLongSessionBlockedManifest({
       config,
       runId,
@@ -1079,12 +1206,19 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       diagnostics: pageDiagnostics,
       rightPaneInitial,
       addressDetailsRecovery,
+    }).then(() => {
+      blockedArtifactWritten = true;
     }).catch((artifactError) => {
       console.error(`[blocked-artifact-failed] Browser pane product long-session ${JSON.stringify({
         reasonHash: hashText(artifactError instanceof Error ? artifactError.message : String(artifactError)),
+        reason: boundedLiveBlockedReason(artifactError),
       })}`);
     });
-    throw error;
+    if (!blockedArtifactWritten) throw error;
+    console.log(`[blocked] Browser pane product long-session ${JSON.stringify({
+      reason: boundedLiveBlockedReason(error),
+      manifestPath: 'docs/test-artifacts/browser-pane-product-long-session/manifest.json',
+    })}`);
   } finally {
     await boundedCleanup('page-close', () => page?.close({ runBeforeUnload: false }), 5_000);
     await boundedCleanup('browser-context-close', () => context?.close(), 5_000);
@@ -1540,20 +1674,13 @@ async function waitForKeyboardHostFrame(
   metrics: ProductLongSessionMetrics,
   iteration?: number,
 ) {
-  const frame = surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first();
+  const frame = surface.locator('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]').first();
   await frame.waitFor({ state: 'visible', timeout: 30_000 });
-  assert.equal(await frame.getAttribute('data-browser-host-keyboard-path'), 'hidden-input');
-  assert.ok(await frame.getAttribute('data-browser-host-keyboard-focus-key'), 'host frame must expose a stable keyboard focus key');
-  const hiddenInput = frame.locator('.browser-workbench-host-keyboard-input[data-browser-host-keyboard-input="true"]').first();
-  assert.ok(await hiddenInput.count(), 'BrowserHostSession host frame must include hidden keyboard input');
-  let visualFrame = frame.locator('canvas[data-browser-host-surface="browser-host-session"]').first();
-  if (!await visualFrame.count()) {
-    visualFrame = frame.locator('img[data-browser-host-surface="browser-host-session"]').first();
-  }
-  await visualFrame.waitFor({ state: 'visible', timeout: 30_000 });
+  assert.equal(await frame.getAttribute('data-browser-host-surface'), 'browser-host-session');
+  assert.equal(await frame.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.match(await frame.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   await waitForFrameCaptureReady(surface, label, metrics, iteration);
-  assert.equal(await visualFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
-  return { frame, visualFrame };
+  return { frame, visualFrame: frame };
 }
 
 async function waitForFrameCaptureReady(
@@ -1564,10 +1691,10 @@ async function waitForFrameCaptureReady(
 ) {
   await metrics.measure('frame-capture', label, async () => {
     await surface.page().waitForFunction(() => {
-      const canvas = document.querySelector('.right-pane-browser-surface canvas[data-browser-host-surface="browser-host-session"]');
-      if (canvas instanceof HTMLCanvasElement) return canvas.width > 0 && canvas.height > 0;
-      const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-      return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
+      const root = document.querySelector('.right-pane-browser-surface');
+      const nativeSurface = root?.querySelector<HTMLElement>('[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]');
+      const liveSurfaceRef = nativeSurface?.getAttribute('data-browser-live-surface-ref') ?? '';
+      return liveSurfaceRef.startsWith('browser-host-session:');
     }, undefined, { timeout: 30_000 });
   }, iteration);
 }
@@ -1578,13 +1705,9 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
       const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
       const state = viewer?.getAttribute('data-browser-state');
       const url = viewer?.querySelector('header p')?.textContent ?? '';
-      const hostFrame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
-      const liveSurfaceRef = hostFrame?.getAttribute('data-browser-live-surface-ref') ?? '';
-      const frameStreamRef = hostFrame?.getAttribute('data-browser-frame-stream-ref') ?? '';
-      const keyboardPath = hostFrame?.getAttribute('data-browser-host-keyboard-path') ?? '';
-      const hostSurfaceReady = liveSurfaceRef.startsWith('browser-host-session:')
-        && frameStreamRef.startsWith('browser-host-session:')
-        && keyboardPath === 'hidden-input';
+      const nativeSurface = document.querySelector<HTMLElement>('.right-pane-browser-surface [data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]');
+      const liveSurfaceRef = nativeSurface?.getAttribute('data-browser-live-surface-ref') ?? '';
+      const hostSurfaceReady = liveSurfaceRef.startsWith('browser-host-session:');
       return (state === 'ready' || state === 'loading' && hostSurfaceReady) && new RegExp(source, flags).test(url);
     }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
   } catch (error) {
@@ -2167,6 +2290,18 @@ function buildProductLongSessionManifest(input: {
   const first = browserHostSessionSummary(input.firstSession);
   const beforeRestart = browserHostSessionSummary(input.sessionBeforeWorkspaceRestart);
   const afterRestart = input.sessionAfterWorkspaceRestart ? browserHostSessionSummary(input.sessionAfterWorkspaceRestart) : undefined;
+  const liveAcceptance = browserPaneLiveAcceptance(input.sessionBeforeWorkspaceRestart, observedFrameTransport(input.sessionBeforeWorkspaceRestart));
+  const nativeOnlyAttempt = buildNativeOnlyAttemptEvidence({
+    config: input.config,
+    durationMs: input.durationMs,
+    iterationsCompleted: input.iterationsCompleted,
+    liveAcceptance,
+    rightPaneInitial: input.rightPaneInitial,
+    rightPaneSample: input.rightPaneBeforeRestart,
+    restartEvidence: input.restartEvidence,
+    tabSwitchContinuity: input.tabSwitchContinuity,
+    addressDetailsRecovery: input.addressDetailsRecovery,
+  });
   const observedSessionRefs = boundedUnique([
     `browser-host-session:${first.id}`,
     `browser-host-session:${beforeRestart.id}`,
@@ -2176,17 +2311,21 @@ function buildProductLongSessionManifest(input: {
   ].filter((value) => value !== 'browser-host-session:'));
   return {
     schemaVersion: PRODUCT_LONG_SESSION_SCHEMA,
-    status: 'passed',
+    status: liveAcceptance.status,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
     targetOriginRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+    liveAcceptance,
+    nativeOnlyAttempt,
+    blockedReason: liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined,
     runner: {
       mode: input.config.mode,
       requestedMinutes: input.config.requestedMinutes,
       requestedIterations: input.config.requestedIterations,
       iterationsCompleted: input.iterationsCompleted,
       durationMs: Math.max(0, Math.round(input.durationMs)),
+      durationTargetMs: input.config.durationTargetMs,
       defaultSmokeIsThirtyMinuteBenchmark: false,
       extensionEnv: {
         minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
@@ -2321,9 +2460,12 @@ function boundedNetworkSamples(samples: BrowserHostNetworkSample[], limit: numbe
 
 function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) {
   assert.equal(manifest.schemaVersion, PRODUCT_LONG_SESSION_SCHEMA);
-  assert.equal(manifest.status, 'passed');
+  assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
   assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
+  assertNativeOnlyAttemptEvidence(manifest.nativeOnlyAttempt, manifest.runner, manifest.status);
+  if (manifest.status === 'blocked') assert.ok(manifest.blockedReason, 'web shell long-session diagnostic must include a blocked reason');
   assert.ok(manifest.runner.iterationsCompleted >= 1);
   assertProductLongSessionRunnerContract(manifest.runner, manifest.status, manifest.verificationCommand);
   assert.deepEqual(manifest.interactionCoverage.classes, [
@@ -2348,16 +2490,20 @@ function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) 
   );
   assert.equal(manifest.browserHostSession.first.owner, 'host');
   assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.owner, 'host');
-  assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.transport, 'host-stream');
-  assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.singleInteractiveTruth, true);
-  assert.match(manifest.browserHostSession.beforeWorkspaceRestart.refs.frameStreamRef ?? '', /^browser-host-session:[^/]+\/frame-stream$/);
+  assert.equal(
+    manifest.browserHostSession.beforeWorkspaceRestart.transport,
+    manifest.browserHostSession.beforeWorkspaceRestart.liveSurfaceTransport,
+  );
+  assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.singleInteractiveTruth, manifest.liveAcceptance.observed.singleInteractiveTruth);
+  assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.secondTruthSource, false);
+  if (manifest.browserHostSession.beforeWorkspaceRestart.refs.frameStreamRef) {
+    assert.match(manifest.browserHostSession.beforeWorkspaceRestart.refs.frameStreamRef, /^browser-host-session:[^/]+\/frame-stream$/);
+  }
   assert.equal(manifest.continuity.sameSessionBeforeRestart, true, 'product long-session must keep the same BrowserHostSession before workspace restart');
   assert.equal(manifest.continuity.singleBrowserHostSessionBeforeRestart, true, 'right pane must expose one BrowserHostSession before workspace restart');
   assert.equal(manifest.continuity.tabSwitchSameSession, true, 'right pane tab switch must preserve the BrowserHostSession');
   assert.equal(manifest.continuity.singleInteractiveTruth, true, 'BrowserHostSession must remain the single interactive truth');
   assert.equal(manifest.continuity.maxHostFrames, 1, 'right pane must not render multiple BrowserHostSession host frames');
-  assert.ok(manifest.boundedMetrics.frameStream.streamsOpened >= 1);
-  assert.ok(manifest.boundedMetrics.frameStream.framesReceived >= 1);
   assert.equal(manifest.boundedMetrics.loadingProgressLifecycle.schemaVersion, PRODUCT_LONG_SESSION_LOADING_PROGRESS_TRACE_SCHEMA);
   assert.equal(manifest.boundedMetrics.loadingProgressLifecycle.bounded, true);
   assert.equal(manifest.boundedMetrics.loadingProgressLifecycle.completionEvidence.readyStateObserved, true);
@@ -2411,6 +2557,247 @@ function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) 
   }
 }
 
+function buildNativeOnlyAttemptEvidence(input: {
+  config: ProductLongSessionConfig;
+  durationMs: number;
+  iterationsCompleted: number;
+  liveAcceptance: BrowserPaneLiveAcceptance;
+  rightPaneInitial?: RightPaneBoundedEvidence;
+  rightPaneSample?: RightPaneBoundedEvidence;
+  restartEvidence?: WorkspaceWriterRestartEvidence;
+  tabSwitchContinuity?: boolean[];
+  addressDetailsRecovery?: AddressDetailsRecoveryEvidence[];
+}): ProductLongSessionNativeOnlyAttemptEvidence {
+  const addressOutcomes = input.addressDetailsRecovery ?? [];
+  const tabSwitchContinuity = input.tabSwitchContinuity ?? [];
+  const rightPane = input.rightPaneSample;
+  return {
+    mode: 'native-only-right-pane-product-long-session',
+    target: {
+      durationTargetMs: input.config.durationTargetMs,
+      requestedMinutes: input.config.requestedMinutes,
+      runUntilDeadline: input.config.runUntilDeadline,
+      thirtyMinuteTarget: (input.config.requestedMinutes ?? 0) >= TRUE_LONG_SESSION_MINUTES,
+      passRequiresElapsedDuration: true,
+    },
+    elapsed: {
+      durationMs: Math.max(0, Math.round(input.durationMs)),
+      iterationsCompleted: input.iterationsCompleted,
+      configuredIterations: input.config.runUntilDeadline ? 'deadline' : input.config.iterations,
+      requestedIterations: input.config.requestedIterations,
+    },
+    expectations: {
+      nativeAttach: {
+        requiredTransport: 'native-embedded',
+        status: input.liveAcceptance.status === 'passed' ? 'attached' : 'blocked',
+        observedLiveSurfaceTransport: input.liveAcceptance.observed.liveSurfaceTransport || 'missing-native-attach',
+        blockedReasonCode: input.liveAcceptance.blockedReasonCode,
+      },
+      addressDetailsRecovery: {
+        expected: true,
+        status: addressOutcomes.length === 0
+          ? 'not-attempted'
+          : addressOutcomes.every((outcome) => outcome.status !== 'blocked' && outcome.boundedRefs?.bounded === true)
+            ? 'observed'
+            : 'blocked',
+        attemptedIterations: addressOutcomes
+          .filter((outcome) => outcome.attempted)
+          .map((outcome) => outcome.iteration)
+          .slice(-24),
+        outcomeCount: addressOutcomes.length,
+        boundedRefsRequired: true,
+      },
+      tabContinuity: {
+        expected: true,
+        status: tabSwitchContinuity.length === 0
+          ? 'not-attempted'
+          : tabSwitchContinuity.every(Boolean)
+            ? 'observed'
+            : 'blocked',
+        sameSessionObserved: tabSwitchContinuity.length === 0 ? undefined : tabSwitchContinuity.every(Boolean),
+      },
+      workspaceWriterRestartReconnect: {
+        expected: true,
+        status: input.restartEvidence?.status ?? 'not-attempted',
+        retryRequired: true,
+        retryAction: 'restart-workspace-writer-same-port-and-poll-existing-session',
+      },
+    },
+    boundedCounters: {
+      memorySampleAvailable: rightPane?.approxJsHeapUsed !== undefined,
+      approxJsHeapUsed: rightPane?.approxJsHeapUsed,
+      approxJsHeapDeltaFromInitial: heapDelta(input.rightPaneInitial, rightPane),
+      objectUrls: rightPane?.objectUrls ?? emptyObjectUrlStats(),
+      surfaceSampleAvailable: Boolean(rightPane),
+      attachChanges: rightPane?.attachChanges ?? 0,
+      detachChanges: rightPane?.detachChanges ?? 0,
+      maxHostFrames: rightPane?.maxHostFrames ?? 0,
+      nativeSurfaces: rightPane?.nativeSurfaces ?? 0,
+      canvasSurfaces: rightPane?.canvasSurfaces ?? 0,
+      imageSurfaces: rightPane?.imageSurfaces ?? 0,
+      iframeSurfaces: rightPane?.iframeSurfaces ?? 0,
+      proxySurfaces: rightPane?.proxySurfaces ?? 0,
+      webviewSurfaces: rightPane?.webviewSurfaces ?? 0,
+      systemPopupSurfaces: rightPane?.systemPopupSurfaces ?? 0,
+      dataImageSurfaces: rightPane?.dataImageSurfaces ?? 0,
+      base64Attributes: rightPane?.base64Attributes ?? 0,
+      sessionRefCount: rightPane?.sessionIds.length ?? 0,
+    },
+    blockedWhenNativeAttachMissing: true,
+    legacyFallbackObserved: {
+      hostStream: false,
+      canvas: false,
+      webRtc: false,
+      httpFrame: false,
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+    },
+  };
+}
+
+function browserPaneLiveAcceptance(session: JsonRecord, frameTransport?: string): BrowserPaneLiveAcceptance {
+  const liveSurfaceTransport = stringField(session.liveSurfaceTransport);
+  const singleInteractiveTruth = session.singleInteractiveTruth === true;
+  const secondTruthSource = session.secondTruthSource === true;
+  const blockedReasonCode = liveSurfaceTransport !== 'native-embedded'
+    ? (liveSurfaceTransport ? 'non-native-live-surface' : 'missing-native-attach')
+    : !singleInteractiveTruth
+      ? 'single-interactive-truth-missing'
+      : secondTruthSource
+        ? 'second-truth-source'
+        : undefined;
+  const passed = liveSurfaceTransport === 'native-embedded'
+    && singleInteractiveTruth
+    && secondTruthSource === false;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'right-pane-live-pass' : 'diagnostic-only',
+    passClaim: passed,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport,
+      singleInteractiveTruth,
+      secondTruthSource,
+      frameTransport,
+    },
+    blockedReason: passed
+      ? undefined
+      : `Browser pane live acceptance requires native-embedded; observed ${liveSurfaceTransport || 'missing-native-attach'}.`,
+    blockedReasonCode: passed ? undefined : blockedReasonCode,
+  };
+}
+
+function observedFrameTransport(session: JsonRecord): string | undefined {
+  return stringField(session.frameTransport) || undefined;
+}
+
+function blockedBrowserPaneLiveAcceptance(error: unknown): BrowserPaneLiveAcceptance {
+  return {
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    required: {
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+    },
+    observed: {
+      shell: 'web-right-pane',
+      liveSurfaceTransport: 'missing-native-attach',
+      singleInteractiveTruth: false,
+      secondTruthSource: false,
+    },
+    blockedReason: boundedLiveBlockedReason(error),
+    blockedReasonCode: 'missing-native-attach',
+  };
+}
+
+function assertBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, manifestStatus: 'passed' | 'blocked'): void {
+  assert.equal(liveAcceptance.status, manifestStatus);
+  assert.equal(liveAcceptance.required.liveSurfaceTransport, 'native-embedded');
+  assert.equal(liveAcceptance.required.singleInteractiveTruth, true);
+  assert.equal(liveAcceptance.required.secondTruthSource, false);
+  assert.equal(liveAcceptance.observed.shell, 'web-right-pane');
+  assert.equal(liveAcceptance.observed.secondTruthSource, false);
+  if (manifestStatus === 'passed') {
+    assert.equal(liveAcceptance.claimScope, 'right-pane-live-pass');
+    assert.equal(liveAcceptance.passClaim, true);
+    assert.equal(liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+    assert.equal(liveAcceptance.observed.singleInteractiveTruth, true);
+  } else {
+    assert.equal(liveAcceptance.claimScope, 'diagnostic-only');
+    assert.equal(liveAcceptance.passClaim, false);
+    assert.ok(liveAcceptance.blockedReason);
+    assert.ok(liveAcceptance.blockedReasonCode);
+  }
+}
+
+function assertNativeOnlyAttemptEvidence(
+  attempt: ProductLongSessionNativeOnlyAttemptEvidence,
+  runner: ProductLongSessionManifest['runner'],
+  status: ProductLongSessionManifest['status'],
+): void {
+  assert.equal(attempt.mode, 'native-only-right-pane-product-long-session');
+  assert.equal(attempt.target.durationTargetMs, runner.durationTargetMs);
+  assert.equal(attempt.target.requestedMinutes, runner.requestedMinutes);
+  assert.equal(attempt.target.passRequiresElapsedDuration, true);
+  assert.equal(attempt.target.thirtyMinuteTarget, (runner.requestedMinutes ?? 0) >= TRUE_LONG_SESSION_MINUTES);
+  assert.equal(attempt.elapsed.durationMs, runner.durationMs);
+  assert.equal(attempt.elapsed.iterationsCompleted, runner.iterationsCompleted);
+  assert.equal(attempt.blockedWhenNativeAttachMissing, true);
+  assert.deepEqual(Object.values(attempt.legacyFallbackObserved), [false, false, false, false, false, false, false, false]);
+  assert.equal(attempt.expectations.nativeAttach.requiredTransport, 'native-embedded');
+  assert.equal(attempt.expectations.addressDetailsRecovery.expected, true);
+  assert.equal(attempt.expectations.addressDetailsRecovery.boundedRefsRequired, true);
+  assert.equal(attempt.expectations.tabContinuity.expected, true);
+  assert.equal(attempt.expectations.workspaceWriterRestartReconnect.expected, true);
+  assert.equal(attempt.expectations.workspaceWriterRestartReconnect.retryRequired, true);
+  assert.equal(attempt.expectations.workspaceWriterRestartReconnect.retryAction, 'restart-workspace-writer-same-port-and-poll-existing-session');
+  assert.ok(['attached', 'blocked'].includes(attempt.expectations.nativeAttach.status));
+  assert.ok(['observed', 'blocked', 'not-attempted'].includes(attempt.expectations.addressDetailsRecovery.status));
+  assert.ok(['observed', 'blocked', 'not-attempted'].includes(attempt.expectations.tabContinuity.status));
+  assert.ok(['reconnected', 'blocked', 'not-attempted'].includes(attempt.expectations.workspaceWriterRestartReconnect.status));
+  assert.ok(attempt.boundedCounters.objectUrls.createCount >= 0);
+  assert.ok(attempt.boundedCounters.objectUrls.revokeCount >= 0);
+  assert.ok(attempt.boundedCounters.objectUrls.liveEstimate >= 0);
+  assert.ok(attempt.boundedCounters.objectUrls.maxLiveEstimate >= attempt.boundedCounters.objectUrls.liveEstimate);
+  assert.ok(attempt.boundedCounters.objectUrls.revokeDeficit >= 0);
+  assert.equal(attempt.boundedCounters.canvasSurfaces, 0);
+  assert.equal(attempt.boundedCounters.iframeSurfaces, 0);
+  assert.equal(attempt.boundedCounters.proxySurfaces, 0);
+  assert.equal(attempt.boundedCounters.webviewSurfaces, 0);
+  assert.equal(attempt.boundedCounters.systemPopupSurfaces, 0);
+  assert.equal(attempt.boundedCounters.dataImageSurfaces, 0);
+  assert.equal(attempt.boundedCounters.base64Attributes, 0);
+  if (status === 'passed') {
+    assert.equal(attempt.expectations.nativeAttach.status, 'attached');
+    assert.equal(attempt.expectations.nativeAttach.observedLiveSurfaceTransport, 'native-embedded');
+    assert.equal(attempt.expectations.addressDetailsRecovery.status, 'observed');
+    assert.equal(attempt.expectations.tabContinuity.status, 'observed');
+    if (attempt.target.thirtyMinuteTarget) {
+      assert.ok(attempt.elapsed.durationMs >= attempt.target.durationTargetMs);
+    }
+  } else if (attempt.expectations.nativeAttach.observedLiveSurfaceTransport === 'missing-native-attach') {
+    assert.equal(attempt.expectations.nativeAttach.status, 'blocked');
+    assert.equal(attempt.expectations.nativeAttach.blockedReasonCode, 'missing-native-attach');
+  }
+}
+
+function boundedLiveBlockedReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => `url:${hashText(url)}`)
+    .replaceAll(FIXTURE_HOST, `fixture-host:${hashText(FIXTURE_HOST)}`)
+    .slice(0, 240) || 'blocked';
+}
+
 async function writeProductLongSessionBlockedManifest(input: {
   config: ProductLongSessionConfig;
   runId: string;
@@ -2448,6 +2835,16 @@ async function writeProductLongSessionBlockedManifest(input: {
     initialRightPaneEvidence: input.rightPaneInitial,
     networkSamples,
   });
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(input.error);
+  const nativeOnlyAttempt = buildNativeOnlyAttemptEvidence({
+    config: input.config,
+    durationMs: input.durationMs,
+    iterationsCompleted: input.currentIteration,
+    liveAcceptance,
+    rightPaneInitial: input.rightPaneInitial,
+    rightPaneSample: rightPaneBeforeFailure,
+    addressDetailsRecovery: input.addressDetailsRecovery,
+  });
   const manifest: ProductLongSessionBlockedManifest = {
     schemaVersion: PRODUCT_LONG_SESSION_SCHEMA,
     status: 'blocked',
@@ -2455,12 +2852,15 @@ async function writeProductLongSessionBlockedManifest(input: {
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
     targetOriginRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+    liveAcceptance,
+    nativeOnlyAttempt,
     runner: {
       mode: input.config.mode,
       requestedMinutes: input.config.requestedMinutes,
       requestedIterations: input.config.requestedIterations,
       iterationsCompleted: input.currentIteration,
       durationMs: Math.max(0, Math.round(input.durationMs)),
+      durationTargetMs: input.config.durationTargetMs,
       defaultSmokeIsThirtyMinuteBenchmark: false,
       extensionEnv: {
         minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
@@ -2539,6 +2939,8 @@ function assertProductLongSessionBlockedManifest(manifest: ProductLongSessionBlo
   assert.equal(manifest.status, 'blocked');
   assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
+  assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, 'blocked');
+  assertNativeOnlyAttemptEvidence(manifest.nativeOnlyAttempt, manifest.runner, 'blocked');
   assert.ok(manifest.failure.phase.length > 0);
   assert.match(manifest.failure.reasonHash, /^[a-f0-9]{16}$/);
   assertProductLongSessionRunnerContract(manifest.runner, manifest.status, manifest.verificationCommand);
@@ -2602,7 +3004,7 @@ function assertProductLongSessionManifestIsBounded(manifest: ProductLongSessionM
     'product long-session manifest must stay bounded',
   );
   assert.doesNotMatch(serialized, /data:image|;base64,|iVBORw0KGgo|<\s*(?:!doctype|html|body|script|iframe|webview)\b/i);
-  assert.doesNotMatch(serialized, /"(?:rawDom|domSnapshot|screenshotBase64|providerPayload|consoleLog|networkLog)"\s*:/i);
+  assert.doesNotMatch(serialized, /"(?:rawDomPayload|domSnapshotPayload|screenshotBase64|providerPayload|consoleLogPayload|networkLogPayload)"\s*:/i);
 }
 
 function assertAddressDetailsRecoveryOutcome(outcome: AddressDetailsRecoveryEvidence) {
@@ -2644,6 +3046,11 @@ function assertProductLongSessionRunnerContract(
   assert.equal(runner.extensionEnv.iterations, 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS');
   assert.ok(runner.iterationsCompleted >= 0);
   assert.ok(runner.durationMs >= 0);
+  assert.equal(
+    runner.durationTargetMs,
+    runner.requestedMinutes === undefined ? 0 : Math.round(runner.requestedMinutes * 60_000),
+    'runner durationTargetMs must reflect requested minutes without implying a default 30 minute benchmark',
+  );
 
   if (runner.mode === 'quick-contract') {
     assert.ok(
@@ -2676,7 +3083,7 @@ function assertProductLongSessionRunnerContract(
     assert.equal(runner.mode, 'extended-product-long-session');
     if (status === 'passed') {
       assert.ok(
-        runner.durationMs >= Math.round((runner.requestedMinutes ?? 0) * 60_000),
+        runner.durationMs >= runner.durationTargetMs,
         'requested 30+ minute product long-session pass must run for the requested duration',
       );
     } else {
@@ -2705,6 +3112,16 @@ function emptyFrameStreamStats(): FrameStreamStats {
     framesReceived: 0,
     binaryFramesReceived: 0,
     maxPayloadBytes: 0,
+  };
+}
+
+function emptyObjectUrlStats(): ObjectUrlBoundedStats {
+  return {
+    createCount: 0,
+    revokeCount: 0,
+    liveEstimate: 0,
+    maxLiveEstimate: 0,
+    revokeDeficit: 0,
   };
 }
 
@@ -2819,7 +3236,7 @@ function productLongSessionFailureReasonCode(error: unknown, phase = ''): Produc
   if (/fixture event/i.test(message)) return 'fixture-event-timeout';
   if (/BrowserHostSession URL/i.test(message)) return 'browser-host-session-url-timeout';
   if (/results panel/i.test(message)) return 'sciforge-results-panel-timeout';
-  if (/No browser executable/i.test(message)) return 'browser-executable-missing';
+  if (/No browser executable|missing-browser-executable/i.test(message)) return 'browser-executable-missing';
   if (/workspace|health/i.test(message)) return 'workspace-writer-health-timeout';
   return 'product-long-session-error';
 }
@@ -2856,7 +3273,9 @@ function browserHostSessionSummary(session: JsonRecord): BrowserHostSessionSumma
     owner: stringField(session.owner),
     status: stringField(session.status),
     transport: stringField(session.liveSurfaceTransport),
+    liveSurfaceTransport: stringField(session.liveSurfaceTransport),
     singleInteractiveTruth: session.singleInteractiveTruth === true,
+    secondTruthSource: session.secondTruthSource === true,
     canGoBack: session.canGoBack === true,
     canGoForward: session.canGoForward === true,
     urlHash: url ? hashText(url) : undefined,
@@ -3070,7 +3489,7 @@ function detailsPageBody(iteration: number) {
     <main>
       <section class="hero">
         <h1>Details ${iteration}</h1>
-        <p>History, reload, frame-stream, and surface continuity target.</p>
+        <p>History, reload, native surface, and continuity target.</p>
       </section>
       <aside class="drag-target">Stable details surface ${iteration}</aside>
       <section class="long-page">

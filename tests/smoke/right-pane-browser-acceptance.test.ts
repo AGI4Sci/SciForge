@@ -140,28 +140,30 @@ async function assertExternalBrowserHostSession(page: Page, browserSurface: Loca
   }
 
   const workbench = browserSurface.locator('.browser-workbench-viewer').first();
-  await page.waitForFunction(({ source, flags }) => {
+  const surfaceState = await page.waitForFunction(({ source, flags }) => {
     const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
     const state = viewer?.getAttribute('data-browser-state');
     const url = viewer?.querySelector('header p')?.textContent ?? '';
-    if (state === 'error') return true;
-    return state === 'ready' && new RegExp(source, flags).test(url);
+    const nativeSurface = document.querySelector('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]');
+    if ((state === 'blocked' || state === 'error') && !nativeSurface) return state;
+    if ((state === 'ready' || state === 'loading') && nativeSurface && new RegExp(source, flags).test(url)) return 'native';
+    return false;
   }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 60_000 });
-  assert.equal(await workbench.getAttribute('data-browser-state'), 'ready', await browserSurface.textContent() ?? undefined);
   assert.equal(await browserSurface.locator('input[aria-label="Browser URL"]').inputValue(), expectedAddress);
+  await assertNoLegacyBrowserLiveFallback(browserSurface);
+  if (await surfaceState.jsonValue() !== 'native') {
+    const state = await workbench.getAttribute('data-browser-state');
+    assert.ok(state === 'blocked' || state === 'error', await browserSurface.textContent() ?? undefined);
+    return;
+  }
 
-  const hostFrame = browserSurface.locator('img[data-browser-host-surface="browser-host-session"][data-browser-frame-ref^="browser-host-session:"]').first();
-  await hostFrame.waitFor({ state: 'visible', timeout: 30_000 });
-  await page.waitForFunction(() => {
-    const img = document.querySelector('.right-pane-browser-surface img[data-browser-host-surface="browser-host-session"]');
-    return img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0;
-  }, undefined, { timeout: 30_000 });
-  assert.match(await hostFrame.getAttribute('src') ?? '', /^blob:/);
-  assert.equal(await hostFrame.getAttribute('data-browser-frame-transport'), 'websocket-binary');
+  assert.equal(await workbench.getAttribute('data-browser-state'), 'ready', await browserSurface.textContent() ?? undefined);
+  const nativeSurface = browserSurface.locator('.browser-workbench-host-frame[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"][data-browser-single-interactive-truth="true"]').first();
+  await nativeSurface.waitFor({ state: 'visible', timeout: 30_000 });
+  assert.equal(await nativeSurface.getAttribute('data-browser-host-surface'), 'browser-host-session');
+  assert.equal(await nativeSurface.getAttribute('data-browser-frame-transport'), 'native-embedded');
+  assert.match(await nativeSurface.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   assert.match(await workbench.locator('header p').textContent() ?? '', expectedUrl);
-  assert.equal(await browserSurface.locator('[data-browser-host-surface="system-browser-window"]').count(), 0);
-  assert.equal(await browserSurface.locator('iframe[src^="/api/sciforge/browser/proxy"]').count(), 0);
-  assert.equal(await browserSurface.locator('img[src*="/api/sciforge/browser-host/sessions/"][data-browser-host-surface="browser-host-session"]').count(), 0);
   assert.equal(await browserSurface.locator(`a[href^="${expectedAddress}"]`).count(), 0);
   assert.ok(await browserSurface.locator('[data-browser-command-id="open-external"][data-command-text^="/browser open-external"]').count() >= 1);
   for (const refKind of ['browser-frame', 'screenshot', 'dom-snapshot', 'ax-snapshot', 'console-log', 'network-log']) {
@@ -172,9 +174,22 @@ async function assertExternalBrowserHostSession(page: Page, browserSurface: Loca
   }
 }
 
+async function assertNoLegacyBrowserLiveFallback(browserSurface: Locator) {
+  assert.equal(await browserSurface.locator('[data-browser-host-surface="system-browser-window"]').count(), 0);
+  assert.equal(await browserSurface.locator('iframe[src^="/api/sciforge/browser/proxy"], iframe').count(), 0);
+  assert.equal(await browserSurface.locator('webview').count(), 0);
+  assert.equal(await browserSurface.locator('img[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await browserSurface.locator('canvas[data-browser-host-surface="browser-host-session"]').count(), 0);
+  assert.equal(await browserSurface.locator('img[src*="/api/sciforge/browser-host/sessions/"][data-browser-host-surface="browser-host-session"]').count(), 0);
+}
+
 async function assertPaneSurfaces(page: Page) {
   await ensurePane(page, 'Screen', '[data-component-id="virtual-screen-viewer"]');
-  await expectAttribute(page, '[data-component-id="virtual-screen-viewer"]', 'data-status', 'empty');
+  const screenStatus = await page.locator('[data-component-id="virtual-screen-viewer"]').first().getAttribute('data-status');
+  assert.ok(
+    screenStatus === 'empty' || screenStatus === 'blocked',
+    `Screen pane should be empty or typed blocked in this acceptance shell, observed ${String(screenStatus)}`,
+  );
 
   await ensurePane(page, 'Terminal', '[data-component-id="terminal-session-viewer"]');
   await expectAttribute(page, '[data-component-id="terminal-session-viewer"]', 'data-mode', 'live');

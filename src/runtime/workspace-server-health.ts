@@ -5,6 +5,7 @@ export const WORKSPACE_WRITER_HEALTH_CAPABILITIES = [
   'sciforge-tools',
   'workspace-terminal-websocket-pty',
   'browser-host-session',
+  'browser-host-native-surface',
   'browser-host-search',
   'repair-handoff-runner',
   'feedback-direct-codex-terminal-websocket-pty',
@@ -25,9 +26,16 @@ export interface WorkspaceWriterHealthInput {
   startedAt: string;
   instanceId: string;
   lifecycleToken?: string;
+  browserHostNativeAdapterUrl?: string;
 }
 
 export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
+  const nativeAdapterUrl = normalizeBrowserHostNativeAdapterUrl(
+    input.browserHostNativeAdapterUrl ?? process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL,
+  );
+  const capabilities = nativeAdapterUrl
+    ? [...WORKSPACE_WRITER_HEALTH_CAPABILITIES]
+    : WORKSPACE_WRITER_HEALTH_CAPABILITIES.filter((capability) => capability !== 'browser-host-native-surface');
   return {
     ok: true,
     service: 'sciforge-workspace-writer',
@@ -36,12 +44,28 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
     startedAt: input.startedAt,
     instanceId: input.instanceId,
     lifecycleToken: input.lifecycleToken || undefined,
-    capabilities: [...WORKSPACE_WRITER_HEALTH_CAPABILITIES],
+    capabilities,
     endpoints: {
       runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
-      browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+      browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+      ...(nativeAdapterUrl
+        ? { browserHostNativeSurface: `${nativeAdapterUrl}/{health,sessions/{sessionId}/{attach,state}}` }
+        : {}),
+      browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
     },
   };
+}
+
+function normalizeBrowserHostNativeAdapterUrl(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().replace(/\/+$/, '');
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'http:' || !/^(?:127\.0\.0\.1|localhost|::1)$/i.test(url.hostname)) return undefined;
+    return trimmed;
+  } catch {
+    return undefined;
+  }
 }
