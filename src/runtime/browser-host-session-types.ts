@@ -24,6 +24,7 @@ export type BrowserHostSessionAction =
   | 'state'
   | 'close';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
+export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
 export type BrowserHostSessionLoadingProgressState =
   | 'navigation-start'
@@ -89,7 +90,7 @@ export interface BrowserHostSessionActionTiming {
   hostActionMs: number;
   evidenceMs?: number;
   totalMs: number;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   paintAckSource?: 'native-adapter-action-state' | 'host-stream-frame' | 'none';
   blockedReason?: string;
 }
@@ -115,6 +116,17 @@ export interface BrowserHostSessionLoadingProgressRefs {
   searchResult?: string;
 }
 
+export interface BrowserHostSessionLoadingProgressUrlDigest {
+  length: number;
+  sha1: string;
+}
+
+export interface BrowserHostSessionLoadingProgressUrls {
+  requested?: BrowserHostSessionLoadingProgressUrlDigest;
+  current?: BrowserHostSessionLoadingProgressUrlDigest;
+  final?: BrowserHostSessionLoadingProgressUrlDigest;
+}
+
 export interface BrowserHostSessionLoadingProgress {
   schemaVersion: typeof BROWSER_HOST_LOADING_PROGRESS_SCHEMA;
   state: BrowserHostSessionLoadingProgressState;
@@ -124,6 +136,19 @@ export interface BrowserHostSessionLoadingProgress {
   action?: BrowserHostSessionAction | 'open';
   updatedAt: string;
   refs: BrowserHostSessionLoadingProgressRefs;
+  urls?: BrowserHostSessionLoadingProgressUrls;
+  canRetry?: boolean;
+  blocked?: boolean;
+  requiresHandoff?: boolean;
+}
+
+export interface BrowserHostSessionNavigationProgressEvent {
+  state: BrowserHostSessionLoadingProgressState;
+  reason: BrowserHostSessionLoadingProgressReason;
+  source?: BrowserHostSessionLoadingProgressSource;
+  requestedUrl?: string;
+  currentUrl?: string;
+  finalUrl?: string;
   canRetry?: boolean;
   blocked?: boolean;
   requiresHandoff?: boolean;
@@ -145,7 +170,7 @@ export interface BrowserHostSessionState {
   canGoBack: boolean;
   canGoForward: boolean;
   liveSurfaceRef?: string;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
   frameStreamRef?: string;
@@ -222,7 +247,7 @@ export interface BrowserHostSearchOutput {
 }
 
 export interface BrowserHostSessionDriver {
-  readonly liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  readonly liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   readonly nativeAdapterUrl?: string;
   goto(url: string, timeoutMs: number): Promise<void>;
   url(): string;
@@ -246,11 +271,12 @@ export interface BrowserHostSessionDriver {
   drag?(path: BrowserHostMousePoint[], button?: BrowserHostMouseButton): Promise<void>;
   type(text: string): Promise<void>;
   press(key: string): Promise<void>;
-  scroll(deltaX: number, deltaY: number): Promise<void>;
+  scroll(deltaX: number, deltaY: number, x?: number, y?: number): Promise<void>;
   cursor?(x: number, y: number): Promise<string>;
   close(): Promise<void>;
   onConsole?(listener: (entry: Record<string, unknown>) => void): void;
   onNetwork?(listener: (entry: Record<string, unknown>) => void): void;
+  onNavigationProgress?(listener: (progress: BrowserHostSessionNavigationProgressEvent) => void): void;
 }
 
 export interface BrowserHostSessionDriverFactory {

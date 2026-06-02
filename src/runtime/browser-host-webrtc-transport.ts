@@ -72,6 +72,100 @@ export interface BrowserHostWebRtcTransportBridgeActionChannel {
   ackMode: 'bounded-action-ack';
 }
 
+export interface BrowserHostWebRtcRightPaneHandoffContract {
+  status: 'candidate-contract';
+  claim: 'bridge-to-right-pane-canvas-handoff-only';
+  claimScope: 'candidate-only';
+  owner: 'BrowserHostSession';
+  shell: 'web-shell';
+  rightPaneSurfaceOwner: 'BrowserHostSession';
+  productSurface: 'right-pane-browser';
+  renderTarget: 'canvas';
+  frameRenderer: 'canvas-binary';
+  frameTransport: 'webrtc-data-channel';
+  fallbackTransport: 'websocket-binary';
+  liveSurfaceTransportCandidate: 'webrtc-data-channel';
+  hostSessionRef: string;
+  liveSurfaceRef: string;
+  frameStreamRef: string;
+  actionChannelRef: string;
+  metricsSummaryRef: string;
+  inlineFrameBytes: false;
+  inlineSignals: false;
+  rawDomCaptured: false;
+  secondViewer: false;
+  secondTruthSource: false;
+  httpFrameLiveFallback: false;
+  iframe: false;
+  proxy: false;
+  snapshotViewer: false;
+  fullyPassedClaim: false;
+  realUiWebRtcPassClaim: false;
+  loopbackEvidenceOnly: false;
+  httpFrameRouteClaim: false;
+}
+
+export interface BrowserHostWebRtcRealLongRunHandoffContract {
+  schemaVersion: 'sciforge.browser-host-session.webrtc-transport-real-long-run-handoff.v1';
+  status: 'blocked';
+  blockedReason: string;
+  benchmarkClaim: false;
+  owner: 'BrowserHostSession';
+  source: 'contract-smoke-not-real-ui-run';
+  realUiRun: false;
+  secondTruthSource: false;
+  rawPayloadsCaptured: false;
+  refs: {
+    hostSessionRef: string;
+    bridgeRef: string;
+    transportRef: string;
+    metricsSummaryRef: string;
+    metricsSamplesRef: string;
+    decoderMetricsRef: string;
+    objectUrlMetricsRef: string;
+    rightPaneSurfaceRef: string;
+    actionChannelRef: string;
+  };
+  requiredMetrics: readonly string[];
+  deterministicContractMetrics: {
+    sampleCount: number;
+    p95EndToEndMs: number;
+    p95DecodeMs: number;
+    totalDroppedFrames: number;
+    totalSkippedBackpressure: number;
+    totalSkippedRecentInput: number;
+    backpressureEventCount: number;
+    dropRate: number;
+  };
+  realRunProofRequirements: {
+    source: 'real-right-pane-ui-webrtc-run';
+    realUiRun: true;
+    productSurface: 'right-pane-browser';
+    transportEvidenceKind: 'real-ui-webrtc-data-channel-live-stack';
+    hostSessionRefPrefix: 'browser-host-session:';
+    rightPaneSurfaceRefPrefix: 'browser-host-session:';
+    metricsSamplesRefPrefix: 'browser-host-session:';
+    decoderMetricsRefPrefix: 'browser-host-session:';
+    objectUrlMetricsRefPrefix: 'browser-host-session:';
+    minSampleCount: 120;
+    requiredBoundedMetrics: readonly string[];
+  };
+  payloadPolicy: {
+    refsFirst: true;
+    inlineSamples: false;
+    rawFramePayloads: false;
+    rawSignals: false;
+    rawDom: false;
+  };
+  passRefusalPolicy: {
+    candidateContractDoesNotPass: true;
+    loopbackSmokeDoesNotPass: true;
+    httpFrameRouteDoesNotPass: true;
+    secondTruthSourceDoesNotPass: true;
+    deterministicContractMetricsDoNotPass: true;
+  };
+}
+
 export interface BrowserHostWebRtcFrameRefMessage {
   schemaVersion: typeof BROWSER_HOST_WEBRTC_FRAME_REF_MESSAGE_SCHEMA;
   type: 'browser-host-frame-ref';
@@ -99,6 +193,8 @@ export interface BrowserHostWebRtcTransportBridgeManifest {
   media: BrowserHostWebRtcMediaContract;
   metrics: BrowserHostWebRtcTransportBridgeMetricsRefs;
   actionChannel: BrowserHostWebRtcTransportBridgeActionChannel;
+  rightPaneHandoff: BrowserHostWebRtcRightPaneHandoffContract;
+  realP95DropBackpressureLongRunHandoff: BrowserHostWebRtcRealLongRunHandoffContract;
   frameMessages: BrowserHostWebRtcFrameRefMessage[];
   bridge: {
     adapterRole: 'display-input-adapter';
@@ -186,6 +282,39 @@ export function createBrowserHostWebRtcTransportBridgeManifest(input: {
       hotPathCapture: 'none',
       ackMode: 'bounded-action-ack',
     },
+    rightPaneHandoff: {
+      status: 'candidate-contract',
+      claim: 'bridge-to-right-pane-canvas-handoff-only',
+      claimScope: 'candidate-only',
+      owner: 'BrowserHostSession',
+      shell: 'web-shell',
+      rightPaneSurfaceOwner: 'BrowserHostSession',
+      productSurface: 'right-pane-browser',
+      renderTarget: 'canvas',
+      frameRenderer: 'canvas-binary',
+      frameTransport: 'webrtc-data-channel',
+      fallbackTransport: 'websocket-binary',
+      liveSurfaceTransportCandidate: 'webrtc-data-channel',
+      hostSessionRef: refs.hostSessionRef,
+      liveSurfaceRef: refs.liveSurfaceRef,
+      frameStreamRef: refs.frameStreamRef ?? `browser-host-session:${sessionId}/frame-stream`,
+      actionChannelRef: refs.actionChannelRef,
+      metricsSummaryRef: `${refs.metricsRef}/summary`,
+      inlineFrameBytes: false,
+      inlineSignals: false,
+      rawDomCaptured: false,
+      secondViewer: false,
+      secondTruthSource: false,
+      httpFrameLiveFallback: false,
+      iframe: false,
+      proxy: false,
+      snapshotViewer: false,
+      fullyPassedClaim: false,
+      realUiWebRtcPassClaim: false,
+      loopbackEvidenceOnly: false,
+      httpFrameRouteClaim: false,
+    },
+    realP95DropBackpressureLongRunHandoff: browserHostWebRtcRealLongRunHandoffContract(input.candidate, refs),
     frameMessages: browserHostWebRtcFrameRefMessages(input.candidate, refs, input.maxFrameMessages),
     bridge: {
       adapterRole: input.candidate.adapter.role,
@@ -236,6 +365,8 @@ export function validateBrowserHostWebRtcTransportBridgeManifest(value: unknown)
     validateBridgeRefs(manifest.refs, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
     validateBridgeSignaling(manifest.signaling, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
     validateBridgeActionChannel(manifest.actionChannel, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
+    validateRightPaneHandoff(manifest.rightPaneHandoff, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
+    validateRealLongRunHandoff(manifest.realP95DropBackpressureLongRunHandoff, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
     validateBridgeFrameMessages(manifest.frameMessages, manifest.media, browserHostWebRtcTransportBridgeRefs(sessionId), errors);
   }
 
@@ -272,6 +403,100 @@ function browserHostWebRtcFrameRefMessages(
       inlineFrameBytes: false,
     };
   });
+}
+
+function browserHostWebRtcRealLongRunHandoffContract(
+  candidate: BrowserHostWebRtcTransportCandidate,
+  refs: BrowserHostWebRtcTransportBridgeRefs,
+): BrowserHostWebRtcRealLongRunHandoffContract {
+  return {
+    schemaVersion: 'sciforge.browser-host-session.webrtc-transport-real-long-run-handoff.v1',
+    status: 'blocked',
+    blockedReason: 'real-ui-webrtc-stack-and-long-run-runner-not-implemented-in-this-smoke',
+    benchmarkClaim: false,
+    owner: 'BrowserHostSession',
+    source: 'contract-smoke-not-real-ui-run',
+    realUiRun: false,
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+    refs: {
+      hostSessionRef: refs.hostSessionRef,
+      bridgeRef: refs.bridgeRef,
+      transportRef: refs.transportRef,
+      metricsSummaryRef: `${refs.metricsRef}/summary`,
+      metricsSamplesRef: `${refs.metricsRef}/samples`,
+      decoderMetricsRef: `${refs.metricsRef}/decoder`,
+      objectUrlMetricsRef: `${refs.metricsRef}/object-url-lifecycle`,
+      rightPaneSurfaceRef: refs.liveSurfaceRef,
+      actionChannelRef: refs.actionChannelRef,
+    },
+    requiredMetrics: [
+      'sampleCount',
+      'p95CaptureMs',
+      'p95EncodeMs',
+      'p95NetworkMs',
+      'p95DecodeMs',
+      'p95RenderMs',
+      'p95EndToEndMs',
+      'totalDroppedFrames',
+      'totalSkippedBackpressure',
+      'totalSkippedRecentInput',
+      'backpressureEventCount',
+      'dropRate',
+      'objectUrlCreateCount',
+      'objectUrlRevokeCount',
+      'objectUrlLiveEstimate',
+      'objectUrlRevokeDeficit',
+    ],
+    deterministicContractMetrics: {
+      sampleCount: candidate.metrics.sampleCount,
+      p95EndToEndMs: candidate.metrics.p95EndToEndMs,
+      p95DecodeMs: candidate.metrics.p95DecodeMs,
+      totalDroppedFrames: candidate.metrics.totalDroppedFrames,
+      totalSkippedBackpressure: candidate.metrics.totalSkippedBackpressure,
+      totalSkippedRecentInput: candidate.metrics.totalSkippedRecentInput,
+      backpressureEventCount: candidate.metrics.backpressureEventCount,
+      dropRate: candidate.metrics.dropRate,
+    },
+    realRunProofRequirements: {
+      source: 'real-right-pane-ui-webrtc-run',
+      realUiRun: true,
+      productSurface: 'right-pane-browser',
+      transportEvidenceKind: 'real-ui-webrtc-data-channel-live-stack',
+      hostSessionRefPrefix: 'browser-host-session:',
+      rightPaneSurfaceRefPrefix: 'browser-host-session:',
+      metricsSamplesRefPrefix: 'browser-host-session:',
+      decoderMetricsRefPrefix: 'browser-host-session:',
+      objectUrlMetricsRefPrefix: 'browser-host-session:',
+      minSampleCount: 120,
+      requiredBoundedMetrics: [
+        'p95EndToEndMs',
+        'p95DecodeMs',
+        'dropRate',
+        'totalDroppedFrames',
+        'totalSkippedBackpressure',
+        'backpressureEventCount',
+        'objectUrlCreateCount',
+        'objectUrlRevokeCount',
+        'objectUrlLiveEstimate',
+        'objectUrlRevokeDeficit',
+      ],
+    },
+    payloadPolicy: {
+      refsFirst: true,
+      inlineSamples: false,
+      rawFramePayloads: false,
+      rawSignals: false,
+      rawDom: false,
+    },
+    passRefusalPolicy: {
+      candidateContractDoesNotPass: true,
+      loopbackSmokeDoesNotPass: true,
+      httpFrameRouteDoesNotPass: true,
+      secondTruthSourceDoesNotPass: true,
+      deterministicContractMetricsDoNotPass: true,
+    },
+  };
 }
 
 function browserHostWebRtcMediaRef(media: BrowserHostWebRtcMediaContract): string {
@@ -331,6 +556,218 @@ function validateBridgeActionChannel(actionChannel: unknown, refs: BrowserHostWe
   for (const action of BROWSER_HOST_WEBRTC_BRIDGE_ACTIONS) {
     if (!acceptedActions.includes(action)) errors.push(`actionChannel.acceptedActions must include ${action}`);
   }
+}
+
+function validateRightPaneHandoff(handoff: unknown, refs: BrowserHostWebRtcTransportBridgeRefs, errors: string[]): void {
+  const record = objectRecord(handoff);
+  if (!record) {
+    errors.push('rightPaneHandoff is required');
+    return;
+  }
+  const expected: Record<string, unknown> = {
+    status: 'candidate-contract',
+    claim: 'bridge-to-right-pane-canvas-handoff-only',
+    claimScope: 'candidate-only',
+    owner: 'BrowserHostSession',
+    shell: 'web-shell',
+    rightPaneSurfaceOwner: 'BrowserHostSession',
+    productSurface: 'right-pane-browser',
+    renderTarget: 'canvas',
+    frameRenderer: 'canvas-binary',
+    frameTransport: 'webrtc-data-channel',
+    fallbackTransport: 'websocket-binary',
+    liveSurfaceTransportCandidate: 'webrtc-data-channel',
+    hostSessionRef: refs.hostSessionRef,
+    liveSurfaceRef: refs.liveSurfaceRef,
+    frameStreamRef: refs.frameStreamRef,
+    actionChannelRef: refs.actionChannelRef,
+    metricsSummaryRef: `${refs.metricsRef}/summary`,
+    inlineFrameBytes: false,
+    inlineSignals: false,
+    rawDomCaptured: false,
+    secondViewer: false,
+    secondTruthSource: false,
+    httpFrameLiveFallback: false,
+    iframe: false,
+    proxy: false,
+    snapshotViewer: false,
+    fullyPassedClaim: false,
+    realUiWebRtcPassClaim: false,
+    loopbackEvidenceOnly: false,
+    httpFrameRouteClaim: false,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (record[key] !== value) errors.push(`rightPaneHandoff.${key} must be ${String(value)}`);
+  }
+}
+
+function validateRealLongRunHandoff(handoff: unknown, refs: BrowserHostWebRtcTransportBridgeRefs, errors: string[]): void {
+  const record = objectRecord(handoff);
+  if (!record) {
+    errors.push('realP95DropBackpressureLongRunHandoff is required');
+    return;
+  }
+  if (record.schemaVersion !== 'sciforge.browser-host-session.webrtc-transport-real-long-run-handoff.v1') {
+    errors.push('realP95DropBackpressureLongRunHandoff.schemaVersion must be real long-run handoff v1');
+  }
+  if (record.owner !== 'BrowserHostSession') errors.push('realP95DropBackpressureLongRunHandoff.owner must remain BrowserHostSession');
+  if (record.secondTruthSource !== false) errors.push('realP95DropBackpressureLongRunHandoff.secondTruthSource must be false');
+  if (record.rawPayloadsCaptured !== false) errors.push('realP95DropBackpressureLongRunHandoff.rawPayloadsCaptured must be false');
+
+  const handoffRefs = objectRecord(record.refs);
+  const expectedRefs: Record<string, unknown> = {
+    hostSessionRef: refs.hostSessionRef,
+    bridgeRef: refs.bridgeRef,
+    transportRef: refs.transportRef,
+    metricsSummaryRef: `${refs.metricsRef}/summary`,
+    metricsSamplesRef: `${refs.metricsRef}/samples`,
+    decoderMetricsRef: `${refs.metricsRef}/decoder`,
+    objectUrlMetricsRef: `${refs.metricsRef}/object-url-lifecycle`,
+    rightPaneSurfaceRef: refs.liveSurfaceRef,
+    actionChannelRef: refs.actionChannelRef,
+  };
+  if (!handoffRefs) {
+    errors.push('realP95DropBackpressureLongRunHandoff.refs are required');
+  } else {
+    for (const [key, value] of Object.entries(expectedRefs)) {
+      if (handoffRefs[key] !== value) errors.push(`realP95DropBackpressureLongRunHandoff.refs.${key} must be ${String(value)}`);
+    }
+  }
+
+  const benchmarkClaim = record.benchmarkClaim === true;
+  if (!benchmarkClaim) {
+    if (record.status !== 'blocked') errors.push('realP95DropBackpressureLongRunHandoff nonpass status must be blocked');
+    if (record.source !== 'contract-smoke-not-real-ui-run') errors.push('realP95DropBackpressureLongRunHandoff blocked source must be contract-smoke-not-real-ui-run');
+    if (record.realUiRun !== false) errors.push('realP95DropBackpressureLongRunHandoff blocked realUiRun must be false');
+    if (typeof record.blockedReason !== 'string' || record.blockedReason.length === 0) {
+      errors.push('realP95DropBackpressureLongRunHandoff blockedReason is required while blocked');
+    }
+    validateRealRunProofRequirements(record.realRunProofRequirements, errors);
+    validateRealRunPayloadPolicy(record.payloadPolicy, errors);
+    validateRealRunPassRefusalPolicy(record.passRefusalPolicy, errors);
+    return;
+  }
+
+  if (record.status !== 'passed'
+    || record.source !== 'real-right-pane-ui-webrtc-run'
+    || record.realUiRun !== true
+    || record.productSurface !== 'right-pane-browser'
+    || record.transportEvidenceKind !== 'real-ui-webrtc-data-channel-live-stack'
+    || typeof record.blockedReason === 'string') {
+    errors.push('realP95DropBackpressureLongRunHandoff pass requires real right-pane UI WebRTC proof');
+  }
+  validateRealLongRunRefCohesion(record.refs, errors);
+  validateRealRunPassRefusalPolicy(record.passRefusalPolicy, errors);
+  const metrics = objectRecord(record.realRunMetrics);
+  if (!metrics) {
+    errors.push('realP95DropBackpressureLongRunHandoff.realRunMetrics are required for pass');
+  } else {
+    const sampleCount = metrics.sampleCount;
+    if (!isNonNegativeNumber(sampleCount) || sampleCount < 120) {
+      errors.push('realP95DropBackpressureLongRunHandoff.realRunMetrics.sampleCount must be at least 120');
+    }
+    for (const field of [
+      'p95EndToEndMs',
+      'p95DecodeMs',
+      'dropRate',
+      'totalDroppedFrames',
+      'totalSkippedBackpressure',
+      'backpressureEventCount',
+      'objectUrlCreateCount',
+      'objectUrlRevokeCount',
+      'objectUrlLiveEstimate',
+      'objectUrlRevokeDeficit',
+    ] as const) {
+      if (!isNonNegativeNumber(metrics[field])) errors.push(`realP95DropBackpressureLongRunHandoff.realRunMetrics.${field} is required for pass`);
+    }
+  }
+}
+
+function validateRealRunProofRequirements(requirements: unknown, errors: string[]): void {
+  const record = objectRecord(requirements);
+  if (!record) {
+    errors.push('realP95DropBackpressureLongRunHandoff.realRunProofRequirements are required');
+    return;
+  }
+  const expected: Record<string, unknown> = {
+    source: 'real-right-pane-ui-webrtc-run',
+    realUiRun: true,
+    productSurface: 'right-pane-browser',
+    transportEvidenceKind: 'real-ui-webrtc-data-channel-live-stack',
+    hostSessionRefPrefix: 'browser-host-session:',
+    rightPaneSurfaceRefPrefix: 'browser-host-session:',
+    metricsSamplesRefPrefix: 'browser-host-session:',
+    decoderMetricsRefPrefix: 'browser-host-session:',
+    objectUrlMetricsRefPrefix: 'browser-host-session:',
+    minSampleCount: 120,
+  };
+  for (const [key, value] of Object.entries(expected)) {
+    if (record[key] !== value) errors.push(`realP95DropBackpressureLongRunHandoff.realRunProofRequirements.${key} must be ${String(value)}`);
+  }
+  const required = Array.isArray(record.requiredBoundedMetrics) ? record.requiredBoundedMetrics : [];
+  for (const field of ['p95EndToEndMs', 'p95DecodeMs', 'dropRate', 'totalDroppedFrames', 'totalSkippedBackpressure', 'backpressureEventCount', 'objectUrlCreateCount', 'objectUrlRevokeCount', 'objectUrlLiveEstimate', 'objectUrlRevokeDeficit']) {
+    if (!required.includes(field)) errors.push(`realP95DropBackpressureLongRunHandoff.realRunProofRequirements.requiredBoundedMetrics must include ${field}`);
+  }
+}
+
+function validateRealLongRunRefCohesion(refs: unknown, errors: string[]): void {
+  const record = objectRecord(refs);
+  if (!record) {
+    errors.push('realP95DropBackpressureLongRunHandoff.refs are required for pass');
+    return;
+  }
+  const hostSessionRef = typeof record.hostSessionRef === 'string' ? record.hostSessionRef : '';
+  const sessionId = hostSessionRef.startsWith('browser-host-session:') ? hostSessionRef.slice('browser-host-session:'.length) : '';
+  const expected: Record<string, string> = {
+    hostSessionRef: `browser-host-session:${sessionId}`,
+    bridgeRef: `browser-host-session:${sessionId}/webrtc-transport/bridge`,
+    transportRef: `browser-host-session:${sessionId}/webrtc-transport`,
+    metricsSummaryRef: `browser-host-session:${sessionId}/webrtc-metrics/summary`,
+    metricsSamplesRef: `browser-host-session:${sessionId}/webrtc-metrics/samples`,
+    decoderMetricsRef: `browser-host-session:${sessionId}/webrtc-metrics/decoder`,
+    objectUrlMetricsRef: `browser-host-session:${sessionId}/webrtc-metrics/object-url-lifecycle`,
+    rightPaneSurfaceRef: `browser-host-session:${sessionId}/live-surface`,
+    actionChannelRef: `browser-host-session:${sessionId}/actions`,
+  };
+  if (!sessionId) {
+    errors.push('realP95DropBackpressureLongRunHandoff.refs.hostSessionRef must be a BrowserHostSession ref');
+    return;
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (record[key] !== value) errors.push(`realP95DropBackpressureLongRunHandoff.refs.${key} must be ${value}`);
+  }
+}
+
+function validateRealRunPassRefusalPolicy(policy: unknown, errors: string[]): void {
+  const record = objectRecord(policy);
+  if (!record) {
+    errors.push('realP95DropBackpressureLongRunHandoff.passRefusalPolicy is required');
+    return;
+  }
+  for (const [key, value] of Object.entries({
+    candidateContractDoesNotPass: true,
+    loopbackSmokeDoesNotPass: true,
+    httpFrameRouteDoesNotPass: true,
+    secondTruthSourceDoesNotPass: true,
+    deterministicContractMetricsDoNotPass: true,
+  })) {
+    if (record[key] !== value) errors.push(`realP95DropBackpressureLongRunHandoff.passRefusalPolicy.${key} must be ${String(value)}`);
+  }
+}
+
+function validateRealRunPayloadPolicy(policy: unknown, errors: string[]): void {
+  const record = objectRecord(policy);
+  if (!record) {
+    errors.push('realP95DropBackpressureLongRunHandoff.payloadPolicy is required');
+    return;
+  }
+  for (const [key, value] of Object.entries({ refsFirst: true, inlineSamples: false, rawFramePayloads: false, rawSignals: false, rawDom: false })) {
+    if (record[key] !== value) errors.push(`realP95DropBackpressureLongRunHandoff.payloadPolicy.${key} must be ${String(value)}`);
+  }
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
 function validateBridgeFrameMessages(

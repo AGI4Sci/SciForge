@@ -818,6 +818,142 @@ function validateVirtualAppScreenUserAcceptanceGate(
       });
     }
   }
+  issues.push(...validateVirtualAppScreenManifestEvidenceLedger(
+    manifest,
+    `${path}.virtualAppScreenUserAcceptanceManifestRef`,
+    currentRunBundleRef,
+  ));
+  return issues;
+}
+
+function validateVirtualAppScreenManifestEvidenceLedger(
+  manifest: Record<string, unknown>,
+  path: string,
+  currentRunBundleRef: string | undefined,
+): CuNextProductSmokeMatrixIssue[] {
+  const issues: CuNextProductSmokeMatrixIssue[] = [];
+  const bundleRoot = currentRunBundleRef && isSafeProductSmokeRef(currentRunBundleRef)
+    ? currentBundleRoot(currentRunBundleRef)
+    : undefined;
+  const sessionRefs = stringArray(manifest.sessionRefs);
+  const guiPresentRefs = new Set(stringArray(manifest.guiPresentRefs));
+  const screenFrameRefs = new Set(stringArray(manifest.screenFrameRefs));
+  const inputIntentRefs = new Set(stringArray(manifest.inputIntentRefs));
+  const adapterReadinessRefs = new Set(stringArray(manifest.adapterReadinessRefs));
+  const executorEventRefs = new Set(stringArray(manifest.executorEventRefs));
+  const beforeAfterFrameRefs = new Set(stringArray(manifest.beforeAfterFrameRefs));
+  const artifactRefs = new Set(stringArray(manifest.artifactRefs));
+  const verificationRefs = new Set(stringArray(manifest.verificationRefs));
+  const declaredRefs = new Set(virtualAppScreenManifestFileRefs(manifest));
+  const actions = [
+    ...records(manifest.evidenceLedgerActions),
+    ...records(asRecord(manifest.evidenceLedger)?.actions),
+    ...records(asRecord(manifest.actionLedger)?.actions),
+  ];
+
+  if (actions.length === 0) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-evidence-ledger',
+      path: `${path}.evidenceLedgerActions`,
+      reason: 'VirtualAppScreen acceptance manifest must include per-action evidence ledger records.',
+    });
+  }
+  for (const [index, action] of actions.entries()) {
+    const actionPath = `${path}.evidenceLedgerActions[${index}]`;
+    const inputIntentRef = firstString(action, ['inputIntentRef', 'intentRef']);
+    const providerAdapterRef = firstString(action, ['providerAdapterRef', 'adapterReadinessRef', 'executorAdapterRef']);
+    const executorEventRef = firstString(action, ['executorEventRef']);
+    const beforeFrameRef = firstString(action, ['beforeFrameRef', 'beforeScreenshotRef']);
+    const afterFrameRef = firstString(action, ['afterFrameRef', 'afterScreenshotRef']);
+    const beforeAfterFrameRef = firstString(action, ['beforeAfterFrameRef']);
+    const verifierRef = firstString(action, ['verifierRef', 'verificationRef']);
+    const artifactRef = firstString(action, ['artifactRef', 'outputArtifactRef']);
+    const blockedReasonRef = firstString(action, ['blockedReasonRef', 'permissionHandoffRef', 'observeOnlyRef']);
+    const guiPresentRef = firstString(action, ['guiPresentRef', 'presentRef']);
+    const sessionRef = firstString(action, ['sessionRef']);
+
+    requireManifestLedgerRef(issues, actionPath, 'inputIntentRef', inputIntentRef, inputIntentRefs);
+    requireManifestLedgerRef(issues, actionPath, 'providerAdapterRef', providerAdapterRef, adapterReadinessRefs);
+    requireManifestLedgerRef(issues, actionPath, 'executorEventRef', executorEventRef, executorEventRefs);
+    requireManifestLedgerRef(issues, actionPath, 'beforeFrameRef', beforeFrameRef, screenFrameRefs);
+    requireManifestLedgerRef(issues, actionPath, 'afterFrameRef', afterFrameRef, screenFrameRefs);
+    requireManifestLedgerRef(issues, actionPath, 'beforeAfterFrameRef', beforeAfterFrameRef, beforeAfterFrameRefs);
+    requireManifestLedgerRef(issues, actionPath, 'verifierRef', verifierRef, verificationRefs);
+    requireManifestLedgerRef(issues, actionPath, 'guiPresentRef', guiPresentRef, guiPresentRefs);
+    if (!sessionRef || !sessionRefs.includes(sessionRef)) {
+      issues.push({
+        id: 'invalid-virtual-app-screen-evidence-ledger',
+        path: `${actionPath}.sessionRef`,
+        reason: 'Each action ledger record must bind a current manifest sessionRef.',
+      });
+    }
+    if (artifactRef) {
+      if (!artifactRefs.has(artifactRef)) {
+        issues.push({
+          id: 'invalid-virtual-app-screen-evidence-ledger',
+          path: `${actionPath}.artifactRef`,
+          reason: 'Action artifactRef must appear in manifest artifactRefs.',
+        });
+      }
+    } else if (!blockedReasonRef && !stringValue(action.blockedReason)) {
+      issues.push({
+        id: 'invalid-virtual-app-screen-evidence-ledger',
+        path: `${actionPath}.artifactRef`,
+        reason: 'Each action must resolve to an artifact ref or a blocked/permission/observe-only reason.',
+      });
+    }
+    for (const ref of [
+      inputIntentRef,
+      providerAdapterRef,
+      executorEventRef,
+      beforeFrameRef,
+      afterFrameRef,
+      beforeAfterFrameRef,
+      verifierRef,
+      artifactRef,
+      blockedReasonRef,
+      guiPresentRef,
+    ].filter((item): item is string => Boolean(item))) {
+      if (isSafeProductSmokeRef(ref) && !declaredRefs.has(ref)) {
+        issues.push({
+          id: 'invalid-virtual-app-screen-evidence-ledger',
+          path: actionPath,
+          reason: `Action ledger ref ${ref} must be declared by the same VirtualAppScreen manifest.`,
+        });
+      }
+    }
+  }
+
+  if (findRecordValue(manifest, (key, value) => (
+    (
+      key === 'shellOnly'
+      || key === 'shellOnlyArtifact'
+      || key === 'staleFile'
+      || key === 'staleArtifact'
+      || key === 'fixturePass'
+      || key === 'fixtureArtifactPass'
+      || key === 'passFromFixture'
+    )
+    && value === true
+  ))) {
+    issues.push({
+      id: 'virtual-app-screen-rejected-substitute-claims',
+      path,
+      reason: 'VirtualAppScreen artifact evidence must reject shell-only, stale-file, fixture, or fixture-pass completion records.',
+    });
+  }
+
+  if (bundleRoot) {
+    for (const [index, ref] of virtualAppScreenManifestFileRefs(manifest).entries()) {
+      if (isSafeProductSmokeRef(ref) && !isRefUnderBundleRoot(ref, bundleRoot)) {
+        issues.push({
+          id: 'product-smoke-ref-outside-current-bundle',
+          path: `${path}.refs[${index}]`,
+          reason: `VirtualAppScreen manifest ref ${ref} must be under currentRunBundleRef ${currentRunBundleRef}.`,
+        });
+      }
+    }
+  }
   return issues;
 }
 
@@ -1876,6 +2012,31 @@ function requireRef(
   }
 }
 
+function requireManifestLedgerRef(
+  issues: CuNextProductSmokeMatrixIssue[],
+  actionPath: string,
+  field: string,
+  ref: string | undefined,
+  declaredRefs: Set<string>,
+): void {
+  if (!ref) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-evidence-ledger',
+      path: `${actionPath}.${field}`,
+      reason: `Action ledger ${field} is required.`,
+    });
+    return;
+  }
+  requireRef(issues, `${actionPath}.${field}`, ref);
+  if (!declaredRefs.has(ref)) {
+    issues.push({
+      id: 'invalid-virtual-app-screen-evidence-ledger',
+      path: `${actionPath}.${field}`,
+      reason: `Action ledger ${field} must appear in the matching top-level manifest refs.`,
+    });
+  }
+}
+
 function isSafeProductSmokeRef(ref: string): boolean {
   const normalized = ref.trim();
   if (!normalized) return false;
@@ -1947,6 +2108,52 @@ function uniqueStringList(values: Array<string | undefined>): string[] {
 
 function numberValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function firstString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = stringValue(record[key]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function virtualAppScreenManifestFileRefs(manifest: Record<string, unknown>): string[] {
+  return uniqueStringList([
+    ...requiredVirtualAppScreenManifestArrayFields.flatMap((field) => stringArray(manifest[field])),
+    stringValue(manifest.replayRef),
+    stringValue(manifest.evidenceLedgerRef),
+    ...records(manifest.evidenceLedgerActions).flatMap((action) => Object.values(action).filter((value): value is string => (
+      typeof value === 'string' && isPotentialProductEvidenceRef(value) && isSafeProductSmokeRef(value)
+    ))),
+    ...records(asRecord(manifest.evidenceLedger)?.actions).flatMap((action) => Object.values(action).filter((value): value is string => (
+      typeof value === 'string' && isPotentialProductEvidenceRef(value) && isSafeProductSmokeRef(value)
+    ))),
+  ].filter((ref): ref is string => (
+    typeof ref === 'string'
+    && isPotentialProductEvidenceRef(ref)
+    && isSafeProductSmokeRef(ref)
+  )));
+}
+
+function findRecordValue(
+  value: unknown,
+  predicate: (key: string, value: unknown) => boolean,
+  seen = new Set<unknown>(),
+): boolean {
+  if (!value || typeof value !== 'object') return false;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  if (Array.isArray(value)) return value.some((item) => findRecordValue(item, predicate, seen));
+  for (const [key, child] of Object.entries(value)) {
+    if (predicate(key, child)) return true;
+    if (findRecordValue(child, predicate, seen)) return true;
+  }
+  return false;
+}
+
+function isPotentialProductEvidenceRef(value: string): boolean {
+  return /\/|\.json$|\.png$|\.jpe?g$|\.webp$|\.txt$|\.md$|\.pptx$|\.docx$|\.csv$|\.html$|\.xlsx$/i.test(value.trim());
 }
 
 function containsForbiddenLegacyBackendMarker(values: Array<string | undefined>): boolean {

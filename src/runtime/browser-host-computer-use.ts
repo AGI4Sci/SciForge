@@ -15,7 +15,7 @@ export type BrowserHostLowLevelComputerUseAction =
   | { type: 'mouse_down'; x?: number; y?: number; button?: BrowserHostMouseButton; targetDescription?: string }
   | { type: 'mouse_move'; x?: number; y?: number; targetDescription?: string }
   | { type: 'mouse_up'; x?: number; y?: number; button?: BrowserHostMouseButton; targetDescription?: string }
-  | { type: 'wheel'; deltaX?: number; deltaY?: number; targetDescription?: string }
+  | { type: 'wheel'; x?: number; y?: number; deltaX?: number; deltaY?: number; targetDescription?: string }
   | { type: 'cursor'; x?: number; y?: number; targetDescription?: string };
 
 export type BrowserHostComputerUseAction = GenericVisionAction | BrowserHostLowLevelComputerUseAction;
@@ -150,6 +150,8 @@ export function browserHostActionFromComputerUse(
   if (action.type === 'wheel') {
     return {
       action: 'scroll',
+      x: optionalBrowserHostCoordinate(action.x),
+      y: optionalBrowserHostCoordinate(action.y),
       deltaX: Math.round(action.deltaX ?? 0),
       deltaY: Math.round(action.deltaY ?? 0),
       capture: options.capture ?? 'none',
@@ -231,6 +233,10 @@ function browserHostComputerUseDragPath(from: BrowserHostMousePoint, to: Browser
 function requiredBrowserHostCoordinate(value: number | undefined, name: string) {
   if (!Number.isFinite(value)) throw new Error(`BrowserHostSession Computer Use action is missing ${name}.`);
   return Math.round(value as number);
+}
+
+function optionalBrowserHostCoordinate(value: number | undefined) {
+  return Number.isFinite(value) ? Math.round(value as number) : undefined;
 }
 
 function browserHostComputerUseKey(key: string) {

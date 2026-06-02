@@ -10,6 +10,7 @@ import { visualRegressionVirtualScreenViewerFixture } from './fixtures/visual-re
 import { manifest } from './manifest';
 import {
   buildVirtualScreenInputIntentCommand,
+  buildVirtualScreenLeaseControlCommand,
   renderVirtualScreenViewer,
   type VirtualScreenPayload,
 } from './render';
@@ -22,6 +23,27 @@ function requireBlock(html: string, pattern: RegExp, label: string) {
   const match = html.match(pattern);
   assert.ok(match, `${label} should be present`);
   return match[0];
+}
+
+function visualRegressionFixtureWithLiveBindingRefs() {
+  return {
+    ...visualRegressionVirtualScreenViewerFixture,
+    artifact: {
+      ...visualRegressionVirtualScreenViewerFixture.artifact,
+      data: {
+        ...(visualRegressionVirtualScreenViewerFixture.artifact?.data as Record<string, unknown>),
+        surfaceTransportRef: 'computer-use:session/visual-regression/surface-transport.json',
+        providerSessionOwnerRef: 'computer-use:provider-session/visual-regression/owner.json',
+        providerSessionReconnectRef: 'computer-use:provider-session/visual-regression/reconnect.json',
+        liveBindingAttachGrantRef: 'computer-use:provider-session/visual-regression/live-binding-attach-grant.json',
+        currentFrameSequence: {
+          ref: 'computer-use:session/visual-regression/frame-sequence.json',
+          sequence: 17,
+          transport: 'native-frame-stream',
+        },
+      },
+    },
+  };
 }
 
 test('virtual-screen-viewer renders VirtualAppScreen refs-first state and actor cursors', () => {
@@ -63,7 +85,8 @@ test('virtual-screen-viewer renders VirtualAppScreen refs-first state and actor 
   assert.match(html, /data-event="virtual-screen-terminal-equivalent-text"/);
   assert.match(html, /\/computer-use observe --session-ref/);
   assert.match(html, /\/computer-use replay --replay-ref/);
-  assert.match(html, /\/computer-use stop --session-ref/);
+  assert.match(html, /data-control-kind="stop-session" data-control-enabled="false"/);
+  assert.match(html, /computer-use:session\/basic\/stop\.json/);
   assert.match(html, /computer-use:session\/basic\/platform-driver\.json/);
   assert.match(html, /Platform virtual display driver missing/);
   assert.match(html, /data-platform-driver-status="missing"/);
@@ -72,7 +95,7 @@ test('virtual-screen-viewer renders VirtualAppScreen refs-first state and actor 
 });
 
 test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags visually materialized', () => {
-  const html = renderToStaticMarkup(renderVirtualScreenViewer(visualRegressionVirtualScreenViewerFixture));
+  const html = renderToStaticMarkup(renderVirtualScreenViewer(visualRegressionFixtureWithLiveBindingRefs()));
   const stageHtml = requireBlock(html, /<section class="virtual-screen-stage"[\s\S]*?<\/section>/, 'screen stage');
   const footerHtml = requireBlock(html, /<footer class="virtual-screen-footer"[\s\S]*?<\/footer>/, 'screen footer');
   const imageMatch = stageHtml.match(/<img\b[^>]*class="virtual-screen-frame-image"[^>]*src="([^"]+)"[^>]*>/);
@@ -90,6 +113,10 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.match(imageMatch?.[0] ?? '', /data-frame-stream-mode="ref-only"/);
   assert.match(imageMatch?.[0] ?? '', /data-live-surface-ref="computer-use:session\/visual-regression\/live-surface\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-surface-transport="native-frame-stream"/);
+  assert.match(imageMatch?.[0] ?? '', /data-provider-session-owner-ref="computer-use:provider-session\/visual-regression\/owner\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-provider-session-reconnect-ref="computer-use:provider-session\/visual-regression\/reconnect\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-surface-transport-ref="computer-use:session\/visual-regression\/surface-transport\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-current-frame-sequence-ref="computer-use:session\/visual-regression\/frame-sequence\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-platform-driver-ref="computer-use:session\/visual-regression\/platform-driver\.json"/);
   assert.match(html, /data-presentation-mode="live-surface-ref"/);
   assert.match(html, /data-screen-surface-mode="live"/);
@@ -110,6 +137,10 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.doesNotMatch(html, /data-screen-presentation-mode="replay-ref-inspector"/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/overlays\/cursors-active\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/proposals\/click-confirm\.json/);
+  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/owner\.json/);
+  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/reconnect\.json/);
+  assert.match(footerHtml, /computer-use:session\/visual-regression\/surface-transport\.json/);
+  assert.match(footerHtml, /computer-use:session\/visual-regression\/frame-sequence\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/input-leases\/main-held\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/action-adapters\/native-app-window\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/adapter-readiness\/native-app-window\.json/);
@@ -155,6 +186,131 @@ test('virtual-screen-viewer builds terminal-equivalent InputIntent commands for 
     ...payload,
     isolationFlags: { ...payload.isolationFlags, backgroundRenderable: undefined },
   }, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
+});
+
+test('virtual-screen-viewer exposes user and agent lease ownership with intervention InputIntent commands', () => {
+  const payload = attachedHumanInterventionPayload();
+  const takeoverCommand = buildVirtualScreenLeaseControlCommand(payload, 'takeover');
+  const pauseCommand = buildVirtualScreenLeaseControlCommand(payload, 'pause-agent');
+  const resumeCommand = buildVirtualScreenLeaseControlCommand(payload, 'resume-agent');
+  const stopCommand = buildVirtualScreenLeaseControlCommand(payload, 'stop-session');
+
+  assert.equal(
+    takeoverCommand,
+    '/computer-use input-intent --source virtual-app-screen-control --kind takeover --session-ref "computer-use:session/input/session.json" --screen-ref "virtual-app-screen:input/screen-a" --target-app-ref "app:input-native-app" --target-window-ref "window:input-native-app/main" --input-lease-ref "computer-use:session/input/leases/active.json" --user-lease-ref "computer-use:session/input/leases/user.json" --agent-lease-ref "computer-use:session/input/leases/agent.json" --active-lease-owner-ref "computer-use:session/input/leases/agent.json" --active-lease-owner-role "agent" --lease-control-ref "computer-use:session/input/leases/takeover.json" --action-adapter-ref "computer-use:session/input/adapters/native-app-window.json" --adapter-readiness-ref "computer-use:session/input/readiness/native-app-window.json" --evidence-ledger-ref "computer-use:session/input/evidence-ledger.json"',
+  );
+  assert.match(pauseCommand ?? '', /--kind pause-agent .*--lease-control-ref "computer-use:session\/input\/leases\/pause-agent\.json"/);
+  assert.match(resumeCommand ?? '', /--kind resume-agent .*--lease-control-ref "computer-use:session\/input\/leases\/resume-agent\.json"/);
+  assert.match(stopCommand ?? '', /--kind stop-session .*--lease-control-ref "computer-use:session\/input\/leases\/stop-session\.json"/);
+  assert.doesNotMatch(takeoverCommand ?? '', /executeScoped|runComputerUse|executorLease|schedulerParams/);
+
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Human intervention' },
+    artifact: {
+      id: 'human-intervention',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.match(html, /data-active-lease-owner-ref="computer-use:session\/input\/leases\/agent\.json"/);
+  assert.match(html, /data-active-lease-owner-role="agent"/);
+  assert.match(html, /data-user-lease-ref="computer-use:session\/input\/leases\/user\.json"/);
+  assert.match(html, /data-agent-lease-ref="computer-use:session\/input\/leases\/agent\.json"/);
+  assert.match(html, /data-lease-control-ready="true"/);
+  assert.match(html, /data-lease-owner-ref="computer-use:session\/input\/leases\/user\.json" data-lease-owner-actor="user"/);
+  assert.match(html, /data-lease-owner-ref="computer-use:session\/input\/leases\/agent\.json" data-lease-owner-actor="agent"/);
+  assert.match(html, /data-control-kind="takeover" data-control-enabled="true"/);
+  assert.match(html, /data-control-kind="pause-agent" data-control-enabled="true"/);
+  assert.match(html, /data-control-kind="resume-agent" data-control-enabled="true"/);
+  assert.match(html, /data-control-kind="stop-session" data-control-enabled="true"/);
+  assert.match(html, /--kind takeover/);
+  assert.match(html, /--input-lease-ref &quot;computer-use:session\/input\/leases\/active\.json&quot;/);
+  assert.match(html, /data-timeline-kind="user-lease"/);
+  assert.match(html, /data-timeline-kind="agent-lease"/);
+  assert.match(html, /data-timeline-kind="takeover"/);
+  assert.match(html, /data-timeline-kind="pause-agent"/);
+  assert.match(html, /data-timeline-kind="resume-agent"/);
+  assert.match(html, /data-timeline-kind="stop-session"/);
+  assert.doesNotMatch(html, /data:image|base64|providerRoute|executeScoped|runComputerUse/);
+});
+
+test('virtual-screen-viewer disables human intervention controls in observe-only mode', () => {
+  const payload = {
+    ...attachedHumanInterventionPayload(),
+    attachState: 'observe-only' as const,
+    status: 'observe-only',
+  };
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Observe only intervention' },
+    artifact: {
+      id: 'observe-only-intervention',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.equal(buildVirtualScreenLeaseControlCommand(payload, 'takeover'), undefined);
+  assert.match(html, /data-attach-state="observe-only"/);
+  assert.match(html, /data-input-intent-ready="false"/);
+  assert.match(html, /data-lease-control-ready="false"/);
+  assert.match(html, /data-control-kind="takeover" data-control-enabled="false" disabled=""/);
+  assert.match(html, /data-control-kind="pause-agent" data-control-enabled="false" disabled=""/);
+  assert.match(html, /data-control-kind="resume-agent" data-control-enabled="false" disabled=""/);
+  assert.match(html, /data-control-kind="stop-session" data-control-enabled="false" disabled=""/);
+  assert.doesNotMatch(html, /--kind takeover|--kind pause-agent|--kind resume-agent|--kind stop-session/);
+});
+
+test('virtual-screen-viewer presents permission handoff and recheck refs when blocked', () => {
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Permission blocked' },
+    artifact: {
+      id: 'permission-blocked',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: {
+        title: 'Permission blocked',
+        status: 'blocked',
+        attachState: 'blocked',
+        targetAppRef: 'app:permission-native-app',
+        sessionRef: 'computer-use:session/permission/session.json',
+        screenRef: 'virtual-app-screen:permission/screen-a',
+        blockedRef: 'computer-use:session/permission/blocked/screen-recording.json',
+        blockedReason: 'Screen Recording permission missing',
+        permissionRef: 'computer-use:session/permission/permissions/screen-recording.json',
+        permissionStatus: 'denied',
+        permissionRequired: true,
+        permissionGranted: false,
+        permissionHandoffRef: 'computer-use:session/permission/handoff/screen-recording.json',
+        permissionRecheckRef: 'computer-use:session/permission/recheck/screen-recording.json',
+        adapterReadinessRef: 'computer-use:session/permission/readiness/native-app-window.json',
+        platformDriverRef: 'computer-use:session/permission/platform-driver.json',
+        platformDriverStatus: 'ready',
+        evidenceLedgerRef: 'computer-use:session/permission/evidence-ledger.json',
+        providerRoute: '/private/provider/should-not-render',
+      },
+    },
+  }));
+
+  assert.match(html, /data-attach-state="blocked"/);
+  assert.match(html, /Screen Recording permission missing/);
+  assert.match(html, /computer-use:session\/permission\/handoff\/screen-recording\.json/);
+  assert.match(html, /computer-use:session\/permission\/recheck\/screen-recording\.json/);
+  assert.match(html, /data-control-kind="permission-handoff" data-control-enabled="true"/);
+  assert.match(html, /data-control-kind="permission-recheck" data-control-enabled="true"/);
+  assert.match(html, /\/computer-use permission-handoff/);
+  assert.match(html, /--permission-ref &quot;computer-use:session\/permission\/permissions\/screen-recording\.json&quot;/);
+  assert.match(html, /\/computer-use permission-recheck/);
+  assert.match(html, /--platform-driver-ref &quot;computer-use:session\/permission\/platform-driver\.json&quot;/);
+  assert.match(html, /data-timeline-kind="permission-handoff"/);
+  assert.match(html, /data-timeline-kind="permission-recheck"/);
+  assert.match(html, /data-rejection-kind="provider-route" data-rejected-field="providerRoute"/);
+  assert.doesNotMatch(html, /\/private\/provider|data:image|base64/);
 });
 
 test('virtual-screen-viewer appends finite positive frame dimensions to screen input intent commands', () => {
@@ -258,10 +414,18 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
         screenRef: 'virtual-app-screen:vscode/screen',
         liveSurfaceRef: 'computer-use:session/vscode/live-surface.json',
         surfaceTransport: 'native-frame-stream',
+        surfaceTransportRef: 'computer-use:session/vscode/surface-transport.json',
         platformDriverRef: 'computer-use:session/vscode/platform-driver.json',
         platformDriverStatus: 'ready',
         frameStreamRef: 'computer-use:session/vscode/frame-stream.json',
         currentFrameRef: 'computer-use:session/vscode/frames/current.png',
+        providerSessionOwnerRef: 'computer-use:provider-session/vscode/owner.json',
+        providerSessionReconnectRef: 'computer-use:provider-session/vscode/reconnect.json',
+        liveBindingAttachGrantRef: 'computer-use:provider-session/vscode/live-binding-attach-grant.json',
+        currentFrameSequence: {
+          ref: 'computer-use:session/vscode/frame-sequence.json',
+          sequence: 8,
+        },
         inputLeaseRef: 'computer-use:session/vscode/input-lease.json',
         actionAdapterRef: 'computer-use:session/vscode/action-adapter.json',
         adapterReadinessRef: 'computer-use:session/vscode/adapter-readiness.json',
@@ -289,6 +453,10 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   assert.match(html, /data-screen-surface-mode="live"/);
   assert.match(html, /data-live-surface-ref="computer-use:session\/vscode\/live-surface\.json"/);
   assert.match(html, /data-surface-transport="native-frame-stream"/);
+  assert.match(html, /data-provider-session-owner-ref="computer-use:provider-session\/vscode\/owner\.json"/);
+  assert.match(html, /data-provider-session-reconnect-ref="computer-use:provider-session\/vscode\/reconnect\.json"/);
+  assert.match(html, /data-surface-transport-ref="computer-use:session\/vscode\/surface-transport\.json"/);
+  assert.match(html, /data-current-frame-sequence-ref="computer-use:session\/vscode\/frame-sequence\.json"/);
   assert.match(html, /data-platform-driver-status="ready"/);
   assert.match(html, /data-permission-status="granted"/);
   assert.match(html, /data-screen-presentation-mode="live-surface-ref"/);
@@ -296,6 +464,103 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   assert.match(html, /data-isolation-flag="single interactive truth" data-isolation-value="true"/);
   assert.match(html, /data-isolation-flag="second interactive surface" data-isolation-value="false"/);
   assert.doesNotMatch(html, /providerRoute|streamUrl|iceCandidates|data:image|base64/);
+});
+
+test('virtual-screen-viewer does not present live mode with incomplete provider binding refs', () => {
+  const payload = {
+    ...attachedInputIntentPayload(),
+    providerSessionOwnerRef: undefined,
+    providerSessionReconnectRef: undefined,
+    surfaceTransportRef: undefined,
+    currentFrameSequence: undefined,
+  };
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Incomplete live binding' },
+    artifact: {
+      id: 'incomplete-live-binding',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.equal(buildVirtualScreenInputIntentCommand(payload, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
+  assert.match(html, /data-screen-surface-mode="replay"/);
+  assert.match(html, /data-input-intent-ready="false"/);
+  assert.doesNotMatch(html, /data-screen-presentation-mode="live-surface-ref"/);
+});
+
+test('virtual-screen-viewer presents stream-quality refs and keeps legacy transports diagnostic-only', () => {
+  const payload: VirtualScreenPayload = {
+    ...attachedInputIntentPayload(),
+    frameTransport: {
+      ref: 'computer-use:session/quality/frame-transport.json',
+      label: 'Frame transport',
+      status: 'degraded',
+      transport: 'noVNC',
+      rawPayload: 'do-not-render',
+    },
+    frameTelemetry: {
+      ref: 'computer-use:session/quality/frame-telemetry.json',
+      status: 'sampling',
+      transport: 'VNC',
+    },
+    currentFrameSequence: {
+      ref: 'computer-use:session/quality/current-frame-sequence.json',
+      status: 'current',
+      transport: 'RDP',
+      sequence: 42,
+    },
+    reconnect: {
+      ref: 'computer-use:session/quality/reconnect.json',
+      status: 'armed',
+      transport: 'MJPEG',
+    },
+    inputHotPath: {
+      ref: 'computer-use:session/quality/input-hot-path.json',
+      status: 'ready',
+      transport: 'native-frame-stream',
+      providerUrl: 'https://provider.invalid/stream',
+    },
+  } as VirtualScreenPayload;
+  const command = buildVirtualScreenInputIntentCommand(payload, {
+    kind: 'click',
+    xRatio: 0.25,
+    yRatio: 0.75,
+  });
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Stream quality' },
+    artifact: {
+      id: 'stream-quality',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: payload,
+    },
+  }));
+
+  assert.match(html, /data-frame-transport-ref="computer-use:session\/quality\/frame-transport\.json"/);
+  assert.match(html, /data-frame-transport="noVNC"/);
+  assert.match(html, /data-frame-transport-diagnostic-only="true"/);
+  assert.match(html, /data-frame-telemetry-ref="computer-use:session\/quality\/frame-telemetry\.json"/);
+  assert.match(html, /data-current-frame-sequence-ref="computer-use:session\/quality\/current-frame-sequence\.json"/);
+  assert.match(html, /data-reconnect-ref="computer-use:session\/quality\/reconnect\.json"/);
+  assert.match(html, /data-input-hot-path-ref="computer-use:session\/quality\/input-hot-path\.json"/);
+  assert.match(html, /data-stream-quality-kind="frame transport"[\s\S]*?diagnostic-only:true/);
+  assert.match(html, /data-stream-quality-kind="frame telemetry"[\s\S]*?data-stream-quality-transport="VNC"[\s\S]*?diagnostic-only:true/);
+  assert.match(html, /data-stream-quality-kind="current frame sequence"[\s\S]*?data-stream-quality-transport="RDP"[\s\S]*?sequence:42/);
+  assert.match(html, /data-stream-quality-kind="reconnect"[\s\S]*?data-stream-quality-transport="MJPEG"[\s\S]*?diagnostic-only:true/);
+  assert.match(html, /data-timeline-kind="frame-transport"/);
+  assert.match(html, /data-timeline-kind="frame-telemetry"/);
+  assert.match(html, /data-timeline-kind="current-frame-sequence"/);
+  assert.match(html, /data-timeline-kind="reconnect"/);
+  assert.match(html, /data-timeline-kind="input-hot-path"/);
+  assert.match(html, /data-rejection-kind="raw-json" data-rejected-field="frameTransport\.rawPayload"/);
+  assert.match(html, /data-rejection-kind="provider-route" data-rejected-field="inputHotPath\.providerUrl"/);
+  assert.match(command ?? '', /\/computer-use input-intent/);
+  assert.doesNotMatch(command ?? '', /frame-transport|frame-telemetry|current-frame-sequence|reconnect|input-hot-path|noVNC|VNC|RDP|MJPEG/);
+  assert.doesNotMatch(html, /do-not-render|provider\.invalid|<iframe|<canvas|websockify|executeScoped|runComputerUse|executor\.invoke|module\.invoke/);
 });
 
 test('virtual-screen-viewer fails closed for missing platform driver and incomplete isolation', () => {
@@ -355,9 +620,18 @@ test('virtual-screen-viewer fails closed for missing platform driver and incompl
         sessionRef: 'computer-use:session/isolation-incomplete/session.json',
         liveSurfaceRef: 'computer-use:session/isolation-incomplete/live-surface.json',
         surfaceTransport: 'native-frame-stream',
+        surfaceTransportRef: 'computer-use:session/isolation-incomplete/surface-transport.json',
         platformDriverRef: 'computer-use:session/isolation-incomplete/platform-driver.json',
         platformDriverStatus: 'ready',
+        frameStreamRef: 'computer-use:session/isolation-incomplete/frame-stream.json',
         currentFrameRef: 'computer-use:session/isolation-incomplete/frames/current.png',
+        providerSessionOwnerRef: 'computer-use:provider-session/isolation-incomplete/owner.json',
+        providerSessionReconnectRef: 'computer-use:provider-session/isolation-incomplete/reconnect.json',
+        liveBindingAttachGrantRef: 'computer-use:provider-session/isolation-incomplete/live-binding-attach-grant.json',
+        currentFrameSequence: {
+          ref: 'computer-use:session/isolation-incomplete/frame-sequence.json',
+          sequence: 9,
+        },
         inputLeaseRef: 'computer-use:session/isolation-incomplete/input-lease.json',
         actionAdapterRef: 'computer-use:session/isolation-incomplete/action-adapter.json',
         adapterReadinessRef: 'computer-use:session/isolation-incomplete/adapter-readiness.json',
@@ -588,9 +862,19 @@ function attachedInputIntentPayload(): VirtualScreenPayload {
     sessionRef: 'computer-use:session/input/session.json',
     liveSurfaceRef: 'computer-use:session/input/live-surface.json',
     surfaceTransport: 'native-frame-stream',
+    surfaceTransportRef: 'computer-use:session/input/surface-transport.json',
     platformDriverRef: 'computer-use:session/input/platform-driver.json',
     platformDriverStatus: 'ready',
+    frameStreamRef: 'computer-use:session/input/frame-stream.json',
     currentFrameRef: 'computer-use:session/input/frames/current.png',
+    providerSessionOwnerRef: 'computer-use:provider-session/input/owner.json',
+    providerSessionReconnectRef: 'computer-use:provider-session/input/reconnect.json',
+    liveBindingAttachGrantRef: 'computer-use:provider-session/input/live-binding-attach-grant.json',
+    currentFrameSequence: {
+      ref: 'computer-use:session/input/frame-sequence.json',
+      sequence: 3,
+      transport: 'native-frame-stream',
+    },
     screen: { width: 1440, height: 900 },
     inputLeaseRef: 'computer-use:session/input/leases/active.json',
     actionAdapterRef: 'computer-use:session/input/adapters/native-app-window.json',
@@ -612,5 +896,39 @@ function attachedInputIntentPayload(): VirtualScreenPayload {
       secondInteractiveSurfacePresent: false,
       diagnosticOnly: false,
     },
+  };
+}
+
+function attachedHumanInterventionPayload(): VirtualScreenPayload {
+  return {
+    ...attachedInputIntentPayload(),
+    activeLeaseOwnerRef: 'computer-use:session/input/leases/agent.json',
+    activeLeaseOwnerRole: 'agent',
+    userLeaseRef: 'computer-use:session/input/leases/user.json',
+    agentLeaseRef: 'computer-use:session/input/leases/agent.json',
+    leaseOwnerRefs: [
+      {
+        ref: 'computer-use:session/input/leases/user.json',
+        actor: 'user',
+        label: 'Human',
+        status: 'standby',
+        ownerRef: 'actor:user',
+        scopeRef: 'virtual-app-screen:input/screen-a',
+        active: false,
+      },
+      {
+        ref: 'computer-use:session/input/leases/agent.json',
+        actor: 'agent',
+        label: 'Agent',
+        status: 'active',
+        ownerRef: 'actor:agent',
+        scopeRef: 'virtual-app-screen:input/screen-a',
+        active: true,
+      },
+    ],
+    takeoverRef: 'computer-use:session/input/leases/takeover.json',
+    pauseRef: 'computer-use:session/input/leases/pause-agent.json',
+    resumeRef: 'computer-use:session/input/leases/resume-agent.json',
+    stopRef: 'computer-use:session/input/leases/stop-session.json',
   };
 }

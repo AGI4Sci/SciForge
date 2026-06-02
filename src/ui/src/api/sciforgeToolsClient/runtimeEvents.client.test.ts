@@ -89,10 +89,10 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
     assert.equal(guiAskUser.source, `gui.ask_user:${response.run.id}:computer-use`);
     assert.equal((guiAskUser.approvalRequest as Record<string, unknown>).id, 'approval:computer-use:cu-risk');
     assert.deepEqual(guiAskUser.relatedRefs, [traceRef, screenshotRef]);
-    assert.deepEqual(response.message.objectReferences?.map((reference) => reference.ref), [
-      `file:${traceRef}`,
-      `file:${screenshotRef}`,
-    ]);
+    const objectRefs = response.message.objectReferences?.map((reference) => reference.ref) ?? [];
+    assert.ok(objectRefs.some((ref) => ref.startsWith('artifact:computer-use-virtual-screen-')));
+    assert.ok(objectRefs.includes(`file:${traceRef}`));
+    assert.ok(objectRefs.includes(`file:${screenshotRef}`));
     assert.doesNotMatch(response.message.content, /RAW_PROVIDER_MESSAGE_SHOULD_NOT_RENDER/);
   } finally {
     globalThis.fetch = originalFetch;

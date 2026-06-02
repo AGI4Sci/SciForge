@@ -57,6 +57,7 @@ export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-s
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
 export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'snapshot' | 'state' | 'close';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
+export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
 
 export interface BrowserHostSessionViewport {
@@ -82,7 +83,7 @@ export interface BrowserHostSessionActionTiming {
   hostActionMs: number;
   evidenceMs?: number;
   totalMs: number;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   paintAckSource?: 'native-adapter-action-state' | 'host-stream-frame' | 'none';
   blockedReason?: string;
 }
@@ -111,7 +112,7 @@ export interface BrowserHostSessionState {
   canGoBack?: boolean;
   canGoForward?: boolean;
   liveSurfaceRef?: string;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
   frameStreamRef?: string;

@@ -129,6 +129,7 @@ export function validateCuNextLiveAcceptanceTaskEvidence(
   issues.push(...validateBrowserRuntimeObservationHints(evidence));
   issues.push(...validatePlatformSidecarIsolationReport(evidence));
   issues.push(...validateProductPathClassification(evidence));
+  issues.push(...validateEvidenceLedgerTraceability(evidence));
 
   const markerValidation = rule
     ? validateTaskMarker(evidence, rule, input.refRecords)
@@ -177,6 +178,8 @@ function validationResult(
     || issue.id === 'invalid-browser-runtime-observation-hint'
     || issue.id === 'missing-user-control-ref'
     || issue.id === 'missing-observe-before-mutate-ref'
+    || issue.id === 'missing-evidence-ledger-trace'
+    || issue.id === 'missing-gui-present-current-session'
     || issue.id === 'missing-platform-sidecar-isolation'
     || issue.id === 'invalid-platform-sidecar-isolation'
     || issue.id === 'invalid-product-path-classification'
@@ -739,6 +742,177 @@ function validateComputerUseProvenanceAndReplay(
       reason: 'Acceptance evidence refs must be bundle-local file refs, not absolute, scheme, or parent-relative refs.',
     });
   }
+  return issues;
+}
+
+function validateEvidenceLedgerTraceability(
+  evidence: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const currentBundleRef = stringValue(asRecord(evidence.productPathClassification)?.currentBundleRef)
+    ?? stringValue(asRecord(evidence.productPath)?.currentBundleRef)
+    ?? stringValue(evidence.currentRunBundleRef)
+    ?? stringValue(evidence.currentBundleRef);
+  const bundleRoot = currentBundleRef ? currentBundleRootFromRef(currentBundleRef) : undefined;
+  const sessionRefs = collectSessionRefs(evidence);
+  const declaredRefs = new Set(collectAllEvidenceFileRefs(evidence));
+  const guiPresent = asRecord(evidence.guiPresent) ?? {};
+  const guiPresentDisplayedRefs = stringArray(guiPresent.displayedRefs);
+  const guiPresentSessionRefs = stringArray(guiPresent.sessionRefs);
+  const replay = asRecord(evidence.replayBundle)
+    ?? asRecord(evidence.replayManifest)
+    ?? asRecord(evidence.visibleReplay)
+    ?? {};
+  const replayFrameRefs = records(replay.frames).flatMap((frame) => refsFromKeys(frame, [
+    'frameRef',
+    'screenshotRef',
+    'imageRef',
+    'sourceEvidenceRefs',
+    'cursorOverlayRefs',
+  ]));
+  const replayRefs = new Set([
+    stringValue(replay.ref),
+    stringValue(evidence.replayRef),
+    ...stringArray(replay.beforeEvidenceRefs),
+    ...stringArray(replay.afterEvidenceRefs),
+    ...replayFrameRefs,
+  ].filter(isNonEmptyString));
+
+  if (guiPresentSessionRefs.length === 0 || !guiPresentSessionRefs.some((ref) => sessionRefs.includes(ref))) {
+    issues.push({
+      id: 'missing-gui-present-current-session',
+      path: 'guiPresent.sessionRefs',
+      reason: 'gui.present evidence must bind the same current Computer Use session that produced the evidence ledger.',
+    });
+  }
+  if (!stringValue(guiPresent.recordRef)) {
+    issues.push({
+      id: 'missing-gui-present-current-session',
+      path: 'guiPresent.recordRef',
+      reason: 'gui.present evidence must include a recordRef for the current Screen presentation.',
+    });
+  }
+  if (!guiPresentDisplayedRefs.some((ref) => ref === stringValue(evidence.finalArtifactRef))) {
+    issues.push({
+      id: 'missing-gui-present-current-session',
+      path: 'guiPresent.displayedRefs',
+      reason: 'gui.present evidence must display the current-session artifact ref.',
+    });
+  }
+  if (!guiPresentDisplayedRefs.some((ref) => replayRefs.has(ref))) {
+    issues.push({
+      id: 'missing-gui-present-current-session',
+      path: 'guiPresent.displayedRefs',
+      reason: 'gui.present evidence must prove the current session is presentable by displaying a live/replay frame ref.',
+    });
+  }
+
+  const actionRecords = computerUseActionRecords(evidence);
+  if (actionRecords.length === 0) {
+    issues.push({
+      id: 'missing-evidence-ledger-trace',
+      path: 'mutatingActions',
+      reason: 'Evidence ledger must include at least one Computer Use action record.',
+    });
+  }
+  for (const [index, action] of actionRecords.entries()) {
+    const path = `mutatingActions[${index}]`;
+    const inputIntentRef = firstString(action, ['inputIntentRef', 'intentRef', 'inputRef']);
+    const providerAdapterRef = firstString(action, ['providerAdapterRef', 'adapterRef', 'executorAdapterRef', 'actionAdapterRef']);
+    const executorEventRef = firstString(action, ['executorEventRef', 'executeEventRef']);
+    const beforeFrameRefs = uniqueStrings([
+      ...stringArray(action.beforeFrameRefs),
+      ...stringArray(action.beforeEvidenceRefs),
+      firstString(action, ['beforeFrameRef', 'beforeScreenshotRef', 'currentScreenshotRef']),
+    ].filter(isNonEmptyString));
+    const afterFrameRefs = uniqueStrings([
+      ...stringArray(action.afterFrameRefs),
+      ...stringArray(action.afterEvidenceRefs),
+      firstString(action, ['afterFrameRef', 'afterScreenshotRef']),
+    ].filter(isNonEmptyString));
+    const verificationRefs = uniqueStrings([
+      ...stringArray(action.verificationRefs),
+      ...stringArray(action.verifierRefs),
+      firstString(action, ['verifierRef', 'verificationRef', 'verifierVerdictRef']),
+    ].filter(isNonEmptyString));
+    const artifactRefs = uniqueStrings([
+      ...stringArray(action.artifactRefs),
+      ...stringArray(action.outputArtifactRefs),
+      firstString(action, ['artifactRef', 'finalArtifactRef']),
+      stringValue(evidence.finalArtifactRef),
+    ].filter(isNonEmptyString));
+    const blockedRefs = uniqueStrings([
+      ...stringArray(action.blockedReasonRefs),
+      ...stringArray(action.blockedEvidenceRefs),
+      firstString(action, ['blockedReasonRef', 'permissionHandoffRef', 'observeOnlyRef']),
+      firstString(evidence, ['blockedReasonRef', 'permissionHandoffRef', 'observeOnlyRef']),
+    ].filter(isNonEmptyString));
+    const blockedReason = stringValue(action.blockedReason) ?? stringValue(evidence.blockedReason);
+
+    requireCustomRef(issues, 'missing-evidence-ledger-trace', `${path}.inputIntentRef`, inputIntentRef);
+    requireCustomRef(issues, 'missing-evidence-ledger-trace', `${path}.providerAdapterRef`, providerAdapterRef);
+    requireCustomRef(issues, 'missing-evidence-ledger-trace', `${path}.executorEventRef`, executorEventRef);
+    requireCustomRefs(issues, 'missing-evidence-ledger-trace', `${path}.beforeFrameRefs`, beforeFrameRefs);
+    requireCustomRefs(issues, 'missing-evidence-ledger-trace', `${path}.afterFrameRefs`, afterFrameRefs);
+    requireCustomRefs(issues, 'missing-evidence-ledger-trace', `${path}.verificationRefs`, verificationRefs);
+    if (artifactRefs.length === 0 && blockedRefs.length === 0 && !blockedReason) {
+      issues.push({
+        id: 'missing-evidence-ledger-trace',
+        path: `${path}.artifactRefs`,
+        reason: 'Each Computer Use action must end in artifact refs or a structured blocked/permission/observe-only reason.',
+      });
+    }
+
+    for (const ref of [
+      inputIntentRef,
+      providerAdapterRef,
+      executorEventRef,
+      ...beforeFrameRefs,
+      ...afterFrameRefs,
+      ...verificationRefs,
+      ...artifactRefs,
+      ...blockedRefs,
+    ].filter(isNonEmptyString)) {
+      if (!declaredRefs.has(ref)) {
+        issues.push({
+          id: 'missing-evidence-ledger-trace',
+          path,
+          reason: `Action causality ref ${ref} must also appear in the current evidence ledger or manifest refs.`,
+        });
+      }
+    }
+  }
+
+  if (findRecordValue(evidence, (key, value) => (
+    (
+      key === 'shellOnly'
+      || key === 'shellOnlyArtifact'
+      || key === 'staleFile'
+      || key === 'staleArtifact'
+      || key === 'fixturePass'
+      || key === 'fixtureArtifactPass'
+      || key === 'passFromFixture'
+    )
+    && value === true
+  ))) {
+    issues.push({
+      id: 'forbidden-shell-stale-fixture-artifact',
+      reason: 'Artifact evidence must reject shell-only, stale-file, fixture, or fixture-pass completion records.',
+    });
+  }
+
+  if (bundleRoot) {
+    for (const [index, ref] of collectAllEvidenceFileRefs(evidence).entries()) {
+      if (!isEvidenceRefInCurrentBundle(ref, bundleRoot)) {
+        issues.push({
+          id: 'forbidden-cross-bundle-ref',
+          path: `refs[${index}]`,
+          reason: `Evidence ref ${describeMarkerRef(ref)} must belong to current bundle ${currentBundleRef}.`,
+        });
+      }
+    }
+  }
+
   return issues;
 }
 
@@ -2144,6 +2318,15 @@ function computerUseMutatingActionRecords(evidence: Record<string, unknown>): Ar
   });
 }
 
+function computerUseActionRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
+  return [
+    ...computerUseMutatingActionRecords(evidence),
+    ...records(evidence.evidenceLedgerActions),
+    ...records(asRecord(evidence.evidenceLedger)?.actions),
+    ...records(asRecord(evidence.evidenceLedger)?.actionRecords),
+  ];
+}
+
 function computerUseQueueRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {
   const recordsFromTopLevel = [
     ...records(evidence.actionProposals),
@@ -2261,6 +2444,41 @@ function isForbiddenCrossBundleEvidenceRef(value: string): boolean {
   if (trimmed.startsWith('../') || trimmed.includes('/../')) return true;
   if (trimmed.startsWith('/') || trimmed.startsWith('~')) return true;
   return /^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.startsWith('approval:');
+}
+
+function collectAllEvidenceFileRefs(value: unknown, seen = new Set<unknown>()): string[] {
+  if (!value || typeof value !== 'object') {
+    return typeof value === 'string' && isPotentialEvidenceFileRef(value) && isEvidenceBundleLocalFileRef(value) ? [value] : [];
+  }
+  if (seen.has(value)) return [];
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return uniqueStrings(value.flatMap((item) => collectAllEvidenceFileRefs(item, seen)));
+  }
+  return uniqueStrings(Object.values(value).flatMap((item) => collectAllEvidenceFileRefs(item, seen)));
+}
+
+function isPotentialEvidenceFileRef(value: string): boolean {
+  return /\/|\.json$|\.png$|\.jpe?g$|\.webp$|\.txt$|\.md$|\.pptx$|\.docx$|\.csv$|\.html$|\.xlsx$/i.test(value.trim());
+}
+
+function currentBundleRootFromRef(ref: string): string {
+  const normalized = ref.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/g, '');
+  if (!normalized || normalized === '.') return '.';
+  if (/\.[a-z0-9][a-z0-9-]{0,15}$/i.test(normalized.split('/').at(-1) ?? '')) {
+    return normalized.split('/').slice(0, -1).join('/') || '.';
+  }
+  return normalized;
+}
+
+function isEvidenceRefInCurrentBundle(ref: string, bundleRoot: string): boolean {
+  if (!isEvidenceBundleLocalFileRef(ref)) return false;
+  const normalizedRef = ref.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/g, '');
+  const normalizedRoot = bundleRoot.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/g, '') || '.';
+  if (normalizedRoot === '.') {
+    return !normalizedRef.startsWith('.sciforge/vision-runs/');
+  }
+  return normalizedRef === normalizedRoot || normalizedRef.startsWith(`${normalizedRoot}/`);
 }
 
 function sameStringSet(left: readonly string[], right: readonly string[]): boolean {

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  BROWSER_HOST_SESSION_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
   BrowserHostSessionManager,
   type BrowserHostMouseButton,
@@ -81,6 +82,54 @@ type MouseGesturePolicy =
   | 'browser-host-session-drag-drop-fixture'
   | 'browser-host-session-text-selection-fixture'
   | 'browser-host-session-scrollbar-thumb-drag-fixture';
+
+type MouseGestureOsUiAuditProofKind =
+  | 'window-focus-owner'
+  | 'right-click-context-menu-owner'
+  | 'middle-click-tab-owner-or-handoff'
+  | 'selection-range-owner'
+  | 'scrollbar-thumb-owner'
+  | 'shell-composer-not-targeted';
+
+type MouseGestureOsUiAuditProof = {
+  kind: MouseGestureOsUiAuditProofKind;
+  owner: 'BrowserHostSession';
+  auditRef: string;
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  rawPayloadRecorded: false;
+  shellComposerTarget: 'not-targeted';
+};
+
+type MouseGestureProductAcceptance = {
+  status: 'blocked' | 'passed';
+  source: 'deterministic-contract-not-real-os-ui-run' | 'real-product-os-ui-run';
+  canClaimRealMouseFidelityPass: boolean;
+  requiredRealProofs: string[];
+  auditProofsRequired: MouseGestureOsUiAuditProofKind[];
+  realContextMenuVerified: boolean;
+  realMiddleClickNewTabOrHandoffVerified: boolean;
+  realSelectionRangeVerified: boolean;
+  shellComposerCapturedCharacters: number;
+  shellComposerTargetedActions: number;
+  rawSelectionTextRecorded: false;
+  rawContextMenuPayloadRecorded: false;
+  rawTabPayloadCaptured: false;
+  blocker?: string;
+  osUiRun?: {
+    runId: string;
+    platform: 'macos' | 'windows' | 'linux';
+    productSurface: 'right-pane-browser';
+    browserHostSessionRef: string;
+    liveSurfaceRef: string;
+    composerAudit: {
+      shellComposerCapturedCharacters: number;
+      shellComposerTargetedActions: number;
+      composerAuditRef: string;
+    };
+    auditProofs: MouseGestureOsUiAuditProof[];
+  };
+};
 
 interface MouseGestureTraceRecord {
   owner: 'BrowserHostSession';
@@ -288,6 +337,11 @@ test('BrowserHostSession mouse gesture completeness is single-owner and refs-fir
     assert.equal(report.newTabSemantics.modifierClick.reasonCode, 'click-action-has-no-modifier-fields');
     assert.equal(report.contextMenuPolicy, 'browser-context-menu');
     assert.equal(report.middleClickPolicy, 'browser-host-session-owned-middle-button');
+    assert.equal(report.productAcceptance.canClaimRealMouseFidelityPass, false);
+    assert.deepEqual(validateMouseGestureProductAcceptance(report), [
+      'real-product-os-ui-run-required',
+      'real-os-ui-audit-proof-required',
+    ]);
     assert.equal(report.systemInputUsed, false);
     assert.equal(report.secondTruthSource, false);
     assert.equal(report.rawPayloadsCaptured, false);
@@ -310,6 +364,92 @@ test('BrowserHostSession mouse gesture completeness is single-owner and refs-fir
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
+});
+
+test('BrowserHostSession mouse gesture product claim rejects forged pass without OS UI audit proofs', () => {
+  const state = syntheticBrowserHostState();
+  const report = boundedMouseGestureReport(state, expectedTrace());
+  const forged = {
+    ...report,
+    source: 'real-product-os-ui-run',
+    productAcceptance: {
+      ...report.productAcceptance,
+      status: 'passed' as const,
+      source: 'real-product-os-ui-run' as const,
+      canClaimRealMouseFidelityPass: true,
+      osUiRun: {
+        runId: 'mouse-gesture-forged',
+        platform: 'macos' as const,
+        productSurface: 'right-pane-browser' as const,
+        browserHostSessionRef: `browser-host-session:${state.id}/session`,
+        liveSurfaceRef: `browser-host-session:${state.id}/live-surface`,
+        composerAudit: {
+          shellComposerCapturedCharacters: 1,
+          shellComposerTargetedActions: 1,
+          composerAuditRef: `browser-host-session:${state.id}/mouse-os-ui/composer-audit`,
+        },
+        auditProofs: [],
+      },
+    },
+  };
+
+  const blockers = validateMouseGestureProductAcceptance(forged);
+  assert.ok(blockers.includes('real-os-ui-audit-proof-required'));
+  assert.ok(blockers.includes('shell-composer-must-not-capture-mouse-input'));
+});
+
+test('BrowserHostSession mouse gesture product claim rejects split BrowserHostSession audit refs', () => {
+  const state = syntheticBrowserHostState();
+  const runRef = `browser-host-session:${state.id}/session`;
+  const liveSurfaceRef = `browser-host-session:${state.id}/live-surface`;
+  const report = {
+    source: 'real-product-os-ui-run',
+    productAcceptance: {
+      status: 'passed',
+      source: 'real-product-os-ui-run',
+      canClaimRealMouseFidelityPass: true,
+      requiredRealProofs: [],
+      auditProofsRequired: [
+        'window-focus-owner',
+        'right-click-context-menu-owner',
+        'middle-click-tab-owner-or-handoff',
+        'selection-range-owner',
+        'scrollbar-thumb-owner',
+        'shell-composer-not-targeted',
+      ] satisfies MouseGestureOsUiAuditProofKind[],
+      realContextMenuVerified: true,
+      realMiddleClickNewTabOrHandoffVerified: true,
+      realSelectionRangeVerified: true,
+      shellComposerCapturedCharacters: 0,
+      shellComposerTargetedActions: 0,
+      rawSelectionTextRecorded: false,
+      rawContextMenuPayloadRecorded: false,
+      rawTabPayloadCaptured: false,
+      osUiRun: {
+        runId: 'mouse-gesture-split-ref-forged',
+        platform: 'macos',
+        productSurface: 'right-pane-browser',
+        browserHostSessionRef: runRef,
+        liveSurfaceRef,
+        composerAudit: {
+          shellComposerCapturedCharacters: 0,
+          shellComposerTargetedActions: 0,
+          composerAuditRef: 'browser-host-session:other-mouse-run/composer-audit',
+        },
+        auditProofs: [
+          mouseGestureAuditProof('window-focus-owner', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('right-click-context-menu-owner', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('middle-click-tab-owner-or-handoff', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('selection-range-owner', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('scrollbar-thumb-owner', runRef, liveSurfaceRef),
+          mouseGestureAuditProof('shell-composer-not-targeted', runRef, liveSurfaceRef),
+        ],
+      },
+    } satisfies MouseGestureProductAcceptance,
+  };
+
+  const blockers = validateMouseGestureProductAcceptance(report);
+  assert.ok(blockers.includes('real-os-ui-run-ref-cohesion-required'));
 });
 
 async function actMouse(
@@ -373,6 +513,7 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
   contentCalls = 0;
   axSnapshotCalls = 0;
   private pendingTextSelectionPath: BrowserHostMousePoint[] | undefined;
+  private pendingPointerPath: BrowserHostMousePoint[] | undefined;
 
   async goto(url: string): Promise<void> {
     this.currentUrl = url;
@@ -449,6 +590,7 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
     if (pointsEqual({ x, y }, TEXT_SELECTION_PATH[0]) && button === 'left') {
       this.pendingTextSelectionPath = [{ x, y }];
     }
+    this.pendingPointerPath = [{ x, y }];
     this.trace.push({
       owner: 'BrowserHostSession',
       hostAction: 'mouse-down',
@@ -463,6 +605,9 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
     if (this.pendingTextSelectionPath) {
       this.pendingTextSelectionPath.push({ x, y });
     }
+    if (this.pendingPointerPath) {
+      this.pendingPointerPath.push({ x, y });
+    }
     this.trace.push({
       owner: 'BrowserHostSession',
       hostAction: 'mouse-move',
@@ -473,6 +618,8 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
   }
 
   async mouseUp(x: number, y: number, button: BrowserHostMouseButton = 'left'): Promise<void> {
+    const pointerPath = this.pendingPointerPath ? [...this.pendingPointerPath, { x, y }] : undefined;
+    this.pendingPointerPath = undefined;
     if (this.pendingTextSelectionPath && button === 'left') {
       const path = [...this.pendingTextSelectionPath, { x, y }];
       this.pendingTextSelectionPath = undefined;
@@ -489,6 +636,20 @@ class MouseGestureDriver implements BrowserHostSessionDriver {
         });
         return;
       }
+    }
+    const fixtureGesture = classifyPointerPath(pointerPath);
+    if (fixtureGesture) {
+      this.trace.push({
+        owner: 'BrowserHostSession',
+        hostAction: 'mouse-up',
+        gesture: fixtureGesture.gesture,
+        x,
+        y,
+        button,
+        path: fixtureGesture.path,
+        ...(fixtureGesture.policy ? { policy: fixtureGesture.policy } : {}),
+      });
+      return;
     }
     this.trace.push({
       owner: 'BrowserHostSession',
@@ -552,21 +713,16 @@ function expectedTrace(): MouseGestureTraceRecord[] {
     { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 144, y: 152 },
     { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 152, y: 160 },
     { owner: 'BrowserHostSession', hostAction: 'mouse-up', gesture: 'mouse-up', x: 160, y: 168, button: 'left' },
-    {
-      owner: 'BrowserHostSession',
-      hostAction: 'drag',
-      gesture: 'drag-path',
-      button: 'left',
-      path: DRAG_PATH,
-    },
-    {
-      owner: 'BrowserHostSession',
-      hostAction: 'drag',
-      gesture: 'drag-drop',
-      button: 'left',
-      path: DRAG_DROP_PATH,
-      policy: 'browser-host-session-drag-drop-fixture',
-    },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-down', gesture: 'mouse-down', x: 200, y: 208, button: 'left' },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 232, y: 240 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 264, y: 224 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 296, y: 256 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-up', gesture: 'drag-path', x: 296, y: 256, button: 'left', path: DRAG_PATH },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-down', gesture: 'mouse-down', x: 340, y: 220, button: 'left' },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 372, y: 244 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 416, y: 268 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 468, y: 292 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-up', gesture: 'drag-drop', x: 468, y: 292, button: 'left', path: DRAG_DROP_PATH, policy: 'browser-host-session-drag-drop-fixture' },
     { owner: 'BrowserHostSession', hostAction: 'mouse-down', gesture: 'mouse-down', x: 180, y: 340, button: 'left' },
     { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 220, y: 340 },
     { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 260, y: 340 },
@@ -580,17 +736,40 @@ function expectedTrace(): MouseGestureTraceRecord[] {
       path: TEXT_SELECTION_PATH,
       policy: 'browser-host-session-text-selection-fixture',
     },
-    {
-      owner: 'BrowserHostSession',
-      hostAction: 'drag',
-      gesture: 'scrollbar-thumb-drag',
-      button: 'left',
-      path: SCROLLBAR_THUMB_DRAG_PATH,
-      policy: 'browser-host-session-scrollbar-thumb-drag-fixture',
-    },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-down', gesture: 'mouse-down', x: 944, y: 120, button: 'left' },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 944, y: 220 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 944, y: 340 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-move', gesture: 'continuous-move', x: 944, y: 460 },
+    { owner: 'BrowserHostSession', hostAction: 'mouse-up', gesture: 'scrollbar-thumb-drag', x: 944, y: 460, button: 'left', path: SCROLLBAR_THUMB_DRAG_PATH, policy: 'browser-host-session-scrollbar-thumb-drag-fixture' },
     { owner: 'BrowserHostSession', hostAction: 'scroll', gesture: 'vertical-wheel', deltaX: 0, deltaY: 420 },
     { owner: 'BrowserHostSession', hostAction: 'scroll', gesture: 'horizontal-wheel', deltaX: -360, deltaY: 0 },
   ];
+}
+
+function classifyPointerPath(path: BrowserHostMousePoint[] | undefined): {
+  gesture: Extract<MouseGestureName, 'drag-path' | 'drag-drop' | 'scrollbar-thumb-drag'>;
+  path: BrowserHostMousePoint[];
+  policy?: MouseGesturePolicy;
+} | undefined {
+  if (!path) return undefined;
+  const normalizedPath = normalizePointerPath(path);
+  if (pathsEqual(normalizedPath, DRAG_PATH)) return { gesture: 'drag-path', path: normalizedPath };
+  if (pathsEqual(normalizedPath, DRAG_DROP_PATH)) {
+    return { gesture: 'drag-drop', path: normalizedPath, policy: 'browser-host-session-drag-drop-fixture' };
+  }
+  if (pathsEqual(normalizedPath, SCROLLBAR_THUMB_DRAG_PATH)) {
+    return { gesture: 'scrollbar-thumb-drag', path: normalizedPath, policy: 'browser-host-session-scrollbar-thumb-drag-fixture' };
+  }
+  return undefined;
+}
+
+function normalizePointerPath(path: BrowserHostMousePoint[]): BrowserHostMousePoint[] {
+  const previous = path[path.length - 2];
+  const last = path[path.length - 1];
+  if (path.length >= 2 && last && pointsEqual(last, previous)) {
+    return path.slice(0, -1);
+  }
+  return path;
 }
 
 function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseGestureTraceRecord[]) {
@@ -679,6 +858,36 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
       rawTabPayloadCaptured: false,
       systemInputUsed: false,
     },
+    productAcceptance: {
+      status: 'blocked' as const,
+      source: 'deterministic-contract-not-real-os-ui-run' as const,
+      canClaimRealMouseFidelityPass: false,
+      requiredRealProofs: [
+        'real-right-pane-os-ui-run',
+        'right-click-context-menu-owner',
+        'middle-click-tab-owner-or-handoff',
+        'selection-range-owner',
+        'scrollbar-thumb-owner',
+        'shell-composer-not-targeted',
+      ],
+      auditProofsRequired: [
+        'window-focus-owner',
+        'right-click-context-menu-owner',
+        'middle-click-tab-owner-or-handoff',
+        'selection-range-owner',
+        'scrollbar-thumb-owner',
+        'shell-composer-not-targeted',
+      ] satisfies MouseGestureOsUiAuditProofKind[],
+      realContextMenuVerified: false,
+      realMiddleClickNewTabOrHandoffVerified: false,
+      realSelectionRangeVerified: false,
+      shellComposerCapturedCharacters: 0,
+      shellComposerTargetedActions: 0,
+      rawSelectionTextRecorded: false,
+      rawContextMenuPayloadRecorded: false,
+      rawTabPayloadCaptured: false,
+      blocker: 'real-product-os-ui-run-not-executed',
+    } satisfies MouseGestureProductAcceptance,
     actionTimingSummary: state.actionTimingSummary?.map((row) => ({
       action: row.action,
       count: row.count,
@@ -697,6 +906,112 @@ async function writeBoundedMouseGestureArtifact(report: ReturnType<typeof bounde
   await writeFile(manifestPath, text, 'utf8');
 }
 
+function validateMouseGestureProductAcceptance(report: { source: string; productAcceptance: MouseGestureProductAcceptance }): string[] {
+  const blockers: string[] = [];
+  const acceptance = report.productAcceptance;
+  if (!acceptance.canClaimRealMouseFidelityPass) {
+    if (acceptance.status !== 'blocked') blockers.push('nonpass-must-be-blocked');
+    if (acceptance.source !== 'real-product-os-ui-run') blockers.push('real-product-os-ui-run-required');
+    if (!hasMouseGestureOsUiAuditProofs(acceptance)) blockers.push('real-os-ui-audit-proof-required');
+    return blockers;
+  }
+  if (
+    acceptance.status !== 'passed'
+      || acceptance.source !== 'real-product-os-ui-run'
+      || report.source !== 'real-product-os-ui-run'
+  ) {
+    blockers.push('real-product-os-ui-run-required');
+  }
+  if (!hasMouseGestureOsUiAuditProofs(acceptance)) blockers.push('real-os-ui-audit-proof-required');
+  if (!hasMouseGestureComposerIsolationProof(acceptance)) blockers.push('shell-composer-must-not-capture-mouse-input');
+  if (!hasMouseGestureOsUiRunRefCohesion(acceptance)) blockers.push('real-os-ui-run-ref-cohesion-required');
+  if (acceptance.realContextMenuVerified !== true) blockers.push('right-click-context-menu-proof-required');
+  if (acceptance.realMiddleClickNewTabOrHandoffVerified !== true) blockers.push('middle-click-tab-owner-or-handoff-proof-required');
+  if (acceptance.realSelectionRangeVerified !== true) blockers.push('selection-range-proof-required');
+  if (
+    acceptance.rawSelectionTextRecorded !== false
+      || acceptance.rawContextMenuPayloadRecorded !== false
+      || acceptance.rawTabPayloadCaptured !== false
+  ) {
+    blockers.push('raw-mouse-product-payloads-forbidden');
+  }
+  return blockers;
+}
+
+function hasMouseGestureOsUiAuditProofs(acceptance: MouseGestureProductAcceptance): boolean {
+  const run = acceptance.osUiRun;
+  if (!run) return false;
+  const requiredKinds: MouseGestureOsUiAuditProofKind[] = [
+    'window-focus-owner',
+    'right-click-context-menu-owner',
+    'middle-click-tab-owner-or-handoff',
+    'selection-range-owner',
+    'scrollbar-thumb-owner',
+    'shell-composer-not-targeted',
+  ];
+  const proofs = Array.isArray(run.auditProofs) ? run.auditProofs : [];
+  const proofKinds = new Set(proofs.map((proof) => proof.kind));
+  return run.productSurface === 'right-pane-browser'
+    && run.browserHostSessionRef.startsWith('browser-host-session:')
+    && run.liveSurfaceRef.startsWith('browser-host-session:')
+    && requiredKinds.every((kind) => proofKinds.has(kind))
+    && proofs.every((proof) => (
+      proof.owner === 'BrowserHostSession'
+        && proof.auditRef.startsWith('browser-host-session:')
+        && proof.browserHostSessionRef === run.browserHostSessionRef
+        && proof.liveSurfaceRef === run.liveSurfaceRef
+        && proof.rawPayloadRecorded === false
+        && proof.shellComposerTarget === 'not-targeted'
+    ));
+}
+
+function hasMouseGestureComposerIsolationProof(acceptance: MouseGestureProductAcceptance): boolean {
+  const audit = acceptance.osUiRun?.composerAudit;
+  return Boolean(
+    audit
+      && audit.shellComposerCapturedCharacters === 0
+      && audit.shellComposerTargetedActions === 0
+      && audit.composerAuditRef.startsWith('browser-host-session:'),
+  );
+}
+
+function hasMouseGestureOsUiRunRefCohesion(acceptance: MouseGestureProductAcceptance): boolean {
+  const run = acceptance.osUiRun;
+  const runScope = browserHostRefScope(run?.browserHostSessionRef);
+  if (!run || !runScope || !browserHostRefBelongsToScope(run.liveSurfaceRef, runScope)) return false;
+  const refs = [
+    run.composerAudit.composerAuditRef,
+    ...run.auditProofs.flatMap((proof) => [proof.auditRef, proof.browserHostSessionRef, proof.liveSurfaceRef]),
+  ];
+  return refs.length > 0 && refs.every((ref) => browserHostRefBelongsToScope(ref, runScope));
+}
+
+function mouseGestureAuditProof(
+  kind: MouseGestureOsUiAuditProofKind,
+  browserHostSessionRef: string,
+  liveSurfaceRef: string,
+): MouseGestureOsUiAuditProof {
+  return {
+    kind,
+    owner: 'BrowserHostSession',
+    auditRef: `${browserHostSessionRef.replace(/\/session$/, '')}/audit/${kind}`,
+    browserHostSessionRef,
+    liveSurfaceRef,
+    rawPayloadRecorded: false,
+    shellComposerTarget: 'not-targeted',
+  };
+}
+
+function browserHostRefScope(ref: string | undefined): string | undefined {
+  if (!ref?.startsWith('browser-host-session:')) return undefined;
+  const slash = ref.lastIndexOf('/');
+  return slash > 'browser-host-session:'.length ? ref.slice(0, slash) : undefined;
+}
+
+function browserHostRefBelongsToScope(ref: string | undefined, scope: string): boolean {
+  return typeof ref === 'string' && (ref === scope || ref.startsWith(`${scope}/`));
+}
+
 function assertNoRawMouseArtifactPayload(text: string, label: string): void {
   assert.doesNotMatch(text, /data:image|base64|rawDom|raw DOM|domSnapshotPayload|screenshotPayload|systemMousePayload/i, `${label} must not include raw payloads`);
   assert.doesNotMatch(text, /<\s*(?:!doctype|html|body|iframe|webview)\b/i, `${label} must not include captured markup`);
@@ -709,4 +1024,34 @@ function pathsEqual(left: BrowserHostMousePoint[], right: BrowserHostMousePoint[
 
 function pointsEqual(left: BrowserHostMousePoint, right: BrowserHostMousePoint | undefined): boolean {
   return !!right && left.x === right.x && left.y === right.y;
+}
+
+function syntheticBrowserHostState(): BrowserHostSessionState {
+  return {
+    schemaVersion: BROWSER_HOST_SESSION_SCHEMA,
+    id: 'mouse-gesture-product-claim-forged',
+    providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+    owner: 'host',
+    status: 'ready',
+    workspacePath: '/tmp/sciforge-browser-mouse-gesture-forged',
+    requestedUrl: 'http://localhost/mouse-gesture/start',
+    url: 'http://localhost/mouse-gesture/start',
+    title: 'BrowserHostSession mouse gesture completeness',
+    startedAt: '2026-06-02T00:00:00.000Z',
+    updatedAt: '2026-06-02T00:00:00.000Z',
+    viewport: { width: 960, height: 640 },
+    screenshotRef: `browser-host-session:mouse-gesture-product-claim-forged/screenshot`,
+    frameRef: `browser-host-session:mouse-gesture-product-claim-forged/frame`,
+    frameStreamRef: `browser-host-session:mouse-gesture-product-claim-forged/frame-stream`,
+    domSnapshotRef: `browser-host-session:mouse-gesture-product-claim-forged/dom`,
+    axSnapshotRef: `browser-host-session:mouse-gesture-product-claim-forged/ax`,
+    consoleLogRef: `browser-host-session:mouse-gesture-product-claim-forged/console`,
+    networkLogRef: `browser-host-session:mouse-gesture-product-claim-forged/network`,
+    liveSurfaceTransport: 'host-stream',
+    liveSurfaceRef: `browser-host-session:mouse-gesture-product-claim-forged/live-surface`,
+    singleInteractiveTruth: true,
+    canGoBack: false,
+    canGoForward: false,
+    diagnostics: [],
+  };
 }

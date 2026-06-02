@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import {
+  RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION,
   readRuntimeCodexBrowserAcceptanceManifest,
   runtimeCodexBrowserAcceptanceManifestPath,
 } from './workspace-server-runtime-codex-browser-acceptance.js';
@@ -49,12 +50,18 @@ test('readRuntimeCodexBrowserAcceptanceManifest normalizes passed manifest and f
   const observedAt = '2026-05-29T00:00:00.000Z';
   await utimes(screenshotPath, new Date(observedAt), new Date('2026-05-29T00:01:00.000Z'));
   await writeFile(join(evidenceDir, 'manifest.json'), JSON.stringify({
-    schemaVersion: 'sciforge.runtime-codex-browser-acceptance.v1',
+    schemaVersion: RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION,
     status: ' passed ',
-    source: ' browser ',
+    source: ' codex-in-app-browser ',
     observedAt,
     actualUrl: ' http://127.0.0.1:3000 ',
     actualPort: 3000,
+    requestedRolePort: 3000,
+    actualWorkspaceWriterPort: 3001,
+    actualWorkspaceWriterUrl: ' http://127.0.0.1:3001 ',
+    actualRuntimeCodexPort: 3002,
+    actualRuntimeCodexUrl: ' http://127.0.0.1:3002 ',
+    profile: ' p2 ',
     workspacePath: ' /workspace ',
     provider: ' openai ',
     model: ' gpt-5 ',
@@ -98,8 +105,14 @@ test('readRuntimeCodexBrowserAcceptanceManifest normalizes passed manifest and f
   });
 
   assert.equal(manifest?.status, 'passed');
-  assert.equal(manifest?.source, 'browser');
+  assert.equal(manifest?.source, 'codex-in-app-browser');
   assert.equal(manifest?.actualUrl, 'http://127.0.0.1:3000');
+  assert.equal(manifest?.requestedRolePort, 3000);
+  assert.equal(manifest?.actualWorkspaceWriterPort, 3001);
+  assert.equal(manifest?.actualWorkspaceWriterUrl, 'http://127.0.0.1:3001');
+  assert.equal(manifest?.actualRuntimeCodexPort, 3002);
+  assert.equal(manifest?.actualRuntimeCodexUrl, 'http://127.0.0.1:3002');
+  assert.equal(manifest?.profile, 'p2');
   assert.equal(manifest?.startedFromDefaultChatEntry, true);
   assert.deepEqual(manifest?.blockedOn, ['provider', 'env']);
   assert.deepEqual(manifest?.nextActions, [{
@@ -125,7 +138,9 @@ test('readRuntimeCodexBrowserAcceptanceManifest normalizes passed manifest and f
 test('readRuntimeCodexBrowserAcceptanceManifest omits freshness for blocked manifests', async () => {
   const evidenceDir = await mkdtemp(join(tmpdir(), 'sciforge-browser-acceptance-blocked-'));
   await writeFile(join(evidenceDir, 'manifest.json'), JSON.stringify({
+    schemaVersion: RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION,
     status: 'blocked',
+    source: 'codex-in-app-browser',
     reason: 'missing runtime env',
     evidence: {
       screenshotPath: 'missing.png',
@@ -155,4 +170,43 @@ test('readRuntimeCodexBrowserAcceptanceManifest rejects non-object manifests', a
     }),
     /runtime codex browser acceptance manifest is invalid/,
   );
+});
+
+test('readRuntimeCodexBrowserAcceptanceManifest rejects unsupported schema, source, and status', async () => {
+  const cases: Array<{ name: string; patch: Record<string, unknown>; error: RegExp }> = [
+    {
+      name: 'schema',
+      patch: { schemaVersion: 'sciforge.runtime-codex-browser-acceptance.v1' },
+      error: /unsupported schemaVersion/,
+    },
+    {
+      name: 'source',
+      patch: { source: 'browser' },
+      error: /source must be codex-in-app-browser/,
+    },
+    {
+      name: 'status',
+      patch: { status: 'unknown' },
+      error: /status must be passed, blocked, failed, or partial/,
+    },
+  ];
+
+  for (const item of cases) {
+    const evidenceDir = await mkdtemp(join(tmpdir(), `sciforge-browser-acceptance-${item.name}-`));
+    await writeFile(join(evidenceDir, 'manifest.json'), JSON.stringify({
+      schemaVersion: RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION,
+      status: 'blocked',
+      source: 'codex-in-app-browser',
+      ...item.patch,
+    }));
+
+    await assert.rejects(
+      readRuntimeCodexBrowserAcceptanceManifest({
+        cwd: '/repo',
+        env: { SCIFORGE_BROWSER_ACCEPTANCE_EVIDENCE_DIR: evidenceDir },
+        parallelProfileId: 'p1',
+      }),
+      item.error,
+    );
+  }
 });

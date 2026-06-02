@@ -38,6 +38,7 @@ import { useRightPaneTabController } from './results/rightPaneTabController';
 import { useRightPaneWorkspaceFileController } from './results/rightPaneWorkspaceFileController';
 import { useRightPaneActionController } from './results/rightPaneActionController';
 import { useRightPaneTerminalController } from './results/rightPaneTerminalController';
+import { useRightPaneScreenController } from './results/rightPaneScreenController';
 import { RightPaneArtifactInspectorDrawer } from './results/rightPaneArtifactInspectorAdapter';
 import { useRightPaneLifecycleController } from './results/rightPaneLifecycleController';
 
@@ -144,6 +145,15 @@ export function ResultsRenderer({
   });
   const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
+  const rightPaneScreenController = useRightPaneScreenController({
+    config,
+    session,
+    activeRun,
+    activeTabId: activeResultTabId,
+    resultTab,
+    locale,
+    onCommandRequest: rightPaneActionController.requestCommandText,
+  });
   const rendererModel = useMemo(() => createResultsRendererViewModel({
     scenarioId,
     session,
@@ -217,6 +227,7 @@ export function ResultsRenderer({
         workspaceFileOpenTabs={workspaceFileController.workspaceFileOpenTabs}
         browserAddressDraft={activeBrowserAddress}
         terminalSession={rightPaneTerminalController.activeTerminalSession}
+        virtualScreenPayload={rightPaneScreenController.payload}
         onBrowserAddressDraftChange={setActiveBrowserAddress}
         onCommandRequest={rightPaneActionController.requestCommandText}
         onObjectAction={rightPaneActionController.handleObjectAction}

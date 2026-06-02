@@ -154,6 +154,7 @@ async function liveAcceptanceRegularRefExists(acceptancePath: string, runDirRef:
 function liveAcceptanceRegularRefExistsSync(acceptancePath: string, runDirRef: string, ref: string) {
   const localRef = normalizeCurrentRunBundleRef(ref, runDirRef);
   if (!isLocalFileEvidenceRef(localRef)) return false;
+  if (isNormalizedCrossBundleRef(localRef)) return false;
   const baseDir = dirname(resolve(acceptancePath));
   const target = resolve(baseDir, localRef);
   try {
@@ -170,6 +171,7 @@ function liveAcceptanceRegularRefExistsSync(acceptancePath: string, runDirRef: s
 async function liveAcceptanceRegularRefPath(acceptancePath: string, runDirRef: string, ref: string | undefined) {
   const localRef = ref ? normalizeCurrentRunBundleRef(ref, runDirRef) : undefined;
   if (!localRef || !isLocalFileEvidenceRef(localRef)) return undefined;
+  if (isNormalizedCrossBundleRef(localRef)) return undefined;
   const baseDir = dirname(resolve(acceptancePath));
   const target = resolve(baseDir, localRef);
   try {
@@ -223,8 +225,14 @@ function collectLiveAcceptanceFileRefs(manifest: Record<string, unknown>) {
     stringValue(verifierVerdict.ref),
     stringValue(guiPresent.recordRef),
     stringValue(guiPresent.payloadRef),
+    stringValue(manifest.replayRef),
+    stringValue(manifest.evidenceLedgerRef),
     stringValue(manifest.completionEvidenceRef),
     ...stringArray(guiPresent.displayedRefs),
+    ...records(manifest.mutatingActions).flatMap(actionFileRefs),
+    ...records(manifest.actionCausality).flatMap(actionFileRefs),
+    ...records(manifest.evidenceLedgerActions).flatMap(actionFileRefs),
+    ...records(recordValue(manifest.evidenceLedger).actions).flatMap(actionFileRefs),
     ...records(manifest.tuiHostChain).flatMap((link) => [
       stringValue(link.requestRef),
       stringValue(link.hostPortsRef),
@@ -241,6 +249,46 @@ function collectLiveAcceptanceFileRefs(manifest: Record<string, unknown>) {
     ...records(manifest.evidenceMarkers).flatMap(markerFileRefs),
   ];
   return uniqueStrings(refs.filter((ref): ref is string => Boolean(ref)));
+}
+
+function actionFileRefs(action: Record<string, unknown>) {
+  return [
+    stringValue(action.inputIntentRef),
+    stringValue(action.intentRef),
+    stringValue(action.providerAdapterRef),
+    stringValue(action.adapterRef),
+    stringValue(action.executorAdapterRef),
+    stringValue(action.actionAdapterRef),
+    stringValue(action.executorEventRef),
+    stringValue(action.beforeFrameRef),
+    stringValue(action.afterFrameRef),
+    stringValue(action.beforeAfterFrameRef),
+    stringValue(action.beforeScreenshotRef),
+    stringValue(action.afterScreenshotRef),
+    stringValue(action.currentScreenshotRef),
+    stringValue(action.currentAppStateRef),
+    stringValue(action.stateSnapshotRef),
+    stringValue(action.freshnessCheckRef),
+    stringValue(action.verifierRef),
+    stringValue(action.verificationRef),
+    stringValue(action.verifierVerdictRef),
+    stringValue(action.artifactRef),
+    stringValue(action.finalArtifactRef),
+    stringValue(action.blockedReasonRef),
+    stringValue(action.permissionHandoffRef),
+    stringValue(action.observeOnlyRef),
+    stringValue(action.guiPresentRef),
+    ...stringArray(action.beforeFrameRefs),
+    ...stringArray(action.afterFrameRefs),
+    ...stringArray(action.beforeEvidenceRefs),
+    ...stringArray(action.afterEvidenceRefs),
+    ...stringArray(action.groundingRefs),
+    ...stringArray(action.verificationRefs),
+    ...stringArray(action.artifactRefs),
+    ...stringArray(action.outputArtifactRefs),
+    ...stringArray(action.blockedReasonRefs),
+    ...stringArray(action.blockedEvidenceRefs),
+  ].filter((ref): ref is string => typeof ref === 'string' && isPotentialEvidenceRef(ref));
 }
 
 function markerFileRefs(marker: Record<string, unknown>) {
@@ -266,6 +314,10 @@ function isLocalFileEvidenceRef(ref: string) {
 
 function isPotentialEvidenceRef(value: string) {
   return /\/|\.json$|\.png$|\.csv$|\.md$|\.txt$|\.docx$|\.pptx$|\.xlsx$/i.test(value);
+}
+
+function isNormalizedCrossBundleRef(ref: string) {
+  return /^\.?sciforge\/vision-runs\//i.test(ref.replace(/\\/g, '/').replace(/^\.\//, ''));
 }
 
 function isPathInsideOrSame(base: string, target: string) {

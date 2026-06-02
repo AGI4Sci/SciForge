@@ -534,6 +534,196 @@ test('browser-workbench canvas-binary experiment is constrained to the same Brow
   assert.doesNotMatch(html, /<img|<iframe|<webview|html2canvas|\/api\/sciforge\/browser\/proxy|\/api\/sciforge\/browser-host\/sessions\/host-canvas\/frame|src=/);
 });
 
+test('browser-workbench accepts webrtc-data-channel only as a same-session canvas transport candidate', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        addressValue: 'https://external.example/webrtc-live',
+        frameRenderer: 'canvas-binary',
+        frameTransport: 'webrtc-data-channel',
+        liveTransportHandoff: {
+          status: 'candidate-contract',
+          claim: 'bridge-to-right-pane-canvas-handoff-only',
+          claimScope: 'candidate-only',
+          owner: 'BrowserHostSession',
+          rightPaneSurfaceOwner: 'BrowserHostSession',
+          productSurface: 'right-pane-browser',
+          renderTarget: 'canvas',
+          frameRenderer: 'canvas-binary',
+          frameTransport: 'webrtc-data-channel',
+          fallbackTransport: 'websocket-binary',
+          liveSurfaceTransportCandidate: 'webrtc-data-channel',
+          hostSessionRef: 'browser-host-session:host-webrtc',
+          liveSurfaceRef: 'browser-host-session:host-webrtc/live-surface',
+          frameStreamRef: 'browser-host-session:host-webrtc/frame-stream',
+          inlineFrameBytes: false,
+          inlineSignals: false,
+          secondViewer: false,
+          secondTruthSource: false,
+          httpFrameLiveFallback: false,
+          fullyPassedClaim: false,
+          realUiWebRtcPassClaim: false,
+          loopbackEvidenceOnly: false,
+          httpFrameRouteClaim: false,
+        },
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'host-webrtc',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'ready',
+          url: 'https://external.example/webrtc-live',
+          liveSurfaceRef: 'browser-host-session:host-webrtc/live-surface',
+          liveSurfaceTransport: 'host-stream',
+          singleInteractiveTruth: true,
+          frameStreamRef: 'browser-host-session:host-webrtc/frame-stream',
+          frameRef: 'browser-host-session:host-webrtc/frame.png',
+          viewport: { width: 1280, height: 720 },
+          updatedAt: '2026-06-02T00:00:00.000Z',
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="host-browser"/);
+  assert.match(html, /browser-workbench-host-frame-canvas/);
+  assert.match(html, /<canvas/);
+  assert.match(html, /data-browser-live-surface-transport="host-stream"/);
+  assert.match(html, /data-browser-frame-transport="webrtc-data-channel"/);
+  assert.match(html, /data-browser-frame-source="browser-host-session-frame-stream-binary"/);
+  assert.match(html, /data-browser-frame-stream-ref="browser-host-session:host-webrtc\/frame-stream"/);
+  assert.match(html, /data-browser-single-interactive-truth="true"/);
+  assert.match(html, /data-browser-webrtc-handoff="candidate-only"/);
+  assert.match(html, /data-browser-webrtc-claim="bridge-to-right-pane-canvas-handoff-only"/);
+  assert.match(html, /data-browser-webrtc-fully-passed-claim="false"/);
+  assert.match(html, /data-browser-second-viewer="false"/);
+  assert.match(html, /data-browser-http-frame-live-fallback="false"/);
+  assert.doesNotMatch(html, /<img|<iframe|<webview|\/api\/sciforge\/browser\/proxy|src=/);
+});
+
+test('browser-workbench refuses WebRTC candidate rendering without the typed right-pane handoff', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        addressValue: 'https://external.example/webrtc-live',
+        frameRenderer: 'canvas-binary',
+        frameTransport: 'webrtc-data-channel',
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'host-webrtc-untyped',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'ready',
+          url: 'https://external.example/webrtc-live',
+          liveSurfaceRef: 'browser-host-session:host-webrtc-untyped/live-surface',
+          liveSurfaceTransport: 'host-stream',
+          singleInteractiveTruth: true,
+          frameStreamRef: 'browser-host-session:host-webrtc-untyped/frame-stream',
+          frameRef: 'browser-host-session:host-webrtc-untyped/frame.png',
+          viewport: { width: 1280, height: 720 },
+          updatedAt: '2026-06-02T00:00:00.000Z',
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
+});
+
+test('browser-workbench refuses WebRTC candidate rendering when the handoff claims real UI pass evidence', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        addressValue: 'https://external.example/webrtc-live',
+        frameRenderer: 'canvas-binary',
+        frameTransport: 'webrtc-data-channel',
+        liveTransportHandoff: {
+          status: 'candidate-contract',
+          claim: 'bridge-to-right-pane-canvas-handoff-only',
+          claimScope: 'candidate-only',
+          owner: 'BrowserHostSession',
+          rightPaneSurfaceOwner: 'BrowserHostSession',
+          productSurface: 'right-pane-browser',
+          renderTarget: 'canvas',
+          frameRenderer: 'canvas-binary',
+          frameTransport: 'webrtc-data-channel',
+          fallbackTransport: 'websocket-binary',
+          liveSurfaceTransportCandidate: 'webrtc-data-channel',
+          hostSessionRef: 'browser-host-session:host-webrtc-forged',
+          liveSurfaceRef: 'browser-host-session:host-webrtc-forged/live-surface',
+          frameStreamRef: 'browser-host-session:host-webrtc-forged/frame-stream',
+          inlineFrameBytes: false,
+          inlineSignals: false,
+          secondViewer: false,
+          secondTruthSource: false,
+          httpFrameLiveFallback: false,
+          fullyPassedClaim: false,
+          realUiWebRtcPassClaim: true as false,
+          loopbackEvidenceOnly: false,
+          httpFrameRouteClaim: false,
+        },
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'host-webrtc-forged',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'ready',
+          url: 'https://external.example/webrtc-live',
+          liveSurfaceRef: 'browser-host-session:host-webrtc-forged/live-surface',
+          liveSurfaceTransport: 'host-stream',
+          singleInteractiveTruth: true,
+          frameStreamRef: 'browser-host-session:host-webrtc-forged/frame-stream',
+          frameRef: 'browser-host-session:host-webrtc-forged/frame.png',
+          viewport: { width: 1280, height: 720 },
+          updatedAt: '2026-06-02T00:00:00.000Z',
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
+});
+
+test('browser-workbench refuses WebRTC canvas when the BrowserHostSession owner is not host-stream', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        addressValue: 'https://external.example/webrtc-live',
+        frameRenderer: 'canvas-binary',
+        frameTransport: 'webrtc-data-channel',
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'host-webrtc-second-viewer',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'ready',
+          url: 'https://external.example/webrtc-live',
+          liveSurfaceRef: 'browser-host-session:host-webrtc-second-viewer/live-surface',
+          liveSurfaceTransport: 'webrtc-data-channel',
+          singleInteractiveTruth: true,
+          frameStreamRef: 'browser-host-session:host-webrtc-second-viewer/frame-stream',
+          frameRef: 'browser-host-session:host-webrtc-second-viewer/frame.png',
+          viewport: { width: 1280, height: 720 },
+          updatedAt: '2026-06-02T00:00:00.000Z',
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-webrtc-handoff|data-browser-frame-transport="webrtc-data-channel"|<img|<iframe|<webview/);
+});
+
 test('browser-workbench refuses canvas-binary rendering for mismatched BrowserHostSession frame streams', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
@@ -564,6 +754,40 @@ test('browser-workbench refuses canvas-binary rendering for mismatched BrowserHo
 
   assert.match(html, /data-browser-object-type="browser-state"/);
   assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|<canvas|data-browser-frame-renderer="canvas-binary"|<img|<iframe|<webview/);
+});
+
+test('browser-workbench refuses WebRTC candidate fallback to HTTP frame when session refs mismatch', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        addressValue: 'https://external.example/webrtc-live',
+        frameRenderer: 'canvas-binary',
+        frameTransport: 'webrtc-data-channel',
+        frameUrl: 'https://workspace.example/api/sciforge/browser-host/sessions/host-webrtc/frame',
+        hostSession: {
+          schemaVersion: 'sciforge.browser-host-session.state.v1',
+          id: 'host-webrtc',
+          owner: 'host',
+          providerId: 'sciforge.browser-host-session',
+          status: 'ready',
+          url: 'https://external.example/webrtc-live',
+          liveSurfaceRef: 'browser-host-session:host-webrtc/live-surface',
+          liveSurfaceTransport: 'host-stream',
+          singleInteractiveTruth: true,
+          frameStreamRef: 'browser-host-session:other-session/frame-stream',
+          frameUrl: 'https://workspace.example/api/sciforge/browser-host/sessions/host-webrtc/frame',
+          viewport: { width: 1280, height: 720 },
+          updatedAt: '2026-06-02T00:00:00.000Z',
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-canvas|browser-workbench-host-frame-image|<canvas|<img|<iframe|<webview/);
+  assert.doesNotMatch(html, /data-browser-frame-transport="webrtc-data-channel"|\/api\/sciforge\/browser-host\/sessions\/host-webrtc\/frame/);
 });
 
 test('browser-workbench forwards host pointer gestures without owning browser execution', () => {

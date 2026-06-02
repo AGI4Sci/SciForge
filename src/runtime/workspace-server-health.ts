@@ -41,6 +41,7 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
       runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
       browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
+      runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
     },
   };
 }

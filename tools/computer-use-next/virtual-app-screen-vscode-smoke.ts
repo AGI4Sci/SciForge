@@ -10,9 +10,11 @@ import { promisify } from 'node:util';
 
 import {
   buildVirtualDisplayScreenPayload,
+  createVirtualDisplayProviderContract,
   isVirtualDisplayReadinessControllable,
   probeVirtualDisplayProviders,
   virtualDisplayReadinessToAdapterReadiness,
+  type VirtualDisplayProviderInvokeResult,
   type VirtualDisplayProviderProbeOptions,
 } from '../../src/runtime/computer-use/virtual-display-provider.js';
 import {
@@ -43,12 +45,66 @@ export interface VirtualAppScreenVsCodeExecutionEvidence {
   guiPresented?: boolean;
 }
 
+export interface VirtualAppScreenVsCodeAcceptanceEvidence {
+  realIsolationEvidencePresent?: boolean;
+  currentRunArtifactEvidencePresent?: boolean;
+  currentRunGuiPresentEvidencePresent?: boolean;
+  currentRunBeforeAfterEvidencePresent?: boolean;
+  currentRunVerifierEvidencePresent?: boolean;
+}
+
+export interface VirtualAppScreenVsCodeProviderLifecycle {
+  schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-lifecycle.v1';
+  createSession: VirtualDisplayProviderInvokeResult;
+  launchApp: VirtualDisplayProviderInvokeResult;
+  attachSurface: VirtualDisplayProviderInvokeResult;
+  readFrame: VirtualDisplayProviderInvokeResult;
+  sendInputIntent: VirtualDisplayProviderInvokeResult;
+}
+
+export interface VirtualAppScreenVsCodeEditorProfile {
+  schemaVersion: 'sciforge.computer-use.virtual-app-screen-editor-profile.v1';
+  profileId: 'vscode-editor-low-risk';
+  profileRef: string;
+  appIdentity: {
+    appKind: 'vscode';
+    displayName: 'VSCode';
+    bundleId: 'com.microsoft.VSCode';
+    executableName: 'Code';
+    supportedExecutablePaths: string[];
+  };
+  workspaceTarget: {
+    mode: 'temp-workspace';
+    artifactFileName: 'sciforge-virtual-screen-note.md';
+    writesOutsideWorkspace: false;
+  };
+  windowPlacement: {
+    display: 'agent-owned-virtual-display';
+    windowRole: 'main-editor-window';
+    requireTargetWindowRef: true;
+  };
+  allowedActions: string[];
+  disallowedActions: string[];
+  inputIntentPolicy: {
+    minimalIntentKind: 'focus-editor-temp-artifact-and-type';
+    nonDestructive: true;
+    requiresBeforeAfterFrameRefs: true;
+    requiresExecutorAndVerifierRefs: true;
+  };
+  safeClosePolicy: {
+    closeStrategy: 'terminate-temp-profile-only';
+    preserveUserWindows: true;
+    cleanupTempWorkspace: true;
+  };
+}
+
 export interface VirtualAppScreenVsCodeSmokeOptions extends VirtualDisplayProviderProbeOptions {
   runId?: string;
   runDirRef?: string;
   createdAt?: string;
   executionMode?: VirtualAppScreenVsCodeExecutionMode;
   executionEvidence?: VirtualAppScreenVsCodeExecutionEvidence;
+  acceptanceEvidence?: VirtualAppScreenVsCodeAcceptanceEvidence;
   executionBlockedReason?: string;
 }
 
@@ -72,14 +128,24 @@ export interface VirtualAppScreenVsCodeSmokeBundle {
   executionMode: VirtualAppScreenVsCodeExecutionMode;
   providerReady: boolean;
   executionEvidenceComplete: boolean;
+  userAcceptanceEvidenceComplete: boolean;
   blockedReason?: string;
+  editorProfile: VirtualAppScreenVsCodeEditorProfile;
   providerProbeBundle: ReturnType<typeof probeVirtualDisplayProviders>;
   screenPayload: ReturnType<typeof buildVirtualDisplayScreenPayload>;
   adapterReadiness: VirtualAppScreenReadinessRecord;
+  providerLifecycle: VirtualAppScreenVsCodeProviderLifecycle;
   records: {
+    editorProfileRef: string;
     providerProbeRef: string;
     adapterReadinessRef: string;
     screenPayloadRef: string;
+    providerLifecycleRef: string;
+    createSessionRef: string;
+    launchAppRef: string;
+    attachSurfaceRef: string;
+    readFrameRef: string;
+    sendInputIntentRef: string;
     appLaunchRef: string;
     liveSurfaceRef: string;
     inputIntentRef: string;
@@ -102,6 +168,9 @@ const USER_INTENT =
 const MACOS_PROVIDER_ID = 'virtual-display.macos.cgvirtualdisplay-screencapturekit';
 const MACOS_NATIVE_EXECUTION_SCHEMA =
   'sciforge.computer-use.macos-native-vscode-virtual-display-execution.v1' as const;
+const VSCODE_EDITOR_PROFILE_SCHEMA =
+  'sciforge.computer-use.virtual-app-screen-editor-profile.v1' as const;
+const VSCODE_EDITOR_PROFILE_ID = 'vscode-editor-low-risk' as const;
 const execFileAsync = promisify(execFile);
 const requireFromHere = createRequire(import.meta.url);
 
@@ -127,10 +196,20 @@ export function buildVirtualAppScreenVsCodeSmokeBundle(
   const executionEvidenceComplete = providerReady
     && executionMode === 'provider-executed'
     && executionEvidenceCompleteFor(options.executionEvidence);
+  const userAcceptanceEvidenceComplete = executionEvidenceComplete
+    && acceptanceEvidenceCompleteFor(options.acceptanceEvidence);
+  const editorProfile = buildVsCodeEditorProfile(runDirRef);
   const records = {
+    editorProfileRef: editorProfile.profileRef,
     providerProbeRef: `${runDirRef}/virtual-display-provider/probe-bundle.json`,
     adapterReadinessRef: screenPayload.adapterReadinessRef,
     screenPayloadRef: `${runDirRef}/virtual-display-provider/screen-payload.json`,
+    providerLifecycleRef: `${runDirRef}/virtual-display-provider/provider-lifecycle.json`,
+    createSessionRef: `${runDirRef}/virtual-display-provider/lifecycle/create-session.json`,
+    launchAppRef: `${runDirRef}/virtual-display-provider/lifecycle/launch-app.json`,
+    attachSurfaceRef: `${runDirRef}/virtual-display-provider/lifecycle/attach-surface.json`,
+    readFrameRef: `${runDirRef}/virtual-display-provider/lifecycle/read-frame.json`,
+    sendInputIntentRef: `${runDirRef}/virtual-display-provider/lifecycle/send-input-intent.json`,
     appLaunchRef: `${runDirRef}/virtual-display-provider/app-launch/vscode.json`,
     liveSurfaceRef: screenPayload.liveSurfaceRef ?? `${runDirRef}/virtual-display-provider/live-surface.json`,
     inputIntentRef: screenPayload.inputIntentRefs?.[0] ?? `${runDirRef}/virtual-display-provider/input-intents/click-and-type.json`,
@@ -145,9 +224,15 @@ export function buildVirtualAppScreenVsCodeSmokeBundle(
   const adapterReadiness = selectedReadiness
     ? virtualDisplayReadinessToAdapterReadiness(selectedReadiness)
     : unavailableAdapterReadiness('No VirtualDisplayProvider profile was selected.');
+  const providerLifecycle = buildVsCodeProviderLifecycle({
+    runId,
+    providerProbeBundle,
+    blockedReason: options.executionBlockedReason ?? providerProbeBundle.blockedReason ?? selectedReadiness?.blockedReason,
+  });
   const blockedReason = blockedReasonForVsCodeSmoke({
     providerReady,
     executionEvidenceComplete,
+    userAcceptanceEvidenceComplete,
     providerBlockedReason: providerProbeBundle.blockedReason ?? selectedReadiness?.blockedReason,
     executionMode,
     executionEvidence: options.executionEvidence,
@@ -156,12 +241,15 @@ export function buildVirtualAppScreenVsCodeSmokeBundle(
   const manifestInput = manifestInputForVsCodeSmoke({
     screenPayload,
     adapterReadiness,
+    providerLifecycle,
     records,
     providerReady,
     executionEvidenceComplete,
+    userAcceptanceEvidenceComplete,
     executionMode,
     blockedReason,
     createdAt,
+    editorProfile,
   });
   const manifest = buildVirtualAppScreenUserAcceptanceManifest(manifestInput);
   manifest.validation = validateVirtualAppScreenUserAcceptanceManifest(manifest);
@@ -177,7 +265,9 @@ export function buildVirtualAppScreenVsCodeSmokeBundle(
     executionMode,
     providerReady,
     executionEvidenceComplete,
+    userAcceptanceEvidenceComplete,
     blockedReason,
+    editorProfile,
     providerProbeBundle,
     screenPayload: {
       ...screenPayload,
@@ -189,6 +279,7 @@ export function buildVirtualAppScreenVsCodeSmokeBundle(
       guiPresentRefs: executionEvidenceComplete ? [records.guiPresentRef] : screenPayload.guiPresentRefs,
     },
     adapterReadiness,
+    providerLifecycle,
     records,
     manifestInput,
     manifest,
@@ -223,9 +314,11 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
     ['vscode-smoke-bundle.json', bundle],
     ['virtual-app-screen-user-acceptance-input.json', bundle.manifestInput],
     ['virtual-app-screen-user-acceptance-manifest.json', bundle.manifest],
+    [bundle.records.editorProfileRef, bundle.editorProfile],
     [bundle.records.providerProbeRef, bundle.providerProbeBundle],
     [bundle.records.adapterReadinessRef, bundle.adapterReadiness],
     [bundle.records.screenPayloadRef, bundle.screenPayload],
+    ...providerLifecycleRecords(bundle),
     [bundle.records.blockedRef, {
       schemaVersion: 'sciforge.computer-use.virtual-app-screen-vscode-blocked.v1',
       ref: bundle.records.blockedRef,
@@ -245,9 +338,20 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
         ref: bundle.records.appLaunchRef,
         providerId: bundle.providerProbeBundle.selectedProviderId,
         backendKind: bundle.providerProbeBundle.selectedReadiness?.backendKind,
+        editorProfileRef: bundle.records.editorProfileRef,
+        providerLifecycleRef: bundle.records.providerLifecycleRef,
+        lifecycleOperationRefs: [bundle.records.createSessionRef, bundle.records.launchAppRef],
+        appIdentity: bundle.editorProfile.appIdentity,
+        workspaceTarget: bundle.editorProfile.workspaceTarget,
+        windowPlacement: bundle.editorProfile.windowPlacement,
+        allowedActions: bundle.editorProfile.allowedActions,
+        safeClosePolicy: bundle.editorProfile.safeClosePolicy,
         targetAppRef: bundle.screenPayload.targetAppRef,
         targetWindowRef: bundle.screenPayload.targetWindowRef,
         sessionRef: bundle.screenPayload.sessionRef,
+        createSessionRef: bundle.records.createSessionRef,
+        launchAppRef: bundle.records.launchAppRef,
+        providerCreatedSession: true,
         launchedInAgentOwnedSurface: true,
       }],
       [bundle.records.liveSurfaceRef, {
@@ -255,6 +359,9 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
         ref: bundle.records.liveSurfaceRef,
         sessionRef: bundle.screenPayload.sessionRef,
         frameStreamRef: bundle.screenPayload.frameStreamRef,
+        currentFrameRef: bundle.screenPayload.currentFrameRef,
+        attachSurfaceRef: bundle.records.attachSurfaceRef,
+        readFrameRef: bundle.records.readFrameRef,
         transport: bundle.screenPayload.surfaceTransport ?? bundle.providerProbeBundle.selectedReadiness?.selectedTransport ?? 'webrtc',
         singleInteractiveTruth: true,
       }],
@@ -271,17 +378,28 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
       [bundle.records.inputIntentRef, {
         schemaVersion: 'sciforge.computer-use.input-intent.v1',
         ref: bundle.records.inputIntentRef,
-        kind: 'click-and-type',
+        kind: bundle.editorProfile.inputIntentPolicy.minimalIntentKind,
+        inputKind: bundle.editorProfile.inputIntentPolicy.minimalIntentKind,
+        nonDestructive: true,
+        editorProfileRef: bundle.records.editorProfileRef,
         targetAppRef: bundle.screenPayload.targetAppRef,
         targetWindowRef: bundle.screenPayload.targetWindowRef,
         inputLeaseRef: bundle.screenPayload.inputLeaseRef,
         actionAdapterRef: bundle.screenPayload.actionAdapterRef,
+        sendInputIntentRef: bundle.records.sendInputIntentRef,
+        beforeFrameRef: bundle.screenPayload.beforeFrameRef,
+        afterFrameRef: bundle.screenPayload.afterFrameRef,
+        beforeAfterFrameRefs: [bundle.records.beforeAfterRef],
+        executorEventRef: bundle.records.executorEventRef,
+        verificationRefs: [bundle.records.verificationRef],
       }],
       [bundle.records.executorEventRef, {
         schemaVersion: 'sciforge.computer-use.executor-event.v1',
         ref: bundle.records.executorEventRef,
         status: 'completed',
         inputIntentRef: bundle.records.inputIntentRef,
+        providerLifecycleRef: bundle.records.providerLifecycleRef,
+        sendInputIntentRef: bundle.records.sendInputIntentRef,
         beforeFrameRef: bundle.screenPayload.beforeFrameRef,
         afterFrameRef: bundle.screenPayload.afterFrameRef,
         affectsPhysicalDisplay: false,
@@ -323,6 +441,7 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
         sessionRef: bundle.screenPayload.sessionRef,
         timelineRefs: [
           bundle.screenPayload.beforeFrameRef,
+          bundle.records.sendInputIntentRef,
           bundle.records.inputIntentRef,
           bundle.records.executorEventRef,
           bundle.records.beforeAfterRef,
@@ -338,6 +457,12 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
         currentRunOnly: true,
         refs: [
           bundle.records.appLaunchRef,
+          bundle.records.providerLifecycleRef,
+          bundle.records.createSessionRef,
+          bundle.records.launchAppRef,
+          bundle.records.attachSurfaceRef,
+          bundle.records.readFrameRef,
+          bundle.records.sendInputIntentRef,
           bundle.records.liveSurfaceRef,
           bundle.records.inputIntentRef,
           bundle.records.executorEventRef,
@@ -361,6 +486,80 @@ export async function writeVirtualAppScreenVsCodeSmokeBundle(
 function shouldRunNativeProviderExecution(options: VirtualAppScreenVsCodeSmokeOptions) {
   return (options.executionMode ?? 'probe-only') === 'provider-executed'
     && !executionEvidenceCompleteFor(options.executionEvidence);
+}
+
+function buildVsCodeProviderLifecycle(options: {
+  runId: string;
+  providerProbeBundle: ReturnType<typeof probeVirtualDisplayProviders>;
+  blockedReason?: string;
+}): VirtualAppScreenVsCodeProviderLifecycle {
+  const contract = createVirtualDisplayProviderContract({
+    runId: options.runId,
+    targetAppKind: 'vscode',
+    targetAppName: 'VSCode',
+    probeBundle: options.providerProbeBundle,
+    blockedReason: options.blockedReason,
+  });
+  const operationOptions = {
+    runId: options.runId,
+    targetAppKind: 'vscode',
+    targetAppName: 'VSCode',
+    probeBundle: options.providerProbeBundle,
+    blockedReason: options.blockedReason,
+  };
+  return {
+    schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-lifecycle.v1',
+    createSession: contract.createSession(operationOptions),
+    launchApp: contract.launchApp(operationOptions),
+    attachSurface: contract.attachSurface(operationOptions),
+    readFrame: contract.readFrame(operationOptions),
+    sendInputIntent: contract.sendInputIntent(operationOptions),
+  };
+}
+
+function providerLifecycleRecords(
+  bundle: Pick<VirtualAppScreenVsCodeSmokeBundle, 'runId' | 'executionMode' | 'providerReady' | 'executionEvidenceComplete' | 'providerProbeBundle' | 'providerLifecycle' | 'records'>,
+): Array<[string, unknown]> {
+  const operationRefs = {
+    createSession: bundle.records.createSessionRef,
+    launchApp: bundle.records.launchAppRef,
+    attachSurface: bundle.records.attachSurfaceRef,
+    readFrame: bundle.records.readFrameRef,
+    sendInputIntent: bundle.records.sendInputIntentRef,
+  };
+  const operations = (Object.keys(operationRefs) as Array<keyof typeof operationRefs>).map((operation) => ({
+    operation,
+    ref: operationRefs[operation],
+    invokeResult: bundle.providerLifecycle[operation],
+  }));
+  return [
+    [bundle.records.providerLifecycleRef, {
+      schemaVersion: bundle.providerLifecycle.schemaVersion,
+      ref: bundle.records.providerLifecycleRef,
+      runId: bundle.runId,
+      providerId: bundle.providerProbeBundle.selectedProviderId,
+      executionMode: bundle.executionMode,
+      providerReady: bundle.providerReady,
+      providerExecuted: operations.every((operation) => operation.invokeResult.providerExecuted === true),
+      currentRunOnly: bundle.executionEvidenceComplete,
+      operationRefs,
+      chain: operations.map((operation) => operation.ref),
+    }],
+    ...operations.map((operation): [string, unknown] => [operation.ref, {
+      schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-lifecycle-operation.v1',
+      ref: operation.ref,
+      runId: bundle.runId,
+      operation: operation.operation,
+      providerId: operation.invokeResult.providerId,
+      status: operation.invokeResult.status,
+      refs: operation.invokeResult.refs,
+      blockedReason: operation.invokeResult.blockedReason ?? null,
+      providerExecuted: operation.invokeResult.providerExecuted,
+      mutatingActionExecuted: operation.invokeResult.mutatingActionExecuted,
+      rawPayloadWritten: operation.invokeResult.rawPayloadWritten,
+      currentRunOnly: bundle.executionEvidenceComplete,
+    }]),
+  ];
 }
 
 async function createVsCodeBridgeExtension(workspaceDir: string): Promise<VsCodeBridgePaths> {
@@ -717,6 +916,8 @@ export async function executeMacosNativeVsCodeProviderSmoke(
       return finish('VSCode AX window was discovered, but moving it onto the virtual display could not be verified by CoreGraphics bounds.');
     }
 
+    const editorProfile = buildVsCodeEditorProfile(runDirRef);
+    executionRecords.push([editorProfile.profileRef, editorProfile]);
     const inputBeforeFrame = await captureMacosDisplayFrame(outDir, runDirRef, 'before', virtualDisplay);
     record.beforeFrame = inputBeforeFrame.frameRecord;
     record.beforeFrameRef = inputBeforeFrame.frameRef;
@@ -730,6 +931,7 @@ export async function executeMacosNativeVsCodeProviderSmoke(
       extensionsDir,
       workspaceDir,
       bridgePaths,
+      editorProfile,
       text: `SciForge isolated keyboard InputIntent ${runId}`,
     });
     record.inputExecution = inputExecution.summary;
@@ -790,20 +992,30 @@ export async function executeMacosNativeVsCodeProviderSmoke(
 function manifestInputForVsCodeSmoke(options: {
   screenPayload: ReturnType<typeof buildVirtualDisplayScreenPayload>;
   adapterReadiness: VirtualAppScreenReadinessRecord;
+  providerLifecycle: VirtualAppScreenVsCodeProviderLifecycle;
   records: VirtualAppScreenVsCodeSmokeBundle['records'];
   providerReady: boolean;
   executionEvidenceComplete: boolean;
+  userAcceptanceEvidenceComplete: boolean;
   executionMode: VirtualAppScreenVsCodeExecutionMode;
   blockedReason?: string;
   createdAt: string;
+  editorProfile: VirtualAppScreenVsCodeEditorProfile;
 }): VirtualAppScreenUserAcceptanceInput {
   const evidenceClaims: VirtualAppScreenEvidenceClaim[] = options.executionEvidenceComplete
     ? [{
         id: 'vscode-real-virtual-app-screen',
         kind: 'real-virtual-app-screen',
-        status: 'present',
+        status: options.userAcceptanceEvidenceComplete ? 'present' : 'diagnostic-only',
         ref: options.records.liveSurfaceRef,
         evidenceRefs: [
+          options.records.editorProfileRef,
+          options.records.providerLifecycleRef,
+          options.records.createSessionRef,
+          options.records.launchAppRef,
+          options.records.attachSurfaceRef,
+          options.records.readFrameRef,
+          options.records.sendInputIntentRef,
           options.records.appLaunchRef,
           options.records.liveSurfaceRef,
           options.records.inputIntentRef,
@@ -812,7 +1024,10 @@ function manifestInputForVsCodeSmoke(options: {
           options.records.verificationRef,
           options.records.guiPresentRef,
         ],
-        userAcceptanceEligible: true,
+        userAcceptanceEligible: options.userAcceptanceEvidenceComplete,
+        note: options.userAcceptanceEvidenceComplete
+          ? undefined
+          : 'Provider-executed VSCode/editor loop evidence is present, but user acceptance remains disabled until real isolation, artifact, gui.present, current-run before/after, and verifier evidence are all proven by the product path.',
       }]
     : [{
         id: 'vscode-provider-probe-boundary',
@@ -823,10 +1038,11 @@ function manifestInputForVsCodeSmoke(options: {
           ? [
               options.records.providerProbeRef,
               options.records.adapterReadinessRef,
+              options.records.providerLifecycleRef,
               options.records.providerExecutionRef,
               options.records.blockedRef,
             ]
-          : [options.records.providerProbeRef, options.records.adapterReadinessRef, options.records.blockedRef],
+          : [options.records.providerProbeRef, options.records.adapterReadinessRef, options.records.providerLifecycleRef, options.records.blockedRef],
         userAcceptanceEligible: false,
         note: options.blockedReason,
       }];
@@ -857,17 +1073,33 @@ function manifestInputForVsCodeSmoke(options: {
       physicalDisplayPopup: false,
       systemPointerMoved: false,
       systemKeyboardEventsSent: false,
-      diagnosticOnly: !options.executionEvidenceComplete,
+      diagnosticOnly: !options.userAcceptanceEvidenceComplete,
     },
     evidenceClaims,
     blockedReason: options.blockedReason,
     createdAt: options.createdAt,
     metadata: {
       vscodeSmokeSchemaVersion: VIRTUAL_APP_SCREEN_VSCODE_SMOKE_SCHEMA_VERSION,
+      editorProfileId: options.editorProfile.profileId,
+      editorProfileRef: options.records.editorProfileRef,
+      providerLifecycleRef: options.records.providerLifecycleRef,
+      providerLifecycleSchemaVersion: options.providerLifecycle.schemaVersion,
+      providerLifecycleOperationRefs: [
+        options.records.createSessionRef,
+        options.records.launchAppRef,
+        options.records.attachSurfaceRef,
+        options.records.readFrameRef,
+        options.records.sendInputIntentRef,
+      ],
+      appIdentity: options.editorProfile.appIdentity,
+      workspaceTarget: options.editorProfile.workspaceTarget,
+      windowPlacement: options.editorProfile.windowPlacement,
+      allowedActions: options.editorProfile.allowedActions,
+      safeClosePolicy: options.editorProfile.safeClosePolicy,
       providerProbeRef: options.records.providerProbeRef,
       screenPayloadRef: options.records.screenPayloadRef,
       providerExecutionRef: options.executionMode === 'provider-executed' ? options.records.providerExecutionRef : undefined,
-      blockedRef: options.executionEvidenceComplete ? undefined : options.records.blockedRef,
+      blockedRef: options.userAcceptanceEvidenceComplete ? undefined : options.records.blockedRef,
     },
   };
 }
@@ -875,12 +1107,16 @@ function manifestInputForVsCodeSmoke(options: {
 function blockedReasonForVsCodeSmoke(options: {
   providerReady: boolean;
   executionEvidenceComplete: boolean;
+  userAcceptanceEvidenceComplete: boolean;
   providerBlockedReason?: string;
   executionMode: VirtualAppScreenVsCodeExecutionMode;
   executionEvidence?: VirtualAppScreenVsCodeExecutionEvidence;
   executionBlockedReason?: string;
 }) {
-  if (options.executionEvidenceComplete) return undefined;
+  if (options.executionEvidenceComplete && options.userAcceptanceEvidenceComplete) return undefined;
+  if (options.executionEvidenceComplete) {
+    return 'VSCode provider-created closed-loop evidence is present, but user acceptance is disabled until real isolation, current-run artifact, gui.present, before/after, and verifier evidence are all present.';
+  }
   if (!options.providerReady) {
     return options.providerBlockedReason
       ?? 'No isolated VirtualDisplayProvider is ready for VSCode.';
@@ -911,6 +1147,70 @@ function executionEvidenceCompleteFor(evidence: VirtualAppScreenVsCodeExecutionE
     && evidence.beforeAfterVerified
     && evidence.guiPresented,
   );
+}
+
+function acceptanceEvidenceCompleteFor(evidence: VirtualAppScreenVsCodeAcceptanceEvidence | undefined) {
+  return Boolean(
+    evidence?.realIsolationEvidencePresent
+    && evidence.currentRunArtifactEvidencePresent
+    && evidence.currentRunGuiPresentEvidencePresent
+    && evidence.currentRunBeforeAfterEvidencePresent
+    && evidence.currentRunVerifierEvidencePresent,
+  );
+}
+
+function buildVsCodeEditorProfile(runDirRef: string): VirtualAppScreenVsCodeEditorProfile {
+  return {
+    schemaVersion: VSCODE_EDITOR_PROFILE_SCHEMA,
+    profileId: VSCODE_EDITOR_PROFILE_ID,
+    profileRef: `${runDirRef}/app-profiles/${VSCODE_EDITOR_PROFILE_ID}.json`,
+    appIdentity: {
+      appKind: 'vscode',
+      displayName: 'VSCode',
+      bundleId: 'com.microsoft.VSCode',
+      executableName: 'Code',
+      supportedExecutablePaths: [
+        '/Applications/Visual Studio Code.app/Contents/MacOS/Code',
+        '/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code',
+      ],
+    },
+    workspaceTarget: {
+      mode: 'temp-workspace',
+      artifactFileName: 'sciforge-virtual-screen-note.md',
+      writesOutsideWorkspace: false,
+    },
+    windowPlacement: {
+      display: 'agent-owned-virtual-display',
+      windowRole: 'main-editor-window',
+      requireTargetWindowRef: true,
+    },
+    allowedActions: [
+      'focus-editor',
+      'open-temp-workspace-artifact',
+      'type_text',
+      'undo',
+      'save-temp-workspace-artifact',
+    ],
+    disallowedActions: [
+      'open-user-workspace-file',
+      'modify-user-workspace-file',
+      'install-extension',
+      'run-terminal-command',
+      'send-shared-system-input',
+      'move-physical-pointer',
+    ],
+    inputIntentPolicy: {
+      minimalIntentKind: 'focus-editor-temp-artifact-and-type',
+      nonDestructive: true,
+      requiresBeforeAfterFrameRefs: true,
+      requiresExecutorAndVerifierRefs: true,
+    },
+    safeClosePolicy: {
+      closeStrategy: 'terminate-temp-profile-only',
+      preserveUserWindows: true,
+      cleanupTempWorkspace: true,
+    },
+  };
 }
 
 interface MacosDisplayInventoryEntry {
@@ -978,6 +1278,7 @@ interface MacosVsCodeInputIntentOptions {
   extensionsDir: string;
   workspaceDir: string;
   bridgePaths: VsCodeBridgePaths;
+  editorProfile: VirtualAppScreenVsCodeEditorProfile;
   text: string;
 }
 
@@ -1237,6 +1538,8 @@ async function executeMacosVsCodeInputIntents(
 ): Promise<MacosVsCodeInputExecution> {
   const inputIntentRef = `${options.runDirRef}/virtual-display-provider/input-intents/click-and-type.json`;
   const executorEventRef = `${options.runDirRef}/virtual-display-provider/executor-events/click-and-type.json`;
+  const providerLifecycleRef = `${options.runDirRef}/virtual-display-provider/provider-lifecycle.json`;
+  const sendInputIntentRef = `${options.runDirRef}/virtual-display-provider/lifecycle/send-input-intent.json`;
   const requestId = `input-intent-${Date.now()}`;
   const bridgeResult = await executeVsCodeBridgeRequest({
     requestId,
@@ -1247,6 +1550,7 @@ async function executeMacosVsCodeInputIntents(
     workspaceDir: options.workspaceDir,
     userDataDir: options.userDataDir,
     extensionsDir: options.extensionsDir,
+    editorProfile: options.editorProfile,
   });
   const workspaceArtifact = await readWorkspaceArtifact(options.bridgePaths.workspaceArtifactPath);
   const pointerInputExecuted = bridgeResult.ok && bridgeResult.openedDocument === true && bridgeResult.revealedRange === true;
@@ -1268,9 +1572,11 @@ async function executeMacosVsCodeInputIntents(
     schemaVersion: 'sciforge.computer-use.input-intent.v1',
     ref: inputIntentRef,
     intentId: `input-intent:${requestId}`,
-    kind: 'click-and-type',
-    inputKind: 'click-and-type',
+    kind: options.editorProfile.inputIntentPolicy.minimalIntentKind,
+    inputKind: options.editorProfile.inputIntentPolicy.minimalIntentKind,
     source: 'virtual-screen-viewer-terminal-equivalent',
+    editorProfileRef: options.editorProfile.profileRef,
+    nonDestructive: options.editorProfile.inputIntentPolicy.nonDestructive,
     actorId,
     cursorId,
     screenId,
@@ -1285,12 +1591,16 @@ async function executeMacosVsCodeInputIntents(
     inputLeaseRef,
     actionAdapterRef,
     adapterReadinessRef,
+    providerLifecycleRef,
+    sendInputIntentRef,
     executorEventRef,
+    beforeFrameRef: `${options.runDirRef}/virtual-display-provider/frames/before.json`,
+    afterFrameRef: `${options.runDirRef}/virtual-display-provider/frames/after.json`,
     beforeAfterFrameRefs: [`${options.runDirRef}/virtual-display-provider/before-after/input.json`],
     verificationRefs: [`${options.runDirRef}/virtual-display-provider/verification/vscode-input.json`],
     actions: [
       {
-        kind: 'click',
+        kind: 'focus-editor',
         adapter: 'vscode-extension-host-app-command',
         terminalEquivalent: 'open/reveal target document in the bound VSCode window',
         target: 'editor:sciforge-virtual-screen-note.md',
@@ -1326,11 +1636,13 @@ async function executeMacosVsCodeInputIntents(
     schemaVersion: 'sciforge.computer-use.executor-event.v1',
     ref: executorEventRef,
     eventId: `executor-event:${requestId}`,
-    actionKind: 'click-and-type',
+    actionKind: options.editorProfile.inputIntentPolicy.minimalIntentKind,
     leaseId: inputLeaseRef,
     actorId,
     cursorId,
     screenId,
+    editorProfileRef: options.editorProfile.profileRef,
+    nonDestructive: options.editorProfile.inputIntentPolicy.nonDestructive,
     target: {
       targetAppRef,
       targetWindowRef,
@@ -1338,6 +1650,8 @@ async function executeMacosVsCodeInputIntents(
     },
     status: pointerInputExecuted && keyboardInputExecuted ? 'completed' : 'blocked',
     inputIntentRef,
+    providerLifecycleRef,
+    sendInputIntentRef,
     actionAdapterRef,
     executorCommandRef: `${options.runDirRef}/virtual-display-provider/vscode-bridge/request.json`,
     beforeEvidenceRefs: [`${options.runDirRef}/virtual-display-provider/frames/before.json`],
@@ -1380,6 +1694,7 @@ async function executeMacosVsCodeInputIntents(
     adapterKind: 'vscode-extension-host-app-command',
     targetScope: 'virtual-app-screen-window',
     providerId: MACOS_PROVIDER_ID,
+    editorProfileRef: options.editorProfile.profileRef,
     supportedActions: ['click', 'type_text', 'menu_command'],
     captureSupported: true,
     backgroundRenderable: true,
@@ -1403,6 +1718,8 @@ async function executeMacosVsCodeInputIntents(
       status: pointerInputExecuted && keyboardInputExecuted ? 'completed' : 'blocked',
       inputIntentRef,
       executorEventRef,
+      editorProfileRef: options.editorProfile.profileRef,
+      nonDestructive: options.editorProfile.inputIntentPolicy.nonDestructive,
       bridgeRequestId: requestId,
       bridgeResult,
       markerInWorkspaceFile: workspaceArtifact.markerInWorkspaceFile,
@@ -1433,6 +1750,7 @@ async function executeVsCodeBridgeRequest(options: {
   workspaceDir: string;
   userDataDir: string;
   extensionsDir: string;
+  editorProfile: VirtualAppScreenVsCodeEditorProfile;
 }): Promise<Record<string, unknown> & {
   ok: boolean;
   status: string;
@@ -1446,7 +1764,11 @@ async function executeVsCodeBridgeRequest(options: {
     requestId: options.requestId,
     runId: options.runId,
     createdAt: new Date().toISOString(),
-    kind: 'click-and-type',
+    kind: options.editorProfile.inputIntentPolicy.minimalIntentKind,
+    profileId: options.editorProfile.profileId,
+    profileRef: options.editorProfile.profileRef,
+    nonDestructive: options.editorProfile.inputIntentPolicy.nonDestructive,
+    workspaceScope: options.editorProfile.workspaceTarget.mode,
     targetWindow: options.targetWindow,
     workspaceDir: options.workspaceDir,
     userDataDir: options.userDataDir,
@@ -1462,7 +1784,7 @@ async function executeVsCodeBridgeRequest(options: {
       '',
     ].join('\n'),
     actions: [
-      { kind: 'click', command: 'showTextDocument', target: options.bridgePaths.workspaceArtifactPath },
+      { kind: 'focus-editor', command: 'showTextDocument', target: options.bridgePaths.workspaceArtifactPath },
       { kind: 'type_text', command: 'workspace.applyEdit', textLength: options.text.length },
     ],
     isolationFlags: {
@@ -1535,6 +1857,12 @@ function virtualAppScreenCompletionRecords(
   options: VirtualAppScreenCompletionRecordOptions,
 ): Array<[string, unknown]> {
   const refs = {
+    providerLifecycleRef: `${options.runDirRef}/virtual-display-provider/provider-lifecycle.json`,
+    createSessionRef: `${options.runDirRef}/virtual-display-provider/lifecycle/create-session.json`,
+    launchAppRef: `${options.runDirRef}/virtual-display-provider/lifecycle/launch-app.json`,
+    attachSurfaceRef: `${options.runDirRef}/virtual-display-provider/lifecycle/attach-surface.json`,
+    readFrameRef: `${options.runDirRef}/virtual-display-provider/lifecycle/read-frame.json`,
+    sendInputIntentRef: `${options.runDirRef}/virtual-display-provider/lifecycle/send-input-intent.json`,
     appLaunchRef: `${options.runDirRef}/virtual-display-provider/app-launch/vscode.json`,
     liveSurfaceRef: `${options.runDirRef}/virtual-display-provider/live-surface.json`,
     inputIntentRef: `${options.runDirRef}/virtual-display-provider/input-intents/click-and-type.json`,
@@ -1547,6 +1875,89 @@ function virtualAppScreenCompletionRecords(
     artifactRef: `artifact:${options.runId}/vscode-virtual-screen-note.md`,
   };
   return [
+    [refs.providerLifecycleRef, {
+      schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-lifecycle.v1',
+      ref: refs.providerLifecycleRef,
+      runId: options.runId,
+      providerId: MACOS_PROVIDER_ID,
+      executionMode: 'provider-executed',
+      providerReady: true,
+      currentRunOnly: true,
+      operationRefs: {
+        createSession: refs.createSessionRef,
+        launchApp: refs.launchAppRef,
+        attachSurface: refs.attachSurfaceRef,
+        readFrame: refs.readFrameRef,
+        sendInputIntent: refs.sendInputIntentRef,
+      },
+      chain: [
+        refs.createSessionRef,
+        refs.launchAppRef,
+        refs.attachSurfaceRef,
+        refs.readFrameRef,
+        refs.sendInputIntentRef,
+      ],
+    }],
+    [refs.createSessionRef, providerLifecycleOperationRecord({
+      runId: options.runId,
+      ref: refs.createSessionRef,
+      operation: 'createSession',
+      refs: {
+        sessionRef: options.screenPayloadRefs.sessionRef,
+        screenRef: `virtual-app-screen:${options.runId}/screen`,
+        targetAppRef: options.screenPayloadRefs.targetAppRef,
+      },
+    })],
+    [refs.launchAppRef, providerLifecycleOperationRecord({
+      runId: options.runId,
+      ref: refs.launchAppRef,
+      operation: 'launchApp',
+      refs: {
+        sessionRef: options.screenPayloadRefs.sessionRef,
+        targetAppRef: options.screenPayloadRefs.targetAppRef,
+        targetWindowRef: options.screenPayloadRefs.targetWindowRef,
+        appLaunchRef: refs.appLaunchRef,
+      },
+    })],
+    [refs.attachSurfaceRef, providerLifecycleOperationRecord({
+      runId: options.runId,
+      ref: refs.attachSurfaceRef,
+      operation: 'attachSurface',
+      refs: {
+        sessionRef: options.screenPayloadRefs.sessionRef,
+        liveSurfaceRef: refs.liveSurfaceRef,
+        frameStreamRef: options.screenPayloadRefs.frameStreamRef,
+        currentFrameRef: options.afterFrameRef,
+      },
+    })],
+    [refs.readFrameRef, providerLifecycleOperationRecord({
+      runId: options.runId,
+      ref: refs.readFrameRef,
+      operation: 'readFrame',
+      refs: {
+        sessionRef: options.screenPayloadRefs.sessionRef,
+        liveSurfaceRef: refs.liveSurfaceRef,
+        frameStreamRef: options.screenPayloadRefs.frameStreamRef,
+        beforeFrameRef: options.beforeFrameRef,
+        afterFrameRef: options.afterFrameRef,
+        currentFrameRef: options.afterFrameRef,
+      },
+    })],
+    [refs.sendInputIntentRef, providerLifecycleOperationRecord({
+      runId: options.runId,
+      ref: refs.sendInputIntentRef,
+      operation: 'sendInputIntent',
+      refs: {
+        sessionRef: options.screenPayloadRefs.sessionRef,
+        inputIntentRefs: [refs.inputIntentRef],
+        executorEventRefs: [refs.executorEventRef],
+        beforeFrameRef: options.beforeFrameRef,
+        afterFrameRef: options.afterFrameRef,
+        beforeAfterFrameRefs: [refs.beforeAfterRef],
+        verificationRefs: [refs.verificationRef],
+      },
+      mutatingActionExecuted: true,
+    })],
     [refs.liveSurfaceRef, {
       schemaVersion: 'sciforge.computer-use.virtual-app-screen-live-surface.v1',
       ref: refs.liveSurfaceRef,
@@ -1562,6 +1973,8 @@ function virtualAppScreenCompletionRecords(
       afterFrameRef: options.afterFrameRef,
       beforeFrameSha256: options.beforeHash,
       afterFrameSha256: options.afterHash,
+      readFrameRef: refs.readFrameRef,
+      sendInputIntentRef: refs.sendInputIntentRef,
       inputIntentRef: refs.inputIntentRef,
       executorEventRef: refs.executorEventRef,
       changedRegionRefs: [`${options.afterFrameRef}#vscode-editor`],
@@ -1619,7 +2032,12 @@ function virtualAppScreenCompletionRecords(
       ref: refs.replayRef,
       sessionRef: options.screenPayloadRefs.sessionRef,
       timelineRefs: [
+        refs.createSessionRef,
+        refs.launchAppRef,
+        refs.attachSurfaceRef,
         options.beforeFrameRef,
+        refs.readFrameRef,
+        refs.sendInputIntentRef,
         refs.inputIntentRef,
         refs.executorEventRef,
         refs.beforeAfterRef,
@@ -1634,6 +2052,12 @@ function virtualAppScreenCompletionRecords(
       ref: refs.evidenceLedgerRef,
       currentRunOnly: true,
       refs: [
+        refs.providerLifecycleRef,
+        refs.createSessionRef,
+        refs.launchAppRef,
+        refs.attachSurfaceRef,
+        refs.readFrameRef,
+        refs.sendInputIntentRef,
         refs.appLaunchRef,
         refs.liveSurfaceRef,
         refs.inputIntentRef,
@@ -1646,6 +2070,29 @@ function virtualAppScreenCompletionRecords(
       ],
     }],
   ];
+}
+
+function providerLifecycleOperationRecord(options: {
+  runId: string;
+  ref: string;
+  operation: 'createSession' | 'launchApp' | 'attachSurface' | 'readFrame' | 'sendInputIntent';
+  refs: Record<string, string | string[] | undefined>;
+  mutatingActionExecuted?: boolean;
+}) {
+  return {
+    schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-lifecycle-operation.v1',
+    ref: options.ref,
+    runId: options.runId,
+    operation: options.operation,
+    providerId: MACOS_PROVIDER_ID,
+    status: 'completed',
+    refs: options.refs,
+    blockedReason: null,
+    providerExecuted: true,
+    mutatingActionExecuted: options.mutatingActionExecuted === true,
+    rawPayloadWritten: false,
+    currentRunOnly: true,
+  };
 }
 
 function runCompiledSwiftHelper(name: string, source: string, args: string[]): string {

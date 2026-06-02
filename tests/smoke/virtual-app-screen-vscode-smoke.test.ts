@@ -22,8 +22,17 @@ test('VSCode VirtualAppScreen smoke defaults to fail-closed provider probe evide
 
   assert.equal(bundle.schemaVersion, 'sciforge.computer-use.virtual-app-screen-vscode-smoke.v1');
   assert.equal(bundle.taskId, 'P0-CU-UA-VSCODE-MINIMAL-LOOP');
+  assert.equal(bundle.editorProfile.profileId, 'vscode-editor-low-risk');
+  assert.equal(bundle.editorProfile.appIdentity.appKind, 'vscode');
+  assert.equal(bundle.editorProfile.workspaceTarget.mode, 'temp-workspace');
+  assert.equal(bundle.editorProfile.workspaceTarget.writesOutsideWorkspace, false);
+  assert.equal(bundle.editorProfile.windowPlacement.requireTargetWindowRef, true);
+  assert.equal(bundle.editorProfile.inputIntentPolicy.nonDestructive, true);
+  assert.ok(bundle.editorProfile.allowedActions.includes('type_text'));
+  assert.ok(bundle.editorProfile.disallowedActions.includes('send-shared-system-input'));
   assert.equal(bundle.providerReady, false);
   assert.equal(bundle.executionEvidenceComplete, false);
+  assert.equal(bundle.userAcceptanceEvidenceComplete, false);
   assert.equal(bundle.screenPayload.status, 'blocked');
   assert.equal(bundle.screenPayload.attachState, 'adapter-unavailable');
   assert.equal(bundle.screenPayload.currentFrameRef, undefined);
@@ -78,7 +87,7 @@ test('VSCode VirtualAppScreen smoke requires execution evidence even when local 
   assert.match(String(bundle.blockedReason), /probe-only/);
 });
 
-test('VSCode VirtualAppScreen smoke can represent a completed provider-executed evidence loop', () => {
+test('VSCode VirtualAppScreen smoke represents closed-loop evidence without user-acceptance overclaim', () => {
   const bundle = buildVirtualAppScreenVsCodeSmokeBundle({
     runId: 'vscode-provider-executed',
     platform: 'darwin',
@@ -101,17 +110,46 @@ test('VSCode VirtualAppScreen smoke can represent a completed provider-executed 
 
   assert.equal(bundle.providerReady, true);
   assert.equal(bundle.executionEvidenceComplete, true);
+  assert.equal(bundle.userAcceptanceEvidenceComplete, false);
   assert.equal(bundle.screenPayload.status, 'ready');
   assert.equal(bundle.screenPayload.attachState, 'attached');
-  assert.equal(bundle.manifest.status, 'passed');
-  assert.equal(bundle.manifest.userAcceptanceEligible, true);
-  assert.equal(bundle.manifest.diagnosticOnly, false);
+  assert.equal(bundle.screenPayload.sessionRef, 'computer-use:session/vscode-provider-executed/virtual-display-session.json');
+  assert.equal(bundle.screenPayload.targetWindowRef, 'window:vscode-provider-executed/vscode/main');
+  assert.equal(bundle.screenPayload.liveSurfaceRef, '.sciforge/vision-runs/vscode-provider-executed/virtual-display-provider/live-surface.json');
+  assert.equal(bundle.screenPayload.currentFrameRef, '.sciforge/vision-runs/vscode-provider-executed/virtual-display-provider/frames/after.json');
+  assert.equal(bundle.providerLifecycle.createSession.refs.sessionRef, bundle.screenPayload.sessionRef);
+  assert.equal(bundle.providerLifecycle.launchApp.refs.targetWindowRef, bundle.screenPayload.targetWindowRef);
+  assert.equal(bundle.providerLifecycle.attachSurface.refs.liveSurfaceRef, bundle.records.liveSurfaceRef);
+  assert.equal(bundle.providerLifecycle.readFrame.refs.currentFrameRef, bundle.screenPayload.currentFrameRef);
+  assert.deepEqual(bundle.providerLifecycle.sendInputIntent.refs.inputIntentRefs, [bundle.records.inputIntentRef]);
+  assert.equal(bundle.providerLifecycle.createSession.providerExecuted, false);
+  assert.equal(bundle.providerLifecycle.launchApp.providerExecuted, false);
+  assert.equal(bundle.providerLifecycle.attachSurface.providerExecuted, false);
+  assert.equal(bundle.providerLifecycle.readFrame.providerExecuted, false);
+  assert.equal(bundle.providerLifecycle.sendInputIntent.providerExecuted, false);
+  assert.equal(bundle.providerLifecycle.sendInputIntent.mutatingActionExecuted, true);
+  assert.equal(bundle.manifest.status, 'blocked');
+  assert.equal(bundle.manifest.userAcceptanceEligible, false);
+  assert.equal(bundle.manifest.diagnosticOnly, true);
   assert.deepEqual(bundle.manifest.validation.missingRefs, []);
   assert.deepEqual(bundle.manifest.inputIntentRefs, [bundle.records.inputIntentRef]);
   assert.deepEqual(bundle.manifest.executorEventRefs, [bundle.records.executorEventRef]);
   assert.deepEqual(bundle.manifest.beforeAfterFrameRefs, [bundle.records.beforeAfterRef]);
   assert.deepEqual(bundle.manifest.guiPresentRefs, [bundle.records.guiPresentRef]);
-  assert.ok(bundle.manifest.evidenceClaims.some((claim) => claim.kind === 'real-virtual-app-screen'));
+  const primaryEvidenceClaim = bundle.manifest.evidenceClaims[0];
+  if (!primaryEvidenceClaim) assert.fail('expected primary evidence claim');
+  assert.ok(Array.isArray(primaryEvidenceClaim.evidenceRefs));
+  const primaryEvidenceRefs = primaryEvidenceClaim.evidenceRefs;
+  assert.ok(primaryEvidenceRefs.includes(bundle.records.providerLifecycleRef));
+  assert.ok(primaryEvidenceRefs.includes(bundle.records.createSessionRef));
+  assert.ok(primaryEvidenceRefs.includes(bundle.records.sendInputIntentRef));
+  assert.match(String(bundle.blockedReason), /user acceptance is disabled/);
+  assert.ok(bundle.manifest.evidenceClaims.some((claim) => (
+    claim.kind === 'real-virtual-app-screen'
+    && claim.status === 'diagnostic-only'
+    && claim.userAcceptanceEligible === false
+  )));
+  assert.equal(bundle.manifest.metadata?.editorProfileRef, bundle.records.editorProfileRef);
 });
 
 test('VSCode VirtualAppScreen smoke writer materializes blocked refs by default', async () => {
@@ -185,18 +223,58 @@ test('VSCode VirtualAppScreen smoke writer materializes completed current-run re
       },
     });
     const manifest = JSON.parse(await readFile(join(workspace, 'virtual-app-screen-user-acceptance-manifest.json'), 'utf8')) as Record<string, unknown>;
+    const editorProfile = JSON.parse(await readFile(join(workspace, 'app-profiles/vscode-editor-low-risk.json'), 'utf8')) as Record<string, unknown>;
     const inputIntent = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/input-intents/click-and-type.json'), 'utf8')) as Record<string, unknown>;
     const executorEvent = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/executor-events/click-and-type.json'), 'utf8')) as Record<string, unknown>;
+    const liveSurface = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/live-surface.json'), 'utf8')) as Record<string, unknown>;
+    const providerLifecycle = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/provider-lifecycle.json'), 'utf8')) as Record<string, unknown>;
+    const createSession = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/lifecycle/create-session.json'), 'utf8')) as Record<string, unknown>;
+    const sendInputIntent = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/lifecycle/send-input-intent.json'), 'utf8')) as Record<string, unknown>;
     const replay = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/replay.json'), 'utf8')) as Record<string, unknown>;
     const evidenceLedger = JSON.parse(await readFile(join(workspace, 'virtual-display-provider/evidence-ledger.json'), 'utf8')) as Record<string, unknown>;
 
     assert.equal(bundle.executionEvidenceComplete, true);
-    assert.equal(manifest.userAcceptanceEligible, true);
+    assert.equal(bundle.userAcceptanceEvidenceComplete, false);
+    assert.equal(manifest.userAcceptanceEligible, false);
+    assert.equal(manifest.diagnosticOnly, true);
+    assert.equal(editorProfile.schemaVersion, 'sciforge.computer-use.virtual-app-screen-editor-profile.v1');
+    assert.equal(editorProfile.profileId, 'vscode-editor-low-risk');
     assert.equal(inputIntent.schemaVersion, 'sciforge.computer-use.input-intent.v1');
+    assert.equal(inputIntent.kind, 'focus-editor-temp-artifact-and-type');
+    assert.equal(inputIntent.nonDestructive, true);
+    assert.equal(inputIntent.beforeFrameRef, '.sciforge/vision-runs/writer-completed-vscode/virtual-display-provider/frames/before.json');
+    assert.equal(inputIntent.afterFrameRef, '.sciforge/vision-runs/writer-completed-vscode/virtual-display-provider/frames/after.json');
+    assert.equal(inputIntent.executorEventRef, bundle.records.executorEventRef);
+    assert.equal(inputIntent.sendInputIntentRef, bundle.records.sendInputIntentRef);
+    assert.deepEqual(inputIntent.beforeAfterFrameRefs, [bundle.records.beforeAfterRef]);
+    assert.deepEqual(inputIntent.verificationRefs, [bundle.records.verificationRef]);
     assert.equal(executorEvent.status, 'completed');
     assert.equal(executorEvent.sharedSystemInputUsed, false);
+    assert.equal(executorEvent.providerLifecycleRef, bundle.records.providerLifecycleRef);
+    assert.equal(executorEvent.sendInputIntentRef, bundle.records.sendInputIntentRef);
+    assert.equal(liveSurface.sessionRef, bundle.screenPayload.sessionRef);
+    assert.equal(liveSurface.currentFrameRef, bundle.screenPayload.currentFrameRef);
+    assert.equal(liveSurface.attachSurfaceRef, bundle.records.attachSurfaceRef);
+    assert.equal(liveSurface.readFrameRef, bundle.records.readFrameRef);
+    assert.equal(providerLifecycle.schemaVersion, 'sciforge.computer-use.virtual-app-screen-provider-lifecycle.v1');
+    assert.equal(providerLifecycle.providerExecuted, false);
+    assert.deepEqual(providerLifecycle.chain, [
+      bundle.records.createSessionRef,
+      bundle.records.launchAppRef,
+      bundle.records.attachSurfaceRef,
+      bundle.records.readFrameRef,
+      bundle.records.sendInputIntentRef,
+    ]);
+    assert.equal(createSession.operation, 'createSession');
+    assert.equal(createSession.providerExecuted, false);
+    assert.equal(sendInputIntent.operation, 'sendInputIntent');
+    assert.equal(sendInputIntent.status, 'ready');
+    assert.equal(sendInputIntent.providerExecuted, false);
+    assert.equal(sendInputIntent.mutatingActionExecuted, true);
     assert.equal(replay.schemaVersion, 'sciforge.computer-use.virtual-app-screen-replay.v1');
     assert.ok(Array.isArray(evidenceLedger.refs));
+    assert.ok((evidenceLedger.refs as string[]).includes(bundle.records.providerLifecycleRef));
+    assert.ok((evidenceLedger.refs as string[]).includes(bundle.records.createSessionRef));
     assert.ok((evidenceLedger.refs as string[]).includes(bundle.records.inputIntentRef));
   } finally {
     await rm(workspace, { recursive: true, force: true });

@@ -4,7 +4,7 @@ import type { SettingsSectionId } from '../appShell/settingsPageModel';
 import type { CommandTextUIAction, OpenDebugAuditUIAction } from '../uiActionBoundary';
 import type { ResultsRendererViewModel } from '../results-renderer-view-model';
 import type { ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../../domain';
-import type { WorkspaceFileViewerOpenFileTab } from '../../../../../packages/presentation/components';
+import type { VirtualScreenPayload, WorkspaceFileViewerOpenFileTab } from '../../../../../packages/presentation/components';
 import { PrimaryResultAdapter } from './primaryResultAdapter';
 import { browserAddressForFocusedObjectReference } from './browserPaneModel';
 import { RightPaneBrowserTool } from './browserPaneHostAdapter';
@@ -39,6 +39,7 @@ export interface RightPaneActiveSurfaceProps {
   workspaceFileOpenTabs: WorkspaceFileViewerOpenFileTab[];
   browserAddressDraft?: string;
   terminalSession?: WorkspaceTerminalSession;
+  virtualScreenPayload?: VirtualScreenPayload;
   onBrowserAddressDraftChange: (nextAddress: string) => void;
   onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
   onObjectAction: (reference: ObjectReference, action: ObjectAction) => void | Promise<void>;
@@ -85,6 +86,7 @@ export function RightPaneActiveSurface({
   workspaceFileOpenTabs,
   browserAddressDraft,
   terminalSession,
+  virtualScreenPayload,
   onBrowserAddressDraftChange,
   onCommandRequest,
   onObjectAction,
@@ -152,6 +154,7 @@ export function RightPaneActiveSurface({
         workspaceFileOpenTabs,
         browserAddressDraft,
         terminalSession,
+        virtualScreenPayload,
         onBrowserAddressDraftChange,
         onCommandRequest,
         onConfigChange,
@@ -192,6 +195,7 @@ function renderRightPaneActiveTool({
   workspaceFileOpenTabs,
   browserAddressDraft,
   terminalSession,
+  virtualScreenPayload,
   onBrowserAddressDraftChange,
   onCommandRequest,
   onConfigChange,
@@ -236,6 +240,8 @@ function renderRightPaneActiveTool({
         config={config}
         session={session}
         activeRun={activeRun}
+        activeTabId={activeResultTabId}
+        payload={virtualScreenPayload}
         locale={locale}
         onCommandRequest={onCommandRequest}
       />

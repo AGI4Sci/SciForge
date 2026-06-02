@@ -7,12 +7,14 @@ import type { RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } fr
 import { artifactsForRun } from './executionUnitsForRun';
 import { isRecord, toRecordList } from './resultArtifactHelpers';
 import { resultText, type ResultLocale } from './resultLocale';
+import { rightPaneVirtualAppScreenPlaceholderRefs } from './rightPaneLiveBindingRegistry';
 
 export function rightPaneVirtualScreenPayload(
   session: SciForgeSession,
   activeRun: SciForgeRun | undefined,
   config: SciForgeConfig,
   locale?: ResultLocale,
+  activation?: RightPaneVirtualScreenActivationPolicy,
 ): VirtualScreenPayload {
   const candidates = virtualScreenPayloadCandidates(session, activeRun, config);
   const payload = candidates.find((candidate) =>
@@ -22,8 +24,16 @@ export function rightPaneVirtualScreenPayload(
     || candidate.targetAppRef
     || candidate.targetWindowRef
     || candidate.sessionRef
+    || candidate.adapterReadinessRef
     || candidate.blockedRef
     || candidate.errorRef
+    || candidate.currentFrameSequence
+    || candidate.permissionRef
+    || candidate.permissionHandoffRef
+    || (candidate.permissionHandoffRefs?.length ?? 0)
+    || candidate.permissionRecheckRef
+    || (candidate.permissionRecheckRefs?.length ?? 0)
+    || candidate.recheckRef
     || (candidate.actorCursorRefs?.length ?? 0)
     || (candidate.annotationOverlayRefs?.length ?? 0)
     || (candidate.annotationProposalRefs?.length ?? 0)
@@ -32,10 +42,98 @@ export function rightPaneVirtualScreenPayload(
     || (candidate.frameRefs?.length ?? 0)
   );
   if (payload) return payload;
+  return rightPaneVirtualScreenActivationPayload(session, activeRun, locale, activation);
+}
+
+export interface RightPaneVirtualScreenActivationPolicy {
+  activeTabId?: string;
+  bootstrapWindowMs?: number;
+  defaultProfile?: 'vscode-editor';
+}
+
+export function rightPaneVirtualScreenActivationReason(activeTabId: string | undefined) {
+  if (activeTabId?.startsWith('custom:screen:')) return 'new-screen-window';
+  if (activeTabId && activeTabId !== 'base:screen') return 'workspace-restore';
+  return 'pane-open';
+}
+
+export function rightPaneVirtualScreenActivationPayload(
+  session: SciForgeSession,
+  activeRun: SciForgeRun | undefined,
+  locale?: ResultLocale,
+  activation: RightPaneVirtualScreenActivationPolicy = {},
+): VirtualScreenPayload {
+  const refs = rightPaneVirtualAppScreenPlaceholderRefs({
+    sessionId: session.sessionId,
+    runId: activeRun?.id,
+    activeTabId: activation.activeTabId,
+  });
+  const reason = rightPaneVirtualScreenActivationReason(activation.activeTabId);
+  const bootstrapWindowMs = activation.bootstrapWindowMs ?? 8000;
+  const defaultProfile = activation.defaultProfile ?? 'vscode-editor';
+  const platformPermissionHandoffRefs = [
+    'macos-screen-recording',
+    'macos-accessibility',
+    'macos-automation',
+    'macos-virtual-display-helper',
+    'linux-xpra-install',
+    'linux-xpra-session-permission',
+    'windows-idd-driver-install',
+  ].map((gate) => `computer-use:screen-activation/${refs.scope}/permission-handoff/${gate}.json`);
+  const platformPermissionRecheckRefs = platformPermissionHandoffRefs.map((ref) => ref.replace('/permission-handoff/', '/permission-recheck/'));
   return {
     title: resultText(locale, { 'zh-CN': 'Computer Use 虚拟屏幕', 'en-US': 'Computer Use Virtual Screen' }),
-    status: 'empty',
-    isolationFlags: { diagnosticOnly: true },
+    status: 'blocked',
+    attachState: 'blocked',
+    surfaceMode: 'empty',
+    screenRef: refs.screenRef,
+    targetAppRef: `app:profile/${defaultProfile}`,
+    adapterReadinessRef: refs.readinessRef,
+    platformDriverRef: refs.platformDriverRef,
+    platformDriverStatus: 'missing',
+    blockedRef: refs.blockedRef,
+    handoffRef: refs.activationRef,
+    permissionRef: refs.permissionRef,
+    permissionStatus: 'missing',
+    permissionRequired: true,
+    permissionGranted: false,
+    permissionHandoffRef: refs.permissionHandoffRef,
+    permissionHandoffRefs: platformPermissionHandoffRefs,
+    permissionRecheckRef: refs.permissionRecheckRef,
+    permissionRecheckRefs: platformPermissionRecheckRefs,
+    recheckRef: refs.permissionRecheckRef,
+    evidenceLedgerRef: refs.evidenceLedgerRef,
+    guiPresentRefs: [refs.guiPresentRef],
+    verificationRefs: [refs.readinessRef, refs.blockedRef, refs.permissionRef, refs.permissionRecheckRef, ...platformPermissionRecheckRefs],
+    artifactRefs: [refs.activationRef, refs.permissionHandoffRef, ...platformPermissionHandoffRefs],
+    blockedReason: `Screen pane activation requested a native VirtualDisplayProvider session; no current session is attached after the ${bootstrapWindowMs}ms bootstrap window. Resolve platform authorization or install gates with permission handoff refs, then recheck provider readiness.`,
+    isolationFlags: {
+      diagnosticOnly: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      singleInteractiveTruth: true,
+      secondInteractiveSurfacePresent: false,
+    },
+    events: [{
+      label: 'screen-activation-policy',
+      ref: refs.activationRef,
+      status: reason,
+    }, {
+      label: 'provider-readiness',
+      ref: refs.readinessRef,
+      status: 'permission-missing',
+    }, {
+      label: 'permission-handoff',
+      ref: refs.permissionHandoffRef,
+      status: 'requires-handoff',
+    }, {
+      label: 'permission-recheck',
+      ref: refs.permissionRecheckRef,
+      status: 'blocked-until-recheck',
+    }],
   };
 }
 
@@ -69,6 +167,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
   const currentFrameRef = firstNonEmptyString(
     stringField(data.currentFrameRef),
     stringField(metadata.currentFrameRef),
+    refFromValue(data.surfaceTransportDescriptor, ['currentFrameRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['currentFrameRef']),
     stringField(data.frameRef),
     stringField(metadata.frameRef),
     frameRefs[0],
@@ -76,6 +176,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
   const frameStreamRef = firstNonEmptyString(
     stringField(data.frameStreamRef),
     stringField(metadata.frameStreamRef),
+    refFromValue(data.surfaceTransportDescriptor, ['frameStreamRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['frameStreamRef']),
     refFromValue(data.frameStream, ['ref', 'frameStreamRef']),
     refFromValue(metadata.frameStream, ['ref', 'frameStreamRef']),
   );
@@ -95,6 +197,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
   const liveSurfaceRef = firstNonEmptyString(
     stringField(data.liveSurfaceRef),
     stringField(metadata.liveSurfaceRef),
+    refFromValue(data.surfaceTransportDescriptor, ['liveSurfaceRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['liveSurfaceRef']),
     refFromValue(data.liveSurface, ['ref', 'liveSurfaceRef']),
     refFromValue(metadata.liveSurface, ['ref', 'liveSurfaceRef']),
   );
@@ -104,6 +208,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
       stringField(metadata.surfaceTransport),
       stringField(data.transport),
       stringField(metadata.transport),
+      stringField(refFromValue(data.surfaceTransportDescriptor, ['transport', 'surfaceTransport'])),
+      stringField(refFromValue(metadata.surfaceTransportDescriptor, ['transport', 'surfaceTransport'])),
       stringField(refFromValue(data.liveSurface, ['transport', 'surfaceTransport'])),
       stringField(refFromValue(metadata.liveSurface, ['transport', 'surfaceTransport'])),
     ),
@@ -203,12 +309,36 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
   const adapterReadinessRef = firstNonEmptyString(
     stringField(data.adapterReadinessRef),
     stringField(metadata.adapterReadinessRef),
+    stringField(data.providerReadinessRef),
+    stringField(metadata.providerReadinessRef),
     stringField(data.sidecarCapabilitiesRef),
     stringField(metadata.sidecarCapabilitiesRef),
     stringField(runSummary.sidecarCapabilitiesRef),
     refFromValue(data.adapterReadiness, ['ref', 'adapterReadinessRef', 'readinessRef']),
     refFromValue(metadata.adapterReadiness, ['ref', 'adapterReadinessRef', 'readinessRef']),
+    refFromValue(data.providerReadiness, ['ref', 'providerReadinessRef', 'readinessRef']),
+    refFromValue(metadata.providerReadiness, ['ref', 'providerReadinessRef', 'readinessRef']),
     refFromValue(sidecarCapabilities, ['ref', 'sidecarCapabilitiesRef', 'capabilitiesRef']),
+  );
+  const platformDriverRef = firstNonEmptyString(
+    stringField(data.platformDriverRef),
+    stringField(metadata.platformDriverRef),
+    stringField(data.driverRef),
+    stringField(metadata.driverRef),
+    refFromValue(data.platformDriver, ['ref', 'platformDriverRef', 'driverRef']),
+    refFromValue(metadata.platformDriver, ['ref', 'platformDriverRef', 'driverRef']),
+    refFromValue(data.providerReadiness, ['platformDriverRef', 'driverRef']),
+    refFromValue(metadata.providerReadiness, ['platformDriverRef', 'driverRef']),
+  );
+  const platformDriverStatus = firstNonEmptyString(
+    stringField(data.platformDriverStatus),
+    stringField(metadata.platformDriverStatus),
+    stringField(data.driverStatus),
+    stringField(metadata.driverStatus),
+    stringField(refFromValue(data.platformDriver, ['status', 'platformDriverStatus'])),
+    stringField(refFromValue(metadata.platformDriver, ['status', 'platformDriverStatus'])),
+    stringField(refFromValue(data.providerReadiness, ['platformDriverStatus', 'driverStatus'])),
+    stringField(refFromValue(metadata.providerReadiness, ['platformDriverStatus', 'driverStatus'])),
   );
   const replayRef = firstNonEmptyString(
     stringField(data.replayRef),
@@ -218,8 +348,115 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     stringField(artifact.dataRef),
   );
   const sessionRef = firstNonEmptyString(stringField(data.sessionRef), stringField(metadata.sessionRef));
+  const providerSessionOwnerRef = firstNonEmptyString(
+    stringField(data.providerSessionOwnerRef),
+    stringField(metadata.providerSessionOwnerRef),
+    refFromValue(data.providerSession, ['ownerRef', 'providerSessionOwnerRef']),
+    refFromValue(metadata.providerSession, ['ownerRef', 'providerSessionOwnerRef']),
+  );
+  const providerSessionReconnectRef = firstNonEmptyString(
+    stringField(data.providerSessionReconnectRef),
+    stringField(metadata.providerSessionReconnectRef),
+    stringField(data.reconnectRef),
+    stringField(metadata.reconnectRef),
+    refFromValue(data.providerSession, ['reconnectRef', 'providerSessionReconnectRef']),
+    refFromValue(metadata.providerSession, ['reconnectRef', 'providerSessionReconnectRef']),
+  );
+  const liveBindingAttachGrantRef = firstNonEmptyString(
+    stringField(data.liveBindingAttachGrantRef),
+    stringField(metadata.liveBindingAttachGrantRef),
+    refFromValue(data.providerSession, ['liveBindingAttachGrantRef', 'attachGrantRef']),
+    refFromValue(metadata.providerSession, ['liveBindingAttachGrantRef', 'attachGrantRef']),
+    refFromValue(data.liveBinding, ['attachGrantRef', 'liveBindingAttachGrantRef']),
+    refFromValue(metadata.liveBinding, ['attachGrantRef', 'liveBindingAttachGrantRef']),
+  );
+  const surfaceTransportRef = firstNonEmptyString(
+    stringField(data.surfaceTransportRef),
+    stringField(metadata.surfaceTransportRef),
+    refFromValue(data.surfaceTransportDescriptor, ['ref', 'surfaceTransportRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['ref', 'surfaceTransportRef']),
+  );
+  const currentFrameSequence = virtualScreenQualityRefFromValue(
+    data.currentFrameSequence,
+    metadata.currentFrameSequence,
+    surfaceTransportSequenceRef(data.surfaceTransportDescriptor),
+    surfaceTransportSequenceRef(metadata.surfaceTransportDescriptor),
+    stringField(data.currentFrameSequenceRef),
+    stringField(metadata.currentFrameSequenceRef),
+    refFromValue(data.surfaceTransportDescriptor, ['currentFrameSequenceRef', 'frameSequenceRef', 'currentFrameRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['currentFrameSequenceRef', 'frameSequenceRef', 'currentFrameRef']),
+    refFromValue(data.frameStream, ['currentFrameSequenceRef', 'frameSequenceRef']),
+    refFromValue(metadata.frameStream, ['currentFrameSequenceRef', 'frameSequenceRef']),
+  );
+  const surfaceTransportDescriptor = virtualScreenSurfaceTransportDescriptorEvidence(
+    data.surfaceTransportDescriptor,
+    metadata.surfaceTransportDescriptor,
+  );
+  const providerExecuted = firstBoolean(
+    booleanField(data.providerExecuted),
+    booleanField(metadata.providerExecuted),
+    booleanField(runSummary.providerExecuted),
+    booleanField(runSummary.realNativeSidecarExecuted),
+    booleanFromRecord(data.isolationFlags, 'providerExecuted'),
+    booleanFromRecord(metadata.isolationFlags, 'providerExecuted'),
+    booleanFromRecord(data.isolation, 'providerExecuted'),
+    booleanFromRecord(metadata.isolation, 'providerExecuted'),
+  );
   const blockedRef = firstNonEmptyString(stringField(data.blockedRef), stringField(metadata.blockedRef));
   const errorRef = firstNonEmptyString(stringField(data.errorRef), stringField(metadata.errorRef));
+  const blockedReason = firstNonEmptyString(stringField(data.blockedReason), stringField(metadata.blockedReason));
+  const errorReason = firstNonEmptyString(stringField(data.errorReason), stringField(metadata.errorReason));
+  const permissionRef = firstNonEmptyString(
+    stringField(data.permissionRef),
+    stringField(metadata.permissionRef),
+    refFromValue(data.permission, ['ref', 'permissionRef']),
+    refFromValue(metadata.permission, ['ref', 'permissionRef']),
+    refsFromList(data.permissions, ['ref', 'permissionRef'])[0],
+    refsFromList(metadata.permissions, ['ref', 'permissionRef'])[0],
+  );
+  const permissionStatus = firstNonEmptyString(
+    stringField(data.permissionStatus),
+    stringField(metadata.permissionStatus),
+    stringField(refFromValue(data.permission, ['status', 'permissionStatus'])),
+    stringField(refFromValue(metadata.permission, ['status', 'permissionStatus'])),
+    stringField(refFromValue(data.providerReadiness, ['permissionStatus'])),
+    stringField(refFromValue(metadata.providerReadiness, ['permissionStatus'])),
+  );
+  const permissionRequired = firstBoolean(
+    booleanField(data.permissionRequired),
+    booleanField(metadata.permissionRequired),
+    booleanField(data.requiresPermission),
+    booleanField(metadata.requiresPermission),
+  );
+  const permissionGranted = firstBoolean(
+    booleanField(data.permissionGranted),
+    booleanField(metadata.permissionGranted),
+    booleanField(data.permissionsGranted),
+    booleanField(metadata.permissionsGranted),
+  );
+  const permissionHandoffRefs = rightPaneRefList(
+    stringField(data.permissionHandoffRef),
+    stringField(metadata.permissionHandoffRef),
+    stringListField(data.permissionHandoffRefs),
+    stringListField(metadata.permissionHandoffRefs),
+    refsFromList(data.permissionHandoffs, ['ref', 'permissionHandoffRef', 'handoffRef']),
+    refsFromList(metadata.permissionHandoffs, ['ref', 'permissionHandoffRef', 'handoffRef']),
+  );
+  const permissionRecheckRefs = rightPaneRefList(
+    stringField(data.permissionRecheckRef),
+    stringField(metadata.permissionRecheckRef),
+    stringField(data.recheckRef),
+    stringField(metadata.recheckRef),
+    stringListField(data.permissionRecheckRefs),
+    stringListField(metadata.permissionRecheckRefs),
+    refsFromList(data.permissionRechecks, ['ref', 'permissionRecheckRef', 'recheckRef']),
+    refsFromList(metadata.permissionRechecks, ['ref', 'permissionRecheckRef', 'recheckRef']),
+  );
+  const recheckRef = firstNonEmptyString(
+    stringField(data.recheckRef),
+    stringField(metadata.recheckRef),
+    permissionRecheckRefs[0],
+  );
   const validationRef = firstNonEmptyString(stringField(data.validationRef), stringField(metadata.validationRef), stringField(runSummary.validationRef));
   const completionEvidenceRef = firstNonEmptyString(stringField(data.completionEvidenceRef), stringField(metadata.completionEvidenceRef));
   const evidenceLedgerRef = firstNonEmptyString(
@@ -254,6 +491,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     frameRecords.map((frame) => frame.frameDataRef),
     frameRecords.map((frame) => frame.screenshotRef),
     frameRecords.map((frame) => frame.evidenceRef),
+    permissionHandoffRefs,
   );
   const verificationRefs = rightPaneRefList(
     stringListField(data.verificationRefs),
@@ -262,9 +500,10 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     completionEvidenceRef,
     beforeEvidenceRefs,
     afterEvidenceRefs,
-    stringField(data.permissionRef),
-    stringField(metadata.permissionRef),
+    permissionRef,
+    permissionRecheckRefs,
     sidecarDiscoveryRef,
+    adapterReadinessRef,
   );
   const guiPresentRefs = rightPaneRefList(
     stringField(data.guiPresentRef),
@@ -281,6 +520,12 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     && !sessionRef
     && !blockedRef
     && !errorRef
+    && !currentFrameSequence
+    && !permissionRef
+    && !permissionHandoffRefs.length
+    && !permissionRecheckRefs.length
+    && !recheckRef
+    && !adapterReadinessRef
     && !actorCursorRefs.length
     && !annotationOverlayRefs.length
     && !proposalRefs.length
@@ -288,12 +533,16 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     && !verificationRefs.length
     && !frameRecords.length
   ) return undefined;
+  const authorizationIncomplete = virtualScreenAuthorizationIncomplete({ permissionRequired, permissionGranted, permissionStatus, platformDriverStatus, permissionHandoffRefs });
   const status = errorRef
     ? 'error'
     : blockedRef
       ? 'blocked'
-      : firstNonEmptyString(stringField(data.status), stringField(metadata.status), stringField(runSummary.status), currentFrameRef ? 'ready' : 'empty');
-  const attachState = normalizeVirtualScreenAttachState(firstNonEmptyString(stringField(data.attachState), stringField(metadata.attachState)));
+      : authorizationIncomplete
+        ? 'requires-handoff'
+        : firstNonEmptyString(stringField(data.status), stringField(metadata.status), stringField(runSummary.status), currentFrameRef ? 'ready' : 'empty');
+  const attachState = normalizeVirtualScreenAttachState(firstNonEmptyString(stringField(data.attachState), stringField(metadata.attachState)))
+    ?? (authorizationIncomplete ? 'requires-handoff' : undefined);
   const isolationFlags = virtualScreenIsolationFlagsFromValue(data.isolationFlags ?? metadata.isolationFlags ?? data.isolation ?? metadata.isolation);
   return {
     title: stringField(data.title) ?? stringField(metadata.title) ?? 'Computer Use Virtual Screen',
@@ -304,8 +553,22 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
       explicitSurfaceMode: normalizeVirtualScreenSurfaceMode(stringField(data.surfaceMode) ?? stringField(metadata.surfaceMode)),
       sessionRef,
       liveSurfaceRef,
+      surfaceTransport,
+      surfaceTransportRef,
       frameStreamRef,
       currentFrameRef,
+      providerSessionOwnerRef,
+      providerSessionReconnectRef,
+      liveBindingAttachGrantRef,
+      currentFrameSequence,
+      surfaceTransportDescriptor,
+      platformDriverRef,
+      platformDriverStatus,
+      permissionRequired,
+      permissionGranted,
+      permissionStatus,
+      evidenceLedgerRef,
+      providerExecuted,
       replayRef,
       frameRecords,
       isolationFlags,
@@ -314,10 +577,19 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     screenRef: explicitScreenRef,
     liveSurfaceRef,
     surfaceTransport,
+    platformDriverRef,
+    platformDriverStatus,
     visibleScreenRefs,
     targetAppRef,
     targetWindowRef,
     sessionRef,
+    providerSessionOwnerRef,
+    providerSessionReconnectRef,
+    liveBindingAttachGrantRef,
+    surfaceTransportRef,
+    currentFrameSequence,
+    ...(surfaceTransportDescriptor ? { surfaceTransportDescriptor } : {}),
+    ...(providerExecuted === undefined ? {} : { providerExecuted }),
     frameStreamRef,
     screen,
     frameRefs: frameRecords,
@@ -343,10 +615,45 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     guiPresentRefs,
     blockedRef,
     errorRef,
+    blockedReason,
+    errorReason,
+    permissionRef,
+    permissionStatus,
+    permissionRequired,
+    permissionGranted,
     stopRef: firstNonEmptyString(stringField(data.stopRef), stringField(metadata.stopRef)),
     handoffRef: firstNonEmptyString(stringField(data.handoffRef), stringField(metadata.handoffRef)),
+    permissionHandoffRef: permissionHandoffRefs[0],
+    permissionHandoffRefs,
+    permissionRecheckRef: permissionRecheckRefs[0],
+    permissionRecheckRefs,
+    recheckRef,
     isolationFlags,
   };
+}
+
+function virtualScreenAuthorizationIncomplete(options: {
+  permissionRequired: boolean | undefined;
+  permissionGranted: boolean | undefined;
+  permissionStatus: string;
+  platformDriverStatus: string;
+  permissionHandoffRefs: string[];
+}) {
+  return Boolean(
+    (options.permissionRequired === true && options.permissionGranted !== true)
+    || options.permissionGranted === false
+    || isBlockedGateStatus(options.permissionStatus)
+    || isBlockedGateStatus(options.platformDriverStatus)
+    || (options.permissionHandoffRefs.length && !isReadyGateStatus(options.permissionStatus)),
+  );
+}
+
+function isBlockedGateStatus(value: string) {
+  return /^(blocked|denied|disabled|error|failed|missing|not-granted|not-installed|revoked|unavailable)$/i.test(value.trim());
+}
+
+function isReadyGateStatus(value: string) {
+  return /^(available|granted|ready|attached|running)$/i.test(value.trim());
 }
 
 function runtimeArtifactsFromRunForRightPane(run: SciForgeRun): RuntimeArtifact[] {
@@ -433,6 +740,143 @@ function refFromValue(value: unknown, keys: string[]) {
   return undefined;
 }
 
+function surfaceTransportSequenceRef(value: unknown): VirtualScreenPayload['currentFrameSequence'] {
+  if (!isRecord(value)) return undefined;
+  const sequence = nonNegativeNumberField(value.currentFrameSequence);
+  const ref = firstNonEmptyString(
+    stringField(value.currentFrameSequenceRef),
+    stringField(value.frameSequenceRef),
+    stringField(value.currentFrameRef),
+  );
+  if (!ref || sequence === undefined) return undefined;
+  return {
+    ref,
+    transport: stringField(value.transport),
+    sequence,
+  };
+}
+
+interface RightPaneVirtualScreenSurfaceTransportDescriptorEvidence {
+  schemaVersion?: string;
+  owner: 'VirtualDisplayProvider';
+  providerId?: string;
+  transport?: string;
+  surfaceTransportRef: string;
+  liveSurfaceRef: string;
+  frameStreamRef: string;
+  currentFrameRef: string;
+  frameTransportContractRef?: string;
+  frameTelemetryRef?: string;
+  mediaChannelRef?: string;
+  dataChannelRef?: string;
+  currentFrameSequence: number;
+  diagnosticOnly: false;
+  productFallback: false;
+  singleInteractiveTruth: true;
+}
+
+function virtualScreenSurfaceTransportDescriptorEvidence(...values: unknown[]): RightPaneVirtualScreenSurfaceTransportDescriptorEvidence | undefined {
+  for (const value of values) {
+    const descriptor = virtualScreenSurfaceTransportDescriptorEvidenceFromValue(value);
+    if (descriptor) return descriptor;
+  }
+  return undefined;
+}
+
+function virtualScreenSurfaceTransportDescriptorEvidenceFromValue(value: unknown): RightPaneVirtualScreenSurfaceTransportDescriptorEvidence | undefined {
+  if (!isRecord(value)) return undefined;
+  const owner = stringField(value.owner);
+  const currentFrameSequence = nonNegativeNumberField(value.currentFrameSequence);
+  const descriptor = {
+    schemaVersion: stringField(value.schemaVersion),
+    owner,
+    providerId: safeDescriptorText(value.providerId),
+    transport: normalizeVirtualScreenSurfaceTransport(stringField(value.transport)),
+    surfaceTransportRef: safeDescriptorRef(value.surfaceTransportRef),
+    liveSurfaceRef: safeDescriptorRef(value.liveSurfaceRef),
+    frameStreamRef: safeDescriptorRef(value.frameStreamRef),
+    currentFrameRef: safeDescriptorRef(value.currentFrameRef),
+    frameTransportContractRef: safeDescriptorRef(value.frameTransportContractRef),
+    frameTelemetryRef: safeDescriptorRef(value.frameTelemetryRef),
+    mediaChannelRef: safeDescriptorRef(value.mediaChannelRef),
+    dataChannelRef: safeDescriptorRef(value.dataChannelRef),
+    currentFrameSequence,
+    diagnosticOnly: booleanField(value.diagnosticOnly),
+    productFallback: booleanField(value.productFallback),
+    singleInteractiveTruth: booleanField(value.singleInteractiveTruth),
+  };
+  if (
+    descriptor.owner !== 'VirtualDisplayProvider'
+    || !descriptor.surfaceTransportRef
+    || !descriptor.liveSurfaceRef
+    || !descriptor.frameStreamRef
+    || !descriptor.currentFrameRef
+    || descriptor.currentFrameSequence === undefined
+    || descriptor.diagnosticOnly !== false
+    || descriptor.productFallback !== false
+    || descriptor.singleInteractiveTruth !== true
+  ) return undefined;
+  return descriptor as RightPaneVirtualScreenSurfaceTransportDescriptorEvidence;
+}
+
+function safeDescriptorRef(value: unknown) {
+  const ref = stringField(value);
+  if (!ref || unsafeDescriptorRef(ref)) return undefined;
+  return ref;
+}
+
+function safeDescriptorText(value: unknown) {
+  const text = stringField(value);
+  if (!text || /authorization|bearer|api[_-]?key|password|secret|token/i.test(text)) return undefined;
+  return text;
+}
+
+function unsafeDescriptorRef(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized.startsWith('data:')
+    || normalized.startsWith('javascript:')
+    || normalized.startsWith('file:')
+    || normalized.startsWith('blob:')
+    || normalized.startsWith('http://')
+    || normalized.startsWith('https://')
+    || normalized.startsWith('//')
+    || normalized.includes(';base64,')
+    || /authorization|bearer|api[_-]?key|password|secret|token/i.test(normalized)
+  );
+}
+
+function virtualScreenQualityRefFromValue(...values: unknown[]): VirtualScreenPayload['currentFrameSequence'] {
+  for (const value of values) {
+    const qualityRef = virtualScreenQualityRefValue(value);
+    if (qualityRef) return qualityRef;
+  }
+  return undefined;
+}
+
+function virtualScreenQualityRefValue(value: unknown): VirtualScreenPayload['currentFrameSequence'] {
+  if (typeof value === 'string') {
+    const ref = stringField(value);
+    return ref ? { ref } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const ref = firstNonEmptyString(
+    stringField(value.ref),
+    stringField(value.currentFrameSequenceRef),
+    stringField(value.frameSequenceRef),
+    stringField(value.sequenceRef),
+  );
+  if (!ref) return undefined;
+  return {
+    ref,
+    label: stringField(value.label),
+    status: stringField(value.status),
+    transport: stringField(value.transport) ?? stringField(value.protocol),
+    diagnosticOnly: booleanField(value.diagnosticOnly),
+    sequence: nonNegativeNumberField(value.sequence),
+  };
+}
+
 function normalizeVirtualScreenAttachState(value: string | undefined): VirtualScreenPayload['attachState'] {
   const normalized = value?.replace('requires-user-handoff', 'requires-handoff');
   if (
@@ -466,23 +910,95 @@ function deriveVirtualScreenSurfaceMode(options: {
   explicitSurfaceMode: VirtualScreenPayload['surfaceMode'];
   sessionRef: string;
   liveSurfaceRef: string;
+  surfaceTransport: VirtualScreenPayload['surfaceTransport'];
+  surfaceTransportRef: string;
   frameStreamRef: string;
   currentFrameRef: string;
+  providerSessionOwnerRef: string;
+  providerSessionReconnectRef: string;
+  liveBindingAttachGrantRef: string;
+  currentFrameSequence: VirtualScreenPayload['currentFrameSequence'];
+  surfaceTransportDescriptor: RightPaneVirtualScreenSurfaceTransportDescriptorEvidence | undefined;
+  platformDriverRef: string;
+  platformDriverStatus: string;
+  permissionRequired: boolean | undefined;
+  permissionGranted: boolean | undefined;
+  permissionStatus: string;
+  evidenceLedgerRef: string;
+  providerExecuted: boolean | undefined;
   replayRef: string;
   frameRecords: VirtualScreenFrame[];
   isolationFlags: VirtualScreenPayload['isolationFlags'];
 }): VirtualScreenPayload['surfaceMode'] {
   const canRepresentLive = Boolean(
-    (options.attachState === 'attached' || options.attachState === 'observe-only')
+    options.attachState === 'attached'
     && options.sessionRef
-    && (options.liveSurfaceRef || options.frameStreamRef)
+    && options.liveSurfaceRef
+    && options.surfaceTransport
+    && options.surfaceTransportRef
+    && options.frameStreamRef
+    && options.currentFrameRef
+    && options.providerSessionOwnerRef
+    && options.providerSessionReconnectRef
+    && options.liveBindingAttachGrantRef
+    && options.currentFrameSequence?.ref
+    && typeof options.currentFrameSequence.sequence === 'number'
+    && Number.isFinite(options.currentFrameSequence.sequence)
+    && options.currentFrameSequence.sequence >= 0
+    && options.platformDriverRef
+    && isReadyGateStatus(options.platformDriverStatus)
+    && virtualScreenPermissionReady(options)
+    && options.evidenceLedgerRef
+    && options.providerExecuted === true
+    && virtualScreenSurfaceTransportDescriptorMatchesLiveRefs(options)
+    && options.isolationFlags?.backgroundRenderable === true
+    && options.isolationFlags?.affectsPhysicalDisplay === false
+    && options.isolationFlags?.requiresFocusSteal === false
+    && options.isolationFlags?.sharedSystemInputUsed === false
+    && options.isolationFlags?.systemPointerMoved === false
+    && options.isolationFlags?.systemKeyboardEventsSent === false
     && options.isolationFlags?.singleInteractiveTruth !== false
-    && options.isolationFlags?.secondInteractiveSurfacePresent !== true,
+    && options.isolationFlags?.secondInteractiveSurfacePresent !== true
+    && options.isolationFlags?.diagnosticOnly === false
   );
   if (canRepresentLive) return 'live';
   if (options.explicitSurfaceMode === 'empty' && !options.currentFrameRef && !options.replayRef && !options.frameStreamRef && !options.liveSurfaceRef && !options.frameRecords.length) return 'empty';
   if (options.explicitSurfaceMode === 'replay') return 'replay';
   return options.currentFrameRef || options.replayRef || options.frameStreamRef || options.liveSurfaceRef || options.frameRecords.length ? 'replay' : 'empty';
+}
+
+function virtualScreenPermissionReady(options: {
+  permissionRequired: boolean | undefined;
+  permissionGranted: boolean | undefined;
+  permissionStatus: string;
+}) {
+  const permissionStatusReady = isReadyGateStatus(options.permissionStatus) || /^not-required$/i.test(options.permissionStatus.trim());
+  if (options.permissionRequired === true) {
+    return options.permissionGranted === true || permissionStatusReady;
+  }
+  if (options.permissionGranted === false || isBlockedGateStatus(options.permissionStatus)) return false;
+  return options.permissionGranted === true || permissionStatusReady;
+}
+
+function virtualScreenSurfaceTransportDescriptorMatchesLiveRefs(options: {
+  liveSurfaceRef: string;
+  surfaceTransport: VirtualScreenPayload['surfaceTransport'];
+  surfaceTransportRef: string;
+  frameStreamRef: string;
+  currentFrameRef: string;
+  currentFrameSequence: VirtualScreenPayload['currentFrameSequence'];
+  surfaceTransportDescriptor: RightPaneVirtualScreenSurfaceTransportDescriptorEvidence | undefined;
+}) {
+  const descriptor = options.surfaceTransportDescriptor;
+  return Boolean(
+    descriptor
+    && descriptor.surfaceTransportRef === options.surfaceTransportRef
+    && descriptor.liveSurfaceRef === options.liveSurfaceRef
+    && descriptor.frameStreamRef === options.frameStreamRef
+    && descriptor.currentFrameRef === options.currentFrameRef
+    && (!descriptor.transport || descriptor.transport === options.surfaceTransport)
+    && descriptor.currentFrameSequence === options.currentFrameSequence?.sequence,
+  );
 }
 
 function virtualScreenIsolationFlagsFromValue(value: unknown): VirtualScreenPayload['isolationFlags'] {
@@ -665,6 +1181,18 @@ function booleanField(value: unknown) {
   return typeof value === 'boolean' ? value : undefined;
 }
 
+function booleanFromRecord(value: unknown, key: string) {
+  return isRecord(value) ? booleanField(value[key]) : undefined;
+}
+
+function firstBoolean(...values: Array<boolean | undefined>) {
+  return values.find((value): value is boolean => typeof value === 'boolean');
+}
+
 function positiveNumberField(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeNumberField(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

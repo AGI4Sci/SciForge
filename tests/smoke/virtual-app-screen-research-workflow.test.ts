@@ -30,6 +30,43 @@ test('research workflow fixture covers the first screen profile batch without cl
 
   for (const profile of bundle.profiles) {
     assert.equal(profile.adapterReadiness.ref, profile.adapterReadinessRef);
+    assert.equal(profile.appIdentity.profileId, profile.id);
+    assert.equal(profile.appIdentity.targetAppRef, profile.targetAppRef);
+    assert.equal(profile.appIdentity.screenRef, profile.screenRef);
+    assert.equal(profile.appIdentity.virtualDisplayProviderRef, profile.virtualDisplayProviderRef);
+    assert.equal(profile.providerReadiness.providerKind, 'VirtualDisplayProvider');
+    assert.equal(profile.providerReadiness.realProviderEvidenceRef, null);
+    assert.equal(profile.providerReadiness.diagnosticOnlyUntilRealProviderEvidence, true);
+    assert.equal(profile.providerReadiness.status === 'diagnostic-only' || profile.providerReadiness.status === 'blocked', true);
+    assert.equal(profile.controlEvidence.frameStreamRef, profile.frameStreamRef);
+    assert.deepEqual(profile.controlEvidence.inputIntentRefs, profile.inputIntentRefs);
+    assert.deepEqual(profile.controlEvidence.beforeAfterFrameRefs, profile.beforeAfterFrameRefs);
+    assert.ok(profile.controlEvidence.liveSurfaceRef.length > 0);
+    assert.ok(profile.controlEvidence.currentFrameRef.length > 0);
+    assert.ok(profile.controlEvidence.blockedReasonRef.length > 0);
+    assert.ok(profile.controlEvidence.userHandoffPath.handoffRef.length > 0);
+    assert.ok(profile.controlEvidence.userHandoffPath.recheckRef.length > 0);
+    assert.equal(profile.artifactContract.verifierRequired, true);
+    assert.equal(profile.artifactContract.guiPresentRequired, true);
+    assert.equal(profile.artifactContract.rejectsShellOnly, true);
+    assert.deepEqual(profile.artifactContract.produces, profile.contributionBoundary.mayProduceArtifactKinds);
+    assert.deepEqual(profile.artifactContract.consumesFromProfileIds, profile.contributionBoundary.mayConsumeFromProfileIds);
+    assert.equal(profile.closeReusePolicy.safeToCloseUserOwnedWindow, false);
+    assert.equal(profile.closeReusePolicy.requiresFinalFrameBeforeClose, true);
+    assert.ok(profile.closeReusePolicy.stopPathRef.length > 0);
+    assert.equal(profile.riskPolicy.credentialPolicy, 'never-enter-secrets');
+    assert.ok(profile.riskPolicy.prohibitedActions.length >= 1);
+    assert.ok(profile.allowedActions.length >= 1);
+    assert.ok(profile.allowedActions.every((action) => (
+      action.requiresInputLease
+      && action.requiresBeforeAfter
+      && action.allowedWhenDiagnosticOnly === false
+    )));
+    assert.equal(profile.collaboration.virtualAppScreenRef, profile.screenRef);
+    assert.equal(profile.collaboration.oneAppPerVirtualAppScreen, true);
+    assert.equal(profile.collaboration.peerVirtualAppScreenRefs.length, REQUIRED_RESEARCH_SCREEN_PROFILE_IDS.length - 1);
+    assert.equal(profile.collaboration.peerVirtualAppScreenRefs.includes(profile.screenRef), false);
+    assert.equal(profile.collaboration.crossAppArtifactExchange, 'artifact-refs-only');
     assert.equal(profile.blockedPolicy.status, 'diagnostic-only');
     assert.equal(profile.blockedPolicy.userLevelEligible, false);
     assert.equal(profile.contributionBoundary.disallowCrossScreenWrites, true);
@@ -51,26 +88,30 @@ test('research workflow fixture covers the first screen profile batch without cl
   }
 });
 
-test('research workflow becomes user-level eligible only with explicit real VirtualAppScreen evidence mode', () => {
+test('research app profiles remain diagnostic-only without real provider evidence', () => {
   const bundle = buildVirtualAppScreenResearchWorkflowBundle({
     runId: 'research-workflow-real-contract',
     evidenceMode: 'real-virtual-app-screen',
   });
 
   assert.equal(bundle.fixtureBoundary.diagnosticFixture, false);
-  assert.equal(bundle.validation.status, 'passed');
-  assert.equal(bundle.validation.ok, true);
-  assert.deepEqual(bundle.validation.issues, []);
-  assert.equal(bundle.manifest.status, 'passed');
-  assert.equal(bundle.manifest.userAcceptanceEligible, true);
+  assert.equal(bundle.fixtureBoundary.fixtureCanClaimUserAcceptance, false);
+  assert.equal(bundle.validation.status, 'blocked');
+  assert.equal(bundle.validation.ok, false);
+  assert.ok(bundle.validation.issues.some((issue) => issue.includes('missing real VirtualDisplayProvider evidence')));
+  assert.equal(bundle.manifest.status, 'blocked');
+  assert.equal(bundle.manifest.diagnosticOnly, true);
+  assert.equal(bundle.manifest.userAcceptanceEligible, false);
   assert.equal(bundle.schedulingPlan.strategy, 'isolated-parallel');
   assert.deepEqual(bundle.schedulingPlan.isolatedParallelProfileIds, REQUIRED_RESEARCH_SCREEN_PROFILE_IDS);
   assert.deepEqual(bundle.schedulingPlan.nonIsolatedSerialProfileIds, []);
-  assert.deepEqual(bundle.manifest.artifactRefs, bundle.artifactChains.map((chain) => chain.artifactRef));
-  assert.deepEqual(bundle.manifest.verificationRefs, bundle.artifactChains.map((chain) => chain.verifierRef));
-  assert.deepEqual(bundle.manifest.guiPresentRefs, bundle.artifactChains.map((chain) => chain.guiPresentRef));
-  assert.ok(bundle.profiles.every((profile) => profile.blockedPolicy.userLevelEligible));
-  assert.ok(bundle.artifactChains.every((chain) => chain.userLevelEligible));
+  assert.deepEqual(bundle.manifest.artifactRefs, []);
+  assert.deepEqual(bundle.manifest.verificationRefs, []);
+  assert.deepEqual(bundle.manifest.guiPresentRefs, []);
+  assert.ok(bundle.profiles.every((profile) => profile.blockedPolicy.userLevelEligible === false));
+  assert.ok(bundle.profiles.every((profile) => profile.blockedPolicy.status === 'diagnostic-only'));
+  assert.ok(bundle.artifactChains.every((chain) => chain.userLevelEligible === false));
+  assert.ok(bundle.evidenceClaims.every((claim) => claim.userAcceptanceEligible !== true));
 });
 
 test('research workflow validator blocks cross-screen artifact contribution boundary violations', () => {

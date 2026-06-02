@@ -2,6 +2,10 @@ import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { isRecord, readOptionalJson } from './server/http.js';
 
+export const RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION = 'sciforge.runtime-codex.browser-acceptance.v1';
+const RUNTIME_CODEX_BROWSER_ACCEPTANCE_SOURCE = 'codex-in-app-browser';
+const RUNTIME_CODEX_BROWSER_ACCEPTANCE_STATUSES = new Set(['passed', 'blocked', 'failed', 'partial']);
+
 interface RuntimeCodexBrowserAcceptanceReadOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -27,6 +31,7 @@ export async function readRuntimeCodexBrowserAcceptanceManifest(options: Runtime
   const parsed = await readOptionalJson(manifestPath);
   if (!parsed) return undefined;
   if (!isRecord(parsed)) throw new Error('runtime codex browser acceptance manifest is invalid');
+  assertRuntimeCodexBrowserAcceptanceManifest(parsed);
   const manifest = normalizeRuntimeCodexBrowserAcceptanceManifest(parsed);
   return {
     ...manifest,
@@ -45,12 +50,18 @@ export function runtimeCodexBrowserAcceptanceManifestPath(options: Pick<RuntimeC
 
 function normalizeRuntimeCodexBrowserAcceptanceManifest(parsed: Record<string, unknown>) {
   return {
-    schemaVersion: parsed.schemaVersion,
+    schemaVersion: stringValue(parsed.schemaVersion),
     status: stringValue(parsed.status),
     source: stringValue(parsed.source),
     observedAt: stringValue(parsed.observedAt) || undefined,
     actualUrl: stringValue(parsed.actualUrl) || undefined,
     actualPort: typeof parsed.actualPort === 'number' ? parsed.actualPort : undefined,
+    requestedRolePort: typeof parsed.requestedRolePort === 'number' ? parsed.requestedRolePort : undefined,
+    actualWorkspaceWriterPort: typeof parsed.actualWorkspaceWriterPort === 'number' ? parsed.actualWorkspaceWriterPort : undefined,
+    actualWorkspaceWriterUrl: stringValue(parsed.actualWorkspaceWriterUrl) || undefined,
+    actualRuntimeCodexPort: typeof parsed.actualRuntimeCodexPort === 'number' ? parsed.actualRuntimeCodexPort : undefined,
+    actualRuntimeCodexUrl: stringValue(parsed.actualRuntimeCodexUrl) || undefined,
+    profile: stringValue(parsed.profile) || undefined,
     workspacePath: stringValue(parsed.workspacePath) || undefined,
     provider: stringValue(parsed.provider) || undefined,
     model: stringValue(parsed.model) || undefined,
@@ -98,6 +109,21 @@ function normalizeRuntimeCodexBrowserAcceptanceManifest(parsed: Record<string, u
       runtimeAuditPath: stringValue(parsed.evidence.runtimeAuditPath) || undefined,
     } : undefined,
   };
+}
+
+function assertRuntimeCodexBrowserAcceptanceManifest(parsed: Record<string, unknown>) {
+  const schemaVersion = stringValue(parsed.schemaVersion);
+  if (schemaVersion !== RUNTIME_CODEX_BROWSER_ACCEPTANCE_SCHEMA_VERSION) {
+    throw new Error('runtime codex browser acceptance manifest has unsupported schemaVersion');
+  }
+  const source = stringValue(parsed.source);
+  if (source !== RUNTIME_CODEX_BROWSER_ACCEPTANCE_SOURCE) {
+    throw new Error('runtime codex browser acceptance manifest source must be codex-in-app-browser');
+  }
+  const status = stringValue(parsed.status);
+  if (!RUNTIME_CODEX_BROWSER_ACCEPTANCE_STATUSES.has(status)) {
+    throw new Error('runtime codex browser acceptance manifest status must be passed, blocked, failed, or partial');
+  }
 }
 
 async function runtimeCodexBrowserAcceptanceFreshness(

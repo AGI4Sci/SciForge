@@ -131,6 +131,8 @@ test('browser pane model exposes a bounded loading/progress lifecycle contract',
   assert.equal(committed?.source, 'host-lifecycle');
   assert.equal(committed?.requestedUrl, 'https://external.example/lifecycle');
   assert.equal(committed?.currentUrl, 'https://external.example/lifecycle');
+  assert.equal(committed?.urlDigests?.requested?.length, 'https://external.example/lifecycle'.length);
+  assert.match(committed?.urlDigests?.requested?.hash ?? '', /^[a-f0-9]{8}$/);
 
   const runtimeLoadingProgress = rightPaneBrowserLoadingProgressLifecycle({
     hostSession: {
@@ -153,6 +155,34 @@ test('browser pane model exposes a bounded loading/progress lifecycle contract',
   assert.equal(runtimeLoadingProgress?.state, 'navigation-start');
   assert.equal(runtimeLoadingProgress?.reason, 'navigation-requested');
   assert.equal(runtimeLoadingProgress?.source, 'host-navigation');
+
+  const runtimeRedirectDigest = rightPaneBrowserLoadingProgressLifecycle({
+    hostSession: {
+      id: 'browser-host-runtime-redirect',
+      status: 'ready',
+      requestedUrl: 'https://external.example/requested',
+      url: 'https://external.example/current',
+      loadingProgress: {
+        schemaVersion: 'sciforge.browser-host-session.loading-progress.lifecycle.v1',
+        state: 'network-quiet',
+        reason: 'network-quiet',
+        source: 'host-progress',
+        status: 'ready',
+        action: 'navigate',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        refs: { session: 'browser-host-session:browser-host-runtime-redirect/session.json' },
+        urls: {
+          requested: { length: 34, sha1: '1111111111111111111111111111111111111111' },
+          current: { length: 32, sha1: '2222222222222222222222222222222222222222' },
+          final: { length: 30, sha1: 'abcdef1234567890abcdef1234567890abcdef12' },
+        },
+      },
+    },
+  });
+  assert.equal(runtimeRedirectDigest?.urlDigests?.requested?.length, 'https://external.example/requested'.length);
+  assert.equal(runtimeRedirectDigest?.urlDigests?.current?.length, 'https://external.example/current'.length);
+  assert.equal(runtimeRedirectDigest?.urlDigests?.final?.length, 30);
+  assert.equal(runtimeRedirectDigest?.urlDigests?.final?.hash, 'abcdef12');
 
   const interactive = rightPaneBrowserLoadingProgressLifecycle({
     hostSession: {
@@ -205,6 +235,21 @@ test('browser pane model exposes a bounded loading/progress lifecycle contract',
   assert.equal(handoff?.state, 'handoff');
   assert.equal(handoff?.reason, 'user-handoff-required');
   assert.equal(handoff?.requiresHandoff, true);
+
+  const redirected = rightPaneBrowserLoadingProgressLifecycle({
+    hostSession: {
+      id: 'browser-host-redirected',
+      status: 'ready',
+      requestedUrl: 'https://external.example/requested',
+      url: 'https://external.example/current',
+      finalUrl: 'https://external.example/final',
+    },
+  });
+  assert.equal(redirected?.state, 'network-quiet');
+  assert.equal(redirected?.urlDigests?.requested?.length, 'https://external.example/requested'.length);
+  assert.equal(redirected?.urlDigests?.current?.length, 'https://external.example/current'.length);
+  assert.equal(redirected?.urlDigests?.final?.length, 'https://external.example/final'.length);
+  assert.match(redirected?.urlDigests?.final?.hash ?? '', /^[a-f0-9]{8}$/);
 });
 
 test('browser pane model keeps local pages direct and requires host-owned browser surfaces for external HTML', () => {
@@ -273,9 +318,10 @@ test('browser pane model projects external pages to host-owned browser surfaces 
     hostExternalBrowserAvailable: true,
     hostError: 'host unavailable',
   });
-  assert.equal(failed.status, 'error');
+  assert.equal(failed.status, 'blocked');
   assert.equal(failed.tabStatus, 'failed');
   assert.equal(failed.detail, 'host unavailable');
+  assert.equal(failed.loadingProgress?.state, 'blocked');
 
   const trailingSlash = rightPaneBrowserProjectionForUrl('https://external.example', {
     hostExternalBrowserAvailable: true,
@@ -327,8 +373,9 @@ test('browser pane model projects external pages to host-owned browser surfaces 
       reason: 'navigation stalled before first paint',
     },
   });
-  assert.equal(failedWithReason.status, 'error');
+  assert.equal(failedWithReason.status, 'blocked');
   assert.equal(failedWithReason.detail, 'navigation stalled before first paint');
+  assert.equal(failedWithReason.loadingProgress?.state, 'blocked');
 });
 
 test('browser pane model still allows external PDFs through document viewer projection', () => {

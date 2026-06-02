@@ -86,6 +86,12 @@ test('desktop native embedded surface action ACK uses adapter state and heartbea
     assert.equal(failed.frameRef, undefined);
     assert.equal(failed.lastActionTiming?.status, 'failed');
     assert.match(failed.lastActionTiming?.blockedReason ?? '', /retryable-native-paint-heartbeat-blocked/);
+    assert.equal(failed.loadingProgress?.state, 'blocked');
+    assert.equal(failed.loadingProgress?.blocked, true);
+    assert.equal(failed.loadingProgress?.canRetry, true);
+    assert.equal(failed.loadingProgress?.refs.liveSurface, heartbeat.liveSurfaceRef);
+    assert.equal(failed.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(failed.loadingProgress?.refs.frame, undefined);
 
     const report = nativePaintAckHeartbeatReport({
       ack,

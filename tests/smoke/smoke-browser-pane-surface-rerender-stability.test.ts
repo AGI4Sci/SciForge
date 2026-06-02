@@ -183,7 +183,7 @@ test('Browser pane adapter keeps session start attach and object URL revoke guar
   const adapterSource = readFileSync(new URL('../../src/ui/src/app/results/browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
 
   assert.match(adapterSource, /const initialHostSession = browserHostSessionForFocusedObjectReference\(focusedObjectReference, session\) as BrowserHostSessionState \| undefined;/);
-  assert.match(adapterSource, /useState<BrowserHostSessionState \| undefined>\(\(\) => \{[\s\S]*browserHostSessionMatchesTarget\(initialHostSession, normalizedUrl\) \? initialHostSession : undefined/);
+  assert.match(adapterSource, /useState<BrowserHostSessionState \| undefined>\(\(\) => \{[\s\S]*browserHostSessionMatchesTarget\(initialHostSession, normalizedUrl\)[\s\S]*initialHostSession[\s\S]*cachedRightPaneBrowserHostSession\(hostSessionCacheKey, normalizedUrl\)/);
   assert.match(adapterSource, /setHostSession\(\(current\) => current && current\.id === focusedHostSession\.id && current\.updatedAt === focusedHostSession\.updatedAt \? current : focusedHostSession\)/);
   assert.match(adapterSource, /if \(browserHostSessionMatchesTarget\(hostSession, normalizedUrl\)\) return;[\s\S]*startBrowserHostSession\(config, \{ url: normalizedUrl, \.\.\.viewportRef\.current \}\)/);
   assert.match(adapterSource, /frameUrl: hostSession && !browserHostSessionUsesNativeSurface\(hostSession\) && hostFrameObjectSessionRef\.current === hostSession\.id \? hostFrameObjectUrl : undefined/);

@@ -17,7 +17,7 @@ export const VIRTUAL_APP_SCREEN_RESEARCH_WORKFLOW_SCHEMA_VERSION =
   'sciforge.computer-use.virtual-app-screen-research-workflow.v1' as const;
 
 export const VIRTUAL_APP_SCREEN_RESEARCH_WORKFLOW_TASK_ID =
-  'P1-CU-UA-RESEARCH-WORKFLOW' as const;
+  'P1-CU-VAS-APP-PROFILES' as const;
 
 export const REQUIRED_RESEARCH_SCREEN_PROFILE_IDS = [
   'browser-research',
@@ -52,6 +52,98 @@ export type VirtualAppScreenResearchSchedulingKind =
   | 'isolated-parallel'
   | 'non-isolated-serial';
 
+export type VirtualAppScreenResearchActionRisk = 'low' | 'medium' | 'high';
+
+export type VirtualAppScreenResearchProviderReadinessStatus =
+  | 'diagnostic-only'
+  | 'ready'
+  | 'permission-missing'
+  | 'adapter-unavailable'
+  | 'blocked';
+
+export interface VirtualAppScreenResearchAppIdentity {
+  profileId: VirtualAppScreenResearchProfileId;
+  appName: string;
+  appFamily: string;
+  localAppKind: string;
+  launchTargets: string[];
+  targetAppRef: string;
+  targetWindowRef: string;
+  sessionRef: string;
+  screenRef: string;
+  virtualDisplayProviderRef: string;
+}
+
+export interface VirtualAppScreenResearchAllowedAction {
+  id: string;
+  inputIntentKind: 'pointer' | 'keyboard' | 'text' | 'scroll' | 'app-command';
+  risk: VirtualAppScreenResearchActionRisk;
+  requiresInputLease: true;
+  requiresBeforeAfter: true;
+  allowedWhenDiagnosticOnly: false;
+}
+
+export interface VirtualAppScreenResearchArtifactContract {
+  produces: VirtualAppScreenResearchArtifactKind[];
+  consumesFromProfileIds: VirtualAppScreenResearchProfileId[];
+  sourceRefsRequired: string[];
+  verifierRequired: true;
+  guiPresentRequired: true;
+  rejectsShellOnly: true;
+}
+
+export interface VirtualAppScreenResearchRiskPolicy {
+  defaultRisk: VirtualAppScreenResearchActionRisk;
+  confirmationRequiredFor: string[];
+  prohibitedActions: string[];
+  credentialPolicy: 'never-enter-secrets';
+  networkPolicy: 'task-scoped-only' | 'local-only' | 'document-local-only';
+  dataVisibility: 'current-workspace-and-user-approved-sources';
+}
+
+export interface VirtualAppScreenResearchCloseReusePolicy {
+  reusePolicy: 'reuse-matching-profile-session' | 'reuse-only-with-user-confirmation';
+  closePolicy: 'safe-close-after-artifacts-saved' | 'preserve-session-for-user-handoff';
+  safeToCloseUserOwnedWindow: false;
+  requiresFinalFrameBeforeClose: true;
+  stopPathRef: string;
+}
+
+export interface VirtualAppScreenResearchProviderReadiness {
+  ref: string;
+  providerRef: string;
+  providerKind: 'VirtualDisplayProvider';
+  status: VirtualAppScreenResearchProviderReadinessStatus;
+  realProviderEvidenceRef: string | null;
+  diagnosticOnlyUntilRealProviderEvidence: true;
+  blockedReason: string;
+  requiredProviderEvidence: string[];
+}
+
+export interface VirtualAppScreenResearchControlEvidence {
+  liveSurfaceRef: string;
+  currentFrameRef: string;
+  frameStreamRef: string;
+  inputLeaseRef: string;
+  inputIntentRefs: string[];
+  beforeAfterFrameRefs: string[];
+  blockedReasonRef: string;
+  userHandoffPath: {
+    status: 'available';
+    handoffRef: string;
+    recheckRef: string;
+    allowedUserControls: ['observe', 'takeover', 'pause-agent', 'resume-agent', 'stop-session'];
+  };
+}
+
+export interface VirtualAppScreenResearchCollaborationContract {
+  virtualAppScreenRef: string;
+  oneAppPerVirtualAppScreen: true;
+  peerVirtualAppScreenRefs: string[];
+  sharedEvidenceLedgerRef: string;
+  crossAppArtifactExchange: 'artifact-refs-only';
+}
+
 export interface VirtualAppScreenResearchWorkflowOptions {
   runId?: string;
   runDirRef?: string;
@@ -69,9 +161,19 @@ export interface VirtualAppScreenResearchProfile {
   id: VirtualAppScreenResearchProfileId;
   title: string;
   appFamily: string;
+  appIdentity: VirtualAppScreenResearchAppIdentity;
+  allowedActions: VirtualAppScreenResearchAllowedAction[];
+  artifactContract: VirtualAppScreenResearchArtifactContract;
+  riskPolicy: VirtualAppScreenResearchRiskPolicy;
+  closeReusePolicy: VirtualAppScreenResearchCloseReusePolicy;
+  providerReadiness: VirtualAppScreenResearchProviderReadiness;
+  controlEvidence: VirtualAppScreenResearchControlEvidence;
+  collaboration: VirtualAppScreenResearchCollaborationContract;
   targetAppRef: string;
   targetWindowRef: string;
   sessionRef: string;
+  screenRef: string;
+  virtualDisplayProviderRef: string;
   adapterReadinessRef: string;
   frameStreamRef: string;
   screenFrameRefs: string[];
@@ -321,6 +423,7 @@ export function buildVirtualAppScreenResearchWorkflowBundle(
     evidenceMode,
     nonIsolated: nonIsolatedProfiles.has(template.id),
   }));
+  attachCollaborationPeers(profiles);
   const profileById = new Map(profiles.map((profile) => [profile.id, profile]));
   const artifactChains = artifactPlan.map((plan) => buildArtifactChain({
     plan,
@@ -342,6 +445,7 @@ export function buildVirtualAppScreenResearchWorkflowBundle(
     includeDomPlaywrightShellSubstitutes: options.includeDomPlaywrightShellSubstitutes === true,
   });
   const aggregateRefsEligible = evidenceMode === 'real-virtual-app-screen'
+    && profiles.every((profile) => profile.providerReadiness.status === 'ready')
     && artifactChains.every((chain) => chain.userLevelEligible)
     && profiles.every((profile) => profile.blockedPolicy.userLevelEligible)
     && schedulingPlan.nonIsolatedSerialProfileIds.length === 0;
@@ -408,6 +512,12 @@ export function validateVirtualAppScreenResearchWorkflowBundle(
 
   const profileRefIssues = validateProfileRefs(bundle.profiles);
   issues.push(...profileRefIssues);
+  const missingProviderEvidenceProfileIds = bundle.profiles
+    .filter((profile) => profile.providerReadiness.realProviderEvidenceRef === null)
+    .map((profile) => profile.id);
+  if (missingProviderEvidenceProfileIds.length) {
+    issues.push(`missing real VirtualDisplayProvider evidence for profiles: ${missingProviderEvidenceProfileIds.join(', ')}.`);
+  }
 
   const missingArtifactKinds = REQUIRED_RESEARCH_ARTIFACT_KINDS.filter((kind) => (
     !bundle.artifactChains.some((chain) => chain.kind === kind)
@@ -499,14 +609,47 @@ function buildProfile(options: {
   const targetAppRef = `app:${options.template.id}`;
   const targetWindowRef = `window:${options.template.id}/main`;
   const sessionRef = `computer-use-session:${options.runId}/${options.template.id}`;
+  const screenRef = `virtual-app-screen:${options.runId}/${options.template.id}`;
+  const virtualDisplayProviderRef = `virtual-display-provider:${options.runId}/native-local-app`;
   const adapterReadinessRef = `${refBase}/adapter-readiness.json`;
+  const providerReadinessRef = `${refBase}/provider-readiness.json`;
+  const liveSurfaceRef = `${refBase}/live-surface.json`;
+  const currentFrameRef = `${refBase}/frames/current.png`;
   const beforeFrameRef = `${refBase}/frames/before.png`;
   const afterFrameRef = `${refBase}/frames/after.png`;
   const inputIntentRef = `${refBase}/input-intents/primary-action.json`;
+  const inputLeaseRef = `${refBase}/input-lease.json`;
   const executorEventRef = `${refBase}/executor-events/primary-action.json`;
   const beforeAfterRef = `${refBase}/before-after/primary-action.json`;
   const annotationProposalRef = `${refBase}/annotation-proposals/primary-action.json`;
+  const blockedReasonRef = `${refBase}/blocked-reason.json`;
+  const handoffRef = `${refBase}/handoff/user-control-plane.json`;
+  const recheckRef = `${refBase}/handoff/recheck-provider.json`;
+  const stopPathRef = `${refBase}/close-reuse/stop-session.json`;
+  const frameStreamRef = `${refBase}/frame-stream.json`;
   const isolationFlags = isolationFlagsFor(options.nonIsolated, options.evidenceMode);
+  const providerBlockedReason = options.nonIsolated
+    ? 'No isolated VirtualDisplayProvider evidence exists for this app profile; shared input requires user handoff.'
+    : 'Profile is diagnostic-only until a real local-native VirtualDisplayProvider run supplies current session evidence.';
+  const providerReadiness: VirtualAppScreenResearchProviderReadiness = {
+    ref: providerReadinessRef,
+    providerRef: virtualDisplayProviderRef,
+    providerKind: 'VirtualDisplayProvider',
+    status: options.nonIsolated ? 'blocked' : 'diagnostic-only',
+    realProviderEvidenceRef: null,
+    diagnosticOnlyUntilRealProviderEvidence: true,
+    blockedReason: providerBlockedReason,
+    requiredProviderEvidence: [
+      'provider probe ref',
+      'created VirtualAppScreen session ref',
+      'target app/window attach ref',
+      'live frame stream ref',
+      'input lease ref',
+      'before/after frame refs from the current run',
+      'gui.present ref for the Screen pane',
+    ],
+  };
+  isolationFlags.diagnosticOnly = true;
   const adapterReadiness: VirtualAppScreenReadinessRecord & { ref: string } = {
     ref: adapterReadinessRef,
     adapterKind: options.nonIsolated
@@ -521,34 +664,92 @@ function buildProfile(options: {
     sharedSystemInputUsed: options.nonIsolated,
     blockedReason: options.nonIsolated
       ? 'No isolated app/window-scoped adapter is available; this profile must run serially with user handoff.'
-      : null,
+      : providerBlockedReason,
     schemaRefs: [
       'schema:computer-use/action-adapter-readiness.v1',
       'schema:computer-use/virtual-app-screen-research-profile.v1',
     ],
   };
-  const userLevelEligible = options.evidenceMode === 'real-virtual-app-screen' && !options.nonIsolated;
+  const userLevelEligible = false;
   const blockedReason = options.nonIsolated
     ? 'non-isolated shared input requires serial scheduling and user handoff'
-    : options.evidenceMode === 'fixture-diagnostic'
-      ? 'diagnostic fixture cannot claim user-level acceptance'
-      : null;
+    : providerBlockedReason;
   const status = options.nonIsolated
     ? 'requires-handoff'
-    : options.evidenceMode === 'fixture-diagnostic'
-      ? 'diagnostic-only'
-      : 'eligible';
+    : 'diagnostic-only';
 
   return {
     id: options.template.id,
     title: options.template.title,
     appFamily: options.template.appFamily,
+    appIdentity: {
+      profileId: options.template.id,
+      appName: options.template.title,
+      appFamily: options.template.appFamily,
+      localAppKind: options.template.appFamily,
+      launchTargets: launchTargetsFor(options.template.id),
+      targetAppRef,
+      targetWindowRef,
+      sessionRef,
+      screenRef,
+      virtualDisplayProviderRef,
+    },
+    allowedActions: options.template.supportedActions.map((action) => allowedActionFor(action)),
+    artifactContract: {
+      produces: options.template.mayProduceArtifactKinds,
+      consumesFromProfileIds: options.template.mayConsumeFromProfileIds,
+      sourceRefsRequired: [
+        sessionRef,
+        currentFrameRef,
+        beforeAfterRef,
+      ],
+      verifierRequired: true,
+      guiPresentRequired: true,
+      rejectsShellOnly: true,
+    },
+    riskPolicy: riskPolicyFor(options.template.id),
+    closeReusePolicy: {
+      reusePolicy: options.template.id === 'terminal-experiment'
+        ? 'reuse-only-with-user-confirmation'
+        : 'reuse-matching-profile-session',
+      closePolicy: options.nonIsolated
+        ? 'preserve-session-for-user-handoff'
+        : 'safe-close-after-artifacts-saved',
+      safeToCloseUserOwnedWindow: false,
+      requiresFinalFrameBeforeClose: true,
+      stopPathRef,
+    },
+    providerReadiness,
+    controlEvidence: {
+      liveSurfaceRef,
+      currentFrameRef,
+      frameStreamRef,
+      inputLeaseRef,
+      inputIntentRefs: [inputIntentRef],
+      beforeAfterFrameRefs: [beforeAfterRef],
+      blockedReasonRef,
+      userHandoffPath: {
+        status: 'available',
+        handoffRef,
+        recheckRef,
+        allowedUserControls: ['observe', 'takeover', 'pause-agent', 'resume-agent', 'stop-session'],
+      },
+    },
+    collaboration: {
+      virtualAppScreenRef: screenRef,
+      oneAppPerVirtualAppScreen: true,
+      peerVirtualAppScreenRefs: [],
+      sharedEvidenceLedgerRef: `${options.runDirRef}/research-workflow-evidence-ledger.json`,
+      crossAppArtifactExchange: 'artifact-refs-only',
+    },
     targetAppRef,
     targetWindowRef,
     sessionRef,
+    screenRef,
+    virtualDisplayProviderRef,
     adapterReadinessRef,
-    frameStreamRef: `${refBase}/frame-stream.json`,
-    screenFrameRefs: [beforeFrameRef, afterFrameRef],
+    frameStreamRef,
+    screenFrameRefs: [currentFrameRef, beforeFrameRef, afterFrameRef],
     inputIntentRefs: [inputIntentRef],
     executorEventRefs: [executorEventRef],
     beforeAfterFrameRefs: [beforeAfterRef],
@@ -566,6 +767,12 @@ function buildProfile(options: {
         targetAppRef,
         targetWindowRef,
         sessionRef,
+        screenRef,
+        virtualDisplayProviderRef,
+        providerReadinessRef,
+        liveSurfaceRef,
+        currentFrameRef,
+        inputLeaseRef,
         adapterReadinessRef,
         beforeFrameRef,
         afterFrameRef,
@@ -642,11 +849,7 @@ function buildArtifactChain(options: {
       displayedRefs: guiPresentRef ? [artifactRef, ...(verifierRef ? [verifierRef] : [])] : [],
     },
     shellDirectArtifactWrite: options.shellDirectArtifactWrite,
-    userLevelEligible: options.evidenceMode === 'real-virtual-app-screen'
-      && verifierStatus === 'passed'
-      && guiPresentStatus === 'present'
-      && !options.shellDirectArtifactWrite
-      && !options.crossScreenArtifactWrite,
+    userLevelEligible: false,
   };
 }
 
@@ -667,6 +870,15 @@ function attachArtifactRefsToProfiles(
     profile.contributionBoundary.readableArtifactRefs = chains
       .filter((chain) => chain.sourceProfileIds.includes(profile.id))
       .map((chain) => chain.artifactRef);
+  }
+}
+
+function attachCollaborationPeers(profiles: VirtualAppScreenResearchProfile[]): void {
+  const screenRefs = profiles.map((profile) => profile.screenRef);
+  for (const profile of profiles) {
+    profile.collaboration.peerVirtualAppScreenRefs = screenRefs.filter((screenRef) => (
+      screenRef !== profile.screenRef
+    ));
   }
 }
 
@@ -698,29 +910,35 @@ function buildEvidenceClaims(options: {
   evidenceMode: VirtualAppScreenResearchEvidenceMode;
   includeDomPlaywrightShellSubstitutes: boolean;
 }): VirtualAppScreenEvidenceClaim[] {
-  const realScreenClaims: VirtualAppScreenEvidenceClaim[] = options.profiles.map((profile) => ({
-    id: `real-virtual-app-screen:${profile.id}`,
-    kind: options.evidenceMode === 'real-virtual-app-screen'
-      ? 'real-virtual-app-screen'
-      : 'target-bound-fixture',
-    status: options.evidenceMode === 'real-virtual-app-screen' ? 'present' : 'diagnostic-only',
-    refs: [
-      profile.targetAppRef,
-      profile.targetWindowRef,
-      profile.sessionRef,
-      ...profile.screenFrameRefs,
-      ...profile.inputIntentRefs,
-      ...profile.executorEventRefs,
-      ...profile.beforeAfterFrameRefs,
-    ],
-    sessionRefs: [profile.sessionRef],
-    userAcceptanceEligible: options.evidenceMode === 'real-virtual-app-screen'
-      && profile.blockedPolicy.userLevelEligible,
-    completionEvidence: false,
-    note: options.evidenceMode === 'real-virtual-app-screen'
-      ? 'Current-run VirtualAppScreen screen refs are present.'
-      : 'Diagnostic fixture profile coverage only; not live user acceptance evidence.',
-  }));
+  const realScreenClaims: VirtualAppScreenEvidenceClaim[] = options.profiles.map((profile) => {
+    const hasRealProviderEvidence = options.evidenceMode === 'real-virtual-app-screen'
+      && profile.providerReadiness.status === 'ready'
+      && profile.providerReadiness.realProviderEvidenceRef !== null;
+    return {
+      id: `real-virtual-app-screen:${profile.id}`,
+      kind: hasRealProviderEvidence ? 'real-virtual-app-screen' : 'target-bound-fixture',
+      status: hasRealProviderEvidence ? 'present' : 'diagnostic-only',
+      refs: [
+        profile.targetAppRef,
+        profile.targetWindowRef,
+        profile.sessionRef,
+        profile.screenRef,
+        profile.providerReadiness.ref,
+        profile.controlEvidence.liveSurfaceRef,
+        profile.controlEvidence.inputLeaseRef,
+        ...profile.screenFrameRefs,
+        ...profile.inputIntentRefs,
+        ...profile.executorEventRefs,
+        ...profile.beforeAfterFrameRefs,
+      ],
+      sessionRefs: [profile.sessionRef],
+      userAcceptanceEligible: hasRealProviderEvidence && profile.blockedPolicy.userLevelEligible,
+      completionEvidence: false,
+      note: hasRealProviderEvidence
+        ? 'Current-run native VirtualDisplayProvider evidence is present.'
+        : 'Diagnostic app-profile contract only; real native VirtualDisplayProvider evidence is required before user acceptance.',
+    };
+  });
   const artifactClaims: VirtualAppScreenEvidenceClaim[] = options.artifactChains.flatMap((chain) => ([
     {
       id: `verifier:${chain.kind}`,
@@ -825,7 +1043,11 @@ function buildManifestInput(options: {
     metadata: {
       workflowSchemaVersion: VIRTUAL_APP_SCREEN_RESEARCH_WORKFLOW_SCHEMA_VERSION,
       schedulingStrategy: options.schedulingPlan.strategy,
-      diagnosticFixture: options.evidenceMode === 'fixture-diagnostic',
+      diagnosticFixture: options.evidenceMode === 'fixture-diagnostic'
+        || options.profiles.some((profile) => profile.providerReadiness.status !== 'ready'),
+      diagnosticOnlyUntilProviderEvidence: options.profiles.some((profile) => (
+        profile.providerReadiness.realProviderEvidenceRef === null
+      )),
       requiredProfiles: REQUIRED_RESEARCH_SCREEN_PROFILE_IDS,
       requiredArtifactKinds: REQUIRED_RESEARCH_ARTIFACT_KINDS,
     },
@@ -858,8 +1080,37 @@ function validateProfileRefs(profiles: VirtualAppScreenResearchProfile[]): strin
     if (!profile.adapterReadiness.schemaRefs.length) {
       issues.push(`${profile.id} adapter readiness missing schema refs.`);
     }
-    if (profile.adapterReadiness.blockedReason && profile.blockedPolicy.status !== 'requires-handoff') {
-      issues.push(`${profile.id} adapter readiness has blockedReason without requires-handoff policy.`);
+    if (profile.adapterReadiness.blockedReason && !['diagnostic-only', 'requires-handoff', 'blocked'].includes(profile.blockedPolicy.status)) {
+      issues.push(`${profile.id} adapter readiness has blockedReason without fail-closed policy.`);
+    }
+    if (!profile.appIdentity.screenRef || profile.appIdentity.screenRef !== profile.screenRef) {
+      issues.push(`${profile.id} app identity must bind to its VirtualAppScreen ref.`);
+    }
+    if (!profile.providerReadiness.diagnosticOnlyUntilRealProviderEvidence) {
+      issues.push(`${profile.id} provider readiness must remain diagnostic-only until real provider evidence exists.`);
+    }
+    if (profile.providerReadiness.realProviderEvidenceRef === null && profile.providerReadiness.status === 'ready') {
+      issues.push(`${profile.id} provider readiness cannot be ready without real provider evidence.`);
+    }
+    if (!profile.controlEvidence.liveSurfaceRef || !profile.controlEvidence.inputLeaseRef) {
+      issues.push(`${profile.id} missing live surface or input lease refs.`);
+    }
+    if (!profile.controlEvidence.userHandoffPath.handoffRef || !profile.controlEvidence.userHandoffPath.recheckRef) {
+      issues.push(`${profile.id} missing user handoff path refs.`);
+    }
+    if (!profile.allowedActions.length || profile.allowedActions.some((action) => (
+      action.requiresInputLease !== true || action.requiresBeforeAfter !== true || action.allowedWhenDiagnosticOnly !== false
+    ))) {
+      issues.push(`${profile.id} allowed actions must require lease and before/after evidence, and stay disabled in diagnostic-only mode.`);
+    }
+    if (!profile.artifactContract.verifierRequired || !profile.artifactContract.guiPresentRequired || !profile.artifactContract.rejectsShellOnly) {
+      issues.push(`${profile.id} artifact contract must require verifier, gui.present, and shell-only rejection.`);
+    }
+    if (profile.closeReusePolicy.safeToCloseUserOwnedWindow !== false || !profile.closeReusePolicy.stopPathRef) {
+      issues.push(`${profile.id} close/reuse policy must avoid user-owned window closure and expose a stop path.`);
+    }
+    if (!profile.collaboration.oneAppPerVirtualAppScreen || profile.collaboration.virtualAppScreenRef !== profile.screenRef) {
+      issues.push(`${profile.id} collaboration contract must declare one app per VirtualAppScreen.`);
     }
   }
   return issues;
@@ -951,6 +1202,114 @@ function artifactFileName(kind: VirtualAppScreenResearchArtifactKind): string {
   }
 }
 
+function launchTargetsFor(profileId: VirtualAppScreenResearchProfileId): string[] {
+  switch (profileId) {
+    case 'browser-research':
+      return ['Safari', 'Google Chrome', 'Chromium'];
+    case 'terminal-experiment':
+      return ['Terminal.app', 'iTerm2', 'GNOME Terminal', 'Windows Terminal'];
+    case 'jupyter-notebook':
+      return ['JupyterLab', 'Jupyter Notebook', 'VSCode Notebook'];
+    case 'editor-cursor':
+      return ['Visual Studio Code', 'Cursor'];
+    case 'pdf-zotero-preview':
+      return ['Preview.app', 'Zotero', 'Adobe Acrobat Reader'];
+    case 'csv-table-viewer':
+      return ['Numbers', 'LibreOffice Calc', 'TablePlus', 'CSV viewer'];
+  }
+}
+
+function allowedActionFor(action: string): VirtualAppScreenResearchAllowedAction {
+  return {
+    id: action,
+    inputIntentKind: inputIntentKindFor(action),
+    risk: actionRiskFor(action),
+    requiresInputLease: true,
+    requiresBeforeAfter: true,
+    allowedWhenDiagnosticOnly: false,
+  };
+}
+
+function inputIntentKindFor(action: string): VirtualAppScreenResearchAllowedAction['inputIntentKind'] {
+  if (['type', 'run-command', 'open-file', 'open-document', 'open-table', 'navigate', 'save', 'search'].includes(action)) {
+    return 'text';
+  }
+  if (['hotkey', 'interrupt', 'run-cell', 'insert-cell', 'capture-output', 'export-selection', 'extract-selection', 'diff'].includes(action)) {
+    return 'keyboard';
+  }
+  if (action === 'scroll') {
+    return 'scroll';
+  }
+  if (['sort', 'filter'].includes(action)) {
+    return 'app-command';
+  }
+  return 'pointer';
+}
+
+function actionRiskFor(action: string): VirtualAppScreenResearchActionRisk {
+  if (['run-command', 'interrupt', 'save', 'export-selection'].includes(action)) {
+    return 'medium';
+  }
+  return 'low';
+}
+
+function riskPolicyFor(profileId: VirtualAppScreenResearchProfileId): VirtualAppScreenResearchRiskPolicy {
+  const shared = {
+    credentialPolicy: 'never-enter-secrets' as const,
+    dataVisibility: 'current-workspace-and-user-approved-sources' as const,
+  };
+  switch (profileId) {
+    case 'terminal-experiment':
+      return {
+        ...shared,
+        defaultRisk: 'medium',
+        confirmationRequiredFor: ['package install', 'network command', 'process kill', 'write outside workspace'],
+        prohibitedActions: ['sudo', 'credential entry', 'destructive filesystem command', 'background daemon install'],
+        networkPolicy: 'task-scoped-only',
+      };
+    case 'browser-research':
+      return {
+        ...shared,
+        defaultRisk: 'low',
+        confirmationRequiredFor: ['download file', 'submit form', 'authenticate', 'external upload'],
+        prohibitedActions: ['enter password', 'send message', 'purchase', 'change account settings'],
+        networkPolicy: 'task-scoped-only',
+      };
+    case 'pdf-zotero-preview':
+      return {
+        ...shared,
+        defaultRisk: 'low',
+        confirmationRequiredFor: ['modify library metadata', 'sync reference library', 'export bibliography'],
+        prohibitedActions: ['delete reference', 'share document', 'overwrite original PDF'],
+        networkPolicy: 'document-local-only',
+      };
+    case 'jupyter-notebook':
+      return {
+        ...shared,
+        defaultRisk: 'medium',
+        confirmationRequiredFor: ['run untrusted cell', 'install package', 'open network resource'],
+        prohibitedActions: ['credential entry', 'kernel command outside workspace', 'delete notebook output source'],
+        networkPolicy: 'task-scoped-only',
+      };
+    case 'csv-table-viewer':
+      return {
+        ...shared,
+        defaultRisk: 'low',
+        confirmationRequiredFor: ['overwrite source table', 'export outside workspace'],
+        prohibitedActions: ['delete source table', 'send external share'],
+        networkPolicy: 'local-only',
+      };
+    case 'editor-cursor':
+      return {
+        ...shared,
+        defaultRisk: 'low',
+        confirmationRequiredFor: ['save outside workspace', 'run integrated terminal command', 'install extension'],
+        prohibitedActions: ['credential entry', 'delete project files', 'change global editor settings'],
+        networkPolicy: 'task-scoped-only',
+      };
+  }
+}
+
 function isolationFlagsFor(
   nonIsolated: boolean,
   evidenceMode: VirtualAppScreenResearchEvidenceMode,
@@ -972,7 +1331,10 @@ function aggregateIsolationFlagsFor(
   evidenceMode: VirtualAppScreenResearchEvidenceMode,
 ): Required<VirtualAppScreenIsolationFlags> {
   const nonIsolated = profiles.some((profile) => profile.blockedPolicy.status === 'requires-handoff');
-  return isolationFlagsFor(nonIsolated, evidenceMode);
+  const flags = isolationFlagsFor(nonIsolated, evidenceMode);
+  flags.diagnosticOnly = flags.diagnosticOnly
+    || profiles.some((profile) => profile.providerReadiness.status !== 'ready');
+  return flags;
 }
 
 function rejectedSubstituteClaimKinds(

@@ -231,6 +231,39 @@ test('CU-NEXT product smoke matrix accepts VirtualAppScreen user-level manifest 
 
   assert.equal(missingBlockedReason.ok, false);
   assert.ok(productSmokeIssue(missingBlockedReason, 'invalid-virtual-app-screen-user-acceptance-manifest'));
+
+  const missingLedgerActionsManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
+  delete missingLedgerActionsManifest.evidenceLedgerActions;
+  const missingLedgerActions = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [manifestRef]: missingLedgerActionsManifest,
+    },
+  });
+
+  assert.equal(missingLedgerActions.ok, false);
+  assert.ok(productSmokeIssue(missingLedgerActions, 'invalid-virtual-app-screen-evidence-ledger'));
+
+  const crossBundleLedgerManifest = virtualAppScreenUserAcceptanceManifest('CU-NEXT-07');
+  (crossBundleLedgerManifest.evidenceLedgerActions as Array<Record<string, unknown>>)[0].inputIntentRef =
+    ref('CU-NEXT-04', 'input-intents/highlight-title.json');
+  const crossBundleLedger = validateCuNextProductSmokeMatrix(buildCuNextProductSmokeMatrix({
+    cases: [
+      liveCase,
+      ...buildCuNextProductSmokeMatrix().cases.filter((item) => item.id !== liveCase.id),
+    ],
+  }), {
+    refRecords: {
+      [manifestRef]: crossBundleLedgerManifest,
+    },
+  });
+
+  assert.equal(crossBundleLedger.ok, false);
+  assert.ok(productSmokeIssue(crossBundleLedger, 'product-smoke-ref-outside-current-bundle'));
 });
 
 test('CU-NEXT product smoke matrix keeps M6 as historical native multi-screen regression', () => {
@@ -1238,6 +1271,70 @@ test('CU-NEXT live acceptance fail-closes without user control, observe-before-m
   assert.ok(hasIssue(result, 'invalid-product-path-classification'));
 });
 
+test('CU-NEXT live acceptance requires each action to trace InputIntent through adapter executor frames verifier and artifact', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  const action = (evidence.mutatingActions as Array<Record<string, unknown>>)[0];
+  delete action.inputIntentRef;
+  delete action.providerAdapterRef;
+  delete action.artifactRefs;
+  delete evidence.finalArtifactRef;
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-evidence-ledger-trace'));
+  assert.match(result.issues.map((issue) => issue.reason).join('\n'), /InputIntent|providerAdapterRef|artifact refs/i);
+});
+
+test('CU-NEXT live acceptance requires gui.present to prove the current session is presentable', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07');
+  evidence.guiPresent = {
+    status: 'present',
+    recordRef: ref('CU-NEXT-07', 'gui-present.json'),
+    payloadRef: ref('CU-NEXT-07', 'gui-present-payload.json'),
+    displayedRefs: [ref('CU-NEXT-07', finalArtifactName('CU-NEXT-07'))],
+    sessionRefs: [ref('CU-NEXT-04', 'computer-use-session.json')],
+  };
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'missing-gui-present-current-session'));
+});
+
+test('CU-NEXT live acceptance rejects shell-only stale fixture-pass artifacts and cross-bundle action refs', () => {
+  const evidence = liveAcceptanceEvidence('CU-NEXT-07', {
+    artifactValidation: {
+      shellOnly: true,
+      staleFile: true,
+      fixturePass: true,
+    },
+  });
+  const action = (evidence.mutatingActions as Array<Record<string, unknown>>)[0];
+  action.inputIntentRef = ref('CU-NEXT-04', 'input-intent-click.json');
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+    refRecords: denseGroundingRefRecords('CU-NEXT-07'),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.disqualifiersClean, false);
+  assert.ok(hasIssue(result, 'forbidden-shell-stale-fixture-artifact'));
+  assert.ok(hasIssue(result, 'forbidden-cross-bundle-ref'));
+});
+
 test('CU-NEXT live acceptance rejects global coordinates placeholder-only viewer stale and cross-bundle evidence', () => {
   const evidence = liveAcceptanceEvidence('CU-NEXT-07');
   evidence.staleEvidenceUsed = true;
@@ -1863,6 +1960,8 @@ function liveAcceptanceEvidence(
         },
         beforeEvidenceRefs: [ref(taskId, 'before.png')],
         afterEvidenceRefs: [ref(taskId, 'after.png')],
+        inputIntentRef: ref(taskId, 'input-intent-click.json'),
+        providerAdapterRef: ref(taskId, 'sidecar-executor-adapter.json'),
         currentAppStateRef: ref(taskId, 'current-app-state.json'),
         currentScreenshotRef: ref(taskId, 'before.png'),
         stateSnapshotRef: ref(taskId, 'state-snapshot.json'),
@@ -1870,6 +1969,7 @@ function liveAcceptanceEvidence(
         groundingRefs: [ref(taskId, 'grounding-diagnostics.json'), ref(taskId, 'browser-grounding-hints.json')],
         executorEventRef: ref(taskId, 'executor-event.json'),
         verificationRefs: [ref(taskId, 'verifier-verdict.json')],
+        artifactRefs: [finalArtifactRef],
       },
     ],
     replayBundle: {
@@ -1921,7 +2021,7 @@ function liveAcceptanceEvidence(
       status: 'present',
       recordRef: ref(taskId, 'gui-present.json'),
       payloadRef: ref(taskId, 'gui-present-payload.json'),
-      displayedRefs: [finalArtifactRef],
+      displayedRefs: [finalArtifactRef, ref(taskId, 'after.png'), ref(taskId, 'replay-bundle.json')],
       sessionRefs: [sessionRef(taskId)],
     },
     evidenceClaims: commonEvidenceClaims(taskId),
@@ -2359,6 +2459,19 @@ function virtualAppScreenUserAcceptanceManifest(
       refs: [ref(taskId, 'replay.json')],
       evidenceRefs: [ref(taskId, 'before-after/highlight-title.json')],
       sessionRefs: [`computer-use-session:${id}-virtual-app-screen`],
+    }],
+    evidenceLedgerActions: [{
+      actionId: `${id}-highlight-title`,
+      sessionRef: `computer-use-session:${id}-virtual-app-screen`,
+      inputIntentRef: ref(taskId, 'input-intents/highlight-title.json'),
+      providerAdapterRef: ref(taskId, 'adapter-readiness.json'),
+      executorEventRef: ref(taskId, 'executor-events/highlight-title.json'),
+      beforeFrameRef: ref(taskId, 'frames/before.png'),
+      afterFrameRef: ref(taskId, 'frames/after.png'),
+      beforeAfterFrameRef: ref(taskId, 'before-after/highlight-title.json'),
+      verifierRef: ref(taskId, 'verifier/research-note.json'),
+      artifactRef: ref(taskId, 'artifacts/research-note.md'),
+      guiPresentRef: ref(taskId, 'gui-present/research-note.json'),
     }],
     diagnosticOnly: false,
     userAcceptanceEligible: true,

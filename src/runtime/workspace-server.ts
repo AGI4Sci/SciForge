@@ -113,7 +113,7 @@ import {
   parseJsonEnv,
   stringValue,
 } from './workspace-server-local-config.js';
-import { CODEX_RUNTIME_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
+import { CODEX_RUNTIME_STREAM_PATH as CODEX_RUNTIME_SERVER_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
 import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
@@ -128,6 +128,10 @@ import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js
 const INSTANCE_ID = process.env.SCIFORGE_INSTANCE_ID || process.env.SCIFORGE_INSTANCE || 'default';
 const INSTANCE_ROLE = process.env.SCIFORGE_INSTANCE_ROLE || INSTANCE_ID;
 const DEFAULT_PARALLEL_INSTANCE_ID = normalizeParallelInstanceId(INSTANCE_ID);
+const CODEX_RUNTIME_STREAM_PATH = '/api/sciforge/runtime/codex/stream' as const;
+if (CODEX_RUNTIME_STREAM_PATH !== CODEX_RUNTIME_SERVER_STREAM_PATH) {
+  throw new Error('Workspace server Runtime Codex stream route drifted from codex runtime server route.');
+}
 const DEFAULT_PARALLEL_PROFILE = parallelProfile(DEFAULT_PARALLEL_INSTANCE_ID);
 const PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || DEFAULT_PARALLEL_PROFILE.workspacePort);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || DEFAULT_PARALLEL_PROFILE.uiPort);

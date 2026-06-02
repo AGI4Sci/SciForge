@@ -118,6 +118,7 @@ test('BrowserHostSession WebRTC data-channel loopback validates refs-first trans
 
   let browser: Browser | undefined;
   let browserVersion = 'unknown';
+  let blockedEvidenceWritten = false;
   try {
     browser = await chromium.launch({
       executablePath: browserExecutable,
@@ -139,6 +140,7 @@ test('BrowserHostSession WebRTC data-channel loopback validates refs-first trans
 
     if (result.status !== 'passed') {
       await writeBlockedEvidence(browserExecutable, browserVersion, result, result.reason ?? 'WebRTC data-channel loopback did not complete.');
+      blockedEvidenceWritten = true;
       throw new Error(`WebRTC loopback blocked: ${result.reason ?? 'unknown reason'}`);
     }
 
@@ -202,7 +204,7 @@ test('BrowserHostSession WebRTC data-channel loopback validates refs-first trans
     await writeEvidence(evidence);
     assertNoRawPayloads(JSON.stringify(evidence));
   } catch (error) {
-    if (browser) {
+    if (browser && !blockedEvidenceWritten) {
       const result = blockedLoopbackResult(error);
       await writeBlockedEvidence(browserExecutable, browserVersion, result, result.reason ?? 'Chromium WebRTC loopback failed.');
     }

@@ -67,9 +67,19 @@ export interface RightPaneBrowserLoadingProgressLifecycle {
   requestedUrl?: string;
   currentUrl?: string;
   finalUrl?: string;
+  urlDigests?: {
+    requested?: RightPaneBrowserBoundedUrlDigest;
+    current?: RightPaneBrowserBoundedUrlDigest;
+    final?: RightPaneBrowserBoundedUrlDigest;
+  };
   canRetry?: boolean;
   blocked?: boolean;
   requiresHandoff?: boolean;
+}
+
+export interface RightPaneBrowserBoundedUrlDigest {
+  length: number;
+  hash: string;
 }
 
 export interface RightPaneBrowserHostLoadingProgressRecord {
@@ -93,9 +103,20 @@ export interface RightPaneBrowserHostLoadingProgressRecord {
     networkLog?: string;
     searchResult?: string;
   };
+  urls?: {
+    requested?: RightPaneBrowserHostUrlDigestRecord;
+    current?: RightPaneBrowserHostUrlDigestRecord;
+    final?: RightPaneBrowserHostUrlDigestRecord;
+  };
   canRetry?: boolean;
   blocked?: boolean;
   requiresHandoff?: boolean;
+}
+
+export interface RightPaneBrowserHostUrlDigestRecord {
+  length?: number;
+  sha1?: string;
+  hash?: string;
 }
 
 export interface RightPaneBrowserLoadingProgressInput {
@@ -146,7 +167,7 @@ export interface RightPaneBrowserHostSessionState {
   canGoBack?: boolean;
   canGoForward?: boolean;
   liveSurfaceRef?: string;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
   singleInteractiveTruth?: true;
   frameStreamRef?: string;
   frameRef?: string;
@@ -487,6 +508,11 @@ function buildRightPaneBrowserLoadingProgressLifecycle(
   const surface = RIGHT_PANE_BROWSER_LOADING_PROGRESS_SURFACE_BY_STATE[state];
   const hostSession = recordValue(input.hostSession);
   const hostState = recordValue(input.hostState);
+  const requestedUrl = normalizedOptionalRightPaneBrowserUrl(hostSession?.requestedUrl ?? input.targetUrl);
+  const currentUrl = normalizedOptionalRightPaneBrowserUrl(hostSession?.url ?? hostState?.url);
+  const finalUrl = normalizedOptionalRightPaneBrowserUrl(hostSession?.finalUrl ?? hostState?.finalUrl);
+  const hostUrlDigests = rightPaneBrowserHostLoadingProgressUrlDigests(hostSession)
+    ?? rightPaneBrowserHostLoadingProgressUrlDigests(hostState);
   return {
     schemaVersion: RIGHT_PANE_BROWSER_LOADING_PROGRESS_LIFECYCLE_SCHEMA,
     state,
@@ -494,13 +520,64 @@ function buildRightPaneBrowserLoadingProgressLifecycle(
     source,
     status: surface.status,
     tabStatus: surface.tabStatus,
-    requestedUrl: normalizedOptionalRightPaneBrowserUrl(hostSession?.requestedUrl ?? input.targetUrl),
-    currentUrl: normalizedOptionalRightPaneBrowserUrl(hostSession?.url ?? hostState?.url),
-    finalUrl: normalizedOptionalRightPaneBrowserUrl(hostSession?.finalUrl ?? hostState?.finalUrl),
+    requestedUrl,
+    currentUrl,
+    finalUrl,
+    urlDigests: rightPaneBrowserLoadingProgressUrlDigests({ requestedUrl, currentUrl, finalUrl }, hostUrlDigests),
     canRetry: state === 'retry' || booleanField(hostSession?.retryable) || booleanField(hostState?.retryable) || undefined,
     blocked: state === 'blocked' ? true : undefined,
     requiresHandoff: state === 'handoff' ? true : undefined,
   };
+}
+
+function rightPaneBrowserLoadingProgressUrlDigests(input: {
+  requestedUrl?: string;
+  currentUrl?: string;
+  finalUrl?: string;
+}, hostDigests?: RightPaneBrowserLoadingProgressLifecycle['urlDigests']): RightPaneBrowserLoadingProgressLifecycle['urlDigests'] {
+  const requested = boundedUrlDigest(input.requestedUrl) ?? hostDigests?.requested;
+  const current = boundedUrlDigest(input.currentUrl) ?? hostDigests?.current;
+  const final = boundedUrlDigest(input.finalUrl) ?? hostDigests?.final;
+  return requested || current || final ? { requested, current, final } : undefined;
+}
+
+function rightPaneBrowserHostLoadingProgressUrlDigests(record: Record<string, unknown> | undefined): RightPaneBrowserLoadingProgressLifecycle['urlDigests'] {
+  const progress = recordValue(record?.loadingProgress);
+  const urls = recordValue(progress?.urls);
+  if (!urls) return undefined;
+  const requested = boundedHostUrlDigest(urls.requested);
+  const current = boundedHostUrlDigest(urls.current);
+  const final = boundedHostUrlDigest(urls.final);
+  return requested || current || final ? { requested, current, final } : undefined;
+}
+
+function boundedHostUrlDigest(value: unknown): RightPaneBrowserBoundedUrlDigest | undefined {
+  const record = recordValue(value);
+  if (!record) return undefined;
+  const length = typeof record.length === 'number' && Number.isFinite(record.length) ? Math.max(0, Math.round(record.length)) : undefined;
+  const hashSource = typeof record.hash === 'string' && /^[a-f0-9]{8}$/i.test(record.hash.trim())
+    ? record.hash.trim()
+    : typeof record.sha1 === 'string' && /^[a-f0-9]{40}$/i.test(record.sha1.trim())
+      ? record.sha1.trim().slice(0, 8)
+      : undefined;
+  return length !== undefined && hashSource ? { length, hash: hashSource.toLowerCase() } : undefined;
+}
+
+function boundedUrlDigest(value: string | undefined): RightPaneBrowserBoundedUrlDigest | undefined {
+  if (!value) return undefined;
+  return {
+    length: value.length,
+    hash: stableBoundedHash(value),
+  };
+}
+
+function stableBoundedHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 function hostNavigationAppearsCommitted(input: RightPaneBrowserLoadingProgressInput) {
@@ -544,6 +621,8 @@ function rightPaneBrowserLoadingProgressIsExplicit(lifecycle: RightPaneBrowserLo
     || lifecycle.source === 'host-progress'
     || lifecycle.source === 'host-navigation'
     || lifecycle.source === 'host-action-timing'
+    || lifecycle.source === 'host-error'
+    || lifecycle.state === 'blocked'
     || lifecycle.state === 'retry'
     || lifecycle.state === 'handoff';
 }
@@ -630,7 +709,7 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
     const hostTargetKnown = Boolean(requestedUrl || hostUrl);
     const hostReadyForTarget = stateMatchesUrl
       || (!hostTargetKnown && (options.hostSession?.status === 'ready' || options.hostState?.ok === true));
-    const hostDiagnostic = options.hostSession?.reason ?? options.hostSession?.diagnostics?.join('\n') ?? options.hostState?.reason;
+    const hostDiagnostic = options.hostError ?? options.hostSession?.reason ?? options.hostSession?.diagnostics?.join('\n') ?? options.hostState?.reason;
     const loadingProgress = rightPaneBrowserLoadingProgressLifecycle({
       targetUrl: url,
       hostBusy: options.hostBusy,
@@ -641,9 +720,10 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
     const lifecycleDrivenStatus = loadingProgress && rightPaneBrowserLoadingProgressIsExplicit(loadingProgress)
       ? loadingProgress.status
       : undefined;
-    const status: RightPaneBrowserProjectionStatus = hostFailed
+    const status: RightPaneBrowserProjectionStatus = lifecycleDrivenStatus
+      ?? (hostFailed
       ? 'error'
-      : lifecycleDrivenStatus
+      : undefined)
         ?? (options.hostBusy || options.hostSession?.status === 'starting' || options.hostSession?.status === 'loading'
         ? 'loading'
         : hostReadyForTarget

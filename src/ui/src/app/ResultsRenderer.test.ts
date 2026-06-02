@@ -375,9 +375,12 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(screenHtml, /data-testid="right-pane-virtual-screen-tool"/);
   assert.match(screenHtml, /data-component-id="virtual-screen-viewer"/);
   assert.match(screenHtml, /data-render-boundary="presentation-only"/);
-  assert.match(screenHtml, /data-status="empty"/);
-  assert.match(screenHtml, /VirtualAppScreen attach state: no-session/);
-  assert.doesNotMatch(screenHtml, /computer-use:screen\/right-pane\/blocked\/no-current-frame|computer-use:session\/right-pane|providerRoute|executorLease|desktopBridge/);
+  assert.match(screenHtml, /data-status="blocked"/);
+  assert.match(screenHtml, /data-attach-state="blocked"/);
+  assert.match(screenHtml, /computer-use:screen-activation\/session-empty\/attach-request\.json/);
+  assert.match(screenHtml, /computer-use:screen-activation\/session-empty\/provider-readiness\.json/);
+  assert.match(screenHtml, /gui\.present:session-empty\/screen-pane-activation/);
+  assert.doesNotMatch(screenHtml, /VirtualAppScreen attach state: no-session|providerRoute|executorLease|desktopBridge/);
   assert.match(terminalHtml, /data-testid="right-pane-terminal-tool"/);
   assert.match(terminalHtml, /data-component-id="terminal-session-viewer"/);
   assert.match(terminalHtml, /data-render-boundary="presentation-only"/);
@@ -522,7 +525,9 @@ test('ResultsRenderer screen pane renders active Computer Use frame source and r
   assert.match(html, /computer-use:session\/run-screen\/evidence\/index\.json/);
   assert.match(html, /data-attach-state="blocked"/);
   assert.match(html, /VirtualAppScreen blocked/);
-  assert.match(html, /\/computer-use stop --session-ref &quot;computer-use:stop\/run-screen&quot;/);
+  assert.match(html, /data-control-kind="stop-session" data-control-enabled="false" disabled=""/);
+  assert.match(html, /\/computer-use permission-handoff --target-ref &quot;computer-use:session\/run-screen\/blocked\/permission\.json&quot;/);
+  assert.match(html, /\/computer-use permission-recheck --target-ref &quot;computer-use:session\/run-screen\/sidecar\/capabilities\.json&quot;/);
   assert.doesNotMatch(html, /RAW_SCREENSHOT_SHOULD_NOT_RENDER|data:image|providerRoute|desktopBridge/);
 });
 
@@ -794,8 +799,11 @@ test('ResultsRenderer screen tab does not reuse old session screen when active r
   const html = renderResultsRenderer(session, { activeRunId: 'run-current-no-screen', initialResultTab: 'screen' });
 
   assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
-  assert.match(html, /data-status="empty"/);
-  assert.match(html, /VirtualAppScreen attach state: no-session/);
+  assert.match(html, /data-status="blocked"/);
+  assert.match(html, /data-attach-state="blocked"/);
+  assert.match(html, /computer-use:screen-activation\/run-current-no-screen\/attach-request\.json/);
+  assert.match(html, /computer-use:screen-activation\/run-current-no-screen\/provider-readiness\.json/);
+  assert.match(html, /gui\.present:run-current-no-screen\/screen-pane-activation/);
   assert.doesNotMatch(html, /run-old-screen|old-screen|latest\.png|computer-use:replay\/run-old-screen/);
 });
 

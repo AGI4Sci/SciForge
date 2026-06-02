@@ -339,7 +339,14 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
     const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
     const state = viewer?.getAttribute('data-browser-state');
     const url = viewer?.querySelector('header p')?.textContent ?? '';
-    return state === 'ready' && new RegExp(source, flags).test(url);
+    const hostFrame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
+    const liveSurfaceRef = hostFrame?.getAttribute('data-browser-live-surface-ref') ?? '';
+    const frameStreamRef = hostFrame?.getAttribute('data-browser-frame-stream-ref') ?? '';
+    const keyboardPath = hostFrame?.getAttribute('data-browser-host-keyboard-path') ?? '';
+    const hostSurfaceReady = liveSurfaceRef.startsWith('browser-host-session:')
+      && frameStreamRef.startsWith('browser-host-session:')
+      && keyboardPath === 'hidden-input';
+    return (state === 'ready' || state === 'loading' && hostSurfaceReady) && new RegExp(source, flags).test(url);
   }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
 }
 

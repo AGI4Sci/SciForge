@@ -682,6 +682,12 @@ export interface RuntimeCodexBrowserAcceptanceManifest {
   observedAt?: string;
   actualUrl?: string;
   actualPort?: number;
+  requestedRolePort?: number;
+  actualWorkspaceWriterPort?: number;
+  actualWorkspaceWriterUrl?: string;
+  actualRuntimeCodexPort?: number;
+  actualRuntimeCodexUrl?: string;
+  profile?: string;
   workspacePath?: string;
   provider?: string;
   model?: string;

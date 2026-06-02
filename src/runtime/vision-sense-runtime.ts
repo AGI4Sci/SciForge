@@ -13,11 +13,25 @@ import { runComputerUsePackageBridge } from './computer-use/package-bridge.js';
 import { sanitizeId } from './computer-use/utils.js';
 import type { ComputerUseConfig, WindowTarget } from './computer-use/types.js';
 import {
-  applyVirtualScreenInputIntentCommandToConfig,
   parseVirtualScreenInputIntentCommand,
   virtualScreenInputIntentTraceDetail,
 } from './computer-use/input-intent-command.js';
-import { genericBridgeBlockedPayload } from './vision-sense/computer-use-trace-output.js';
+import { runVirtualAppScreenInputRuntime } from './computer-use/virtual-app-screen-input-runtime.js';
+import {
+  parseVirtualAppScreenRuntimeCommand,
+  virtualAppScreenRuntimeCommandBlockedReason,
+  virtualAppScreenRuntimeCommandRoute,
+  virtualAppScreenRuntimeCommandRunId,
+  virtualAppScreenRuntimeCommandTraceDetail,
+  type VirtualAppScreenRuntimeCommand,
+} from './computer-use/virtual-app-screen-command.js';
+import * as virtualAppScreenSessionManager from './computer-use/virtual-app-screen-session-manager.js';
+import type { VirtualAppScreenSessionManagerAttachResult } from './computer-use/virtual-app-screen-session-manager.js';
+import { ensureVirtualAppScreenRuntimeExecutorsRegistered } from './computer-use/virtual-app-screen-runtime-executors.js';
+import {
+  genericBridgeBlockedPayload,
+  virtualAppScreenRuntimePayload,
+} from './vision-sense/computer-use-trace-output.js';
 import { isRecord, toStringList, uniqueStrings } from './gateway-utils.js';
 
 export async function tryRunVisionSenseRuntime(
@@ -30,6 +44,7 @@ export async function tryRunVisionSenseRuntime(
 
   const workspace = resolve(request.workspacePath || process.cwd());
   const inputIntentCommand = parseVirtualScreenInputIntentCommand(request.prompt);
+  const virtualAppScreenCommand = parseVirtualAppScreenRuntimeCommand(request.prompt);
   if (inputIntentCommand.kind === 'invalid') {
     return genericBridgeBlockedPayload(
       request,
@@ -43,12 +58,22 @@ export async function tryRunVisionSenseRuntime(
       },
     );
   }
+  if (virtualAppScreenCommand.kind === 'invalid') {
+    return genericBridgeBlockedPayload(
+      request,
+      workspace,
+      virtualAppScreenCommand.reason,
+      {
+        selectedRuntime: VISION_SENSE_RUNTIME_ID,
+        selectedToolId: VISION_TOOL_ID,
+        route: 'virtual-app-screen-runtime-command',
+        safetyVerifierContract: visionSenseSafetyVerifierContract,
+      },
+    );
+  }
 
   const config = await loadVisionSenseConfig(workspace, request);
   rebindWindowTargetForPromptAppAlias(config, request.prompt);
-  if (inputIntentCommand.kind === 'parsed') {
-    applyVirtualScreenInputIntentCommandToConfig(config, inputIntentCommand.command);
-  }
   const computerUseRequest = gatewayRequestToComputerUseRequest(request, config, workspace);
   const hostPorts = computerUseHostPortsContract(config);
   emitWorkspaceRuntimeEvent(callbacks, {
@@ -68,8 +93,119 @@ export async function tryRunVisionSenseRuntime(
       virtualScreenInputIntent: inputIntentCommand.kind === 'parsed'
         ? virtualScreenInputIntentTraceDetail(inputIntentCommand.command)
         : undefined,
+      virtualAppScreenRuntimeCommand: virtualAppScreenCommand.kind === 'parsed'
+        ? virtualAppScreenRuntimeCommandTraceDetail(virtualAppScreenCommand.command)
+        : undefined,
     }),
   });
+
+  if (inputIntentCommand.kind === 'parsed') {
+    const inputRuntime = await runVirtualAppScreenInputRuntime(inputIntentCommand.command, { dryRun: config.dryRun });
+    return virtualAppScreenRuntimePayload(
+      request,
+      workspace,
+      {
+        runId: inputRuntime.runId,
+        status: inputRuntime.status === 'executed' ? 'done' : 'failed-with-reason',
+        message: inputRuntime.message,
+        routeDecision: {
+          selectedRuntime: VISION_SENSE_RUNTIME_ID,
+          selectedToolId: VISION_TOOL_ID,
+          desktopBridgeEnabled: config.desktopBridgeEnabled,
+          dryRun: config.dryRun,
+          safetyVerifierContract: visionSenseSafetyVerifierContract,
+          inputRuntimeEvidence: inputRuntime.evidence,
+          ...inputRuntime.routeDecision,
+        },
+        virtualScreen: {
+          artifactId: `computer-use-virtual-screen-${inputRuntime.runId}`,
+          title: 'Computer Use screen',
+          data: inputRuntime.virtualScreenData,
+        },
+      },
+    );
+  }
+
+  if (virtualAppScreenCommand.kind === 'parsed') {
+    const command = virtualAppScreenCommand.command;
+    const reconnectCommand = command.action === 'screen-reconnect';
+    const runtimeExecutorBootstrap = reconnectCommand
+      ? virtualAppScreenReconnectBootstrapSkipped()
+      : ensureVirtualAppScreenRuntimeExecutorsRegistered({
+        nativeDriverHooks: { env: process.env },
+      });
+    const sessionManagerResult = await runVirtualAppScreenSessionManagerCommand(command, { dryRun: config.dryRun });
+    const traceDetail = {
+      ...virtualAppScreenRuntimeCommandTraceDetail(command),
+      providerExecuted: sessionManagerResult.evidence.providerExecuted,
+      failClosed: !virtualAppScreenSessionManagerResultSucceeded(sessionManagerResult),
+    };
+    const blockedReason = [
+      virtualAppScreenRuntimeCommandBlockedReason(command),
+      sessionManagerResult.blockedReason,
+    ].filter(Boolean).join(' ');
+    const sessionManagerSucceeded = virtualAppScreenSessionManagerResultSucceeded(sessionManagerResult);
+    return virtualAppScreenRuntimePayload(
+      request,
+      workspace,
+      {
+        runId: virtualAppScreenRuntimeCommandRunId(command),
+        status: sessionManagerSucceeded ? 'done' : 'failed-with-reason',
+        message: sessionManagerSucceeded
+          ? virtualAppScreenRuntimeSuccessMessage(command)
+          : blockedReason,
+        routeDecision: {
+          selectedRuntime: VISION_SENSE_RUNTIME_ID,
+          selectedToolId: VISION_TOOL_ID,
+          route: virtualAppScreenRuntimeCommandRoute(command),
+          commandKind: command.action,
+          reconnectReason: command.reconnectReason,
+          source: command.source,
+          profile: command.profile,
+          targetAppRef: command.refs.targetAppRef,
+          screenRef: command.refs.screenRef,
+          sessionRef: command.refs.sessionRef,
+          liveSurfaceRef: command.refs.liveSurfaceRef ?? command.refs.surfaceRef,
+          surfaceRef: command.refs.surfaceRef,
+          frameStreamRef: command.refs.frameStreamRef,
+          currentFrameRef: command.refs.currentFrameRef,
+          currentFrameSequence: command.currentFrameSequence,
+          providerSessionOwnerRef: command.refs.providerSessionOwnerRef,
+          providerSessionReconnectRef: command.refs.providerSessionReconnectRef,
+          liveBindingAttachGrantRef: command.refs.liveBindingAttachGrantRef,
+          surfaceTransportRef: command.refs.surfaceTransportRef,
+          activationRef: command.refs.activationRef,
+          targetRef: command.refs.providerSessionReconnectRef ?? command.refs.permissionHandoffRef ?? command.refs.permissionRecheckRef ?? command.refs.activationRef,
+          adapterReadinessRef: command.refs.readinessRef,
+          providerReadinessRef: command.refs.readinessRef,
+          permissionRef: command.refs.permissionRef,
+          recheckRef: command.refs.permissionRecheckRef,
+          platformDriverRef: command.refs.platformDriverRef,
+          evidenceLedgerRef: command.refs.evidenceLedgerRef,
+          guiPresentRef: command.refs.guiPresentRef,
+          desktopBridgeEnabled: config.desktopBridgeEnabled,
+          safetyVerifierContract: visionSenseSafetyVerifierContract,
+          mutatingActionExecuted: sessionManagerResult.evidence.mutatingActionExecuted,
+          providerExecuted: sessionManagerResult.evidence.providerExecuted,
+          sessionManagerStatus: sessionManagerResult.status,
+          sessionManagerExecutorId: sessionManagerResult.executorId,
+          sessionManagerProviderId: sessionManagerResult.providerId,
+          sessionManagerEvidence: sessionManagerResult.evidence,
+          runtimeExecutorBootstrap,
+          terminalEquivalent: true,
+          virtualAppScreenRuntimeCommand: traceDetail,
+        },
+        virtualScreen: {
+          artifactId: `computer-use-virtual-screen-${virtualAppScreenRuntimeCommandRunId(command)}`,
+          title: 'Computer Use screen',
+          data: virtualAppScreenSessionManager.virtualAppScreenSessionManagerResultToVirtualScreenData(
+            command,
+            normalizeVirtualAppScreenSessionManagerResultForScreenData(sessionManagerResult),
+          ),
+        },
+      },
+    );
+  }
 
   const silentBackgroundGuard = silentBackgroundVirtualAppScreenGuard(request, config);
   if (silentBackgroundGuard.required && !silentBackgroundGuard.ready) {
@@ -120,6 +256,72 @@ export async function tryRunVisionSenseRuntime(
   }
 
   return runComputerUsePackageBridge(request, workspace, config, callbacks);
+}
+
+type VirtualAppScreenSessionManagerRuntimeResult =
+  Omit<VirtualAppScreenSessionManagerAttachResult, 'status'>
+  & { status: VirtualAppScreenSessionManagerAttachResult['status'] | 'reconnected' };
+
+type VirtualAppScreenSessionManagerReconnectModule =
+  typeof virtualAppScreenSessionManager
+  & {
+    reconnectVirtualAppScreenSession?: (
+      command: VirtualAppScreenRuntimeCommand,
+      options?: { dryRun?: boolean },
+    ) => Promise<VirtualAppScreenSessionManagerRuntimeResult> | VirtualAppScreenSessionManagerRuntimeResult;
+  };
+
+async function runVirtualAppScreenSessionManagerCommand(
+  command: VirtualAppScreenRuntimeCommand,
+  options: { dryRun?: boolean },
+): Promise<VirtualAppScreenSessionManagerRuntimeResult> {
+  if (command.action !== 'screen-reconnect') {
+    return virtualAppScreenSessionManager.attachVirtualAppScreenSession(command, options);
+  }
+  const reconnectVirtualAppScreenSession = (
+    virtualAppScreenSessionManager as VirtualAppScreenSessionManagerReconnectModule
+  ).reconnectVirtualAppScreenSession;
+  if (typeof reconnectVirtualAppScreenSession !== 'function') {
+    return virtualAppScreenSessionManager.blockedVirtualAppScreenSessionManagerResult(
+      command,
+      'VirtualAppScreen reconnect session manager is not available; reconnect failed closed without creating, launching, or attaching a native session.',
+    );
+  }
+  return reconnectVirtualAppScreenSession(command, options);
+}
+
+function virtualAppScreenSessionManagerResultSucceeded(result: VirtualAppScreenSessionManagerRuntimeResult) {
+  return result.status === 'attached' || result.status === 'reconnected';
+}
+
+function normalizeVirtualAppScreenSessionManagerResultForScreenData(
+  result: VirtualAppScreenSessionManagerRuntimeResult,
+): VirtualAppScreenSessionManagerAttachResult {
+  const { status, ...rest } = result;
+  if (status !== 'reconnected') {
+    return { ...rest, status };
+  }
+  return {
+    ...rest,
+    status: 'attached',
+  };
+}
+
+function virtualAppScreenRuntimeSuccessMessage(command: VirtualAppScreenRuntimeCommand) {
+  if (command.action === 'screen-reconnect') {
+    return 'VirtualAppScreen reconnect completed through the existing provider session checkpoint; the Screen artifact preserves the current live session refs.';
+  }
+  return 'VirtualAppScreen attach completed through a registered runtime-owned native provider executor; the Screen artifact contains the current live session refs.';
+}
+
+function virtualAppScreenReconnectBootstrapSkipped() {
+  return {
+    platform: process.platform,
+    registeredExecutorIds: [],
+    alreadyRegistered: false,
+    skippedForReconnect: true,
+    reason: 'screen-reconnect uses existing provider-session refs and does not create, launch, or attach a native session.',
+  };
 }
 
 function looksLikePlaywrightEdgeMcpBrowserRequest(prompt: string) {

@@ -24,6 +24,9 @@ import {
   type BrowserHostSearchOutput,
   type BrowserHostSessionDriver,
   type BrowserHostSessionDriverFactory,
+  type BrowserHostSessionLoadingProgressReason,
+  type BrowserHostSessionLoadingProgressSource,
+  type BrowserHostSessionLoadingProgressState,
   type BrowserHostSessionState,
 } from './browser-host-session.js';
 import {
@@ -140,7 +143,7 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
     await manager.act(workspacePath, 'session-a', { action: 'type', text: 'hello' });
     await manager.act(workspacePath, 'session-a', { action: 'type', text: ' ' });
     await manager.act(workspacePath, 'session-a', { action: 'press', key: 'Enter' });
-    await manager.act(workspacePath, 'session-a', { action: 'scroll', deltaY: 240 });
+    await manager.act(workspacePath, 'session-a', { action: 'scroll', x: 300, y: 420, deltaY: 240 });
     const cursorState = await manager.act(workspacePath, 'session-a', { action: 'cursor', x: 12, y: 24 });
     assert.equal(cursorState.cursor, 'pointer');
     assert.deepEqual(drivers[0]?.actions.slice(-14), [
@@ -156,7 +159,7 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
       'type:hello',
       'type: ',
       'press:Enter',
-      'scroll:0,240',
+      'scroll:0,240@300,420',
       'cursor:12,24',
     ]);
     const afterInput = await manager.sessionState(workspacePath, 'session-a');
@@ -203,6 +206,9 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
     assert.equal(openingState?.loadingProgress?.action, 'open');
     assert.equal(openingState?.loadingProgress?.refs.session, 'browser-host-session:progress-session/session.json');
     assert.equal(openingState?.loadingProgress?.refs.liveSurface, 'browser-host-session:progress-session/live-surface');
+    assert.equal(openingState?.loadingProgress?.urls?.requested?.length, 'https://progress.example/start?token=secret-value'.length);
+    assert.match(openingState?.loadingProgress?.urls?.requested?.sha1 ?? '', /^[a-f0-9]{40}$/);
+    assert.equal(openingState?.loadingProgress?.urls?.final, undefined);
     assert.doesNotMatch(JSON.stringify(openingState?.loadingProgress), /progress\.example|secret-value|<html|Ready/);
 
     drivers[0]?.releaseHeldAction();
@@ -213,6 +219,8 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
     assert.equal(opened.loadingProgress?.source, 'host-session');
     assert.equal(opened.loadingProgress?.action, 'open');
     assert.equal(opened.loadingProgress?.refs.frame, opened.frameRef);
+    assert.deepEqual(opened.loadingProgress?.urls?.final, opened.loadingProgress?.urls?.current);
+    assert.match(opened.loadingProgress?.urls?.current?.sha1 ?? '', /^[a-f0-9]{40}$/);
 
     drivers[0]?.holdNextNavigation();
     const navigating = manager.act(workspacePath, opened.id, {
@@ -227,15 +235,78 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
     assert.equal(navigatingState?.loadingProgress?.reason, 'navigation-requested');
     assert.equal(navigatingState?.loadingProgress?.source, 'host-navigation');
     assert.equal(navigatingState?.loadingProgress?.action, 'navigate');
+    assert.equal(navigatingState?.loadingProgress?.urls?.requested?.length, 'https://progress.example/next?token=secret-value'.length);
+    assert.equal(navigatingState?.loadingProgress?.urls?.final, undefined);
     assert.doesNotMatch(JSON.stringify(navigatingState?.loadingProgress), /progress\.example|secret-value|<html|Ready/);
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'navigation-committed',
+      reason: 'navigation-committed',
+      source: 'host-lifecycle',
+    });
+    await waitFor(() => drivers[0]?.lastProgressState === 'navigation-committed');
+    const committedState = await manager.sessionState(workspacePath, opened.id);
+    assert.equal(committedState?.status, 'loading');
+    assert.equal(committedState?.loadingProgress?.state, 'navigation-committed');
+    assert.equal(committedState?.loadingProgress?.reason, 'navigation-committed');
+    assert.equal(committedState?.loadingProgress?.source, 'host-lifecycle');
+    assert.equal(committedState?.loadingProgress?.action, 'navigate');
+    assert.doesNotMatch(JSON.stringify(committedState?.loadingProgress), /progress\.example|secret-value|<html|Ready/);
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'interactive',
+      reason: 'page-interactive',
+      source: 'host-lifecycle',
+    });
+    const interactiveState = await manager.sessionState(workspacePath, opened.id);
+    assert.equal(interactiveState?.status, 'loading');
+    assert.equal(interactiveState?.loadingProgress?.state, 'interactive');
+    assert.equal(interactiveState?.loadingProgress?.reason, 'page-interactive');
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'load',
+      reason: 'page-load',
+      source: 'host-lifecycle',
+    });
+    const loadState = await manager.sessionState(workspacePath, opened.id);
+    assert.equal(loadState?.status, 'loading');
+    assert.equal(loadState?.loadingProgress?.state, 'load');
+    assert.equal(loadState?.loadingProgress?.reason, 'page-load');
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'stalled',
+      reason: 'navigation-stalled',
+      source: 'host-progress',
+      canRetry: true,
+    });
+    const stalledState = await manager.sessionState(workspacePath, opened.id);
+    assert.equal(stalledState?.status, 'loading');
+    assert.equal(stalledState?.loadingProgress?.state, 'stalled');
+    assert.equal(stalledState?.loadingProgress?.reason, 'navigation-stalled');
+    assert.equal(stalledState?.loadingProgress?.canRetry, true);
+    assert.equal(stalledState?.loadingProgress?.urls?.final, undefined);
+    assert.doesNotMatch(JSON.stringify(stalledState?.loadingProgress), /progress\.example|secret-value|<html|Ready/);
 
     drivers[0]?.releaseHeldAction();
     const navigated = await navigating;
-    assert.equal(navigated.status, 'ready');
-    assert.equal(navigated.loadingProgress?.state, 'network-quiet');
-    assert.equal(navigated.loadingProgress?.reason, 'host-ready');
-    assert.equal(navigated.loadingProgress?.source, 'host-session');
+    assert.equal(navigated.status, 'loading');
+    assert.equal(navigated.loadingProgress?.state, 'stalled');
+    assert.equal(navigated.loadingProgress?.reason, 'navigation-stalled');
+    assert.equal(navigated.loadingProgress?.source, 'host-progress');
     assert.equal(navigated.loadingProgress?.action, 'navigate');
+    assert.equal(navigated.loadingProgress?.urls?.final, undefined);
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'network-quiet',
+      reason: 'network-quiet',
+      source: 'host-progress',
+    });
+    const settled = await manager.act(workspacePath, opened.id, { action: 'state' });
+    assert.equal(settled.status, 'ready');
+    assert.equal(settled.loadingProgress?.state, 'network-quiet');
+    assert.equal(settled.loadingProgress?.reason, 'host-ready');
+    assert.equal(settled.loadingProgress?.source, 'host-session');
+    assert.deepEqual(settled.loadingProgress?.urls?.final, settled.loadingProgress?.urls?.current);
 
     for (const action of ['back', 'forward', 'reload'] as const) {
       const state = await manager.act(workspacePath, opened.id, { action });
@@ -244,6 +315,14 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
       assert.equal(state.loadingProgress?.source, 'host-session');
       assert.equal(state.loadingProgress?.action, action);
     }
+    const stopped = await manager.act(workspacePath, opened.id, { action: 'stop' });
+    assert.equal(stopped.status, 'ready');
+    assert.equal(stopped.loadingProgress?.state, 'network-quiet');
+    assert.equal(stopped.loadingProgress?.reason, 'host-ready');
+    assert.equal(stopped.loadingProgress?.source, 'host-session');
+    assert.equal(stopped.loadingProgress?.action, 'stop');
+    assert.deepEqual(stopped.loadingProgress?.urls?.final, stopped.loadingProgress?.urls?.current);
+    assert.doesNotMatch(JSON.stringify(stopped.loadingProgress), /progress\.example|secret-value|<html|Ready/);
   } finally {
     drivers[0]?.releaseHeldAction();
     await rm(workspacePath, { recursive: true, force: true });
@@ -273,10 +352,70 @@ test('BrowserHostSession loadingProgress failure state is bounded and does not c
   }
 });
 
+test('BrowserHostSession keeps ready status for same-URL interactive heartbeat after non-navigation input', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-interactive-heartbeat-'));
+  const { factory, drivers } = fakeDriverFactory();
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const opened = await manager.openSession(workspacePath, {
+      url: 'https://heartbeat.example/input',
+      sessionId: 'interactive-heartbeat-session',
+    });
+    assert.equal(opened.status, 'ready');
+    drivers[0]?.emitNavigationProgress({
+      state: 'interactive',
+      reason: 'page-interactive',
+      source: 'host-lifecycle',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const state = await manager.sessionState(workspacePath, opened.id);
+    assert.ok(state);
+    assert.equal(state.status, 'ready');
+    assert.equal(state.loadingProgress?.state, 'network-quiet');
+    assert.equal(state.loadingProgress?.reason, 'host-ready');
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession stop publishes an immediate bounded control state before driver ACK', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-stop-progress-'));
+  const { factory, drivers } = fakeDriverFactory({ holdStop: true });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const opened = await manager.openSession(workspacePath, {
+      url: 'https://progress.example/slow?token=secret-value',
+      sessionId: 'stop-progress-session',
+    });
+
+    const stopping = manager.act(workspacePath, opened.id, { action: 'stop' });
+    await waitFor(() => drivers[0]?.isHoldingAction() === true);
+
+    const stoppingState = await manager.sessionState(workspacePath, opened.id);
+    assert.equal(stoppingState?.status, 'loading');
+    assert.equal(stoppingState?.loadingProgress?.state, 'stalled');
+    assert.equal(stoppingState?.loadingProgress?.reason, 'navigation-stalled');
+    assert.equal(stoppingState?.loadingProgress?.source, 'host-action-timing');
+    assert.equal(stoppingState?.loadingProgress?.action, 'stop');
+    assert.equal(stoppingState?.loadingProgress?.canRetry, true);
+    assert.doesNotMatch(JSON.stringify(stoppingState?.loadingProgress), /progress\.example|secret-value|<html|Ready/);
+
+    drivers[0]?.releaseHeldAction();
+    const stopped = await stopping;
+    assert.equal(stopped.status, 'ready');
+    assert.equal(stopped.loadingProgress?.state, 'network-quiet');
+    assert.equal(stopped.loadingProgress?.action, 'stop');
+  } finally {
+    drivers[0]?.releaseHeldAction();
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('BrowserHostSessionManager can drive a native embedded BrowserHostSession adapter without frame-stream live fallback', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-'));
   const calls: Array<{ route: string; body: Record<string, unknown> }> = [];
   let currentUrl = 'about:blank';
+  let currentProgress: Record<string, unknown> | undefined;
   const server = createServer((req, res) => {
     void (async () => {
       const route = req.url ?? '/';
@@ -285,9 +424,10 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
       if (route === '/sessions/start') writeJsonResponse(res, { ok: true, sessionId: body.sessionId });
       else if (route.endsWith('/navigate')) {
         currentUrl = normalizeBrowserHostUrl(String(body.url ?? 'about:blank'));
-        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false });
+        currentProgress = { state: 'network-quiet', reason: 'network-quiet', source: 'host-state' };
+        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, loadingProgress: currentProgress });
       } else if (route.endsWith('/state')) {
-        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false });
+        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, progress: currentProgress });
       } else if (route.endsWith('/screenshot')) {
         writeJsonResponse(res, { ok: true, dataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}` });
       } else if (route.endsWith('/content')) {
@@ -299,7 +439,8 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
       } else if (route.includes('/search-results')) {
         writeJsonResponse(res, { ok: true, results: [{ title: 'Result', url: 'https://example.org/result', snippet: 'Native result' }] });
       } else if (route.endsWith('/actions')) {
-        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, diagnostics: body.action === 'cursor' ? ['cursor:pointer'] : [] });
+        if (body.action === 'reload') currentProgress = { state: 'stalled', reason: 'navigation-stalled', source: 'host-state', canRetry: true };
+        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, diagnostics: body.action === 'cursor' ? ['cursor:pointer'] : [], navigation: currentProgress });
       } else {
         writeJsonResponse(res, { ok: false, reason: `unexpected route ${route}` }, 404);
       }
@@ -329,6 +470,10 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
       y: 24,
       capture: 'none',
     });
+    const reloaded = await manager.act(workspacePath, 'native-session', {
+      action: 'reload',
+      capture: 'none',
+    });
 
     assert.equal(session.status, 'ready');
     assert.equal(session.url, 'https://example.org/native');
@@ -345,6 +490,14 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
     assert.equal(clicked.lastActionTiming?.capture, 'none');
     assert.equal(clicked.lastActionTiming?.paintAckSource, 'native-adapter-action-state');
     assert.equal(cursor.cursor, 'pointer');
+    assert.equal(reloaded.loadingProgress?.state, 'stalled');
+    assert.equal(reloaded.loadingProgress?.reason, 'navigation-stalled');
+    assert.equal(reloaded.loadingProgress?.source, 'host-state');
+    assert.equal(reloaded.loadingProgress?.canRetry, true);
+    assert.equal(reloaded.loadingProgress?.refs.frameStream, undefined);
+    assert.equal(reloaded.loadingProgress?.refs.frame, undefined);
+    assert.match(reloaded.loadingProgress?.urls?.current?.sha1 ?? '', /^[a-f0-9]{40}$/);
+    assert.doesNotMatch(JSON.stringify(reloaded.loadingProgress), /example\.org\/native|<html|base64|data:image/i);
     assert.deepEqual(calls.find((call) => call.route === '/sessions/start')?.body.sessionId, 'native-session');
     assert.ok(calls.some((call) => call.route.endsWith('/actions') && call.body.action === 'click'));
   } finally {
@@ -619,7 +772,7 @@ test('BrowserHostSession exposes host-owned low-level mouse operations for real 
 test('BrowserHostSession keeps typing and scrolling low latency for browser surfing', async () => {
   const source = await readFile(new URL('./browser-host-session.ts', import.meta.url), 'utf8');
   assert.match(source, /async type\(text: string\): Promise<void> \{\n    await this\.page\.keyboard\.insertText\(text\);\n    this\.recordNavigation\(\);\n  \}/);
-  assert.match(source, /async scroll\(deltaX: number, deltaY: number\): Promise<void> \{\n    await this\.page\.mouse\.wheel\(deltaX, deltaY\);\n  \}/);
+  assert.match(source, /async scroll\(deltaX: number, deltaY: number, x\?: number, y\?: number\): Promise<void> \{\n    if \(x !== undefined && y !== undefined\) await this\.page\.mouse\.move\(x, y\);\n    await this\.page\.mouse\.wheel\(deltaX, deltaY\);\n  \}/);
 });
 
 test('BrowserHostSession frame stream skips capture instead of queueing behind active input', async () => {
@@ -722,8 +875,10 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
     capture: 'frame',
     timeoutMs: undefined,
   });
-  assert.deepEqual(browserHostActionFromComputerUse({ type: 'wheel', deltaX: 3.2, deltaY: -4.8 }), {
+  assert.deepEqual(browserHostActionFromComputerUse({ type: 'wheel', x: 12.4, y: 88.6, deltaX: 3.2, deltaY: -4.8 }), {
     action: 'scroll',
+    x: 12,
+    y: 89,
     deltaX: 3,
     deltaY: -5,
     capture: 'none',
@@ -765,7 +920,7 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
   }
 });
 
-function fakeDriverFactory(options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; failNavigation?: boolean } = {}): { factory: BrowserHostSessionDriverFactory; drivers: FakeBrowserHostDriver[] } {
+function fakeDriverFactory(options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}): { factory: BrowserHostSessionDriverFactory; drivers: FakeBrowserHostDriver[] } {
   const drivers: FakeBrowserHostDriver[] = [];
   return {
     drivers,
@@ -786,13 +941,22 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   contentCalls = 0;
   axSnapshotCalls = 0;
   screenshotCalls = 0;
+  lastProgressState?: BrowserHostSessionLoadingProgressState;
   private readonly consoleListeners = new Set<(entry: Record<string, unknown>) => void>();
   private readonly networkListeners = new Set<(entry: Record<string, unknown>) => void>();
+  private readonly navigationProgressListeners = new Set<(progress: {
+    state: BrowserHostSessionLoadingProgressState;
+    reason: BrowserHostSessionLoadingProgressReason;
+    source?: BrowserHostSessionLoadingProgressSource;
+    canRetry?: boolean;
+    blocked?: boolean;
+    requiresHandoff?: boolean;
+  }) => void>();
   private heldActionResolve?: () => void;
   private heldActionPromise?: Promise<void>;
   private holdNavigation: boolean;
 
-  constructor(private readonly options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; failNavigation?: boolean } = {}) {
+  constructor(private readonly options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}) {
     this.holdNavigation = options.holdNavigation === true;
   }
 
@@ -867,6 +1031,7 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
 
   async stop(): Promise<void> {
     this.actions.push('stop');
+    if (this.options.holdStop) await this.holdAction();
   }
 
   async click(x: number, y: number, button: BrowserHostMouseButton = 'left'): Promise<void> {
@@ -902,8 +1067,8 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
     this.actions.push(`press:${key}`);
   }
 
-  async scroll(deltaX: number, deltaY: number): Promise<void> {
-    this.actions.push(`scroll:${deltaX},${deltaY}`);
+  async scroll(deltaX: number, deltaY: number, x?: number, y?: number): Promise<void> {
+    this.actions.push(x !== undefined && y !== undefined ? `scroll:${deltaX},${deltaY}@${x},${y}` : `scroll:${deltaX},${deltaY}`);
   }
 
   async cursor(x: number, y: number): Promise<string> {
@@ -922,6 +1087,29 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
 
   onNetwork(listener: (entry: Record<string, unknown>) => void): void {
     this.networkListeners.add(listener);
+  }
+
+  onNavigationProgress(listener: (progress: {
+    state: BrowserHostSessionLoadingProgressState;
+    reason: BrowserHostSessionLoadingProgressReason;
+    source?: BrowserHostSessionLoadingProgressSource;
+    canRetry?: boolean;
+    blocked?: boolean;
+    requiresHandoff?: boolean;
+  }) => void): void {
+    this.navigationProgressListeners.add(listener);
+  }
+
+  emitNavigationProgress(progress: {
+    state: BrowserHostSessionLoadingProgressState;
+    reason: BrowserHostSessionLoadingProgressReason;
+    source?: BrowserHostSessionLoadingProgressSource;
+    canRetry?: boolean;
+    blocked?: boolean;
+    requiresHandoff?: boolean;
+  }): void {
+    this.lastProgressState = progress.state;
+    for (const listener of this.navigationProgressListeners) listener(progress);
   }
 
   private emitConsole(entry: Record<string, unknown>) {
@@ -960,9 +1148,9 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   }
 }
 
-async function waitFor(predicate: () => boolean): Promise<void> {
+async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
   const startedAt = Date.now();
-  while (!predicate()) {
+  while (!await predicate()) {
     if (Date.now() - startedAt > 1000) throw new Error('Timed out waiting for BrowserHostSession test condition.');
     await new Promise((resolve) => setTimeout(resolve, 5));
   }

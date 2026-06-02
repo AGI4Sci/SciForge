@@ -8,7 +8,9 @@ SciForge 的“内置浏览器”应该实现为 **TUI agent browser runtime cap
 
 更准确地说，它不是一个普通浏览器，而是一个面向开发智能体的可视化执行环境：把视觉问题压缩成稳定引用、终端等价命令和可验证断言，再把代码修改的副作用展开成截图、DOM、日志和验证证据。
 
-最终性能目标选用 **host-owned native embedded live surface**：`BrowserHostSession` / `BrowserRuntime` 仍是 TUI capability / Agent Host module 和 live browser owner；桌面 shell 承载 Electron `WebContentsView`（未来可替换为 WebView2/WKWebView 或独立 Chromium surface）作为同一 session 的 display/input adapter，让用户和 agent 的鼠标键盘体验接近 Edge/Chrome。这里没有第二个 truth source，也没有替代交互路径：desktop native surface 是最终 live path；Web shell 的 websocket-binary frame-stream 只是同一 owner session 的非桌面 stream/diagnostic/evidence transport，不是 native 桌面的性能替代品；无法 attach live surface 时必须返回 blocked / needs-human / handoff，而不是切到 iframe、proxy、snapshot、旧 frame、`<webview>` 或系统 popup 继续冒充可操作浏览器。GUI 不新增 provider route，不直接调用 Playwright/MCP，不跨域读取 DOM/AX/console/network，不把 hidden completion logic 放进 renderer。
+最终性能目标选用 **host-owned native embedded live surface**，并收口为一个 live truth source：`BrowserHostSession` / `BrowserRuntime` 仍是 TUI capability / Agent Host module 和 live browser owner；桌面 shell 承载 Electron `WebContentsView`（未来可替换为 WebView2/WKWebView 或独立 Chromium surface）作为同一 session 的 display/input adapter，让用户和 agent 的鼠标键盘体验接近 Edge/Chrome。这里没有第二个 truth source，也没有产品级 fallback：`native-embedded` 是唯一 live path；无法 attach native live surface 时必须返回 blocked / needs-human / handoff，而不是切到 iframe、proxy、snapshot、旧 frame、host-stream/canvas/WebRTC、`<webview>` 或系统 popup 继续冒充可操作浏览器。GUI 不新增 provider route，不直接调用 Playwright/MCP，不跨域读取 DOM/AX/console/network，不把 hidden completion logic 放进 renderer。
+
+本次架构决策（2026-06-02）：Browser pane 的终局方案不再保留“native 优先、streaming fallback”的双轨 live surface。`frame-stream`、canvas-binary、WebRTC candidate 和 HTTP `/frame` 只能作为 refs-first evidence、diagnostic、manual inspection 或迁移期删除对象；它们不能承载用户交互，不能被 Browser Workbench 渲染为 live page，也不能在 native attach 失败时接管主画面。
 
 Codex in-app browser 的核心体验不是“打开一个网页控件”这么简单，而是一套可被 agent 使用的浏览器运行时：
 
@@ -24,7 +26,7 @@ SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser`
 - `playwright_browser_automation`：后台、headless、isolated，适合 agent 自动浏览、检索、截图、结构化抽取。
 - `playwright_edge_browser`：可见 Edge、独立 profile，适合登录、人工接管和需要桌面可见性的验收。
 
-历史缺口是：这两条 provider 还只是“单次浏览器调用能力”，没有形成像 Codex 内置浏览器那样稳定的 **session / tab / action / snapshot / trace / live surface** 契约，也没有给用户一个能直接打开 URL、查看页面、请求 snapshot/state/takeover 并交回 agent 的可见工作台。当前 Browser pane 已补齐 presentation / projection 中间层；桌面壳已经接入 `BrowserHostSession` 拥有的 native embedded surface adapter，Web 壳保留同一 owner 的 frame-stream transport，同时仍不把 provider routing 或 completion 判断搬进 GUI。
+历史缺口是：这两条 provider 还只是“单次浏览器调用能力”，没有形成像 Codex 内置浏览器那样稳定的 **session / tab / action / snapshot / trace / live surface** 契约，也没有给用户一个能直接打开 URL、查看页面、请求 snapshot/state/takeover 并交回 agent 的可见工作台。当前 Browser pane 已补齐 presentation / projection 中间层；桌面壳已经接入 `BrowserHostSession` 拥有的 native embedded surface adapter。后续目标是删除 Web 壳 frame-stream/canvas 作为交互 surface 的产品路径，native attach 不可用时只显示 typed blocked/handoff 状态，同时仍不把 provider routing 或 completion 判断搬进 GUI。
 
 ## 三层架构
 
@@ -32,7 +34,7 @@ SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser`
 
 | 层级 | 职责 | 例子 |
 |---|---|---|
-| 运行时层 | Chromium / BrowserHostSession、native embedded view、非桌面低延迟 frame stream、Playwright session、CDP 通道、frame/dialog/network/storage/idle、HMR/dev-server 监听。 | `BrowserHostSession`、Electron `WebContentsView` adapter、WebView2/WKWebView adapter、streaming canvas、`playwright_browser_automation`、`playwright_edge_browser`。 |
+| 运行时层 | Chromium / BrowserHostSession、native embedded view、Playwright session、CDP 通道、frame/dialog/network/storage/idle、HMR/dev-server 监听。 | `BrowserHostSession`、Electron `WebContentsView` adapter、WebView2/WKWebView adapter、独立 Chromium surface、`playwright_browser_automation`、`playwright_edge_browser`。 |
 | 能力层 | browser command API、StableRef、PageQuery DSL、标注引擎、DOM→源码 resolver、验证器。 | `browser_runtime`、`BrowserRuntimeStableRef`、`BrowserRuntimePageQuery`。 |
 | 协作层 | 线程状态、审批流、审计日志、上下文打包、feedback inbox、代码 diff 和验证证据。 | `/browser ...` 命令、annotation record、refs-first trace、approval gate。 |
 
@@ -46,8 +48,8 @@ SciForge 已经有 `playwright_browser_automation` 和 `playwright_edge_browser`
 |---|---|---|---|
 | `@sciforge-ui/runtime-contract/browser-runtime` | shared contract | `BrowserRuntimeSession/Tab/Command/Snapshot/Trace/StableRef/PageQuery`、risk/page-query/stable-ref 等纯函数 | Playwright、MCP client、React、iframe、workspace IO、provider route |
 | `packages/observe/web` | TUI capability | `browser_runtime` manifest、Playwright MCP wrapper、provider availability、TUI-facing provider adapter | React renderer、右侧结果区布局、GUI state、provider 选择以外的 GUI 控件 |
-| `packages/presentation/components/browser-workbench` | GUI presentation | 右侧 browser projection renderer、typed browser state、tabs/snapshot/log refs、terminal-equivalent command events、host-owned native/streaming surface slot、blocked/error/offline 诊断状态 | provider routing、页面动作执行、跨域 DOM/console/network 读取、截图 base64/完整 DOM 保存、completion 判断、把 iframe/proxy 当 live browser 或第二画面真相源 |
-| `src/ui/**` host 装配层 | GUI host | 将按钮/表单翻译成 `/browser ...` 文本或 declared GUI intent、装配 Browser page、连接反馈收件箱和结果区 placement、接入 shell 提供的 native/streaming surface handle；桌面环境只把 Browser pane bounds attach 给 `BrowserHostSession` native surface | import `@sciforge-observe/web/browser-runtime`、直接调用 Playwright/MCP/provider、判断网页任务完成、把外部网页白屏伪装成 ready、让 shell 变成 live browser owner |
+| `packages/presentation/components/browser-workbench` | GUI presentation | 右侧 browser projection renderer、typed browser state、tabs/snapshot/log refs、terminal-equivalent command events、host-owned native surface slot、blocked/error/offline 诊断状态 | provider routing、页面动作执行、跨域 DOM/console/network 读取、截图 base64/完整 DOM 保存、completion 判断、把 iframe/proxy/host-stream/canvas/WebRTC 当 live browser 或第二画面真相源 |
+| `src/ui/**` host 装配层 | GUI host | 将按钮/表单翻译成 `/browser ...` 文本或 declared GUI intent、装配 Browser page、连接反馈收件箱和结果区 placement、接入 shell 提供的 native surface handle；桌面环境只把 Browser pane bounds attach 给 `BrowserHostSession` native surface | import `@sciforge-observe/web/browser-runtime`、直接调用 Playwright/MCP/provider、判断网页任务完成、把外部网页白屏伪装成 ready、让 shell 变成 live browser owner、用 frame-stream/canvas/WebRTC 兜底渲染交互网页 |
 | `src/desktop/browser-host-surface.ts` | desktop shell adapter | Electron `WebContentsView` attach/detach/bounds/input/screenshot/DOM/text/AX/search-results adapter；通过 loopback URL 供 workspace-server 的 BrowserHostSession driver 调用 | 创建第二个 session truth、直接绕过 BrowserHostSession route、把系统 BrowserWindow popup 当右栏 live browser、启用 `<webview>` |
 
 Cursor Agent 右侧结果区的对齐目标不是把 browser、screen、terminal、file viewer 和 references 都塞进一个 React 页面，而是把它们变成可组合 presentation modules：`browser-workbench`、`virtual-screen-viewer`、`terminal-session-viewer`、`workspace-file-viewer` 和 references object inspector。TUI 通过 `module.invoke({ moduleId: 'gui', intent: 'present' })` 或 UI manifest slot 选择 presentation；GUI 模块只发出 view-local events、declared intent 或终端等价文本。
@@ -64,8 +66,8 @@ Cursor Agent 右侧结果区的对齐目标不是把 browser、screen、terminal
 
 ### GUI 侧负责
 
-- 展示 browser session 状态、tab 列表、当前 URL、host-owned native/streaming live surface、截图/DOM/日志 refs。
-- 提供 Browser Workbench projection：地址栏、native/streaming surface slot、`idle/loading/ready/blocked/error/offline` 状态、blocked reason 和显式 handoff 入口。
+- 展示 browser session 状态、tab 列表、当前 URL、host-owned native live surface、截图/DOM/日志 refs。
+- 提供 Browser Workbench projection：地址栏、native surface slot、`idle/loading/ready/blocked/error/offline` 状态、blocked reason 和显式 handoff 入口。
 - 展示 refs-first feedback / evidence bundle 的摘要，例如 URL、viewport、region ref、snapshot ref、DOM/AX snapshot ref、console/network refs、trace refs 和 redacted diagnostics。
 - 提供“打开浏览器视图”“查看截图”“复制 URL”“请求人工接管”等 presentation controls。
 - 把用户按钮转换成 terminal-equivalent text command 或 declared GUI intent，例如 `/browser open <url>`、`/browser snapshot`、`/browser state` 或 `/browser takeover <sessionId>`。
@@ -90,7 +92,7 @@ User text / GUI command
        └─ playwright_edge_browser        (visible, human takeover)
   -> BrowserRuntimeResult
   -> refs-first trace / snapshot / logs
-  -> host-owned native/streaming live surface + gui.present(browser projection)
+  -> host-owned native live surface + gui.present(browser projection)
 ```
 
 GUI Browser Workbench 的本地输入链路是：
@@ -105,27 +107,32 @@ User opens URL / clicks / types / requests snapshot / requests takeover
 
 这个链路让用户得到真实可见预览和明确 blocked/error 状态，同时避免 GUI 自己接管 provider routing、隐藏执行网页动作，或把网页内容直接塞进 workspace state。
 
-## BrowserHostSession Native Surface Contract
+## BrowserHostSession Native Embedded Single Truth Contract
 
 最高性能路线把“可见浏览器”拆成两个对象：
 
 1. `BrowserHostSession` 是 owner，持有 session/tab/navigation/action/CDP/evidence/search refs。
 2. shell surface 是 adapter，只承载 pixels 和 input routing，不拥有 provider、DOM 读取、动作策略、evidence truth 或 completion。
 
-唯一可交互真相源是 owner session 的 live surface。允许的 surface transport 只有这些形态：
+唯一可交互真相源是 owner session 的 `native-embedded` live surface。允许的产品 live surface transport 只有一种形态：
 
 | 模式 | 用途 | 规则 |
 |---|---|---|
-| `native-embedded` | 桌面壳内嵌真实浏览器合成面，目标体验接近 Edge/Chrome。 | Electron `WebContentsView`、WebView2、WKWebView 或独立 Chromium surface 只能作为 BrowserHostSession 的 view adapter；动作和 refs 仍回到 host owner。 |
-| `host-stream` | Web shell 的同一 owner live-surface transport。 | 用 WebSocket/WebRTC/canvas 等低延迟流展示同一个 host-owned session；输入事件走低延迟 host action channel；evidence refs 按状态点生成。它不是 native-embedded 的第二真相源或产品替代 live path。 |
+| `native-embedded` | 桌面壳内嵌真实浏览器合成面，目标体验接近 Edge/Chrome。 | Electron `WebContentsView`、WebView2、WKWebView 或独立 Chromium surface 只能作为 BrowserHostSession 的 view adapter；所有用户输入直接进入 native surface；state、refs、snapshot、DOM/AX、console/network 仍回到 host owner。 |
 
-Web shell 的当前主画面传输采用 `frame-stream` WebSocket：同一条 owner stream 先发 frame metadata，再发 PNG binary frame，GUI 只把 binary frame 转成短生命周期 `blob:` object URL 展示。`/api/sciforge/browser-host/sessions/:id/frame` 继续作为 refs-first evidence / manual inspection route 保留，但不能作为 Browser pane 的 live view 替代路径，也不能在 frame-stream 失败时自动接管主画面。
+`host-stream`、`frame-stream`、canvas-binary、WebRTC candidate 和 HTTP `/frame` 不再是 Browser pane live surface transport。它们只能保留在以下非交互用途中，直到迁移完成后删除：
 
-Writer preflight 必须以最终版 `/health` 为准：`capabilities` 需要包含 `browser-host-session` 和 `browser-host-search`，`endpoints.browserHostSession` 必须同时声明 `start`、`state`、`actions`、`computer-use-actions`、`frame` 和 `frame-stream`，`endpoints.browserHostSearch` 必须声明 `/api/sciforge/browser-host/search`。只声明旧版 `{start,state,actions,frame}` 的 Workspace Writer 必须判定为 stale，不能进入 ready，也不能显示没有 live pixels 的 Browser pane。
+- refs-first evidence capture，例如截图、frame ref、manual inspection artifact。
+- transport/latency diagnostic，用于解释 native attach 失败或历史回归。
+- migration audit，用来证明旧 live path 已被拒绝、未被自动 fallback。
+
+任何 Web shell 或桌面 shell 在无法 attach `native-embedded` 时，都必须进入 typed blocked / needs-human / handoff / retry 状态。它不能把 `frame-stream` PNG、canvas、WebRTC loopback、HTTP `/frame`、旧 screenshot 或外部系统窗口接管为 Browser pane 主画面。
+
+Writer preflight 必须以最终版 `/health` 为准：`capabilities` 需要包含 `browser-host-session`、`browser-host-search` 和 native surface attach 能力，`endpoints.browserHostSession` 必须声明 `start`、`state`、`actions`、`computer-use-actions` 以及 native attach/state/health 端点；`frame` / `frame-stream` 端点只能作为 evidence/diagnostic optional capability，不能成为 Browser pane ready 条件。只声明旧版 `{start,state,actions,frame}` 或只支持 host-stream live pixels 的 Workspace Writer 必须判定为 stale/blocked，不能进入 ready，也不能显示没有 native live surface 的 Browser pane。
 
 用户鼠标、键盘、滚轮、拖拽和 cursor hit-test 都必须进入同一个 `BrowserHostSession` action owner。Web 右侧栏当前通过 Workspace Writer `POST /api/sciforge/browser-host/sessions/:id/computer-use-actions` 投递这些 intent；该 route 是 BrowserHostSession 的输入通道，不是第二个 Computer Use 执行 owner。
 
-性能优先级是 input > live-frame refresh > heavy evidence。`host-stream` 的 frame capture 必须是低优先级、可跳帧的刷新：如果同一 session 的 action queue 正在处理 click/type/drag/scroll/cursor，或刚刚有输入，stream 应跳过本轮 capture，而不是把截图排到用户输入前面。Snapshot/State/DOM/AX/console/network 属于显式 evidence request，不能混进连续冲浪的热路径。
+性能优先级是 native input/compositor > lightweight state heartbeat > heavy evidence。用户 click/type/drag/scroll/cursor 进入 native surface 后不等待 screenshot、DOM、AX、console/network、search summary 或 state polling；Snapshot/State/DOM/AX/console/network 属于显式 evidence request，必须异步追上，不能混进连续冲浪的热路径。
 
 非 surface artifact，例如 screenshot、PDF、document、DOM/AX/log 导出和离线诊断，只能作为只读证据或独立静态对象打开，不参与 Browser pane 的交互真相，不能替代 live surface。
 
@@ -135,7 +142,7 @@ Writer preflight 必须以最终版 `/health` 为准：`capabilities` 需要包�
 - shell 可以承载 native surface，但不能成为 BrowserRuntime provider 或 evidence owner。
 - surface attach、image complete 或 iframe load 不能被当成浏览任务成功。
 - static snapshot、PDF、document、proxy materialization 不能作为 Browser pane 的第二画面真相源。
-- native surface attach 失败时不能自动切到 proxy/snapshot/iframe/old-frame；只能显示 blocked/handoff/retry diagnostics 并等待 owner session 恢复。
+- native surface attach 失败时不能自动切到 proxy/snapshot/iframe/old-frame/host-stream/canvas/WebRTC；只能显示 blocked/handoff/retry diagnostics 并等待 owner session 恢复。
 - screenshot/DOM/AX/console/network/search refs 必须由 BrowserHostSession 或 browser runtime 生成。
 
 ## BrowserRuntime Contract
@@ -283,12 +290,12 @@ type BrowserRuntimePageQuery = {
 
 ## Browser Workbench Live Surface Target
 
-GUI 侧提供的不是静态说明页，而是一个可操作的浏览器工作台。最终目标是右侧 Browser pane 只保留必要导航 chrome，其余空间交给 host-owned native/streaming live surface：
+GUI 侧提供的不是静态说明页，而是一个可操作的浏览器工作台。最终目标是右侧 Browser pane 只保留必要导航 chrome，其余空间交给 host-owned native live surface：
 
 - URL bar：支持 `localhost`、`127.0.0.1`、`http` 和 `https` 输入归一化；无效 URL 进入 typed error。
-- Live surface：优先接入 host-owned native embedded browser view；Web shell 使用同一 BrowserHostSession 的 host-owned frame stream（当前 route 是 `/api/sciforge/browser-host/sessions/:id/frame-stream`，主画面 transport 为 metadata + websocket-binary pixels + `blob:` object URL）。这两者是同一 owner surface 的不同 transport，不形成替代真相链。frame-stream 必须支持 input-priority / skip-frame backpressure；`/frame` HTTP route 和截图图片只作为证据 artifact / manual inspection，不作为可交互画面或 live view 替代路径。
+- Live surface：只接入 host-owned native embedded browser view。Browser Workbench 不渲染 frame-stream/canvas/WebRTC 作为页面，也不把截图图片或 HTTP `/frame` 当成可交互 live view。没有 native surface 时显示 typed blocked/handoff/retry。
 - Navigation controls：Open、Back、Forward、Reload/Stop、Snapshot、State、Takeover、Copy URL、Open External。
-- Blocked controls：无法 attach native/streaming surface、站点阻塞或安全策略限制时必须给出原因和下一步，例如 retry host、needs-human、Open External handoff 或 takeover；这些动作离开或恢复唯一 live surface，不创建第二个浏览画面。
+- Blocked controls：无法 attach native surface、站点阻塞或安全策略限制时必须给出原因和下一步，例如 retry host、needs-human、Open External handoff 或 takeover；这些动作离开或恢复唯一 live surface，不创建第二个浏览画面。
 - Command surface：所有按钮生成终端等价文本或 declared GUI intent，例如 `/browser open`、`/browser back`、`/browser forward`、`/browser reload`、`/browser stop`、`/browser snapshot`、`/browser state`、`/browser takeover`、`/browser copy-url`、`/browser open-external`。
 
 Web GUI 版本的硬边界仍然存在：
@@ -298,7 +305,7 @@ Web GUI 版本的硬边界仍然存在：
 - 不能复用用户 Chrome profile、Cookie、扩展或登录态。
 - 不能把 iframe 内容当作高优先级 prompt。
 
-因此，Web GUI 不能把 iframe 当产品浏览器。桌面壳优先走 native embedded surface；Web 壳只能展示同一 BrowserHostSession 的 host-owned frame stream。真正的跨域截图、DOM snapshot、console/network logs、搜索摘要和自动点击输入由 `BrowserHostSession` / `browser_runtime` 执行；如果该 owner surface 不可用，结果是 blocked/handoff，而不是替代交互路径。
+因此，Web GUI 不能把 iframe 当产品浏览器，也不能把 frame-stream/canvas/WebRTC 当产品浏览器。Browser pane 的产品形态必须走 native embedded surface；不具备 native attach 能力的 shell 只能展示 blocked/handoff/retry 和 evidence refs。真正的跨域截图、DOM snapshot、console/network logs、搜索摘要和自动点击输入由 `BrowserHostSession` / `browser_runtime` 执行；如果该 owner surface 不可用，结果是 blocked/handoff，而不是替代交互路径。
 
 ## 七个硬问题
 
@@ -366,19 +373,19 @@ M3 之前要建立 30-50 个固定 browser regression tasks，每个任务包含
 
 | 阶段 | 名称 | 关键交付 | 出货门槛 |
 |---|---|---|---|
-| M1 | Host-owned live surface | BrowserHostSession session/action/ref contract、desktop native surface adapter、Web frame stream transport、dev server URL 检测、线程级状态。 | App 内可打开 localhost 和外部 HTTP/HTTPS；Browser pane 不使用 iframe/proxy/snapshot/旧 frame/系统 popup 作为 live browser、第二真相源或替代交互路径。 |
+| M1 | Host-owned native live surface | BrowserHostSession session/action/ref contract、desktop native surface adapter、dev server URL 检测、线程级状态。 | App 内可打开 localhost 和外部 HTTP/HTTPS；Browser pane 只使用 `native-embedded` 作为 live browser，不使用 iframe/proxy/snapshot/旧 frame/host-stream/canvas/WebRTC/系统 popup 作为第二真相源或替代交互路径。 |
 | M2 | 标注引擎 | 元素/区域选择、截图 crop/ref、StableRef、annotation 入线程。 | reload 后 80% 常见标注能重新定位或明确要求重新观察。 |
 | M3 | 页面观察 | 分层 `get_state`、AX/DOM/frames、PageQuery DSL、上下文压缩。 | 单次任务平均 browser context < 30K token。 |
 | M4 | 页面操作 | click/type/scroll/wait/dialog/upload/media，ref 解析和 host approval。 | 100 个典型操作脚本通过率 > 90%。 |
 | M5 | 源码映射 + 验证闭环 | DOM→源码 resolver、结构/行为/视觉断言、代码 diff 验证。 | “标注→改码→刷新→验证”端到端可用。 |
 | M6 | 样式反馈 + 高级体验 | style inspector、live preview、visual diff、responsive presets。 | 15 个前端常见任务成功率 > 70%。 |
 
-当前实现已补齐右侧结果栏可用性边界：外部页面不再以 iframe/proxy 冒充 live browser，Browser pane 有明确状态机、writer preflight、`computer-use-actions` 输入通道、桌面 Electron `WebContentsView` native embedded adapter、Web 壳 `frame-stream` transport 和 command surface；`/frame` route 仅保留 evidence/manual inspection，不作为右栏 live view 替代路径。桌面 M1 live path 已经从截图投影升级为 native embedded surface，让连续输入、拖拽和滚动走真实浏览器合成面；跨域观察、截图、DOM/AX、console/network 和深度自动化继续交给 BrowserHostSession / TUI browser runtime。
+当前实现已补齐右侧结果栏可用性边界：外部页面不再以 iframe/proxy 冒充 live browser，Browser pane 有明确状态机、writer preflight、`computer-use-actions` 输入通道、桌面 Electron `WebContentsView` native embedded adapter 和 command surface。新的收口目标是删除 Web 壳 `frame-stream` / canvas / WebRTC 作为交互主画面的产品路径；`/frame` route 仅保留 evidence/manual inspection，不作为右栏 live view 替代路径。桌面 M1 live path 已经从截图投影升级为 native embedded surface，让连续输入、拖拽和滚动走真实浏览器合成面；跨域观察、截图、DOM/AX、console/network 和深度自动化继续交给 BrowserHostSession / TUI browser runtime。
 
 ## 后续路线
 
 1. 把 `browser_runtime` 接入 Codex GUI extension resource tree，例如 `/gui/browser/sessions.json`，resource 内容只包含 projection/ref 摘要。
 2. 将 Browser Workbench 的 `/browser ...` 命令直接接入 TUI/Codex command executor，而不是只复制命令。
 3. 为 Runtime Codex 暴露 `/browser` slash command 或 MCP tool，并把高风险动作统一落到 approval request。
-4. 增加 live acceptance：在桌面 shell 中打开 SciForge Browser Workbench，完成 `open external URL -> native embedded surface attached -> click/type/drag/scroll -> snapshot/state refs -> takeover/open-external intent`；Web shell 另测同一 owner frame-stream transport。
-5. 将当前 Electron `WebContentsView` adapter 抽象成可替换边界，后续可接 WebView2 / WKWebView / 独立 Chromium surface；Web GUI 使用 host-owned frame stream，不能伪装成拥有 native 浏览器权限。
+4. 增加 live acceptance：在桌面 shell 中打开 SciForge Browser Workbench，完成 `open external URL -> native embedded surface attached -> click/type/drag/scroll -> snapshot/state refs -> takeover/open-external intent`；缺 native attach 的 shell 必须验证 blocked/handoff，不验证 frame-stream live fallback。
+5. 将当前 Electron `WebContentsView` adapter 抽象成可替换边界，后续可接 WebView2 / WKWebView / 独立 Chromium surface；Web GUI 不能伪装成拥有 native 浏览器权限，也不能使用 host-stream/canvas/WebRTC 作为产品交互兜底。

@@ -276,6 +276,10 @@ async function readWorkspaceToolSse(
         result = withGuiPresentRuntimeResult(data, guiPresent);
         return;
       }
+      if (isStructuredRuntimeDoneProjection(data)) {
+        result = withStructuredRuntimeDoneProjection(data);
+        return;
+      }
       const nativeMessage = joinAssistantStreamText(genericMessages);
       if (nativeMessage) {
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
@@ -434,6 +438,80 @@ function withGuiPresentRuntimeResult(result: unknown, guiPresent: Record<string,
         ...(virtualScreen.slot ? [virtualScreen.slot] : []),
       ],
     } : {}),
+  };
+}
+
+function isStructuredRuntimeDoneProjection(result: unknown): result is Record<string, unknown> {
+  if (!isRecord(result)) return false;
+  const uiManifest = recordList(result.uiManifest);
+  const artifacts = recordList(result.artifacts);
+  if (!uiManifest.length || !artifacts.length) return false;
+  const artifactIds = new Set(artifacts.map((artifact) => asString(artifact.id)).filter((id): id is string => Boolean(id)));
+  return uiManifest.some((slot) => {
+    const artifactRef = asString(slot.artifactRef);
+    if (!artifactRef) return false;
+    return artifactIds.has(artifactRef) && artifactSafeForStructuredDoneProjection(artifacts.find((artifact) => asString(artifact.id) === artifactRef));
+  });
+}
+
+function withStructuredRuntimeDoneProjection(result: Record<string, unknown>): unknown {
+  const output = isRecord(result.output) ? result.output : {};
+  const commandId = asString(result.commandId);
+  const uiManifest = recordList(result.uiManifest);
+  const artifacts = recordList(result.artifacts).filter(artifactSafeForStructuredDoneProjection);
+  const artifactRefs = artifacts.map((artifact) => `artifact:${asString(artifact.id)}`);
+  const auditRefs = uniqueStrings([
+    ...(asStringArray(result.evidenceRefs) ?? []),
+    ...artifactRefs,
+  ]);
+  const runtimeMetadata = runtimeMetadataForProjection(result, auditRefs);
+  const message = safeSummaryText(result.message)
+    ?? (artifacts.some((artifact) => artifact.type === COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE)
+      ? 'Computer Use screen artifact is available in the Screen pane.'
+      : 'Runtime Codex materialized structured artifacts.');
+  return {
+    ...result,
+    message,
+    structuredRuntimeProjection: {
+      schemaVersion: 'sciforge.runtime-codex-structured-done-projection.v1',
+      source: commandId ? `runtime-codex:done:${commandId}` : 'runtime-codex:done',
+      artifactRefs,
+      uiManifestRefs: uiManifest.map((slot) => asString(slot.artifactRef)).filter((ref): ref is string => Boolean(ref)),
+      failClosedRawText: true,
+    },
+    displayIntent: {
+      source: commandId ? `runtime-codex:done:${commandId}` : 'runtime-codex:done',
+      conversationProjection: {
+        schemaVersion: 'sciforge.conversation-projection.v1',
+        conversationId: commandId ? `runtime-codex:${commandId}` : 'runtime-codex:structured-done',
+        visibleAnswer: {
+          status: 'partial-ready',
+          text: message,
+          artifactRefs,
+        },
+        artifacts: artifacts.map((artifact) => ({
+          ref: `artifact:${asString(artifact.id)}`,
+          label: asString(isRecord(artifact.metadata) ? artifact.metadata.title : undefined) ?? asString(artifact.type) ?? 'Structured artifact',
+          mime: asString(artifact.type) ?? 'artifact',
+        })),
+        executionProcess: [{
+          eventId: `${commandId ?? 'runtime-codex'}:structured-done`,
+          type: 'StructuredDoneProjection',
+          summary: 'Runtime Codex completed with refs-first structured artifacts in the done payload.',
+          timestamp: asString(result.timestamp) ?? new Date().toISOString(),
+        }],
+        recoverActions: [],
+        verificationState: { status: 'unverified', verifierRef: commandId ? `runtime-codex:done:${commandId}` : 'runtime-codex:done' },
+        runtimeMetadata,
+        auditRefs,
+        diagnostics: [],
+      },
+    },
+    output: {
+      ...output,
+      message,
+      structuredRuntimeProjection: true,
+    },
   };
 }
 
@@ -1367,6 +1445,16 @@ function guiChoicesFromValue(value: unknown): Array<{ label: string; commandText
 
 function recordList(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function artifactSafeForStructuredDoneProjection(artifact: Record<string, unknown> | undefined): artifact is Record<string, unknown> {
+  if (!artifact) return false;
+  const id = asString(artifact.id);
+  const type = asString(artifact.type);
+  if (!id || !type) return false;
+  if (type !== COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE && type !== COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE) return false;
+  const text = JSON.stringify(artifact);
+  return !/data:image|;base64,|rawScreenshot|screenshotBase64|providerUrl|providerRoute|Authorization|apiKey|password|secret|token/i.test(text);
 }
 
 function sanitizeRecordArray(value: unknown): Record<string, unknown>[] {

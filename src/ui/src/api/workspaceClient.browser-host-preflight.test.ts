@@ -6,6 +6,7 @@ import {
   BROWSER_HOST_SEARCH_CAPABILITY,
   BROWSER_HOST_SESSION_CAPABILITY,
   browserHostSessionFrameStreamUrl,
+  browserHostSessionWebRtcSignalingUrl,
   preflightBrowserHostSessionWriter,
   sendBrowserHostComputerUseAction,
   sendBrowserHostSessionAction,
@@ -327,6 +328,45 @@ describe('browser host session writer preflight', () => {
       }, { maxBufferedBytes: 131072 }),
       'ws://127.0.0.1:6173/api/sciforge/browser-host/sessions/session-a/frame-stream?workspacePath=%2Ftmp%2Fsciforge&maxBufferedBytes=131072',
     );
+  });
+
+  it('builds BrowserHostSession WebRTC signaling URLs without making the endpoint a readiness preflight requirement', async () => {
+    assert.equal(
+      browserHostSessionWebRtcSignalingUrl(testConfig(), {
+        schemaVersion: 'sciforge.browser-host-session.state.v1',
+        id: 'session-a',
+        owner: 'host',
+        providerId: 'sciforge.browser-host-session',
+        status: 'ready',
+        workspacePath: '/tmp/sciforge',
+        requestedUrl: 'https://example.org',
+        url: 'https://example.org',
+        startedAt: '2026-06-01T00:00:00.000Z',
+        updatedAt: '2026-06-01T00:00:01.000Z',
+        viewport: { width: 1365, height: 900 },
+        canGoBack: false,
+        canGoForward: false,
+        liveSurfaceTransport: 'webrtc-data-channel',
+        liveSurfaceRef: 'browser-host-session:session-a/live-surface',
+        frameStreamRef: 'browser-host-session:session-a/frame-stream',
+        singleInteractiveTruth: true,
+        diagnostics: [],
+      }),
+      'http://127.0.0.1:6173/api/sciforge/browser-host/sessions/session-a/webrtc-signaling?workspacePath=%2Ftmp%2Fsciforge&transport=webrtc-data-channel&role=adapter',
+    );
+
+    globalThis.fetch = (async () => jsonResponse(writerHealth(
+      [BROWSER_HOST_SESSION_CAPABILITY, BROWSER_HOST_SEARCH_CAPABILITY],
+      {
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions,frame,frame-stream}',
+        browserHostSearch: '/api/sciforge/browser-host/search',
+      },
+    ))) as typeof fetch;
+
+    const result = await preflightBrowserHostSessionWriter(testConfig());
+
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'ready');
   });
 });
 

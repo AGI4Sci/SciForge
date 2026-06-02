@@ -1285,8 +1285,6 @@ function blockedAcceptanceRubric(reason: string): AcceptanceRubric {
 }
 
 function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPreflightManifest {
-  const existing = readCurrentProviderPreflightManifest();
-  if (existing) return existing;
   const credentials = runtimeCredentialPresence();
   const runtimeApiKeyPresentInServiceEnv = Boolean(process.env.SCIFORGE_RUNTIME_API_KEY?.trim());
   const upstreamBaseUrlPresent = credentials.proxyUpstreamBaseUrl;
@@ -1331,20 +1329,6 @@ function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPrefli
   mkdirSync(join(root, 'docs', 'test-artifacts', 'runtime-provider-preflight'), { recursive: true });
   writeFileSync(providerPreflightManifestPath, JSON.stringify(manifest, null, 2));
   return manifest;
-}
-
-function readCurrentProviderPreflightManifest(): CurrentEnvProviderPreflightManifest | undefined {
-  if (!existsSync(providerPreflightManifestPath)) return undefined;
-  try {
-    const parsed = JSON.parse(readFileSync(providerPreflightManifestPath, 'utf8')) as unknown;
-    if (!isRecord(parsed)) return undefined;
-    if (parsed.schemaVersion !== 'sciforge.runtime-provider-preflight.current-env.v1') return undefined;
-    if (parsed.releaseAcceptance !== 'not-evaluated') return undefined;
-    if (parsed.evidenceMode !== 'current-env-diagnostic-only') return undefined;
-    return parsed as CurrentEnvProviderPreflightManifest;
-  } catch {
-    return undefined;
-  }
 }
 
 function isPreflightOnlyBlockedReason(reason: string): boolean {

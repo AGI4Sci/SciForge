@@ -68,6 +68,8 @@ test('Browser pane loading/progress lifecycle contract covers navigation and rec
     assert.equal(lifecycle?.status, EXPECTED_SURFACE[state].status);
     assert.equal(lifecycle?.tabStatus, EXPECTED_SURFACE[state].tabStatus);
     assert.equal(lifecycle?.requestedUrl, TARGET_URL);
+    assert.equal(lifecycle?.urlDigests?.requested?.length, TARGET_URL.length);
+    assert.match(lifecycle?.urlDigests?.requested?.hash ?? '', /^[a-f0-9]{8}$/);
 
     const projection = rightPaneBrowserProjectionForUrl(TARGET_URL, {
       hostExternalBrowserAvailable: true,
@@ -81,12 +83,14 @@ test('Browser pane loading/progress lifecycle contract covers navigation and rec
     assert.equal(projection.hostSurface, 'browser-host-session');
     assert.equal(projection.canRenderFrame, false);
     assert.doesNotMatch(projection.loadingProgress?.reason ?? '', /raw|https?:\/\//i);
+    assert.equal(projection.loadingProgress?.urlDigests?.requested?.length, TARGET_URL.length);
 
     return {
       state,
       reason: projection.loadingProgress?.reason,
       status: projection.status,
       tabStatus: projection.tabStatus,
+      requestedUrlDigestLength: projection.loadingProgress?.urlDigests?.requested?.length,
       bounded: true,
     };
   });

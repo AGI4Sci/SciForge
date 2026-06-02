@@ -33,7 +33,6 @@ async function executeRequest(dir, request) {
   if (!fs.existsSync(request.filePath)) {
     fs.writeFileSync(request.filePath, '');
   }
-  await vscode.commands.executeCommand('workbench.action.closeAllEditors').catch(() => undefined);
   const document = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(document, {
     preview: false,
@@ -58,6 +57,9 @@ async function executeRequest(dir, request) {
     saved,
     filePath: request.filePath,
     visibleTextEditorDocument: editor.document.uri.fsPath,
+    profileId: request.profileId,
+    nonDestructive: request.nonDestructive === true,
+    workspaceScope: request.workspaceScope,
     isolationFlags: request.isolationFlags,
   });
 }

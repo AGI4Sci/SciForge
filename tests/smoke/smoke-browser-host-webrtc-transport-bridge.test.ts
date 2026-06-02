@@ -54,6 +54,35 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
   assert.equal(manifest.actionChannel.hotPathCapture, 'none');
   assert.ok(manifest.actionChannel.acceptedActions.includes('type'));
   assert.ok(manifest.actionChannel.acceptedActions.includes('drag'));
+  assert.equal(manifest.rightPaneHandoff.status, 'candidate-contract');
+  assert.equal(manifest.rightPaneHandoff.claim, 'bridge-to-right-pane-canvas-handoff-only');
+  assert.equal(manifest.rightPaneHandoff.claimScope, 'candidate-only');
+  assert.equal(manifest.rightPaneHandoff.owner, 'BrowserHostSession');
+  assert.equal(manifest.rightPaneHandoff.rightPaneSurfaceOwner, 'BrowserHostSession');
+  assert.equal(manifest.rightPaneHandoff.productSurface, 'right-pane-browser');
+  assert.equal(manifest.rightPaneHandoff.renderTarget, 'canvas');
+  assert.equal(manifest.rightPaneHandoff.frameRenderer, 'canvas-binary');
+  assert.equal(manifest.rightPaneHandoff.frameTransport, 'webrtc-data-channel');
+  assert.equal(manifest.rightPaneHandoff.fallbackTransport, 'websocket-binary');
+  assert.equal(manifest.rightPaneHandoff.liveSurfaceTransportCandidate, 'webrtc-data-channel');
+  assert.equal(manifest.rightPaneHandoff.hostSessionRef, manifest.refs.hostSessionRef);
+  assert.equal(manifest.rightPaneHandoff.liveSurfaceRef, manifest.refs.liveSurfaceRef);
+  assert.equal(manifest.rightPaneHandoff.frameStreamRef, manifest.refs.frameStreamRef);
+  assert.equal(manifest.rightPaneHandoff.actionChannelRef, manifest.refs.actionChannelRef);
+  assert.equal(manifest.rightPaneHandoff.metricsSummaryRef, manifest.metrics.summaryRef);
+  assert.equal(manifest.rightPaneHandoff.inlineFrameBytes, false);
+  assert.equal(manifest.rightPaneHandoff.inlineSignals, false);
+  assert.equal(manifest.rightPaneHandoff.rawDomCaptured, false);
+  assert.equal(manifest.rightPaneHandoff.secondViewer, false);
+  assert.equal(manifest.rightPaneHandoff.secondTruthSource, false);
+  assert.equal(manifest.rightPaneHandoff.httpFrameLiveFallback, false);
+  assert.equal(manifest.rightPaneHandoff.iframe, false);
+  assert.equal(manifest.rightPaneHandoff.proxy, false);
+  assert.equal(manifest.rightPaneHandoff.snapshotViewer, false);
+  assert.equal(manifest.rightPaneHandoff.fullyPassedClaim, false);
+  assert.equal(manifest.rightPaneHandoff.realUiWebRtcPassClaim, false);
+  assert.equal(manifest.rightPaneHandoff.loopbackEvidenceOnly, false);
+  assert.equal(manifest.rightPaneHandoff.httpFrameRouteClaim, false);
   assert.equal(manifest.frameMessages.length, 3);
   assert.ok(manifest.frameMessages.every((message) => message.rawFramePayload === false && message.inlineFrameBytes === false));
   assert.equal(manifest.bridge.productIntegration, 'BrowserHostSession-owner-transport-bridge');
@@ -92,6 +121,7 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
       bridgeContractInline: true,
       sourceContractInline: true,
       inputPriorityContractInline: true,
+      rightPaneHandoffInline: true,
       realLongRunHandoffInline: true,
       inlinePayloadsCaptured: false,
       rawSignalsCaptured: false,
@@ -115,18 +145,53 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
       secondTruthSource: false,
       boundary: 'bounded-bridge-contract-not-real-ui-webrtc-stack',
     },
+    rightPaneHandoffContract: {
+      schemaVersion: 'sciforge.browser-host-session.webrtc-right-pane-handoff.v1',
+      status: 'candidate-contract',
+      claim: 'bridge-to-right-pane-canvas-handoff-only',
+      claimScope: manifest.rightPaneHandoff.claimScope,
+      owner: manifest.rightPaneHandoff.owner,
+      rightPaneSurfaceOwner: manifest.rightPaneHandoff.rightPaneSurfaceOwner,
+      productSurface: manifest.rightPaneHandoff.productSurface,
+      frameRenderer: manifest.rightPaneHandoff.frameRenderer,
+      frameTransport: manifest.rightPaneHandoff.frameTransport,
+      liveSurfaceTransportCandidate: manifest.rightPaneHandoff.liveSurfaceTransportCandidate,
+      fallbackTransport: manifest.rightPaneHandoff.fallbackTransport,
+      refs: {
+        hostSessionRef: manifest.rightPaneHandoff.hostSessionRef,
+        liveSurfaceRef: manifest.rightPaneHandoff.liveSurfaceRef,
+        frameStreamRef: manifest.rightPaneHandoff.frameStreamRef,
+        actionChannelRef: manifest.rightPaneHandoff.actionChannelRef,
+        metricsSummaryRef: manifest.rightPaneHandoff.metricsSummaryRef,
+      },
+      noSecondViewer: manifest.rightPaneHandoff.secondViewer === false && manifest.rightPaneHandoff.secondTruthSource === false,
+      noHttpFrameLiveFallback: manifest.rightPaneHandoff.httpFrameLiveFallback === false,
+      noInlineSignals: manifest.rightPaneHandoff.inlineSignals === false,
+      noInlineFrameBytes: manifest.rightPaneHandoff.inlineFrameBytes === false,
+      fullyPassedClaim: false,
+      realUiWebRtcPassClaim: false,
+      loopbackEvidenceOnly: false,
+      httpFrameRouteClaim: false,
+      boundary: 'right-pane-contract-recognizes-webrtc-data-channel-candidate-but-does-not-claim-real-ui-webrtc-long-run-pass',
+    },
     realP95DropBackpressureLongRunHandoff: {
       schemaVersion: 'sciforge.browser-host-session.webrtc-transport-real-long-run-handoff.v1',
       status: 'blocked',
       blockedReason: 'real-ui-webrtc-stack-and-long-run-runner-not-implemented-in-this-smoke',
       benchmarkClaim: false,
       owner: 'BrowserHostSession',
+      source: 'contract-smoke-not-real-ui-run',
+      realUiRun: false,
+      secondTruthSource: false,
+      rawPayloadsCaptured: false,
       refs: {
         hostSessionRef: manifest.refs.hostSessionRef,
         bridgeRef: manifest.refs.bridgeRef,
         transportRef: manifest.refs.transportRef,
         metricsSummaryRef: manifest.metrics.summaryRef,
         metricsSamplesRef: manifest.metrics.samplesRef,
+        rightPaneSurfaceRef: manifest.refs.liveSurfaceRef,
+        actionChannelRef: manifest.refs.actionChannelRef,
       },
       requiredMetrics: [
         'sampleCount',
@@ -151,12 +216,43 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
         backpressureEventCount: manifest.metrics.summary.backpressureEventCount,
         dropRate: manifest.metrics.summary.dropRate,
       },
+      realRunProofRequirements: {
+        source: 'real-right-pane-ui-webrtc-run',
+        realUiRun: true,
+        productSurface: 'right-pane-browser',
+        transportEvidenceKind: 'real-ui-webrtc-data-channel-live-stack',
+        hostSessionRefPrefix: 'browser-host-session:',
+        rightPaneSurfaceRefPrefix: 'browser-host-session:',
+        metricsSamplesRefPrefix: 'browser-host-session:',
+        decoderMetricsRefPrefix: 'browser-host-session:',
+        objectUrlMetricsRefPrefix: 'browser-host-session:',
+        minSampleCount: 120,
+        requiredBoundedMetrics: [
+          'p95EndToEndMs',
+          'p95DecodeMs',
+          'dropRate',
+          'totalDroppedFrames',
+          'totalSkippedBackpressure',
+          'backpressureEventCount',
+          'objectUrlCreateCount',
+          'objectUrlRevokeCount',
+          'objectUrlLiveEstimate',
+          'objectUrlRevokeDeficit',
+        ],
+      },
       payloadPolicy: {
         refsFirst: true,
         inlineSamples: false,
         rawFramePayloads: false,
         rawSignals: false,
         rawDom: false,
+      },
+      passRefusalPolicy: {
+        candidateContractDoesNotPass: true,
+        loopbackSmokeDoesNotPass: true,
+        httpFrameRouteDoesNotPass: true,
+        secondTruthSourceDoesNotPass: true,
+        deterministicContractMetricsDoNotPass: true,
       },
     },
     bridge: manifest,
@@ -177,8 +273,14 @@ test('BrowserHostSession WebRTC transport bridge manifest keeps signaling, frame
   };
   assert.equal(evidence.inputPriorityContract.screenshotQueuedBeforeInput, false);
   assert.equal(evidence.inputPriorityContract.status, 'contract-only');
+  assert.equal(evidence.rightPaneHandoffContract.status, 'candidate-contract');
+  assert.equal(evidence.rightPaneHandoffContract.frameTransport, 'webrtc-data-channel');
+  assert.equal(evidence.rightPaneHandoffContract.noSecondViewer, true);
+  assert.equal(evidence.rightPaneHandoffContract.fullyPassedClaim, false);
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.status, 'blocked');
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.benchmarkClaim, false);
+  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realUiRun, false);
+  assert.equal(evidence.realP95DropBackpressureLongRunHandoff.realRunProofRequirements.minSampleCount, 120);
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalDroppedFrames, 4);
   assert.equal(evidence.realP95DropBackpressureLongRunHandoff.deterministicContractMetrics.totalSkippedBackpressure, 1);
   return writeEvidence(evidence);
@@ -212,6 +314,21 @@ test('BrowserHostSession WebRTC transport bridge validator rejects inline payloa
         secondViewer: true,
       },
     },
+    rightPaneHandoff: {
+      ...manifest.rightPaneHandoff,
+      claimScope: 'real-ui-pass',
+      fullyPassedClaim: true,
+      realUiWebRtcPassClaim: true,
+      loopbackEvidenceOnly: true,
+      httpFrameRouteClaim: true,
+      secondViewer: true,
+      secondTruthSource: true,
+      httpFrameLiveFallback: true,
+      iframe: true,
+      proxy: true,
+      inlineSignals: true,
+      inlineFrameBytes: true,
+    },
     rawDom: '<iframe src="/api/sciforge/browser/proxy"></iframe>',
   };
 
@@ -225,6 +342,17 @@ test('BrowserHostSession WebRTC transport bridge validator rejects inline payloa
   assert.match(errors, /frameMessages\[0\]\.inlineFrameBytes must be false/);
   assert.match(errors, /bridge.secondViewer must be false/);
   assert.match(errors, /bridge.forbiddenLiveBackings.secondViewer must be false/);
+  assert.match(errors, /rightPaneHandoff.fullyPassedClaim must be false/);
+  assert.match(errors, /rightPaneHandoff.realUiWebRtcPassClaim must be false/);
+  assert.match(errors, /rightPaneHandoff.loopbackEvidenceOnly must be false/);
+  assert.match(errors, /rightPaneHandoff.httpFrameRouteClaim must be false/);
+  assert.match(errors, /rightPaneHandoff.secondViewer must be false/);
+  assert.match(errors, /rightPaneHandoff.secondTruthSource must be false/);
+  assert.match(errors, /rightPaneHandoff.httpFrameLiveFallback must be false/);
+  assert.match(errors, /rightPaneHandoff.iframe must be false/);
+  assert.match(errors, /rightPaneHandoff.proxy must be false/);
+  assert.match(errors, /rightPaneHandoff.inlineSignals must be false/);
+  assert.match(errors, /rightPaneHandoff.inlineFrameBytes must be false/);
   assert.match(errors, /inline payload|represented by a ref/);
 });
 

@@ -1,17 +1,32 @@
 import type { ComputerUseConfig, GenericActionMetadata, GenericVisionAction } from './types.js';
 
-export const VIRTUAL_APP_SCREEN_INPUT_INTENT_SOURCE = 'virtual-app-screen-canvas';
+export const VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE = 'virtual-app-screen-canvas';
+export const VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE = 'virtual-app-screen-control';
+export const VIRTUAL_APP_SCREEN_INPUT_INTENT_SOURCE = VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE;
 export const VIRTUAL_APP_SCREEN_INPUT_INTENT_COMPLETION_REASON = 'VirtualAppScreen InputIntent terminal-equivalent command';
+
+export type VirtualScreenInputIntentSource =
+  | typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE
+  | typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE;
+
+export type VirtualScreenInputIntentControlKind =
+  | 'takeover'
+  | 'pause-agent'
+  | 'resume-agent'
+  | 'stop-session';
 
 export type VirtualScreenInputIntentCommandParseResult =
   | { kind: 'not-input-intent' }
   | { kind: 'invalid'; reason: string }
   | { kind: 'parsed'; command: VirtualScreenInputIntentCommand };
 
-export interface VirtualScreenInputIntentCommand {
-  source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_SOURCE;
+export type VirtualScreenInputIntentCommand =
+  | VirtualScreenCanvasInputIntentCommand
+  | VirtualScreenLeaseControlInputIntentCommand;
+
+export interface VirtualScreenInputIntentCommandBase {
+  source: VirtualScreenInputIntentSource;
   intentKind: string;
-  action: GenericVisionAction;
   refs: VirtualScreenInputIntentRefs;
   frame?: {
     width?: number;
@@ -20,22 +35,38 @@ export interface VirtualScreenInputIntentCommand {
   ratios: Record<string, number>;
 }
 
+export interface VirtualScreenCanvasInputIntentCommand extends VirtualScreenInputIntentCommandBase {
+  source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE;
+  action: GenericVisionAction;
+}
+
+export interface VirtualScreenLeaseControlInputIntentCommand extends VirtualScreenInputIntentCommandBase {
+  source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE;
+  controlKind: VirtualScreenInputIntentControlKind;
+  action?: undefined;
+}
+
 export interface VirtualScreenInputIntentRefs {
   sessionRef: string;
-  frameRef: string;
+  frameRef?: string;
   inputLeaseRef: string;
-  actionAdapterRef: string;
-  adapterReadinessRef: string;
+  actionAdapterRef?: string;
+  adapterReadinessRef?: string;
   screenRef?: string;
   targetAppRef?: string;
   targetWindowRef?: string;
   evidenceLedgerRef?: string;
+  userLeaseRef?: string;
+  agentLeaseRef?: string;
+  activeLeaseOwnerRef?: string;
+  activeLeaseOwnerRole?: string;
+  leaseControlRef?: string;
 }
 
 type ParsedFlags = Map<string, string>;
 
 const inputIntentPrefixPattern = /^\/(?:computer-use|computer\s+use)\s+input-intent\b/i;
-const requiredRefFlags = [
+const canvasRequiredRefFlags = [
   'session-ref',
   'frame-ref',
   'input-lease-ref',
@@ -43,10 +74,28 @@ const requiredRefFlags = [
   'adapter-readiness-ref',
 ] as const;
 
-const optionalRefFlags = [
+const controlRequiredRefFlags = [
+  'session-ref',
+  'input-lease-ref',
+  'lease-control-ref',
+] as const;
+
+const canvasOptionalRefFlags = [
   'screen-ref',
   'target-app-ref',
   'target-window-ref',
+  'evidence-ledger-ref',
+] as const;
+
+const controlOptionalRefFlags = [
+  'screen-ref',
+  'target-app-ref',
+  'target-window-ref',
+  'user-lease-ref',
+  'agent-lease-ref',
+  'active-lease-owner-ref',
+  'action-adapter-ref',
+  'adapter-readiness-ref',
   'evidence-ledger-ref',
 ] as const;
 
@@ -72,11 +121,11 @@ export function parseVirtualScreenInputIntentCommand(commandText: string): Virtu
   if ('reason' in flags) return { kind: 'invalid', reason: flags.reason };
 
   const source = flagValue(flags.flags, 'source');
-  if (source !== VIRTUAL_APP_SCREEN_INPUT_INTENT_SOURCE) {
-    return { kind: 'invalid', reason: 'InputIntent source must be virtual-app-screen-canvas.' };
+  if (!isInputIntentSource(source)) {
+    return { kind: 'invalid', reason: 'InputIntent source must be virtual-app-screen-canvas or virtual-app-screen-control.' };
   }
 
-  const refsResult = parseRefs(flags.flags);
+  const refsResult = parseRefs(flags.flags, source);
   if ('reason' in refsResult) return { kind: 'invalid', reason: refsResult.reason };
 
   const intentKind = flagValue(flags.flags, 'kind')?.trim();
@@ -87,7 +136,26 @@ export function parseVirtualScreenInputIntentCommand(commandText: string): Virtu
     height: positiveNumberFlag(flags.flags, 'frame-height'),
   };
   const ratios = ratioFlags(flags.flags);
+  if (source === VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE) {
+    const controlKind = normalizeControlKind(intentKind);
+    if (!controlKind) {
+      return { kind: 'invalid', reason: `Unsupported VirtualAppScreen lease control kind: ${intentKind}.` };
+    }
+    return {
+      kind: 'parsed',
+      command: {
+        source,
+        intentKind: controlKind,
+        controlKind,
+        refs: refsResult.refs,
+        frame,
+        ratios,
+      },
+    };
+  }
+
   const actionResult = actionFromInputIntent({
+    source,
     intentKind,
     flags: flags.flags,
     refs: refsResult.refs,
@@ -113,6 +181,9 @@ export function applyVirtualScreenInputIntentCommandToConfig(
   config: ComputerUseConfig,
   parsed: VirtualScreenInputIntentCommand,
 ): ComputerUseConfig {
+  if (parsed.source !== VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE || !parsed.action) {
+    throw new Error('VirtualAppScreen lease control InputIntent cannot be converted into a generic GUI action fixture.');
+  }
   config.testActionFixtureMode = true;
   config.testOnlyPlannedActions = [parsed.action];
   config.maxSteps = 1;
@@ -129,14 +200,16 @@ export function virtualScreenInputIntentTraceDetail(parsed: VirtualScreenInputIn
     kind: parsed.intentKind,
     refs: parsed.refs,
     frame: parsed.frame,
-    actionType: parsed.action.type,
+    actionType: parsed.action?.type,
+    controlKind: parsed.source === VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE ? parsed.controlKind : undefined,
     testActionFixtureMode: true,
-    testOnlyPlannedActions: 1,
-    completionPolicy: 'one-successful-non-wait-action',
+    testOnlyPlannedActions: parsed.action ? 1 : 0,
+    completionPolicy: parsed.action ? 'one-successful-non-wait-action' : undefined,
   };
 }
 
 function actionFromInputIntent(params: {
+  source: typeof VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE;
   intentKind: string;
   flags: ParsedFlags;
   refs: VirtualScreenInputIntentRefs;
@@ -204,6 +277,7 @@ function actionFromInputIntent(params: {
 }
 
 function actionMetadata(params: {
+  source: VirtualScreenInputIntentSource;
   intentKind: string;
   refs: VirtualScreenInputIntentRefs;
   frame: { width?: number; height?: number };
@@ -215,7 +289,7 @@ function actionMetadata(params: {
     screenId: params.refs.screenRef,
     windowId: params.refs.targetWindowRef,
     grounding: {
-      source: VIRTUAL_APP_SCREEN_INPUT_INTENT_SOURCE,
+      source: params.source,
       intentKind: params.intentKind,
       refs: params.refs,
       frame: params.frame,
@@ -245,8 +319,17 @@ function pointFromRatios(
   };
 }
 
-function parseRefs(flags: ParsedFlags): { refs: VirtualScreenInputIntentRefs } | { reason: string } {
+function parseRefs(
+  flags: ParsedFlags,
+  source: VirtualScreenInputIntentSource,
+): { refs: VirtualScreenInputIntentRefs } | { reason: string } {
   const refs: Partial<VirtualScreenInputIntentRefs> = {};
+  const requiredRefFlags = source === VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE
+    ? canvasRequiredRefFlags
+    : controlRequiredRefFlags;
+  const optionalRefFlags = source === VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE
+    ? canvasOptionalRefFlags
+    : controlOptionalRefFlags;
   for (const flag of requiredRefFlags) {
     const value = flagValue(flags, flag);
     if (!value) return { reason: `InputIntent requires --${flag}.` };
@@ -260,6 +343,12 @@ function parseRefs(flags: ParsedFlags): { refs: VirtualScreenInputIntentRefs } |
     const safe = safeTerminalRef(value);
     if (!safe) return { reason: `InputIntent ref --${flag} is unsafe.` };
     refs[refProperty(flag)] = safe;
+  }
+  const activeLeaseOwnerRole = flagValue(flags, 'active-lease-owner-role');
+  if (activeLeaseOwnerRole) {
+    const safe = safeTerminalRef(activeLeaseOwnerRole);
+    if (!safe) return { reason: 'InputIntent ref --active-lease-owner-role is unsafe.' };
+    refs.activeLeaseOwnerRole = safe;
   }
   return { refs: refs as VirtualScreenInputIntentRefs };
 }
@@ -288,6 +377,22 @@ function safeTerminalRef(value: string) {
   }
   if (/[\r\n]/.test(normalized)) return undefined;
   return normalized;
+}
+
+function isInputIntentSource(value: string | undefined): value is VirtualScreenInputIntentSource {
+  return value === VIRTUAL_APP_SCREEN_INPUT_INTENT_CANVAS_SOURCE
+    || value === VIRTUAL_APP_SCREEN_INPUT_INTENT_CONTROL_SOURCE;
+}
+
+function normalizeControlKind(value: string): VirtualScreenInputIntentControlKind | undefined {
+  const normalized = value.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (
+    normalized === 'takeover'
+    || normalized === 'pause-agent'
+    || normalized === 'resume-agent'
+    || normalized === 'stop-session'
+  ) return normalized;
+  return undefined;
 }
 
 function ratioFlags(flags: ParsedFlags) {

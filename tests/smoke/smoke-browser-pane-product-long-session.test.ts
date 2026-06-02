@@ -11,6 +11,7 @@ import { test } from 'node:test';
 import {
   chromium,
   type Browser,
+  type BrowserContext,
   type Locator,
   type Page,
   type Request,
@@ -24,6 +25,7 @@ const PRODUCT_LONG_SESSION_LOADING_PROGRESS_TRACE_SCHEMA = 'sciforge.browser-pan
 const FIXTURE_HOST = 'sciforge-browser-pane-product-long-session.test';
 const DEFAULT_QUICK_ITERATIONS = 2;
 const TRUE_LONG_SESSION_MINUTES = 30;
+const MAX_PRODUCT_LONG_SESSION_MANIFEST_BYTES = 96_000;
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-product-long-session');
 const manifestPath = join(artifactDir, 'manifest.json');
 const PRODUCT_LONG_SESSION_CONFIG = productLongSessionConfig();
@@ -100,6 +102,11 @@ type BrowserPaneLoadingProgressLifecycleTraceSummary = {
   observedLifecycleReasons: BoundedCount[];
   observedLifecycleSources: BoundedCount[];
   observedTransitions: string[];
+  urlEvidence: {
+    requested: BoundedUrlDigestSummary;
+    current: BoundedUrlDigestSummary;
+    final: BoundedUrlDigestSummary;
+  };
   completionEvidence: {
     uiLoadingToReady: boolean;
     lifecycleNavigationStartToNetworkQuiet: boolean;
@@ -123,6 +130,19 @@ type BrowserHostNetworkSample = {
   loadingProgressState?: string;
   loadingProgressReason?: string;
   loadingProgressSource?: string;
+  requestedUrlLength?: number;
+  requestedUrlHash?: string;
+  currentUrlLength?: number;
+  currentUrlHash?: string;
+  finalUrlLength?: number;
+  finalUrlHash?: string;
+};
+
+type BoundedUrlDigestSummary = {
+  sampleCount: number;
+  uniqueHashCount: number;
+  lengthRange: number[];
+  hashes: string[];
 };
 
 type FrameStreamStats = {
@@ -131,6 +151,14 @@ type FrameStreamStats = {
   binaryFramesReceived: number;
   firstFrameLatencyMs?: number;
   maxPayloadBytes: number;
+};
+
+type ObjectUrlBoundedStats = {
+  createCount: number;
+  revokeCount: number;
+  liveEstimate: number;
+  maxLiveEstimate: number;
+  revokeDeficit: number;
 };
 
 type RightPaneBoundedEvidence = {
@@ -159,6 +187,7 @@ type RightPaneBoundedEvidence = {
   dataImageSurfaces: number;
   base64Attributes: number;
   approxJsHeapUsed?: number;
+  objectUrls: ObjectUrlBoundedStats;
 };
 
 type BrowserWorkbenchFailureSnapshot = {
@@ -177,6 +206,102 @@ type BrowserWorkbenchFailureSnapshot = {
     back: 'enabled' | 'disabled' | 'missing';
     forward: 'enabled' | 'disabled' | 'missing';
     reload: 'enabled' | 'disabled' | 'missing';
+  };
+};
+
+type ProductLongSessionResourceEvidence = {
+  bounded: true;
+  sample: 'before-restart' | 'before-failure';
+  approxJsHeapUsed?: number;
+  approxJsHeapDeltaFromInitial?: number;
+  objectUrls: ObjectUrlBoundedStats;
+  surface: {
+    attachChanges: number;
+    detachChanges: number;
+    maxHostFrames: number;
+    sessionRefCount: number;
+    surfaceReconnectObserved: boolean;
+  };
+};
+
+type ProductLongSessionFailureClassification = {
+  kind:
+    | 'address-details-ready-timeout'
+    | 'browser-workbench-url-timeout'
+    | 'browser-host-session-url-timeout'
+    | 'fixture-event-timeout'
+    | 'browser-executable-missing'
+    | 'sciforge-results-panel-timeout'
+    | 'browser-host-session-continuity-break'
+    | 'product-long-session-cleanup-blocked'
+    | 'workspace-writer-health-timeout'
+    | 'product-long-session-error';
+  phaseCategory:
+    | 'address-details-navigation'
+    | 'browser-navigation'
+    | 'fixture-readiness'
+    | 'session-continuity'
+    | 'cleanup'
+    | 'environment'
+    | 'workspace'
+    | 'unknown';
+  timedOut: boolean;
+  retryable: boolean;
+  expectedRoute: 'details' | 'session' | 'unknown';
+  blockedEvidence: {
+    bounded: true;
+    noRawUrl: true;
+    noRawDom: true;
+    uiState?: string;
+    displayedUrlLength?: number;
+    displayedUrlHash?: string;
+    addressDraftLength?: number;
+    addressDraftHash?: string;
+    hostFrameCount?: number;
+    hiddenKeyboardActive?: boolean;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+    frameStreamRefs: string[];
+    recentHostStatuses: BoundedCount[];
+    recentLoadingStates: BoundedCount[];
+    recentLoadingReasons: BoundedCount[];
+    observedUiStates: BoundedCount[];
+    resourceHealth?: ProductLongSessionResourceEvidence;
+  };
+};
+
+type AddressDetailsRecoveryEvidence = {
+  iteration: number;
+  attempted: boolean;
+  status: 'not-needed' | 'succeeded' | 'blocked';
+  actionSequence: Array<'open-url' | 'reload' | 'retry-open-url'>;
+  reasonCode?: 'workbench-url-timeout' | 'browser-host-session-url-timeout' | 'fixture-event-timeout' | 'address-details-retry-timeout';
+  reasonHash?: string;
+  initialFailure?: {
+    reasonCode: 'workbench-url-timeout' | 'browser-host-session-url-timeout' | 'fixture-event-timeout' | 'address-details-retry-timeout';
+    reasonHash: string;
+  };
+  reloadAck?: {
+    status: 'acked' | 'not-observed' | 'command-unavailable';
+    action: 'reload';
+    reasonHash?: string;
+  };
+  boundedRefs?: {
+    bounded: true;
+    noRawUrl: true;
+    noRawDom: true;
+    workbenchState?: string;
+    displayedUrlLength?: number;
+    displayedUrlHash?: string;
+    addressDraftLength?: number;
+    addressDraftHash?: string;
+    hostFrameCount?: number;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+    frameStreamRefs: string[];
+    recentHostStatuses: BoundedCount[];
+    recentLoadingStates: BoundedCount[];
+    recentLoadingReasons: BoundedCount[];
   };
 };
 
@@ -292,12 +417,23 @@ type ProductLongSessionManifest = {
       rightPaneSessionRefCount: number;
       approxJsHeapUsedBeforeRestart?: number;
       approxJsHeapUsedAfterRestart?: number;
+      approxJsHeapDeltaBeforeRestart?: number;
+      objectUrlCreateCountBeforeRestart: number;
+      objectUrlRevokeCountBeforeRestart: number;
+      objectUrlLiveEstimateBeforeRestart: number;
+      objectUrlMaxLiveEstimateBeforeRestart: number;
+      objectUrlRevokeDeficitBeforeRestart: number;
     };
     loadingProgressLifecycle: BrowserPaneLoadingProgressLifecycleTraceSummary;
     rightPaneBeforeRestart: RightPaneBoundedEvidence;
     rightPaneAfterRestart?: RightPaneBoundedEvidence;
   };
   failureRetry: {
+    addressDetailsRecovery: {
+      attemptedIterations: number[];
+      outcomeCount: number;
+      outcomes: AddressDetailsRecoveryEvidence[];
+    };
     workspaceWriterRestart: WorkspaceWriterRestartEvidence;
     pageDiagnostics: {
       pageErrorCount: number;
@@ -334,6 +470,7 @@ type ProductLongSessionBlockedManifest = {
     reasonHash: string;
     errorName: string;
     currentIteration: number;
+    classification: ProductLongSessionFailureClassification;
     retrySemantics: 'typed-blocked-artifact-written-and-original-error-rethrown';
   };
   boundedMetrics: {
@@ -348,6 +485,12 @@ type ProductLongSessionBlockedManifest = {
       fixtureEventCount: number;
       rightPaneSessionRefCount: number;
       approxJsHeapUsedBeforeFailure?: number;
+      approxJsHeapDeltaBeforeFailure?: number;
+      objectUrlCreateCountBeforeFailure: number;
+      objectUrlRevokeCountBeforeFailure: number;
+      objectUrlLiveEstimateBeforeFailure: number;
+      objectUrlMaxLiveEstimateBeforeFailure: number;
+      objectUrlRevokeDeficitBeforeFailure: number;
     };
     loadingProgressLifecycle?: BrowserPaneLoadingProgressLifecycleTraceSummary;
     rightPaneBeforeFailure?: RightPaneBoundedEvidence;
@@ -360,6 +503,13 @@ type ProductLongSessionBlockedManifest = {
     consoleErrorCount: number;
     recentPageErrorHashes: string[];
     recentConsoleErrorHashes: string[];
+  };
+  failureRetry: {
+    addressDetailsRecovery: {
+      attemptedIterations: number[];
+      outcomeCount: number;
+      outcomes: AddressDetailsRecoveryEvidence[];
+    };
   };
   forbiddenEvidence: ProductLongSessionManifest['forbiddenEvidence'];
   verificationCommand: string;
@@ -381,6 +531,10 @@ type RightPaneProductObserverState = {
   browserStateSampleCount: number;
   lastBrowserState: string;
   hiddenKeyboardFocusKeys: string[];
+  objectUrlCreateCount: number;
+  objectUrlRevokeCount: number;
+  objectUrlLiveEstimate: number;
+  objectUrlMaxLiveEstimate: number;
 };
 
 type RightPaneProductObserver = {
@@ -394,6 +548,353 @@ declare global {
     __sciforgeBrowserPaneProductLongSession?: RightPaneProductObserver;
   }
 }
+
+test('product long-session blocked diagnostics classify address-details ready timeout with bounded evidence', () => {
+  const classification = classifyProductLongSessionFailure({
+    phase: 'iteration-7-address-details',
+    error: new Error('Timed out waiting for Browser workbench URL {"expectedPatternHash":"abc","causeHash":"def"}'),
+    workbenchFailureSnapshot: {
+      hasViewer: true,
+      state: 'loading',
+      displayedUrlLength: 54,
+      displayedUrlHash: hashText('bounded displayed url placeholder'),
+      addressDraftLength: 54,
+      addressDraftHash: hashText('bounded address draft placeholder'),
+      liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
+      sessionRefs: ['browser-host-session:session-7'],
+      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
+      hostFrameCount: 1,
+      hiddenKeyboardActive: true,
+      commandAvailability: {
+        back: 'enabled',
+        forward: 'disabled',
+        reload: 'enabled',
+      },
+    },
+    rightPaneBeforeFailure: {
+      state: 'loading',
+      mutationCount: 8,
+      attachChanges: 1,
+      detachChanges: 0,
+      maxHostFrames: 1,
+      sessionIds: ['session-7'],
+      liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
+      renderers: ['canvas-binary'],
+      browserStates: ['loading'],
+      browserStateCounts: { loading: 3 },
+      browserStateTransitions: ['ready->loading'],
+      browserStateSampleCount: 3,
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-7'],
+      hostFrames: 1,
+      canvasSurfaces: 1,
+      imageSurfaces: 0,
+      nativeSurfaces: 0,
+      iframeSurfaces: 0,
+      proxySurfaces: 0,
+      webviewSurfaces: 0,
+      systemPopupSurfaces: 0,
+      dataImageSurfaces: 0,
+      base64Attributes: 0,
+      objectUrls: {
+        createCount: 18,
+        revokeCount: 16,
+        liveEstimate: 2,
+        maxLiveEstimate: 4,
+        revokeDeficit: 2,
+      },
+    },
+    initialRightPaneEvidence: {
+      state: 'ready',
+      mutationCount: 1,
+      attachChanges: 1,
+      detachChanges: 0,
+      maxHostFrames: 1,
+      sessionIds: ['session-7'],
+      liveSurfaceRefs: ['browser-host-session:session-7/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-7/frame-stream'],
+      renderers: ['canvas-binary'],
+      browserStates: ['ready'],
+      browserStateCounts: { ready: 1 },
+      browserStateTransitions: [],
+      browserStateSampleCount: 1,
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-7'],
+      hostFrames: 1,
+      canvasSurfaces: 1,
+      imageSurfaces: 0,
+      nativeSurfaces: 0,
+      iframeSurfaces: 0,
+      proxySurfaces: 0,
+      webviewSurfaces: 0,
+      systemPopupSurfaces: 0,
+      dataImageSurfaces: 0,
+      base64Attributes: 0,
+      approxJsHeapUsed: 10_000_000,
+      objectUrls: {
+        createCount: 1,
+        revokeCount: 1,
+        liveEstimate: 0,
+        maxLiveEstimate: 1,
+        revokeDeficit: 0,
+      },
+    },
+    networkSamples: [
+      {
+        endpoint: 'session-action',
+        status: 200,
+        durationMs: 123,
+        sessionRef: 'browser-host-session:session-7',
+        sessionStatus: 'loading',
+        action: 'navigate',
+        loadingProgressState: 'stalled',
+        loadingProgressReason: 'host-navigation-timeout',
+        loadingProgressSource: 'browser-host-session',
+      },
+    ],
+  });
+
+  assert.equal(classification.kind, 'address-details-ready-timeout');
+  assert.equal(classification.phaseCategory, 'address-details-navigation');
+  assert.equal(classification.expectedRoute, 'details');
+  assert.equal(classification.timedOut, true);
+  assert.equal(classification.retryable, true);
+  assert.equal(classification.blockedEvidence.noRawUrl, true);
+  assert.equal(classification.blockedEvidence.noRawDom, true);
+  assert.deepEqual(classification.blockedEvidence.recentLoadingStates, [{ value: 'stalled', count: 1 }]);
+  assert.deepEqual(classification.blockedEvidence.observedUiStates, [{ value: 'loading', count: 5 }]);
+  assert.deepEqual(classification.blockedEvidence.resourceHealth?.objectUrls, {
+    createCount: 18,
+    revokeCount: 16,
+    liveEstimate: 2,
+    maxLiveEstimate: 4,
+    revokeDeficit: 2,
+  });
+  assert.equal(classification.blockedEvidence.resourceHealth?.surface.detachChanges, 0);
+  assert.equal(classification.blockedEvidence.resourceHealth?.approxJsHeapDeltaFromInitial, undefined);
+});
+
+test('product long-session blocked diagnostics fall back to right-pane refs when workbench snapshot is missing', () => {
+  const classification = classifyProductLongSessionFailure({
+    phase: 'iteration-3-address-details',
+    error: new Error('Timed out waiting for Browser workbench URL'),
+    rightPaneBeforeFailure: {
+      state: 'loading',
+      mutationCount: 6,
+      attachChanges: 2,
+      detachChanges: 1,
+      maxHostFrames: 1,
+      sessionIds: ['session-3'],
+      liveSurfaceRefs: ['browser-host-session:session-3/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-3/frame-stream'],
+      renderers: ['canvas-binary'],
+      browserStates: ['loading'],
+      browserStateCounts: { loading: 2 },
+      browserStateTransitions: ['ready->loading'],
+      browserStateSampleCount: 2,
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-3'],
+      hostFrames: 1,
+      canvasSurfaces: 1,
+      imageSurfaces: 0,
+      nativeSurfaces: 0,
+      iframeSurfaces: 0,
+      proxySurfaces: 0,
+      webviewSurfaces: 0,
+      systemPopupSurfaces: 0,
+      dataImageSurfaces: 0,
+      base64Attributes: 0,
+      approxJsHeapUsed: 21_000_000,
+      objectUrls: {
+        createCount: 9,
+        revokeCount: 7,
+        liveEstimate: 2,
+        maxLiveEstimate: 3,
+        revokeDeficit: 2,
+      },
+    },
+    initialRightPaneEvidence: {
+      state: 'ready',
+      mutationCount: 1,
+      attachChanges: 1,
+      detachChanges: 0,
+      maxHostFrames: 1,
+      sessionIds: ['session-3'],
+      liveSurfaceRefs: ['browser-host-session:session-3/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-3/frame-stream'],
+      renderers: ['canvas-binary'],
+      browserStates: ['ready'],
+      browserStateCounts: { ready: 1 },
+      browserStateTransitions: [],
+      browserStateSampleCount: 1,
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-3'],
+      hostFrames: 1,
+      canvasSurfaces: 1,
+      imageSurfaces: 0,
+      nativeSurfaces: 0,
+      iframeSurfaces: 0,
+      proxySurfaces: 0,
+      webviewSurfaces: 0,
+      systemPopupSurfaces: 0,
+      dataImageSurfaces: 0,
+      base64Attributes: 0,
+      approxJsHeapUsed: 17_000_000,
+      objectUrls: {
+        createCount: 0,
+        revokeCount: 0,
+        liveEstimate: 0,
+        maxLiveEstimate: 0,
+        revokeDeficit: 0,
+      },
+    },
+    networkSamples: [],
+  });
+
+  assert.equal(classification.kind, 'address-details-ready-timeout');
+  assert.equal(classification.blockedEvidence.uiState, 'loading');
+  assert.deepEqual(classification.blockedEvidence.sessionRefs, ['browser-host-session:session-3']);
+  assert.deepEqual(classification.blockedEvidence.liveSurfaceRefs, ['browser-host-session:session-3/live-surface']);
+  assert.deepEqual(classification.blockedEvidence.frameStreamRefs, ['browser-host-session:session-3/frame-stream']);
+  assert.equal(classification.blockedEvidence.hostFrameCount, 1);
+  assert.equal(classification.blockedEvidence.hiddenKeyboardActive, true);
+  assert.equal(classification.blockedEvidence.resourceHealth?.approxJsHeapDeltaFromInitial, 4_000_000);
+  assert.equal(classification.blockedEvidence.resourceHealth?.surface.surfaceReconnectObserved, true);
+});
+
+test('product long-session blocked diagnostics classify BrowserHostSession continuity breaks distinctly', () => {
+  const classification = classifyProductLongSessionFailure({
+    phase: 'iteration-1-results-browser-tab-switch',
+    error: new assert.AssertionError({
+      message: 'product long-session must keep the same BrowserHostSession before workspace restart',
+      actual: false,
+      expected: true,
+      operator: 'strictEqual',
+    }),
+    rightPaneBeforeFailure: {
+      state: 'ready',
+      mutationCount: 4,
+      attachChanges: 1,
+      detachChanges: 0,
+      maxHostFrames: 1,
+      sessionIds: ['session-after-tab-switch'],
+      liveSurfaceRefs: ['browser-host-session:session-after-tab-switch/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-after-tab-switch/frame-stream'],
+      renderers: ['canvas-binary'],
+      browserStates: ['ready'],
+      browserStateCounts: { ready: 2 },
+      browserStateTransitions: ['loading->ready'],
+      browserStateSampleCount: 2,
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-after-tab-switch'],
+      hostFrames: 1,
+      canvasSurfaces: 1,
+      imageSurfaces: 0,
+      nativeSurfaces: 0,
+      iframeSurfaces: 0,
+      proxySurfaces: 0,
+      webviewSurfaces: 0,
+      systemPopupSurfaces: 0,
+      dataImageSurfaces: 0,
+      base64Attributes: 0,
+      objectUrls: {
+        createCount: 2,
+        revokeCount: 2,
+        liveEstimate: 0,
+        maxLiveEstimate: 1,
+        revokeDeficit: 0,
+      },
+    },
+    networkSamples: [],
+  });
+
+  assert.equal(classification.kind, 'browser-host-session-continuity-break');
+  assert.equal(classification.phaseCategory, 'session-continuity');
+  assert.equal(classification.retryable, false);
+  assert.deepEqual(classification.blockedEvidence.sessionRefs, ['browser-host-session:session-after-tab-switch']);
+});
+
+test('product long-session blocked diagnostics classify cleanup separately from product continuity flakes', () => {
+  const classification = classifyProductLongSessionFailure({
+    phase: 'cleanup-temp-root-rm',
+    error: new Error('Timed out during temp-root-rm'),
+    networkSamples: [],
+  });
+
+  assert.equal(classification.kind, 'product-long-session-cleanup-blocked');
+  assert.equal(classification.phaseCategory, 'cleanup');
+  assert.equal(classification.retryable, false);
+  assert.equal(classification.expectedRoute, 'unknown');
+  assert.deepEqual(classification.blockedEvidence.sessionRefs, []);
+});
+
+test('product long-session deadline mode cannot be truncated by requested iterations', () => {
+  const config: ProductLongSessionConfig = {
+    mode: 'extended-product-long-session',
+    requestedMinutes: TRUE_LONG_SESSION_MINUTES,
+    requestedIterations: 1,
+    iterations: Number.MAX_SAFE_INTEGER,
+    runUntilDeadline: true,
+    durationTargetMs: TRUE_LONG_SESSION_MINUTES * 60_000,
+    testTimeoutMs: TRUE_LONG_SESSION_MINUTES * 60_000 + 240_000,
+    defaultSmokeIsThirtyMinuteBenchmark: false,
+  };
+
+  assert.equal(shouldContinueLongSession(config, 1, Date.now() - 1_000), true);
+  assert.equal(shouldContinueLongSession(config, 1, Date.now() - config.durationTargetMs - 1), false);
+  assert.equal(
+    productLongSessionVerificationCommand(config),
+    'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=30 SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS=1 node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+  );
+});
+
+test('product long-session runner contract rejects pass-shaped truncated thirty-minute artifacts', () => {
+  const runner: ProductLongSessionManifest['runner'] = {
+    mode: 'extended-product-long-session',
+    requestedMinutes: TRUE_LONG_SESSION_MINUTES,
+    requestedIterations: 1,
+    iterationsCompleted: 1,
+    durationMs: 1_200,
+    defaultSmokeIsThirtyMinuteBenchmark: false,
+    extensionEnv: {
+      minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
+      iterations: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS',
+    },
+  };
+
+  assert.throws(
+    () => assertProductLongSessionRunnerContract(
+      runner,
+      'passed',
+      'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=30 SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS=1 node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+    ),
+    /requested 30\+ minute product long-session pass must run for the requested duration/,
+  );
+  assert.doesNotThrow(() => assertProductLongSessionRunnerContract(
+    runner,
+    'blocked',
+    'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=30 SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS=1 node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+  ));
+});
+
+test('product long-session runner contract requires minutes env when artifact requests a deadline', () => {
+  const runner: ProductLongSessionManifest['runner'] = {
+    mode: 'extended-product-long-session',
+    requestedMinutes: TRUE_LONG_SESSION_MINUTES,
+    iterationsCompleted: 1,
+    durationMs: TRUE_LONG_SESSION_MINUTES * 60_000,
+    defaultSmokeIsThirtyMinuteBenchmark: false,
+    extensionEnv: {
+      minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
+      iterations: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS',
+    },
+  };
+
+  assert.throws(
+    () => assertProductLongSessionRunnerContract(
+      runner,
+      'passed',
+      'node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+    ),
+    /requested minutes artifact must include its minutes env in verificationCommand/,
+  );
+});
 
 test('SciForge Browser pane product long-session harness emits bounded continuity and reconnect evidence', { timeout: PRODUCT_LONG_SESSION_CONFIG.testTimeoutMs }, async () => {
   const config = PRODUCT_LONG_SESSION_CONFIG;
@@ -413,6 +914,8 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
   const fixtureOrigin = `http://${FIXTURE_HOST}:${fixturePort}`;
   const runId = `browser-pane-product-long-session-${Date.now().toString(36)}`;
   let browser: Browser | undefined;
+  let context: BrowserContext | undefined;
+  let browserPid: number | undefined;
   let workspaceWriter: ChildProcess | undefined;
   let uiServer: ChildProcess | undefined;
   let fixture: Awaited<ReturnType<typeof startProductLongSessionFixture>> | undefined;
@@ -421,11 +924,13 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
   let metrics: ProductLongSessionMetrics | undefined;
   let networkRecorder: ReturnType<typeof recordBrowserHostNetwork> | undefined;
   let frameStreamStats: FrameStreamStats | undefined;
+  let rightPaneInitial: RightPaneBoundedEvidence | undefined;
   let loopStartedAt = Date.now();
   let firstSession: JsonRecord | undefined;
   let sessionBeforeWorkspaceRestart: JsonRecord | undefined;
   let iterationsCompleted = 0;
   const tabSwitchContinuity: boolean[] = [];
+  const addressDetailsRecovery: AddressDetailsRecoveryEvidence[] = [];
   let currentPhase = 'setup';
 
   await mkdir(workspacePath);
@@ -465,7 +970,8 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
     await waitForHttp(uiUrl, 45_000);
 
     browser = await chromium.launch({ executablePath: browserExecutable, headless: true });
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    browserPid = browserProcessId(browser);
+    context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
     page = await context.newPage();
     pageDiagnostics = recordPageDiagnostics(page);
     metrics = new ProductLongSessionMetrics();
@@ -478,6 +984,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
     await ensureBrowserPane(page);
     await installRightPaneObserver(page);
     const surface = page.locator('.right-pane-browser-surface');
+    rightPaneInitial = await collectRightPaneEvidence(page);
 
     loopStartedAt = Date.now();
 
@@ -493,6 +1000,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
         workspacePath,
         metrics,
         networkRecorder,
+        addressDetailsRecovery,
         onPhase: (phase) => {
           currentPhase = phase;
         },
@@ -532,6 +1040,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       sessionBeforeWorkspaceRestart,
       sessionAfterWorkspaceRestart: restart.sessionAfterRestart,
       rightPaneBeforeRestart,
+      rightPaneInitial,
       rightPaneAfterRestart,
       events,
       metrics: metrics.samples,
@@ -539,6 +1048,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       frameStream: frameStream.stats,
       restartEvidence: restart.evidence,
       tabSwitchContinuity,
+      addressDetailsRecovery,
       diagnostics: pageDiagnostics,
     });
     assertProductLongSessionManifest(manifest);
@@ -567,6 +1077,8 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       networkRecorder,
       frameStream: frameStreamStats,
       diagnostics: pageDiagnostics,
+      rightPaneInitial,
+      addressDetailsRecovery,
     }).catch((artifactError) => {
       console.error(`[blocked-artifact-failed] Browser pane product long-session ${JSON.stringify({
         reasonHash: hashText(artifactError instanceof Error ? artifactError.message : String(artifactError)),
@@ -574,11 +1086,13 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
     });
     throw error;
   } finally {
-    await browser?.close().catch(() => undefined);
-    await stopProcess(uiServer);
-    await stopProcess(workspaceWriter);
-    await fixture?.close();
-    await rm(tempRoot, { recursive: true, force: true });
+    await boundedCleanup('page-close', () => page?.close({ runBeforeUnload: false }), 5_000);
+    await boundedCleanup('browser-context-close', () => context?.close(), 5_000);
+    await boundedCleanup('browser-close', () => closeBrowserWithProcessFallback(browser, browserPid), 10_000);
+    await boundedCleanup('ui-server-stop', () => stopProcess(uiServer), 5_000);
+    await boundedCleanup('workspace-writer-stop', () => stopProcess(workspaceWriter), 5_000);
+    await boundedCleanup('fixture-close', () => fixture?.close(), 5_000);
+    await boundedCleanup('temp-root-rm', () => rm(tempRoot, { recursive: true, force: true }), 5_000);
   }
 });
 
@@ -592,6 +1106,7 @@ async function runProductLongSessionIteration(input: {
   workspacePath: string;
   metrics: ProductLongSessionMetrics;
   networkRecorder: ReturnType<typeof recordBrowserHostNetwork>;
+  addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
   onPhase?: (phase: string) => void;
 }): Promise<{ firstSession: JsonRecord; finalSession: JsonRecord; tabSwitchSameSession: boolean }> {
   const sessionUrl = `${input.fixtureOrigin}/session?iteration=${input.iteration}`;
@@ -665,15 +1180,11 @@ async function runProductLongSessionIteration(input: {
 
   input.onPhase?.(`iteration-${input.iteration}-address-details`);
   await input.metrics.measure('navigation', `iteration-${input.iteration}-address-details`, async () => {
-    await openBrowserPaneUrl(input.surface, detailsUrl);
-    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`));
-    await waitForSessionUrl(input.page, input.writerUrl, input.workspacePath, /\/details\?iteration=/, input.metrics, `iteration-${input.iteration}-state-details`);
-    await waitForFixtureEvent(
-      input.fixtureUrl,
-      (event) => event.type === 'page-load' && event.path === '/details' && event.iteration === input.iteration,
-      30_000,
-      `details page load ${input.iteration}`,
-    );
+    await navigateToAddressDetailsWithRetry({
+      ...input,
+      detailsUrl,
+      expectedWorkbenchUrl: new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`),
+    });
   }, input.iteration);
   host = await waitForKeyboardHostFrame(input.surface, `iteration-${input.iteration}-details-frame`, input.metrics, input.iteration);
 
@@ -718,6 +1229,183 @@ async function runProductLongSessionIteration(input: {
     finalSession: afterTabSwitch,
     tabSwitchSameSession: stringField(afterTabSwitch.id) === stringField(beforeTabSwitch.id),
   };
+}
+
+async function navigateToAddressDetailsWithRetry(input: {
+  iteration: number;
+  page: Page;
+  surface: Locator;
+  fixtureUrl: string;
+  detailsUrl: string;
+  expectedWorkbenchUrl: RegExp;
+  writerUrl: string;
+  workspacePath: string;
+  metrics: ProductLongSessionMetrics;
+  networkRecorder: ReturnType<typeof recordBrowserHostNetwork>;
+  addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
+}) {
+  const actionSequence: AddressDetailsRecoveryEvidence['actionSequence'] = ['open-url'];
+  const firstAttemptCursor = input.networkRecorder.samples.length;
+  try {
+    await verifyAddressDetailsNavigation({ ...input, shouldOpen: true });
+    input.addressDetailsRecovery.push({
+      iteration: input.iteration,
+      attempted: false,
+      status: 'not-needed',
+      actionSequence,
+      boundedRefs: await collectAddressDetailsRecoveryRefs(input.page, input.networkRecorder.samples.slice(firstAttemptCursor)),
+    });
+    return;
+  } catch (firstError) {
+    const firstReason = addressDetailsRecoveryReason(firstError);
+    const firstReasonHash = hashText(firstError instanceof Error ? firstError.message : String(firstError));
+    actionSequence.push('reload', 'retry-open-url');
+    const reloadCursor = input.networkRecorder.samples.length;
+    const reloadAck = await attemptAddressDetailsTypedReload(input, reloadCursor);
+    const retryCursor = input.networkRecorder.samples.length;
+    try {
+      await openBrowserPaneUrl(input.surface, input.detailsUrl);
+      await verifyAddressDetailsNavigation({ ...input, shouldOpen: false });
+      input.addressDetailsRecovery.push({
+        iteration: input.iteration,
+        attempted: true,
+        status: 'succeeded',
+        actionSequence,
+        reasonCode: firstReason,
+        reasonHash: firstReasonHash,
+        initialFailure: {
+          reasonCode: firstReason,
+          reasonHash: firstReasonHash,
+        },
+        reloadAck,
+        boundedRefs: await collectAddressDetailsRecoveryRefs(input.page, input.networkRecorder.samples.slice(retryCursor)),
+      });
+      return;
+    } catch (retryError) {
+      const retryReason = addressDetailsRecoveryReason(retryError);
+      const retryReasonHash = hashText(retryError instanceof Error ? retryError.message : String(retryError));
+      input.addressDetailsRecovery.push({
+        iteration: input.iteration,
+        attempted: true,
+        status: 'blocked',
+        actionSequence,
+        reasonCode: retryReason,
+        reasonHash: retryReasonHash,
+        initialFailure: {
+          reasonCode: firstReason,
+          reasonHash: firstReasonHash,
+        },
+        reloadAck,
+        boundedRefs: await collectAddressDetailsRecoveryRefs(input.page, input.networkRecorder.samples.slice(retryCursor)),
+      });
+      throw retryError;
+    }
+  }
+}
+
+async function attemptAddressDetailsTypedReload(
+  input: {
+    iteration: number;
+    surface: Locator;
+    networkRecorder: ReturnType<typeof recordBrowserHostNetwork>;
+  },
+  fromIndex: number,
+): Promise<NonNullable<AddressDetailsRecoveryEvidence['reloadAck']>> {
+  try {
+    await clickBrowserCommand(input.surface, 'Reload');
+  } catch (error) {
+    return {
+      status: 'command-unavailable',
+      action: 'reload',
+      reasonHash: hashText(error instanceof Error ? error.message : String(error)),
+    };
+  }
+  try {
+    await input.networkRecorder.waitForAction('reload', fromIndex, 12_000, `address-details recovery reload ${input.iteration}`);
+    return {
+      status: 'acked',
+      action: 'reload',
+    };
+  } catch (error) {
+    return {
+      status: 'not-observed',
+      action: 'reload',
+      reasonHash: hashText(error instanceof Error ? error.message : String(error)),
+    };
+  }
+}
+
+async function collectAddressDetailsRecoveryRefs(
+  page: Page,
+  networkSamples: BrowserHostNetworkSample[],
+): Promise<NonNullable<AddressDetailsRecoveryEvidence['boundedRefs']>> {
+  const [snapshot, rightPane] = await Promise.all([
+    collectBrowserWorkbenchFailureSnapshot(page).catch(() => undefined),
+    collectRightPaneEvidence(page).catch(() => undefined),
+  ]);
+  const sessionRefs = boundedUnique([
+    ...(snapshot?.sessionRefs ?? []),
+    ...(rightPane?.sessionIds ?? []).map((id) => `browser-host-session:${id}`),
+    ...networkSamples.map((sample) => sample.sessionRef ?? '').filter(Boolean),
+  ], 12);
+  const liveSurfaceRefs = boundedUnique([
+    ...(snapshot?.liveSurfaceRefs ?? []),
+    ...(rightPane?.liveSurfaceRefs ?? []),
+  ], 12);
+  const frameStreamRefs = boundedUnique([
+    ...(snapshot?.frameStreamRefs ?? []),
+    ...(rightPane?.frameStreamRefs ?? []),
+  ], 12);
+  return {
+    bounded: true,
+    noRawUrl: true,
+    noRawDom: true,
+    workbenchState: snapshot?.state ?? rightPane?.state,
+    displayedUrlLength: snapshot?.displayedUrlLength,
+    displayedUrlHash: snapshot?.displayedUrlHash,
+    addressDraftLength: snapshot?.addressDraftLength,
+    addressDraftHash: snapshot?.addressDraftHash,
+    hostFrameCount: snapshot?.hostFrameCount ?? rightPane?.hostFrames,
+    sessionRefs,
+    liveSurfaceRefs,
+    frameStreamRefs,
+    recentHostStatuses: summarizeCounts(networkSamples.slice(-24).map((sample) => sample.sessionStatus ?? '').filter(Boolean), 12),
+    recentLoadingStates: summarizeCounts(networkSamples.slice(-24).map((sample) => sample.loadingProgressState ?? '').filter(Boolean), 12),
+    recentLoadingReasons: summarizeCounts(networkSamples.slice(-24).map((sample) => sample.loadingProgressReason ?? '').filter(Boolean), 12),
+  };
+}
+
+async function verifyAddressDetailsNavigation(input: {
+  iteration: number;
+  surface: Locator;
+  fixtureUrl: string;
+  detailsUrl: string;
+  expectedWorkbenchUrl: RegExp;
+  page: Page;
+  writerUrl: string;
+  workspacePath: string;
+  metrics: ProductLongSessionMetrics;
+  shouldOpen: boolean;
+}) {
+  if (input.shouldOpen) {
+    await openBrowserPaneUrl(input.surface, input.detailsUrl);
+  }
+  await waitForWorkbenchUrl(input.surface, input.expectedWorkbenchUrl);
+  await waitForSessionUrl(input.page, input.writerUrl, input.workspacePath, /\/details\?iteration=/, input.metrics, `iteration-${input.iteration}-state-details`);
+  await waitForFixtureEvent(
+    input.fixtureUrl,
+    (event) => event.type === 'page-load' && event.path === '/details' && event.iteration === input.iteration,
+    30_000,
+    `details page load ${input.iteration}`,
+  );
+}
+
+function addressDetailsRecoveryReason(error: unknown): NonNullable<AddressDetailsRecoveryEvidence['reasonCode']> {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/Browser workbench URL/i.test(message)) return 'workbench-url-timeout';
+  if (/BrowserHostSession URL/i.test(message)) return 'browser-host-session-url-timeout';
+  if (/fixture event/i.test(message)) return 'fixture-event-timeout';
+  return 'address-details-retry-timeout';
 }
 
 class ProductLongSessionMetrics {
@@ -890,7 +1578,14 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
       const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
       const state = viewer?.getAttribute('data-browser-state');
       const url = viewer?.querySelector('header p')?.textContent ?? '';
-      return state === 'ready' && new RegExp(source, flags).test(url);
+      const hostFrame = document.querySelector<HTMLElement>('.right-pane-browser-surface .browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]');
+      const liveSurfaceRef = hostFrame?.getAttribute('data-browser-live-surface-ref') ?? '';
+      const frameStreamRef = hostFrame?.getAttribute('data-browser-frame-stream-ref') ?? '';
+      const keyboardPath = hostFrame?.getAttribute('data-browser-host-keyboard-path') ?? '';
+      const hostSurfaceReady = liveSurfaceRef.startsWith('browser-host-session:')
+        && frameStreamRef.startsWith('browser-host-session:')
+        && keyboardPath === 'hidden-input';
+      return (state === 'ready' || state === 'loading' && hostSurfaceReady) && new RegExp(source, flags).test(url);
     }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
   } catch (error) {
     const snapshot = await collectBrowserWorkbenchFailureSnapshot(surface.page()).catch(() => undefined);
@@ -1075,7 +1770,37 @@ async function installRightPaneObserver(page: Page) {
       browserStateSampleCount: 0,
       lastBrowserState: '',
       hiddenKeyboardFocusKeys: [],
+      objectUrlCreateCount: 0,
+      objectUrlRevokeCount: 0,
+      objectUrlLiveEstimate: 0,
+      objectUrlMaxLiveEstimate: 0,
     };
+    const urlCtor = window.URL || window.webkitURL;
+    if (urlCtor && !urlCtor.__sciforgeBrowserPaneProductLongSessionWrapped) {
+      const originalCreateObjectURL = urlCtor.createObjectURL && urlCtor.createObjectURL.bind(urlCtor);
+      const originalRevokeObjectURL = urlCtor.revokeObjectURL && urlCtor.revokeObjectURL.bind(urlCtor);
+      if (originalCreateObjectURL) {
+        urlCtor.createObjectURL = function(value) {
+          const objectUrl = originalCreateObjectURL(value);
+          state.objectUrlCreateCount += 1;
+          state.objectUrlLiveEstimate += 1;
+          state.objectUrlMaxLiveEstimate = Math.max(state.objectUrlMaxLiveEstimate, state.objectUrlLiveEstimate);
+          return objectUrl;
+        };
+      }
+      if (originalRevokeObjectURL) {
+        urlCtor.revokeObjectURL = function(value) {
+          state.objectUrlRevokeCount += 1;
+          state.objectUrlLiveEstimate = Math.max(0, state.objectUrlLiveEstimate - 1);
+          return originalRevokeObjectURL(value);
+        };
+      }
+      Object.defineProperty(urlCtor, '__sciforgeBrowserPaneProductLongSessionWrapped', {
+        value: true,
+        configurable: false,
+        enumerable: false,
+      });
+    }
     function pushUnique(values, value) {
       if (value && !values.includes(value) && values.length < 48) values.push(value);
     }
@@ -1197,6 +1922,13 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
       approxJsHeapUsed: performanceWithMemory.memory && typeof performanceWithMemory.memory.usedJSHeapSize === 'number'
         ? Math.round(performanceWithMemory.memory.usedJSHeapSize)
         : undefined,
+      objectUrls: {
+        createCount: observerState ? observerState.objectUrlCreateCount : 0,
+        revokeCount: observerState ? observerState.objectUrlRevokeCount : 0,
+        liveEstimate: observerState ? Math.max(0, observerState.objectUrlLiveEstimate) : 0,
+        maxLiveEstimate: observerState ? Math.max(0, observerState.objectUrlMaxLiveEstimate) : 0,
+        revokeDeficit: observerState ? Math.max(0, observerState.objectUrlCreateCount - observerState.objectUrlRevokeCount) : 0,
+      },
     };
   })()
   `) as Promise<RightPaneBoundedEvidence>;
@@ -1364,6 +2096,9 @@ function boundedBrowserHostNetworkSample(
   const action = stringField(hostAction?.action) || stringField(timing?.action);
   const text = stringField(hostAction?.text);
   const sessionId = stringField(session?.id);
+  const requestedUrl = stringField(session?.requestedUrl);
+  const currentUrl = stringField(session?.url);
+  const finalUrl = stringField(session?.finalUrl);
   return {
     endpoint,
     status,
@@ -1379,6 +2114,12 @@ function boundedBrowserHostNetworkSample(
     loadingProgressState: stringField(loadingProgress?.state) || undefined,
     loadingProgressReason: stringField(loadingProgress?.reason) || undefined,
     loadingProgressSource: stringField(loadingProgress?.source) || undefined,
+    requestedUrlLength: requestedUrl?.length,
+    requestedUrlHash: requestedUrl ? hashText(requestedUrl) : undefined,
+    currentUrlLength: currentUrl?.length,
+    currentUrlHash: currentUrl ? hashText(currentUrl) : undefined,
+    finalUrlLength: finalUrl?.length,
+    finalUrlHash: finalUrl ? hashText(finalUrl) : undefined,
   };
 }
 
@@ -1402,6 +2143,7 @@ function buildProductLongSessionManifest(input: {
   firstSession: JsonRecord;
   sessionBeforeWorkspaceRestart: JsonRecord;
   sessionAfterWorkspaceRestart?: JsonRecord;
+  rightPaneInitial?: RightPaneBoundedEvidence;
   rightPaneBeforeRestart: RightPaneBoundedEvidence;
   rightPaneAfterRestart?: RightPaneBoundedEvidence;
   events: ProductFixtureEvent[];
@@ -1410,6 +2152,7 @@ function buildProductLongSessionManifest(input: {
   frameStream: FrameStreamStats;
   restartEvidence: WorkspaceWriterRestartEvidence;
   tabSwitchContinuity: boolean[];
+  addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
   diagnostics: ReturnType<typeof recordPageDiagnostics>;
 }): ProductLongSessionManifest {
   const inputEvents = input.events.filter((event) => event.type === 'product-input');
@@ -1497,7 +2240,7 @@ function buildProductLongSessionManifest(input: {
     },
     boundedMetrics: {
       latencySummary: summarizeLatency(input.metrics),
-      networkSamples: input.networkSamples.slice(-80),
+      networkSamples: boundedNetworkSamples(input.networkSamples, 24),
       frameStream: input.frameStream,
       loadingProgressLifecycle: summarizeLoadingProgressLifecycle(input.rightPaneBeforeRestart, input.rightPaneAfterRestart, input.networkSamples),
       memoryishCounts: {
@@ -1509,11 +2252,25 @@ function buildProductLongSessionManifest(input: {
         rightPaneSessionRefCount: input.rightPaneBeforeRestart.sessionIds.length,
         approxJsHeapUsedBeforeRestart: input.rightPaneBeforeRestart.approxJsHeapUsed,
         approxJsHeapUsedAfterRestart: input.rightPaneAfterRestart?.approxJsHeapUsed,
+        approxJsHeapDeltaBeforeRestart: heapDelta(input.rightPaneInitial, input.rightPaneBeforeRestart),
+        objectUrlCreateCountBeforeRestart: input.rightPaneBeforeRestart.objectUrls.createCount,
+        objectUrlRevokeCountBeforeRestart: input.rightPaneBeforeRestart.objectUrls.revokeCount,
+        objectUrlLiveEstimateBeforeRestart: input.rightPaneBeforeRestart.objectUrls.liveEstimate,
+        objectUrlMaxLiveEstimateBeforeRestart: input.rightPaneBeforeRestart.objectUrls.maxLiveEstimate,
+        objectUrlRevokeDeficitBeforeRestart: input.rightPaneBeforeRestart.objectUrls.revokeDeficit,
       },
       rightPaneBeforeRestart: input.rightPaneBeforeRestart,
       rightPaneAfterRestart: input.rightPaneAfterRestart,
     },
     failureRetry: {
+      addressDetailsRecovery: {
+        attemptedIterations: input.addressDetailsRecovery
+          .filter((entry) => entry.attempted)
+          .map((entry) => entry.iteration)
+          .slice(-24),
+        outcomeCount: input.addressDetailsRecovery.length,
+        outcomes: input.addressDetailsRecovery.slice(-12),
+      },
       workspaceWriterRestart: input.restartEvidence,
       pageDiagnostics: {
         pageErrorCount: input.diagnostics.errors.length,
@@ -1533,19 +2290,42 @@ function buildProductLongSessionManifest(input: {
       fixtureHostRaw: false,
       defaultSmokeClaimsThirtyMinutes: false,
     },
-    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+    verificationCommand: productLongSessionVerificationCommand(input.config),
   };
+}
+
+function boundedNetworkSamples(samples: BrowserHostNetworkSample[], limit: number): BrowserHostNetworkSample[] {
+  return samples.slice(-Math.max(0, limit)).map((sample) => ({
+    endpoint: sample.endpoint,
+    status: sample.status,
+    durationMs: Math.max(0, Math.round(sample.durationMs)),
+    sessionRef: sample.sessionRef,
+    sessionStatus: sample.sessionStatus,
+    action: sample.action,
+    key: sample.key,
+    textLength: sample.textLength,
+    textHash: sample.textHash,
+    capture: sample.capture,
+    paintAckSource: sample.paintAckSource,
+    loadingProgressState: sample.loadingProgressState,
+    loadingProgressReason: sample.loadingProgressReason,
+    loadingProgressSource: sample.loadingProgressSource,
+    requestedUrlLength: sample.requestedUrlLength,
+    requestedUrlHash: sample.requestedUrlHash,
+    currentUrlLength: sample.currentUrlLength,
+    currentUrlHash: sample.currentUrlHash,
+    finalUrlLength: sample.finalUrlLength,
+    finalUrlHash: sample.finalUrlHash,
+  }));
 }
 
 function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) {
   assert.equal(manifest.schemaVersion, PRODUCT_LONG_SESSION_SCHEMA);
   assert.equal(manifest.status, 'passed');
+  assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
   assert.ok(manifest.runner.iterationsCompleted >= 1);
-  assert.equal(manifest.runner.defaultSmokeIsThirtyMinuteBenchmark, false);
-  if (manifest.runner.mode === 'quick-contract') {
-    assert.notEqual(manifest.runner.requestedMinutes, TRUE_LONG_SESSION_MINUTES, 'quick mode must not claim the 30 minute benchmark');
-  }
+  assertProductLongSessionRunnerContract(manifest.runner, manifest.status, manifest.verificationCommand);
   assert.deepEqual(manifest.interactionCoverage.classes, [
     'continuous-navigation',
     'continuous-input',
@@ -1571,11 +2351,11 @@ function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) 
   assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.transport, 'host-stream');
   assert.equal(manifest.browserHostSession.beforeWorkspaceRestart.singleInteractiveTruth, true);
   assert.match(manifest.browserHostSession.beforeWorkspaceRestart.refs.frameStreamRef ?? '', /^browser-host-session:[^/]+\/frame-stream$/);
-  assert.equal(manifest.continuity.sameSessionBeforeRestart, true);
-  assert.equal(manifest.continuity.singleBrowserHostSessionBeforeRestart, true);
-  assert.equal(manifest.continuity.tabSwitchSameSession, true);
-  assert.equal(manifest.continuity.singleInteractiveTruth, true);
-  assert.equal(manifest.continuity.maxHostFrames, 1);
+  assert.equal(manifest.continuity.sameSessionBeforeRestart, true, 'product long-session must keep the same BrowserHostSession before workspace restart');
+  assert.equal(manifest.continuity.singleBrowserHostSessionBeforeRestart, true, 'right pane must expose one BrowserHostSession before workspace restart');
+  assert.equal(manifest.continuity.tabSwitchSameSession, true, 'right pane tab switch must preserve the BrowserHostSession');
+  assert.equal(manifest.continuity.singleInteractiveTruth, true, 'BrowserHostSession must remain the single interactive truth');
+  assert.equal(manifest.continuity.maxHostFrames, 1, 'right pane must not render multiple BrowserHostSession host frames');
   assert.ok(manifest.boundedMetrics.frameStream.streamsOpened >= 1);
   assert.ok(manifest.boundedMetrics.frameStream.framesReceived >= 1);
   assert.equal(manifest.boundedMetrics.loadingProgressLifecycle.schemaVersion, PRODUCT_LONG_SESSION_LOADING_PROGRESS_TRACE_SCHEMA);
@@ -1591,7 +2371,18 @@ function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) 
   assert.equal(manifest.boundedMetrics.rightPaneBeforeRestart.systemPopupSurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPaneBeforeRestart.dataImageSurfaces, 0);
   assert.equal(manifest.boundedMetrics.rightPaneBeforeRestart.base64Attributes, 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlCreateCountBeforeRestart >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlRevokeCountBeforeRestart >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlLiveEstimateBeforeRestart >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlMaxLiveEstimateBeforeRestart >= manifest.boundedMetrics.memoryishCounts.objectUrlLiveEstimateBeforeRestart);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlRevokeDeficitBeforeRestart >= 0);
   assert.ok(['reconnected', 'blocked'].includes(manifest.failureRetry.workspaceWriterRestart.status));
+  assert.equal(manifest.failureRetry.addressDetailsRecovery.outcomeCount, manifest.runner.iterationsCompleted);
+  assert.ok(manifest.failureRetry.addressDetailsRecovery.outcomes.length > 0);
+  assert.ok(manifest.failureRetry.addressDetailsRecovery.outcomes.length <= 12);
+  for (const outcome of manifest.failureRetry.addressDetailsRecovery.outcomes) {
+    assertAddressDetailsRecoveryOutcome(outcome);
+  }
   assert.equal(manifest.failureRetry.workspaceWriterRestart.attempted, true);
   if (manifest.failureRetry.workspaceWriterRestart.status === 'blocked') {
     assert.equal(manifest.failureRetry.workspaceWriterRestart.retry.status, 'blocked');
@@ -1634,6 +2425,8 @@ async function writeProductLongSessionBlockedManifest(input: {
   networkRecorder?: ReturnType<typeof recordBrowserHostNetwork>;
   frameStream?: FrameStreamStats;
   diagnostics?: ReturnType<typeof recordPageDiagnostics>;
+  rightPaneInitial?: RightPaneBoundedEvidence;
+  addressDetailsRecovery?: AddressDetailsRecoveryEvidence[];
 }): Promise<void> {
   await input.networkRecorder?.drain().catch(() => undefined);
   const rightPaneBeforeFailure = input.page
@@ -1645,7 +2438,16 @@ async function writeProductLongSessionBlockedManifest(input: {
   const fixtureEvents = input.fixtureUrl
     ? await fetchFixtureEvents(input.fixtureUrl).catch(() => [])
     : [];
-  const networkSamples = input.networkRecorder?.samples.slice(-80) ?? [];
+  const allNetworkSamples = input.networkRecorder?.samples ?? [];
+  const networkSamples = boundedNetworkSamples(allNetworkSamples, 24);
+  const failureClassification = classifyProductLongSessionFailure({
+    phase: input.phase,
+    error: input.error,
+    workbenchFailureSnapshot,
+    rightPaneBeforeFailure,
+    initialRightPaneEvidence: input.rightPaneInitial,
+    networkSamples,
+  });
   const manifest: ProductLongSessionBlockedManifest = {
     schemaVersion: PRODUCT_LONG_SESSION_SCHEMA,
     status: 'blocked',
@@ -1667,11 +2469,22 @@ async function writeProductLongSessionBlockedManifest(input: {
     },
     failure: {
       phase: boundedFailurePhase(input.phase),
-      reasonCode: productLongSessionFailureReasonCode(input.error),
+      reasonCode: failureClassification.kind,
       reasonHash: hashText(input.error instanceof Error ? input.error.message : String(input.error)),
       errorName: input.error instanceof Error && input.error.name ? input.error.name : 'Error',
       currentIteration: input.currentIteration,
+      classification: failureClassification,
       retrySemantics: 'typed-blocked-artifact-written-and-original-error-rethrown',
+    },
+    failureRetry: {
+      addressDetailsRecovery: {
+        attemptedIterations: (input.addressDetailsRecovery ?? [])
+          .filter((entry) => entry.attempted)
+          .map((entry) => entry.iteration)
+          .slice(-24),
+        outcomeCount: input.addressDetailsRecovery?.length ?? 0,
+        outcomes: input.addressDetailsRecovery?.slice(-12) ?? [],
+      },
     },
     boundedMetrics: {
       latencySummary: summarizeLatency(input.metrics),
@@ -1685,9 +2498,15 @@ async function writeProductLongSessionBlockedManifest(input: {
         fixtureEventCount: fixtureEvents.length,
         rightPaneSessionRefCount: rightPaneBeforeFailure?.sessionIds.length ?? 0,
         approxJsHeapUsedBeforeFailure: rightPaneBeforeFailure?.approxJsHeapUsed,
+        approxJsHeapDeltaBeforeFailure: heapDelta(input.rightPaneInitial, rightPaneBeforeFailure),
+        objectUrlCreateCountBeforeFailure: rightPaneBeforeFailure?.objectUrls.createCount ?? 0,
+        objectUrlRevokeCountBeforeFailure: rightPaneBeforeFailure?.objectUrls.revokeCount ?? 0,
+        objectUrlLiveEstimateBeforeFailure: rightPaneBeforeFailure?.objectUrls.liveEstimate ?? 0,
+        objectUrlMaxLiveEstimateBeforeFailure: rightPaneBeforeFailure?.objectUrls.maxLiveEstimate ?? 0,
+        objectUrlRevokeDeficitBeforeFailure: rightPaneBeforeFailure?.objectUrls.revokeDeficit ?? 0,
       },
       loadingProgressLifecycle: rightPaneBeforeFailure
-        ? summarizeLoadingProgressLifecycle(rightPaneBeforeFailure, undefined, networkSamples)
+        ? summarizeLoadingProgressLifecycle(rightPaneBeforeFailure, undefined, allNetworkSamples)
         : undefined,
       rightPaneBeforeFailure,
       workbenchFailureSnapshot,
@@ -1701,7 +2520,7 @@ async function writeProductLongSessionBlockedManifest(input: {
       recentConsoleErrorHashes: input.diagnostics?.consoleErrors.slice(-6).map(hashText) ?? [],
     },
     forbiddenEvidence: productLongSessionForbiddenEvidence(),
-    verificationCommand: 'node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+    verificationCommand: productLongSessionVerificationCommand(input.config),
   };
   assertProductLongSessionBlockedManifest(manifest);
   await mkdir(artifactDir, { recursive: true });
@@ -1718,12 +2537,37 @@ async function writeProductLongSessionBlockedManifest(input: {
 function assertProductLongSessionBlockedManifest(manifest: ProductLongSessionBlockedManifest) {
   assert.equal(manifest.schemaVersion, PRODUCT_LONG_SESSION_SCHEMA);
   assert.equal(manifest.status, 'blocked');
+  assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
   assert.ok(manifest.failure.phase.length > 0);
   assert.match(manifest.failure.reasonHash, /^[a-f0-9]{16}$/);
-  assert.equal(manifest.runner.defaultSmokeIsThirtyMinuteBenchmark, false);
+  assertProductLongSessionRunnerContract(manifest.runner, manifest.status, manifest.verificationCommand);
   assert.equal(manifest.failure.retrySemantics, 'typed-blocked-artifact-written-and-original-error-rethrown');
-  assert.ok(manifest.boundedMetrics.networkSamples.length <= 80);
+  for (const outcome of manifest.failureRetry.addressDetailsRecovery.outcomes) {
+    assert.ok(['not-needed', 'succeeded', 'blocked'].includes(outcome.status));
+    if (outcome.attempted) assert.ok(outcome.actionSequence.includes('retry-open-url'));
+  }
+  assert.equal(manifest.failure.classification.blockedEvidence.bounded, true);
+  assert.equal(manifest.failure.classification.blockedEvidence.noRawUrl, true);
+  assert.equal(manifest.failure.classification.blockedEvidence.noRawDom, true);
+  assert.ok(manifest.failure.classification.kind === manifest.failure.reasonCode);
+  if (manifest.failure.phase.includes('address-details')) {
+    assert.equal(manifest.failure.classification.phaseCategory, 'address-details-navigation');
+    assert.equal(manifest.failure.classification.expectedRoute, 'details');
+    if (manifest.failure.classification.timedOut) {
+      assert.equal(manifest.failure.reasonCode, 'address-details-ready-timeout');
+      assert.equal(manifest.failure.classification.retryable, true);
+    }
+    const currentOutcome = manifest.failureRetry.addressDetailsRecovery.outcomes
+      .find((outcome) => outcome.iteration === manifest.failure.currentIteration);
+    assert.ok(currentOutcome, 'address-details blocked manifest must include recovery outcome for the current iteration');
+    assert.equal(currentOutcome.attempted, true);
+    assert.equal(currentOutcome.status, 'blocked');
+  }
+  for (const outcome of manifest.failureRetry.addressDetailsRecovery.outcomes) {
+    assertAddressDetailsRecoveryOutcome(outcome);
+  }
+  assert.ok(manifest.boundedMetrics.networkSamples.length <= 24);
   if (manifest.boundedMetrics.rightPaneBeforeFailure) {
     assert.equal(manifest.boundedMetrics.rightPaneBeforeFailure.iframeSurfaces, 0);
     assert.equal(manifest.boundedMetrics.rightPaneBeforeFailure.proxySurfaces, 0);
@@ -1732,12 +2576,112 @@ function assertProductLongSessionBlockedManifest(manifest: ProductLongSessionBlo
     assert.equal(manifest.boundedMetrics.rightPaneBeforeFailure.dataImageSurfaces, 0);
     assert.equal(manifest.boundedMetrics.rightPaneBeforeFailure.base64Attributes, 0);
   }
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlCreateCountBeforeFailure >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlRevokeCountBeforeFailure >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlLiveEstimateBeforeFailure >= 0);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlMaxLiveEstimateBeforeFailure >= manifest.boundedMetrics.memoryishCounts.objectUrlLiveEstimateBeforeFailure);
+  assert.ok(manifest.boundedMetrics.memoryishCounts.objectUrlRevokeDeficitBeforeFailure >= 0);
+  if (manifest.failure.classification.blockedEvidence.resourceHealth) {
+    assert.equal(manifest.failure.classification.blockedEvidence.resourceHealth.bounded, true);
+    assert.ok(manifest.failure.classification.blockedEvidence.resourceHealth.objectUrls.liveEstimate >= 0);
+    assert.ok(manifest.failure.classification.blockedEvidence.resourceHealth.surface.maxHostFrames >= 0);
+  }
   assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false, false, false, false, false]);
   const serialized = JSON.stringify(manifest);
   assert.doesNotMatch(serialized, /<!doctype|<html|<body|<input|<form|outerHTML|innerHTML|data:image|;base64,|base64(?:Data|Payload|Inline|Bytes)|iVBORw0KGgo|screenshot(?:Data|Base64|Inline|Bytes)/i);
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(FIXTURE_HOST)));
   for (let iteration = 0; iteration <= manifest.failure.currentIteration; iteration += 1) {
     assertNoRawText(serialized, productInputText(iteration));
+  }
+}
+
+function assertProductLongSessionManifestIsBounded(manifest: ProductLongSessionManifest | ProductLongSessionBlockedManifest) {
+  const serialized = JSON.stringify(manifest);
+  assert.ok(
+    Buffer.byteLength(serialized, 'utf8') <= MAX_PRODUCT_LONG_SESSION_MANIFEST_BYTES,
+    'product long-session manifest must stay bounded',
+  );
+  assert.doesNotMatch(serialized, /data:image|;base64,|iVBORw0KGgo|<\s*(?:!doctype|html|body|script|iframe|webview)\b/i);
+  assert.doesNotMatch(serialized, /"(?:rawDom|domSnapshot|screenshotBase64|providerPayload|consoleLog|networkLog)"\s*:/i);
+}
+
+function assertAddressDetailsRecoveryOutcome(outcome: AddressDetailsRecoveryEvidence) {
+  assert.ok(outcome.iteration >= 0);
+  assert.ok(['not-needed', 'succeeded', 'blocked'].includes(outcome.status));
+  assert.ok(outcome.actionSequence.includes('open-url'));
+  assert.equal(outcome.boundedRefs?.bounded, true);
+  assert.equal(outcome.boundedRefs?.noRawUrl, true);
+  assert.equal(outcome.boundedRefs?.noRawDom, true);
+  assert.ok((outcome.boundedRefs?.sessionRefs.length ?? 0) >= 1);
+  assert.deepEqual(Object.values({
+    rawUrl: false,
+    rawDom: false,
+  }), [false, false]);
+  if (outcome.attempted) {
+    assert.ok(outcome.actionSequence.includes('reload'));
+    assert.ok(outcome.actionSequence.includes('retry-open-url'));
+    assert.ok(outcome.reasonCode);
+    assert.match(outcome.reasonHash ?? '', /^[a-f0-9]{16}$/);
+    assert.ok(outcome.initialFailure);
+    assert.match(outcome.initialFailure?.reasonHash ?? '', /^[a-f0-9]{16}$/);
+    assert.ok(outcome.reloadAck);
+    assert.equal(outcome.reloadAck?.action, 'reload');
+    assert.ok(['acked', 'not-observed', 'command-unavailable'].includes(outcome.reloadAck?.status ?? ''));
+    if (outcome.status === 'blocked') {
+      assert.ok(outcome.reasonCode);
+      assert.match(outcome.reasonHash ?? '', /^[a-f0-9]{16}$/);
+    }
+  }
+}
+
+function assertProductLongSessionRunnerContract(
+  runner: ProductLongSessionManifest['runner'],
+  status: ProductLongSessionManifest['status'] | ProductLongSessionBlockedManifest['status'],
+  verificationCommand: string,
+) {
+  assert.equal(runner.defaultSmokeIsThirtyMinuteBenchmark, false);
+  assert.equal(runner.extensionEnv.minutes, 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES');
+  assert.equal(runner.extensionEnv.iterations, 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS');
+  assert.ok(runner.iterationsCompleted >= 0);
+  assert.ok(runner.durationMs >= 0);
+
+  if (runner.mode === 'quick-contract') {
+    assert.ok(
+      (runner.requestedMinutes ?? 0) < TRUE_LONG_SESSION_MINUTES,
+      'quick mode must not claim the 30 minute benchmark',
+    );
+  }
+
+  if (runner.requestedMinutes !== undefined) {
+    assert.ok(
+      verificationCommand.includes(`SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=${runner.requestedMinutes}`),
+      'requested minutes artifact must include its minutes env in verificationCommand',
+    );
+  } else {
+    assert.doesNotMatch(
+      verificationCommand,
+      /SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=/,
+      'default quick artifact must not imply a requested minutes deadline',
+    );
+  }
+
+  if (runner.requestedIterations !== undefined) {
+    assert.ok(
+      verificationCommand.includes(`SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS=${runner.requestedIterations}`),
+      'requested iterations artifact must include its iterations env in verificationCommand',
+    );
+  }
+
+  if ((runner.requestedMinutes ?? 0) >= TRUE_LONG_SESSION_MINUTES) {
+    assert.equal(runner.mode, 'extended-product-long-session');
+    if (status === 'passed') {
+      assert.ok(
+        runner.durationMs >= Math.round((runner.requestedMinutes ?? 0) * 60_000),
+        'requested 30+ minute product long-session pass must run for the requested duration',
+      );
+    } else {
+      assert.equal(status, 'blocked', 'truncated requested 30+ minute product long-session artifacts must remain blocked');
+    }
   }
 }
 
@@ -1768,8 +2712,109 @@ function boundedFailurePhase(value: string): string {
   return /^[a-z0-9-]+$/i.test(value) ? value.slice(0, 96) : 'unknown';
 }
 
-function productLongSessionFailureReasonCode(error: unknown): string {
+function classifyProductLongSessionFailure(input: {
+  phase: string;
+  error: unknown;
+  workbenchFailureSnapshot?: BrowserWorkbenchFailureSnapshot;
+  rightPaneBeforeFailure?: RightPaneBoundedEvidence;
+  initialRightPaneEvidence?: RightPaneBoundedEvidence;
+  networkSamples: BrowserHostNetworkSample[];
+}): ProductLongSessionFailureClassification {
+  const baseReasonCode = productLongSessionFailureReasonCode(input.error, input.phase);
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
+  const phase = boundedFailurePhase(input.phase);
+  const addressDetailsPhase = /(?:^|-)address-details$/.test(phase);
+  const timedOut = /timed out|timeout|waitForFunction: Timeout|Browser workbench URL|BrowserHostSession URL|fixture event/i.test(message);
+  const kind = addressDetailsPhase && timedOut ? 'address-details-ready-timeout' : baseReasonCode;
+  const sessionRefs = boundedUnique([
+    ...(input.workbenchFailureSnapshot?.sessionRefs ?? []),
+    ...(input.rightPaneBeforeFailure?.sessionIds ?? []).map((id) => `browser-host-session:${id}`),
+  ], 12);
+  const liveSurfaceRefs = boundedUnique([
+    ...(input.workbenchFailureSnapshot?.liveSurfaceRefs ?? []),
+    ...(input.rightPaneBeforeFailure?.liveSurfaceRefs ?? []),
+  ], 12);
+  const frameStreamRefs = boundedUnique([
+    ...(input.workbenchFailureSnapshot?.frameStreamRefs ?? []),
+    ...(input.rightPaneBeforeFailure?.frameStreamRefs ?? []),
+  ], 12);
+  return {
+    kind,
+    phaseCategory: productLongSessionFailurePhaseCategory(kind, phase),
+    timedOut,
+    retryable: productLongSessionFailureRetryable(kind),
+    expectedRoute: addressDetailsPhase ? 'details' : phase.includes('address-session') ? 'session' : 'unknown',
+    blockedEvidence: {
+      bounded: true,
+      noRawUrl: true,
+      noRawDom: true,
+      uiState: input.workbenchFailureSnapshot?.state || input.rightPaneBeforeFailure?.state || undefined,
+      displayedUrlLength: input.workbenchFailureSnapshot?.displayedUrlLength,
+      displayedUrlHash: input.workbenchFailureSnapshot?.displayedUrlHash,
+      addressDraftLength: input.workbenchFailureSnapshot?.addressDraftLength,
+      addressDraftHash: input.workbenchFailureSnapshot?.addressDraftHash,
+      hostFrameCount: input.workbenchFailureSnapshot?.hostFrameCount ?? input.rightPaneBeforeFailure?.hostFrames,
+      hiddenKeyboardActive: input.workbenchFailureSnapshot?.hiddenKeyboardActive ?? Boolean(input.rightPaneBeforeFailure?.hiddenKeyboardFocusKeys.length),
+      sessionRefs,
+      liveSurfaceRefs,
+      frameStreamRefs,
+      recentHostStatuses: summarizeCounts(input.networkSamples.slice(-24).map((sample) => sample.sessionStatus ?? '').filter(Boolean), 12),
+      recentLoadingStates: summarizeCounts(input.networkSamples.slice(-24).map((sample) => sample.loadingProgressState ?? '').filter(Boolean), 12),
+      recentLoadingReasons: summarizeCounts(input.networkSamples.slice(-24).map((sample) => sample.loadingProgressReason ?? '').filter(Boolean), 12),
+      observedUiStates: summarizeCounts([
+        ...(input.rightPaneBeforeFailure ? expandCounts(input.rightPaneBeforeFailure.browserStateCounts) : []),
+        ...(input.rightPaneBeforeFailure?.browserStates ?? []),
+        input.workbenchFailureSnapshot?.state ?? '',
+      ].filter(Boolean), 12),
+      resourceHealth: input.rightPaneBeforeFailure
+        ? buildResourceEvidence('before-failure', input.rightPaneBeforeFailure, input.initialRightPaneEvidence)
+        : undefined,
+    },
+  };
+}
+
+function buildResourceEvidence(
+  sample: ProductLongSessionResourceEvidence['sample'],
+  evidence: RightPaneBoundedEvidence,
+  initialEvidence?: RightPaneBoundedEvidence,
+): ProductLongSessionResourceEvidence {
+  return {
+    bounded: true,
+    sample,
+    approxJsHeapUsed: evidence.approxJsHeapUsed,
+    approxJsHeapDeltaFromInitial: heapDelta(initialEvidence, evidence),
+    objectUrls: evidence.objectUrls,
+    surface: {
+      attachChanges: evidence.attachChanges,
+      detachChanges: evidence.detachChanges,
+      maxHostFrames: evidence.maxHostFrames,
+      sessionRefCount: evidence.sessionIds.length,
+      surfaceReconnectObserved: evidence.attachChanges > 1 || evidence.detachChanges > 0,
+    },
+  };
+}
+
+function heapDelta(
+  initialEvidence: RightPaneBoundedEvidence | undefined,
+  laterEvidence: RightPaneBoundedEvidence | undefined,
+): number | undefined {
+  if (
+    initialEvidence?.approxJsHeapUsed === undefined
+    || laterEvidence?.approxJsHeapUsed === undefined
+  ) {
+    return undefined;
+  }
+  return Math.round(laterEvidence.approxJsHeapUsed - initialEvidence.approxJsHeapUsed);
+}
+
+function productLongSessionFailureReasonCode(error: unknown, phase = ''): ProductLongSessionFailureClassification['kind'] {
   const message = error instanceof Error ? error.message : String(error);
+  if (/cleanup|Timed out during (?:page-close|browser-context-close|browser-close|ui-server-stop|workspace-writer-stop|fixture-close|temp-root-rm)/i.test(`${phase} ${message}`)) {
+    return 'product-long-session-cleanup-blocked';
+  }
+  if (/same BrowserHostSession|keep the same BrowserHostSession|BrowserHostSession.*continuity|session continuity|tab switch.*preserve|single interactive truth|maxHostFrames|host frames|live surface.*continuity|surface continuity/i.test(message)) {
+    return 'browser-host-session-continuity-break';
+  }
   if (/Browser workbench URL|waitForFunction: Timeout/i.test(message)) return 'browser-workbench-url-timeout';
   if (/fixture event/i.test(message)) return 'fixture-event-timeout';
   if (/BrowserHostSession URL/i.test(message)) return 'browser-host-session-url-timeout';
@@ -1777,6 +2822,30 @@ function productLongSessionFailureReasonCode(error: unknown): string {
   if (/No browser executable/i.test(message)) return 'browser-executable-missing';
   if (/workspace|health/i.test(message)) return 'workspace-writer-health-timeout';
   return 'product-long-session-error';
+}
+
+function productLongSessionFailurePhaseCategory(
+  kind: ProductLongSessionFailureClassification['kind'],
+  phase: string,
+): ProductLongSessionFailureClassification['phaseCategory'] {
+  if (kind === 'address-details-ready-timeout' || phase.includes('address-details')) return 'address-details-navigation';
+  if (kind === 'browser-workbench-url-timeout' || kind === 'browser-host-session-url-timeout') return 'browser-navigation';
+  if (kind === 'fixture-event-timeout') return 'fixture-readiness';
+  if (kind === 'browser-host-session-continuity-break') return 'session-continuity';
+  if (kind === 'product-long-session-cleanup-blocked') return 'cleanup';
+  if (kind === 'browser-executable-missing') return 'environment';
+  if (kind === 'workspace-writer-health-timeout') return 'workspace';
+  return 'unknown';
+}
+
+function productLongSessionFailureRetryable(kind: ProductLongSessionFailureClassification['kind']): boolean {
+  return [
+    'address-details-ready-timeout',
+    'browser-workbench-url-timeout',
+    'browser-host-session-url-timeout',
+    'fixture-event-timeout',
+    'workspace-writer-health-timeout',
+  ].includes(kind);
 }
 
 function browserHostSessionSummary(session: JsonRecord): BrowserHostSessionSummary {
@@ -1866,12 +2935,37 @@ function summarizeLoadingProgressLifecycle(
     observedLifecycleReasons: summarizeCounts(lifecycleReasons, 16),
     observedLifecycleSources: summarizeCounts(lifecycleSources, 16),
     observedTransitions,
+    urlEvidence: {
+      requested: summarizeUrlDigests(networkSamples, 'requested'),
+      current: summarizeUrlDigests(networkSamples, 'current'),
+      final: summarizeUrlDigests(networkSamples, 'final'),
+    },
     completionEvidence: {
       uiLoadingToReady: uiStates.includes('loading') && uiStates.includes('ready'),
       lifecycleNavigationStartToNetworkQuiet: lifecycleStates.includes('navigation-start') && lifecycleStates.includes('network-quiet'),
       readyStateObserved: uiStates.includes('ready') || hostStatuses.includes('ready'),
       networkQuietObserved: lifecycleStates.includes('network-quiet') || hostStatuses.includes('ready'),
     },
+  };
+}
+
+function summarizeUrlDigests(
+  samples: BrowserHostNetworkSample[],
+  kind: 'requested' | 'current' | 'final',
+): BoundedUrlDigestSummary {
+  const lengthKey = `${kind}UrlLength` as const;
+  const hashKey = `${kind}UrlHash` as const;
+  const lengths = samples
+    .map((sample) => sample[lengthKey])
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  const hashes = samples
+    .map((sample) => sample[hashKey])
+    .filter((value): value is string => typeof value === 'string' && /^[a-f0-9]{16}$/.test(value));
+  return {
+    sampleCount: hashes.length,
+    uniqueHashCount: new Set(hashes).size,
+    lengthRange: lengths.length > 0 ? [Math.min(...lengths), Math.max(...lengths)] : [],
+    hashes: boundedUnique(hashes, 12),
   };
 }
 
@@ -2106,7 +3200,7 @@ function productLongSessionConfig(): ProductLongSessionConfig {
   const requestedIterations = positiveIntegerEnv('SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS');
   const runUntilDeadline = requestedMinutes !== undefined;
   const durationTargetMs = requestedMinutes === undefined ? 0 : Math.round(requestedMinutes * 60_000);
-  const iterations = requestedIterations ?? (runUntilDeadline ? Number.MAX_SAFE_INTEGER : DEFAULT_QUICK_ITERATIONS);
+  const iterations = runUntilDeadline ? Number.MAX_SAFE_INTEGER : requestedIterations ?? DEFAULT_QUICK_ITERATIONS;
   const mode: ProductLongSessionMode = (requestedMinutes ?? 0) >= TRUE_LONG_SESSION_MINUTES || (requestedIterations ?? 0) > DEFAULT_QUICK_ITERATIONS
     ? 'extended-product-long-session'
     : 'quick-contract';
@@ -2123,9 +3217,22 @@ function productLongSessionConfig(): ProductLongSessionConfig {
 }
 
 function shouldContinueLongSession(config: ProductLongSessionConfig, iterationsCompleted: number, startedAt: number): boolean {
-  if (iterationsCompleted >= config.iterations) return false;
-  if (!config.runUntilDeadline) return iterationsCompleted < config.iterations;
-  return Date.now() - startedAt < config.durationTargetMs;
+  if (config.runUntilDeadline) return Date.now() - startedAt < config.durationTargetMs;
+  return iterationsCompleted < config.iterations;
+}
+
+function productLongSessionVerificationCommand(config: ProductLongSessionConfig): string {
+  const env: string[] = [];
+  if (config.requestedMinutes !== undefined) {
+    env.push(`SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=${config.requestedMinutes}`);
+  }
+  if (config.requestedIterations !== undefined) {
+    env.push(`SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS=${config.requestedIterations}`);
+  }
+  return [
+    ...env,
+    'node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+  ].join(' ');
 }
 
 function positiveNumberEnv(name: string): number | undefined {
@@ -2159,11 +3266,10 @@ function spawnProcess(command: string, args: string[], env: NodeJS.ProcessEnv) {
   const child = spawn(command, args, {
     cwd: process.cwd(),
     env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: 'ignore',
     detached: true,
   });
-  child.stdout?.on('data', () => undefined);
-  child.stderr?.on('data', () => undefined);
+  child.unref();
   return child;
 }
 
@@ -2179,7 +3285,7 @@ async function stopProcess(child: ChildProcess | undefined) {
   } else {
     child.kill('SIGTERM');
   }
-  await Promise.race([exited, delay(2000)]);
+  await waitForProcessExit(exited, 2000);
   if (child.exitCode !== null || child.signalCode) return;
   if (child.pid) {
     try {
@@ -2190,7 +3296,46 @@ async function stopProcess(child: ChildProcess | undefined) {
   } else {
     child.kill('SIGKILL');
   }
-  await Promise.race([exited, delay(1000)]);
+  await waitForProcessExit(exited, 1000);
+}
+
+async function closeBrowserWithProcessFallback(browser: Browser | undefined, browserPid: number | undefined): Promise<void> {
+  if (!browser) return;
+  try {
+    await withTimeout(browser.close(), 8_000, 'browser-close-timeout');
+    return;
+  } catch {
+    await disconnectBrowser(browser);
+    if (browserPid) forceKillProcessTree(browserPid);
+  }
+}
+
+async function disconnectBrowser(browser: Browser): Promise<void> {
+  const disconnect = (browser as unknown as { disconnect?: () => Promise<void> | void }).disconnect;
+  if (typeof disconnect !== 'function') return;
+  await Promise.resolve(disconnect.call(browser)).catch(() => undefined);
+}
+
+function forceKillProcessTree(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // The browser may already have exited after disconnect.
+    }
+  }
+}
+
+function browserProcessId(browser: Browser): number | undefined {
+  const maybeProcess = (browser as unknown as { process?: () => ChildProcess | undefined }).process;
+  if (typeof maybeProcess !== 'function') return undefined;
+  return maybeProcess.call(browser)?.pid;
+}
+
+async function waitForProcessExit(exited: Promise<void>, timeoutMs: number): Promise<void> {
+  await withTimeout(exited, timeoutMs, 'process-exit-timeout').catch(() => undefined);
 }
 
 async function waitForHttp(url: string, timeoutMs: number) {
@@ -2238,7 +3383,34 @@ async function getFreePort() {
 
 async function stopHttpServer(server: HttpServer | undefined) {
   if (!server) return;
+  server.closeIdleConnections?.();
+  server.closeAllConnections?.();
   await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+}
+
+async function boundedCleanup(label: string, cleanup: () => Promise<unknown> | undefined, timeoutMs: number): Promise<void> {
+  try {
+    await withTimeout(Promise.resolve(cleanup()), timeoutMs, `Timed out during ${label}`);
+  } catch (error) {
+    console.error(`[cleanup-blocked] Browser pane product long-session ${JSON.stringify({
+      label,
+      reasonHash: hashText(error instanceof Error ? error.message : String(error)),
+    })}`);
+  }
+}
+
+async function withTimeout<T>(task: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      task,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function writeHtml(res: { writeHead(status: number, headers: Record<string, string>): void; end(body: string): void }, body: string) {

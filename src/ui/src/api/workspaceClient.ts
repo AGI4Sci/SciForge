@@ -409,6 +409,7 @@ export interface BrowserHostSessionWriterPreflightResult {
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
 export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'snapshot' | 'state' | 'close';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
+export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
 export type BrowserHostSessionLoadingProgressState = 'navigation-start' | 'navigation-committed' | 'interactive' | 'load' | 'network-quiet' | 'stalled' | 'blocked' | 'retry' | 'handoff';
 export type BrowserHostSessionLoadingProgressReason = 'navigation-requested' | 'navigation-committed' | 'page-interactive' | 'page-load' | 'network-quiet' | 'navigation-stalled' | 'navigation-blocked' | 'navigation-retry' | 'user-handoff-required' | 'host-starting' | 'host-loading' | 'host-ready' | 'host-error' | 'host-diagnostic';
@@ -424,7 +425,7 @@ export type BrowserHostComputerUseAction =
   | { type: 'press_key'; key: string; targetDescription?: string }
   | { type: 'hotkey'; keys: string[]; targetDescription?: string }
   | { type: 'scroll'; direction: 'up' | 'down' | 'left' | 'right'; amount?: number; targetDescription?: string }
-  | { type: 'wheel'; deltaX?: number; deltaY?: number; targetDescription?: string }
+  | { type: 'wheel'; x?: number; y?: number; deltaX?: number; deltaY?: number; targetDescription?: string }
   | { type: 'cursor'; x?: number; y?: number; targetDescription?: string }
   | { type: 'wait'; ms?: number; targetDescription?: string };
 
@@ -448,6 +449,11 @@ export interface BrowserHostSessionLoadingProgress {
     networkLog?: string;
     searchResult?: string;
   };
+  urls?: {
+    requested?: { length: number; sha1: string };
+    current?: { length: number; sha1: string };
+    final?: { length: number; sha1: string };
+  };
   canRetry?: boolean;
   blocked?: boolean;
   requiresHandoff?: boolean;
@@ -469,7 +475,7 @@ export interface BrowserHostSessionState {
   canGoBack: boolean;
   canGoForward: boolean;
   liveSurfaceRef?: string;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
   frameStreamRef?: string;
@@ -507,7 +513,7 @@ export interface BrowserHostSessionActionTiming {
   hostActionMs: number;
   evidenceMs?: number;
   totalMs: number;
-  liveSurfaceTransport?: 'host-stream' | 'native-embedded';
+  liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   paintAckSource?: 'native-adapter-action-state' | 'host-stream-frame' | 'none';
   blockedReason?: string;
 }
@@ -1557,6 +1563,19 @@ export function browserHostSessionFrameStreamUrl(
   if (input.fps) url.searchParams.set('fps', String(input.fps));
   if (input.quietWindowMs !== undefined) url.searchParams.set('quietWindowMs', String(input.quietWindowMs));
   if (input.maxBufferedBytes !== undefined) url.searchParams.set('maxBufferedBytes', String(input.maxBufferedBytes));
+  return url.toString();
+}
+
+export function browserHostSessionWebRtcSignalingUrl(
+  config: SciForgeConfig,
+  session: BrowserHostSessionState,
+  input: { transport?: 'webrtc-data-channel'; role?: 'adapter' | 'viewer' } = {},
+): string {
+  const writerBaseUrl = session.workspaceWriterBaseUrl || config.workspaceWriterBaseUrl;
+  const url = new URL(`${writerBaseUrl}/api/sciforge/browser-host/sessions/${encodeURIComponent(session.id)}/webrtc-signaling`);
+  url.searchParams.set('workspacePath', session.workspacePath || config.workspacePath);
+  url.searchParams.set('transport', input.transport ?? 'webrtc-data-channel');
+  url.searchParams.set('role', input.role ?? 'adapter');
   return url.toString();
 }
 

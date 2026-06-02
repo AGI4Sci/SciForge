@@ -9,6 +9,13 @@ export const REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES = [
 
 export type BrowserNativeAdapterCandidateId = typeof REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES[number];
 
+export const REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS = {
+  'electron-web-contents-view': 'cross-platform',
+  webview2: 'windows',
+  wkwebview: 'macos',
+  'standalone-chromium-surface': 'cross-platform',
+} as const satisfies Record<BrowserNativeAdapterCandidateId, BrowserNativeAdapterPlatform>;
+
 export const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS = [
   'latency',
   'cpu',
@@ -349,6 +356,12 @@ export function validateBrowserNativeAdapterComparisonManifest(
     }
     if (candidate.comparisonRefs.length === 0) {
       issues.push({ path: `${path}.comparisonRefs`, message: 'candidate comparison evidence must be refs-first' });
+    }
+    if (candidate.platform !== REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidate.id]) {
+      issues.push({
+        path: `${path}.platform`,
+        message: `candidate ${candidate.id} must keep canonical platform ${REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidate.id]}`,
+      });
     }
     issues.push(...validateCandidateMetrics(candidate, path));
   });

@@ -130,6 +130,76 @@ test('SSE reader still requires gui.present or a native assistant message for Ru
   assert.equal((seen.at(-1) as { type?: string }).type, 'failed');
 });
 
+test('SSE reader materializes structured VirtualAppScreen artifacts from done payloads without raw text fallback', async () => {
+  const commandId = 'codex-command-virtual-screen-done';
+  const screenArtifactId = `computer-use-virtual-screen-${commandId}`;
+  const body = [
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex returned a structured Computer Use screen artifact.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      uiManifest: [{
+        componentId: 'virtual-screen-viewer',
+        title: 'Computer Use screen',
+        artifactRef: screenArtifactId,
+        priority: -6,
+      }],
+      artifacts: [{
+        id: screenArtifactId,
+        type: 'computer-use-virtual-screen',
+        schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+        metadata: {
+          title: 'Computer Use screen',
+          producer: 'workspace-runtime',
+        },
+        data: {
+          schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+          status: 'blocked',
+          attachState: 'blocked',
+          surfaceMode: 'empty',
+          screenRef: 'virtual-app-screen:structured-done/screen',
+          targetAppRef: 'app:profile/vscode-editor',
+          adapterReadinessRef: 'computer-use:structured-done/provider-readiness.json',
+          handoffRef: 'computer-use:structured-done/attach-request.json',
+          evidenceLedgerRef: 'ledger:computer-use/structured-done/screen-activation.json',
+          guiPresentRefs: ['gui.present:structured-done/screen-pane'],
+          isolationFlags: {
+            affectsPhysicalDisplay: false,
+            sharedSystemInputUsed: false,
+            systemPointerMoved: false,
+            systemKeyboardEventsSent: false,
+          },
+        },
+      }],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+  const result = stream.result as {
+    structuredRuntimeProjection?: { artifactRefs?: string[]; failClosedRawText?: boolean };
+    artifacts?: Array<{ id?: string; type?: string; data?: Record<string, unknown> }>;
+    displayIntent?: { conversationProjection?: { visibleAnswer?: { artifactRefs?: string[] } } };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.structuredRuntimeProjection?.failClosedRawText, true);
+  assert.deepEqual(result.structuredRuntimeProjection?.artifactRefs, [`artifact:${screenArtifactId}`]);
+  assert.ok(result.displayIntent?.conversationProjection?.visibleAnswer?.artifactRefs?.includes(`artifact:${screenArtifactId}`));
+  const screenArtifact = result.artifacts?.find((artifact) => artifact.id === screenArtifactId);
+  assert.equal(screenArtifact?.type, 'computer-use-virtual-screen');
+  assert.equal(screenArtifact?.data?.screenRef, 'virtual-app-screen:structured-done/screen');
+  assert.equal(screenArtifact?.data?.sessionRef, undefined);
+  assert.equal(screenArtifact?.data?.currentFrameRef, undefined);
+  assert.equal((seen.at(-1) as { type?: string }).type, 'done');
+});
+
 test('SSE reader promotes native Runtime Codex assistant messages when gui.present is absent', async () => {
   const commandId = 'codex-command-native-message';
   const body = [

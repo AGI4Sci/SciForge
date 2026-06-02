@@ -26,6 +26,7 @@ import type {
   BrowserHostSessionLoadingProgressReason,
   BrowserHostSessionLoadingProgressSource,
   BrowserHostSessionLoadingProgressState,
+  BrowserHostSessionLoadingProgressUrls,
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
@@ -77,6 +78,8 @@ export type {
   BrowserHostSessionLoadingProgressRefs,
   BrowserHostSessionLoadingProgressSource,
   BrowserHostSessionLoadingProgressState,
+  BrowserHostSessionLoadingProgressUrlDigest,
+  BrowserHostSessionLoadingProgressUrls,
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
@@ -120,6 +123,10 @@ type BrowserHostSessionCompletedInputBatch = Pick<BrowserHostSessionPendingInput
   | { state: BrowserHostSessionState; error?: undefined }
   | { state?: undefined; error: unknown }
 );
+
+type BrowserHostNavigationProgressEvent = Parameters<NonNullable<BrowserHostSessionDriver['onNavigationProgress']>>[0] extends (progress: infer Progress) => void
+  ? Progress
+  : never;
 
 export class BrowserHostSessionManager {
   private readonly sessions = new Map<string, ActiveBrowserHostSession>();
@@ -186,20 +193,9 @@ export class BrowserHostSessionManager {
       await persistBrowserHostSession(session);
       await session.driver.goto(requestedUrl, timeoutMs(input.timeoutMs));
       markBrowserHostActionTimingActionEnd(timing);
-      session.status = 'ready';
-      setBrowserHostSessionLoadingProgress(session, {
-        state: 'network-quiet',
-        reason: 'host-ready',
-        source: 'host-session',
-        action: 'open',
-      });
+      completeBrowserHostNavigationAction(session, 'open');
       await this.capture(session, { includeDom: true, includeAx: true, includeLogs: true }, timing);
-      setBrowserHostSessionLoadingProgress(session, {
-        state: 'network-quiet',
-        reason: 'host-ready',
-        source: 'host-session',
-        action: 'open',
-      });
+      completeBrowserHostNavigationAction(session, 'open');
       finishBrowserHostActionTiming(session, timing, 'ok');
       await persistBrowserHostSession(session);
     } catch (error) {
@@ -283,13 +279,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.goto(nextUrl, timeout);
-        session.status = 'ready';
-        setBrowserHostSessionLoadingProgress(session, {
-          state: 'network-quiet',
-          reason: 'host-ready',
-          source: 'host-session',
-          action: 'navigate',
-        });
+        completeBrowserHostNavigationAction(session, 'navigate');
       } else if (input.action === 'back') {
         session.status = 'loading';
         session.updatedAt = new Date().toISOString();
@@ -301,13 +291,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.back(timeout);
-        session.status = 'ready';
-        setBrowserHostSessionLoadingProgress(session, {
-          state: 'network-quiet',
-          reason: 'host-ready',
-          source: 'host-session',
-          action: 'back',
-        });
+        completeBrowserHostNavigationAction(session, 'back');
       } else if (input.action === 'forward') {
         session.status = 'loading';
         session.updatedAt = new Date().toISOString();
@@ -319,13 +303,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.forward(timeout);
-        session.status = 'ready';
-        setBrowserHostSessionLoadingProgress(session, {
-          state: 'network-quiet',
-          reason: 'host-ready',
-          source: 'host-session',
-          action: 'forward',
-        });
+        completeBrowserHostNavigationAction(session, 'forward');
       } else if (input.action === 'reload') {
         session.status = 'loading';
         session.updatedAt = new Date().toISOString();
@@ -337,16 +315,28 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.reload(timeout);
+        completeBrowserHostNavigationAction(session, 'reload');
+      } else if (input.action === 'stop') {
+        session.status = 'loading';
+        session.updatedAt = new Date().toISOString();
+        setBrowserHostSessionLoadingProgress(session, {
+          state: 'stalled',
+          reason: 'navigation-stalled',
+          source: 'host-action-timing',
+          action: 'stop',
+          canRetry: true,
+        });
+        await persistBrowserHostSession(session);
+        await session.driver.stop();
+        await this.refreshNavigationState(session);
         session.status = 'ready';
+        session.updatedAt = new Date().toISOString();
         setBrowserHostSessionLoadingProgress(session, {
           state: 'network-quiet',
           reason: 'host-ready',
           source: 'host-session',
-          action: 'reload',
+          action: 'stop',
         });
-      } else if (input.action === 'stop') {
-        await session.driver.stop();
-        session.status = 'ready';
       } else if (input.action === 'click') {
         await session.driver.click(requiredNumber(input.x, 'x'), requiredNumber(input.y, 'y'), button);
       } else if (input.action === 'double-click') {
@@ -364,7 +354,12 @@ export class BrowserHostSessionManager {
       } else if (input.action === 'press') {
         await session.driver.press(requiredString(input.key, 'key'));
       } else if (input.action === 'scroll') {
-        await session.driver.scroll(numberOr(input.deltaX, 0), numberOr(input.deltaY, 800));
+        await session.driver.scroll(
+          numberOr(input.deltaX, 0),
+          numberOr(input.deltaY, 800),
+          optionalFiniteNumber(input.x),
+          optionalFiniteNumber(input.y),
+        );
       } else if (input.action === 'cursor') {
         const cursor = await session.driver.cursor?.(requiredNumber(input.x, 'x'), requiredNumber(input.y, 'y')).catch(() => 'default');
         session.cursor = normalizeBrowserHostCursor(cursor);
@@ -414,7 +409,7 @@ export class BrowserHostSessionManager {
         reason: 'host-error',
         source: 'host-error',
         action: input.action,
-        canRetry: browserHostLoadingProgressActionCanRetry(input.action),
+        canRetry: browserHostErrorCanRetry(error) || browserHostLoadingProgressActionCanRetry(input.action),
         blocked: true,
       });
       finishBrowserHostActionTiming(session, timing, 'failed', browserHostErrorMessage(error));
@@ -766,8 +761,12 @@ function coalesceBrowserHostActionInput(
     };
   }
   if (left.action === 'scroll') {
+    const x = optionalFiniteNumber(right.x) ?? optionalFiniteNumber(left.x);
+    const y = optionalFiniteNumber(right.y) ?? optionalFiniteNumber(left.y);
     return {
       ...left,
+      x,
+      y,
       deltaX: numberOr(left.deltaX, 0) + numberOr(right.deltaX, 0),
       deltaY: numberOr(left.deltaY, 800) + numberOr(right.deltaY, 800),
       capture,
@@ -833,6 +832,55 @@ export function browserHostNavigationCommittedAfterTimeout(targetUrl: string, cu
   }
 }
 
+function browserHostNavigationProgressFromNativeState(state: Record<string, unknown>): BrowserHostNavigationProgressEvent | undefined {
+  for (const candidate of [state.loadingProgress, state.progress, state.navigation]) {
+    if (!isBrowserHostRecord(candidate)) continue;
+    const progress = browserHostNavigationProgressFromRecord(candidate);
+    if (progress) return progress;
+  }
+  return undefined;
+}
+
+function browserHostNavigationProgressFromRecord(record: Record<string, unknown>): BrowserHostNavigationProgressEvent | undefined {
+  const state = browserHostLoadingProgressState(record.state ?? record.phase ?? record.stage);
+  if (!state) return undefined;
+  return {
+    state,
+    reason: browserHostLoadingProgressReason(record.reason) ?? browserHostDefaultLoadingProgressReason(state),
+    source: browserHostLoadingProgressSource(record.source) ?? 'host-state',
+    canRetry: record.canRetry === true || record.retryable === true ? true : undefined,
+    blocked: record.blocked === true ? true : undefined,
+    requiresHandoff: record.requiresHandoff === true ? true : undefined,
+  };
+}
+
+function browserHostNavigationProgressKey(progress: BrowserHostNavigationProgressEvent): string {
+  return [
+    progress.state,
+    progress.reason,
+    progress.source ?? '',
+    progress.canRetry === true ? 'retry' : '',
+    progress.blocked === true ? 'blocked' : '',
+    progress.requiresHandoff === true ? 'handoff' : '',
+  ].join(':');
+}
+
+function browserHostDefaultLoadingProgressReason(state: BrowserHostSessionLoadingProgressState): BrowserHostSessionLoadingProgressReason {
+  if (state === 'navigation-start') return 'navigation-requested';
+  if (state === 'navigation-committed') return 'navigation-committed';
+  if (state === 'interactive') return 'page-interactive';
+  if (state === 'load') return 'page-load';
+  if (state === 'network-quiet') return 'network-quiet';
+  if (state === 'stalled') return 'navigation-stalled';
+  if (state === 'blocked') return 'navigation-blocked';
+  if (state === 'retry') return 'navigation-retry';
+  return 'user-handoff-required';
+}
+
+function isBrowserHostRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
 function defaultPlaywrightBrowserHostDriverFactory(): BrowserHostSessionDriverFactory {
   const nativeAdapterUrl = browserHostNativeAdapterUrl();
   if (nativeAdapterUrl) return createNativeEmbeddedBrowserHostDriverFactory(nativeAdapterUrl);
@@ -881,6 +929,8 @@ async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostS
 class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
   readonly liveSurfaceTransport = 'native-embedded' as const;
   readonly nativeAdapterUrl: string;
+  private readonly navigationProgressListeners = new Set<(progress: BrowserHostNavigationProgressEvent) => void>();
+  private lastNavigationProgressKey?: string;
 
   constructor(
     private readonly adapterBaseUrl: string,
@@ -999,8 +1049,8 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     await this.action({ action: 'press', key });
   }
 
-  async scroll(deltaX: number, deltaY: number): Promise<void> {
-    await this.action({ action: 'scroll', deltaX, deltaY });
+  async scroll(deltaX: number, deltaY: number, x?: number, y?: number): Promise<void> {
+    await this.action({ action: 'scroll', deltaX, deltaY, x, y });
   }
 
   async cursor(x: number, y: number): Promise<string> {
@@ -1015,11 +1065,15 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     await this.action({ action: 'close' });
   }
 
+  onNavigationProgress(listener: (progress: BrowserHostNavigationProgressEvent) => void): void {
+    this.navigationProgressListeners.add(listener);
+  }
+
   private lastState?: { url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean };
 
   private async state(): Promise<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean }> {
     const state = await this.get<{ url?: string; title?: string; canGoBack?: boolean; canGoForward?: boolean }>(`/sessions/${encodeURIComponent(this.sessionId)}/state`);
-    this.lastState = state;
+    this.cacheState(state);
     return state;
   }
 
@@ -1036,6 +1090,13 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
       canGoBack: state.canGoBack === true,
       canGoForward: state.canGoForward === true,
     };
+    const progress = browserHostNavigationProgressFromNativeState(state);
+    if (progress) {
+      const progressKey = browserHostNavigationProgressKey(progress);
+      if (this.lastNavigationProgressKey === progressKey) return;
+      this.lastNavigationProgressKey = progressKey;
+      for (const listener of this.navigationProgressListeners) listener(progress);
+    }
   }
 
   private async get<T extends Record<string, unknown>>(path: string): Promise<T> {
@@ -1057,9 +1118,16 @@ async function nativeEmbeddedJson<T extends Record<string, unknown>>(url: string
   const json = text ? JSON.parse(text) as Record<string, unknown> : {};
   if (!response.ok || json.ok === false) {
     const reason = typeof json.reason === 'string' ? json.reason : typeof json.error === 'string' ? json.error : response.statusText;
-    throw new Error(`Native embedded BrowserHostSession adapter failed: ${reason}`);
+    throw new NativeEmbeddedBrowserHostAdapterError(`Native embedded BrowserHostSession adapter failed: ${reason}`, json.retryable === true);
   }
   return json as T;
+}
+
+class NativeEmbeddedBrowserHostAdapterError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'NativeEmbeddedBrowserHostAdapterError';
+  }
 }
 
 function browserHostNativeAdapterUrl(): string | undefined {
@@ -1088,6 +1156,7 @@ function browserHostChromiumArgs() {
 class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
   private readonly consoleListeners = new Set<(entry: Record<string, unknown>) => void>();
   private readonly networkListeners = new Set<(entry: Record<string, unknown>) => void>();
+  private readonly navigationProgressListeners = new Set<(progress: BrowserHostNavigationProgressEvent) => void>();
   private readonly history: string[] = [];
   private historyIndex = -1;
   private activeMouseDown?: { x: number; y: number; button: BrowserHostMouseButton; clickCount: number; moved: boolean };
@@ -1138,12 +1207,22 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
     const targetUrl = normalizeBrowserHostUrl(url);
     try {
       await this.page.goto(targetUrl, { waitUntil: 'commit', timeout: timeoutMs });
+      this.emitNavigationProgress({ state: 'navigation-committed', reason: 'navigation-committed' });
     } catch (error) {
       if (!browserHostNavigationCommittedAfterTimeout(targetUrl, this.page.url())) throw error;
       await this.page.evaluate(() => window.stop()).catch(() => undefined);
+      this.emitNavigationProgress({ state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
     }
-    await this.waitForDomContentLoaded();
-    await this.waitForSettle(timeoutMs);
+    const domReady = await this.waitForDomContentLoaded();
+    this.emitNavigationProgress(domReady
+      ? { state: 'interactive', reason: 'page-interactive' }
+      : { state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
+    const loaded = await this.waitForLoad();
+    if (loaded) this.emitNavigationProgress({ state: 'load', reason: 'page-load' });
+    const settled = await this.waitForSettle(timeoutMs);
+    this.emitNavigationProgress(settled
+      ? { state: 'network-quiet', reason: 'network-quiet', source: 'host-progress' }
+      : { state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
     this.recordNavigation();
   }
 
@@ -1224,23 +1303,41 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
   async back(timeoutMs: number): Promise<void> {
     if (this.historyIndex > 0) this.historyIndex -= 1;
     await this.page.goBack({ waitUntil: 'commit', timeout: timeoutMs }).catch(() => undefined);
-    await this.waitForDomContentLoaded();
-    await this.waitForSettle(timeoutMs);
+    const domReady = await this.waitForDomContentLoaded();
+    if (domReady) this.emitNavigationProgress({ state: 'interactive', reason: 'page-interactive' });
+    const loaded = await this.waitForLoad();
+    if (loaded) this.emitNavigationProgress({ state: 'load', reason: 'page-load' });
+    const settled = await this.waitForSettle(timeoutMs);
+    this.emitNavigationProgress(settled
+      ? { state: 'network-quiet', reason: 'network-quiet', source: 'host-progress' }
+      : { state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
     this.syncHistoryPosition();
   }
 
   async forward(timeoutMs: number): Promise<void> {
     if (this.historyIndex < this.history.length - 1) this.historyIndex += 1;
     await this.page.goForward({ waitUntil: 'commit', timeout: timeoutMs }).catch(() => undefined);
-    await this.waitForDomContentLoaded();
-    await this.waitForSettle(timeoutMs);
+    const domReady = await this.waitForDomContentLoaded();
+    if (domReady) this.emitNavigationProgress({ state: 'interactive', reason: 'page-interactive' });
+    const loaded = await this.waitForLoad();
+    if (loaded) this.emitNavigationProgress({ state: 'load', reason: 'page-load' });
+    const settled = await this.waitForSettle(timeoutMs);
+    this.emitNavigationProgress(settled
+      ? { state: 'network-quiet', reason: 'network-quiet', source: 'host-progress' }
+      : { state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
     this.syncHistoryPosition();
   }
 
   async reload(timeoutMs: number): Promise<void> {
     await this.page.reload({ waitUntil: 'commit', timeout: timeoutMs }).catch(() => undefined);
-    await this.waitForDomContentLoaded();
-    await this.waitForSettle(timeoutMs);
+    const domReady = await this.waitForDomContentLoaded();
+    if (domReady) this.emitNavigationProgress({ state: 'interactive', reason: 'page-interactive' });
+    const loaded = await this.waitForLoad();
+    if (loaded) this.emitNavigationProgress({ state: 'load', reason: 'page-load' });
+    const settled = await this.waitForSettle(timeoutMs);
+    this.emitNavigationProgress(settled
+      ? { state: 'network-quiet', reason: 'network-quiet', source: 'host-progress' }
+      : { state: 'stalled', reason: 'navigation-stalled', source: 'host-progress', canRetry: true });
     this.syncHistoryPosition();
   }
 
@@ -1324,7 +1421,8 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
     this.recordNavigation();
   }
 
-  async scroll(deltaX: number, deltaY: number): Promise<void> {
+  async scroll(deltaX: number, deltaY: number, x?: number, y?: number): Promise<void> {
+    if (x !== undefined && y !== undefined) await this.page.mouse.move(x, y);
     await this.page.mouse.wheel(deltaX, deltaY);
   }
 
@@ -1358,25 +1456,40 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
     this.networkListeners.add(listener);
   }
 
-  private async waitForSettle(timeoutMs: number, maxSettleMs = browserHostNavigationSettleMs(timeoutMs)): Promise<void> {
+  onNavigationProgress(listener: (progress: BrowserHostNavigationProgressEvent) => void): void {
+    this.navigationProgressListeners.add(listener);
+  }
+
+  private async waitForSettle(timeoutMs: number, maxSettleMs = browserHostNavigationSettleMs(timeoutMs)): Promise<boolean> {
     const settleMs = Math.min(timeoutMs, maxSettleMs);
-    if (settleMs <= 0) return;
-    await this.page.waitForLoadState('networkidle', { timeout: settleMs }).catch(() => undefined);
+    if (settleMs <= 0) return false;
+    return this.page.waitForLoadState('networkidle', { timeout: settleMs }).then(() => true, () => false);
   }
 
   private async waitForInteractiveNavigationOrSettle(beforeUrl: string): Promise<void> {
     await this.page.waitForTimeout(browserHostInteractiveNavigationGraceMs()).catch(() => undefined);
-    await this.waitForDomContentLoaded(browserHostInteractiveDomContentLoadedSettleMs());
     const afterUrl = this.page.url();
+    const navigated = normalizeBrowserHostUrl(afterUrl) !== normalizeBrowserHostUrl(beforeUrl);
+    if (!navigated) return;
+    const domReady = await this.waitForDomContentLoaded(browserHostInteractiveDomContentLoadedSettleMs());
+    if (domReady) this.emitNavigationProgress({ state: 'interactive', reason: 'page-interactive' });
     const settleMs = normalizeBrowserHostUrl(afterUrl) === normalizeBrowserHostUrl(beforeUrl)
       ? browserHostInteractiveSettleMs()
       : browserHostInteractiveNavigationSettleMs();
-    await this.waitForSettle(8000, settleMs);
+    const settled = await this.waitForSettle(8000, settleMs);
+    if (settled) {
+      this.emitNavigationProgress({ state: 'network-quiet', reason: 'network-quiet', source: 'host-progress' });
+    }
   }
 
-  private async waitForDomContentLoaded(maxSettleMs = browserHostDomContentLoadedSettleMs()): Promise<void> {
-    if (maxSettleMs <= 0) return;
-    await this.page.waitForLoadState('domcontentloaded', { timeout: maxSettleMs }).catch(() => undefined);
+  private async waitForDomContentLoaded(maxSettleMs = browserHostDomContentLoadedSettleMs()): Promise<boolean> {
+    if (maxSettleMs <= 0) return false;
+    return this.page.waitForLoadState('domcontentloaded', { timeout: maxSettleMs }).then(() => true, () => false);
+  }
+
+  private async waitForLoad(maxSettleMs = browserHostLoadSettleMs()): Promise<boolean> {
+    if (maxSettleMs <= 0) return false;
+    return this.page.waitForLoadState('load', { timeout: maxSettleMs }).then(() => true, () => false);
   }
 
   private recordNavigation(url = this.page.url()) {
@@ -1403,6 +1516,10 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
 
   private emitNetwork(entry: Record<string, unknown>) {
     for (const listener of this.networkListeners) listener(entry);
+  }
+
+  private emitNavigationProgress(progress: BrowserHostNavigationProgressEvent) {
+    for (const listener of this.navigationProgressListeners) listener(progress);
   }
 }
 
@@ -1455,6 +1572,36 @@ function attachDriverDiagnostics(session: ActiveBrowserHostSession) {
     session.networkLog.push(scrubBrowserHostLogEntry(entry));
     if (session.networkLog.length > 400) session.networkLog.splice(0, session.networkLog.length - 400);
   });
+  session.driver?.onNavigationProgress?.((progress) => {
+    if (session.status === 'closed' || session.status === 'failed') return;
+    const existingAction = session.loadingProgress?.action;
+    session.status = browserHostSessionStatusForNavigationProgress(session, progress);
+    session.updatedAt = new Date().toISOString();
+    setBrowserHostSessionLoadingProgress(session, {
+      state: progress.state,
+      reason: progress.reason,
+      source: progress.source ?? 'host-lifecycle',
+      action: existingAction,
+      canRetry: progress.canRetry,
+      blocked: progress.blocked,
+      requiresHandoff: progress.requiresHandoff,
+    });
+    void persistBrowserHostSession(session).catch(() => undefined);
+  });
+}
+
+function browserHostSessionStatusForNavigationProgress(
+  session: ActiveBrowserHostSession,
+  progress: BrowserHostNavigationProgressEvent,
+): BrowserHostSessionStatus {
+  if (progress.state === 'blocked' || progress.state === 'handoff') return 'failed';
+  if (progress.state === 'network-quiet') return 'ready';
+  if ((progress.state === 'interactive' || progress.state === 'load') && session.status === 'ready') {
+    const sessionUrl = normalizeBrowserHostUrl(session.url);
+    const driverUrl = session.driver ? normalizeBrowserHostUrl(session.driver.url()) : sessionUrl;
+    if (driverUrl === sessionUrl) return 'ready';
+  }
+  return 'loading';
 }
 
 function browserHostCaptureOptions(
@@ -1683,8 +1830,35 @@ function setBrowserHostSessionLoadingProgress(
   session.loadingProgress = buildBrowserHostSessionLoadingProgress(session, input);
 }
 
+function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, action: BrowserHostSessionAction | 'open'): void {
+  const progress = browserHostSessionLoadingProgress(session.loadingProgress);
+  const onlyInitialHostNavigation = progress?.state === 'navigation-start' && progress.source === 'host-navigation';
+  if (progress?.state && progress.state !== 'network-quiet' && !onlyInitialHostNavigation) {
+    session.status = progress.state === 'blocked' || progress.state === 'handoff' ? 'failed' : 'loading';
+    session.updatedAt = new Date().toISOString();
+    setBrowserHostSessionLoadingProgress(session, {
+      state: progress.state,
+      reason: progress.reason,
+      source: progress.source,
+      action,
+      canRetry: progress.canRetry,
+      blocked: progress.blocked,
+      requiresHandoff: progress.requiresHandoff,
+    });
+    return;
+  }
+  session.status = 'ready';
+  session.updatedAt = new Date().toISOString();
+  setBrowserHostSessionLoadingProgress(session, {
+    state: 'network-quiet',
+    reason: progress?.reason === 'network-quiet' ? 'network-quiet' : 'host-ready',
+    source: progress?.reason === 'network-quiet' ? progress.source : 'host-session',
+    action,
+  });
+}
+
 function buildBrowserHostSessionLoadingProgress(
-  session: Pick<ActiveBrowserHostSession, 'id' | 'status' | 'updatedAt' | 'driver' | 'liveSurfaceTransport' | 'frameRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef' | 'searchResultRef'>,
+  session: Pick<ActiveBrowserHostSession, 'id' | 'status' | 'requestedUrl' | 'url' | 'updatedAt' | 'driver' | 'liveSurfaceTransport' | 'frameRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef' | 'searchResultRef'>,
   input: BrowserHostSessionLoadingProgressInput,
 ): BrowserHostSessionLoadingProgress {
   return {
@@ -1696,6 +1870,7 @@ function buildBrowserHostSessionLoadingProgress(
     action: input.action,
     updatedAt: session.updatedAt,
     refs: browserHostLoadingProgressRefs(session),
+    urls: browserHostLoadingProgressUrls(session, input),
     canRetry: input.canRetry || input.state === 'retry' ? true : undefined,
     blocked: input.blocked || input.state === 'blocked' ? true : undefined,
     requiresHandoff: input.requiresHandoff || input.state === 'handoff' ? true : undefined,
@@ -1724,7 +1899,7 @@ function browserHostLoadingProgressInputForPublicState(
       reason: 'host-error',
       source: 'host-error',
       action,
-      canRetry: browserHostLoadingProgressActionCanRetry(action),
+      canRetry: existing?.canRetry === true || browserHostLoadingProgressActionCanRetry(action),
       blocked: true,
     };
   }
@@ -1784,6 +1959,7 @@ function browserHostSessionLoadingProgress(value: unknown): BrowserHostSessionLo
     action: browserHostLoadingProgressAction(record.action),
     updatedAt,
     refs: browserHostLoadingProgressRefsFromUnknown(record.refs),
+    urls: browserHostLoadingProgressUrlsFromUnknown(record.urls),
     canRetry: record.canRetry === true ? true : undefined,
     blocked: record.blocked === true ? true : undefined,
     requiresHandoff: record.requiresHandoff === true ? true : undefined,
@@ -1823,6 +1999,45 @@ function browserHostLoadingProgressRefsFromUnknown(value: unknown): BrowserHostS
     networkLog: browserHostRefField(record.networkLog),
     searchResult: browserHostRefField(record.searchResult),
   };
+}
+
+function browserHostLoadingProgressUrls(
+  session: Pick<ActiveBrowserHostSession, 'requestedUrl' | 'url' | 'status'>,
+  input: Pick<BrowserHostSessionLoadingProgressInput, 'state'>,
+): BrowserHostSessionLoadingProgressUrls | undefined {
+  const requested = browserHostUrlDigest(session.requestedUrl);
+  const current = browserHostUrlDigest(session.url);
+  const final = input.state === 'network-quiet' && session.status === 'ready' ? current : undefined;
+  if (!requested && !current && !final) return undefined;
+  return { requested, current, final };
+}
+
+function browserHostLoadingProgressUrlsFromUnknown(value: unknown): BrowserHostSessionLoadingProgressUrls | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const urls = {
+    requested: browserHostUrlDigestFromUnknown(record.requested),
+    current: browserHostUrlDigestFromUnknown(record.current),
+    final: browserHostUrlDigestFromUnknown(record.final),
+  };
+  return urls.requested || urls.current || urls.final ? urls : undefined;
+}
+
+function browserHostUrlDigest(value: unknown): BrowserHostSessionLoadingProgressUrls['requested'] {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const normalized = normalizeBrowserHostUrl(value);
+  return {
+    length: normalized.length,
+    sha1: sha1(normalized),
+  };
+}
+
+function browserHostUrlDigestFromUnknown(value: unknown): BrowserHostSessionLoadingProgressUrls['requested'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const length = typeof record.length === 'number' && Number.isFinite(record.length) ? Math.max(0, Math.round(record.length)) : undefined;
+  const hash = typeof record.sha1 === 'string' && /^[a-f0-9]{40}$/i.test(record.sha1.trim()) ? record.sha1.trim().toLowerCase() : undefined;
+  return length !== undefined && hash ? { length, sha1: hash } : undefined;
 }
 
 function browserHostLoadingProgressState(value: unknown): BrowserHostSessionLoadingProgressState | undefined {
@@ -1981,6 +2196,10 @@ function browserHostDomContentLoadedSettleMs() {
   return browserHostEnvNumber('SCIFORGE_BROWSER_HOST_DOMCONTENTLOADED_SETTLE_MS', 1500, 0, 10_000);
 }
 
+function browserHostLoadSettleMs() {
+  return browserHostEnvNumber('SCIFORGE_BROWSER_HOST_LOAD_SETTLE_MS', 1500, 0, 10_000);
+}
+
 function browserHostInteractiveSettleMs() {
   return browserHostEnvNumber('SCIFORGE_BROWSER_HOST_INTERACTIVE_SETTLE_MS', 160, 0, 2000);
 }
@@ -2066,6 +2285,10 @@ function numberOr(value: unknown, fallback: number) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
+function optionalFiniteNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function browserHostMouseButton(value: unknown): BrowserHostMouseButton {
   return value === 'right' || value === 'middle' ? value : 'left';
 }
@@ -2084,6 +2307,10 @@ function sleep(ms: number): Promise<void> {
 
 function browserHostErrorMessage(error: unknown) {
   return scrubBrowserHostText(error instanceof Error ? error.message : String(error));
+}
+
+function browserHostErrorCanRetry(error: unknown) {
+  return error instanceof NativeEmbeddedBrowserHostAdapterError && error.retryable === true;
 }
 
 function scrubBrowserHostLogEntry(entry: Record<string, unknown>) {

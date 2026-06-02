@@ -90,14 +90,25 @@ export interface VirtualScreenLeaseOwner {
   ref: string;
   label?: string;
   status?: string;
+  actor?: string;
   ownerRef?: string;
   scopeRef?: string;
+  active?: boolean;
 }
 
 export interface VirtualScreenEvent {
   label: string;
   ref: string;
   status?: string;
+}
+
+export interface VirtualScreenQualityRef {
+  ref: string;
+  label?: string;
+  status?: string;
+  transport?: string;
+  diagnosticOnly?: boolean;
+  sequence?: number;
 }
 
 export type VirtualScreenInputIntentKind =
@@ -138,11 +149,20 @@ export interface VirtualScreenPayload {
   surfaceTransport?: 'webrtc' | 'native-frame-stream';
   platformDriverRef?: string;
   platformDriverStatus?: string;
+  frameTransport?: VirtualScreenQualityRef;
+  frameTelemetry?: VirtualScreenQualityRef;
+  currentFrameSequence?: VirtualScreenQualityRef;
+  reconnect?: VirtualScreenQualityRef;
+  inputHotPath?: VirtualScreenQualityRef;
   visibleScreenRefs?: string[];
   visibleCursorRefs?: string[];
   targetAppRef?: string;
   targetWindowRef?: string;
   sessionRef?: string;
+  providerSessionOwnerRef?: string;
+  providerSessionReconnectRef?: string;
+  liveBindingAttachGrantRef?: string;
+  surfaceTransportRef?: string;
   frameStreamRef?: string;
   frameRef?: string;
   frameRefs?: VirtualScreenFrame[];
@@ -157,6 +177,10 @@ export interface VirtualScreenPayload {
   executorEventRefs?: string[];
   cursorOverlayRefs?: string[];
   leaseOwnerRefs?: VirtualScreenLeaseOwner[];
+  activeLeaseOwnerRef?: string;
+  activeLeaseOwnerRole?: string;
+  userLeaseRef?: string;
+  agentLeaseRef?: string;
   proposalRefs?: string[];
   proposals?: Array<Record<string, unknown>>;
   inputLeaseRef?: string;
@@ -164,6 +188,7 @@ export interface VirtualScreenPayload {
   adapterReadinessRef?: string;
   replayRef?: string;
   evidenceLedgerRef?: string;
+  surfaceTransportDescriptor?: unknown;
   artifactRefs?: string[];
   verificationRefs?: string[];
   guiPresentRefs?: string[];
@@ -180,9 +205,17 @@ export interface VirtualScreenPayload {
   permissionGranted?: boolean;
   sharedInputAllowed?: boolean;
   leaseStatus?: string;
+  takeoverRef?: string;
+  pauseRef?: string;
+  resumeRef?: string;
   stopRef?: string;
   cancelLeaseRef?: string;
   handoffRef?: string;
+  permissionHandoffRef?: string;
+  permissionHandoffRefs?: string[];
+  permissionRecheckRef?: string;
+  permissionRecheckRefs?: string[];
+  recheckRef?: string;
   screen?: { width?: number; height?: number; label?: string };
   actorCursors?: VirtualScreenCursor[];
   isolation?: Record<string, unknown>;
@@ -204,11 +237,20 @@ const allowedPayloadFields = new Set([
   'surfaceTransport',
   'platformDriverRef',
   'platformDriverStatus',
+  'frameTransport',
+  'frameTelemetry',
+  'currentFrameSequence',
+  'reconnect',
+  'inputHotPath',
   'visibleScreenRefs',
   'visibleCursorRefs',
   'targetAppRef',
   'targetWindowRef',
   'sessionRef',
+  'providerSessionOwnerRef',
+  'providerSessionReconnectRef',
+  'liveBindingAttachGrantRef',
+  'surfaceTransportRef',
   'frameStreamRef',
   'frameRef',
   'frameRefs',
@@ -224,11 +266,17 @@ const allowedPayloadFields = new Set([
   'inputIntentRefs',
   'executorEventRef',
   'executorEventRefs',
+  'leaseOwnerRefs',
+  'activeLeaseOwnerRef',
+  'activeLeaseOwnerRole',
+  'userLeaseRef',
+  'agentLeaseRef',
   'inputLeaseRef',
   'actionAdapterRef',
   'adapterReadinessRef',
   'replayRef',
   'evidenceLedgerRef',
+  'surfaceTransportDescriptor',
   'artifactRefs',
   'verificationRefs',
   'guiPresentRefs',
@@ -245,9 +293,17 @@ const allowedPayloadFields = new Set([
   'permissionGranted',
   'sharedInputAllowed',
   'leaseStatus',
+  'takeoverRef',
+  'pauseRef',
+  'resumeRef',
   'stopRef',
   'cancelLeaseRef',
   'handoffRef',
+  'permissionHandoffRef',
+  'permissionHandoffRefs',
+  'permissionRecheckRef',
+  'permissionRecheckRefs',
+  'recheckRef',
   'screen',
   'actorCursors',
   'isolation',
@@ -284,6 +340,14 @@ const rejectedInputLabels: Array<[string, string, VirtualScreenRejectedInputKind
   ['transportOffer', 'raw transport payload', 'raw-json'],
   ['transportAnswer', 'raw transport payload', 'raw-json'],
   ['iceCandidates', 'raw transport payload', 'raw-json'],
+  ['transportPayload', 'raw transport payload', 'raw-json'],
+  ['transportParams', 'provider parameters', 'provider-params'],
+  ['rawTransport', 'raw transport payload', 'raw-json'],
+  ['telemetryPayload', 'raw telemetry payload', 'raw-json'],
+  ['rawTelemetry', 'raw telemetry payload', 'raw-json'],
+  ['framePayload', 'raw frame payload', 'raw-json'],
+  ['rawPayload', 'raw payload', 'raw-json'],
+  ['payload', 'raw payload', 'raw-json'],
   ['provider', 'provider parameters', 'provider-params'],
   ['hostBridge', 'host bridge parameters', 'host-bridge'],
   ['executorLease', 'executor parameters', 'executor-params'],
@@ -307,6 +371,10 @@ function bool(value: unknown): boolean | undefined {
 
 function positiveNumber(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function nonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function uniqueStrings(values: Array<string | undefined>) {
@@ -442,6 +510,92 @@ function normalizeEventRecords(value: unknown, field: string, rejected: VirtualS
   return events;
 }
 
+function normalizeLeaseOwnerRecords(value: unknown, field: string, rejected: VirtualScreenRejectedInput[]): VirtualScreenLeaseOwner[] {
+  if (!Array.isArray(value)) return [];
+  const owners: VirtualScreenLeaseOwner[] = [];
+  for (const [index, entry] of value.entries()) {
+    const prefix = `${field}[${index}]`;
+    if (typeof entry === 'string') {
+      const ref = safeRef(entry, prefix, rejected);
+      if (ref) owners.push({ ref });
+      continue;
+    }
+    if (!isRecord(entry)) {
+      rejected.push({ field: prefix, label: 'unsupported payload field', kind: 'unsupported-payload-field' });
+      continue;
+    }
+    const ref = safeRef(entry.ref ?? entry.leaseRef, `${prefix}.ref`, rejected);
+    if (!ref) continue;
+    owners.push({
+      ref,
+      label: normalizeStatus(entry.label),
+      status: normalizeStatus(entry.status),
+      actor: normalizeStatus(entry.actor ?? entry.actorRole ?? entry.ownerRole),
+      ownerRef: safeRef(entry.ownerRef, `${prefix}.ownerRef`, rejected),
+      scopeRef: safeRef(entry.scopeRef, `${prefix}.scopeRef`, rejected),
+      active: bool(entry.active),
+    });
+  }
+  return owners;
+}
+
+const legacyDiagnosticTransports = new Set(['vnc', 'novnc', 'rdp', 'mjpeg']);
+const qualityRefAllowedFields = new Set(['ref', 'label', 'status', 'transport', 'protocol', 'diagnosticOnly', 'sequence']);
+const streamQualityPayloadFields = new Set([
+  'frameTransport',
+  'frameTelemetry',
+  'currentFrameSequence',
+  'reconnect',
+  'inputHotPath',
+  'surfaceTransportDescriptor',
+]);
+
+function normalizeQualityTransport(value: unknown) {
+  const transport = s(value);
+  if (!transport) return undefined;
+  if (legacyDiagnosticTransports.has(transport.toLowerCase())) {
+    return transport.toLowerCase() === 'novnc' ? 'noVNC' : transport.toUpperCase();
+  }
+  return normalizeStatus(transport);
+}
+
+function isLegacyDiagnosticTransport(value: string | undefined) {
+  return Boolean(value && legacyDiagnosticTransports.has(value.toLowerCase()));
+}
+
+function normalizeQualityRef(value: unknown, field: string, rejected: VirtualScreenRejectedInput[]): VirtualScreenQualityRef | undefined {
+  if (typeof value === 'string') {
+    const ref = safeRef(value, field, rejected);
+    return ref ? { ref } : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+
+  for (const key of Object.keys(value)) {
+    if (!qualityRefAllowedFields.has(key)) {
+      const knownRejection = rejectedInputLabelForKey(key);
+      rejected.push({
+        field: `${field}.${key}`,
+        label: knownRejection?.label ?? 'unsupported payload field',
+        kind: knownRejection?.kind ?? 'unsupported-payload-field',
+      });
+    }
+  }
+
+  const ref = safeRef(value.ref ?? value[`${field}Ref`], `${field}.ref`, rejected);
+  if (!ref) return undefined;
+  const transport = normalizeQualityTransport(value.transport ?? value.protocol);
+  const diagnosticOnly = bool(value.diagnosticOnly) ?? (isLegacyDiagnosticTransport(transport) ? true : undefined);
+  const sequence = nonNegativeNumber(value.sequence);
+  return {
+    ref,
+    label: normalizeStatus(value.label),
+    status: normalizeStatus(value.status),
+    transport,
+    diagnosticOnly,
+    sequence,
+  };
+}
+
 function rejectedInputLabelForKey(key: string): Omit<VirtualScreenRejectedInput, 'field'> | undefined {
   const exact = rejectedInputLabels.find(([field]) => field === key);
   if (exact) return { label: exact[1], kind: exact[2] };
@@ -478,6 +632,9 @@ function collectRejectedInputs(value: unknown, fieldPrefix = '', rejected: Virtu
   for (const [key, entry] of Object.entries(value)) {
     const field = fieldPrefix ? `${fieldPrefix}.${key}` : key;
     const topLevelAllowed = !fieldPrefix && allowedPayloadFields.has(key);
+    if (topLevelAllowed && streamQualityPayloadFields.has(key)) {
+      continue;
+    }
     const knownRejection = topLevelAllowed ? undefined : rejectedInputLabelForKey(key);
     if (!topLevelAllowed) {
       if (knownRejection) {
@@ -638,11 +795,20 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
     surfaceTransport: normalizeSurfaceTransport(value.surfaceTransport, rejectedInputs),
     platformDriverRef: safeRef(value.platformDriverRef, 'platformDriverRef', rejectedInputs),
     platformDriverStatus: normalizeStatus(value.platformDriverStatus),
+    frameTransport: normalizeQualityRef(value.frameTransport, 'frameTransport', rejectedInputs),
+    frameTelemetry: normalizeQualityRef(value.frameTelemetry, 'frameTelemetry', rejectedInputs),
+    currentFrameSequence: normalizeQualityRef(value.currentFrameSequence, 'currentFrameSequence', rejectedInputs),
+    reconnect: normalizeQualityRef(value.reconnect, 'reconnect', rejectedInputs),
+    inputHotPath: normalizeQualityRef(value.inputHotPath, 'inputHotPath', rejectedInputs),
     visibleScreenRefs: safeRefArray(value.visibleScreenRefs, 'visibleScreenRefs', rejectedInputs),
     visibleCursorRefs: safeRefArray(value.visibleCursorRefs, 'visibleCursorRefs', rejectedInputs),
     targetAppRef: safeRef(value.targetAppRef, 'targetAppRef', rejectedInputs),
     targetWindowRef: safeRef(value.targetWindowRef, 'targetWindowRef', rejectedInputs),
     sessionRef: safeRef(value.sessionRef, 'sessionRef', rejectedInputs),
+    providerSessionOwnerRef: safeRef(value.providerSessionOwnerRef, 'providerSessionOwnerRef', rejectedInputs),
+    providerSessionReconnectRef: safeRef(value.providerSessionReconnectRef, 'providerSessionReconnectRef', rejectedInputs),
+    liveBindingAttachGrantRef: safeRef(value.liveBindingAttachGrantRef, 'liveBindingAttachGrantRef', rejectedInputs),
+    surfaceTransportRef: safeRef(value.surfaceTransportRef, 'surfaceTransportRef', rejectedInputs),
     frameStreamRef: safeRef(value.frameStreamRef, 'frameStreamRef', rejectedInputs),
     frameRef,
     frameRefs,
@@ -661,6 +827,11 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
       safeRef(value.executorEventRef, 'executorEventRef', rejectedInputs),
       ...safeRefArray(value.executorEventRefs, 'executorEventRefs', rejectedInputs),
     ]),
+    leaseOwnerRefs: normalizeLeaseOwnerRecords(value.leaseOwnerRefs, 'leaseOwnerRefs', rejectedInputs),
+    activeLeaseOwnerRef: safeRef(value.activeLeaseOwnerRef, 'activeLeaseOwnerRef', rejectedInputs),
+    activeLeaseOwnerRole: normalizeStatus(value.activeLeaseOwnerRole),
+    userLeaseRef: safeRef(value.userLeaseRef, 'userLeaseRef', rejectedInputs),
+    agentLeaseRef: safeRef(value.agentLeaseRef, 'agentLeaseRef', rejectedInputs),
     inputLeaseRef: safeRef(value.inputLeaseRef, 'inputLeaseRef', rejectedInputs),
     actionAdapterRef: safeRef(value.actionAdapterRef, 'actionAdapterRef', rejectedInputs),
     adapterReadinessRef: safeRef(value.adapterReadinessRef, 'adapterReadinessRef', rejectedInputs),
@@ -682,9 +853,17 @@ function normalizePayload(value: Record<string, unknown>): VirtualScreenPayload 
     permissionGranted: bool(value.permissionGranted),
     sharedInputAllowed: bool(value.sharedInputAllowed),
     leaseStatus: normalizeStatus(value.leaseStatus),
+    takeoverRef: safeRef(value.takeoverRef, 'takeoverRef', rejectedInputs),
+    pauseRef: safeRef(value.pauseRef, 'pauseRef', rejectedInputs),
+    resumeRef: safeRef(value.resumeRef, 'resumeRef', rejectedInputs),
     stopRef: safeRef(value.stopRef, 'stopRef', rejectedInputs),
     cancelLeaseRef: safeRef(value.cancelLeaseRef, 'cancelLeaseRef', rejectedInputs),
     handoffRef: safeRef(value.handoffRef, 'handoffRef', rejectedInputs),
+    permissionHandoffRef: safeRef(value.permissionHandoffRef, 'permissionHandoffRef', rejectedInputs),
+    permissionHandoffRefs: safeRefArray(value.permissionHandoffRefs, 'permissionHandoffRefs', rejectedInputs),
+    permissionRecheckRef: safeRef(value.permissionRecheckRef, 'permissionRecheckRef', rejectedInputs),
+    permissionRecheckRefs: safeRefArray(value.permissionRecheckRefs, 'permissionRecheckRefs', rejectedInputs),
+    recheckRef: safeRef(value.recheckRef, 'recheckRef', rejectedInputs),
     screen: normalizeScreen(value.screen),
     isolationFlags: normalizeIsolationFlags(value.isolationFlags ?? value.isolation),
     events: normalizeEventRecords(value.events, 'events', rejectedInputs),
@@ -718,7 +897,7 @@ function canRepresentLiveSurface(
   attachState: VirtualAppScreenAttachState,
 ) {
   if (attachState !== 'attached' && attachState !== 'observe-only') return false;
-  if (!payload.sessionRef || !payload.liveSurfaceRef || !payload.surfaceTransport) return false;
+  if (!hasCompleteLiveSurfaceRefs(payload)) return false;
   if (!platformDriverReady(payload) || hasBlockedPlatformGate(payload)) return false;
   return true;
 }
@@ -762,9 +941,7 @@ function shouldIncludeFrameDimensions(kind: VirtualScreenInputIntentKind) {
 function canRequestInputIntent(payload: VirtualScreenPayload) {
   return Boolean(
     payload.attachState === 'attached'
-    && payload.sessionRef
-    && payload.liveSurfaceRef
-    && payload.surfaceTransport
+    && hasCompleteLiveSurfaceRefs(payload)
     && platformDriverReady(payload)
     && permissionReady(payload)
     && !hasBlockedPlatformGate(payload)
@@ -773,6 +950,46 @@ function canRequestInputIntent(payload: VirtualScreenPayload) {
     && payload.actionAdapterRef
     && payload.adapterReadinessRef
     && hasCompleteNativeIsolation(payload.isolationFlags),
+  );
+}
+
+function hasCompleteLiveSurfaceRefs(
+  payload: Pick<
+    VirtualScreenPayload,
+    | 'sessionRef'
+    | 'liveSurfaceRef'
+    | 'surfaceTransport'
+    | 'surfaceTransportRef'
+    | 'frameStreamRef'
+    | 'currentFrameRef'
+    | 'providerSessionOwnerRef'
+    | 'providerSessionReconnectRef'
+    | 'liveBindingAttachGrantRef'
+    | 'currentFrameSequence'
+  >,
+) {
+  return Boolean(
+    payload.sessionRef
+    && payload.liveSurfaceRef
+    && payload.surfaceTransport
+    && payload.surfaceTransportRef
+    && payload.frameStreamRef
+    && payload.currentFrameRef
+    && payload.providerSessionOwnerRef
+    && payload.providerSessionReconnectRef
+    && payload.liveBindingAttachGrantRef
+    && payload.currentFrameSequence?.ref
+    && typeof payload.currentFrameSequence.sequence === 'number'
+    && Number.isFinite(payload.currentFrameSequence.sequence)
+    && payload.currentFrameSequence.sequence >= 0,
+  );
+}
+
+function canRequestLeaseControl(payload: VirtualScreenPayload) {
+  return Boolean(
+    canRequestInputIntent(payload)
+    && payload.inputLeaseRef
+    && (payload.userLeaseRef || payload.agentLeaseRef || payload.activeLeaseOwnerRef || payload.leaseOwnerRefs?.length),
   );
 }
 
@@ -818,6 +1035,43 @@ export function buildVirtualScreenInputIntentCommand(
     action.key ? `--key ${terminalQuote(action.key)}` : undefined,
     action.text ? `--text ${terminalQuote(action.text)}` : undefined,
     action.menuCommand ? `--menu-command ${terminalQuote(action.menuCommand)}` : undefined,
+  ].filter(Boolean);
+  return parts.join(' ');
+}
+
+type VirtualScreenLeaseControlKind = 'takeover' | 'pause-agent' | 'resume-agent' | 'stop-session';
+
+function leaseControlRef(payload: VirtualScreenPayload, kind: VirtualScreenLeaseControlKind) {
+  if (kind === 'takeover') return payload.takeoverRef ?? payload.userLeaseRef ?? payload.inputLeaseRef;
+  if (kind === 'pause-agent') return payload.pauseRef ?? payload.agentLeaseRef ?? payload.inputLeaseRef;
+  if (kind === 'resume-agent') return payload.resumeRef ?? payload.agentLeaseRef ?? payload.inputLeaseRef;
+  return payload.stopRef ?? payload.cancelLeaseRef ?? payload.inputLeaseRef;
+}
+
+export function buildVirtualScreenLeaseControlCommand(
+  payload: VirtualScreenPayload,
+  kind: VirtualScreenLeaseControlKind,
+): string | undefined {
+  if (!canRequestLeaseControl(payload)) return undefined;
+  const controlRef = leaseControlRef(payload, kind);
+  if (!controlRef || !payload.sessionRef || !payload.inputLeaseRef) return undefined;
+  const parts = [
+    '/computer-use input-intent',
+    '--source virtual-app-screen-control',
+    `--kind ${kind}`,
+    `--session-ref ${terminalQuote(payload.sessionRef)}`,
+    payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
+    payload.targetAppRef ? `--target-app-ref ${terminalQuote(payload.targetAppRef)}` : undefined,
+    payload.targetWindowRef ? `--target-window-ref ${terminalQuote(payload.targetWindowRef)}` : undefined,
+    `--input-lease-ref ${terminalQuote(payload.inputLeaseRef)}`,
+    payload.userLeaseRef ? `--user-lease-ref ${terminalQuote(payload.userLeaseRef)}` : undefined,
+    payload.agentLeaseRef ? `--agent-lease-ref ${terminalQuote(payload.agentLeaseRef)}` : undefined,
+    payload.activeLeaseOwnerRef ? `--active-lease-owner-ref ${terminalQuote(payload.activeLeaseOwnerRef)}` : undefined,
+    payload.activeLeaseOwnerRole ? `--active-lease-owner-role ${terminalQuote(payload.activeLeaseOwnerRole)}` : undefined,
+    `--lease-control-ref ${terminalQuote(controlRef)}`,
+    payload.actionAdapterRef ? `--action-adapter-ref ${terminalQuote(payload.actionAdapterRef)}` : undefined,
+    payload.adapterReadinessRef ? `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}` : undefined,
+    payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
   ].filter(Boolean);
   return parts.join(' ');
 }
@@ -968,14 +1222,23 @@ function mirrorVirtualScreenSpecialKey(input: HTMLTextAreaElement, key: string) 
   if (key === 'End') input.setSelectionRange(input.value.length, input.value.length);
 }
 
-function command(label: string, commandText: string, targetRef: string | undefined, onTerminalEquivalentText: VirtualScreenPayload['onTerminalEquivalentText']) {
+function command(
+  label: string,
+  commandText: string | undefined,
+  targetRef: string | undefined,
+  onTerminalEquivalentText: VirtualScreenPayload['onTerminalEquivalentText'],
+  options: { disabled?: boolean; controlKind?: string } = {},
+) {
+  const disabled = options.disabled === true || !commandText || !targetRef;
   return (
     <button
       type="button"
       data-event="virtual-screen-terminal-equivalent-text"
       data-command-text={commandText}
-      disabled={!targetRef}
-      onClick={() => targetRef ? onTerminalEquivalentText?.({ commandText, label, targetRef }) : undefined}
+      data-control-kind={options.controlKind}
+      data-control-enabled={disabled ? 'false' : 'true'}
+      disabled={disabled}
+      onClick={() => !disabled && commandText && targetRef ? onTerminalEquivalentText?.({ commandText, label, targetRef }) : undefined}
     >
       {label}
     </button>
@@ -1002,12 +1265,56 @@ function refList(label: string, refs: string[]) {
   );
 }
 
+function leaseOwnerList(owners: VirtualScreenLeaseOwner[] | undefined) {
+  if (!owners?.length) return null;
+  return (
+    <span className="virtual-screen-ref-chip">
+      <strong>lease owners</strong>
+      {owners.map((owner) => (
+        <code
+          key={owner.ref}
+          data-lease-owner-ref={owner.ref}
+          data-lease-owner-actor={owner.actor}
+          data-lease-owner-status={owner.status}
+          data-lease-owner-active={owner.active === undefined ? undefined : String(owner.active)}
+          data-lease-owner-owner-ref={owner.ownerRef}
+          data-lease-owner-scope-ref={owner.scopeRef}
+        >
+          {[owner.label, owner.actor, owner.status, owner.ref].filter(Boolean).join(' | ')}
+        </code>
+      ))}
+    </span>
+  );
+}
+
 function statusChip(label: string, value: string | boolean | undefined) {
   if (value === undefined) return null;
   return (
     <span className="virtual-screen-ref-chip">
       <strong>{label}</strong>
       <code>{String(value)}</code>
+    </span>
+  );
+}
+
+function qualityRefChip(kind: string, quality: VirtualScreenQualityRef | undefined) {
+  if (!quality) return null;
+  return (
+    <span
+      className="virtual-screen-ref-chip"
+      data-stream-quality-kind={kind}
+      data-stream-quality-ref={quality.ref}
+      data-stream-quality-transport={quality.transport}
+      data-stream-quality-status={quality.status}
+      data-stream-quality-diagnostic-only={quality.diagnosticOnly === undefined ? undefined : String(quality.diagnosticOnly)}
+      data-current-frame-sequence={quality.sequence === undefined ? undefined : String(quality.sequence)}
+    >
+      <strong>{quality.label ?? kind}</strong>
+      {quality.transport ? <code>{quality.transport}</code> : null}
+      {quality.status ? <code>{quality.status}</code> : null}
+      {quality.diagnosticOnly === undefined ? null : <code>{`diagnostic-only:${quality.diagnosticOnly}`}</code>}
+      {quality.sequence === undefined ? null : <code>{`sequence:${quality.sequence}`}</code>}
+      <code>{quality.ref}</code>
     </span>
   );
 }
@@ -1100,6 +1407,11 @@ function frameTimeline(payload: VirtualScreenPayload) {
   pushTimelineRow(rows, 'target-window', payload.targetWindowRef);
   pushTimelineRow(rows, 'live-surface', payload.liveSurfaceRef);
   pushTimelineRow(rows, 'platform-driver', payload.platformDriverRef);
+  pushTimelineRow(rows, 'frame-transport', payload.frameTransport?.ref);
+  pushTimelineRow(rows, 'frame-telemetry', payload.frameTelemetry?.ref);
+  pushTimelineRow(rows, 'current-frame-sequence', payload.currentFrameSequence?.ref, true);
+  pushTimelineRow(rows, 'reconnect', payload.reconnect?.ref);
+  pushTimelineRow(rows, 'input-hot-path', payload.inputHotPath?.ref);
   pushTimelineRow(rows, 'frame-stream', payload.frameStreamRef);
   for (const frame of payload.frameRefs ?? []) pushTimelineRow(rows, frame.ref === payload.currentFrameRef ? 'current-frame' : 'frame', frame.ref, frame.ref === payload.currentFrameRef);
   pushTimelineRow(rows, 'before', payload.beforeFrameRef);
@@ -1114,8 +1426,23 @@ function frameTimeline(payload: VirtualScreenPayload) {
   for (const ref of payload.annotationProposalRefs ?? []) pushTimelineRow(rows, 'proposal', ref);
   for (const ref of payload.inputIntentRefs ?? []) pushTimelineRow(rows, 'input-intent', ref);
   for (const ref of payload.executorEventRefs ?? []) pushTimelineRow(rows, 'executor-event', ref);
+  pushTimelineRow(rows, 'input-lease', payload.inputLeaseRef);
+  pushTimelineRow(rows, 'active-lease-owner', payload.activeLeaseOwnerRef);
+  pushTimelineRow(rows, 'user-lease', payload.userLeaseRef);
+  pushTimelineRow(rows, 'agent-lease', payload.agentLeaseRef);
+  for (const owner of payload.leaseOwnerRefs ?? []) pushTimelineRow(rows, owner.actor ? `${owner.actor}-lease-owner` : 'lease-owner', owner.ref, owner.active);
+  pushTimelineRow(rows, 'takeover', payload.takeoverRef);
+  pushTimelineRow(rows, 'pause-agent', payload.pauseRef);
+  pushTimelineRow(rows, 'resume-agent', payload.resumeRef);
+  pushTimelineRow(rows, 'stop-session', payload.stopRef);
+  pushTimelineRow(rows, 'cancel-lease', payload.cancelLeaseRef);
   pushTimelineRow(rows, 'adapter-readiness', payload.adapterReadinessRef);
   pushTimelineRow(rows, 'permission', payload.permissionRef);
+  pushTimelineRow(rows, 'permission-handoff', payload.permissionHandoffRef);
+  for (const ref of payload.permissionHandoffRefs ?? []) pushTimelineRow(rows, 'permission-handoff', ref);
+  pushTimelineRow(rows, 'permission-recheck', payload.permissionRecheckRef ?? payload.recheckRef);
+  for (const ref of payload.permissionRecheckRefs ?? []) pushTimelineRow(rows, 'permission-recheck', ref);
+  pushTimelineRow(rows, 'handoff', payload.handoffRef);
   pushTimelineRow(rows, 'replay', payload.replayRef);
   pushTimelineRow(rows, 'evidence-ledger', payload.evidenceLedgerRef);
   pushTimelineRow(rows, 'blocked', payload.blockedRef);
@@ -1139,9 +1466,35 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
   const title = payload.title ?? props.slot.title ?? 'VirtualAppScreen';
   const timeline = frameTimeline(payload);
   const observeTargetRef = payload.sessionRef ?? payload.targetWindowRef ?? payload.targetAppRef;
-  const stopTargetRef = payload.stopRef ?? payload.sessionRef;
   const handoffTargetRef = payload.handoffRef ?? payload.sessionRef;
   const inputIntentReady = canRequestInputIntent(payload);
+  const leaseControlReady = canRequestLeaseControl(payload);
+  const takeoverCommand = buildVirtualScreenLeaseControlCommand(payload, 'takeover');
+  const pauseCommand = buildVirtualScreenLeaseControlCommand(payload, 'pause-agent');
+  const resumeCommand = buildVirtualScreenLeaseControlCommand(payload, 'resume-agent');
+  const stopCommand = buildVirtualScreenLeaseControlCommand(payload, 'stop-session');
+  const permissionHandoffTargetRef = payload.permissionHandoffRef ?? payload.permissionHandoffRefs?.[0] ?? payload.handoffRef ?? payload.blockedRef;
+  const permissionRecheckTargetRef = payload.permissionRecheckRef ?? payload.permissionRecheckRefs?.[0] ?? payload.recheckRef ?? payload.adapterReadinessRef;
+  const permissionHandoffCommand = permissionHandoffTargetRef
+    ? [
+        '/computer-use permission-handoff',
+        `--target-ref ${terminalQuote(permissionHandoffTargetRef)}`,
+        payload.sessionRef ? `--session-ref ${terminalQuote(payload.sessionRef)}` : undefined,
+        payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
+        payload.adapterReadinessRef ? `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}` : undefined,
+        payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
+      ].filter(Boolean).join(' ')
+    : undefined;
+  const permissionRecheckCommand = permissionRecheckTargetRef
+    ? [
+        '/computer-use permission-recheck',
+        `--target-ref ${terminalQuote(permissionRecheckTargetRef)}`,
+        payload.sessionRef ? `--session-ref ${terminalQuote(payload.sessionRef)}` : undefined,
+        payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
+        payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
+        payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
+      ].filter(Boolean).join(' ')
+    : undefined;
 
   if (attachState === 'no-session' && !payload.targetAppRef && !payload.targetWindowRef && !(payload.rejectedInputs ?? []).length) {
     return (
@@ -1174,8 +1527,23 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
       data-attach-state={attachState}
       data-screen-surface-mode={surfaceMode}
       data-platform-driver-status={payload.platformDriverStatus}
+      data-provider-session-owner-ref={payload.providerSessionOwnerRef}
+      data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
+      data-surface-transport-ref={payload.surfaceTransportRef}
+      data-frame-transport-ref={payload.frameTransport?.ref}
+      data-frame-transport={payload.frameTransport?.transport}
+      data-frame-transport-diagnostic-only={payload.frameTransport?.diagnosticOnly === undefined ? undefined : String(payload.frameTransport.diagnosticOnly)}
+      data-frame-telemetry-ref={payload.frameTelemetry?.ref}
+      data-current-frame-sequence-ref={payload.currentFrameSequence?.ref}
+      data-reconnect-ref={payload.reconnect?.ref}
+      data-input-hot-path-ref={payload.inputHotPath?.ref}
       data-permission-status={payload.permissionStatus}
       data-shared-input-allowed={payload.sharedInputAllowed === undefined ? undefined : String(payload.sharedInputAllowed)}
+      data-active-lease-owner-ref={payload.activeLeaseOwnerRef}
+      data-active-lease-owner-role={payload.activeLeaseOwnerRole}
+      data-user-lease-ref={payload.userLeaseRef}
+      data-agent-lease-ref={payload.agentLeaseRef}
+      data-lease-control-ready={leaseControlReady ? 'true' : 'false'}
     >
       <header className="virtual-screen-toolbar">
         <div>
@@ -1185,7 +1553,16 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
         <div className="virtual-screen-toolbar-actions">
           {command('Observe', `/computer-use observe --session-ref ${JSON.stringify(observeTargetRef ?? '')}`, observeTargetRef, payload.onTerminalEquivalentText)}
           {command('Replay', `/computer-use replay --replay-ref ${JSON.stringify(payload.replayRef ?? '')}`, payload.replayRef, payload.onTerminalEquivalentText)}
-          {command('Stop', `/computer-use stop --session-ref ${JSON.stringify(stopTargetRef ?? '')}`, stopTargetRef, payload.onTerminalEquivalentText)}
+          {command('Take over', takeoverCommand, leaseControlRef(payload, 'takeover'), payload.onTerminalEquivalentText, { disabled: !leaseControlReady, controlKind: 'takeover' })}
+          {command('Pause agent', pauseCommand, leaseControlRef(payload, 'pause-agent'), payload.onTerminalEquivalentText, { disabled: !leaseControlReady, controlKind: 'pause-agent' })}
+          {command('Resume agent', resumeCommand, leaseControlRef(payload, 'resume-agent'), payload.onTerminalEquivalentText, { disabled: !leaseControlReady, controlKind: 'resume-agent' })}
+          {command('Stop', stopCommand, leaseControlRef(payload, 'stop-session'), payload.onTerminalEquivalentText, { disabled: !leaseControlReady, controlKind: 'stop-session' })}
+          {attachState === 'blocked' || attachState === 'requires-handoff'
+            ? command('Permission handoff', permissionHandoffCommand, permissionHandoffTargetRef, payload.onTerminalEquivalentText, { controlKind: 'permission-handoff' })
+            : null}
+          {attachState === 'blocked' || attachState === 'requires-handoff'
+            ? command('Recheck', permissionRecheckCommand, permissionRecheckTargetRef, payload.onTerminalEquivalentText, { controlKind: 'permission-recheck' })
+            : null}
           {attachState === 'requires-handoff'
             ? command('Handoff', `/computer-use handoff --session-ref ${JSON.stringify(handoffTargetRef ?? '')}`, handoffTargetRef, payload.onTerminalEquivalentText)
             : null}
@@ -1202,10 +1579,26 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           data-command-boundary="terminal-equivalent-input-intent"
           data-live-surface-ref={payload.liveSurfaceRef}
           data-surface-transport={payload.surfaceTransport}
+          data-provider-session-owner-ref={payload.providerSessionOwnerRef}
+          data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
+          data-surface-transport-ref={payload.surfaceTransportRef}
           data-platform-driver-ref={payload.platformDriverRef}
           data-platform-driver-status={payload.platformDriverStatus}
+          data-frame-transport-ref={payload.frameTransport?.ref}
+          data-frame-transport={payload.frameTransport?.transport}
+          data-frame-transport-diagnostic-only={payload.frameTransport?.diagnosticOnly === undefined ? undefined : String(payload.frameTransport.diagnosticOnly)}
+          data-frame-telemetry-ref={payload.frameTelemetry?.ref}
+          data-current-frame-sequence-ref={payload.currentFrameSequence?.ref}
+          data-reconnect-ref={payload.reconnect?.ref}
+          data-input-hot-path-ref={payload.inputHotPath?.ref}
           data-permission-ref={payload.permissionRef}
           data-permission-status={payload.permissionStatus}
+          data-input-lease-ref={payload.inputLeaseRef}
+          data-active-lease-owner-ref={payload.activeLeaseOwnerRef}
+          data-active-lease-owner-role={payload.activeLeaseOwnerRole}
+          data-user-lease-ref={payload.userLeaseRef}
+          data-agent-lease-ref={payload.agentLeaseRef}
+          data-lease-control-ready={leaseControlReady ? 'true' : 'false'}
         >
           {payload.currentFrameRef && currentFrameUrl ? (
             <>
@@ -1219,8 +1612,18 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
                 data-frame-stream-mode="ref-only"
                 data-live-surface-ref={payload.liveSurfaceRef}
                 data-surface-transport={payload.surfaceTransport}
+                data-provider-session-owner-ref={payload.providerSessionOwnerRef}
+                data-provider-session-reconnect-ref={payload.providerSessionReconnectRef}
+                data-surface-transport-ref={payload.surfaceTransportRef}
                 data-platform-driver-ref={payload.platformDriverRef}
                 data-platform-driver-status={payload.platformDriverStatus}
+                data-frame-transport-ref={payload.frameTransport?.ref}
+                data-frame-transport={payload.frameTransport?.transport}
+                data-frame-transport-diagnostic-only={payload.frameTransport?.diagnosticOnly === undefined ? undefined : String(payload.frameTransport.diagnosticOnly)}
+                data-frame-telemetry-ref={payload.frameTelemetry?.ref}
+                data-current-frame-sequence-ref={payload.currentFrameSequence?.ref}
+                data-reconnect-ref={payload.reconnect?.ref}
+                data-input-hot-path-ref={payload.inputHotPath?.ref}
                 data-permission-ref={payload.permissionRef}
                 data-permission-status={payload.permissionStatus}
                 data-screen-surface-mode={surfaceMode}
@@ -1426,10 +1829,18 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           {refChip('target app', payload.targetAppRef)}
           {refChip('target window', payload.targetWindowRef)}
           {refChip('session', payload.sessionRef)}
+          {refChip('provider session owner', payload.providerSessionOwnerRef)}
+          {refChip('provider session reconnect', payload.providerSessionReconnectRef)}
           {refChip('live surface', payload.liveSurfaceRef)}
           {statusChip('surface transport', payload.surfaceTransport)}
+          {refChip('surface transport ref', payload.surfaceTransportRef)}
           {refChip('platform driver', payload.platformDriverRef)}
           {statusChip('platform driver status', payload.platformDriverStatus)}
+          {qualityRefChip('frame transport', payload.frameTransport)}
+          {qualityRefChip('frame telemetry', payload.frameTelemetry)}
+          {qualityRefChip('current frame sequence', payload.currentFrameSequence)}
+          {qualityRefChip('reconnect', payload.reconnect)}
+          {qualityRefChip('input hot path', payload.inputHotPath)}
           {refChip('frame stream', payload.frameStreamRef)}
           {refChip('current frame', payload.currentFrameRef)}
           {refChip('before', payload.beforeFrameRef)}
@@ -1444,10 +1855,23 @@ export function renderVirtualScreenViewer(props: UIComponentRendererProps) {
           {refList('input intents', payload.inputIntentRefs ?? [])}
           {refList('executor events', payload.executorEventRefs ?? [])}
           {refChip('input lease', payload.inputLeaseRef)}
+          {refChip('active lease owner', payload.activeLeaseOwnerRef)}
+          {statusChip('active lease owner role', payload.activeLeaseOwnerRole)}
+          {refChip('user lease', payload.userLeaseRef)}
+          {refChip('agent lease', payload.agentLeaseRef)}
+          {leaseOwnerList(payload.leaseOwnerRefs)}
           {statusChip('lease status', payload.leaseStatus)}
+          {refChip('takeover', payload.takeoverRef)}
+          {refChip('pause', payload.pauseRef)}
+          {refChip('resume', payload.resumeRef)}
+          {refChip('stop', payload.stopRef)}
           {refChip('action adapter', payload.actionAdapterRef)}
           {refChip('adapter readiness', payload.adapterReadinessRef)}
           {refChip('permission', payload.permissionRef)}
+          {refChip('permission handoff', payload.permissionHandoffRef)}
+          {refList('permission handoffs', payload.permissionHandoffRefs ?? [])}
+          {refChip('permission recheck', payload.permissionRecheckRef ?? payload.recheckRef)}
+          {refList('permission rechecks', payload.permissionRecheckRefs ?? [])}
           {statusChip('permission status', payload.permissionStatus)}
           {statusChip('permission required', payload.permissionRequired)}
           {statusChip('permission granted', payload.permissionGranted)}

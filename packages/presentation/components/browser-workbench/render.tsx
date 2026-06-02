@@ -97,6 +97,32 @@ export interface BrowserWorkbenchHostAction {
 
 export type BrowserWorkbenchFrameRenderer = 'image-blob' | 'canvas-binary';
 
+export interface BrowserWorkbenchLiveTransportHandoff {
+  status: 'candidate-contract';
+  claim: 'bridge-to-right-pane-canvas-handoff-only';
+  claimScope: 'candidate-only';
+  owner: 'BrowserHostSession';
+  rightPaneSurfaceOwner: 'BrowserHostSession';
+  productSurface: 'right-pane-browser';
+  renderTarget: 'canvas';
+  frameRenderer: 'canvas-binary';
+  frameTransport: 'webrtc-data-channel';
+  fallbackTransport: 'websocket-binary';
+  liveSurfaceTransportCandidate: 'webrtc-data-channel';
+  hostSessionRef: string;
+  liveSurfaceRef: string;
+  frameStreamRef: string;
+  inlineFrameBytes: false;
+  inlineSignals: false;
+  secondViewer: false;
+  secondTruthSource: false;
+  httpFrameLiveFallback: false;
+  fullyPassedClaim: false;
+  realUiWebRtcPassClaim: false;
+  loopbackEvidenceOnly: false;
+  httpFrameRouteClaim: false;
+}
+
 const BROWSER_WORKBENCH_POINTER_MOVE_FLUSH_MS = 24;
 const BROWSER_WORKBENCH_KEYBOARD_FOCUS_STORAGE_PREFIX = 'sciforge.browser-workbench.keyboard-focus.v1';
 const BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX = 240;
@@ -126,6 +152,7 @@ export interface BrowserWorkbenchPayload {
   frameUrl?: string;
   frameTransport?: string;
   frameRenderer?: BrowserWorkbenchFrameRenderer;
+  liveTransportHandoff?: BrowserWorkbenchLiveTransportHandoff;
   previewSandbox?: string;
   title?: string;
   status?: string;
@@ -642,7 +669,10 @@ function browserWorkbenchFrameBitmapSize(target: BrowserWorkbenchInteractiveFram
 
 function browserWorkbenchFramePoint(
   target: BrowserWorkbenchInteractiveFrameElement,
-  event: React.MouseEvent<BrowserWorkbenchInteractiveFrameElement> | React.PointerEvent<BrowserWorkbenchInteractiveFrameElement>,
+  event:
+    | React.MouseEvent<BrowserWorkbenchInteractiveFrameElement>
+    | React.PointerEvent<BrowserWorkbenchInteractiveFrameElement>
+    | React.WheelEvent<BrowserWorkbenchInteractiveFrameElement>,
 ) {
   const rect = target.getBoundingClientRect();
   const bitmapSize = browserWorkbenchFrameBitmapSize(target);
@@ -1016,13 +1046,53 @@ function canRenderHostCanvas(
   state: BrowserWorkbenchState,
   hostSession: BrowserHostSessionState | undefined,
   frameTransport: string | undefined,
+  handoff: BrowserWorkbenchLiveTransportHandoff | undefined,
 ) {
+  const requestedTransportAllowed = frameTransport === 'webrtc-data-channel'
+    ? browserWorkbenchWebRtcCandidateHandoffAllowed(hostSession, frameTransport, handoff)
+    : !frameTransport || frameTransport === 'websocket-binary';
   return state.hostSurface === 'browser-host-session'
     && (state.status === 'ready' || state.status === 'loading')
     && hostSession?.liveSurfaceTransport === 'host-stream'
     && hostSession.singleInteractiveTruth === true
     && browserHostSessionFrameStreamRefMatchesSession(hostSession)
-    && (!frameTransport || frameTransport === 'websocket-binary');
+    && requestedTransportAllowed;
+}
+
+function browserWorkbenchWebRtcCandidateHandoffAllowed(
+  hostSession: BrowserHostSessionState | undefined,
+  frameTransport: string | undefined,
+  handoff: BrowserWorkbenchLiveTransportHandoff | undefined,
+) {
+  const hostSessionRef = hostSession?.id ? `browser-host-session:${hostSession.id}` : undefined;
+  return frameTransport === 'webrtc-data-channel'
+    && handoff?.status === 'candidate-contract'
+    && handoff.claim === 'bridge-to-right-pane-canvas-handoff-only'
+    && handoff.claimScope === 'candidate-only'
+    && handoff.owner === 'BrowserHostSession'
+    && handoff.rightPaneSurfaceOwner === 'BrowserHostSession'
+    && handoff.productSurface === 'right-pane-browser'
+    && handoff.renderTarget === 'canvas'
+    && handoff.frameRenderer === 'canvas-binary'
+    && handoff.frameTransport === 'webrtc-data-channel'
+    && handoff.fallbackTransport === 'websocket-binary'
+    && handoff.liveSurfaceTransportCandidate === 'webrtc-data-channel'
+    && handoff.hostSessionRef === hostSessionRef
+    && Boolean(hostSession?.liveSurfaceRef)
+    && handoff.liveSurfaceRef === hostSession?.liveSurfaceRef
+    && handoff.frameStreamRef === hostSession?.frameStreamRef
+    && handoff.inlineFrameBytes === false
+    && handoff.inlineSignals === false
+    && handoff.secondViewer === false
+    && handoff.secondTruthSource === false
+    && handoff.httpFrameLiveFallback === false
+    && handoff.fullyPassedClaim === false
+    && handoff.realUiWebRtcPassClaim === false
+    && handoff.loopbackEvidenceOnly === false
+    && handoff.httpFrameRouteClaim === false
+    && hostSession?.liveSurfaceTransport === 'host-stream'
+    && hostSession.singleInteractiveTruth === true
+    && browserHostSessionFrameStreamRefMatchesSession(hostSession);
 }
 
 export function renderBrowserWorkbench(props: UIComponentRendererProps) {
@@ -1068,11 +1138,16 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
   const hostBrowserFrameUrl = safeHostBrowserFrameUrl(payload.frameUrl ?? hostSession?.frameUrl);
   const requestedFrameTransport = asString(payload.frameTransport);
   const frameRenderer = browserWorkbenchFrameRenderer(payload.frameRenderer);
-  const renderCanvasHostBrowser = !renderFrame && frameRenderer === 'canvas-binary' && canRenderHostCanvas(state, hostSession, requestedFrameTransport);
-  const renderHostBrowser = !renderFrame && (renderCanvasHostBrowser || canRenderHostBrowser(state, hostSession, hostBrowserFrameUrl));
+  const liveTransportHandoff = payload.liveTransportHandoff;
+  const renderCanvasHostBrowser = !renderFrame && frameRenderer === 'canvas-binary' && canRenderHostCanvas(state, hostSession, requestedFrameTransport, liveTransportHandoff);
+  const requestedWebRtcLiveTransport = requestedFrameTransport === 'webrtc-data-channel'
+    || hostSession?.liveSurfaceTransport === 'webrtc-data-channel';
+  const renderHostBrowser = !renderFrame
+    && (renderCanvasHostBrowser || (!requestedWebRtcLiveTransport && canRenderHostBrowser(state, hostSession, hostBrowserFrameUrl)));
   const renderNativeHostBrowser = renderHostBrowser && !renderCanvasHostBrowser && hostSession?.liveSurfaceTransport === 'native-embedded';
   const hostFrameTransport = requestedFrameTransport
-    ?? (renderNativeHostBrowser ? 'native-embedded' : renderCanvasHostBrowser ? 'websocket-binary' : hostBrowserFrameUrl?.startsWith('blob:') ? 'websocket-binary' : undefined);
+    ?? (renderNativeHostBrowser ? 'native-embedded' : renderCanvasHostBrowser ? hostSession?.liveSurfaceTransport === 'webrtc-data-channel' ? 'webrtc-data-channel' : 'websocket-binary' : hostBrowserFrameUrl?.startsWith('blob:') ? 'websocket-binary' : undefined);
+  const webRtcCandidateHandoff = browserWorkbenchWebRtcCandidateHandoffAllowed(hostSession, hostFrameTransport, liveTransportHandoff);
   const hostCursor = normalizeBrowserWorkbenchCursor(hostSession?.cursor);
   const hostKeyboardFocusKey = browserWorkbenchKeyboardFocusKey(session, activeTab, state);
 
@@ -1174,6 +1249,11 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
             data-browser-frame-transport={hostFrameTransport}
             data-browser-frame-renderer="canvas-binary"
             data-browser-frame-source="browser-host-session-frame-stream-binary"
+            data-browser-webrtc-handoff={webRtcCandidateHandoff ? 'candidate-only' : undefined}
+            data-browser-webrtc-claim={webRtcCandidateHandoff ? liveTransportHandoff?.claim : undefined}
+            data-browser-webrtc-fully-passed-claim={webRtcCandidateHandoff ? 'false' : undefined}
+            data-browser-second-viewer={webRtcCandidateHandoff ? 'false' : undefined}
+            data-browser-http-frame-live-fallback={webRtcCandidateHandoff ? 'false' : undefined}
             data-browser-host-keyboard-path="hidden-input"
             data-browser-host-keyboard-focus-key={hostKeyboardFocusKey}
             style={{ cursor: hostCursor }}
@@ -1199,6 +1279,11 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
               data-browser-frame-transport={hostFrameTransport}
               data-browser-frame-renderer="canvas-binary"
               data-browser-frame-source="browser-host-session-frame-stream-binary"
+              data-browser-webrtc-handoff={webRtcCandidateHandoff ? 'candidate-only' : undefined}
+              data-browser-webrtc-claim={webRtcCandidateHandoff ? liveTransportHandoff?.claim : undefined}
+              data-browser-webrtc-fully-passed-claim={webRtcCandidateHandoff ? 'false' : undefined}
+              data-browser-second-viewer={webRtcCandidateHandoff ? 'false' : undefined}
+              data-browser-http-frame-live-fallback={webRtcCandidateHandoff ? 'false' : undefined}
               data-browser-frame-session-id={hostSession?.id}
               data-browser-frame-state={state.status}
               tabIndex={0}
@@ -1349,8 +1434,11 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
               onWheel={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                const point = browserWorkbenchFramePoint(event.currentTarget, event);
                 payload.onHostActionRequest?.({
                   action: 'scroll',
+                  x: point.x,
+                  y: point.y,
                   deltaX: Math.round(event.deltaX),
                   deltaY: Math.round(event.deltaY),
                 });
@@ -1588,8 +1676,11 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
               onWheel={(event) => {
                 event.preventDefault();
                 event.stopPropagation();
+                const point = browserWorkbenchFramePoint(event.currentTarget, event);
                 payload.onHostActionRequest?.({
                   action: 'scroll',
+                  x: point.x,
+                  y: point.y,
                   deltaX: Math.round(event.deltaX),
                   deltaY: Math.round(event.deltaY),
                 });

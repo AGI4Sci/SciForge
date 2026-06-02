@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import test from 'node:test';
 
 import {
+  REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS,
   REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATES,
   buildBrowserNativeAdapterComparisonManifest,
@@ -46,6 +47,7 @@ test('browser native adapter comparison contract accepts refs-first candidate an
     assert.equal(candidate.adapterRole, 'display-input-adapter');
     assert.equal(candidate.liveSurfaceTransport, 'native-embedded');
     assert.equal(candidate.secondTruthSource, false);
+    assert.equal(candidate.platform, REQUIRED_BROWSER_NATIVE_ADAPTER_CANDIDATE_PLATFORMS[candidate.id]);
     assert.ok(candidate.comparisonRefs.length > 0);
     assert.deepEqual(Object.keys(candidate.metrics), [...REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS]);
     assert.equal(candidate.metrics.secondTruthSource.value, false);
@@ -87,6 +89,11 @@ test('browser native adapter comparison contract rejects incomplete candidate ma
   assert.ok(issues.some((issue) => issue.message.includes('missing required native adapter candidate: wkwebview')));
 });
 
+test('browser native adapter comparison contract rejects canonical platform drift', () => {
+  const issues = platformDriftFixtureIssues();
+  assert.ok(issues.some((issue) => issue.message.includes('candidate webview2 must keep canonical platform windows')));
+});
+
 test('browser native adapter comparison smoke writes bounded refs-first evidence artifact', async () => {
   const manifest = buildPositiveComparisonManifest();
   const validationIssues = validateBrowserNativeAdapterComparisonManifest(manifest);
@@ -107,6 +114,11 @@ test('browser native adapter comparison smoke writes bounded refs-first evidence
       'incomplete-candidate-matrix-fixture',
       incompleteCandidateMatrixFixtureIssues(),
       ['required-candidate-matrix'],
+    ),
+    negativeFixtureReport(
+      'canonical-platform-drift-fixture',
+      platformDriftFixtureIssues(),
+      ['required-candidate-platforms'],
     ),
   ];
   assert.ok(negativeFixtureRejections.every((fixture) => fixture.status === 'rejected-as-expected'));
@@ -283,6 +295,18 @@ function incompleteCandidateMatrixFixtureIssues() {
     createdAt: '2026-06-02T00:00:00.000Z',
   });
   manifest.candidates = manifest.candidates.filter((candidate) => candidate.id !== 'wkwebview');
+
+  return validateBrowserNativeAdapterComparisonManifest(manifest);
+}
+
+function platformDriftFixtureIssues() {
+  const manifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-comparison-contract-platform-drift',
+    createdAt: '2026-06-02T00:00:00.000Z',
+  });
+  const webview2 = manifest.candidates.find((candidate) => candidate.id === 'webview2');
+  assert.ok(webview2, 'platform drift fixture should include webview2');
+  webview2.platform = 'cross-platform';
 
   return validateBrowserNativeAdapterComparisonManifest(manifest);
 }

@@ -51,6 +51,11 @@ type AuditFixtureEvent = {
   path: string;
   valueLength?: number;
   valueHash?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+  selectionLength?: number;
+  selectionHash?: string;
+  sliderValue?: number;
   count?: number;
   maxScrollY?: number;
   x?: number;
@@ -143,14 +148,35 @@ type RightPaneBoundedEvidence = {
 
 type BrowserPaneBottleneckAuditManifest = {
   schemaVersion: typeof AUDIT_SCHEMA;
-  status: 'passed';
+  status: 'passed' | 'blocked';
   refsFirst: true;
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
   targetOriginRef: string;
+  targetEvidence: {
+    mode: 'resolver-fixture' | 'blocked';
+    hostRef: string;
+    originRef: string;
+    resolverRuleApplied: boolean;
+    realExternalSiteClaim: false;
+    hardcodedSitePassClaim: false;
+    rawUrlCaptured: false;
+    allowedUse: 'right-pane-product-path-contract-not-external-web-pass' | 'blocked-no-real-product-evidence';
+  };
+  blockedReason?: string;
   interactionCoverage: {
-    classes: Array<'continuous-input' | 'long-page-scroll' | 'drag-mouse-move' | 'navigation-history-reload'>;
+    classes: Array<
+      | 'continuous-input'
+      | 'searchbox-caret-selection'
+      | 'long-page-scroll'
+      | 'slider-drag'
+      | 'text-selection-drag'
+      | 'drag-mouse-move'
+      | 'tab-switch-surface-continuity'
+      | 'surface-resize-reload-continuity'
+      | 'navigation-history-reload'
+    >;
     eventTypes: string[];
     eventPaths: string[];
     input: {
@@ -165,11 +191,42 @@ type BrowserPaneBottleneckAuditManifest = {
       maxScrollY: number;
       scrollEvents: number;
     };
+    searchboxCaret: {
+      focused: boolean;
+      finalSelectionStart?: number;
+      finalSelectionEnd?: number;
+      finalSelectionLength?: number;
+      selectedTextHash?: string;
+      evidenceSource: 'fixture-selection-event';
+    };
+    slider: {
+      inputEvents: number;
+      maxValue?: number;
+      evidenceSource: 'fixture-input-event';
+    };
+    textSelection: {
+      selectionEvents: number;
+      maxSelectionLength: number;
+      selectionHash?: string;
+      evidenceSource: 'fixture-selectionchange-event';
+    };
     drag: {
       fixturePointerMoveEvents: number;
       browserHostRouteActions: string[];
       fixtureDragUpObserved: boolean;
       evidenceSource: 'browser-host-action';
+    };
+    surfaceContinuity: {
+      sameSessionAcrossResize: boolean;
+      sameLiveSurfaceAcrossResize: boolean;
+      sameSessionAcrossTabSwitch: boolean;
+      sameLiveSurfaceAcrossTabSwitch: boolean;
+      sameLiveSurfaceAcrossReload: boolean;
+      checkpointLabels: string[];
+      hiddenKeyboardPathAfterTabReturn?: string;
+      maxHostFrames: number;
+      detachChanges: number;
+      evidenceSource: 'right-pane-observer-and-browser-host-state';
     };
   };
   browserHostSession: {
@@ -237,6 +294,16 @@ type RightPaneAuditObserver = {
   observer: MutationObserver;
 };
 
+type SurfaceContinuityCheckpoint = {
+  label: 'before-resize' | 'after-resize' | 'after-tab-return' | 'after-reload';
+  sessionId: string;
+  liveSurfaceRef: string;
+  frameStreamRef?: string;
+  hiddenKeyboardPath?: string;
+  hostFrameCount: number;
+  browserState?: string;
+};
+
 declare global {
   interface Window {
     __sciforgeBrowserPaneBottleneckAudit?: RightPaneAuditObserver;
@@ -246,7 +313,8 @@ declare global {
 test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real right-pane interactions', { timeout: 180_000 }, async () => {
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
   if (!existsSync(browserExecutable)) {
-    throw new Error(`No browser executable found for Browser pane bottleneck audit: ${browserExecutable}`);
+    await writeBlockedBottleneckManifest(`missing-browser-executable:${hashText(browserExecutable)}`);
+    throw new Error(`Browser pane bottleneck audit blocked: no browser executable found; wrote ${MANIFEST_PATH}`);
   }
 
   const tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-browser-pane-bottleneck-audit-'));
@@ -306,6 +374,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     const metrics = new BottleneckMetrics();
     const networkRecorder = recordBrowserHostNetwork(page, metrics);
     const frameStream = recordFrameStreamStats(page, metrics);
+    const surfaceCheckpoints: SurfaceContinuityCheckpoint[] = [];
 
     await page.goto(uiUrl, { waitUntil: 'domcontentloaded' });
     await page.locator('.results-panel').waitFor({ state: 'visible', timeout: 30_000 });
@@ -337,7 +406,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
         'initial continuous input',
       );
     });
-    await metrics.measure('input-routing', 'continuous-input-edit-retype', async () => {
+    await metrics.measure('input-routing', 'continuous-input-edit-retype-and-caret-selection', async () => {
       for (let index = 0; index < BACKSPACE_COUNT; index += 1) {
         await page.keyboard.press('Backspace');
       }
@@ -354,9 +423,51 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
         30_000,
         'final retyped input update',
       );
+      await page.keyboard.press('Shift+ArrowLeft');
+      await page.keyboard.press('Shift+ArrowLeft');
+      await waitForFixtureEvent(
+        fixtureServer.url,
+        (event) => event.type === 'audit-selection' && event.selectionLength === 2,
+        30_000,
+        'searchbox caret selection',
+      );
     });
     await waitForFrameCaptureReady(surface, 'after-continuous-input', metrics);
     await waitForReactRerenderQuiet(page, metrics, 'after-continuous-input');
+
+    await metrics.measure('input-routing', 'slider-drag-route', async () => {
+      await dragHostPoints(page, host.visualFrame, [
+        { x: 120, y: 190 },
+        { x: 220, y: 190 },
+        { x: 330, y: 190 },
+        { x: 450, y: 190 },
+      ]);
+      await waitForFixtureEvent(
+        fixtureServer.url,
+        (event) => event.type === 'audit-slider-input' && (event.sliderValue ?? 0) >= 60,
+        30_000,
+        'slider drag input',
+      );
+    });
+    await waitForFrameCaptureReady(surface, 'after-slider-drag', metrics);
+    await waitForReactRerenderQuiet(page, metrics, 'after-slider-drag');
+
+    await metrics.measure('input-routing', 'text-selection-drag-route', async () => {
+      await dragHostPoints(page, host.visualFrame, [
+        { x: 118, y: 231 },
+        { x: 178, y: 231 },
+        { x: 250, y: 231 },
+        { x: 330, y: 231 },
+      ]);
+      await waitForFixtureEvent(
+        fixtureServer.url,
+        (event) => event.type === 'audit-text-selection' && (event.selectionLength ?? 0) >= 4,
+        30_000,
+        'text selection drag',
+      );
+    });
+    await waitForFrameCaptureReady(surface, 'after-text-selection-drag', metrics);
+    await waitForReactRerenderQuiet(page, metrics, 'after-text-selection-drag');
 
     await metrics.measure('input-routing', 'long-page-wheel-scroll-route', async () => {
       await host.visualFrame.hover();
@@ -384,6 +495,31 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     await waitForFrameCaptureReady(surface, 'after-drag-route', metrics);
     await waitForReactRerenderQuiet(page, metrics, 'after-drag-route');
 
+    const sessionBeforeResize = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-before-resize');
+    const liveSurfaceBeforeResize = stringField(sessionBeforeResize.liveSurfaceRef);
+    surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionBeforeResize, 'before-resize'));
+    await metrics.measure('surface-attach', 'right-pane-resize-keeps-session-surface', async () => {
+      await page.setViewportSize({ width: 1180, height: 900 });
+      await waitForWorkbenchAttachedUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
+      await waitForFrameCaptureReady(surface, 'after-right-pane-resize', metrics);
+      const sessionAfterResize = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-resize');
+      assert.equal(stringField(sessionAfterResize.id), stringField(sessionBeforeResize.id), 'resize must keep the BrowserHostSession owner');
+      assert.equal(stringField(sessionAfterResize.liveSurfaceRef), liveSurfaceBeforeResize, 'resize must keep the same live surface ref');
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterResize, 'after-resize'));
+    });
+
+    await metrics.measure('surface-attach', 'right-pane-tab-switch-keeps-session-surface', async () => {
+      await activateRightPaneTab(page, 'Results');
+      await activateRightPaneTab(page, 'Browser');
+      await page.getByTestId('right-pane-browser-tool').waitFor({ state: 'visible', timeout: 20_000 });
+      await waitForWorkbenchAttachedUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/audit`));
+      host = await waitForKeyboardHostFrame(surface, 'after-right-pane-tab-return', metrics);
+      const sessionAfterTabReturn = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-tab-return');
+      assert.equal(stringField(sessionAfterTabReturn.id), stringField(sessionBeforeResize.id), 'tab switch must keep the BrowserHostSession owner');
+      assert.equal(stringField(sessionAfterTabReturn.liveSurfaceRef), liveSurfaceBeforeResize, 'tab switch must keep the same live surface ref');
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterTabReturn, 'after-tab-return'));
+    });
+
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/details`);
     await metrics.measure('navigation', 'address-navigation-details', async () => {
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/details`));
@@ -407,6 +543,9 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       await clickBrowserCommand(surface, 'Reload');
       await waitForSessionAction(page, writerUrl, workspacePath, 'reload', metrics, 'state-after-reload');
       await waitForWorkbenchUrl(surface, new RegExp(`^http://${escapeRegExp(FIXTURE_HOST)}:\\d+/details`));
+      const sessionAfterReload = await currentBrowserHostSession(page, writerUrl, workspacePath, metrics, 'state-after-reload-live-surface');
+      assert.equal(stringField(sessionAfterReload.liveSurfaceRef), liveSurfaceBeforeResize, 'reload must keep the same live surface ref');
+      surfaceCheckpoints.push(await collectSurfaceContinuityCheckpoint(page, surface, sessionAfterReload, 'after-reload'));
     });
     await waitForFrameCaptureReady(surface, 'after-history-and-reload', metrics);
     await waitForReactRerenderQuiet(page, metrics, 'after-history-and-reload');
@@ -425,6 +564,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       networkSamples: networkRecorder.samples,
       frameStream: frameStream.stats,
       rightPane: await collectRightPaneEvidence(page),
+      surfaceCheckpoints,
     });
     assertBrowserPaneBottleneckAuditManifest(manifest);
     await mkdir(ARTIFACT_DIR, { recursive: true });
@@ -435,6 +575,9 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       frameStreamFrames: manifest.boundedMetrics.frameStream.framesReceived,
       manifestPath: 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json',
     })}`);
+  } catch (error) {
+    await writeBlockedBottleneckManifest(`run-blocked:${hashText(error instanceof Error ? error.message : String(error))}`);
+    throw error;
   } finally {
     await browser?.close().catch(() => undefined);
     for (const child of children.reverse()) await stopProcess(child);
@@ -499,6 +642,16 @@ async function ensureBrowserPane(page: Page) {
   await page.getByTestId('right-pane-browser-tool').waitFor({ state: 'visible', timeout: 20_000 });
 }
 
+async function activateRightPaneTab(page: Page, label: 'Browser' | 'Results') {
+  const tab = page.locator('.result-page-tab', { hasText: label }).first();
+  await tab.waitFor({ state: 'visible', timeout: 10_000 });
+  await tab.click();
+  await page.waitForFunction((expectedLabel) => {
+    const selected = document.querySelector<HTMLElement>('.result-page-tab[aria-selected="true"]');
+    return selected?.textContent?.includes(expectedLabel) === true;
+  }, label, { timeout: 10_000 });
+}
+
 async function openBrowserPaneUrl(surface: Locator, url: string) {
   const address = surface.locator('input[aria-label="Browser URL"]');
   await address.fill(url);
@@ -538,6 +691,15 @@ async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
     const state = viewer?.getAttribute('data-browser-state');
     const url = viewer?.querySelector('header p')?.textContent ?? '';
     return state === 'ready' && new RegExp(source, flags).test(url);
+  }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
+}
+
+async function waitForWorkbenchAttachedUrl(surface: Locator, expectedUrl: RegExp) {
+  await surface.page().waitForFunction(({ source, flags }) => {
+    const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
+    const state = viewer?.getAttribute('data-browser-state');
+    const url = viewer?.querySelector('header p')?.textContent ?? '';
+    return (state === 'ready' || state === 'loading') && new RegExp(source, flags).test(url);
   }, { source: expectedUrl.source, flags: expectedUrl.flags }, { timeout: 45_000 });
 }
 
@@ -772,6 +934,43 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
   });
 }
 
+async function collectSurfaceContinuityCheckpoint(
+  page: Page,
+  surface: Locator,
+  session: JsonRecord,
+  label: SurfaceContinuityCheckpoint['label'],
+): Promise<SurfaceContinuityCheckpoint> {
+  const dom = await page.evaluate(() => {
+    const currentSurface = document.querySelector('.right-pane-browser-surface');
+    const frames = currentSurface
+      ? Array.from(currentSurface.querySelectorAll<HTMLElement>('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]'))
+      : [];
+    const firstFrame = frames[0];
+    const viewer = currentSurface?.querySelector<HTMLElement>('.browser-workbench-viewer');
+    return {
+      hostFrameCount: frames.length,
+      liveSurfaceRef: firstFrame?.getAttribute('data-browser-live-surface-ref') || '',
+      frameStreamRef: firstFrame?.getAttribute('data-browser-frame-stream-ref') || '',
+      hiddenKeyboardPath: firstFrame?.getAttribute('data-browser-host-keyboard-path') || '',
+      browserState: viewer?.getAttribute('data-browser-state') || '',
+    };
+  });
+  const sessionId = stringField(session.id);
+  const liveSurfaceRef = stringField(session.liveSurfaceRef) || dom.liveSurfaceRef;
+  assert.equal(dom.hostFrameCount, 1, `${label}: Browser pane must expose one host frame`);
+  assert.equal(dom.liveSurfaceRef, liveSurfaceRef, `${label}: DOM live surface ref must match BrowserHostSession state`);
+  await surface.locator('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').first().waitFor({ state: 'visible', timeout: 10_000 });
+  return {
+    label,
+    sessionId,
+    liveSurfaceRef,
+    frameStreamRef: dom.frameStreamRef || undefined,
+    hiddenKeyboardPath: dom.hiddenKeyboardPath || undefined,
+    hostFrameCount: dom.hostFrameCount,
+    browserState: dom.browserState || undefined,
+  };
+}
+
 function recordBrowserHostNetwork(page: Page, metrics: BottleneckMetrics): {
   samples: BrowserHostNetworkSample[];
   waitForAction(action: string, timeoutMs: number, label: string): Promise<void>;
@@ -943,6 +1142,21 @@ function buildTimingSummary(
   };
 }
 
+function checkpointByLabel(
+  checkpoints: SurfaceContinuityCheckpoint[],
+  label: SurfaceContinuityCheckpoint['label'],
+): SurfaceContinuityCheckpoint | undefined {
+  return checkpoints.find((checkpoint) => checkpoint.label === label);
+}
+
+function sameCheckpointField<K extends keyof SurfaceContinuityCheckpoint>(
+  before: SurfaceContinuityCheckpoint | undefined,
+  after: SurfaceContinuityCheckpoint | undefined,
+  field: K,
+): boolean {
+  return Boolean(before && after && before[field] && before[field] === after[field]);
+}
+
 function buildManifest(input: {
   runId: string;
   fixtureOrigin: string;
@@ -952,6 +1166,7 @@ function buildManifest(input: {
   networkSamples: BrowserHostNetworkSample[];
   frameStream: FrameStreamStats;
   rightPane: RightPaneBoundedEvidence;
+  surfaceCheckpoints: SurfaceContinuityCheckpoint[];
 }): BrowserPaneBottleneckAuditManifest {
   const metrics = new BottleneckMetrics();
   for (const sample of input.metrics) metrics.add(sample.category, sample.label, sample.durationMs);
@@ -959,10 +1174,23 @@ function buildManifest(input: {
   const timingSummary = buildTimingSummary(input.metrics, input.networkSamples, input.frameStream);
   const inputEvents = input.events.filter((event) => event.type === 'audit-input');
   const scrollEvents = input.events.filter((event) => event.type === 'audit-scroll');
+  const selectionEvents = input.events.filter((event) => event.type === 'audit-selection');
+  const sliderEvents = input.events.filter((event) => event.type === 'audit-slider-input');
+  const textSelectionEvents = input.events.filter((event) => event.type === 'audit-text-selection');
   const dragMoveEvents = input.events.filter((event) => event.type === 'audit-pointer-move');
+  const lastSelectionEvent = selectionEvents[selectionEvents.length - 1];
+  const maxTextSelectionLength = Math.max(0, ...textSelectionEvents.map((event) => event.selectionLength ?? 0));
+  const strongestTextSelection = textSelectionEvents.reduce<AuditFixtureEvent | undefined>((current, next) => {
+    if (!current || (next.selectionLength ?? 0) > (current.selectionLength ?? 0)) return next;
+    return current;
+  }, undefined);
   const browserHostRouteActions = boundedUnique(input.networkSamples
     .filter((sample) => sample.endpoint === 'computer-use-action' && ['cursor', 'drag', 'mouse-down', 'mouse-move', 'mouse-up'].includes(sample.action ?? ''))
     .map((sample) => sample.action ?? 'unknown'), 8);
+  const beforeResize = checkpointByLabel(input.surfaceCheckpoints, 'before-resize');
+  const afterResize = checkpointByLabel(input.surfaceCheckpoints, 'after-resize');
+  const afterTabReturn = checkpointByLabel(input.surfaceCheckpoints, 'after-tab-return');
+  const afterReload = checkpointByLabel(input.surfaceCheckpoints, 'after-reload');
   return {
     schemaVersion: AUDIT_SCHEMA,
     status: 'passed',
@@ -971,8 +1199,28 @@ function buildManifest(input: {
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
     targetOriginRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+    targetEvidence: {
+      mode: 'resolver-fixture',
+      hostRef: `fixture-host:${hashText(FIXTURE_HOST)}`,
+      originRef: `fixture-origin:${hashText(input.fixtureOrigin)}`,
+      resolverRuleApplied: true,
+      realExternalSiteClaim: false,
+      hardcodedSitePassClaim: false,
+      rawUrlCaptured: false,
+      allowedUse: 'right-pane-product-path-contract-not-external-web-pass',
+    },
     interactionCoverage: {
-      classes: ['continuous-input', 'long-page-scroll', 'drag-mouse-move', 'navigation-history-reload'],
+      classes: [
+        'continuous-input',
+        'searchbox-caret-selection',
+        'long-page-scroll',
+        'slider-drag',
+        'text-selection-drag',
+        'drag-mouse-move',
+        'tab-switch-surface-continuity',
+        'surface-resize-reload-continuity',
+        'navigation-history-reload',
+      ],
       eventTypes: boundedUnique(input.events.map((event) => event.type), 24),
       eventPaths: boundedUnique(input.events.map((event) => event.path), 8),
       input: {
@@ -987,11 +1235,42 @@ function buildManifest(input: {
         maxScrollY: Math.max(0, ...scrollEvents.map((event) => event.maxScrollY ?? 0)),
         scrollEvents: scrollEvents.length,
       },
+      searchboxCaret: {
+        focused: input.events.some((event) => event.type === 'audit-focus'),
+        finalSelectionStart: lastSelectionEvent?.selectionStart,
+        finalSelectionEnd: lastSelectionEvent?.selectionEnd,
+        finalSelectionLength: lastSelectionEvent?.selectionLength,
+        selectedTextHash: lastSelectionEvent?.selectionHash,
+        evidenceSource: 'fixture-selection-event',
+      },
+      slider: {
+        inputEvents: sliderEvents.length,
+        maxValue: Math.max(0, ...sliderEvents.map((event) => event.sliderValue ?? 0)),
+        evidenceSource: 'fixture-input-event',
+      },
+      textSelection: {
+        selectionEvents: textSelectionEvents.length,
+        maxSelectionLength: maxTextSelectionLength,
+        selectionHash: strongestTextSelection?.selectionHash,
+        evidenceSource: 'fixture-selectionchange-event',
+      },
       drag: {
         fixturePointerMoveEvents: dragMoveEvents.length,
         browserHostRouteActions,
         fixtureDragUpObserved: input.events.some((event) => event.type === 'audit-drag-up'),
         evidenceSource: 'browser-host-action',
+      },
+      surfaceContinuity: {
+        sameSessionAcrossResize: sameCheckpointField(beforeResize, afterResize, 'sessionId'),
+        sameLiveSurfaceAcrossResize: sameCheckpointField(beforeResize, afterResize, 'liveSurfaceRef'),
+        sameSessionAcrossTabSwitch: sameCheckpointField(beforeResize, afterTabReturn, 'sessionId'),
+        sameLiveSurfaceAcrossTabSwitch: sameCheckpointField(beforeResize, afterTabReturn, 'liveSurfaceRef'),
+        sameLiveSurfaceAcrossReload: sameCheckpointField(beforeResize, afterReload, 'liveSurfaceRef'),
+        checkpointLabels: input.surfaceCheckpoints.map((checkpoint) => checkpoint.label),
+        hiddenKeyboardPathAfterTabReturn: afterTabReturn?.hiddenKeyboardPath,
+        maxHostFrames: input.rightPane.maxHostFrames,
+        detachChanges: input.rightPane.detachChanges,
+        evidenceSource: 'right-pane-observer-and-browser-host-state',
       },
     },
     browserHostSession: {
@@ -1044,23 +1323,50 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
   assert.equal(manifest.status, 'passed');
   assert.equal(manifest.refsFirst, true);
   assert.equal(manifest.verificationCommand, VERIFICATION_COMMAND);
+  assert.equal(manifest.targetOriginRef, manifest.targetEvidence.originRef);
+  assert.equal(manifest.targetEvidence.mode, 'resolver-fixture');
+  assert.equal(manifest.targetEvidence.resolverRuleApplied, true);
+  assert.equal(manifest.targetEvidence.realExternalSiteClaim, false);
+  assert.equal(manifest.targetEvidence.hardcodedSitePassClaim, false);
+  assert.equal(manifest.targetEvidence.rawUrlCaptured, false);
+  assert.equal(manifest.targetEvidence.allowedUse, 'right-pane-product-path-contract-not-external-web-pass');
   assert.equal(manifest.browserHostSession.owner, 'host');
   assert.equal(manifest.browserHostSession.status, 'ready');
   assert.equal(manifest.browserHostSession.transport, 'host-stream');
   assert.equal(manifest.browserHostSession.singleInteractiveTruth, true);
   assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   assert.match(manifest.browserHostSession.refs.frameStreamRef ?? '', /^browser-host-session:[^/]+\/frame-stream$/);
-  assert.deepEqual(manifest.interactionCoverage.classes, ['continuous-input', 'long-page-scroll', 'drag-mouse-move', 'navigation-history-reload']);
+  assert.deepEqual(manifest.interactionCoverage.classes, [
+    'continuous-input',
+    'searchbox-caret-selection',
+    'long-page-scroll',
+    'slider-drag',
+    'text-selection-drag',
+    'drag-mouse-move',
+    'tab-switch-surface-continuity',
+    'surface-resize-reload-continuity',
+    'navigation-history-reload',
+  ]);
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-focus'));
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-input'));
+  assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-selection'));
   assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-scroll'));
+  assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-slider-input'));
+  assert.ok(manifest.interactionCoverage.eventTypes.includes('audit-text-selection'));
   assert.ok(
     manifest.interactionCoverage.eventTypes.includes('audit-pointer-move')
       || manifest.interactionCoverage.drag.browserHostRouteActions.length > 0,
     'drag/mouse move coverage must include fixture movement or BrowserHostSession input-route evidence',
   );
   assert.ok(manifest.interactionCoverage.eventTypes.includes('page-load'));
+  assert.equal(manifest.interactionCoverage.searchboxCaret.focused, true);
+  assert.equal(manifest.interactionCoverage.searchboxCaret.finalSelectionLength, 2);
+  assert.ok(manifest.interactionCoverage.searchboxCaret.selectedTextHash, 'searchbox caret selection must be hash-only evidence');
   assert.ok(manifest.interactionCoverage.scroll.maxScrollY >= 900);
+  assert.ok((manifest.interactionCoverage.slider.maxValue ?? 0) >= 60, 'slider drag must emit product input evidence');
+  assert.ok(manifest.interactionCoverage.slider.inputEvents >= 1, 'slider drag must record fixture input events');
+  assert.ok(manifest.interactionCoverage.textSelection.maxSelectionLength >= 4, 'text selection drag must record bounded selection length');
+  assert.ok(manifest.interactionCoverage.textSelection.selectionHash, 'text selection evidence must be hash-only');
   assert.ok(
     manifest.interactionCoverage.drag.fixturePointerMoveEvents >= 1
       || manifest.interactionCoverage.drag.browserHostRouteActions.includes('mouse-move')
@@ -1068,6 +1374,15 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
     'drag coverage must be backed by fixture pointer moves or BrowserHostSession route actions',
   );
   assert.ok(manifest.interactionCoverage.drag.browserHostRouteActions.includes('mouse-up'), 'drag coverage must include mouse-up route ACK');
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.sameSessionAcrossResize, true);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.sameLiveSurfaceAcrossResize, true);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.sameSessionAcrossTabSwitch, true);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.sameLiveSurfaceAcrossTabSwitch, true);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.sameLiveSurfaceAcrossReload, true);
+  assert.deepEqual(manifest.interactionCoverage.surfaceContinuity.checkpointLabels, ['before-resize', 'after-resize', 'after-tab-return', 'after-reload']);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.hiddenKeyboardPathAfterTabReturn, 'hidden-input');
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.maxHostFrames, 1);
+  assert.equal(manifest.interactionCoverage.surfaceContinuity.detachChanges, 0);
   assert.ok(manifest.boundedMetrics.frameStream.streamsOpened >= 1);
   assert.ok(manifest.boundedMetrics.frameStream.framesReceived >= 1);
   assert.ok(manifest.boundedMetrics.rightPane.maxHostFrames === 1);
@@ -1105,6 +1420,172 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(EXPECTED_AFTER_BACKSPACE)));
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(EXPECTED_FINAL_INPUT)));
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(encodeURIComponent(INPUT_TEXT))));
+}
+
+async function writeBlockedBottleneckManifest(blockedReason: string): Promise<void> {
+  const manifest: BrowserPaneBottleneckAuditManifest = {
+    schemaVersion: AUDIT_SCHEMA,
+    status: 'blocked',
+    refsFirst: true,
+    runId: `browser-pane-bottleneck-audit-blocked-${Date.now().toString(36)}`,
+    observedAt: new Date().toISOString(),
+    shell: 'web-right-pane',
+    targetOriginRef: 'blocked:no-real-product-evidence',
+    targetEvidence: {
+      mode: 'blocked',
+      hostRef: 'blocked:no-real-product-evidence',
+      originRef: 'blocked:no-real-product-evidence',
+      resolverRuleApplied: false,
+      realExternalSiteClaim: false,
+      hardcodedSitePassClaim: false,
+      rawUrlCaptured: false,
+      allowedUse: 'blocked-no-real-product-evidence',
+    },
+    blockedReason,
+    interactionCoverage: {
+      classes: [
+        'continuous-input',
+        'searchbox-caret-selection',
+        'long-page-scroll',
+        'slider-drag',
+        'text-selection-drag',
+        'drag-mouse-move',
+        'surface-resize-reload-continuity',
+        'navigation-history-reload',
+      ],
+      eventTypes: [],
+      eventPaths: [],
+      input: {
+        initialLength: INPUT_TEXT.length,
+        initialHash: hashText(INPUT_TEXT),
+        afterBackspaceLength: EXPECTED_AFTER_BACKSPACE.length,
+        afterBackspaceHash: hashText(EXPECTED_AFTER_BACKSPACE),
+        finalLength: EXPECTED_FINAL_INPUT.length,
+        finalHash: hashText(EXPECTED_FINAL_INPUT),
+      },
+      scroll: {
+        maxScrollY: 0,
+        scrollEvents: 0,
+      },
+      searchboxCaret: {
+        focused: false,
+        evidenceSource: 'fixture-selection-event',
+      },
+      slider: {
+        inputEvents: 0,
+        evidenceSource: 'fixture-input-event',
+      },
+      textSelection: {
+        selectionEvents: 0,
+        maxSelectionLength: 0,
+        evidenceSource: 'fixture-selectionchange-event',
+      },
+      drag: {
+        fixturePointerMoveEvents: 0,
+        browserHostRouteActions: [],
+        fixtureDragUpObserved: false,
+        evidenceSource: 'browser-host-action',
+      },
+      surfaceContinuity: {
+        sameSessionAcrossResize: false,
+        sameLiveSurfaceAcrossResize: false,
+        sameSessionAcrossTabSwitch: false,
+        sameLiveSurfaceAcrossTabSwitch: false,
+        sameLiveSurfaceAcrossReload: false,
+        checkpointLabels: [],
+        maxHostFrames: 0,
+        detachChanges: 0,
+        evidenceSource: 'right-pane-observer-and-browser-host-state',
+      },
+    },
+    browserHostSession: {
+      id: '',
+      owner: '',
+      status: 'blocked',
+      singleInteractiveTruth: false,
+      refs: {},
+    },
+    bottleneckRanking: [],
+    timingSummary: {
+      totalSamples: 0,
+      totalMeasuredMs: 0,
+      categories: [],
+      slowestSample: { category: 'input-routing', label: 'blocked', durationMs: 0 },
+      network: {
+        sampleCount: 0,
+        maxDurationMs: 0,
+        statusCodes: [],
+      },
+      frameStream: {
+        streamsOpened: 0,
+        framesReceived: 0,
+        binaryFramesReceived: 0,
+        maxPayloadBytes: 0,
+      },
+    },
+    boundedMetrics: {
+      totalSamples: 0,
+      maxAllowedSampleMs: 60_000,
+      maxManifestBytes: MAX_MANIFEST_BYTES,
+      maxNetworkSamples: MAX_NETWORK_SAMPLES,
+      maxSampleLabelsPerCategory: MAX_SAMPLE_LABELS_PER_CATEGORY,
+      maxRightPaneRefCount: MAX_RIGHT_PANE_REF_COUNT,
+      networkSamples: [],
+      frameStream: {
+        streamsOpened: 0,
+        framesReceived: 0,
+        binaryFramesReceived: 0,
+        maxPayloadBytes: 0,
+      },
+      rightPane: {
+        mutationCount: 0,
+        attachChanges: 0,
+        detachChanges: 0,
+        maxHostFrames: 0,
+        sessionIds: [],
+        liveSurfaceRefs: [],
+        frameStreamRefs: [],
+        renderers: [],
+        browserStates: [],
+        iframeSurfaces: 0,
+        proxySurfaces: 0,
+        dataImageSurfaces: 0,
+      },
+    },
+    forbiddenEvidence: {
+      rawDom: false,
+      base64: false,
+      rawScreenshot: false,
+      fixtureDomRead: false,
+      iframe: false,
+      proxy: false,
+      rawCurrentRunPayload: false,
+      rawProviderPayload: false,
+    },
+    verificationCommand: VERIFICATION_COMMAND,
+  };
+  assertBlockedBottleneckManifest(manifest);
+  await mkdir(ARTIFACT_DIR, { recursive: true });
+  await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+}
+
+function assertBlockedBottleneckManifest(manifest: BrowserPaneBottleneckAuditManifest): void {
+  assert.equal(manifest.schemaVersion, AUDIT_SCHEMA);
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.refsFirst, true);
+  assert.ok(manifest.blockedReason, 'blocked manifest must record bounded reason');
+  assert.equal(manifest.browserHostSession.singleInteractiveTruth, false);
+  assert.equal(manifest.boundedMetrics.frameStream.streamsOpened, 0);
+  assert.equal(manifest.boundedMetrics.rightPane.iframeSurfaces, 0);
+  assert.equal(manifest.boundedMetrics.rightPane.proxySurfaces, 0);
+  assert.equal(manifest.boundedMetrics.rightPane.dataImageSurfaces, 0);
+  assert.deepEqual(Object.values(manifest.forbiddenEvidence), [false, false, false, false, false, false, false, false]);
+  const serialized = JSON.stringify(manifest);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') <= MAX_MANIFEST_BYTES, 'blocked manifest must stay bounded');
+  assert.doesNotMatch(serialized, /<!doctype|<html|<body|<input|<form|outerHTML|innerHTML|data:image|;base64,|iVBORw0KGgo/i);
+  assert.doesNotMatch(serialized, /"(?:screenshotData|screenshotBase64|screenshotInline|screenshotBytes|domSnapshotPayload|rawDomPayload|providerBody|providerRequest|providerResponse|rawProviderResponse|toolPayload|rawPayload)"\s*:/i);
+  assert.doesNotMatch(serialized, new RegExp(escapeRegExp(INPUT_TEXT)));
+  assert.doesNotMatch(serialized, new RegExp(escapeRegExp(EXPECTED_FINAL_INPUT)));
 }
 
 async function startBottleneckFixture(port: number): Promise<{ url: string; close(): Promise<void> }> {
@@ -1145,6 +1626,13 @@ function auditPageBody() {
         <input id="auditInput" aria-label="Audit input" autofocus />
       </section>
       <aside id="dragTarget" class="drag-target">Drag target</aside>
+      <section class="product-controls" aria-label="Product interaction controls">
+        <div>Audit slider</div>
+        <div id="auditSlider" class="audit-slider" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="12" tabindex="0">
+          <span id="auditSliderThumb"></span>
+        </div>
+        <p id="selectionText">Selectable audit paragraph for BrowserHostSession drag selection fidelity.</p>
+      </section>
       <section class="long-page">
         ${Array.from({ length: 72 }, (_, index) => `<p>Audit section ${index + 1}: bounded right-pane BrowserHostSession scroll content.</p>`).join('')}
       </section>
@@ -1153,8 +1641,16 @@ function auditPageBody() {
       let scrollCount = 0;
       let pointerMoveCount = 0;
       let dragging = false;
+      let sliderDragging = false;
       function record(path, payload) {
         navigator.sendBeacon('/__events?path=' + encodeURIComponent(path), JSON.stringify(payload));
+      }
+      function updateSlider(clientX) {
+        const bounds = auditSlider.getBoundingClientRect();
+        const value = Math.max(0, Math.min(100, Math.round(((clientX - bounds.left) / bounds.width) * 100)));
+        auditSlider.setAttribute('aria-valuenow', String(value));
+        auditSliderThumb.style.left = value + '%';
+        record('/audit', { type: 'audit-slider-input', sliderValue: value });
       }
       function loadCount(path) {
         const key = 'bottleneck-load-count:' + path;
@@ -1165,6 +1661,28 @@ function auditPageBody() {
       record('/audit', { type: 'page-load', count: loadCount('/audit') });
       auditInput.addEventListener('focus', () => record('/audit', { type: 'audit-focus', value: auditInput.value }));
       auditInput.addEventListener('input', () => record('/audit', { type: 'audit-input', value: auditInput.value }));
+      function recordAuditInputSelection() {
+        const selected = auditInput.value.slice(auditInput.selectionStart || 0, auditInput.selectionEnd || 0);
+        if (!selected) return;
+        record('/audit', {
+          type: 'audit-selection',
+          selectionStart: auditInput.selectionStart || 0,
+          selectionEnd: auditInput.selectionEnd || 0,
+          selectionLength: selected.length,
+          value: selected,
+        });
+      }
+      auditInput.addEventListener('select', recordAuditInputSelection);
+      auditInput.addEventListener('keyup', recordAuditInputSelection);
+      auditSlider.addEventListener('mousedown', (event) => {
+        sliderDragging = true;
+        updateSlider(event.clientX);
+      });
+      document.addEventListener('selectionchange', () => {
+        const selection = String(document.getSelection() || '');
+        if (!selection) return;
+        record('/audit', { type: 'audit-text-selection', selectionLength: selection.length, value: selection });
+      });
       addEventListener('scroll', () => {
         scrollCount += 1;
         record('/audit', { type: 'audit-scroll', count: scrollCount, maxScrollY: Math.round(scrollY) });
@@ -1175,11 +1693,13 @@ function auditPageBody() {
         record('/audit', { type: 'audit-drag-down', x: Math.round(event.clientX), y: Math.round(event.clientY) });
       });
       document.addEventListener('mousemove', (event) => {
+        if (sliderDragging) updateSlider(event.clientX);
         if (!dragging) return;
         pointerMoveCount += 1;
         record('/audit', { type: 'audit-pointer-move', count: pointerMoveCount, x: Math.round(event.clientX), y: Math.round(event.clientY) });
       });
       document.addEventListener('mouseup', (event) => {
+        sliderDragging = false;
         if (!dragging) return;
         dragging = false;
         record('/audit', { type: 'audit-drag-up', count: pointerMoveCount, x: Math.round(event.clientX), y: Math.round(event.clientY) });
@@ -1227,8 +1747,13 @@ function pageShell(title: string, body: string) {
       .hero { position: relative; min-height: 128px; }
       h1 { margin: 0 0 16px; font-size: 26px; }
       input { box-sizing: border-box; width: 820px; height: 44px; padding: 9px 12px; font-size: 17px; border: 2px solid #174c4f; border-radius: 4px; background: white; color: #102024; }
-      .drag-target { position: fixed; top: 90px; left: 72px; right: 72px; height: 240px; display: grid; place-items: center; border-radius: 6px; background: #174c4f; color: white; user-select: none; touch-action: none; }
-      .long-page { padding-top: 28px; max-width: 720px; }
+      .drag-target { position: fixed; top: 300px; left: 72px; right: 72px; height: 160px; display: grid; place-items: center; border-radius: 6px; background: #174c4f; color: white; user-select: none; touch-action: none; }
+      .product-controls { position: fixed; top: 141px; left: 72px; z-index: 3; display: grid; gap: 8px; max-width: 720px; padding: 8px 0 12px; background: #f7faf9; }
+      .product-controls div:first-child { font-size: 14px; font-weight: 700; color: #174c4f; }
+      .audit-slider { position: relative; width: 420px; height: 32px; border-radius: 16px; background: #d8e6e3; box-shadow: inset 0 0 0 2px #174c4f; }
+      .audit-slider span { position: absolute; top: 50%; left: 12%; width: 28px; height: 28px; border-radius: 50%; background: #174c4f; transform: translate(-50%, -50%); }
+      #selectionText { user-select: text; max-width: 620px; padding: 8px 0; }
+      .long-page { padding-top: 460px; max-width: 720px; }
       p { margin: 0 0 18px; line-height: 1.55; }
     </style>
   </head>
@@ -1244,6 +1769,11 @@ function eventFromPayload(raw: string, path: string): AuditFixtureEvent {
     path,
     valueLength: value === undefined ? undefined : value.length,
     valueHash: value === undefined ? undefined : hashText(value),
+    selectionStart: numberField(payload.selectionStart),
+    selectionEnd: numberField(payload.selectionEnd),
+    selectionLength: numberField(payload.selectionLength),
+    selectionHash: value === undefined ? undefined : hashText(value),
+    sliderValue: numberField(payload.sliderValue),
     count: numberField(payload.count),
     maxScrollY: numberField(payload.maxScrollY),
     x: numberField(payload.x),
