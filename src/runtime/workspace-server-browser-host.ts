@@ -198,6 +198,66 @@ async function handleBrowserHostNativeSurfaceRoutes(
     return true;
   }
 
+  if (url.pathname === '/api/sciforge/browser-host/native-surface/resize') {
+    if (req.method !== 'POST') {
+      writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('resize', undefined, `Unsupported native surface resize method: ${req.method ?? 'unknown'}`));
+      return true;
+    }
+    const body = await readJson(req);
+    const sessionId = safeBrowserHostNativeSurfaceSessionId(body.sessionId);
+    if (!sessionId) {
+      writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('resize', undefined, 'BrowserHostSession native surface resize requires a bounded session id.', 'native-surface-session-invalid'));
+      return true;
+    }
+    if (nativeAdapterUrl) {
+      const proxied = await browserHostNativeSurfaceAdapterResponse(
+        nativeAdapterUrl,
+        `/sessions/${encodeURIComponent(sessionId)}/resize`,
+        'resize',
+        sessionId,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(browserHostNativeSurfaceAttachBody(body, sessionId)),
+        },
+      );
+      writeJson(res, proxied.statusCode, proxied.body);
+      return true;
+    }
+    writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('resize', sessionId));
+    return true;
+  }
+
+  if (url.pathname === '/api/sciforge/browser-host/native-surface/detach') {
+    if (req.method !== 'POST') {
+      writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('detach', undefined, `Unsupported native surface detach method: ${req.method ?? 'unknown'}`));
+      return true;
+    }
+    const body = await readJson(req);
+    const sessionId = safeBrowserHostNativeSurfaceSessionId(body.sessionId);
+    if (!sessionId) {
+      writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('detach', undefined, 'BrowserHostSession native surface detach requires a bounded session id.', 'native-surface-session-invalid'));
+      return true;
+    }
+    if (nativeAdapterUrl) {
+      const proxied = await browserHostNativeSurfaceAdapterResponse(
+        nativeAdapterUrl,
+        `/sessions/${encodeURIComponent(sessionId)}/detach`,
+        'detach',
+        sessionId,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId }),
+        },
+      );
+      writeJson(res, proxied.statusCode, proxied.body);
+      return true;
+    }
+    writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('detach', sessionId));
+    return true;
+  }
+
   if (url.pathname === '/api/sciforge/browser-host/native-surface/state') {
     if (req.method !== 'GET') {
       writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('state', undefined, `Unsupported native surface state method: ${req.method ?? 'unknown'}`));
@@ -227,7 +287,7 @@ async function handleBrowserHostNativeSurfaceRoutes(
 }
 
 function browserHostNativeSurfaceBlockedDiagnostic(
-  action: 'health' | 'attach' | 'state' | 'unknown',
+  action: BrowserHostNativeSurfaceAction | 'unknown',
   sessionId?: string,
   message = 'Workspace Writer native surface bridge is unavailable; BrowserHostSession native-embedded attach remains blocked.',
   reason = 'native-bridge-unavailable',
@@ -237,7 +297,7 @@ function browserHostNativeSurfaceBlockedDiagnostic(
     schemaVersion: BROWSER_HOST_NATIVE_SURFACE_PREFLIGHT_SCHEMA,
     service: 'sciforge-workspace-writer',
     capability: 'browser-host-native-surface',
-    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,resize,detach,state}',
     action,
     status: 'blocked',
     reason,
@@ -248,6 +308,8 @@ function browserHostNativeSurfaceBlockedDiagnostic(
     nativeBridge: false,
     rightPaneBridge: false,
     attachAvailable: false,
+    detachAvailable: false,
+    resizeAvailable: false,
     stateAvailable: false,
     singleInteractiveTruth: false,
     secondTruthSource: false,
@@ -260,7 +322,7 @@ function browserHostNativeSurfaceBlockedDiagnostic(
   };
 }
 
-type BrowserHostNativeSurfaceAction = 'health' | 'attach' | 'state';
+type BrowserHostNativeSurfaceAction = 'health' | 'attach' | 'resize' | 'detach' | 'state';
 
 interface BrowserHostNativeSurfaceAdapterResponse {
   statusCode: number;
@@ -343,7 +405,7 @@ function browserHostNativeSurfaceTrustedBody(
     schemaVersion: BROWSER_HOST_NATIVE_SURFACE_PREFLIGHT_SCHEMA,
     service: 'sciforge-workspace-writer',
     capability: 'browser-host-native-surface',
-    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,resize,detach,state}',
     action,
     status,
     ...(reason ? { reason } : {}),
@@ -354,6 +416,8 @@ function browserHostNativeSurfaceTrustedBody(
     nativeBridge: true,
     rightPaneBridge: payload.rightPaneBridge === true,
     attachAvailable: payload.attachAvailable === true,
+    detachAvailable: payload.detachAvailable === true,
+    resizeAvailable: payload.resizeAvailable === true,
     stateAvailable: payload.stateAvailable === true,
     singleInteractiveTruth: true,
     secondTruthSource: false,
@@ -363,6 +427,10 @@ function browserHostNativeSurfaceTrustedBody(
     body.sessionId = sessionId;
     body.liveSurfaceRef = `browser-host-session:${sessionId}/live-surface`;
   }
+  const bounds = browserHostNativeSurfaceRect(payload.bounds);
+  if (bounds) body.bounds = bounds;
+  if (typeof payload.embedded === 'boolean') body.embedded = payload.embedded;
+  if (typeof payload.visible === 'boolean') body.visible = payload.visible;
   const diagnostics = boundedBrowserHostNativeSurfaceDiagnostics(payload.diagnostics);
   if (diagnostics.length) body.diagnostics = diagnostics;
   return body;

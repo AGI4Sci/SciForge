@@ -1,5 +1,8 @@
+import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { dirname, isAbsolute } from 'node:path';
 import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   type BrowserHostSessionNativeOsUiProof,
@@ -24,7 +27,11 @@ export type DesktopBrowserHostSurfaceState = {
   nativeBridge: true;
   rightPaneBridge: true;
   attachAvailable: true;
+  detachAvailable: true;
+  resizeAvailable: true;
   stateAvailable: true;
+  liveSurfaceRef: string;
+  status: 'attached' | 'detached';
   embedded: boolean;
   secondTruthSource: false;
   passClaim: boolean;
@@ -38,6 +45,23 @@ export type DesktopBrowserHostSurfaceState = {
   reason?: string;
   diagnostics?: string[];
   nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
+};
+
+export type DesktopBrowserHostSurfaceEvidenceOutputKind = 'screenshot' | 'dom' | 'text' | 'ax';
+
+export type DesktopBrowserHostSurfaceEvidenceWriteResult = {
+  ok: boolean;
+  sessionId: string;
+  owner: 'BrowserHostSession';
+  adapterRole: 'display-input-adapter';
+  liveSurfaceTransport: 'native-embedded';
+  nativeBridge: true;
+  rightPaneBridge: true;
+  outputKind: DesktopBrowserHostSurfaceEvidenceOutputKind;
+  mimeType?: 'image/png' | 'text/html' | 'text/plain' | 'application/json';
+  bytesWritten?: number;
+  sha256?: string;
+  reason?: string;
 };
 
 export const DESKTOP_BROWSER_HOST_SURFACE_AUDIT_SCHEMA = 'sciforge.desktop.browser-host-surface.audit.v1' as const;
@@ -90,6 +114,7 @@ export type DesktopBrowserHostSurfaceAuditRoute =
   | 'navigate'
   | 'attach'
   | 'detach'
+  | 'resize'
   | 'actions'
   | 'state'
   | 'screenshot'
@@ -164,6 +189,7 @@ export type DesktopBrowserHostSurfaceElectron = {
       nodeIntegration?: boolean;
       sandbox?: boolean;
       webSecurity?: boolean;
+      partition?: string;
     };
   }) => DesktopBrowserHostSurfaceViewLike;
 };
@@ -181,6 +207,15 @@ type DesktopBrowserHostSurfaceSession = {
   updatedAt: string;
   lastMouse: { x: number; y: number };
   diagnostics: string[];
+  url?: string;
+  title?: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  history: string[];
+  historyIndex: number;
+  profilePartition: string;
+  pendingHistoryAction?: 'back' | 'forward';
 };
 
 export function createDesktopBrowserHostSurfaceController(
@@ -222,11 +257,11 @@ export function createDesktopBrowserHostSurfaceController(
     serverUrl = undefined;
   }
 
-  function startSession(input: { sessionId: string; width?: number; height?: number }): DesktopBrowserHostSurfaceState {
+  function startSession(input: { sessionId: string; width?: number; height?: number; workspaceProfileDir?: string }): DesktopBrowserHostSurfaceState {
     const session = ensureSession(input.sessionId, {
       width: numberOr(input.width, 1365),
       height: numberOr(input.height, 900),
-    });
+    }, input.workspaceProfileDir);
     return stateForSession(session);
   }
 
@@ -284,13 +319,48 @@ export function createDesktopBrowserHostSurfaceController(
     return stateForSession(session);
   }
 
+  function resize(input: {
+    sessionId: string;
+    bounds: DesktopBrowserHostSurfaceBounds;
+    visible?: boolean;
+  }): DesktopBrowserHostSurfaceState {
+    const session = sessions.get(input.sessionId);
+    if (!session) return missingState(input.sessionId);
+    const bounds = normalizeBounds(input.bounds);
+    session.view.setBounds?.(bounds);
+    if (input.visible !== undefined) {
+      session.view.setVisible?.(input.visible);
+      session.visible = input.visible;
+    }
+    session.bounds = bounds;
+    session.updatedAt = new Date().toISOString();
+    return stateForSession(session);
+  }
+
   async function action(sessionId: string, input: Record<string, unknown>): Promise<DesktopBrowserHostSurfaceState> {
     const session = ensureSession(sessionId);
     const action = typeof input.action === 'string' ? input.action : '';
-    if (action === 'back') session.webContents.goBack?.();
-    else if (action === 'forward') session.webContents.goForward?.();
-    else if (action === 'reload') session.webContents.reload?.();
-    else if (action === 'stop') session.webContents.stop?.();
+    if (action === 'back') {
+      session.pendingHistoryAction = 'back';
+      session.webContents.goBack?.();
+      if (session.pendingHistoryAction === 'back') {
+        session.canGoForward = true;
+        session.pendingHistoryAction = undefined;
+      }
+    } else if (action === 'forward') {
+      session.pendingHistoryAction = 'forward';
+      session.webContents.goForward?.();
+      if (session.pendingHistoryAction === 'forward') {
+        session.canGoBack = true;
+        session.pendingHistoryAction = undefined;
+      }
+    } else if (action === 'reload') {
+      session.loading = true;
+      session.webContents.reload?.();
+    } else if (action === 'stop') {
+      session.webContents.stop?.();
+      session.loading = false;
+    }
     else if (action === 'click') await sendMouseClick(session, numberOr(input.x, 0), numberOr(input.y, 0), mouseButton(input.button), 1);
     else if (action === 'double-click') await sendMouseClick(session, numberOr(input.x, 0), numberOr(input.y, 0), mouseButton(input.button), 2);
     else if (action === 'mouse-down') await sendMouseEvent(session, 'mouseDown', numberOr(input.x, 0), numberOr(input.y, 0), mouseButton(input.button));
@@ -328,6 +398,19 @@ export function createDesktopBrowserHostSurfaceController(
     return { ...stateForSession(session), mimeType: 'image/png', dataUrl };
   }
 
+  async function writeScreenshot(sessionId: string, outputPath: unknown): Promise<DesktopBrowserHostSurfaceEvidenceWriteResult> {
+    const session = sessions.get(sessionId);
+    const path = nativeEvidenceOutputPath(outputPath);
+    if (!path) return evidenceWriteResult(sessionId, 'screenshot', 'native-embedded-evidence-output-path-invalid');
+    if (!session) return evidenceWriteResult(sessionId, 'screenshot', 'native-embedded-session-not-found');
+    const image = await session.webContents.capturePage?.();
+    const buffer = image?.toPNG
+      ? Buffer.from(image.toPNG())
+      : dataUrlPngBuffer(image?.toDataURL?.());
+    if (!buffer?.length) return evidenceWriteResult(sessionId, 'screenshot', 'native-embedded-screenshot-unavailable');
+    return writeEvidenceOutput(session.id, 'screenshot', path, buffer, 'image/png');
+  }
+
   async function content(sessionId: string): Promise<{ ok: boolean; content: string; reason?: string }> {
     const session = sessions.get(sessionId);
     if (!session) return { ok: false, content: '', reason: 'native-embedded-session-not-found' };
@@ -335,11 +418,29 @@ export function createDesktopBrowserHostSurfaceController(
     return { ok: true, content: value };
   }
 
+  async function writeContent(sessionId: string, outputPath: unknown): Promise<DesktopBrowserHostSurfaceEvidenceWriteResult> {
+    const session = sessions.get(sessionId);
+    const path = nativeEvidenceOutputPath(outputPath);
+    if (!path) return evidenceWriteResult(sessionId, 'dom', 'native-embedded-evidence-output-path-invalid');
+    if (!session) return evidenceWriteResult(sessionId, 'dom', 'native-embedded-session-not-found');
+    const value = await executeJavaScript<string>(session, 'document.documentElement ? document.documentElement.outerHTML : ""', '');
+    return writeEvidenceOutput(session.id, 'dom', path, Buffer.from(value, 'utf8'), 'text/html');
+  }
+
   async function text(sessionId: string): Promise<{ ok: boolean; text: string; reason?: string }> {
     const session = sessions.get(sessionId);
     if (!session) return { ok: false, text: '', reason: 'native-embedded-session-not-found' };
     const value = await executeJavaScript<string>(session, 'document.body ? document.body.innerText : ""', '');
     return { ok: true, text: cleanText(value) };
+  }
+
+  async function writeText(sessionId: string, outputPath: unknown): Promise<DesktopBrowserHostSurfaceEvidenceWriteResult> {
+    const session = sessions.get(sessionId);
+    const path = nativeEvidenceOutputPath(outputPath);
+    if (!path) return evidenceWriteResult(sessionId, 'text', 'native-embedded-evidence-output-path-invalid');
+    if (!session) return evidenceWriteResult(sessionId, 'text', 'native-embedded-session-not-found');
+    const value = await executeJavaScript<string>(session, 'document.body ? document.body.innerText : ""', '');
+    return writeEvidenceOutput(session.id, 'text', path, Buffer.from(cleanText(value), 'utf8'), 'text/plain');
   }
 
   async function axSnapshot(sessionId: string): Promise<{ ok: boolean; snapshot: unknown; reason?: string }> {
@@ -351,6 +452,19 @@ export function createDesktopBrowserHostSurfaceController(
       text: (document.body?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 4000)
     }))()`, {});
     return { ok: true, snapshot };
+  }
+
+  async function writeAxSnapshot(sessionId: string, outputPath: unknown): Promise<DesktopBrowserHostSurfaceEvidenceWriteResult> {
+    const session = sessions.get(sessionId);
+    const path = nativeEvidenceOutputPath(outputPath);
+    if (!path) return evidenceWriteResult(sessionId, 'ax', 'native-embedded-evidence-output-path-invalid');
+    if (!session) return evidenceWriteResult(sessionId, 'ax', 'native-embedded-session-not-found');
+    const snapshot = await executeJavaScript(session, `(() => ({
+      role: 'document',
+      name: document.title || '',
+      text: (document.body?.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 4000)
+    }))()`, {});
+    return writeEvidenceOutput(session.id, 'ax', path, Buffer.from(JSON.stringify(snapshot, null, 2), 'utf8'), 'application/json');
   }
 
   async function searchResults(sessionId: string, limit: number): Promise<{ ok: boolean; results: Array<{ title: string; url: string; snippet: string }>; reason?: string }> {
@@ -392,6 +506,8 @@ export function createDesktopBrowserHostSurfaceController(
         nativeBridge: true,
         rightPaneBridge: true,
         attachAvailable: true,
+        detachAvailable: true,
+        resizeAvailable: true,
         stateAvailable: true,
         singleInteractiveTruth: true,
         secondTruthSource: false,
@@ -420,29 +536,46 @@ export function createDesktopBrowserHostSurfaceController(
     const sessionId = decodeURIComponent(match[1]);
     const route = match[2];
     if (req.method === 'GET' && route === 'state') writeJson(res, 200, state(sessionId));
-    else if (req.method === 'GET' && route === 'screenshot') writeJson(res, 200, await screenshot(sessionId));
-    else if (req.method === 'GET' && route === 'content') writeJson(res, 200, await content(sessionId));
-    else if (req.method === 'GET' && route === 'text') writeJson(res, 200, await text(sessionId));
-    else if (req.method === 'GET' && route === 'ax') writeJson(res, 200, await axSnapshot(sessionId));
+    else if (req.method === 'GET' && isRawEvidenceRoute(route)) writeJson(res, 405, blockedRawEvidenceRoute(sessionId, route));
+    else if (req.method === 'POST' && route === 'screenshot') {
+      const body = await readJsonBody(req);
+      writeJson(res, 200, await writeScreenshot(sessionId, body.outputPath));
+    } else if (req.method === 'POST' && route === 'content') {
+      const body = await readJsonBody(req);
+      writeJson(res, 200, await writeContent(sessionId, body.outputPath));
+    } else if (req.method === 'POST' && route === 'text') {
+      const body = await readJsonBody(req);
+      writeJson(res, 200, await writeText(sessionId, body.outputPath));
+    } else if (req.method === 'POST' && route === 'ax') {
+      const body = await readJsonBody(req);
+      writeJson(res, 200, await writeAxSnapshot(sessionId, body.outputPath));
+    }
     else if (req.method === 'GET' && route === 'search-results') writeJson(res, 200, await searchResults(sessionId, Number(url.searchParams.get('limit') ?? '5')));
     else if (req.method === 'GET' && route === 'audit') writeJson(res, 200, surfaceAuditSnapshot(audit, sessionId));
     else if (req.method === 'POST' && route === 'attach') writeJson(res, 200, attach({ sessionId, ...(await readJsonBody(req)) as { bounds: DesktopBrowserHostSurfaceBounds; visible?: boolean; focus?: boolean } }));
     else if (req.method === 'POST' && route === 'detach') writeJson(res, 200, detach(sessionId));
+    else if (req.method === 'POST' && route === 'resize') writeJson(res, 200, resize({ sessionId, ...(await readJsonBody(req)) as { bounds: DesktopBrowserHostSurfaceBounds; visible?: boolean } }));
     else if (req.method === 'POST' && route === 'navigate') writeJson(res, 200, await navigate(sessionId, await readJsonBody(req) as { url: string; timeoutMs?: number }));
     else if (req.method === 'POST' && route === 'actions') writeJson(res, 200, await action(sessionId, await readJsonBody(req)));
     else writeJson(res, 405, { ok: false, error: `Unsupported native embedded browser method: ${req.method} ${url.pathname}` });
   }
 
-  function ensureSession(sessionId: string, viewport: { width: number; height: number } = { width: 1365, height: 900 }): DesktopBrowserHostSurfaceSession {
+  function ensureSession(
+    sessionId: string,
+    viewport: { width: number; height: number } = { width: 1365, height: 900 },
+    workspaceProfileDir?: string,
+  ): DesktopBrowserHostSurfaceSession {
     const safeId = requiredSessionId(sessionId);
     const current = sessions.get(safeId);
     if (current) return current;
     if (!electron.WebContentsView) throw new Error('Electron WebContentsView is unavailable for native embedded BrowserHostSession surfaces.');
+    const profilePartition = browserHostSurfaceProfilePartition(safeId, workspaceProfileDir);
     const view = new electron.WebContentsView({
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        partition: profilePartition,
       },
     });
     view.setVisible?.(false);
@@ -455,7 +588,15 @@ export function createDesktopBrowserHostSurfaceController(
       updatedAt: new Date().toISOString(),
       lastMouse: { x: 0, y: 0 },
       diagnostics: [],
+      url: 'about:blank',
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+      history: ['about:blank'],
+      historyIndex: 0,
+      profilePartition,
     };
+    installWebContentsStateListeners(session);
     sessions.set(safeId, session);
     return session;
   }
@@ -465,6 +606,7 @@ export function createDesktopBrowserHostSurfaceController(
     detach,
     navigate,
     action,
+    resize,
     screenshot,
     content,
     text,
@@ -630,6 +772,9 @@ async function executeJavaScript<T>(session: DesktopBrowserHostSurfaceSession, c
 function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: string): DesktopBrowserHostSurfaceState {
   const ok = !reason;
   const embedded = Boolean(session.attachedWindow);
+  const loading = session.webContents.isLoadingMainFrame?.() ?? session.webContents.isLoading?.() ?? session.loading;
+  const canGoBack = session.webContents.canGoBack?.() ?? session.canGoBack;
+  const canGoForward = session.webContents.canGoForward?.() ?? session.canGoForward;
   return {
     ok,
     sessionId: session.id,
@@ -642,20 +787,134 @@ function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: str
     nativeBridge: true,
     rightPaneBridge: true,
     attachAvailable: true,
+    detachAvailable: true,
+    resizeAvailable: true,
     stateAvailable: true,
+    liveSurfaceRef: `browser-host-session:${session.id}/live-surface`,
+    status: embedded ? 'attached' : 'detached',
     embedded,
     secondTruthSource: false,
     passClaim: ok && embedded,
-    url: session.webContents.getURL?.() || undefined,
-    title: session.webContents.getTitle?.() || undefined,
-    loading: session.webContents.isLoadingMainFrame?.() ?? session.webContents.isLoading?.() ?? false,
-    canGoBack: session.webContents.canGoBack?.() ?? false,
-    canGoForward: session.webContents.canGoForward?.() ?? false,
+    url: session.webContents.getURL?.() || session.url || undefined,
+    title: session.webContents.getTitle?.() || session.title || undefined,
+    loading,
+    canGoBack,
+    canGoForward,
     bounds: session.bounds,
     visible: session.visible,
     reason,
     diagnostics: session.diagnostics.slice(-20),
   };
+}
+
+function installWebContentsStateListeners(session: DesktopBrowserHostSurfaceSession): void {
+  const on = session.webContents.on?.bind(session.webContents);
+  if (!on) return;
+  on('did-start-loading', () => {
+    session.loading = true;
+    touchSession(session);
+  });
+  on('did-stop-loading', () => {
+    session.loading = false;
+    touchSession(session);
+  });
+  on('did-start-navigation', (...args) => {
+    const url = firstString(args);
+    if (url) session.url = url;
+    session.loading = true;
+    touchSession(session);
+  });
+  on('did-navigate', (...args) => {
+    const url = firstString(args);
+    if (url) recordCommittedNavigation(session, url);
+    session.loading = false;
+    touchSession(session);
+  });
+  on('did-navigate-in-page', (...args) => {
+    const url = firstString(args);
+    if (url) recordCommittedNavigation(session, url);
+    touchSession(session);
+  });
+  on('page-title-updated', (...args) => {
+    const title = firstString(args);
+    if (title) session.title = title;
+    touchSession(session);
+  });
+  on('did-finish-load', () => {
+    session.loading = false;
+    const url = session.webContents.getURL?.() || session.url;
+    if (url) recordCommittedNavigation(session, url);
+    const title = session.webContents.getTitle?.() || session.title;
+    if (title) session.title = title;
+    touchSession(session);
+  });
+  on('did-fail-load', (...args) => {
+    const code = firstNumber(args);
+    const description = firstStringAfterNumber(args) ?? 'unknown';
+    const url = lastString(args);
+    if (url) session.url = url;
+    session.loading = false;
+    pushDiagnostic(session, `native embedded load failed: ${description} (${code ?? 'unknown'})`);
+    touchSession(session);
+  });
+}
+
+function recordCommittedNavigation(session: DesktopBrowserHostSurfaceSession, url: string): void {
+  session.url = url;
+  if (session.pendingHistoryAction === 'back') {
+    if (session.historyIndex > 0) session.historyIndex -= 1;
+    session.canGoBack = session.historyIndex > 0;
+    session.canGoForward = true;
+    session.pendingHistoryAction = undefined;
+    return;
+  }
+  if (session.pendingHistoryAction === 'forward') {
+    if (session.historyIndex < session.history.length - 1) session.historyIndex += 1;
+    session.canGoBack = true;
+    session.canGoForward = session.historyIndex >= 0 && session.historyIndex < session.history.length - 1;
+    session.pendingHistoryAction = undefined;
+    return;
+  }
+  if (session.history[session.historyIndex] === url) {
+    updateHistoryState(session);
+    return;
+  }
+  if (session.historyIndex < session.history.length - 1) session.history.splice(session.historyIndex + 1);
+  session.history.push(url);
+  session.historyIndex = session.history.length - 1;
+  updateHistoryState(session);
+}
+
+function updateHistoryState(session: DesktopBrowserHostSurfaceSession): void {
+  session.canGoBack = session.historyIndex > 0;
+  session.canGoForward = session.historyIndex >= 0 && session.historyIndex < session.history.length - 1;
+}
+
+function pushDiagnostic(session: DesktopBrowserHostSurfaceSession, diagnostic: string): void {
+  session.diagnostics.push(diagnostic);
+  if (session.diagnostics.length > 40) session.diagnostics.splice(0, session.diagnostics.length - 40);
+}
+
+function touchSession(session: DesktopBrowserHostSurfaceSession): void {
+  session.updatedAt = new Date().toISOString();
+}
+
+function firstString(args: unknown[]): string | undefined {
+  return args.find((arg): arg is string => typeof arg === 'string' && arg.length > 0);
+}
+
+function lastString(args: unknown[]): string | undefined {
+  return args.findLast((arg): arg is string => typeof arg === 'string' && arg.length > 0);
+}
+
+function firstNumber(args: unknown[]): number | undefined {
+  return args.find((arg): arg is number => typeof arg === 'number' && Number.isFinite(arg));
+}
+
+function firstStringAfterNumber(args: unknown[]): string | undefined {
+  const numberIndex = args.findIndex((arg) => typeof arg === 'number' && Number.isFinite(arg));
+  if (numberIndex < 0) return undefined;
+  return args.slice(numberIndex + 1).find((arg): arg is string => typeof arg === 'string' && arg.length > 0);
 }
 
 function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
@@ -671,7 +930,11 @@ function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
     nativeBridge: true,
     rightPaneBridge: true,
     attachAvailable: true,
+    detachAvailable: true,
+    resizeAvailable: true,
     stateAvailable: true,
+    liveSurfaceRef: `browser-host-session:${sessionId}/live-surface`,
+    status: 'detached',
     embedded: false,
     secondTruthSource: false,
     passClaim: false,
@@ -799,6 +1062,7 @@ const SURFACE_AUDIT_ROUTES: DesktopBrowserHostSurfaceAuditRoute[] = [
   'navigate',
   'attach',
   'detach',
+  'resize',
   'actions',
   'state',
   'screenshot',
@@ -814,6 +1078,13 @@ const SURFACE_AUDIT_ROUTES: DesktopBrowserHostSurfaceAuditRoute[] = [
 function requiredSessionId(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('Native embedded BrowserHostSession requires a safe sessionId.');
   return value;
+}
+
+function browserHostSurfaceProfilePartition(sessionId: string, workspaceProfileDir: unknown): string {
+  const profileDir = typeof workspaceProfileDir === 'string' ? workspaceProfileDir.trim() : '';
+  const source = profileDir || `session:${sessionId}`;
+  const digest = createHash('sha256').update(source).digest('hex').slice(0, 16);
+  return profileDir ? `persist:sciforge-browser-host-${digest}` : `sciforge-browser-host-${digest}`;
 }
 
 function numberOr(value: unknown, fallback: number): number {
@@ -848,6 +1119,80 @@ function parseKeyPress(value: string): { keyCode: string; modifiers: string[] } 
 
 function cleanText(value: unknown): string {
   return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+}
+
+function nativeEvidenceOutputPath(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.includes('\0') || trimmed.length > 4096) return undefined;
+  return isAbsolute(trimmed) ? trimmed : undefined;
+}
+
+function dataUrlPngBuffer(value: unknown): Buffer | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = /^data:image\/png;base64,([a-z0-9+/=]+)$/i.exec(value);
+  if (!match) return undefined;
+  return Buffer.from(match[1], 'base64');
+}
+
+async function writeEvidenceOutput(
+  sessionId: string,
+  outputKind: DesktopBrowserHostSurfaceEvidenceOutputKind,
+  outputPath: string,
+  bytes: Buffer,
+  mimeType: NonNullable<DesktopBrowserHostSurfaceEvidenceWriteResult['mimeType']>,
+): Promise<DesktopBrowserHostSurfaceEvidenceWriteResult> {
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, bytes);
+  return {
+    ok: true,
+    sessionId,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    liveSurfaceTransport: 'native-embedded',
+    nativeBridge: true,
+    rightPaneBridge: true,
+    outputKind,
+    mimeType,
+    bytesWritten: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+  };
+}
+
+function evidenceWriteResult(
+  sessionId: string,
+  outputKind: DesktopBrowserHostSurfaceEvidenceOutputKind,
+  reason: string,
+): DesktopBrowserHostSurfaceEvidenceWriteResult {
+  return {
+    ok: false,
+    sessionId,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    liveSurfaceTransport: 'native-embedded',
+    nativeBridge: true,
+    rightPaneBridge: true,
+    outputKind,
+    reason,
+  };
+}
+
+function isRawEvidenceRoute(route: string): boolean {
+  return route === 'screenshot' || route === 'content' || route === 'text' || route === 'ax';
+}
+
+function blockedRawEvidenceRoute(sessionId: string, route: string): Record<string, unknown> {
+  return {
+    ok: false,
+    sessionId,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    liveSurfaceTransport: 'native-embedded',
+    nativeBridge: true,
+    rightPaneBridge: true,
+    outputKind: route,
+    reason: 'native-embedded-raw-evidence-route-blocked',
+  };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => void): Promise<T> {

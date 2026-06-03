@@ -23,6 +23,7 @@ export type CursorAgentActionKind =
   | 'verifier'
   | 'repair'
   | 'message'
+  | 'window_action'
   | 'folded'
   | 'other';
 
@@ -210,7 +211,7 @@ function compactCursorEntries(entries: StreamWorklogEntry[]) {
 function keepCursorTimelineAnchors(entries: StreamWorklogEntry[], limit: number) {
   if (entries.length <= limit) return entries;
   const selected = new Set<number>();
-  const anchorKinds = new Set<CursorAgentActionKind>(['search', 'fetch', 'read', 'file_edit', 'write', 'artifact', 'approval', 'verifier', 'repair', 'subagent']);
+  const anchorKinds = new Set<CursorAgentActionKind>(['search', 'fetch', 'read', 'file_edit', 'write', 'artifact', 'approval', 'verifier', 'repair', 'subagent', 'window_action']);
   selected.add(0);
   for (let index = 0; index < entries.length; index += 1) {
     const entry = entries[index];
@@ -249,7 +250,9 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
   const stderrRef = sanitizeCursorRef(nativeString(event, 'stderrRef') ?? nativeString(event, 'stderr_ref'));
   const diffRef = sanitizeCursorDiffRef(nativeString(event, 'diffRef') ?? nativeString(event, 'diff_ref'));
   const diffSource = nativeString(event, 'diff') ?? nativeString(event, 'patch') ?? diffTextFromNativeOutput(event, actionKind);
-  const outputSummary = actionKind === 'subagent'
+  const outputSummary = actionKind === 'window_action'
+    ? undefined
+    : actionKind === 'subagent'
     ? cleanSubagentActionSummary(rawOutputSummary)
     : diffSource && looksLikeDiffSummary(rawOutputSummary) ? undefined : cleanCursorActionSummary(rawOutputSummary);
   const status = actionStatus(event, type, { actionKind, command, exitCode, diffSource });
@@ -257,16 +260,32 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
   const stdout = stdoutRef || diff ? undefined : boundedBlockDetail(nativeString(event, 'stdout'));
   const stderr = stderrRef ? undefined : boundedBlockDetail(nativeString(event, 'stderr'));
   const transcriptRef = sanitizeCursorRef(nativeString(event, 'transcriptRef') ?? nativeString(event, 'transcript_ref'));
-  const agentId = sanitizeCursorIdentifier(nativeString(event, 'agentId') ?? nativeString(event, 'agent_id'));
+  const agentId = sanitizeCursorIdentifier(
+    nativeString(event, 'agentId')
+    ?? nativeString(event, 'agent_id')
+    ?? nativeRecordString(event, 'actorCursor', 'agentId')
+    ?? nativeRecordString(event, 'actor_cursor', 'agent_id')
+    ?? nativeRecordString(event, 'actorCursor', 'actorId')
+    ?? nativeRecordString(event, 'actor_cursor', 'actor_id'),
+  );
   const parentAgentId = sanitizeCursorIdentifier(nativeString(event, 'parentAgentId') ?? nativeString(event, 'parent_agent_id'));
   const runId = sanitizeCursorIdentifier(nativeString(event, 'runId') ?? nativeString(event, 'run_id') ?? sourceRunId);
   const rawResultSummary = sanitizeCursorText(nativeString(event, 'resultSummary') ?? nativeString(event, 'result_summary') ?? nativeString(event, 'summary'));
-  const resultSummary = actionKind === 'subagent'
+  const resultSummary = actionKind === 'window_action'
+    ? undefined
+    : actionKind === 'subagent'
     ? cleanSubagentActionSummary(rawResultSummary)
     : cleanCursorActionSummary(rawResultSummary);
   const commands = actionKind === 'approval' ? runtimeGuiChoicesFromEventPayload(event.raw) : [];
-  const resultRefs = resultRefsForEvent(event);
-  const itemId = sanitizeCursorIdentifier(nativeString(event, 'itemId') ?? nativeString(event, 'item_id'));
+  const windowActionRefs = actionKind === 'window_action' ? windowActionRefsForEvent(event) : [];
+  const resultRefs = uniqueStrings([...resultRefsForEvent(event), ...windowActionRefs]);
+  const itemId = sanitizeCursorIdentifier(
+    nativeString(event, 'itemId')
+    ?? nativeString(event, 'item_id')
+    ?? nativeRecordString(event, 'action', 'id')
+    ?? nativeRecordString(event, 'action', 'actionId')
+    ?? nativeRecordString(event, 'action', 'action_id'),
+  );
   const traceStepId = sanitizeCursorIdentifier(nativeString(event, 'traceStepId') ?? nativeString(event, 'trace_step_id'));
   const fileRef = filePreviewRefForEntry(event, actionKind, command);
   const refs = uniqueStrings([
@@ -277,6 +296,7 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
     sanitizeCursorObjectPreviewRef(nativeString(event, 'ref')),
     fileRef,
     ...resultRefs,
+    ...windowActionRefs,
     ...nativeStringList(event, 'refs').map(sanitizeCursorRef),
   ]);
   const detail = detailForAction(entry, {
@@ -295,12 +315,15 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
   });
   const displayStatus = mode === 'recorded' && status === 'running' ? 'unknown' : status;
   const titleStatus = mode === 'live' && status === 'running' ? 'running' : displayStatus;
-  const title = actionTitle(actionKind, {
-    target: actionTarget(entry, actionKind, command, fileTarget, { agentId, resultSummary }, locale),
-    status: titleStatus,
-    outputSummary,
-    exitCode,
-  }, locale);
+  const target = actionTarget(entry, actionKind, command, fileTarget, { agentId, resultSummary }, locale);
+  const title = actionKind === 'window_action'
+    ? windowActionTitle(event, { target, status: titleStatus }, locale)
+    : actionTitle(actionKind, {
+      target,
+      status: titleStatus,
+      outputSummary,
+      exitCode,
+    }, locale);
   return {
     id: event.id,
     kind: actionKind,
@@ -440,9 +463,14 @@ function foldedGroupKind(actions: CursorAgentAction[]): CursorAgentGroupKind {
 }
 
 function cursorActionLifecycleKey(action: CursorAgentAction) {
-  const explicit = action.kind === 'subagent'
-    ? action.itemId ?? action.traceStepId ?? action.agentId
-    : action.agentId ?? action.itemId ?? action.traceStepId;
+  let explicit: string | undefined;
+  if (action.kind === 'subagent') {
+    explicit = action.itemId ?? action.traceStepId ?? action.agentId;
+  } else if (action.kind === 'window_action') {
+    explicit = action.itemId ?? action.traceStepId;
+  } else {
+    explicit = action.agentId ?? action.itemId ?? action.traceStepId;
+  }
   if (explicit) return `${action.kind}:${normalizeText(explicit)}`;
   if ((action.kind === 'diff' || action.kind === 'shell_command' || action.kind === 'read' || action.kind === 'search') && action.command) {
     return `${action.kind}:command:${normalizeText(action.command)}`;
@@ -529,6 +557,7 @@ function actionKindForEntry(
   const nativeDiff = nativeString(entry.event, 'diff') ?? nativeString(entry.event, 'patch');
   const text = `${toolName ?? ''}\n${command ?? ''}\n${nativeDiff ?? ''}\n${cursorEntryText(entry)}\n${entry.operationLine}`.toLowerCase();
   if (/^process_summary$/i.test(toolName ?? '')) return 'thought';
+  if (isWindowActionEntry(entry, type)) return 'window_action';
   const semanticKind = semanticCursorActionKind({
     type,
     toolName,
@@ -585,8 +614,16 @@ function explicitCursorActionKind(entry: StreamWorklogEntry): CursorAgentActionK
   if (kind === 'validate') return 'validate';
   if (kind === 'artifact') return 'artifact';
   if (kind === 'message') return 'message';
+  if (kind === 'window_action' || kind === 'windowaction' || kind === 'actor_cursor_action') return 'window_action';
   if (kind === 'other') return 'other';
   return undefined;
+}
+
+function isWindowActionEntry(entry: StreamWorklogEntry, type: string) {
+  const operationKind = nativeString(entry.event, 'operationKind') ?? nativeString(entry.event, 'operation_kind') ?? entry.operationKind;
+  return normalizeWindowActionToken(type) === 'window_action_event'
+    || normalizeWindowActionToken(operationKind) === 'window_action'
+    || Boolean(nativeRecord(entry.event, 'actorCursor') || nativeRecord(entry.event, 'actor_cursor'));
 }
 
 function isToolLifecycleEntry(entry: StreamWorklogEntry, type: string) {
@@ -609,6 +646,7 @@ function actionTarget(
   if (kind === 'read') return readDisplayTarget(entry, command, fileTarget, locale);
   if (kind === 'file_edit' || kind === 'diff') return fileTarget ?? fileLikeTargetFromText(cursorEntryText(entry)) ?? cursorEntryText(entry) ?? chatText(locale, { 'zh-CN': '文件', 'en-US': 'file' });
   if (kind === 'subagent') return subagentTarget(subagent?.resultSummary ?? cursorEntryText(entry)) ?? chatText(locale, { 'zh-CN': '子代理', 'en-US': 'sub agent' });
+  if (kind === 'window_action') return windowActionTarget(entry.event, locale);
   return cursorEntryText(entry) || entry.presentation.typeLabel;
 }
 
@@ -650,6 +688,17 @@ function actionTitle(
   return target || chatText(locale, { 'zh-CN': '工作', 'en-US': 'Worked' });
 }
 
+function windowActionTitle(
+  event: AgentStreamEvent,
+  input: { target: string; status: CursorAgentActionStatus },
+  locale?: SupportedLocale,
+) {
+  const verb = windowActionVerb(event);
+  const target = compactInline(input.target, 128);
+  if (input.status === 'running') return `${windowActionVerbLabel(verb, 'running', locale)} ${target}`;
+  return `${windowActionVerbLabel(verb, 'completed', locale)} ${target}${actionStatusSuffix(input.status, locale)}`;
+}
+
 function runningActionTitle(kind: CursorAgentActionKind, target: string, locale?: SupportedLocale) {
   if (kind === 'read') return `${chatText(locale, { 'zh-CN': '正在读取', 'en-US': 'Reading' })} ${target}`;
   if (kind === 'search') return `${chatText(locale, { 'zh-CN': '正在搜索', 'en-US': 'Searching' })} ${target}`;
@@ -668,6 +717,63 @@ function runningActionTitle(kind: CursorAgentActionKind, target: string, locale?
   if (kind === 'validate') return `${chatText(locale, { 'zh-CN': '正在检查', 'en-US': 'Checking' })} ${target}`;
   if (kind === 'artifact') return `${chatText(locale, { 'zh-CN': '正在创建', 'en-US': 'Creating' })} ${target}`;
   return target || chatText(locale, { 'zh-CN': '正在工作', 'en-US': 'Working' });
+}
+
+function windowActionVerb(event: AgentStreamEvent) {
+  const raw = normalizeWindowActionToken(
+    nativeRecordString(event, 'action', 'kind')
+    ?? nativeRecordString(event, 'action', 'type')
+    ?? nativeRecordString(event, 'action', 'actionType')
+    ?? nativeRecordString(event, 'action', 'action_type')
+    ?? nativeString(event, 'actionType')
+    ?? nativeString(event, 'action_type')
+    ?? nativeString(event, 'eventType')
+    ?? nativeString(event, 'event_type'),
+  );
+  if (/^(?:observe|watch|inspect|look)$/.test(raw)) return 'observe';
+  if (/^(?:click|double_click|press|tap)$/.test(raw)) return 'click';
+  if (/^(?:type|type_text|input|keyboard|key|hotkey)$/.test(raw)) return 'type';
+  if (/^(?:wait|wait_for|sleep|idle)$/.test(raw)) return 'wait';
+  if (/^(?:scroll|scroll_to)$/.test(raw)) return 'scroll';
+  if (/^(?:move|point|hover)$/.test(raw)) return 'move';
+  return 'observe';
+}
+
+function windowActionVerbLabel(verb: string, tense: 'running' | 'completed', locale?: SupportedLocale) {
+  if (verb === 'click') return chatText(locale, { 'zh-CN': tense === 'running' ? '正在点击' : '点击', 'en-US': tense === 'running' ? 'Clicking' : 'Clicked' });
+  if (verb === 'type') return chatText(locale, { 'zh-CN': tense === 'running' ? '正在输入' : '输入', 'en-US': tense === 'running' ? 'Typing in' : 'Typed in' });
+  if (verb === 'wait') return chatText(locale, { 'zh-CN': tense === 'running' ? '正在等待' : '等待', 'en-US': tense === 'running' ? 'Waiting in' : 'Waited in' });
+  if (verb === 'scroll') return chatText(locale, { 'zh-CN': tense === 'running' ? '正在滚动' : '滚动', 'en-US': tense === 'running' ? 'Scrolling' : 'Scrolled' });
+  if (verb === 'move') return chatText(locale, { 'zh-CN': tense === 'running' ? '正在移动到' : '移动到', 'en-US': tense === 'running' ? 'Moving in' : 'Moved in' });
+  return chatText(locale, { 'zh-CN': tense === 'running' ? '正在观察' : '观察', 'en-US': tense === 'running' ? 'Observing' : 'Observed' });
+}
+
+function windowActionTarget(event: AgentStreamEvent, locale?: SupportedLocale) {
+  const target = nativeRecord(event, 'target') ?? nativeRecord(event, 'window') ?? {};
+  const raw = firstString(
+    stringField(target.windowTitle),
+    stringField(target.window_title),
+    stringField(target.title),
+    nativeString(event, 'windowTitle'),
+    nativeString(event, 'window_title'),
+    nativeString(event, 'targetWindowTitle'),
+    nativeString(event, 'target_window_title'),
+    stringField(target.appName),
+    stringField(target.app_name),
+    stringField(target.app),
+    nativeString(event, 'appName'),
+    nativeString(event, 'app_name'),
+    nativeString(event, 'target'),
+  );
+  const cleaned = compactInline(sanitizeCursorText(raw), 96);
+  const fallback = chatText(locale, { 'zh-CN': '窗口', 'en-US': 'window' });
+  if (!cleaned) return fallback;
+  if (/\bwindow\b/i.test(cleaned) || /窗口/.test(cleaned)) return cleaned;
+  return chatText(locale, { 'zh-CN': `${cleaned} 窗口`, 'en-US': `${cleaned} window` });
+}
+
+function normalizeWindowActionToken(value: string | undefined) {
+  return (value ?? '').trim().toLowerCase().replace(/[-\s]+/g, '_');
 }
 
 function shellCommandDisplayTarget(entry: StreamWorklogEntry, command: string | undefined, locale?: SupportedLocale) {
@@ -772,6 +878,7 @@ function detailForAction(
 ) {
   const lines: string[] = [];
   if (input.actionKind === 'subagent') return '';
+  if (input.actionKind === 'window_action') return '';
   const entryText = boundedDetail(cursorEntryText(entry));
   if (looksLikeRedactedPathPlaceholderDetail(entryText)) return '';
   if (input.actionKind === 'read' && fileLikeTargetFromText(entryText)) return '';
@@ -1001,7 +1108,7 @@ function actionStatus(
   type: string,
   context?: { actionKind?: CursorAgentActionKind; command?: string; exitCode?: number | null; diffSource?: string },
 ): CursorAgentActionStatus {
-  const status = nativeString(event, 'status')?.toLowerCase();
+  const status = (nativeString(event, 'status') ?? nativeRecordString(event, 'action', 'status'))?.toLowerCase();
   const failedByResultPayload = nativeFailureSignal(event);
   if (isDiffDifferenceResult(context) && !failedByResultPayload) return 'completed';
   if (status && /^(?:running|in_progress|started|pending)$/.test(status)) return 'running';
@@ -1101,6 +1208,41 @@ function resultRefsForEvent(event: AgentStreamEvent) {
     ...nativeStringList(event, 'sourceRefs').map(sanitizeCursorResultRef),
     ...nativeStringList(event, 'source_refs').map(sanitizeCursorResultRef),
   ]);
+}
+
+function windowActionRefsForEvent(event: AgentStreamEvent) {
+  const action = nativeRecord(event, 'action') ?? {};
+  const actorCursor = nativeRecord(event, 'actorCursor') ?? nativeRecord(event, 'actor_cursor') ?? {};
+  const target = nativeRecord(event, 'target') ?? nativeRecord(event, 'window') ?? {};
+  return uniqueStrings([
+    ...nativeStringList(event, 'refs'),
+    ...nativeStringList(event, 'evidenceRefs'),
+    ...nativeStringList(event, 'evidence_refs'),
+    ...nativeStringList(event, 'resultRefs'),
+    ...nativeStringList(event, 'result_refs'),
+    ...stringListField(action.refs),
+    ...stringListField(action.evidenceRefs),
+    ...stringListField(action.evidence_refs),
+    ...stringListField(action.resultRefs),
+    ...stringListField(action.result_refs),
+    stringField(action.ref),
+    stringField(action.actionRef),
+    stringField(action.action_ref),
+    stringField(action.visibleActionRef),
+    stringField(action.visible_action_ref),
+    stringField(target.ref),
+    stringField(target.windowRef),
+    stringField(target.window_ref),
+    stringField(target.screenRef),
+    stringField(target.screen_ref),
+    stringField(target.browserRef),
+    stringField(target.browser_ref),
+    stringField(actorCursor.ref),
+    stringField(actorCursor.cursorRef),
+    stringField(actorCursor.cursor_ref),
+    stringField(actorCursor.actorCursorRef),
+    stringField(actorCursor.actor_cursor_ref),
+  ].map(sanitizeCursorWindowActionRef));
 }
 
 function isFilePreviewActionKind(kind: CursorAgentActionKind) {
@@ -1271,6 +1413,23 @@ function nativeString(event: AgentStreamEvent, key: string): string | undefined 
   const nestedRaw = recordOrUndefined(raw.raw);
   const nestedEvent = recordOrUndefined(nestedRaw?.event);
   return stringField(native[key]) ?? stringField(nativeRaw?.[key]) ?? stringField(raw[key]) ?? stringField(nestedRaw?.[key]) ?? stringField(nestedEvent?.[key]);
+}
+
+function nativeRecord(event: AgentStreamEvent, key: string): Record<string, unknown> | undefined {
+  const raw = record(event.raw);
+  const native = recordOrUndefined(raw.native) ?? raw;
+  const nativeRaw = recordOrUndefined(native.raw);
+  const nestedRaw = recordOrUndefined(raw.raw);
+  const nestedEvent = recordOrUndefined(nestedRaw?.event);
+  return recordOrUndefined(native[key])
+    ?? recordOrUndefined(nativeRaw?.[key])
+    ?? recordOrUndefined(raw[key])
+    ?? recordOrUndefined(nestedRaw?.[key])
+    ?? recordOrUndefined(nestedEvent?.[key]);
+}
+
+function nativeRecordString(event: AgentStreamEvent, recordKey: string, fieldKey: string): string | undefined {
+  return stringField(nativeRecord(event, recordKey)?.[fieldKey]);
 }
 
 function nativeNumber(event: AgentStreamEvent, key: string): number | null | undefined {
@@ -1748,7 +1907,18 @@ function isBackendTransportLifecycleText(text: string) {
 function cursorEntryDedupeKey(entry: StreamWorklogEntry) {
   const command = sanitizeCursorText(nativeString(entry.event, 'command') ?? commandTextFromEntry(entry));
   const kind = actionKindForEntry(entry, rawType(entry.event), nativeString(entry.event, 'toolName'), command);
-  const itemId = sanitizeCursorIdentifier(nativeString(entry.event, 'itemId') ?? nativeString(entry.event, 'item_id') ?? nativeString(entry.event, 'traceStepId') ?? nativeString(entry.event, 'trace_step_id'));
+  const itemId = sanitizeCursorIdentifier(
+    nativeString(entry.event, 'itemId')
+    ?? nativeString(entry.event, 'item_id')
+    ?? nativeString(entry.event, 'traceStepId')
+    ?? nativeString(entry.event, 'trace_step_id')
+    ?? nativeRecordString(entry.event, 'action', 'id')
+    ?? nativeRecordString(entry.event, 'action', 'actionId')
+    ?? nativeRecordString(entry.event, 'action', 'action_id'),
+  );
+  if (kind === 'window_action') {
+    return `${kind}:${normalizeText(windowActionVerb(entry.event))}:${normalizeText(windowActionTarget(entry.event))}:${itemId ?? windowActionRefsForEvent(entry.event)[0] ?? entry.event.id}`;
+  }
   const missingFileTargetKey = isFilePreviewActionKind(kind)
     && !fileTargetForEntry(entry.event, entry, kind, command)
     && itemId
@@ -1908,6 +2078,16 @@ function sanitizeCursorDiffRef(value: string | undefined) {
   return sanitizeCursorRef(text);
 }
 
+function sanitizeCursorWindowActionRef(value: string | undefined) {
+  const text = sanitizeCursorText(value);
+  if (!text || /\[redacted\]|\[url\]|\[local-path\]/.test(text)) return undefined;
+  if (text.startsWith('file:') || text.startsWith('artifact:')) return sanitizeCursorRef(text);
+  if (!/^(?:window|screen|browser|browser-runtime|browser-session|browser-snapshot|computer-use|computer-use-session|replay|approval:computer-use):/i.test(text)) {
+    return undefined;
+  }
+  return isSafeWindowActionRef(text) ? text : undefined;
+}
+
 function sanitizeCursorIdentifier(value: string | undefined) {
   const text = sanitizeCursorText(value);
   if (!text || /\[redacted\]|\[url\]|\[local-path\]/.test(text)) return undefined;
@@ -1979,4 +2159,16 @@ function isSafeOpaqueRef(value: string) {
 
 function isSafeArtifactRefPayload(value: string) {
   return isSafeOpaqueRef(value);
+}
+
+function isSafeWindowActionRef(value: string) {
+  const text = value.trim();
+  if (!text || text.includes('://') || text.includes('[local-path]') || text.includes('[redacted]') || text.includes('[url]')) return false;
+  if (/^(?:\/|[A-Za-z]:[\\/]|file:\/\/)/.test(text)) return false;
+  if (/[\r\n\t<>|?*]/.test(text)) return false;
+  if (/(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:[/:]|$)/i.test(text)) return false;
+  if (/(?:^|[/:])(?:raw|stdout|stderr|provider)(?:[/:]|$)/i.test(text)) return false;
+  if (text.includes('..') || text.startsWith('~')) return false;
+  if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(text)) return false;
+  return /^[A-Za-z][A-Za-z0-9_.:/-]{1,180}$/.test(text);
 }

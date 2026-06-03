@@ -14,6 +14,7 @@ const INSPECT_ACTIONS = ['focus-right-pane', 'inspect', 'pin'] as const satisfie
 const EXTERNAL_ACTIONS = ['focus-right-pane', 'open-external', 'copy-path', 'pin'] as const satisfies readonly ObjectAction[];
 const TERMINAL_ACTIONS = ['focus-right-pane', 'inspect', 'copy-path', 'pin'] as const satisfies readonly ObjectAction[];
 const EVIDENCE_ACTIONS = ['focus-right-pane', 'inspect', 'pin'] as const satisfies readonly ObjectAction[];
+const IMAGE_EVIDENCE_SPEC = { kind: 'artifact', artifactType: 'image-evidence', preferredView: 'image-evidence', actions: INSPECT_ACTIONS } as const satisfies CursorRefSpec;
 
 export function objectReferenceForCursorAction(action: CursorAgentAction): ObjectReference | undefined {
   const reference = actionFocusCandidates(action)
@@ -84,7 +85,11 @@ function cursorRefSpec(ref: string): CursorRefSpec | undefined {
     return { kind: 'artifact', artifactType: 'workspace-diff', preferredView: 'workspace-diff-viewer', actions: DIFF_ACTIONS };
   }
   if (lower.startsWith('folder:') || lower.startsWith('workspace:')) return { kind: 'folder', preferredView: 'folder-viewer', actions: FILE_ACTIONS };
-  if (lower.startsWith('artifact:')) return { kind: 'artifact', preferredView: 'generic-artifact-inspector', actions: INSPECT_ACTIONS };
+  if (lower.startsWith('artifact:')) {
+    return isImageEvidenceArtifactRef(ref)
+      ? IMAGE_EVIDENCE_SPEC
+      : { kind: 'artifact', preferredView: 'generic-artifact-inspector', actions: INSPECT_ACTIONS };
+  }
   if (lower.startsWith('result:') || lower.startsWith('preview:') || lower.startsWith('ui:')) {
     return { kind: 'artifact', artifactType: 'runtime-result', preferredView: 'generic-artifact-inspector', actions: INSPECT_ACTIONS };
   }
@@ -92,7 +97,8 @@ function cursorRefSpec(ref: string): CursorRefSpec | undefined {
   if (lower.startsWith('run:') || ref.startsWith('run-')) return { kind: 'run', preferredView: 'evidence-inspector', actions: EVIDENCE_ACTIONS };
   if (isTerminalRef(ref)) return { kind: 'execution-unit', preferredView: 'terminal-session-viewer', actions: TERMINAL_ACTIONS };
   if (isBrowserRef(ref)) return { kind: 'url', preferredView: 'browser-object', actions: EXTERNAL_ACTIONS };
-  if (isScreenRef(ref)) return { kind: 'artifact', artifactType: 'screen-observation', preferredView: 'screen-observation', actions: INSPECT_ACTIONS };
+  if (isImageEvidenceRef(ref)) return IMAGE_EVIDENCE_SPEC;
+  if (isLegacyScreenEvidenceRef(ref)) return IMAGE_EVIDENCE_SPEC;
   if (lower.startsWith('subagent:') || lower.startsWith('agent-result:') || lower.startsWith('agent-transcript:')) {
     return { kind: 'run', preferredView: 'subagent-result', actions: EVIDENCE_ACTIONS };
   }
@@ -111,8 +117,24 @@ function isBrowserRef(ref: string) {
   return /^(?:url|browser|browser-runtime|browser-session|browser-snapshot):/i.test(ref);
 }
 
-function isScreenRef(ref: string) {
-  return /^(?:screen|virtual-app-screen|app|window|computer-use|computer-use-session|replay|ledger|approval:computer-use):/i.test(ref);
+function isImageEvidenceRef(ref: string) {
+  return /^(?:image|image-evidence|screenshot|annotation|browser-evidence|window-capture|screen-region|artifact-preview):/i.test(ref);
+}
+
+function isImageEvidenceArtifactRef(ref: string) {
+  const payload = artifactPayload(ref);
+  return Boolean(payload) && /(?:^|[_.:-])(?:image|image-evidence|screenshot|annotation|browser-evidence|window-capture|screen-region|artifact-preview|replay|window-action-evidence)(?:$|[_.:-])/i.test(payload);
+}
+
+function isLegacyScreenEvidenceRef(ref: string) {
+  return /^(?:screen|virtual-app-screen|replay):/i.test(ref)
+    || /^(?:computer-use|computer-use-session):/i.test(ref) && /(?:^|[/:._-])(?:frame|frames|screenshot|screenshots|capture|captures|crop|crops|image|images|replay)(?:$|[/:._-])/i.test(ref);
+}
+
+function artifactPayload(ref: string) {
+  return ref.toLowerCase().startsWith('artifact:')
+    ? ref.slice('artifact:'.length).replace(/^:/, '').trim()
+    : '';
 }
 
 function pathForCursorRef(ref: string, fallbackPath: string | undefined, kind: ObjectReferenceKind) {
@@ -145,7 +167,7 @@ function isTrustedCursorObjectRef(ref: string) {
   if (ref.toLowerCase().startsWith('file:')) return isSafeCursorRelativePath(ref.slice('file:'.length));
   if (ref.toLowerCase().startsWith('folder:')) return isSafeCursorRelativePath(ref.slice('folder:'.length));
   if (ref.toLowerCase().startsWith('workspace:')) return isSafeCursorRelativePath(ref.slice('workspace:'.length));
-  if (ref.toLowerCase().startsWith('artifact:')) return isSafeCursorOpaquePayload(ref.slice('artifact:'.length));
+  if (ref.toLowerCase().startsWith('artifact:')) return isSafeCursorOpaquePayload(artifactPayload(ref));
   return /^[A-Za-z][A-Za-z0-9_.:/-]{1,180}$/.test(ref) || /^EU-[A-Za-z0-9_.:-]{1,128}$/.test(ref);
 }
 

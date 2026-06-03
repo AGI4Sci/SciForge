@@ -105,8 +105,9 @@ test('browser-workbench package exposes manifest and renders browser_runtime ref
   assert.match(html, /blob:\/\/browser\/demo-screenshot\.png/);
   assert.match(html, /blob:\/\/browser\/demo-dom\.json/);
   assert.match(html, /data-event="browser-command-request"/);
-  assert.match(html, /data-browser-command-id="open-external"/);
-  assert.match(html, /\/browser snapshot --url &quot;http:\/\/localhost:5173\/&quot; --screenshot --dom --logs/);
+  assert.match(html, /data-browser-command-id="open"/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
+  assert.doesNotMatch(html, /\/browser (?:snapshot|annotate|state|takeover|copy-url|open-external)\b/);
   assertNoProductFallbackSurface(html);
 });
 
@@ -121,13 +122,13 @@ test('browser-workbench renders an empty state without pretending to own browser
   assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench keeps host-declared previews as typed state plus approval-tagged commands', () => {
+test('browser-workbench keeps host-declared previews as typed state while filtering non-toolbar commands', () => {
   const html = htmlFor(selectionBrowserWorkbenchFixture);
 
   assert.match(html, /data-browser-object-type="browser-state"/);
   assert.match(html, /http:\/\/localhost:5173\//);
-  assert.match(html, /data-browser-risk="needs-approval"/);
   assert.match(html, /Visible takeover requires TUI-host approval/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
   assertNoProductFallbackSurface(html);
 });
 
@@ -137,22 +138,12 @@ test('browser-workbench default commands are terminal-equivalent text', () => {
     '/browser back --url "https://example.org"',
     '/browser forward --url "https://example.org"',
     '/browser reload --url "https://example.org"',
-    '/browser snapshot --url "https://example.org" --screenshot --dom --logs',
-    '/browser state --url "https://example.org" --dom --ax --console --network',
-    '/browser takeover --url "https://example.org" --approval required',
-    '/browser copy-url "https://example.org" --surface workbench',
-    '/browser open-external "https://example.org" --approval required',
   ]);
   assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org').map((item) => item.id), [
     'open',
     'back',
     'forward',
     'reload',
-    'snapshot',
-    'state',
-    'takeover',
-    'copy-url',
-    'open-external',
   ]);
   assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org', { status: 'loading' })[3], {
     id: 'stop',
@@ -166,7 +157,11 @@ test('browser-workbench default commands are terminal-equivalent text', () => {
 
 test('browser-workbench normalizes scheme-less urls without iframe materialization', () => {
   assert.equal(normalizeBrowserWorkbenchUrl('localhost:5175'), 'http://localhost:5175');
+  assert.equal(normalizeBrowserWorkbenchUrl('LOCALHOST:5175/app'), 'http://LOCALHOST:5175/app');
+  assert.equal(normalizeBrowserWorkbenchUrl('127.0.0.1:5175/app'), 'http://127.0.0.1:5175/app');
   assert.equal(normalizeBrowserWorkbenchUrl('example.org/docs'), 'https://example.org/docs');
+  assert.equal(normalizeBrowserWorkbenchUrl('HTTP://example.org/docs'), 'HTTP://example.org/docs');
+  assert.equal(normalizeBrowserWorkbenchUrl('HTTPS://example.org/docs'), 'HTTPS://example.org/docs');
   assert.equal(normalizeBrowserWorkbenchUrl('/api/sciforge/browser/proxy?url=https%3A%2F%2Fexample.org'), '/api/sciforge/browser/proxy?url=https%3A%2F%2Fexample.org');
   assert.equal(normalizeBrowserWorkbenchUrl('https://example.org/about:blank'), 'https://example.org/');
   assert.equal(browserWorkbenchDefaultCommands('localhost:5175')[0]?.command, '/browser open "http://localhost:5175" --surface workbench');
@@ -200,8 +195,8 @@ test('browser-workbench keeps proxy materialization out of the interactive brows
     },
   }));
 
-  assert.match(html, /data-browser-state-action="open-external"/);
-  assert.match(html, /data-command-text="\/browser open-external &quot;https:\/\/external\.example&quot; --approval required"/);
+  assert.match(html, /data-browser-state="blocked"/);
+  assert.doesNotMatch(html, /data-browser-state-action="open-external"|\/browser open-external/);
   assert.doesNotMatch(html, /data-browser-state-action="proxy-fallback"|Proxy Snapshot/);
   assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy/);
   assert.doesNotMatch(html, /href="https:\/\/external\.example/);
@@ -228,7 +223,7 @@ test('browser-workbench preserves legacy host-stream refs as typed state, not a 
   assert.match(html, /browser-host-session:session-1/);
   assert.match(html, /browser-host-session:legacy-session-1\/frame\.png/);
   assert.match(html, /browser-host-session:legacy-session-1\/ax\.json/);
-  assert.match(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
+  assert.doesNotMatch(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
   assert.doesNotMatch(html, /data-browser-live-surface-ref="browser-host-session:session-1\/live-surface"/);
   assertNoProductFallbackSurface(html);
 });
@@ -346,6 +341,48 @@ test('browser-workbench keeps native surface stable across loading refs diagnost
   assertNoProductFallbackSurface(updatedHtml);
 });
 
+test('browser-workbench renders bounded actor cursor status on the native surface', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        hostSession: nativeHostSession({
+          actorCursor: {
+            agentId: 'agent-blue',
+            cursorId: 'cursor-blue',
+            color: '#00d5ff',
+            label: 'Agent Blue token=secret',
+            status: 'acting',
+            target: {
+              type: 'browser-pane',
+              sessionId: 'native-session-1',
+              windowRef: 'browser-host-session:native-session-1',
+            },
+            lastAction: {
+              action: 'click',
+              status: 'completed',
+              evidenceRefs: ['browser-host-session:native-session-1/visible-actions/click.json'],
+            },
+            evidenceRefs: ['browser-host-session:native-session-1/actor-cursors/cursor-blue.json'],
+          },
+        }),
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-native-surface="true"/);
+  assert.match(html, /data-browser-actor-cursor-count="1"/);
+  assert.match(html, /data-browser-actor-agent-id="agent-blue"/);
+  assert.match(html, /data-browser-actor-cursor-id="cursor-blue"/);
+  assert.match(html, /data-browser-actor-cursor-status="acting"/);
+  assert.match(html, /data-browser-actor-cursor-action="click"/);
+  assert.match(html, /data-browser-actor-cursor-evidence-ref="browser-host-session:native-session-1\/visible-actions\/click\.json"/);
+  assert.match(html, /Agent Blue token=\[redacted\]/);
+  assert.doesNotMatch(html, /secret|rawDom|data:image|base64|https?:\/\/example\.invalid/);
+  assertNoProductFallbackSurface(html);
+});
+
 test('browser-workbench renders missing native attach as typed blocked handoff retry refs only', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
@@ -385,7 +422,7 @@ test('browser-workbench renders missing native attach as typed blocked handoff r
   assert.match(html, /data-browser-loading-progress-can-retry="true"/);
   assert.match(html, /data-browser-loading-progress-requires-handoff="true"/);
   assert.match(html, /data-browser-state-action="retry"/);
-  assert.match(html, /data-browser-state-action="handoff"/);
+  assert.doesNotMatch(html, /data-browser-state-action="handoff"|\/browser open-external/);
   assert.match(html, /browser-host-session:native-session-1\/frame-evidence\.png/);
   assert.doesNotMatch(html, /data-browser-native-surface="true"|data-browser-live-surface-ref=|data-browser-frame-transport="native-embedded"/);
   assertNoProductFallbackSurface(html);
@@ -453,7 +490,9 @@ test('browser-workbench renders reachable native-surface route with unavailable 
   assert.match(html, /data-browser-native-surface-bridge-status="native-bridge-unavailable"/);
   assert.match(html, /nativeSurfaceBridge<\/dt><dd>native-bridge-unavailable:route=reachable,capability=missing,rightPaneBridge=false/);
   assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
-  assert.match(html, /data-browser-state-action="handoff"/);
+  assert.match(html, /data-browser-state-action="retry"/);
+  assert.doesNotMatch(html, /data-browser-state-action="handoff"|\/browser open-external/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
   assert.doesNotMatch(html, /data-browser-native-surface="true"|data-browser-live-surface-ref=|data-browser-frame-transport="native-embedded"/);
   assertNoProductFallbackSurface(html);
 });
@@ -596,7 +635,7 @@ test('browser-workbench renders system-browser host handoff as state, not a fake
   assert.match(html, /data-browser-object-type="browser-state"/);
   assert.match(html, /data-browser-host-surface="browser-host-session"/);
   assert.match(html, /External pages require BrowserHostSession/);
-  assert.match(html, /\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
+  assert.doesNotMatch(html, /\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
   assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy|data-browser-state-action="proxy-fallback"|Proxy Snapshot/);
   assertNoProductFallbackSurface(html);
 });

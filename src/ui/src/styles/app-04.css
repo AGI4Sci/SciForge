@@ -4379,7 +4379,7 @@
 }
 
 .right-pane-browser-surface .browser-workbench-viewer-actions {
-  display: none;
+  display: flex;
   max-width: min(45%, 280px);
   flex-wrap: nowrap;
   gap: 4px;

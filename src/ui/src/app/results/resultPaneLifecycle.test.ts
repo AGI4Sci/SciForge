@@ -31,9 +31,11 @@ class MemoryStorage {
 
 test('right pane lifecycle creates localized default tabs and restores missing pane kinds', () => {
   const defaults = createDefaultRightPaneTabs('zh-CN');
-  assert.deepEqual(defaults.map((tab) => tab.kind), ['primary', 'browser', 'screen', 'terminal', 'files', 'evidence']);
+  assert.deepEqual(defaults.map((tab) => tab.kind), ['primary', 'browser', 'image', 'terminal', 'files', 'evidence']);
   assert.equal(defaults[0]?.id, 'base:primary');
   assert.equal(defaults[0]?.label, '结果');
+  assert.equal(defaults[2]?.id, 'base:image');
+  assert.equal(defaults[2]?.label, '图片 / 证据');
   assert.equal(defaults.at(-1)?.label, '引用');
 
   const existing = [{ id: 'custom:browser:1:1', kind: 'browser' as const, label: 'Browser', closable: true }];
@@ -156,6 +158,22 @@ test('right pane lifecycle storage preserves explicit empty state and prunes sta
     const badJson = loadStoredRightPaneState(badJsonKey, 'en-US', 'browser');
     assert.equal(badJson.activeTabId, baseResultPaneTabId('browser'));
     assert.equal(badJson.tabs.find((tab) => tab.kind === 'browser')?.label, 'Browser');
+
+    const legacyScreenKey = rightPaneStateStorageKey('/workspace/legacy-screen');
+    storage.setItem(legacyScreenKey, JSON.stringify({
+      tabs: [
+        { id: 'base:screen', kind: 'screen', label: 'Screen' },
+        { id: 'custom:screen:42:2', kind: 'screen', label: 'Virtual Screen 2' },
+      ],
+      activeTabId: 'base:screen',
+      browserTabAddresses: {},
+    }));
+    const legacyScreen = loadStoredRightPaneState(legacyScreenKey, 'en-US', 'screen');
+    assert.deepEqual(legacyScreen.tabs.map((tab) => [tab.id, tab.kind, tab.label]), [
+      ['base:image', 'image', 'Image / Evidence'],
+      ['custom:image:42:2', 'image', 'Image / Evidence 2'],
+    ]);
+    assert.equal(legacyScreen.activeTabId, 'base:image');
 
     storage.failWrites = true;
     assert.doesNotThrow(() => saveStoredRightPaneState(rightPaneStateStorageKey('/workspace/write-fail'), {

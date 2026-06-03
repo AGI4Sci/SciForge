@@ -1,7 +1,7 @@
 import {
   type BrowserWorkbenchStateStatus,
 } from '../../../../../packages/presentation/components';
-import type { ObjectReference } from '../../domain';
+import type { ObjectReference, SciForgeReference } from '../../domain';
 import {
   artifactForObjectReference,
   type ObjectReferenceSessionLike,
@@ -79,6 +79,39 @@ export interface RightPaneBrowserLoadingProgressLifecycle {
   requiresHandoff?: boolean;
 }
 
+export type RightPaneBrowserActorCursorStatus =
+  | 'idle'
+  | 'moving'
+  | 'acting'
+  | 'observing'
+  | 'clicking'
+  | 'typing'
+  | 'scrolling'
+  | 'waiting'
+  | 'leaving'
+  | 'paused'
+  | 'stopped'
+  | 'blocked'
+  | 'done'
+  | 'unknown';
+
+export interface RightPaneBrowserActorCursorTargetProjection {
+  ref?: string;
+  kind?: string;
+  label?: string;
+}
+
+export interface RightPaneBrowserActorCursorProjection {
+  agentId: string;
+  cursorId: string;
+  color?: string;
+  label?: string;
+  status?: RightPaneBrowserActorCursorStatus;
+  target?: RightPaneBrowserActorCursorTargetProjection;
+  lastActionRef?: string;
+  evidenceRefs?: string[];
+}
+
 export interface RightPaneBrowserBoundedUrlDigest {
   length: number;
   hash: string;
@@ -141,6 +174,8 @@ export interface RightPaneBrowserProjectionState {
   canRenderFrame?: boolean;
   hostSurface?: string;
   loadingProgress?: RightPaneBrowserLoadingProgressLifecycle;
+  actorCursor?: RightPaneBrowserActorCursorProjection;
+  actorCursors?: RightPaneBrowserActorCursorProjection[];
   embedPolicy?: {
     embeddable?: boolean;
     status?: RightPaneBrowserProjectionStatus;
@@ -185,6 +220,8 @@ export interface RightPaneBrowserHostSessionState {
   diagnostics?: string[];
   nativeSurfaceBridge?: RightPaneBrowserNativeSurfaceBridgeState;
   loadingProgress?: RightPaneBrowserLoadingProgressLifecycle | RightPaneBrowserHostLoadingProgressRecord;
+  actorCursor?: RightPaneBrowserActorCursorProjection;
+  actorCursors?: RightPaneBrowserActorCursorProjection[];
 }
 
 export interface RightPaneBrowserNativeSurfaceBridgeState {
@@ -205,6 +242,14 @@ export interface RightPaneBrowserProjectionOptions {
   hostSession?: RightPaneBrowserHostSessionState;
   hostState?: RightPaneBrowserHostState;
   hostError?: string;
+}
+
+export interface RightPaneBrowserAnnotationReferenceOptions {
+  annotationRef?: string;
+  targetRef?: string;
+  cropRef?: string;
+  screenshotRef?: string;
+  createdAt?: string;
 }
 
 export function browserAddressForFocusedObjectReference(reference: ObjectReference | undefined, session: Pick<ObjectReferenceSessionLike, 'artifacts'>) {
@@ -231,6 +276,7 @@ export function browserHostSessionForFocusedObjectReference(
   const id = stringField(hostSession?.id);
   const url = stringField(hostSession?.url) ?? stringField(hostSession?.requestedUrl) ?? browserProjectionArtifactUrl(reference, session);
   if (!id || !url) return undefined;
+  const actorCursorFields = rightPaneBrowserActorCursorProjectionFields(hostSession);
   return {
     id,
     status: browserHostSessionStatus(hostSession?.status),
@@ -258,6 +304,70 @@ export function browserHostSessionForFocusedObjectReference(
     diagnostics: arrayOfStrings(hostSession?.diagnostics),
     nativeSurfaceBridge: rightPaneBrowserNativeSurfaceBridgeState(hostSession?.nativeSurfaceBridge),
     loadingProgress: rightPaneBrowserLoadingProgressLifecycle({ hostSession }),
+    ...actorCursorFields,
+  };
+}
+
+export function browserAnnotationComposerReferenceForHostSession(
+  hostSession: RightPaneBrowserHostSessionState | undefined,
+  options: RightPaneBrowserAnnotationReferenceOptions = {},
+): SciForgeReference | undefined {
+  if (!hostSession?.id) return undefined;
+  const annotationRef = safeBrowserAnnotationRef(options.annotationRef) ?? `annotation:${hostSession.id}`;
+  const targetRef = stringField(options.targetRef) ?? hostSession.frameRef ?? hostSession.liveSurfaceRef;
+  const screenshotRef = stringField(options.screenshotRef) ?? hostSession.screenshotRef;
+  if (!targetRef || !screenshotRef) return undefined;
+  const cropRef = stringField(options.cropRef) ?? `browser-host-session:${hostSession.id}/annotation-crop.json`;
+  const refs = uniqueStrings([
+    annotationRef,
+    targetRef,
+    cropRef,
+    screenshotRef,
+    hostSession.domSnapshotRef,
+    hostSession.axSnapshotRef,
+    hostSession.consoleLogRef,
+    hostSession.networkLogRef,
+    hostSession.searchResultRef,
+  ]);
+  const title = `Browser annotation · ${hostSession.title || hostSession.url || hostSession.id}`;
+  return {
+    id: `ref-${safeBrowserReferenceIdPart(annotationRef)}`,
+    kind: 'ui',
+    title,
+    ref: annotationRef,
+    summary: 'Browser annotation pending composer context; evidence is represented by refs only.',
+    payload: {
+      schemaVersion: 'sciforge.browser-annotation.composer-reference.v1',
+      source: 'browser-pane',
+      displayModel: 'sciforge.annotation-reference.v1',
+      annotationRef,
+      targetRef,
+      cropRef,
+      screenshotRef,
+      refs,
+      url: hostSession.url,
+      title: hostSession.title,
+      createdAt: options.createdAt,
+      provenance: {
+        producer: 'browser-pane',
+        dataRef: annotationRef,
+        screenshotRef,
+      },
+      currentReference: {
+        id: `object-${safeBrowserReferenceIdPart(annotationRef)}`,
+        kind: 'artifact',
+        title,
+        ref: annotationRef,
+        artifactType: 'browser-annotation',
+        preferredView: 'browser-object',
+        summary: 'Browser annotation with target, crop, and screenshot refs.',
+        provenance: {
+          producer: 'browser-pane',
+          dataRef: annotationRef,
+          screenshotRef,
+        },
+      },
+    },
   };
 }
 
@@ -291,6 +401,214 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function safeBrowserAnnotationRef(value: unknown) {
+  const ref = stringField(value);
+  return ref && /^annotation:[a-z0-9][a-z0-9._:/-]*$/i.test(ref) ? ref : undefined;
+}
+
+function safeBrowserReferenceIdPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96) || 'browser-annotation';
+}
+
+function uniqueStrings(values: Array<string | undefined>) {
+  const seen = new Set<string>();
+  return values.filter((value): value is string => {
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+}
+
+function rightPaneBrowserActorCursorProjectionFields(
+  value: unknown,
+): Pick<RightPaneBrowserProjectionState, 'actorCursor' | 'actorCursors'> {
+  const actorCursors = rightPaneBrowserActorCursorProjections(value);
+  if (!actorCursors.length) return {};
+  return {
+    actorCursor: actorCursors[0]!,
+    actorCursors,
+  };
+}
+
+function rightPaneBrowserActorCursorProjections(value: unknown): RightPaneBrowserActorCursorProjection[] {
+  const record = recordValue(value);
+  if (!record) return [];
+  const visibleAction = recordValue(record.visibleAction);
+  const primaryCursor = recordValue(record.actorCursor) ?? recordValue(record.actor_cursor);
+  const cursorRecords = [
+    primaryCursor,
+    ...recordList(record.actorCursors),
+    ...recordList(record.actor_cursors),
+  ].filter((cursor): cursor is Record<string, unknown> => Boolean(cursor));
+  const projections: RightPaneBrowserActorCursorProjection[] = [];
+  const seen = new Set<string>();
+  cursorRecords.forEach((cursorRecord, index) => {
+    const projection = rightPaneBrowserActorCursorProjection(
+      cursorRecord,
+      index === 0 && primaryCursor === cursorRecord ? visibleAction : undefined,
+    );
+    if (!projection) return;
+    const key = `${projection.agentId}:${projection.cursorId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    projections.push(projection);
+  });
+  return projections;
+}
+
+function rightPaneBrowserActorCursorProjection(
+  record: Record<string, unknown>,
+  visibleAction: Record<string, unknown> | undefined,
+): RightPaneBrowserActorCursorProjection | undefined {
+  const agentId = actorCursorIdentifier(firstStringField(record, ['agentId', 'agent_id', 'actorId', 'actor_id']));
+  if (!agentId) return undefined;
+  const cursorId = actorCursorIdentifier(firstStringField(record, ['cursorId', 'cursor_id', 'id'])) ?? agentId;
+  const lastAction = recordValue(record.lastAction) ?? recordValue(record.last_action);
+  const target = rightPaneBrowserActorCursorTargetProjection(record.target)
+    ?? rightPaneBrowserActorCursorTargetProjection({
+      ref: record.targetRef ?? record.target_ref,
+      kind: record.targetKind ?? record.targetType ?? record.target_kind ?? record.target_type,
+      label: record.targetLabel ?? record.targetName ?? record.target_label ?? record.target_name,
+    });
+  const lastActionRef = firstBrowserProjectionRef(
+    record.lastActionRef,
+    record.last_action_ref,
+    lastAction?.ref,
+    lastAction?.visibleActionRef,
+    visibleAction?.visibleActionRef,
+  );
+  const evidenceRefs = uniqueStrings([
+    safeBrowserProjectionRef(visibleAction?.actorCursorRef),
+    safeBrowserProjectionRef(record.actorCursorRef),
+    safeBrowserProjectionRef(record.cursorRef),
+    safeBrowserProjectionRef(record.ref),
+    safeBrowserProjectionRef(record.evidenceRef),
+    ...safeBrowserProjectionRefs(record.evidenceRefs),
+    safeBrowserProjectionRef(lastAction?.evidenceRef),
+    ...safeBrowserProjectionRefs(lastAction?.evidenceRefs),
+    ...safeBrowserProjectionRefs(recordValue(record.target)?.evidenceRefs),
+  ]);
+  const projection: RightPaneBrowserActorCursorProjection = { agentId, cursorId };
+  const color = actorCursorColor(record.color);
+  const label = boundedActorCursorText(record.label);
+  const status = actorCursorStatus(record.status ?? record.state);
+  if (color) projection.color = color;
+  if (label) projection.label = label;
+  if (status) projection.status = status;
+  if (target) projection.target = target;
+  if (lastActionRef) projection.lastActionRef = lastActionRef;
+  if (evidenceRefs.length) projection.evidenceRefs = evidenceRefs;
+  return projection;
+}
+
+function rightPaneBrowserActorCursorTargetProjection(value: unknown): RightPaneBrowserActorCursorTargetProjection | undefined {
+  const record = recordValue(value);
+  if (!record) {
+    const ref = safeBrowserProjectionRef(value);
+    return ref ? { ref } : undefined;
+  }
+  const ref = firstBrowserProjectionRef(
+    record.ref,
+    record.targetRef,
+    record.target_ref,
+    record.elementRef,
+    record.element_ref,
+    record.nodeRef,
+    record.node_ref,
+    record.windowRef,
+    record.window_ref,
+    record.browserRef,
+    record.browser_ref,
+  );
+  const kind = actorCursorTargetKind(record.kind ?? record.type ?? record.role);
+  const label = boundedActorCursorText(record.label ?? record.name ?? record.title);
+  if (!ref && !kind && !label) return undefined;
+  const target: RightPaneBrowserActorCursorTargetProjection = {};
+  if (ref) target.ref = ref;
+  if (kind) target.kind = kind;
+  if (label) target.label = label;
+  return target;
+}
+
+function recordList(value: unknown) {
+  return Array.isArray(value) ? value.map(recordValue).filter((record): record is Record<string, unknown> => Boolean(record)) : [];
+}
+
+function firstStringField(record: Record<string, unknown>, fields: string[]) {
+  for (const field of fields) {
+    const value = stringField(record[field]);
+    if (value) return value;
+  }
+  return undefined;
+}
+
+function actorCursorIdentifier(value: unknown) {
+  const text = stringField(value);
+  if (!text || text.length > 96) return undefined;
+  return /^[a-z0-9][a-z0-9._:-]*$/i.test(text) ? text : undefined;
+}
+
+function actorCursorColor(value: unknown) {
+  const text = stringField(value);
+  if (!text || text.length > 32) return undefined;
+  return /^#(?:[0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(text) ? text : undefined;
+}
+
+function boundedActorCursorText(value: unknown) {
+  const text = stringField(value);
+  return text ? text.replace(/\s+/g, ' ').trim().slice(0, 80) : undefined;
+}
+
+function actorCursorStatus(value: unknown): RightPaneBrowserActorCursorStatus | undefined {
+  const token = normalizedActorCursorToken(value);
+  if (!token) return undefined;
+  if (token === 'idle' || token === 'ready') return 'idle';
+  if (token === 'observing' || token === 'clicking' || token === 'typing' || token === 'scrolling' || token === 'waiting' || token === 'leaving' || token === 'paused' || token === 'stopped') return token;
+  if (token === 'moving' || token === 'move' || token === 'hovering' || token === 'pointing') return 'moving';
+  if (token === 'acting' || token === 'active' || token === 'action' || token === 'proposing') return 'acting';
+  if (token === 'blocked' || token === 'failed') return 'blocked';
+  if (token === 'done' || token === 'complete' || token === 'completed') return 'done';
+  return 'unknown';
+}
+
+function actorCursorTargetKind(value: unknown) {
+  const token = normalizedActorCursorToken(value);
+  return token && token.length <= 48 ? token : undefined;
+}
+
+function normalizedActorCursorToken(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function firstBrowserProjectionRef(...values: unknown[]) {
+  for (const value of values) {
+    const ref = safeBrowserProjectionRef(value);
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
+function safeBrowserProjectionRefs(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(safeBrowserProjectionRefs);
+  const record = recordValue(value);
+  if (record) return safeBrowserProjectionRefs(record.ref);
+  const ref = safeBrowserProjectionRef(value);
+  return ref ? [ref] : [];
+}
+
+function safeBrowserProjectionRef(value: unknown) {
+  const ref = stringField(value);
+  if (!ref || ref.length > 512) return undefined;
+  if (/data:image|base64|<html|rawDom|rawScreenshot|rawPayload|payload/i.test(ref)) return undefined;
+  return /^[a-z][a-z0-9._-]*:[^\s<>{}"']+$/i.test(ref) ? ref : undefined;
 }
 
 function booleanField(value: unknown) {
@@ -766,16 +1084,6 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
     };
   }
 
-  if (rightPaneBrowserUrlIsLocal(parsed)) {
-    return {
-      status: 'ready',
-      tabStatus: 'ready',
-      previewUrl: url,
-      reason: 'Local pages can be embedded directly in the workbench.',
-      canRenderFrame: true,
-    };
-  }
-
   if (options.hostExternalBrowserAvailable) {
     const hostSurface = options.hostSurface ?? options.hostState?.surface ?? 'browser-host-session';
     const hostUrl = options.hostSession?.url
@@ -800,6 +1108,7 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
     const lifecycleDrivenStatus = loadingProgress && rightPaneBrowserLoadingProgressIsExplicit(loadingProgress)
       ? loadingProgress.status
       : undefined;
+    const actorCursorFields = rightPaneBrowserActorCursorProjectionFields(options.hostSession);
     const status: RightPaneBrowserProjectionStatus = lifecycleDrivenStatus
       ?? (hostFailed
       ? 'error'
@@ -815,14 +1124,14 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
       tabStatus: status === 'error' || status === 'blocked' || status === 'offline' ? 'failed' : status === 'idle' ? 'new' : status === 'loading' ? 'loading' : 'ready',
       externalUrl: url,
       reason: status === 'error'
-        ? 'BrowserHostSession could not open this external page.'
+        ? 'BrowserHostSession could not open this page.'
         : status === 'idle'
-          ? 'External pages open through host-owned BrowserHostSession instead of unsafe iframe/proxy live browsing.'
+          ? 'HTTP/HTTPS pages open through host-owned BrowserHostSession instead of unsafe iframe/proxy live browsing.'
           : status === 'loading'
-            ? (lifecycleReason ?? 'BrowserHostSession is loading this external page.')
+            ? (lifecycleReason ?? 'BrowserHostSession is loading this page.')
             : status === 'blocked'
               ? (lifecycleReason ?? 'BrowserHostSession navigation is blocked.')
-            : 'External page is carried by host-owned BrowserHostSession.',
+            : 'Page is carried by host-owned BrowserHostSession.',
       detail: status === 'error'
         ? (options.hostError ?? hostDiagnostic ?? 'BrowserHostSession open failed.')
         : status === 'loading' || status === 'blocked'
@@ -832,6 +1141,7 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
       canRenderFrame: false,
       hostSurface,
       loadingProgress,
+      ...actorCursorFields,
     };
   }
 
@@ -860,7 +1170,7 @@ export function rightPaneBrowserProjectionForUrl(url: string, options: RightPane
     tabStatus: 'failed',
     externalUrl: url,
     previewSandbox: browserPreviewSandboxForUrl(url),
-    reason: 'External HTTP/HTTPS pages require a host-owned browser surface for live navigation.',
+    reason: 'HTTP/HTTPS pages require a host-owned browser surface for live navigation.',
     detail: 'Live external navigation must run in BrowserHostSession. Proxy, iframe, and snapshot projections are evidence or document artifacts only; they are not alternate live browsers or a second interactive truth source.',
     ref: 'browser:host-surface/right-pane/required',
     canRenderFrame: false,

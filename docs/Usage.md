@@ -90,7 +90,7 @@ codex --model gpt-5.5 -C /path/to/SciForge
 codex app-server --listen stdio://
 ```
 
-Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 provider proxy upstream 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md)。
+Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 provider proxy upstream 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](../packages/backend/CodexRuntimeMigration.md)。
 需要文献、PDF、PubMed、动态网页等外部检索时，Runtime Codex 仍使用 `workspace-write`，但必须显式启用 `sandbox_workspace_write.network_access=true`；SciForge 的 runtime home 和 runtime adapter 会自动写入并传递该配置。
 
 ## Runtime Codex no-secret 配置
@@ -190,21 +190,21 @@ npm run smoke:runtime-codex-browser-acceptance
 SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance
 ```
 
-provider preflight 和 config fallback 只能说明 upstream/secret-source 分诊状态；只有 Codex in-app browser 的默认聊天入口出现非 seed Runtime Codex 第二轮答案，并且 strict manifest 为 passed，才可以写 browser/release acceptance 通过。
+provider preflight 和 config fallback 只能说明 upstream/secret-source 分诊状态；Codex in-app browser 的默认聊天入口只能作为 Web UI / Runtime Codex smoke。涉及真实 Browser Pane 的 product acceptance，必须使用 Desktop Electron native host 的 `WebContentsView` live acceptance。
 
 `npm run smoke:runtime-codex-browser-acceptance` 是当前 `npm run verify:single-agent-final` 的一部分。默认模式会验证 fail-closed evidence；如果缺少 `SCIFORGE_RUNTIME_API_KEY` 或 provider proxy upstream base URL，会写出 blocked manifest/notes，而不是假装通过。
 
 `npm run smoke:runtime-provider-preflight` / `GET /healthz?check=upstream` 只做 live default-chat 前的 provider upstream 分诊（`config-missing`、`provider-auth`、`rate-limited`、`upstream-outage`、`repo-bug`）。`verify:single-agent-final` 和 `verify:single-agent-release` 会在 browser acceptance 前运行它，但它的结果仍是 `releaseAcceptance: not-evaluated`，不等同于 browser/release acceptance passed。
 
-真实 release rerun 必须先在 Codex in-app browser 的默认聊天入口完成 live Runtime Codex 验收，并确认非 seed 的第二轮答案可见，然后启用 strict gate：
+真实 release rerun 必须先完成 Web UI / Runtime Codex smoke，并确认非 seed 的第二轮答案可见；涉及 Browser Pane 的 release gate 还必须通过 Desktop Electron native host live acceptance。Web strict gate：
 
 ```bash
 npm run smoke:runtime-codex-browser-acceptance:strict
 ```
 
-strict gate 只接受 `manifest.status === "passed"`，并要求 provider/model/profile、workspace、command id、live `gui.present` 结果、折叠 audit、selected-ref follow-up 和 multi-turn second-turn answer 都有真实浏览器证据。
+strict gate 只接受 `manifest.status === "passed"`，并要求 provider/model/profile、workspace、command id、live `gui.present` 结果、折叠 audit、selected-ref follow-up 和 multi-turn second-turn answer 都有 Web UI 证据。它不能替代 Desktop Electron native Browser evidence。
 
-涉及注释、反馈收件箱或 repair 控制面的用户级验收必须同样使用 Codex in-app browser，且必须覆盖工作台页面和至少一个非工作台页面。两处都要从可见 `注释` 入口进入全局 `AnnotationSidebar`，点选多个对象，完成 plan-only 澄清或跳过澄清，保存到反馈收件箱，并确认生成的是 `annotation-plan` record。只验证旧的“顶部注释 -> 工作台主 composer”路径不能作为通过证据。
+涉及注释、反馈收件箱或 repair 控制面的 Web UI smoke 可以使用 Codex in-app browser，且必须覆盖工作台页面和至少一个非工作台页面。涉及真实窗口 overlay、window capture、native Browser 或 native input 的验收必须在 Desktop Electron native host 中完成。只验证旧的“顶部注释 -> 工作台主 composer”路径不能作为通过证据。
 
 ## 常用工作流
 
@@ -313,9 +313,9 @@ npm run smoke:stable-version-registry
 
 当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、KV-Ground grounding 辅助和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
 
-Browser pane 和 Screen pane 的目标体验都采用单一 native/streaming live surface：Browser 由 `BrowserHostSession` 持有 live browser owner，Screen 由 Computer Use `VirtualAppScreen` 持有 app/window/session owner。桌面 Browser 主画面使用同一 session 的 native embedded adapter；Web Browser 主画面才使用同一 frame-stream 的 websocket-binary pixels 和短生命周期 `blob:` object URL。frame-stream、WebRTC 或 canvas stream 只是同一 owner live surface 的 transport，`/frame` route 只用于 evidence/manual inspection。截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live surface 通过验收。无法 attach live surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
+Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
-默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 TUI Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 L1/L2/L3 和 Codex in-app browser 可见证据。
+默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 TUI Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 L1/L2/L3、WindowActionSession evidence 和 Desktop native 可见证据。
 
 每个 package-backed run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
 
@@ -327,12 +327,12 @@ Browser pane 和 Screen pane 的目标体验都采用单一 native/streaming liv
 
 真实 Computer Use run 开始前应有可见的用户控制面，而不是静默接管桌面。TUI Host 应生成 session permission / allowlist refs，说明本轮允许读取的 screen/window/app、允许操作的 app/window/display group、允许的 input modality、风险等级、截图/文件 refs 使用范围和 stop/cancel 入口。GUI 可以展示这些信息、收集 confirmation 或发送 stop 文本，但不能直接扩大权限或执行动作。缺少 permission ref、allowlist ref、risk preview 或 cancel path 的 mutating run 只能作为 diagnostic/blocked evidence。
 
-真实平台控制应通过 platform sidecar / MCP service 接入。sidecar 负责 macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、streaming surface、focused window binding、click/type/scroll/hotkey 和 permission/preflight；它只返回 live surface refs、capture refs、executor event、isolation flags 和 diagnostics。SciForge runtime 只负责启动/连接 sidecar、注入 workspace/session context 和转发 host-port 调用，不把 sidecar 变成 planning 或 completion owner。
+真实平台控制应通过 platform sidecar / MCP service 接入。sidecar 负责 macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、focused window binding、click/type/scroll/hotkey 和 permission/preflight；它只返回 window/action refs、capture refs、executor event、risk refs 和 diagnostics。SciForge runtime 只负责启动/连接 sidecar、注入 workspace/session context 和转发 host-port 调用，不把 sidecar 变成 planning 或 completion owner。
 
 产品化 smoke 分三层执行：
 
 1. package diagnostic：`plugin_probe`、`target_bound_window_host_probe`、`visible_run`，证明 SciForge Computer Use action provider、manifest、stdio、trace、viewer 和 artifact validation 可用。
-2. platform smoke：Codex app-server/native plugin 或 `module.invoke(actions, execute)` 调用 SciForge Computer Use，再经 platform sidecar/noVNC/RDP 完成一个真实单 app 输入任务，要求 `sharedSystemInputUsed=false`、真实 frame refs 和 executor lease refs。
+2. platform smoke：Codex app-server/native plugin 或 `module.invoke(actions, execute)` 调用 SciForge Computer Use，再经 platform sidecar / WindowActionSession 完成一个真实单 app 输入任务，要求 action adapter route、真实 window/capture refs 和 executor lease refs。
 3. product smoke：真实 artifact 任务、多 app workflow、高风险 confirmation stop、blocked recovery 和 viewer/replay evidence 全部使用当前 bundle refs。只有这一层可作为用户级完成证据。
 
 启用真实桌面 bridge：
@@ -351,7 +351,7 @@ curl "$SCIFORGE_VISION_KV_GROUND_URL/health"
 
 `/predict/` smoke 要使用本机截图或测试图，确认返回包含 `coordinates`、`image_size` 和可解析坐标系。KV-Ground 服务读不到本机路径时保持 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`，由 SciForge 在请求里发送 `image_base64`；只有明确存在共享挂载和路径前缀映射时才传服务端可读 `image_path`。
 
-真实输入优先使用绑定到同一 live surface 的独立 input adapter。当前通用第一片是 `remote-desktop` + `sciforge-simulated-remote-desktop`：它维护 SciForge 自己的虚拟 pointer/keyboard state，写出 `independent-input-adapter.json` 和虚拟 pointer SVG，不移动系统鼠标、不发送全局系统键盘事件。Browser pane 的桌面高性能路径已经采用 native embedded adapter，Web shell 使用同一 owner stream；Screen pane 应沿用同类 native surface / WebRTC / canvas 主传输。截图投影可以保留为证据查看器，但不再承担替代交互路径。
+真实输入优先使用目标 app/window 的独立 action adapter。Browser pane 的桌面高性能路径已经采用 `WebContentsView` native embedded adapter；普通窗口动作通过 WindowActionSession 路由到 app-native command、Accessibility/UI Automation/AT-SPI、BrowserHostSession/CDP/Playwright 或显式 `shared-system-input` evidence。截图投影只属于 Image / Evidence 查看器，不承担替代交互路径。
 
 ```bash
 export SCIFORGE_VISION_INPUT_ADAPTER=remote-desktop
@@ -430,7 +430,7 @@ npm run verify:single-agent-release
 
 `verify:single-agent-release` 会先执行 strict Runtime Codex browser acceptance，缺少 live Runtime Codex service secret 时会立刻 fail closed；strict browser gate 通过后才继续执行 desktop package directory gate 和后续 release 检查。
 
-注释、反馈收件箱和 repair UI 的 browser acceptance 证据必须来自 Codex in-app browser，并记录工作台页面与非工作台页面两条路径。证据中应能看到全局 `AnnotationSidebar`、多对象引用、`annotation-plan-only` 保存和反馈收件箱记录；terminal smoke、API probe 或外部浏览器只能作为辅助诊断。
+注释、反馈收件箱和 repair UI 的 Web smoke 证据可以来自 Codex in-app browser，并记录工作台页面与非工作台页面两条路径。真实窗口 overlay、window capture、native Browser 或 native input 的产品证据必须来自 Desktop Electron native host；terminal smoke、API probe 或外部浏览器只能作为辅助诊断。
 
 桌面 package 验证：
 

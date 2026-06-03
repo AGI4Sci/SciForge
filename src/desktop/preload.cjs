@@ -14,7 +14,11 @@ const api = {
   captureNativeBrowserScreenshot: () => ipcRenderer.invoke('desktop:native-browser:screenshot'),
   attachBrowserHostSessionSurface: (input) => ipcRenderer.invoke('desktop:browser-host-surface:attach', input),
   detachBrowserHostSessionSurface: (input) => ipcRenderer.invoke('desktop:browser-host-surface:detach', input),
+  resizeBrowserHostSessionSurface: (input) => ipcRenderer.invoke('desktop:browser-host-surface:resize', input),
   getBrowserHostSessionSurfaceState: (input) => ipcRenderer.invoke('desktop:browser-host-surface:state', input),
+  attachVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:attach', input),
+  presentVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:present', input),
+  detachVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:detach', input),
   revealPath: (path) => ipcRenderer.invoke('platform:reveal-path', path),
   pickDirectory: (defaultPath) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
 };

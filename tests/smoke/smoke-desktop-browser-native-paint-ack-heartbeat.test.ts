@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -173,11 +174,13 @@ function createNativePaintAckHeartbeatAdapter() {
       } else if (route.endsWith('/screenshot')) {
         calls.screenshot.push({ at: Date.now(), route });
         if (delayScreenshotsMs > 0) await sleep(delayScreenshotsMs);
-        writeJsonResponse(res, { ok: true, dataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}` });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'screenshot', PNG_1X1), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/content')) {
-        writeJsonResponse(res, { ok: true, content: '<!-- bounded native surface fixture -->' });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'dom', '<!-- bounded native surface fixture -->'), req.method === 'POST' ? 200 : 405);
+      } else if (route.endsWith('/text')) {
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'text', 'Native heartbeat text'), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/ax')) {
-        writeJsonResponse(res, { ok: true, snapshot: { role: 'document', name: currentState.title } });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'ax', JSON.stringify({ role: 'document', name: currentState.title })), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/search-results')) {
         writeJsonResponse(res, { ok: true, results: [] });
       } else if (route.endsWith('/actions')) {
@@ -318,6 +321,34 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
 function writeJsonResponse(res: ServerResponse, body: Record<string, unknown>, statusCode = 200): void {
   res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(body));
+}
+
+async function writeNativeEvidenceResponse(
+  route: string,
+  body: Record<string, unknown>,
+  outputKind: 'screenshot' | 'dom' | 'text' | 'ax',
+  bytes: Buffer | string,
+): Promise<Record<string, unknown>> {
+  const outputPath = typeof body.outputPath === 'string' ? body.outputPath : '';
+  const sessionId = /\/sessions\/([^/]+)\//.exec(route)?.[1] ?? 'unknown';
+  if (!outputPath) {
+    return {
+      ok: false,
+      sessionId,
+      outputKind,
+      reason: 'raw-native-evidence-route-disabled',
+    };
+  }
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, 'utf8');
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, buffer);
+  return {
+    ok: true,
+    sessionId: decodeURIComponent(sessionId),
+    outputKind,
+    bytesWritten: buffer.length,
+    sha256: createHash('sha256').update(buffer).digest('hex'),
+  };
 }
 
 function countCallsBetween(calls: TimedCall[], startedAt: number, completedAt: number): number {

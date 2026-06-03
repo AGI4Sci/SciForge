@@ -12,7 +12,7 @@ import {
   type BrowserHostSessionWriterPreflightResult,
   type BrowserHostSessionState,
 } from '../../api/workspaceClient';
-import type { ObjectReference, SciForgeConfig, SciForgeSession } from '../../domain';
+import type { ObjectReference, SciForgeConfig, SciForgeReference, SciForgeSession } from '../../domain';
 import {
   browserWorkbenchDefaultCommands,
   renderBrowserWorkbench,
@@ -20,12 +20,12 @@ import {
 } from '../../../../../packages/presentation/components';
 import {
   browserAddressForFocusedObjectReference,
+  browserAnnotationComposerReferenceForHostSession,
   browserHostSessionForFocusedObjectReference,
   normalizeRightPaneBrowserUrl,
   parseRightPaneBrowserUrl,
   rightPaneBrowserProjectionForUrl,
   rightPaneBrowserUrlsEquivalent,
-  rightPaneBrowserUrlIsLocal,
   type RightPaneBrowserNativeSurfaceBridgeState,
 } from './browserPaneModel';
 import { resultText, type ResultLocale } from './resultLocale';
@@ -33,7 +33,7 @@ import { resultText, type ResultLocale } from './resultLocale';
 export function rightPaneBrowserRequiresExternalHost(url: string) {
   if (url === 'about:blank') return false;
   const parsed = parseRightPaneBrowserUrl(url);
-  return Boolean(parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:') && !rightPaneBrowserUrlIsLocal(parsed));
+  return Boolean(parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:'));
 }
 
 type RightPaneBrowserHostAction = {
@@ -63,6 +63,7 @@ export function RightPaneBrowserTool({
   addressDraft,
   onAddressDraftChange,
   onCommandRequest,
+  onAnnotationReferenceRequest,
   onConfigChange,
   onOpenSettings,
 }: {
@@ -74,6 +75,7 @@ export function RightPaneBrowserTool({
   addressDraft: string;
   onAddressDraftChange: (nextAddress: string) => void;
   onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
+  onAnnotationReferenceRequest?: (reference: SciForgeReference) => void;
   onConfigChange?: (patch: Partial<SciForgeConfig>) => void;
   onOpenSettings?: (section?: 'workspace') => void;
 }) {
@@ -293,11 +295,7 @@ export function RightPaneBrowserTool({
     canGoForward: hostSession?.canGoForward ?? false,
     canReload: normalizedUrl !== 'about:blank',
     canStop: browserState.status === 'loading',
-    canSnapshot: normalizedUrl !== 'about:blank',
-    canState: normalizedUrl !== 'about:blank',
-    canTakeover: normalizedUrl !== 'about:blank',
-    canCopyUrl: normalizedUrl !== 'about:blank',
-    canOpenExternal: Boolean(browserState.externalUrl),
+    canAnnotate: Boolean(hostSession?.screenshotRef && (hostSession.frameRef || hostSession.liveSurfaceRef)),
   });
 
   function requestCommand(command: BrowserWorkbenchCommand) {
@@ -305,9 +303,17 @@ export function RightPaneBrowserTool({
       void openAddress(normalizedUrl);
       return;
     }
-    if (hostSession && (command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop' || command.id === 'snapshot' || command.id === 'state')) {
+    if (command.id === 'annotate') {
+      const reference = browserAnnotationComposerReferenceForHostSession(hostSessionRef.current);
+      if (reference) {
+        onAnnotationReferenceRequest?.(reference);
+        return;
+      }
+      setHostError('Browser annotation needs current target, crop, and screenshot refs. Capture a snapshot, then annotate again.');
+      return;
+    }
+    if (hostSession && (command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop')) {
       flushBufferedHostActions();
-      const action = command.id === 'snapshot' ? 'snapshot' : command.id === 'state' ? 'state' : command.id;
       const commandShowsLoading = command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop';
       if (commandShowsLoading) setBusy(true);
       if (command.id === 'stop') {
@@ -339,7 +345,7 @@ export function RightPaneBrowserTool({
         });
       }
       void sendBrowserHostSessionAction(browserHostSessionConfig(config, hostSession), hostSession.id, {
-        action,
+        action: command.id,
         workspaceWriterBaseUrl: hostSession.workspaceWriterBaseUrl,
       })
         .then(setHostSession)
@@ -351,12 +357,6 @@ export function RightPaneBrowserTool({
           if (commandShowsLoading) setBusy(false);
         });
       return;
-    }
-    if (command.id === 'copy-url' && typeof navigator !== 'undefined') {
-      void navigator.clipboard?.writeText(normalizedUrl);
-    }
-    if (command.id === 'open-external') {
-      onCommandRequest(command.command, command.label, browserState.ref);
     }
   }
 

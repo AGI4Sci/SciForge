@@ -73,6 +73,15 @@ export type BrowserHostSessionLoadingProgressSource =
   | 'host-state'
   | 'host-session'
   | 'host-error';
+export type BrowserHostSessionActionRiskType =
+  | 'navigation-external'
+  | 'form-submit'
+  | 'credential'
+  | 'payment'
+  | 'destructive'
+  | 'low-risk-input'
+  | 'scroll'
+  | 'click';
 
 export interface BrowserHostMousePoint {
   x: number;
@@ -174,6 +183,44 @@ export interface BrowserHostSessionNativeOsUiProof {
   diagnostics: string[];
 }
 
+export interface BrowserHostSessionVisibleAction {
+  actionId: string;
+  action: BrowserHostSessionAction | 'open';
+  riskType: BrowserHostSessionActionRiskType;
+  actorCursorRef?: string;
+  visibleActionRef?: string;
+}
+
+export interface BrowserHostSessionRiskLedgerEntry extends BrowserHostSessionVisibleAction {
+  recordedAt: string;
+}
+
+export interface BrowserHostSessionActorCursorInput {
+  agentId: string;
+  cursorId: string;
+  color?: string;
+  label?: string;
+}
+
+export interface BrowserHostSessionActorCursor {
+  agentId: string;
+  cursorId: string;
+  color: string;
+  label: string;
+  status: 'acting';
+  target: {
+    type: 'browser-pane';
+    sessionId: string;
+    windowRef: string;
+  };
+  lastAction: {
+    action: 'observe' | 'click' | 'type' | 'scroll' | 'wait';
+    status: 'completed';
+    evidenceRefs: string[];
+  };
+  evidenceRefs: string[];
+}
+
 export interface BrowserHostSessionNavigationProgressEvent {
   state: BrowserHostSessionLoadingProgressState;
   reason: BrowserHostSessionLoadingProgressReason;
@@ -218,6 +265,10 @@ export interface BrowserHostSessionState {
   cursor?: string;
   loadingProgress?: BrowserHostSessionLoadingProgress;
   nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
+  actorCursor?: BrowserHostSessionActorCursor;
+  actorCursors?: BrowserHostSessionActorCursor[];
+  visibleAction?: BrowserHostSessionVisibleAction;
+  riskLedger?: BrowserHostSessionRiskLedgerEntry[];
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics: string[];
@@ -229,6 +280,7 @@ export interface BrowserHostSessionStartInput {
   width?: number;
   height?: number;
   timeoutMs?: number;
+  actorCursor?: BrowserHostSessionActorCursorInput;
 }
 
 export interface BrowserHostSessionActionInput {
@@ -250,6 +302,7 @@ export interface BrowserHostSessionActionInput {
   expectedProofNames?: string[];
   uiEventReceivedAt?: string;
   adapterSentAt?: string;
+  actorCursor?: BrowserHostSessionActorCursorInput;
 }
 
 export interface BrowserHostSearchInput {
@@ -319,7 +372,13 @@ export interface BrowserHostSessionDriver {
 }
 
 export interface BrowserHostSessionDriverFactory {
-  create(input: { sessionId: string; viewport: BrowserHostSessionViewport; timeoutMs: number }): Promise<BrowserHostSessionDriver>;
+  create(input: {
+    sessionId: string;
+    viewport: BrowserHostSessionViewport;
+    timeoutMs: number;
+    workspacePath: string;
+    workspaceProfileDir: string;
+  }): Promise<BrowserHostSessionDriver>;
 }
 
 export interface BrowserHostFrameCaptureResult {

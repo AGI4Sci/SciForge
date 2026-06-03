@@ -1,221 +1,79 @@
-# SciForge Browser Product Protocol
+# SciForge Browser Pane 项目协议
 
-Last updated: 2026-06-03
+最后更新：2026-06-03
 
-This document is the current design contract for the SciForge right-pane
-Browser. Historical TODO lists and completed task logs are intentionally
-removed; use Git history and `docs/test-artifacts/**` when old evidence is
-needed.
+## 当前目标
 
-## Product Decision
-
-The Browser product is a Desktop-native capability.
-
-`localhost:5173` is a React development and diagnostic surface. It can render
-the Browser UI, show health, and explain why native attach is blocked. It must
-not claim that a real webpage is open inside the product Browser.
-
-The Desktop Electron app is the product shell for real browsing. It loads the
-same React UI, but it also owns the native window bridge required to embed a
-real page through Electron `WebContentsView`.
-
-## Mental Model
+Browser Pane 是 SciForge 右侧栏里的真实内置浏览器。M1 目标是：
 
 ```text
-Web dev mode
-  Browser / Codex in-app Browser
-    -> http://localhost:5173
-       -> React UI
-       -> diagnostics only for external pages
-
-Desktop product mode
-  Electron app
-    -> React UI
-    -> Desktop native surface bridge
-    -> Workspace Writer
-    -> BrowserHostSession
-    -> Electron WebContentsView display/input adapter
-       -> real HTTP/HTTPS page
+Desktop Electron app
+  -> React Workbench
+  -> BrowserHostSession
+  -> Electron WebContentsView
+  -> 真实 HTTP/HTTPS 或本地开发网页
 ```
 
-## Ownership
+`localhost:5173` 只能调试 React UI、状态和诊断；真实网页打开和使用必须在
+Desktop Electron native host 中验证。
 
-- `BrowserHostSession` is the only Browser owner.
-- React owns layout, toolbar controls, mount bounds, and typed diagnostics.
-- Workspace Writer owns local HTTP routes, session state, refs, and bounded
-  proxying to a trusted Desktop native adapter.
-- Electron `WebContentsView` is only a display/input adapter. It is not a
-  second browser owner.
-- Desktop Electron main process owns creation, placement, resize, focus, and
-  lifecycle of native embedded surfaces.
+## 不可变规则
 
-## Required Live Path
+- BrowserHostSession 是唯一 browser session/action/evidence owner。
+- Electron `WebContentsView` 只是 display/input adapter，不是第二个浏览器 owner。
+- 支持本地地址和任意 HTTP/HTTPS 外部网页；不能用 iframe、proxy、snapshot、PDF、旧 frame、`<webview>` 或系统浏览器冒充内置浏览器。
+- 每个 workspace 使用独立 browser profile；profile、cookie、storage、cache 都是 ignored local runtime state。
+- agent 操作采用可见操作 + 后台 Playwright/CDP 自动化结合；后台结果必须投影回 Browser Pane 或 annotation/evidence refs。
+- annotation/ref 系统与 Global Annotation 统一。
+- 已完成 TODO 必须打勾，并补充日期、evidence refs、验证命令和最终状态。
 
-A product-live Browser pane must satisfy all of these:
+## 当前任务板
 
-- `owner=BrowserHostSession`
-- `adapterRole=display-input-adapter`
-- `liveSurfaceTransport=native-embedded`
-- `singleInteractiveTruth=true`
-- `secondTruthSource=false`
-- Session-scoped `sessionRef` and `liveSurfaceRef`
-- Trusted attach/state responses from Desktop native adapter or its Workspace
-  Writer route proxy
-- User input goes through BrowserHostSession actions, not host shell capture
+### P0：Desktop 真实 Browser Pane
 
-If any item is missing, the Browser pane must render a typed blocked,
-handoff, or retry state.
+- [x] 保证 Desktop shell 使用 `WebContentsView` 作为 Browser Pane 的真实网页 surface。
+- [x] Web dev shell 缺 native host 时显示 typed blocked/diagnostic，不声明打开成功。
+- [x] Browser toolbar 支持 URL、Open、Back、Forward、Reload、Stop 和 loading/error/blocked 状态。
+- [x] Browser pane 支持本地开发地址、HTTP、HTTPS 和 scheme-less URL normalization。
+- [x] 删除或迁移与最终方案冲突的 iframe/proxy/snapshot live path。
 
-## Forbidden Product Fallbacks
+完成记录（2026-06-03）：
 
-These may exist only as migration diagnostics, test fixtures, or explicit
-external handoff. They must not be used as the product live Browser surface:
+- evidence refs：`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json`、`browser-host-session:visible-action-session/actor-cursors/cursor-shared-browser.json`、`browser-host-session:visible-action-session/visible-actions/agent-click-visible.json`。
+- 验证命令：`SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE=1 SCIFORGE_DESKTOP_BROWSER_NATIVE_REAL_EXTERNAL_TARGET_JSON='{"url":"https://example.com/","secondUrl":"https://www.iana.org/domains/example"}' npm run smoke:desktop-browser-native-live-acceptance --silent`；`node --import tsx --test packages/presentation/components/browser-workbench/render.test.tsx packages/presentation/components/image-evidence-viewer/render.test.tsx src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts src/ui/src/app/results/rightPaneSurfaceAdapter.test.ts src/ui/src/app/results/imagePaneModel.test.ts src/runtime/browser-host-session.test.ts src/runtime/playwright-edge-browser-runtime.test.ts src/runtime/window-action-session.test.ts`；`node --import tsx --test src/ui/src/app/ResultsRenderer.test.ts`；`node --import tsx --test tests/smoke/smoke-desktop-electron-main.test.ts tests/smoke/smoke-desktop-browser-native-surface-lifecycle.test.ts tests/smoke/smoke-desktop-browser-native-paint-ack-heartbeat.test.ts tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-window-capture.test.ts tests/smoke/smoke-desktop-dev-shell.test.ts`；`npm run typecheck --silent`。
+- 最终状态：passed。Desktop native Browser live acceptance 已真实打开外部 HTTPS；local/external HTTP(S) 在 React pane 中统一要求 host-owned BrowserHostSession，不再以 iframe/proxy/snapshot/旧 frame 或系统浏览器冒充 live Browser。
 
-- iframe
-- HTTP proxy page rendering
-- screenshot or snapshot replay
-- canvas stream
-- WebRTC stream
-- HTTP `/frame` or frame-stream transport
-- `<webview>`
-- system popup or external browser as a claimed embedded pass
-- site-specific or URL-specific patches
+### P1：Workspace Profile
 
-## Development Modes
+- [ ] 为每个 workspace 创建独立 browser profile 目录。
+- [ ] 将 profile 路径加入 ignored runtime state，禁止进入 Git 和长期 trace。
+- [ ] BrowserHostSession 和后台 Playwright/CDP 自动化使用同一 workspace profile。
+- [ ] 登录态复用只限当前 workspace；不默认复用用户 Chrome/Edge 主 profile。
 
-### Web Dev Mode
+### P1：可见操作 + 后台自动化
 
-Entry: `npm run dev`, then open `http://localhost:5173`.
+- [ ] 可见操作显示 agent actorCursor、点击、滚动、输入和加载状态。
+- [ ] 后台自动化可执行批量检查、抓取、测试，但必须返回 bounded refs 和摘要。
+- [ ] 高风险页面动作先记录为风险类型；权限系统不是 M1 阻塞项。
 
-Use this mode for:
+### P1：Browser Annotation
 
-- React layout
-- toolbar behavior
-- address bar state
-- loading, blocked, retry, and handoff copy
-- Workspace Writer health diagnostics
-- command text and refs projection
+- [ ] Browser pane 内标注生成统一 `annotationRef`、`targetRef`、`cropRef` 和 `screenshotRef`。
+- [ ] 标注作为 pending context 进入 composer，随下一条用户消息提交。
+- [ ] Browser annotation 与全局窗口 annotation 在 thread 中使用同一展示模型。
 
-Do not use this mode to claim:
+未完成说明（2026-06-03）：Browser annotation 已有 pending refs 适配测试，但 Browser Pane 内真实框选/点选 E2E 和与 Global Annotate 的同模型 thread 展示尚未完成，不能勾选。
 
-- real external webpage attach
-- click/type/scroll fidelity
-- native focus/caret/cursor behavior
-- M0/M1 Browser pass
+## 验收规则
 
-When Web dev mode lacks a Desktop native adapter, the correct state is
-`native-surface-adapter-missing` or an equivalent typed blocked diagnostic.
+- 文档改动：`git diff --check`。
+- Browser UI 改动：运行 Browser pane focused tests 和 right-pane smoke。
+- Desktop native Browser 改动：必须在 Desktop Electron native host 中验证真实外部网页打开。
+- Profile 改动：确认 profile 路径 ignored，日志和 evidence 不泄漏 cookie、token、Authorization 或完整私密 URL。
 
-### Desktop Product Mode
+## 相关文档
 
-Entry: `npm run desktop:start:prod`.
-
-Use this mode for:
-
-- real external HTTP/HTTPS navigation
-- real click/type/scroll/reload/back/forward/stop
-- native surface attach and resize
-- BrowserHostSession input latency
-- focus, cursor, caret, and OS UI parity
-- pass-grade Browser evidence
-
-### Desired Desktop Dev Mode
-
-The intended developer experience is a dedicated Desktop dev shell:
-
-```text
-desktop dev shell
-  starts Vite
-  starts Workspace Writer
-  starts Electron
-  Electron loads the Vite URL
-  Electron injects the native Browser adapter URL into Workspace Writer
-```
-
-This keeps React hot reload while preserving the real native Browser path.
-Until this mode exists, use Web dev mode for UI-only work and Desktop product
-mode for real Browser verification.
-
-## Workspace Writer Contract
-
-Workspace Writer `/health` may advertise `browser-host-native-surface` only
-when a trusted loopback Desktop adapter is configured by
-`SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL`.
-
-The public route
-`/api/sciforge/browser-host/native-surface/{health,attach,state}` may proxy the
-Desktop adapter only if the bounded response passes the BrowserHostSession
-trust checks. Raw URLs, raw DOM, raw logs, screenshots, base64, provider
-payloads, secrets, or forged refs must be blocked.
-
-## Evidence Rules
-
-Pass-grade Browser evidence records only bounded facts:
-
-- session refs
-- live surface refs
-- transport and surface type
-- capability health
-- action coverage
-- latency summaries
-- hashes, lengths, counts, and refs
-
-It must not record:
-
-- raw DOM
-- raw console or network logs
-- raw screenshot or base64
-- raw page content
-- provider payloads
-- secrets
-- full private URLs
-
-## Current Status
-
-- Desktop Electron native live acceptance has passed for the M0 Browser path.
-- Web dev mode correctly fails closed when no Desktop native adapter is
-  present.
-- Workspace Writer native-surface routes exist and must stay bounded.
-- M1 real OS UI parity remains separate from M0 browsing and requires Desktop
-  observation, not Web dev mode.
-
-## Next Design Work
-
-1. Add a first-class Desktop dev shell that loads the Vite renderer while
-   injecting Desktop native adapter capability into Workspace Writer.
-2. Keep Web dev mode diagnostics explicit so users do not mistake 5173 for the
-   product Browser host.
-3. Continue M1 work only in Desktop product/dev mode: cursor, caret, context
-   menu, IME, clipboard, selection, rerender, resize, and focus retention.
-4. Keep all Browser evidence bounded and refs-first.
-
-## Verification
-
-For Browser UI or model changes:
-
-```bash
-npm run typecheck --silent
-node --import tsx --test packages/presentation/components/browser-workbench/render.test.tsx src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts src/ui/src/api/workspaceClient.browser-host-preflight.test.ts
-node --import tsx --test src/runtime/browser-host-session.test.ts src/runtime/browser-host-search-runtime.test.ts
-git diff --check
-```
-
-For native Browser product changes:
-
-```bash
-npm run smoke:desktop-browser-native-live-acceptance --silent
-npm run smoke:desktop-browser-native-live-acceptance:strict --silent
-npm run smoke:browser-bounded-evidence-crosscheck --silent
-```
-
-For Web dev diagnostics:
-
-```bash
-npm run dev
-curl -sS -X POST http://127.0.0.1:5173/api/sciforge/runtime/start \
-  -H 'Content-Type: application/json' \
-  -d '{"requireBrowserHostNativeSurface":true}'
-```
-
-The expected Web dev result without Desktop native adapter is a typed blocked
-diagnostic, not a claimed live Browser pass.
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)
+- [`PROJECT_desktop.md`](PROJECT_desktop.md)
+- [`PROJECT_annotation.md`](PROJECT_annotation.md)
+- [`PROJECT_image.md`](PROJECT_image.md)

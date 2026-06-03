@@ -79,7 +79,7 @@ test('runtime gui refs focus browser screen terminal and subagent objects fail c
   assert.match(html, /data-object-kind="url"/);
   assert.match(html, /data-preferred-view="browser-object"/);
   assert.match(html, /data-object-kind="artifact"/);
-  assert.match(html, /data-preferred-view="screen-observation"/);
+  assert.match(html, /data-preferred-view="image-evidence"/);
   assert.match(html, /data-object-kind="execution-unit"/);
   assert.match(html, /data-preferred-view="terminal-session-viewer"/);
   assert.match(html, /data-object-kind="run"/);

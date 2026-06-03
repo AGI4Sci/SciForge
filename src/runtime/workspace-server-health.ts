@@ -21,7 +21,7 @@ export const WORKSPACE_WRITER_HEALTH_CAPABILITIES = [
   'stable-version-registry',
 ] as const;
 
-export const WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT = '/api/sciforge/browser-host/native-surface/{health,attach,state}' as const;
+export const WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT = '/api/sciforge/browser-host/native-surface/{health,attach,resize,detach,state}' as const;
 
 export interface WorkspaceWriterHealthInput {
   pid: number;

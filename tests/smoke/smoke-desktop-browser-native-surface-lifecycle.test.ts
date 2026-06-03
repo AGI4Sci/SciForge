@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -8,6 +11,59 @@ import {
   type DesktopBrowserHostSurfaceViewLike,
   type DesktopBrowserHostSurfaceWebContentsLike,
 } from '../../src/desktop/browser-host-surface.js';
+
+const PNG_1X1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
+  'base64',
+);
+
+test('desktop BrowserHostSession native surface uses workspace profile partition without exposing the profile path', async () => {
+  const constructedOptions: unknown[] = [];
+
+  class FakeWebContentsView implements DesktopBrowserHostSurfaceViewLike {
+    webContents: DesktopBrowserHostSurfaceWebContentsLike = {};
+
+    constructor(options?: unknown) {
+      constructedOptions.push(options);
+    }
+  }
+
+  const controller = createDesktopBrowserHostSurfaceController({
+    WebContentsView: FakeWebContentsView,
+  });
+  const workspaceAProfile = '/private/workspaces/alpha/.sciforge/browser-host/profile';
+  const workspaceBProfile = '/private/workspaces/beta/.sciforge/browser-host/profile';
+
+  const alphaOne = controller.startSession({
+    sessionId: 'native-alpha-1',
+    workspaceProfileDir: workspaceAProfile,
+  });
+  const alphaTwo = controller.startSession({
+    sessionId: 'native-alpha-2',
+    workspaceProfileDir: workspaceAProfile,
+  });
+  controller.startSession({
+    sessionId: 'native-beta',
+    workspaceProfileDir: workspaceBProfile,
+  });
+  controller.startSession({
+    sessionId: 'native-ephemeral',
+  });
+
+  const partitions = constructedOptions.map((option) => {
+    const webPreferences = (option as { webPreferences?: { partition?: unknown } } | undefined)?.webPreferences;
+    return typeof webPreferences?.partition === 'string' ? webPreferences.partition : '';
+  });
+  assert.match(partitions[0], /^persist:sciforge-browser-host-[a-f0-9]{16}$/);
+  assert.equal(partitions[0], partitions[1]);
+  assert.notEqual(partitions[0], partitions[2]);
+  assert.match(partitions[3], /^sciforge-browser-host-[a-f0-9]{16}$/);
+  assert.doesNotMatch(partitions[3], /^persist:/);
+  assert.doesNotMatch(JSON.stringify(constructedOptions), /\/private\/workspaces|\.sciforge|browser-host\/profile|alpha|beta/);
+  assert.doesNotMatch(JSON.stringify([alphaOne, alphaTwo]), /partition|profile|\/private\/workspaces|\.sciforge/i);
+
+  await controller.stopServer();
+});
 
 test('desktop BrowserHostSession native surface lifecycle contract covers resize detach reattach focus and cleanup', async () => {
   const events: string[] = [];
@@ -212,6 +268,192 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
   assert.equal(countEvents(events, 'webContents.close:1'), 1);
 });
 
+test('desktop BrowserHostSession native surface loopback writes evidence files without raw bridge payloads', async () => {
+  const outputDir = await mkdtemp(join(tmpdir(), 'sciforge-native-evidence-'));
+  const sessionId = 'native-evidence-bounded';
+
+  class FakeWebContentsView implements DesktopBrowserHostSurfaceViewLike {
+    webContents: DesktopBrowserHostSurfaceWebContentsLike = {
+      getTitle: () => 'Native evidence title secret-token',
+      getURL: () => 'https://secret.example/path?token=secret-token',
+      capturePage: async () => ({
+        toDataURL: () => `data:image/png;base64,${PNG_1X1.toString('base64')}`,
+        toPNG: () => PNG_1X1,
+      }),
+      executeJavaScript: async <T = unknown>(code: string) => {
+        if (code.includes('outerHTML')) {
+          return '<html><body data-provider="provider-payload">secret-token DOM</body></html>' as T;
+        }
+        if (code.includes("role: 'document'")) {
+          return {
+            role: 'document',
+            name: 'AX secret-token title',
+            text: 'raw ax text provider-payload',
+          } as T;
+        }
+        if (code.includes('innerText')) {
+          return 'raw page text secret-token provider-payload' as T;
+        }
+        return '' as T;
+      },
+    };
+  }
+
+  const controller = createDesktopBrowserHostSurfaceController({
+    WebContentsView: FakeWebContentsView,
+  });
+
+  try {
+    controller.startSession({ sessionId });
+    const server = await controller.startServer();
+
+    for (const route of ['screenshot', 'content', 'text', 'ax']) {
+      const response = await fetch(`${server.url}/sessions/${encodeURIComponent(sessionId)}/${route}`);
+      const serialized = await response.text();
+      assert.notEqual(response.status, 200, `raw GET /${route} must be blocked`);
+      assertNoRawNativeEvidencePayload(serialized, `GET /${route}`);
+    }
+
+    const outputs = [
+      { route: 'screenshot', outputKind: 'screenshot', path: join(outputDir, 'frame.png') },
+      { route: 'content', outputKind: 'dom', path: join(outputDir, 'dom.html') },
+      { route: 'text', outputKind: 'text', path: join(outputDir, 'text.txt') },
+      { route: 'ax', outputKind: 'ax', path: join(outputDir, 'ax.json') },
+    ] as const;
+
+    for (const output of outputs) {
+      const json = await postJson(`${server.url}/sessions/${encodeURIComponent(sessionId)}/${output.route}`, {
+        outputPath: output.path,
+      });
+      assert.equal(json.ok, true, output.route);
+      assert.equal(json.sessionId, sessionId, output.route);
+      assert.equal(json.outputKind, output.outputKind, output.route);
+      assert.equal(typeof json.bytesWritten, 'number', output.route);
+      assert.match(String(json.sha256), /^[a-f0-9]{64}$/i, output.route);
+      assert.equal(Object.hasOwn(json, 'outputPath'), false, output.route);
+      assertNoRawNativeEvidencePayload(JSON.stringify(json), `POST /${output.route}`);
+    }
+
+    assert.equal((await readFile(join(outputDir, 'frame.png'))).length, PNG_1X1.length);
+    assert.match(await readFile(join(outputDir, 'dom.html'), 'utf8'), /secret-token DOM/);
+    assert.match(await readFile(join(outputDir, 'text.txt'), 'utf8'), /raw page text secret-token/);
+    assert.match(await readFile(join(outputDir, 'ax.json'), 'utf8'), /raw ax text provider-payload/);
+  } finally {
+    await controller.stopServer();
+    await rm(outputDir, { recursive: true, force: true });
+  }
+});
+
+test('desktop BrowserHostSession native surface derives toolbar action state from WebContentsView events', async () => {
+  type Listener = (...args: unknown[]) => void;
+  const listeners = new Map<string, Listener[]>();
+  const events: string[] = [];
+
+  class FakeWebContentsView implements DesktopBrowserHostSurfaceViewLike {
+    webContents: DesktopBrowserHostSurfaceWebContentsLike = {
+      on: (event, listener) => {
+        const current = listeners.get(event) ?? [];
+        current.push(listener);
+        listeners.set(event, current);
+      },
+      loadURL: async (url) => {
+        events.push(`loadURL:${url}`);
+      },
+      goBack: () => {
+        events.push('goBack');
+        emit('did-navigate-in-page', {}, 'https://example.test/back', true);
+      },
+      goForward: () => {
+        events.push('goForward');
+        emit('did-navigate-in-page', {}, 'https://example.test/forward', false);
+      },
+      reload: () => {
+        events.push('reload');
+        emit('did-start-loading');
+      },
+      stop: () => {
+        events.push('stop');
+        emit('did-stop-loading');
+      },
+    };
+  }
+
+  function emit(event: string, ...args: unknown[]): void {
+    for (const listener of listeners.get(event) ?? []) listener(...args);
+  }
+
+  const controller = createDesktopBrowserHostSurfaceController({
+    WebContentsView: FakeWebContentsView,
+  });
+
+  const started = controller.startSession({ sessionId: 'native-toolbar-events' });
+  assertNativeContractState(started, { embeddedPassClaim: false });
+
+  await controller.navigate('native-toolbar-events', { url: 'example.test/research' });
+  emit('did-start-navigation', {}, 'https://example.test/research', false, true);
+  emit('did-start-loading');
+  let state = controller.state('native-toolbar-events');
+  assertNativeContractState(state, { embeddedPassClaim: false });
+  assert.equal(state.loading, true);
+  assert.equal(state.url, 'https://example.test/research');
+  assert.equal(state.canGoBack, false);
+  assert.equal(state.canGoForward, false);
+  assert.deepEqual(state.diagnostics, []);
+
+  emit('page-title-updated', {}, 'Research Home');
+  emit('did-navigate', {}, 'https://example.test/research');
+  emit('did-finish-load');
+  emit('did-stop-loading');
+  state = controller.state('native-toolbar-events');
+  assert.equal(state.loading, false);
+  assert.equal(state.title, 'Research Home');
+  assert.equal(state.url, 'https://example.test/research');
+  assert.equal(state.canGoBack, true);
+  assert.equal(state.canGoForward, false);
+  assert.deepEqual(state.diagnostics, []);
+
+  await controller.navigate('native-toolbar-events', { url: 'https://example.test/details' });
+  emit('did-start-navigation', {}, 'https://example.test/details', false, true);
+  emit('did-navigate', {}, 'https://example.test/details');
+  emit('did-finish-load');
+  state = controller.state('native-toolbar-events');
+  assert.equal(state.url, 'https://example.test/details');
+  assert.equal(state.canGoBack, true);
+  assert.equal(state.canGoForward, false);
+
+  const backState = await controller.action('native-toolbar-events', { action: 'back' });
+  assert.equal(backState.url, 'https://example.test/back');
+  assert.equal(backState.canGoBack, true);
+  assert.equal(backState.canGoForward, true);
+
+  const forwardState = await controller.action('native-toolbar-events', { action: 'forward' });
+  assert.equal(forwardState.url, 'https://example.test/forward');
+  assert.equal(forwardState.canGoBack, true);
+  assert.equal(forwardState.canGoForward, false);
+
+  const reloadState = await controller.action('native-toolbar-events', { action: 'reload' });
+  assert.equal(reloadState.loading, true);
+
+  const stopState = await controller.action('native-toolbar-events', { action: 'stop' });
+  assert.equal(stopState.loading, false);
+
+  emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'https://example.test/missing', true);
+  state = controller.state('native-toolbar-events');
+  assert.equal(state.loading, false);
+  assert.equal(state.url, 'https://example.test/missing');
+  assert.ok(state.diagnostics?.includes('native embedded load failed: NAME_NOT_RESOLVED (-105)'));
+  assertNativeContractState(state, { embeddedPassClaim: false });
+
+  assert.deepEqual(events, [
+    'loadURL:https://example.test/research',
+    'loadURL:https://example.test/details',
+    'goBack',
+    'goForward',
+    'reload',
+    'stop',
+  ]);
+});
+
 function createFakeWindow(name: string, events: string[]) {
   const views: DesktopBrowserHostSurfaceViewLike[] = [];
   return {
@@ -237,6 +479,25 @@ async function fetchJson(url: string): Promise<Record<string, unknown>> {
   const response = await fetch(url);
   assert.equal(response.status, 200);
   return await response.json() as Record<string, unknown>;
+}
+
+async function postJson(url: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const json = await response.json() as Record<string, unknown>;
+  if (response.status !== 200) assert.fail(JSON.stringify(json));
+  return json;
+}
+
+function assertNoRawNativeEvidencePayload(serialized: string, label: string): void {
+  assert.doesNotMatch(
+    serialized,
+    /data:image|;base64|iVBORw0KGgo|<\s*(?:!doctype|html|body|input)\b|secret-token|provider-payload|raw page text|raw ax text|https:\/\/secret\.example/i,
+    label,
+  );
 }
 
 function assertNativeContractState(

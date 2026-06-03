@@ -25,6 +25,8 @@ test('right pane tab controller owns ResultsRenderer tab wiring extraction', () 
 test('right pane tab controller derives focus mode from active tab kind', () => {
   assert.equal(focusModeForRightPaneTab('evidence', 'all'), 'evidence');
   assert.equal(focusModeForRightPaneTab('terminal', 'all'), 'execution');
+  assert.equal(focusModeForRightPaneTab('image', 'all'), 'visual');
+  assert.equal(focusModeForRightPaneTab('screen', 'all'), 'visual');
   assert.equal(focusModeForRightPaneTab('primary', 'evidence'), 'all');
   assert.equal(focusModeForRightPaneTab('browser', 'execution'), 'all');
   assert.equal(focusModeForRightPaneTab('files', 'visual'), 'visual');

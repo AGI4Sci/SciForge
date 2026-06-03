@@ -1,4 +1,4 @@
-import { FolderTree, Globe2, Monitor, Terminal } from 'lucide-react';
+import { FolderTree, Globe2, Image as ImageIcon, Terminal } from 'lucide-react';
 import type { ScenarioId } from '../../data';
 import type { SciForgeConfig, SciForgeRun, SciForgeSession, ObjectReference, RuntimeArtifact } from '../../domain';
 import { Badge, EmptyArtifactState } from '../uiPrimitives';
@@ -164,10 +164,10 @@ function RightPaneToolDock({
       Icon: Globe2,
     },
     {
-      tab: 'screen',
-      label: resultText(locale, { 'zh-CN': '虚拟屏幕', 'en-US': 'Virtual Screen' }),
-      detail: resultText(locale, { 'zh-CN': '屏幕预览、光标、权限和回放', 'en-US': 'Screen preview, cursor, permissions, and replay' }),
-      Icon: Monitor,
+      tab: 'image',
+      label: resultText(locale, { 'zh-CN': '图片 / 证据', 'en-US': 'Image / Evidence' }),
+      detail: resultText(locale, { 'zh-CN': '图片、标注、裁剪和来源', 'en-US': 'Images, annotations, crops, and source details' }),
+      Icon: ImageIcon,
     },
     {
       tab: 'terminal',

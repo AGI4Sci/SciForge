@@ -1,7 +1,7 @@
 import type { ResultPaneTab, ResultPaneTabInstance } from './ResultShell';
 import { resultText, type ResultLocale } from './resultLocale';
 
-const DEFAULT_RIGHT_PANE_TABS: ResultPaneTab[] = ['primary', 'browser', 'screen', 'terminal', 'files', 'evidence'];
+const DEFAULT_RIGHT_PANE_TABS: ResultPaneTab[] = ['primary', 'browser', 'image', 'terminal', 'files', 'evidence'];
 
 export type RightPaneFocusTarget =
   | { kind: 'tab'; tabId: string }
@@ -20,7 +20,7 @@ export interface RightPaneTabLifecycleTransition extends RightPaneTabLifecycleSt
 export type StoredRightPaneState = RightPaneTabLifecycleState;
 
 export function baseResultPaneTabId(kind: ResultPaneTab) {
-  return `base:${kind}`;
+  return `base:${canonicalResultPaneTab(kind)}`;
 }
 
 export function createDefaultRightPaneTabs(locale?: ResultLocale): ResultPaneTabInstance[] {
@@ -33,11 +33,12 @@ export function createDefaultRightPaneTabs(locale?: ResultLocale): ResultPaneTab
 }
 
 export function ensureRightPaneTab(tabs: readonly ResultPaneTabInstance[], kind: ResultPaneTab, locale?: ResultLocale): ResultPaneTabInstance[] {
-  if (tabs.some((tab) => tab.kind === kind)) return [...tabs];
+  const canonicalKind = canonicalResultPaneTab(kind);
+  if (tabs.some((tab) => tab.kind === canonicalKind)) return [...tabs];
   return [...tabs, {
-    id: baseResultPaneTabId(kind),
-    kind,
-    label: resultPaneTabInstanceLabel(kind, 1, locale),
+    id: baseResultPaneTabId(canonicalKind),
+    kind: canonicalKind,
+    label: resultPaneTabInstanceLabel(canonicalKind, 1, locale),
     closable: true,
   }];
 }
@@ -48,11 +49,12 @@ export function addRightPaneTabLifecycleState(
   locale?: ResultLocale,
   now = Date.now(),
 ): RightPaneTabLifecycleTransition {
-  const nextIndex = nextResultPaneTabIndex(state.tabs, tab);
+  const canonicalTab = canonicalResultPaneTab(tab);
+  const nextIndex = nextResultPaneTabIndex(state.tabs, canonicalTab);
   const nextTab: ResultPaneTabInstance = {
-    id: `custom:${tab}:${now}:${nextIndex}`,
-    kind: tab,
-    label: resultPaneTabInstanceLabel(tab, nextIndex, locale),
+    id: `custom:${canonicalTab}:${now}:${nextIndex}`,
+    kind: canonicalTab,
+    label: resultPaneTabInstanceLabel(canonicalTab, nextIndex, locale),
     closable: true,
   };
   return {
@@ -117,8 +119,9 @@ export function rightPaneStateStorageKey(workspacePath: string | undefined) {
 }
 
 export function loadStoredRightPaneState(storageKey: string, locale: ResultLocale | undefined, initialResultTab: ResultPaneTab): StoredRightPaneState {
+  const initialCanonicalTab = canonicalResultPaneTab(initialResultTab);
   const fallbackTabs = createDefaultRightPaneTabs(locale);
-  const fallbackActive = fallbackTabs.find((tab) => tab.kind === initialResultTab)?.id ?? fallbackTabs[0]?.id ?? '';
+  const fallbackActive = fallbackTabs.find((tab) => tab.kind === initialCanonicalTab)?.id ?? fallbackTabs[0]?.id ?? '';
   if (typeof window === 'undefined') {
     return { tabs: fallbackTabs, activeTabId: fallbackActive, browserTabAddresses: {} };
   }
@@ -130,9 +133,12 @@ export function loadStoredRightPaneState(storageKey: string, locale: ResultLocal
     const tabs = Array.isArray(parsed.tabs)
       ? normalizeStoredRightPaneTabs(parsed.tabs, locale)
       : fallbackTabs;
-    const activeTabId = typeof parsed.activeTabId === 'string' && tabs.some((tab) => tab.id === parsed.activeTabId)
-      ? parsed.activeTabId
-      : tabs.find((tab) => tab.kind === initialResultTab)?.id ?? tabs[0]?.id ?? '';
+    const storedActiveTabId = typeof parsed.activeTabId === 'string'
+      ? canonicalResultPaneTabId(parsed.activeTabId)
+      : undefined;
+    const activeTabId = storedActiveTabId && tabs.some((tab) => tab.id === storedActiveTabId)
+      ? storedActiveTabId
+      : tabs.find((tab) => tab.kind === initialCanonicalTab)?.id ?? tabs[0]?.id ?? '';
     return {
       tabs,
       activeTabId,
@@ -158,8 +164,8 @@ function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?:
       ? '结果'
       : kind === 'browser'
         ? '浏览器'
-        : kind === 'screen'
-          ? '屏幕'
+        : kind === 'image' || kind === 'screen'
+          ? '图片 / 证据'
           : kind === 'terminal'
             ? '终端'
             : kind === 'files'
@@ -169,8 +175,8 @@ function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?:
       ? 'Results'
       : kind === 'browser'
         ? 'Browser'
-        : kind === 'screen'
-          ? 'Screen'
+        : kind === 'image' || kind === 'screen'
+          ? 'Image / Evidence'
           : kind === 'terminal'
             ? 'Terminal'
             : kind === 'files'
@@ -202,6 +208,7 @@ function browserTabAddressesForOpenTabs(addresses: Record<string, string>, tabs:
 function isResultPaneTab(value: unknown): value is ResultPaneTab {
   return value === 'primary'
     || value === 'browser'
+    || value === 'image'
     || value === 'screen'
     || value === 'terminal'
     || value === 'files'
@@ -214,19 +221,37 @@ function normalizeStoredRightPaneTabs(value: unknown, locale?: ResultLocale) {
   const tabs: ResultPaneTabInstance[] = [];
   for (const item of value) {
     if (!isRecord(item) || !isResultPaneTab(item.kind)) continue;
-    const id = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : baseResultPaneTabId(item.kind);
+    const kind = canonicalResultPaneTab(item.kind);
+    const rawId = typeof item.id === 'string' && item.id.trim() ? item.id.trim() : baseResultPaneTabId(kind);
+    const id = canonicalResultPaneTabId(rawId);
     if (seen.has(id)) continue;
     seen.add(id);
     tabs.push({
       id,
-      kind: item.kind,
+      kind,
       label: typeof item.label === 'string' && item.label.trim()
-        ? item.label.trim()
-        : resultPaneTabInstanceLabel(item.kind, nextResultPaneTabIndex(tabs, item.kind), locale),
+        ? legacyScreenLabel(item.label.trim(), locale)
+        : resultPaneTabInstanceLabel(kind, nextResultPaneTabIndex(tabs, kind), locale),
       closable: true,
     });
   }
   return tabs;
+}
+
+function canonicalResultPaneTab(kind: ResultPaneTab): ResultPaneTab {
+  return kind === 'screen' ? 'image' : kind;
+}
+
+function legacyScreenLabel(label: string, locale?: ResultLocale) {
+  const legacy = /^(?:Screen|Virtual Screen|屏幕|虚拟屏幕)(?:\s+(\d+))?$/.exec(label);
+  if (legacy) {
+    return resultPaneTabInstanceLabel('image', Number(legacy[1] ?? 1), locale);
+  }
+  return label;
+}
+
+function canonicalResultPaneTabId(id: string) {
+  return id.trim().replace(/^base:screen$/, 'base:image').replace(/^custom:screen:/, 'custom:image:');
 }
 
 function normalizeStoredBrowserTabAddresses(value: unknown) {

@@ -14,7 +14,7 @@ import type { ResultLocale } from './resultLocale';
 export const RIGHT_PANE_SCOPED_SMOKE_DEFAULT_TABS: ResultPaneTab[] = [
   'primary',
   'browser',
-  'screen',
+  'image',
   'terminal',
   'files',
   'evidence',
@@ -50,7 +50,7 @@ export const RIGHT_PANE_SCOPED_SMOKE_SELECTORS = {
   ].join(', '),
   browserCanvasSurface: '[data-component-id="browser-workbench"] canvas, [data-component-id="browser-workbench"] [data-browser-frame-renderer="canvas-binary"]',
   browserHttpFrameImage: '[data-component-id="browser-workbench"] img[src^="blob:"], [data-component-id="browser-workbench"] img[src^="/api/sciforge/browser-host/"][src*="/frame"]',
-  screenViewer: '[data-component-id="virtual-screen-viewer"]',
+  imageEvidenceViewer: '[data-component-id="image-evidence-viewer"]',
   terminalViewer: '[data-component-id="terminal-session-viewer"]',
   terminalTool: '[data-testid="right-pane-terminal-tool"]',
   terminalHostOwnedSurface: '[data-terminal-live-surface="host-owned"]',
@@ -121,8 +121,8 @@ export interface RightPaneScopedSmokeEvidenceInput {
   browserLegacyLiveSurfaceCount?: unknown;
   browserCanvasSurfaceCount?: unknown;
   browserHttpFrameImageCount?: unknown;
-  screenViewerCount?: unknown;
-  screenStatusLabel?: unknown;
+  imageEvidenceViewerCount?: unknown;
+  imageEvidenceStatusLabel?: unknown;
   terminalViewerCount?: unknown;
   terminalToolCount?: unknown;
   terminalHostOwnedCount?: unknown;
@@ -164,8 +164,8 @@ export interface RightPaneScopedSmokeEvidence {
   browserLegacyLiveSurfaceCount: number;
   browserCanvasSurfaceCount: number;
   browserHttpFrameImageCount: number;
-  screenViewerCount: number;
-  screenStatusLabel: string;
+  imageEvidenceViewerCount: number;
+  imageEvidenceStatusLabel: string;
   terminalViewerCount: number;
   terminalToolCount: number;
   terminalHostOwnedCount: number;
@@ -295,8 +295,8 @@ export function createRightPaneScopedSmokeEvidence(input: RightPaneScopedSmokeEv
     browserLegacyLiveSurfaceCount: boundedSmokeCount(input.browserLegacyLiveSurfaceCount),
     browserCanvasSurfaceCount: boundedSmokeCount(input.browserCanvasSurfaceCount),
     browserHttpFrameImageCount: boundedSmokeCount(input.browserHttpFrameImageCount),
-    screenViewerCount: boundedSmokeCount(input.screenViewerCount),
-    screenStatusLabel: boundedSmokeLabel(input.screenStatusLabel),
+    imageEvidenceViewerCount: boundedSmokeCount(input.imageEvidenceViewerCount),
+    imageEvidenceStatusLabel: boundedSmokeLabel(input.imageEvidenceStatusLabel),
     terminalViewerCount: boundedSmokeCount(input.terminalViewerCount),
     terminalToolCount: boundedSmokeCount(input.terminalToolCount),
     terminalHostOwnedCount: boundedSmokeCount(input.terminalHostOwnedCount),
@@ -333,7 +333,7 @@ export function collectRightPaneScopedSmokeSignals(
   const selectedTabId = attr(selectedTab, 'id');
   const activePanel = one(documentLike, selectors.panel);
   const browserWorkbench = one(documentLike, selectors.browserWorkbench);
-  const screenViewer = one(documentLike, selectors.screenViewer);
+  const imageEvidenceViewer = one(documentLike, selectors.imageEvidenceViewer);
   const terminalViewer = one(documentLike, selectors.terminalViewer);
   const referencesTool = one(documentLike, selectors.referencesTool);
   const browserUrlInput = one(documentLike, selectors.browserUrlInput);
@@ -364,8 +364,8 @@ export function collectRightPaneScopedSmokeSignals(
     browserLegacyLiveSurfaceCount: count(documentLike, selectors.browserLegacyLiveSurface),
     browserCanvasSurfaceCount: count(documentLike, selectors.browserCanvasSurface),
     browserHttpFrameImageCount: count(documentLike, selectors.browserHttpFrameImage),
-    screenViewerCount: count(documentLike, selectors.screenViewer),
-    screenStatusLabel: attr(screenViewer, 'data-status'),
+    imageEvidenceViewerCount: count(documentLike, selectors.imageEvidenceViewer),
+    imageEvidenceStatusLabel: attr(imageEvidenceViewer, 'data-status'),
     terminalViewerCount: count(documentLike, selectors.terminalViewer),
     terminalToolCount: count(documentLike, selectors.terminalTool),
     terminalHostOwnedCount: count(documentLike, selectors.terminalHostOwnedSurface),
@@ -382,7 +382,7 @@ export function rightPaneScopedSmokeEvidenceHasDefaultTabs(evidence: Pick<RightP
   const labels = new Set(evidence.tabLabels.map((label) => label.toLowerCase()));
   return evidence.tablistCount > 0
     && evidence.tabCount >= RIGHT_PANE_SCOPED_SMOKE_DEFAULT_TABS.length
-    && ['results', 'browser', 'screen', 'terminal', 'files', 'references'].every((label) => labels.has(label));
+    && ['results', 'browser', 'image / evidence', 'terminal', 'files', 'references'].every((label) => labels.has(label));
 }
 
 function cleanStorageKeySegment(value: unknown) {

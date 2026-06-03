@@ -8,6 +8,7 @@ import {
   renderBrowserWorkbench,
   renderComputerUseControlPlane,
   renderGraphViewer,
+  renderImageEvidenceViewer,
   renderMatrixViewer,
   renderPaperCardList,
   renderPointSetViewer,
@@ -53,6 +54,7 @@ export type InteractiveArtifactInspectorTablePolicy = {
 
 const packageRenderersByComponentId: Record<string, UIComponentRenderer> = {
   'browser-workbench': renderBrowserWorkbench,
+  'image-evidence-viewer': renderImageEvidenceViewer,
   'virtual-screen-viewer': renderVirtualScreenViewer,
   'computer-use-control-plane': renderComputerUseControlPlane,
   'terminal-session-viewer': renderTerminalSessionViewer,

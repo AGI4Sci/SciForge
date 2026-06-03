@@ -10,6 +10,7 @@ import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from './r
 import { capabilityProviderRoutesForGatewayInvocation } from './gateway/capability-provider-preflight.js';
 import { sha1 } from './workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from './workspace-runtime-events.js';
+import { normalizeWorkspaceRootPath, workspaceBrowserOutputDir, workspaceBrowserProfileDir } from './workspace-paths.js';
 
 const TOOL_ID = PLAYWRIGHT_EDGE_MCP_CAPABILITY_ID;
 
@@ -26,7 +27,7 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
     toolName: TOOL_ID,
     status: 'running',
     message: 'Calling configured Microsoft Edge Playwright MCP browser provider.',
-    detail: JSON.stringify({ url: input.url, query: input.query, mcpUrl: input.mcpUrl }),
+    detail: JSON.stringify(playwrightEdgeBrowserExecutionDiagnostic(input)),
   });
   try {
     const output = await invokePlaywrightEdgeBrowser(input);
@@ -37,7 +38,7 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
       toolName: TOOL_ID,
       status: output.status === 'succeeded' ? 'satisfied' : output.status,
       message: `Microsoft Edge MCP browser read ${output.title || output.url}.`,
-      detail: `edgeDetected=${output.providerDiagnostics.edgeDetected}; url=${output.url}`,
+      detail: `edgeDetected=${output.providerDiagnostics.edgeDetected}; urlDigest=${urlDigest(output.url)?.sha1.slice(0, 12) ?? 'none'}`,
     });
     return {
       message,
@@ -53,10 +54,10 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
       claims: [{
         id: `claim-playwright-edge-browser-${id}`,
         type: 'fact',
-        text: `Microsoft Edge MCP read ${output.title || output.url}; edgeDetected=${output.providerDiagnostics.edgeDetected}.`,
+        text: `Microsoft Edge MCP read ${output.title || 'page'}; edgeDetected=${output.providerDiagnostics.edgeDetected}; urlDigest=${urlDigest(output.url)?.sha1.slice(0, 12) ?? 'none'}.`,
         confidence: output.status === 'succeeded' ? 0.84 : 0.58,
         evidenceLevel: 'runtime',
-        supportingRefs: [`artifact:playwright-edge-browser-result-${id}`, output.url].filter(Boolean),
+        supportingRefs: [`artifact:playwright-edge-browser-result-${id}`],
         opposingRefs: [],
       }],
       uiManifest: [{
@@ -69,7 +70,7 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
         id: `EU-playwright-edge-browser-${id}`,
         tool: TOOL_ID,
         status: output.status === 'succeeded' ? 'done' : 'repair-needed',
-        params: JSON.stringify({ url: input.url, query: input.query, mcpUrl: input.mcpUrl, mode: input.mode }),
+        params: playwrightEdgeBrowserExecutionParams(input),
         hash: sha1(JSON.stringify(output)).slice(0, 16),
         environment: 'Microsoft Edge + Playwright MCP',
         runtimeProfileId: 'playwright-edge-mcp',
@@ -83,22 +84,22 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
         metadata: {
           source: TOOL_ID,
           providerId: PLAYWRIGHT_EDGE_MCP_PROVIDER_ID,
-          url: output.url,
+          urlDigest: urlDigest(output.url),
           title: output.title,
           edgeDetected: output.providerDiagnostics.edgeDetected,
-          mcpUrl: output.providerDiagnostics.mcpUrl,
           transport: output.providerDiagnostics.transport,
+          workspaceProfileRef: input.workspaceProfileDir ? '.sciforge/browser-host/profile' : undefined,
         },
         data: {
           markdown: message,
-          output,
+          output: publicPlaywrightEdgeBrowserOutput(output),
         },
       }],
       objectReferences: [{
         id: `obj-playwright-edge-browser-${id}`,
         kind: 'url',
-        title: output.title || output.url,
-        ref: output.url,
+        title: output.title || 'Microsoft Edge MCP page',
+        ref: `url-digest:${urlDigest(output.url)?.sha1 ?? sha1(output.url)}`,
         status: output.status === 'succeeded' ? 'available' : 'partial',
         summary: output.text.slice(0, 240),
       }],
@@ -125,6 +126,7 @@ export function playwrightEdgeBrowserInvocationInputFromRequest(request: Gateway
   const url = urlFromPrompt(request.prompt);
   const query = url ? undefined : queryFromPrompt(request.prompt);
   if (!url && !query) return undefined;
+  const workspaceRoot = request.workspacePath ? normalizeWorkspaceRootPath(request.workspacePath) : '';
   return {
     task: request.prompt,
     ...(url ? { url } : {}),
@@ -132,7 +134,15 @@ export function playwrightEdgeBrowserInvocationInputFromRequest(request: Gateway
     maxChars: 1800,
     timeoutMs: 60_000,
     ...(mcpUrl ? { mcpUrl } : {}),
+    ...(workspaceRoot ? {
+      workspaceProfileDir: workspaceBrowserProfileDir(workspaceRoot),
+      outputDir: workspaceBrowserOutputDir(workspaceRoot, 'playwright-edge-output'),
+    } : {}),
   };
+}
+
+export function playwrightEdgeBrowserExecutionParams(input: PlaywrightEdgeBrowserInvocationInput | undefined): string {
+  return JSON.stringify(playwrightEdgeBrowserExecutionDiagnostic(input));
 }
 
 function looksLikePlaywrightEdgeBrowserRequest(prompt: string) {
@@ -161,11 +171,12 @@ function queryFromPrompt(prompt: string) {
 
 function playwrightEdgeBrowserMarkdown(output: Awaited<ReturnType<typeof invokePlaywrightEdgeBrowser>>) {
   const firstSentence = firstReadableSentence(output.text);
+  const digest = urlDigest(output.url);
   return [
     '# Microsoft Edge MCP browser result',
     '',
     `- Title: ${output.title || '(untitled)'}`,
-    `- URL: ${output.url}`,
+    `- URL digest: ${digest ? `${digest.length}:${digest.sha1}` : '(unavailable)'}`,
     `- Body first sentence: ${firstSentence || '(no readable body text)'}`,
     `- providerDiagnostics.edgeDetected: ${String(output.providerDiagnostics.edgeDetected)}`,
     `- userAgent contains Edg: ${String(/Edg\//.test(output.providerDiagnostics.userAgent ?? ''))}`,
@@ -214,7 +225,7 @@ function playwrightEdgeBrowserFailurePayload(
       id: `EU-playwright-edge-browser-${id}`,
       tool: TOOL_ID,
       status: 'failed-with-reason',
-      params: JSON.stringify({ url: input.url, query: input.query, mcpUrl: input.mcpUrl, mode: input.mode }),
+      params: playwrightEdgeBrowserExecutionParams(input),
       failureReason: message,
       hash: sha1(message).slice(0, 16),
     }],
@@ -229,8 +240,53 @@ function playwrightEdgeBrowserFailurePayload(
       },
       data: {
         message,
-        input,
+        input: playwrightEdgeBrowserExecutionDiagnostic(input),
       },
     }],
   };
+}
+
+function playwrightEdgeBrowserExecutionDiagnostic(input: PlaywrightEdgeBrowserInvocationInput | undefined) {
+  return {
+    mode: input?.mode,
+    queryDigest: input?.query ? textDigest(input.query) : undefined,
+    urlDigest: input?.url ? urlDigest(input.url) : undefined,
+    mcpRoute: input?.mcpUrl ? 'configured-loopback-or-provider-route' : undefined,
+    workspaceProfileRef: input?.workspaceProfileDir ? '.sciforge/browser-host/profile' : undefined,
+    outputRef: input?.outputDir ? '.sciforge/browser-host/playwright-edge-output' : undefined,
+  };
+}
+
+function publicPlaywrightEdgeBrowserOutput(output: Awaited<ReturnType<typeof invokePlaywrightEdgeBrowser>>) {
+  return {
+    ...output,
+    url: `url-digest:${urlDigest(output.url)?.sha1 ?? sha1(output.url)}`,
+    observations: output.observations.map((observation) => ({
+      ...observation,
+      url: observation.url ? `url-digest:${urlDigest(observation.url)?.sha1 ?? sha1(observation.url)}` : undefined,
+    })),
+    resultLinks: output.resultLinks?.map((link) => ({
+      text: link.text,
+      href: `url-digest:${urlDigest(link.href)?.sha1 ?? sha1(link.href)}`,
+    })),
+    links: output.links?.map((link) => ({
+      text: link.text,
+      href: `url-digest:${urlDigest(link.href)?.sha1 ?? sha1(link.href)}`,
+    })),
+    providerDiagnostics: {
+      ...output.providerDiagnostics,
+      mcpUrl: output.providerDiagnostics.mcpUrl ? 'configured-loopback-or-provider-route' : '',
+    },
+  };
+}
+
+function urlDigest(value: string | undefined) {
+  if (!value) return undefined;
+  const normalized = value.trim();
+  if (!normalized) return undefined;
+  return { length: normalized.length, sha1: sha1(normalized) };
+}
+
+function textDigest(value: string) {
+  return { length: value.length, sha1: sha1(value) };
 }

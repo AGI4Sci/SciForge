@@ -7,7 +7,7 @@ import { RunExecutionProcess } from './RunExecutionProcess';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 import { attachStreamProcessToResponse, compactFailureNotice } from './runPresentation';
 import { NativeEventStream } from './RunningWorkProcess';
-import type { CursorAgentAction } from './cursorAgentProcess';
+import { buildCursorAgentProcessModel, type CursorAgentAction } from './cursorAgentProcess';
 import { objectReferenceForCursorAction, objectReferenceForCursorRef } from './cursorProcessObjectReferences';
 import { focusResultPaneRouteForObjectReference } from '../results/resultPaneContract';
 
@@ -279,9 +279,20 @@ test('execution process keeps private runtime run ids out of public DOM focus at
 test('cursor process refs map to typed right-pane objects beyond files', () => {
   const cases: Array<[string, string, string, string]> = [
     ['browser:session-1', 'url', 'browser', 'browser-object'],
-    ['screen:frame-1', 'artifact', 'screen', 'screen-observation'],
+    ['image-evidence:browser/latest.png', 'artifact', 'image', 'image-evidence'],
+    ['screenshot:browser/latest.png', 'artifact', 'image', 'image-evidence'],
+    ['screen:frame-1', 'artifact', 'image', 'image-evidence'],
+    ['annotation:crop-1', 'artifact', 'image', 'image-evidence'],
+    ['image:browser/latest.png', 'artifact', 'image', 'image-evidence'],
+    ['browser-evidence:session-1/screenshot.png', 'artifact', 'image', 'image-evidence'],
+    ['window-capture:session-1/frame.png', 'artifact', 'image', 'image-evidence'],
+    ['screen-region:session-1/crop.png', 'artifact', 'image', 'image-evidence'],
+    ['artifact-preview:summary-image', 'artifact', 'image', 'image-evidence'],
+    ['replay:computer-use-run', 'artifact', 'image', 'image-evidence'],
+    ['artifact:window-action-evidence', 'artifact', 'image', 'image-evidence'],
     ['file:patches/update.diff', 'file', 'files', 'workspace-diff-viewer'],
     ['diff:patch-1', 'artifact', 'files', 'workspace-diff-viewer'],
+    ['artifact:analysis-report', 'artifact', 'primary', 'generic-artifact-inspector'],
     ['terminal-transcript:run-1', 'execution-unit', 'terminal', 'terminal-session-viewer'],
     ['execution-unit:EU-1', 'execution-unit', 'terminal', 'terminal-session-viewer'],
     ['subagent:worker-1', 'run', 'evidence', 'subagent-result'],
@@ -300,6 +311,10 @@ test('cursor process refs map to typed right-pane objects beyond files', () => {
   for (const unsafeRef of [
     'https://provider.example/v1/chat',
     'url:https://provider.example/v1/chat',
+    'window:session-1/action-1',
+    'app:Safari/main',
+    'ledger:computer-use/run-1.json',
+    'approval:computer-use/run-1',
     'file:/Applications/workspace/private.ts',
     'file:../private.ts',
     'trace:raw-stream',
@@ -337,7 +352,7 @@ test('cursor process action summaries focus preview objects, not terminal transc
   assert.equal(focusResultPaneRouteForObjectReference(fallbackReference).pane, 'files');
 });
 
-test('native stream renders Browser Screen Terminal and subagent refs as focus buttons', () => {
+test('native stream renders Browser Image Terminal and subagent refs as focus buttons', () => {
   const html = renderNativeStream([
     nativeEvent('tool-result', 'Object refs completed', {
       rawType: 'tool_completed',
@@ -525,6 +540,37 @@ test('native stream renders composer declared intent ack as public message actio
   assert.match(html, /Message: Agent Host acknowledged Assistant Deep preference\.; status: completed/);
   assert.match(html, /Agent Host acknowledged Assistant Deep preference/);
   assert.doesNotMatch(html, /provider\.example|sk-private|private\/model-name|providerUrl|apiKey|modelName/i);
+});
+
+test('native stream renders window action events as concise actor cursor rows with refs', () => {
+  const events = [agentNativeEventAt('2026-05-25T00:00:01.000Z', 'window-action-event', 'Window action', {
+    rawType: 'window-action-event',
+    operationKind: 'window_action',
+    status: 'running',
+    actorCursor: { agentId: 'agent-1', cursorId: 'cursor-1', label: 'Agent' },
+    action: { kind: 'click', status: 'running' },
+    target: { windowTitle: 'Browser preview', appName: 'Safari' },
+    evidenceRefs: ['window:session-1/action-1', 'artifact:window-action-evidence'],
+    providerPayload: {
+      providerUrl: 'https://provider.example.invalid/v1',
+      apiKey: 'sk-private',
+      route: 'raw-window-action-route',
+    },
+  })];
+  const model = buildCursorAgentProcessModel(events, { mode: 'live', sourceRunId: 'run-native-stream-test' });
+  const actions = model.groups.flatMap((group) => group.actions);
+  const html = renderLiveNativeStream(events);
+
+  assert.equal(actions[0]?.agentId, 'agent-1');
+  assert.match(html, /data-action-kind="window_action"/);
+  assert.match(html, /data-action-status="running"/);
+  assert.match(html, /Clicking Browser preview window/);
+  assert.match(html, /cursor-agent-action-focus/);
+  assert.match(html, /data-object-kind="artifact"/);
+  assert.match(html, /data-preferred-view="image-evidence"/);
+  assert.match(html, /<code>action-1<\/code>/);
+  assert.match(html, />window-action-evidence<\/button>/);
+  assert.doesNotMatch(html, /provider\.example|sk-private|providerPayload|apiKey|raw-window-action-route|actorCursor|cursor-1/i);
 });
 
 test('native stream renders approval choices and repair evidence as action-row affordances', () => {

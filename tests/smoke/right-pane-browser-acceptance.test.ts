@@ -165,7 +165,8 @@ async function assertExternalBrowserHostSession(page: Page, browserSurface: Loca
   assert.match(await nativeSurface.getAttribute('data-browser-live-surface-ref') ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   assert.match(await workbench.locator('header p').textContent() ?? '', expectedUrl);
   assert.equal(await browserSurface.locator(`a[href^="${expectedAddress}"]`).count(), 0);
-  assert.ok(await browserSurface.locator('[data-browser-command-id="open-external"][data-command-text^="/browser open-external"]').count() >= 1);
+  assert.ok(await browserSurface.locator('[data-browser-command-id="open"][data-command-text*="--surface workbench"]').count() >= 1);
+  assert.equal(await browserSurface.locator('[data-browser-command-id="open-external"], [data-command-text^="/browser open-external"]').count(), 0);
   for (const refKind of ['browser-frame', 'screenshot', 'dom-snapshot', 'ax-snapshot', 'console-log', 'network-log']) {
     assert.ok(
       await browserSurface.locator(`[data-browser-ref-kind="${refKind}"][data-browser-ref^="browser-host-session:"]`).count() >= 1,
@@ -184,11 +185,11 @@ async function assertNoLegacyBrowserLiveFallback(browserSurface: Locator) {
 }
 
 async function assertPaneSurfaces(page: Page) {
-  await ensurePane(page, 'Screen', '[data-component-id="virtual-screen-viewer"]');
-  const screenStatus = await page.locator('[data-component-id="virtual-screen-viewer"]').first().getAttribute('data-status');
+  await ensurePane(page, 'Image / Evidence', '[data-component-id="image-evidence-viewer"]');
+  const imageStatus = await page.locator('[data-component-id="image-evidence-viewer"]').first().getAttribute('data-status');
   assert.ok(
-    screenStatus === 'empty' || screenStatus === 'blocked',
-    `Screen pane should be empty or typed blocked in this acceptance shell, observed ${String(screenStatus)}`,
+    imageStatus === 'missing-ref' || imageStatus === 'empty' || imageStatus === 'blocked',
+    `Image / Evidence pane should be empty or typed blocked in this acceptance shell, observed ${String(imageStatus)}`,
   );
 
   await ensurePane(page, 'Terminal', '[data-component-id="terminal-session-viewer"]');

@@ -200,6 +200,12 @@ test('runtime ui manifest policy routes browser, terminal, and file artifacts th
   }).map((slot) => slot.componentId), ['browser-workbench', 'execution-unit-table']);
 
   assert.deepEqual(runtimeResultViewSlotsPolicy({
+    primaryArtifactRef: 'computer-use-frame',
+    primaryArtifactType: 'computer-use-virtual-screen',
+    runtimeResultRef: 'run-1',
+  }).map((slot) => slot.componentId), ['image-evidence-viewer', 'execution-unit-table']);
+
+  assert.deepEqual(runtimeResultViewSlotsPolicy({
     primaryArtifactRef: 'computer-use-control-plane-run-1',
     primaryArtifactType: 'computer-use-control-plane',
     runtimeResultRef: 'run-1',

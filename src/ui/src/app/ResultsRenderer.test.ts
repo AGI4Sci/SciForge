@@ -263,7 +263,7 @@ test('ResultsRenderer keeps raw ContractValidationFailure audit-only without syn
   assert.doesNotMatch(html, /Completed report|ready result/);
 });
 
-test('ResultsRenderer empty right pane exposes Cursor-like browser terminal and files tools', () => {
+test('ResultsRenderer empty right pane exposes Cursor-like browser image terminal and files tools', () => {
   const html = renderResultsRenderer(emptySession());
 
   assert.match(html, /class="result-tabstrip"/);
@@ -278,11 +278,11 @@ test('ResultsRenderer empty right pane exposes Cursor-like browser terminal and 
   assert.match(html, />New</);
   assert.match(html, /role="tab"/);
   assert.match(html, /data-right-pane-tool="browser"/);
-  assert.match(html, /data-right-pane-tool="screen"/);
+  assert.match(html, /data-right-pane-tool="image"/);
   assert.match(html, /data-right-pane-tool="terminal"/);
   assert.match(html, /data-right-pane-tool="files"/);
   assert.match(html, />Browser</);
-  assert.match(html, /Virtual Screen|虚拟屏幕/);
+  assert.match(html, /Image \/ Evidence|图片 \/ 证据/);
   assert.match(html, />Terminal</);
   assert.match(html, />Files</);
   assert.match(html, /Nothing to preview yet/);
@@ -360,9 +360,10 @@ test('ResultsRenderer right pane narrow overflow keeps tablist actions accessibl
   assert.match(cssSource, /\.result-tabs \[data-fixed-action\]\s*\{[\s\S]*flex:\s*0 0 auto/);
 });
 
-test('ResultsRenderer tool tabs render package-owned browser terminal and file modules', () => {
+test('ResultsRenderer tool tabs render package-owned browser image terminal and file modules', () => {
   const browserHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'browser' });
-  const screenHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'screen' });
+  const imageHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'image' });
+  const legacyScreenHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'screen' });
   const terminalHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'terminal' });
   const filesHtml = renderResultsRenderer(emptySession(), { initialResultTab: 'files' });
 
@@ -372,15 +373,16 @@ test('ResultsRenderer tool tabs render package-owned browser terminal and file m
   assert.match(browserHtml, /name="browser-url"/);
   assert.match(browserHtml, /\/browser open/);
   assert.match(browserHtml, /data-browser-state="(?:idle|loading)"/);
-  assert.match(screenHtml, /data-testid="right-pane-virtual-screen-tool"/);
-  assert.match(screenHtml, /data-component-id="virtual-screen-viewer"/);
-  assert.match(screenHtml, /data-render-boundary="presentation-only"/);
-  assert.match(screenHtml, /data-status="blocked"/);
-  assert.match(screenHtml, /data-attach-state="blocked"/);
-  assert.match(screenHtml, /computer-use:screen-activation\/session-empty\/attach-request\.json/);
-  assert.match(screenHtml, /computer-use:screen-activation\/session-empty\/provider-readiness\.json/);
-  assert.match(screenHtml, /gui\.present:session-empty\/screen-pane-activation/);
-  assert.doesNotMatch(screenHtml, /VirtualAppScreen attach state: no-session|providerRoute|executorLease|desktopBridge/);
+  assert.match(imageHtml, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(imageHtml, /data-component-id="image-evidence-viewer"/);
+  assert.match(imageHtml, /data-render-boundary="presentation-only"/);
+  assert.match(imageHtml, /data-host-presentation-boundary="image-evidence-ref-only"/);
+  assert.match(imageHtml, /data-status="missing-ref"/);
+  assert.match(imageHtml, /No image evidence ref is attached/);
+  assert.doesNotMatch(imageHtml, /right-pane-virtual-screen-tool|virtual-screen-viewer|VirtualAppScreen|attachVirtualAppScreen|providerRoute|executorLease|desktopBridge/);
+  assert.match(legacyScreenHtml, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(legacyScreenHtml, /data-component-id="image-evidence-viewer"/);
+  assert.doesNotMatch(legacyScreenHtml, /right-pane-virtual-screen-tool|virtual-screen-viewer|VirtualAppScreen|attachVirtualAppScreen|providerRoute|executorLease|desktopBridge/);
   assert.match(terminalHtml, /data-testid="right-pane-terminal-tool"/);
   assert.match(terminalHtml, /data-component-id="terminal-session-viewer"/);
   assert.match(terminalHtml, /data-render-boundary="presentation-only"/);
@@ -407,7 +409,7 @@ test('ResultsRenderer routes focused chat object refs to the matching right-pane
       ref: 'screen:frame-1',
       preferredView: 'screen-observation',
       artifactType: 'screen-observation',
-    }, /data-testid="right-pane-virtual-screen-tool"/, /data-component-id="virtual-screen-viewer"/],
+    }, /data-testid="right-pane-image-evidence-tool"/, /data-component-id="image-evidence-viewer"/],
     [{
       id: 'terminal-transcript',
       title: 'Terminal transcript',
@@ -435,7 +437,7 @@ test('ResultsRenderer routes focused chat object refs to the matching right-pane
   }
 });
 
-test('ResultsRenderer screen pane renders active Computer Use frame source and refs-first state', () => {
+test('ResultsRenderer Image Evidence pane renders active Computer Use frame source refs-first', () => {
   const screenRef = 'computer-use:session/run-screen/virtual-screens.json#screen-1';
   const session: SciForgeSession = {
     ...emptySession(),
@@ -503,33 +505,19 @@ test('ResultsRenderer screen pane renders active Computer Use frame source and r
     }],
   };
 
-  const html = renderResultsRenderer(session, { activeRunId: 'run-screen', initialResultTab: 'screen' });
+  const html = renderResultsRenderer(session, { activeRunId: 'run-screen', initialResultTab: 'image' });
 
-  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
-  assert.match(html, /data-presentation-mode="permission-gate"/);
-  assert.match(html, /data-screen-presentation-state="permission"/);
-  assert.match(html, /Permission gate/);
-  assert.match(html, /class="virtual-screen-frame-image"/);
+  assert.match(html, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(html, /data-host-presentation-boundary="image-evidence-ref-only"/);
+  assert.match(html, /data-component-id="image-evidence-viewer"/);
+  assert.match(html, /data-source-kind="replay"/);
+  assert.match(html, /data-status="blocked"/);
+  assert.match(html, /class="image-evidence-image"/);
   assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png"/);
-  assert.match(html, /data-frame-ref="computer-use:session\/run-screen\/frames\/after\.png"/);
-  assert.match(html, /computer-use:session\/run-screen\/frame-data\/after\.json/);
+  assert.match(html, /data-image-ref="computer-use:session\/run-screen\/frames\/after\.png"/);
   assert.match(html, /computer-use:session\/run-screen\/replay\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/overlays\/cursors\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/leases\/screen-1\.json/);
-  assert.match(html, /data-cursor-state="ref-only"/);
-  assert.match(html, /computer-use:session\/run-screen\/proposals\/click\.json/);
-  assert.match(html, /computer-use:permission\/run-screen\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/sidecar\/binding\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/sidecar\/capabilities\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/sidecar\/discovery\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/validation\.json/);
-  assert.match(html, /computer-use:session\/run-screen\/evidence\/index\.json/);
-  assert.match(html, /data-attach-state="blocked"/);
-  assert.match(html, /VirtualAppScreen blocked/);
-  assert.match(html, /data-control-kind="stop-session" data-control-enabled="false" disabled=""/);
-  assert.match(html, /\/computer-use permission-handoff --target-ref &quot;computer-use:session\/run-screen\/blocked\/permission\.json&quot;/);
-  assert.match(html, /\/computer-use permission-recheck --target-ref &quot;computer-use:session\/run-screen\/sidecar\/capabilities\.json&quot;/);
-  assert.doesNotMatch(html, /RAW_SCREENSHOT_SHOULD_NOT_RENDER|data:image|providerRoute|desktopBridge/);
+  assert.doesNotMatch(html, /right-pane-virtual-screen-tool|virtual-screen-viewer|VirtualAppScreen|Permission gate|data-attach-state|input-intent|stop-session|permission-handoff|permission-recheck/);
+  assert.doesNotMatch(html, /leases\/screen-1|proposals\/click|sidecar\/binding|sidecar\/capabilities|sidecar\/discovery|RAW_SCREENSHOT_SHOULD_NOT_RENDER|data:image|providerRoute|desktopBridge|executorLease/);
 });
 
 test('ResultsRenderer right pane terminal renders execution transcript', () => {
@@ -722,7 +710,7 @@ test('ResultsRenderer right pane terminal preflights writer URL before opening P
   assert.match(source, /startRuntimeServicesAndRetry/);
 });
 
-test('ResultsRenderer screen tab derives Computer Use frame and replay refs from current run artifacts', () => {
+test('ResultsRenderer Image Evidence tab derives Computer Use frame and replay refs from current run artifacts', () => {
   const artifact: RuntimeArtifact = {
     id: 'cu-screen-run',
     type: 'computer-use-virtual-screen',
@@ -753,27 +741,21 @@ test('ResultsRenderer screen tab derives Computer Use frame and replay refs from
     artifacts: [artifact],
   };
 
-  const html = renderResultsRenderer(session, { activeRunId: 'run-cu-screen', initialResultTab: 'screen' });
+  const html = renderResultsRenderer(session, { activeRunId: 'run-cu-screen', initialResultTab: 'image' });
 
-  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
+  assert.match(html, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(html, /data-component-id="image-evidence-viewer"/);
   assert.match(html, /data-status="ready"/);
-  assert.match(html, /data-attach-state="adapter-unavailable"/);
-  assert.match(html, /data-presentation-mode="blocked-gate"/);
-  assert.match(html, /data-screen-surface-mode="replay"/);
+  assert.match(html, /data-source-kind="replay"/);
   assert.match(html, /.sciforge\/computer-use\/run-cu-screen\/latest\.png/);
   assert.match(html, /computer-use:replay\/run-cu-screen\/replay\.json/);
-  assert.match(html, /computer-use:validation\/run-cu-screen\/validation\.json/);
-  assert.match(html, /computer-use:evidence\/run-cu-screen\/index\.json/);
-  assert.match(html, /\/computer-use observe --session-ref &quot;computer-use:session\/run-cu-screen\/session\.json&quot;/);
-  assert.match(html, /class="virtual-screen-frame-image"/);
+  assert.match(html, /class="image-evidence-image"/);
   assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png"/);
-  assert.match(html, /data-cursor-state="ref-only"/);
-  assert.match(html, /computer-use:cursor\/run-cu-screen\/agent\.json/);
-  assert.doesNotMatch(html, /virtual-desktop-session-manifest\.json/);
-  assert.doesNotMatch(html, /providerRoute|executorLease|desktopBridge|rawScreenshot|base64/);
+  assert.doesNotMatch(html, /right-pane-virtual-screen-tool|virtual-screen-viewer|data-attach-state|data-screen-surface-mode|\/computer-use observe/);
+  assert.doesNotMatch(html, /computer-use:cursor\/run-cu-screen\/agent\.json|virtual-desktop-session-manifest\.json|providerRoute|executorLease|desktopBridge|rawScreenshot|base64/);
 });
 
-test('ResultsRenderer screen tab does not reuse old session screen when active run has no screen artifact', () => {
+test('ResultsRenderer Image Evidence tab does not reuse old session image evidence when active run has none', () => {
   const oldArtifact: RuntimeArtifact = {
     id: 'cu-screen-old-run',
     type: 'computer-use-virtual-screen',
@@ -797,14 +779,13 @@ test('ResultsRenderer screen tab does not reuse old session screen when active r
     artifacts: [oldArtifact],
   };
 
-  const html = renderResultsRenderer(session, { activeRunId: 'run-current-no-screen', initialResultTab: 'screen' });
+  const html = renderResultsRenderer(session, { activeRunId: 'run-current-no-screen', initialResultTab: 'image' });
 
-  assert.match(html, /data-testid="right-pane-virtual-screen-tool"/);
-  assert.match(html, /data-status="blocked"/);
-  assert.match(html, /data-attach-state="blocked"/);
-  assert.match(html, /computer-use:screen-activation\/run-current-no-screen\/attach-request\.json/);
-  assert.match(html, /computer-use:screen-activation\/run-current-no-screen\/provider-readiness\.json/);
-  assert.match(html, /gui\.present:run-current-no-screen\/screen-pane-activation/);
+  assert.match(html, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(html, /data-component-id="image-evidence-viewer"/);
+  assert.match(html, /data-status="missing-ref"/);
+  assert.match(html, /No image evidence ref is attached/);
+  assert.doesNotMatch(html, /computer-use:screen-activation\/run-current-no-screen|gui\.present:run-current-no-screen\/screen-pane-activation|right-pane-virtual-screen-tool|virtual-screen-viewer/);
   assert.doesNotMatch(html, /run-old-screen|old-screen|latest\.png|computer-use:replay\/run-old-screen/);
 });
 
@@ -884,8 +865,9 @@ test('ResultsRenderer Browser pane projects focused URL refs instead of stale ta
   assert.match(html, /data-browser-state="idle"/);
   assert.match(html, /data-browser-host-surface="browser-host-session"/);
   assert.match(html, /browser:host-surface\/right-pane\/external/);
-  assert.match(html, /\/browser open-external &quot;https:\/\/example\.org\/focused&quot; --approval required/);
-  assert.match(html, /data-command-text="\/browser open-external &quot;https:\/\/example\.org\/focused&quot; --approval required"/);
+  assert.match(html, /\/browser open &quot;https:\/\/example\.org\/focused&quot; --surface workbench/);
+  assert.match(html, /data-command-text="\/browser open &quot;https:\/\/example\.org\/focused&quot; --surface workbench"/);
+  assert.doesNotMatch(html, /\/browser open-external &quot;https:\/\/example\.org\/focused&quot; --approval required/);
   assert.doesNotMatch(html, /value="about:blank"|src="https:\/\/example\.org\/focused"|<iframe/);
 });
 
@@ -915,7 +897,7 @@ test('ResultsRenderer Browser pane uses BrowserHostSession surface for external 
     assert.match(html, /data-browser-state="idle"/);
     assert.match(html, /data-browser-host-surface="browser-host-session"/);
     assert.match(html, /\/browser open &quot;https:\/\/external\.example\/search&quot; --surface workbench/);
-    assert.match(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
+    assert.doesNotMatch(html, /\/browser open-external &quot;https:\/\/external\.example\/search&quot; --approval required/);
     assert.doesNotMatch(html, /<iframe|<webview|src="\/api\/sciforge\/browser\/proxy|src="https:\/\/external\.example\/search/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
@@ -953,8 +935,8 @@ test('ResultsRenderer Browser pane ignores legacy desktop webview ownership for 
     assert.match(html, /value="https:\/\/external\.example"/);
     assert.match(html, /data-browser-object-type="browser-state"/);
     assert.match(html, /data-browser-host-surface="browser-host-session"/);
-    assert.match(html, /\/browser snapshot --url &quot;https:\/\/external\.example&quot; --screenshot --dom --logs/);
-    assert.match(html, /\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
+    assert.match(html, /\/browser open &quot;https:\/\/external\.example&quot; --surface workbench/);
+    assert.doesNotMatch(html, /\/browser snapshot --url &quot;https:\/\/external\.example&quot; --screenshot --dom --logs|\/browser open-external &quot;https:\/\/external\.example&quot; --approval required/);
     assert.doesNotMatch(html, /<iframe|<webview|src="https:\/\/external\.example|electron-webview/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
@@ -1032,7 +1014,8 @@ test('ResultsRenderer restores right pane tabs and Browser address from localSto
     assert.doesNotMatch(html, /data-browser-state-action="proxy-fallback"|Proxy Snapshot/);
     assert.doesNotMatch(html, /href="\/api\/sciforge\/browser\/proxy/);
     assert.doesNotMatch(html, /href="https:\/\/example\.org"/);
-    assert.match(html, /\/browser open-external &quot;https:\/\/example\.org&quot; --approval required/);
+    assert.match(html, /\/browser open &quot;https:\/\/example\.org&quot; --surface workbench/);
+    assert.doesNotMatch(html, /\/browser open-external &quot;https:\/\/example\.org&quot; --approval required/);
     assert.doesNotMatch(html, /src="about:blank"/);
     assert.doesNotMatch(html, /src="https:\/\/example\.org"|<iframe/);
   } finally {
@@ -1100,7 +1083,8 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
 
     assert.match(secondHtml, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
     assert.match(secondHtml, /value="https:\/\/example\.org\/second"/);
-    assert.match(secondHtml, /\/browser open-external &quot;https:\/\/example\.org\/second&quot; --approval required/);
+    assert.match(secondHtml, /\/browser open &quot;https:\/\/example\.org\/second&quot; --surface workbench/);
+    assert.doesNotMatch(secondHtml, /\/browser open-external &quot;https:\/\/example\.org\/second&quot; --approval required/);
     assert.doesNotMatch(secondHtml, /value="localhost:4173\/first"|src="http:\/\/localhost:4173\/first"/);
 
     storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
@@ -1115,9 +1099,10 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
 
     assert.match(firstHtml, /aria-selected="true"[^>]*><span>Browser<\/span>/);
     assert.match(firstHtml, /value="localhost:4173\/first"/);
-    assert.match(firstHtml, /data-browser-state="ready"/);
+    assert.match(firstHtml, /data-browser-state="idle"/);
     assert.match(firstHtml, /<dd>http:\/\/localhost:4173\/first<\/dd>/);
-    assert.doesNotMatch(firstHtml, /value="https:\/\/example\.org\/second"|\/browser open-external &quot;https:\/\/example\.org\/second/);
+    assert.match(firstHtml, /\/browser open &quot;http:\/\/localhost:4173\/first&quot; --surface workbench/);
+    assert.doesNotMatch(firstHtml, /value="https:\/\/example\.org\/second"|\/browser open &quot;https:\/\/example\.org\/second|\/browser open-external &quot;https:\/\/example\.org\/second/);
     assert.doesNotMatch(firstHtml, /<iframe|src="http:\/\/localhost:4173\/first"/);
   } finally {
     Object.defineProperty(globalThis, 'window', {
@@ -1153,7 +1138,7 @@ test('ResultsRenderer restores persisted New/Close state and Browser URL without
     assert.match(html, /class="result-active-tab-close"[^>]*aria-label="Close Browser 2"/);
     assert.match(html, /aria-selected="true"[^>]*><span>Browser 2<\/span>/);
     assert.match(html, /value="localhost:4173\/preview"/);
-    assert.match(html, /data-browser-state="ready"/);
+    assert.match(html, /data-browser-state="idle"/);
     assert.match(html, /<dd>http:\/\/localhost:4173\/preview<\/dd>/);
     assert.match(html, /\/browser open &quot;http:\/\/localhost:4173\/preview&quot; --surface workbench/);
     assert.doesNotMatch(html, /<iframe|src="http:\/\/localhost:4173\/preview"/);
@@ -2532,7 +2517,10 @@ test('object reference focus routes open refs to typed right-pane tabs', () => {
   assert.equal(resultTabForObjectReference({ id: 'file', kind: 'file', title: 'File', ref: 'file:PROJECT.md' }), 'files');
   assert.equal(resultTabForObjectReference({ id: 'url', kind: 'url', title: 'URL', ref: 'url:https://example.org' }), 'browser');
   assert.equal(resultTabForObjectReference({ id: 'terminal', kind: 'execution-unit', title: 'Shell', ref: 'execution-unit:EU-shell' }), 'terminal');
-  assert.equal(resultTabForObjectReference({ id: 'screen', kind: 'artifact', title: 'Screen', ref: 'computer-use:frame/latest.png', artifactType: 'computer-use-virtual-screen' }), 'screen');
+  assert.equal(resultTabForObjectReference({ id: 'image', kind: 'artifact', title: 'Image evidence', ref: 'image:browser/latest.png', artifactType: 'image-evidence' }), 'image');
+  assert.equal(resultTabForObjectReference({ id: 'annotation', kind: 'artifact', title: 'Annotation crop', ref: 'annotation:crop/latest.json' }), 'image');
+  assert.equal(resultTabForObjectReference({ id: 'screenshot', kind: 'artifact', title: 'Screenshot', ref: 'screenshot:run/latest.png' }), 'image');
+  assert.equal(resultTabForObjectReference({ id: 'legacy-screen-frame', kind: 'artifact', title: 'Legacy frame', ref: 'computer-use:frame/latest.png', artifactType: 'computer-use-virtual-screen' }), 'image');
   assert.equal(resultTabForObjectReference({ id: 'artifact', kind: 'artifact', title: 'Report', ref: 'artifact:report' }), 'primary');
 });
 
@@ -2977,7 +2965,7 @@ function projectionResultPresentation(runId: string, artifactRefs: string[]) {
 function renderResultsRenderer(session: SciForgeSession, options: {
   activeRunId?: string;
   initialFocusMode?: 'all' | 'visual' | 'evidence' | 'execution';
-  initialResultTab?: 'primary' | 'browser' | 'screen' | 'terminal' | 'files' | 'evidence';
+  initialResultTab?: 'primary' | 'browser' | 'image' | 'screen' | 'terminal' | 'files' | 'evidence';
   focusedObjectReference?: ObjectReference;
   workspaceFileEditor?: WorkspaceFileEditorState | null;
 } = {}) {

@@ -100,6 +100,7 @@ export type DesktopMainOptions = {
   packagedRoot?: string;
   sidecarCwd?: string;
   workspacePath?: string;
+  rendererDevServerUrl?: string;
   launcher?: ProductionRuntimeLauncher;
   platformService?: DesktopPlatformService;
 };
@@ -235,9 +236,15 @@ export function createElectronDesktopMainController(
     });
     const window = new electron.BrowserWindow(createDesktopBrowserWindowOptions(plan));
     browserHostSurface?.setMainWindow(window);
-    logDesktopStartupDebug('browser-window-created', { rendererFile: plan.renderer.loadStrategy.filePath });
-    await window.loadFile(plan.renderer.loadStrategy.filePath);
-    logDesktopStartupDebug('renderer-loaded', { rendererFile: plan.renderer.loadStrategy.filePath });
+    const desktopRendererUrl = desktopRendererUrlFromOption(options.rendererDevServerUrl) ?? desktopRendererUrlFromEnv();
+    logDesktopStartupDebug('browser-window-created', { rendererFile: plan.renderer.loadStrategy.filePath, desktopRendererUrl });
+    if (desktopRendererUrl && window.loadURL) {
+      await window.loadURL(desktopRendererUrl);
+      logDesktopStartupDebug('renderer-loaded', { rendererUrl: desktopRendererUrl });
+    } else {
+      await window.loadFile(plan.renderer.loadStrategy.filePath);
+      logDesktopStartupDebug('renderer-loaded', { rendererFile: plan.renderer.loadStrategy.filePath });
+    }
     started = { plan, launcher: launcherResult, runtimeConfig, window };
     return started;
   }
@@ -301,6 +308,10 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:browser-host-surface:detach', async (_event: unknown, value: unknown) => {
     if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
     return input.browserHostSurface.detach(browserHostSurfaceSessionId(value));
+  });
+  input.electron.ipcMain.handle('desktop:browser-host-surface:resize', async (_event: unknown, value: unknown) => {
+    if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
+    return input.browserHostSurface.resize(browserHostSurfaceAttachRequest(value));
   });
   input.electron.ipcMain.handle('desktop:browser-host-surface:state', async (_event: unknown, value: unknown) => {
     if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
@@ -567,6 +578,25 @@ function desktopWorkspacePathFromEnv(): string | undefined {
 function desktopAppRootFromEnv(): string | undefined {
   const value = process.env.SCIFORGE_DESKTOP_APP_ROOT;
   return value?.trim() ? resolve(value) : undefined;
+}
+
+function desktopRendererUrlFromEnv(): string | undefined {
+  return desktopRendererUrlFromOption(process.env.SCIFORGE_DESKTOP_RENDERER_URL);
+}
+
+function desktopRendererUrlFromOption(value: string | undefined): string | undefined {
+  if (!value?.trim()) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return undefined;
+    const hostname = url.hostname.toLowerCase();
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]' && hostname !== '::1') return undefined;
+    url.search = '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch {
+    return undefined;
+  }
 }
 
 function inferDesktopAppRoot(appPath: string | undefined): string | undefined {

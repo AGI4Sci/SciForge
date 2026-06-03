@@ -5,7 +5,7 @@ import type { ResultPaneTab } from './ResultShell';
 export const RESULT_PANE_TABS = [
   'primary',
   'browser',
-  'screen',
+  'image',
   'terminal',
   'files',
   'evidence',
@@ -19,19 +19,7 @@ export const RESULT_PANE_LIFECYCLE_STATES = [
   'blocked',
 ] as const;
 
-export const RESULT_PANE_SCREEN_ATTACH_STATES = [
-  'attached',
-  'replay',
-  'no-session',
-  'adapter-unavailable',
-  'observe-only',
-  'blocked',
-  'requires-handoff',
-  'error',
-] as const;
-
 export type ResultPaneLifecycleState = typeof RESULT_PANE_LIFECYCLE_STATES[number];
-export type ResultPaneScreenAttachState = typeof RESULT_PANE_SCREEN_ATTACH_STATES[number];
 export type ResultPaneObjectStateKind = ResultPaneLifecycleState | 'unsupported';
 export type ResultPaneRoutePurpose = 'focus' | 'open';
 export type ResultPaneRouteReason = 'preferred-view' | 'ref-prefix' | 'artifact-type' | 'object-kind' | 'fallback' | 'unsupported';
@@ -72,7 +60,7 @@ export interface ResultPaneRequiredRef {
 }
 
 export interface ResultPaneAttachStateDescriptor {
-  state: ResultPaneScreenAttachState;
+  state: string;
   title: string;
   description: string;
   placeholderEvidence: false;
@@ -83,7 +71,7 @@ export interface ResultPaneContract {
   objectKinds: readonly ObjectReferenceKind[];
   refPrefixes: readonly string[];
   states: Record<ResultPaneLifecycleState, ResultPaneStateDescriptor>;
-  attachStates?: Record<ResultPaneScreenAttachState, ResultPaneAttachStateDescriptor>;
+  attachStates?: Record<string, ResultPaneAttachStateDescriptor>;
   allowedActions: readonly ObjectAction[];
   requiredRefs: readonly ResultPaneRequiredRef[];
   redactionHints: readonly ResultPaneRedactionHint[];
@@ -156,7 +144,9 @@ const COMMON_REDACTION_HINTS = [
   'mask-secrets',
 ] as const satisfies readonly ResultPaneRedactionHint[];
 
-export const RESULT_PANE_CONTRACTS: Record<ResultPaneTab, ResultPaneContract> = {
+type CanonicalResultPaneTab = Exclude<ResultPaneTab, 'screen'>;
+
+export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneContract> = {
   primary: defineResultPaneContract({
     pane: 'primary',
     objectKinds: ['artifact', 'scenario-package'],
@@ -216,166 +206,75 @@ export const RESULT_PANE_CONTRACTS: Record<ResultPaneTab, ResultPaneContract> = 
     ],
     redactionHints: [...COMMON_REDACTION_HINTS, 'native-only-live-surface', 'no-full-dom', 'no-auth-headers', 'bounded-preview'],
   }),
-  screen: defineResultPaneContract({
-    pane: 'screen',
-    objectKinds: ['artifact', 'execution-unit'],
+  image: defineResultPaneContract({
+    pane: 'image',
+    objectKinds: ['artifact', 'file', 'execution-unit'],
     refPrefixes: [
+      'image:',
+      'image-evidence:',
+      'screenshot:',
+      'annotation:',
+      'browser-evidence:',
+      'window-capture:',
+      'screen-region:',
+      'artifact-preview:',
+      'replay:',
+      'computer-use:frame',
+      'computer-use:frames',
       'screen:',
       'virtual-app-screen:',
-      'app:',
-      'window:',
-      'computer-use:',
-      'computer-use-session:',
-      'replay:',
-      'ledger:',
-      'approval:computer-use:',
     ],
-    states: paneStates('VirtualAppScreen object'),
-    attachStates: screenAttachStates(),
-    allowedActions: ['focus-right-pane', 'inspect', 'pin'],
-    requiredRefs: [
-      {
-        name: 'targetAppRef',
-        description: 'Application identity ref bound to one VirtualAppScreen.',
-        prefixes: ['app:', 'computer-use:'],
-        requiredFor: ['ready', 'blocked', 'error'],
-      },
-      {
-        name: 'targetWindowRef',
-        description: 'Window or app surface identity ref bound to the active screen.',
-        prefixes: ['window:', 'screen:', 'computer-use:'],
-        requiredFor: ['ready', 'blocked', 'error'],
-      },
-      {
-        name: 'sessionRef',
-        description: 'VirtualAppScreen session ref; no active session must render as no-session.',
-        prefixes: ['computer-use:session/', 'computer-use-session:', 'virtual-app-screen:'],
-        requiredFor: ['ready', 'blocked', 'error'],
-      },
-      {
-        name: 'frameStreamRef',
-        description: 'Host-owned live frame stream ref; the Screen pane may materialize it but never accepts provider URLs or raw frames.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'screen:'],
-        requiredFor: [],
-      },
-      {
-        name: 'liveSurfaceRef',
-        description: 'Single interactive live surface ref for the active VirtualAppScreen. Replay and snapshots remain evidence only.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'screen:', 'virtual-app-screen:'],
-        requiredFor: [],
-      },
-      {
-        name: 'currentFrameRef',
-        description: 'Current frame ref rendered through the host preview materializer, never as inline screenshot data.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'screen:'],
-        requiredFor: ['ready'],
-      },
-      {
-        name: 'actorCursorRefs',
-        description: 'Actor cursor refs for user/agent presence and target proposals.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'cursor:'],
-        requiredFor: ['ready', 'blocked'],
-      },
-      {
-        name: 'annotationOverlayRefs',
-        description: 'Annotation/proposal overlay refs bound to frame, window region, element, OCR span, or artifact refs.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'annotation:', 'proposal:'],
-        requiredFor: ['ready', 'blocked'],
-      },
-      {
-        name: 'inputLeaseRef',
-        description: 'Input lease ref for live control; absent lease must render observe-only or replay instead of executing in GUI.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'lease:'],
-        requiredFor: [],
-      },
-      {
-        name: 'actionAdapterRef',
-        description: 'Action adapter ref proving app/window-scoped execution ownership outside GUI for live control.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'adapter:'],
-        requiredFor: [],
-      },
-      {
-        name: 'adapterReadinessRef',
-        description: 'Adapter readiness ref; missing or unavailable readiness must render adapter-unavailable.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'readiness:'],
-        requiredFor: ['ready', 'blocked'],
-      },
-      {
-        name: 'replayRef',
-        description: 'Replay bundle ref for timeline reconstruction.',
-        prefixes: ['replay:', 'computer-use:session/', 'computer-use:'],
-        requiredFor: ['ready', 'blocked', 'error'],
-      },
-      {
-        name: 'evidenceLedgerRef',
-        description: 'Evidence ledger ref tying before/after, input intent, executor event, verification, and gui.present refs together.',
-        prefixes: ['ledger:', 'evidence:', 'computer-use:session/', 'computer-use:'],
-        requiredFor: ['ready', 'blocked', 'error'],
-      },
-      {
-        name: 'blockedRef',
-        description: 'Blocked diagnostic ref used for blocked and requires-handoff attach states.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'blocked:'],
-        requiredFor: ['blocked'],
-      },
-      {
-        name: 'errorRef',
-        description: 'Bounded error ref; raw provider or trace payloads are not pane payload.',
-        prefixes: ['computer-use:session/', 'computer-use:', 'error:'],
-        requiredFor: ['error'],
-      },
-    ],
+    states: paneStates('Image evidence object'),
+    allowedActions: ['focus-right-pane', 'inspect', 'open-external', 'copy-path', 'pin'],
+    requiredRefs: [{
+      name: 'imageRef',
+      description: 'Stable image evidence ref; binary image bytes, raw screenshots, and data URLs stay outside the thread payload.',
+      prefixes: ['image:', 'image-evidence:', 'screenshot:', 'annotation:', 'browser-evidence:', 'window-capture:', 'screen-region:', 'artifact-preview:', 'replay:', 'computer-use:frame', 'computer-use:frames', 'screen:', 'virtual-app-screen:'],
+      requiredFor: ['ready', 'error', 'blocked'],
+    }, {
+      name: 'provenanceRef',
+      description: 'Provenance ref describing source, time, dimensions, hash, and target for the image evidence.',
+      prefixes: ['provenance:', 'evidence:', 'browser-evidence:', 'annotation:', 'artifact:', 'replay:', 'computer-use:'],
+      requiredFor: ['ready', 'error', 'blocked'],
+    }],
     redactionHints: [
       ...COMMON_REDACTION_HINTS,
       'no-raw-screenshot-bytes',
       'no-private-coordinates',
       'no-provider-payloads',
       'no-executor-params',
-      'terminal-equivalent-only',
       'no-gui-computer-use-execution',
+      'bounded-preview',
     ],
     acceptedPayloadRefs: [
-      'targetAppRef',
-      'targetWindowRef',
-      'sessionRef',
-      'displayGroupRef',
-      'screenRef',
-      'liveSurfaceRef',
-      'surfaceTransport',
-      'visibleScreenRefs',
-      'visibleCursorRefs',
-      'frameStreamRef',
-      'frameRef',
-      'frameRefs',
-      'frames',
-      'currentFrameRef',
-      'beforeFrameRef',
-      'afterFrameRef',
-      'beforeAfterFrameRefs',
-      'actorCursorRefs',
-      'annotationOverlayRefs',
-      'annotationProposalRefs',
-      'inputIntentRefs',
-      'executorEventRefs',
-      'inputLeaseRef',
-      'actionAdapterRef',
-      'adapterReadinessRef',
-      'replayRef',
-      'evidenceLedgerRef',
-      'artifactRefs',
-      'verificationRefs',
-      'guiPresentRefs',
-      'blockedRef',
-      'errorRef',
-      'stopRef',
-      'handoffRef',
+      'imageRef',
+      'ref',
+      'sourceKind',
+      'mime',
+      'width',
+      'height',
+      'sha256',
+      'createdAt',
+      'bounds',
+      'cropBounds',
+      'provenanceRef',
+      'provenanceRefs',
+      'annotationRefs',
+      'targetRef',
+      'windowRef',
+      'browserSessionRef',
+      'artifactRef',
+      'redactionRef',
+      'status',
     ],
     rejectedPayloadFields: [
       'rawScreenshot',
       'screenshot',
       'screenshotBase64',
       'imageBase64',
+      'base64',
       'base64Screenshot',
+      'dataUrl',
       'frameBase64',
       'frameData',
       'rawFrame',
@@ -394,6 +293,11 @@ export const RESULT_PANE_CONTRACTS: Record<ResultPaneTab, ResultPaneContract> = 
       'framePreviewUrl',
       'thumbnailPreviewUrl',
       'rawUrl',
+      'inputLeaseRef',
+      'actionAdapterRef',
+      'liveSurfaceRef',
+      'frameStreamRef',
+      'sessionRef',
     ],
   }),
   terminal: defineResultPaneContract({
@@ -506,7 +410,7 @@ const OBJECT_KIND_ROUTE: Record<ObjectReferenceKind, ResultPaneTab> = {
 
 const PREFERRED_VIEW_ROUTES: Array<{ pane: ResultPaneTab; pattern: RegExp; label: string }> = [
   { pane: 'browser', pattern: /\b(?:browser|web|url|site|page|dom)\b/i, label: 'browser' },
-  { pane: 'screen', pattern: /\b(?:screen|screenshot|computer-use|desktop|replay|vision)\b/i, label: 'screen' },
+  { pane: 'image', pattern: /\b(?:image|visual|screen|screenshot|desktop|replay|vision|annotation|crop)\b/i, label: 'image' },
   { pane: 'terminal', pattern: /\b(?:terminal|shell|console|execution|notebook-timeline)\b/i, label: 'terminal' },
   { pane: 'files', pattern: /\b(?:workspace-file|file-viewer|folder|editor|diff|patch|compare|comparison)\b/i, label: 'files' },
   { pane: 'evidence', pattern: /\b(?:evidence|reference|references|source|citation|audit|ledger|subagent|agent-result|agent-transcript)\b/i, label: 'evidence' },
@@ -515,12 +419,12 @@ const PREFERRED_VIEW_ROUTES: Array<{ pane: ResultPaneTab; pattern: RegExp; label
 
 const ARTIFACT_TYPE_ROUTES: Array<{ pane: ResultPaneTab; pattern: RegExp; label: string }> = [
   { pane: 'browser', pattern: /\b(?:browser|browser-runtime|browser-snapshot|web-page|webpage|dom-snapshot)\b/i, label: 'browser-artifact' },
-  { pane: 'screen', pattern: /\b(?:computer-use|virtual-screen|screen|screenshot|app-screen|desktop-frame)\b/i, label: 'screen-artifact' },
+  { pane: 'image', pattern: /\b(?:image|image-evidence|annotation|annotation-crop|screenshot|browser-evidence|window-capture|screen-region|artifact-image|artifact-preview|replay-frame|replay|virtual-screen|screen|app-screen|desktop-frame)\b/i, label: 'image-artifact' },
   { pane: 'terminal', pattern: /\b(?:terminal|terminal-transcript|pty|shell|execution-log|command-output)\b/i, label: 'terminal-artifact' },
 ];
 
 export function resultPaneContractForTab(tab: ResultPaneTab): ResultPaneContract {
-  return RESULT_PANE_CONTRACTS[tab];
+  return RESULT_PANE_CONTRACTS[canonicalResultPaneTab(tab)];
 }
 
 export function requiredRefsForResultPane(tab: ResultPaneTab): readonly ResultPaneRequiredRef[] {
@@ -702,59 +606,6 @@ function paneStates(label: string): Record<ResultPaneLifecycleState, ResultPaneS
   };
 }
 
-function screenAttachStates(): Record<ResultPaneScreenAttachState, ResultPaneAttachStateDescriptor> {
-  return {
-    attached: {
-      state: 'attached',
-      title: 'Attached',
-      description: 'The host has attached a VirtualAppScreen session; GUI may request terminal-equivalent InputIntent text but never executes Computer Use actions.',
-      placeholderEvidence: false,
-    },
-    replay: {
-      state: 'replay',
-      title: 'Replay / evidence inspector',
-      description: 'The pane can show refs-first frame or replay evidence, but it is not a live control stream.',
-      placeholderEvidence: false,
-    },
-    'no-session': {
-      state: 'no-session',
-      title: 'No VirtualAppScreen session',
-      description: 'The Screen pane has no active app/window/session binding and must not present a placeholder as frame evidence.',
-      placeholderEvidence: false,
-    },
-    'adapter-unavailable': {
-      state: 'adapter-unavailable',
-      title: 'Adapter unavailable',
-      description: 'The target has a session or frame ref, but adapter readiness is missing or unavailable.',
-      placeholderEvidence: false,
-    },
-    'observe-only': {
-      state: 'observe-only',
-      title: 'Observe-only',
-      description: 'The pane can show frame and annotation refs but has no input lease or action adapter for control.',
-      placeholderEvidence: false,
-    },
-    blocked: {
-      state: 'blocked',
-      title: 'Blocked',
-      description: 'The pane must cite blocked refs and keep Computer Use execution outside GUI.',
-      placeholderEvidence: false,
-    },
-    'requires-handoff': {
-      state: 'requires-handoff',
-      title: 'Requires handoff',
-      description: 'The target cannot satisfy isolated background control and must produce terminal-equivalent handoff text.',
-      placeholderEvidence: false,
-    },
-    error: {
-      state: 'error',
-      title: 'Screen error',
-      description: 'The pane must cite bounded error refs and must not dump raw provider or executor payloads.',
-      placeholderEvidence: false,
-    },
-  };
-}
-
 function paneForPreferredView(preferredView: string | undefined): { pane: ResultPaneTab; label: string } | undefined {
   if (!preferredView) return undefined;
   const match = PREFERRED_VIEW_ROUTES.find((route) => route.pattern.test(preferredView));
@@ -774,6 +625,10 @@ function paneForRefPrefix(ref: string | undefined): { pane: ResultPaneTab; prefi
     if (match) return { pane, prefix: match };
   }
   return undefined;
+}
+
+function canonicalResultPaneTab(tab: ResultPaneTab): CanonicalResultPaneTab {
+  return tab === 'screen' ? 'image' : tab;
 }
 
 function lifecycleStateForObjectReference(reference: ObjectReference): ResultPaneLifecycleState {

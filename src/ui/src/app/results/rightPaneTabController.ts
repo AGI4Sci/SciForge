@@ -50,6 +50,7 @@ export interface RightPaneTabController {
 export function focusModeForRightPaneTab(tab: ResultPaneTab | undefined, current: ResultFocusMode): ResultFocusMode {
   if (tab === 'evidence') return 'evidence';
   if (tab === 'terminal') return 'execution';
+  if (tab === 'image' || tab === 'screen') return 'visual';
   if (!tab || current === 'evidence' || current === 'execution') return 'all';
   return current;
 }
@@ -160,7 +161,7 @@ export function useRightPaneTabController({
     setFocusMode(mode);
     if (mode === 'evidence') activateResultTabKind('evidence');
     if (mode === 'execution') activateResultTabKind('terminal');
-    if (mode === 'visual') activateResultTabKind('primary');
+    if (mode === 'visual') activateResultTabKind('image');
   }
 
   function setActiveBrowserAddress(nextAddress: string) {

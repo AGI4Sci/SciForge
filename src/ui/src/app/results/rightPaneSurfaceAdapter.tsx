@@ -3,8 +3,8 @@ import type { WorkspaceTerminalSession } from '../../api/workspaceClient';
 import type { SettingsSectionId } from '../appShell/settingsPageModel';
 import type { CommandTextUIAction, OpenDebugAuditUIAction } from '../uiActionBoundary';
 import type { ResultsRendererViewModel } from '../results-renderer-view-model';
-import type { ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../../domain';
-import type { VirtualScreenPayload, WorkspaceFileViewerOpenFileTab } from '../../../../../packages/presentation/components';
+import type { ObjectAction, ObjectReference, PreviewDescriptor, RuntimeArtifact, SciForgeConfig, SciForgeReference, SciForgeRun, SciForgeSession } from '../../domain';
+import type { ImageEvidencePayload, WorkspaceFileViewerOpenFileTab } from '../../../../../packages/presentation/components';
 import { PrimaryResultAdapter } from './primaryResultAdapter';
 import { browserAddressForFocusedObjectReference } from './browserPaneModel';
 import { RightPaneBrowserTool } from './browserPaneHostAdapter';
@@ -13,7 +13,7 @@ import { ResultPaneWorkspaceFileViewer, RightPaneFilesTool } from './filesPaneHo
 import type { WorkspaceFileEditorState } from './filesPaneModel';
 import { RightPaneTerminalTool as RightPaneTerminalLiveTool } from './terminalPaneHostAdapter';
 import { RightPaneReferencesTool } from './referencesPaneHostAdapter';
-import { RightPaneVirtualScreenTool } from './screenPaneHostAdapter';
+import { RightPaneImageEvidenceTool } from './imagePaneHostAdapter';
 import type { ResultFocusMode, ResultPaneTab } from './ResultShell';
 import { resultText, type ResultLocale } from './resultLocale';
 
@@ -39,9 +39,10 @@ export interface RightPaneActiveSurfaceProps {
   workspaceFileOpenTabs: WorkspaceFileViewerOpenFileTab[];
   browserAddressDraft?: string;
   terminalSession?: WorkspaceTerminalSession;
-  virtualScreenPayload?: VirtualScreenPayload;
+  imageEvidencePayload?: ImageEvidencePayload;
   onBrowserAddressDraftChange: (nextAddress: string) => void;
   onCommandRequest: (commandText: string, label?: string, targetRef?: string) => void;
+  onExternalReferenceRequest?: (reference: SciForgeReference) => void;
   onObjectAction: (reference: ObjectReference, action: ObjectAction) => void | Promise<void>;
   onClearFocusedObject: () => void;
   onPreviewPackageRequest?: (reference: ObjectReference, path?: string, descriptor?: PreviewDescriptor) => void;
@@ -86,9 +87,10 @@ export function RightPaneActiveSurface({
   workspaceFileOpenTabs,
   browserAddressDraft,
   terminalSession,
-  virtualScreenPayload,
+  imageEvidencePayload,
   onBrowserAddressDraftChange,
   onCommandRequest,
+  onExternalReferenceRequest,
   onObjectAction,
   onClearFocusedObject,
   onPreviewPackageRequest,
@@ -154,9 +156,10 @@ export function RightPaneActiveSurface({
         workspaceFileOpenTabs,
         browserAddressDraft,
         terminalSession,
-        virtualScreenPayload,
+        imageEvidencePayload,
         onBrowserAddressDraftChange,
         onCommandRequest,
+        onExternalReferenceRequest,
         onConfigChange,
         onOpenSettings,
         onTerminalSessionChange,
@@ -195,9 +198,10 @@ function renderRightPaneActiveTool({
   workspaceFileOpenTabs,
   browserAddressDraft,
   terminalSession,
-  virtualScreenPayload,
+  imageEvidencePayload,
   onBrowserAddressDraftChange,
   onCommandRequest,
+  onExternalReferenceRequest,
   onConfigChange,
   onOpenSettings,
   onTerminalSessionChange,
@@ -228,6 +232,7 @@ function renderRightPaneActiveTool({
         addressDraft={browserAddressForFocusedObjectReference(focusedObjectReference, session) ?? browserAddressDraft ?? 'about:blank'}
         onAddressDraftChange={onBrowserAddressDraftChange}
         onCommandRequest={onCommandRequest}
+        onAnnotationReferenceRequest={onExternalReferenceRequest}
         onConfigChange={onConfigChange}
         onOpenSettings={onOpenSettings}
       />
@@ -235,15 +240,25 @@ function renderRightPaneActiveTool({
   }
   if (resultTab === 'screen') {
     return (
-      <RightPaneVirtualScreenTool
+      <RightPaneImageEvidenceTool
         key={activeResultTabId}
         config={config}
         session={session}
         activeRun={activeRun}
-        activeTabId={activeResultTabId}
-        payload={virtualScreenPayload}
+        payload={imageEvidencePayload}
         locale={locale}
-        onCommandRequest={onCommandRequest}
+      />
+    );
+  }
+  if (resultTab === 'image') {
+    return (
+      <RightPaneImageEvidenceTool
+        key={activeResultTabId}
+        config={config}
+        session={session}
+        activeRun={activeRun}
+        payload={imageEvidencePayload}
+        locale={locale}
       />
     );
   }
@@ -320,7 +335,7 @@ export function RightPaneEmptyWorkspace({ locale }: { locale?: ResultLocale }) {
   return (
     <div className="right-pane-empty-workspace" data-testid="right-pane-empty-workspace">
       <strong>{resultText(locale, { 'zh-CN': '没有打开的页面', 'en-US': 'No pages open' })}</strong>
-      <span>{resultText(locale, { 'zh-CN': '使用顶部 New 打开 Results、Browser、Screen、Terminal、Files 或 References。', 'en-US': 'Use New above to open Results, Browser, Screen, Terminal, Files, or References.' })}</span>
+      <span>{resultText(locale, { 'zh-CN': '使用顶部 New 打开 Results、Browser、Image / Evidence、Terminal、Files 或 References。', 'en-US': 'Use New above to open Results, Browser, Image / Evidence, Terminal, Files, or References.' })}</span>
     </div>
   );
 }

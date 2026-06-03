@@ -12,7 +12,7 @@ import {
   rightPaneVirtualScreenSlot,
 } from './screenPaneHostAdapter';
 
-test('screen pane host adapter owns Screen wrapper extraction from ResultsRenderer', () => {
+test('screen pane host adapter stays legacy-only while product right pane uses Image Evidence', () => {
   const adapterSource = readFileSync(new URL('./screenPaneHostAdapter.tsx', import.meta.url), 'utf8');
   const rendererSource = readFileSync(new URL('../ResultsRenderer.tsx', import.meta.url), 'utf8');
   const surfaceSource = readFileSync(new URL('./rightPaneSurfaceAdapter.tsx', import.meta.url), 'utf8');
@@ -30,18 +30,23 @@ test('screen pane host adapter owns Screen wrapper extraction from ResultsRender
   assert.match(adapterSource, /data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
   assert.match(adapterSource, /rightPaneVirtualScreenHostPresentationAttachRequest/);
   assert.match(adapterSource, /visible: false/);
+  assert.match(rendererSource, /rightPaneImageEvidencePayload/);
+  assert.match(rendererSource, /imageEvidencePayload={imageEvidencePayload}/);
+  assert.match(surfaceSource, /RightPaneImageEvidenceTool/);
+  assert.match(surfaceSource, /resultTab === 'screen'/);
+  assert.match(surfaceSource, /resultTab === 'image'/);
   assert.match(viewerSource, /buildVirtualScreenInputIntentCommand/);
   assert.match(viewerSource, /virtual-screen-keyboard-input/);
   assert.match(viewerSource, /data-command-boundary="terminal-equivalent-input-intent"/);
   assert.match(viewerSource, /onPointerDown/);
   assert.match(viewerSource, /onWheel/);
   assert.match(styleSource, /\.virtual-screen-keyboard-input\s*\{[\s\S]*?caret-color: #fff/);
-  assert.match(surfaceSource, /from '.\/screenPaneHostAdapter'/);
   assert.doesNotMatch(adapterSource, /sendBrowserHostSessionAction|startBrowserHostSession|executeScoped|runComputerUse|attachVirtualAppScreenSession|registerVirtualAppScreenSessionExecutor/);
   assert.doesNotMatch(viewerSource, /sendBrowserHostSessionAction|startBrowserHostSession|executeScoped|runComputerUse/);
-  assert.doesNotMatch(rendererSource, /function RightPaneVirtualScreenTool/);
+  assert.doesNotMatch(rendererSource, /useRightPaneScreenController|function RightPaneVirtualScreenTool/);
   assert.doesNotMatch(rendererSource, /renderVirtualScreenViewer/);
   assert.doesNotMatch(rendererSource, /rightPaneVirtualScreenPayload/);
+  assert.doesNotMatch(surfaceSource, /from '.\/screenPaneHostAdapter'|RightPaneVirtualScreenTool|renderVirtualScreenViewer|rightPaneVirtualScreenPayload|attachVirtualAppScreenSurface|data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
 });
 
 test('screen pane host adapter renders replay inspector without becoming a live owner', () => {

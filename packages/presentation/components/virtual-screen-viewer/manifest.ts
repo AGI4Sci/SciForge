@@ -8,10 +8,10 @@ export const manifest: UIComponentManifest = {
   packageName: '@sciforge-ui/virtual-screen-viewer',
   moduleId: 'virtual-screen-panel',
   version: '1.0.0',
-  title: 'Virtual screen viewer',
-  description: 'Presentation-only Computer Use VirtualAppScreen surface with host-owned live frame refs, actor cursors, isolation flags, leases, input-intent requests, evidence, and replay status.',
+  title: 'Legacy virtual screen inspector',
+  description: 'Deprecated compatibility renderer for historical Computer Use VirtualAppScreen payloads. New right-pane visual evidence uses image-evidence-viewer.',
   componentId: VIRTUAL_SCREEN_VIEWER_COMPONENT_ID,
-  lifecycle: 'published',
+  lifecycle: 'deprecated',
   outputArtifactTypes: [VIRTUAL_SCREEN_VIEWER_ARTIFACT_TYPE],
   acceptsArtifactTypes: [
     VIRTUAL_SCREEN_VIEWER_ARTIFACT_TYPE,
@@ -55,7 +55,7 @@ export const manifest: UIComponentManifest = {
   },
   docs: {
     readmePath: 'packages/presentation/components/virtual-screen-viewer/README.md',
-    agentSummary: 'Use for displaying Computer Use VirtualAppScreen live-surface refs and requesting scoped InputIntent terminal-equivalent commands from the frame. The GUI never executes input, never owns scheduler leases, never creates virtual displays, and never accepts raw coordinates, desktop bridge params, provider routes, transport SDP, or inline screenshots.',
+    agentSummary: 'Deprecated compatibility renderer for historical VirtualAppScreen records. Prefer image-evidence-viewer for screenshots, crops, captures, and replay frames; this legacy renderer must not be selected for new right-pane product surfaces.',
   },
   workbenchDemo: {
     artifactType: VIRTUAL_SCREEN_VIEWER_ARTIFACT_TYPE,
@@ -97,7 +97,7 @@ export const manifest: UIComponentManifest = {
       afterEvidenceRef: 'computer-use:session/demo/evidence/after.json',
       blockedRef: 'computer-use:session/demo/blocked/backend.json',
       status: 'blocked',
-      title: 'Virtual Screen',
+      title: 'Legacy virtual screen record',
       permissionRequired: true,
       permissionGranted: false,
       sharedInputAllowed: false,

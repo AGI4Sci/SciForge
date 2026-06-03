@@ -15,7 +15,7 @@ export interface BrowserWorkbenchCommand {
   command: string;
   risk?: 'allowed' | 'needs-approval';
   disabled?: boolean;
-  kind?: 'terminal-equivalent';
+  kind?: 'terminal-equivalent' | 'composer-reference';
 }
 
 export type BrowserWorkbenchCommandId =
@@ -24,11 +24,7 @@ export type BrowserWorkbenchCommandId =
   | 'forward'
   | 'reload'
   | 'stop'
-  | 'snapshot'
-  | 'state'
-  | 'takeover'
-  | 'copy-url'
-  | 'open-external';
+  | 'annotate';
 
 export type BrowserWorkbenchStateStatus = 'idle' | 'loading' | 'ready' | 'blocked' | 'error' | 'offline';
 
@@ -80,11 +76,7 @@ export interface BrowserWorkbenchCapabilities {
   canGoForward?: boolean;
   canReload?: boolean;
   canStop?: boolean;
-  canSnapshot?: boolean;
-  canState?: boolean;
-  canTakeover?: boolean;
-  canCopyUrl?: boolean;
-  canOpenExternal?: boolean;
+  canAnnotate?: boolean;
 }
 
 export interface BrowserWorkbenchWriterDiagnostic {
@@ -324,22 +316,26 @@ export function browserWorkbenchDefaultCommands(url: string, options: BrowserWor
     { id: 'back', label: 'Back', command: `/browser back --url ${quotedUrl}`, disabled: options.canGoBack === false, risk: 'allowed', kind: 'terminal-equivalent' },
     { id: 'forward', label: 'Forward', command: `/browser forward --url ${quotedUrl}`, disabled: options.canGoForward === false, risk: 'allowed', kind: 'terminal-equivalent' },
     reloadOrStop,
-    { id: 'snapshot', label: 'Snapshot', command: `/browser snapshot --url ${quotedUrl} --screenshot --dom --logs`, disabled: options.canSnapshot === false, risk: 'allowed', kind: 'terminal-equivalent' },
-    { id: 'state', label: 'State', command: `/browser state --url ${quotedUrl} --dom --ax --console --network`, disabled: options.canState === false, risk: 'allowed', kind: 'terminal-equivalent' },
-    { id: 'takeover', label: 'Takeover', command: `/browser takeover --url ${quotedUrl} --approval required`, disabled: options.canTakeover === false, risk: 'needs-approval', kind: 'terminal-equivalent' },
-    { id: 'copy-url', label: 'Copy URL', command: `/browser copy-url ${quotedUrl} --surface workbench`, disabled: options.canCopyUrl === false || normalizedUrl === 'about:blank', risk: 'allowed', kind: 'terminal-equivalent' },
-    { id: 'open-external', label: 'Open External', command: `/browser open-external ${quotedUrl} --approval required`, disabled: options.canOpenExternal === false || normalizedUrl === 'about:blank', risk: 'needs-approval', kind: 'terminal-equivalent' },
   ];
 }
 
 function browserWorkbenchCommands(payload: BrowserWorkbenchPayload, state: BrowserWorkbenchState, tab?: BrowserRuntimeTab, snapshot?: BrowserRuntimeSnapshot) {
-  if (payload.commands?.length) return payload.commands;
+  const explicitCommands = payload.commands?.filter(browserWorkbenchToolbarCommand);
+  if (explicitCommands?.length) return explicitCommands;
   return browserWorkbenchDefaultCommands(commandUrl(payload, tab, snapshot), {
     ...payload.capabilities,
     canGoBack: payload.canGoBack ?? payload.capabilities?.canGoBack,
     canGoForward: payload.canGoForward ?? payload.capabilities?.canGoForward,
     status: state.status,
   });
+}
+
+function browserWorkbenchToolbarCommand(command: BrowserWorkbenchCommand) {
+  return command.id === 'open'
+    || command.id === 'back'
+    || command.id === 'forward'
+    || command.id === 'reload'
+    || command.id === 'stop';
 }
 
 function normalizeStateStatus(value: unknown): BrowserWorkbenchStateStatus | undefined {
@@ -538,11 +534,7 @@ function browserWorkbenchCommandShortLabel(command: BrowserWorkbenchCommand) {
   if (command.id === 'forward') return '>';
   if (command.id === 'reload') return 'R';
   if (command.id === 'stop') return 'X';
-  if (command.id === 'snapshot') return 'Shot';
-  if (command.id === 'state') return 'State';
-  if (command.id === 'takeover') return 'Take';
-  if (command.id === 'copy-url') return 'Copy';
-  if (command.id === 'open-external') return 'Ext';
+  if (command.id === 'annotate') return 'Note';
   return command.label.slice(0, 6);
 }
 
@@ -782,19 +774,13 @@ function renderBrowserState(
   payload: BrowserWorkbenchPayload,
   commands: BrowserWorkbenchCommand[],
 ) {
-  const externalUrl = safeExternalHref(payload.externalUrl ?? state.url);
   const openCommand = commands.find((command) => command.id === 'open');
-  const openExternalCommand = externalUrl
-    ? commands.find((command) => command.id === 'open-external')
-      ?? browserWorkbenchDefaultCommands(externalUrl).find((command) => command.id === 'open-external')
-    : undefined;
   const canRetryNativeSurface = state.hostSurface === 'browser-host-session' && Boolean(
     state.loadingProgress?.canRetry
     || state.status === 'blocked'
     || state.status === 'error'
     || state.loadingProgress?.state === 'retry',
   );
-  const requiresHandoff = Boolean(state.loadingProgress?.requiresHandoff || state.loadingProgress?.state === 'handoff');
   return (
     <div
       className={`browser-workbench-viewer-state browser-workbench-viewer-state-${state.status}`}
@@ -823,44 +809,24 @@ function renderBrowserState(
         {renderStateValue('checkedAt', state.checkedAt)}
         {renderStateValue('ref', state.ref)}
       </dl>
-      {canRetryNativeSurface || externalUrl ? (
+      {canRetryNativeSurface && openCommand ? (
         <div className="browser-workbench-viewer-state-actions" aria-label="Browser state actions">
-          {canRetryNativeSurface && openCommand ? (
-            <button
-              type="button"
-              data-event="browser-command-request"
-              data-browser-state-action="retry"
-              data-browser-command-id={openCommand.id}
-              data-browser-command={openCommand.command}
-              data-command-text={openCommand.command}
-              data-browser-command-kind={openCommand.kind ?? 'terminal-equivalent'}
-              data-browser-risk={openCommand.risk ?? 'allowed'}
-              disabled={openCommand.disabled}
-              onClick={() => {
-                if (!openCommand.disabled) payload.onCommandRequest?.(openCommand);
-              }}
-            >
-              Retry
-            </button>
-          ) : null}
-          {openExternalCommand ? (
-            <button
-              type="button"
-              data-event="browser-command-request"
-              data-browser-state-action={requiresHandoff ? 'handoff' : 'open-external'}
-              data-browser-command-id={openExternalCommand.id}
-              data-browser-command={openExternalCommand.command}
-              data-command-text={openExternalCommand.command}
-              data-browser-command-kind={openExternalCommand.kind ?? 'terminal-equivalent'}
-              data-browser-risk={openExternalCommand.risk ?? 'needs-approval'}
-              disabled={openExternalCommand.disabled}
-              onClick={() => {
-                if (!openExternalCommand.disabled) payload.onCommandRequest?.(openExternalCommand);
-              }}
-            >
-              {requiresHandoff ? 'Handoff' : 'Open External'}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            data-event="browser-command-request"
+            data-browser-state-action="retry"
+            data-browser-command-id={openCommand.id}
+            data-browser-command={openCommand.command}
+            data-command-text={openCommand.command}
+            data-browser-command-kind={openCommand.kind ?? 'terminal-equivalent'}
+            data-browser-risk={openCommand.risk ?? 'allowed'}
+            disabled={openCommand.disabled}
+            onClick={() => {
+              if (!openCommand.disabled) payload.onCommandRequest?.(openCommand);
+            }}
+          >
+            Retry
+          </button>
         </div>
       ) : null}
       {renderRefs(refs, payload.onCopyRefRequest)}
@@ -879,6 +845,105 @@ function canRenderHostBrowser(state: BrowserWorkbenchState, hostSession?: Browse
 
 function browserWorkbenchNativeSurfaceStabilityKey(hostSession: BrowserHostSessionState) {
   return `${hostSession.id}:${hostSession.liveSurfaceRef}`;
+}
+
+function renderBrowserWorkbenchActorCursors(hostSession: BrowserHostSessionState | undefined) {
+  const cursors = browserWorkbenchActorCursors(hostSession);
+  if (!cursors.length) return null;
+  return (
+    <section
+      className="browser-workbench-actor-cursors"
+      aria-label="Browser actor cursors"
+      data-browser-actor-cursor-count={cursors.length}
+    >
+      {cursors.map((cursor) => (
+        <div
+          key={`${cursor.agentId}:${cursor.cursorId}`}
+          className="browser-workbench-actor-cursor"
+          data-browser-actor-cursor="true"
+          data-browser-actor-agent-id={cursor.agentId}
+          data-browser-actor-cursor-id={cursor.cursorId}
+          data-browser-actor-cursor-status={cursor.status}
+          data-browser-actor-cursor-action={cursor.action}
+          data-browser-actor-cursor-evidence-ref={cursor.evidenceRef}
+          style={{ '--browser-actor-cursor-color': cursor.color } as React.CSSProperties}
+        >
+          <span className="browser-workbench-actor-cursor-dot" aria-hidden="true" />
+          <strong>{cursor.label}</strong>
+          <span>{cursor.action}</span>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function browserWorkbenchActorCursors(hostSession: BrowserHostSessionState | undefined) {
+  type BrowserWorkbenchActorCursorView = {
+    agentId: string;
+    cursorId: string;
+    color: string;
+    label: string;
+    status: 'acting' | 'unknown';
+    action: 'observe' | 'click' | 'type' | 'scroll' | 'wait';
+    evidenceRef?: string;
+  };
+  const rawCursors = [
+    hostSession?.actorCursor,
+    ...(Array.isArray(hostSession?.actorCursors) ? hostSession.actorCursors : []),
+  ].filter((cursor): cursor is NonNullable<BrowserHostSessionState['actorCursor']> => Boolean(cursor));
+  const seen = new Set<string>();
+  const cursors: BrowserWorkbenchActorCursorView[] = [];
+  for (const cursor of rawCursors) {
+    const agentId = browserWorkbenchActorCursorToken(cursor.agentId);
+    const cursorId = browserWorkbenchActorCursorToken(cursor.cursorId);
+    if (!agentId || !cursorId) continue;
+    const key = `${agentId}:${cursorId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cursors.push({
+      agentId,
+      cursorId,
+      color: browserWorkbenchActorCursorColor(cursor.color),
+      label: browserWorkbenchActorCursorLabel(cursor.label) ?? agentId,
+      status: cursor.status === 'acting' ? 'acting' : 'unknown',
+      action: browserWorkbenchActorCursorAction(cursor.lastAction?.action),
+      evidenceRef: browserWorkbenchActorCursorEvidenceRef(cursor.lastAction?.evidenceRefs, cursor.evidenceRefs),
+    });
+  }
+  return cursors.slice(0, 8);
+}
+
+function browserWorkbenchActorCursorToken(value: unknown) {
+  const text = asString(value);
+  return text && /^[a-z0-9][a-z0-9._:-]{0,95}$/i.test(text) ? text : undefined;
+}
+
+function browserWorkbenchActorCursorColor(value: unknown) {
+  const text = asString(value);
+  return text && /^#[a-f0-9]{6}$/i.test(text) ? text : '#00d5ff';
+}
+
+function browserWorkbenchActorCursorLabel(value: unknown) {
+  const text = asString(value);
+  return text ? sanitizeBrowserWorkbenchDiagnosticText(text) : undefined;
+}
+
+function browserWorkbenchActorCursorAction(value: unknown): 'observe' | 'click' | 'type' | 'scroll' | 'wait' {
+  return value === 'observe' || value === 'click' || value === 'type' || value === 'scroll' || value === 'wait'
+    ? value
+    : 'wait';
+}
+
+function browserWorkbenchActorCursorEvidenceRef(...values: unknown[]) {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const ref = value.map(asRefString).find((item): item is string => Boolean(item));
+      if (ref) return ref;
+    }
+    const ref = asRefString(value);
+    if (ref) return ref;
+  }
+  return undefined;
 }
 
 function browserWorkbenchStateWithExplicit(
@@ -1032,7 +1097,9 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
             data-browser-frame-transport={hostFrameTransport}
             role="application"
             aria-label="Browser page"
-          />
+          >
+            {renderBrowserWorkbenchActorCursors(hostSession)}
+          </div>
         ) : (
           renderBrowserState(state, refs, payload, commands)
         )}

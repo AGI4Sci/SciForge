@@ -8,7 +8,7 @@ import {
 } from './results-renderer-view-model';
 export { selectDefaultResultItems, type HandoffAutoRunRequest } from './results/viewPlanResolver';
 export { coerceReportPayload } from './results/reportContent';
-import { type SciForgeConfig, type SciForgeSession, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type UIManifestSlot } from '../domain';
+import { type SciForgeConfig, type SciForgeSession, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type SciForgeReference, type UIManifestSlot } from '../domain';
 export {
   backendRepairStates,
   contractValidationFailures,
@@ -38,7 +38,7 @@ import { useRightPaneTabController } from './results/rightPaneTabController';
 import { useRightPaneWorkspaceFileController } from './results/rightPaneWorkspaceFileController';
 import { useRightPaneActionController } from './results/rightPaneActionController';
 import { useRightPaneTerminalController } from './results/rightPaneTerminalController';
-import { useRightPaneScreenController } from './results/rightPaneScreenController';
+import { rightPaneImageEvidencePayload } from './results/imagePaneModel';
 import { RightPaneArtifactInspectorDrawer } from './results/rightPaneArtifactInspectorAdapter';
 import { useRightPaneLifecycleController } from './results/rightPaneLifecycleController';
 
@@ -65,6 +65,7 @@ export function ResultsRenderer({
   onOpenSettings,
   onDismissResultSlotPresentation,
   onCommandTextAction,
+  onExternalReferenceRequest,
   onOpenDebugAuditAction,
   initialFocusMode = 'all',
   initialResultTab = 'primary',
@@ -88,6 +89,7 @@ export function ResultsRenderer({
   /** Hide a resolved results card from the UI only (artifacts and workspace files stay). */
   onDismissResultSlotPresentation?: (resolvedSlotPresentationId: string) => void;
   onCommandTextAction?: (action: CommandTextUIAction) => void;
+  onExternalReferenceRequest?: (reference: SciForgeReference) => void;
   onOpenDebugAuditAction?: (action: OpenDebugAuditUIAction) => void;
   /** Test hook for rendering a non-default focus mode without browser events. */
   initialFocusMode?: ResultFocusMode;
@@ -145,15 +147,11 @@ export function ResultsRenderer({
   });
   const executionFocus = focusMode === 'execution';
   const activeRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : undefined;
-  const rightPaneScreenController = useRightPaneScreenController({
-    config,
-    session,
+  const imageEvidencePayload = useMemo(() => rightPaneImageEvidencePayload(session, activeRun, focusedObjectReference), [
     activeRun,
-    activeTabId: activeResultTabId,
-    resultTab,
-    locale,
-    onCommandRequest: rightPaneActionController.requestCommandText,
-  });
+    focusedObjectReference,
+    session,
+  ]);
   const rendererModel = useMemo(() => createResultsRendererViewModel({
     scenarioId,
     session,
@@ -227,9 +225,10 @@ export function ResultsRenderer({
         workspaceFileOpenTabs={workspaceFileController.workspaceFileOpenTabs}
         browserAddressDraft={activeBrowserAddress}
         terminalSession={rightPaneTerminalController.activeTerminalSession}
-        virtualScreenPayload={rightPaneScreenController.payload}
+        imageEvidencePayload={imageEvidencePayload}
         onBrowserAddressDraftChange={setActiveBrowserAddress}
         onCommandRequest={rightPaneActionController.requestCommandText}
+        onExternalReferenceRequest={onExternalReferenceRequest}
         onObjectAction={rightPaneActionController.handleObjectAction}
         onClearFocusedObject={() => onFocusedObjectChange(undefined)}
         onPreviewPackageRequest={onPreviewPackageRequest}

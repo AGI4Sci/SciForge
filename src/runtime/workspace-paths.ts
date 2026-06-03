@@ -41,6 +41,20 @@ export function resolveWorkspaceFileRefPath(ref: string, workspacePath: string) 
   return targetPath;
 }
 
+export function workspaceBrowserRuntimeDir(workspacePath: string) {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(workspacePath || process.cwd()));
+  if (!workspaceRoot) throw new Error('workspace path is required');
+  return join(workspaceRoot, '.sciforge', 'browser-host');
+}
+
+export function workspaceBrowserProfileDir(workspacePath: string) {
+  return join(workspaceBrowserRuntimeDir(workspacePath), 'profile');
+}
+
+export function workspaceBrowserOutputDir(workspacePath: string, runtime = 'output') {
+  return join(workspaceBrowserRuntimeDir(workspacePath), safeWorkspaceRuntimeSegment(runtime));
+}
+
 export function resolveWorkspaceFilePreviewPath(rawPath: string, workspacePath = '') {
   const stripped = stripWorkspaceFileLikeRef(rawPath);
   if (!stripped) throw new Error('path is required');
@@ -70,4 +84,9 @@ function resolveInsideWorkspace(workspaceRoot: string, relativePath: string) {
     throw new Error('Workspace File Gateway refused a path outside the active workspace.');
   }
   return targetPath;
+}
+
+function safeWorkspaceRuntimeSegment(value: string) {
+  const segment = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
+  return segment || 'output';
 }

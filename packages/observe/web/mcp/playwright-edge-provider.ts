@@ -20,6 +20,8 @@ export interface PlaywrightEdgeBrowserInvocationInput {
   keepOpen?: boolean;
   requiresHumanTakeover?: boolean;
   mcpUrl?: string;
+  workspaceProfileDir?: string;
+  outputDir?: string;
 }
 
 export interface PlaywrightEdgeBrowserInvocationOutput {

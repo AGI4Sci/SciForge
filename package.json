@@ -37,6 +37,7 @@
     "desktop:copy-preload": "node -e \"require('fs').mkdirSync('dist-desktop/src/desktop',{recursive:true});require('fs').copyFileSync('src/desktop/preload.cjs','dist-desktop/src/desktop/preload.cjs')\"",
     "desktop:bundle-sidecars": "node --import tsx tools/build-desktop-sidecars.ts",
     "desktop:build": "npm run build && tsc -p tsconfig.desktop.build.json && npm run desktop:copy-preload && npm run desktop:bundle-sidecars",
+    "desktop:dev": "tsx tools/desktop-dev-shell.ts",
     "desktop:start:prod": "npm run desktop:build && electron dist-desktop/src/desktop/main.js",
     "desktop:package:dir": "npm run desktop:build && electron-builder --dir && npm run smoke:desktop-package-artifact && npm run smoke:desktop-packaged-electron-lifecycle",
     "skills:generate": "tsx tools/generate-skill-catalog.ts",

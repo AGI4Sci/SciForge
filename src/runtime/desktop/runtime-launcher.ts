@@ -96,6 +96,7 @@ export class ProductionRuntimeLauncher {
   private shuttingDown = false;
   private auditLogPath = '';
   private appData?: DesktopAppDataLayout;
+  private localRuntimeEnv: Record<string, string> = {};
 
   constructor(private readonly options: RuntimeLauncherOptions) {}
 
@@ -307,6 +308,7 @@ export class ProductionRuntimeLauncher {
       env.SCIFORGE_RUNTIME_DEFAULT_WORKSPACE = resolve(this.options.workspacePath);
       env.SCIFORGE_WORKSPACE_PATH = resolve(this.options.workspacePath);
     }
+    Object.assign(env, this.localRuntimeEnv);
     if (ui) env.SCIFORGE_UI_PORT = String(ui.actual);
     if (workspace) {
       env.SCIFORGE_WORKSPACE_PORT = String(workspace.actual);
@@ -339,11 +341,14 @@ export class ProductionRuntimeLauncher {
 
   private async prepareDesktopLocalConfig(): Promise<void> {
     if (!this.appData) return;
-    const source = await readNonSecretProxyConfig(process.env.SCIFORGE_CONFIG_PATH)
-      ?? await readNonSecretProxyConfig(resolve(process.cwd(), 'config.local.json'));
+    const source = await readLocalRuntimeConfig(process.env.SCIFORGE_CONFIG_PATH)
+      ?? await readLocalRuntimeConfig(resolve(process.cwd(), 'config.local.json'));
+    this.localRuntimeEnv = source ? localRuntimeEnvFromConfig(source, process.env) : {};
     if (!source) return;
+    const nonSecret = nonSecretProxyConfigFromLocalRuntimeConfig(source);
+    if (!nonSecret) return;
     const target = join(this.appData.configDir, 'config.local.json');
-    await writeFile(target, `${JSON.stringify({ codexProxy: source }, null, 2)}\n`, 'utf8');
+    await writeFile(target, `${JSON.stringify({ codexProxy: nonSecret }, null, 2)}\n`, 'utf8');
   }
 }
 
@@ -414,7 +419,32 @@ type NonSecretProxyConfig = {
   model?: string;
 };
 
-async function readNonSecretProxyConfig(path: string | undefined): Promise<NonSecretProxyConfig | undefined> {
+type LocalRuntimeConfig = NonSecretProxyConfig & {
+  apiKey?: string;
+};
+
+function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.ProcessEnv): Record<string, string> {
+  const output: Record<string, string> = {};
+  const upstreamBaseUrl = config.upstreamBaseUrl ?? config.baseUrl;
+  const defaultModel = config.defaultModel ?? config.model;
+  if (!env.SCIFORGE_RUNTIME_API_KEY && config.apiKey) output.SCIFORGE_RUNTIME_API_KEY = config.apiKey;
+  if (!env.SCIFORGE_PROXY_UPSTREAM_BASE_URL && upstreamBaseUrl) output.SCIFORGE_PROXY_UPSTREAM_BASE_URL = upstreamBaseUrl;
+  if (!env.SCIFORGE_RUNTIME_MODEL && defaultModel) output.SCIFORGE_RUNTIME_MODEL = defaultModel;
+  if (!env.SCIFORGE_PROXY_DEFAULT_MODEL && defaultModel) output.SCIFORGE_PROXY_DEFAULT_MODEL = defaultModel;
+  return output;
+}
+
+function nonSecretProxyConfigFromLocalRuntimeConfig(config: LocalRuntimeConfig): NonSecretProxyConfig | undefined {
+  const upstreamBaseUrl = config.upstreamBaseUrl ?? config.baseUrl;
+  const defaultModel = config.defaultModel ?? config.model;
+  if (!upstreamBaseUrl && !defaultModel) return undefined;
+  return {
+    ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
+    ...(defaultModel ? { defaultModel } : {}),
+  };
+}
+
+async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRuntimeConfig | undefined> {
   if (!path?.trim()) return undefined;
   const configPath = resolve(path);
   if (!existsSync(configPath)) return undefined;
@@ -427,19 +457,39 @@ async function readNonSecretProxyConfig(path: string | undefined): Promise<NonSe
         ? parsed.runtimeCodexProxy
         : {};
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
-    const upstreamBaseUrl = stringValue(llm.baseUrl)
+    const textLLM = isRecord(parsed.textLLM) ? parsed.textLLM : {};
+    const textLLMEnv = isRecord(textLLM.env) ? textLLM.env : {};
+    const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
+      ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
+      ?? stringValue(textLLM.baseUrl)
+      ?? stringValue(textLLM.modelBaseUrl)
+      ?? stringValue(llm.baseUrl)
       ?? stringValue(llm.upstreamBaseUrl)
+      ?? stringValue(llm.modelBaseUrl)
       ?? stringValue(codexProxy.upstreamBaseUrl)
-      ?? stringValue(codexProxy.baseUrl);
-    const defaultModel = stringValue(llm.model)
+      ?? stringValue(codexProxy.baseUrl)
+      ?? stringValue(parsed.modelBaseUrl);
+    const defaultModel = stringValue(textLLMEnv.SCIFORGE_RUNTIME_MODEL)
+      ?? stringValue(textLLMEnv.SCIFORGE_PROXY_DEFAULT_MODEL)
+      ?? stringValue(textLLM.model)
+      ?? stringValue(textLLM.modelName)
+      ?? stringValue(textLLM.defaultModel)
+      ?? stringValue(llm.model)
       ?? stringValue(llm.modelName)
       ?? stringValue(llm.defaultModel)
       ?? stringValue(codexProxy.defaultModel)
-      ?? stringValue(codexProxy.model);
-    if (!upstreamBaseUrl && !defaultModel) return undefined;
+      ?? stringValue(codexProxy.model)
+      ?? stringValue(parsed.modelName)
+      ?? stringValue(parsed.model);
+    const apiKey = stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
+      ?? stringValue(textLLM.apiKey)
+      ?? stringValue(llm.apiKey)
+      ?? stringValue(parsed.apiKey);
+    if (!upstreamBaseUrl && !defaultModel && !apiKey) return undefined;
     return {
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
       ...(defaultModel ? { defaultModel } : {}),
+      ...(apiKey ? { apiKey } : {}),
     };
   } catch {
     return undefined;

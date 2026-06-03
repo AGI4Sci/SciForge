@@ -1,90 +1,78 @@
 # SciForge 项目协议
 
-最后更新：2026-05-31
+最后更新：2026-06-03
 
-当前目标：把 SciForge 收敛为 **Agent Host Semantic Pipeline + Cursor-like Agent Workbench**。Codex app-server 是产品 runtime 必需的原生 backend 和 rich-client 主路径；GUI 是 Agent Host 的 presentation / confirmation / focus / resource projection 模块，不是第二个 agent host。旧任务历史已在 Git 历史中保留；本文件只保留当前原则、任务板、TODO 和验收规则。
+## 当前目标
 
-## 当前范围
+SciForge 是一个 **Agent Host Semantic Pipeline + Cursor-like Agent Workbench**。
+Codex app-server / Desktop native host 是产品 runtime 主路径；GUI 是
+presentation、confirmation、focus 和 resource projection，不是第二个 agent host。
 
-- SciForge web 必须像 Cursor Agent desktop app 一样承载对话、过程、右侧结果栏、左侧仓库/对话管理和可点击对象；回答内容可以不同，但信息架构、折叠层级、实时状态、右侧 pane 行为和 refs-first 交互必须一致。
-- Codex app-server 是产品 runtime 主路径；`codex exec --json`、runtime gateway、Workspace Gateway 和旧 AgentServer 路径只能作为 legacy/test-only/diagnostic shim。
-- 所有边界能力通过 `module.describe/query/read/invoke` 或 Codex native tool/plugin/MCP 暴露；GUI 不做 provider route、capability ranking、completion 判断、workspace 写入、Computer Use 执行或隐藏 prompt assembly。
-- BrowserRuntime、Computer Use、files、terminal、connectors、verifiers、skills、memory、capabilities 和 artifacts 都是 Agent Host 可组合模块；复杂流程由 Agent Host 组合成 typed semantic pipeline，并写入结构化 trace。
-- Computer Use 当前验收名统一为 `virtual-app-screen-user-acceptance`：active gate 必须基于 VirtualAppScreen session、adapter-first app/window/session 执行、refs-first evidence、`gui.present` 和 isolation flags；M6/native multi-screen 只保留为 historical regression/diagnostic evidence，不阻塞当前路线。
-- 对齐体验时必须同时使用 SciForge web 与 Cursor Agent desktop app 做双端对照：Browser 验证 SciForge 真实页面，Computer Use 观察 Cursor Agent 基线；对照结果只能沉淀为通用规则，不允许写成截图/文件名/历史会话硬编码。
+当前 M1 收敛为三条可并行主线：
+
+- Browser Pane：右侧栏内真实浏览器，Desktop Electron native host 承载真实网页。
+- Global Annotation：像 Codex 一样把标注作为 pending context，随下一条用户消息提交。
+- Window Action：真实应用窗口正常打开，agent 用自己的 actorCursor 操作目标窗口。
+
+旧的隔离 `VirtualAppScreen` 产品需求已废弃；右侧 `Screen` pane 升级为通用
+Image / Evidence 展示栏。
 
 ## 不可变规则
 
 - 所有修改必须通用，不能为当前页面、截图、URL、文件名或历史 run 写硬编码补丁。
 - 代码路径保持唯一真相源；旧逻辑和最终方案冲突时删除或迁移旧逻辑，不做长期并行实现。
 - GUI -> TUI 只发送终端等价文本、focus/confirmation 结果或只读 projection；TUI -> GUI 只通过 declared GUI intents。
-- 右侧结果栏不是日志 dump。它必须按对象类型展示 Browser、Screen、Terminal、Files、References 等 Cursor-like panes，并以可点击 refs 驱动。
 - 大 payload、截图、录屏、terminal transcript、DOM snapshot、artifact、audit 和 replay 必须 refs-first；不得内联 raw screenshot/base64/provider payload/secret。
 - 涉及 provider URL、API key、model name、Authorization、token、secret、password、credential 的日志和 evidence 必须脱敏；ignored local config 不得提交。
 - 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
-- 已完成 TODO 需要打勾，并补充日期、evidence refs、验证命令和最终状态。
+- 已完成 TODO 必须打勾，并补充日期、evidence refs、验证命令和最终状态。
 
-## 模块化设计原则
+## 活跃项目板
 
-- 公共函数只有四个：`module.describe`、`module.query`、`module.read`、`module.invoke`。
-- `describe/query/read` 必须只读；只有 `invoke` 可以有副作用。未声明 module function、intent、facet 或 ref prefix 必须 fail closed。
-- `list/search` 收敛为 `query`，`stat` 收敛为 `read({ includeMeta: true })`，`watch/subscribe/present/ask_user/apply_batch` 收敛为具体 `invoke` intent。
-- Agent Host 负责编排 semantic pipeline；模块不得直接 import 或调用其它模块；GUI 可以展示 pipeline trace，但不决定 pipeline。
-- trace-first 是默认要求：跨模块组合必须记录 step id、moduleId、function、intent/query/ref、input/result summary、refs、approval、operation、timing、status 和 parent/child relation。
-
-## 体验对齐原则
-
-- 用户体验尽可能与 Cursor Agent desktop app 的稳定信息架构对齐；对照记录只保留通用行为，不固化一次性坐标、URL、截图或历史 run。
-- 左侧栏只管理 workspace/project/thread 的可视化投影、选择、排序、归档、置顶、草稿和上下文入口；真实任务启动、工具选择、repair、sub agent 创建和 workspace 写入仍由 Agent Host 执行并产生 trace。
-- 聊天中间栏只展示用户消息、assistant 进度句、`Worked for ...` / `Explored ...` 聚合项、动作行和最终回答；旧 SciForge summary、重复 transcript、不可交互过程块和占位 progress 应删除。
-- 右侧结果栏必须按对象渲染：Browser 展示真实可交互网页或明确 blocked/error；Screen 展示 Computer Use VirtualAppScreen frame、annotation overlay 和 replay refs；Terminal 展示 Cursor-like terminal session；Files 展示 workspace file viewer/editor；References 展示对象 refs 和 provenance。
-- 点击对象引用必须打开或聚焦右侧对象；把引用插回输入框只能通过显式引用/上下文菜单完成。
+- [`PROJECT_browser.md`](PROJECT_browser.md)：内置浏览器 Browser Pane。
+- [`PROJECT_annotation.md`](PROJECT_annotation.md)：统一标注和 refs。
+- [`PROJECT_image.md`](PROJECT_image.md)：通用 Image / Evidence Pane。
+- [`PROJECT_window_action.md`](PROJECT_window_action.md)：Window Action Session 和 actorCursor。
+- [`PROJECT_desktop.md`](PROJECT_desktop.md)：Desktop Electron native host、overlay 和 native bridge。
+- [`PROJECT_right.md`](PROJECT_right.md)：右侧结果栏 shell、tab、focus 和对象投影。
+- [`PROJECT_left.md`](PROJECT_left.md)：左侧栏和 workspace/thread 管理。
+- [`PROJECT_middle.md`](PROJECT_middle.md)：中间聊天区和过程展示。
+- [`PROJECT_CU.md`](PROJECT_CU.md)：旧 Computer Use / VirtualAppScreen 兼容入口，活跃任务已迁出。
 
 ## 当前任务板
 
-- 右侧结果栏任务板已迁移到 [`PROJECT_right.md`](PROJECT_right.md)。
-- Computer Use 详细任务板维护在 [`PROJECT_CU.md`](PROJECT_CU.md)。
+### P0：文档真相源收敛
 
-### P1：左侧栏和聊天体验继续收敛
+- [ ] 将旧 `VirtualAppScreen` 术语从活跃产品文档中迁移到
+  Screen Annotation、Image Evidence 和 Window Action。
+- [ ] 更新代码注释、manifest 和 smoke 命名，避免把隔离虚拟屏幕作为当前或未来需求。
+- [ ] 保持 `docs/README.md`、`PROJECT_*.md` 和架构文档入口互相一致。
 
-- [x] 继续按 Cursor Agent 检查 Automations、Customize、Search、Repositories 菜单、归档/删除/恢复、跨项目切换和新对话保留。
-  完成：2026-05-31；evidence：Computer Use 只读观察 Cursor Agents 左侧栏：New Agent、Automations、Customize、Repositories/Open Workspace、项目分组、thread Pin/Archive、draft Discard、See more；SciForge sidebar search 将 Automations/Customize/Repositories 映射为 local-presentation actions，不生成 `commandText`，Repositories 只展开/聚焦仓库区；archive settings 覆盖 restore/delete，retained new-chat history 不进入 archived settings，跨项目 project groups 保留各 workspace 线程。验证：`node --import tsx --test src/ui/src/app/appShell/SettingsArchivedChatsPanel.test.tsx src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarProjectSessions.test.ts src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts`；状态：passed。
-- [x] 继续检查 running delta、完成态折叠、`Worked for ...` / `Explored ...`、动作行、命令输出、diff、文件预览、approval、sub agent 和错误/取消状态。
-  完成：2026-05-31；evidence：Cursor 只读对照确认中间栏使用 `Worked for ...` / `Thought ...` 折叠过程；SciForge `RunExecutionProcess` 覆盖 running terminal deltas、完成态 folding、动作行、命令输出、diff/file preview、approval/sub-agent 以及 failed/cancelled terminal targets；右侧 file/object focus 不隐式插入 composer。验证：`node --import tsx --test src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/sciforgeApp/SciForgeWorkbench.test.ts src/ui/src/app/ResultsRenderer.test.ts`；状态：passed。
+### P1：Cursor-like Workbench 收敛
 
+- [ ] Browser、Image、Terminal、Files、References 都按对象 refs 打开右侧 pane。
+- [ ] annotation refs 随用户消息进入 chat，不自动生成任务、不自动触发 agent。
+- [ ] agent actorCursor 在 Browser pane 和真实窗口目标上保持同一身份投影。
 
-## 验证规则
+## 验收规则
 
 - 纯文档改动：运行 `git diff --check`。
-- Shared contract / TypeScript policy 改动：运行 focused Node tests 和 `npm run typecheck --silent`。
-- Runtime adapter 改动：运行 adapter normalization tests、runtime event tests 和 `git diff --check`。
-- GUI module / result pane 改动：运行 GUI protocol/controller tests、runtime events client tests、pane focused tests、Browser visual check，并确认 GUI 没有执行 Computer Use action。
-- Browser pane 改动：覆盖 embeddable URL、X-Frame-Options/CSP blocked URL、network failure、loading、open-external 和 DOM/AX observation refs。
-- Screen pane / Computer Use 改动：运行 package-local Python suite、package bridge focused tests、presentation focused tests、refs-first validator 和 `virtual-app-screen-user-acceptance` gate；确认 GUI 只做 presentation/confirmation/focus，不执行 Computer Use action。
-- Terminal pane 改动：覆盖 running/completed/error/stopped terminal session、pty transcript refs、copy/download/focus/resize 和非 terminal object rejection。
-
-## 本地模型配置
-
-- 本地调试可以使用 ignored config，例如 `config.local.json`、`config.computer-use.local.json`。
-- 这些文件可能包含 provider URLs、API keys、model names，绝不能提交或打印。
-- Runtime Codex / Computer Use 服务环境必须通过 ignored config 或环境变量提供密钥；文档、日志和 repair action 只能引用变量名，不能打印 secret 值。
-- 默认 provider/model 应可见、可审计，不得静默 fallback 到 OpenAI。
-
-## 暂缓集成
-
-- 将 Claude Code 作为默认 backend。
-- 默认 release gate 中运行长耗时 live Computer Use / browser / Claude real-process tests。
-- GUI workbench 拖拽式 pipeline 编排。当前 pipeline 编排归 Agent Host，GUI 只做展示和确认。
-- 删除 `capability_discovery.*` 或 `gui.*` alias。必须等 `module.*` 主路径稳定后再做；删除前 alias 只能停留在 adapter shim，不能再扩展新能力。
+- PROJECT / docs 入口改动：运行链接和关键术语检查，确认活跃入口不再把旧隔离
+  `VirtualAppScreen` 当作当前路线。
+- Shared contract / TypeScript policy 改动：运行 focused Node tests 和
+  `npm run typecheck --silent`。
+- Runtime adapter 改动：运行 adapter normalization tests、runtime event tests 和
+  `git diff --check`。
+- GUI module / result pane 改动：运行 GUI protocol/controller tests、runtime events
+  client tests、pane focused tests，并确认 GUI 没有越权执行 agent/provider action。
 
 ## 必读文档
 
 - [`docs/README.md`](docs/README.md)：当前文档入口。
-- [`docs/Architecture.md`](docs/Architecture.md)：总架构、Agent Host Semantic Pipeline、GUI-as-extension 和模块归属。
-- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影、`gui.*` alias 和执行边界。
-- [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：provider route、verifier、repair、Computer Use 和 connector 能力归属。
-- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：browser runtime 作为 TUI capability + GUI presentation surface 的边界。
-- [`PROJECT_CU.md`](PROJECT_CU.md)：Computer Use VirtualAppScreen / 后台应用控制协议、`virtual-app-screen-user-acceptance` active gate 和任务板。
+- [`docs/Architecture.md`](docs/Architecture.md)：总架构、Agent Host Semantic Pipeline 和 GUI-as-extension。
+- [`docs/TuiGuiProtocol.md`](docs/TuiGuiProtocol.md)：GUI 输入、只读投影和执行边界。
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：Browser Runtime 架构。
+- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)：Screen Annotation / Image Evidence / Window Action 架构。
 
 ## Worktree 规则
 

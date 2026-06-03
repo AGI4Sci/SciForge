@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
-import { normalizeWorkspaceRootPath } from './workspace-paths.js';
+import { normalizeWorkspaceRootPath, workspaceBrowserProfileDir } from './workspace-paths.js';
 import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
@@ -18,8 +18,11 @@ import type {
   BrowserHostSearchInput,
   BrowserHostSearchOutput,
   BrowserHostSearchResult,
+  BrowserHostSessionActorCursor,
+  BrowserHostSessionActorCursorInput,
   BrowserHostSessionAction,
   BrowserHostSessionActionInput,
+  BrowserHostSessionActionRiskType,
   BrowserHostSessionCaptureMode,
   BrowserHostSessionDriver,
   BrowserHostSessionDriverFactory,
@@ -32,6 +35,7 @@ import type {
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
+  BrowserHostSessionVisibleAction,
   BrowserHostSessionViewport,
 } from './browser-host-session-types.js';
 import {
@@ -70,6 +74,7 @@ export type {
   BrowserHostSearchOutput,
   BrowserHostSearchResult,
   BrowserHostSessionAction,
+  BrowserHostSessionActionRiskType,
   BrowserHostSessionActionInput,
   BrowserHostSessionActionTiming,
   BrowserHostSessionActionTimingSummary,
@@ -87,6 +92,7 @@ export type {
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
+  BrowserHostSessionVisibleAction,
   BrowserHostSessionViewport,
 } from './browser-host-session-types.js';
 export {
@@ -219,6 +225,7 @@ export class BrowserHostSessionManager {
       networkLog: [],
       actionTimingSamples: new Map(),
     };
+    await publishBrowserHostVisibleAction(session, 'open', input.sessionId, input.actorCursor);
     setBrowserHostSessionLoadingProgress(session, {
       state: 'navigation-start',
       reason: 'host-starting',
@@ -237,6 +244,8 @@ export class BrowserHostSessionManager {
         sessionId,
         viewport: session.viewport,
         timeoutMs: timeoutMs(input.timeoutMs),
+        workspacePath: root,
+        workspaceProfileDir: workspaceBrowserProfileDir(root),
       });
       attachDriverDiagnostics(session);
       session.status = 'loading';
@@ -324,6 +333,7 @@ export class BrowserHostSessionManager {
       adapterSentAt: input.adapterSentAt,
       hostReceivedAtMs,
     });
+    await publishBrowserHostVisibleAction(session, input.action, input.actionId, input.actorCursor);
     try {
       let didClose = false;
       let didCursor = false;
@@ -1015,14 +1025,14 @@ export function createNativeEmbeddedBrowserHostDriverFactory(adapterBaseUrl: str
   const baseUrl = adapterBaseUrl.replace(/\/+$/, '');
   return {
     async create(input) {
-      const driver = new NativeEmbeddedBrowserHostDriver(baseUrl, input.sessionId, input.viewport, input.timeoutMs);
+      const driver = new NativeEmbeddedBrowserHostDriver(baseUrl, input.sessionId, input.viewport, input.timeoutMs, input.workspaceProfileDir);
       await driver.start();
       return driver;
     },
   };
 }
 
-async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostSessionViewport; timeoutMs: number }): Promise<BrowserHostSessionDriver> {
+async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostSessionViewport; timeoutMs: number; workspaceProfileDir: string }): Promise<BrowserHostSessionDriver> {
   let chromium: Awaited<typeof import('playwright-core')>['chromium'];
   try {
     ({ chromium } = await import('playwright-core'));
@@ -1030,12 +1040,11 @@ async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostS
     throw new Error(`Playwright browser host is unavailable: ${browserHostErrorMessage(error)}`);
   }
   const executablePath = browserHostExecutablePath();
-  const browser = await chromium.launch({
+  await mkdir(input.workspaceProfileDir, { recursive: true });
+  const context = await chromium.launchPersistentContext(input.workspaceProfileDir, {
     headless: true,
     ...(executablePath ? { executablePath } : {}),
     args: browserHostChromiumArgs(),
-  });
-  const context = await browser.newContext({
     viewport: input.viewport,
     locale: 'en-US',
     userAgent: 'SciForgeBrowserHostSession/1.0',
@@ -1043,7 +1052,7 @@ async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostS
   const page = await context.newPage();
   page.setDefaultTimeout(input.timeoutMs);
   page.setDefaultNavigationTimeout(input.timeoutMs);
-  return new PlaywrightBrowserHostDriver(browser, context, page);
+  return new PlaywrightBrowserHostDriver(context.browser(), context, page);
 }
 
 class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
@@ -1058,6 +1067,7 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     private readonly sessionId: string,
     private readonly viewport: BrowserHostSessionViewport,
     private readonly timeoutMs: number,
+    private readonly workspaceProfileDir: string,
   ) {
     this.nativeAdapterUrl = adapterBaseUrl;
   }
@@ -1068,6 +1078,7 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
       width: this.viewport.width,
       height: this.viewport.height,
       timeoutMs: this.timeoutMs,
+      workspaceProfileDir: this.workspaceProfileDir,
     });
   }
 
@@ -1088,27 +1099,26 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
   }
 
   async content(): Promise<string> {
-    const json = await this.get<{ content?: unknown }>(`/sessions/${encodeURIComponent(this.sessionId)}/content`);
-    return typeof json.content === 'string' ? json.content : '';
+    const outputPath = this.evidenceOutputPath('dom', 'html');
+    await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/content`, { outputPath });
+    return await readFile(outputPath, 'utf8');
   }
 
   async text(): Promise<string> {
-    const json = await this.get<{ text?: unknown }>(`/sessions/${encodeURIComponent(this.sessionId)}/text`);
-    return typeof json.text === 'string' ? json.text : '';
+    const outputPath = this.evidenceOutputPath('text', 'txt');
+    await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/text`, { outputPath });
+    return await readFile(outputPath, 'utf8');
   }
 
   async screenshot(path: string): Promise<void> {
-    const json = await this.get<{ dataUrl?: unknown }>(`/sessions/${encodeURIComponent(this.sessionId)}/screenshot`);
-    const dataUrl = typeof json.dataUrl === 'string' ? json.dataUrl : '';
-    const match = /^data:image\/png;base64,(.+)$/i.exec(dataUrl);
-    if (!match) throw new Error('Native embedded BrowserHostSession screenshot did not return a PNG data URL.');
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, Buffer.from(match[1], 'base64'));
+    await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/screenshot`, { outputPath: path });
   }
 
   async axSnapshot(): Promise<unknown> {
-    const json = await this.get<{ snapshot?: unknown }>(`/sessions/${encodeURIComponent(this.sessionId)}/ax`);
-    return json.snapshot ?? {};
+    const outputPath = this.evidenceOutputPath('ax', 'json');
+    await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/ax`, { outputPath });
+    return JSON.parse(await readFile(outputPath, 'utf8'));
   }
 
   async searchResults(limit: number): Promise<BrowserHostSearchResult[]> {
@@ -1277,6 +1287,15 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
       body: JSON.stringify(body),
     });
   }
+
+  private evidenceOutputPath(kind: string, extension: string): string {
+    return join(
+      dirname(this.workspaceProfileDir),
+      'native-evidence',
+      this.sessionId,
+      `${kind}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.${extension}`,
+    );
+  }
 }
 
 async function nativeEmbeddedJson<T extends Record<string, unknown>>(url: string, init?: RequestInit): Promise<T> {
@@ -1330,7 +1349,7 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
   private lastMouseUp?: { x: number; y: number; button: BrowserHostMouseButton; at: number; clickCount: number };
 
   constructor(
-    private readonly browser: Browser,
+    private readonly browser: Browser | null,
     private readonly context: BrowserContext,
     private readonly page: Page,
   ) {
@@ -1612,7 +1631,7 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
 
   async close(): Promise<void> {
     await this.context.close().catch(() => undefined);
-    await this.browser.close().catch(() => undefined);
+    await this.browser?.close().catch(() => undefined);
   }
 
   onConsole(listener: (entry: Record<string, unknown>) => void): void {
@@ -1880,6 +1899,10 @@ async function readStoredBrowserHostSession(workspacePath: string, sessionId: st
       cursor: normalizeBrowserHostCursor(record.cursor),
       loadingProgress: browserHostSessionLoadingProgress(record.loadingProgress),
       nativeOsUiProof: browserHostNativeOsUiProofFromUnknown(record.nativeOsUiProof),
+      actorCursor: browserHostActorCursorFromUnknown(record.actorCursor),
+      actorCursors: browserHostActorCursorsFromUnknown(record.actorCursors),
+      visibleAction: browserHostVisibleActionFromUnknown(record.visibleAction),
+      riskLedger: browserHostRiskLedgerFromUnknown(record.riskLedger),
       lastActionTiming: browserHostActionTiming(record.lastActionTiming),
       actionTimingSummary: browserHostActionTimingSummary(record.actionTimingSummary),
       diagnostics: Array.isArray(record.diagnostics) ? record.diagnostics.filter((item): item is string => typeof item === 'string') : [],
@@ -1969,6 +1992,10 @@ function publicBrowserHostSessionState(session: ActiveBrowserHostSession): Brows
     networkLogRef: session.networkLogRef,
     searchResultRef: session.searchResultRef,
     cursor: normalizeBrowserHostCursor(session.cursor),
+    actorCursor: browserHostActorCursorFromUnknown(session.actorCursor),
+    actorCursors: browserHostActorCursorsFromUnknown(session.actorCursors),
+    visibleAction: browserHostVisibleActionFromUnknown(session.visibleAction),
+    riskLedger: browserHostRiskLedgerFromUnknown(session.riskLedger),
     lastActionTiming: session.lastActionTiming,
     actionTimingSummary: session.actionTimingSummary ?? summarizeBrowserHostActionTimings(session.actionTimingSamples),
     diagnostics: session.diagnostics.slice(-20),
@@ -2334,6 +2361,246 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+async function publishBrowserHostVisibleAction(
+  session: ActiveBrowserHostSession,
+  action: BrowserHostSessionAction | 'open',
+  requestedActionId: string | undefined,
+  actorCursorInput?: BrowserHostSessionActorCursorInput,
+): Promise<void> {
+  const actionId = browserHostActionId(requestedActionId, action);
+  const riskType = browserHostActionRiskType(action);
+  const visibleAction: BrowserHostSessionVisibleAction = {
+    actionId,
+    action,
+    riskType,
+    ...(action === 'cursor'
+      ? { actorCursorRef: browserHostRef(session.id, `actor-cursors/${actionId}.json`) }
+      : { visibleActionRef: browserHostRef(session.id, `visible-actions/${actionId}.json`) }),
+  };
+  session.visibleAction = visibleAction;
+  session.riskLedger = [
+    ...(session.riskLedger ?? []),
+    {
+      ...visibleAction,
+      recordedAt: new Date().toISOString(),
+    },
+  ].slice(-50);
+  await persistBrowserHostVisibleActionRef(session, visibleAction);
+  await publishBrowserHostActorCursor(session, action, visibleAction, actorCursorInput);
+}
+
+async function persistBrowserHostVisibleActionRef(
+  session: Pick<ActiveBrowserHostSession, 'workspacePath' | 'id'>,
+  visibleAction: BrowserHostSessionVisibleAction,
+): Promise<void> {
+  const ref = visibleAction.actorCursorRef ?? visibleAction.visibleActionRef;
+  if (!ref) return;
+  const file = browserHostFileForRef(session.workspacePath, session.id, ref);
+  if (!file) return;
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(visibleAction, null, 2), 'utf8');
+}
+
+function browserHostActionId(value: string | undefined, action: BrowserHostSessionAction | 'open'): string {
+  const safe = safeSessionId(value);
+  return safe || `${action}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+}
+
+async function publishBrowserHostActorCursor(
+  session: ActiveBrowserHostSession,
+  action: BrowserHostSessionAction | 'open',
+  visibleAction: BrowserHostSessionVisibleAction,
+  input?: BrowserHostSessionActorCursorInput,
+): Promise<void> {
+  const agentId = safeActorCursorId(input?.agentId);
+  const cursorId = safeActorCursorId(input?.cursorId);
+  if (!agentId || !cursorId) return;
+  const actorCursorRef = browserHostRef(session.id, `actor-cursors/${cursorId}.json`);
+  const actionEvidenceRef = visibleAction.visibleActionRef ?? visibleAction.actorCursorRef;
+  const publicCursor: BrowserHostSessionActorCursor = {
+    agentId,
+    cursorId,
+    color: safeActorCursorColor(input?.color),
+    label: safeActorCursorLabel(input?.label) || agentId,
+    status: 'acting',
+    target: {
+      type: 'browser-pane',
+      sessionId: session.id,
+      windowRef: `browser-host-session:${session.id}`,
+    },
+    lastAction: {
+      action: browserHostWindowActionKind(action),
+      status: 'completed',
+      evidenceRefs: actionEvidenceRef ? [actionEvidenceRef] : [],
+    },
+    evidenceRefs: [actorCursorRef],
+  };
+  session.actorCursor = publicCursor;
+  session.actorCursors = [publicCursor];
+  const file = browserHostFileForRef(session.workspacePath, session.id, actorCursorRef);
+  if (!file) return;
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(publicCursor, null, 2), 'utf8');
+}
+
+function safeActorCursorId(value: string | undefined) {
+  if (typeof value !== 'string') return undefined;
+  const safe = value.trim().replace(/[^a-z0-9._:-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 96);
+  return safe || undefined;
+}
+
+function safeActorCursorColor(value: string | undefined) {
+  return typeof value === 'string' && /^#[a-f0-9]{6}$/i.test(value.trim()) ? value.trim().toLowerCase() : '#00d5ff';
+}
+
+function safeActorCursorLabel(value: string | undefined) {
+  if (typeof value !== 'string') return undefined;
+  const label = value.trim().replace(/\s+/g, ' ').slice(0, 80);
+  return browserHostNativeOsUiRawTextForbidden(label) ? undefined : label;
+}
+
+function browserHostActorCursorFromUnknown(value: unknown): BrowserHostSessionActorCursor | undefined {
+  const record = objectRecord(value);
+  const agentId = safeActorCursorId(stringField(record.agentId));
+  const cursorId = safeActorCursorId(stringField(record.cursorId));
+  if (!agentId || !cursorId || record.status !== 'acting') return undefined;
+  const target = objectRecord(record.target);
+  const lastAction = objectRecord(record.lastAction);
+  const action = browserHostWindowActorAction(lastAction.action);
+  const evidenceRefs = browserHostActionEvidenceRefs(lastAction.evidenceRefs);
+  const cursorRefs = browserHostActionEvidenceRefs(record.evidenceRefs);
+  if (
+    target.type !== 'browser-pane' ||
+    target.sessionId !== stringField(target.sessionId) ||
+    target.windowRef !== `browser-host-session:${target.sessionId}` ||
+    !action ||
+    lastAction.status !== 'completed' ||
+    cursorRefs.length === 0
+  ) {
+    return undefined;
+  }
+  return {
+    agentId,
+    cursorId,
+    color: safeActorCursorColor(stringField(record.color)),
+    label: safeActorCursorLabel(stringField(record.label)) || agentId,
+    status: 'acting',
+    target: {
+      type: 'browser-pane',
+      sessionId: String(target.sessionId),
+      windowRef: String(target.windowRef),
+    },
+    lastAction: {
+      action,
+      status: 'completed',
+      evidenceRefs,
+    },
+    evidenceRefs: cursorRefs,
+  };
+}
+
+function browserHostActorCursorsFromUnknown(value: unknown): BrowserHostSessionActorCursor[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const cursors = value.map(browserHostActorCursorFromUnknown).filter((cursor): cursor is BrowserHostSessionActorCursor => Boolean(cursor));
+  return cursors.length ? cursors.slice(-8) : undefined;
+}
+
+function browserHostActionEvidenceRefs(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map(browserHostRefField).filter((ref): ref is string => Boolean(ref)))]
+    : [];
+}
+
+function browserHostWindowActorAction(value: unknown): BrowserHostSessionActorCursor['lastAction']['action'] | undefined {
+  return value === 'observe' || value === 'click' || value === 'type' || value === 'scroll' || value === 'wait'
+    ? value
+    : undefined;
+}
+
+function browserHostWindowActionKind(action: BrowserHostSessionAction | 'open'): BrowserHostSessionActorCursor['lastAction']['action'] {
+  if (action === 'click' || action === 'double-click' || action === 'mouse-down' || action === 'mouse-move' || action === 'mouse-up' || action === 'drag' || action === 'cursor') return 'click';
+  if (action === 'type' || action === 'press') return 'type';
+  if (action === 'scroll') return 'scroll';
+  if (
+    action === 'open' ||
+    action === 'navigate' ||
+    action === 'back' ||
+    action === 'forward' ||
+    action === 'reload' ||
+    action === 'stop' ||
+    action === 'state' ||
+    action === 'snapshot' ||
+    action === 'native-os-ui-proof'
+  ) {
+    return 'observe';
+  }
+  return 'wait';
+}
+
+function browserHostActionRiskType(action: BrowserHostSessionAction | 'open'): BrowserHostSessionActionRiskType {
+  if (action === 'open' || action === 'navigate' || action === 'back' || action === 'forward' || action === 'reload') return 'navigation-external';
+  if (action === 'type' || action === 'press') return 'low-risk-input';
+  if (action === 'scroll') return 'scroll';
+  if (
+    action === 'click' ||
+    action === 'double-click' ||
+    action === 'mouse-down' ||
+    action === 'mouse-move' ||
+    action === 'mouse-up' ||
+    action === 'drag' ||
+    action === 'cursor'
+  ) {
+    return 'click';
+  }
+  return 'low-risk-input';
+}
+
+function browserHostVisibleActionFromUnknown(value: unknown): BrowserHostSessionVisibleAction | undefined {
+  const record = objectRecord(value);
+  const actionId = browserHostNativeOsUiToken(record.actionId);
+  const action = browserHostLoadingProgressAction(record.action);
+  const riskType = browserHostRiskType(record.riskType);
+  if (!actionId || !action || !riskType) return undefined;
+  const actorCursorRef = browserHostBoundedActionRef(record.actorCursorRef, 'actor-cursors');
+  const visibleActionRef = browserHostBoundedActionRef(record.visibleActionRef, 'visible-actions');
+  if (!actorCursorRef && !visibleActionRef) return undefined;
+  return {
+    actionId,
+    action,
+    riskType,
+    ...(actorCursorRef ? { actorCursorRef } : {}),
+    ...(visibleActionRef ? { visibleActionRef } : {}),
+  };
+}
+
+function browserHostRiskLedgerFromUnknown(value: unknown): BrowserHostSessionState['riskLedger'] {
+  if (!Array.isArray(value)) return undefined;
+  const entries = value.map((entry) => {
+    const visibleAction = browserHostVisibleActionFromUnknown(entry);
+    const recordedAt = safeIsoTimestampField(objectRecord(entry).recordedAt);
+    return visibleAction && recordedAt ? { ...visibleAction, recordedAt } : undefined;
+  }).filter((entry): entry is NonNullable<BrowserHostSessionState['riskLedger']>[number] => Boolean(entry));
+  return entries.length ? entries.slice(-50) : undefined;
+}
+
+function browserHostRiskType(value: unknown): BrowserHostSessionActionRiskType | undefined {
+  return value === 'navigation-external' ||
+    value === 'form-submit' ||
+    value === 'credential' ||
+    value === 'payment' ||
+    value === 'destructive' ||
+    value === 'low-risk-input' ||
+    value === 'scroll' ||
+    value === 'click'
+    ? value
+    : undefined;
+}
+
+function browserHostBoundedActionRef(value: unknown, directory: 'actor-cursors' | 'visible-actions'): string | undefined {
+  const ref = browserHostRefField(value);
+  return ref && new RegExp(`/${directory}/[a-z0-9._:-]+\\.json$`, 'i').test(ref) ? ref : undefined;
+}
+
 function browserHostLoadingProgressRefs(
   session: Pick<ActiveBrowserHostSession, 'id' | 'driver' | 'liveSurfaceTransport' | 'frameRef' | 'screenshotRef' | 'domSnapshotRef' | 'axSnapshotRef' | 'consoleLogRef' | 'networkLogRef' | 'searchResultRef'>,
 ): BrowserHostSessionLoadingProgress['refs'] {
@@ -2527,8 +2794,9 @@ function browserHostRef(sessionId: string, fileName: string) {
 }
 
 function browserHostFileForRef(workspacePath: string, sessionId: string, ref: string) {
-  const match = /^browser-host-session:([^/]+)\/([^/]+)$/.exec(ref);
+  const match = /^browser-host-session:([^/]+)\/(.+)$/.exec(ref);
   if (!match || match[1] !== (safeSessionId(sessionId) || sessionId)) return undefined;
+  if (!/^[a-zA-Z0-9._:-]+(?:\/[a-zA-Z0-9._:-]+)*$/.test(match[2])) return undefined;
   return join(browserHostSessionDir(workspacePath, sessionId), match[2]);
 }
 

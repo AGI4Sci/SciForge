@@ -45,6 +45,66 @@ test('results renderer execution model projects failure audit data without React
   assert.match(rawItems.find((item) => item.id === `run-${activeRun?.id}`)?.value ?? '', /sciforge\.contract-validation-failure\.v1/);
 });
 
+test('image evidence artifacts do not upgrade projectionless runs to completion truth', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-image-evidence-not-completion',
+    scenarioId: 'literature-evidence-review',
+    title: 'image evidence not completion',
+    createdAt: '2026-06-03T00:00:00.000Z',
+    updatedAt: '2026-06-03T00:00:01.000Z',
+    messages: [],
+    runs: [{
+      id: 'run-image-evidence-not-completion',
+      scenarioId: 'literature-evidence-review',
+      status: 'running',
+      prompt: 'capture visual evidence',
+      response: '',
+      createdAt: '2026-06-03T00:00:00.000Z',
+    }],
+    artifacts: [{
+      id: 'image-evidence-only',
+      type: 'image-evidence',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.image-evidence.payload.v1',
+      metadata: { runId: 'run-image-evidence-not-completion' },
+      data: {
+        imageRef: 'screenshot:run-image-evidence-not-completion/latest.png',
+        sourceKind: 'screenshot',
+        status: 'ready',
+        completionEligible: true,
+        completionEvidenceRef: 'screenshot:run-image-evidence-not-completion/latest.png',
+        actionTruthRef: 'window:run-image-evidence-not-completion/action-1',
+      },
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: 'artifact:image-evidence-only',
+        role: 'supporting-evidence',
+        declaredMediaType: 'application/json',
+        declaredExtension: '.json',
+        contentShape: 'json-envelope',
+        readableRef: 'artifact:image-evidence-only/manifest.json',
+        previewPolicy: 'inline',
+      },
+    }],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    notebook: [],
+    versions: [],
+  };
+
+  const presentation = runPresentationState(session, session.runs[0]);
+  const browserState = browserVisibleRuntimeState(session, session.runs[0]);
+
+  assert.equal(presentation.kind, 'empty');
+  assert.equal(presentation.title, 'Waiting for results');
+  assert.deepEqual(presentation.availableArtifacts, []);
+  assert.equal(browserState.projectionStatus, 'missing');
+  assert.equal(browserState.presentationKind, 'empty');
+  assert.deepEqual(browserState.visibleArtifactRefs, []);
+});
+
 test('results renderer execution model keeps response JSON failures audit-only', () => {
   const session = responseFailureSession();
   const activeRun = session.runs[0];
@@ -354,7 +414,7 @@ test('results renderer execution model lets conversation projection override raw
 
   const state = runPresentationState(session, session.runs[0]);
 
-  assert.equal(state.kind, 'ready');
+  assert.equal(state.kind, 'empty');
   assert.equal(state.reason, 'Projection-visible answer is ready.');
   assert.deepEqual(runAuditBlockers(session, session.runs[0]), []);
   assert.deepEqual(runRecoverActions(session, session.runs[0]), []);

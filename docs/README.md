@@ -1,67 +1,57 @@
 # SciForge 文档
 
-最后更新：2026-06-02
+最后更新：2026-06-03
 
-当前架构重构的核心结论：
+## 当前结论
 
-> **SciForge GUI 是 TUI agent 的 GUI extension。TUI / agent host 拥有全部逻辑。**
+SciForge GUI 是 Agent Host 的确定性体验扩展。Agent Host 拥有 planning、provider routing、action、verification 和 trace；GUI 负责 presentation、annotation、focus、confirmation 和 refs projection。
 
-GUI 给 TUI 的操作输入全部是文本。默认 TUI 服务必须走 Codex app-server；`codex exec --json` 只作为 legacy/test-only 兼容和历史证据，Claude Code stream-json 是可选 backend，不需要独立 AgentServer。生产默认 model provider 应是 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。跨模块组合采用 Agent Host Semantic Pipeline：所有模块对外收敛到 `module.describe/query/read/invoke`，Agent Host 负责 pipeline 编排和 trace，GUI 只是其中一个特殊模块。迁移期 `gui.*` alias 只能作为 adapter shim 暴露；稳定心智模型是统一 `module.*` 函数。
+M1 当前主线：
 
-当前注释路线是连续反馈体验：全局 `AnnotationSidebar` 负责点选对象、澄清问题和对象关系，并可承载低风险 quick action；反馈收件箱负责复杂改动的管理、确认、审计、GitHub sync 和 Runtime Codex repair。`annotation-plan-only` 仍用于无副作用的整理/预览 lane，`annotation-quick-action` 用于侧栏低风险小改动。
+- Browser Pane：Desktop Electron native host 内的真实浏览器。
+- Global Annotation：像 Codex 一样把标注作为下一条用户消息的 pending context。
+- Image / Evidence Pane：右侧通用图片证据展示区，替代旧 Screen pane。
+- Window Action Session：agent 以 actorCursor 操作用户加入的真实窗口。
+
+旧的隔离 `VirtualAppScreen` 产品需求已废弃。
 
 ## 权威文档
 
 | 文档 | 状态 | 用途 |
-|---|---|---|
-| [`Architecture.md`](Architecture.md) | **当前总架构真相源** | GUI-as-extension 的产品边界、Agent Host Semantic Pipeline、职责归属、全局注释侧栏、双目录能力发现、引用预览、confidence、harness/policy 和 UI 边界。 |
-| [`SemanticModuleEngineering.md`](SemanticModuleEngineering.md) | **软件工程范式设计** | 统一模块函数、Root Agent Host、L1 Module Host、resource graph、UI/memory/skills/tools/project 的关系，以及跨开源项目资源组合原则。 |
-| [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | **当前协议真相源** | GUI → TUI 文本输入，TUI 通过 `module.query/read/invoke(moduleId='gui')` 读取 GUI resource tree 并表达展示/确认意图；迁移期 `gui.*` adapter shim、annotation feedback envelopes、展示组件目录、对象引用、confidence、hot region、precondition 和协商。 |
-| [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md) | **内置浏览器运行时设计** | Codex-like browser session、tab、action、snapshot、trace、安全确认和 GUI presentation surface 边界。 |
-| [`runbooks/browser-pane-dogfood-runbook.md`](runbooks/browser-pane-dogfood-runbook.md) | Browser pane dogfood runbook | 右侧 Browser pane 连续冲浪验收流程、bounded evidence 字段、latency/transport/surface/ref 模板和瓶颈分类。 |
-| [`VirtualAppScreenArchitecture.md`](VirtualAppScreenArchitecture.md) | **虚拟屏幕 / App Surface 设计** | VirtualAppScreen、Native Host、VirtualDisplayProvider adapter、跨平台虚拟显示 backend、native/WebRTC transport、app surface、输入隔离和用户级验收 evidence 的后续实现指导。 |
-| [`VirtualAppScreenNativeHost.md`](VirtualAppScreenNativeHost.md) | **终局 C Native Host 设计** | `packages/actions/computer-use/virtual-app-screen-host` 模块边界、host protocol、surface/control plane、真人 fire-and-release 输入、自动化 barrier、host-owned evidence 和第三方虚拟屏幕工具定位。 |
-| [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | **TUI native extension 归属图** | capability discovery、GUI 展示组件目录、confidence、harness/policy、provider route、verifier、skill promotion、Computer Use 和 dual-instance repair 的 Codex 原生/GUI extension 归属与可验证 manifest。 |
-| [`CodexRuntimeMigration.md`](CodexRuntimeMigration.md) | 当前迁移路线 | Codex app-server 为默认生产 runtime；`CodexExecJsonAdapter`/`codex exec --json` 仅 legacy/test-only，`ClaudeStreamJsonAdapter` 作为可选 backend；统一归一化为内部事件、module pipeline trace 和 backend presentation profile。 |
-| [`Usage.md`](Usage.md) | 当前操作手册 | 当前代码启动、配置、验证命令；它描述现状，不代表最终职责归属。 |
-| [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | **反馈收件箱设计原则** | 反馈收件箱作为本地反馈、`annotation-plan` 记录、GitHub sync、Runtime Codex repair 和证据审计控制面的设计边界、证据策略、readiness gate、系统 Terminal/Web Viewer、repair log evidence 和确认原则。 |
+| --- | --- | --- |
+| [`Architecture.md`](Architecture.md) | 当前总架构 | Agent Host Semantic Pipeline、GUI-as-extension、模块归属。 |
+| [`TuiGuiProtocol.md`](TuiGuiProtocol.md) | 当前协议 | GUI 输入、只读投影、declared GUI intents 和执行边界。 |
+| [`SemanticModuleEngineering.md`](SemanticModuleEngineering.md) | 模块工程范式 | `module.describe/query/read/invoke`、Root Agent Host、L1 Module Host。 |
+| [`BrowserRuntimeArchitecture.md`](BrowserRuntimeArchitecture.md) | Browser 架构 | BrowserHostSession、Electron `WebContentsView`、workspace profile、annotation/evidence。 |
+| [`VirtualAppScreenArchitecture.md`](VirtualAppScreenArchitecture.md) | Screen/Annotation/Image/Window 架构 | 说明旧 VirtualAppScreen 废弃，并定义 Global Annotation、Image Evidence 和 Window Action。 |
+| [`NativeExtensionOwnershipMap.md`](NativeExtensionOwnershipMap.md) / [`native-extension-ownership-map.json`](native-extension-ownership-map.json) | 归属图 | native extension 和 module ownership。若旧 VirtualAppScreen 叙述与当前 PROJECT 冲突，以当前 PROJECT 和本 README 为准并登记迁移。 |
+| [`Usage.md`](Usage.md) | 操作手册 | 当前启动、配置、验证命令；描述现状，不覆盖产品职责边界。 |
+| [`FeedbackInboxDesignPrinciples.md`](FeedbackInboxDesignPrinciples.md) | 反馈原则 | annotation、feedback inbox、repair 和审计边界。 |
 
-迁移前旧方案保存在 [`../docs_old`](../docs_old)，只作为历史对照和迁移输入；不要再把它当作当前架构真相源。
+## 活跃 PROJECT 入口
+
+- [`../PROJECT.md`](../PROJECT.md)：总协议。
+- [`../PROJECT_browser.md`](../PROJECT_browser.md)：Browser Pane。
+- [`../PROJECT_annotation.md`](../PROJECT_annotation.md)：统一 Annotation。
+- [`../PROJECT_image.md`](../PROJECT_image.md)：Image / Evidence Pane。
+- [`../PROJECT_window_action.md`](../PROJECT_window_action.md)：Window Action Session。
+- [`../PROJECT_desktop.md`](../PROJECT_desktop.md)：Desktop native host。
+- [`../PROJECT_CU.md`](../PROJECT_CU.md)：旧 Computer Use / VirtualAppScreen 兼容入口。
 
 ## 核心规则
 
-1. **GUI → TUI 全部是文本。**
-   按钮、拖拽、菜单、表单都必须生成终端等价文本。
+1. 所有修改必须通用，不能为当前页面、截图、URL、文件名或历史 run 写硬编码补丁。
+2. 代码路径保持唯一真相源；旧逻辑和最终方案冲突时删除或迁移旧逻辑，不做长期并行实现。
+3. GUI 不做 provider route、capability ranking、completion 判断、workspace 写入、Computer Use 执行或隐藏 prompt assembly。
+4. 大 payload 和敏感材料必须 refs-first；日志和 evidence 必须脱敏。
+5. 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
+6. 已完成 TODO 必须打勾，并补充日期、evidence refs、验证命令和最终状态。
 
-2. **TUI → GUI 调 GUI module intent。**
-   稳定范式是 `module.invoke({ moduleId: 'gui', intent })`；`gui.*` 只允许作为迁移期或 host-specific adapter alias。
+## 当前验证入口
 
-3. **TUI 读取 GUI 状态像读资源树。**
-   默认只给 shell + hot region；需要更多信息时用 `module.query/read` 按需探测，`watch` 作为可选 subscription facet。
+- 纯文档改动：`git diff --check`。
+- JSON manifest 改动：`node -e "JSON.parse(require('fs').readFileSync('<file>','utf8'))"`。
+- Browser runtime 改动：Browser focused tests + Desktop native smoke。
+- Annotation/Image/Window Action 改动：focused projection/contract tests + Desktop overlay/capture evidence。
 
-4. **插件系统使用 Codex 原生机制。**
-   Codex CLI / app-server 已经有 plugin、skill、tool、MCP 和 custom model provider；SciForge 不再定义第二套，也不要求或新增 AgentServer。
-
-5. **运行期成本必须可控。**
-   默认运行期不得消耗 OpenAI token，除非用户显式 opt in；Codex 使用的 provider/model 必须可见、可审计、可测试。
-
-6. **GUI 不做 agent 决策。**
-   GUI 不做 provider route、capability ranking、repair strategy 或隐藏 prompt assembly；只允许确定性的 UI precondition、risk label 和 confirmation routing。
-
-7. **GUI 是确定性体验扩展。**
-   GUI 可以有 renderer、layout、focus、precondition、defer/reject/suggestion 等 presentation autonomy；接入 GUI 后任务能力不增加，只是展示、确认和交互变好。
-
-8. **GUI 展示能力和 TUI 任务能力分开发现。**
-   TUI 任务能力走 Codex 原生 skills/tools/plugins/MCP；GUI 展示组件走只读 GUI resources。两边不互相注册、不互相 import。
-
-9. **引用、trace 和 confidence 必须按需可解释。**
-   小数据可以 inline；大 payload、敏感内容和审计材料必须用 ref。`confidence` 只能来自 TUI/verifier/harness 的可解释输出，GUI 不补默认百分比。
-
-10. **注释侧栏是连续反馈入口。**
-   `AnnotationSidebar` 可以跨工作台和非工作台引用对象；它负责澄清、预览、保存反馈，也可以在低风险条件下触发小改动。复杂改动、GitHub、repair、commit/push/PR/merge 必须进入收件箱确认和审计。
-
-11. **浏览器和虚拟屏幕只有一个交互真相源。**
-   Browser pane 必须展示 `BrowserHostSession` 拥有的 native/streaming live surface；桌面 shell 使用同一 session 的 native embedded surface adapter，Web shell 才使用同一 owner 的 frame-stream pixels。Screen pane 必须展示 `NativeVirtualAppScreenHost` 拥有的 app/window/session live surface；它不是 Web 里的远程桌面模拟，而是 `packages/actions/computer-use/virtual-app-screen-host` 提供的 native host/control plane。frame-stream、WebRTC 或 canvas stream 只是同一个 owner surface 的 transport，GUI viewer 只 attach 和 overlay，`/frame` route 只作 evidence/manual inspection。iframe、proxy、截图、PDF、document、replay、旧 frame、第三方虚拟屏幕 UI 和系统 popup 只能是 evidence/artifact、diagnostic/reference 或显式 handoff，不得作为第二个可交互画面、验收真相源或替代交互路径；live surface attach 失败时必须 blocked / handoff / retry diagnostics。
-
-12. **浏览器验收必须覆盖两类页面。**
-   注释、反馈收件箱和 repair UI 的用户级验收必须使用 Codex in-app browser，并同时覆盖工作台页面和至少一个非工作台页面。
+迁移前旧方案保存在 [`../docs_old`](../docs_old)，只作为历史对照和迁移输入；不要再把它当作当前架构真相源。

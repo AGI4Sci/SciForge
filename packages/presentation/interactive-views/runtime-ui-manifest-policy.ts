@@ -65,14 +65,22 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
   'browser-runtime-projection': 'browser-workbench',
   'browser-session': 'browser-workbench',
   'browser-snapshot': 'browser-workbench',
+  'image-evidence': 'image-evidence-viewer',
+  'annotation-crop': 'image-evidence-viewer',
+  'screenshot': 'image-evidence-viewer',
+  'browser-evidence': 'image-evidence-viewer',
+  'window-capture': 'image-evidence-viewer',
+  'screen-region': 'image-evidence-viewer',
+  'artifact-image': 'image-evidence-viewer',
+  'replay-frame': 'image-evidence-viewer',
   'computer-use-control-plane': 'computer-use-control-plane',
   'computer-use-user-control-plane': 'computer-use-control-plane',
   'computer-use-session-control': 'computer-use-control-plane',
   'computer-use-replay-control': 'computer-use-control-plane',
-  'computer-use-virtual-screen': 'virtual-screen-viewer',
-  'virtual-desktop-session': 'virtual-screen-viewer',
-  'computer-use-screen': 'virtual-screen-viewer',
-  'computer-use-replay': 'virtual-screen-viewer',
+  'computer-use-virtual-screen': 'image-evidence-viewer',
+  'virtual-desktop-session': 'image-evidence-viewer',
+  'computer-use-screen': 'image-evidence-viewer',
+  'computer-use-replay': 'image-evidence-viewer',
   'terminal-session': 'terminal-session-viewer',
   'terminal-buffer': 'terminal-session-viewer',
   'runtime-terminal-session': 'terminal-session-viewer',
@@ -98,7 +106,7 @@ const AUDIT_COMPONENTS = new Set([...PRESENTATION_ONLY_COMPONENTS, 'unknown-arti
 const TABULAR_COMPONENTS = new Set(['record-table', 'data-table']);
 const PRIMARY_RESULT_COMPONENTS = new Set([
   'browser-workbench',
-  'virtual-screen-viewer',
+  'image-evidence-viewer',
   'computer-use-control-plane',
   'terminal-session-viewer',
   'workspace-file-viewer',
@@ -115,7 +123,7 @@ const PRIMARY_RESULT_COMPONENTS = new Set([
 ]);
 const DEFAULT_RESULT_COMPONENT_ORDER = [
   'browser-workbench',
-  'virtual-screen-viewer',
+  'image-evidence-viewer',
   'computer-use-control-plane',
   'terminal-session-viewer',
   'workspace-file-viewer',
@@ -479,6 +487,7 @@ function componentTargetType(componentId: string, artifacts: Array<Record<string
   if (componentId === 'publication-figure-builder') return 'figure-spec';
   if (componentId === 'statistical-annotation-layer') return 'statistical-result';
   if (componentId === 'browser-workbench') return 'browser-runtime-projection';
+  if (componentId === 'image-evidence-viewer') return 'image-evidence';
   if (componentId === 'virtual-screen-viewer') return 'computer-use-virtual-screen';
   if (componentId === 'computer-use-control-plane') return 'computer-use-control-plane';
   if (componentId === 'terminal-session-viewer') return 'terminal-session';
@@ -504,7 +513,8 @@ function titleForComponent(componentId: string) {
   const titles: Record<string, string> = {
     'paper-card-list': '文献卡片',
     'computer-use-control-plane': 'Computer Use 控制面',
-    'virtual-screen-viewer': 'Computer Use 虚拟屏幕',
+    'image-evidence-viewer': '图片 / 证据',
+    'virtual-screen-viewer': 'Legacy virtual screen inspector',
     'molecule-viewer': '分子结构查看器',
     'structure-viewer': '结构查看器',
     'scientific-plot-viewer': '科学绘图',

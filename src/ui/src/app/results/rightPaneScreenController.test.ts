@@ -11,20 +11,25 @@ import {
   updateRightPaneActiveVirtualAppScreenRegistry,
 } from './rightPaneLiveBindingRegistry';
 
-test('right pane screen controller owns Screen activation without executing Computer Use directly', () => {
+test('right pane screen controller is legacy helper-only while product wiring uses Image Evidence', () => {
   const controllerSource = readFileSync(new URL('./rightPaneScreenController.ts', import.meta.url), 'utf8');
   const rendererSource = readFileSync(new URL('../ResultsRenderer.tsx', import.meta.url), 'utf8');
   const adapterSource = readFileSync(new URL('./screenPaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const surfaceSource = readFileSync(new URL('./rightPaneSurfaceAdapter.tsx', import.meta.url), 'utf8');
 
   assert.match(controllerSource, /export function useRightPaneScreenController/);
   assert.match(controllerSource, /rightPaneVirtualScreenPayload/);
   assert.match(controllerSource, /resultTab !== 'screen'/);
   assert.match(controllerSource, /emittedActivationKeys/);
-  assert.match(rendererSource, /useRightPaneScreenController/);
+  assert.match(rendererSource, /rightPaneImageEvidencePayload/);
+  assert.match(rendererSource, /imageEvidencePayload={imageEvidencePayload}/);
+  assert.match(surfaceSource, /RightPaneImageEvidenceTool/);
+  assert.match(surfaceSource, /resultTab === 'screen'/);
+  assert.match(surfaceSource, /resultTab === 'image'/);
   assert.match(adapterSource, /payload:\s*providedPayload/);
-  assert.match(adapterSource, /attachVirtualAppScreenSurface/);
-  assert.match(adapterSource, /data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
   assert.doesNotMatch(controllerSource, /sendBrowserHostSessionAction|startBrowserHostSession|executeScoped|runComputerUse|invokeWorkspaceModule/);
+  assert.doesNotMatch(rendererSource, /useRightPaneScreenController|rightPaneVirtualScreenPayload|RightPaneVirtualScreenTool|renderVirtualScreenViewer|attachVirtualAppScreenSurface/);
+  assert.doesNotMatch(surfaceSource, /RightPaneVirtualScreenTool|rightPaneVirtualScreenPayload|rightPaneVirtualScreenHostPresentation|attachVirtualAppScreenSurface|data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
   assert.doesNotMatch(adapterSource, /rightPaneVirtualScreenActivationCommand|sendBrowserHostSessionAction|startBrowserHostSession|executeScoped|runComputerUse|attachVirtualAppScreenSession|registerVirtualAppScreenSessionExecutor/);
 });
 

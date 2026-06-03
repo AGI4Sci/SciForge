@@ -78,6 +78,7 @@ export function Workbench({
   workspaceFileEditor,
   onWorkspaceFileEditorChange,
   externalReferenceRequest,
+  onExternalReferenceRequest,
   onExternalReferenceConsumed,
   availableComponentIds,
   onAvailableComponentIdsChange,
@@ -114,6 +115,7 @@ export function Workbench({
   workspaceFileEditor: WorkspaceFileEditorState | null;
   onWorkspaceFileEditorChange: (next: WorkspaceFileEditorState | null) => void;
   externalReferenceRequest?: { id: string; reference: SciForgeReference };
+  onExternalReferenceRequest: (reference: SciForgeReference) => void;
   onExternalReferenceConsumed: (requestId: string) => void;
   availableComponentIds: string[];
   onAvailableComponentIdsChange: (ids: string[]) => void;
@@ -256,6 +258,11 @@ export function Workbench({
 
   function handleExternalReferenceConsumed(requestId: string) {
     onExternalReferenceConsumed(requestId);
+  }
+
+  function handleExternalReferenceRequest(reference: SciForgeReference) {
+    onExternalReferenceRequest(reference);
+    setMobilePane('chat');
   }
 
   function recordWorkbenchUIAction(action: UIAction) {
@@ -446,6 +453,7 @@ export function Workbench({
             onOpenSettings={onOpenSettings}
             onCommandTextAction={handleCommandTextAction}
             onOpenDebugAuditAction={handleOpenDebugAuditAction}
+            onExternalReferenceRequest={handleExternalReferenceRequest}
             onDismissResultSlotPresentation={(presentationId) => {
               const scopedPresentationId = scopedResultSlotId(activeRunId, presentationId);
               onSessionChange({

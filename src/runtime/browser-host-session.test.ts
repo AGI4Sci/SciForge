@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
 import { WebSocket } from 'ws';
 
@@ -188,6 +189,157 @@ test('BrowserHostSessionManager captures refs-first frame, DOM, AX, and redacted
     const closed = await manager.act(workspacePath, 'session-a', { action: 'close' });
     assert.equal(closed.status, 'closed');
     assert.equal(drivers[0]?.closed, true);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSessionManager gives drivers an ignored workspace browser profile without exposing it publicly', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-profile-'));
+  const { factory, createInputs } = fakeDriverFactory();
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+
+    const session = await manager.openSession(workspacePath, {
+      url: 'https://profile.example/start',
+      sessionId: 'profile-session',
+    });
+
+    const expectedProfileDir = join(workspacePath, '.sciforge', 'browser-host', 'profile');
+    assert.equal(createInputs[0]?.workspaceProfileDir, expectedProfileDir);
+    assert.equal(createInputs[0]?.workspacePath, workspacePath);
+
+    const sessionDir = browserHostSessionDir(workspacePath, 'profile-session');
+    const manifest = await readFile(join(sessionDir, 'session.json'), 'utf8');
+    assert.doesNotMatch(manifest, /browser-host\/profile/);
+    assert.doesNotMatch(JSON.stringify(session), /browser-host\/profile/);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession publishes bounded visible action and risk ledger without raw URL or text', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-visible-action-'));
+  const { factory } = fakeDriverFactory();
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const opened = await manager.openSession(workspacePath, {
+      url: 'https://visible.example/start?token=secret-value',
+      sessionId: 'visible-action-session',
+    });
+
+    assert.equal(opened.visibleAction?.action, 'open');
+    assert.equal(opened.visibleAction?.riskType, 'navigation-external');
+    assert.match(opened.visibleAction?.visibleActionRef ?? '', /^browser-host-session:visible-action-session\/visible-actions\//);
+    assert.equal(opened.visibleAction?.actorCursorRef, undefined);
+    assert.deepEqual(opened.riskLedger?.map((entry) => [entry.action, entry.riskType]), [
+      ['open', 'navigation-external'],
+    ]);
+
+    const clicked = await manager.act(workspacePath, opened.id, {
+      action: 'click',
+      x: 12,
+      y: 24,
+      actionId: 'ui-click-visible',
+      capture: 'none',
+    });
+    assert.deepEqual(clicked.visibleAction, {
+      actionId: 'ui-click-visible',
+      action: 'click',
+      riskType: 'click',
+      visibleActionRef: 'browser-host-session:visible-action-session/visible-actions/ui-click-visible.json',
+    });
+
+    const scrolled = await manager.act(workspacePath, opened.id, {
+      action: 'scroll',
+      x: 300,
+      y: 420,
+      deltaY: 240,
+      actionId: 'ui-scroll-visible',
+    });
+    assert.equal(scrolled.visibleAction?.action, 'scroll');
+    assert.equal(scrolled.visibleAction?.riskType, 'scroll');
+    assert.equal(scrolled.visibleAction?.visibleActionRef, 'browser-host-session:visible-action-session/visible-actions/ui-scroll-visible.json');
+
+    const typed = await manager.act(workspacePath, opened.id, {
+      action: 'type',
+      text: 'secret search text should never appear',
+      actionId: 'ui-type-visible',
+    });
+    assert.equal(typed.visibleAction?.action, 'type');
+    assert.equal(typed.visibleAction?.riskType, 'low-risk-input');
+
+    const cursor = await manager.act(workspacePath, opened.id, {
+      action: 'cursor',
+      x: 18,
+      y: 36,
+      actionId: 'ui-cursor-visible',
+    });
+    assert.equal(cursor.visibleAction?.action, 'cursor');
+    assert.equal(cursor.visibleAction?.riskType, 'click');
+    assert.equal(cursor.visibleAction?.actorCursorRef, 'browser-host-session:visible-action-session/actor-cursors/ui-cursor-visible.json');
+    assert.equal(cursor.visibleAction?.visibleActionRef, undefined);
+
+    const actorClicked = await manager.act(workspacePath, opened.id, {
+      action: 'click',
+      x: 32,
+      y: 48,
+      actionId: 'agent-click-visible',
+      capture: 'none',
+      actorCursor: {
+        agentId: 'agent-window-action',
+        cursorId: 'cursor-shared-browser',
+        color: '#22c55e',
+        label: 'Window action',
+      },
+    });
+    assert.deepEqual(actorClicked.actorCursor, {
+      agentId: 'agent-window-action',
+      cursorId: 'cursor-shared-browser',
+      color: '#22c55e',
+      label: 'Window action',
+      status: 'acting',
+      target: {
+        type: 'browser-pane',
+        sessionId: 'visible-action-session',
+        windowRef: 'browser-host-session:visible-action-session',
+      },
+      lastAction: {
+        action: 'click',
+        status: 'completed',
+        evidenceRefs: ['browser-host-session:visible-action-session/visible-actions/agent-click-visible.json'],
+      },
+      evidenceRefs: ['browser-host-session:visible-action-session/actor-cursors/cursor-shared-browser.json'],
+    });
+    assert.deepEqual(actorClicked.actorCursors, [actorClicked.actorCursor]);
+
+    const navigated = await manager.act(workspacePath, opened.id, {
+      action: 'navigate',
+      url: 'https://payments.example/checkout?card=4111111111111111',
+      actionId: 'ui-nav-visible',
+      capture: 'none',
+    });
+    assert.equal(navigated.visibleAction?.action, 'navigate');
+    assert.equal(navigated.visibleAction?.riskType, 'navigation-external');
+    assert.deepEqual(navigated.riskLedger?.slice(-6).map((entry) => [entry.action, entry.riskType]), [
+      ['click', 'click'],
+      ['scroll', 'scroll'],
+      ['type', 'low-risk-input'],
+      ['cursor', 'click'],
+      ['click', 'click'],
+      ['navigate', 'navigation-external'],
+    ]);
+
+    const sessionDir = browserHostSessionDir(workspacePath, opened.id);
+    const manifest = JSON.parse(await readFile(join(sessionDir, 'session.json'), 'utf8')) as BrowserHostSessionState;
+    const boundedActions = JSON.stringify({
+      visibleAction: manifest.visibleAction,
+      riskLedger: manifest.riskLedger,
+      loadingProgress: manifest.loadingProgress,
+    });
+    const visibleActionRefPayload = await readFile(join(sessionDir, 'visible-actions', basename(navigated.visibleAction?.visibleActionRef ?? '')), 'utf8');
+    const actorCursorRefPayload = await readFile(join(sessionDir, 'actor-cursors', basename(actorClicked.actorCursor?.evidenceRefs?.[0] ?? '')), 'utf8');
+    assert.doesNotMatch(`${boundedActions}\n${visibleActionRefPayload}\n${actorCursorRefPayload}`, /visible\.example|payments\.example|secret-value|secret search text|4111111111111111|<html/i);
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
@@ -503,14 +655,15 @@ test('BrowserHostSession navigation controls publish immediate bounded URL diges
 
 test('BrowserHostSessionManager can drive a native embedded BrowserHostSession adapter without frame-stream live fallback', async () => {
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-'));
-  const calls: Array<{ route: string; body: Record<string, unknown> }> = [];
+  const calls: Array<{ method: string; route: string; body: Record<string, unknown> }> = [];
+  const evidenceBridgeResponses: Array<Record<string, unknown>> = [];
   let currentUrl = 'about:blank';
   let currentProgress: Record<string, unknown> | undefined;
   const server = createServer((req, res) => {
     void (async () => {
       const route = req.url ?? '/';
       const body = req.method === 'POST' ? await readJsonRequest(req) : {};
-      calls.push({ route, body });
+      calls.push({ method: req.method ?? 'GET', route, body });
       if (route === '/sessions/start') writeJsonResponse(res, { ok: true, sessionId: body.sessionId });
       else if (route.endsWith('/navigate')) {
         currentUrl = normalizeBrowserHostUrl(String(body.url ?? 'about:blank'));
@@ -519,13 +672,21 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
       } else if (route.endsWith('/state')) {
         writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, progress: currentProgress });
       } else if (route.endsWith('/screenshot')) {
-        writeJsonResponse(res, { ok: true, dataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}` });
+        const payload = await writeNativeEvidenceResponse(route, body, 'screenshot', PNG_1X1);
+        evidenceBridgeResponses.push(payload);
+        writeJsonResponse(res, payload, req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/content')) {
-        writeJsonResponse(res, { ok: true, content: '<html><body><a href="https://example.org/result">Result</a></body></html>' });
+        const payload = await writeNativeEvidenceResponse(route, body, 'dom', '<html><body data-provider="provider-payload"><a href="https://example.org/result?token=secret-token">Result</a></body></html>');
+        evidenceBridgeResponses.push(payload);
+        writeJsonResponse(res, payload, req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/text')) {
-        writeJsonResponse(res, { ok: true, text: 'Native embedded page text' });
+        const payload = await writeNativeEvidenceResponse(route, body, 'text', 'Native embedded page text secret-token provider-payload');
+        evidenceBridgeResponses.push(payload);
+        writeJsonResponse(res, payload, req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/ax')) {
-        writeJsonResponse(res, { ok: true, snapshot: { role: 'document', name: 'Native embedded page' } });
+        const payload = await writeNativeEvidenceResponse(route, body, 'ax', JSON.stringify({ role: 'document', name: 'Native embedded page', text: 'AX secret-token provider-payload' }, null, 2));
+        evidenceBridgeResponses.push(payload);
+        writeJsonResponse(res, payload, req.method === 'POST' ? 200 : 405);
       } else if (route.includes('/search-results')) {
         writeJsonResponse(res, { ok: true, results: [{ title: 'Result', url: 'https://example.org/result', snippet: 'Native result' }] });
       } else if (route.endsWith('/actions')) {
@@ -629,6 +790,18 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
     assert.match(session.liveSurfaceRef ?? '', /^browser-host-session:native-session\/live-surface$/);
     assert.equal(session.frameRef, undefined);
     assert.match(session.screenshotRef ?? '', /^browser-host-session:native-session\/screenshot-/);
+    const evidenceCalls = calls.filter((call) => call.method === 'POST' && /\/(?:screenshot|content|text|ax)(?:\?|$)/.test(call.route));
+    assert.ok(evidenceCalls.length >= 3);
+    assert.ok(
+      evidenceCalls.every((call) => call.method === 'POST' && typeof call.body.outputPath === 'string'),
+      JSON.stringify(evidenceCalls),
+    );
+    for (const response of evidenceBridgeResponses) {
+      assertNoRawNativeBridgePayload(JSON.stringify(response));
+      assert.equal(Object.hasOwn(response, 'outputPath'), false);
+      assert.equal(typeof response.bytesWritten, 'number');
+      assert.match(String(response.sha256), /^[a-f0-9]{64}$/i);
+    }
     assert.equal(clicked.liveSurfaceTransport, 'native-embedded');
     assert.equal(clicked.secondTruthSource, false);
     assert.equal(clicked.frameStreamRef, undefined);
@@ -704,11 +877,13 @@ test('BrowserHostSession native loading state ACK drives lifecycle and missing l
           loading: false,
         });
       } else if (route.endsWith('/screenshot')) {
-        writeJsonResponse(res, { ok: true, dataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}` });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'screenshot', PNG_1X1), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/content')) {
-        writeJsonResponse(res, { ok: true, content: '<!-- bounded native loading fixture -->' });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'dom', '<!-- bounded native loading fixture -->'), req.method === 'POST' ? 200 : 405);
+      } else if (route.endsWith('/text')) {
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'text', 'Native loading state page'), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/ax')) {
-        writeJsonResponse(res, { ok: true, snapshot: { role: 'document', name: 'Native loading state page' } });
+        writeJsonResponse(res, await writeNativeEvidenceResponse(route, body, 'ax', JSON.stringify({ role: 'document', name: 'Native loading state page' })), req.method === 'POST' ? 200 : 405);
       } else if (route.endsWith('/actions')) {
         currentUrl = 'https://example.org/native-loading/reloaded';
         if (actionResponseMode === 'missing-loading') {
@@ -1053,6 +1228,23 @@ test('BrowserHostSession native surface routes fail closed with bounded blocked 
     assert.equal(attach.rightPaneBridge, false);
     assert.doesNotMatch(JSON.stringify(attach), /frame-stream|webrtc|iframe|proxy/i);
 
+    for (const action of ['resize', 'detach'] as const) {
+      const response = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/${action}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspacePath, sessionId: 'native-route-session', bounds: { x: 1, y: 2, width: 300, height: 200 } }),
+      });
+      assert.equal(response.status, 503, action);
+      const blocked = await response.json() as Record<string, unknown>;
+      assert.equal(blocked.ok, false, action);
+      assert.equal(blocked.status, 'blocked', action);
+      assert.equal(blocked.action, action, action);
+      assert.equal(blocked.sessionId, 'native-route-session', action);
+      assert.equal(blocked.rightPaneBridge, false, action);
+      assert.equal(blocked.detachAvailable, false, action);
+      assert.equal(blocked.resizeAvailable, false, action);
+    }
+
     const stateResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/state?sessionId=native-route-session`);
     assert.equal(stateResponse.status, 503);
     const state = await stateResponse.json() as Record<string, unknown>;
@@ -1087,6 +1279,8 @@ test('BrowserHostSession native surface routes proxy only trusted session-scoped
           singleInteractiveTruth: true,
           secondTruthSource: false,
           attachAvailable: true,
+          detachAvailable: true,
+          resizeAvailable: true,
           stateAvailable: true,
           rightPaneBridge: false,
         });
@@ -1106,8 +1300,57 @@ test('BrowserHostSession native surface routes proxy only trusted session-scoped
           secondTruthSource: false,
           sessionId: 'proxy-session',
           liveSurfaceRef: 'browser-host-session:proxy-session/live-surface',
+          attachAvailable: true,
+          detachAvailable: true,
+          resizeAvailable: true,
+          stateAvailable: true,
           diagnostics: ['main-window-unavailable'],
         }, 503);
+        return;
+      }
+      if (route === '/sessions/proxy-session/resize' && req.method === 'POST') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'resized',
+          ready: true,
+          passClaim: true,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          sessionId: 'proxy-session',
+          liveSurfaceRef: 'browser-host-session:proxy-session/live-surface',
+          attachAvailable: true,
+          detachAvailable: true,
+          resizeAvailable: true,
+          stateAvailable: true,
+          bounds: body.bounds,
+          embedded: true,
+          visible: true,
+        });
+        return;
+      }
+      if (route === '/sessions/proxy-session/detach' && req.method === 'POST') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'detached',
+          ready: true,
+          passClaim: false,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          sessionId: 'proxy-session',
+          liveSurfaceRef: 'browser-host-session:proxy-session/live-surface',
+          attachAvailable: true,
+          detachAvailable: true,
+          resizeAvailable: true,
+          stateAvailable: true,
+          embedded: false,
+          visible: false,
+        });
         return;
       }
       if (route === '/sessions/forged-session/attach' && req.method === 'POST') {
@@ -1214,6 +1457,42 @@ test('BrowserHostSession native surface routes proxy only trusted session-scoped
     assert.equal(attach.liveSurfaceRef, 'browser-host-session:proxy-session/live-surface');
     assert.equal(attach.singleInteractiveTruth, true);
     assert.equal(attach.secondTruthSource, false);
+    assert.equal(attach.detachAvailable, true);
+    assert.equal(attach.resizeAvailable, true);
+
+    const resizeResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/resize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspacePath,
+        sessionId: 'proxy-session',
+        bounds: { x: 8, y: 13, width: 987, height: 610 },
+      }),
+    });
+    assert.equal(resizeResponse.status, 200);
+    const resize = await resizeResponse.json() as Record<string, unknown>;
+    assert.equal(resize.ok, true);
+    assert.equal(resize.status, 'resized');
+    assert.equal(resize.action, 'resize');
+    assert.deepEqual(resize.bounds, { x: 8, y: 13, width: 987, height: 610 });
+    assert.equal(resize.liveSurfaceRef, 'browser-host-session:proxy-session/live-surface');
+    assert.equal(resize.passClaim, true);
+    assert.doesNotMatch(JSON.stringify(resize), /data:image|base64|<html|secret|provider|frame-stream/i);
+
+    const detachResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/detach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath, sessionId: 'proxy-session' }),
+    });
+    assert.equal(detachResponse.status, 200);
+    const detach = await detachResponse.json() as Record<string, unknown>;
+    assert.equal(detach.ok, true);
+    assert.equal(detach.status, 'detached');
+    assert.equal(detach.action, 'detach');
+    assert.equal(detach.embedded, false);
+    assert.equal(detach.visible, false);
+    assert.equal(detach.passClaim, false);
+    assert.equal(detach.liveSurfaceRef, 'browser-host-session:proxy-session/live-surface');
 
     const forgedResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/attach`, {
       method: 'POST',
@@ -1247,10 +1526,18 @@ test('BrowserHostSession native surface routes proxy only trusted session-scoped
     assert.deepEqual(adapterCalls.map((call) => `${call.method} ${call.route}`), [
       'GET /health',
       'POST /sessions/proxy-session/attach',
+      'POST /sessions/proxy-session/resize',
+      'POST /sessions/proxy-session/detach',
       'POST /sessions/forged-session/attach',
       'GET /sessions/wrong-ref/state',
       'POST /sessions/raw-session/attach',
     ]);
+    assert.deepEqual(adapterCalls.find((call) => call.route === '/sessions/proxy-session/resize')?.body.bounds, {
+      x: 8,
+      y: 13,
+      width: 987,
+      height: 610,
+    });
   } finally {
     if (previousNativeAdapterUrl === undefined) delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
     else process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = previousNativeAdapterUrl;
@@ -1519,12 +1806,19 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
   }
 });
 
-function fakeDriverFactory(options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}): { factory: BrowserHostSessionDriverFactory; drivers: FakeBrowserHostDriver[] } {
+function fakeDriverFactory(options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}): {
+  factory: BrowserHostSessionDriverFactory;
+  drivers: FakeBrowserHostDriver[];
+  createInputs: Array<{ sessionId: string; viewport: unknown; timeoutMs: number; workspacePath?: string; workspaceProfileDir?: string }>;
+} {
   const drivers: FakeBrowserHostDriver[] = [];
+  const createInputs: Array<{ sessionId: string; viewport: unknown; timeoutMs: number; workspacePath?: string; workspaceProfileDir?: string }> = [];
   return {
     drivers,
+    createInputs,
     factory: {
-      async create() {
+      async create(input) {
+        createInputs.push(input);
         const driver = new FakeBrowserHostDriver(options);
         drivers.push(driver);
         return driver;
@@ -1921,6 +2215,41 @@ async function readJsonRequest(req: IncomingMessage): Promise<Record<string, unk
   for await (const chunk of req) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   const raw = Buffer.concat(chunks).toString('utf8').trim();
   return raw ? JSON.parse(raw) as Record<string, unknown> : {};
+}
+
+async function writeNativeEvidenceResponse(
+  route: string,
+  body: Record<string, unknown>,
+  outputKind: 'screenshot' | 'dom' | 'text' | 'ax',
+  bytes: Buffer | string,
+): Promise<Record<string, unknown>> {
+  const outputPath = typeof body.outputPath === 'string' ? body.outputPath : '';
+  const sessionId = /\/sessions\/([^/]+)\//.exec(route)?.[1] ?? 'unknown';
+  if (!outputPath) {
+    return {
+      ok: false,
+      sessionId,
+      outputKind,
+      reason: 'raw-native-evidence-route-disabled',
+    };
+  }
+  const buffer = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes, 'utf8');
+  await mkdir(dirname(outputPath), { recursive: true });
+  await writeFile(outputPath, buffer);
+  return {
+    ok: true,
+    sessionId: decodeURIComponent(sessionId),
+    outputKind,
+    bytesWritten: buffer.length,
+    sha256: createHash('sha256').update(buffer).digest('hex'),
+  };
+}
+
+function assertNoRawNativeBridgePayload(serialized: string): void {
+  assert.doesNotMatch(
+    serialized,
+    /data:image|;base64|iVBORw0KGgo|<\s*(?:!doctype|html|body|input)\b|secret-token|provider-payload|Native embedded page text|AX secret-token|https:\/\/example\.org\/result/i,
+  );
 }
 
 function writeJsonResponse(res: ServerResponse, body: Record<string, unknown>, statusCode = 200): void {

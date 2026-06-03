@@ -1617,7 +1617,7 @@ async function prepareBrowserHostSessionWriter(
 
   let runtimeStart: BrowserHostSessionStartResult['runtimeStart'];
   try {
-    runtimeStart = await startRuntimeServices();
+    runtimeStart = await startRuntimeServices({ requireBrowserHostNativeSurface: true });
   } catch (error) {
     throw browserHostWriterUnavailableError(first, error);
   }

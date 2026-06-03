@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { runInNewContext } from 'node:vm';
 import {
   createDefaultDesktopManagedServices,
   createDesktopBrowserHostSurfaceController,
@@ -88,9 +89,10 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
   assert.equal(started.plan.fullElectronEntrypointImplemented, true);
   assert.equal(loadedFiles[0], join(process.cwd(), 'dist-ui', 'index.html'));
   assert.deepEqual(handledChannels.sort(), [
-	    'desktop:browser-host-surface:attach',
-	    'desktop:browser-host-surface:detach',
-	    'desktop:browser-host-surface:state',
+    'desktop:browser-host-surface:attach',
+    'desktop:browser-host-surface:detach',
+    'desktop:browser-host-surface:resize',
+    'desktop:browser-host-surface:state',
 	    'desktop:native-browser:back',
 	    'desktop:native-browser:forward',
 	    'desktop:native-browser:open',
@@ -109,6 +111,47 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
     'runtime:shutdown',
   ]);
   assert.deepEqual(events, ['app:before-quit', 'app:window-all-closed']);
+});
+
+test('P1-DESK main controller can load the Vite dev URL while preserving the isolated preload bridge', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-electron-main-dev-url-test-'));
+  const loadedFiles: string[] = [];
+  const loadedUrls: string[] = [];
+  const handledChannels: string[] = [];
+  const electron = fakeElectron({
+    appDataRoot: join(root, 'userData'),
+    loadedFiles,
+    loadedUrls,
+    handledChannels,
+    events: [],
+  });
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'appData'),
+    requestedControlPort: 0,
+  });
+  const controller = createElectronDesktopMainController(electron, {
+    projectRoot: process.cwd(),
+    workspacePath: join(root, 'workspace'),
+    rendererDevServerUrl: 'http://127.0.0.1:5173',
+    launcher,
+    platformService: new DesktopPlatformService(),
+  });
+
+  const started = await controller.start();
+  await controller.shutdown();
+
+  assert.deepEqual(loadedFiles, []);
+  assert.deepEqual(loadedUrls, ['http://127.0.0.1:5173']);
+  assert.equal(started.plan.fullElectronEntrypointImplemented, true);
+  const startedWindow = started.window as typeof started.window & { options: ElectronBrowserWindowOptions };
+  assert.equal(startedWindow.options.webPreferences.preload, join(process.cwd(), 'dist-desktop', 'src', 'desktop', 'preload.cjs'));
+  assert.equal(startedWindow.options.webPreferences.contextIsolation, true);
+  assert.equal(startedWindow.options.webPreferences.nodeIntegration, false);
+  assert.ok(handledChannels.includes('runtime:config'));
+  assert.ok(handledChannels.includes('desktop:browser-host-surface:attach'));
+  assert.ok(handledChannels.includes('desktop:virtual-app-screen-surface:attach'));
+  assert.doesNotMatch(JSON.stringify(started.runtimeConfig), /SCIFORGE_RUNTIME_API_KEY|apiKey|sk-/);
 });
 
 test('R-DESK main controller honors isolated desktop userData and workspace env overrides', async () => {
@@ -229,6 +272,66 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'pickDirectory',
     'presentVirtualAppScreenSurface',
     'requestShutdown',
+    'resizeBrowserHostSessionSurface',
+    'revealPath',
+  ]);
+});
+
+test('P1-DESK copied CommonJS preload stays in parity with the TypeScript preload bridge', async () => {
+  const source = await readFile(join(process.cwd(), 'src', 'desktop', 'preload.cjs'), 'utf8');
+  const exposed: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> = {};
+  const invoked: string[] = [];
+
+  runInNewContext(source, {
+    require(name: string) {
+      assert.equal(name, 'electron');
+      return {
+        contextBridge: {
+          exposeInMainWorld(apiKey: string, api: Record<string, (...args: unknown[]) => Promise<unknown>>) {
+            exposed[apiKey] = api;
+          },
+        },
+        ipcRenderer: {
+          async invoke(channel: string) {
+            invoked.push(channel);
+            return { ok: true, channel };
+          },
+        },
+      };
+    },
+  }, { filename: 'src/desktop/preload.cjs' });
+
+  const api = exposed.sciforgeDesktop;
+  assert.ok(api);
+  await api.attachVirtualAppScreenSurface({});
+  await api.presentVirtualAppScreenSurface({});
+  await api.detachVirtualAppScreenSurface({});
+
+  assert.deepEqual(invoked, [
+    'desktop:virtual-app-screen-surface:attach',
+    'desktop:virtual-app-screen-surface:present',
+    'desktop:virtual-app-screen-surface:detach',
+  ]);
+  assert.deepEqual(Object.keys(api).sort(), [
+    'attachBrowserHostSessionSurface',
+    'attachVirtualAppScreenSurface',
+    'captureNativeBrowserScreenshot',
+    'detachBrowserHostSessionSurface',
+    'detachVirtualAppScreenSurface',
+    'getBrowserHostSessionSurfaceState',
+    'getNativeBrowserState',
+    'getRuntimeConfig',
+    'getRuntimeHealth',
+    'getRuntimeReady',
+    'nativeBrowserBack',
+    'nativeBrowserForward',
+    'nativeBrowserReload',
+    'openExternal',
+    'openNativeBrowser',
+    'pickDirectory',
+    'presentVirtualAppScreenSurface',
+    'requestShutdown',
+    'resizeBrowserHostSessionSurface',
     'revealPath',
   ]);
 });
@@ -637,6 +740,7 @@ function validVirtualAppScreenSurfaceDetachRequest() {
 function fakeElectron(input: {
   appDataRoot: string;
   loadedFiles: string[];
+  loadedUrls?: string[];
   handledChannels: string[];
   events: string[];
   setPaths?: Array<[string, string]>;
@@ -646,6 +750,10 @@ function fakeElectron(input: {
 
     async loadFile(filePath: string): Promise<void> {
       input.loadedFiles.push(filePath);
+    }
+
+    async loadURL(url: string): Promise<void> {
+      input.loadedUrls?.push(url);
     }
 
     on(): void {}

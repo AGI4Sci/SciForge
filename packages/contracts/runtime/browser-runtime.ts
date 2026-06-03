@@ -57,6 +57,7 @@ export type BrowserRuntimeRiskLevel = 'low' | 'medium' | 'high';
 export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-snapshot' | 'ax-snapshot' | 'console-log' | 'network-log' | 'search-result' | 'download';
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
 export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'native-os-ui-proof' | 'snapshot' | 'state' | 'close';
+export type BrowserHostSessionActionRiskType = 'navigation-external' | 'form-submit' | 'credential' | 'payment' | 'destructive' | 'low-risk-input' | 'scroll' | 'click';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
 export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
@@ -123,6 +124,37 @@ export interface BrowserHostSessionNativeOsUiProof {
   diagnostics: string[];
 }
 
+export interface BrowserHostSessionVisibleAction {
+  actionId: string;
+  action: BrowserHostSessionAction | 'open';
+  riskType: BrowserHostSessionActionRiskType;
+  actorCursorRef?: string;
+  visibleActionRef?: string;
+}
+
+export interface BrowserHostSessionActorCursor {
+  agentId: string;
+  cursorId: string;
+  color: string;
+  label: string;
+  status: 'acting';
+  target: {
+    type: 'browser-pane';
+    sessionId: string;
+    windowRef: string;
+  };
+  lastAction: {
+    action: 'observe' | 'click' | 'type' | 'scroll' | 'wait';
+    status: 'completed';
+    evidenceRefs: string[];
+  };
+  evidenceRefs: string[];
+}
+
+export interface BrowserHostSessionRiskLedgerEntry extends BrowserHostSessionVisibleAction {
+  recordedAt: string;
+}
+
 export interface BrowserHostSessionState {
   schemaVersion: typeof BROWSER_HOST_SESSION_SCHEMA;
   id: string;
@@ -155,6 +187,10 @@ export interface BrowserHostSessionState {
   workspaceWriterBaseUrl?: string;
   cursor?: string;
   nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
+  actorCursor?: BrowserHostSessionActorCursor;
+  actorCursors?: BrowserHostSessionActorCursor[];
+  visibleAction?: BrowserHostSessionVisibleAction;
+  riskLedger?: BrowserHostSessionRiskLedgerEntry[];
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics?: string[];

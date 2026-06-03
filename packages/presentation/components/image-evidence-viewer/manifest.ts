@@ -1,0 +1,88 @@
+import type { UIComponentManifest } from '@sciforge-ui/runtime-contract';
+
+export const IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE = 'image-evidence' as const;
+export const IMAGE_EVIDENCE_VIEWER_COMPONENT_ID = 'image-evidence-viewer' as const;
+export const IMAGE_EVIDENCE_VIEWER_SCHEMA_VERSION = 'sciforge.image-evidence.payload.v1' as const;
+
+export const manifest: UIComponentManifest = {
+  packageName: '@sciforge-ui/image-evidence-viewer',
+  moduleId: 'image-evidence-viewer-panel',
+  version: '1.0.0',
+  title: 'Image evidence viewer',
+  description: 'Generic refs-first image and evidence preview for screenshots, crops, captures, artifacts, and replay frames.',
+  componentId: IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
+  lifecycle: 'published',
+  outputArtifactTypes: [IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE],
+  acceptsArtifactTypes: [
+    'image-evidence',
+    'annotation-crop',
+    'screenshot',
+    'browser-evidence',
+    'window-capture',
+    'screen-region',
+    'artifact-image',
+    'replay-frame',
+    'computer-use-virtual-screen',
+    'virtual-desktop-session',
+    'computer-use-screen',
+    'computer-use-replay',
+  ],
+  consumes: [
+    {
+      kinds: ['binary', 'text'],
+      mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'application/json'],
+      previewPolicies: ['inline', 'open-system', 'audit-only'],
+    },
+  ],
+  viewParams: [
+    'imageRef',
+    'ref',
+    'sourceKind',
+    'provenanceRef',
+    'provenanceRefs',
+    'annotationRefs',
+    'targetRef',
+    'windowRef',
+    'browserSessionRef',
+    'artifactRef',
+    'redactionRef',
+    'bounds',
+    'cropBounds',
+    'status',
+  ],
+  interactionEvents: [
+    'image-view-control',
+    'copy-ref-request',
+    'open-original-request',
+    'download-image-request',
+    'show-provenance-request',
+    'toggle-annotation-overlay',
+    'toggle-crop-bounds',
+  ],
+  roleDefaults: ['researcher', 'software-engineer', 'runtime-operator'],
+  fallbackModuleIds: ['generic-artifact-inspector'],
+  defaultSection: 'primary',
+  priority: 8,
+  safety: { sandbox: true, externalResources: 'declared-only', executesCode: false },
+  presentation: {
+    dedupeScope: 'entity',
+    identityFields: ['imageRef', 'ref', 'sha256', 'artifactRef', 'provenanceRef'],
+  },
+  docs: {
+    readmePath: 'packages/presentation/components/image-evidence-viewer/README.md',
+    agentSummary: 'Use for refs-first ImageEvidencePayload displays. It renders host-resolved image refs, provenance refs, annotation overlay refs, and crop metadata while leaving copy, open, download, and provenance handling to host policy.',
+  },
+  workbenchDemo: {
+    artifactType: IMAGE_EVIDENCE_VIEWER_ARTIFACT_TYPE,
+    artifactData: {
+      sourceKind: 'screenshot',
+      imageRef: 'image:evidence/demo-screenshot.png',
+      mime: 'image/png',
+      width: 1280,
+      height: 720,
+      provenanceRef: 'prov:evidence/demo-screenshot.json',
+      annotationRefs: ['annotation:evidence/demo-focus.json'],
+      status: 'ready',
+    },
+  },
+};

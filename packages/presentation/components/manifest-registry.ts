@@ -7,6 +7,7 @@ import { manifest as executionUnitTable } from './execution-unit-table/manifest'
 import { manifest as genomeTrackViewer } from './genome-track-viewer/manifest';
 import { manifest as graphViewer } from './graph-viewer/manifest';
 import { manifest as imageAnnotationViewer } from './image-annotation-viewer/manifest';
+import { manifest as imageEvidenceViewer } from './image-evidence-viewer/manifest';
 import { manifest as matrixViewer } from './matrix-viewer/manifest';
 import { manifest as modelEvalViewer } from './model-eval-viewer/manifest';
 import { manifest as notebookTimeline } from './notebook-timeline/manifest';
@@ -55,6 +56,7 @@ export const uiComponentManifests: UIComponentManifest[] = [
   comparisonViewer,
   genomeTrackViewer,
   imageAnnotationViewer,
+  imageEvidenceViewer,
   spatialOmicsViewer,
   plateLayoutViewer,
   predictionReviewer,

@@ -5,7 +5,6 @@ import { objectActions } from '../../runtimeContracts';
 import {
   RESULT_PANE_CONTRACTS,
   RESULT_PANE_LIFECYCLE_STATES,
-  RESULT_PANE_SCREEN_ATTACH_STATES,
   RESULT_PANE_TABS,
   allowedActionsForResultPaneObject,
   focusResultPaneRouteForObjectReference,
@@ -34,91 +33,86 @@ test('result pane contracts declare states, refs, actions, and redaction hints f
   }
 });
 
-test('screen result pane declares VirtualAppScreen refs-first attach contract', () => {
-  const screen = resultPaneContractForTab('screen');
-  const requiredNames = screen.requiredRefs.map((ref) => ref.name);
+test('image result pane declares refs-first visual evidence contract without live screen control', () => {
+  assert.ok(RESULT_PANE_TABS.includes('image'));
+  assert.equal((RESULT_PANE_TABS as readonly string[]).includes('screen'), false);
 
-  assert.deepEqual(Object.keys(screen.attachStates ?? {}).sort(), [...RESULT_PANE_SCREEN_ATTACH_STATES].sort());
-  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('attached'));
-  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('replay'));
-  assert.ok(RESULT_PANE_SCREEN_ATTACH_STATES.includes('error'));
-  for (const state of RESULT_PANE_SCREEN_ATTACH_STATES) {
-    assert.equal(screen.attachStates?.[state].placeholderEvidence, false, `${state} is not frame evidence`);
-  }
+  const image = resultPaneContractForTab('image');
+  assert.equal(image.pane, 'image');
+  assert.deepEqual(image.attachStates, undefined);
+  assert.ok(image.refPrefixes.includes('image:'));
+  assert.ok(image.refPrefixes.includes('screenshot:'));
+  assert.ok(image.refPrefixes.includes('annotation:'));
+  assert.ok(image.refPrefixes.includes('browser-evidence:'));
+  assert.ok(image.refPrefixes.includes('window-capture:'));
+  assert.ok(image.refPrefixes.includes('screen-region:'));
+  assert.ok(image.refPrefixes.includes('replay:'));
   for (const field of [
-    'targetAppRef',
-    'targetWindowRef',
-    'sessionRef',
-    'frameStreamRef',
-    'frameRef',
-    'frameRefs',
-    'currentFrameRef',
-    'screenRef',
-    'liveSurfaceRef',
-    'surfaceTransport',
-    'displayGroupRef',
-    'beforeFrameRef',
-    'afterFrameRef',
-    'beforeAfterFrameRefs',
-    'actorCursorRefs',
-    'annotationOverlayRefs',
-    'annotationProposalRefs',
-    'inputIntentRefs',
-    'executorEventRefs',
-    'inputLeaseRef',
-    'actionAdapterRef',
-    'adapterReadinessRef',
-    'replayRef',
-    'evidenceLedgerRef',
-    'artifactRefs',
-    'verificationRefs',
-    'guiPresentRefs',
-    'blockedRef',
-    'errorRef',
-    'stopRef',
-    'handoffRef',
+    'imageRef',
+    'sourceKind',
+    'mime',
+    'width',
+    'height',
+    'sha256',
+    'createdAt',
+    'bounds',
+    'provenanceRef',
+    'annotationRefs',
+    'targetRef',
+    'windowRef',
+    'browserSessionRef',
+    'artifactRef',
+    'redactionRef',
   ]) {
-    assert.ok(screen.acceptedPayloadRefs?.includes(field), `Screen accepts ${field}`);
-  }
-  for (const field of [
-    'targetAppRef',
-    'targetWindowRef',
-    'sessionRef',
-    'currentFrameRef',
-    'actorCursorRefs',
-    'annotationOverlayRefs',
-    'adapterReadinessRef',
-    'replayRef',
-    'evidenceLedgerRef',
-    'blockedRef',
-    'errorRef',
-  ]) {
-    assert.ok(requiredNames.includes(field), `Screen declares required ref ${field}`);
+    assert.ok(image.acceptedPayloadRefs?.includes(field), `Image accepts ${field}`);
   }
   for (const field of [
     'rawScreenshot',
     'screenshotBase64',
-    'providerParams',
-    'providerRoute',
-    'executorLeaseParams',
-    'executorParams',
+    'imageBase64',
+    'base64',
+    'dataUrl',
     'frameUrl',
-    'rawTrace',
+    'providerRoute',
+    'providerParams',
+    'executorParams',
+    'inputLeaseRef',
+    'actionAdapterRef',
+    'liveSurfaceRef',
+    'frameStreamRef',
+    'sessionRef',
   ]) {
-    assert.ok(screen.rejectedPayloadFields?.includes(field), `Screen rejects ${field}`);
+    assert.ok(image.rejectedPayloadFields?.includes(field), `Image rejects ${field}`);
   }
-  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'frameStreamRef')?.requiredFor.includes('ready'), false);
-  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'liveSurfaceRef')?.requiredFor.includes('ready'), false);
-  assert.equal(screen.requiredRefs.find((ref) => ref.name === 'inputLeaseRef')?.requiredFor.includes('ready'), false);
-  assert.ok(screen.redactionHints.includes('no-raw-screenshot-bytes'));
-  assert.ok(screen.redactionHints.includes('no-provider-payloads'));
-  assert.ok(screen.redactionHints.includes('no-executor-params'));
-  assert.ok(screen.redactionHints.includes('terminal-equivalent-only'));
-  assert.ok(screen.redactionHints.includes('no-gui-computer-use-execution'));
-  assert.match(screen.attachStates?.attached.description ?? '', /InputIntent/);
-  assert.match(screen.attachStates?.attached.description ?? '', /never executes Computer Use actions/);
-  assert.equal(screen.allowedActions.includes('open-external'), false);
-  assert.equal(screen.allowedActions.includes('copy-path'), false);
+  assert.ok(image.redactionHints.includes('no-raw-screenshot-bytes'));
+  assert.ok(image.redactionHints.includes('no-provider-payloads'));
+  assert.ok(image.redactionHints.includes('no-gui-computer-use-execution'));
+  assert.equal(image.allowedActions.includes('open-external'), true);
+  assert.equal(image.allowedActions.includes('copy-path'), true);
+});
+
+test('legacy screen pane route inputs resolve to Image Evidence without exposing a Screen contract', () => {
+  assert.equal(resultPaneContractForTab('screen').pane, 'image');
+  assert.equal(focusResultPaneRouteForObjectReference({
+    id: 'legacy-screen-ref',
+    kind: 'artifact',
+    title: 'Legacy screen frame',
+    ref: 'screen:run/frame.png',
+  }).pane, 'image');
+  assert.equal(focusResultPaneRouteForObjectReference({
+    id: 'legacy-preferred-view',
+    kind: 'artifact',
+    title: 'Legacy screen preferred view',
+    ref: 'artifact:legacy-screen',
+    preferredView: 'screen-observation',
+  }).pane, 'image');
+  assert.equal(focusResultPaneRouteForObjectReference({
+    id: 'legacy-screen-artifact',
+    kind: 'artifact',
+    title: 'Legacy screen artifact',
+    ref: 'artifact:legacy-screen',
+    artifactType: 'computer-use-virtual-screen',
+  }).pane, 'image');
 });
 
 test('browser result pane declares BrowserHostSession refs-first evidence contract', () => {
@@ -155,9 +149,9 @@ test('result pane route helper maps preferred view, ref prefix, and object kind 
   const cases: Array<[string, Partial<ObjectReference>, string, string]> = [
     ['primary artifact', { kind: 'artifact', ref: 'artifact:report-1' }, 'primary', 'ref-prefix'],
     ['browser url', { kind: 'url', ref: 'https://example.test/paper' }, 'browser', 'ref-prefix'],
-    ['screen ref', { kind: 'artifact', ref: 'screen:attempt:before' }, 'screen', 'ref-prefix'],
-    ['virtual app ref', { kind: 'artifact', ref: 'app:browser-research-profile' }, 'screen', 'ref-prefix'],
-    ['virtual window ref', { kind: 'artifact', ref: 'window:browser-research-profile/main' }, 'screen', 'ref-prefix'],
+    ['screen ref', { kind: 'artifact', ref: 'screen:attempt:before' }, 'image', 'ref-prefix'],
+    ['annotation ref', { kind: 'artifact', ref: 'annotation:attempt:crop' }, 'image', 'ref-prefix'],
+    ['image ref', { kind: 'artifact', ref: 'image:attempt:before.png' }, 'image', 'ref-prefix'],
     ['terminal execution', { kind: 'execution-unit', ref: 'execution-unit:EU-1' }, 'terminal', 'ref-prefix'],
     ['workspace file', { kind: 'file', ref: 'file:.sciforge/artifacts/report.md' }, 'files', 'ref-prefix'],
     ['workspace diff preferred view', { kind: 'file', ref: 'file:patches/update.diff', preferredView: 'workspace-diff-viewer' }, 'files', 'preferred-view'],
@@ -165,7 +159,9 @@ test('result pane route helper maps preferred view, ref prefix, and object kind 
     ['subagent evidence', { kind: 'run', ref: 'subagent:worker-1' }, 'evidence', 'ref-prefix'],
     ['preferred view override', { kind: 'file', ref: 'file:trace.txt', preferredView: 'terminal-session-viewer' }, 'terminal', 'preferred-view'],
     ['subagent preferred view', { kind: 'run', ref: 'run:worker-1', preferredView: 'subagent-result' }, 'evidence', 'preferred-view'],
-    ['screen artifact type', { kind: 'artifact', ref: 'artifact:screen-run', artifactType: 'computer-use-virtual-screen' }, 'screen', 'artifact-type'],
+    ['screen artifact type', { kind: 'artifact', ref: 'artifact:screen-run', artifactType: 'computer-use-virtual-screen' }, 'image', 'artifact-type'],
+    ['computer-use control plane artifact type', { kind: 'artifact', ref: 'artifact:control-plane', artifactType: 'computer-use-control-plane' }, 'primary', 'ref-prefix'],
+    ['computer-use control plane preferred view', { kind: 'artifact', ref: 'artifact:control-plane', artifactType: 'computer-use-control-plane', preferredView: 'computer-use-control-plane' }, 'primary', 'ref-prefix'],
     ['browser artifact type', { kind: 'artifact', ref: 'artifact:browser-run', artifactType: 'browser-runtime-snapshot' }, 'browser', 'artifact-type'],
     ['terminal artifact type', { kind: 'artifact', ref: 'artifact:terminal-run', artifactType: 'terminal-transcript' }, 'terminal', 'artifact-type'],
   ];
@@ -259,7 +255,7 @@ test('object focus/open routes cover chat, process, references, and tool panes w
     ['process terminal action', { kind: 'execution-unit', ref: 'terminal-transcript:right-pane', title: 'Terminal transcript' }, 'terminal'],
     ['references inspector object', { kind: 'run', ref: 'subagent:reviewer', title: 'Subagent review' }, 'evidence'],
     ['browser host object', { kind: 'url', ref: 'browser-host-session:session-1', title: 'Host session' }, 'browser'],
-    ['screen replay object', { kind: 'artifact', ref: 'replay:computer-use-run', title: 'Screen replay' }, 'screen'],
+    ['screen replay object', { kind: 'artifact', ref: 'replay:computer-use-run', title: 'Screen replay' }, 'image'],
   ];
 
   for (const [label, reference, pane] of routeCases) {

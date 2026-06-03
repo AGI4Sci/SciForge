@@ -165,8 +165,8 @@ try {
   });
   actionAckSamples.push(typeAction.durationMs);
   await sleep(250);
-  const textProbe = await getJson(`${nativeAdapterBaseUrl}/sessions/${encodeURIComponent(sessionId)}/text`);
-  const typedTokenObserved = typeof textProbe.text === 'string' && textProbe.text.includes(typedToken);
+  const textProbe = await readNativeAdapterTextEvidence(nativeAdapterBaseUrl, sessionId, 'type-text-probe');
+  const typedTokenObserved = textProbe.includes(typedToken);
   const scrollAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
     action: 'scroll',
     deltaX: 0,
@@ -714,10 +714,9 @@ async function desktopNativeReconnectProbe(input: {
       : { ok: false as const, reasonHash: 'reconnect-click-not-observed' };
     if (reconnectType.ok) actionDurationsMs.push(reconnectType.durationMs);
     await sleep(200);
-    const textProbe = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/text`);
+    const textProbe = await readNativeAdapterTextEvidence(input.nativeAdapterBaseUrl, input.sessionId, 'reconnect-text-probe');
     const inputRoutedAfterReconnect = reconnectType.ok
-      && typeof textProbe.text === 'string'
-      && textProbe.text.includes(reconnectToken);
+      && textProbe.includes(reconnectToken);
     const passed = disconnectDetected
       && sameBrowserHostSessionOwner
       && stateHeartbeatRestored
@@ -1620,6 +1619,23 @@ async function postJson(url: string, body: JsonRecord): Promise<JsonRecord> {
     throw new Error(`POST ${url} failed: ${String(json.reason ?? json.error ?? response.statusText)}`);
   }
   return json;
+}
+
+async function readNativeAdapterTextEvidence(nativeAdapterBaseUrl: string, sessionId: string, label: string): Promise<string> {
+  const dir = join(outputDir, 'native-evidence');
+  await mkdir(dir, { recursive: true });
+  const outputPath = join(dir, `${safeFileToken(label)}-${Date.now().toString(36)}.txt`);
+  const response = await postJson(`${nativeAdapterBaseUrl}/sessions/${encodeURIComponent(sessionId)}/text`, { outputPath });
+  assertNoRawNativeEvidenceBridgeResponse(response);
+  return await readFile(outputPath, 'utf8');
+}
+
+function assertNoRawNativeEvidenceBridgeResponse(value: unknown): void {
+  assert.doesNotMatch(JSON.stringify(value), /data:image|;base64|<html|<body|provider|secret|raw page text|outputPath/i);
+}
+
+function safeFileToken(value: string): string {
+  return value.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'native-evidence';
 }
 
 async function writeNonPassingEvidence(

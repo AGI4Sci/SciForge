@@ -1451,6 +1451,7 @@ export function SciForgeApp() {
               onPreviewPackageRequest={handlePreviewPackageRequest}
               workspaceFileEditor={workbenchWorkspaceFileEditor}
               onWorkspaceFileEditorChange={setWorkbenchWorkspaceFileEditor}
+              onExternalReferenceRequest={requestChatReference}
               onExternalReferenceConsumed={consumeChatReferenceRequest}
               externalReferenceRequest={chatReferenceRequest ?? undefined}
               availableComponentIds={selectedRuntimeComponentIds}

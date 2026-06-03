@@ -6,7 +6,7 @@ import type { ScenarioId } from '../../data';
 import { resultText, type ResultLocale } from './resultLocale';
 
 export type ResultFocusMode = 'all' | 'visual' | 'evidence' | 'execution';
-export type ResultPaneTab = 'primary' | 'browser' | 'screen' | 'terminal' | 'files' | 'evidence';
+export type ResultPaneTab = 'primary' | 'browser' | 'image' | 'screen' | 'terminal' | 'files' | 'evidence';
 export interface ResultPaneTabInstance {
   id: string;
   kind: ResultPaneTab;
@@ -17,7 +17,7 @@ export interface ResultPaneTabInstance {
 const RESULT_TABS: Array<{ id: ResultPaneTab; label: string }> = [
   { id: 'primary', label: 'Results' },
   { id: 'browser', label: 'Browser' },
-  { id: 'screen', label: 'Screen' },
+  { id: 'image', label: 'Image / Evidence' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'files', label: 'Files' },
   { id: 'evidence', label: 'References' },
@@ -306,7 +306,7 @@ export function ResultShell({
 
 function resultTabLabel(tabId: ResultPaneTab, locale?: ResultLocale) {
   if (tabId === 'browser') return resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' });
-  if (tabId === 'screen') return resultText(locale, { 'zh-CN': '屏幕', 'en-US': 'Screen' });
+  if (tabId === 'image' || tabId === 'screen') return resultText(locale, { 'zh-CN': '图片 / 证据', 'en-US': 'Image / Evidence' });
   if (tabId === 'terminal') return resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' });
   if (tabId === 'files') return resultText(locale, { 'zh-CN': '文件', 'en-US': 'Files' });
   if (tabId === 'evidence') return resultText(locale, { 'zh-CN': '引用', 'en-US': 'References' });

@@ -5,6 +5,7 @@ import { browserWorkbenchDefaultCommands } from '../../../../../packages/present
 import {
   RIGHT_PANE_BROWSER_LOADING_PROGRESS_LIFECYCLE_SCHEMA,
   RIGHT_PANE_BROWSER_LOADING_PROGRESS_STATES,
+  browserAnnotationComposerReferenceForHostSession,
   browserAddressForFocusedObjectReference,
   browserHostSessionForFocusedObjectReference,
   normalizeRightPaneBrowserUrl,
@@ -14,6 +15,46 @@ import {
   rightPaneBrowserUrlsEquivalent,
   rightPaneBrowserUrlIsLocal,
 } from './browserPaneModel';
+
+test('browser pane model builds refs-first annotation composer references from BrowserHostSession refs', () => {
+  const reference = browserAnnotationComposerReferenceForHostSession({
+    id: 'browser-host-annotation-1',
+    status: 'ready',
+    requestedUrl: 'https://example.org/paper',
+    url: 'https://example.org/paper',
+    title: 'Example paper',
+    liveSurfaceRef: 'browser-host-session:browser-host-annotation-1/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    frameRef: 'browser-host-session:browser-host-annotation-1/frame.png',
+    screenshotRef: 'browser-host-session:browser-host-annotation-1/screenshot.png',
+    domSnapshotRef: 'browser-host-session:browser-host-annotation-1/dom.json',
+    axSnapshotRef: 'browser-host-session:browser-host-annotation-1/ax.json',
+  }, {
+    cropRef: 'browser-host-session:browser-host-annotation-1/crops/selection.json',
+  });
+
+  assert.ok(reference);
+  const payload = reference.payload as Record<string, unknown>;
+  assert.equal(reference.ref, 'annotation:browser-host-annotation-1');
+  assert.equal(reference.kind, 'ui');
+  assert.equal(reference.title, 'Browser annotation · Example paper');
+  assert.equal(payload.annotationRef, 'annotation:browser-host-annotation-1');
+  assert.equal(payload.targetRef, 'browser-host-session:browser-host-annotation-1/frame.png');
+  assert.equal(payload.cropRef, 'browser-host-session:browser-host-annotation-1/crops/selection.json');
+  assert.equal(payload.screenshotRef, 'browser-host-session:browser-host-annotation-1/screenshot.png');
+  assert.deepEqual(payload.refs, [
+    'annotation:browser-host-annotation-1',
+    'browser-host-session:browser-host-annotation-1/frame.png',
+    'browser-host-session:browser-host-annotation-1/crops/selection.json',
+    'browser-host-session:browser-host-annotation-1/screenshot.png',
+    'browser-host-session:browser-host-annotation-1/dom.json',
+    'browser-host-session:browser-host-annotation-1/ax.json',
+  ]);
+  const serialized = JSON.stringify(reference);
+  assert.doesNotMatch(serialized, /data:image|base64|rawDom|rawScreenshot|annotatedDataUrl/);
+});
 
 test('browser pane model normalizes focused URL object refs into Browser targets', () => {
   const session = emptySession();
@@ -29,7 +70,7 @@ test('browser pane model normalizes focused URL object refs into Browser targets
   assert.equal(browserAddressForFocusedObjectReference({ ...urlReference, kind: 'file', ref: 'file:README.md' }, session), undefined);
 });
 
-test('browser pane model resolves BrowserRuntime refs from provenance without losing SciForge commands', () => {
+test('browser pane model resolves BrowserRuntime refs from provenance while keeping toolbar navigation-only', () => {
   const session = emptySession();
   const browserRuntimeReference: ObjectReference = {
     id: 'browser-runtime-1',
@@ -43,15 +84,15 @@ test('browser pane model resolves BrowserRuntime refs from provenance without lo
 
   assert.equal(browserAddressForFocusedObjectReference(browserRuntimeReference, session), 'http://127.0.0.1:4173/result');
 
-  const commandIds = browserWorkbenchDefaultCommands('https://example.org/result', {
-    canOpenExternal: true,
-    canSnapshot: true,
-    canState: true,
-    canTakeover: true,
-    canCopyUrl: true,
-  }).map((command) => command.id);
+  const commandIds = new Set<string>(browserWorkbenchDefaultCommands('https://example.org/result', {
+    canGoBack: true,
+    canGoForward: true,
+  }).map((command) => String(command.id)));
+  for (const id of ['open', 'back', 'forward', 'reload'] as const) {
+    assert.ok(commandIds.has(id), `keeps ${id} command`);
+  }
   for (const id of ['snapshot', 'state', 'takeover', 'copy-url', 'open-external'] as const) {
-    assert.ok(commandIds.includes(id), `keeps ${id} command`);
+    assert.equal(commandIds.has(id), false, `blocks ${id} command`);
   }
 });
 
@@ -146,6 +187,183 @@ test('browser pane model reuses focused native embedded browser runtime projecti
   assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-native-1/search-results.json');
   assert.equal(hostSession?.reason, 'native projection ready');
   assert.equal(hostSession?.loadingProgress?.state, 'network-quiet');
+});
+
+test('browser pane model exposes bounded actor cursor identity from BrowserHostSession data', () => {
+  const rawHostSession = {
+    id: 'browser-host-window-action-1',
+    status: 'ready' as const,
+    requestedUrl: 'https://example.org/window-action',
+    url: 'https://example.org/window-action',
+    title: 'Window action page',
+    liveSurfaceRef: 'browser-host-session:browser-host-window-action-1/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    frameRef: 'browser-host-session:browser-host-window-action-1/frame.png',
+    actorCursor: {
+      agentId: 'agent-window-action',
+      cursorId: 'cursor-shared-browser',
+      color: '#22c55e',
+      label: 'Window action',
+      status: 'acting',
+      target: {
+        ref: 'browser-host-session:browser-host-window-action-1/targets/search-box.json',
+        kind: 'input',
+        label: 'Search box',
+        selector: 'input[name="token"]',
+        rawDom: '<input value="secret-token" />',
+        screenshotDataUrl: 'data:image/png;base64,TARGET',
+      },
+      lastAction: {
+        ref: 'browser-host-session:browser-host-window-action-1/visible-actions/cursor.json',
+        payload: { selector: 'input[name="token"]', text: 'secret-token' },
+        evidenceRefs: [
+          'browser-host-session:browser-host-window-action-1/evidence/cursor.json',
+          'data:image/png;base64,ACTION',
+        ],
+      },
+      evidenceRefs: [
+        'browser-host-session:browser-host-window-action-1/actor-cursors/cursor-shared-browser.json',
+      ],
+      rawDom: '<html>secret-token</html>',
+      rawScreenshot: 'data:image/png;base64,SESSION',
+      payload: { text: 'secret-token' },
+    },
+    actorCursors: [{
+      actorId: 'agent-reviewer',
+      id: 'cursor-reviewer',
+      color: '#0ea5e9',
+      label: 'Reviewer',
+      state: 'idle',
+      targetRef: 'browser-host-session:browser-host-window-action-1/targets/reviewer.json',
+      lastActionRef: 'browser-host-session:browser-host-window-action-1/visible-actions/reviewer.json',
+      evidenceRef: 'browser-host-session:browser-host-window-action-1/evidence/reviewer.json',
+      rawPayload: 'secret-token',
+    }],
+    visibleAction: {
+      actionId: 'cursor-action',
+      action: 'cursor',
+      riskType: 'click',
+      actorCursorRef: 'browser-host-session:browser-host-window-action-1/actor-cursors/cursor-shared-browser.json',
+    },
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    artifacts: [{
+      id: 'browser-host-window-action-projection',
+      type: 'browser-runtime-projection',
+      producerScenario: 'literature-evidence-review',
+      schemaVersion: 'sciforge.browser-runtime.projection.v1',
+      data: { hostSession: rawHostSession },
+    }],
+  };
+  const reference: ObjectReference = {
+    id: 'browser-window-action-ref',
+    kind: 'artifact',
+    title: 'Browser window action projection',
+    ref: 'artifact:browser-host-window-action-projection',
+    artifactType: 'browser-runtime-projection',
+  };
+
+  const hostSession = browserHostSessionForFocusedObjectReference(reference, session);
+
+  assert.deepEqual(hostSession?.actorCursor, {
+    agentId: 'agent-window-action',
+    cursorId: 'cursor-shared-browser',
+    color: '#22c55e',
+    label: 'Window action',
+    status: 'acting',
+    target: {
+      ref: 'browser-host-session:browser-host-window-action-1/targets/search-box.json',
+      kind: 'input',
+      label: 'Search box',
+    },
+    lastActionRef: 'browser-host-session:browser-host-window-action-1/visible-actions/cursor.json',
+    evidenceRefs: [
+      'browser-host-session:browser-host-window-action-1/actor-cursors/cursor-shared-browser.json',
+      'browser-host-session:browser-host-window-action-1/evidence/cursor.json',
+    ],
+  });
+  assert.deepEqual(hostSession?.actorCursors, [
+    hostSession?.actorCursor,
+    {
+      agentId: 'agent-reviewer',
+      cursorId: 'cursor-reviewer',
+      color: '#0ea5e9',
+      label: 'Reviewer',
+      status: 'idle',
+      target: {
+        ref: 'browser-host-session:browser-host-window-action-1/targets/reviewer.json',
+      },
+      lastActionRef: 'browser-host-session:browser-host-window-action-1/visible-actions/reviewer.json',
+      evidenceRefs: ['browser-host-session:browser-host-window-action-1/evidence/reviewer.json'],
+    },
+  ]);
+
+  const rightPaneProjection = rightPaneBrowserProjectionForUrl('https://example.org/window-action', {
+    hostExternalBrowserAvailable: true,
+    hostSession: rawHostSession as unknown as NonNullable<Parameters<typeof rightPaneBrowserProjectionForUrl>[1]>['hostSession'],
+  });
+  assert.deepEqual(rightPaneProjection.actorCursor, hostSession?.actorCursor);
+  assert.deepEqual(rightPaneProjection.actorCursors, hostSession?.actorCursors);
+
+  const serialized = JSON.stringify({ hostSession, rightPaneProjection });
+  assert.doesNotMatch(serialized, /rawDom|rawScreenshot|rawPayload|payload|selector|secret-token|data:image|base64/);
+});
+
+test('browser pane model accepts WindowActionSession actor cursor shape', () => {
+  const rawHostSession = {
+    id: 'browser-host-window-action-session-shape',
+    status: 'ready' as const,
+    requestedUrl: 'https://example.org/window-action-session-shape',
+    url: 'https://example.org/window-action-session-shape',
+    title: 'Window action session shape',
+    liveSurfaceRef: 'browser-host-session:browser-host-window-action-session-shape/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    actorCursor: {
+      agentId: 'agent-runtime-1',
+      color: '#28a0f0',
+      label: 'Runtime worker',
+      status: 'clicking',
+      target: {
+        type: 'window-action-session',
+        sessionId: 'window-action-window:chrome:main',
+        windowRef: 'window:chrome:main',
+      },
+      lastAction: {
+        action: 'click',
+        status: 'completed',
+        evidenceRefs: [
+          { kind: 'screenshot', ref: 'window-action-ref:screenshot-1' },
+          { kind: 'raw', ref: 'data:image/png;base64,NOPE' },
+        ],
+      },
+      evidenceRefs: ['window-action-ref:actor-cursor-1'],
+    },
+  };
+
+  const projection = rightPaneBrowserProjectionForUrl('https://example.org/window-action-session-shape', {
+    hostExternalBrowserAvailable: true,
+    hostSession: rawHostSession as unknown as NonNullable<Parameters<typeof rightPaneBrowserProjectionForUrl>[1]>['hostSession'],
+  });
+
+  assert.deepEqual(projection.actorCursor, {
+    agentId: 'agent-runtime-1',
+    cursorId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+    status: 'clicking',
+    target: {
+      ref: 'window:chrome:main',
+      kind: 'window-action-session',
+    },
+    evidenceRefs: [
+      'window-action-ref:actor-cursor-1',
+      'window-action-ref:screenshot-1',
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(projection), /data:image|base64|NOPE/);
 });
 
 test('browser pane model exposes a bounded loading/progress lifecycle contract', () => {
@@ -354,19 +572,21 @@ test('browser pane model exposes a bounded loading/progress lifecycle contract',
   assert.match(redirected?.urlDigests?.final?.hash ?? '', /^[a-f0-9]{8}$/);
 });
 
-test('browser pane model keeps local pages direct and requires host-owned browser surfaces for external HTML', () => {
+test('browser pane model requires host-owned browser surfaces for local and external HTTP', () => {
   assert.equal(normalizeRightPaneBrowserUrl('localhost:5173/app'), 'http://localhost:5173/app');
   assert.equal(normalizeRightPaneBrowserUrl('www.baidu.com'), 'https://www.baidu.com');
   assert.equal(normalizeRightPaneBrowserUrl('www.google.com'), 'https://www.google.com');
 
   const local = rightPaneBrowserProjectionForUrl('http://localhost:5173/app');
-  assert.equal(local.status, 'ready');
-  assert.equal(local.canRenderFrame, true);
-  assert.equal(local.previewUrl, 'http://localhost:5173/app');
+  assert.equal(local.status, 'blocked');
+  assert.equal(local.canRenderFrame, false);
+  assert.equal(local.previewUrl, undefined);
+  assert.equal(local.externalUrl, 'http://localhost:5173/app');
+  assert.equal(local.embedPolicy?.embeddable, false);
 
   const ipv6Local = rightPaneBrowserProjectionForUrl('http://[::1]:5173/app');
-  assert.equal(ipv6Local.status, 'ready');
-  assert.equal(ipv6Local.canRenderFrame, true);
+  assert.equal(ipv6Local.status, 'blocked');
+  assert.equal(ipv6Local.canRenderFrame, false);
 
   for (const rawUrl of ['https://example.org/paper', 'https://external.example/search', 'https://docs.example/resource', 'www.baidu.com', 'www.google.com']) {
     const url = normalizeRightPaneBrowserUrl(rawUrl);

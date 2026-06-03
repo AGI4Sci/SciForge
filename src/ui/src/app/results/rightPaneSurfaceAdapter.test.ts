@@ -15,7 +15,8 @@ test('right pane surface adapter owns active pane rendering extraction from Resu
 
   assert.match(adapterSource, /export function RightPaneActiveSurface/);
   assert.match(adapterSource, /RightPaneBrowserTool/);
-  assert.match(adapterSource, /RightPaneVirtualScreenTool/);
+  assert.match(adapterSource, /RightPaneImageEvidenceTool/);
+  assert.doesNotMatch(adapterSource, /RightPaneVirtualScreenTool/);
   assert.match(adapterSource, /RightPaneTerminalLiveTool/);
   assert.match(adapterSource, /RightPaneFilesTool/);
   assert.match(adapterSource, /PrimaryResultAdapter/);
@@ -23,6 +24,7 @@ test('right pane surface adapter owns active pane rendering extraction from Resu
   assert.match(rendererSource, /from '.\/results\/rightPaneSurfaceAdapter'/);
   assert.doesNotMatch(rendererSource, /<RightPaneBrowserTool\b/);
   assert.doesNotMatch(rendererSource, /<RightPaneVirtualScreenTool\b/);
+  assert.doesNotMatch(rendererSource, /<RightPaneImageEvidenceTool\b/);
   assert.doesNotMatch(rendererSource, /<RightPaneTerminalLiveTool\b/);
   assert.doesNotMatch(rendererSource, /<RightPaneFilesTool\b/);
   assert.doesNotMatch(rendererSource, /<PrimaryResultAdapter\b/);
@@ -38,7 +40,41 @@ test('right pane surface adapter renders the empty workspace projection without 
 
   assert.match(html, /data-testid="right-pane-empty-workspace"/);
   assert.match(html, /No pages open/);
-  assert.doesNotMatch(html, /right-pane-browser-tool|right-pane-terminal-tool|right-pane-files-tool|right-pane-virtual-screen-tool|right-pane-references-tool/);
+  assert.doesNotMatch(html, /right-pane-browser-tool|right-pane-terminal-tool|right-pane-files-tool|right-pane-image-evidence-tool|right-pane-virtual-screen-tool|right-pane-references-tool/);
+});
+
+test('right pane surface adapter routes Image Evidence presentation without live host bridge', () => {
+  const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
+    ...baseProps(),
+    resultTab: 'image' as never,
+    imageEvidencePayload: {
+      title: 'Browser evidence',
+      status: 'ready',
+      sourceKind: 'browser-evidence',
+      imageRef: 'browser-evidence:session-1/screenshot.png',
+      mime: 'image/png',
+      width: 1440,
+      height: 900,
+      sha256: 'a'.repeat(64),
+      createdAt: '2026-06-03T00:00:00.000Z',
+      provenanceRef: 'browser-evidence:session-1/provenance.json',
+      browserSessionRef: 'browser-host-session:session-1',
+      annotationRefs: ['annotation:session-1/crop.json'],
+      bounds: { x: 10, y: 20, width: 300, height: 160 },
+    },
+  } as RightPaneActiveSurfaceProps & Record<string, unknown>));
+
+  assert.match(html, /data-testid="right-pane-image-evidence-tool"/);
+  assert.match(html, /data-component-id="image-evidence-viewer"/);
+  assert.match(html, /data-render-boundary="presentation-only"/);
+  assert.match(html, /data-source-kind="browser-evidence"/);
+  assert.match(html, /browser-evidence:session-1\/screenshot\.png/);
+  assert.match(html, /Fit/);
+  assert.match(html, /Actual size/);
+  assert.match(html, /Copy ref/);
+  assert.match(html, /Open original/);
+  assert.match(html, /Download/);
+  assert.doesNotMatch(html, /virtual-app-screen|VirtualAppScreen|live-surface|input-intent|attachVirtualAppScreen|data:image|base64|providerRoute|executorLease/);
 });
 
 test('right pane surface adapter routes Browser presentation while preserving command boundary props', () => {
@@ -105,6 +141,7 @@ test('right pane browser product flow renders native browser_search projection w
             liveSurfaceRef: `browser-host-session:${hostSessionId}/live-surface`,
             liveSurfaceTransport: 'native-embedded',
             singleInteractiveTruth: true,
+            secondTruthSource: false,
             searchResultRef: `browser-host-session:${hostSessionId}/search-results.json`,
             screenshotRef: `browser-host-session:${hostSessionId}/screenshot.png`,
             domSnapshotRef: `browser-host-session:${hostSessionId}/dom.html`,
@@ -201,7 +238,7 @@ test('right pane empty workspace can be rendered independently by locale', () =>
   const html = renderToStaticMarkup(createElement(RightPaneEmptyWorkspace, { locale: 'zh-CN' }));
 
   assert.match(html, /没有打开的页面/);
-  assert.match(html, /Results、Browser、Screen、Terminal、Files/);
+  assert.match(html, /Results、Browser、Image \/ Evidence、Terminal、Files/);
 });
 
 function baseProps(): RightPaneActiveSurfaceProps {

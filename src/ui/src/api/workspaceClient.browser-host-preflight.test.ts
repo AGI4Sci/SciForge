@@ -230,6 +230,78 @@ describe('browser host session writer preflight', () => {
     assert.equal(result.services[0]?.status, 'native-surface-adapter-missing');
   });
 
+  it('autostarts native-capable runtime before BrowserHostSession writer retry', async () => {
+    const calls: string[] = [];
+    let runtimeStartBody: Record<string, unknown> | undefined;
+    let healthAttempts = 0;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === 'http://127.0.0.1:6173/health') {
+        healthAttempts += 1;
+        return jsonResponse(healthAttempts === 1
+          ? writerHealth([
+              BROWSER_HOST_SESSION_CAPABILITY,
+              BROWSER_HOST_SEARCH_CAPABILITY,
+            ], {
+              browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+              browserHostSearch: '/api/sciforge/browser-host/search',
+            })
+          : writerHealth(currentBrowserHostCapabilities()));
+      }
+      if (url === '/api/sciforge/runtime/start') {
+        runtimeStartBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        return jsonResponse({
+          ok: true,
+          services: [{
+            id: 'workspace',
+            label: 'Workspace Writer',
+            ok: true,
+            status: 'running',
+          }],
+        });
+      }
+      if (url === 'http://127.0.0.1:6173/api/sciforge/browser-host/sessions/start') {
+        return jsonResponse({
+          ok: true,
+          session: {
+            schemaVersion: 'sciforge.browser-host-session.state.v1',
+            id: 'browser-host-native-autostart',
+            owner: 'host',
+            providerId: 'sciforge.browser-host-session',
+            status: 'ready',
+            workspacePath: '/tmp/sciforge',
+            requestedUrl: 'https://example.org',
+            url: 'https://example.org/',
+            startedAt: '2026-06-03T00:00:00.000Z',
+            updatedAt: '2026-06-03T00:00:01.000Z',
+            viewport: { width: 1365, height: 900 },
+            canGoBack: false,
+            canGoForward: false,
+            liveSurfaceRef: 'browser-host-session:browser-host-native-autostart/live-surface',
+            liveSurfaceTransport: 'native-embedded',
+            singleInteractiveTruth: true,
+            secondTruthSource: false,
+            diagnostics: [],
+          },
+        });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    const result = await startBrowserHostSession(testConfig(), { url: 'https://example.org' });
+
+    assert.deepEqual(runtimeStartBody, { requireBrowserHostNativeSurface: true });
+    assert.equal(result.session.id, 'browser-host-native-autostart');
+    assert.deepEqual(calls, [
+      'http://127.0.0.1:6173/health',
+      'http://127.0.0.1:5174/health',
+      '/api/sciforge/runtime/start',
+      'http://127.0.0.1:6173/health',
+      'http://127.0.0.1:6173/api/sciforge/browser-host/sessions/start',
+    ]);
+  });
+
   it('sends requested capture mode with BrowserHostSession actions', async () => {
     let actionBody: Record<string, unknown> | undefined;
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {

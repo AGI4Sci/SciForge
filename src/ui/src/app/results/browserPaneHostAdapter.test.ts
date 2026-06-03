@@ -79,7 +79,8 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.doesNotMatch(adapterSource, /window\.open\(|html2canvas|toDataURL|captureStream|getDisplayMedia|document\.body/);
   assert.doesNotMatch(adapterSource, /type: 'drag', fromX/);
 
-  assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-actions\s*\{[\s\S]*?display: none/);
+  assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-actions\s*\{[^}]*display: flex/);
+  assert.doesNotMatch(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-actions\s*\{[^}]*display: none/);
   assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-diagnostics\s*\{[\s\S]*?position: absolute[\s\S]*?width: 1px[\s\S]*?height: 1px[\s\S]*?clip-path: inset\(50%\)[\s\S]*?pointer-events: none/);
   assert.match(styleSource, /\.right-pane-browser-surface \.browser-workbench-viewer-refs\s*\{[\s\S]*?display: none/);
 
@@ -126,6 +127,34 @@ test('browser host adapter routes search text and edit keys into BrowserHostSess
   assert.doesNotMatch(adapterSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|\.focus\(\)[\s\S]*composer|window\.dispatchEvent\([\s\S]*KeyboardEvent/);
 });
 
+test('browser host adapter promotes Browser annotations as pending composer refs without raw evidence', () => {
+  const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const modelSource = readFileSync(new URL('./browserPaneModel.ts', import.meta.url), 'utf8');
+  const surfaceSource = readFileSync(new URL('./rightPaneSurfaceAdapter.tsx', import.meta.url), 'utf8');
+  const rendererSource = readFileSync(new URL('../ResultsRenderer.tsx', import.meta.url), 'utf8');
+  const workbenchSource = readFileSync(new URL('../sciforgeApp/SciForgeWorkbench.tsx', import.meta.url), 'utf8');
+  const browserWorkbenchSource = readFileSync(new URL('../../../../../packages/presentation/components/browser-workbench/render.tsx', import.meta.url), 'utf8');
+  const annotationHelperSource = modelSource.slice(
+    modelSource.indexOf('export function browserAnnotationComposerReferenceForHostSession'),
+    modelSource.indexOf('function browserProjectionArtifactUrl'),
+  );
+
+  assert.match(browserWorkbenchSource, /'annotate'/);
+  assert.match(browserWorkbenchSource, /canAnnotate\?: boolean/);
+  assert.doesNotMatch(browserWorkbenchSource, /id: 'annotate'|label: 'Annotate'/);
+  assert.match(adapterSource, /browserAnnotationComposerReferenceForHostSession/);
+  assert.match(adapterSource, /onAnnotationReferenceRequest\?: \(reference: SciForgeReference\) => void/);
+  assert.match(adapterSource, /if \(command\.id === 'annotate'\) \{[\s\S]*browserAnnotationComposerReferenceForHostSession\(hostSessionRef\.current/);
+  assert.match(adapterSource, /onAnnotationReferenceRequest\?\.\(reference\)/);
+  assert.match(surfaceSource, /onAnnotationReferenceRequest=\{onExternalReferenceRequest\}/);
+  assert.match(rendererSource, /onExternalReferenceRequest\?: \(reference: SciForgeReference\) => void/);
+  assert.match(workbenchSource, /onExternalReferenceRequest\(reference\)/);
+  assert.match(modelSource, /annotationRef[\s\S]*targetRef[\s\S]*cropRef[\s\S]*screenshotRef/);
+
+  assert.doesNotMatch(adapterSource, /toDataURL|document\.body|rawDom|rawScreenshot|base64|data:image/);
+  assert.doesNotMatch(annotationHelperSource, /toDataURL|document\.body|rawDom|rawScreenshot|base64|data:image|annotatedDataUrl/);
+});
+
 test('browser host adapter exposes a route-backed native attach bridge when bounded health is ready', () => {
   const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
 
@@ -161,14 +190,21 @@ test('browser host adapter clears pending auto-open busy state when cancelled', 
   assert.match(adapterSource, /return \(\) => \{[\s\S]*cancelled = true;[\s\S]*pollStopped = true;[\s\S]*if \(pollTimer !== undefined && typeof window !== 'undefined'\) window\.clearTimeout\(pollTimer\);[\s\S]*if \(rightPaneBrowserUrlsEquivalent\(pendingHostOpenUrlRef\.current, normalizedUrl\)\) pendingHostOpenUrlRef\.current = undefined;[\s\S]*setBusy\(false\);[\s\S]*\};/);
 });
 
-test('browser host adapter requires host-owned sessions only for external HTTP targets', () => {
+test('browser host adapter only routes toolbar navigation commands to live BrowserHostSession', () => {
+  const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
+
+  assert.match(adapterSource, /if \(hostSession && \(command\.id === 'back' \|\| command\.id === 'forward' \|\| command\.id === 'reload' \|\| command\.id === 'stop'\)\)/);
+  assert.doesNotMatch(adapterSource, /command\.id === 'snapshot'|command\.id === 'state'|action = command\.id === 'snapshot'/);
+});
+
+test('browser host adapter requires host-owned sessions for all HTTP targets', () => {
   const external = normalizeRightPaneBrowserUrl('www.google.com');
   assert.equal(external, 'https://www.google.com');
   assert.equal(rightPaneBrowserRequiresExternalHost(external), true);
   assert.equal(rightPaneBrowserRequiresExternalHost('https://example.org/path'), true);
-  assert.equal(rightPaneBrowserRequiresExternalHost('http://localhost:5173/'), false);
-  assert.equal(rightPaneBrowserRequiresExternalHost('http://127.0.0.1:5173/'), false);
-  assert.equal(rightPaneBrowserRequiresExternalHost('http://[::1]:5173/'), false);
+  assert.equal(rightPaneBrowserRequiresExternalHost('http://localhost:5173/'), true);
+  assert.equal(rightPaneBrowserRequiresExternalHost('http://127.0.0.1:5173/'), true);
+  assert.equal(rightPaneBrowserRequiresExternalHost('http://[::1]:5173/'), true);
   assert.equal(rightPaneBrowserRequiresExternalHost('about:blank'), false);
   assert.equal(rightPaneBrowserRequiresExternalHost('file:///tmp/demo.html'), false);
   assert.equal(rightPaneBrowserRequiresExternalHost('https://%'), false);

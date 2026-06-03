@@ -84,6 +84,14 @@ export type {
   VirtualScreenPresentationState,
 } from './virtual-screen-viewer/render';
 export {
+  IMAGE_EVIDENCE_SOURCE_KINDS,
+  renderImageEvidenceViewer,
+  type ImageEvidenceBounds,
+  type ImageEvidencePayload,
+  type ImageEvidenceSourceKind,
+  type ImageEvidenceStatus,
+} from './image-evidence-viewer/render';
+export {
   WORKSPACE_FILE_VIEWER_DEFAULT_INLINE_TEXT_LIMIT_BYTES,
   WORKSPACE_FILE_VIEWER_DEFAULT_TREE_PAGE_SIZE,
   renderWorkspaceFileViewer,
