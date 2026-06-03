@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 import { createElement } from 'react';
@@ -19,6 +19,7 @@ const WRITER_URL = 'http://127.0.0.1:61234';
 const STABILITY_SCHEMA = 'sciforge.browser-pane-surface-rerender-stability.v1';
 const ARTIFACT_DIR = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-surface-rerender-stability');
 const MANIFEST_PATH = join(ARTIFACT_DIR, 'manifest.json');
+const DESKTOP_NATIVE_LIVE_MANIFEST_PATH = resolve(process.cwd(), 'docs', 'test-artifacts', 'desktop-browser-native-live-acceptance', 'manifest.json');
 const VERIFICATION_COMMAND = 'node --import tsx --test tests/smoke/smoke-browser-pane-surface-rerender-stability.test.ts';
 const MAX_MANIFEST_BYTES = 48_000;
 
@@ -46,6 +47,21 @@ type SurfacePhaseEvidence = ReturnType<typeof boundedSurfaceEvidence> & {
   stabilityKeyHash?: string;
   frameTransport?: string;
   refsRenderedCount: number;
+};
+
+type ConsumedNativeDesktopEvidence = {
+  sourceRef: 'docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json';
+  schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1';
+  status: 'passed';
+  claimScope: 'desktop-native-embedded-browser-pane-live';
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  nativeAttachRef: string;
+  nativeSurfaceStateRef: string;
+  lifecycleResultRef?: string;
+  inputCompletenessResultRef?: string;
+  verificationCommand?: string;
+  rawPayloadRecorded: false;
 };
 
 type SurfaceRerenderStabilityManifest = {
@@ -94,6 +110,8 @@ type SurfaceRerenderStabilityManifest = {
     maxNativeSurfaceMountsPerPhase: number;
     blockedReason?: string;
   };
+  consumedNativeDesktopEvidence?: ConsumedNativeDesktopEvidence;
+  coverageGaps: string[];
   updateCounts: {
     topbarAddressDraftChanges: number;
     tabStateChanges: number;
@@ -262,20 +280,41 @@ test('Browser pane adapter keeps native session start and attach guards session-
 
 test('Browser pane surface stability manifest stays typed blocked/handoff without real native attach proof', async () => {
   const evidence = nativeSurfaceContractEvidence();
-  const manifest = buildSurfaceRerenderStabilityManifest(evidence, {
-    state: 'handoff',
-    observed: 'missing-native-attach',
-    canRetry: true,
-    handoffRequired: true,
-    blockedReason: 'Real right-pane native attach/remount/focus dogfood proof is unavailable in this smoke; contract evidence is diagnostic only.',
-  });
+  const consumed = await readConsumedNativeDesktopEvidence();
+  const manifest = buildSurfaceRerenderStabilityManifest(
+    evidence,
+    consumed
+      ? nativeAttachFromConsumedDesktopEvidence(consumed)
+      : {
+          state: 'handoff',
+          observed: 'missing-native-attach',
+          canRetry: true,
+          handoffRequired: true,
+          blockedReason: 'Real right-pane native attach/remount/focus dogfood proof is unavailable in this smoke; contract evidence is diagnostic only.',
+        },
+    consumed
+      ? {
+          consumedNativeDesktopEvidence: consumed,
+          coverageGaps: [
+            'missing-real-right-pane-rerender-remount-proof',
+            'missing-real-right-pane-rerender-focus-retention-proof',
+          ],
+          blockedReason: 'Desktop native live acceptance supplied real attach/resize/minimize/restore refs, but surface rerender stability still lacks real rerender remount and focus retention proof.',
+        }
+      : {
+          coverageGaps: [
+            'missing-real-right-pane-native-evidence',
+            'missing-real-right-pane-rerender-remount-proof',
+            'missing-real-right-pane-rerender-focus-retention-proof',
+          ],
+        },
+  );
 
   assertSurfaceRerenderStabilityManifest(manifest);
   assert.equal(manifest.status, 'blocked');
   assert.equal(manifest.claimScope, 'contract-diagnostic-only');
   assert.equal(manifest.passClaim, false);
-  assert.equal(manifest.nativeAttach.state, 'handoff');
-  assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
+  assert.ok(manifest.coverageGaps.length > 0);
 
   const forgedPassWithoutAttach = {
     ...manifest,
@@ -285,12 +324,180 @@ test('Browser pane surface stability manifest stays typed blocked/handoff withou
   } satisfies SurfaceRerenderStabilityManifest;
   assert.throws(
     () => assertSurfaceRerenderStabilityManifest(forgedPassWithoutAttach),
-    /attached|real native attach proof/,
+    /attached|real native attach proof|coverage gaps/,
   );
 
   await mkdir(ARTIFACT_DIR, { recursive: true });
   await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 });
+
+test('Browser pane surface stability consumes desktop native evidence without claiming missing real rerender focus proof', () => {
+  const consumed = consumedNativeDesktopEvidenceFrom(desktopNativeLiveEvidenceFixture());
+  assert.ok(consumed, 'fixture should expose pass-grade desktop native evidence');
+
+  const manifest = buildSurfaceRerenderStabilityManifest(
+    nativeSurfaceContractEvidence(),
+    nativeAttachFromConsumedDesktopEvidence(consumed),
+    {
+      consumedNativeDesktopEvidence: consumed,
+      coverageGaps: [
+        'missing-real-right-pane-rerender-remount-proof',
+        'missing-real-right-pane-rerender-focus-retention-proof',
+      ],
+    },
+  );
+
+  assertSurfaceRerenderStabilityManifest(manifest);
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.nativeAttach.state, 'attached');
+  assert.equal(manifest.nativeAttach.observed, 'native-embedded');
+  assert.match(manifest.nativeAttach.proofRef ?? '', /^browser-host-session:browser-host-real-native-live\//);
+  assert.equal(manifest.consumedNativeDesktopEvidence?.rawPayloadRecorded, false);
+  assert.deepEqual(manifest.coverageGaps, [
+    'missing-real-right-pane-rerender-remount-proof',
+    'missing-real-right-pane-rerender-focus-retention-proof',
+  ]);
+});
+
+async function readConsumedNativeDesktopEvidence(): Promise<ConsumedNativeDesktopEvidence | undefined> {
+  try {
+    const text = await readFile(DESKTOP_NATIVE_LIVE_MANIFEST_PATH, 'utf8');
+    return consumedNativeDesktopEvidenceFrom(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function consumedNativeDesktopEvidenceFrom(value: unknown): ConsumedNativeDesktopEvidence | undefined {
+  const evidence = recordValue(value);
+  const nativeAdapter = recordValue(evidence?.nativeAdapter);
+  const browserHostSession = recordValue(evidence?.browserHostSession);
+  const surface = recordValue(evidence?.surface);
+  const interaction = recordValue(evidence?.interaction);
+  const actionAck = recordValue(interaction?.actionAck);
+  const heartbeat = recordValue(interaction?.stateHeartbeat);
+  const benchmarkMetrics = recordValue(evidence?.benchmarkMetrics);
+  const metricSections = recordValue(benchmarkMetrics?.metricSections);
+  const lifecycle = recordValue(metricSections?.lifecycle);
+  const inputCompleteness = recordValue(metricSections?.inputCompleteness);
+  const sessionId = stringValue(browserHostSession?.id);
+  if (
+    stringValue(evidence?.schemaVersion) !== 'sciforge.desktop.browser-native-live-acceptance.v1'
+    || stringValue(evidence?.status) !== 'passed'
+    || evidence?.canClaimDesktopNativeLivePass !== true
+    || stringValue(evidence?.claimScope) !== 'desktop-native-embedded-browser-pane-live'
+    || stringValue(nativeAdapter?.owner) !== 'BrowserHostSession'
+    || stringValue(nativeAdapter?.adapterRole) !== 'display-input-adapter'
+    || stringValue(nativeAdapter?.liveSurfaceTransport) !== 'native-embedded'
+    || nativeAdapter?.secondTruthSource !== false
+    || stringValue(browserHostSession?.liveSurfaceTransport) !== 'native-embedded'
+    || browserHostSession?.singleInteractiveTruth !== true
+    || browserHostSession?.frameStreamRefPresent !== false
+    || browserHostSession?.frameRefPresent !== false
+    || browserHostSession?.frameUrlPresent !== false
+    || surface?.ok !== true
+    || stringValue(surface?.owner) !== 'BrowserHostSession'
+    || stringValue(surface?.surface) !== 'electron-web-contents-view'
+    || stringValue(surface?.liveSurfaceTransport) !== 'native-embedded'
+    || surface?.embedded !== true
+    || surface?.visible !== true
+    || surface?.secondTruthSource !== false
+    || interaction?.typedTokenObserved !== true
+    || stringValue(interaction?.paintAckSource) !== 'native-adapter-action-state'
+    || stringValue(actionAck?.status) !== 'ok'
+    || actionAck?.dependsOnScreenshot !== false
+    || actionAck?.dependsOnFrameStream !== false
+    || stringValue(heartbeat?.source) !== 'native-adapter-state-endpoint'
+    || heartbeat?.lightweightStateUpdated !== true
+    || stringValue(lifecycle?.status) !== 'passed'
+    || !isNonEmptyString(sessionId)
+  ) {
+    return undefined;
+  }
+  const sessionRef = `browser-host-session:${sessionId}`;
+  return {
+    sourceRef: 'docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json',
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
+    status: 'passed',
+    claimScope: 'desktop-native-embedded-browser-pane-live',
+    browserHostSessionRef: sessionRef,
+    liveSurfaceRef: `${sessionRef}/live-surface`,
+    nativeAttachRef: `${sessionRef}/desktop-native-live-attach-proof`,
+    nativeSurfaceStateRef: `${sessionRef}/desktop-native-live-surface-state-proof`,
+    lifecycleResultRef: stringValue(lifecycle?.resultRef),
+    inputCompletenessResultRef: stringValue(inputCompleteness?.resultRef),
+    verificationCommand: stringValue(evidence?.verificationCommand),
+    rawPayloadRecorded: false,
+  };
+}
+
+function nativeAttachFromConsumedDesktopEvidence(evidence: ConsumedNativeDesktopEvidence): SurfaceRerenderStabilityManifest['nativeAttach'] {
+  return {
+    state: 'attached',
+    observed: 'native-embedded',
+    proofRef: evidence.nativeAttachRef,
+    canRetry: false,
+    handoffRequired: false,
+  };
+}
+
+function desktopNativeLiveEvidenceFixture() {
+  return {
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
+    status: 'passed',
+    canClaimDesktopNativeLivePass: true,
+    claimScope: 'desktop-native-embedded-browser-pane-live',
+    nativeAdapter: {
+      owner: 'BrowserHostSession',
+      adapterRole: 'display-input-adapter',
+      liveSurfaceTransport: 'native-embedded',
+      secondTruthSource: false,
+    },
+    browserHostSession: {
+      id: 'browser-host-real-native-live',
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      frameStreamRefPresent: false,
+      frameRefPresent: false,
+      frameUrlPresent: false,
+    },
+    surface: {
+      ok: true,
+      owner: 'BrowserHostSession',
+      surface: 'electron-web-contents-view',
+      liveSurfaceTransport: 'native-embedded',
+      embedded: true,
+      visible: true,
+      secondTruthSource: false,
+    },
+    interaction: {
+      typedTokenObserved: true,
+      paintAckSource: 'native-adapter-action-state',
+      actionAck: {
+        status: 'ok',
+        dependsOnScreenshot: false,
+        dependsOnFrameStream: false,
+      },
+      stateHeartbeat: {
+        source: 'native-adapter-state-endpoint',
+        lightweightStateUpdated: true,
+      },
+    },
+    benchmarkMetrics: {
+      metricSections: {
+        lifecycle: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:lifecycle:fixture',
+        },
+        inputCompleteness: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:inputCompleteness:fixture',
+        },
+      },
+    },
+    verificationCommand: 'npm run smoke:desktop-browser-native-live-acceptance --silent',
+  };
+}
 
 function nativeSurfaceContractPhases(): SurfaceRenderPhase[] {
   return [
@@ -477,6 +684,11 @@ function boundedSurfaceEvidence(phase: string, html: string) {
 function buildSurfaceRerenderStabilityManifest(
   phases: SurfacePhaseEvidence[],
   nativeAttach: SurfaceRerenderStabilityManifest['nativeAttach'],
+  options: {
+    consumedNativeDesktopEvidence?: ConsumedNativeDesktopEvidence;
+    coverageGaps?: string[];
+    blockedReason?: string;
+  } = {},
 ): SurfaceRerenderStabilityManifest {
   const sessionIds = uniqueFlat(phases.flatMap((item) => item.sessionIds));
   const liveSurfaceRefs = uniqueFlat(phases.map((item) => item.liveSurfaceRef).filter(isNonEmptyString));
@@ -511,14 +723,16 @@ function buildSurfaceRerenderStabilityManifest(
     && transports[0] === 'native-embedded'
     && frameTransports.length === 1
     && frameTransports[0] === 'native-embedded';
+  const coverageGaps = options.coverageGaps ?? [];
   const canClaimPass = contractStable
     && nativeAttach.state === 'attached'
     && nativeAttach.observed === 'native-embedded'
     && Boolean(nativeAttach.proofRef)
-    && !nativeAttach.handoffRequired;
+    && !nativeAttach.handoffRequired
+    && coverageGaps.length === 0;
   const blockedReason = canClaimPass
     ? undefined
-    : nativeAttach.blockedReason ?? blockedReasonForSurfaceStability({
+    : options.blockedReason ?? nativeAttach.blockedReason ?? blockedReasonForSurfaceStability({
       contractStable,
       sameSessionId,
       sameLiveSurfaceRef,
@@ -579,6 +793,8 @@ function buildSurfaceRerenderStabilityManifest(
       maxNativeSurfaceMountsPerPhase: Math.max(...phases.map((item) => item.nativeSurfaces)),
       blockedReason,
     },
+    consumedNativeDesktopEvidence: options.consumedNativeDesktopEvidence,
+    coverageGaps,
     updateCounts: {
       topbarAddressDraftChanges: countTriggers(phases, 'topbar-address-draft'),
       tabStateChanges: countTriggers(phases, 'tab-state'),
@@ -661,6 +877,7 @@ function assertSurfaceRerenderStabilityManifest(manifest: SurfaceRerenderStabili
   if (manifest.status === 'passed') {
     assert.equal(manifest.claimScope, 'right-pane-native-surface-rerender-stability');
     assert.equal(manifest.passClaim, true);
+    assert.deepEqual(manifest.coverageGaps, [], 'passed manifest cannot carry coverage gaps');
     assert.equal(manifest.nativeAttach.state, 'attached');
     assert.equal(manifest.nativeAttach.observed, 'native-embedded');
     assert.ok(manifest.nativeAttach.proofRef, 'passed manifest requires real native attach proof');
@@ -671,9 +888,14 @@ function assertSurfaceRerenderStabilityManifest(manifest: SurfaceRerenderStabili
   } else {
     assert.equal(manifest.claimScope, 'contract-diagnostic-only');
     assert.equal(manifest.passClaim, false);
-    assert.notEqual(manifest.nativeAttach.state, 'attached');
-    assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
-    assert.equal(manifest.nativeAttach.handoffRequired, true);
+    if (manifest.nativeAttach.state === 'attached') {
+      assert.equal(manifest.nativeAttach.observed, 'native-embedded');
+      assert.ok(manifest.nativeAttach.proofRef, 'attached blocked manifest still requires bounded proof ref');
+    } else {
+      assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
+      assert.equal(manifest.nativeAttach.handoffRequired, true);
+    }
+    assert.ok(manifest.coverageGaps.length > 0);
     assert.ok(manifest.observed.blockedReason);
     assert.equal(manifest.observed.realNativeRemountCount, null);
     assert.equal(manifest.observed.realNativeFocusLossCount, null);
@@ -895,4 +1117,14 @@ function uniqueAttrValues(html: string, attr: string) {
 
 function countMatches(html: string, pattern: RegExp) {
   return [...html.matchAll(pattern)].length;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

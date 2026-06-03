@@ -95,6 +95,9 @@ export function codexRuntimeEnv(baseEnv: NodeJS.ProcessEnv, codexHome: string): 
   const env: NodeJS.ProcessEnv = { ...baseEnv, CODEX_HOME: codexHome };
   delete env.CODEX_USER_HOME;
   delete env.CODEX_CONFIG_HOME;
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_')) delete env[key];
+  }
   return env;
 }
 

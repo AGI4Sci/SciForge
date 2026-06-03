@@ -81,6 +81,60 @@ test('VirtualAppScreen runtime command accepts spaced computer use attach aliase
   assert.equal('liveSurfaceRef' in data, false);
 });
 
+test('VirtualAppScreen runtime command preserves only Host-owned preflight refs', () => {
+  const parsed = parseVirtualAppScreenRuntimeCommand([
+    '/computer-use screen attach',
+    '--source right-pane-screen',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--screen-ref "virtual-app-screen:preflight/screen-request"',
+    '--activation-ref "computer-use:screen-activation/preflight/attach-request.json"',
+    '--adapter-readiness-ref "computer-use:native-host/preflights/preflight/adapter-readiness.json"',
+    '--preflight-ref "computer-use:native-host/preflights/preflight/preflight.json"',
+    '--preflight-ledger-ref "computer-use:native-host/preflights/preflight/preflight-ledger.json"',
+    '--preflight-ledger-entry-ref "computer-use:native-host/preflights/preflight/preflight-ledger.json/events/0001-preflight.recorded.json"',
+    '--host-readiness-ref "computer-use:native-host/preflights/preflight/host-readiness.json"',
+  ].join(' '));
+
+  assert.equal(parsed.kind, 'parsed');
+  if (parsed.kind !== 'parsed') return;
+
+  assert.equal(parsed.command.refs.preflightRef, 'computer-use:native-host/preflights/preflight/preflight.json');
+  assert.equal(parsed.command.refs.preflightLedgerRef, 'computer-use:native-host/preflights/preflight/preflight-ledger.json');
+  assert.equal(parsed.command.refs.preflightLedgerEntryRef, 'computer-use:native-host/preflights/preflight/preflight-ledger.json/events/0001-preflight.recorded.json');
+  assert.equal(parsed.command.refs.hostReadinessRef, 'computer-use:native-host/preflights/preflight/host-readiness.json');
+  const data = virtualAppScreenRuntimeCommandVirtualScreenData(parsed.command);
+  assert.equal(data.preflightRef, 'computer-use:native-host/preflights/preflight/preflight.json');
+  assert.deepEqual(data.nativeHostPreflight, {
+    preflightRef: 'computer-use:native-host/preflights/preflight/preflight.json',
+    preflightLedgerRef: 'computer-use:native-host/preflights/preflight/preflight-ledger.json',
+    preflightLedgerEntryRef: 'computer-use:native-host/preflights/preflight/preflight-ledger.json/events/0001-preflight.recorded.json',
+    hostReadinessRef: 'computer-use:native-host/preflights/preflight/host-readiness.json',
+    adapterReadinessRef: 'computer-use:native-host/preflights/preflight/adapter-readiness.json',
+  });
+  assert.ok(data.verificationRefs.includes('computer-use:native-host/preflights/preflight/preflight-ledger.json/events/0001-preflight.recorded.json'));
+
+  const placeholder = parseVirtualAppScreenRuntimeCommand([
+    '/computer-use screen attach',
+    '--source right-pane-screen',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--screen-ref "virtual-app-screen:placeholder-preflight/screen-request"',
+    '--activation-ref "computer-use:screen-activation/placeholder-preflight/attach-request.json"',
+    '--adapter-readiness-ref "computer-use:screen-activation/placeholder-preflight/provider-readiness.json"',
+    '--preflight-ref "computer-use:screen-activation/placeholder-preflight/preflight.json"',
+    '--preflight-ledger-ref "computer-use:native-host/readiness/placeholder-preflight/preflight-ledger.json"',
+    '--preflight-ledger-entry-ref "computer-use:screen-activation/placeholder-preflight/preflight-ledger.json/events/0001-preflight.recorded.json"',
+    '--host-readiness-ref "computer-use:native-host/readiness/placeholder-preflight/host-readiness.json"',
+  ].join(' '));
+
+  assert.equal(placeholder.kind, 'parsed');
+  if (placeholder.kind !== 'parsed') return;
+  assert.equal(placeholder.command.refs.preflightRef, undefined);
+  assert.equal(placeholder.command.refs.preflightLedgerRef, undefined);
+  assert.equal(placeholder.command.refs.preflightLedgerEntryRef, undefined);
+  assert.equal(placeholder.command.refs.hostReadinessRef, undefined);
+  assert.equal(virtualAppScreenRuntimeCommandVirtualScreenData(placeholder.command).nativeHostPreflight, undefined);
+});
+
 test('VirtualAppScreen runtime command parses permission handoff from right pane controller', () => {
   const parsed = parseVirtualAppScreenRuntimeCommand([
     '/computer-use permission-handoff',
@@ -155,6 +209,9 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
     '--current-frame-sequence 42',
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--provider-session-reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
+    '--surface-identity-ref "computer-use:provider-session/reconnect/surface-identity.json"',
+    '--surface-owner-ref "computer-use:native-host/surfaces/reconnect/surface-owner.json"',
+    '--display-owner-ref "computer-use:native-host/surfaces/reconnect/display-owner.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
     '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
@@ -175,6 +232,9 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
   assert.equal(parsed.command.refs.currentFrameRef, 'computer-use:session/reconnect/frames/current.png');
   assert.equal(parsed.command.refs.providerSessionOwnerRef, 'computer-use:provider-session/reconnect/owner.json');
   assert.equal(parsed.command.refs.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
+  assert.equal(parsed.command.refs.surfaceIdentityRef, 'computer-use:provider-session/reconnect/surface-identity.json');
+  assert.equal(parsed.command.refs.surfaceOwnerRef, 'computer-use:native-host/surfaces/reconnect/surface-owner.json');
+  assert.equal(parsed.command.refs.displayOwnerRef, 'computer-use:native-host/surfaces/reconnect/display-owner.json');
   assert.equal(parsed.command.refs.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
   assert.equal(parsed.command.refs.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   assert.equal(parsed.command.refs.surfaceTransportRef, 'computer-use:session/reconnect/surface-transport.json');
@@ -202,6 +262,9 @@ test('VirtualAppScreen runtime command parses screen reconnect as current-sessio
   assert.equal(data.currentFrameRef, 'computer-use:session/reconnect/frames/current.png');
   assert.equal(data.providerSessionOwnerRef, 'computer-use:provider-session/reconnect/owner.json');
   assert.equal(data.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
+  assert.equal(data.surfaceIdentityRef, 'computer-use:provider-session/reconnect/surface-identity.json');
+  assert.equal(data.surfaceOwnerRef, 'computer-use:native-host/surfaces/reconnect/surface-owner.json');
+  assert.equal(data.displayOwnerRef, 'computer-use:native-host/surfaces/reconnect/display-owner.json');
   assert.equal(data.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
   assert.equal(data.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   assert.equal(data.surfaceTransportRef, 'computer-use:session/reconnect/surface-transport.json');
@@ -225,6 +288,9 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--current-frame-sequence 7',
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
+    '--surface-identity-ref "computer-use:provider-session/reconnect/surface-identity.json"',
+    '--surface-owner-ref "computer-use:native-host/surfaces/reconnect/surface-owner.json"',
+    '--display-owner-ref "computer-use:native-host/surfaces/reconnect/display-owner.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
     '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',
@@ -234,6 +300,9 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
   if (alias.kind === 'parsed') {
     assert.equal(alias.command.reconnectReason, 'provider-reconnect');
     assert.equal(alias.command.refs.providerSessionReconnectRef, 'computer-use:provider-session/reconnect/reconnect.json');
+    assert.equal(alias.command.refs.surfaceIdentityRef, 'computer-use:provider-session/reconnect/surface-identity.json');
+    assert.equal(alias.command.refs.surfaceOwnerRef, 'computer-use:native-host/surfaces/reconnect/surface-owner.json');
+    assert.equal(alias.command.refs.displayOwnerRef, 'computer-use:native-host/surfaces/reconnect/display-owner.json');
     assert.equal(alias.command.refs.liveBindingAttachGrantRef, 'computer-use:provider-session/reconnect/live-binding-attach-grant.json');
     assert.equal(alias.command.refs.grantValidationRef, 'computer-use:provider-session/reconnect/grant-validation.json');
   }
@@ -260,6 +329,9 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--current-frame-sequence 1',
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "computer-use:provider-session/reconnect/reconnect.json"',
+    '--surface-identity-ref "computer-use:provider-session/reconnect/surface-identity.json"',
+    '--surface-owner-ref "computer-use:native-host/surfaces/reconnect/surface-owner.json"',
+    '--display-owner-ref "computer-use:native-host/surfaces/reconnect/display-owner.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
     '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
   ].join(' ')), {
@@ -279,6 +351,9 @@ test('VirtualAppScreen runtime command accepts reconnect aliases and rejects mis
     '--current-frame-sequence 1',
     '--provider-session-owner-ref "computer-use:provider-session/reconnect/owner.json"',
     '--reconnect-ref "javascript:alert(1)"',
+    '--surface-identity-ref "computer-use:provider-session/reconnect/surface-identity.json"',
+    '--surface-owner-ref "computer-use:native-host/surfaces/reconnect/surface-owner.json"',
+    '--display-owner-ref "computer-use:native-host/surfaces/reconnect/display-owner.json"',
     '--live-binding-attach-grant-ref "computer-use:provider-session/reconnect/live-binding-attach-grant.json"',
     '--grant-validation-ref "computer-use:provider-session/reconnect/grant-validation.json"',
     '--surface-transport-ref "computer-use:session/reconnect/surface-transport.json"',

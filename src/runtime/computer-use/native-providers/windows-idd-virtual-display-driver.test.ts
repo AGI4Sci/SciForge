@@ -110,10 +110,10 @@ test('Windows IDD opt-in driver readFrame stays anchored to attached session ref
 
 test('Windows IDD opt-in driver exposes provider-owned input and control hook evidence refs', async () => {
   const deps = fakeDriverDependencies({
-    sendInputIntent: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    pauseAgentQueue: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    resumeAgentQueue: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    safeStopSession: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
+    sendInputIntent: inputControlResult,
+    pauseAgentQueue: inputControlResult,
+    resumeAgentQueue: inputControlResult,
+    safeStopSession: inputControlResult,
   });
   const provider = createWindowsIddVirtualDisplayProvider({
     probeOptions: readyProbeOptions('generic-editor'),
@@ -554,6 +554,19 @@ function inputControlRefs(context: NativeVirtualDisplayDriverInputControlContext
     operation: context.operation,
     operationOptions: context.operationOptions,
   });
+}
+
+function inputControlResult(context: NativeVirtualDisplayDriverInputControlContext) {
+  return {
+    ok: true,
+    refs: inputControlRefs(context),
+    mutatingActionExecuted: true,
+    providerEvidenceWritten: true,
+    affectsPhysicalDisplay: false,
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+  };
 }
 
 function requiredString(value: string | string[] | undefined) {

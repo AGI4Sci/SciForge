@@ -56,6 +56,46 @@ test('right pane command action helper creates terminal-equivalent open actions 
   assert.equal(createRightPaneCommandTextAction({ session, commandText: '   ' }), undefined);
 });
 
+test('right pane command action rewrites stale VirtualAppScreen attach refs to the current UI action scope', () => {
+  const action = createRightPaneCommandTextAction({
+    session,
+    id: 'command-right-pane-fresh-screen',
+    createdAt: '2026-06-01T00:00:00.000Z',
+    label: 'Attach VirtualAppScreen',
+    targetRef: 'computer-use:screen-activation/old-run/attach-request.json',
+    commandText: [
+      '/computer-use screen attach',
+      '--source right-pane-screen',
+      '--profile "vscode-editor"',
+      '--target-app-ref "app:profile/vscode-editor"',
+      '--screen-ref "virtual-app-screen:old-run/screen-request"',
+      '--activation-ref "computer-use:screen-activation/old-run/attach-request.json"',
+      '--adapter-readiness-ref "computer-use:screen-activation/old-run/provider-readiness.json"',
+      '--preflight-ref "computer-use:native-host/preflights/old-run/preflight.json"',
+      '--host-readiness-ref "computer-use:native-host/preflights/old-run/host-readiness.json"',
+      '--platform-driver-ref "computer-use:screen-activation/old-run/platform-driver.json"',
+      '--permission-ref "computer-use:screen-activation/old-run/permissions/platform-gates.json"',
+      '--evidence-ledger-ref "ledger:computer-use/old-run/screen-activation.json"',
+      '--gui-present-ref "gui.present:old-run/screen-pane-activation"',
+    ].join(' '),
+  });
+
+  assert.equal(action?.commandText, [
+    '/computer-use screen attach',
+    '--source right-pane-screen',
+    '--profile "vscode-editor"',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--screen-ref "virtual-app-screen:right-pane-command-right-pane-fresh-screen/screen-request"',
+    '--activation-ref "computer-use:screen-activation/right-pane-command-right-pane-fresh-screen/attach-request.json"',
+    '--adapter-readiness-ref "computer-use:screen-activation/right-pane-command-right-pane-fresh-screen/provider-readiness.json"',
+    '--platform-driver-ref "computer-use:screen-activation/right-pane-command-right-pane-fresh-screen/platform-driver.json"',
+    '--permission-ref "computer-use:screen-activation/right-pane-command-right-pane-fresh-screen/permissions/platform-gates.json"',
+    '--evidence-ledger-ref "ledger:computer-use/right-pane-command-right-pane-fresh-screen/screen-activation.json"',
+    '--gui-present-ref "gui.present:right-pane-command-right-pane-fresh-screen/screen-pane-activation"',
+  ].join(' '));
+  assert.doesNotMatch(action?.commandText ?? '', /old-run|preflight-ref|host-readiness-ref/);
+});
+
 test('right pane object action result adapter applies presentation state without execution side effects', () => {
   const reference: ObjectReference = {
     id: 'url-ref',

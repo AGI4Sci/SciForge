@@ -21,6 +21,9 @@ export type SciForgeDesktopPreloadApi = {
   attachBrowserHostSessionSurface(input: unknown): Promise<unknown>;
   detachBrowserHostSessionSurface(input: unknown): Promise<unknown>;
   getBrowserHostSessionSurfaceState(input: unknown): Promise<unknown>;
+  attachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
+  presentVirtualAppScreenSurface(input: unknown): Promise<unknown>;
+  detachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
   revealPath(path: string): Promise<unknown>;
   pickDirectory(defaultPath?: string): Promise<{ ok: boolean; path?: string }>;
 };
@@ -43,6 +46,9 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     attachBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:attach', input),
     detachBrowserHostSessionSurface: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:detach', input),
     getBrowserHostSessionSurfaceState: (input: unknown) => ipcRenderer.invoke('desktop:browser-host-surface:state', input),
+    attachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:attach', input),
+    presentVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:present', input),
+    detachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:detach', input),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
     pickDirectory: async (defaultPath?: string) => normalizePickDirectoryResult(
       await ipcRenderer.invoke('platform:pick-directory', defaultPath),

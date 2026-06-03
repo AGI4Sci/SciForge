@@ -39,7 +39,7 @@ test('VirtualAppScreen first scenario fixture is local, low-risk, and diagnostic
   )));
 });
 
-test('VirtualAppScreen first scenario only becomes user-acceptance eligible with explicit real app-screen evidence', () => {
+test('VirtualAppScreen first scenario contract real app-screen evidence fields remain blocked without real Host opt-in evidence', () => {
   const bundle = buildVirtualAppScreenFirstScenarioBundle({
     runId: 'real-app-screen-run',
     evidenceMode: 'real-virtual-app-screen',
@@ -47,12 +47,13 @@ test('VirtualAppScreen first scenario only becomes user-acceptance eligible with
 
   assert.equal(bundle.fixtureBoundary.diagnosticFixture, false);
   assert.equal(bundle.artifactValidation.ok, true);
-  assert.equal(bundle.manifest.status, 'passed');
+  assert.equal(bundle.manifest.status, 'blocked');
   assert.equal(bundle.manifest.diagnosticOnly, false);
-  assert.equal(bundle.manifest.userAcceptanceEligible, true);
-  assert.equal(bundle.manifest.validation.ok, true);
+  assert.equal(bundle.manifest.userAcceptanceEligible, false);
+  assert.equal(bundle.manifest.validation.ok, false);
   assert.deepEqual(bundle.manifest.validation.missingRefs, []);
   assert.deepEqual(bundle.manifest.validation.rejectedClaimKinds, []);
+  assert.ok(bundle.manifest.validation.issues.some((issue) => issue.includes('real VirtualAppScreen action-causality evidence is required')));
   assert.deepEqual(bundle.manifest.targetAppRefs, [bundle.refs.targetAppRef]);
   assert.deepEqual(bundle.manifest.targetWindowRefs, [bundle.refs.targetWindowRef]);
   assert.deepEqual(bundle.manifest.sessionRefs, [bundle.refs.sessionRef]);

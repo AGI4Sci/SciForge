@@ -131,6 +131,37 @@ test('VirtualAppScreen lease control InputIntent parses refs without creating a 
   });
 });
 
+test('VirtualAppScreen InputIntent carries Host current-run pointer refs for canvas and control commands', () => {
+  const canvas = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-canvas',
+    '--kind type_text',
+    '--session-ref "computer-use:native-host/sessions/session-1/session.json"',
+    '--frame-ref "computer-use:native-host/frames/surface/0001.png"',
+    '--current-run-pointer-ref "computer-use:native-host/runs/session-1/current-run-pointer.json"',
+    '--input-lease-ref "computer-use:native-host/leases/session-1/input.json"',
+    '--action-adapter-ref "computer-use:native-host/adapters/session-1/input.json"',
+    '--adapter-readiness-ref "computer-use:native-host/readiness/session-1/adapter.json"',
+    '--text hello',
+  ].join(' '));
+  assert.equal(canvas.kind, 'parsed');
+  if (canvas.kind !== 'parsed') return;
+  assert.equal(canvas.command.refs.currentRunPointerRef, 'computer-use:native-host/runs/session-1/current-run-pointer.json');
+
+  const control = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-control',
+    '--kind resume-agent',
+    '--session-ref "computer-use:native-host/sessions/session-1/session.json"',
+    '--current-run-pointer-ref "computer-use:native-host/runs/session-1/current-run-pointer.json"',
+    '--input-lease-ref "computer-use:native-host/leases/session-1/input.json"',
+    '--lease-control-ref "computer-use:native-host/leases/session-1/resume.json"',
+  ].join(' '));
+  assert.equal(control.kind, 'parsed');
+  if (control.kind !== 'parsed') return;
+  assert.equal(control.command.refs.currentRunPointerRef, 'computer-use:native-host/runs/session-1/current-run-pointer.json');
+});
+
 test('VirtualAppScreen InputIntent rejects unsafe refs and pointer intents without dimensions', () => {
   const unsafe = parseVirtualScreenInputIntentCommand([
     '/computer-use input-intent',
@@ -173,6 +204,20 @@ test('VirtualAppScreen InputIntent rejects unsafe refs and pointer intents witho
   assert.deepEqual(unsafeLeaseControl, {
     kind: 'invalid',
     reason: 'InputIntent ref --lease-control-ref is unsafe.',
+  });
+
+  const unsafeCurrentRunPointer = parseVirtualScreenInputIntentCommand([
+    '/computer-use input-intent',
+    '--source virtual-app-screen-control',
+    '--kind pause-agent',
+    '--session-ref "computer-use:native-host/sessions/session-1/session.json"',
+    '--current-run-pointer-ref "https://example.invalid/current-run-pointer.json"',
+    '--input-lease-ref "computer-use:native-host/leases/session-1/input.json"',
+    '--lease-control-ref "computer-use:native-host/leases/session-1/pause.json"',
+  ].join(' '));
+  assert.deepEqual(unsafeCurrentRunPointer, {
+    kind: 'invalid',
+    reason: 'InputIntent ref --current-run-pointer-ref is unsafe.',
   });
 
   const missingLeaseControl = parseVirtualScreenInputIntentCommand([

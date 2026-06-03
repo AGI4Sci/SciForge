@@ -74,7 +74,11 @@ export function useRightPaneScreenController({
     payload.guiPresentRefs?.[0],
     (payload as Record<string, unknown>).grantValidationRef,
     payload.handoffRef,
+    payload.hostReadinessRef,
     (payload as Record<string, unknown>).liveBindingAttachGrantRef,
+    (payload as Record<string, unknown>).surfaceIdentityRef,
+    (payload as Record<string, unknown>).surfaceOwnerRef,
+    (payload as Record<string, unknown>).displayOwnerRef,
     payload.liveSurfaceRef,
     payload.permissionGranted,
     payload.permissionHandoffRef,
@@ -86,6 +90,9 @@ export function useRightPaneScreenController({
     payload.permissionStatus,
     payload.platformDriverRef,
     payload.platformDriverStatus,
+    payload.preflightLedgerEntryRef,
+    payload.preflightLedgerRef,
+    payload.preflightRef,
     payload.providerSessionOwnerRef,
     payload.providerSessionReconnectRef,
     payload.recheckRef,
@@ -153,6 +160,7 @@ function rightPaneVirtualScreenAttachCommand(payload: VirtualScreenPayload): Rig
     payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
     `--activation-ref ${terminalQuote(payload.handoffRef)}`,
     `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}`,
+    ...rightPaneVirtualScreenPreflightCommandParts(payload),
     payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
     payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
     payload.evidenceLedgerRef ? `--evidence-ledger-ref ${terminalQuote(payload.evidenceLedgerRef)}` : undefined,
@@ -176,19 +184,26 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
   if (payload.status !== 'blocked' && payload.attachState !== 'blocked') return undefined;
   const liveBindingAttachGrantRef = virtualScreenStringProp(payload, 'liveBindingAttachGrantRef');
   const grantValidationRef = virtualScreenStringProp(payload, 'grantValidationRef');
+  const surfaceIdentityRef = virtualScreenStringProp(payload, 'surfaceIdentityRef');
+  const surfaceOwnerRef = virtualScreenStringProp(payload, 'surfaceOwnerRef');
+  const displayOwnerRef = virtualScreenStringProp(payload, 'displayOwnerRef');
   if (
     !payload.screenRef
-    || !payload.liveSurfaceRef
-    || !payload.frameStreamRef
-    || !payload.currentFrameRef
+    || !rightPaneNativeHostProductRef(payload.sessionRef)
+    || !rightPaneNativeHostProductRef(payload.liveSurfaceRef)
+    || !rightPaneNativeHostProductRef(payload.frameStreamRef)
+    || !rightPaneNativeHostProductRef(payload.currentFrameRef)
     || typeof payload.currentFrameSequence?.sequence !== 'number'
     || !Number.isFinite(payload.currentFrameSequence.sequence)
     || payload.currentFrameSequence.sequence < 0
     || !payload.providerSessionOwnerRef
     || !payload.providerSessionReconnectRef
-    || !liveBindingAttachGrantRef
-    || !grantValidationRef
-    || !payload.surfaceTransportRef
+    || !surfaceIdentityRef
+    || !rightPaneNativeHostProductRef(surfaceOwnerRef)
+    || !rightPaneNativeHostProductRef(displayOwnerRef)
+    || !rightPaneNativeHostProductRef(liveBindingAttachGrantRef)
+    || !rightPaneNativeHostProductRef(grantValidationRef)
+    || !rightPaneNativeHostProductRef(payload.surfaceTransportRef)
   ) return undefined;
   const parts = [
     '/computer-use screen reconnect',
@@ -202,6 +217,9 @@ function rightPaneVirtualScreenReconnectCommand(payload: VirtualScreenPayload): 
     `--current-frame-sequence ${Math.round(payload.currentFrameSequence.sequence)}`,
     `--provider-session-owner-ref ${terminalQuote(payload.providerSessionOwnerRef)}`,
     `--provider-session-reconnect-ref ${terminalQuote(payload.providerSessionReconnectRef)}`,
+    `--surface-identity-ref ${terminalQuote(surfaceIdentityRef)}`,
+    `--surface-owner-ref ${terminalQuote(surfaceOwnerRef)}`,
+    `--display-owner-ref ${terminalQuote(displayOwnerRef)}`,
     `--live-binding-attach-grant-ref ${terminalQuote(liveBindingAttachGrantRef)}`,
     `--grant-validation-ref ${terminalQuote(grantValidationRef)}`,
     `--surface-transport-ref ${terminalQuote(payload.surfaceTransportRef)}`,
@@ -229,6 +247,7 @@ function rightPaneVirtualScreenPermissionRecheckCommand(payload: VirtualScreenPa
     `--adapter-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}`,
     payload.permissionRef ? `--permission-ref ${terminalQuote(payload.permissionRef)}` : undefined,
     payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
+    ...rightPaneVirtualScreenPreflightCommandParts(payload),
     payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
     payload.sessionRef ? `--session-ref ${terminalQuote(payload.sessionRef)}` : undefined,
     payload.targetAppRef ? `--target-app-ref ${terminalQuote(payload.targetAppRef)}` : undefined,
@@ -258,6 +277,7 @@ function rightPaneVirtualScreenPermissionHandoffCommand(payload: VirtualScreenPa
     permissionRecheckRef ? `--recheck-ref ${terminalQuote(permissionRecheckRef)}` : undefined,
     `--provider-readiness-ref ${terminalQuote(payload.adapterReadinessRef)}`,
     payload.platformDriverRef ? `--platform-driver-ref ${terminalQuote(payload.platformDriverRef)}` : undefined,
+    ...rightPaneVirtualScreenPreflightCommandParts(payload),
     payload.screenRef ? `--screen-ref ${terminalQuote(payload.screenRef)}` : undefined,
     payload.sessionRef ? `--session-ref ${terminalQuote(payload.sessionRef)}` : undefined,
     payload.targetAppRef ? `--target-app-ref ${terminalQuote(payload.targetAppRef)}` : undefined,
@@ -311,6 +331,19 @@ function isReadyGateStatus(value: string | undefined) {
   return /^(attached|available|granted|not-required|ready|running)$/i.test(value?.trim() ?? '');
 }
 
+function rightPaneVirtualScreenPreflightCommandParts(payload: VirtualScreenPayload) {
+  const refs = [
+    ['preflight-ref', payload.preflightRef],
+    ['preflight-ledger-ref', payload.preflightLedgerRef],
+    ['preflight-ledger-entry-ref', payload.preflightLedgerEntryRef],
+    ['host-readiness-ref', payload.hostReadinessRef],
+  ] as const;
+  return refs.flatMap(([option, ref]) =>
+    ref && rightPaneNativeHostPreflightRef(ref)
+      ? [`--${option} ${terminalQuote(ref)}`]
+      : []);
+}
+
 function terminalQuote(value: string) {
   return JSON.stringify(value);
 }
@@ -324,4 +357,29 @@ function virtualScreenStringProp(payload: unknown, key: string) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function rightPaneNativeHostProductRef(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const ref = value.trim();
+  if (!ref.startsWith('computer-use:native-host/')) return false;
+  const lower = ref.toLowerCase();
+  if (
+    lower.startsWith('data:')
+    || lower.startsWith('javascript:')
+    || lower.startsWith('file:')
+    || lower.startsWith('blob:')
+    || lower.startsWith('http://')
+    || lower.startsWith('https://')
+    || lower.startsWith('//')
+    || lower.includes(';base64,')
+    || /authorization|bearer|api[_-]?key|password|secret|token/i.test(ref)
+    || /(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)
+  ) return false;
+  return !/[\r\n]/.test(ref);
+}
+
+function rightPaneNativeHostPreflightRef(value: unknown): value is string {
+  return rightPaneNativeHostProductRef(value)
+    && value.trim().startsWith('computer-use:native-host/preflights/');
 }

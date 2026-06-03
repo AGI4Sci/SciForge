@@ -1063,6 +1063,31 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
   const platformDriverRef = safeRef(value.platformDriverRef) ?? safeRef(value.driverRef);
   const platformDriverStatus = safeSummaryText(value.platformDriverStatus) ?? safeSummaryText(value.driverStatus);
   const evidenceLedgerRef = safeRef(value.evidenceLedgerRef) ?? evidenceBundleIndexRef;
+  const nativeHostPreflightInput = isRecord(value.nativeHostPreflight)
+    ? value.nativeHostPreflight
+    : isRecord(value.nativeHost)
+      ? isRecord(value.nativeHost.preflight)
+        ? value.nativeHost.preflight
+        : {}
+      : {};
+  const preflightRef = safeNativeHostPreflightRef(value.preflightRef) ?? safeNativeHostPreflightRef(nativeHostPreflightInput.preflightRef);
+  const preflightLedgerRef = safeNativeHostPreflightRef(value.preflightLedgerRef) ?? safeNativeHostPreflightRef(nativeHostPreflightInput.preflightLedgerRef);
+  const preflightLedgerEntryRef = safeNativeHostPreflightRef(value.preflightLedgerEntryRef) ?? safeNativeHostPreflightRef(nativeHostPreflightInput.preflightLedgerEntryRef);
+  const hostReadinessRef = safeNativeHostPreflightRef(value.hostReadinessRef) ?? safeNativeHostPreflightRef(nativeHostPreflightInput.hostReadinessRef);
+  const preflightProviderReadinessRefs = uniqueStrings([
+    ...(safeNativeHostPreflightRefArray(value.providerReadinessRefs) ?? []),
+    ...(safeNativeHostPreflightRefArray(nativeHostPreflightInput.providerReadinessRefs) ?? []),
+  ]);
+  const nativeHostPreflight = preflightRef || preflightLedgerRef || preflightLedgerEntryRef || hostReadinessRef || preflightProviderReadinessRefs.length
+    ? {
+      preflightRef,
+      preflightLedgerRef,
+      preflightLedgerEntryRef,
+      hostReadinessRef,
+      adapterReadinessRef: safeNativeHostPreflightRef(value.adapterReadinessRef) ?? safeNativeHostPreflightRef(nativeHostPreflightInput.adapterReadinessRef),
+      providerReadinessRefs: preflightProviderReadinessRefs.length ? preflightProviderReadinessRefs : undefined,
+    }
+    : undefined;
   const stopRef = safeRef(value.stopRef);
   const cancelLeaseRef = safeRef(value.cancelLeaseRef);
   const sessionRef = safeRef(value.sessionRef) ?? safeRef(value.sessionManifestRef);
@@ -1136,6 +1161,11 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     || providerSessionReconnectRef
     || liveBindingAttachGrantRef
     || grantValidationRef
+    || preflightRef
+    || preflightLedgerRef
+    || preflightLedgerEntryRef
+    || hostReadinessRef
+    || preflightProviderReadinessRefs.length
     || replayRef
     || currentFrameRef
     || explicitFrameRefs.length
@@ -1184,7 +1214,7 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     targetCount: positiveInteger(value.targetCount) ?? targetRefs.length,
     blockedReason: safeSummaryText(value.blockedReason),
   });
-  if (!sessionRef && !screenRef && !targetAppRef && !targetWindowRef && !frameStreamRef && !replayRef && !frameRefs.length && !frames.length && !visibleScreenRefs.length && !blockedRef && !errorRef) {
+  if (!sessionRef && !screenRef && !targetAppRef && !targetWindowRef && !frameStreamRef && !replayRef && !frameRefs.length && !frames.length && !visibleScreenRefs.length && !blockedRef && !errorRef && !preflightRef && !preflightLedgerEntryRef && !hostReadinessRef) {
     return undefined;
   }
   return compactRecord({
@@ -1232,6 +1262,12 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     inputLeaseRef,
     actionAdapterRef,
     adapterReadinessRef,
+    preflightRef,
+    preflightLedgerRef,
+    preflightLedgerEntryRef,
+    hostReadinessRef,
+    providerReadinessRefs: preflightProviderReadinessRefs,
+    nativeHostPreflight,
     evidenceLedgerRef,
     hostSessionRef,
     surfaceOwnerRef,
@@ -1340,6 +1376,11 @@ function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> 
     safeRef(payload.currentFrameRef),
     safeRef(payload.inputLeaseRef),
     safeRef(payload.platformDriverRef),
+    safeRef(payload.preflightRef),
+    safeRef(payload.preflightLedgerRef),
+    safeRef(payload.preflightLedgerEntryRef),
+    safeRef(payload.hostReadinessRef),
+    ...(safeRefArray(payload.providerReadinessRefs) ?? []),
     safeRef(payload.permissionRef),
     safeRef(payload.permissionHandoffRef),
     safeRef(payload.permissionRecheckRef),
@@ -1711,9 +1752,21 @@ function safeRef(value: unknown): string | undefined {
   return ref;
 }
 
+function safeNativeHostPreflightRef(value: unknown): string | undefined {
+  const ref = safeRef(value);
+  if (!ref || !ref.startsWith('computer-use:native-host/preflights/')) return undefined;
+  if (/(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)) return undefined;
+  return ref;
+}
+
 function safeRefList(value: unknown): string[] {
   const ref = safeRef(value);
   return ref ? [ref] : [];
+}
+
+function safeNativeHostPreflightRefArray(value: unknown): string[] | undefined {
+  const refs = asStringArray(value)?.map((ref) => safeNativeHostPreflightRef(ref)).filter((ref): ref is string => Boolean(ref));
+  return refs?.length ? uniqueStrings(refs) : undefined;
 }
 
 function safeRefArray(value: unknown): string[] | undefined {

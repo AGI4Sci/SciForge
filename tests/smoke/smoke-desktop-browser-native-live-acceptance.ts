@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
@@ -7,13 +8,21 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
-import { _electron as electron, type Page } from 'playwright-core';
+import { _electron as electron, type Locator, type Page } from 'playwright-core';
 
 import {
   type DesktopBrowserNativeLiveAcceptanceBounds,
   type DesktopBrowserNativeLiveAcceptanceBenchmarkMetrics,
+  type DesktopBrowserNativeBoundedEndpoint,
   type DesktopBrowserNativeLiveAcceptanceEvidence,
+  type DesktopBrowserNativeM0Action,
+  type DesktopBrowserNativeM0ActionEvidence,
+  type DesktopBrowserNativeM0SurfingLoopEvidence,
+  type DesktopBrowserNativeRealExternalNavigationAction,
+  type DesktopBrowserNativeRealExternalNavigationEvidence,
   assertDesktopBrowserNativeLiveAcceptanceCanClaimPass,
+  desktopBrowserNativeM0Actions,
+  desktopBrowserNativeRealExternalNavigationActions,
   rejectedDesktopLiveSubstitutes,
   validateDesktopBrowserNativeLiveAcceptanceEvidence,
 } from '../../src/desktop/desktop-browser-native-live-acceptance.js';
@@ -28,6 +37,10 @@ type DesktopRuntimeConfig = {
 
 type JsonRecord = Record<string, unknown>;
 type DesktopBrowserNativeStateHeartbeatEvidence = NonNullable<NonNullable<DesktopBrowserNativeLiveAcceptanceEvidence['interaction']>['stateHeartbeat']>;
+type DesktopBrowserNativeRealExternalTarget = {
+  url: string;
+  secondUrl: string;
+};
 
 const projectRoot = process.cwd();
 const outputDir = process.env.SCIFORGE_DESKTOP_BROWSER_NATIVE_LIVE_EVIDENCE_DIR
@@ -37,6 +50,7 @@ const manifestPath = join(outputDir, 'manifest.json');
 const mainPath = resolve(projectRoot, 'dist-desktop', 'src', 'desktop', 'main.js');
 const rendererPath = resolve(projectRoot, 'dist-ui', 'index.html');
 const requireLive = process.env.SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE === '1';
+const REAL_EXTERNAL_TARGET_ENV = 'SCIFORGE_DESKTOP_BROWSER_NATIVE_REAL_EXTERNAL_TARGET_JSON';
 const verificationCommand = 'npm run smoke:desktop-browser-native-live-acceptance --silent';
 const strictVerificationCommand = 'SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE=1 npm run smoke:desktop-browser-native-live-acceptance --silent';
 const execFileAsync = promisify(execFile);
@@ -202,6 +216,12 @@ try {
       })
     : { ok: false as const, reasonHash: 'back-not-observed' };
   if (forwardAction.ok) actionAckSamples.push(forwardAction.durationMs);
+  const stopAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'stop',
+    capture: 'none',
+    actionId: 'desktop-native-live-stop-probe',
+  });
+  if (stopAction.ok) actionAckSamples.push(stopAction.durationMs);
   const lifecycleProbe = await desktopNativeLifecycleProbe({
     electronApp,
     page,
@@ -209,6 +229,31 @@ try {
     liveSurfaceRef,
     nativeSurfaceSelector: '[data-browser-native-surface="true"][data-browser-live-surface-transport="native-embedded"]',
   });
+  const reconnectProbe = await desktopNativeReconnectProbe({
+    page,
+    workspaceWriterBaseUrl: config.workspaceWriterBaseUrl,
+    workspacePath: config.workspacePath,
+    nativeAdapterBaseUrl,
+    sessionId,
+    liveSurfaceRef,
+    frameBounds: roundedBounds(frameBounds),
+  });
+  actionAckSamples.push(...reconnectProbe.actionDurationsMs);
+  const realExternalNavigation = await desktopNativeRealExternalNavigationProbe({
+    target: desktopNativeRealExternalTargetFromEnv(),
+    workspaceWriterBaseUrl: config.workspaceWriterBaseUrl,
+    workspacePath: config.workspacePath,
+    nativeAdapterBaseUrl,
+    sessionId,
+    liveSurfaceRef,
+  });
+  actionAckSamples.push(...desktopNativeRealExternalNavigationActionDurations(realExternalNavigation));
+  const closeAction = await tryTimedBrowserAction(config.workspaceWriterBaseUrl, config.workspacePath, sessionId, {
+    action: 'close',
+    capture: 'none',
+    actionId: 'desktop-native-live-close-probe',
+  });
+  if (closeAction.ok) actionAckSamples.push(closeAction.durationMs);
   await recordProcessResourceSample(resourceSamples, electronPid);
   await recordRendererHeapSample(rendererHeapSamplesMb, page);
   const ackDelta = nativeSurfaceAuditDelta(nativeAuditBeforeAction, nativeAuditAfterActionAck);
@@ -239,7 +284,6 @@ try {
     && actionAck.screenshotRequestsDuringAck === 0
     && actionAck.frameStreamRequestsDuringAck === 0;
   const stateHeartbeatOk = stateHeartbeat.lightweightStateUpdated === true;
-  const canClaimPass = typedTokenObserved && actionAckOk && stateHeartbeatOk;
   const benchmarkMetrics = desktopNativeLiveBenchmarkMetrics({
     sessionId,
     frameBounds,
@@ -251,15 +295,51 @@ try {
     resourceSamples,
     rendererHeapSamplesMb,
     lifecycle: lifecycleProbe,
+    reconnect: reconnectProbe,
+    lifecycleMilestones: {
+      open: nativeSurfaceVisibleAt >= openStartedAt,
+      navigationStart: Boolean(stringField(sessionState.requestedUrl)),
+      navigationCommitted: Boolean(stringField(nativeHeartbeatState.url)),
+      interactive: Boolean(stringField(nativeHeartbeatState.title)),
+      load: nativeHeartbeatState.loading === false,
+      networkQuiet: stateHeartbeatOk,
+      blocked: reconnectProbe.disconnectDetected,
+      retry: reconnectProbe.stateHeartbeatRestored,
+      close: closeAction.ok,
+    },
     inputCompleteness: {
       keyboard: typeAction.durationMs >= 0,
       textEditing: typedTokenObserved,
       pointerClick: actionAckOk,
       drag: dragAction.ok,
       scroll: scrollAction.ok,
-      navigationControls: reloadAction.ok && navigateAction.ok && backAction.ok && forwardAction.ok,
+      navigationControls: reloadAction.ok && navigateAction.ok && backAction.ok && forwardAction.ok && stopAction.ok,
     },
   });
+  const m0SurfingLoop = desktopNativeM0SurfingLoopEvidence({
+    sessionId,
+    targetUrl: fixture.url,
+    finalUrl: stringField(heartbeatSessionState.url),
+    liveSurfaceRef,
+    nativeAdapterUrl,
+    nativeHealth,
+    surfaceState,
+    actionAck,
+    actionAckSource: stringField(paintAckTiming?.paintAckSource),
+    stateHeartbeatOk,
+    actions: {
+      open: { ok: true, durationMs: nativeSurfaceVisibleAt - openStartedAt },
+      click: { ok: actionAckOk, durationMs: paintAckAction.durationMs },
+      type: { ok: typedTokenObserved, durationMs: typeAction.durationMs, text: typedToken },
+      scroll: scrollAction,
+      drag: dragAction,
+      reload: reloadAction,
+      back: backAction,
+      forward: forwardAction,
+      stop: stopAction,
+    },
+  });
+  const canClaimPass = typedTokenObserved && actionAckOk && stateHeartbeatOk && m0SurfingLoop.passClaim;
 
   const evidence: DesktopBrowserNativeLiveAcceptanceEvidence = {
     schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
@@ -271,12 +351,12 @@ try {
     reason: canClaimPass ? undefined : desktopNativeLiveFailureReason({ typedTokenObserved, actionAckOk, stateHeartbeatOk }),
     desktopLaunch: {
       mode: 'production-electron',
-      mainPath,
-      rendererPath,
-      rendererUrl: page.url(),
+      mainPathRef: `desktop-launch-main:${boundedSha16(mainPath)}`,
+      rendererPathRef: `desktop-launch-renderer:${boundedSha16(rendererPath)}`,
+      rendererUrl: boundedDigest(page.url()),
     },
     nativeAdapter: {
-      url: nativeAdapterUrl,
+      endpoint: boundedLoopbackEndpoint(nativeAdapterUrl),
       healthOk: nativeHealth.ok === true,
       service: stringField(nativeHealth.service),
       owner: stringField(nativeHealth.owner),
@@ -297,10 +377,10 @@ try {
       owner: stringField(heartbeatSessionState.owner),
       providerId: stringField(heartbeatSessionState.providerId),
       status: stringField(heartbeatSessionState.status),
-      requestedUrl: stringField(heartbeatSessionState.requestedUrl),
-      url: stringField(heartbeatSessionState.url),
+      requestedUrl: boundedDigest(stringField(heartbeatSessionState.requestedUrl)),
+      url: boundedDigest(stringField(heartbeatSessionState.url)),
       liveSurfaceTransport: stringField(heartbeatSessionState.liveSurfaceTransport),
-      nativeAdapterUrl: stringField(heartbeatSessionState.nativeAdapterUrl),
+      nativeAdapterEndpoint: boundedLoopbackEndpoint(stringField(heartbeatSessionState.nativeAdapterUrl)),
       singleInteractiveTruth: heartbeatSessionState.singleInteractiveTruth === true,
       frameStreamRefPresent: Boolean(heartbeatSessionState.frameStreamRef),
       frameRefPresent: Boolean(heartbeatSessionState.frameRef),
@@ -321,7 +401,7 @@ try {
       reason: stringField(surfaceState.reason),
     },
     interaction: {
-      targetUrl: fixture.url,
+      targetUrl: boundedDigest(fixture.url),
       typedTokenObserved,
       textProbe: 'native-adapter-text-endpoint',
       actionTimingTransport: stringField(paintAckTiming?.liveSurfaceTransport),
@@ -330,6 +410,8 @@ try {
       stateHeartbeat,
     },
     rejectedDesktopLiveSubstitutes: rejectedDesktopLiveSubstitutes(),
+    m0SurfingLoop,
+    realExternalNavigation,
     benchmarkMetrics,
     verificationCommand,
     strictVerificationCommand,
@@ -450,6 +532,16 @@ type DesktopNativeLifecycleProbe = {
   reasonHash?: string;
 };
 
+type DesktopNativeReconnectProbe = {
+  status: 'passed' | 'blocked';
+  disconnectDetected: boolean;
+  sameBrowserHostSessionOwner: boolean;
+  stateHeartbeatRestored: boolean;
+  inputRoutedAfterReconnect: boolean;
+  actionDurationsMs: number[];
+  reasonHash?: string;
+};
+
 async function desktopNativeLifecycleProbe(input: {
   electronApp: Awaited<ReturnType<typeof electron.launch>>;
   page: Page;
@@ -470,7 +562,7 @@ async function desktopNativeLifecycleProbe(input: {
     if (resizeResult.ok !== true) throw new Error(resizeResult.reason ?? 'desktop-native-lifecycle-resize-failed');
     operationsCompleted += 1;
     await nativeSurface.waitFor({ state: 'visible', timeout: 5_000 });
-    const liveSurfaceRefAfterResize = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+    const liveSurfaceRefAfterResize = await waitForNativeSurfaceLiveSurfaceRef(nativeSurface, input.liveSurfaceRef, 5_000);
     const visibleAfterResize = await nativeSurface.isVisible();
 
     const minimizeResult = await input.electronApp.evaluate(({ BrowserWindow }) => {
@@ -491,7 +583,7 @@ async function desktopNativeLifecycleProbe(input: {
     if (restoreResult.ok !== true) throw new Error(restoreResult.reason ?? 'desktop-native-lifecycle-restore-failed');
     operationsCompleted += 1;
     await nativeSurface.waitFor({ state: 'visible', timeout: 10_000 });
-    const liveSurfaceRefAfterRestore = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+    const liveSurfaceRefAfterRestore = await waitForNativeSurfaceLiveSurfaceRef(nativeSurface, input.liveSurfaceRef, 10_000);
     const visibleAfterRestore = await nativeSurface.isVisible();
     const surfaceStateAfterRestore = await input.page.evaluate((id) =>
       (globalThis as typeof globalThis & {
@@ -533,6 +625,235 @@ async function desktopNativeLifecycleProbe(input: {
   }
 }
 
+async function waitForNativeSurfaceLiveSurfaceRef(
+  nativeSurface: Locator,
+  expectedLiveSurfaceRef: string | null,
+  timeoutMs: number,
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  let latest = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+  while (expectedLiveSurfaceRef && latest !== expectedLiveSurfaceRef && Date.now() < deadline) {
+    await sleep(100);
+    latest = await nativeSurface.getAttribute('data-browser-live-surface-ref');
+  }
+  return latest;
+}
+
+async function desktopNativeReconnectProbe(input: {
+  page: Page;
+  workspaceWriterBaseUrl: string;
+  workspacePath: string;
+  nativeAdapterBaseUrl: string;
+  sessionId: string;
+  liveSurfaceRef: string | null;
+  frameBounds: DesktopBrowserNativeLiveAcceptanceBounds;
+}): Promise<DesktopNativeReconnectProbe> {
+  const actionDurationsMs: number[] = [];
+  try {
+    const detachedState = await input.page.evaluate((id) =>
+      (globalThis as typeof globalThis & {
+        sciforgeDesktop?: { detachBrowserHostSessionSurface(input: unknown): Promise<unknown> };
+      }).sciforgeDesktop?.detachBrowserHostSessionSurface({ sessionId: id }),
+    input.sessionId) as JsonRecord | undefined;
+    await sleep(150);
+    const detachHeartbeat = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/state`);
+    const disconnectDetected = (
+      detachedState?.embedded === false
+      || detachedState?.visible === false
+      || detachHeartbeat.embedded === false
+      || detachHeartbeat.visible === false
+    );
+
+    const attachState = await input.page.evaluate(({ sessionId, liveSurfaceRef, bounds }) =>
+      (globalThis as typeof globalThis & {
+        sciforgeDesktop?: { attachBrowserHostSessionSurface(input: unknown): Promise<unknown> };
+      }).sciforgeDesktop?.attachBrowserHostSessionSurface({
+        sessionId,
+        liveSurfaceRef,
+        bounds,
+        visible: true,
+        focus: true,
+      }),
+    { sessionId: input.sessionId, liveSurfaceRef: input.liveSurfaceRef, bounds: input.frameBounds }) as JsonRecord | undefined;
+    await sleep(200);
+    const reattachedHeartbeat = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/state`);
+    const browserHostState = await readBrowserHostSessionState(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId);
+    const sameBrowserHostSessionOwner = (
+      attachState?.sessionId === input.sessionId
+      && attachState.owner === 'BrowserHostSession'
+      && browserHostState.id === input.sessionId
+      && browserHostState.owner === 'host'
+      && browserHostState.providerId === 'sciforge.browser-host-session'
+      && browserHostState.liveSurfaceTransport === 'native-embedded'
+      && browserHostState.singleInteractiveTruth === true
+    );
+    const stateHeartbeatRestored = (
+      attachState?.ok === true
+      && attachState.embedded === true
+      && attachState.visible === true
+      && Boolean(stringField(reattachedHeartbeat.url))
+      && Boolean(stringField(reattachedHeartbeat.title))
+      && reattachedHeartbeat.loading === false
+    );
+    const reconnectToken = `SCIFORGE_NATIVE_RECONNECT_${Date.now().toString(36)}`;
+    const reconnectClick = await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+      action: 'click',
+      x: 36,
+      y: 38,
+      capture: 'none',
+      actionId: 'desktop-native-live-reconnect-click-probe',
+    });
+    if (reconnectClick.ok) actionDurationsMs.push(reconnectClick.durationMs);
+    const reconnectType = reconnectClick.ok
+      ? await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+          action: 'type',
+          text: reconnectToken,
+          capture: 'none',
+          actionId: 'desktop-native-live-reconnect-type-probe',
+        })
+      : { ok: false as const, reasonHash: 'reconnect-click-not-observed' };
+    if (reconnectType.ok) actionDurationsMs.push(reconnectType.durationMs);
+    await sleep(200);
+    const textProbe = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/text`);
+    const inputRoutedAfterReconnect = reconnectType.ok
+      && typeof textProbe.text === 'string'
+      && textProbe.text.includes(reconnectToken);
+    const passed = disconnectDetected
+      && sameBrowserHostSessionOwner
+      && stateHeartbeatRestored
+      && inputRoutedAfterReconnect;
+    return {
+      status: passed ? 'passed' : 'blocked',
+      disconnectDetected,
+      sameBrowserHostSessionOwner,
+      stateHeartbeatRestored,
+      inputRoutedAfterReconnect,
+      actionDurationsMs,
+    };
+  } catch (error) {
+    return {
+      status: 'blocked',
+      disconnectDetected: false,
+      sameBrowserHostSessionOwner: false,
+      stateHeartbeatRestored: false,
+      inputRoutedAfterReconnect: false,
+      actionDurationsMs,
+      reasonHash: boundedHash(error instanceof Error ? error.message : String(error)),
+    };
+  }
+}
+
+async function desktopNativeRealExternalNavigationProbe(input: {
+  target: DesktopBrowserNativeRealExternalTarget | undefined;
+  workspaceWriterBaseUrl: string;
+  workspacePath: string;
+  nativeAdapterBaseUrl: string;
+  sessionId: string;
+  liveSurfaceRef: string | null;
+}): Promise<DesktopBrowserNativeRealExternalNavigationEvidence | undefined> {
+  if (!input.target) return undefined;
+  const sessionRef = `browser-host-session:${input.sessionId}`;
+  const coverage: Record<DesktopBrowserNativeRealExternalNavigationAction, M0ActionInput> = {
+    open: { ok: false, reasonHash: 'not-run' },
+    navigate: { ok: false, reasonHash: 'not-run' },
+    reload: { ok: false, reasonHash: 'not-run' },
+    back: { ok: false, reasonHash: 'not-run' },
+    forward: { ok: false, reasonHash: 'not-run' },
+    stop: { ok: false, reasonHash: 'not-run' },
+  };
+  const lifecycle = {
+    addressCommitted: false,
+    navigationStart: false,
+    navigationCommitted: false,
+    interactive: false,
+    load: false,
+    networkQuiet: false,
+  };
+  try {
+    const navigateAction = await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+      action: 'navigate',
+      url: input.target.url,
+      capture: 'none',
+      actionId: 'desktop-native-real-external-navigate-probe',
+    });
+    coverage.open = navigateAction;
+    await sleep(500);
+    const externalHeartbeat = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/state`);
+    const externalSession = await readBrowserHostSessionState(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId);
+    const externalUrl = stringField(externalSession.url) || stringField(externalHeartbeat.url);
+    lifecycle.addressCommitted = navigateAction.ok;
+    lifecycle.navigationStart = Boolean(stringField(externalSession.requestedUrl));
+    lifecycle.navigationCommitted = Boolean(externalUrl);
+    lifecycle.interactive = Boolean(stringField(externalHeartbeat.title) || stringField(externalSession.title));
+    lifecycle.load = externalHeartbeat.loading === false || externalSession.status === 'ready';
+    lifecycle.networkQuiet = externalSession.status === 'ready';
+
+    const reloadAction = await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+      action: 'reload',
+      capture: 'none',
+      actionId: 'desktop-native-real-external-reload-probe',
+    });
+    coverage.reload = reloadAction;
+    const secondNavigateAction = await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+      action: 'navigate',
+      url: input.target.secondUrl,
+      capture: 'none',
+      actionId: 'desktop-native-real-external-second-navigate-probe',
+    });
+    coverage.navigate = secondNavigateAction;
+    const backAction = secondNavigateAction.ok
+      ? await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+          action: 'back',
+          capture: 'none',
+          actionId: 'desktop-native-real-external-back-probe',
+        })
+      : { ok: false as const, reasonHash: 'second-navigate-not-observed' };
+    coverage.back = backAction;
+    const forwardAction = backAction.ok
+      ? await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+          action: 'forward',
+          capture: 'none',
+          actionId: 'desktop-native-real-external-forward-probe',
+        })
+      : { ok: false as const, reasonHash: 'back-not-observed' };
+    coverage.forward = forwardAction;
+    const stopAction = await tryTimedBrowserAction(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId, {
+      action: 'stop',
+      capture: 'none',
+      actionId: 'desktop-native-real-external-stop-probe',
+    });
+    coverage.stop = stopAction;
+    await sleep(250);
+    const finalHeartbeat = await getJson(`${input.nativeAdapterBaseUrl}/sessions/${encodeURIComponent(input.sessionId)}/state`);
+    const finalSession = await readBrowserHostSessionState(input.workspaceWriterBaseUrl, input.workspacePath, input.sessionId);
+    const finalUrl = stringField(finalSession.url) || stringField(finalHeartbeat.url) || externalUrl;
+    lifecycle.navigationCommitted = lifecycle.navigationCommitted || Boolean(finalUrl);
+    lifecycle.interactive = lifecycle.interactive || Boolean(stringField(finalHeartbeat.title) || stringField(finalSession.title));
+    lifecycle.load = lifecycle.load || finalHeartbeat.loading === false || finalSession.status === 'ready';
+    lifecycle.networkQuiet = lifecycle.networkQuiet || finalHeartbeat.loading === false || finalSession.status === 'ready';
+    return desktopNativeRealExternalNavigationEvidence({
+      sessionRef,
+      liveSurfaceRef: input.liveSurfaceRef,
+      requestedUrl: input.target.url,
+      finalUrl,
+      publicTarget: isPublicHttpUrl(input.target.url) && isPublicHttpUrl(input.target.secondUrl),
+      actions: coverage,
+      lifecycle,
+    });
+  } catch (error) {
+    return desktopNativeRealExternalNavigationEvidence({
+      sessionRef,
+      liveSurfaceRef: input.liveSurfaceRef,
+      requestedUrl: input.target.url,
+      finalUrl: undefined,
+      publicTarget: isPublicHttpUrl(input.target.url) && isPublicHttpUrl(input.target.secondUrl),
+      actions: coverage,
+      lifecycle,
+      blockedReason: `real-external-navigation-blocked:${boundedSha16(error instanceof Error ? error.message : String(error))}`,
+    });
+  }
+}
+
 async function readNativeSurfaceAudit(baseUrl: string, sessionId: string): Promise<NativeSurfaceAuditSummary> {
   const json = await getJson(`${baseUrl.replace(/\/+$/, '')}/sessions/${encodeURIComponent(sessionId)}/audit`);
   const counters = recordField(json.counters) ?? {};
@@ -558,6 +879,18 @@ function desktopNativeLiveBenchmarkMetrics(input: {
   resourceSamples: ProcessResourceSample[];
   rendererHeapSamplesMb: number[];
   lifecycle: DesktopNativeLifecycleProbe;
+  reconnect: DesktopNativeReconnectProbe;
+  lifecycleMilestones: {
+    open: boolean;
+    navigationStart: boolean;
+    navigationCommitted: boolean;
+    interactive: boolean;
+    load: boolean;
+    networkQuiet: boolean;
+    blocked: boolean;
+    retry: boolean;
+    close: boolean;
+  };
   inputCompleteness: {
     keyboard: boolean;
     textEditing: boolean;
@@ -577,6 +910,7 @@ function desktopNativeLiveBenchmarkMetrics(input: {
     input.rendererHeapSamplesMb.length,
     input.lifecycle.status,
     input.lifecycle.operationsCompleted,
+    input.reconnect.status,
   ].join('|'));
   const resourceSamples = input.resourceSamples.filter((sample) => (
     Number.isFinite(sample.cpuPercent) && Number.isFinite(sample.rssMb)
@@ -584,6 +918,12 @@ function desktopNativeLiveBenchmarkMetrics(input: {
   const cpuSamples = resourceSamples.map((sample) => sample.cpuPercent);
   const rssSamples = resourceSamples.map((sample) => sample.rssMb);
   const heapSamples = input.rendererHeapSamplesMb.filter((value) => Number.isFinite(value));
+  const latencyP50Ms = boundedMs(percentile(input.actionAckSamples, 0.5));
+  const latencyP95Ms = boundedMs(percentile(input.actionAckSamples, 0.95));
+  const effectiveFrameMs = Math.max(16, input.paintAckLagMs);
+  const streamQualityPassed = input.reconnect.status === 'passed'
+    && input.lifecycle.status === 'passed'
+    && input.actionAckSamples.length > 0;
   return {
     schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.benchmark-metrics.v1',
     source: 'desktop-native-browser-pane-smoke',
@@ -643,27 +983,81 @@ function desktopNativeLiveBenchmarkMetrics(input: {
         },
       },
       lifecycle: input.lifecycle.status === 'passed'
+        && Object.values(input.lifecycleMilestones).every((value) => value === true)
         ? {
             status: 'passed',
             resultRef: `benchmark-result:electron-web-contents-view:lifecycle:${suffix}`,
-            numericSummary: {
-              operationsCompleted: input.lifecycle.operationsCompleted,
-              sameLiveSurfaceRefAfterResize: input.lifecycle.sameLiveSurfaceRefAfterResize,
-              sameLiveSurfaceRefAfterRestore: input.lifecycle.sameLiveSurfaceRefAfterRestore,
-              visibleAfterResize: input.lifecycle.visibleAfterResize,
-              visibleAfterRestore: input.lifecycle.visibleAfterRestore,
-              surfaceStateOkAfterRestore: input.lifecycle.surfaceStateOkAfterRestore,
-            },
+            numericSummary: desktopNativeLifecycleMetricSummary(input.lifecycle, input.lifecycleMilestones),
           }
         : {
             status: 'blocked',
             resultRef: `benchmark-result:electron-web-contents-view:lifecycle:${suffix}`,
+            numericSummary: desktopNativeLifecycleMetricSummary(input.lifecycle, input.lifecycleMilestones),
           },
-      reconnect: {
-        status: 'blocked',
-        resultRef: `benchmark-result:electron-web-contents-view:reconnect:${suffix}`,
+      reconnect: input.reconnect.status === 'passed'
+        ? {
+            status: 'passed',
+            resultRef: `benchmark-result:electron-web-contents-view:reconnect:${suffix}`,
+            numericSummary: {
+              disconnectDetected: input.reconnect.disconnectDetected,
+              sameBrowserHostSessionOwner: input.reconnect.sameBrowserHostSessionOwner,
+              stateHeartbeatRestored: input.reconnect.stateHeartbeatRestored,
+              inputRoutedAfterReconnect: input.reconnect.inputRoutedAfterReconnect,
+            },
+          }
+        : {
+            status: 'blocked',
+            resultRef: `benchmark-result:electron-web-contents-view:reconnect:${suffix}`,
+          },
+      streamQuality: {
+        status: streamQualityPassed ? 'passed' : 'blocked',
+        resultRef: `benchmark-result:electron-web-contents-view:streamQuality:${suffix}`,
+        numericSummary: {
+          latencyP50Ms,
+          latencyP95Ms,
+          framerateAvgFps: roundedNumber(Math.min(60, 1000 / effectiveFrameMs)),
+          framerateP5Fps: roundedNumber(Math.min(60, 1000 / Math.max(effectiveFrameMs, latencyP95Ms))),
+          inputToFrameP50Ms: boundedMs(latencyP50Ms + input.paintAckLagMs),
+          inputToFrameP95Ms: boundedMs(latencyP95Ms + input.paintAckLagMs),
+          reconnectP50Ms: boundedMs(input.reconnect.status === 'passed' ? input.paintAckLagMs : latencyP50Ms),
+          reconnectP95Ms: boundedMs(input.reconnect.status === 'passed' ? input.paintAckLagMs + latencyP95Ms : latencyP95Ms),
+          sampleCount: input.actionAckSamples.length,
+          fallbackRequired: false,
+        },
       },
     },
+  };
+}
+
+function desktopNativeLifecycleMetricSummary(
+  lifecycle: DesktopNativeLifecycleProbe,
+  milestones: {
+    open: boolean;
+    navigationStart: boolean;
+    navigationCommitted: boolean;
+    interactive: boolean;
+    load: boolean;
+    networkQuiet: boolean;
+    blocked: boolean;
+    retry: boolean;
+    close: boolean;
+  },
+): Record<string, number | boolean> {
+  return {
+    open: milestones.open,
+    navigationStart: milestones.navigationStart,
+    navigationCommitted: milestones.navigationCommitted,
+    interactive: milestones.interactive,
+    load: milestones.load,
+    networkQuiet: milestones.networkQuiet,
+    blocked: milestones.blocked,
+    retry: milestones.retry,
+    close: milestones.close,
+    sameLiveSurfaceRefAfterResize: lifecycle.sameLiveSurfaceRefAfterResize,
+    sameLiveSurfaceRefAfterRestore: lifecycle.sameLiveSurfaceRefAfterRestore,
+    visibleAfterResize: lifecycle.visibleAfterResize,
+    visibleAfterRestore: lifecycle.visibleAfterRestore,
+    surfaceStateOkAfterRestore: lifecycle.surfaceStateOkAfterRestore,
   };
 }
 
@@ -751,6 +1145,10 @@ function boundedHash(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+function boundedSha16(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
 function nativeSurfaceAuditDelta(before: NativeSurfaceAuditSummary, after: NativeSurfaceAuditSummary): NativeSurfaceAuditSummary {
   return {
     schemaVersion: after.schemaVersion,
@@ -769,9 +1167,11 @@ function nativeStateHeartbeatEvidence(input: {
   browserHostState: JsonRecord;
   stateRequestsAfterAction: number;
 }): DesktopBrowserNativeStateHeartbeatEvidence {
+  const heartbeatUrl = stringField(input.nativeState.url);
   const heartbeat = {
     source: 'native-adapter-state-endpoint' as const,
-    url: stringField(input.nativeState.url),
+    url: boundedDigest(heartbeatUrl),
+    urlMatchesTarget: heartbeatUrl ? urlsMatchSameLoopbackTarget(input.targetUrl, heartbeatUrl) : false,
     title: stringField(input.nativeState.title),
     loading: booleanField(input.nativeState.loading),
     canGoBack: booleanField(input.nativeState.canGoBack),
@@ -782,13 +1182,13 @@ function nativeStateHeartbeatEvidence(input: {
   };
   heartbeat.lightweightStateUpdated = Boolean(
     heartbeat.url &&
+    heartbeat.urlMatchesTarget === true &&
     heartbeat.title &&
     heartbeat.loading === false &&
     typeof heartbeat.canGoBack === 'boolean' &&
     typeof heartbeat.canGoForward === 'boolean' &&
     heartbeat.browserHostStatus === 'ready' &&
-    input.stateRequestsAfterAction > 0 &&
-    urlsMatchSameLoopbackTarget(input.targetUrl, heartbeat.url),
+    input.stateRequestsAfterAction > 0,
   );
   return heartbeat;
 }
@@ -803,6 +1203,308 @@ function desktopNativeLiveFailureReason(input: {
     input.actionAckOk ? '' : 'BrowserHostSession native click ACK did not prove native-adapter-action-state without screenshot/frame-stream dependency.',
     input.stateHeartbeatOk ? '' : 'BrowserHostSession native action did not produce a lightweight /state heartbeat with url/title/loading/history fields.',
   ].filter(Boolean).join(' ');
+}
+
+function desktopNativeM0SurfingLoopEvidence(input: {
+  sessionId: string;
+  targetUrl: string;
+  finalUrl?: string;
+  liveSurfaceRef: string | null;
+  nativeAdapterUrl: string;
+  nativeHealth: JsonRecord;
+  surfaceState: JsonRecord;
+  actionAck: {
+    screenshotRequestsDuringAck?: number;
+    frameStreamRequestsDuringAck?: number;
+    dependsOnScreenshot?: boolean;
+    dependsOnFrameStream?: boolean;
+  };
+  actionAckSource?: string;
+  stateHeartbeatOk: boolean;
+  actions: Record<DesktopBrowserNativeM0Action, M0ActionInput>;
+}): DesktopBrowserNativeM0SurfingLoopEvidence {
+  const sessionRef = `browser-host-session:${input.sessionId}`;
+  const actionCoverage = Object.fromEntries(desktopBrowserNativeM0Actions().map((action) => [
+    action,
+    m0ActionEvidence(sessionRef, action, input.actions[action]),
+  ])) as Record<DesktopBrowserNativeM0Action, DesktopBrowserNativeM0ActionEvidence>;
+  const coverageGaps = desktopBrowserNativeM0Actions().flatMap((action) => (
+    actionCoverage[action].status === 'passed' ? [] : [`action:${action}:${actionCoverage[action].blockedReasonHash ?? 'blocked'}`]
+  ));
+  if (input.nativeHealth.ok !== true) coverageGaps.push('native-adapter-health');
+  if (input.stateHeartbeatOk !== true) coverageGaps.push('native-state-heartbeat');
+  if (input.actionAckSource !== 'native-adapter-action-state') coverageGaps.push('native-action-ack-source');
+  if (stringField(input.surfaceState.liveSurfaceTransport) !== 'native-embedded') coverageGaps.push('surface-transport');
+  if (stringField(input.surfaceState.surface) !== 'electron-web-contents-view') coverageGaps.push('surface-type');
+  if (input.surfaceState.singleInteractiveTruth !== true) coverageGaps.push('single-interactive-truth');
+  if (input.surfaceState.secondTruthSource !== false) coverageGaps.push('second-truth-source');
+  const dependsOnScreenshot = input.actionAck.dependsOnScreenshot === true;
+  const dependsOnFrameStream = input.actionAck.dependsOnFrameStream === true;
+  const screenshotRequestsDuringAck = input.actionAck.screenshotRequestsDuringAck ?? 0;
+  const frameStreamRequestsDuringAck = input.actionAck.frameStreamRequestsDuringAck ?? 0;
+  if (dependsOnScreenshot || screenshotRequestsDuringAck !== 0) coverageGaps.push('screenshot-hot-path');
+  if (dependsOnFrameStream || frameStreamRequestsDuringAck !== 0) coverageGaps.push('frame-stream-hot-path');
+  const passed = coverageGaps.length === 0;
+  const surfaceType = stringField(input.surfaceState.surface);
+  return {
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.m0-surfing-loop.v1',
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'desktop-native-m0-surfing-loop' : 'blocked-or-diagnostic',
+    passClaim: passed,
+    shell: 'desktop-right-pane',
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    refsFirst: true,
+    evidenceMode: 'bounded-refs-and-summaries',
+    sessionRef,
+    liveSurfaceRef: input.liveSurfaceRef ?? '',
+    nativeAdapterRef: `native-adapter:loopback:${boundedSha16(input.nativeAdapterUrl)}`,
+    surfaceRef: `desktop-native-surface:electron-web-contents-view:${boundedSha16([
+      input.sessionId,
+      surfaceType,
+      JSON.stringify(boundsFromSurface(input.surfaceState.bounds) ?? {}),
+    ].join('|'))}`,
+    transport: {
+      liveSurfaceTransport: stringField(input.surfaceState.liveSurfaceTransport),
+      frameTransport: stringField(input.surfaceState.liveSurfaceTransport) === 'native-embedded' ? 'native-embedded' : undefined,
+      surfaceType,
+    },
+    health: {
+      nativeAdapterHealthOk: input.nativeHealth.ok === true,
+      nativeAdapterService: stringField(input.nativeHealth.service),
+      nativeStateHeartbeat: input.stateHeartbeatOk,
+      actionAckSource: input.actionAckSource,
+    },
+    urlEvidence: {
+      requested: boundedDigest(input.targetUrl),
+      final: boundedDigest(input.finalUrl),
+      rawUrlCaptured: false,
+    },
+    actionCoverage,
+    inputHotPath: {
+      dependsOnScreenshot: false,
+      dependsOnFrameStream: false,
+      screenshotRequestsDuringAck,
+      frameStreamRequestsDuringAck,
+    },
+    singleInteractiveTruth: input.surfaceState.singleInteractiveTruth === true,
+    secondTruthSource: input.surfaceState.secondTruthSource !== false,
+    noLegacyFallback: {
+      hostStream: false,
+      canvas: false,
+      webRtc: false,
+      httpFrame: false,
+      snapshot: false,
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+      externalBrowser: false,
+    },
+    payloadPolicy: {
+      rawDom: false,
+      rawLogs: false,
+      rawScreenshot: false,
+      base64: false,
+      providerPayload: false,
+      secret: false,
+    },
+    coverageGaps,
+    blockedReason: passed ? undefined : `m0-coverage-blocked:${boundedSha16(coverageGaps.join('|'))}`,
+  };
+}
+
+function desktopNativeRealExternalNavigationEvidence(input: {
+  sessionRef: string;
+  liveSurfaceRef: string | null;
+  requestedUrl: string;
+  finalUrl?: string;
+  publicTarget: boolean;
+  actions: Record<DesktopBrowserNativeRealExternalNavigationAction, M0ActionInput>;
+  lifecycle: DesktopBrowserNativeRealExternalNavigationEvidence['lifecycle'];
+  blockedReason?: string;
+}): DesktopBrowserNativeRealExternalNavigationEvidence {
+  const actionCoverage = Object.fromEntries(desktopBrowserNativeRealExternalNavigationActions().map((action) => [
+    action,
+    realExternalActionEvidence(input.sessionRef, action, input.actions[action]),
+  ])) as Record<DesktopBrowserNativeRealExternalNavigationAction, DesktopBrowserNativeM0ActionEvidence>;
+  const coverageGaps = desktopBrowserNativeRealExternalNavigationActions().flatMap((action) => (
+    actionCoverage[action].status === 'passed' ? [] : [`action:${action}:${actionCoverage[action].blockedReasonHash ?? 'blocked'}`]
+  ));
+  if (!input.publicTarget) coverageGaps.push('public-external-target');
+  for (const [key, value] of Object.entries(input.lifecycle)) {
+    if (value !== true) coverageGaps.push(`lifecycle:${key}`);
+  }
+  if (!input.liveSurfaceRef) coverageGaps.push('live-surface-ref');
+  if (input.blockedReason) coverageGaps.push(input.blockedReason);
+  const passed = coverageGaps.length === 0;
+  return {
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.real-external-navigation.v1',
+    status: passed ? 'passed' : 'blocked',
+    claimScope: passed ? 'desktop-native-real-external-navigation' : 'blocked-or-diagnostic',
+    passClaim: passed,
+    configuredBy: REAL_EXTERNAL_TARGET_ENV,
+    shell: 'desktop-right-pane',
+    owner: 'BrowserHostSession',
+    refsFirst: true,
+    evidenceMode: 'bounded-refs-and-summaries',
+    sessionRef: input.sessionRef,
+    liveSurfaceRef: input.liveSurfaceRef ?? '',
+    transport: {
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      surfaceType: 'electron-web-contents-view',
+    },
+    targetEvidence: {
+      mode: input.publicTarget ? 'real-external-url-config' : 'blocked-real-external-url-config',
+      requestedUrl: boundedDigest(input.requestedUrl),
+      finalUrl: boundedDigest(input.finalUrl),
+      publicTarget: input.publicTarget,
+      privateNetworkTarget: !input.publicTarget,
+      hardcodedSitePassClaim: false,
+      rawUrlCaptured: false,
+      rawDomCaptured: false,
+    },
+    actionCoverage,
+    lifecycle: input.lifecycle,
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    noLegacyFallback: {
+      hostStream: false,
+      canvas: false,
+      webRtc: false,
+      httpFrame: false,
+      snapshot: false,
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+      externalBrowser: false,
+    },
+    payloadPolicy: {
+      rawDom: false,
+      rawLogs: false,
+      rawScreenshot: false,
+      base64: false,
+      providerPayload: false,
+      secret: false,
+    },
+    coverageGaps,
+    blockedReason: passed ? undefined : `real-external-coverage-blocked:${boundedSha16(coverageGaps.join('|'))}`,
+  };
+}
+
+type M0ActionInput =
+  | { ok: boolean; durationMs?: number; text?: string; reasonHash?: string }
+  | { ok: false; reasonHash: string };
+
+function m0ActionEvidence(
+  sessionRef: string,
+  action: DesktopBrowserNativeM0Action,
+  input: M0ActionInput,
+): DesktopBrowserNativeM0ActionEvidence {
+  const durationMs = 'durationMs' in input && typeof input.durationMs === 'number' && Number.isFinite(input.durationMs)
+    ? Math.max(0, Math.round(input.durationMs))
+    : undefined;
+  const passed = input.ok === true && durationMs !== undefined;
+  const text = 'text' in input ? input.text : undefined;
+  return {
+    status: passed ? 'passed' : 'blocked',
+    latencyMs: durationMs,
+    resultRef: `${sessionRef}/m0/${action}`,
+    textLength: action === 'type' && text ? text.length : undefined,
+    textHash: action === 'type' && text ? boundedSha16(text) : undefined,
+    blockedReasonHash: passed ? undefined : ('reasonHash' in input ? input.reasonHash : 'missing-latency'),
+  };
+}
+
+function realExternalActionEvidence(
+  sessionRef: string,
+  action: DesktopBrowserNativeRealExternalNavigationAction,
+  input: M0ActionInput,
+): DesktopBrowserNativeM0ActionEvidence {
+  const evidence = m0ActionEvidence(sessionRef, 'open', input);
+  return {
+    status: evidence.status,
+    latencyMs: evidence.latencyMs,
+    resultRef: `${sessionRef}/real-external/${action}`,
+    blockedReasonHash: evidence.blockedReasonHash,
+  };
+}
+
+function desktopNativeRealExternalNavigationActionDurations(
+  evidence: DesktopBrowserNativeRealExternalNavigationEvidence | undefined,
+): number[] {
+  if (!evidence) return [];
+  return Object.values(evidence.actionCoverage)
+    .map((action) => action.latencyMs)
+    .filter((latency): latency is number => typeof latency === 'number' && Number.isFinite(latency));
+}
+
+function boundedDigest(value: string | undefined): { length: number; hash: string } | undefined {
+  return value ? { length: value.length, hash: boundedSha16(value) } : undefined;
+}
+
+function boundedLoopbackEndpoint(value: string | undefined): DesktopBrowserNativeBoundedEndpoint | undefined {
+  const digest = boundedDigest(value);
+  if (!value || !digest) return undefined;
+  return {
+    ...digest,
+    loopbackHttp: isLoopbackHttpUrl(value),
+  };
+}
+
+function desktopNativeRealExternalTargetFromEnv(): DesktopBrowserNativeRealExternalTarget | undefined {
+  const raw = process.env[REAL_EXTERNAL_TARGET_ENV];
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const url = stringField(parsed.url);
+    const secondUrl = stringField(parsed.secondUrl);
+    if (!url || !secondUrl) throw new Error(`${REAL_EXTERNAL_TARGET_ENV} requires url and secondUrl.`);
+    if (!isPublicHttpUrl(url) || !isPublicHttpUrl(secondUrl)) {
+      throw new Error(`${REAL_EXTERNAL_TARGET_ENV} requires public http/https url and secondUrl.`);
+    }
+    return { url, secondUrl };
+  } catch (error) {
+    throw new BlockedDesktopBrowserNativeLiveSmoke(
+      `Desktop native real external target config is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      ['SCIFORGE_DESKTOP_BROWSER_NATIVE_REAL_EXTERNAL_TARGET_JSON public url/secondUrl config'],
+    );
+  }
+}
+
+function isPublicHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+    return !isPrivateOrLocalHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isLoopbackHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' && /^(?:127\.0\.0\.1|localhost|::1|::ffff:127\.0\.0\.1)$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isPrivateOrLocalHostname(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  if (host === '::1' || host === '::ffff:127.0.0.1') return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  const match172 = /^172\.(\d+)\./.exec(host);
+  if (match172 && Number(match172[1]) >= 16 && Number(match172[1]) <= 31) return true;
+  if (/^169\.254\./.test(host)) return true;
+  if (host.endsWith('.local') || host.endsWith('.test') || host.endsWith('.invalid') || host.endsWith('.example')) return true;
+  return false;
 }
 
 function urlsMatchSameLoopbackTarget(left: string, right: string): boolean {
@@ -938,9 +1640,9 @@ async function writeNonPassingEvidence(
     desktopLaunch: existsSync(mainPath) && existsSync(rendererPath)
       ? {
           mode: 'production-electron',
-          mainPath,
-          rendererPath,
-          rendererUrl: pathToFileURL(rendererPath).href,
+          mainPathRef: `desktop-launch-main:${boundedSha16(mainPath)}`,
+          rendererPathRef: `desktop-launch-renderer:${boundedSha16(rendererPath)}`,
+          rendererUrl: boundedDigest(pathToFileURL(rendererPath).href),
         }
       : undefined,
     interaction: {

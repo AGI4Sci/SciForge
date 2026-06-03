@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 
 const DOGFOOD_SCHEMA = 'sciforge.browser-pane-tab-focus-retention.v1';
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-tab-focus-retention');
 const manifestPath = join(artifactDir, 'manifest.json');
+const desktopNativeLiveManifestPath = resolve(process.cwd(), 'docs', 'test-artifacts', 'desktop-browser-native-live-acceptance', 'manifest.json');
 const verificationCommand = 'node --import tsx --test tests/smoke/smoke-browser-pane-tab-focus-retention.test.ts';
 const requiredLifecyclePhases = [
   'before-tab-switch',
@@ -82,6 +83,21 @@ type LifecycleProof = {
   rawPayloadRecorded: false;
 };
 
+type ConsumedNativeDesktopEvidence = {
+  sourceRef: 'docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json';
+  schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1';
+  status: 'passed';
+  claimScope: 'desktop-native-embedded-browser-pane-live';
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  nativeAttachRef: string;
+  nativeSurfaceStateRef: string;
+  lifecycleResultRef?: string;
+  inputCompletenessResultRef?: string;
+  verificationCommand?: string;
+  rawPayloadRecorded: false;
+};
+
 type TabFocusRetentionManifest = {
   schemaVersion: typeof DOGFOOD_SCHEMA;
   status: 'passed' | 'blocked';
@@ -124,6 +140,8 @@ type TabFocusRetentionManifest = {
     shellComposerCapturedCharacters: number;
     blockedReason?: string;
   };
+  consumedNativeDesktopEvidence?: ConsumedNativeDesktopEvidence;
+  coverageGaps: string[];
   nativeAttach: NativeAttachProof;
   focusKeyboardProof: FocusKeyboardProof;
   lifecycleProof: LifecycleProof;
@@ -192,6 +210,8 @@ type NativeFocusFixture = {
   nativeAttach?: Partial<NativeAttachProof>;
   focusKeyboardProof?: Partial<FocusKeyboardProof>;
   lifecycleProof?: Partial<LifecycleProof>;
+  consumedNativeDesktopEvidence?: ConsumedNativeDesktopEvidence;
+  coverageGaps?: string[];
 };
 
 test('tab focus retention only claims pass for native-embedded BrowserHostSession single truth', () => {
@@ -301,24 +321,80 @@ test('tab focus retention refuses stale, second-truth, and forged native-looking
 });
 
 test('tab focus retention writes bounded blocked manifest when real native dogfood is absent', async () => {
-  const manifest = buildManifest({
-    beforeSessionId: 'browser-host-tab-focus-blocked',
-    afterSessionId: 'browser-host-tab-focus-blocked',
-    liveSurfaceTransport: 'missing-native-attach',
-    beforeLiveSurfaceRef: undefined,
-    afterLiveSurfaceRef: undefined,
-    blockedReason: 'Real right-pane native focus retention dogfood has not produced a native surface attach proof in this environment.',
-  });
+  const consumed = await readConsumedNativeDesktopEvidence();
+  const blockedInput: NativeFocusFixture = consumed
+    ? {
+        beforeSessionId: sessionIdFromSessionRef(consumed.browserHostSessionRef),
+        afterSessionId: sessionIdFromSessionRef(consumed.browserHostSessionRef),
+        beforeLiveSurfaceRef: consumed.liveSurfaceRef,
+        afterLiveSurfaceRef: consumed.liveSurfaceRef,
+        nativeAttach: nativeAttachProofFromConsumedDesktopEvidence(consumed),
+        focusKeyboardProof: focusKeyboardProofFromConsumedDesktopEvidence(consumed),
+        lifecycleProof: lifecycleProofFromConsumedDesktopEvidence(consumed),
+        consumedNativeDesktopEvidence: consumed,
+        coverageGaps: [
+          'missing-real-right-pane-tab-switch-proof',
+          'missing-real-native-detach-reattach-proof',
+          'missing-real-keyboard-focus-retention-proof',
+        ],
+        blockedReason: 'Desktop native live acceptance supplied real attach/resize/minimize/restore refs, but tab focus retention still lacks real tab switch, native detach/reattach, and keyboard focus retention proof.',
+      }
+    : {
+        beforeSessionId: 'browser-host-tab-focus-blocked',
+        afterSessionId: 'browser-host-tab-focus-blocked',
+        liveSurfaceTransport: 'missing-native-attach',
+        beforeLiveSurfaceRef: undefined,
+        afterLiveSurfaceRef: undefined,
+        coverageGaps: [
+          'missing-real-right-pane-native-evidence',
+          'missing-real-right-pane-tab-switch-proof',
+          'missing-real-native-detach-reattach-proof',
+          'missing-real-keyboard-focus-retention-proof',
+        ],
+        blockedReason: 'Real right-pane native focus retention dogfood has not produced a native surface attach proof in this environment.',
+      };
+  const manifest = buildManifest(blockedInput);
   assertTabFocusRetentionManifest(manifest);
   assert.equal(manifest.status, 'blocked');
   assert.equal(manifest.claimScope, 'diagnostic-only');
   assert.equal(manifest.passClaim, false);
-  assert.equal(manifest.nativeAttach.state, 'handoff');
-  assert.equal(manifest.nativeAttach.observed, 'missing-native-attach');
-  assert.equal(manifest.nativeAttach.handoffRequired, true);
-  assert.equal(manifest.nativeAttach.blockedReasonCode, 'missing-native-attach');
+  assert.ok(manifest.coverageGaps.length > 0);
   await mkdir(artifactDir, { recursive: true });
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+});
+
+test('tab focus retention consumes desktop native live evidence without claiming missing tab/detach focus proof', async () => {
+  const consumed = consumedNativeDesktopEvidenceFrom(desktopNativeLiveEvidenceFixture());
+  assert.ok(consumed, 'fixture should expose pass-grade desktop native evidence');
+
+  const manifest = buildManifest({
+    beforeSessionId: 'browser-host-real-native-live',
+    afterSessionId: 'browser-host-real-native-live',
+    beforeLiveSurfaceRef: 'browser-host-session:browser-host-real-native-live/live-surface',
+    afterLiveSurfaceRef: 'browser-host-session:browser-host-real-native-live/live-surface',
+    nativeAttach: nativeAttachProofFromConsumedDesktopEvidence(consumed),
+    focusKeyboardProof: focusKeyboardProofFromConsumedDesktopEvidence(consumed),
+    lifecycleProof: lifecycleProofFromConsumedDesktopEvidence(consumed),
+    consumedNativeDesktopEvidence: consumed,
+    coverageGaps: [
+      'missing-real-right-pane-tab-switch-proof',
+      'missing-real-native-detach-reattach-proof',
+      'missing-real-keyboard-focus-retention-proof',
+    ],
+  });
+
+  assertTabFocusRetentionManifest(manifest);
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.nativeAttach.proofMode, 'real-native-attach');
+  assert.equal(manifest.lifecycleProof.boundedCounts.resizeCount, 1);
+  assert.equal(manifest.lifecycleProof.boundedCounts.minimizeCount, 1);
+  assert.equal(manifest.lifecycleProof.boundedCounts.restoreCount, 1);
+  assert.deepEqual(manifest.coverageGaps, [
+    'missing-real-right-pane-tab-switch-proof',
+    'missing-real-native-detach-reattach-proof',
+    'missing-real-keyboard-focus-retention-proof',
+  ]);
+  assert.equal(manifest.consumedNativeDesktopEvidence?.rawPayloadRecorded, false);
 });
 
 function buildManifest(input: NativeFocusFixture): TabFocusRetentionManifest {
@@ -358,6 +434,7 @@ function buildManifest(input: NativeFocusFixture): TabFocusRetentionManifest {
   const hasRealNativeAttachProof = hasRealNativeAttachProofFor(nativeAttach, beforeSessionRef, beforeLiveSurfaceRef);
   const hasFocusKeyboardOwnerProof = hasFocusKeyboardOwnerProofFor(focusKeyboardProof, beforeSessionRef, beforeLiveSurfaceRef);
   const hasLifecycleProof = hasLifecycleProofFor(lifecycleProof, beforeSessionRef, beforeLiveSurfaceRef);
+  const coverageGaps = input.coverageGaps ?? [];
   const passClaim = owner === 'BrowserHostSession'
     && liveSurfaceTransport === 'native-embedded'
     && singleInteractiveTruth
@@ -368,6 +445,7 @@ function buildManifest(input: NativeFocusFixture): TabFocusRetentionManifest {
     && hasRealNativeAttachProof
     && hasFocusKeyboardOwnerProof
     && hasLifecycleProof
+    && coverageGaps.length === 0
     && !hasFrameStreamRef
     && shellComposerCapturedCharacters === 0;
   const blockedReason = passClaim
@@ -430,6 +508,8 @@ function buildManifest(input: NativeFocusFixture): TabFocusRetentionManifest {
       shellComposerCapturedCharacters,
       blockedReason,
     },
+    consumedNativeDesktopEvidence: input.consumedNativeDesktopEvidence,
+    coverageGaps,
     nativeAttach: {
       ...nativeAttach,
       blockedReason,
@@ -550,6 +630,197 @@ function realLifecycleProof(sessionId: string): LifecycleProof {
       shellComposerCapturedCharacters: 0,
     },
     rawPayloadRecorded: false,
+  };
+}
+
+async function readConsumedNativeDesktopEvidence(): Promise<ConsumedNativeDesktopEvidence | undefined> {
+  try {
+    const text = await readFile(desktopNativeLiveManifestPath, 'utf8');
+    return consumedNativeDesktopEvidenceFrom(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function consumedNativeDesktopEvidenceFrom(value: unknown): ConsumedNativeDesktopEvidence | undefined {
+  const evidence = recordValue(value);
+  const nativeAdapter = recordValue(evidence?.nativeAdapter);
+  const browserHostSession = recordValue(evidence?.browserHostSession);
+  const surface = recordValue(evidence?.surface);
+  const interaction = recordValue(evidence?.interaction);
+  const actionAck = recordValue(interaction?.actionAck);
+  const heartbeat = recordValue(interaction?.stateHeartbeat);
+  const benchmarkMetrics = recordValue(evidence?.benchmarkMetrics);
+  const metricSections = recordValue(benchmarkMetrics?.metricSections);
+  const lifecycle = recordValue(metricSections?.lifecycle);
+  const inputCompleteness = recordValue(metricSections?.inputCompleteness);
+  const sessionId = stringValue(browserHostSession?.id);
+  if (
+    stringValue(evidence?.schemaVersion) !== 'sciforge.desktop.browser-native-live-acceptance.v1'
+    || stringValue(evidence?.status) !== 'passed'
+    || evidence?.canClaimDesktopNativeLivePass !== true
+    || stringValue(evidence?.claimScope) !== 'desktop-native-embedded-browser-pane-live'
+    || stringValue(nativeAdapter?.owner) !== 'BrowserHostSession'
+    || stringValue(nativeAdapter?.adapterRole) !== 'display-input-adapter'
+    || stringValue(nativeAdapter?.liveSurfaceTransport) !== 'native-embedded'
+    || nativeAdapter?.secondTruthSource !== false
+    || stringValue(browserHostSession?.liveSurfaceTransport) !== 'native-embedded'
+    || browserHostSession?.singleInteractiveTruth !== true
+    || browserHostSession?.frameStreamRefPresent !== false
+    || browserHostSession?.frameRefPresent !== false
+    || browserHostSession?.frameUrlPresent !== false
+    || surface?.ok !== true
+    || stringValue(surface?.owner) !== 'BrowserHostSession'
+    || stringValue(surface?.surface) !== 'electron-web-contents-view'
+    || stringValue(surface?.liveSurfaceTransport) !== 'native-embedded'
+    || surface?.embedded !== true
+    || surface?.visible !== true
+    || surface?.secondTruthSource !== false
+    || interaction?.typedTokenObserved !== true
+    || stringValue(interaction?.paintAckSource) !== 'native-adapter-action-state'
+    || stringValue(actionAck?.status) !== 'ok'
+    || actionAck?.dependsOnScreenshot !== false
+    || actionAck?.dependsOnFrameStream !== false
+    || stringValue(heartbeat?.source) !== 'native-adapter-state-endpoint'
+    || heartbeat?.lightweightStateUpdated !== true
+    || stringValue(lifecycle?.status) !== 'passed'
+    || !isNonEmptyString(sessionId)
+  ) {
+    return undefined;
+  }
+  const sessionRef = browserHostSessionRef(sessionId);
+  return {
+    sourceRef: 'docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json',
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
+    status: 'passed',
+    claimScope: 'desktop-native-embedded-browser-pane-live',
+    browserHostSessionRef: sessionRef,
+    liveSurfaceRef: liveSurfaceRefFor(sessionId),
+    nativeAttachRef: `${sessionRef}/desktop-native-live-attach-proof`,
+    nativeSurfaceStateRef: `${sessionRef}/desktop-native-live-surface-state-proof`,
+    lifecycleResultRef: stringValue(lifecycle?.resultRef),
+    inputCompletenessResultRef: stringValue(inputCompleteness?.resultRef),
+    verificationCommand: stringValue(evidence?.verificationCommand),
+    rawPayloadRecorded: false,
+  };
+}
+
+function nativeAttachProofFromConsumedDesktopEvidence(evidence: ConsumedNativeDesktopEvidence): NativeAttachProof {
+  return {
+    state: 'attached',
+    observed: 'native-embedded',
+    proofMode: 'real-native-attach',
+    browserHostSessionRef: evidence.browserHostSessionRef,
+    liveSurfaceRef: evidence.liveSurfaceRef,
+    nativeSurfaceAttachRef: evidence.nativeAttachRef,
+    nativeSurfaceStateRef: evidence.nativeSurfaceStateRef,
+    canRetry: false,
+    handoffRequired: false,
+    rawPayloadRecorded: false,
+  };
+}
+
+function focusKeyboardProofFromConsumedDesktopEvidence(evidence: ConsumedNativeDesktopEvidence): Partial<FocusKeyboardProof> {
+  return {
+    owner: 'BrowserHostSession',
+    focusOwner: 'unproven',
+    keyboardOwner: 'unproven',
+    inputChannel: 'browser-host-session',
+    shellComposerTarget: 'not-targeted',
+    shellComposerCapturedCharacters: 0,
+    browserHostSessionRef: evidence.browserHostSessionRef,
+    liveSurfaceRef: evidence.liveSurfaceRef,
+    actionTraceRef: evidence.inputCompletenessResultRef,
+    rawFocusPayloadRecorded: false,
+    rawKeyboardPayloadRecorded: false,
+  };
+}
+
+function lifecycleProofFromConsumedDesktopEvidence(evidence: ConsumedNativeDesktopEvidence): Partial<LifecycleProof> {
+  const sessionRef = evidence.browserHostSessionRef;
+  return {
+    requiredPhases: [...requiredLifecyclePhases],
+    observedPhases: ['after-resize', 'after-minimize', 'after-restore'],
+    sameBrowserHostSessionRef: true,
+    sameLiveSurfaceRef: true,
+    lifecycleTraceRef: evidence.lifecycleResultRef,
+    phaseProofs: (['after-resize', 'after-minimize', 'after-restore'] as const).map((phase) => ({
+      phase,
+      browserHostSessionRef: sessionRef,
+      liveSurfaceRef: evidence.liveSurfaceRef,
+      proofRef: evidence.lifecycleResultRef,
+      keyboardFocusOwnerRef: undefined,
+      rawPayloadRecorded: false,
+    })),
+    boundedCounts: {
+      tabSwitchCount: 0,
+      nativeDetachCount: 0,
+      nativeAttachCount: 1,
+      resizeCount: 1,
+      minimizeCount: 1,
+      restoreCount: 1,
+      keyboardFocusLossCount: null,
+      shellComposerCapturedCharacters: 0,
+    },
+    rawPayloadRecorded: false,
+  };
+}
+
+function desktopNativeLiveEvidenceFixture() {
+  return {
+    schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.v1',
+    status: 'passed',
+    canClaimDesktopNativeLivePass: true,
+    claimScope: 'desktop-native-embedded-browser-pane-live',
+    nativeAdapter: {
+      owner: 'BrowserHostSession',
+      adapterRole: 'display-input-adapter',
+      liveSurfaceTransport: 'native-embedded',
+      secondTruthSource: false,
+    },
+    browserHostSession: {
+      id: 'browser-host-real-native-live',
+      liveSurfaceTransport: 'native-embedded',
+      singleInteractiveTruth: true,
+      frameStreamRefPresent: false,
+      frameRefPresent: false,
+      frameUrlPresent: false,
+    },
+    surface: {
+      ok: true,
+      owner: 'BrowserHostSession',
+      surface: 'electron-web-contents-view',
+      liveSurfaceTransport: 'native-embedded',
+      embedded: true,
+      visible: true,
+      secondTruthSource: false,
+    },
+    interaction: {
+      typedTokenObserved: true,
+      paintAckSource: 'native-adapter-action-state',
+      actionAck: {
+        status: 'ok',
+        dependsOnScreenshot: false,
+        dependsOnFrameStream: false,
+      },
+      stateHeartbeat: {
+        source: 'native-adapter-state-endpoint',
+        lightweightStateUpdated: true,
+      },
+    },
+    benchmarkMetrics: {
+      metricSections: {
+        lifecycle: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:lifecycle:fixture',
+        },
+        inputCompleteness: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:inputCompleteness:fixture',
+        },
+      },
+    },
+    verificationCommand: 'npm run smoke:desktop-browser-native-live-acceptance --silent',
   };
 }
 
@@ -807,6 +1078,22 @@ function isSessionScopedRef(value: string | undefined, sessionRef: string | unde
 
 function isBrowserHostSessionRef(value: string): boolean {
   return /^browser-host-session:[a-zA-Z0-9_.:-]{1,120}$/.test(value);
+}
+
+function sessionIdFromSessionRef(value: string): string {
+  const match = /^browser-host-session:([a-zA-Z0-9_.:-]{1,120})$/.exec(value);
+  assert.ok(match, `expected BrowserHostSession ref, got ${value}`);
+  return match[1];
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
 function isNonEmptyString(value: unknown): value is string {

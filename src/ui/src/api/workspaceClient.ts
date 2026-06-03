@@ -483,6 +483,7 @@ export interface BrowserHostSessionState {
   liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
+  secondTruthSource?: false;
   frameStreamRef?: string;
   frameRef?: string;
   frameUrl?: string;
@@ -627,10 +628,17 @@ export async function saveFileBackedSciForgeConfig(config: SciForgeConfig): Prom
   return isSciForgeConfig(json.config) ? normalizeConfig(json.config) : undefined;
 }
 
-export async function startRuntimeServices(): Promise<{ ok: boolean; services: Array<Record<string, unknown>>; error?: string }> {
+export interface StartRuntimeServicesOptions {
+  requireBrowserHostNativeSurface?: boolean;
+}
+
+export async function startRuntimeServices(options: StartRuntimeServicesOptions = {}): Promise<{ ok: boolean; services: Array<Record<string, unknown>>; error?: string }> {
   const response = await fetch('/api/sciforge/runtime/start', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      ...(options.requireBrowserHostNativeSurface ? { requireBrowserHostNativeSurface: true } : {}),
+    }),
   });
   const json = await response.json().catch(() => ({})) as { ok?: boolean; services?: Array<Record<string, unknown>>; error?: string };
   if (!response.ok) throw new Error(json.error || `Start runtime services failed: HTTP ${response.status}`);

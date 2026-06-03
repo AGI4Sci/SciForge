@@ -19,6 +19,8 @@ import {
 } from './windows-idd-virtual-display-provider.js';
 import {
   missingNativeDriverInputControlRefs,
+  nativeDriverInputControlIsolationIssues,
+  nativeDriverInputControlRefScopeIssues,
   nativeDriverInputIntentProjection,
   type NativeVirtualDisplayDriverInputControlHook,
   type NativeVirtualDisplayDriverInputControlOperation,
@@ -524,6 +526,24 @@ async function runInputControlHook(input: {
       input.providerId,
       readiness,
       `Windows IDD VirtualDisplayProvider ${input.operation} hook did not return required provider-owned evidence refs: ${missingRefs.join(', ')}.`,
+    );
+  }
+  const refScopeIssues = nativeDriverInputControlRefScopeIssues(refs, result.refs);
+  if (refScopeIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `Windows IDD VirtualDisplayProvider ${input.operation} hook returned evidence refs outside the current provider root: ${refScopeIssues.join(', ')}.`,
+    );
+  }
+  const isolationIssues = nativeDriverInputControlIsolationIssues(result);
+  if (isolationIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `Windows IDD VirtualDisplayProvider ${input.operation} hook did not prove isolated virtual-display input with no physical desktop effects: ${isolationIssues.join(', ')}.`,
     );
   }
   const mergedRefs = { ...refs, ...result.refs };

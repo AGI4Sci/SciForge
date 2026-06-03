@@ -4,6 +4,7 @@ export const NATIVE_VIRTUAL_APP_SCREEN_HOST_SCHEMA_VERSION =
 export const NATIVE_VIRTUAL_APP_SCREEN_HOST_PROTOCOL = [
   'describe',
   'probe',
+  'recordPreflight',
   'createSession',
   'launchOrAttachApp',
   'attachSurface',
@@ -57,6 +58,7 @@ export type NativeHostErrorCode =
   | 'driver-missing'
   | 'provider-unavailable'
   | 'session-not-found'
+  | 'session-paused'
   | 'session-stopped'
   | 'session-closed'
   | 'surface-not-attached'
@@ -75,7 +77,7 @@ export type NativeHostErrorCode =
 export const NATIVE_HOST_ERROR_TAXONOMY = {
   permission: ['permission-missing'],
   provider: ['driver-missing', 'provider-unavailable', 'unsupported-platform'],
-  session: ['session-not-found', 'session-stopped', 'session-closed', 'surface-not-attached', 'stale-current-run', 'stale-frame'],
+  session: ['session-not-found', 'session-paused', 'session-stopped', 'session-closed', 'surface-not-attached', 'stale-current-run', 'stale-frame'],
   grant: ['invalid-grant'],
   evidence: ['missing-frame', 'missing-evidence'],
   input: ['shared-system-input-blocked', 'unsafe-input'],
@@ -161,6 +163,44 @@ export interface NativeHostPermissionRequest {
   requestedPermissionRefs?: string[];
   providerReadinessRef?: string;
   leaseRef?: string;
+}
+
+export interface NativeHostPreflightRequest extends NativeHostEvidenceContext {
+  profileId?: string;
+  requestedPermissionRefs?: string[];
+  adapterReadinessRef?: string;
+  providerReadinessRef?: string;
+  platformDriverRef?: string;
+  permissionHandoffRef?: string;
+  recheckRef?: string;
+  blockedRef?: string;
+}
+
+export interface NativeHostPreflightRecord {
+  schemaVersion: typeof NATIVE_VIRTUAL_APP_SCREEN_HOST_SCHEMA_VERSION;
+  preflightRef: string;
+  preflightLedgerRef: string;
+  preflightLedgerEntryRef: string;
+  hostId: string;
+  platform: NativeHostPlatform;
+  adapterKind: string;
+  status: NativeHostReadinessStatus;
+  checkedAt: string;
+  currentRunRef: string;
+  evidenceRootRef: string;
+  currentRunPointerRef: string;
+  guiPresentRef?: string;
+  adapterReadinessRef: string;
+  hostReadinessRef: string;
+  permissionRefs: string[];
+  driverRefs: string[];
+  providerRefs: string[];
+  capabilities: NativeHostCapabilityFlags;
+  diagnosticOnly: boolean;
+  blockedReason?: string;
+  handoffRef?: string;
+  recheckRef?: string;
+  blockedRef?: string;
 }
 
 export interface NativeHostAppProfile {
@@ -263,6 +303,7 @@ export interface NativeHostHumanInputAccepted {
   acceptedAt: string;
   fireAndRelease: true;
   evidenceWillCatchUp: true;
+  providerEvidenceRefs?: string[];
 }
 
 export interface NativeHostAutomationIntent {
@@ -298,11 +339,13 @@ export interface NativeHostPermissionLedgerRequest {
   recheckRef?: string;
   permissionRef?: string;
   adapterReadinessRef?: string;
+  providerReadinessRef?: string;
   platformDriverRef?: string;
   blockedRef?: string;
 }
 
 export type NativeHostLedgerEventType =
+  | 'preflight.recorded'
   | 'session.created'
   | 'app.launched'
   | 'surface.attached'
@@ -318,6 +361,12 @@ export type NativeHostLedgerEventType =
   | 'grant.validated';
 
 export interface NativeHostLedgerRefs {
+  preflightRef?: string;
+  preflightLedgerRef?: string;
+  preflightLedgerEntryRef?: string;
+  hostReadinessRef?: string;
+  providerReadinessSummaryRef?: string;
+  previousPreflightRef?: string;
   sessionRef?: string;
   targetAppRef?: string;
   targetWindowRef?: string;
@@ -328,6 +377,7 @@ export interface NativeHostLedgerRefs {
   surfaceTransportRef?: string;
   frameStreamRef?: string;
   frameRef?: string;
+  currentFrameRef?: string;
   inputIntentRef?: string;
   inputAcceptedRef?: string;
   automationIntentRef?: string;
@@ -343,8 +393,12 @@ export interface NativeHostLedgerRefs {
   blockedRef?: string;
   agentPauseRef?: string;
   agentResumeRef?: string;
+  agentQueueRef?: string;
+  currentFrameRefreshRef?: string;
+  safeStopRef?: string;
   stoppedRef?: string;
   closedRef?: string;
+  providerEvidenceRefs?: string[];
 }
 
 export interface NativeHostLedgerEntry {
@@ -422,6 +476,10 @@ export type NativeHostMaybePromise<T> = T | Promise<T>;
 export interface NativeVirtualAppScreenPlatformAdapter {
   describe(): NativeVirtualAppScreenHostDescription;
   probe(): NativeHostReadinessRecord;
+  refreshReadiness?(
+    session: NativeHostSession,
+    request?: NativeHostPermissionLedgerRequest,
+  ): NativeHostMaybePromise<NativeHostResult<NativeHostReadinessRecord>>;
   launchOrAttachApp?(session: NativeHostSession, appProfile: NativeHostAppProfile): NativeHostResult<NativeHostAppProfile>;
   attachSurface?(session: NativeHostSession, surfaceTarget: NativeHostSurfaceTarget): NativeHostResult<NativeHostLiveSurface>;
   readFrame?(session: NativeHostSession, cursor?: string): NativeHostResult<NativeHostFrame>;
@@ -443,6 +501,11 @@ export interface NativeVirtualAppScreenPlatformAdapter {
 export interface NativeVirtualAppScreenHost {
   describe(): NativeVirtualAppScreenHostDescription;
   probe(): NativeHostReadinessRecord;
+  refreshPermissionReadiness?(
+    sessionId: string,
+    request?: NativeHostPermissionLedgerRequest,
+  ): NativeHostMaybePromise<NativeHostResult<NativeHostReadinessRecord>>;
+  recordPreflight(request: NativeHostPreflightRequest): NativeHostResult<NativeHostPreflightRecord>;
   createSession(
     profile: NativeHostSessionProfile,
     permissions: NativeHostPermissionRequest,
@@ -466,6 +529,8 @@ export interface NativeVirtualAppScreenHost {
   stop(sessionId: string, reason: string): NativeHostMaybePromise<NativeHostResult<NativeHostSession>>;
   closeSession(sessionId: string): NativeHostMaybePromise<NativeHostResult<NativeHostSession>>;
   validateGrant(grantRef: string): NativeHostGrantValidation;
+  getPreflightLedger(preflightRef: string): NativeHostEvidenceLedger | undefined;
+  validatePreflightLedger(preflightRef: string): NativeHostValidationResult;
   getLedger(sessionId: string): NativeHostEvidenceLedger | undefined;
   validateLedger(sessionId: string, options?: {
     requireFrame?: boolean;

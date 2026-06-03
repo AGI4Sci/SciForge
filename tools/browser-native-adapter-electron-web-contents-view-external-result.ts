@@ -37,6 +37,7 @@ const DEFAULT_REQUIRED_SECTIONS = [
   'inputCompleteness',
   'lifecycle',
   'reconnect',
+  'streamQuality',
 ] as const;
 
 type EnvRecord = Record<string, string | undefined>;
@@ -56,8 +57,20 @@ export async function buildElectronWebContentsViewExternalBenchmarkResult(
   const candidateId = candidateFromEnv(env);
   const platform = platformFromEnv(env);
   const requiredSections = requiredSectionsFromEnv(env);
-  const evidencePath = resolve(cwd, env[ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_PATH_ENV] ?? DEFAULT_ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_REF);
+  const evidencePath = resolve(cwd, DEFAULT_ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_REF);
   const diagnostics: string[] = [];
+
+  if (env[ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_PATH_ENV]) {
+    return blockedExternalResult({
+      candidateId,
+      platform,
+      requiredSections,
+      diagnosticRefs: [
+        'electron-web-contents-view:explicit-live-evidence-file-diagnostic-only',
+        `env:${ELECTRON_WEB_CONTENTS_VIEW_RUN_LIVE_SMOKE_ENV}:not-set`,
+      ],
+    });
+  }
 
   if (env[ELECTRON_WEB_CONTENTS_VIEW_RUN_LIVE_SMOKE_ENV] === '1') {
     diagnostics.push('desktop-native-live-acceptance:live-smoke-executed');
@@ -70,7 +83,7 @@ export async function buildElectronWebContentsViewExternalBenchmarkResult(
       timeout: 120_000,
       maxBuffer: 32_000,
     });
-  } else if (!env[ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_PATH_ENV]) {
+  } else {
     return blockedExternalResult({
       candidateId,
       platform,
@@ -212,7 +225,9 @@ function metricSectionsFromDesktopEvidence(
 async function readDesktopNativeLiveEvidence(path: string): Promise<DesktopBrowserNativeLiveAcceptanceEvidence> {
   const text = await readFile(path, 'utf8');
   assertBoundedExternalInput(text);
-  return JSON.parse(text) as DesktopBrowserNativeLiveAcceptanceEvidence;
+  const evidence = JSON.parse(text) as DesktopBrowserNativeLiveAcceptanceEvidence;
+  assertNoForbiddenRawEvidenceFields(evidence);
+  return evidence;
 }
 
 function schemaFromEnv(env: EnvRecord): typeof BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_EXTERNAL_RESULT_SCHEMA {
@@ -253,6 +268,45 @@ function assertBoundedExternalInput(text: string): void {
   if (/data:image|;base64,|iVBORw0KGgo|<\s*(?:!doctype|html|body|script|iframe|webview)\b/i.test(text)) {
     throw new Error('Electron WebContentsView live evidence must not include raw payloads.');
   }
+  if (/https?:\/\//i.test(text)) {
+    throw new Error('Electron WebContentsView live evidence must not include raw URL strings.');
+  }
+}
+
+function assertNoForbiddenRawEvidenceFields(value: unknown): void {
+  if (Array.isArray(value)) {
+    value.forEach((item) => assertNoForbiddenRawEvidenceFields(item));
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (isUrlEvidenceKey(key) && isBoundedDigest(nested)) {
+      continue;
+    }
+    if (isForbiddenRawEvidenceKey(key) && nested !== false && nested !== undefined && nested !== null) {
+      throw new Error('Electron WebContentsView live evidence must not include forbidden raw URL, payload, log, or secret fields.');
+    }
+    assertNoForbiddenRawEvidenceFields(nested);
+  }
+}
+
+function isUrlEvidenceKey(key: string): boolean {
+  return /^(?:url|requestedUrl|currentUrl|finalUrl)$/i.test(key);
+}
+
+function isForbiddenRawEvidenceKey(key: string): boolean {
+  return /^(?:rawUrl|url|requestedUrl|currentUrl|finalUrl|rawDom|domSnapshot|screenshotBase64|screenshotBytes|providerPayload|consoleLog|networkLog|secret|token|password|credential)$/i.test(key);
+}
+
+function isBoundedDigest(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const digest = value as Record<string, unknown>;
+  return typeof digest.length === 'number'
+    && Number.isFinite(digest.length)
+    && digest.length >= 0
+    && typeof digest.hash === 'string'
+    && /^[a-f0-9]{16,64}$/i.test(digest.hash)
+    && (digest.loopbackHttp === undefined || typeof digest.loopbackHttp === 'boolean');
 }
 
 function hashText(value: string) {
@@ -266,7 +320,12 @@ async function main(): Promise<void> {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((error: unknown) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`${shortError(error)}\n`);
     process.exitCode = 1;
   });
+}
+
+function shortError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/https?:\/\/[^\s"'<>]+/gi, 'url:<redacted>').slice(0, 180);
 }

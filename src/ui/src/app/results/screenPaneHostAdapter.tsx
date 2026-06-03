@@ -75,14 +75,19 @@ interface RightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor {
   singleInteractiveTruth: true;
 }
 
-export interface RightPaneVirtualScreenHostPresentationAttachRequest extends RightPaneVirtualScreenHostPresentationBinding {
+type RightPaneVirtualScreenHostPresentationPresenterBinding = Omit<
+  RightPaneVirtualScreenHostPresentationBinding,
+  'screenRef' | 'providerSessionOwnerRef' | 'providerSessionReconnectRef' | 'providerExecuted' | 'providerSessionRevalidated'
+>;
+
+export interface RightPaneVirtualScreenHostPresentationAttachRequest extends RightPaneVirtualScreenHostPresentationPresenterBinding {
   kind: 'right-pane-virtual-app-screen-surface';
   bounds: RightPaneVirtualScreenHostPresentationBounds;
   visible: true;
   focus: boolean;
 }
 
-export interface RightPaneVirtualScreenHostPresentationDetachRequest extends RightPaneVirtualScreenHostPresentationBinding {
+export interface RightPaneVirtualScreenHostPresentationDetachRequest extends RightPaneVirtualScreenHostPresentationPresenterBinding {
   kind: 'right-pane-virtual-app-screen-surface';
   visible: false;
 }
@@ -187,7 +192,7 @@ export function rightPaneVirtualScreenHostPresentationAttachRequest(
   if (!binding || !normalizedBounds) return undefined;
   return {
     kind: 'right-pane-virtual-app-screen-surface',
-    ...binding,
+    ...rightPaneVirtualScreenHostPresentationPresenterBinding(binding),
     bounds: normalizedBounds,
     visible: true,
     focus,
@@ -284,7 +289,7 @@ function detachRightPaneVirtualScreenHostPresentation(
 ) {
   const request: RightPaneVirtualScreenHostPresentationDetachRequest = {
     kind: 'right-pane-virtual-app-screen-surface',
-    ...binding,
+    ...rightPaneVirtualScreenHostPresentationPresenterBinding(binding),
     visible: false,
   };
   if (bridge.detachVirtualAppScreenSurface) {
@@ -303,26 +308,26 @@ function rightPaneVirtualScreenHostPresentationBinding(payload: VirtualScreenPay
   if (!rightPaneVirtualScreenHostPresentationPermissionReady(payload)) return undefined;
   if (!rightPaneVirtualScreenHostPresentationPlatformDriverReady(payload)) return undefined;
   if (!rightPaneVirtualScreenHostPresentationCompleteIsolation(payload.isolationFlags)) return undefined;
-  const sessionRef = rightPaneVirtualScreenHostPresentationRef(payload.sessionRef);
-  const explicitHostSessionRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'hostSessionRef'));
-  const surfaceOwnerRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'surfaceOwnerRef'));
-  const displayOwnerRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'displayOwnerRef'));
+  const sessionRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.sessionRef);
+  const explicitHostSessionRef = rightPaneVirtualScreenHostPresentationNativeHostRef(virtualScreenStringProp(payload, 'hostSessionRef'));
+  const surfaceOwnerRef = rightPaneVirtualScreenHostPresentationNativeHostRef(virtualScreenStringProp(payload, 'surfaceOwnerRef'));
+  const displayOwnerRef = rightPaneVirtualScreenHostPresentationNativeHostRef(virtualScreenStringProp(payload, 'displayOwnerRef'));
   const screenRef = rightPaneVirtualScreenHostPresentationRef(payload.screenRef);
-  const liveSurfaceRef = rightPaneVirtualScreenHostPresentationRef(payload.liveSurfaceRef);
-  const frameStreamRef = rightPaneVirtualScreenHostPresentationRef(payload.frameStreamRef);
-  const currentFrameRef = rightPaneVirtualScreenHostPresentationRef(payload.currentFrameRef);
+  const liveSurfaceRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.liveSurfaceRef);
+  const frameStreamRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.frameStreamRef);
+  const currentFrameRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.currentFrameRef);
   const providerSessionOwnerRef = rightPaneVirtualScreenHostPresentationRef(payload.providerSessionOwnerRef);
   const providerSessionReconnectRef = rightPaneVirtualScreenHostPresentationRef(payload.providerSessionReconnectRef);
-  const liveBindingAttachGrantRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'liveBindingAttachGrantRef'));
+  const liveBindingAttachGrantRef = rightPaneVirtualScreenHostPresentationNativeHostRef(virtualScreenStringProp(payload, 'liveBindingAttachGrantRef'));
   const liveBindingAttachGrantStatus = rightPaneVirtualScreenHostPresentationText(virtualScreenStringProp(payload, 'liveBindingAttachGrantStatus'));
-  const grantValidationRef = rightPaneVirtualScreenHostPresentationRef(virtualScreenStringProp(payload, 'grantValidationRef'));
+  const grantValidationRef = rightPaneVirtualScreenHostPresentationNativeHostRef(virtualScreenStringProp(payload, 'grantValidationRef'));
   const grantValidationStatus = rightPaneVirtualScreenHostPresentationText(virtualScreenStringProp(payload, 'grantValidationStatus'));
-  const surfaceTransportRef = rightPaneVirtualScreenHostPresentationRef(payload.surfaceTransportRef);
+  const surfaceTransportRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.surfaceTransportRef);
   const surfaceTransport = rightPaneVirtualScreenHostPresentationSurfaceTransport(payload.surfaceTransport);
   const currentFrameSequence = rightPaneVirtualScreenHostPresentationCurrentFrameSequence(payload.currentFrameSequence);
-  const platformDriverRef = rightPaneVirtualScreenHostPresentationRef(payload.platformDriverRef);
+  const platformDriverRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.platformDriverRef);
   const platformDriverStatus = rightPaneVirtualScreenHostPresentationText(payload.platformDriverStatus);
-  const evidenceLedgerRef = rightPaneVirtualScreenHostPresentationRef(payload.evidenceLedgerRef);
+  const evidenceLedgerRef = rightPaneVirtualScreenHostPresentationNativeHostRef(payload.evidenceLedgerRef);
   const providerExecuted = rightPaneVirtualScreenHostPresentationProviderExecuted(payload);
   const providerSessionRevalidated = rightPaneVirtualScreenHostPresentationProviderSessionRevalidated(payload);
   const surfaceTransportDescriptor = rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor(payload);
@@ -389,6 +394,31 @@ function rightPaneVirtualScreenHostPresentationBridge(): RightPaneVirtualScreenH
   return providerBridge ?? desktopBridge;
 }
 
+function rightPaneVirtualScreenHostPresentationPresenterBinding(
+  binding: RightPaneVirtualScreenHostPresentationBinding,
+): RightPaneVirtualScreenHostPresentationPresenterBinding {
+  return {
+    sessionRef: binding.sessionRef,
+    ...(binding.hostSessionRef ? { hostSessionRef: binding.hostSessionRef } : {}),
+    ...(binding.surfaceOwnerRef ? { surfaceOwnerRef: binding.surfaceOwnerRef } : {}),
+    ...(binding.displayOwnerRef ? { displayOwnerRef: binding.displayOwnerRef } : {}),
+    liveSurfaceRef: binding.liveSurfaceRef,
+    frameStreamRef: binding.frameStreamRef,
+    currentFrameRef: binding.currentFrameRef,
+    liveBindingAttachGrantRef: binding.liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus: binding.liveBindingAttachGrantStatus,
+    grantValidationRef: binding.grantValidationRef,
+    grantValidationStatus: binding.grantValidationStatus,
+    surfaceTransportRef: binding.surfaceTransportRef,
+    ...(binding.surfaceTransport ? { surfaceTransport: binding.surfaceTransport } : {}),
+    currentFrameSequence: binding.currentFrameSequence,
+    platformDriverRef: binding.platformDriverRef,
+    platformDriverStatus: binding.platformDriverStatus,
+    evidenceLedgerRef: binding.evidenceLedgerRef,
+    surfaceTransportDescriptor: binding.surfaceTransportDescriptor,
+  };
+}
+
 function rightPaneVirtualScreenHostPresentationElement(root: HTMLElement | null): HTMLElement | null {
   return root?.querySelector<HTMLElement>('.virtual-screen-frame[data-live-surface-ref]') ?? null;
 }
@@ -421,14 +451,17 @@ function rightPaneVirtualScreenHostPresentationRef(value: string | undefined) {
   return ref;
 }
 
-function rightPaneVirtualScreenHostPresentationOptionalRef(value: string | undefined) {
-  return value ? rightPaneVirtualScreenHostPresentationRef(value) : undefined;
+function rightPaneVirtualScreenHostPresentationNativeHostRef(value: string | undefined) {
+  const ref = rightPaneVirtualScreenHostPresentationRef(value);
+  if (!ref || !ref.startsWith('computer-use:native-host/')) return undefined;
+  if (rightPaneVirtualScreenHostPresentationNonProductRef(ref)) return undefined;
+  return ref;
 }
 
 function rightPaneVirtualScreenHostPresentationCurrentFrameSequence(
   value: VirtualScreenPayload['currentFrameSequence'] | undefined,
 ): NonNullable<VirtualScreenPayload['currentFrameSequence']> | undefined {
-  const ref = rightPaneVirtualScreenHostPresentationRef(value?.ref);
+  const ref = rightPaneVirtualScreenHostPresentationNativeHostRef(value?.ref);
   if (!ref) return undefined;
   const sequence = typeof value?.sequence === 'number' && Number.isFinite(value.sequence) && value.sequence >= 0
     ? value.sequence
@@ -464,6 +497,10 @@ function rightPaneVirtualScreenHostPresentationUnsafeRef(value: string) {
   );
 }
 
+function rightPaneVirtualScreenHostPresentationNonProductRef(value: string) {
+  return /(?:^|[:/.-])(?:fixture|fixtures|mock|mocks|replay|snapshot|snapshot-fixture|replay-fixture)(?:[:/.-]|$)/i.test(value);
+}
+
 function rightPaneVirtualScreenHostPresentationSurfaceTransport(value: VirtualScreenPayload['surfaceTransport'] | undefined): VirtualScreenPayload['surfaceTransport'] | undefined {
   if (!value) return undefined;
   return value === 'native-frame-stream' || value === 'webrtc' ? value : undefined;
@@ -484,7 +521,7 @@ function rightPaneVirtualScreenHostPresentationPermissionReady(payload: Pick<Vir
 
 function rightPaneVirtualScreenHostPresentationPlatformDriverReady(payload: Pick<VirtualScreenPayload, 'platformDriverRef' | 'platformDriverStatus'>) {
   return Boolean(
-    rightPaneVirtualScreenHostPresentationRef(payload.platformDriverRef)
+    rightPaneVirtualScreenHostPresentationNativeHostRef(payload.platformDriverRef)
     && rightPaneVirtualScreenHostPresentationReadyStatus(payload.platformDriverStatus)
   );
 }
@@ -592,14 +629,14 @@ function rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptor(
     owner: rightPaneVirtualScreenHostPresentationTextValue(descriptor.owner),
     providerId: rightPaneVirtualScreenHostPresentationTextValue(descriptor.providerId),
     transport: rightPaneVirtualScreenHostPresentationTextValue(descriptor.transport),
-    surfaceTransportRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.surfaceTransportRef),
-    liveSurfaceRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.liveSurfaceRef),
-    frameStreamRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.frameStreamRef),
-    currentFrameRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.currentFrameRef),
-    frameTransportContractRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.frameTransportContractRef),
-    frameTelemetryRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.frameTelemetryRef),
-    mediaChannelRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.mediaChannelRef),
-    dataChannelRef: rightPaneVirtualScreenHostPresentationRefValue(descriptor.dataChannelRef),
+    surfaceTransportRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.surfaceTransportRef),
+    liveSurfaceRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.liveSurfaceRef),
+    frameStreamRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.frameStreamRef),
+    currentFrameRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.currentFrameRef),
+    frameTransportContractRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.frameTransportContractRef),
+    frameTelemetryRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.frameTelemetryRef),
+    mediaChannelRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.mediaChannelRef),
+    dataChannelRef: rightPaneVirtualScreenHostPresentationNativeHostRefValue(descriptor.dataChannelRef),
     currentFrameSequence,
     diagnosticOnly: descriptor.diagnosticOnly,
     productFallback: descriptor.productFallback,
@@ -638,8 +675,8 @@ function rightPaneVirtualScreenHostPresentationSurfaceTransportDescriptorMatches
   );
 }
 
-function rightPaneVirtualScreenHostPresentationRefValue(value: unknown) {
-  return typeof value === 'string' ? rightPaneVirtualScreenHostPresentationRef(value) : undefined;
+function rightPaneVirtualScreenHostPresentationNativeHostRefValue(value: unknown) {
+  return typeof value === 'string' ? rightPaneVirtualScreenHostPresentationNativeHostRef(value) : undefined;
 }
 
 function rightPaneVirtualScreenHostPresentationTextValue(value: unknown) {

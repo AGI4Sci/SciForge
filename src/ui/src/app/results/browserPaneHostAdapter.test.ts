@@ -10,6 +10,7 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   const surfaceSource = readFileSync(new URL('./rightPaneSurfaceAdapter.tsx', import.meta.url), 'utf8');
   const styleSource = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');
   const browserWorkbenchSource = readFileSync(new URL('../../../../../packages/presentation/components/browser-workbench/render.tsx', import.meta.url), 'utf8');
+  const viteConfigSource = readFileSync(new URL('../../../../../vite.config.ts', import.meta.url), 'utf8');
 
   assert.match(adapterSource, /export function RightPaneBrowserTool/);
   assert.match(adapterSource, /startBrowserHostSession/);
@@ -25,11 +26,11 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.match(adapterSource, /browserHostSessionMatchesTarget\(initialHostSession, normalizedUrl\) && browserHostSessionHasUsableLiveSurface\(initialHostSession\)/);
   assert.match(adapterSource, /cachedRightPaneBrowserHostSession\(hostSessionCacheKey, normalizedUrl\)/);
   assert.match(adapterSource, /cacheRightPaneBrowserHostSession\(hostSessionCacheKey, normalizedUrl, hostSession\)/);
-  assert.match(adapterSource, /function browserHostSessionHasUsableLiveSurface\(session: BrowserHostSessionState \| undefined\) \{[\s\S]*return browserHostSessionUsesNativeSurface\(session\)[\s\S]*session\?\.singleInteractiveTruth === true[\s\S]*Boolean\(session\.liveSurfaceRef\);[\s\S]*\}/);
+  assert.match(adapterSource, /function browserHostSessionHasUsableLiveSurface\(session: BrowserHostSessionState \| undefined\) \{[\s\S]*return browserHostSessionUsesNativeSurface\(session\)[\s\S]*session\?\.singleInteractiveTruth === true[\s\S]*session\?\.secondTruthSource === false[\s\S]*Boolean\(session\.liveSurfaceRef\);[\s\S]*\}/);
   assert.match(adapterSource, /function browserHostSessionUsesNativeSurface\(session: BrowserHostSessionState \| undefined\) \{\s*return session\?\.liveSurfaceTransport === 'native-embedded';\s*\}/);
   assert.match(adapterSource, /frameTransport: browserHostSessionHasUsableLiveSurface\(hostSession\) \? 'native-embedded' : undefined/);
   assert.match(adapterSource, /loadingProgress: browserState\.loadingProgress/);
-  assert.match(adapterSource, /const hostSurfaceError = needsBrowserHost[\s\S]*!browserHostSessionHasUsableLiveSurface\(hostSession\)[\s\S]*Native embedded BrowserHostSession surface is blocked/);
+  assert.match(adapterSource, /const hostSurfaceError = needsBrowserHost[\s\S]*!browserHostSessionHasUsableLiveSurface\(projectedHostSession\)[\s\S]*Native embedded BrowserHostSession surface is blocked/);
   assert.match(adapterSource, /hostError: hostSurfaceError/);
   assert.match(adapterSource, /if \(hostError \|\| !needsBrowserHost \|\| !hostSession \|\| !browserHostSessionHasUsableLiveSurface\(hostSession\)/);
   assert.match(adapterSource, /attachBrowserHostSessionSurface\(\{[\s\S]*sessionId: sessionState\.id,[\s\S]*liveSurfaceRef: sessionState\.liveSurfaceRef,[\s\S]*bounds,[\s\S]*visible: true,[\s\S]*focus: nativeSurfaceSessionRef\.current !== sessionState\.id/);
@@ -38,8 +39,16 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.match(adapterSource, /if \(nativeBrowserHostSurfaceResultFailed\(result\)\) \{[\s\S]*detachNativeBrowserSurface\(sessionState\.id\);[\s\S]*retry the same session or hand off externally/);
   assert.match(adapterSource, /detachNativeBrowserSurface\(\)/);
   assert.match(adapterSource, /preflightBrowserHostSessionWriter/);
+  assert.match(adapterSource, /refreshNativeSurfaceBridgeDiagnostic/);
+  assert.match(adapterSource, /probeBrowserHostNativeSurfaceHealth/);
+  assert.match(adapterSource, /nativeSurfaceBridge: nativeSurfaceBridgeDiagnostic/);
+  assert.match(adapterSource, /native-bridge-unavailable/);
+  assert.match(adapterSource, /const rightPaneBridge = desktopBridge \? true : routeBridge/);
   assert.match(adapterSource, /readBrowserHostSessionState/);
   assert.match(adapterSource, /startRuntimeServices/);
+  assert.match(adapterSource, /startRuntimeServices\(\{ requireBrowserHostNativeSurface: true \}\)/);
+  assert.match(adapterSource, /const runtime = await startRuntimeServices\(\{ requireBrowserHostNativeSurface: true \}\);[\s\S]*if \(runtime\.ok !== true\) throw new Error\(browserRuntimeServicesError\(runtime\)\);/);
+  assert.match(adapterSource, /function browserRuntimeServicesError/);
   assert.match(adapterSource, /sendBrowserHostComputerUseAction/);
   assert.match(adapterSource, /sendBrowserHostSessionAction/);
   assert.match(adapterSource, /bufferedTextRef/);
@@ -91,6 +100,13 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.doesNotMatch(browserWorkbenchSource, /BrowserWorkbenchLiveTransportHandoff|BrowserWorkbenchFrameRenderer|frameRenderer|liveTransportHandoff/);
   assert.doesNotMatch(browserWorkbenchSource, /canvas-binary|webrtc-data-channel|websocket-binary|host-stream/);
 
+  assert.match(viteConfigSource, /const body = await readJsonBody\(req\)/);
+  assert.match(viteConfigSource, /requireBrowserHostNativeSurface/);
+  assert.match(viteConfigSource, /browserRuntimeWorkspaceCapabilities\(requireBrowserHostNativeSurface\)/);
+  assert.match(viteConfigSource, /browserRuntimeWorkspaceEndpoints\(requireBrowserHostNativeSurface\)/);
+  assert.match(viteConfigSource, /native-surface-adapter-missing/);
+  assert.doesNotMatch(viteConfigSource, /BROWSER_HOST_SESSION_RUNTIME_ENDPOINT_TOKENS = \[[^\]]*frame-stream/);
+
   assert.match(surfaceSource, /from '.\/browserPaneHostAdapter'/);
   assert.doesNotMatch(rendererSource, /function RightPaneBrowserTool/);
   assert.doesNotMatch(rendererSource, /startBrowserHostSession/);
@@ -108,6 +124,41 @@ test('browser host adapter routes search text and edit keys into BrowserHostSess
   assert.match(adapterSource, /if \(action\.action === 'press'\) return browserHostComputerUseKeyAction\(action\.key\);/);
   assert.match(adapterSource, /function browserHostComputerUseKeyAction\(key: string \| undefined\): BrowserHostComputerUseAction \{[\s\S]*return keys\.length > 1 \? \{ type: 'hotkey', keys \} : \{ type: 'press_key', key: normalized \};[\s\S]*\}/);
   assert.doesNotMatch(adapterSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|\.focus\(\)[\s\S]*composer|window\.dispatchEvent\([\s\S]*KeyboardEvent/);
+});
+
+test('browser host adapter exposes a route-backed native attach bridge when bounded health is ready', () => {
+  const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
+
+  assert.match(adapterSource, /function browserHostNativeSurfaceAttachBridge\(/);
+  assert.match(adapterSource, /const desktopBridge = desktopBrowserHostSurfaceBridge\(\);[\s\S]*if \(desktopBridge\?\.attachBrowserHostSessionSurface\) return desktopBridge/);
+  assert.match(adapterSource, /nativeSurfaceBridgeDiagnostic[\s\S]*routeStatus === 'reachable'[\s\S]*capability === 'ready'/);
+  assert.match(adapterSource, /const routeBridge = routeStatus === 'reachable'[\s\S]*browserHostNativeSurfaceRouteHealthTrusted\(healthJson\);[\s\S]*const rightPaneBridge = desktopBridge \? true : routeBridge/);
+  assert.match(adapterSource, /const response = await fetch\(/);
+  assert.match(adapterSource, /\$\{attachPath\}`/);
+  assert.match(adapterSource, /method: 'POST'/);
+  assert.match(adapterSource, /body: JSON\.stringify/);
+  assert.match(adapterSource, /sessionId: sessionState\.id/);
+  assert.match(adapterSource, /liveSurfaceRef: sessionState\.liveSurfaceRef/);
+  assert.match(adapterSource, /bounds,/);
+  assert.match(adapterSource, /visible: true/);
+  assert.match(adapterSource, /focus: booleanRecordField\(inputRecord, 'focus'\) !== false/);
+  assert.match(adapterSource, /const stateUrl = new URL\(/);
+  assert.match(adapterSource, /\$\{statePath\}`/);
+  assert.match(adapterSource, /stateUrl\.searchParams\.set\('sessionId', sessionState\.id\)/);
+  assert.match(adapterSource, /browserHostNativeSurfaceRouteStateTrusted\(stateJson, sessionState\)/);
+  assert.match(adapterSource, /stringRecordField\(stateJson, 'liveSurfaceTransport'\) === 'native-embedded'/);
+  assert.match(adapterSource, /booleanRecordField\(stateJson, 'singleInteractiveTruth'\) === true/);
+  assert.match(adapterSource, /booleanRecordField\(stateJson, 'secondTruthSource'\) === false/);
+  assert.match(adapterSource, /booleanRecordField\(stateJson, 'rightPaneBridge'\) === true/);
+  assert.match(adapterSource, /booleanRecordField\(stateJson, 'passClaim'\) !== false/);
+
+  assert.doesNotMatch(adapterSource, /rawUrl|rawDom|rawScreenshot|base64|providerPayload|secretPayload/);
+});
+
+test('browser host adapter clears pending auto-open busy state when cancelled', () => {
+  const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
+
+  assert.match(adapterSource, /return \(\) => \{[\s\S]*cancelled = true;[\s\S]*pollStopped = true;[\s\S]*if \(pollTimer !== undefined && typeof window !== 'undefined'\) window\.clearTimeout\(pollTimer\);[\s\S]*if \(rightPaneBrowserUrlsEquivalent\(pendingHostOpenUrlRef\.current, normalizedUrl\)\) pendingHostOpenUrlRef\.current = undefined;[\s\S]*setBusy\(false\);[\s\S]*\};/);
 });
 
 test('browser host adapter requires host-owned sessions only for external HTTP targets', () => {

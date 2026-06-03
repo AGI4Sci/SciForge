@@ -269,7 +269,8 @@ test('vision-sense accepts right pane VirtualAppScreen attach commands as fail-c
     assert.equal(screenData?.attachState, 'blocked');
     assert.equal(screenData?.surfaceMode, 'empty');
     assert.equal(screenData?.targetAppRef, 'app:profile/vscode-editor');
-    assert.equal(screenData?.adapterReadinessRef, 'computer-use:screen-activation/session-screen/provider-readiness.json');
+    assert.match(stringField(screenData?.adapterReadinessRef), /^computer-use:native-host\/preflights\/preflight-\d+\/adapter-readiness\.json$/);
+    assert.equal(screenData?.providerReadinessRef, 'computer-use:screen-activation/session-screen/provider-readiness.json');
     assert.equal(screenData?.sessionRef, undefined);
     assert.equal(screenData?.liveSurfaceRef, undefined);
     assert.equal(screenData?.currentFrameRef, undefined);
@@ -333,10 +334,10 @@ test('vision-sense materializes right pane VirtualAppScreen live refs from a reg
     assert.equal(screenData?.status, 'ready');
     assert.equal(screenData?.attachState, 'attached');
     assert.equal(screenData?.surfaceMode, 'live');
-    assert.equal(screenData?.sessionRef, 'computer-use:session/vision-runtime-test/session.json');
-    assert.equal(screenData?.liveSurfaceRef, 'computer-use:session/vision-runtime-test/live-surface.json');
-    assert.equal(screenData?.frameStreamRef, 'computer-use:session/vision-runtime-test/frame-stream.json');
-    assert.equal(screenData?.currentFrameRef, 'computer-use:session/vision-runtime-test/frames/current.png');
+    assert.equal(screenData?.sessionRef, 'computer-use:native-host/sessions/vision-runtime-test/session.json');
+    assert.equal(screenData?.liveSurfaceRef, 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json');
+    assert.equal(screenData?.frameStreamRef, 'computer-use:native-host/surfaces/vision-runtime-test/frame-stream.json');
+    assert.equal(screenData?.currentFrameRef, 'computer-use:native-host/frames/vision-runtime-test/current.png');
     assert.equal((screenData?.isolationFlags as Record<string, unknown> | undefined)?.providerExecuted, true);
     assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.completionEligible, false);
   } finally {
@@ -426,9 +427,9 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-right-pane-screen-reconnect-'));
   let attachCalls = 0;
   const unregister = registerVirtualAppScreenSessionExecutor({
-    executorId: 'native-session-manager:vision-reconnect-tripwire',
-    providerId: 'provider:vision-reconnect-tripwire',
-    supportedProfiles: ['*'],
+    executorId: 'native-session-manager:vision-runtime-test',
+    providerId: 'provider:vision-runtime-test',
+    supportedProfiles: ['vscode-editor'],
     attach: (command) => {
       attachCalls += 1;
       return validVirtualAppScreenAttachResult(command);
@@ -461,7 +462,7 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
         },
       },
     });
-    assert.equal(seedPayload?.executionUnits[0]?.status, 'done');
+    assert.equal(seedPayload?.executionUnits[0]?.status, 'done', seedPayload?.message);
     const seedArtifact = seedPayload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const seedScreenData = seedArtifact?.data as Record<string, unknown> | undefined;
     assert.equal(attachCalls, 1);
@@ -477,10 +478,13 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
         `--session-ref "${stringField(seedScreenData?.sessionRef)}"`,
         `--live-surface-ref "${stringField(seedScreenData?.liveSurfaceRef)}"`,
         `--frame-stream-ref "${stringField(seedScreenData?.frameStreamRef)}"`,
-        '--current-frame-ref "computer-use:session/vision-runtime-test/frames/current-42.png"',
+        '--current-frame-ref "computer-use:native-host/frames/vision-runtime-test/current-42.png"',
         '--current-frame-sequence 42',
         `--provider-session-owner-ref "${stringField(seedScreenData?.providerSessionOwnerRef)}"`,
         `--provider-session-reconnect-ref "${stringField(seedScreenData?.providerSessionReconnectRef)}"`,
+        `--surface-identity-ref "${stringField(seedScreenData?.surfaceIdentityRef)}"`,
+        `--surface-owner-ref "${stringField(seedScreenData?.surfaceOwnerRef)}"`,
+        `--display-owner-ref "${stringField(seedScreenData?.displayOwnerRef)}"`,
         `--live-binding-attach-grant-ref "${stringField(seedScreenData?.liveBindingAttachGrantRef)}"`,
         `--grant-validation-ref "${stringField(seedScreenData?.grantValidationRef)}"`,
         `--surface-transport-ref "${stringField(seedScreenData?.surfaceTransportRef)}"`,
@@ -505,15 +509,15 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
     assert.equal(routeDecision?.route, 'virtual-app-screen-screen-reconnect');
     assert.equal(routeDecision?.commandKind, 'screen-reconnect');
     assert.equal(routeDecision?.reconnectReason, 'resize');
-    assert.equal(routeDecision?.sessionRef, 'computer-use:session/vision-runtime-test/session.json');
-    assert.equal(routeDecision?.liveSurfaceRef, 'computer-use:session/vision-runtime-test/live-surface.json');
-    assert.equal(routeDecision?.frameStreamRef, 'computer-use:session/vision-runtime-test/frame-stream.json');
-    assert.equal(routeDecision?.currentFrameRef, 'computer-use:session/vision-runtime-test/frames/current-42.png');
+    assert.equal(routeDecision?.sessionRef, 'computer-use:native-host/sessions/vision-runtime-test/session.json');
+    assert.equal(routeDecision?.liveSurfaceRef, 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json');
+    assert.equal(routeDecision?.frameStreamRef, 'computer-use:native-host/surfaces/vision-runtime-test/frame-stream.json');
+    assert.equal(routeDecision?.currentFrameRef, 'computer-use:native-host/frames/vision-runtime-test/current-42.png');
     assert.equal(routeDecision?.currentFrameSequence, 42);
     assert.equal(routeDecision?.providerSessionOwnerRef, seedScreenData?.providerSessionOwnerRef);
     assert.equal(routeDecision?.providerSessionReconnectRef, seedScreenData?.providerSessionReconnectRef);
     assert.equal(routeDecision?.liveBindingAttachGrantRef, seedScreenData?.liveBindingAttachGrantRef);
-    assert.equal(routeDecision?.surfaceTransportRef, 'computer-use:session/vision-runtime-test/surface-transport.json');
+    assert.equal(routeDecision?.surfaceTransportRef, 'computer-use:native-host/surfaces/vision-runtime-test/surface-transport.json');
     assert.equal(routeDecision?.providerExecuted, false);
     assert.equal(routeDecision?.mutatingActionExecuted, false);
     assert.equal(routeDecision?.sessionManagerStatus, 'attached');
@@ -530,16 +534,16 @@ test('vision-sense routes VirtualAppScreen reconnect without native attach or ex
     const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
     assert.equal(screenData?.screenRef, 'virtual-app-screen:session-screen/screen-request');
-    assert.equal(screenData?.sessionRef, 'computer-use:session/vision-runtime-test/session.json');
-    assert.equal(screenData?.liveSurfaceRef, 'computer-use:session/vision-runtime-test/live-surface.json');
-    assert.equal(screenData?.frameStreamRef, 'computer-use:session/vision-runtime-test/frame-stream.json');
-    assert.equal(screenData?.currentFrameRef, 'computer-use:session/vision-runtime-test/frames/current-42.png');
+    assert.equal(screenData?.sessionRef, 'computer-use:native-host/sessions/vision-runtime-test/session.json');
+    assert.equal(screenData?.liveSurfaceRef, 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json');
+    assert.equal(screenData?.frameStreamRef, 'computer-use:native-host/surfaces/vision-runtime-test/frame-stream.json');
+    assert.equal(screenData?.currentFrameRef, 'computer-use:native-host/frames/vision-runtime-test/current-42.png');
     assert.equal(screenData?.providerSessionOwnerRef, seedScreenData?.providerSessionOwnerRef);
     assert.equal(screenData?.providerSessionReconnectRef, seedScreenData?.providerSessionReconnectRef);
     assert.equal(screenData?.liveBindingAttachGrantRef, seedScreenData?.liveBindingAttachGrantRef);
-    assert.equal(screenData?.surfaceTransportRef, 'computer-use:session/vision-runtime-test/surface-transport.json');
+    assert.equal(screenData?.surfaceTransportRef, 'computer-use:native-host/surfaces/vision-runtime-test/surface-transport.json');
     assert.deepEqual(screenData?.currentFrameSequence, {
-      ref: 'computer-use:session/vision-runtime-test/frames/current-42.png',
+      ref: 'computer-use:native-host/frames/vision-runtime-test/current-42.png',
       transport: 'native-frame-stream',
       diagnosticOnly: false,
       sequence: 42,
@@ -561,9 +565,9 @@ test('vision-sense fails closed when reconnect refs do not match the provider-ow
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-right-pane-screen-reconnect-mismatch-'));
   let attachCalls = 0;
   const unregister = registerVirtualAppScreenSessionExecutor({
-    executorId: 'native-session-manager:vision-reconnect-mismatch-tripwire',
-    providerId: 'provider:vision-reconnect-mismatch-tripwire',
-    supportedProfiles: ['*'],
+    executorId: 'native-session-manager:vision-runtime-test',
+    providerId: 'provider:vision-runtime-test',
+    supportedProfiles: ['vscode-editor'],
     attach: (command) => {
       attachCalls += 1;
       return validVirtualAppScreenAttachResult(command);
@@ -575,8 +579,8 @@ test('vision-sense fails closed when reconnect refs do not match the provider-ow
       prompt: [
         '/computer-use screen attach',
         '--source right-pane-screen',
-        '--profile "generic-workbench"',
-        '--target-app-ref "app:profile/generic-workbench"',
+        '--profile "vscode-editor"',
+        '--target-app-ref "app:profile/vscode-editor"',
         '--screen-ref "virtual-app-screen:reconnect-mismatch/screen-request"',
         '--activation-ref "computer-use:screen-activation/reconnect-mismatch/attach-request.json"',
         '--adapter-readiness-ref "computer-use:screen-activation/reconnect-mismatch/provider-readiness.json"',
@@ -596,7 +600,7 @@ test('vision-sense fails closed when reconnect refs do not match the provider-ow
         },
       },
     });
-    assert.equal(seedPayload?.executionUnits[0]?.status, 'done');
+    assert.equal(seedPayload?.executionUnits[0]?.status, 'done', seedPayload?.message);
     const seedArtifact = seedPayload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const seedScreenData = seedArtifact?.data as Record<string, unknown> | undefined;
     assert.equal(attachCalls, 1);
@@ -612,10 +616,13 @@ test('vision-sense fails closed when reconnect refs do not match the provider-ow
         `--session-ref "${stringField(seedScreenData?.sessionRef)}"`,
         '--live-surface-ref "computer-use:session/reconnect-mismatch/wrong-live-surface.json"',
         `--frame-stream-ref "${stringField(seedScreenData?.frameStreamRef)}"`,
-        '--current-frame-ref "computer-use:session/vision-runtime-test/frames/current-2.png"',
+        '--current-frame-ref "computer-use:native-host/frames/vision-runtime-test/current-2.png"',
         '--current-frame-sequence 2',
         `--provider-session-owner-ref "${stringField(seedScreenData?.providerSessionOwnerRef)}"`,
         `--provider-session-reconnect-ref "${stringField(seedScreenData?.providerSessionReconnectRef)}"`,
+        `--surface-identity-ref "${stringField(seedScreenData?.surfaceIdentityRef)}"`,
+        `--surface-owner-ref "${stringField(seedScreenData?.surfaceOwnerRef)}"`,
+        `--display-owner-ref "${stringField(seedScreenData?.displayOwnerRef)}"`,
         `--live-binding-attach-grant-ref "${stringField(seedScreenData?.liveBindingAttachGrantRef)}"`,
         `--grant-validation-ref "${stringField(seedScreenData?.grantValidationRef)}"`,
         `--surface-transport-ref "${stringField(seedScreenData?.surfaceTransportRef)}"`,
@@ -856,7 +863,7 @@ test('vision-sense continues permission recheck into native attach when a regist
     const screenArtifact = payload?.artifacts?.find((artifact) => artifact.type === 'computer-use-virtual-screen');
     const screenData = screenArtifact?.data as Record<string, unknown> | undefined;
     assert.equal(screenData?.attachState, 'attached');
-    assert.equal(screenData?.liveSurfaceRef, 'computer-use:session/vision-runtime-test/live-surface.json');
+    assert.equal(screenData?.liveSurfaceRef, 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json');
   } finally {
     unregister();
     resetVirtualAppScreenRuntimeExecutorsForTests();
@@ -1298,23 +1305,31 @@ function validVirtualAppScreenAttachResult(
     providerId: 'provider:vision-runtime-test',
     refs: {
       currentRunRef: '.sciforge/vision-runs/vision-runtime-test/current-run.json',
-      sessionRef: 'computer-use:session/vision-runtime-test/session.json',
-      liveSurfaceRef: 'computer-use:session/vision-runtime-test/live-surface.json',
-      surfaceTransportRef: 'computer-use:session/vision-runtime-test/surface-transport.json',
-      frameStreamRef: 'computer-use:session/vision-runtime-test/frame-stream.json',
-      currentFrameRef: 'computer-use:session/vision-runtime-test/frames/current.png',
-      frameTransportContractRef: 'computer-use:session/vision-runtime-test/frame-transport-contract.json',
-      frameTelemetryRef: 'computer-use:session/vision-runtime-test/frame-telemetry.json',
-      mediaChannelRef: 'computer-use:session/vision-runtime-test/native-frame-stream/live',
-      dataChannelRef: 'computer-use:session/vision-runtime-test/native-frame-control-channel/control',
+      sessionRef: 'computer-use:native-host/sessions/vision-runtime-test/session.json',
+      liveSurfaceRef: 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json',
+      surfaceTransportRef: 'computer-use:native-host/surfaces/vision-runtime-test/surface-transport.json',
+      frameStreamRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-stream.json',
+      currentFrameRef: 'computer-use:native-host/frames/vision-runtime-test/current.png',
+      currentRunPointerRef: 'computer-use:native-host/runs/vision-runtime-test/current-run-pointer.json',
+      minimalEvidenceReplayRefs: visionRuntimeMinimalEvidenceReplayRefs(),
+      frameTransportContractRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-transport-contract.json',
+      frameTelemetryRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-telemetry.json',
+      mediaChannelRef: 'computer-use:native-host/surfaces/vision-runtime-test/native-frame-stream/live',
+      dataChannelRef: 'computer-use:native-host/surfaces/vision-runtime-test/native-frame-control-channel/control',
+      liveBindingAttachGrantRef: 'computer-use:native-host/grants/vision-runtime-test/live-binding-attach-grant.json',
+      grantValidationRef: 'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0004-grant.validated.json',
+      surfaceIdentityRef: 'computer-use:provider-session/vision-runtime-test/surface-identity.json',
+      surfaceOwnerRef: 'computer-use:native-host/surfaces/vision-runtime-test/surface-owner.json',
+      displayOwnerRef: 'computer-use:native-host/surfaces/vision-runtime-test/display-owner.json',
       screenRef: command.refs.screenRef,
       targetAppRef: command.refs.targetAppRef,
       targetWindowRef: 'window:vision-runtime-test/main',
-      inputLeaseRef: 'computer-use:session/vision-runtime-test/input-lease.json',
-      actionAdapterRef: 'computer-use:session/vision-runtime-test/action-adapter.json',
+      inputLeaseRef: 'computer-use:native-host/input/vision-runtime-test/input-lease.json',
+      actionAdapterRef: 'computer-use:native-host/input/vision-runtime-test/action-adapter.json',
       adapterReadinessRef: command.refs.readinessRef,
-      platformDriverRef: 'computer-use:session/vision-runtime-test/platform-driver.json',
-      evidenceLedgerRef: 'computer-use:session/vision-runtime-test/evidence-ledger.json',
+      platformDriverRef: 'computer-use:native-host/platform-drivers/vision-runtime-test/platform-driver.json',
+      evidenceLedgerRef: 'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json',
+      hostEvidenceLedgerRef: 'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json',
       guiPresentRef: command.refs.guiPresentRef,
     },
     evidence: {
@@ -1340,25 +1355,91 @@ function validVirtualAppScreenAttachResult(
         owner: 'VirtualDisplayProvider',
         providerId: 'provider:vision-runtime-test',
         transport: 'native-frame-stream',
-        surfaceTransportRef: 'computer-use:session/vision-runtime-test/surface-transport.json',
-        liveSurfaceRef: 'computer-use:session/vision-runtime-test/live-surface.json',
-        frameStreamRef: 'computer-use:session/vision-runtime-test/frame-stream.json',
-        currentFrameRef: 'computer-use:session/vision-runtime-test/frames/current.png',
-        frameTransportContractRef: 'computer-use:session/vision-runtime-test/frame-transport-contract.json',
-        frameTelemetryRef: 'computer-use:session/vision-runtime-test/frame-telemetry.json',
-        mediaChannelRef: 'computer-use:session/vision-runtime-test/native-frame-stream/live',
-        dataChannelRef: 'computer-use:session/vision-runtime-test/native-frame-control-channel/control',
+        surfaceTransportRef: 'computer-use:native-host/surfaces/vision-runtime-test/surface-transport.json',
+        liveSurfaceRef: 'computer-use:native-host/surfaces/vision-runtime-test/live-surface.json',
+        frameStreamRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-stream.json',
+        currentFrameRef: 'computer-use:native-host/frames/vision-runtime-test/current.png',
+        frameTransportContractRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-transport-contract.json',
+        frameTelemetryRef: 'computer-use:native-host/surfaces/vision-runtime-test/frame-telemetry.json',
+        mediaChannelRef: 'computer-use:native-host/surfaces/vision-runtime-test/native-frame-stream/live',
+        dataChannelRef: 'computer-use:native-host/surfaces/vision-runtime-test/native-frame-control-channel/control',
         currentFrameSequence: 1,
         diagnosticOnly: false,
         productFallback: false,
         singleInteractiveTruth: true,
       },
       evidenceRefs: [
-        'computer-use:session/vision-runtime-test/surface-transport.json',
-        'computer-use:session/vision-runtime-test/platform-driver.json',
-        'computer-use:session/vision-runtime-test/evidence-ledger.json',
-        'computer-use:session/vision-runtime-test/frames/current.png',
+        'computer-use:native-host/surfaces/vision-runtime-test/surface-transport.json',
+        'computer-use:native-host/platform-drivers/vision-runtime-test/platform-driver.json',
+        'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json',
+        'computer-use:native-host/grants/vision-runtime-test/live-binding-attach-grant.json',
+        'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0004-grant.validated.json',
+        'computer-use:native-host/surfaces/vision-runtime-test/surface-owner.json',
+        'computer-use:native-host/surfaces/vision-runtime-test/display-owner.json',
+        'computer-use:native-host/frames/vision-runtime-test/current.png',
+        'computer-use:native-host/runs/vision-runtime-test/current-run-pointer.json',
+        ...visionRuntimeMinimalEvidenceReplayRefs(),
       ],
     },
+  };
+}
+
+function visionRuntimeMinimalEvidenceReplayRefs() {
+  return [
+    'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0001-session.created.json',
+    'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0003-surface.attached.json',
+    'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0004-grant.validated.json',
+    'computer-use:native-host/ledgers/vision-runtime-test/evidence-ledger.json/events/0005-frame.read.json',
+  ];
+}
+
+function createRecordedVisionNativeHostSession(
+  screenRef = 'virtual-app-screen:permission-handoff-ledger/screen-request',
+) {
+  const host = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter());
+  const created = host.createSession(
+    { profileId: 'generic-workbench', defaultSurfaceTransport: 'native-frame-stream' },
+    { allowBackgroundRendering: true, allowSharedSystemInput: false },
+    {
+      currentRunRef: 'computer-use:run/vision-native-host/current-run.json',
+      evidenceRootRef: 'computer-use:run/vision-native-host/evidence',
+    },
+  );
+  assert.equal(created.status, 'ok');
+  if (created.status !== 'ok') throw new Error('expected Native Host session creation');
+
+  const launched = host.launchOrAttachApp(created.value.sessionId, {
+    appId: 'generic-workbench',
+    appRef: 'app:profile/generic-workbench',
+  });
+  assert.equal(launched.status, 'ok');
+
+  const attached = host.attachSurface(created.value.sessionId, {
+    screenRef,
+    targetWindowRef: 'window:vision-runtime-test/main',
+    transport: 'native-frame-stream',
+  });
+  assert.equal(attached.status, 'ok');
+  if (attached.status !== 'ok') throw new Error('expected Native Host surface attach');
+
+  const frame = host.readFrame(created.value.sessionId);
+  assert.equal(frame.status, 'ok');
+  if (frame.status !== 'ok') throw new Error('expected Native Host frame read');
+
+  const record = recordVirtualAppScreenNativeHostSession({
+    host,
+    session: created.value,
+    surface: attached.value,
+    frame: frame.value,
+    refs: {
+      adapterReadinessRef: created.value.readiness.adapterReadinessRef,
+      evidenceLedgerRef: created.value.ledgerRef,
+    },
+  });
+  return {
+    host,
+    session: created.value,
+    sessionRef: record.sessionRef,
+    ledgerRef: record.evidenceLedgerRef,
   };
 }

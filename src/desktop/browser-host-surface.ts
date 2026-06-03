@@ -1,5 +1,9 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import {
+  BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
+  type BrowserHostSessionNativeOsUiProof,
+} from '../runtime/browser-host-session-types.js';
 
 export type DesktopBrowserHostSurfaceBounds = {
   x: number;
@@ -16,8 +20,14 @@ export type DesktopBrowserHostSurfaceState = {
   surface: 'electron-web-contents-view';
   liveSurfaceTransport: 'native-embedded';
   singleInteractiveTruth: true;
+  ready: boolean;
+  nativeBridge: true;
+  rightPaneBridge: true;
+  attachAvailable: true;
+  stateAvailable: true;
   embedded: boolean;
   secondTruthSource: false;
+  passClaim: boolean;
   url?: string;
   title?: string;
   loading?: boolean;
@@ -27,9 +37,52 @@ export type DesktopBrowserHostSurfaceState = {
   visible?: boolean;
   reason?: string;
   diagnostics?: string[];
+  nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
 };
 
 export const DESKTOP_BROWSER_HOST_SURFACE_AUDIT_SCHEMA = 'sciforge.desktop.browser-host-surface.audit.v1' as const;
+
+const NATIVE_OS_UI_PROOF_NAMES_BY_GROUP = {
+  cursorCaret: [
+    'input-caret-visible',
+    'pointer-button-link',
+    'pointer-default-area',
+    'text-cursor-area',
+    'focus-blur-restore',
+  ],
+  mouseContextMenu: [
+    'left-click-owner',
+    'right-click-context-menu-owner',
+    'middle-click-owner',
+    'double-click-owner',
+    'mouse-down-up-owner',
+    'continuous-move-owner',
+    'drag-drop-owner',
+    'text-selection-range-owner',
+    'wheel-vertical-owner',
+    'wheel-horizontal-owner',
+    'scrollbar-thumb-owner',
+  ],
+  keyboardImeClipboardSelection: [
+    'keyboard-backspace-delete-owner',
+    'keyboard-enter-owner',
+    'keyboard-tab-owner',
+    'keyboard-arrow-home-end-page-owner',
+    'keyboard-shortcuts-select-copy-paste-cut-owner',
+    'keyboard-escape-owner',
+    'ime-candidate-window-owner',
+    'system-clipboard-round-trip-owner',
+    'selection-range-owner',
+  ],
+  rerenderFocus: [
+    'native-surface-not-detached',
+    'address-bar-rerender-stable',
+    'tab-state-rerender-stable',
+    'diagnostic-expand-stable',
+    'focus-retained-after-rerender',
+    'tab-switch-resize-minimize-restore',
+  ],
+} as const satisfies Record<BrowserHostSessionNativeOsUiProof['proofGroup'], readonly string[]>;
 
 export type DesktopBrowserHostSurfaceAuditRoute =
   | 'health'
@@ -250,6 +303,11 @@ export function createDesktopBrowserHostSurfaceController(
     else if (action === 'cursor') {
       const cursor = await cursorAt(session, numberOr(input.x, -1), numberOr(input.y, -1));
       return { ...stateForSession(session), diagnostics: [...session.diagnostics.slice(-10), `cursor:${cursor}`] };
+    } else if (action === 'native-os-ui-proof') {
+      return {
+        ...stateForSession(session),
+        nativeOsUiProof: await nativeOsUiProofForSession(session, input),
+      };
     } else if (action === 'close') {
       closeSession(session);
       sessions.delete(session.id);
@@ -321,15 +379,23 @@ export function createDesktopBrowserHostSurfaceController(
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
     recordAuditRequest(audit, req.method ?? 'GET', url.pathname);
     if (req.method === 'GET' && url.pathname === '/health') {
+      const ready = Boolean(electron.WebContentsView);
       writeJson(res, 200, {
-        ok: Boolean(electron.WebContentsView),
+        ok: ready,
         service: 'sciforge-desktop-browser-host-surface',
+        status: ready ? 'ready' : 'blocked',
+        ready,
         surface: 'electron-web-contents-view',
         liveSurfaceTransport: 'native-embedded',
         owner: 'BrowserHostSession',
         adapterRole: 'display-input-adapter',
+        nativeBridge: true,
+        rightPaneBridge: true,
+        attachAvailable: true,
+        stateAvailable: true,
         singleInteractiveTruth: true,
         secondTruthSource: false,
+        passClaim: ready,
       });
       return;
     }
@@ -483,22 +549,103 @@ async function cursorAt(session: DesktopBrowserHostSurfaceSession, x: number, y:
   })()`, 'default');
 }
 
+async function nativeOsUiProofForSession(
+  session: DesktopBrowserHostSurfaceSession,
+  input: Record<string, unknown>,
+): Promise<BrowserHostSessionNativeOsUiProof> {
+  const proofGroup = nativeOsUiProofGroup(input.proofGroup);
+  const actionId = boundedNativeOsUiToken(input.actionId) ?? 'native-os-ui-proof';
+  const expectedProofNames = expectedNativeOsUiProofNames(input.expectedProofNames, proofGroup);
+  const observed: string[] = [];
+  const evidenceTokens = [
+    session.attachedWindow ? 'native-surface:attached:true' : undefined,
+  ];
+  if (proofGroup === 'cursorCaret') {
+    const raw = await executeJavaScript<Record<string, unknown>>(session, `(() => {
+      const active = document.activeElement;
+      const activeEditable = active instanceof HTMLInputElement
+        || active instanceof HTMLTextAreaElement
+        || Boolean(active && active.isContentEditable);
+      let caretVisible = false;
+      if (activeEditable && active && typeof active.selectionStart === 'number') {
+        caretVisible = true;
+      } else if (activeEditable && document.getSelection) {
+        caretVisible = Boolean(document.getSelection()?.rangeCount);
+      }
+      let blurred = false;
+      let restored = false;
+      if (active && typeof active.blur === 'function' && typeof active.focus === 'function') {
+        active.blur();
+        blurred = document.activeElement !== active;
+        active.focus();
+        restored = document.activeElement === active;
+      }
+      return { activeEditable, caretVisible, blurred, restored };
+    })()`, {});
+    const activeEditable = raw.activeEditable === true;
+    const caretVisible = raw.caretVisible === true;
+    const blurred = raw.blurred === true;
+    const restored = raw.restored === true;
+    if (activeEditable && caretVisible) observed.push('input-caret-visible');
+    if (blurred && restored) observed.push('focus-blur-restore');
+    evidenceTokens.push(
+      activeEditable ? 'caret:active-editable:true' : undefined,
+      caretVisible ? 'caret:visible:true' : undefined,
+      blurred ? 'focus:blurred:true' : undefined,
+      restored ? 'focus:restored:true' : undefined,
+      restored ? 'focus:restored-same-logical-target:true' : undefined,
+    );
+  }
+  const observedProofNames = observed.filter((proofName) => (
+    expectedProofNames.length === 0 || expectedProofNames.includes(proofName)
+  ));
+  const boundedEvidenceTokens = [
+    ...evidenceTokens,
+    ...observedProofNames.map((proofName) => `proof:${proofName}:observed`),
+  ].filter((token): token is string => Boolean(token));
+  return {
+    schemaVersion: BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
+    boundedEvidenceOnly: true,
+    rawDomRecorded: false,
+    rawTextRecorded: false,
+    rawUrlRecorded: false,
+    rawTitleRecorded: false,
+    rawSelectorRecorded: false,
+    rawCoordsRecorded: false,
+    rawPayloadRecorded: false,
+    source: 'native-embedded-action-state',
+    proofGroup,
+    actionId,
+    observedProofNames,
+    evidenceTokens: boundedEvidenceTokens,
+    diagnostics: boundedEvidenceTokens.filter((token) => token.startsWith('proof:')),
+  };
+}
+
 async function executeJavaScript<T>(session: DesktopBrowserHostSurfaceSession, code: string, fallback: T): Promise<T> {
   if (!session.webContents.executeJavaScript) return fallback;
   return session.webContents.executeJavaScript<T>(code, true).catch(() => fallback);
 }
 
 function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: string): DesktopBrowserHostSurfaceState {
+  const ok = !reason;
+  const embedded = Boolean(session.attachedWindow);
   return {
-    ok: !reason,
+    ok,
     sessionId: session.id,
     owner: 'BrowserHostSession',
     adapterRole: 'display-input-adapter',
     surface: 'electron-web-contents-view',
     liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
-    embedded: Boolean(session.attachedWindow),
+    ready: ok,
+    nativeBridge: true,
+    rightPaneBridge: true,
+    attachAvailable: true,
+    stateAvailable: true,
+    embedded,
     secondTruthSource: false,
+    passClaim: ok && embedded,
     url: session.webContents.getURL?.() || undefined,
     title: session.webContents.getTitle?.() || undefined,
     loading: session.webContents.isLoadingMainFrame?.() ?? session.webContents.isLoading?.() ?? false,
@@ -520,8 +667,14 @@ function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
     surface: 'electron-web-contents-view',
     liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
+    ready: false,
+    nativeBridge: true,
+    rightPaneBridge: true,
+    attachAvailable: true,
+    stateAvailable: true,
     embedded: false,
     secondTruthSource: false,
+    passClaim: false,
     reason: 'native-embedded-session-not-found',
   };
 }
@@ -529,6 +682,8 @@ function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
 function closeSession(session: DesktopBrowserHostSurfaceSession): void {
   session.view.setVisible?.(false);
   session.attachedWindow?.contentView?.removeChildView?.(session.view);
+  session.attachedWindow = undefined;
+  session.visible = false;
   session.webContents.close?.();
 }
 
@@ -548,6 +703,25 @@ function normalizeBounds(bounds: DesktopBrowserHostSurfaceBounds): DesktopBrowse
     width: Math.max(1, Math.round(numberOr(bounds?.width, 1))),
     height: Math.max(1, Math.round(numberOr(bounds?.height, 1))),
   };
+}
+
+function nativeOsUiProofGroup(value: unknown): BrowserHostSessionNativeOsUiProof['proofGroup'] {
+  if (value === 'mouseContextMenu' || value === 'keyboardImeClipboardSelection' || value === 'rerenderFocus') return value;
+  return 'cursorCaret';
+}
+
+function expectedNativeOsUiProofNames(value: unknown, proofGroup: BrowserHostSessionNativeOsUiProof['proofGroup']): string[] {
+  if (!Array.isArray(value)) return [];
+  const allowed = new Set<string>(NATIVE_OS_UI_PROOF_NAMES_BY_GROUP[proofGroup]);
+  return [...new Set(value.filter((entry): entry is string => typeof entry === 'string' && allowed.has(entry)))];
+}
+
+function boundedNativeOsUiToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const token = value.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(token)) return undefined;
+  if (/https?:|file:|data:|blob:|javascript:|<html|<input|endpoint|url:|title:|selector|coords?|payload|provider|secret|api[-_]?key|raw-leak/i.test(token)) return undefined;
+  return token;
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {

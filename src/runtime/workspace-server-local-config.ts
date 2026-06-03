@@ -7,8 +7,8 @@ import {
 } from '../../packages/backend/src/runtime-home.js';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import {
+  computerUseWorkspaceEnvFromLocalSettings,
   localProviderSettings,
-  providerEnvFromLocalSettings,
 } from '../../packages/backend/src/local-provider-config.js';
 import { startCodexResponsesProxyServer, type StartedCodexResponsesProxy } from '../../packages/backend/src/proxy.js';
 import { runtimeProviderProxyBaseUrl as normalizeRuntimeProviderProxyBaseUrl } from './workspace-server-runtime-provider-preflight.js';
@@ -286,7 +286,7 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     return {
       ...env,
       SCIFORGE_CONFIG_PATH: options.configLocalPath,
-      ...providerEnvFromLocalSettings(settings),
+      ...computerUseWorkspaceEnvFromLocalSettings(settings),
     };
   }
 

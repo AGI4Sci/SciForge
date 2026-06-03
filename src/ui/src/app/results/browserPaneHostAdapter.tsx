@@ -7,6 +7,7 @@ import {
   sendBrowserHostSessionAction,
   startBrowserHostSession,
   startRuntimeServices,
+  BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
   type BrowserHostComputerUseAction,
   type BrowserHostSessionWriterPreflightResult,
   type BrowserHostSessionState,
@@ -25,6 +26,7 @@ import {
   rightPaneBrowserProjectionForUrl,
   rightPaneBrowserUrlsEquivalent,
   rightPaneBrowserUrlIsLocal,
+  type RightPaneBrowserNativeSurfaceBridgeState,
 } from './browserPaneModel';
 import { resultText, type ResultLocale } from './resultLocale';
 
@@ -88,6 +90,7 @@ export function RightPaneBrowserTool({
   });
   const [hostError, setHostError] = useState('');
   const [writerDiagnostic, setWriterDiagnostic] = useState<BrowserHostSessionWriterPreflightResult | undefined>(undefined);
+  const [nativeSurfaceBridgeDiagnostic, setNativeSurfaceBridgeDiagnostic] = useState<RightPaneBrowserNativeSurfaceBridgeState | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [hostCursor, setHostCursor] = useState('default');
   const surfaceRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +172,7 @@ export function RightPaneBrowserTool({
     if (!needsBrowserHost || typeof window === 'undefined') {
       setHostSession(undefined);
       setHostError('');
+      setNativeSurfaceBridgeDiagnostic(undefined);
       setBusy(false);
       pendingHostOpenUrlRef.current = undefined;
       detachNativeBrowserSurface();
@@ -195,6 +199,7 @@ export function RightPaneBrowserTool({
           if (cancelled || pollStopped || !browserHostSessionMatchesTarget(sessionState, normalizedUrl)) return;
           setHostSession(sessionState);
           setWriterDiagnostic(undefined);
+          void refreshNativeSurfaceBridgeDiagnostic(operationConfig);
           updateEffectiveWriterConfig(sessionState.workspaceWriterBaseUrl);
         })
         .catch(() => undefined)
@@ -218,6 +223,7 @@ export function RightPaneBrowserTool({
         if (cancelled || !result) return;
         setHostSession(result.session);
         setWriterDiagnostic(undefined);
+        void refreshNativeSurfaceBridgeDiagnostic(operationConfig);
         updateEffectiveWriterConfig(result.session.workspaceWriterBaseUrl);
       })
       .catch((error) => {
@@ -235,6 +241,8 @@ export function RightPaneBrowserTool({
       cancelled = true;
       pollStopped = true;
       if (pollTimer !== undefined && typeof window !== 'undefined') window.clearTimeout(pollTimer);
+      if (rightPaneBrowserUrlsEquivalent(pendingHostOpenUrlRef.current, normalizedUrl)) pendingHostOpenUrlRef.current = undefined;
+      setBusy(false);
     };
   }, [config, hostSession?.requestedUrl, hostSession?.status, hostSession?.url, needsBrowserHost, normalizedUrl, tabId]);
 
@@ -259,20 +267,24 @@ export function RightPaneBrowserTool({
       observer?.disconnect();
       window.removeEventListener('resize', syncSurface);
     };
-  }, [hostError, hostSession?.id, hostSession?.liveSurfaceRef, hostSession?.liveSurfaceTransport, hostSession?.singleInteractiveTruth, hostSession?.status, needsBrowserHost]);
+  }, [hostError, hostSession?.id, hostSession?.liveSurfaceRef, hostSession?.liveSurfaceTransport, hostSession?.secondTruthSource, hostSession?.singleInteractiveTruth, hostSession?.status, needsBrowserHost]);
 
+  const projectedHostSession = hostSession ? {
+    ...hostSession,
+    nativeSurfaceBridge: nativeSurfaceBridgeDiagnostic,
+  } : undefined;
   const hostSurfaceError = needsBrowserHost
-    && hostSession
-    && hostSession.status !== 'starting'
-    && hostSession.status !== 'loading'
-    && !browserHostSessionHasUsableLiveSurface(hostSession)
+    && projectedHostSession
+    && projectedHostSession.status !== 'starting'
+    && projectedHostSession.status !== 'loading'
+    && !browserHostSessionHasUsableLiveSurface(projectedHostSession)
     ? 'Native embedded BrowserHostSession surface is blocked because the session has no attachable native live surface ref.'
     : hostError;
   const browserState = rightPaneBrowserProjectionForUrl(normalizedUrl, needsBrowserHost ? {
     hostExternalBrowserAvailable: true,
     hostSurface: 'browser-host-session',
     hostBusy: busy,
-    hostSession,
+    hostSession: projectedHostSession,
     hostError: hostSurfaceError,
   } : {});
   const commands = browserWorkbenchDefaultCommands(normalizedUrl, {
@@ -353,6 +365,7 @@ export function RightPaneBrowserTool({
       const diagnostic = await preflightBrowserHostSessionWriter(config, {
         timeoutMs: BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS,
       });
+      void refreshNativeSurfaceBridgeDiagnostic(config, diagnostic);
       const effectiveBaseUrl = diagnostic.ok ? diagnostic.effectiveBaseUrl : diagnostic.recommendedBaseUrl;
       if (effectiveBaseUrl) {
         setWriterDiagnostic(undefined);
@@ -377,6 +390,7 @@ export function RightPaneBrowserTool({
           if (stopped || !browserHostSessionMatchesTarget(sessionState, targetUrl)) return;
           setHostSession(sessionState);
           setWriterDiagnostic(undefined);
+          void refreshNativeSurfaceBridgeDiagnostic(operationConfig);
           updateEffectiveWriterConfig(sessionState.workspaceWriterBaseUrl);
         })
         .catch(() => undefined)
@@ -416,6 +430,7 @@ export function RightPaneBrowserTool({
         setHostSession(nextSession);
         setHostError('');
         setWriterDiagnostic(undefined);
+        await refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, nextSession));
         updateEffectiveWriterConfig(nextSession.workspaceWriterBaseUrl);
       } catch (error) {
         setHostError(error instanceof Error ? error.message : String(error));
@@ -429,6 +444,7 @@ export function RightPaneBrowserTool({
       setHostSession(undefined);
       setHostError('');
       setWriterDiagnostic(undefined);
+      setNativeSurfaceBridgeDiagnostic(undefined);
     }
   }
 
@@ -611,16 +627,32 @@ export function RightPaneBrowserTool({
 
   async function refreshWriterDiagnostic() {
     try {
-      setWriterDiagnostic(await preflightBrowserHostSessionWriter(config, { timeoutMs: BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS }));
+      const diagnostic = await preflightBrowserHostSessionWriter(config, { timeoutMs: BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS });
+      setWriterDiagnostic(diagnostic);
+      await refreshNativeSurfaceBridgeDiagnostic(config, diagnostic);
     } catch {
       // The original hostError carries the actionable Workspace Writer failure.
+    }
+  }
+
+  async function refreshNativeSurfaceBridgeDiagnostic(
+    operationConfig = config,
+    diagnostic?: BrowserHostSessionWriterPreflightResult,
+  ) {
+    try {
+      const writerDiagnosticResult = diagnostic ?? await preflightBrowserHostSessionWriter(operationConfig, { timeoutMs: BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS });
+      const next = await probeBrowserHostNativeSurfaceHealth(operationConfig, writerDiagnosticResult);
+      setNativeSurfaceBridgeDiagnostic(next);
+    } catch {
+      setNativeSurfaceBridgeDiagnostic(undefined);
     }
   }
 
   async function startRuntimeServicesAndRetry() {
     setBusy(true);
     try {
-      await startRuntimeServices();
+      const runtime = await startRuntimeServices({ requireBrowserHostNativeSurface: true });
+      if (runtime.ok !== true) throw new Error(browserRuntimeServicesError(runtime));
       setWriterDiagnostic(undefined);
       await openAddress(normalizedUrl);
     } catch (error) {
@@ -643,15 +675,20 @@ export function RightPaneBrowserTool({
   }
 
   async function attachNativeBrowserSurface(sessionState: BrowserHostSessionState) {
-    const bridge = desktopBrowserHostSurfaceBridge();
     if (!browserHostSessionHasUsableLiveSurface(sessionState)) {
       detachNativeBrowserSurface(sessionState.id);
       setHostError('Native embedded BrowserHostSession surface is blocked because the session has no attachable native live surface ref.');
       return;
     }
+    const bridge = browserHostNativeSurfaceAttachBridge(
+      browserHostSessionConfig(config, sessionState),
+      sessionState,
+      nativeSurfaceBridgeDiagnostic,
+    );
     if (!bridge?.attachBrowserHostSessionSurface) {
       detachNativeBrowserSurface(sessionState.id);
       setHostError('Native embedded BrowserHostSession attach bridge is unavailable; retry the BrowserHostSession or hand off externally.');
+      void refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, sessionState));
       return;
     }
     const bounds = browserHostNativeSurfaceBounds(surfaceRef.current);
@@ -667,6 +704,7 @@ export function RightPaneBrowserTool({
       if (nativeBrowserHostSurfaceResultFailed(result)) {
         detachNativeBrowserSurface(sessionState.id);
         setHostError(nativeBrowserHostSurfaceReason(result) ?? 'Native embedded BrowserHostSession surface attach blocked; retry the same session or hand off externally.');
+        void refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, sessionState));
       } else {
         nativeSurfaceSessionRef.current = sessionState.id;
         setHostError('');
@@ -674,6 +712,7 @@ export function RightPaneBrowserTool({
     } catch (error) {
       detachNativeBrowserSurface(sessionState.id);
       setHostError(error instanceof Error ? error.message : String(error));
+      void refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, sessionState));
     }
   }
 
@@ -768,7 +807,7 @@ export function RightPaneBrowserTool({
             frameTransport: browserHostSessionHasUsableLiveSurface(hostSession) ? 'native-embedded' : undefined,
             previewSandbox: browserState.previewSandbox,
             externalUrl: browserState.externalUrl,
-            hostSession: hostSession ? { ...hostSession, cursor: hostCursor } : undefined,
+            hostSession: projectedHostSession ? { ...projectedHostSession, cursor: hostCursor } : undefined,
             writerDiagnostic: writerDiagnostic ? {
               status: writerDiagnostic.status,
               configuredBaseUrl: writerDiagnostic.configuredBaseUrl,
@@ -809,22 +848,22 @@ export function RightPaneBrowserTool({
               activeTabId: `${tabId}:tab`,
               tabs: [{
                 id: `${tabId}:tab`,
-                url: hostSession?.url ?? normalizedUrl,
-                title: hostSession?.title ?? (normalizedUrl === 'about:blank' ? 'about:blank' : normalizedUrl),
+                url: projectedHostSession?.url ?? normalizedUrl,
+                title: projectedHostSession?.title ?? (normalizedUrl === 'about:blank' ? 'about:blank' : normalizedUrl),
                 status: browserState.tabStatus,
               }],
             },
-            hostSession: hostSession ? { ...hostSession, cursor: hostCursor } : undefined,
-            snapshot: hostSession ? {
+            hostSession: projectedHostSession ? { ...projectedHostSession, cursor: hostCursor } : undefined,
+            snapshot: projectedHostSession ? {
               schemaVersion: 'sciforge.browser-runtime.snapshot.v1',
-              url: hostSession.url,
-              title: hostSession.title,
-              screenshotRef: hostSession.screenshotRef,
-              domSnapshotRef: hostSession.domSnapshotRef,
-              axSnapshotRef: hostSession.axSnapshotRef,
-              consoleLogRef: hostSession.consoleLogRef,
-              networkLogRef: hostSession.networkLogRef,
-              searchResultRef: hostSession.searchResultRef,
+              url: projectedHostSession.url,
+              title: projectedHostSession.title,
+              screenshotRef: projectedHostSession.screenshotRef,
+              domSnapshotRef: projectedHostSession.domSnapshotRef,
+              axSnapshotRef: projectedHostSession.axSnapshotRef,
+              consoleLogRef: projectedHostSession.consoleLogRef,
+              networkLogRef: projectedHostSession.networkLogRef,
+              searchResultRef: projectedHostSession.searchResultRef,
             } : undefined,
           },
         },
@@ -861,6 +900,7 @@ function browserHostSessionIdHash(value: string) {
 function browserHostSessionHasUsableLiveSurface(session: BrowserHostSessionState | undefined) {
   return browserHostSessionUsesNativeSurface(session)
     && session?.singleInteractiveTruth === true
+    && session?.secondTruthSource === false
     && Boolean(session.liveSurfaceRef);
 }
 
@@ -912,6 +952,242 @@ function browserHostSessionUsesNativeSurface(session: BrowserHostSessionState | 
   return session?.liveSurfaceTransport === 'native-embedded';
 }
 
+function browserHostNativeSurfaceAttachBridge(
+  config: SciForgeConfig,
+  sessionState: BrowserHostSessionState,
+  nativeSurfaceBridgeDiagnostic: RightPaneBrowserNativeSurfaceBridgeState | undefined,
+): DesktopBrowserHostSurfaceBridge | undefined {
+  const desktopBridge = desktopBrowserHostSurfaceBridge();
+  if (desktopBridge?.attachBrowserHostSessionSurface) return desktopBridge;
+  if (!browserHostNativeSurfaceRouteBridgeAvailable(nativeSurfaceBridgeDiagnostic)) return undefined;
+  return {
+    attachBrowserHostSessionSurface: (input) => attachBrowserHostNativeSurfaceViaRoute(
+      config,
+      sessionState,
+      nativeSurfaceBridgeDiagnostic,
+      input,
+    ),
+  };
+}
+
+function browserHostNativeSurfaceRouteBridgeAvailable(
+  nativeSurfaceBridgeDiagnostic: RightPaneBrowserNativeSurfaceBridgeState | undefined,
+): nativeSurfaceBridgeDiagnostic is RightPaneBrowserNativeSurfaceBridgeState {
+  return nativeSurfaceBridgeDiagnostic?.routeStatus === 'reachable'
+    && nativeSurfaceBridgeDiagnostic.capability === 'ready'
+    && nativeSurfaceBridgeDiagnostic.rightPaneBridge === true
+    && nativeSurfaceBridgeDiagnostic.status === 'ready'
+    && Boolean(nativeSurfaceBridgeDiagnostic.attachPath)
+    && Boolean(nativeSurfaceBridgeDiagnostic.statePath);
+}
+
+async function attachBrowserHostNativeSurfaceViaRoute(
+  config: SciForgeConfig,
+  sessionState: BrowserHostSessionState,
+  nativeSurfaceBridgeDiagnostic: RightPaneBrowserNativeSurfaceBridgeState,
+  input: unknown,
+): Promise<unknown> {
+  const attachPath = nativeSurfaceBridgeDiagnostic.attachPath ?? '/api/sciforge/browser-host/native-surface/attach';
+  const statePath = nativeSurfaceBridgeDiagnostic.statePath ?? '/api/sciforge/browser-host/native-surface/state';
+  const baseUrl = sessionState.workspaceWriterBaseUrl ?? config.workspaceWriterBaseUrl;
+  const inputRecord = recordFromUnknown(input);
+  const bounds = browserHostNativeSurfaceRect(inputRecord?.bounds);
+  const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${attachPath}`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: sessionState.id,
+      liveSurfaceRef: sessionState.liveSurfaceRef,
+      bounds,
+      visible: true,
+      focus: booleanRecordField(inputRecord, 'focus') !== false,
+    }),
+  });
+  const attachJson = await browserHostNativeSurfaceRouteJson(response);
+  if (!response.ok || nativeBrowserHostSurfaceResultFailed(attachJson) || !browserHostNativeSurfaceRouteStateTrusted(attachJson, sessionState)) {
+    return {
+      ok: false,
+      reason: nativeBrowserHostSurfaceReason(attachJson) ?? 'native-surface-route-attach-untrusted',
+    };
+  }
+
+  const stateUrl = new URL(`${baseUrl.replace(/\/+$/, '')}${statePath}`);
+  stateUrl.searchParams.set('sessionId', sessionState.id);
+  const stateResponse = await fetch(stateUrl, {
+    headers: { Accept: 'application/json' },
+  });
+  const stateJson = await browserHostNativeSurfaceRouteJson(stateResponse);
+  if (!stateResponse.ok || nativeBrowserHostSurfaceResultFailed(stateJson) || !browserHostNativeSurfaceRouteStateTrusted(stateJson, sessionState)) {
+    return {
+      ok: false,
+      reason: nativeBrowserHostSurfaceReason(stateJson) ?? 'native-surface-route-state-untrusted',
+    };
+  }
+  return {
+    ok: true,
+    sessionId: sessionState.id,
+    liveSurfaceRef: sessionState.liveSurfaceRef,
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+  };
+}
+
+async function probeBrowserHostNativeSurfaceHealth(
+  config: SciForgeConfig,
+  diagnostic: BrowserHostSessionWriterPreflightResult,
+): Promise<RightPaneBrowserNativeSurfaceBridgeState | undefined> {
+  const endpoint = browserHostNativeSurfaceEndpoint(diagnostic);
+  const desktopBridge = Boolean(desktopBrowserHostSurfaceBridge()?.attachBrowserHostSessionSurface);
+  const capability = diagnostic.health?.capabilities.includes(BROWSER_HOST_NATIVE_SURFACE_CAPABILITY) ? 'ready' : 'missing';
+  if (!endpoint) {
+    return diagnostic.health ? {
+      routeStatus: 'unknown',
+      capability,
+      rightPaneBridge: desktopBridge,
+      status: desktopBridge && capability === 'ready' ? 'unknown' : 'native-bridge-unavailable',
+      diagnosticRef: diagnostic.diagnosticRef,
+    } : undefined;
+  }
+  const baseUrl = diagnostic.effectiveBaseUrl ?? diagnostic.configuredBaseUrl ?? config.workspaceWriterBaseUrl;
+  const healthPath = browserHostNativeSurfaceEndpointPath(endpoint, 'health');
+  const attachPath = browserHostNativeSurfaceEndpointPath(endpoint, 'attach');
+  const statePath = browserHostNativeSurfaceEndpointPath(endpoint, 'state');
+  try {
+    const response = await fetch(`${baseUrl.replace(/\/+$/, '')}${healthPath}`, {
+      headers: { Accept: 'application/json' },
+    });
+    const healthJson = await browserHostNativeSurfaceRouteJson(response);
+    const routeStatus = response.ok ? 'reachable' : 'unreachable';
+    const routeBridge = routeStatus === 'reachable'
+      && capability === 'ready'
+      && browserHostNativeSurfaceRouteHealthTrusted(healthJson);
+    const rightPaneBridge = desktopBridge ? true : routeBridge;
+    return {
+      routeStatus,
+      capability,
+      rightPaneBridge,
+      status: routeStatus === 'reachable' && rightPaneBridge && capability === 'ready'
+        ? 'ready'
+        : routeStatus === 'reachable'
+          ? 'native-bridge-unavailable'
+          : 'route-unreachable',
+      healthPath,
+      attachPath,
+      statePath,
+      diagnosticRef: diagnostic.diagnosticRef,
+    };
+  } catch {
+    return {
+      routeStatus: 'unreachable',
+      capability,
+      rightPaneBridge: desktopBridge,
+      status: 'route-unreachable',
+      healthPath,
+      attachPath,
+      statePath,
+      diagnosticRef: diagnostic.diagnosticRef,
+    };
+  }
+}
+
+function browserHostNativeSurfaceEndpoint(diagnostic: BrowserHostSessionWriterPreflightResult) {
+  const endpoint = diagnostic.health?.endpoints?.browserHostNativeSurface;
+  return typeof endpoint === 'string' && endpoint.trim() ? endpoint : undefined;
+}
+
+function browserHostNativeSurfaceEndpointPath(endpoint: string, token: 'health' | 'attach' | 'state') {
+  const fallback = `/api/sciforge/browser-host/native-surface/${token}`;
+  const trimmed = endpoint.trim();
+  const path = trimmed.startsWith('/')
+    ? trimmed
+    : trimmed.startsWith('http://') || trimmed.startsWith('https://')
+      ? browserHostNativeSurfaceWorkspaceRoutePath(trimmed) ?? fallback
+      : fallback;
+  if (!path.startsWith('/api/sciforge/browser-host/native-surface/')) return fallback;
+  if (path.includes(`{health,attach,state}`)) return path.replace('{health,attach,state}', token);
+  if (/\/(?:health|attach|state)$/.test(path)) return path.replace(/\/(?:health|attach|state)$/, `/${token}`);
+  return fallback;
+}
+
+function browserHostNativeSurfaceWorkspaceRoutePath(value: string) {
+  try {
+    const url = new URL(value);
+    return url.pathname.startsWith('/api/sciforge/browser-host/native-surface/')
+      ? url.pathname
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function browserHostNativeSurfaceRouteJson(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const json = await response.json() as unknown;
+    return recordFromUnknown(json) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function browserHostNativeSurfaceRouteHealthTrusted(value: unknown) {
+  const record = recordFromUnknown(value);
+  return stringRecordField(record, 'owner') === 'BrowserHostSession'
+    && stringRecordField(record, 'adapterRole') === 'display-input-adapter'
+    && stringRecordField(record, 'liveSurfaceTransport') === 'native-embedded'
+    && booleanRecordField(record, 'attachAvailable') === true
+    && booleanRecordField(record, 'stateAvailable') === true
+    && booleanRecordField(record, 'singleInteractiveTruth') === true
+    && booleanRecordField(record, 'secondTruthSource') === false
+    && booleanRecordField(record, 'rightPaneBridge') === true
+    && booleanRecordField(record, 'ready') !== false;
+}
+
+function browserHostNativeSurfaceRouteStateTrusted(value: unknown, sessionState: BrowserHostSessionState) {
+  const stateJson = recordFromUnknown(value);
+  return stringRecordField(stateJson, 'owner') === 'BrowserHostSession'
+    && stringRecordField(stateJson, 'adapterRole') === 'display-input-adapter'
+    && stringRecordField(stateJson, 'sessionId') === sessionState.id
+    && stringRecordField(stateJson, 'liveSurfaceRef') === sessionState.liveSurfaceRef
+    && stringRecordField(stateJson, 'liveSurfaceTransport') === 'native-embedded'
+    && booleanRecordField(stateJson, 'singleInteractiveTruth') === true
+    && booleanRecordField(stateJson, 'secondTruthSource') === false
+    && booleanRecordField(stateJson, 'rightPaneBridge') === true
+    && booleanRecordField(stateJson, 'embedded') !== false
+    && booleanRecordField(stateJson, 'attached') !== false
+    && booleanRecordField(stateJson, 'passClaim') !== false;
+}
+
+function browserHostNativeSurfaceRect(value: unknown) {
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const x = numberRecordField(record, 'x');
+  const y = numberRecordField(record, 'y');
+  const width = numberRecordField(record, 'width');
+  const height = numberRecordField(record, 'height');
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return { x, y, width, height };
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function stringRecordField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function booleanRecordField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+function numberRecordField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
 function browserHostActionWithUiTiming(action: RightPaneBrowserHostAction): RightPaneBrowserHostAction {
   const receivedAt = action.uiEventReceivedAt ?? new Date().toISOString();
   return {
@@ -958,6 +1234,17 @@ function nativeBrowserHostSurfaceReason(value: unknown) {
   return value && typeof value === 'object' && typeof (value as { reason?: unknown }).reason === 'string'
     ? (value as { reason: string }).reason
     : undefined;
+}
+
+function browserRuntimeServicesError(runtime: { error?: string; services: Array<Record<string, unknown>> }) {
+  const failed = runtime.services.find((service) => service.ok === false) ?? runtime.services[0];
+  const label = stringRecordField(failed, 'label') ?? stringRecordField(failed, 'id') ?? 'Runtime services';
+  const status = stringRecordField(failed, 'status');
+  const detail = stringRecordField(failed, 'detail') ?? runtime.error;
+  return [
+    `${label}${status ? ` ${status}` : ''}`,
+    detail,
+  ].filter(Boolean).join(': ');
 }
 
 function rightPaneBrowserHostViewport(width: number, height: number) {

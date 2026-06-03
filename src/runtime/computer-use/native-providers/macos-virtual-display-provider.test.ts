@@ -78,9 +78,10 @@ test('macOS VirtualDisplayProvider side-effect hooks can drive a native VirtualA
   assert.equal(result.evidence.nativeSessionCreated, true);
   assert.equal(result.evidence.liveFrameAttached, true);
   assert.equal(result.evidence.currentFrameMaterialized, true);
-  assert.equal(result.refs.sessionRef, `${providerRoot}/session.json`);
-  assert.equal(result.refs.liveSurfaceRef, `${providerRoot}/live-surface.json`);
-  assert.equal(result.refs.currentFrameRef, `${providerRoot}/frames/current.png`);
+  assert.match(result.refs.sessionRef ?? '', /^computer-use:native-host\/sessions\//u);
+  assert.match(result.refs.liveSurfaceRef ?? '', /^computer-use:native-host\/surfaces\//u);
+  assert.match(result.refs.currentFrameRef ?? '', /^computer-use:native-host\/frames\//u);
+  assert.equal(result.refs.providerLifecycleSessionRef, `${providerRoot}/session.json`);
   assert.equal(data.attachState, 'attached');
   assert.equal(data.surfaceMode, 'live');
 });

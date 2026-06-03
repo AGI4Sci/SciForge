@@ -23,6 +23,7 @@ export interface VirtualAppScreenNativeHostSessionRecord {
   currentFrameRef?: string;
   currentFrameSequence?: number;
   currentRunRef: string;
+  currentRunPointerRef: string;
   adapterReadinessRef: string;
   evidenceLedgerRef: string;
   inputLeaseRef?: string;
@@ -43,6 +44,7 @@ export interface RecordVirtualAppScreenNativeHostSessionInput {
     actionAdapterRef?: string;
     adapterReadinessRef?: string;
     evidenceLedgerRef?: string;
+    currentRunPointerRef?: string;
     grantValidationRef?: string;
   };
 }
@@ -68,6 +70,7 @@ export function recordVirtualAppScreenNativeHostSession(
     currentFrameRef: input.frame?.frameRef ?? input.surface?.currentFrameRef,
     currentFrameSequence: input.frame?.frameSequence ?? input.surface?.currentFrameSequence,
     currentRunRef: input.session.evidenceContext.currentRunRef,
+    currentRunPointerRef: input.refs?.currentRunPointerRef ?? input.session.currentRunPointerRef,
     adapterReadinessRef: input.refs?.adapterReadinessRef ?? input.session.readiness.adapterReadinessRef,
     evidenceLedgerRef: input.refs?.evidenceLedgerRef ?? input.session.ledgerRef,
     inputLeaseRef: input.refs?.inputLeaseRef,
@@ -103,6 +106,23 @@ export function updateVirtualAppScreenNativeHostSessionFrame(options: {
     currentFrameRef: options.frame.frameRef,
     currentFrameSequence: options.frame.frameSequence,
   };
+  nativeHostRecordsBySessionRef.set(updated.sessionRef, updated);
+  if (updated.screenRef) nativeHostRecordsByScreenRef.set(updated.screenRef, updated);
+  return updated;
+}
+
+export function updateVirtualAppScreenNativeHostSessionReadiness(options: {
+  sessionRef: string;
+  adapterReadinessRef: string;
+  evidenceLedgerRef?: string;
+}): VirtualAppScreenNativeHostSessionRecord | undefined {
+  const record = nativeHostRecordsBySessionRef.get(options.sessionRef);
+  if (!record) return undefined;
+  const updated: VirtualAppScreenNativeHostSessionRecord = stripUndefined({
+    ...record,
+    adapterReadinessRef: options.adapterReadinessRef,
+    evidenceLedgerRef: options.evidenceLedgerRef ?? record.evidenceLedgerRef,
+  });
   nativeHostRecordsBySessionRef.set(updated.sessionRef, updated);
   if (updated.screenRef) nativeHostRecordsByScreenRef.set(updated.screenRef, updated);
   return updated;

@@ -49,7 +49,10 @@ test('VirtualAppScreen native executor fails closed when any provider lifecycle 
 
       const result = await executor.attach(command);
       const data = virtualAppScreenSessionManagerResultToVirtualScreenData(command, result);
-      const expectedCalls = lifecycleIntents.slice(0, lifecycleIntents.indexOf(blockedIntent) + 1);
+      const expectedCalls: string[] = lifecycleIntents.slice(0, lifecycleIntents.indexOf(blockedIntent) + 1);
+      if (lifecycleIntents.indexOf(blockedIntent) > lifecycleIntents.indexOf('createSession')) {
+        expectedCalls.push('closeSession');
+      }
 
       assert.deepEqual(calls, expectedCalls);
       assert.equal(result.status, 'blocked');
@@ -119,6 +122,20 @@ test('VirtualAppScreen native executor attaches only after provider create launc
     assert.equal(result.refs.platformDriverRef, 'computer-use:session/native-executor-test/platform-driver.json');
     assert.equal(result.refs.permissionRef, 'permission:macos/screen-recording');
     assert.equal(result.refs.evidenceLedgerRef, 'computer-use:native-host/ledgers/session-1/evidence-ledger.json');
+    assert.equal(result.refs.currentRunPointerRef, 'computer-use:native-host/runs/session-1/current-run-pointer.json');
+    assert.deepEqual(result.refs.hostLifecycleReplayRefs, [
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0001-session.created.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0002-app.launched.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0003-surface.attached.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0004-grant.validated.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0005-frame.read.json',
+    ]);
+    assert.deepEqual(result.refs.minimalEvidenceReplayRefs, [
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0001-session.created.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0003-surface.attached.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0004-grant.validated.json',
+      'computer-use:native-host/ledgers/session-1/evidence-ledger.json/events/0005-frame.read.json',
+    ]);
     assert.equal(result.refs.guiPresentRef, 'gui.present:native-executor-test/screen-pane');
     assert.match(result.refs.liveBindingAttachGrantRef ?? '', /^computer-use:native-host\/grants\//);
     assert.match(result.refs.grantValidationRef ?? '', /^computer-use:native-host\/ledgers\/session-1\/evidence-ledger\.json\/events\/\d+-grant\.validated\.json$/);
@@ -143,6 +160,13 @@ test('VirtualAppScreen native executor attaches only after provider create launc
       assert.ok(result.evidence.evidenceRefs.includes(ref), `missing evidence ref ${ref}`);
     }
     assert.ok(result.evidence.evidenceRefs.includes(result.refs.evidenceLedgerRef));
+    assert.ok(result.evidence.evidenceRefs.includes(result.refs.currentRunPointerRef!));
+    for (const ref of result.refs.hostLifecycleReplayRefs ?? []) {
+      assert.ok(result.evidence.evidenceRefs.includes(ref), `missing lifecycle replay ref ${ref}`);
+    }
+    for (const ref of result.refs.minimalEvidenceReplayRefs ?? []) {
+      assert.ok(result.evidence.evidenceRefs.includes(ref), `missing replay ref ${ref}`);
+    }
     assert.ok(result.evidence.evidenceRefs.includes(result.refs.liveBindingAttachGrantRef!));
     assert.ok(result.evidence.evidenceRefs.includes(result.refs.grantValidationRef!));
     assert.ok(result.evidence.evidenceRefs.includes(result.refs.providerSessionOwnerRef!));
@@ -152,6 +176,9 @@ test('VirtualAppScreen native executor attaches only after provider create launc
     assert.equal(data.surfaceMode, 'live');
     assert.equal(data.surfaceTransport, 'webrtc');
     assert.equal(data.hostSessionRef, result.refs.sessionRef);
+    assert.equal(data.currentRunPointerRef, result.refs.currentRunPointerRef);
+    assert.deepEqual(data.hostLifecycleReplayRefs, result.refs.hostLifecycleReplayRefs);
+    assert.deepEqual(data.minimalEvidenceReplayRefs, result.refs.minimalEvidenceReplayRefs);
     assert.equal(data.surfaceOwnerRef, result.refs.surfaceOwnerRef);
     assert.equal(data.displayOwnerRef, result.refs.displayOwnerRef);
     assert.equal(data.liveBindingAttachGrantRef, result.refs.liveBindingAttachGrantRef);
@@ -168,6 +195,56 @@ test('VirtualAppScreen native executor attaches only after provider create launc
   } finally {
     unregister();
   }
+});
+
+test('VirtualAppScreen native executor resolves app profiles before invoking provider target kind', async () => {
+  const command = parsedAttachCommand();
+  const calls: string[] = [];
+  const operationOptionsByIntent: Partial<Record<LifecycleIntent, VirtualDisplayProviderOperationOptions | undefined>> = {};
+  const provider = fakeProvider({
+    calls,
+    status: 'ready',
+    readiness: readyReadiness(),
+    operationOptionsByIntent,
+  });
+  const executor = createVirtualAppScreenNativeExecutor({
+    executorId: 'native-session-manager:profile-resolver-test',
+    providerId: 'provider:profile-resolver-test',
+    supportedProfiles: ['vscode-editor'],
+    provider,
+  });
+
+  const result = await executor.attach(command);
+
+  assert.equal(result.status, 'attached', result.blockedReason);
+  for (const intent of lifecycleIntents) {
+    assert.equal(operationOptionsByIntent[intent]?.targetAppKind, 'vscode');
+    assert.equal(operationOptionsByIntent[intent]?.targetAppName, 'VSCode');
+  }
+  assert.equal(result.refs.targetAppRef, 'app:profile/vscode-editor');
+});
+
+test('VirtualAppScreen native executor blocks unknown app profiles instead of falling back to provider generic', async () => {
+  const command = parsedAttachCommand('unknown-editor', 'app:profile/unknown-editor');
+  const calls: string[] = [];
+  const provider = fakeProvider({
+    calls,
+    status: 'ready',
+    readiness: readyReadiness(),
+  });
+  const executor = createVirtualAppScreenNativeExecutor({
+    executorId: 'native-session-manager:unknown-profile-test',
+    providerId: 'provider:unknown-profile-test',
+    supportedProfiles: ['*'],
+    provider,
+  });
+
+  const result = await executor.attach(command);
+
+  assert.deepEqual(calls, []);
+  assert.equal(result.status, 'blocked');
+  assert.match(result.blockedReason ?? '', /unknown-editor/);
+  assert.equal(result.evidence.providerExecuted, false);
 });
 
 test('VirtualAppScreen native executor registers the Host binding for returned public session refs', async () => {
@@ -285,7 +362,12 @@ test('VirtualAppScreen native executor rejects provider chains missing required 
 
       const result = await executor.attach(command);
 
-      assert.deepEqual(calls, ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame']);
+      assert.deepEqual(
+        calls,
+        testCase.name === 'createSession.sessionRef'
+          ? ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame']
+          : ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame', 'closeSession'],
+      );
       assert.equal(result.status, 'blocked');
       assert.match(result.blockedReason ?? '', testCase.missingReason);
       assert.equal(result.evidence.providerExecuted, false);
@@ -372,7 +454,7 @@ test('VirtualAppScreen native executor rejects stale or cross-session provider l
 
       const result = await executor.attach(command);
 
-      assert.deepEqual(calls, ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame']);
+      assert.deepEqual(calls, ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame', 'closeSession']);
       assert.equal(result.status, 'blocked');
       assert.match(result.blockedReason ?? '', testCase.mismatchReason);
       assert.equal(result.evidence.providerExecuted, false);
@@ -414,7 +496,7 @@ test('VirtualAppScreen native executor rejects unsafe explicit surface transport
 
   const result = await executor.attach(command);
 
-  assert.deepEqual(calls, ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame']);
+  assert.deepEqual(calls, ['probe', 'createSession', 'launchApp', 'attachSurface', 'readFrame', 'closeSession']);
   assert.equal(result.status, 'blocked');
   assert.match(result.blockedReason ?? '', /unsafe provider surface transport/);
   assert.equal(result.evidence.providerExecuted, false);
@@ -490,12 +572,12 @@ test('VirtualAppScreen native executor rejects projection-only provider contract
   assert.equal(result.refs.currentFrameRef, undefined);
 });
 
-function parsedAttachCommand() {
+function parsedAttachCommand(profile = 'vscode-editor', targetAppRef = `app:profile/${profile}`) {
   const parsed = parseVirtualAppScreenRuntimeCommand([
     '/computer-use screen attach',
     '--source right-pane-screen',
-    '--profile "vscode-editor"',
-    '--target-app-ref "app:profile/vscode-editor"',
+    `--profile "${profile}"`,
+    `--target-app-ref "${targetAppRef}"`,
     '--screen-ref "virtual-app-screen:native-executor-test/screen"',
     '--activation-ref "computer-use:native-executor-test/attach-request.json"',
     '--adapter-readiness-ref "computer-use:native-executor-test/provider-readiness.json"',
@@ -540,9 +622,13 @@ function fakeProvider(options: {
   blockedReason?: string;
   omitRefsByIntent?: Partial<Record<VirtualDisplayProviderInvokeIntent, string[]>>;
   overrideRefsByIntent?: Partial<Record<VirtualDisplayProviderInvokeIntent, Record<string, string | undefined>>>;
+  operationOptionsByIntent?: Partial<Record<LifecycleIntent, VirtualDisplayProviderOperationOptions | undefined>>;
 }): VirtualDisplayProviderL1Contract {
   const call = (intent: VirtualDisplayProviderInvokeIntent) => (_operationOptions?: VirtualDisplayProviderOperationOptions) => {
     options.calls.push(intent);
+    if (options.operationOptionsByIntent && lifecycleIntents.includes(intent as LifecycleIntent)) {
+      options.operationOptionsByIntent[intent as LifecycleIntent] = _operationOptions;
+    }
     const status = options.statusByIntent?.[intent] ?? options.status ?? 'ready';
     return fakeInvokeResult({
       intent,

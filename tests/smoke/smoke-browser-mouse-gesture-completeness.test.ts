@@ -96,6 +96,7 @@ type MouseGestureOsUiAuditProof = {
   kind: MouseGestureOsUiAuditProofKind;
   owner: 'BrowserHostSession';
   auditRef: string;
+  proofRef: string;
   browserHostSessionRef: string;
   liveSurfaceRef: string;
   rawPayloadRecorded: false;
@@ -106,7 +107,26 @@ type MouseGestureProductAcceptance = {
   status: 'blocked' | 'passed';
   source: 'deterministic-contract-not-real-os-ui-run' | 'real-product-os-ui-run';
   canClaimRealMouseFidelityPass: boolean;
+  owner: 'BrowserHostSession';
+  productSurface: 'right-pane-browser';
+  inputChannel: 'browser-host-session';
+  liveSurfaceTransport: 'native-embedded';
+  browserHostSessionRef: string;
+  liveSurfaceRef: string;
+  handoffRef: string;
   requiredRealProofs: string[];
+  requiredProofs: Array<{
+    kind: MouseGestureOsUiAuditProofKind;
+    status: 'blocked';
+    owner: 'BrowserHostSession';
+    productSurface: 'right-pane-browser';
+    browserHostSessionRef: string;
+    liveSurfaceRef: string;
+    proofRef: string;
+    auditRef: string;
+    rawPayloadRecorded: false;
+    shellComposerTarget: 'not-targeted';
+  }>;
   auditProofsRequired: MouseGestureOsUiAuditProofKind[];
   realContextMenuVerified: boolean;
   realMiddleClickNewTabOrHandoffVerified: boolean;
@@ -121,6 +141,7 @@ type MouseGestureProductAcceptance = {
     runId: string;
     platform: 'macos' | 'windows' | 'linux';
     productSurface: 'right-pane-browser';
+    liveSurfaceTransport: 'native-embedded';
     browserHostSessionRef: string;
     liveSurfaceRef: string;
     composerAudit: {
@@ -350,6 +371,14 @@ test('BrowserHostSession mouse gesture completeness is single-owner and refs-fir
     assert.equal(report.contextMenuPolicy, 'browser-context-menu');
     assert.equal(report.middleClickPolicy, 'browser-host-session-owned-middle-button');
     assert.equal(report.productAcceptance.canClaimRealMouseFidelityPass, false);
+    assert.equal(report.productAcceptance.owner, 'BrowserHostSession');
+    assert.equal(report.productAcceptance.liveSurfaceTransport, 'native-embedded');
+    assert.equal(report.productAcceptance.browserHostSessionRef, `browser-host-session:${finalState.id}/session`);
+    assert.equal(report.productAcceptance.liveSurfaceRef, finalState.liveSurfaceRef);
+    assert.ok(report.productAcceptance.requiredProofs.every((proof) => proof.proofRef.startsWith(`browser-host-session:${finalState.id}/`)));
+    assert.equal(report.realOsUiRunHandoff.status, 'blocked');
+    assert.equal(report.realOsUiRunHandoff.passClaim, false);
+    assert.equal(report.realOsUiRunHandoff.requiredProofs.length, report.productAcceptance.requiredProofs.length);
     assert.deepEqual(validateMouseGestureProductAcceptance(report), [
       'real-product-os-ui-run-required',
       'real-os-ui-audit-proof-required',
@@ -393,6 +422,7 @@ test('BrowserHostSession mouse gesture product claim rejects forged pass without
         runId: 'mouse-gesture-forged',
         platform: 'macos' as const,
         productSurface: 'right-pane-browser' as const,
+        liveSurfaceTransport: 'native-embedded' as const,
         browserHostSessionRef: `browser-host-session:${state.id}/session`,
         liveSurfaceRef: `browser-host-session:${state.id}/live-surface`,
         composerAudit: {
@@ -423,7 +453,15 @@ test('BrowserHostSession mouse gesture product claim rejects split BrowserHostSe
       status: 'passed',
       source: 'real-product-os-ui-run',
       canClaimRealMouseFidelityPass: true,
+      owner: 'BrowserHostSession',
+      productSurface: 'right-pane-browser',
+      inputChannel: 'browser-host-session',
+      liveSurfaceTransport: 'native-embedded',
+      browserHostSessionRef: runRef,
+      liveSurfaceRef,
+      handoffRef: `browser-host-session:${state.id}/os-ui-handoff/mouse-gesture-fidelity`,
       requiredRealProofs: [],
+      requiredProofs: mouseGestureRequiredProofs(state),
         auditProofsRequired: [
           'window-focus-owner',
           'right-click-context-menu-owner',
@@ -445,6 +483,7 @@ test('BrowserHostSession mouse gesture product claim rejects split BrowserHostSe
         runId: 'mouse-gesture-split-ref-forged',
         platform: 'macos',
         productSurface: 'right-pane-browser',
+        liveSurfaceTransport: 'native-embedded',
         browserHostSessionRef: runRef,
         liveSurfaceRef,
         composerAudit: {
@@ -799,6 +838,9 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
   const dragDrop = trace.find((row) => row.gesture === 'drag-drop');
   const textSelection = trace.find((row) => row.gesture === 'text-selection');
   const scrollbarThumbDrag = trace.find((row) => row.gesture === 'scrollbar-thumb-drag');
+  const sessionRef = `browser-host-session:${state.id}/session`;
+  const liveSurfaceRef = state.liveSurfaceRef ?? `browser-host-session:${state.id}/live-surface`;
+  const requiredProofs = mouseGestureRequiredProofs(state);
   return {
     schemaVersion: 'sciforge.browser-host-session.mouse-gesture-completeness-smoke.v1',
     status: 'blocked',
@@ -885,6 +927,13 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
       status: 'blocked' as const,
       source: 'deterministic-contract-not-real-os-ui-run' as const,
       canClaimRealMouseFidelityPass: false,
+      owner: 'BrowserHostSession' as const,
+      productSurface: 'right-pane-browser' as const,
+      inputChannel: 'browser-host-session' as const,
+      liveSurfaceTransport: 'native-embedded' as const,
+      browserHostSessionRef: sessionRef,
+      liveSurfaceRef,
+      handoffRef: `browser-host-session:${state.id}/os-ui-handoff/mouse-gesture-fidelity`,
       requiredRealProofs: [
         'real-right-pane-os-ui-run',
         'right-click-context-menu-owner',
@@ -911,8 +960,34 @@ function boundedMouseGestureReport(state: BrowserHostSessionState, trace: MouseG
       rawSelectionTextRecorded: false,
       rawContextMenuPayloadRecorded: false,
       rawTabPayloadCaptured: false,
+      requiredProofs,
       blocker: 'real-product-os-ui-run-not-executed',
     } satisfies MouseGestureProductAcceptance,
+    realOsUiRunHandoff: {
+      status: 'blocked' as const,
+      passClaim: false,
+      blocker: 'real-product-native-os-ui-run-not-executed' as const,
+      requiredRunner: 'right-pane-native-os-ui-run' as const,
+      productSurface: 'right-pane-browser' as const,
+      owner: 'BrowserHostSession' as const,
+      inputChannel: 'browser-host-session' as const,
+      liveSurfaceTransport: 'native-embedded' as const,
+      browserHostSessionRef: sessionRef,
+      liveSurfaceRef,
+      handoffRef: `browser-host-session:${state.id}/os-ui-handoff/mouse-gesture-fidelity`,
+      auditRefs: [
+        `browser-host-session:${state.id}/audit/window-focus-owner`,
+        `browser-host-session:${state.id}/audit/right-click-context-menu-owner`,
+        `browser-host-session:${state.id}/audit/middle-click-tab-owner-or-handoff`,
+        `browser-host-session:${state.id}/audit/modifier-click-tab-owner-or-handoff`,
+        `browser-host-session:${state.id}/audit/selection-range-owner`,
+        `browser-host-session:${state.id}/audit/scrollbar-thumb-owner`,
+        `browser-host-session:${state.id}/audit/shell-composer-not-targeted`,
+      ],
+      requiredProofs,
+      rawPayloadsCaptured: false,
+      refsFirst: true,
+    },
     actionTimingSummary: state.actionTimingSummary?.map((row) => ({
       action: row.action,
       count: row.count,
@@ -986,12 +1061,14 @@ function hasMouseGestureOsUiAuditProofs(acceptance: MouseGestureProductAcceptanc
   const proofs = Array.isArray(run.auditProofs) ? run.auditProofs : [];
   const proofKinds = new Set(proofs.map((proof) => proof.kind));
   return run.productSurface === 'right-pane-browser'
+    && run.liveSurfaceTransport === 'native-embedded'
     && run.browserHostSessionRef.startsWith('browser-host-session:')
     && run.liveSurfaceRef.startsWith('browser-host-session:')
     && requiredKinds.every((kind) => proofKinds.has(kind))
     && proofs.every((proof) => (
       proof.owner === 'BrowserHostSession'
         && proof.auditRef.startsWith('browser-host-session:')
+        && proof.proofRef.startsWith('browser-host-session:')
         && proof.browserHostSessionRef === run.browserHostSessionRef
         && proof.liveSurfaceRef === run.liveSurfaceRef
         && proof.rawPayloadRecorded === false
@@ -1015,7 +1092,7 @@ function hasMouseGestureOsUiRunRefCohesion(acceptance: MouseGestureProductAccept
   if (!run || !runScope || !browserHostRefBelongsToScope(run.liveSurfaceRef, runScope)) return false;
   const refs = [
     run.composerAudit.composerAuditRef,
-    ...run.auditProofs.flatMap((proof) => [proof.auditRef, proof.browserHostSessionRef, proof.liveSurfaceRef]),
+    ...run.auditProofs.flatMap((proof) => [proof.auditRef, proof.proofRef, proof.browserHostSessionRef, proof.liveSurfaceRef]),
   ];
   return refs.length > 0 && refs.every((ref) => browserHostRefBelongsToScope(ref, runScope));
 }
@@ -1029,11 +1106,38 @@ function mouseGestureAuditProof(
     kind,
     owner: 'BrowserHostSession',
     auditRef: `${browserHostSessionRef.replace(/\/session$/, '')}/audit/${kind}`,
+    proofRef: `${browserHostSessionRef.replace(/\/session$/, '')}/required-proof/${kind}`,
     browserHostSessionRef,
     liveSurfaceRef,
     rawPayloadRecorded: false,
     shellComposerTarget: 'not-targeted',
   };
+}
+
+function mouseGestureRequiredProofs(state: BrowserHostSessionState) {
+  const sessionRef = `browser-host-session:${state.id}/session`;
+  const liveSurfaceRef = state.liveSurfaceRef ?? `browser-host-session:${state.id}/live-surface`;
+  return ([
+    'window-focus-owner',
+    'right-click-context-menu-owner',
+    'middle-click-tab-owner-or-handoff',
+    'modifier-click-tab-owner-or-handoff',
+    'selection-range-owner',
+    'scrollbar-thumb-owner',
+    'shell-composer-not-targeted',
+  ] satisfies MouseGestureOsUiAuditProofKind[]).map((kind) => ({
+    kind,
+    status: 'blocked' as const,
+    blocker: 'real-product-native-os-ui-run-not-executed' as const,
+    owner: 'BrowserHostSession' as const,
+    productSurface: 'right-pane-browser' as const,
+    browserHostSessionRef: sessionRef,
+    liveSurfaceRef,
+    proofRef: `browser-host-session:${state.id}/required-proof/${kind}`,
+    auditRef: `browser-host-session:${state.id}/audit/${kind}`,
+    rawPayloadRecorded: false as const,
+    shellComposerTarget: 'not-targeted' as const,
+  }));
 }
 
 function mouseGestureNewTabOwnerContract(state: BrowserHostSessionState) {

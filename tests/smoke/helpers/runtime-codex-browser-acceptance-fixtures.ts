@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -10,11 +11,15 @@ type BrowserAcceptanceManifest = {
   observedAt?: string;
   actualWorkspaceWriterPort?: number;
   actualWorkspaceWriterUrl?: string;
+  actualWorkspaceWriterUrlEvidence?: BoundedTextEvidence;
   actualRuntimeCodexPort?: number;
   actualRuntimeCodexUrl?: string;
+  actualRuntimeCodexUrlEvidence?: BoundedTextEvidence;
   actualUrl?: string;
+  actualUrlEvidence?: BoundedTextEvidence;
   actualPort?: number;
   workspacePath?: string;
+  workspacePathEvidence?: BoundedTextEvidence;
   profile?: string;
   provider?: string;
   model?: string;
@@ -47,8 +52,11 @@ type BrowserAcceptanceManifest = {
 type BrowserAcceptanceScenario = {
   status: BrowserAcceptanceStatus;
   prompt?: string;
+  promptEvidence?: BoundedTextEvidence;
   followUpPrompt?: string;
+  followUpPromptEvidence?: BoundedTextEvidence;
   expectedPassphrase?: string;
+  expectedPassphraseEvidence?: BoundedTextEvidence;
   selectedRefs?: string[];
   userIntent?: string;
   actualTaskResult?: ActualTaskResult;
@@ -66,6 +74,11 @@ type BrowserAcceptanceEvidence = {
   screenshotPath?: string;
   domSnapshotPath?: string;
   notesPath?: string;
+};
+
+type BoundedTextEvidence = {
+  length: number;
+  sha256: string;
 };
 
 type AcceptanceRubric = {
@@ -149,16 +162,18 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
   const artifactRoot = relativeFromRoot(context.root, fixtureDir);
   const fixturePath = (file: string): string => `${artifactRoot}/${file}`;
   const runtimeIdentityLines = runtimeIdentityFixtureLines(context.runtimeCodexIdentity);
+  const actualUrlEvidence = boundedTextEvidence(context.actualUrl);
+  const workspacePathEvidence = boundedTextEvidence(context.workspacePath);
   writeFixture(fixtureDir, 'valid-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
-    `  - generic: Actual browser URL ${context.actualUrl}`,
-    `  - generic: workspace ${context.workspacePath}`,
+    `  - generic: actual browser URL evidence length ${actualUrlEvidence.length} sha256 ${actualUrlEvidence.sha256}`,
+    `  - generic: workspace evidence length ${workspacePathEvidence.length} sha256 ${workspacePathEvidence.sha256}`,
     ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - generic: gui.present show-result from live Runtime Codex',
     '  - paragraph: Runtime Codex completed the requested browser task and rendered the answer in the main chat.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260519',
+    '  - paragraph: Runtime Codex answer rendered in bounded fixture summary.',
     '  - generic: audit folded by default',
     '',
   ].join('\n'));
@@ -166,40 +181,40 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
     '- main:',
     '  - strong: Ask SciForge',
     '  - button: 聊天工作台',
-    `  - generic: Actual browser URL ${context.actualUrl}`,
-    `  - generic: workspace ${context.workspacePath}`,
+    `  - generic: actual browser URL evidence length ${actualUrlEvidence.length} sha256 ${actualUrlEvidence.sha256}`,
+    `  - generic: workspace evidence length ${workspacePathEvidence.length} sha256 ${workspacePathEvidence.sha256}`,
     '  - generic: Runtime Codex',
     ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - paragraph: 回答已显示',
     '  - paragraph: Runtime Codex answer rendered in the default chat.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
+    '  - paragraph: Runtime Codex answer rendered in bounded fixture summary.',
     '  - generic: audit folded by default',
     '',
   ].join('\n'));
   writeFixture(fixtureDir, 'native-outside-default-chat-dom.txt', [
     '- main:',
-    `  - generic: Actual browser URL ${context.actualUrl}`,
-    `  - generic: workspace ${context.workspacePath}`,
+    `  - generic: actual browser URL evidence length ${actualUrlEvidence.length} sha256 ${actualUrlEvidence.sha256}`,
+    `  - generic: workspace evidence length ${workspacePathEvidence.length} sha256 ${workspacePathEvidence.sha256}`,
     '  - generic: Runtime Codex',
     ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - paragraph: Runtime Codex answer rendered in a detached audit panel.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260520A',
+    '  - paragraph: Runtime Codex answer rendered in bounded fixture summary.',
     '  - generic: audit folded by default',
     '',
   ].join('\n'));
   writeFixture(fixtureDir, 'seed-demo-dom.txt', [
     '- main:',
     '  - strong: Ask SciForge',
-    `  - generic: Actual browser URL ${context.actualUrl}`,
-    `  - generic: workspace ${context.workspacePath}`,
+    `  - generic: actual browser URL evidence length ${actualUrlEvidence.length} sha256 ${actualUrlEvidence.sha256}`,
+    `  - generic: workspace evidence length ${workspacePathEvidence.length} sha256 ${workspacePathEvidence.sha256}`,
     ...runtimeIdentityLines,
     '  - generic: command codex-command-negative-001',
     '  - generic: gui.present show-result from live Runtime Codex',
     '  - code: literature-evidence-review@1.0.0',
     '  - paragraph: seed-demo fixture success for KRAS G12C should never count as live Runtime Codex acceptance.',
-    '  - paragraph: SCIFORGE-CODEX-BROWSER-MT-20260519',
+    '  - paragraph: Runtime Codex answer rendered in bounded fixture summary.',
     '  - generic: audit folded by default',
     '',
   ].join('\n'));
@@ -207,9 +222,9 @@ export function writeRuntimeCodexBrowserAcceptanceFixtures(
     '# Acceptance rubric',
     '',
     'User intent: prove the real default-chat Runtime Codex browser path completed the requested task.',
-    'Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with URL, workspace, provider, model, profile, and command id.',
-    `Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 at ${context.actualUrl} in workspace ${context.workspacePath}.`,
-    'Evidence refs: valid-dom.txt and screen.png.',
+    'Expected observable result: gui.present projection or native Runtime Codex assistant answer rendered in default chat with URL/workspace digests, provider, model, profile, and command id.',
+    `Actual task result: Runtime Codex rendered a live answer for command codex-command-negative-001 with urlDigest=${actualUrlEvidence.sha256} workspaceDigest=${workspacePathEvidence.sha256}.`,
+    'Evidence refs: valid-dom.txt and valid-notes.md.',
     'Negative checks: seed/demo excluded; audit/debug output not used as the main answer; forged passed and partial states rejected.',
     'Remaining risks: none for this validator fixture.',
     '',
@@ -271,22 +286,22 @@ function passedFixtureManifest(
   context: RuntimeCodexBrowserAcceptanceFixtureContext,
   domPath: string,
   notesPath: string,
-  screenshotPath: string,
+  _screenshotPath: string,
   proofMode: RuntimeOutputProofMode = 'gui-present',
 ): BrowserAcceptanceManifest {
-  const evidence = { screenshotPath, domSnapshotPath: domPath, notesPath };
+  const evidence = { domSnapshotPath: domPath, notesPath };
   return {
     schemaVersion: 'sciforge.runtime-codex.browser-acceptance.v1',
     status: 'passed',
     source: 'codex-in-app-browser',
     observedAt: new Date().toISOString(),
-    actualUrl: context.actualUrl,
+    actualUrlEvidence: boundedTextEvidence(context.actualUrl),
     actualPort: context.requestedRolePort,
     actualWorkspaceWriterPort: context.requestedWorkspaceWriterPort,
-    actualWorkspaceWriterUrl: context.actualWorkspaceWriterUrl,
+    actualWorkspaceWriterUrlEvidence: boundedTextEvidence(context.actualWorkspaceWriterUrl),
     actualRuntimeCodexPort: context.requestedRuntimeCodexPort,
-    actualRuntimeCodexUrl: context.actualRuntimeCodexUrl,
-    workspacePath: context.workspacePath,
+    actualRuntimeCodexUrlEvidence: boundedTextEvidence(context.actualRuntimeCodexUrl),
+    workspacePathEvidence: boundedTextEvidence(context.workspacePath),
     profile: context.runtimeCodexIdentity.profile,
     provider: context.runtimeCodexIdentity.provider,
     model: context.runtimeCodexIdentity.model,
@@ -321,8 +336,8 @@ function passedFixtureManifest(
     artifactFollowUp: { ...passedScenario(context, 'artifact follow up', evidence, proofMode), selectedRefs: ['artifact:negative-fixture'] },
     multiTurn: {
       ...passedScenario(context, 'multi turn', evidence, proofMode),
-      followUpPrompt: 'reply with the remembered passphrase',
-      expectedPassphrase: context.expectedMultiTurnPassphrase,
+      followUpPromptEvidence: boundedTextEvidence('reply with the remembered passphrase'),
+      expectedPassphraseEvidence: boundedTextEvidence(context.expectedMultiTurnPassphrase),
       secondTurnVisibleAnswerConfirmed: true,
     },
   };
@@ -336,7 +351,7 @@ function passedScenario(
 ): BrowserAcceptanceScenario {
   return {
     status: 'passed',
-    prompt: userIntent,
+    promptEvidence: boundedTextEvidence(userIntent),
     userIntent,
     actualTaskResult: passedTaskResult(evidence.domSnapshotPath ?? ''),
     liveRuntimeCodexProof: passedLiveProof(evidence.domSnapshotPath ?? '', proofMode),
@@ -387,6 +402,13 @@ function runtimeIdentityFixtureLines(runtimeCodexIdentity: RuntimeCodexBrowserAc
 
 function writeJsonFixture(fixtureDir: string, file: string, content: unknown): void {
   writeFixture(fixtureDir, file, `${JSON.stringify(content, null, 2)}\n`);
+}
+
+function boundedTextEvidence(value: string): BoundedTextEvidence {
+  return {
+    length: Buffer.byteLength(value, 'utf8'),
+    sha256: createHash('sha256').update(value).digest('hex'),
+  };
 }
 
 function relativeFromRoot(root: string, path: string): string {

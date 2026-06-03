@@ -91,6 +91,14 @@ test('VirtualAppScreen input runtime executes canvas input through a recorded Na
     assert.equal(result.evidence.mutatingActionExecuted, true);
     assert.match(String(result.routeDecision.evidenceLedgerRef), /^computer-use:native-host\/ledgers\//);
     assert.equal(result.virtualScreenData.evidenceLedgerRef, fixture.evidenceLedgerRef);
+    assert.equal(result.virtualScreenData.currentRunPointerRef, fixture.currentRunPointerRef);
+    assert.deepEqual(result.virtualScreenData.minimalEvidenceReplayRefs, [
+      `${fixture.evidenceLedgerRef}/events/0001-session.created.json`,
+      `${fixture.evidenceLedgerRef}/events/0003-surface.attached.json`,
+      `${fixture.evidenceLedgerRef}/events/0004-grant.validated.json`,
+      `${fixture.evidenceLedgerRef}/events/0005-frame.read.json`,
+      `${fixture.evidenceLedgerRef}/events/0006-human-input.accepted.json`,
+    ]);
     assert.equal((result.virtualScreenData.runSummary as Record<string, unknown>).completionEligible, false);
 
     const ledger = fixture.host.getLedger(fixture.sessionId);
@@ -99,6 +107,27 @@ test('VirtualAppScreen input runtime executes canvas input through a recorded Na
     assert.equal(ledger.entries.filter((entry) => entry.type === 'frame.read').length, 2);
     const inputIntentRefs = result.routeDecision.inputIntentRefs as string[];
     assert.equal(ledger.entries.at(-2)?.refs.inputIntentRef, inputIntentRefs[0]);
+  } finally {
+    resetVirtualAppScreenProviderSessionStoreForTests();
+    resetVirtualAppScreenNativeHostSessionStoreForTests();
+  }
+});
+
+test('VirtualAppScreen input runtime blocks Native Host commands with a mismatched current-run pointer', async () => {
+  const fixture = nativeHostInputFixture({
+    currentRunPointerRef: 'computer-use:native-host/runs/session-1/stale-current-run-pointer.json',
+  });
+  try {
+    const result = await tryRunVirtualAppScreenInputRuntimeNativeHost(fixture.command, {
+      executorId: 'input-runtime:native-host-pointer-test',
+      providerId: 'native-virtual-app-screen-host',
+    });
+
+    assert.ok(result);
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /currentRunPointerRef/);
+    assert.match(String(result.routeDecision.providerBlockedReason), /currentRunPointerRef/);
+    assert.equal(result.evidence.providerExecuted, false);
   } finally {
     resetVirtualAppScreenProviderSessionStoreForTests();
     resetVirtualAppScreenNativeHostSessionStoreForTests();
@@ -378,7 +407,7 @@ test('VirtualAppScreen stop fails closed without safe stop evidence', async () =
   assert.equal(result.routeDecision.closesUserRealApp, false);
 });
 
-function nativeHostInputFixture() {
+function nativeHostInputFixture(overrides: { currentRunPointerRef?: string } = {}) {
   const host = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter());
   const created = host.createSession(
     { profileId: 'native-host-input-runtime', defaultSurfaceTransport: 'native-frame-stream' },
@@ -410,6 +439,7 @@ function nativeHostInputFixture() {
   const evidenceLedgerRef = created.value.ledgerRef;
   const command = parsedNativeHostCanvasInputCommand({
     sessionRef: created.value.sessionRef,
+    currentRunPointerRef: overrides.currentRunPointerRef ?? created.value.currentRunPointerRef,
     screenRef: attached.value.screenRef,
     targetAppRef: 'app:contract-smoke',
     targetWindowRef: attached.value.targetWindowRef,
@@ -507,6 +537,7 @@ function nativeHostInputFixture() {
     sessionId: created.value.sessionId,
     command,
     evidenceLedgerRef,
+    currentRunPointerRef: created.value.currentRunPointerRef,
   };
 }
 
@@ -558,6 +589,7 @@ function parsedNativeHostAttachCommand(refs: {
 
 function parsedNativeHostCanvasInputCommand(refs: {
   sessionRef: string;
+  currentRunPointerRef: string;
   screenRef: string;
   targetAppRef: string;
   targetWindowRef: string;
@@ -572,6 +604,7 @@ function parsedNativeHostCanvasInputCommand(refs: {
     '--source virtual-app-screen-canvas',
     '--kind click',
     `--session-ref "${refs.sessionRef}"`,
+    `--current-run-pointer-ref "${refs.currentRunPointerRef}"`,
     `--screen-ref "${refs.screenRef}"`,
     `--target-app-ref "${refs.targetAppRef}"`,
     `--target-window-ref "${refs.targetWindowRef}"`,

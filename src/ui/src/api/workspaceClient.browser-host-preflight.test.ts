@@ -11,6 +11,7 @@ import {
   preflightBrowserHostSessionWriter,
   sendBrowserHostComputerUseAction,
   sendBrowserHostSessionAction,
+  startRuntimeServices,
   startBrowserHostSession,
 } from './workspaceClient';
 
@@ -203,6 +204,30 @@ describe('browser host session writer preflight', () => {
     assert.equal(result.ok, true);
     assert.equal(result.status, 'ready');
     assert.doesNotMatch(result.message, /frame-stream/);
+  });
+
+  it('requests native surface readiness when starting services for the Browser pane', async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      assert.equal(String(input), '/api/sciforge/runtime/start');
+      requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      return jsonResponse({
+        ok: false,
+        services: [{
+          id: 'workspace',
+          label: 'Workspace Writer',
+          ok: false,
+          status: 'native-surface-adapter-missing',
+          detail: 'BrowserHostSession live browser sessions require a Desktop native surface adapter.',
+        }],
+      });
+    }) as typeof fetch;
+
+    const result = await startRuntimeServices({ requireBrowserHostNativeSurface: true });
+
+    assert.deepEqual(requestBody, { requireBrowserHostNativeSurface: true });
+    assert.equal(result.ok, false);
+    assert.equal(result.services[0]?.status, 'native-surface-adapter-missing');
   });
 
   it('sends requested capture mode with BrowserHostSession actions', async () => {

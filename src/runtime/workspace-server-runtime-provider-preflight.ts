@@ -83,9 +83,28 @@ export function normalizeRuntimeProviderProxyHealthzResponse(
 }
 
 export function runtimeProviderProxyBaseUrl(env: NodeJS.ProcessEnv, defaultProxyBaseUrl: string) {
-  const configured = stringValue(env.SCIFORGE_PROXY_BASE_URL) || defaultProxyBaseUrl;
+  const configured = stringValue(env.SCIFORGE_PROXY_BASE_URL)
+    || proxyBaseUrlFromPortEnv(env)
+    || defaultProxyBaseUrl;
   const trimmed = configured.replace(/\/+$/, '');
   return trimmed.endsWith('/v1') ? trimmed.slice(0, -3) : trimmed;
+}
+
+function proxyBaseUrlFromPortEnv(env: NodeJS.ProcessEnv) {
+  const port = stringValue(env.SCIFORGE_PROXY_PORT);
+  if (!port || !/^\d+$/.test(port)) return undefined;
+  const parsedPort = Number(port);
+  if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65_535) return undefined;
+  const configuredHost = stringValue(env.SCIFORGE_PROXY_HOST);
+  const host = !configuredHost || configuredHost === '0.0.0.0' || configuredHost === '::'
+    ? '127.0.0.1'
+    : configuredHost;
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host;
+  try {
+    return new URL(`http://${urlHost}:${parsedPort}`).toString().replace(/\/+$/, '');
+  } catch {
+    return undefined;
+  }
 }
 
 function runtimeProviderPreflightCategory(input: {

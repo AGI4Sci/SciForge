@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
@@ -42,8 +44,12 @@ import {
 import {
   ensureVirtualAppScreenRuntimeExecutorsRegistered,
   resetVirtualAppScreenRuntimeExecutorsForTests,
+  VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV,
+  VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV,
+  VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS_ENV,
   VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV,
   VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV,
+  VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS_ENV,
 } from './virtual-app-screen-runtime-executors.js';
 
 test('runtime executor bootstrap registers a fail-closed macOS native provider shell', async () => {
@@ -252,12 +258,14 @@ test('runtime executor bootstrap can opt into native driver hook factories with 
 test('runtime executor bootstrap maps opt-in env target app into driver, probe, and executor defaults', async () => {
   resetVirtualAppScreenRuntimeExecutorsForTests();
   const launchSpecs: Array<Record<string, unknown>> = [];
+  const targetWindowTimeouts: number[] = [];
   const registered = ensureVirtualAppScreenRuntimeExecutorsRegistered({
     platform: 'darwin',
     macosProviderOptions: readyMacosProviderOptions(),
     nativeDriverHooks: {
       env: {
         [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS_ENV]: '45000',
         [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV]: JSON.stringify({
           kind: ' json-editor ',
           name: ' JSON Editor ',
@@ -268,6 +276,14 @@ test('runtime executor bootstrap maps opt-in env target app into driver, probe, 
           appUserModelId: 'should-not-reach-macos',
           processMatch: ' JsonEditor.* ',
           windowTitlePattern: ' ^Document ',
+          editableWindowReadiness: {
+            required: true,
+            mode: 'document',
+            rejectTitlePattern: '^(?:Open|Save)\\b',
+            requireAxWindow: true,
+            requireNonEmptyTitle: true,
+            requireEditableSurfaceEvidence: true,
+          },
         }),
         SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: ' scalar-editor ',
         SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_ARGS_JSON: '["--scalar","two words"]',
@@ -281,6 +297,31 @@ test('runtime executor bootstrap maps opt-in env target app into driver, probe, 
               details: { launchMode: 'captured-env-target' },
             };
           },
+          waitForTargetWindow: (input) => {
+            targetWindowTimeouts.push(input.timeoutMs);
+            return {
+              cgWindow: {
+                pid: 4242,
+                windowNumber: 19,
+                ownerName: 'Research Editor',
+                title: 'Untitled',
+                layer: 0,
+                x: 1600,
+                y: 0,
+                width: 1000,
+                height: 700,
+              },
+              axWindow: {
+                pid: 4242,
+                windowIndex: 1,
+                title: 'Untitled',
+                x: 1600,
+                y: 0,
+                width: 1000,
+                height: 700,
+              },
+            };
+          },
         }),
       },
     },
@@ -292,6 +333,7 @@ test('runtime executor bootstrap maps opt-in env target app into driver, probe, 
 
     assert.equal(result.status, 'attached');
     assert.equal(launchSpecs.length, 1);
+    assert.deepEqual(targetWindowTimeouts, [45000]);
     assert.deepEqual(launchSpecs[0], {
       kind: 'scalar-editor',
       name: 'JSON Editor',
@@ -301,6 +343,14 @@ test('runtime executor bootstrap maps opt-in env target app into driver, probe, 
       appPath: '/Applications/JsonEditor.app',
       processMatch: 'JsonEditor.*',
       windowTitlePattern: '^Document',
+      editableWindowReadiness: {
+        required: true,
+        mode: 'document',
+        rejectTitlePattern: '^(?:Open|Save)\\b',
+        requireAxWindow: true,
+        requireNonEmptyTitle: true,
+        requireEditableSurfaceEvidence: true,
+      },
     });
   } finally {
     resetVirtualAppScreenRuntimeExecutorsForTests();
@@ -507,6 +557,55 @@ test('runtime executor bootstrap fail-closes without native provider registratio
       },
     },
     {
+      name: 'unsupported editable readiness key',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV]: JSON.stringify({
+          kind: 'generic-editor',
+          command: 'research-editor',
+          editableWindowReadiness: {
+            required: true,
+            unknownEvidence: true,
+          },
+        }),
+      },
+    },
+    {
+      name: 'wrong editable readiness type',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV]: JSON.stringify({
+          kind: 'generic-editor',
+          command: 'research-editor',
+          editableWindowReadiness: {
+            required: 'yes',
+          },
+        }),
+      },
+    },
+    {
+      name: 'invalid editable readiness mode',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV]: JSON.stringify({
+          kind: 'generic-editor',
+          command: 'research-editor',
+          editableWindowReadiness: {
+            mode: 'spreadsheet',
+          },
+        }),
+      },
+    },
+    {
+      name: 'invalid editable readiness reject title regex',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON_ENV]: JSON.stringify({
+          kind: 'generic-editor',
+          command: 'research-editor',
+          editableWindowReadiness: {
+            rejectTitlePattern: '[',
+          },
+        }),
+      },
+    },
+    {
       name: 'invalid regex',
       env: {
         SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_PROCESS_MATCH: '[',
@@ -540,6 +639,74 @@ test('runtime executor bootstrap fail-closes without native provider registratio
         assert.equal(result.status, 'blocked');
         assert.match(result.blockedReason ?? '', /No runtime-owned native VirtualAppScreen session executor is registered/);
         assert.equal(result.evidence.providerExecuted, false);
+      } finally {
+        resetVirtualAppScreenRuntimeExecutorsForTests();
+      }
+    });
+  }
+});
+
+test('runtime executor bootstrap registers fail-closed provider shell on invalid env input/control hook config', async (t) => {
+  const cases = [
+    {
+      name: 'invalid native driver window timeout',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS_ENV]: 'not-a-timeout',
+      },
+      reason: new RegExp(VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS_ENV, 'u'),
+    },
+    {
+      name: 'invalid args JSON',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: '"not-array"',
+      },
+      reason: new RegExp(VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV, 'u'),
+    },
+    {
+      name: 'invalid timeout',
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS_ENV]: '10',
+      },
+      reason: new RegExp(VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS_ENV, 'u'),
+    },
+  ] as const;
+
+  for (const testCase of cases) {
+    await t.test(testCase.name, async () => {
+      resetVirtualAppScreenRuntimeExecutorsForTests();
+      const registered = ensureVirtualAppScreenRuntimeExecutorsRegistered({
+        platform: 'darwin',
+        macosProviderOptions: readyMacosProviderOptions(),
+        nativeDriverHooks: {
+          env: {
+            [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+            ...testCase.env,
+          },
+          macos: {
+            targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+            probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+            dependencies: fakeMacosDriverDependencies(),
+          },
+        },
+      });
+      try {
+        assert.deepEqual(registered.registeredExecutorIds, [
+          'native-session-manager:macos-virtual-display-provider',
+          'input-runtime:macos-virtual-display-provider',
+        ]);
+
+        const result = await attachVirtualAppScreenSession(parsedAttachCommand());
+
+        assert.equal(result.status, 'blocked');
+        assert.equal(result.executorId, 'native-session-manager:macos-virtual-display-provider');
+        assert.equal(result.providerId, MACOS_VIRTUAL_DISPLAY_PROVIDER_ID);
+        assert.equal(result.evidence.providerExecuted, false);
+        assert.match(result.blockedReason ?? '', testCase.reason);
+        const runDirRef = requiredString(result.refs.currentRunRef).replace(/\/current-run\.json$/u, '');
+        assert.equal(requiredString(result.refs.adapterReadinessRef), `${runDirRef}/virtual-display-provider/adapter-readiness.json`);
+        assert.equal(requiredString(result.refs.blockedRef), `${runDirRef}/virtual-display-provider/blocked/probe.json`);
       } finally {
         resetVirtualAppScreenRuntimeExecutorsForTests();
       }
@@ -645,23 +812,34 @@ test('runtime executor bootstrap does not take precedence over an already regist
       providerId: 'provider:product-test',
       refs: {
         currentRunRef: '.sciforge/vision-runs/product-test/current-run.json',
-        sessionRef: 'computer-use:session/product-test/session.json',
-        liveSurfaceRef: 'computer-use:session/product-test/live-surface.json',
-        surfaceTransportRef: 'computer-use:session/product-test/surface-transport.json',
-        frameStreamRef: 'computer-use:session/product-test/frame-stream.json',
-        currentFrameRef: 'computer-use:session/product-test/frames/current.png',
-        frameTransportContractRef: 'computer-use:session/product-test/frame-transport-contract.json',
-        frameTelemetryRef: 'computer-use:session/product-test/frame-telemetry.json',
-        mediaChannelRef: 'computer-use:session/product-test/native-frame-stream/live',
-        dataChannelRef: 'computer-use:session/product-test/native-frame-control-channel/control',
+        currentRunPointerRef: 'computer-use:native-host/runs/product-test/current-run-pointer.json',
+        sessionRef: 'computer-use:native-host/sessions/product-test/session.json',
+        liveSurfaceRef: 'computer-use:native-host/surfaces/product-test/live-surface.json',
+        surfaceTransportRef: 'computer-use:native-host/surfaces/product-test/surface-transport.json',
+        frameStreamRef: 'computer-use:native-host/surfaces/product-test/frame-stream.json',
+        currentFrameRef: 'computer-use:native-host/frames/product-test/current.png',
+        frameTransportContractRef: 'computer-use:native-host/surfaces/product-test/frame-transport-contract.json',
+        frameTelemetryRef: 'computer-use:native-host/surfaces/product-test/frame-telemetry.json',
+        mediaChannelRef: 'computer-use:native-host/surfaces/product-test/native-frame-stream/live',
+        dataChannelRef: 'computer-use:native-host/surfaces/product-test/native-frame-control-channel/control',
+        liveBindingAttachGrantRef: 'computer-use:native-host/grants/product-test/live-binding-attach-grant.json',
+        grantValidationRef: 'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0004-grant.validated.json',
+        surfaceOwnerRef: 'computer-use:native-host/surfaces/product-test/surface-owner.json',
+        displayOwnerRef: 'computer-use:native-host/surfaces/product-test/display-owner.json',
         screenRef: command.refs.screenRef,
         targetAppRef: command.refs.targetAppRef,
         targetWindowRef: 'window:product-test/main',
-        inputLeaseRef: 'computer-use:session/product-test/input-lease.json',
-        actionAdapterRef: 'computer-use:session/product-test/action-adapter.json',
+        inputLeaseRef: 'computer-use:native-host/input/product-test/input-lease.json',
+        actionAdapterRef: 'computer-use:native-host/input/product-test/action-adapter.json',
         adapterReadinessRef: command.refs.readinessRef,
-        platformDriverRef: 'computer-use:session/product-test/platform-driver.json',
-        evidenceLedgerRef: 'computer-use:session/product-test/evidence-ledger.json',
+        platformDriverRef: 'computer-use:native-host/platform-drivers/product-test/platform-driver.json',
+        evidenceLedgerRef: 'computer-use:native-host/ledgers/product-test/evidence-ledger.json',
+        minimalEvidenceReplayRefs: [
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0001-session.created.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0003-surface.attached.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0004-grant.validated.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0005-frame.read.json',
+        ],
         guiPresentRef: command.refs.guiPresentRef,
       },
       evidence: {
@@ -687,23 +865,28 @@ test('runtime executor bootstrap does not take precedence over an already regist
           owner: 'VirtualDisplayProvider',
           providerId: 'provider:product-test',
           transport: 'native-frame-stream',
-          surfaceTransportRef: 'computer-use:session/product-test/surface-transport.json',
-          liveSurfaceRef: 'computer-use:session/product-test/live-surface.json',
-          frameStreamRef: 'computer-use:session/product-test/frame-stream.json',
-          currentFrameRef: 'computer-use:session/product-test/frames/current.png',
-          frameTransportContractRef: 'computer-use:session/product-test/frame-transport-contract.json',
-          frameTelemetryRef: 'computer-use:session/product-test/frame-telemetry.json',
-          mediaChannelRef: 'computer-use:session/product-test/native-frame-stream/live',
-          dataChannelRef: 'computer-use:session/product-test/native-frame-control-channel/control',
+          surfaceTransportRef: 'computer-use:native-host/surfaces/product-test/surface-transport.json',
+          liveSurfaceRef: 'computer-use:native-host/surfaces/product-test/live-surface.json',
+          frameStreamRef: 'computer-use:native-host/surfaces/product-test/frame-stream.json',
+          currentFrameRef: 'computer-use:native-host/frames/product-test/current.png',
+          frameTransportContractRef: 'computer-use:native-host/surfaces/product-test/frame-transport-contract.json',
+          frameTelemetryRef: 'computer-use:native-host/surfaces/product-test/frame-telemetry.json',
+          mediaChannelRef: 'computer-use:native-host/surfaces/product-test/native-frame-stream/live',
+          dataChannelRef: 'computer-use:native-host/surfaces/product-test/native-frame-control-channel/control',
           currentFrameSequence: 1,
           diagnosticOnly: false,
           productFallback: false,
           singleInteractiveTruth: true,
         },
         evidenceRefs: [
-          'computer-use:session/product-test/surface-transport.json',
-          'computer-use:session/product-test/platform-driver.json',
-          'computer-use:session/product-test/evidence-ledger.json',
+          'computer-use:native-host/surfaces/product-test/surface-transport.json',
+          'computer-use:native-host/platform-drivers/product-test/platform-driver.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json',
+          'computer-use:native-host/runs/product-test/current-run-pointer.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0001-session.created.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0003-surface.attached.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0004-grant.validated.json',
+          'computer-use:native-host/ledgers/product-test/evidence-ledger.json/events/0005-frame.read.json',
         ],
       },
     }),
@@ -798,7 +981,13 @@ test('runtime executor bootstrap executes attached Host input through provider-b
                 afterFrameRef: `${providerRootRef}/frames/host-click-after.json`,
                 beforeAfterFrameRefs: [`${providerRootRef}/before-after/host-click.json`],
                 verificationRefs: [`${providerRootRef}/verification/host-click.json`],
+                isolationEvidenceRefs: [`${providerRootRef}/control-plane/sendInputIntent-host-click/isolation-evidence.json`],
+                physicalDesktopProbeRefs: [`${providerRootRef}/control-plane/sendInputIntent-host-click/physical-desktop-probe.json`],
               },
+              affectsPhysicalDisplay: false,
+              sharedSystemInputUsed: false,
+              systemPointerMoved: false,
+              systemKeyboardEventsSent: false,
             };
           },
         }),
@@ -923,6 +1112,668 @@ test('runtime executor bootstrap executes attached Host controls through provide
     assert.deepEqual(controlCalls, ['pause', 'resume', 'closeSession']);
   } finally {
     resetVirtualAppScreenRuntimeExecutorsForTests();
+  }
+});
+
+test('runtime executor bootstrap binds env input/control shell hooks through the Host adapter', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-input-hook-'));
+  const hookPath = join(outDir, 'input-control-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  await writeFile(hookPath, inputControlHookScript(callsPath), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    assert.equal(attachResult.evidence.diagnosticOnly, false);
+    assert.match(requiredString(attachResult.refs.sessionRef), /^computer-use:native-host\/sessions\//u);
+    assert.match(requiredString(attachResult.refs.currentFrameRef), /^computer-use:native-host\/frames\//u);
+
+    const baseRefs = {
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    };
+
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs(baseRefs));
+    assert.equal(input.status, 'executed', input.message);
+    assert.equal(input.providerId, 'native-virtual-app-screen-host');
+    assert.equal(input.evidence.providerExecuted, true);
+    assert.equal(input.evidence.mutatingActionExecuted, true);
+    assert.deepEqual(input.routeDecision.providerOperations, ['sendInputIntent', 'readFrame']);
+    assert.match(String(input.routeDecision.currentFrameRef), /^computer-use:native-host\/frames\//u);
+
+    const resume = await runVirtualAppScreenInputRuntime(parsedControlInputCommandFromRefs('resume-agent', baseRefs));
+    assert.equal(resume.status, 'executed', resume.message);
+    assert.equal(resume.providerId, 'native-virtual-app-screen-host');
+    assert.deepEqual(resume.routeDecision.providerOperations, ['resume', 'readFrame']);
+    assert.match(String(resume.routeDecision.agentQueueRef), /^computer-use:native-host\/provider-adapter-control\//u);
+    assert.match(String(resume.routeDecision.currentFrameRefreshRef), /^computer-use:native-host\/provider-adapter-control\//u);
+
+    const calls = (await readFile(callsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation?: unknown; sessionRef?: unknown });
+    assert.deepEqual(calls.map((call) => call.operation), ['sendInputIntent', 'resume']);
+    assert.ok(calls.every((call) => call.sessionRef === attachResult.refs.providerLifecycleSessionRef));
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap does not leak parent secrets into env input/control hooks', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-input-hook-env-'));
+  const hookPath = join(outDir, 'env-check-hook.mjs');
+  const observedEnvPath = join(outDir, 'observed-env.json');
+  const previousSecret = process.env.SCIFORGE_TEST_INPUT_HOOK_SECRET;
+  process.env.SCIFORGE_TEST_INPUT_HOOK_SECRET = 'SECRET_TOKEN=parent-env-secret';
+  await writeFile(hookPath, envSanitizingInputControlHookScript(observedEnvPath), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(input.status, 'executed', input.message);
+    const observed = JSON.parse(await readFile(observedEnvPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(observed.secret, undefined);
+    assert.equal(observed.pathType, 'string');
+  } finally {
+    if (previousSecret === undefined) {
+      delete process.env.SCIFORGE_TEST_INPUT_HOOK_SECRET;
+    } else {
+      process.env.SCIFORGE_TEST_INPUT_HOOK_SECRET = previousSecret;
+    }
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap passes provider evidence root to env input/control hooks', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-input-hook-evidence-root-'));
+  const hookPath = join(outDir, 'input-control-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  await writeFile(hookPath, inputControlEvidenceRootHookScript(callsPath), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        outDir,
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(input.status, 'executed', input.message);
+    assert.equal(input.evidence.providerExecuted, true);
+
+    const providerSessionRef = requiredString(attachResult.refs.providerLifecycleSessionRef);
+    const providerRootRef = providerSessionRef.replace(/\/session\.json$/u, '');
+    const runDirRef = providerRootRef.replace(/\/virtual-display-provider$/u, '');
+    const calls = (await readFile(callsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as {
+        evidenceRoot?: { outDir?: unknown; runDirRef?: unknown; providerRootRef?: unknown };
+        inputIntentRef?: unknown;
+      });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(calls[0]?.evidenceRoot, {
+      outDir,
+      runDirRef,
+      providerRootRef,
+    });
+    const inputIntentRef = requiredString(typeof calls[0]?.inputIntentRef === 'string' ? calls[0].inputIntentRef : undefined);
+    assert.match(inputIntentRef, new RegExp(`^${escapeRegExp(providerRootRef)}/input-intents/`, 'u'));
+    const evidence = JSON.parse(await readFile(join(
+      outDir,
+      inputIntentRef.slice(`${runDirRef}/`.length),
+    ), 'utf8')) as Record<string, unknown>;
+    assert.equal(evidence.schemaVersion, 'sciforge.computer-use.virtual-app-screen.input-control-provider-evidence.v1');
+    assert.equal(evidence.operation, 'sendInputIntent');
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap uses env input/control hook capability as macOS safe input adapter proof', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-input-hook-capability-'));
+  const hookPath = join(outDir, 'input-control-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  await writeFile(hookPath, inputControlHookScript(callsPath, { includeInputAdapterCapability: true }), 'utf8');
+  await chmod(hookPath, 0o755);
+
+  const macosDeps = fakeMacosDriverDependencies();
+  delete macosDeps.probeInputAdapterCapability;
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: macosDeps,
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(input.status, 'executed', input.message);
+    assert.equal(input.providerId, 'native-virtual-app-screen-host');
+    assert.equal(input.evidence.providerExecuted, true);
+    assert.equal(input.evidence.mutatingActionExecuted, true);
+    assert.deepEqual(input.routeDecision.providerOperations, ['sendInputIntent', 'readFrame']);
+
+    const calls = (await readFile(callsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation?: unknown; capabilityProbe?: unknown });
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === true).length, 1);
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === false).length, 1);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap preserves env input/control capability refs for provider-root validation', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-input-hook-capability-refs-'));
+  const hookPath = join(outDir, 'input-control-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  await writeFile(hookPath, inputControlHookScript(callsPath, {
+    includeInputAdapterCapability: true,
+    capabilityRefs: 'stale-run',
+  }), 'utf8');
+  await chmod(hookPath, 0o755);
+
+  const macosDeps = fakeMacosDriverDependencies();
+  delete macosDeps.probeInputAdapterCapability;
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: macosDeps,
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(input.status, 'blocked');
+    assert.match(input.message, /capability evidence refs outside the current provider root/u);
+    const calls = (await readFile(callsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation?: unknown; capabilityProbe?: unknown });
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === true).length, 1);
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === false).length, 0);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap rejects env input/control capability probes that execute mutations', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-mutating-capability-hook-'));
+  const hookPath = join(outDir, 'input-control-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  await writeFile(hookPath, inputControlHookScript(callsPath, {
+    includeInputAdapterCapability: true,
+    mutateCapabilityProbe: true,
+  }), 'utf8');
+  await chmod(hookPath, 0o755);
+
+  const macosDeps = fakeMacosDriverDependencies();
+  delete macosDeps.probeInputAdapterCapability;
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: macosDeps,
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+
+    const input = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(input.status, 'blocked');
+    assert.match(input.message, /capability probe must be non-mutating/u);
+    const calls = (await readFile(callsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation?: unknown; capabilityProbe?: unknown });
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === true).length, 1);
+    assert.equal(calls.filter((call) => call.operation === 'sendInputIntent' && call.capabilityProbe === false).length, 0);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap redacts env hook diagnostics when input/control fails', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-redacting-hook-'));
+  const hookPath = join(outDir, 'redacting-hook.mjs');
+  await writeFile(hookPath, redactingInputControlHookScript(), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /hook did not complete|input\/control hook reported failure/u);
+    assert.doesNotMatch(result.message, /SECRET|TOKEN|computer-use:native-host\/sessions/u);
+    assert.doesNotMatch(String(result.routeDecision.providerBlockedReason), /SECRET|TOKEN|computer-use:native-host\/sessions/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap preserves bounded env hook failure detail for debugging', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-safe-hook-detail-'));
+  const hookPath = join(outDir, 'safe-detail-hook.mjs');
+  await writeFile(hookPath, safeFailureInputControlHookScript(), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /reported failure: target-window-not-readable/u);
+    assert.match(String(result.routeDecision.providerBlockedReason), /target-window-not-readable/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap fails closed when env hook closes stdin before reading', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-closed-stdin-hook-'));
+  const hookPath = join(outDir, 'closed-stdin-hook.mjs');
+  await writeFile(hookPath, closedStdinInputControlHookScript(), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /stdin|must write a JSON object|exited with code/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap waits for timed-out env hooks to terminate before returning', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-timeout-hook-'));
+  const hookPath = join(outDir, 'timeout-hook.mjs');
+  const markerPath = join(outDir, 'late-write.txt');
+  await writeFile(hookPath, timeoutInputControlHookScript(markerPath), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS_ENV]: '1000',
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /timed out/u);
+    await assert.rejects(readFile(markerPath, 'utf8'), /ENOENT/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap terminates timed-out env hook descendant processes', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-timeout-descendant-hook-'));
+  const hookPath = join(outDir, 'timeout-descendant-hook.mjs');
+  const markerPath = join(outDir, 'descendant-late-write.txt');
+  await writeFile(hookPath, timeoutDescendantInputControlHookScript(markerPath), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS_ENV]: '1000',
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(result.status, 'blocked');
+    assert.match(result.message, /timed out/u);
+    await sleep(1800);
+    await assert.rejects(() => readFile(markerPath, 'utf8'), /ENOENT/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime executor bootstrap terminates successful env hook descendant processes before returning', async () => {
+  resetVirtualAppScreenRuntimeExecutorsForTests();
+  const outDir = await mkdtemp(join(tmpdir(), 'sciforge-virtual-app-screen-success-descendant-hook-'));
+  const hookPath = join(outDir, 'success-descendant-hook.mjs');
+  const callsPath = join(outDir, 'calls.jsonl');
+  const markerPath = join(outDir, 'descendant-late-write.txt');
+  await writeFile(hookPath, inputControlHookScript(callsPath, {
+    includeInputAdapterCapability: true,
+    successDescendantMarkerPath: markerPath,
+  }), 'utf8');
+  await chmod(hookPath, 0o755);
+  ensureVirtualAppScreenRuntimeExecutorsRegistered({
+    platform: 'darwin',
+    macosProviderOptions: readyMacosProviderOptions(),
+    nativeDriverHooks: {
+      env: {
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS_ENV]: '1',
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND_ENV]: process.execPath,
+        [VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON_ENV]: JSON.stringify([hookPath]),
+      },
+      macos: {
+        targetApp: { kind: 'vscode-editor', command: 'research-editor' },
+        probeOptions: readyMacosDriverProbeOptions('vscode-editor'),
+        dependencies: fakeMacosDriverDependencies(),
+      },
+    },
+  });
+  try {
+    const attachResult = await attachVirtualAppScreenSession(parsedAttachCommand());
+    assert.equal(attachResult.status, 'attached', attachResult.blockedReason);
+    const result = await runVirtualAppScreenInputRuntime(parsedCanvasInputCommandFromRefs({
+      sessionRef: requiredString(attachResult.refs.sessionRef),
+      screenRef: requiredString(attachResult.refs.screenRef),
+      targetAppRef: requiredString(attachResult.refs.targetAppRef),
+      targetWindowRef: requiredString(attachResult.refs.targetWindowRef),
+      frameRef: requiredString(attachResult.refs.currentFrameRef),
+      inputLeaseRef: requiredString(attachResult.refs.inputLeaseRef),
+      actionAdapterRef: requiredString(attachResult.refs.actionAdapterRef),
+      adapterReadinessRef: requiredString(attachResult.refs.adapterReadinessRef),
+      evidenceLedgerRef: requiredString(attachResult.refs.evidenceLedgerRef),
+    }));
+
+    assert.equal(result.status, 'executed', result.message);
+    await sleep(1400);
+    await assert.rejects(() => readFile(markerPath, 'utf8'), /ENOENT/u);
+  } finally {
+    resetVirtualAppScreenRuntimeExecutorsForTests();
+    await rm(outDir, { recursive: true, force: true });
   }
 });
 
@@ -1169,6 +2020,7 @@ function fakeMacosDriverDependencies(overrides: Partial<MacosVirtualDisplayDrive
         height: 836,
       },
     }),
+    probeInputAdapterCapability: () => ({ ok: true, mechanism: 'pid-scoped-ax' }),
     captureDisplayFrame: (input) => ({
       frameRef: `${input.runDirRef}/virtual-display-provider/frames/current.json`,
       screenshotRef: `${input.runDirRef}/virtual-display-provider/frames/current.png`,
@@ -1213,6 +2065,8 @@ function providerControlHookResult(
       executorEventRefs: [`${providerRootRef}/executor-events/${slug}.json`],
       beforeAfterFrameRefs: [`${providerRootRef}/before-after/${slug}.json`],
       verificationRefs: [`${providerRootRef}/verification/${slug}.json`],
+      isolationEvidenceRefs: [`${providerRootRef}/control-plane/${slug}/isolation-evidence.json`],
+      physicalDesktopProbeRefs: [`${providerRootRef}/control-plane/${slug}/physical-desktop-probe.json`],
       agentQueueRef: `${providerRootRef}/control-plane/${slug}/agent-queue.json`,
       currentFrameRefreshRef: controlKind === 'resume-agent'
         ? `${providerRootRef}/control-plane/${slug}/current-frame-refresh.json`
@@ -1223,7 +2077,293 @@ function providerControlHookResult(
     },
     mutatingActionExecuted: true,
     providerEvidenceWritten: true,
+    affectsPhysicalDisplay: false,
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
   };
+}
+
+function inputControlHookScript(
+  callsPath: string,
+  options: {
+    includeInputAdapterCapability?: boolean;
+    mutateCapabilityProbe?: boolean;
+    capabilityRefs?: 'provider-root' | 'stale-run';
+    successDescendantMarkerPath?: string;
+  } = {},
+) {
+  return `
+import { spawn } from 'node:child_process';
+import { appendFileSync, readFileSync } from 'node:fs';
+
+const context = JSON.parse(readFileSync(0, 'utf8'));
+const capabilityProbe = context.capabilityProbe === true;
+const refs = context.refs ?? {};
+const providerRootRef = typeof refs.providerRootRef === 'string'
+  ? refs.providerRootRef
+  : '.sciforge/vision-runs/env-input-control-hook/virtual-display-provider';
+const operation = String(context.operation ?? 'unknown');
+const inputIntent = context.inputIntent ?? {};
+const kind = String(inputIntent.controlKind ?? inputIntent.kind ?? operation).replace(/[^a-z0-9-]/giu, '-');
+const slug = String(operation + '-' + kind).replace(/[^a-z0-9-]/giu, '-');
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
+  operation,
+  sessionRef: refs.sessionRef,
+  capabilityProbe,
+}) + '\\n');
+
+const outputRefs = {
+  currentRunRef: refs.currentRunRef,
+  sessionRef: refs.sessionRef,
+  inputLeaseRef: refs.inputLeaseRef,
+  actionAdapterRef: refs.actionAdapterRef,
+  adapterReadinessRef: refs.adapterReadinessRef,
+  evidenceLedgerRef: refs.evidenceLedgerRef,
+  beforeFrameRef: refs.currentFrameRef ?? providerRootRef + '/frames/' + slug + '-before.json',
+  afterFrameRef: providerRootRef + '/frames/' + slug + '-after.json',
+  inputIntentRefs: [providerRootRef + '/input-intents/' + slug + '.json'],
+  executorEventRefs: [providerRootRef + '/executor-events/' + slug + '.json'],
+  beforeAfterFrameRefs: [providerRootRef + '/before-after/' + slug + '.json'],
+  verificationRefs: [providerRootRef + '/verification/' + slug + '.json'],
+  isolationEvidenceRefs: [providerRootRef + '/control-plane/' + slug + '/isolation-evidence.json'],
+  physicalDesktopProbeRefs: [providerRootRef + '/control-plane/' + slug + '/physical-desktop-probe.json'],
+  agentQueueRef: operation === 'pause' || operation === 'resume' || operation === 'closeSession'
+    ? providerRootRef + '/control-plane/' + slug + '/agent-queue.json'
+    : undefined,
+  currentFrameRefreshRef: operation === 'resume'
+    ? providerRootRef + '/control-plane/' + slug + '/current-frame-refresh.json'
+    : undefined,
+  safeStopRef: operation === 'closeSession'
+    ? providerRootRef + '/control-plane/' + slug + '/safe-stop.json'
+    : undefined,
+};
+const capabilityRefs = capabilityProbe
+  ? ${JSON.stringify(options.capabilityRefs ?? '')} === 'stale-run'
+    ? { verificationRefs: ['.sciforge/vision-runs/stale-run/virtual-display-provider/verification/capability.json'] }
+    : ${JSON.stringify(options.capabilityRefs ?? '')} === 'provider-root'
+      ? { verificationRefs: [providerRootRef + '/verification/capability.json'] }
+      : undefined
+  : undefined;
+if (${JSON.stringify(options.successDescendantMarkerPath ?? '')}) {
+  const childScript = "import { appendFileSync } from 'node:fs';"
+    + "setTimeout(() => appendFileSync("
+    + JSON.stringify(${JSON.stringify(options.successDescendantMarkerPath ?? '')})
+    + ", 'late descendant write after success\\\\n'), 900);"
+    + "setInterval(() => {}, 1000);";
+  const child = spawn(process.execPath, ['--input-type=module', '-e', childScript], { stdio: 'ignore' });
+  child.unref();
+}
+
+console.log(JSON.stringify({
+  ok: true,
+  inputAdapterCapability: ${options.includeInputAdapterCapability ? "{ ok: true, mechanism: 'pid-scoped-ax', refs: capabilityRefs }" : 'undefined'},
+  refs: outputRefs,
+  mutatingActionExecuted: capabilityProbe ? ${options.mutateCapabilityProbe ? 'true' : 'false'} : true,
+  providerEvidenceWritten: capabilityProbe ? false : true,
+  affectsPhysicalDisplay: false,
+  sharedSystemInputUsed: false,
+  systemPointerMoved: false,
+  systemKeyboardEventsSent: false,
+}));
+`;
+}
+
+function envSanitizingInputControlHookScript(observedEnvPath: string) {
+  return `
+import { readFileSync, writeFileSync } from 'node:fs';
+
+const context = JSON.parse(readFileSync(0, 'utf8'));
+writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify({
+  secret: process.env.SCIFORGE_TEST_INPUT_HOOK_SECRET,
+  pathType: typeof process.env.PATH,
+}));
+const refs = context.refs ?? {};
+const providerRootRef = typeof refs.providerRootRef === 'string'
+  ? refs.providerRootRef
+  : '.sciforge/vision-runs/env-sanitizing-hook/virtual-display-provider';
+const operation = String(context.operation ?? 'unknown');
+const inputIntent = context.inputIntent ?? {};
+const kind = String(inputIntent.controlKind ?? inputIntent.kind ?? operation).replace(/[^a-z0-9-]/giu, '-');
+const slug = String(operation + '-' + kind).replace(/[^a-z0-9-]/giu, '-');
+
+console.log(JSON.stringify({
+  ok: true,
+  inputAdapterCapability: context.capabilityProbe === true
+    ? { ok: true, mechanism: 'pid-scoped-ax', refs: { verificationRefs: [providerRootRef + '/verification/capability.json'] } }
+    : undefined,
+  refs: {
+    currentRunRef: refs.currentRunRef,
+    sessionRef: refs.sessionRef,
+    inputLeaseRef: refs.inputLeaseRef,
+    actionAdapterRef: refs.actionAdapterRef,
+    adapterReadinessRef: refs.adapterReadinessRef,
+    evidenceLedgerRef: refs.evidenceLedgerRef,
+    beforeFrameRef: refs.currentFrameRef ?? providerRootRef + '/frames/' + slug + '-before.json',
+    afterFrameRef: providerRootRef + '/frames/' + slug + '-after.json',
+    inputIntentRefs: [providerRootRef + '/input-intents/' + slug + '.json'],
+    executorEventRefs: [providerRootRef + '/executor-events/' + slug + '.json'],
+    beforeAfterFrameRefs: [providerRootRef + '/before-after/' + slug + '.json'],
+    verificationRefs: [providerRootRef + '/verification/' + slug + '.json'],
+    isolationEvidenceRefs: [providerRootRef + '/control-plane/' + slug + '/isolation-evidence.json'],
+    physicalDesktopProbeRefs: [providerRootRef + '/control-plane/' + slug + '/physical-desktop-probe.json'],
+  },
+  mutatingActionExecuted: context.capabilityProbe === true ? false : true,
+  providerEvidenceWritten: context.capabilityProbe === true ? false : true,
+  affectsPhysicalDisplay: false,
+  sharedSystemInputUsed: false,
+  systemPointerMoved: false,
+  systemKeyboardEventsSent: false,
+}));
+`;
+}
+
+function inputControlEvidenceRootHookScript(callsPath: string) {
+  return `
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+const context = JSON.parse(readFileSync(0, 'utf8'));
+const evidenceRoot = context.evidenceRoot ?? {};
+if (typeof evidenceRoot.outDir !== 'string' || typeof evidenceRoot.runDirRef !== 'string' || typeof evidenceRoot.providerRootRef !== 'string') {
+  process.exit(2);
+}
+const operation = String(context.operation ?? 'unknown');
+const inputIntent = context.inputIntent ?? {};
+const kind = String(inputIntent.controlKind ?? inputIntent.kind ?? operation).replace(/[^a-z0-9-]/giu, '-');
+const slug = String(operation + '-' + kind).replace(/[^a-z0-9-]/giu, '-');
+const providerRootRef = evidenceRoot.providerRootRef;
+const inputIntentRef = providerRootRef + '/input-intents/' + slug + '.json';
+const localPathForRef = (ref) => {
+  const prefix = evidenceRoot.runDirRef + '/';
+  if (!ref.startsWith(prefix)) throw new Error('ref outside runDirRef: ' + ref);
+  return join(evidenceRoot.outDir, ref.slice(prefix.length));
+};
+const inputIntentPath = localPathForRef(inputIntentRef);
+mkdirSync(dirname(inputIntentPath), { recursive: true });
+writeFileSync(inputIntentPath, JSON.stringify({
+  schemaVersion: 'sciforge.computer-use.virtual-app-screen.input-control-provider-evidence.v1',
+  operation,
+  inputIntent,
+  evidenceRoot,
+}, null, 2));
+appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
+  operation,
+  evidenceRoot,
+  inputIntentRef,
+}) + '\\n');
+
+console.log(JSON.stringify({
+  ok: true,
+  refs: {
+    currentRunRef: context.refs?.currentRunRef,
+    sessionRef: context.refs?.sessionRef,
+    inputLeaseRef: context.refs?.inputLeaseRef,
+    actionAdapterRef: context.refs?.actionAdapterRef,
+    adapterReadinessRef: context.refs?.adapterReadinessRef,
+    evidenceLedgerRef: context.refs?.evidenceLedgerRef,
+    beforeFrameRef: context.refs?.currentFrameRef ?? providerRootRef + '/frames/' + slug + '-before.json',
+    afterFrameRef: providerRootRef + '/frames/' + slug + '-after.json',
+    inputIntentRefs: [inputIntentRef],
+    executorEventRefs: [providerRootRef + '/executor-events/' + slug + '.json'],
+    beforeAfterFrameRefs: [providerRootRef + '/before-after/' + slug + '.json'],
+    verificationRefs: [providerRootRef + '/verification/' + slug + '.json'],
+    isolationEvidenceRefs: [providerRootRef + '/control-plane/' + slug + '/isolation-evidence.json'],
+    physicalDesktopProbeRefs: [providerRootRef + '/control-plane/' + slug + '/physical-desktop-probe.json'],
+  },
+  mutatingActionExecuted: true,
+  providerEvidenceWritten: true,
+  affectsPhysicalDisplay: false,
+  sharedSystemInputUsed: false,
+  systemPointerMoved: false,
+  systemKeyboardEventsSent: false,
+}));
+`;
+}
+
+function redactingInputControlHookScript() {
+  return `
+import { readFileSync } from 'node:fs';
+
+const contextText = readFileSync(0, 'utf8');
+console.error('SECRET_TOKEN=stderr-secret ' + contextText);
+console.log(JSON.stringify({
+  ok: false,
+  detail: 'SECRET_TOKEN=stdout-secret ' + contextText,
+  refs: {},
+  mutatingActionExecuted: false,
+  providerEvidenceWritten: false,
+}));
+`;
+}
+
+function safeFailureInputControlHookScript() {
+  return `
+console.log(JSON.stringify({
+  ok: false,
+  detail: 'target-window-not-readable',
+  refs: {},
+  mutatingActionExecuted: false,
+  providerEvidenceWritten: false,
+}));
+`;
+}
+
+function closedStdinInputControlHookScript() {
+  return `
+process.stdin.destroy();
+setTimeout(() => process.exit(0), 50);
+`;
+}
+
+function timeoutInputControlHookScript(markerPath: string) {
+  return `
+import { appendFileSync, readFileSync } from 'node:fs';
+
+readFileSync(0, 'utf8');
+process.on('SIGTERM', () => {});
+setTimeout(() => {
+  appendFileSync(${JSON.stringify(markerPath)}, 'late write after timeout\\n');
+}, 1500);
+setInterval(() => {}, 1000);
+`;
+}
+
+function timeoutDescendantInputControlHookScript(markerPath: string) {
+  const childScript = `
+import { appendFileSync } from 'node:fs';
+setTimeout(() => {
+  appendFileSync(${JSON.stringify(markerPath)}, 'late descendant write after timeout\\\\n');
+}, 1500);
+setInterval(() => {}, 1000);
+`;
+  return `
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+
+readFileSync(0, 'utf8');
+spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], {
+  stdio: 'ignore',
+});
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+`;
+}
+
+function requiredString(value: string | undefined): string {
+  if (typeof value !== 'string') {
+    assert.fail('expected string');
+  }
+  assert.ok(value.trim());
+  return value;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fakeLinuxXpraDriverDependencies(overrides: Partial<LinuxXpraVirtualDisplayDriverDependencies> & {

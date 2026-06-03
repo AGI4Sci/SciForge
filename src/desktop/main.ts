@@ -17,6 +17,9 @@ import {
   type DesktopBrowserHostSurfaceElectron,
   type DesktopBrowserHostSurfaceViewContainer,
 } from './browser-host-surface.js';
+import {
+  createDesktopVirtualAppScreenSurfacePresenter,
+} from './virtual-app-screen-surface.js';
 
 type ElectronAppLike = {
   whenReady(): Promise<void>;
@@ -268,6 +271,7 @@ export function registerDesktopIpcHandlers(input: {
   browserHostSurface?: DesktopBrowserHostSurfaceController;
 }): void {
   const nativeBrowser = createDesktopNativeBrowserController(input.electron);
+  const virtualAppScreenSurface = createDesktopVirtualAppScreenSurfacePresenter();
   input.electron.ipcMain.handle('runtime:health', () => input.launcher.health());
   input.electron.ipcMain.handle('runtime:ready', () => ({ ok: input.launcher.ready(), ready: input.launcher.ready() }));
   input.electron.ipcMain.handle('runtime:config', () => input.runtimeConfig);
@@ -301,6 +305,15 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:browser-host-surface:state', async (_event: unknown, value: unknown) => {
     if (!input.browserHostSurface) return { ok: false, reason: 'native-embedded-browser-host-surface-unavailable' };
     return input.browserHostSurface.state(browserHostSurfaceSessionId(value));
+  });
+  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:attach', async (_event: unknown, value: unknown) => {
+    return virtualAppScreenSurface.attach(value);
+  });
+  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:present', async (_event: unknown, value: unknown) => {
+    return virtualAppScreenSurface.present(value);
+  });
+  input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:detach', async (_event: unknown, value: unknown) => {
+    return virtualAppScreenSurface.detach(value);
   });
   input.electron.ipcMain.handle('platform:reveal-path', async (_event: unknown, path: unknown) => {
     if (typeof path !== 'string') throw new Error('platform:reveal-path requires a path string');

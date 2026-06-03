@@ -42,6 +42,9 @@ export interface VirtualAppScreenRuntimeCommandRefs {
   currentFrameRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
+  surfaceIdentityRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   liveBindingAttachGrantRef?: string;
   grantValidationRef?: string;
   activationRef?: string;
@@ -49,6 +52,10 @@ export interface VirtualAppScreenRuntimeCommandRefs {
   permissionRef?: string;
   permissionRecheckRef?: string;
   platformDriverRef?: string;
+  preflightRef?: string;
+  preflightLedgerRef?: string;
+  preflightLedgerEntryRef?: string;
+  hostReadinessRef?: string;
   blockedRef?: string;
   evidenceLedgerRef?: string;
   guiPresentRef?: string;
@@ -197,6 +204,9 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       liveSurfaceRef,
       providerSessionOwnerRef: refs.providerSessionOwnerRef,
       providerSessionReconnectRef: refs.providerSessionReconnectRef,
+      surfaceIdentityRef: refs.surfaceIdentityRef,
+      surfaceOwnerRef: refs.surfaceOwnerRef,
+      displayOwnerRef: refs.displayOwnerRef,
       liveBindingAttachGrantRef: refs.liveBindingAttachGrantRef,
       grantValidationRef: refs.grantValidationRef,
       surfaceTransportRef: refs.surfaceTransportRef,
@@ -214,6 +224,19 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
     providerReadinessRef: refs.readinessRef,
     platformDriverRef: refs.platformDriverRef,
     platformDriverStatus: permissionCommand ? 'missing' : 'unknown',
+    preflightRef: refs.preflightRef,
+    preflightLedgerRef: refs.preflightLedgerRef,
+    preflightLedgerEntryRef: refs.preflightLedgerEntryRef,
+    hostReadinessRef: refs.hostReadinessRef,
+    nativeHostPreflight: refs.preflightRef || refs.preflightLedgerRef || refs.preflightLedgerEntryRef || refs.hostReadinessRef
+      ? {
+        preflightRef: refs.preflightRef,
+        preflightLedgerRef: refs.preflightLedgerRef,
+        preflightLedgerEntryRef: refs.preflightLedgerEntryRef,
+        hostReadinessRef: refs.hostReadinessRef,
+        adapterReadinessRef: refs.readinessRef.startsWith('computer-use:native-host/') ? refs.readinessRef : undefined,
+      }
+      : undefined,
     blockedRef: refs.blockedRef ?? primaryRef,
     handoffRef: command.action === 'screen-attach' ? refs.activationRef : refs.permissionHandoffRef,
     permissionRef: refs.permissionRef,
@@ -231,6 +254,8 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       refs.permissionRef,
       refs.permissionRecheckRef,
       refs.platformDriverRef,
+      refs.preflightRef,
+      refs.preflightLedgerRef,
       refs.blockedRef,
       refs.evidenceLedgerRef,
       refs.guiPresentRef,
@@ -241,6 +266,9 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       refs.currentFrameRef,
       refs.providerSessionOwnerRef,
       refs.providerSessionReconnectRef,
+      refs.surfaceIdentityRef,
+      refs.surfaceOwnerRef,
+      refs.displayOwnerRef,
       refs.liveBindingAttachGrantRef,
       refs.grantValidationRef,
       refs.displayGroupRef,
@@ -250,10 +278,15 @@ export function virtualAppScreenRuntimeCommandVirtualScreenData(command: Virtual
       refs.platformDriverRef,
       refs.permissionRef,
       refs.permissionRecheckRef,
+      refs.preflightLedgerEntryRef,
+      refs.hostReadinessRef,
       refs.blockedRef,
       refs.evidenceLedgerRef,
       reconnectCommand ? refs.providerSessionOwnerRef : undefined,
       reconnectCommand ? refs.providerSessionReconnectRef : undefined,
+      reconnectCommand ? refs.surfaceIdentityRef : undefined,
+      reconnectCommand ? refs.surfaceOwnerRef : undefined,
+      reconnectCommand ? refs.displayOwnerRef : undefined,
       reconnectCommand ? refs.liveBindingAttachGrantRef : undefined,
       reconnectCommand ? refs.grantValidationRef : undefined,
       reconnectCommand ? refs.surfaceTransportRef : undefined,
@@ -325,6 +358,10 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
 
   const providerSessionReconnectRef = firstSafeRef(flags, ['provider-session-reconnect-ref', 'reconnect-ref']);
   const liveSurfaceRef = firstSafeRef(flags, ['live-surface-ref', 'surface-ref']);
+  const preflightRef = optionalHostPreflightRef(flags, 'preflight-ref');
+  const preflightLedgerRef = optionalHostPreflightRef(flags, 'preflight-ledger-ref');
+  const preflightLedgerEntryRef = optionalHostPreflightRef(flags, 'preflight-ledger-entry-ref');
+  const hostReadinessRef = optionalHostPreflightRef(flags, 'host-readiness-ref');
   const readinessRef = firstSafeRef(flags, ['adapter-readiness-ref', 'provider-readiness-ref'])
     ?? (action === 'screen-reconnect' ? providerSessionReconnectRef : undefined);
   if (!readinessRef) {
@@ -349,6 +386,9 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
     ...(optionalSafeRef(flags, 'current-frame-ref') ? { currentFrameRef: optionalSafeRef(flags, 'current-frame-ref') } : {}),
     ...(optionalSafeRef(flags, 'provider-session-owner-ref') ? { providerSessionOwnerRef: optionalSafeRef(flags, 'provider-session-owner-ref') } : {}),
     ...(providerSessionReconnectRef ? { providerSessionReconnectRef } : {}),
+    ...(optionalSafeRef(flags, 'surface-identity-ref') ? { surfaceIdentityRef: optionalSafeRef(flags, 'surface-identity-ref') } : {}),
+    ...(optionalSafeRef(flags, 'surface-owner-ref') ? { surfaceOwnerRef: optionalSafeRef(flags, 'surface-owner-ref') } : {}),
+    ...(optionalSafeRef(flags, 'display-owner-ref') ? { displayOwnerRef: optionalSafeRef(flags, 'display-owner-ref') } : {}),
     ...(optionalSafeRef(flags, 'live-binding-attach-grant-ref') ? { liveBindingAttachGrantRef: optionalSafeRef(flags, 'live-binding-attach-grant-ref') } : {}),
     ...(optionalSafeRef(flags, 'grant-validation-ref') ? { grantValidationRef: optionalSafeRef(flags, 'grant-validation-ref') } : {}),
     activationRef: firstSafeRef(flags, ['activation-ref', 'attach-ref']),
@@ -356,6 +396,10 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
     permissionRef: optionalSafeRef(flags, 'permission-ref'),
     permissionRecheckRef: firstSafeRef(flags, ['recheck-ref', 'permission-recheck-ref']),
     platformDriverRef: optionalSafeRef(flags, 'platform-driver-ref'),
+    ...(preflightRef ? { preflightRef } : {}),
+    ...(preflightLedgerRef ? { preflightLedgerRef } : {}),
+    ...(preflightLedgerEntryRef ? { preflightLedgerEntryRef } : {}),
+    ...(hostReadinessRef ? { hostReadinessRef } : {}),
     blockedRef: optionalSafeRef(flags, 'blocked-ref'),
     evidenceLedgerRef: optionalSafeRef(flags, 'evidence-ledger-ref'),
     guiPresentRef: optionalSafeRef(flags, 'gui-present-ref'),
@@ -376,6 +420,9 @@ function parseCommandRefs(action: VirtualAppScreenRuntimeCommandAction, flags: P
       refs.currentFrameRef ? undefined : '--current-frame-ref',
       refs.providerSessionOwnerRef ? undefined : '--provider-session-owner-ref',
       refs.providerSessionReconnectRef ? undefined : '--provider-session-reconnect-ref or --reconnect-ref',
+      refs.surfaceIdentityRef ? undefined : '--surface-identity-ref',
+      refs.surfaceOwnerRef ? undefined : '--surface-owner-ref',
+      refs.displayOwnerRef ? undefined : '--display-owner-ref',
       refs.liveBindingAttachGrantRef ? undefined : '--live-binding-attach-grant-ref',
       refs.grantValidationRef ? undefined : '--grant-validation-ref',
       refs.surfaceTransportRef ? undefined : '--surface-transport-ref',
@@ -408,6 +455,26 @@ function virtualAppScreenRuntimeCommandEvents(command: VirtualAppScreenRuntimeCo
       ref: refs.readinessRef,
       status: 'blocked-until-provider-evidence',
     },
+    refs.preflightRef ? {
+      label: 'preflight',
+      ref: refs.preflightRef,
+      status: 'host-owned',
+    } : undefined,
+    refs.preflightLedgerRef ? {
+      label: 'preflight-ledger',
+      ref: refs.preflightLedgerRef,
+      status: 'host-owned',
+    } : undefined,
+    refs.preflightLedgerEntryRef ? {
+      label: 'preflight-ledger-entry',
+      ref: refs.preflightLedgerEntryRef,
+      status: 'recorded',
+    } : undefined,
+    refs.hostReadinessRef ? {
+      label: 'host-readiness',
+      ref: refs.hostReadinessRef,
+      status: 'recorded',
+    } : undefined,
     refs.activationRef ? {
       label: 'screen-attach',
       ref: refs.activationRef,
@@ -493,6 +560,13 @@ function optionalSafeRef(flags: ParsedFlags, key: string) {
   const value = flagValue(flags, key);
   if (!value) return undefined;
   return safeTerminalRef(value);
+}
+
+function optionalHostPreflightRef(flags: ParsedFlags, key: string) {
+  const ref = optionalSafeRef(flags, key);
+  if (!ref || !ref.startsWith('computer-use:native-host/preflights/')) return undefined;
+  if (/(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)) return undefined;
+  return ref;
 }
 
 function unsafeRefFlags(flags: ParsedFlags) {

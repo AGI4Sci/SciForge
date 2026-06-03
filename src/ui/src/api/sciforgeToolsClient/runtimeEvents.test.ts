@@ -163,6 +163,10 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
           surfaceMode: 'empty',
           screenRef: 'virtual-app-screen:structured-done/screen',
           targetAppRef: 'app:profile/vscode-editor',
+          preflightRef: 'computer-use:native-host/preflights/structured-done/preflight.json',
+          preflightLedgerRef: 'computer-use:native-host/preflights/structured-done/preflight-ledger.json',
+          preflightLedgerEntryRef: 'computer-use:native-host/preflights/structured-done/preflight-ledger.json/events/0001-preflight.recorded.json',
+          hostReadinessRef: 'computer-use:native-host/preflights/structured-done/host-readiness.json',
           adapterReadinessRef: 'computer-use:structured-done/provider-readiness.json',
           handoffRef: 'computer-use:structured-done/attach-request.json',
           evidenceLedgerRef: 'ledger:computer-use/structured-done/screen-activation.json',
@@ -195,6 +199,10 @@ test('SSE reader materializes structured VirtualAppScreen artifacts from done pa
   const screenArtifact = result.artifacts?.find((artifact) => artifact.id === screenArtifactId);
   assert.equal(screenArtifact?.type, 'computer-use-virtual-screen');
   assert.equal(screenArtifact?.data?.screenRef, 'virtual-app-screen:structured-done/screen');
+  assert.equal(screenArtifact?.data?.preflightRef, 'computer-use:native-host/preflights/structured-done/preflight.json');
+  assert.equal(screenArtifact?.data?.preflightLedgerRef, 'computer-use:native-host/preflights/structured-done/preflight-ledger.json');
+  assert.equal(screenArtifact?.data?.preflightLedgerEntryRef, 'computer-use:native-host/preflights/structured-done/preflight-ledger.json/events/0001-preflight.recorded.json');
+  assert.equal(screenArtifact?.data?.hostReadinessRef, 'computer-use:native-host/preflights/structured-done/host-readiness.json');
   assert.equal(screenArtifact?.data?.sessionRef, undefined);
   assert.equal(screenArtifact?.data?.currentFrameRef, undefined);
   assert.equal((seen.at(-1) as { type?: string }).type, 'done');

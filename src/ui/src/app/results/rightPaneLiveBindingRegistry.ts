@@ -10,10 +10,17 @@ export interface RightPaneActiveVirtualAppScreenBinding {
   inputLeaseRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
+  surfaceIdentityRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   liveBindingAttachGrantRef?: string;
   grantValidationRef?: string;
   surfaceTransportRef?: string;
   currentFrameSequence?: VirtualScreenPayload['currentFrameSequence'];
+  preflightRef?: string;
+  preflightLedgerRef?: string;
+  preflightLedgerEntryRef?: string;
+  hostReadinessRef?: string;
   adapterReadinessRef?: string;
   evidenceLedgerRef?: string;
   blockedRef?: string;
@@ -40,10 +47,13 @@ export interface RightPaneVirtualAppScreenPlaceholderRefs {
 }
 
 type RightPaneVirtualAppScreenPayloadRefs =
-  Pick<VirtualScreenPayload, 'screenRef' | 'sessionRef' | 'liveSurfaceRef' | 'frameStreamRef' | 'currentFrameRef' | 'currentFrameSequence' | 'inputLeaseRef' | 'surfaceTransportRef' | 'adapterReadinessRef' | 'evidenceLedgerRef' | 'blockedRef' | 'blockedReason'>
+  Pick<VirtualScreenPayload, 'screenRef' | 'sessionRef' | 'liveSurfaceRef' | 'frameStreamRef' | 'currentFrameRef' | 'currentFrameSequence' | 'inputLeaseRef' | 'surfaceTransportRef' | 'preflightRef' | 'preflightLedgerRef' | 'preflightLedgerEntryRef' | 'hostReadinessRef' | 'adapterReadinessRef' | 'evidenceLedgerRef' | 'blockedRef' | 'blockedReason'>
   & {
     providerSessionOwnerRef?: string;
     providerSessionReconnectRef?: string;
+    surfaceIdentityRef?: string;
+    surfaceOwnerRef?: string;
+    displayOwnerRef?: string;
     liveBindingAttachGrantRef?: string;
     grantValidationRef?: string;
   };
@@ -67,6 +77,9 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   inputLeaseRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
+  surfaceIdentityRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   liveBindingAttachGrantRef?: string;
   grantValidationRef?: string;
   surfaceTransportRef?: string;
@@ -76,10 +89,17 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   observedFrameStreamRef?: string;
   observedProviderSessionOwnerRef?: string;
   observedProviderSessionReconnectRef?: string;
+  observedSurfaceIdentityRef?: string;
+  observedSurfaceOwnerRef?: string;
+  observedDisplayOwnerRef?: string;
   observedLiveBindingAttachGrantRef?: string;
   observedGrantValidationRef?: string;
   observedSurfaceTransportRef?: string;
   observedCurrentFrameSequence?: VirtualScreenPayload['currentFrameSequence'];
+  preflightRef?: string;
+  preflightLedgerRef?: string;
+  preflightLedgerEntryRef?: string;
+  hostReadinessRef?: string;
   adapterReadinessRef?: string;
   evidenceLedgerRef?: string;
   sameSessionRef: boolean;
@@ -87,6 +107,9 @@ export interface RightPaneVirtualAppScreenReconnectCheckpoint {
   sameFrameStreamRef: boolean;
   sameProviderSessionOwnerRef: boolean;
   sameProviderSessionReconnectRef: boolean;
+  sameSurfaceIdentityRef: boolean;
+  sameSurfaceOwnerRef: boolean;
+  sameDisplayOwnerRef: boolean;
   sameLiveBindingAttachGrantRef: boolean;
   sameGrantValidationRef: boolean;
   missingRefEvidence: string[];
@@ -106,6 +129,7 @@ export function rightPaneActiveVirtualAppScreenBindingFromPayload(
   tabId?: string,
 ): RightPaneActiveVirtualAppScreenBinding | undefined {
   if (!payload.screenRef) return undefined;
+  const liveLike = rightPaneVirtualScreenPayloadRefsLiveLike(payload);
   return stripUndefined({
     screenRef: payload.screenRef,
     tabId,
@@ -116,14 +140,21 @@ export function rightPaneActiveVirtualAppScreenBindingFromPayload(
     inputLeaseRef: payload.inputLeaseRef,
     providerSessionOwnerRef: virtualScreenStringProp(payload, 'providerSessionOwnerRef'),
     providerSessionReconnectRef: virtualScreenStringProp(payload, 'providerSessionReconnectRef'),
+    surfaceIdentityRef: virtualScreenStringProp(payload, 'surfaceIdentityRef'),
+    surfaceOwnerRef: virtualScreenStringProp(payload, 'surfaceOwnerRef'),
+    displayOwnerRef: virtualScreenStringProp(payload, 'displayOwnerRef'),
     liveBindingAttachGrantRef: virtualScreenStringProp(payload, 'liveBindingAttachGrantRef'),
     grantValidationRef: virtualScreenStringProp(payload, 'grantValidationRef'),
     surfaceTransportRef: payload.surfaceTransportRef,
     currentFrameSequence: payload.currentFrameSequence,
+    preflightRef: rightPaneNativeHostPreflightRef(payload.preflightRef),
+    preflightLedgerRef: rightPaneNativeHostPreflightRef(payload.preflightLedgerRef),
+    preflightLedgerEntryRef: rightPaneNativeHostPreflightRef(payload.preflightLedgerEntryRef),
+    hostReadinessRef: rightPaneNativeHostPreflightRef(payload.hostReadinessRef),
     adapterReadinessRef: payload.adapterReadinessRef,
     evidenceLedgerRef: payload.evidenceLedgerRef,
-    blockedRef: payload.blockedRef,
-    blockedReason: payload.blockedReason,
+    blockedRef: liveLike ? undefined : payload.blockedRef,
+    blockedReason: liveLike ? undefined : payload.blockedReason,
   });
 }
 
@@ -133,6 +164,7 @@ export function updateRightPaneActiveVirtualAppScreenRegistry(
 ): RightPaneActiveVirtualAppScreenRegistry {
   if (!binding?.screenRef) return cloneRegistry(registry);
   const previous = registry.byScreenRef[binding.screenRef];
+  const identityDrift = rightPaneVirtualAppScreenSurfaceIdentityDrift(previous, binding);
   const nextBinding = stripUndefined({
     ...previous,
     ...binding,
@@ -145,14 +177,25 @@ export function updateRightPaneActiveVirtualAppScreenRegistry(
     inputLeaseRef: binding.inputLeaseRef ?? previous?.inputLeaseRef,
     providerSessionOwnerRef: binding.providerSessionOwnerRef ?? previous?.providerSessionOwnerRef,
     providerSessionReconnectRef: binding.providerSessionReconnectRef ?? previous?.providerSessionReconnectRef,
+    surfaceIdentityRef: identityDrift.length ? previous?.surfaceIdentityRef : binding.surfaceIdentityRef ?? previous?.surfaceIdentityRef,
+    surfaceOwnerRef: identityDrift.length ? previous?.surfaceOwnerRef : binding.surfaceOwnerRef ?? previous?.surfaceOwnerRef,
+    displayOwnerRef: identityDrift.length ? previous?.displayOwnerRef : binding.displayOwnerRef ?? previous?.displayOwnerRef,
     liveBindingAttachGrantRef: binding.liveBindingAttachGrantRef ?? previous?.liveBindingAttachGrantRef,
     grantValidationRef: binding.grantValidationRef ?? previous?.grantValidationRef,
     surfaceTransportRef: binding.surfaceTransportRef ?? previous?.surfaceTransportRef,
     currentFrameSequence: binding.currentFrameSequence ?? previous?.currentFrameSequence,
+    preflightRef: rightPaneNativeHostPreflightRef(binding.preflightRef) ?? rightPaneNativeHostPreflightRef(previous?.preflightRef),
+    preflightLedgerRef: rightPaneNativeHostPreflightRef(binding.preflightLedgerRef) ?? rightPaneNativeHostPreflightRef(previous?.preflightLedgerRef),
+    preflightLedgerEntryRef: rightPaneNativeHostPreflightRef(binding.preflightLedgerEntryRef) ?? rightPaneNativeHostPreflightRef(previous?.preflightLedgerEntryRef),
+    hostReadinessRef: rightPaneNativeHostPreflightRef(binding.hostReadinessRef) ?? rightPaneNativeHostPreflightRef(previous?.hostReadinessRef),
     adapterReadinessRef: binding.adapterReadinessRef ?? previous?.adapterReadinessRef,
     evidenceLedgerRef: binding.evidenceLedgerRef ?? previous?.evidenceLedgerRef,
-    blockedRef: binding.blockedRef ?? previous?.blockedRef,
-    blockedReason: binding.blockedReason ?? previous?.blockedReason,
+    blockedRef: identityDrift.length
+      ? `computer-use:screen-reconnect/${safeRefPathSegment(binding.screenRef)}/blocked/surface-identity.json`
+      : binding.blockedRef ?? previous?.blockedRef,
+    blockedReason: identityDrift.length
+      ? `VirtualAppScreen active binding surface identity drifted: ${identityDrift.join(', ')}.`
+      : binding.blockedReason ?? previous?.blockedReason,
   });
   return {
     byScreenRef: {
@@ -178,6 +221,7 @@ export function mergeRightPaneActiveVirtualAppScreenBinding(
   binding: RightPaneActiveVirtualAppScreenBinding | undefined,
 ): VirtualScreenPayload {
   if (!binding || payload.screenRef !== binding.screenRef) return payload;
+  const payloadLiveLike = rightPaneVirtualScreenPayloadRefsLiveLike(payload);
   return stripUndefined({
     ...payload,
     sessionRef: payload.sessionRef ?? binding.sessionRef,
@@ -187,15 +231,36 @@ export function mergeRightPaneActiveVirtualAppScreenBinding(
     inputLeaseRef: payload.inputLeaseRef ?? binding.inputLeaseRef,
     providerSessionOwnerRef: virtualScreenStringProp(payload, 'providerSessionOwnerRef') ?? binding.providerSessionOwnerRef,
     providerSessionReconnectRef: virtualScreenStringProp(payload, 'providerSessionReconnectRef') ?? binding.providerSessionReconnectRef,
+    surfaceIdentityRef: virtualScreenStringProp(payload, 'surfaceIdentityRef') ?? binding.surfaceIdentityRef,
+    surfaceOwnerRef: virtualScreenStringProp(payload, 'surfaceOwnerRef') ?? binding.surfaceOwnerRef,
+    displayOwnerRef: virtualScreenStringProp(payload, 'displayOwnerRef') ?? binding.displayOwnerRef,
     liveBindingAttachGrantRef: virtualScreenStringProp(payload, 'liveBindingAttachGrantRef') ?? binding.liveBindingAttachGrantRef,
     grantValidationRef: virtualScreenStringProp(payload, 'grantValidationRef') ?? binding.grantValidationRef,
     surfaceTransportRef: payload.surfaceTransportRef ?? binding.surfaceTransportRef,
     currentFrameSequence: payload.currentFrameSequence ?? binding.currentFrameSequence,
+    preflightRef: rightPaneNativeHostPreflightRef(payload.preflightRef) ?? rightPaneNativeHostPreflightRef(binding.preflightRef),
+    preflightLedgerRef: rightPaneNativeHostPreflightRef(payload.preflightLedgerRef) ?? rightPaneNativeHostPreflightRef(binding.preflightLedgerRef),
+    preflightLedgerEntryRef: rightPaneNativeHostPreflightRef(payload.preflightLedgerEntryRef) ?? rightPaneNativeHostPreflightRef(binding.preflightLedgerEntryRef),
+    hostReadinessRef: rightPaneNativeHostPreflightRef(payload.hostReadinessRef) ?? rightPaneNativeHostPreflightRef(binding.hostReadinessRef),
     adapterReadinessRef: payload.adapterReadinessRef ?? binding.adapterReadinessRef,
     evidenceLedgerRef: payload.evidenceLedgerRef ?? binding.evidenceLedgerRef,
-    blockedRef: payload.blockedRef ?? binding.blockedRef,
-    blockedReason: payload.blockedReason ?? binding.blockedReason,
+    blockedRef: payloadLiveLike ? undefined : payload.blockedRef ?? binding.blockedRef,
+    blockedReason: payloadLiveLike ? undefined : payload.blockedReason ?? binding.blockedReason,
   }) as VirtualScreenPayload;
+}
+
+function rightPaneVirtualScreenPayloadRefsLiveLike(payload: Partial<RightPaneVirtualAppScreenPayloadRefs> & Partial<VirtualScreenPayload>) {
+  return Boolean(
+    rightPaneNativeHostProductRef(payload.sessionRef)
+    && rightPaneNativeHostProductRef(payload.liveSurfaceRef)
+    && rightPaneNativeHostProductRef(payload.frameStreamRef)
+    && rightPaneNativeHostProductRef(payload.currentFrameRef)
+    && payload.providerSessionOwnerRef
+    && payload.providerSessionReconnectRef
+    && rightPaneNativeHostProductRef(payload.liveBindingAttachGrantRef)
+    && rightPaneNativeHostProductRef(payload.grantValidationRef)
+    && rightPaneNativeHostProductRef(payload.currentFrameSequence?.ref)
+  );
 }
 
 export function rightPaneVirtualAppScreenReconnectCheckpoint(
@@ -228,15 +293,25 @@ export function rightPaneVirtualAppScreenReconnectCheckpoint(
     inputLeaseRef: binding.inputLeaseRef,
     providerSessionOwnerRef: binding.providerSessionOwnerRef,
     providerSessionReconnectRef: binding.providerSessionReconnectRef,
+    surfaceIdentityRef: binding.surfaceIdentityRef,
+    surfaceOwnerRef: binding.surfaceOwnerRef,
+    displayOwnerRef: binding.displayOwnerRef,
     liveBindingAttachGrantRef: binding.liveBindingAttachGrantRef,
     grantValidationRef: binding.grantValidationRef,
     surfaceTransportRef: binding.surfaceTransportRef,
     currentFrameSequence: binding.currentFrameSequence,
+    preflightRef: rightPaneNativeHostPreflightRef(binding.preflightRef),
+    preflightLedgerRef: rightPaneNativeHostPreflightRef(binding.preflightLedgerRef),
+    preflightLedgerEntryRef: rightPaneNativeHostPreflightRef(binding.preflightLedgerEntryRef),
+    hostReadinessRef: rightPaneNativeHostPreflightRef(binding.hostReadinessRef),
     observedSessionRef: observed.sessionRef,
     observedLiveSurfaceRef: observed.liveSurfaceRef,
     observedFrameStreamRef: observed.frameStreamRef,
     observedProviderSessionOwnerRef: observed.providerSessionOwnerRef,
     observedProviderSessionReconnectRef: observed.providerSessionReconnectRef,
+    observedSurfaceIdentityRef: observed.surfaceIdentityRef,
+    observedSurfaceOwnerRef: observed.surfaceOwnerRef,
+    observedDisplayOwnerRef: observed.displayOwnerRef,
     observedLiveBindingAttachGrantRef: observed.liveBindingAttachGrantRef,
     observedGrantValidationRef: observed.grantValidationRef,
     observedSurfaceTransportRef: observed.surfaceTransportRef,
@@ -248,6 +323,9 @@ export function rightPaneVirtualAppScreenReconnectCheckpoint(
     sameFrameStreamRef: refEvidence.sameFrameStreamRef,
     sameProviderSessionOwnerRef: refEvidence.sameProviderSessionOwnerRef,
     sameProviderSessionReconnectRef: refEvidence.sameProviderSessionReconnectRef,
+    sameSurfaceIdentityRef: refEvidence.sameSurfaceIdentityRef,
+    sameSurfaceOwnerRef: refEvidence.sameSurfaceOwnerRef,
+    sameDisplayOwnerRef: refEvidence.sameDisplayOwnerRef,
     sameLiveBindingAttachGrantRef: refEvidence.sameLiveBindingAttachGrantRef,
     sameGrantValidationRef: refEvidence.sameGrantValidationRef,
     missingRefEvidence: refEvidence.missingRefEvidence,
@@ -300,10 +378,17 @@ function rightPaneVirtualAppScreenObservedRefs(observed: Partial<RightPaneVirtua
     frameStreamRef: virtualScreenStringProp(observed, 'frameStreamRef'),
     providerSessionOwnerRef: virtualScreenStringProp(observed, 'providerSessionOwnerRef'),
     providerSessionReconnectRef: virtualScreenStringProp(observed, 'providerSessionReconnectRef'),
+    surfaceIdentityRef: virtualScreenStringProp(observed, 'surfaceIdentityRef'),
+    surfaceOwnerRef: virtualScreenStringProp(observed, 'surfaceOwnerRef'),
+    displayOwnerRef: virtualScreenStringProp(observed, 'displayOwnerRef'),
     liveBindingAttachGrantRef: virtualScreenStringProp(observed, 'liveBindingAttachGrantRef'),
     grantValidationRef: virtualScreenStringProp(observed, 'grantValidationRef'),
     surfaceTransportRef: virtualScreenStringProp(observed, 'surfaceTransportRef'),
     currentFrameSequence: observed.currentFrameSequence,
+    preflightRef: rightPaneNativeHostPreflightRef(virtualScreenStringProp(observed, 'preflightRef')),
+    preflightLedgerRef: rightPaneNativeHostPreflightRef(virtualScreenStringProp(observed, 'preflightLedgerRef')),
+    preflightLedgerEntryRef: rightPaneNativeHostPreflightRef(virtualScreenStringProp(observed, 'preflightLedgerEntryRef')),
+    hostReadinessRef: rightPaneNativeHostPreflightRef(virtualScreenStringProp(observed, 'hostReadinessRef')),
   });
 }
 
@@ -317,6 +402,9 @@ function rightPaneVirtualAppScreenReconnectRefEvidence(
     rightPaneVirtualAppScreenReconnectRefCheck('frameStreamRef', expected.frameStreamRef, observed.frameStreamRef),
     rightPaneVirtualAppScreenReconnectRefCheck('providerSessionOwnerRef', expected.providerSessionOwnerRef, observed.providerSessionOwnerRef),
     rightPaneVirtualAppScreenReconnectRefCheck('providerSessionReconnectRef', expected.providerSessionReconnectRef, observed.providerSessionReconnectRef),
+    rightPaneVirtualAppScreenReconnectRefCheck('surfaceIdentityRef', expected.surfaceIdentityRef, observed.surfaceIdentityRef),
+    rightPaneVirtualAppScreenReconnectRefCheck('surfaceOwnerRef', expected.surfaceOwnerRef, observed.surfaceOwnerRef),
+    rightPaneVirtualAppScreenReconnectRefCheck('displayOwnerRef', expected.displayOwnerRef, observed.displayOwnerRef),
     rightPaneVirtualAppScreenReconnectRefCheck('liveBindingAttachGrantRef', expected.liveBindingAttachGrantRef, observed.liveBindingAttachGrantRef),
     rightPaneVirtualAppScreenReconnectRefCheck('grantValidationRef', expected.grantValidationRef, observed.grantValidationRef),
   ];
@@ -333,13 +421,40 @@ function rightPaneVirtualAppScreenReconnectRefEvidence(
     sameFrameStreamRef: checks[2]?.same ?? false,
     sameProviderSessionOwnerRef: checks[3]?.same ?? false,
     sameProviderSessionReconnectRef: checks[4]?.same ?? false,
-    sameLiveBindingAttachGrantRef: checks[5]?.same ?? false,
-    sameGrantValidationRef: checks[6]?.same ?? false,
+    sameSurfaceIdentityRef: checks[5]?.same ?? false,
+    sameSurfaceOwnerRef: checks[6]?.same ?? false,
+    sameDisplayOwnerRef: checks[7]?.same ?? false,
+    sameLiveBindingAttachGrantRef: checks[8]?.same ?? false,
+    sameGrantValidationRef: checks[9]?.same ?? false,
     missingRefEvidence,
     mismatchedRefEvidence,
     blockedRef: hasBlockedEvidence ? `computer-use:screen-reconnect/${safeRefPathSegment(expected.screenRef)}/blocked/ref-evidence.json` : undefined,
     blockedReason: hasBlockedEvidence ? `VirtualAppScreen reconnect checkpoint is blocked until expected and observed refs match: ${evidenceSuffix}.` : undefined,
   };
+}
+
+function rightPaneVirtualAppScreenSurfaceIdentityDrift(
+  previous: RightPaneActiveVirtualAppScreenBinding | undefined,
+  next: RightPaneActiveVirtualAppScreenBinding,
+) {
+  if (!previous) return [];
+  return [
+    rightPaneVirtualAppScreenImmutableRefDrift('sessionRef', previous.sessionRef, next.sessionRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('liveSurfaceRef', previous.liveSurfaceRef, next.liveSurfaceRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('frameStreamRef', previous.frameStreamRef, next.frameStreamRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('providerSessionOwnerRef', previous.providerSessionOwnerRef, next.providerSessionOwnerRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('providerSessionReconnectRef', previous.providerSessionReconnectRef, next.providerSessionReconnectRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('surfaceIdentityRef', previous.surfaceIdentityRef, next.surfaceIdentityRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('surfaceOwnerRef', previous.surfaceOwnerRef, next.surfaceOwnerRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('displayOwnerRef', previous.displayOwnerRef, next.displayOwnerRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('liveBindingAttachGrantRef', previous.liveBindingAttachGrantRef, next.liveBindingAttachGrantRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('grantValidationRef', previous.grantValidationRef, next.grantValidationRef),
+    rightPaneVirtualAppScreenImmutableRefDrift('surfaceTransportRef', previous.surfaceTransportRef, next.surfaceTransportRef),
+  ].filter((item): item is string => Boolean(item));
+}
+
+function rightPaneVirtualAppScreenImmutableRefDrift(name: string, previous: string | undefined, next: string | undefined) {
+  return previous && next && previous !== next ? name : undefined;
 }
 
 function rightPaneVirtualAppScreenReconnectRefCheck(name: string, expected: string | undefined, observed: string | undefined) {
@@ -375,4 +490,45 @@ function virtualScreenStringProp(payload: unknown, key: string) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const value = (payload as Record<string, unknown>)[key];
   return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function rightPaneNativeHostPreflightRef(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+  const ref = value.trim();
+  if (!ref.startsWith('computer-use:native-host/preflights/')) return undefined;
+  const lower = ref.toLowerCase();
+  if (
+    lower.startsWith('data:')
+    || lower.startsWith('javascript:')
+    || lower.startsWith('file:')
+    || lower.startsWith('blob:')
+    || lower.startsWith('http://')
+    || lower.startsWith('https://')
+    || lower.startsWith('//')
+    || lower.includes(';base64,')
+    || /authorization|bearer|api[_-]?key|password|secret|token/i.test(ref)
+    || /(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)
+    || /[\r\n]/.test(ref)
+  ) return undefined;
+  return ref;
+}
+
+function rightPaneNativeHostProductRef(value: unknown) {
+  if (typeof value !== 'string') return false;
+  const ref = value.trim();
+  if (!ref.startsWith('computer-use:native-host/')) return false;
+  const lower = ref.toLowerCase();
+  return !(
+    lower.startsWith('data:')
+    || lower.startsWith('javascript:')
+    || lower.startsWith('file:')
+    || lower.startsWith('blob:')
+    || lower.startsWith('http://')
+    || lower.startsWith('https://')
+    || lower.startsWith('//')
+    || lower.includes(';base64,')
+    || /authorization|bearer|api[_-]?key|password|secret|token/i.test(ref)
+    || /(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)
+    || /[\r\n]/.test(ref)
+  );
 }

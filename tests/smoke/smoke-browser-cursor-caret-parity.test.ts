@@ -212,6 +212,9 @@ test('Browser cursor and caret parity is native-host-owned, bounded, and does no
     assert.equal(report.refsFirst, true);
     assert.equal(report.realOsUiRunHandoff.status, 'blocked');
     assert.equal(report.realOsUiRunHandoff.passClaim, false);
+    assert.equal(report.realOsUiRunHandoff.requiredProofs.length, report.productAcceptance.requiredProofs.length);
+    assert.ok(report.realOsUiRunHandoff.requiredProofs.every((proof) => proof.owner === 'BrowserHostSession'));
+    assert.ok(report.realOsUiRunHandoff.requiredProofs.every((proof) => proof.liveSurfaceRef === fallback.liveSurfaceRef));
     assert.ok(report.productAcceptance.requiredProofs.every((proof) => proof.proofRef.startsWith(`browser-host-session:${fallback.id}/`)));
     await writeBoundedCursorCaretArtifact(report);
     const artifactText = await readFile(artifactPath, 'utf8');
@@ -355,7 +358,9 @@ function cursorCaretRequiredProof(
     browserHostSessionRef,
     liveSurfaceRef,
     proofRef: `browser-host-session:${state.id}/required-proof/${kind}`,
+    auditRef: `browser-host-session:${state.id}/audit/${kind}`,
     rawPayloadRecorded: false as const,
+    shellComposerTarget: 'not-targeted' as const,
     secondTruthSource: false as const,
     ...extra,
   };
@@ -379,6 +384,7 @@ function cursorCaretOsUiHandoff(state: BrowserHostSessionState) {
       `browser-host-session:${state.id}/audit/caret-owner`,
       `browser-host-session:${state.id}/audit/selection-range-owner`,
     ],
+    requiredProofs: cursorCaretRequiredProofs(state),
     rawPayloadsCaptured: false,
     refsFirst: true,
   };

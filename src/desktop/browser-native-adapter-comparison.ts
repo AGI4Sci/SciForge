@@ -23,6 +23,7 @@ export const REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS = [
   'inputCompleteness',
   'lifecycle',
   'reconnect',
+  'streamQuality',
 ] as const;
 
 export const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_SECTIONS = [
@@ -98,6 +99,18 @@ const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_FIELDS: Record<BrowserNativeAdapter
     'stateHeartbeatRestored',
     'inputRoutedAfterReconnect',
   ],
+  streamQuality: [
+    'latencyP50Ms',
+    'latencyP95Ms',
+    'framerateAvgFps',
+    'framerateP5Fps',
+    'inputToFrameP50Ms',
+    'inputToFrameP95Ms',
+    'reconnectP50Ms',
+    'reconnectP95Ms',
+    'sampleCount',
+    'fallbackRequired',
+  ],
   secondTruthSource: [
     'secondTruthSource',
   ],
@@ -105,7 +118,7 @@ const REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_FIELDS: Record<BrowserNativeAdapter
 
 export type BrowserNativeAdapterPlatform = 'cross-platform' | 'windows' | 'macos' | 'linux';
 
-export type BrowserNativeAdapterMetricUnit = 'ms' | 'percent' | 'mb' | 'count' | 'boolean' | 'event';
+export type BrowserNativeAdapterMetricUnit = 'ms' | 'percent' | 'mb' | 'fps' | 'count' | 'boolean' | 'event';
 
 export type BrowserNativeAdapterMetricFieldContract = {
   field: string;
@@ -136,6 +149,7 @@ export type BrowserNativeAdapterMetricsContract = {
   inputCompleteness: BrowserNativeAdapterMetricContract;
   lifecycle: BrowserNativeAdapterMetricContract;
   reconnect: BrowserNativeAdapterMetricContract;
+  streamQuality: BrowserNativeAdapterMetricContract;
   secondTruthSource: BrowserNativeAdapterSecondTruthSourceMetricContract;
 };
 
@@ -291,6 +305,7 @@ export function defaultBrowserNativeAdapterMetrics(): BrowserNativeAdapterMetric
     inputCompleteness: metricContract('inputCompleteness', 'boolean', 'runtime-state'),
     lifecycle: metricContract('lifecycle', 'event', 'runtime-state'),
     reconnect: metricContract('reconnect', 'boolean', 'runtime-state'),
+    streamQuality: streamQualityMetricContract(),
     secondTruthSource: {
       section: 'secondTruthSource',
       evidenceMode: 'bounded-summary-ref',
@@ -303,6 +318,32 @@ export function defaultBrowserNativeAdapterMetrics(): BrowserNativeAdapterMetric
         source: 'runtime-state',
       }],
     },
+  };
+}
+
+function streamQualityMetricContract(): BrowserNativeAdapterMetricContract {
+  const fieldUnits: Record<string, BrowserNativeAdapterMetricUnit> = {
+    latencyP50Ms: 'ms',
+    latencyP95Ms: 'ms',
+    framerateAvgFps: 'fps',
+    framerateP5Fps: 'fps',
+    inputToFrameP50Ms: 'ms',
+    inputToFrameP95Ms: 'ms',
+    reconnectP50Ms: 'ms',
+    reconnectP95Ms: 'ms',
+    sampleCount: 'count',
+    fallbackRequired: 'boolean',
+  };
+  return {
+    section: 'streamQuality',
+    evidenceMode: 'bounded-summary-ref',
+    inlineEvidence: 'forbidden',
+    fields: REQUIRED_BROWSER_NATIVE_ADAPTER_METRIC_FIELDS.streamQuality.map((field) => ({
+      field,
+      unit: fieldUnits[field] ?? 'count',
+      required: true,
+      source: 'bounded-summary-ref',
+    })),
   };
 }
 

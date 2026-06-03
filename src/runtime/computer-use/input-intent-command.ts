@@ -48,6 +48,7 @@ export interface VirtualScreenLeaseControlInputIntentCommand extends VirtualScre
 
 export interface VirtualScreenInputIntentRefs {
   sessionRef: string;
+  currentRunPointerRef?: string;
   frameRef?: string;
   inputLeaseRef: string;
   actionAdapterRef?: string;
@@ -85,6 +86,7 @@ const canvasOptionalRefFlags = [
   'target-app-ref',
   'target-window-ref',
   'evidence-ledger-ref',
+  'current-run-pointer-ref',
 ] as const;
 
 const controlOptionalRefFlags = [
@@ -97,6 +99,7 @@ const controlOptionalRefFlags = [
   'action-adapter-ref',
   'adapter-readiness-ref',
   'evidence-ledger-ref',
+  'current-run-pointer-ref',
 ] as const;
 
 export function parseVirtualScreenInputIntentCommand(commandText: string): VirtualScreenInputIntentCommandParseResult {

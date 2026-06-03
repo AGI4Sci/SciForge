@@ -2,6 +2,7 @@ export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' 
 export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
 export const BROWSER_HOST_SEARCH_SCHEMA = 'sciforge.browser-host-session.search-result.v1' as const;
 export const BROWSER_HOST_LOADING_PROGRESS_SCHEMA = 'sciforge.browser-host-session.loading-progress.lifecycle.v1' as const;
+export const BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA = 'sciforge.browser-host-session.native-os-ui-proof.v1' as const;
 
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
 export type BrowserHostSessionAction =
@@ -20,12 +21,25 @@ export type BrowserHostSessionAction =
   | 'press'
   | 'scroll'
   | 'cursor'
+  | 'native-os-ui-proof'
   | 'snapshot'
   | 'state'
   | 'close';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
 export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
+export type BrowserHostNativeOsUiProofGroup =
+  | 'cursorCaret'
+  | 'mouseContextMenu'
+  | 'keyboardImeClipboardSelection'
+  | 'rerenderFocus';
+export type BrowserHostNativeOsUiProofProbe =
+  | 'focus-caret'
+  | 'blur-restore'
+  | 'mouse-context-menu-owner'
+  | 'bounded-keyboard-ime-clipboard-selection'
+  | 'bounded-rerender-focus'
+  | 'rerender-focus';
 export type BrowserHostSessionLoadingProgressState =
   | 'navigation-start'
   | 'navigation-committed'
@@ -142,6 +156,24 @@ export interface BrowserHostSessionLoadingProgress {
   requiresHandoff?: boolean;
 }
 
+export interface BrowserHostSessionNativeOsUiProof {
+  schemaVersion: typeof BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA;
+  boundedEvidenceOnly: true;
+  rawDomRecorded: false;
+  rawTextRecorded: false;
+  rawUrlRecorded: false;
+  rawTitleRecorded: false;
+  rawSelectorRecorded: false;
+  rawCoordsRecorded: false;
+  rawPayloadRecorded: false;
+  source: 'native-embedded-action-state';
+  proofGroup: BrowserHostNativeOsUiProofGroup;
+  actionId: string;
+  observedProofNames: string[];
+  evidenceTokens: string[];
+  diagnostics: string[];
+}
+
 export interface BrowserHostSessionNavigationProgressEvent {
   state: BrowserHostSessionLoadingProgressState;
   reason: BrowserHostSessionLoadingProgressReason;
@@ -173,6 +205,7 @@ export interface BrowserHostSessionState {
   liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
+  secondTruthSource?: false;
   frameStreamRef?: string;
   frameRef?: string;
   frameUrl?: string;
@@ -184,6 +217,7 @@ export interface BrowserHostSessionState {
   searchResultRef?: string;
   cursor?: string;
   loadingProgress?: BrowserHostSessionLoadingProgress;
+  nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics: string[];
@@ -211,6 +245,9 @@ export interface BrowserHostSessionActionInput {
   deltaY?: number;
   timeoutMs?: number;
   actionId?: string;
+  proofGroup?: BrowserHostNativeOsUiProofGroup;
+  probe?: BrowserHostNativeOsUiProofProbe;
+  expectedProofNames?: string[];
   uiEventReceivedAt?: string;
   adapterSentAt?: string;
 }
@@ -273,6 +310,8 @@ export interface BrowserHostSessionDriver {
   press(key: string): Promise<void>;
   scroll(deltaX: number, deltaY: number, x?: number, y?: number): Promise<void>;
   cursor?(x: number, y: number): Promise<string>;
+  readonly nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
+  proveNativeOsUi?(input: BrowserHostSessionActionInput): Promise<BrowserHostSessionNativeOsUiProof | undefined>;
   close(): Promise<void>;
   onConsole?(listener: (entry: Record<string, unknown>) => void): void;
   onNetwork?(listener: (entry: Record<string, unknown>) => void): void;

@@ -32,15 +32,21 @@ function visualRegressionFixtureWithLiveBindingRefs() {
       ...visualRegressionVirtualScreenViewerFixture.artifact,
       data: {
         ...(visualRegressionVirtualScreenViewerFixture.artifact?.data as Record<string, unknown>),
-        surfaceTransportRef: 'computer-use:session/visual-regression/surface-transport.json',
+        sessionRef: 'computer-use:native-host/visual-regression/app-screen-session.json',
+        liveSurfaceRef: 'computer-use:native-host/visual-regression/live-surface.json',
+        surfaceTransportRef: 'computer-use:native-host/visual-regression/surface-transport.json',
         providerSessionOwnerRef: 'computer-use:provider-session/visual-regression/owner.json',
         providerSessionReconnectRef: 'computer-use:provider-session/visual-regression/reconnect.json',
-        liveBindingAttachGrantRef: 'computer-use:provider-session/visual-regression/live-binding-attach-grant.json',
+        liveBindingAttachGrantRef: 'computer-use:native-host/visual-regression/live-binding-attach-grant.json',
         liveBindingAttachGrantStatus: 'validated',
-        grantValidationRef: 'computer-use:provider-session/visual-regression/grant-validation.json',
+        grantValidationRef: 'computer-use:native-host/visual-regression/grant-validation.json',
         grantValidationStatus: 'validated',
+        surfaceOwnerRef: 'computer-use:native-host/visual-regression/surface-owner.json',
+        displayOwnerRef: 'computer-use:native-host/visual-regression/display-owner.json',
+        frameStreamRef: 'computer-use:native-host/visual-regression/frame-stream.json',
+        currentFrameRef: 'computer-use:native-host/visual-regression/frames/active.png',
         currentFrameSequence: {
-          ref: 'computer-use:session/visual-regression/frame-sequence.json',
+          ref: 'computer-use:native-host/visual-regression/frame-sequence.json',
           sequence: 17,
           transport: 'native-frame-stream',
         },
@@ -101,6 +107,62 @@ test('virtual-screen-viewer renders VirtualAppScreen refs-first state and actor 
   assert.doesNotMatch(html, /data:image|do-not-render|executeScoped|runComputerUse/);
 });
 
+test('virtual-screen-viewer preserves only Host-owned preflight refs', () => {
+  const hostOwnedFixture = {
+    ...emptyVirtualScreenViewerFixture,
+    artifact: {
+      ...emptyVirtualScreenViewerFixture.artifact,
+      data: {
+        title: 'Host preflight',
+        status: 'blocked',
+        attachState: 'blocked',
+        targetAppRef: 'app:profile/vscode-editor',
+        screenRef: 'virtual-app-screen:preflight/screen-request',
+        preflightRef: 'computer-use:native-host/preflights/viewer/preflight.json',
+        preflightLedgerRef: 'computer-use:native-host/preflights/viewer/preflight-ledger.json',
+        preflightLedgerEntryRef: 'computer-use:native-host/preflights/viewer/preflight-ledger.json/events/0001-preflight.recorded.json',
+        hostReadinessRef: 'computer-use:native-host/preflights/viewer/host-readiness.json',
+        adapterReadinessRef: 'computer-use:native-host/preflights/viewer/adapter-readiness.json',
+        providerReadinessRefs: ['computer-use:native-host/preflights/viewer/provider-readiness.json'],
+      },
+    },
+  };
+
+  const html = renderToStaticMarkup(renderVirtualScreenViewer(hostOwnedFixture));
+
+  assert.match(html, /computer-use:native-host\/preflights\/viewer\/preflight\.json/);
+  assert.match(html, /computer-use:native-host\/preflights\/viewer\/preflight-ledger\.json/);
+  assert.match(html, /computer-use:native-host\/preflights\/viewer\/preflight-ledger\.json\/events\/0001-preflight\.recorded\.json/);
+  assert.match(html, /computer-use:native-host\/preflights\/viewer\/host-readiness\.json/);
+  assert.match(html, /computer-use:native-host\/preflights\/viewer\/provider-readiness\.json/);
+  assert.match(html, /data-timeline-kind="preflight"/);
+  assert.match(html, /data-timeline-kind="preflight-ledger-entry"/);
+  assert.match(html, /data-timeline-kind="host-readiness"/);
+
+  const placeholderHtml = renderToStaticMarkup(renderVirtualScreenViewer({
+    ...emptyVirtualScreenViewerFixture,
+    artifact: {
+      ...emptyVirtualScreenViewerFixture.artifact,
+      data: {
+        title: 'Placeholder preflight',
+        status: 'blocked',
+        attachState: 'blocked',
+        targetAppRef: 'app:profile/vscode-editor',
+        screenRef: 'virtual-app-screen:placeholder-preflight/screen-request',
+        preflightRef: 'computer-use:screen-activation/placeholder-preflight/preflight.json',
+        preflightLedgerRef: 'ledger:computer-use/placeholder-preflight/preflight-ledger.json',
+        preflightLedgerEntryRef: 'computer-use:screen-activation/placeholder-preflight/preflight-ledger.json/events/0001-preflight.recorded.json',
+        hostReadinessRef: 'computer-use:screen-activation/placeholder-preflight/host-readiness.json',
+        adapterReadinessRef: 'computer-use:screen-activation/placeholder-preflight/provider-readiness.json',
+      },
+    },
+  }));
+
+  assert.doesNotMatch(placeholderHtml, /data-timeline-kind="preflight"/);
+  assert.doesNotMatch(placeholderHtml, /placeholder-preflight\/preflight/);
+  assert.match(placeholderHtml, /data-rejection-kind="non-host-preflight-ref"/);
+});
+
 test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags visually materialized', () => {
   const html = renderToStaticMarkup(renderVirtualScreenViewer(visualRegressionFixtureWithLiveBindingRefs()));
   const stageHtml = requireBlock(html, /<section class="virtual-screen-stage"[\s\S]*?<\/section>/, 'screen stage');
@@ -112,22 +174,24 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.ok(imageMatch, 'active frame preview image should render');
   assert.equal(
     imageMatch?.[1],
-    '/api/sciforge/preview/raw?ref=computer-use%3Asession%2Fvisual-regression%2Fframes%2Factive.png',
+    '/api/sciforge/preview/raw?ref=computer-use%3Anative-host%2Fvisual-regression%2Fframes%2Factive.png',
   );
   assert.match(imageMatch?.[0] ?? '', /alt="VirtualAppScreen current frame"/);
-  assert.match(imageMatch?.[0] ?? '', /data-frame-ref="computer-use:session\/visual-regression\/frames\/active\.png"/);
-  assert.match(imageMatch?.[0] ?? '', /data-frame-stream-ref="computer-use:session\/visual-regression\/frame-stream\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-frame-ref="computer-use:native-host\/visual-regression\/frames\/active\.png"/);
+  assert.match(imageMatch?.[0] ?? '', /data-frame-stream-ref="computer-use:native-host\/visual-regression\/frame-stream\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-frame-stream-mode="ref-only"/);
-  assert.match(imageMatch?.[0] ?? '', /data-live-surface-ref="computer-use:session\/visual-regression\/live-surface\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-live-surface-ref="computer-use:native-host\/visual-regression\/live-surface\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-surface-transport="native-frame-stream"/);
   assert.match(imageMatch?.[0] ?? '', /data-provider-session-owner-ref="computer-use:provider-session\/visual-regression\/owner\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-provider-session-reconnect-ref="computer-use:provider-session\/visual-regression\/reconnect\.json"/);
-  assert.match(imageMatch?.[0] ?? '', /data-live-binding-attach-grant-ref="computer-use:provider-session\/visual-regression\/live-binding-attach-grant\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-live-binding-attach-grant-ref="computer-use:native-host\/visual-regression\/live-binding-attach-grant\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-live-binding-attach-grant-status="validated"/);
-  assert.match(imageMatch?.[0] ?? '', /data-grant-validation-ref="computer-use:provider-session\/visual-regression\/grant-validation\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-grant-validation-ref="computer-use:native-host\/visual-regression\/grant-validation\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-grant-validation-status="validated"/);
-  assert.match(imageMatch?.[0] ?? '', /data-surface-transport-ref="computer-use:session\/visual-regression\/surface-transport\.json"/);
-  assert.match(imageMatch?.[0] ?? '', /data-current-frame-sequence-ref="computer-use:session\/visual-regression\/frame-sequence\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-surface-transport-ref="computer-use:native-host\/visual-regression\/surface-transport\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-surface-owner-ref="computer-use:native-host\/visual-regression\/surface-owner\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-display-owner-ref="computer-use:native-host\/visual-regression\/display-owner\.json"/);
+  assert.match(imageMatch?.[0] ?? '', /data-current-frame-sequence-ref="computer-use:native-host\/visual-regression\/frame-sequence\.json"/);
   assert.match(imageMatch?.[0] ?? '', /data-platform-driver-ref="computer-use:session\/visual-regression\/platform-driver\.json"/);
   assert.match(html, /data-presentation-mode="live-surface-ref"/);
   assert.match(html, /data-presentation-state="live"/);
@@ -152,10 +216,10 @@ test('virtual-screen-viewer keeps refs, overlays, timeline, and isolation flags 
   assert.match(footerHtml, /computer-use:session\/visual-regression\/proposals\/click-confirm\.json/);
   assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/owner\.json/);
   assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/reconnect\.json/);
-  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/live-binding-attach-grant\.json/);
-  assert.match(footerHtml, /computer-use:provider-session\/visual-regression\/grant-validation\.json/);
-  assert.match(footerHtml, /computer-use:session\/visual-regression\/surface-transport\.json/);
-  assert.match(footerHtml, /computer-use:session\/visual-regression\/frame-sequence\.json/);
+  assert.match(footerHtml, /computer-use:native-host\/visual-regression\/live-binding-attach-grant\.json/);
+  assert.match(footerHtml, /computer-use:native-host\/visual-regression\/grant-validation\.json/);
+  assert.match(footerHtml, /computer-use:native-host\/visual-regression\/surface-transport\.json/);
+  assert.match(footerHtml, /computer-use:native-host\/visual-regression\/frame-sequence\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/input-leases\/main-held\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/action-adapters\/native-app-window\.json/);
   assert.match(footerHtml, /computer-use:session\/visual-regression\/adapter-readiness\/native-app-window\.json/);
@@ -185,7 +249,7 @@ test('virtual-screen-viewer builds terminal-equivalent InputIntent commands for 
 
   assert.equal(
     command,
-    '/computer-use input-intent --source virtual-app-screen-canvas --kind click --session-ref "computer-use:session/input/session.json" --screen-ref "virtual-app-screen:input/screen-a" --target-app-ref "app:input-native-app" --target-window-ref "window:input-native-app/main" --frame-ref "computer-use:session/input/frames/current.png" --input-lease-ref "computer-use:session/input/leases/active.json" --action-adapter-ref "computer-use:session/input/adapters/native-app-window.json" --adapter-readiness-ref "computer-use:session/input/readiness/native-app-window.json" --evidence-ledger-ref "computer-use:session/input/evidence-ledger.json" --frame-width 1440 --frame-height 900 --x-ratio 0.1250 --y-ratio 0.5000 --button left',
+    '/computer-use input-intent --source virtual-app-screen-canvas --kind click --session-ref "computer-use:native-host/input/session.json" --screen-ref "virtual-app-screen:input/screen-a" --target-app-ref "app:input-native-app" --target-window-ref "window:input-native-app/main" --frame-ref "computer-use:native-host/input/frames/current.png" --input-lease-ref "computer-use:native-host/input/leases/active.json" --action-adapter-ref "computer-use:native-host/input/adapters/native-app-window.json" --adapter-readiness-ref "computer-use:native-host/input/readiness/native-app-window.json" --evidence-ledger-ref "computer-use:native-host/input/evidence-ledger.json" --frame-width 1440 --frame-height 900 --x-ratio 0.1250 --y-ratio 0.5000 --button left',
   );
   assert.doesNotMatch(command ?? '', /executeScoped|runComputerUse|executorLease|schedulerParams/);
 
@@ -212,11 +276,11 @@ test('virtual-screen-viewer exposes user and agent lease ownership with interven
 
   assert.equal(
     takeoverCommand,
-    '/computer-use input-intent --source virtual-app-screen-control --kind takeover --session-ref "computer-use:session/input/session.json" --screen-ref "virtual-app-screen:input/screen-a" --target-app-ref "app:input-native-app" --target-window-ref "window:input-native-app/main" --input-lease-ref "computer-use:session/input/leases/active.json" --user-lease-ref "computer-use:session/input/leases/user.json" --agent-lease-ref "computer-use:session/input/leases/agent.json" --active-lease-owner-ref "computer-use:session/input/leases/agent.json" --active-lease-owner-role "agent" --lease-control-ref "computer-use:session/input/leases/takeover.json" --action-adapter-ref "computer-use:session/input/adapters/native-app-window.json" --adapter-readiness-ref "computer-use:session/input/readiness/native-app-window.json" --evidence-ledger-ref "computer-use:session/input/evidence-ledger.json"',
+    '/computer-use input-intent --source virtual-app-screen-control --kind takeover --session-ref "computer-use:native-host/input/session.json" --screen-ref "virtual-app-screen:input/screen-a" --target-app-ref "app:input-native-app" --target-window-ref "window:input-native-app/main" --input-lease-ref "computer-use:native-host/input/leases/active.json" --user-lease-ref "computer-use:native-host/input/leases/user.json" --agent-lease-ref "computer-use:native-host/input/leases/agent.json" --active-lease-owner-ref "computer-use:native-host/input/leases/agent.json" --active-lease-owner-role "agent" --lease-control-ref "computer-use:native-host/input/leases/takeover.json" --action-adapter-ref "computer-use:native-host/input/adapters/native-app-window.json" --adapter-readiness-ref "computer-use:native-host/input/readiness/native-app-window.json" --evidence-ledger-ref "computer-use:native-host/input/evidence-ledger.json"',
   );
-  assert.match(pauseCommand ?? '', /--kind pause-agent .*--lease-control-ref "computer-use:session\/input\/leases\/pause-agent\.json"/);
-  assert.match(resumeCommand ?? '', /--kind resume-agent .*--lease-control-ref "computer-use:session\/input\/leases\/resume-agent\.json"/);
-  assert.match(stopCommand ?? '', /--kind stop-session .*--lease-control-ref "computer-use:session\/input\/leases\/stop-session\.json"/);
+  assert.match(pauseCommand ?? '', /--kind pause-agent .*--lease-control-ref "computer-use:native-host\/input\/leases\/pause-agent\.json"/);
+  assert.match(resumeCommand ?? '', /--kind resume-agent .*--lease-control-ref "computer-use:native-host\/input\/leases\/resume-agent\.json"/);
+  assert.match(stopCommand ?? '', /--kind stop-session .*--lease-control-ref "computer-use:native-host\/input\/leases\/stop-session\.json"/);
   assert.doesNotMatch(takeoverCommand ?? '', /executeScoped|runComputerUse|executorLease|schedulerParams/);
 
   const html = renderToStaticMarkup(renderVirtualScreenViewer({
@@ -230,19 +294,19 @@ test('virtual-screen-viewer exposes user and agent lease ownership with interven
     },
   }));
 
-  assert.match(html, /data-active-lease-owner-ref="computer-use:session\/input\/leases\/agent\.json"/);
+  assert.match(html, /data-active-lease-owner-ref="computer-use:native-host\/input\/leases\/agent\.json"/);
   assert.match(html, /data-active-lease-owner-role="agent"/);
-  assert.match(html, /data-user-lease-ref="computer-use:session\/input\/leases\/user\.json"/);
-  assert.match(html, /data-agent-lease-ref="computer-use:session\/input\/leases\/agent\.json"/);
+  assert.match(html, /data-user-lease-ref="computer-use:native-host\/input\/leases\/user\.json"/);
+  assert.match(html, /data-agent-lease-ref="computer-use:native-host\/input\/leases\/agent\.json"/);
   assert.match(html, /data-lease-control-ready="true"/);
-  assert.match(html, /data-lease-owner-ref="computer-use:session\/input\/leases\/user\.json" data-lease-owner-actor="user"/);
-  assert.match(html, /data-lease-owner-ref="computer-use:session\/input\/leases\/agent\.json" data-lease-owner-actor="agent"/);
+  assert.match(html, /data-lease-owner-ref="computer-use:native-host\/input\/leases\/user\.json" data-lease-owner-actor="user"/);
+  assert.match(html, /data-lease-owner-ref="computer-use:native-host\/input\/leases\/agent\.json" data-lease-owner-actor="agent"/);
   assert.match(html, /data-control-kind="takeover" data-control-enabled="true"/);
   assert.match(html, /data-control-kind="pause-agent" data-control-enabled="true"/);
   assert.match(html, /data-control-kind="resume-agent" data-control-enabled="true"/);
   assert.match(html, /data-control-kind="stop-session" data-control-enabled="true"/);
   assert.match(html, /--kind takeover/);
-  assert.match(html, /--input-lease-ref &quot;computer-use:session\/input\/leases\/active\.json&quot;/);
+  assert.match(html, /--input-lease-ref &quot;computer-use:native-host\/input\/leases\/active\.json&quot;/);
   assert.match(html, /data-timeline-kind="user-lease"/);
   assert.match(html, /data-timeline-kind="agent-lease"/);
   assert.match(html, /data-timeline-kind="takeover"/);
@@ -313,6 +377,9 @@ test('virtual-screen-viewer presents permission handoff and recheck refs when bl
   }));
 
   assert.match(html, /data-attach-state="blocked"/);
+  assert.match(html, /data-screen-surface-mode="empty"/);
+  assert.match(html, /data-live-surface-attached="false"/);
+  assert.match(html, /No live VirtualAppScreen surface attached/);
   assert.match(html, /Screen Recording permission missing/);
   assert.match(html, /computer-use:session\/permission\/handoff\/screen-recording\.json/);
   assert.match(html, /computer-use:session\/permission\/recheck\/screen-recording\.json/);
@@ -324,8 +391,60 @@ test('virtual-screen-viewer presents permission handoff and recheck refs when bl
   assert.match(html, /--platform-driver-ref &quot;computer-use:session\/permission\/platform-driver\.json&quot;/);
   assert.match(html, /data-timeline-kind="permission-handoff"/);
   assert.match(html, /data-timeline-kind="permission-recheck"/);
+  assert.match(html, /data-input-intent-ready="false"/);
   assert.match(html, /data-rejection-kind="provider-route" data-rejected-field="providerRoute"/);
-  assert.doesNotMatch(html, /\/private\/provider|data:image|base64/);
+  assert.doesNotMatch(html, /class="virtual-screen-frame-image"|\/private\/provider|data:image|base64/);
+});
+
+test('virtual-screen-viewer styles blocked empty surfaces as non-live gates instead of desktop-like frames', () => {
+  const cssSource = readFileSync(new URL('../../../../src/ui/src/styles/app-04.css', import.meta.url), 'utf8');
+
+  assert.match(
+    cssSource,
+    /\.virtual-screen-frame\[data-screen-surface-mode="empty"\]/,
+  );
+  assert.match(
+    cssSource,
+    /\.virtual-screen-frame\[data-screen-surface-mode="empty"\][\s\S]*background:[\s\S]*non-live-surface/u,
+  );
+});
+
+test('virtual-screen-viewer treats blocked replay surfaces without a visible frame as non-live gates', () => {
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Blocked replay without frame' },
+    artifact: {
+      id: 'blocked-replay-no-frame',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: {
+        title: 'Blocked replay without frame',
+        status: 'blocked',
+        attachState: 'blocked',
+        surfaceMode: 'replay',
+        targetAppRef: 'app:profile/word',
+        sessionRef: 'computer-use:native-host/blocked-replay/session.json',
+        screenRef: 'virtual-app-screen:blocked-replay/screen',
+        frameStreamRef: 'computer-use:native-host/blocked-replay/frame-stream.json',
+        blockedRef: 'computer-use:native-host/blocked-replay/blocked/provider.json',
+        blockedReason: 'native provider probe is not ready',
+        adapterReadinessRef: 'computer-use:native-host/blocked-replay/adapter-readiness.json',
+        permissionStatus: 'missing',
+        permissionGranted: false,
+      },
+    },
+  }));
+  const cssSource = readFileSync(new URL('../../../../src/ui/src/styles/app-04.css', import.meta.url), 'utf8');
+
+  assert.match(html, /data-screen-surface-mode="replay"/);
+  assert.match(html, /data-frame-evidence="none"/);
+  assert.match(html, /data-live-surface-attached="false"/);
+  assert.match(html, /No live VirtualAppScreen surface attached/);
+  assert.doesNotMatch(html, /class="virtual-screen-frame-image"|data-screen-presentation-mode="live-surface-ref"/);
+  assert.match(
+    cssSource,
+    /\.virtual-screen-frame\[data-live-surface-attached="false"\]\[data-frame-evidence="none"\][\s\S]*background:[\s\S]*non-live-surface/u,
+  );
 });
 
 test('virtual-screen-viewer appends finite positive frame dimensions to screen input intent commands', () => {
@@ -425,29 +544,31 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
         surfaceMode: 'live',
         targetAppRef: 'app:vscode',
         targetWindowRef: 'window:vscode/main',
-        sessionRef: 'computer-use:session/vscode/session.json',
+        sessionRef: 'computer-use:native-host/vscode/session.json',
         screenRef: 'virtual-app-screen:vscode/screen',
-        liveSurfaceRef: 'computer-use:session/vscode/live-surface.json',
+        liveSurfaceRef: 'computer-use:native-host/vscode/live-surface.json',
         surfaceTransport: 'native-frame-stream',
-        surfaceTransportRef: 'computer-use:session/vscode/surface-transport.json',
-        platformDriverRef: 'computer-use:session/vscode/platform-driver.json',
+        surfaceTransportRef: 'computer-use:native-host/vscode/surface-transport.json',
+        platformDriverRef: 'computer-use:native-host/vscode/platform-driver.json',
         platformDriverStatus: 'ready',
-        frameStreamRef: 'computer-use:session/vscode/frame-stream.json',
-        currentFrameRef: 'computer-use:session/vscode/frames/current.png',
+        surfaceOwnerRef: 'computer-use:native-host/vscode/surface-owner.json',
+        displayOwnerRef: 'computer-use:native-host/vscode/display-owner.json',
+        frameStreamRef: 'computer-use:native-host/vscode/frame-stream.json',
+        currentFrameRef: 'computer-use:native-host/vscode/frames/current.png',
         providerSessionOwnerRef: 'computer-use:provider-session/vscode/owner.json',
         providerSessionReconnectRef: 'computer-use:provider-session/vscode/reconnect.json',
-        liveBindingAttachGrantRef: 'computer-use:provider-session/vscode/live-binding-attach-grant.json',
+        liveBindingAttachGrantRef: 'computer-use:native-host/vscode/live-binding-attach-grant.json',
         liveBindingAttachGrantStatus: 'validated',
-        grantValidationRef: 'computer-use:provider-session/vscode/grant-validation.json',
+        grantValidationRef: 'computer-use:native-host/vscode/grant-validation.json',
         grantValidationStatus: 'validated',
         currentFrameSequence: {
-          ref: 'computer-use:session/vscode/frame-sequence.json',
+          ref: 'computer-use:native-host/vscode/frame-sequence.json',
           sequence: 8,
         },
-        inputLeaseRef: 'computer-use:session/vscode/input-lease.json',
-        actionAdapterRef: 'computer-use:session/vscode/action-adapter.json',
-        adapterReadinessRef: 'computer-use:session/vscode/adapter-readiness.json',
-        permissionRef: 'computer-use:session/vscode/permissions/platform-capture.json',
+        inputLeaseRef: 'computer-use:native-host/vscode/input-lease.json',
+        actionAdapterRef: 'computer-use:native-host/vscode/action-adapter.json',
+        adapterReadinessRef: 'computer-use:native-host/vscode/adapter-readiness.json',
+        permissionRef: 'computer-use:native-host/vscode/permissions/platform-capture.json',
         permissionStatus: 'granted',
         permissionRequired: true,
         permissionGranted: true,
@@ -471,16 +592,18 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   assert.match(html, /data-presentation-state="live"/);
   assert.match(html, /data-screen-presentation-state="live"/);
   assert.match(html, /data-screen-surface-mode="live"/);
-  assert.match(html, /data-live-surface-ref="computer-use:session\/vscode\/live-surface\.json"/);
-  assert.match(html, /data-live-binding-attach-grant-ref="computer-use:provider-session\/vscode\/live-binding-attach-grant\.json"/);
+  assert.match(html, /data-live-surface-ref="computer-use:native-host\/vscode\/live-surface\.json"/);
+  assert.match(html, /data-live-binding-attach-grant-ref="computer-use:native-host\/vscode\/live-binding-attach-grant\.json"/);
   assert.match(html, /data-live-binding-attach-grant-status="validated"/);
-  assert.match(html, /data-grant-validation-ref="computer-use:provider-session\/vscode\/grant-validation\.json"/);
+  assert.match(html, /data-grant-validation-ref="computer-use:native-host\/vscode\/grant-validation\.json"/);
   assert.match(html, /data-grant-validation-status="validated"/);
   assert.match(html, /data-surface-transport="native-frame-stream"/);
   assert.match(html, /data-provider-session-owner-ref="computer-use:provider-session\/vscode\/owner\.json"/);
   assert.match(html, /data-provider-session-reconnect-ref="computer-use:provider-session\/vscode\/reconnect\.json"/);
-  assert.match(html, /data-surface-transport-ref="computer-use:session\/vscode\/surface-transport\.json"/);
-  assert.match(html, /data-current-frame-sequence-ref="computer-use:session\/vscode\/frame-sequence\.json"/);
+  assert.match(html, /data-surface-transport-ref="computer-use:native-host\/vscode\/surface-transport\.json"/);
+  assert.match(html, /data-surface-owner-ref="computer-use:native-host\/vscode\/surface-owner\.json"/);
+  assert.match(html, /data-display-owner-ref="computer-use:native-host\/vscode\/display-owner\.json"/);
+  assert.match(html, /data-current-frame-sequence-ref="computer-use:native-host\/vscode\/frame-sequence\.json"/);
   assert.match(html, /data-platform-driver-status="ready"/);
   assert.match(html, /data-permission-status="granted"/);
   assert.match(html, /data-screen-presentation-mode="live-surface-ref"/);
@@ -488,6 +611,50 @@ test('virtual-screen-viewer renders host-owned live surface refs without provide
   assert.match(html, /data-isolation-flag="single interactive truth" data-isolation-value="true"/);
   assert.match(html, /data-isolation-flag="second interactive surface" data-isolation-value="false"/);
   assert.doesNotMatch(html, /providerRoute|streamUrl|iceCandidates|data:image|base64/);
+});
+
+test('virtual-screen-viewer keeps provider-session evidence from satisfying live attach truth', () => {
+  const legacyProviderPayload: VirtualScreenPayload = {
+    ...attachedInputIntentPayload(),
+    sessionRef: 'computer-use:session/legacy/session.json',
+    liveSurfaceRef: 'computer-use:session/legacy/live-surface.json',
+    surfaceTransportRef: 'computer-use:session/legacy/surface-transport.json',
+    frameStreamRef: 'computer-use:session/legacy/frame-stream.json',
+    currentFrameRef: 'computer-use:session/legacy/frames/current.png',
+    providerSessionOwnerRef: 'computer-use:provider-session/legacy/owner.json',
+    providerSessionReconnectRef: 'computer-use:provider-session/legacy/reconnect.json',
+    liveBindingAttachGrantRef: 'computer-use:provider-session/legacy/live-binding-attach-grant.json',
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: 'computer-use:provider-session/legacy/grant-validation.json',
+    grantValidationStatus: 'validated',
+    currentFrameSequence: {
+      ref: 'computer-use:session/legacy/frame-sequence.json',
+      sequence: 22,
+      transport: 'native-frame-stream',
+    },
+  };
+  const html = renderToStaticMarkup(renderVirtualScreenViewer({
+    slot: { componentId: 'virtual-screen-viewer', title: 'Legacy provider live shape' },
+    artifact: {
+      id: 'legacy-provider-live-shape',
+      type: 'computer-use-virtual-screen',
+      producerScenario: 'computer-use',
+      schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+      data: legacyProviderPayload,
+    },
+  }));
+
+  assert.equal(buildVirtualScreenInputIntentCommand(legacyProviderPayload, { kind: 'click', xRatio: 0.5, yRatio: 0.5 }), undefined);
+  assert.match(html, /data-presentation-state="fallback"/);
+  assert.match(html, /data-screen-presentation-state="fallback"/);
+  assert.match(html, /data-screen-surface-mode="fallback"/);
+  assert.match(html, /data-input-intent-ready="false"/);
+  assert.match(html, /data-provider-session-owner-ref="computer-use:provider-session\/legacy\/owner\.json"/);
+  assert.match(html, /data-provider-session-reconnect-ref="computer-use:provider-session\/legacy\/reconnect\.json"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="liveSurfaceRef"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="liveBindingAttachGrantRef"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref" data-rejected-field="grantValidationRef"/);
+  assert.doesNotMatch(html, /data-screen-presentation-mode="live-surface-ref"|data-screen-surface-mode="live"/);
 });
 
 test('virtual-screen-viewer rejects fixture or replay refs as live surface bindings', () => {
@@ -589,7 +756,7 @@ test('virtual-screen-viewer presents stream-quality refs and keeps legacy transp
       transport: 'VNC',
     },
     currentFrameSequence: {
-      ref: 'computer-use:session/quality/current-frame-sequence.json',
+      ref: 'computer-use:native-host/quality/current-frame-sequence.json',
       status: 'current',
       transport: 'RDP',
       sequence: 42,
@@ -626,7 +793,7 @@ test('virtual-screen-viewer presents stream-quality refs and keeps legacy transp
   assert.match(html, /data-frame-transport="noVNC"/);
   assert.match(html, /data-frame-transport-diagnostic-only="true"/);
   assert.match(html, /data-frame-telemetry-ref="computer-use:session\/quality\/frame-telemetry\.json"/);
-  assert.match(html, /data-current-frame-sequence-ref="computer-use:session\/quality\/current-frame-sequence\.json"/);
+  assert.match(html, /data-current-frame-sequence-ref="computer-use:native-host\/quality\/current-frame-sequence\.json"/);
   assert.match(html, /data-reconnect-ref="computer-use:session\/quality\/reconnect\.json"/);
   assert.match(html, /data-input-hot-path-ref="computer-use:session\/quality\/input-hot-path\.json"/);
   assert.match(html, /data-stream-quality-kind="frame transport"[\s\S]*?diagnostic-only:true/);
@@ -947,31 +1114,33 @@ function attachedInputIntentPayload(): VirtualScreenPayload {
     screenRef: 'virtual-app-screen:input/screen-a',
     targetAppRef: 'app:input-native-app',
     targetWindowRef: 'window:input-native-app/main',
-    sessionRef: 'computer-use:session/input/session.json',
-    liveSurfaceRef: 'computer-use:session/input/live-surface.json',
+    sessionRef: 'computer-use:native-host/input/session.json',
+    liveSurfaceRef: 'computer-use:native-host/input/live-surface.json',
     surfaceTransport: 'native-frame-stream',
-    surfaceTransportRef: 'computer-use:session/input/surface-transport.json',
-    platformDriverRef: 'computer-use:session/input/platform-driver.json',
+    surfaceTransportRef: 'computer-use:native-host/input/surface-transport.json',
+    platformDriverRef: 'computer-use:native-host/input/platform-driver.json',
     platformDriverStatus: 'ready',
-    frameStreamRef: 'computer-use:session/input/frame-stream.json',
-    currentFrameRef: 'computer-use:session/input/frames/current.png',
+    surfaceOwnerRef: 'computer-use:native-host/input/surface-owner.json',
+    displayOwnerRef: 'computer-use:native-host/input/display-owner.json',
+    frameStreamRef: 'computer-use:native-host/input/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/input/frames/current.png',
     providerSessionOwnerRef: 'computer-use:provider-session/input/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/input/reconnect.json',
-    liveBindingAttachGrantRef: 'computer-use:provider-session/input/live-binding-attach-grant.json',
+    liveBindingAttachGrantRef: 'computer-use:native-host/input/live-binding-attach-grant.json',
     liveBindingAttachGrantStatus: 'validated',
-    grantValidationRef: 'computer-use:provider-session/input/grant-validation.json',
+    grantValidationRef: 'computer-use:native-host/input/grant-validation.json',
     grantValidationStatus: 'validated',
     currentFrameSequence: {
-      ref: 'computer-use:session/input/frame-sequence.json',
+      ref: 'computer-use:native-host/input/frame-sequence.json',
       sequence: 3,
       transport: 'native-frame-stream',
     },
     screen: { width: 1440, height: 900 },
-    inputLeaseRef: 'computer-use:session/input/leases/active.json',
-    actionAdapterRef: 'computer-use:session/input/adapters/native-app-window.json',
-    adapterReadinessRef: 'computer-use:session/input/readiness/native-app-window.json',
-    evidenceLedgerRef: 'computer-use:session/input/evidence-ledger.json',
-    permissionRef: 'computer-use:session/input/permissions/platform-capture.json',
+    inputLeaseRef: 'computer-use:native-host/input/leases/active.json',
+    actionAdapterRef: 'computer-use:native-host/input/adapters/native-app-window.json',
+    adapterReadinessRef: 'computer-use:native-host/input/readiness/native-app-window.json',
+    evidenceLedgerRef: 'computer-use:native-host/input/evidence-ledger.json',
+    permissionRef: 'computer-use:native-host/input/permissions/platform-capture.json',
     permissionStatus: 'granted',
     permissionRequired: true,
     permissionGranted: true,
@@ -993,13 +1162,13 @@ function attachedInputIntentPayload(): VirtualScreenPayload {
 function attachedHumanInterventionPayload(): VirtualScreenPayload {
   return {
     ...attachedInputIntentPayload(),
-    activeLeaseOwnerRef: 'computer-use:session/input/leases/agent.json',
+    activeLeaseOwnerRef: 'computer-use:native-host/input/leases/agent.json',
     activeLeaseOwnerRole: 'agent',
-    userLeaseRef: 'computer-use:session/input/leases/user.json',
-    agentLeaseRef: 'computer-use:session/input/leases/agent.json',
+    userLeaseRef: 'computer-use:native-host/input/leases/user.json',
+    agentLeaseRef: 'computer-use:native-host/input/leases/agent.json',
     leaseOwnerRefs: [
       {
-        ref: 'computer-use:session/input/leases/user.json',
+        ref: 'computer-use:native-host/input/leases/user.json',
         actor: 'user',
         label: 'Human',
         status: 'standby',
@@ -1008,7 +1177,7 @@ function attachedHumanInterventionPayload(): VirtualScreenPayload {
         active: false,
       },
       {
-        ref: 'computer-use:session/input/leases/agent.json',
+        ref: 'computer-use:native-host/input/leases/agent.json',
         actor: 'agent',
         label: 'Agent',
         status: 'active',
@@ -1017,9 +1186,9 @@ function attachedHumanInterventionPayload(): VirtualScreenPayload {
         active: true,
       },
     ],
-    takeoverRef: 'computer-use:session/input/leases/takeover.json',
-    pauseRef: 'computer-use:session/input/leases/pause-agent.json',
-    resumeRef: 'computer-use:session/input/leases/resume-agent.json',
-    stopRef: 'computer-use:session/input/leases/stop-session.json',
+    takeoverRef: 'computer-use:native-host/input/leases/takeover.json',
+    pauseRef: 'computer-use:native-host/input/leases/pause-agent.json',
+    resumeRef: 'computer-use:native-host/input/leases/resume-agent.json',
+    stopRef: 'computer-use:native-host/input/leases/stop-session.json',
   };
 }

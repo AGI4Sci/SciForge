@@ -20,7 +20,9 @@ test('Native VirtualAppScreen Host validation covers manifest/API, ownership, re
     'manifest-api',
     'ownership-map',
     'provider-readiness',
+    'preflight-readiness',
     'contract-ledger',
+    'minimal-replay',
     'permission-ledger',
     'ui-only-negative',
     'fixture-only-negative',
@@ -59,7 +61,9 @@ test('Native Host validation profiles map PROJECT_CU smoke entrypoints to target
       'manifest-api',
       'ownership-map',
       'provider-readiness',
+      'preflight-readiness',
       'contract-ledger',
+      'minimal-replay',
       'permission-ledger',
       'ui-only-negative',
       'fixture-only-negative',
@@ -67,10 +71,10 @@ test('Native Host validation profiles map PROJECT_CU smoke entrypoints to target
       'unverified-grant-negative',
     ],
     'manifest-api': ['manifest-api', 'ownership-map'],
-    viewer: ['manifest-api', 'ownership-map', 'contract-ledger', 'permission-ledger', 'ui-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
+    viewer: ['manifest-api', 'ownership-map', 'preflight-readiness', 'contract-ledger', 'minimal-replay', 'permission-ledger', 'ui-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
     fixtures: ['manifest-api', 'fixture-only-negative'],
-    'provider-readiness': ['manifest-api', 'provider-readiness', 'contract-ledger', 'permission-ledger'],
-    'user-acceptance': ['manifest-api', 'contract-ledger', 'permission-ledger', 'ui-only-negative', 'fixture-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
+    'provider-readiness': ['manifest-api', 'provider-readiness', 'preflight-readiness', 'contract-ledger', 'minimal-replay', 'permission-ledger'],
+    'user-acceptance': ['manifest-api', 'contract-ledger', 'minimal-replay', 'permission-ledger', 'ui-only-negative', 'fixture-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
   };
 
   for (const [profile, checks] of Object.entries(expectedChecks) as Array<[NativeVirtualAppScreenHostValidationProfile, string[]]>) {
@@ -93,4 +97,5 @@ test('Native Host validation CLI reports profile-specific pass status', async ()
   assert.match(stdout, /ui-only-negative/);
   assert.match(stdout, /missing-frame-negative/);
   assert.match(stdout, /unverified-grant-negative/);
+  assert.match(stdout, /minimal-replay/);
 });

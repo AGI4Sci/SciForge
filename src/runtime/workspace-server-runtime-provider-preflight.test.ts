@@ -135,5 +135,13 @@ test('runtimeProviderProxyBaseUrl normalizes proxy base URL and strips OpenAI-co
     runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:8787/v1///' }, 'http://fallback/v1'),
     'http://127.0.0.1:8787',
   );
+  assert.equal(
+    runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_PORT: '3893' }, 'http://fallback/v1'),
+    'http://127.0.0.1:3893',
+  );
+  assert.equal(
+    runtimeProviderProxyBaseUrl({ SCIFORGE_PROXY_HOST: '0.0.0.0', SCIFORGE_PROXY_PORT: '3893' }, 'http://fallback/v1'),
+    'http://127.0.0.1:3893',
+  );
   assert.equal(runtimeProviderProxyBaseUrl({}, 'http://fallback/v1'), 'http://fallback');
 });

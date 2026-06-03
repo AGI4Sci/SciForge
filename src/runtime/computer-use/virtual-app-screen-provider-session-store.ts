@@ -10,6 +10,8 @@ export interface VirtualAppScreenProviderSessionRecord {
   schemaVersion: typeof VIRTUAL_APP_SCREEN_PROVIDER_SESSION_RECORD_SCHEMA;
   providerSessionOwnerRef: string;
   reconnectRef: string;
+  surfaceIdentityRef: string;
+  surfaceIdentity: VirtualAppScreenSurfaceIdentity;
   providerLifecycleSessionRef?: string;
   liveBindingAttachGrantRef: string;
   grantValidationRef: string;
@@ -46,6 +48,27 @@ export interface VirtualAppScreenProviderSessionRecord {
   currentSessionOnly: true;
 }
 
+export interface VirtualAppScreenSurfaceIdentity {
+  schemaVersion: 'sciforge.computer-use.virtual-app-screen-surface-identity.v1';
+  screenRef: string;
+  sessionRef: string;
+  liveSurfaceRef: string;
+  frameStreamRef: string;
+  surfaceTransportRef: string;
+  providerSessionOwnerRef: string;
+  providerSessionReconnectRef: string;
+  liveBindingAttachGrantRef: string;
+  grantValidationRef: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
+  providerId: string;
+  executorId: string;
+  owner: 'VirtualDisplayProvider' | 'NativeVirtualAppScreenHost';
+  singleInteractiveTruth: true;
+  secondInteractiveSurfacePresent: false;
+  currentSessionOnly: true;
+}
+
 export type VirtualAppScreenProviderSessionReconnectReason =
   | 'resize'
   | 'tab-switch'
@@ -63,6 +86,9 @@ export interface VirtualAppScreenProviderSessionReconnectInput {
   surfaceTransportRef?: string;
   providerSessionOwnerRef?: string;
   providerSessionReconnectRef?: string;
+  surfaceIdentityRef?: string;
+  surfaceOwnerRef?: string;
+  displayOwnerRef?: string;
   liveBindingAttachGrantRef?: string;
   grantValidationRef?: string;
   adapterReadinessRef?: string;
@@ -83,6 +109,9 @@ export interface VirtualAppScreenProviderSessionReconnectResult {
     sameFrameStreamRef: boolean;
     sameProviderSessionOwnerRef: boolean;
     sameProviderSessionReconnectRef: boolean;
+    sameSurfaceIdentityRef: boolean;
+    sameSurfaceOwnerRef: boolean;
+    sameDisplayOwnerRef: boolean;
     sameLiveBindingAttachGrantRef: boolean;
     sameGrantValidationRef: boolean;
     sameSurfaceTransportRef: boolean;
@@ -93,6 +122,13 @@ export interface VirtualAppScreenProviderSessionReconnectResult {
     providerExecuted: false;
     evidenceRefs: string[];
   };
+}
+
+export interface VirtualAppScreenProviderSessionReadinessUpdateInput {
+  screenRef?: string;
+  sessionRef?: string;
+  adapterReadinessRef: string;
+  evidenceLedgerRef?: string;
 }
 
 const providerSessionRecordsByScreenRef = new Map<string, VirtualAppScreenProviderSessionRecord>();
@@ -124,10 +160,36 @@ export function recordVirtualAppScreenProviderSession(
     ?? `computer-use:provider-session/${scope}/live-binding-attach-grant.json`;
   const grantValidationRef = refs.grantValidationRef
     ?? `computer-use:provider-session/${scope}/grant-validation.json`;
+  const providerSessionOwnerRef = `computer-use:provider-session/${scope}/owner.json`;
+  const reconnectRef = `computer-use:provider-session/${scope}/reconnect.json`;
+  const surfaceIdentityRef = `computer-use:provider-session/${scope}/surface-identity.json`;
+  const owner = refs.surfaceOwnerRef || refs.displayOwnerRef ? 'NativeVirtualAppScreenHost' as const : 'VirtualDisplayProvider' as const;
+  const surfaceIdentity: VirtualAppScreenSurfaceIdentity = stripUndefined({
+    schemaVersion: 'sciforge.computer-use.virtual-app-screen-surface-identity.v1' as const,
+    screenRef,
+    sessionRef: refs.sessionRef,
+    liveSurfaceRef: refs.liveSurfaceRef,
+    frameStreamRef: refs.frameStreamRef,
+    surfaceTransportRef: refs.surfaceTransportRef,
+    providerSessionOwnerRef,
+    providerSessionReconnectRef: reconnectRef,
+    liveBindingAttachGrantRef,
+    grantValidationRef,
+    surfaceOwnerRef: refs.surfaceOwnerRef,
+    displayOwnerRef: refs.displayOwnerRef,
+    providerId: result.providerId,
+    executorId: result.executorId,
+    owner,
+    singleInteractiveTruth: true as const,
+    secondInteractiveSurfacePresent: false as const,
+    currentSessionOnly: true as const,
+  });
   const record: VirtualAppScreenProviderSessionRecord = stripUndefined({
     schemaVersion: VIRTUAL_APP_SCREEN_PROVIDER_SESSION_RECORD_SCHEMA,
-    providerSessionOwnerRef: `computer-use:provider-session/${scope}/owner.json`,
-    reconnectRef: `computer-use:provider-session/${scope}/reconnect.json`,
+    providerSessionOwnerRef,
+    reconnectRef,
+    surfaceIdentityRef,
+    surfaceIdentity,
     providerLifecycleSessionRef: refs.providerLifecycleSessionRef,
     liveBindingAttachGrantRef,
     grantValidationRef,
@@ -158,16 +220,12 @@ export function recordVirtualAppScreenProviderSession(
     evidenceLedgerRef: refs.evidenceLedgerRef,
     guiPresentRef: refs.guiPresentRef,
     currentFrameSequence: result.evidence.surfaceTransport?.currentFrameSequence,
-    owner: refs.surfaceOwnerRef || refs.displayOwnerRef ? 'NativeVirtualAppScreenHost' as const : 'VirtualDisplayProvider' as const,
+    owner,
     singleInteractiveTruth: true as const,
     secondInteractiveSurfacePresent: false as const,
     currentSessionOnly: true as const,
   });
-  providerSessionRecordsByScreenRef.set(screenRef, record);
-  providerSessionRecordsBySessionRef.set(refs.sessionRef, record);
-  if (refs.providerLifecycleSessionRef) {
-    providerSessionRecordsBySessionRef.set(refs.providerLifecycleSessionRef, record);
-  }
+  storeProviderSessionRecord(record);
   return record;
 }
 
@@ -197,6 +255,9 @@ export function revalidateVirtualAppScreenProviderSession(
     input.surfaceTransportRef ? undefined : 'surfaceTransportRef',
     input.providerSessionOwnerRef ? undefined : 'providerSessionOwnerRef',
     input.providerSessionReconnectRef ? undefined : 'providerSessionReconnectRef',
+    input.surfaceIdentityRef ? undefined : 'surfaceIdentityRef',
+    input.surfaceOwnerRef || !record.surfaceIdentity.surfaceOwnerRef ? undefined : 'surfaceOwnerRef',
+    input.displayOwnerRef || !record.surfaceIdentity.displayOwnerRef ? undefined : 'displayOwnerRef',
     input.liveBindingAttachGrantRef ? undefined : 'liveBindingAttachGrantRef',
     input.grantValidationRef ? undefined : 'grantValidationRef',
   ].filter((value): value is string => Boolean(value));
@@ -221,6 +282,14 @@ export function revalidateVirtualAppScreenProviderSession(
   ) {
     return blockedReconnect(input, record, 'VirtualAppScreen provider session reconnect refs do not match the recorded runtime-owned session.');
   }
+  const identityMismatches = reconnectSurfaceIdentityMismatches(input, record);
+  if (identityMismatches.length) {
+    return blockedReconnect(
+      input,
+      record,
+      `VirtualAppScreen provider session reconnect surface identity drifted: ${identityMismatches.join(', ')}.`,
+    );
+  }
 
   const previousRecord = { ...record };
   const nextFrameRef = input.currentFrameRef ?? record.currentFrameRef;
@@ -244,8 +313,7 @@ export function revalidateVirtualAppScreenProviderSession(
     evidenceLedgerRef: input.evidenceLedgerRef ?? record.evidenceLedgerRef,
     guiPresentRef: input.guiPresentRef ?? record.guiPresentRef,
   };
-  providerSessionRecordsByScreenRef.set(updated.screenRef, updated);
-  providerSessionRecordsBySessionRef.set(updated.sessionRef, updated);
+  storeProviderSessionRecord(updated);
 
   return {
     schemaVersion: 'sciforge.computer-use.virtual-app-screen-provider-session-reconnect.v1',
@@ -267,6 +335,31 @@ export function revalidateVirtualAppScreenProviderSession(
   };
 }
 
+export function updateVirtualAppScreenProviderSessionReadiness(
+  input: VirtualAppScreenProviderSessionReadinessUpdateInput,
+): VirtualAppScreenProviderSessionRecord | undefined {
+  const unsafe = unsafeReconnectRefs({
+    reason: 'provider-reconnect',
+    screenRef: input.screenRef,
+    sessionRef: input.sessionRef,
+    adapterReadinessRef: input.adapterReadinessRef,
+    evidenceLedgerRef: input.evidenceLedgerRef,
+  });
+  if (unsafe.length) return undefined;
+  const recordByScreen = input.screenRef ? providerSessionRecordsByScreenRef.get(input.screenRef) : undefined;
+  const recordBySession = input.sessionRef ? providerSessionRecordsBySessionRef.get(input.sessionRef) : undefined;
+  if (recordByScreen && recordBySession && recordByScreen !== recordBySession) return undefined;
+  const record = recordByScreen ?? recordBySession;
+  if (!record) return undefined;
+  const updated: VirtualAppScreenProviderSessionRecord = stripUndefined({
+    ...record,
+    adapterReadinessRef: input.adapterReadinessRef,
+    evidenceLedgerRef: input.evidenceLedgerRef ?? record.evidenceLedgerRef,
+  });
+  storeProviderSessionRecord(updated);
+  return updated;
+}
+
 export function readVirtualAppScreenProviderSessionRecord(options: {
   screenRef?: string;
   sessionRef?: string;
@@ -283,6 +376,14 @@ export function resetVirtualAppScreenProviderSessionStoreForTests(): void {
 
 function providerSessionScope(screenRef: string, sessionRef: string) {
   return sanitizeId(`${screenRef}-${sessionRef}`);
+}
+
+function storeProviderSessionRecord(record: VirtualAppScreenProviderSessionRecord): void {
+  providerSessionRecordsByScreenRef.set(record.screenRef, record);
+  providerSessionRecordsBySessionRef.set(record.sessionRef, record);
+  if (record.providerLifecycleSessionRef) {
+    providerSessionRecordsBySessionRef.set(record.providerLifecycleSessionRef, record);
+  }
 }
 
 function blockedReconnect(
@@ -318,6 +419,9 @@ function reconnectEvidence(
     sameFrameStreamRef: Boolean(record && input.frameStreamRef === record.frameStreamRef),
     sameProviderSessionOwnerRef: Boolean(record && input.providerSessionOwnerRef === record.providerSessionOwnerRef),
     sameProviderSessionReconnectRef: Boolean(record && input.providerSessionReconnectRef === record.reconnectRef),
+    sameSurfaceIdentityRef: Boolean(record && input.surfaceIdentityRef === record.surfaceIdentityRef),
+    sameSurfaceOwnerRef: Boolean(record && (!record.surfaceIdentity.surfaceOwnerRef || input.surfaceOwnerRef === record.surfaceIdentity.surfaceOwnerRef)),
+    sameDisplayOwnerRef: Boolean(record && (!record.surfaceIdentity.displayOwnerRef || input.displayOwnerRef === record.surfaceIdentity.displayOwnerRef)),
     sameLiveBindingAttachGrantRef: Boolean(record && input.liveBindingAttachGrantRef === record.liveBindingAttachGrantRef),
     sameGrantValidationRef: Boolean(record && input.grantValidationRef === record.grantValidationRef),
     sameSurfaceTransportRef: Boolean(record && input.surfaceTransportRef === record.surfaceTransportRef),
@@ -334,6 +438,9 @@ function reconnectEvidenceRefs(
     input.guiPresentRef,
     input.providerSessionOwnerRef,
     input.providerSessionReconnectRef,
+    input.surfaceIdentityRef,
+    input.surfaceOwnerRef,
+    input.displayOwnerRef,
     input.liveBindingAttachGrantRef,
     input.grantValidationRef,
     record?.grantValidationRef,
@@ -341,6 +448,9 @@ function reconnectEvidenceRefs(
     input.currentFrameRef,
     record?.providerSessionOwnerRef,
     record?.reconnectRef,
+    record?.surfaceIdentityRef,
+    record?.surfaceIdentity.surfaceOwnerRef,
+    record?.surfaceIdentity.displayOwnerRef,
     record?.providerLifecycleSessionRef,
     record?.liveBindingAttachGrantRef,
     record?.grantValidationRef,
@@ -359,6 +469,9 @@ function unsafeReconnectRefs(input: VirtualAppScreenProviderSessionReconnectInpu
     surfaceTransportRef: input.surfaceTransportRef,
     providerSessionOwnerRef: input.providerSessionOwnerRef,
     providerSessionReconnectRef: input.providerSessionReconnectRef,
+    surfaceIdentityRef: input.surfaceIdentityRef,
+    surfaceOwnerRef: input.surfaceOwnerRef,
+    displayOwnerRef: input.displayOwnerRef,
     liveBindingAttachGrantRef: input.liveBindingAttachGrantRef,
     grantValidationRef: input.grantValidationRef,
     adapterReadinessRef: input.adapterReadinessRef,
@@ -368,6 +481,26 @@ function unsafeReconnectRefs(input: VirtualAppScreenProviderSessionReconnectInpu
   return Object.entries(refs)
     .filter(([, ref]) => ref !== undefined && !safeProviderSessionRef(ref))
     .map(([key]) => key);
+}
+
+function reconnectSurfaceIdentityMismatches(
+  input: VirtualAppScreenProviderSessionReconnectInput,
+  record: VirtualAppScreenProviderSessionRecord,
+) {
+  const expected = record.surfaceIdentity;
+  return [
+    input.screenRef !== expected.screenRef ? 'screenRef' : undefined,
+    input.sessionRef !== expected.sessionRef ? 'sessionRef' : undefined,
+    input.liveSurfaceRef !== expected.liveSurfaceRef ? 'liveSurfaceRef' : undefined,
+    input.frameStreamRef !== expected.frameStreamRef ? 'frameStreamRef' : undefined,
+    input.surfaceTransportRef !== expected.surfaceTransportRef ? 'surfaceTransportRef' : undefined,
+    input.providerSessionOwnerRef !== expected.providerSessionOwnerRef ? 'providerSessionOwnerRef' : undefined,
+    input.providerSessionReconnectRef !== expected.providerSessionReconnectRef ? 'providerSessionReconnectRef' : undefined,
+    input.liveBindingAttachGrantRef !== expected.liveBindingAttachGrantRef ? 'liveBindingAttachGrantRef' : undefined,
+    input.grantValidationRef !== expected.grantValidationRef ? 'grantValidationRef' : undefined,
+    expected.surfaceOwnerRef && input.surfaceOwnerRef !== expected.surfaceOwnerRef ? 'surfaceOwnerRef' : undefined,
+    expected.displayOwnerRef && input.displayOwnerRef !== expected.displayOwnerRef ? 'displayOwnerRef' : undefined,
+  ].filter((item): item is string => Boolean(item));
 }
 
 function safeProviderSessionRef(value: string | undefined) {

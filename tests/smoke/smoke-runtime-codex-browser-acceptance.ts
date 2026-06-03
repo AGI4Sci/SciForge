@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
@@ -19,11 +20,15 @@ type BrowserAcceptanceManifest = {
   requestedRolePort?: number;
   actualWorkspaceWriterPort?: number;
   actualWorkspaceWriterUrl?: string;
+  actualWorkspaceWriterUrlEvidence?: BoundedTextEvidence;
   actualRuntimeCodexPort?: number;
   actualRuntimeCodexUrl?: string;
+  actualRuntimeCodexUrlEvidence?: BoundedTextEvidence;
   actualUrl?: string;
+  actualUrlEvidence?: BoundedTextEvidence;
   actualPort?: number;
   workspacePath?: string;
+  workspacePathEvidence?: BoundedTextEvidence;
   profile?: string;
   provider?: string;
   model?: string;
@@ -73,6 +78,8 @@ type BrowserAcceptanceManifest = {
   upstreamBaseUrlSourceKind?: 'env' | 'config' | 'missing';
   configPathsChecked?: string[];
   configSecretFallbackPaths?: string[];
+  configPathsCheckedCount?: number;
+  configSecretFallbackCount?: number;
   currentPortStatus?: Record<string, PortStatus>;
   serviceEnvRequired?: {
     required: string[];
@@ -80,10 +87,35 @@ type BrowserAcceptanceManifest = {
     runtimeApiKeySource: 'service-env-required';
     note: string;
   };
+  runtimeServiceEnvAcceptance?: RuntimeServiceEnvAcceptanceDiagnostic;
+  liveRerunEligibility?: RuntimeLiveRerunEligibilityDiagnostic;
   exactStartCommands?: string[];
   exactRetestCommands?: string[];
   strictRetestCommand?: string;
   configFallbackWarning?: string;
+};
+
+type RuntimeServiceEnvAcceptanceDiagnostic = {
+  typedBlocked: boolean;
+  runtimeApiKeyPresentInServiceEnv: boolean;
+  canClaimRightPaneBrowserLivePass: boolean;
+  evidenceScope: 'preflight-only' | 'live-browser-current-run';
+  missingEnv: string[];
+};
+
+type BoundedTextEvidence = {
+  length: number;
+  sha256: string;
+};
+
+type RuntimeLiveRerunEligibilityDiagnostic = {
+  serviceEnvReady: boolean;
+  canAttemptLiveBrowserRerun: boolean;
+  requiresLiveBrowserAcceptance: boolean;
+  evidenceScope: 'preflight-only' | 'live-browser-current-run';
+  keySourceKind: 'env' | 'config-debug-fallback' | 'missing';
+  upstreamSourceKind: 'env' | 'config' | 'missing';
+  missingEnv: string[];
 };
 
 type PortStatus = {
@@ -92,6 +124,7 @@ type PortStatus = {
   listening: boolean;
   healthOk?: boolean;
   healthUrl?: string;
+  healthUrlEvidence?: BoundedTextEvidence;
   note?: string;
 };
 
@@ -103,8 +136,10 @@ type CurrentEnvProviderPreflightManifest = {
   upstreamBaseUrlPresent: boolean;
   upstreamKeySourceKind: 'env' | 'config-debug-fallback' | 'missing';
   upstreamBaseUrlSourceKind: 'env' | 'config' | 'missing';
-  configPathsChecked: string[];
-  configSecretFallbackPaths: string[];
+  configPathsChecked?: string[];
+  configSecretFallbackPaths?: string[];
+  configPathsCheckedCount: number;
+  configSecretFallbackCount: number;
   category: string;
   owner: 'environment' | 'provider' | 'repo';
   policyViolations: string[];
@@ -122,8 +157,11 @@ type BlockedNextAction = {
 type BrowserAcceptanceScenario = {
   status: BrowserAcceptanceStatus;
   prompt?: string;
+  promptEvidence?: BoundedTextEvidence;
   followUpPrompt?: string;
+  followUpPromptEvidence?: BoundedTextEvidence;
   expectedPassphrase?: string;
+  expectedPassphraseEvidence?: BoundedTextEvidence;
   selectedRefs?: string[];
   userIntent?: string;
   actualTaskResult?: ActualTaskResult;
@@ -238,6 +276,7 @@ const FORBIDDEN_MANIFEST_PAYLOAD_KEYS = new Set([
   'rawproviderpayload',
   'providerpayload',
   'base64payload',
+  'screenshotpath',
   'screenshotbase64',
   'imagebase64',
 ]);
@@ -327,12 +366,12 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     observedAt,
     requestedRolePort,
     actualWorkspaceWriterPort: requestedWorkspaceWriterPort,
-    actualWorkspaceWriterUrl,
+    actualWorkspaceWriterUrlEvidence: boundedTextEvidence(actualWorkspaceWriterUrl),
     actualRuntimeCodexPort: requestedRuntimeCodexPort,
-    actualRuntimeCodexUrl,
-    actualUrl,
+    actualRuntimeCodexUrlEvidence: boundedTextEvidence(actualRuntimeCodexUrl),
+    actualUrlEvidence: boundedTextEvidence(actualUrl),
     actualPort: requestedRolePort,
-    workspacePath,
+    workspacePathEvidence: boundedTextEvidence(workspacePath),
     profile: runtimeCodexIdentity.profile,
     provider: runtimeCodexIdentity.provider,
     model: runtimeCodexIdentity.model,
@@ -372,8 +411,8 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
     upstreamBaseUrlPresent: providerPreflight.upstreamBaseUrlPresent,
     upstreamKeySourceKind: providerPreflight.upstreamKeySourceKind,
     upstreamBaseUrlSourceKind: providerPreflight.upstreamBaseUrlSourceKind,
-    configPathsChecked: providerPreflight.configPathsChecked,
-    configSecretFallbackPaths: providerPreflight.configSecretFallbackPaths,
+    configPathsCheckedCount: providerPreflight.configPathsCheckedCount,
+    configSecretFallbackCount: providerPreflight.configSecretFallbackCount,
     currentPortStatus,
     serviceEnvRequired: {
       required: ['SCIFORGE_RUNTIME_API_KEY', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
@@ -381,10 +420,12 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
       runtimeApiKeySource: 'service-env-required',
       note: 'Runtime Codex browser/release acceptance requires the Runtime API key in the service process environment; ignored config-file secret fallbacks are diagnostic-only.',
     },
+    runtimeServiceEnvAcceptance: runtimeServiceEnvAcceptanceDiagnostic(providerPreflight, preflightOnly ? 'preflight-only' : 'live-browser-current-run'),
+    liveRerunEligibility: runtimeLiveRerunEligibilityDiagnostic(providerPreflight, preflightOnly ? 'preflight-only' : 'live-browser-current-run'),
     exactStartCommands: exactCommands.start,
     exactRetestCommands: exactCommands.retest,
     strictRetestCommand: exactCommands.strictRetest,
-    configFallbackWarning: `Ignored config secret fallbacks (${providerPreflight.configSecretFallbackPaths.join(', ') || 'none detected'}) can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.`,
+    configFallbackWarning: `Ignored config secret fallback count=${providerPreflight.configSecretFallbackCount}; config-file secrets can help local proxy diagnostics but cannot satisfy Runtime Codex browser/release acceptance.`,
     releaseBlocking: true,
     releaseEligible: false,
     singleTurn: blockedScenario(
@@ -408,9 +449,9 @@ async function writeBlockedAcceptanceManifest(blockedReason: string): Promise<Br
         browserEvidence.multiTurn.evidence,
         browserEvidence.multiTurn,
       ),
-      prompt: multiTurnPrompt,
-      followUpPrompt: multiTurnFollowUpPrompt,
-      expectedPassphrase: expectedMultiTurnPassphrase,
+      promptEvidence: boundedTextEvidence(multiTurnPrompt),
+      followUpPromptEvidence: boundedTextEvidence(multiTurnFollowUpPrompt),
+      expectedPassphraseEvidence: boundedTextEvidence(expectedMultiTurnPassphrase),
       secondTurnVisibleAnswerConfirmed: false,
     },
     evidence: browserEvidence.evidence,
@@ -429,11 +470,12 @@ async function probeCurrentPortStatus(): Promise<Record<string, PortStatus>> {
     providerProxy: await probeTcpPort(host, requestedProviderProxyPort),
     kvGround: await probeTcpPort(host, portFromEnv(process.env.SCIFORGE_VISION_KV_GROUND_PORT, undefined, 18081)),
   };
-  statuses.kvGround.healthUrl = `http://${host}:${statuses.kvGround.port}/health`;
-  statuses.kvGround.healthOk = await probeHttpHealth(statuses.kvGround.healthUrl);
+  const kvGroundHealthUrl = `http://${host}:${statuses.kvGround.port}/health`;
+  statuses.kvGround.healthUrlEvidence = boundedTextEvidence(kvGroundHealthUrl);
+  statuses.kvGround.healthOk = await probeHttpHealth(kvGroundHealthUrl);
   statuses.kvGround.note = statuses.kvGround.healthOk
     ? 'KV-Ground health is reachable; this proves the Grounder service is alive, not browser/release acceptance.'
-    : 'KV-Ground health is not currently reachable from this process.';
+    : 'KV-Ground health is not currently reachable from this process; this is diagnostic-only and not browser/release acceptance.';
   return statuses;
 }
 
@@ -476,36 +518,40 @@ function exactServiceEnvCommands(): {
   retest: string[];
   strictRetest: string;
 } {
-  const proxyCommand = [
+  const serviceEnvGuard = [
     'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in service env}"',
     'SCIFORGE_PROXY_UPSTREAM_BASE_URL="${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}"',
-    'SCIFORGE_PROXY_HOST=127.0.0.1',
+  ].join(' ');
+  const proxyCommand = [
+    serviceEnvGuard,
+    'SCIFORGE_PROXY_HOST=<loopback-host>',
     `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
-    `npm run backend:codex-proxy -- --host 127.0.0.1 --port ${requestedProviderProxyPort} --upstream-base-url "$SCIFORGE_PROXY_UPSTREAM_BASE_URL" --api-key-env SCIFORGE_RUNTIME_API_KEY`,
+    'npm run backend:codex-proxy -- --host <loopback-host> --port <provider-proxy-port> --upstream-base-url "$SCIFORGE_PROXY_UPSTREAM_BASE_URL" --api-key-env SCIFORGE_RUNTIME_API_KEY',
   ].join(' ');
   const devCommand = [
     'SCIFORGE_AGENT_SERVER_AUTOSTART=0',
-    'SCIFORGE_CONFIG_PATH=/tmp/sciforge-runtime-nosecret-config.local.json',
-    'SCIFORGE_RUNTIME_API_KEY="${SCIFORGE_RUNTIME_API_KEY:?set in service env}"',
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL="${SCIFORGE_PROXY_UPSTREAM_BASE_URL:?set upstream /v1 url}"',
+    'SCIFORGE_CONFIG_PATH=<no-secret-runtime-config>',
+    serviceEnvGuard,
     `SCIFORGE_PROXY_PORT=${requestedProviderProxyPort}`,
     `SCIFORGE_INSTANCE_ID=${instanceProfile.id}`,
     `SCIFORGE_UI_PORT=${requestedRolePort}`,
     `SCIFORGE_WORKSPACE_PORT=${requestedWorkspaceWriterPort}`,
     `SCIFORGE_RUNTIME_CODEX_PORT=${requestedRuntimeCodexPort}`,
-    `SCIFORGE_WORKSPACE_PATH=${workspacePath}`,
+    'SCIFORGE_WORKSPACE_PATH=<workspace-root>',
     `npm run dev -- --instance ${instanceProfile.id}`,
   ].join(' ');
-  const strictRetest = 'npm run smoke:runtime-provider-preflight && SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance';
+  const providerPreflightRetest = `${serviceEnvGuard} npm run smoke:runtime-provider-preflight`;
+  const browserAcceptanceRetest = `${serviceEnvGuard} npm run smoke:runtime-codex-browser-acceptance`;
+  const strictRetest = `${providerPreflightRetest} && ${serviceEnvGuard} SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance`;
   return {
     start: [
-      `npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:${requestedProviderProxyPort}/v1`,
+      'npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url <loopback-provider-proxy-v1-url>',
       proxyCommand,
       devCommand,
     ],
     retest: [
-      'npm run smoke:runtime-provider-preflight',
-      'npm run smoke:runtime-codex-browser-acceptance',
+      providerPreflightRetest,
+      browserAcceptanceRetest,
       strictRetest,
     ],
     strictRetest,
@@ -518,16 +564,17 @@ function assertBrowserAcceptanceManifest(manifest: BrowserAcceptanceManifest): v
   assertBoundedManifestPayload(manifest);
   assert.notEqual(manifest.automationSubstituteUsed, true, 'system browser, macOS open, external Chrome, or non-user-level automation cannot be acceptance evidence');
   assert.notEqual(manifest.seedDemoFixtureEvidenceUsed, true, 'seed/demo/fixture messages cannot be live browser acceptance evidence');
-  assert.match(manifest.actualUrl ?? '', /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\//, 'actual browser URL must be recorded');
   assert.ok(manifest.actualPort, 'actual UI port must be recorded after port preflight');
-  assertUrlPortMatches(manifest.actualUrl, manifest.actualPort, 'actualUrl');
+  assertBoundedTextEvidence(manifest.actualUrlEvidence, 'actualUrlEvidence');
+  assert.equal(manifest.actualUrl, undefined, 'actualUrl must be represented by bounded digest evidence, not raw loopback URL');
   assert.ok(manifest.actualWorkspaceWriterPort, 'actual workspace writer port must be recorded after port preflight');
-  assert.match(manifest.actualWorkspaceWriterUrl ?? '', /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/?$/, 'actual workspace writer URL must be recorded');
-  assertUrlPortMatches(manifest.actualWorkspaceWriterUrl, manifest.actualWorkspaceWriterPort, 'actualWorkspaceWriterUrl');
+  assertBoundedTextEvidence(manifest.actualWorkspaceWriterUrlEvidence, 'actualWorkspaceWriterUrlEvidence');
+  assert.equal(manifest.actualWorkspaceWriterUrl, undefined, 'actualWorkspaceWriterUrl must be represented by bounded digest evidence, not raw loopback URL');
   assert.ok(manifest.actualRuntimeCodexPort, 'actual RuntimeCodex port must be recorded after port preflight');
-  assert.match(manifest.actualRuntimeCodexUrl ?? '', /^http:\/\/(?:127\.0\.0\.1|localhost):\d+\/?$/, 'actual RuntimeCodex URL must be recorded');
-  assertUrlPortMatches(manifest.actualRuntimeCodexUrl, manifest.actualRuntimeCodexPort, 'actualRuntimeCodexUrl');
-  assert.ok(manifest.workspacePath?.startsWith('/'), 'absolute workspace path must be recorded');
+  assertBoundedTextEvidence(manifest.actualRuntimeCodexUrlEvidence, 'actualRuntimeCodexUrlEvidence');
+  assert.equal(manifest.actualRuntimeCodexUrl, undefined, 'actualRuntimeCodexUrl must be represented by bounded digest evidence, not raw loopback URL');
+  assertBoundedTextEvidence(manifest.workspacePathEvidence, 'workspacePathEvidence');
+  assert.equal(manifest.workspacePath, undefined, 'workspacePath must be represented by bounded digest evidence, not raw absolute path');
   assert.equal(manifest.profile, runtimeCodexIdentity.profile, 'Runtime Codex profile must match the resolved local runtime config');
   assert.equal(manifest.provider, runtimeCodexIdentity.provider, 'Runtime Codex provider must match the resolved local runtime config');
   assert.equal(manifest.model, runtimeCodexIdentity.model, 'Runtime Codex model must match the resolved local runtime config');
@@ -583,12 +630,12 @@ function runtimeCodexEnvironmentBlockedReason(): string | undefined {
   if (blockers.length === 0) return undefined;
   const missing = blockers.join(' and ');
   const checked = credentials.checkedConfigPaths.length > 0
-    ? ` Checked config paths: ${credentials.checkedConfigPaths.join(', ')}.`
+    ? ` Checked config path count: ${credentials.checkedConfigPaths.length}.`
     : '';
   const configSecretNote = credentials.configSecretPaths.length > 0
-    ? ` Runtime secret-like keys were found in ignored config files (${credentials.configSecretPaths.join(', ')}); they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.`
+    ? ` Runtime secret-like keys were found in ignored config file count=${credentials.configSecretPaths.length}; they are accepted only as local proxy debug fallback and cannot satisfy browser/release acceptance.`
     : '';
-  return `Runtime Codex environment is not fully configured; missing ${missing}. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json/.sciforge instance config codexProxy.upstreamBaseUrl/llm.baseUrl before live browser E2E can pass.${checked}${configSecretNote}`;
+  return `Runtime Codex environment is not fully configured; missing ${missing}. Set SCIFORGE_RUNTIME_API_KEY in the service environment, and set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config before live browser E2E can pass.${checked}${configSecretNote}`;
 }
 
 function runtimeCredentialPresence(): {
@@ -665,7 +712,8 @@ function runtimeCodexLocalRuntimeBlockedReason(): string | undefined {
     return `Runtime Codex config drift in ${configPath}: missing ${missingConfig.join(', ')}.`;
   }
   if (!existsSync(workspacePath)) {
-    return `Runtime Codex workspace path is missing: ${workspacePath}.`;
+    const evidence = boundedTextEvidence(workspacePath);
+    return `Runtime Codex workspace path is missing; workspace path evidence length=${evidence.length} sha256=${evidence.sha256}.`;
   }
   return undefined;
 }
@@ -692,8 +740,6 @@ function assertPassedManifest(manifest: BrowserAcceptanceManifest): void {
   assertEvidenceExists(manifest.evidence, 'manifest evidence', { requireScreenshotAndDom: true });
   const manifestEvidenceText = readEvidenceText(manifest.evidence, { includeNotes: true });
   assertIncludes(manifestEvidenceText, manifest.commandId, 'manifest evidence must mention command id');
-  assertIncludes(manifestEvidenceText, manifest.actualUrl, 'manifest evidence must mention actual browser URL');
-  assertIncludes(manifestEvidenceText, manifest.workspacePath, 'manifest evidence must mention workspace path');
   assertLiveRuntimeCodexRenderedEvidence(manifest.evidence, 'manifest evidence');
   assert.match(manifestEvidenceText, /user intent|用户意图|Actual task result|实际结果|acceptance rubric|验收/i, 'manifest evidence must include user intent and actual result rubric');
   assertDoesNotUseSeedDemoOrRawEvidence(manifestEvidenceText, 'manifest evidence');
@@ -701,7 +747,8 @@ function assertPassedManifest(manifest: BrowserAcceptanceManifest): void {
   assertScenarioPassed(manifest.artifactFollowUp, 'artifactFollowUp');
   assertScenarioPassed(manifest.multiTurn, 'multiTurn');
   assert.equal(manifest.multiTurn?.secondTurnVisibleAnswerConfirmed, true, 'passed requires visible second-turn answer in Codex in-app browser');
-  assert.equal(manifest.multiTurn?.expectedPassphrase, expectedMultiTurnPassphrase, 'multi-turn expected passphrase must be recorded');
+  assertBoundedTextEvidence(manifest.multiTurn?.expectedPassphraseEvidence, 'multiTurn expectedPassphraseEvidence');
+  assert.equal(manifest.multiTurn?.expectedPassphrase, undefined, 'multiTurn expected passphrase must be stored as bounded digest evidence');
 }
 
 function assertPassedManifestFreshness(manifest: BrowserAcceptanceManifest): void {
@@ -744,6 +791,10 @@ function assertBlockedOrFailedManifest(manifest: BrowserAcceptanceManifest): voi
   assert.ok(manifest.providerPreflightCheckedAt?.trim(), 'blocked/failed/partial manifest must record providerPreflightCheckedAt');
   assert.equal(manifest.providerPreflightReleaseAcceptance, 'not-evaluated', 'provider preflight must remain diagnostic-only');
   assert.equal(manifest.providerPreflightEvidenceMode, 'current-env-diagnostic-only', 'provider preflight evidence mode must be current-env diagnostic only');
+  assert.equal(manifest.configPathsChecked, undefined, 'blocked/failed/partial manifest must not record raw config paths');
+  assert.equal(manifest.configSecretFallbackPaths, undefined, 'blocked/failed/partial manifest must not record raw config secret fallback paths');
+  assert.equal(typeof manifest.configPathsCheckedCount, 'number', 'blocked/failed/partial manifest must record config path count only');
+  assert.equal(typeof manifest.configSecretFallbackCount, 'number', 'blocked/failed/partial manifest must record config secret fallback count only');
   assertBlockedRuntimeConfigArtifactFields(manifest);
   assert.ok((manifest.exactRetestCommands ?? []).some((command) => /SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1/.test(command)), 'blocked/failed/partial manifest must record strict retest command');
   assert.ok(
@@ -789,7 +840,8 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
     assert.equal(status.port, expectedPort, `currentPortStatus.${label}.port must match configured port`);
     assert.equal(typeof status.listening, 'boolean', `currentPortStatus.${label}.listening must be boolean`);
   }
-  assert.match(currentPortStatus.kvGround?.healthUrl ?? '', /^http:\/\/127\.0\.0\.1:\d+\/health$/, 'currentPortStatus.kvGround must record healthUrl');
+  assert.equal(currentPortStatus.kvGround?.healthUrl, undefined, 'currentPortStatus.kvGround must not record raw healthUrl');
+  assertBoundedTextEvidence(currentPortStatus.kvGround?.healthUrlEvidence, 'currentPortStatus.kvGround.healthUrlEvidence');
   assert.equal(typeof currentPortStatus.kvGround?.healthOk, 'boolean', 'currentPortStatus.kvGround must record healthOk');
   assert.match(currentPortStatus.kvGround?.note ?? '', /not browser\/release acceptance/i, 'currentPortStatus.kvGround note must stay diagnostic-only');
 
@@ -809,6 +861,32 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
   assert.ok(exactStartCommands.every((command) => !/sk-[A-Za-z0-9_-]+/.test(command)), 'exactStartCommands must not contain literal secrets');
   assert.ok(exactStartCommands.every((command) => !/api[_-]?key=(?!env\b)[^ "$']+/i.test(command)), 'exactStartCommands must pass API keys by env name, not literal value');
   assert.match(manifest.configFallbackWarning ?? '', /diagnostic-only|cannot satisfy/i, 'blocked/failed/partial manifest must warn config fallback is diagnostic-only');
+  if (manifest.runtimeApiKeyPresentInServiceEnv !== true || (manifest.missingEnv ?? []).includes('SCIFORGE_RUNTIME_API_KEY')) {
+    assert.deepEqual(manifest.runtimeServiceEnvAcceptance, {
+      typedBlocked: true,
+      runtimeApiKeyPresentInServiceEnv: false,
+      canClaimRightPaneBrowserLivePass: false,
+      evidenceScope: manifest.currentRunEvidenceScope,
+      missingEnv: ['SCIFORGE_RUNTIME_API_KEY'],
+    }, 'missing service env must stay typed blocked and cannot claim right-pane Browser live pass');
+  }
+  const liveRerun = manifest.liveRerunEligibility;
+  assert.ok(liveRerun, 'blocked/failed/partial manifest must record bounded liveRerunEligibility');
+  assert.equal(liveRerun.evidenceScope, manifest.currentRunEvidenceScope, 'liveRerunEligibility must use the current evidence scope');
+  assert.equal(liveRerun.keySourceKind, manifest.upstreamKeySourceKind, 'liveRerunEligibility must record key source kind only');
+  assert.equal(liveRerun.upstreamSourceKind, manifest.upstreamBaseUrlSourceKind, 'liveRerunEligibility must record upstream source kind only');
+  assert.deepEqual(liveRerun.missingEnv, manifest.serviceEnvRequired?.missing ?? [], 'liveRerunEligibility missing env must mirror service env preflight');
+  assert.equal(
+    liveRerun.serviceEnvReady,
+    manifest.runtimeApiKeyPresentInServiceEnv === true && manifest.upstreamBaseUrlPresent === true,
+    'liveRerunEligibility readiness must require service env key plus upstream presence',
+  );
+  assert.equal(
+    liveRerun.canAttemptLiveBrowserRerun,
+    liveRerun.serviceEnvReady,
+    'live rerun attempt eligibility must be based on bounded service env readiness, not config fallback',
+  );
+  assert.equal(liveRerun.requiresLiveBrowserAcceptance, requireLiveBrowserAcceptance, 'liveRerunEligibility must record strict live acceptance requirement as a boolean');
 }
 
 function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, label: string): void {
@@ -827,14 +905,14 @@ function assertScenarioPassed(scenario: BrowserAcceptanceScenario | undefined, l
   }
   if (label === 'multiTurn') {
     assert.equal(scenario.secondTurnVisibleAnswerConfirmed, true, `${label} must confirm the visible second-turn answer`);
-    assert.ok(scenario.followUpPrompt?.trim(), `${label} must record the second-turn prompt`);
-    assert.equal(scenario.expectedPassphrase, expectedMultiTurnPassphrase, `${label} must record the expected passphrase`);
-    assert.match(readEvidenceText(scenario.evidence, { includeNotes: true }), new RegExp(escapeRegExp(expectedMultiTurnPassphrase)), `${label} evidence must contain the visible second-turn passphrase`);
+    assertBoundedTextEvidence(scenario.followUpPromptEvidence, `${label} followUpPromptEvidence`);
+    assert.equal(scenario.followUpPrompt, undefined, `${label} follow-up prompt must be stored as bounded digest evidence`);
+    assertBoundedTextEvidence(scenario.expectedPassphraseEvidence, `${label} expectedPassphraseEvidence`);
+    assert.equal(scenario.expectedPassphrase, undefined, `${label} expected passphrase must be stored as bounded digest evidence`);
   }
   const evidenceText = readEvidenceText(scenario.evidence, { includeNotes: true });
   assertDoesNotUseSeedDemoOrRawEvidence(evidenceText, `${label} evidence`);
   assert.match(evidenceText, /codex-command-[a-z0-9-]+/i, `${label} evidence must include the observed command id`);
-  assert.match(evidenceText, /workspace|工作区文件树|Workspace Runtime/i, `${label} evidence must include workspace context`);
   assertIncludes(evidenceText, runtimeCodexIdentity.profile, `${label} evidence must include the Runtime Codex profile`);
   assertIncludes(evidenceText, runtimeCodexIdentity.model, `${label} evidence must include the Runtime Codex model`);
   assertLiveRuntimeCodexRenderedEvidence(scenario.evidence, `${label} evidence`);
@@ -858,8 +936,8 @@ function assertEvidenceExists(
 ): void {
   assert.ok(evidence, `${label} must be present`);
   if (options.requireScreenshotAndDom) {
-    assert.ok(evidence.screenshotPath, `${label} must include screenshot evidence`);
-    assert.ok(evidence.domSnapshotPath, `${label} must include DOM snapshot evidence`);
+    assert.equal(evidence.screenshotPath, undefined, `${label} must not use raw screenshot artifacts as release evidence`);
+    assert.ok(evidence.domSnapshotPath, `${label} must include bounded DOM summary evidence`);
     assert.ok(evidence.notesPath, `${label} must include notes/rubric evidence`);
   }
   const paths = [
@@ -874,6 +952,9 @@ function assertEvidenceExists(
     assert.ok(existsSync(resolved), `${label} path does not exist: ${evidencePath}`);
     assert.ok(statSync(resolved).isFile(), `${label} path is not a file: ${evidencePath}`);
     assert.ok(statSync(resolved).size > 0, `${label} path is empty: ${evidencePath}`);
+    if (/\.(?:txt|md|json)$/i.test(evidencePath)) {
+      assertBoundedAcceptanceEvidenceText(readIfExists(evidencePath), `${label} ${evidencePath}`);
+    }
     if (/\.(?:json|jsonl)$/i.test(evidencePath)) {
       assertStructuredEvidenceParses(evidencePath, label);
     }
@@ -888,6 +969,15 @@ function assertEvidenceExists(
     assert.ok(notesText.trim(), `${label} notes must be readable and non-empty`);
     assert.match(notesText, /^#|\bAcceptance\b|验收|Observed at:/m, `${label} notes are not parseable acceptance evidence`);
   }
+}
+
+function assertBoundedAcceptanceEvidenceText(text: string, label: string): void {
+  assert.ok(Buffer.byteLength(text, 'utf8') <= 16 * 1024, `${label} must stay bounded under 16 KiB`);
+  assert.doesNotMatch(text, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i, `${label} must store loopback URLs as digest evidence`);
+  assert.doesNotMatch(text, /\/(?:Applications|Users)\/[^\s"']+/i, `${label} must store local absolute paths as digest evidence`);
+  assert.doesNotMatch(text, /\bconfig\.local\.json\b/i, `${label} must not name local config files`);
+  assert.doesNotMatch(text, /SCIFORGE-CODEX-BROWSER-(?:SINGLE|MT)-[A-Z0-9-]+/i, `${label} must store prompt/answer markers as digest evidence`);
+  assert.doesNotMatch(text, /(?:reply in one short sentence|remember this passphrase|Use only the selected artifact ref|selected artifact message:)/i, `${label} must not store raw acceptance prompts or answers`);
 }
 
 function readEvidenceText(evidence: BrowserAcceptanceEvidence | undefined, options: { includeNotes?: boolean } = {}): string {
@@ -929,7 +1019,7 @@ function blockedScenario(
 ): BrowserAcceptanceScenario {
   return {
     status: 'blocked',
-    prompt: summary,
+    promptEvidence: boundedTextEvidence(summary),
     visibleAnswerConfirmed: false,
     providerModelProfileVisible: observed.providerModelProfileVisible,
     workspaceCommandIdVisible: observed.workspaceCommandIdVisible,
@@ -1075,7 +1165,6 @@ function evidenceRefsFromObservations(observations: ScenarioObservation[]): stri
 function evidenceRefs(evidence: BrowserAcceptanceEvidence | undefined): string[] {
   if (!evidence) return [];
   return [
-    evidence.screenshotPath,
     evidence.domSnapshotPath,
     evidence.runtimeAuditPath,
   ].filter((path): path is string => Boolean(path));
@@ -1083,7 +1172,6 @@ function evidenceRefs(evidence: BrowserAcceptanceEvidence | undefined): string[]
 
 function scenarioObservation(input: { domCandidates: string[]; screenshotCandidates: string[] }): ScenarioObservation {
   const domPath = firstExisting(input.domCandidates.map((file) => join(outputDir, file)));
-  const screenshotPath = firstExisting(input.screenshotCandidates.map((file) => join(outputDir, file)));
   const domText = domPath ? readIfExists(domPath) : '';
   return {
     domText,
@@ -1092,7 +1180,6 @@ function scenarioObservation(input: { domCandidates: string[]; screenshotCandida
     rawAuditFoldedByDefault: !/RAW_JSONL|RAW_STDERR|RAW_STDOUT|raw provider sse|plugin warning|stderr[^折]|stdout[^折]|jsonl[^折]/i.test(domText),
     commandId: /codex-command-[a-z0-9-]+/i.exec(domText)?.[0],
     evidence: {
-      ...(screenshotPath ? { screenshotPath: relativeFromRoot(screenshotPath) } : {}),
       ...(domPath ? { domSnapshotPath: relativeFromRoot(domPath) } : {}),
       notesPath: relativeFromRoot(blockedNotesPath),
     },
@@ -1109,16 +1196,17 @@ function runtimeIdentityVisibleInText(text: string): boolean {
 }
 
 function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPreflightManifest): string {
+  const exactCommands = exactServiceEnvCommands();
   return [
     '# Runtime Codex browser acceptance blocked',
     '',
     `Observed at: ${new Date().toISOString()}`,
     `Requested UI port: ${requestedRolePort}`,
     `Requested workspace writer port: ${requestedWorkspaceWriterPort}`,
-    `Actual/intended URL: ${actualUrl}`,
-    `Actual/intended workspace writer URL: ${actualWorkspaceWriterUrl}`,
-    `Actual/intended RuntimeCodex URL: ${actualRuntimeCodexUrl}`,
-    `Workspace path: ${workspacePath}`,
+    `Actual/intended URL evidence: length=${boundedTextEvidence(actualUrl).length}; sha256=${boundedTextEvidence(actualUrl).sha256}`,
+    `Actual/intended workspace writer URL evidence: length=${boundedTextEvidence(actualWorkspaceWriterUrl).length}; sha256=${boundedTextEvidence(actualWorkspaceWriterUrl).sha256}`,
+    `Actual/intended RuntimeCodex URL evidence: length=${boundedTextEvidence(actualRuntimeCodexUrl).length}; sha256=${boundedTextEvidence(actualRuntimeCodexUrl).sha256}`,
+    `Workspace path evidence: length=${boundedTextEvidence(workspacePath).length}; sha256=${boundedTextEvidence(workspacePath).sha256}`,
     `Profile: ${runtimeCodexIdentity.profile ?? 'unresolved'}`,
     `Provider: ${runtimeCodexIdentity.provider ?? 'unresolved'}`,
     `Model: ${runtimeCodexIdentity.model ?? 'unresolved'}`,
@@ -1141,10 +1229,12 @@ function blockedNotes(reason: string, providerPreflight: CurrentEnvProviderPrefl
     '- Negative checks: fake passed status, missing DOM/screenshot, missing command id, missing task result, seed/demo evidence, and partial/blocked/failed status remain release-blocking.',
     '- Required key: set SCIFORGE_RUNTIME_API_KEY in the service environment; do not store it in repository files.',
     '- Config-file apiKey fallback: accepted only for local provider proxy debugging, and rejected as browser/release acceptance evidence.',
-    '- Required provider proxy upstream: set SCIFORGE_PROXY_UPSTREAM_BASE_URL or config.local.json codexProxy.upstreamBaseUrl/llm.baseUrl so the local proxy has an upstream OpenAI-compatible endpoint.',
+    '- Required provider proxy upstream: set SCIFORGE_PROXY_UPSTREAM_BASE_URL or a non-secret local upstream config so the local proxy has an upstream OpenAI-compatible endpoint.',
     '- Provider preflight artifact: docs/test-artifacts/runtime-provider-preflight/manifest.json records the current non-secret service-env/upstream diagnostic and remains diagnostic-only, not browser/release acceptance.',
     '- Required Runtime Codex config: active profile, provider, model, env_key SCIFORGE_RUNTIME_API_KEY, and responses wire_api must be resolved from the local runtime config.',
-    '- Re-run strict release acceptance with SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance after the key/upstream are present and the browser shows the second-turn answer.',
+    `- Re-run provider preflight command evidence: length=${boundedTextEvidence(exactCommands.retest[0]).length}; sha256=${boundedTextEvidence(exactCommands.retest[0]).sha256}`,
+    `- Re-run default browser acceptance command evidence: length=${boundedTextEvidence(exactCommands.retest[1]).length}; sha256=${boundedTextEvidence(exactCommands.retest[1]).sha256}`,
+    `- Re-run strict release acceptance command evidence: length=${boundedTextEvidence(exactCommands.strictRetest).length}; sha256=${boundedTextEvidence(exactCommands.strictRetest).sha256}`,
     '- Remaining risk: live browser acceptance still requires configured Runtime Codex credentials/upstream and visible second-turn answer.',
     '',
     'No passed user-level conclusion is claimed.',
@@ -1219,6 +1309,11 @@ function assertBoundedManifestValue(value: unknown, path: string): void {
     assert.doesNotMatch(value, /data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,/i, `${path} must not embed base64/data-url payloads`);
     assert.doesNotMatch(value, /(?:<!doctype\s+html|<html[\s>]|<body[\s>])/i, `${path} must not embed raw DOM/HTML payloads`);
     assert.doesNotMatch(value, /\b(?:rawProviderBody|providerRawBody|raw_provider_body)\b/i, `${path} must not embed provider payload labels`);
+    assert.doesNotMatch(value, /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/i, `${path} must store loopback URLs as bounded digest evidence`);
+    assert.doesNotMatch(value, /\/(?:Applications|Users)\/[^\s"']+/i, `${path} must store local absolute paths as bounded digest evidence`);
+    assert.doesNotMatch(value, /\bconfig\.local\.json\b/i, `${path} must not name local config files as acceptance evidence`);
+    assert.doesNotMatch(value, /SCIFORGE-CODEX-BROWSER-(?:SINGLE|MT)-[A-Z0-9-]+/i, `${path} must store prompt/answer markers as bounded digest evidence`);
+    assert.doesNotMatch(value, /(?:reply in one short sentence|remember this passphrase|Use only the selected artifact ref|selected artifact message:)/i, `${path} must not store raw acceptance prompts or answers`);
     return;
   }
   if (Array.isArray(value)) {
@@ -1234,6 +1329,13 @@ function assertBoundedManifestValue(value: unknown, path: string): void {
     assert.ok(!FORBIDDEN_MANIFEST_PAYLOAD_KEYS.has(normalizedKey), `${path}.${key} must be stored as a bounded evidence ref, not raw payload`);
     assertBoundedManifestValue(item, `${path}.${key}`);
   }
+}
+
+function assertBoundedTextEvidence(value: BoundedTextEvidence | undefined, label: string): void {
+  assert.ok(value, `${label} is required`);
+  assert.equal(typeof value.length, 'number', `${label}.length must be numeric`);
+  assert.ok(value.length >= 0, `${label}.length must be non-negative`);
+  assert.match(value.sha256, /^[a-f0-9]{64}$/, `${label}.sha256 must be a sha256 digest`);
 }
 
 function assertLiveRuntimeCodexRenderedEvidence(evidence: BrowserAcceptanceEvidence | undefined, label: string): void {
@@ -1355,8 +1457,8 @@ function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPrefli
     upstreamBaseUrlPresent,
     upstreamKeySourceKind,
     upstreamBaseUrlSourceKind,
-    configPathsChecked: credentials.checkedConfigPaths,
-    configSecretFallbackPaths: credentials.configSecretPaths,
+    configPathsCheckedCount: credentials.checkedConfigPaths.length,
+    configSecretFallbackCount: credentials.configSecretPaths.length,
     category,
     owner: category === 'unknown' ? 'repo' : 'environment',
     policyViolations: !runtimeApiKeyPresentInServiceEnv && credentials.configSecretPaths.length > 0
@@ -1371,6 +1473,38 @@ function readOrWriteCurrentProviderPreflightManifest(): CurrentEnvProviderPrefli
   mkdirSync(join(root, 'docs', 'test-artifacts', 'runtime-provider-preflight'), { recursive: true });
   writeFileSync(providerPreflightManifestPath, JSON.stringify(manifest, null, 2));
   return manifest;
+}
+
+function runtimeServiceEnvAcceptanceDiagnostic(
+  providerPreflight: CurrentEnvProviderPreflightManifest,
+  evidenceScope: RuntimeServiceEnvAcceptanceDiagnostic['evidenceScope'],
+): RuntimeServiceEnvAcceptanceDiagnostic {
+  const runtimeApiKeyPresentInServiceEnv = providerPreflight.runtimeApiKeyPresentInServiceEnv;
+  const missingEnv = runtimeApiKeyPresentInServiceEnv ? [] : ['SCIFORGE_RUNTIME_API_KEY'];
+  return {
+    typedBlocked: !runtimeApiKeyPresentInServiceEnv,
+    runtimeApiKeyPresentInServiceEnv,
+    canClaimRightPaneBrowserLivePass: false,
+    evidenceScope,
+    missingEnv,
+  };
+}
+
+function runtimeLiveRerunEligibilityDiagnostic(
+  providerPreflight: CurrentEnvProviderPreflightManifest,
+  evidenceScope: RuntimeLiveRerunEligibilityDiagnostic['evidenceScope'],
+): RuntimeLiveRerunEligibilityDiagnostic {
+  const missingEnv = providerPreflight.missingEnv;
+  const serviceEnvReady = providerPreflight.runtimeApiKeyPresentInServiceEnv && providerPreflight.upstreamBaseUrlPresent;
+  return {
+    serviceEnvReady,
+    canAttemptLiveBrowserRerun: serviceEnvReady,
+    requiresLiveBrowserAcceptance: requireLiveBrowserAcceptance,
+    evidenceScope,
+    keySourceKind: providerPreflight.upstreamKeySourceKind,
+    upstreamSourceKind: providerPreflight.upstreamBaseUrlSourceKind,
+    missingEnv,
+  };
 }
 
 function isPreflightOnlyBlockedReason(reason: string): boolean {
@@ -1472,6 +1606,13 @@ function positiveNumberFromEnv(value: string | undefined, fallback: number): num
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function boundedTextEvidence(value: string): BoundedTextEvidence {
+  return {
+    length: Buffer.byteLength(value, 'utf8'),
+    sha256: createHash('sha256').update(value).digest('hex'),
+  };
+}
+
 function relativeFromRoot(path: string): string {
   return path.startsWith(root) ? path.slice(root.length + 1) : path;
 }
@@ -1513,7 +1654,7 @@ async function writeManifest(manifest: BrowserAcceptanceManifest): Promise<void>
 
 async function readManifest(): Promise<BrowserAcceptanceManifest> {
   const raw = await readFile(manifestPath, 'utf8').catch((error: unknown) => {
-    throw new Error(`Runtime bridge is present, but Codex in-app browser evidence is missing at ${manifestPath}: ${(error as Error).message}`);
+    throw new Error(`Runtime bridge is present, but Codex in-app browser evidence is missing at ${relativeFromRoot(manifestPath)}: ${(error as Error).message}`);
   });
   return JSON.parse(raw) as BrowserAcceptanceManifest;
 }

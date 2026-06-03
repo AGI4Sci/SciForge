@@ -26,6 +26,7 @@ import {
 import { enrichRepairRaw } from './sessionRepairRaw';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
+import { parseSciForgeReferenceAttribute, referenceForMessage, sciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
 
 const goalSnapshot: UserGoalSnapshot = {
   turnId: 'turn-1',
@@ -603,6 +604,90 @@ test('explicit old artifact follow-up only carries selected refs in request payl
   assert.deepEqual(payload.runs, []);
   assert.match(serialized, /artifact:old-report/);
   assert.doesNotMatch(serialized, /latest-report|LATEST_REPORT_BODY_SHOULD_NOT_APPEAR/);
+});
+
+test('explicit selected message follow-up preserves bounded message text in request payload', () => {
+  const selectedMessage = message(
+    'msg-selected-answer',
+    'scenario',
+    'SELECTED_VISIBLE_MESSAGE_BODY_SHOULD_BE_AVAILABLE_TO_RUNTIME',
+    '2026-05-07T00:05:00.000Z',
+  );
+  const unselectedMessage = message(
+    'msg-unselected-answer',
+    'scenario',
+    'UNSELECTED_MESSAGE_BODY_SHOULD_NOT_APPEAR',
+    '2026-05-07T00:06:00.000Z',
+  );
+  const userMessage = message('msg-user', 'user', 'use only the selected message ref', '2026-05-07T01:00:00.000Z');
+  const payload = requestPayloadForTurn(session({
+    messages: [selectedMessage, unselectedMessage, userMessage],
+  }), userMessage, [{
+    id: 'ref-selected-message',
+    kind: 'message',
+    title: 'Selected visible message',
+    ref: 'message:msg-selected-answer',
+  }]);
+  const serialized = JSON.stringify(payload);
+  const preservedMessage = payload.messages.find((item) => item.id === 'msg-selected-answer') as { content?: string; selectedReferenceContent?: boolean } | undefined;
+  const compactedMessage = payload.messages.find((item) => item.id === 'msg-unselected-answer') as { content?: string; contentDigest?: string } | undefined;
+
+  assert.equal(preservedMessage?.content, 'SELECTED_VISIBLE_MESSAGE_BODY_SHOULD_BE_AVAILABLE_TO_RUNTIME');
+  assert.equal(preservedMessage?.selectedReferenceContent, true);
+  assert.equal(compactedMessage, undefined);
+  assert.match(serialized, /SELECTED_VISIBLE_MESSAGE_BODY_SHOULD_BE_AVAILABLE_TO_RUNTIME/);
+  assert.doesNotMatch(serialized, /UNSELECTED_MESSAGE_BODY_SHOULD_NOT_APPEAR/);
+});
+
+test('selected message follow-up preserves text after safe DOM reference round-trip', () => {
+  const selectedMessage = message(
+    'msg-selected-answer',
+    'scenario',
+    'SELECTED_VISIBLE_MESSAGE_BODY_FROM_SAFE_DOM_REF_SHOULD_SURVIVE',
+    '2026-05-07T00:05:00.000Z',
+  );
+  const userMessage = message('msg-user', 'user', 'use the picked visible context', '2026-05-07T01:00:00.000Z');
+  const domReference = parseSciForgeReferenceAttribute(sciForgeReferenceAttribute(referenceForMessage(selectedMessage)));
+  assert.ok(domReference, 'safe DOM reference should parse');
+  assert.notEqual(domReference.ref, 'message:msg-selected-answer', 'safe DOM reference should not rely on the raw message ref');
+  assert.equal(domReference.sourceId, 'msg-selected-answer');
+
+  const payload = requestPayloadForTurn(session({
+    messages: [selectedMessage, userMessage],
+  }), userMessage, [domReference]);
+  const preservedMessage = payload.messages.find((item) => item.id === 'msg-selected-answer') as { content?: string; selectedReferenceContent?: boolean } | undefined;
+
+  assert.equal(preservedMessage?.content, 'SELECTED_VISIBLE_MESSAGE_BODY_FROM_SAFE_DOM_REF_SHOULD_SURVIVE');
+  assert.equal(preservedMessage?.selectedReferenceContent, true);
+});
+
+test('selected object refs do not preserve carrier message body as selected content', () => {
+  const carrierMessage = {
+    ...message(
+      'msg-carrier',
+      'scenario',
+      'CARRIER_MESSAGE_BODY_SHOULD_STAY_DIGESTED',
+      '2026-05-07T00:05:00.000Z',
+    ),
+    objectReferences: [{ id: 'report-1', kind: 'artifact' as const, ref: 'artifact:report-1', title: 'Report 1' }],
+  };
+  const userMessage = message('msg-user', 'user', 'use only the selected artifact ref', '2026-05-07T01:00:00.000Z');
+  const payload = requestPayloadForTurn(session({
+    messages: [carrierMessage, userMessage],
+  }), userMessage, [{
+    id: 'ref-selected-artifact',
+    kind: 'task-result',
+    title: 'Selected artifact',
+    ref: 'artifact:report-1',
+  }]);
+  const serialized = JSON.stringify(payload);
+  const carrier = payload.messages.find((item) => item.id === 'msg-carrier') as { content?: string; selectedReferenceContent?: boolean; contentDigest?: string } | undefined;
+
+  assert.ok(carrier, 'carrier message should stay available by selected ref');
+  assert.notEqual(carrier?.content, 'CARRIER_MESSAGE_BODY_SHOULD_STAY_DIGESTED');
+  assert.equal(carrier?.selectedReferenceContent, undefined);
+  assert.ok(carrier?.contentDigest, 'carrier message should keep only a bounded digest');
+  assert.doesNotMatch(serialized, /CARRIER_MESSAGE_BODY_SHOULD_STAY_DIGESTED/);
 });
 
 test('selected Runtime Codex artifact follow-up preserves native session lineage', () => {

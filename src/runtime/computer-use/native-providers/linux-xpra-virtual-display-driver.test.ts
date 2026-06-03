@@ -108,10 +108,10 @@ test('Linux Xpra opt-in driver readFrame stays anchored to attached session refs
 
 test('Linux Xpra opt-in driver exposes provider-owned input and control hook evidence refs', async () => {
   const deps = fakeDriverDependencies({
-    sendInputIntent: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    pauseAgentQueue: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    resumeAgentQueue: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
-    safeStopSession: (context) => ({ ok: true, refs: inputControlRefs(context), mutatingActionExecuted: true, providerEvidenceWritten: true }),
+    sendInputIntent: inputControlResult,
+    pauseAgentQueue: inputControlResult,
+    resumeAgentQueue: inputControlResult,
+    safeStopSession: inputControlResult,
   });
   const provider = createLinuxXpraVirtualDisplayProvider({
     probeOptions: readyProbeOptions('generic-editor'),
@@ -147,6 +147,249 @@ test('Linux Xpra opt-in driver exposes provider-owned input and control hook evi
   assert.equal(resume.refs.currentFrameRefreshRef, `${providerRoot}/control-plane/resume-resume-agent/current-frame-refresh.json`);
   assert.equal(stop.status, 'ready');
   assert.equal(stop.refs.safeStopRef, `${providerRoot}/control-plane/closeSession-stop-session/safe-stop.json`);
+});
+
+test('Linux Xpra default isolated input hook scopes xdotool to the Xpra display and writes evidence', async () => {
+  const writes: Array<{ ref: string; data: unknown }> = [];
+  const execCalls: Array<{
+    command: string;
+    args: string[];
+    env?: NodeJS.ProcessEnv;
+  }> = [];
+  const deps = fakeDriverDependencies({
+    writes,
+    inputControlRunner: {
+      execFile: async (command, args, options) => {
+        execCalls.push({
+          command,
+          args,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+        });
+        return { stdout: 'ok', stderr: '' };
+      },
+    },
+  });
+  const provider = createLinuxXpraVirtualDisplayProvider({
+    probeOptions: readyProbeOptions('generic-editor'),
+    hooks: createLinuxXpraVirtualDisplayDriverHooks({
+      targetApp: { kind: 'generic-editor', command: 'research-editor' },
+      probeOptions: readyProbeOptions('generic-editor'),
+      dependencies: deps,
+    }),
+  });
+  const executor = createVirtualAppScreenNativeExecutor({
+    executorId: 'native-session-manager:linux-xpra-default-input-hook-test',
+    providerId: LINUX_XPRA_VIRTUAL_DISPLAY_PROVIDER_ID,
+    supportedProfiles: ['generic-editor'],
+    provider,
+    targetAppKind: 'generic-editor',
+  });
+  const attachResult = await executor.attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
+  const providerRoot = sessionRef.replace(/\/session\.json$/u, '');
+
+  const result = await provider.sendInputIntent({
+    runId: 'linux-xpra-default-input-hook',
+    targetAppKind: 'generic-editor',
+    inputIntent: {
+      source: 'virtual-app-screen-canvas',
+      kind: 'click',
+      action: { type: 'click' },
+      refs: {
+        sessionRef,
+        frameRef: `computer-use:session/linux-xpra-default-input-hook/frames/current.json`,
+      },
+      ratios: {
+        'x-ratio': 0.25,
+        'y-ratio': 0.5,
+      },
+    },
+  });
+
+  assert.equal(result.status, 'ready', result.blockedReason);
+  assert.equal(result.providerExecuted, true);
+  assert.equal(result.mutatingActionExecuted, true);
+  assert.deepEqual(result.refs.inputIntentRefs, [`${providerRoot}/input-intents/sendInputIntent-click.json`]);
+  assert.deepEqual(result.refs.beforeAfterFrameRefs, [`${providerRoot}/before-after/sendInputIntent-click.json`]);
+  assert.equal(result.refs.beforeFrameRef, `${providerRoot}/frames/sendInputIntent-click-before.json`);
+  assert.equal(result.refs.afterFrameRef, `${providerRoot}/frames/sendInputIntent-click-after.json`);
+  assert.equal(execCalls.length, 1);
+  assert.ok(execCalls.every((call) => call.command === 'xdotool'));
+  assert.ok(execCalls.every((call) => call.env?.DISPLAY === ':2301'));
+  assert.deepEqual(execCalls.at(-1)?.args, ['mousemove', '--window', '7', '300', '380', 'click', '1']);
+  const verification = writes.find((write) => write.ref === `${providerRoot}/verification/sendInputIntent-click.json`);
+  assert.equal(recordValue(verification?.data).displayScoped, true);
+  assert.equal(recordValue(verification?.data).affectsPhysicalDisplay, false);
+  assert.equal(recordValue(verification?.data).sharedSystemInputUsed, false);
+});
+
+test('Linux Xpra default isolated input hook handles provider control without shared desktop input', async () => {
+  const writes: Array<{ ref: string; data: unknown }> = [];
+  const execCalls: Array<{ command: string; args: string[] }> = [];
+  const deps = fakeDriverDependencies({
+    writes,
+    inputControlRunner: {
+      execFile: async (command, args) => {
+        execCalls.push({ command, args });
+        return { stdout: 'ok', stderr: '' };
+      },
+    },
+  });
+  const provider = createLinuxXpraVirtualDisplayProvider({
+    probeOptions: readyProbeOptions('generic-editor'),
+    hooks: createLinuxXpraVirtualDisplayDriverHooks({
+      targetApp: { kind: 'generic-editor', command: 'research-editor' },
+      probeOptions: readyProbeOptions('generic-editor'),
+      dependencies: deps,
+    }),
+  });
+  const executor = createVirtualAppScreenNativeExecutor({
+    executorId: 'native-session-manager:linux-xpra-default-control-hook-test',
+    providerId: LINUX_XPRA_VIRTUAL_DISPLAY_PROVIDER_ID,
+    supportedProfiles: ['generic-editor'],
+    provider,
+    targetAppKind: 'generic-editor',
+  });
+  const attachResult = await executor.attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
+  const providerRoot = sessionRef.replace(/\/session\.json$/u, '');
+
+  const pause = await provider.pause(inputOperationOptions('linux-xpra-default-control-pause', 'takeover', sessionRef));
+  const resume = await provider.resume(inputOperationOptions('linux-xpra-default-control-resume', 'resume-agent', sessionRef));
+  const stop = await provider.closeSession(inputOperationOptions('linux-xpra-default-control-stop', 'stop-session', sessionRef));
+
+  assert.equal(pause.status, 'ready', pause.blockedReason);
+  assert.equal(resume.status, 'ready', resume.blockedReason);
+  assert.equal(stop.status, 'ready', stop.blockedReason);
+  assert.equal(pause.refs.agentQueueRef, `${providerRoot}/control-plane/pause-takeover/agent-queue.json`);
+  assert.equal(resume.refs.currentFrameRefreshRef, `${providerRoot}/control-plane/resume-resume-agent/current-frame-refresh.json`);
+  assert.equal(stop.refs.safeStopRef, `${providerRoot}/control-plane/closeSession-stop-session/safe-stop.json`);
+  assert.deepEqual(execCalls, []);
+  const pauseVerification = writes.find((write) => write.ref === `${providerRoot}/verification/pause-takeover.json`);
+  assert.equal(recordValue(pauseVerification?.data).sharedSystemInputUsed, false);
+  assert.equal(recordValue(pauseVerification?.data).agentQueueState, 'paused');
+});
+
+test('Linux Xpra default isolated input hook passes typed text as execFile argv and redacts evidence', async () => {
+  const writes: Array<{ ref: string; data: unknown }> = [];
+  const execCalls: Array<{
+    command: string;
+    args: string[];
+    env?: NodeJS.ProcessEnv;
+  }> = [];
+  const deps = fakeDriverDependencies({
+    writes,
+    inputControlRunner: {
+      execFile: async (command, args, options) => {
+        execCalls.push({
+          command,
+          args,
+          env: options?.env as NodeJS.ProcessEnv | undefined,
+        });
+        return { stdout: 'ok', stderr: '' };
+      },
+    },
+  });
+  const provider = attachedLinuxXpraProvider(deps);
+  const attachResult = await attachedLinuxXpraExecutor(provider, 'default-type-text').attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
+  const providerRoot = sessionRef.replace(/\/session\.json$/u, '');
+  const text = 'abc $HOME; rm -rf /';
+
+  const result = await provider.sendInputIntent({
+    runId: 'linux-xpra-default-type-text',
+    targetAppKind: 'generic-editor',
+    inputIntent: {
+      source: 'virtual-app-screen-canvas',
+      kind: 'type',
+      action: { type: 'type_text', text },
+      refs: {
+        sessionRef,
+        frameRef: `computer-use:session/linux-xpra-default-type-text/frames/current.json`,
+      },
+    },
+  });
+
+  assert.equal(result.status, 'ready', result.blockedReason);
+  assert.equal(result.mutatingActionExecuted, true);
+  assert.equal(execCalls.length, 1);
+  assert.equal(execCalls[0]?.command, 'xdotool');
+  assert.equal(execCalls[0]?.env?.DISPLAY, ':2301');
+  assert.deepEqual(execCalls[0]?.args, ['type', '--window', '7', '--clearmodifiers', '--delay', '10', text]);
+  const executorEvent = writes.find((write) => write.ref === `${providerRoot}/executor-events/sendInputIntent-type.json`);
+  const commandRecords = recordValue(executorEvent?.data).commandRecords;
+  assert.ok(Array.isArray(commandRecords));
+  assert.deepEqual(recordValue(commandRecords[0]).args, ['type', '--window', '7', '--clearmodifiers', '--delay', '10', `[text:${text.length}]`]);
+  assert.equal(JSON.stringify(executorEvent?.data).includes(text), false);
+});
+
+test('Linux Xpra default isolated input hook fails closed when the input runner fails', async () => {
+  const deps = fakeDriverDependencies({
+    inputControlRunner: {
+      execFile: async () => {
+        throw new Error('xdotool denied');
+      },
+    },
+  });
+  const provider = attachedLinuxXpraProvider(deps);
+  const attachResult = await attachedLinuxXpraExecutor(provider, 'runner-fails').attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
+
+  const result = await provider.sendInputIntent({
+    runId: 'linux-xpra-runner-fails',
+    targetAppKind: 'generic-editor',
+    inputIntent: {
+      source: 'virtual-app-screen-canvas',
+      kind: 'click',
+      action: { type: 'click' },
+      refs: {
+        sessionRef,
+        frameRef: `computer-use:session/linux-xpra-runner-fails/frames/current.json`,
+      },
+      ratios: {
+        'x-ratio': 0.5,
+        'y-ratio': 0.5,
+      },
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.blockedReason ?? '', /xdotool denied/);
+  assert.equal(result.mutatingActionExecuted, false);
+});
+
+test('Linux Xpra default isolated input hook rejects unsupported actions without running input tooling', async () => {
+  const execCalls: Array<{ command: string; args: string[] }> = [];
+  const deps = fakeDriverDependencies({
+    inputControlRunner: {
+      execFile: async (command, args) => {
+        execCalls.push({ command, args });
+        return { stdout: 'ok', stderr: '' };
+      },
+    },
+  });
+  const provider = attachedLinuxXpraProvider(deps);
+  const attachResult = await attachedLinuxXpraExecutor(provider, 'unsupported-action').attach(parsedAttachCommand());
+  const sessionRef = providerSessionRefFromAttachEvidence(attachResult);
+
+  const result = await provider.sendInputIntent({
+    runId: 'linux-xpra-unsupported-action',
+    targetAppKind: 'generic-editor',
+    inputIntent: {
+      source: 'virtual-app-screen-canvas',
+      kind: 'open_menu',
+      action: { type: 'open_menu', menuName: 'File' },
+      refs: {
+        sessionRef,
+        frameRef: `computer-use:session/linux-xpra-unsupported-action/frames/current.json`,
+      },
+    },
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.match(result.blockedReason ?? '', /unsupported Linux Xpra input action type "open_menu"/);
+  assert.equal(result.mutatingActionExecuted, false);
+  assert.deepEqual(execCalls, []);
 });
 
 test('Linux Xpra opt-in driver input hook fails closed without provider-owned evidence refs', async () => {
@@ -267,6 +510,14 @@ test('Linux Xpra opt-in driver probe fails closed when command, capture, or inpu
       name: 'input isolation not proven',
       deps: { probeInputIsolation: () => ({ ok: false, detail: 'at-spi bridge unavailable' }) },
       reason: /isolated input adapter is not proven.*at-spi bridge unavailable/,
+    },
+    {
+      name: 'default xdotool missing',
+      deps: {
+        probeInputIsolation: undefined,
+        commandExists: (command) => command === 'xpra',
+      },
+      reason: /isolated input adapter is not proven.*xdotool command is not available/,
     },
   ];
 
@@ -529,9 +780,51 @@ function inputControlRefs(context: NativeVirtualDisplayDriverInputControlContext
   });
 }
 
+function inputControlResult(context: NativeVirtualDisplayDriverInputControlContext) {
+  return {
+    ok: true,
+    refs: inputControlRefs(context),
+    mutatingActionExecuted: true,
+    providerEvidenceWritten: true,
+    affectsPhysicalDisplay: false,
+    sharedSystemInputUsed: false,
+    systemPointerMoved: false,
+    systemKeyboardEventsSent: false,
+  };
+}
+
+function attachedLinuxXpraProvider(deps: LinuxXpraVirtualDisplayDriverDependencies) {
+  return createLinuxXpraVirtualDisplayProvider({
+    probeOptions: readyProbeOptions('generic-editor'),
+    hooks: createLinuxXpraVirtualDisplayDriverHooks({
+      targetApp: { kind: 'generic-editor', command: 'research-editor' },
+      probeOptions: readyProbeOptions('generic-editor'),
+      dependencies: deps,
+    }),
+  });
+}
+
+function attachedLinuxXpraExecutor(
+  provider: ReturnType<typeof createLinuxXpraVirtualDisplayProvider>,
+  label: string,
+) {
+  return createVirtualAppScreenNativeExecutor({
+    executorId: `native-session-manager:linux-xpra-${label}-test`,
+    providerId: LINUX_XPRA_VIRTUAL_DISPLAY_PROVIDER_ID,
+    supportedProfiles: ['generic-editor'],
+    provider,
+    targetAppKind: 'generic-editor',
+  });
+}
+
 function requiredString(value: string | string[] | undefined) {
   assert.equal(typeof value, 'string');
   return value as string;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  assert.ok(value && typeof value === 'object' && !Array.isArray(value));
+  return value as Record<string, unknown>;
 }
 
 function fakeDriverDependencies(overrides: Partial<LinuxXpraVirtualDisplayDriverDependencies> & {

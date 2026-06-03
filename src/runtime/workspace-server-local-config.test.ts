@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   cleanUrlString,
   configuredString,
+  createWorkspaceLocalConfigService,
   normalizeConfiguredPeerInstances,
   normalizePeerInstances,
   normalizeToolProviderRoutes,
@@ -180,4 +181,35 @@ test('normalizeToolProviderRoutes trims route fields, filters enums, de-duplicat
 
   assert.equal(normalizeToolProviderRoutes(undefined), undefined);
   assert.equal(normalizeToolProviderRoutes({ empty: { source: 'root' } }), undefined);
+});
+
+test('workspace Computer Use env from local config includes safe VirtualAppScreen native driver env', async () => {
+  const service = createWorkspaceLocalConfigService({
+    configLocalPath: '/tmp/sciforge-config.local.json',
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: '/tmp/sciforge-workspace',
+    env: {
+      HOME: '/tmp/sciforge-home',
+    } as NodeJS.ProcessEnv,
+  });
+
+  const env = await service.runtimeCodexEnvFromLocalConfig({
+    apiKey: 'root-key',
+    computerUse: {
+      virtualAppScreen: {
+        env: {
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: true,
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'powerpoint',
+          SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS: true,
+        },
+      },
+    },
+  });
+
+  assert.equal(env.SCIFORGE_RUNTIME_API_KEY, 'root-key');
+  assert.equal(env.SCIFORGE_CONFIG_PATH, '/tmp/sciforge-config.local.json');
+  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
+  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
+  assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
 });

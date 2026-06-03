@@ -27,6 +27,18 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
       },
       getTitle: () => 'contract-only fake native surface',
       getURL: () => 'about:blank',
+      executeJavaScript: async <T = unknown>() => {
+        events.push(`webContents.executeJavaScript:${fakeViews.indexOf(this)}`);
+        return {
+          activeEditable: true,
+          caretVisible: true,
+          blurred: true,
+          restored: true,
+          rawUrl: 'https://example.invalid/private',
+          dom: '<input value="secret">',
+          payload: { secret: 'do-not-record' },
+        } as T;
+      },
       stop: () => {
         events.push(`webContents.stop:${fakeViews.indexOf(this)}`);
       },
@@ -58,7 +70,7 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
 
   controller.setMainWindow(windowA);
   const started = controller.startSession({ sessionId: 'native-lifecycle', width: 1024, height: 768 });
-  assertNativeContractState(started);
+  assertNativeContractState(started, { embeddedPassClaim: false });
   assert.equal(started.embedded, false);
   assert.equal(started.visible, false);
   assert.equal(fakeViews.length, 1);
@@ -69,25 +81,71 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
     visible: true,
     focus: true,
   });
-  assertNativeContractState(attached);
+  assertNativeContractState(attached, { embeddedPassClaim: true });
   assert.equal(attached.embedded, true);
   assert.equal(attached.visible, true);
   assert.deepEqual(attached.bounds, { x: 320, y: 25, width: 640, height: 481 });
   assert.deepEqual(windowA.contentView.views, [fakeViews[0]]);
+
+  const focusCaretProof = await controller.action('native-lifecycle', {
+    action: 'native-os-ui-proof',
+    proofGroup: 'cursorCaret',
+    probe: 'focus-caret',
+    expectedProofNames: ['input-caret-visible', 'focus-blur-restore'],
+    actionId: 'focus-input-caret',
+    capture: 'none',
+  });
+  assertNativeContractState(focusCaretProof, { embeddedPassClaim: true });
+  assert.equal(focusCaretProof.nativeOsUiProof?.schemaVersion, 'sciforge.browser-host-session.native-os-ui-proof.v1');
+  assert.equal(focusCaretProof.nativeOsUiProof?.boundedEvidenceOnly, true);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawDomRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawTextRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawUrlRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawTitleRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawSelectorRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawCoordsRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.rawPayloadRecorded, false);
+  assert.equal(focusCaretProof.nativeOsUiProof?.source, 'native-embedded-action-state');
+  assert.equal(focusCaretProof.nativeOsUiProof?.proofGroup, 'cursorCaret');
+  assert.equal(focusCaretProof.nativeOsUiProof?.actionId, 'focus-input-caret');
+  assert.deepEqual(focusCaretProof.nativeOsUiProof?.observedProofNames, ['input-caret-visible', 'focus-blur-restore']);
+  assert.ok(focusCaretProof.nativeOsUiProof?.evidenceTokens.includes('proof:input-caret-visible:observed'));
+  assert.ok(focusCaretProof.nativeOsUiProof?.evidenceTokens.includes('proof:focus-blur-restore:observed'));
+  assert.doesNotMatch(
+    JSON.stringify(focusCaretProof.nativeOsUiProof),
+    /secret|<input|https?:|selector:|coords:|payload:|"x"|"y"|"url"|"title"|"rawUrl"/i,
+  );
+
+  const executeJavaScriptCallsBeforeKeyboardProof = events.filter((event) => event === 'webContents.executeJavaScript:0').length;
+  const keyboardProof = await controller.action('native-lifecycle', {
+    action: 'native-os-ui-proof',
+    proofGroup: 'keyboardImeClipboardSelection',
+    probe: 'bounded-keyboard-ime-clipboard-selection',
+    expectedProofNames: ['keyboard-enter-owner'],
+    actionId: 'url:https://example.invalid/payload:secret',
+    capture: 'none',
+  });
+  const executeJavaScriptCallsAfterKeyboardProof = events.filter((event) => event === 'webContents.executeJavaScript:0').length;
+  assertNativeContractState(keyboardProof, { embeddedPassClaim: true });
+  assert.equal(executeJavaScriptCallsAfterKeyboardProof, executeJavaScriptCallsBeforeKeyboardProof);
+  assert.equal(keyboardProof.nativeOsUiProof?.proofGroup, 'keyboardImeClipboardSelection');
+  assert.equal(keyboardProof.nativeOsUiProof?.actionId, 'native-os-ui-proof');
+  assert.deepEqual(keyboardProof.nativeOsUiProof?.observedProofNames, []);
+  assert.doesNotMatch(JSON.stringify(keyboardProof.nativeOsUiProof), /https?:|secret/i);
 
   const resizedHidden = controller.attach({
     sessionId: 'native-lifecycle',
     bounds: { x: -20, y: -4, width: 0, height: 0 },
     visible: false,
   });
-  assertNativeContractState(resizedHidden);
+  assertNativeContractState(resizedHidden, { embeddedPassClaim: true });
   assert.equal(resizedHidden.embedded, true);
   assert.equal(resizedHidden.visible, false);
   assert.deepEqual(resizedHidden.bounds, { x: 0, y: 0, width: 1, height: 1 });
   assert.deepEqual(windowA.contentView.views, [fakeViews[0]]);
 
   const detached = controller.detach('native-lifecycle');
-  assertNativeContractState(detached);
+  assertNativeContractState(detached, { embeddedPassClaim: false });
   assert.equal(detached.embedded, false);
   assert.equal(detached.visible, false);
   assert.deepEqual(windowA.contentView.views, []);
@@ -100,7 +158,7 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
     visible: true,
     focus: true,
   });
-  assertNativeContractState(reattached);
+  assertNativeContractState(reattached, { embeddedPassClaim: true });
   assert.equal(reattached.embedded, true);
   assert.equal(reattached.visible, true);
   assert.deepEqual(reattached.bounds, { x: 12, y: 34, width: 800, height: 600 });
@@ -109,7 +167,7 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
   assert.equal(fakeViews.length, 1, 'reattach must reuse the same BrowserHostSession native surface');
 
   const closed = await controller.action('native-lifecycle', { action: 'close' });
-  assertNativeContractState(closed);
+  assertNativeContractState(closed, { embeddedPassClaim: false });
   assert.equal(closed.visible, false);
   assert.equal(controller.state('native-lifecycle').reason, 'native-embedded-session-not-found');
   assert.deepEqual(windowB.contentView.views, []);
@@ -124,6 +182,12 @@ test('desktop BrowserHostSession native surface lifecycle contract covers resize
   assert.equal(health.owner, 'BrowserHostSession');
   assert.equal(health.liveSurfaceTransport, 'native-embedded');
   assert.equal(health.secondTruthSource, false);
+  assert.equal(health.ready, true);
+  assert.equal(health.nativeBridge, true);
+  assert.equal(health.rightPaneBridge, true);
+  assert.equal(health.attachAvailable, true);
+  assert.equal(health.stateAvailable, true);
+  assert.equal(health.passClaim, true);
 
   controller.startSession({ sessionId: 'native-server-cleanup' });
   controller.attach({
@@ -175,13 +239,22 @@ async function fetchJson(url: string): Promise<Record<string, unknown>> {
   return await response.json() as Record<string, unknown>;
 }
 
-function assertNativeContractState(state: DesktopBrowserHostSurfaceState): void {
+function assertNativeContractState(
+  state: DesktopBrowserHostSurfaceState,
+  options: { embeddedPassClaim: boolean },
+): void {
   assert.equal(state.owner, 'BrowserHostSession');
   assert.equal(state.adapterRole, 'display-input-adapter');
   assert.equal(state.surface, 'electron-web-contents-view');
   assert.equal(state.liveSurfaceTransport, 'native-embedded');
   assert.equal(state.singleInteractiveTruth, true);
   assert.equal(state.secondTruthSource, false);
+  assert.equal(state.ready, state.ok);
+  assert.equal(state.nativeBridge, true);
+  assert.equal(state.rightPaneBridge, true);
+  assert.equal(state.attachAvailable, true);
+  assert.equal(state.stateAvailable, true);
+  assert.equal(state.passClaim, options.embeddedPassClaim);
 }
 
 function countEvents(events: string[], value: string): number {

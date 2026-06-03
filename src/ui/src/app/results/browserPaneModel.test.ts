@@ -121,6 +121,7 @@ test('browser pane model reuses focused native embedded browser runtime projecti
           liveSurfaceRef: 'browser-host-session:browser-host-native-1/live-surface',
           liveSurfaceTransport: 'native-embedded',
           singleInteractiveTruth: true,
+          secondTruthSource: false,
           searchResultRef: 'browser-host-session:browser-host-native-1/search-results.json',
           reason: 'native projection ready',
         },
@@ -140,6 +141,7 @@ test('browser pane model reuses focused native embedded browser runtime projecti
   assert.equal(hostSession?.id, 'browser-host-native-1');
   assert.equal(hostSession?.liveSurfaceTransport, 'native-embedded');
   assert.equal(hostSession?.singleInteractiveTruth, true);
+  assert.equal(hostSession?.secondTruthSource, false);
   assert.equal(hostSession?.liveSurfaceRef, 'browser-host-session:browser-host-native-1/live-surface');
   assert.equal(hostSession?.searchResultRef, 'browser-host-session:browser-host-native-1/search-results.json');
   assert.equal(hostSession?.reason, 'native projection ready');
@@ -280,6 +282,61 @@ test('browser pane model exposes a bounded loading/progress lifecycle contract',
   assert.equal(handoff?.state, 'handoff');
   assert.equal(handoff?.reason, 'user-handoff-required');
   assert.equal(handoff?.requiresHandoff, true);
+
+  const nativeBridgeUnavailable = rightPaneBrowserLoadingProgressLifecycle({
+    hostSession: {
+      id: 'browser-host-native-route',
+      status: 'ready',
+      requestedUrl: 'https://external.example/native-route',
+      url: 'https://external.example/native-route',
+      nativeSurfaceBridge: {
+        routeStatus: 'reachable',
+        capability: 'missing',
+        rightPaneBridge: false,
+        status: 'native-bridge-unavailable',
+        healthPath: '/api/sciforge/browser-host/native-surface/health',
+      },
+    },
+  });
+  assert.equal(nativeBridgeUnavailable?.state, 'handoff');
+  assert.equal(nativeBridgeUnavailable?.reason, 'native-bridge-unavailable');
+  assert.equal(nativeBridgeUnavailable?.source, 'native-surface-route');
+  assert.equal(nativeBridgeUnavailable?.status, 'blocked');
+  assert.equal(nativeBridgeUnavailable?.requiresHandoff, true);
+
+  const nativeBridgeUnavailableWithRuntimeStall = rightPaneBrowserProjectionForUrl('https://external.example/native-stalled', {
+    hostExternalBrowserAvailable: true,
+    hostSession: {
+      id: 'browser-host-native-stalled',
+      status: 'loading',
+      requestedUrl: 'https://external.example/native-stalled',
+      url: 'https://external.example/native-stalled',
+      loadingProgress: {
+        schemaVersion: 'sciforge.browser-host-session.loading-progress.lifecycle.v1',
+        state: 'stalled',
+        reason: 'navigation-stalled',
+        source: 'host-progress',
+        status: 'loading',
+        action: 'navigate',
+        updatedAt: '2026-06-01T00:00:00.000Z',
+        canRetry: true,
+        refs: { session: 'browser-host-session:browser-host-native-stalled/session.json' },
+      },
+      nativeSurfaceBridge: {
+        routeStatus: 'reachable',
+        capability: 'missing',
+        rightPaneBridge: false,
+        status: 'native-bridge-unavailable',
+        healthPath: '/api/sciforge/browser-host/native-surface/health',
+      },
+    },
+  });
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.status, 'blocked');
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.tabStatus, 'failed');
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.loadingProgress?.state, 'handoff');
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.loadingProgress?.reason, 'native-bridge-unavailable');
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.loadingProgress?.source, 'native-surface-route');
+  assert.equal(nativeBridgeUnavailableWithRuntimeStall.loadingProgress?.requiresHandoff, true);
 
   const redirected = rightPaneBrowserLoadingProgressLifecycle({
     hostSession: {

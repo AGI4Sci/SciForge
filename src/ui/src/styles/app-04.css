@@ -4674,6 +4674,13 @@
   background-size: 40px 40px;
 }
 
+.virtual-screen-frame[data-screen-surface-mode="empty"],
+.virtual-screen-frame[data-live-surface-attached="false"][data-frame-evidence="none"] {
+  --non-live-surface-background: linear-gradient(135deg, #07111f 0%, #101a2b 52%, #162033 100%);
+  background: var(--non-live-surface-background);
+  background-size: auto;
+}
+
 .virtual-screen-frame-ref,
 .virtual-screen-empty-frame {
   position: absolute;
@@ -4684,6 +4691,21 @@
   padding: 20px;
   text-align: center;
   color: #0f172a;
+}
+
+.virtual-screen-frame[data-screen-surface-mode="empty"] .virtual-screen-empty-frame,
+.virtual-screen-frame[data-live-surface-attached="false"][data-frame-evidence="none"] .virtual-screen-empty-frame {
+  color: #dbeafe;
+}
+
+.virtual-screen-frame[data-screen-surface-mode="empty"] .virtual-screen-empty-frame strong,
+.virtual-screen-frame[data-live-surface-attached="false"][data-frame-evidence="none"] .virtual-screen-empty-frame strong {
+  color: #f8fafc;
+}
+
+.virtual-screen-frame[data-screen-surface-mode="empty"] .virtual-screen-empty-frame span,
+.virtual-screen-frame[data-live-surface-attached="false"][data-frame-evidence="none"] .virtual-screen-empty-frame span {
+  color: #b6c6da;
 }
 
 .virtual-screen-frame-image {

@@ -14,8 +14,10 @@ import {
 } from './browser-host-session.js';
 import { executeBrowserHostComputerUseAction, type BrowserHostComputerUseAction } from './browser-host-computer-use.js';
 import { isRecord, readJson, writeJson } from './server/http.js';
+import { normalizeBrowserHostNativeAdapterUrl } from './workspace-server-health.js';
 
 export const BROWSER_HOST_FRAME_STREAM_SCHEMA = 'sciforge.browser-host-session.frame-stream.v1' as const;
+export const BROWSER_HOST_NATIVE_SURFACE_PREFLIGHT_SCHEMA = 'sciforge.browser-host.native-surface.preflight.v1' as const;
 const BROWSER_HOST_FRAME_STREAM_DEFAULT_MAX_BUFFERED_BYTES = 2_000_000;
 
 const browserHostFrameStreamWss = new WebSocketServer({ noServer: true });
@@ -64,6 +66,10 @@ export async function handleBrowserHostSessionRoutes(
   options: BrowserHostSessionRouteHandlerOptions,
 ): Promise<boolean> {
   const manager = options.manager ?? defaultBrowserHostSessionManager();
+  if (url.pathname.startsWith('/api/sciforge/browser-host/native-surface/')) {
+    return handleBrowserHostNativeSurfaceRoutes(req, res, url);
+  }
+
   if (url.pathname === '/api/sciforge/browser-host/sessions/start' && req.method === 'POST') {
     try {
       const body = await readJson(req);
@@ -142,6 +148,273 @@ export async function handleBrowserHostSessionRoutes(
   return false;
 }
 
+async function handleBrowserHostNativeSurfaceRoutes(
+  req: IncomingMessage,
+  res: ServerResponse,
+  url: URL,
+): Promise<boolean> {
+  const nativeAdapterUrl = normalizeBrowserHostNativeAdapterUrl(process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL);
+  if (url.pathname === '/api/sciforge/browser-host/native-surface/health') {
+    if (req.method !== 'GET') {
+      writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('health', undefined, `Unsupported native surface health method: ${req.method ?? 'unknown'}`));
+      return true;
+    }
+    if (nativeAdapterUrl) {
+      const proxied = await browserHostNativeSurfaceAdapterResponse(nativeAdapterUrl, '/health', 'health');
+      writeJson(res, proxied.statusCode, proxied.body);
+      return true;
+    }
+    writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('health'));
+    return true;
+  }
+
+  if (url.pathname === '/api/sciforge/browser-host/native-surface/attach') {
+    if (req.method !== 'POST') {
+      writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('attach', undefined, `Unsupported native surface attach method: ${req.method ?? 'unknown'}`));
+      return true;
+    }
+    const body = await readJson(req);
+    const sessionId = safeBrowserHostNativeSurfaceSessionId(body.sessionId);
+    if (!sessionId) {
+      writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('attach', undefined, 'BrowserHostSession native surface attach requires a bounded session id.', 'native-surface-session-invalid'));
+      return true;
+    }
+    if (nativeAdapterUrl) {
+      const proxied = await browserHostNativeSurfaceAdapterResponse(
+        nativeAdapterUrl,
+        `/sessions/${encodeURIComponent(sessionId)}/attach`,
+        'attach',
+        sessionId,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(browserHostNativeSurfaceAttachBody(body, sessionId)),
+        },
+      );
+      writeJson(res, proxied.statusCode, proxied.body);
+      return true;
+    }
+    writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('attach', sessionId));
+    return true;
+  }
+
+  if (url.pathname === '/api/sciforge/browser-host/native-surface/state') {
+    if (req.method !== 'GET') {
+      writeJson(res, 405, browserHostNativeSurfaceBlockedDiagnostic('state', undefined, `Unsupported native surface state method: ${req.method ?? 'unknown'}`));
+      return true;
+    }
+    const sessionId = safeBrowserHostNativeSurfaceSessionId(url.searchParams.get('sessionId') ?? undefined);
+    if (!sessionId) {
+      writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('state', undefined, 'BrowserHostSession native surface state requires a bounded session id.', 'native-surface-session-invalid'));
+      return true;
+    }
+    if (nativeAdapterUrl) {
+      const proxied = await browserHostNativeSurfaceAdapterResponse(
+        nativeAdapterUrl,
+        `/sessions/${encodeURIComponent(sessionId)}/state`,
+        'state',
+        sessionId,
+      );
+      writeJson(res, proxied.statusCode, proxied.body);
+      return true;
+    }
+    writeJson(res, 503, browserHostNativeSurfaceBlockedDiagnostic('state', sessionId));
+    return true;
+  }
+
+  writeJson(res, 404, browserHostNativeSurfaceBlockedDiagnostic('unknown', undefined, 'Unknown native surface preflight route.'));
+  return true;
+}
+
+function browserHostNativeSurfaceBlockedDiagnostic(
+  action: 'health' | 'attach' | 'state' | 'unknown',
+  sessionId?: string,
+  message = 'Workspace Writer native surface bridge is unavailable; BrowserHostSession native-embedded attach remains blocked.',
+  reason = 'native-bridge-unavailable',
+) {
+  return {
+    ok: false,
+    schemaVersion: BROWSER_HOST_NATIVE_SURFACE_PREFLIGHT_SCHEMA,
+    service: 'sciforge-workspace-writer',
+    capability: 'browser-host-native-surface',
+    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+    action,
+    status: 'blocked',
+    reason,
+    ready: false,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    liveSurfaceTransport: 'native-embedded',
+    nativeBridge: false,
+    rightPaneBridge: false,
+    attachAvailable: false,
+    stateAvailable: false,
+    singleInteractiveTruth: false,
+    secondTruthSource: false,
+    passClaim: false,
+    ...(sessionId ? { sessionId } : {}),
+    diagnostics: [
+      message,
+      'No BrowserHostSession-owned native surface bridge is registered in the Workspace Writer process.',
+    ],
+  };
+}
+
+type BrowserHostNativeSurfaceAction = 'health' | 'attach' | 'state';
+
+interface BrowserHostNativeSurfaceAdapterResponse {
+  statusCode: number;
+  body: Record<string, unknown>;
+}
+
+async function browserHostNativeSurfaceAdapterResponse(
+  nativeAdapterUrl: string,
+  adapterPath: string,
+  action: BrowserHostNativeSurfaceAction,
+  sessionId?: string,
+  init?: RequestInit,
+): Promise<BrowserHostNativeSurfaceAdapterResponse> {
+  try {
+    const response = await fetch(`${nativeAdapterUrl}${adapterPath}`, init);
+    const payload = await browserHostNativeSurfaceJson(response);
+    const trustIssue = browserHostNativeSurfaceTrustIssue(payload, sessionId);
+    if (trustIssue) {
+      return {
+        statusCode: 503,
+        body: browserHostNativeSurfaceBlockedDiagnostic(
+          action,
+          sessionId,
+          'Loopback native adapter response failed BrowserHostSession native surface trust checks.',
+          'native-adapter-response-invalid',
+        ),
+      };
+    }
+    const body = browserHostNativeSurfaceTrustedBody(payload, action, sessionId);
+    return {
+      statusCode: body.ok === false || body.status === 'blocked' ? Math.max(response.status, 503) : 200,
+      body,
+    };
+  } catch {
+    return {
+      statusCode: 503,
+      body: browserHostNativeSurfaceBlockedDiagnostic(
+        action,
+        sessionId,
+        'Loopback native adapter did not return a bounded BrowserHostSession native surface response.',
+        'native-adapter-unavailable',
+      ),
+    };
+  }
+}
+
+async function browserHostNativeSurfaceJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text();
+  if (!text.trim()) return {};
+  const json = JSON.parse(text) as unknown;
+  return isRecord(json) ? json : {};
+}
+
+function browserHostNativeSurfaceTrustIssue(payload: Record<string, unknown>, sessionId?: string): string | undefined {
+  if (browserHostNativeSurfaceHasForbiddenEvidence(payload)) return 'forbidden-evidence';
+  if (stringField(payload.owner) !== 'BrowserHostSession') return 'owner';
+  if (stringField(payload.adapterRole) !== 'display-input-adapter') return 'adapter-role';
+  if (stringField(payload.liveSurfaceTransport) !== 'native-embedded') return 'live-surface-transport';
+  if (payload.singleInteractiveTruth !== true) return 'single-interactive-truth';
+  if (payload.secondTruthSource !== false) return 'second-truth-source';
+  if (sessionId) {
+    if (stringField(payload.sessionId) !== sessionId) return 'session-id';
+    if (stringField(payload.liveSurfaceRef) !== `browser-host-session:${sessionId}/live-surface`) return 'live-surface-ref';
+  } else if (payload.sessionId !== undefined || payload.liveSurfaceRef !== undefined) {
+    return 'session-scoped-fields';
+  }
+  return undefined;
+}
+
+function browserHostNativeSurfaceTrustedBody(
+  payload: Record<string, unknown>,
+  action: BrowserHostNativeSurfaceAction,
+  sessionId?: string,
+): Record<string, unknown> {
+  const status = safeBrowserHostNativeSurfaceToken(payload.status) ?? (payload.ok === false ? 'blocked' : 'ready');
+  const ok = payload.ok === false || status === 'blocked' ? false : true;
+  const reason = ok ? undefined : safeBrowserHostNativeSurfaceToken(payload.reason) ?? 'native-surface-adapter-blocked';
+  const body: Record<string, unknown> = {
+    ok,
+    schemaVersion: BROWSER_HOST_NATIVE_SURFACE_PREFLIGHT_SCHEMA,
+    service: 'sciforge-workspace-writer',
+    capability: 'browser-host-native-surface',
+    endpoint: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+    action,
+    status,
+    ...(reason ? { reason } : {}),
+    ready: ok && payload.ready !== false,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    liveSurfaceTransport: 'native-embedded',
+    nativeBridge: true,
+    rightPaneBridge: payload.rightPaneBridge === true,
+    attachAvailable: payload.attachAvailable === true,
+    stateAvailable: payload.stateAvailable === true,
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    passClaim: ok && payload.passClaim === true,
+  };
+  if (sessionId) {
+    body.sessionId = sessionId;
+    body.liveSurfaceRef = `browser-host-session:${sessionId}/live-surface`;
+  }
+  const diagnostics = boundedBrowserHostNativeSurfaceDiagnostics(payload.diagnostics);
+  if (diagnostics.length) body.diagnostics = diagnostics;
+  return body;
+}
+
+function browserHostNativeSurfaceAttachBody(body: Record<string, unknown>, sessionId: string): Record<string, unknown> {
+  const attachBody: Record<string, unknown> = { sessionId };
+  const timeoutMs = numberField(body.timeoutMs);
+  if (timeoutMs !== undefined) attachBody.timeoutMs = timeoutMs;
+  const bounds = browserHostNativeSurfaceRect(body.bounds ?? body.rightPaneBounds);
+  if (bounds) attachBody.bounds = bounds;
+  return attachBody;
+}
+
+function browserHostNativeSurfaceRect(value: unknown): Record<string, number> | undefined {
+  if (!isRecord(value)) return undefined;
+  const x = numberField(value.x);
+  const y = numberField(value.y);
+  const width = numberField(value.width);
+  const height = numberField(value.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return { x, y, width, height };
+}
+
+function boundedBrowserHostNativeSurfaceDiagnostics(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const token = safeBrowserHostNativeSurfaceToken(entry);
+    return token ? [token] : [];
+  }).slice(0, 8);
+}
+
+function safeBrowserHostNativeSurfaceToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return /^[a-z0-9][a-z0-9_.:/-]{0,120}$/i.test(trimmed) ? trimmed : undefined;
+}
+
+function browserHostNativeSurfaceHasForbiddenEvidence(value: unknown, depth = 0): boolean {
+  if (depth > 6) return false;
+  if (typeof value === 'string') {
+    return /https?:\/\/|data:image|base64|<html|secret|provider|host-stream|frame-stream|canvas|iframe|webview|webrtc/i.test(value);
+  }
+  if (Array.isArray(value)) return value.some((entry) => browserHostNativeSurfaceHasForbiddenEvidence(entry, depth + 1));
+  if (!isRecord(value)) return false;
+  for (const [key, entry] of Object.entries(value)) {
+    if (/(?:url|dom|screenshot|base64|provider|secret|html|payload)/i.test(key)) return true;
+    if (browserHostNativeSurfaceHasForbiddenEvidence(entry, depth + 1)) return true;
+  }
+  return false;
+}
+
 function browserHostSessionStartInput(body: Record<string, unknown>): BrowserHostSessionStartInput {
   return {
     url: stringField(body.url) || stringField(body.startUrl) || 'about:blank',
@@ -155,6 +428,20 @@ function browserHostSessionStartInput(body: Record<string, unknown>): BrowserHos
 function browserHostSessionActionInput(body: Record<string, unknown>): BrowserHostSessionActionInput {
   const action = stringField(body.action);
   if (!action) throw new Error('BrowserHostSession action is required.');
+  if (action === 'native-os-ui-proof') {
+    const proofGroup = browserHostNativeOsUiProofGroup(body.proofGroup);
+    return {
+      action,
+      capture: 'none',
+      timeoutMs: numberField(body.timeoutMs),
+      actionId: browserHostNativeOsUiActionId(body.actionId),
+      proofGroup,
+      probe: browserHostNativeOsUiProofProbe(body.probe),
+      expectedProofNames: browserHostNativeOsUiExpectedProofNames(body.expectedProofNames, proofGroup),
+      uiEventReceivedAt: stringField(body.uiEventReceivedAt),
+      adapterSentAt: stringField(body.adapterSentAt),
+    };
+  }
   return {
     action: action as BrowserHostSessionActionInput['action'],
     capture: browserHostSessionCaptureMode(body.capture),
@@ -172,6 +459,95 @@ function browserHostSessionActionInput(body: Record<string, unknown>): BrowserHo
     uiEventReceivedAt: stringField(body.uiEventReceivedAt),
     adapterSentAt: stringField(body.adapterSentAt),
   };
+}
+
+function browserHostNativeOsUiProofGroup(value: unknown): BrowserHostSessionActionInput['proofGroup'] | undefined {
+  return value === 'cursorCaret' ||
+    value === 'mouseContextMenu' ||
+    value === 'keyboardImeClipboardSelection' ||
+    value === 'rerenderFocus'
+    ? value
+    : undefined;
+}
+
+function browserHostNativeOsUiProofProbe(value: unknown): BrowserHostSessionActionInput['probe'] | undefined {
+  return value === 'focus-caret' ||
+    value === 'blur-restore' ||
+    value === 'mouse-context-menu-owner' ||
+    value === 'bounded-keyboard-ime-clipboard-selection' ||
+    value === 'bounded-rerender-focus' ||
+    value === 'rerender-focus'
+    ? value
+    : undefined;
+}
+
+function browserHostNativeOsUiExpectedProofNames(
+  value: unknown,
+  proofGroup: BrowserHostSessionActionInput['proofGroup'],
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const allowed = new Set(browserHostNativeOsUiProofNamesForGroup(proofGroup));
+  const proofNames = [...new Set(value.filter((entry): entry is string => typeof entry === 'string' && allowed.has(entry)))];
+  return proofNames.length > 0 ? proofNames : undefined;
+}
+
+function browserHostNativeOsUiProofNamesForGroup(
+  proofGroup: BrowserHostSessionActionInput['proofGroup'],
+): string[] {
+  if (proofGroup === 'mouseContextMenu') {
+    return [
+      'left-click-owner',
+      'right-click-context-menu-owner',
+      'middle-click-owner',
+      'double-click-owner',
+      'mouse-down-up-owner',
+      'continuous-move-owner',
+      'drag-drop-owner',
+      'text-selection-range-owner',
+      'wheel-vertical-owner',
+      'wheel-horizontal-owner',
+      'scrollbar-thumb-owner',
+    ];
+  }
+  if (proofGroup === 'keyboardImeClipboardSelection') {
+    return [
+      'keyboard-backspace-delete-owner',
+      'keyboard-enter-owner',
+      'keyboard-tab-owner',
+      'keyboard-arrow-home-end-page-owner',
+      'keyboard-shortcuts-select-copy-paste-cut-owner',
+      'keyboard-escape-owner',
+      'ime-candidate-window-owner',
+      'system-clipboard-round-trip-owner',
+      'selection-range-owner',
+    ];
+  }
+  if (proofGroup === 'rerenderFocus') {
+    return [
+      'native-surface-not-detached',
+      'address-bar-rerender-stable',
+      'tab-state-rerender-stable',
+      'diagnostic-expand-stable',
+      'focus-retained-after-rerender',
+      'tab-switch-resize-minimize-restore',
+    ];
+  }
+  return [
+    'input-caret-visible',
+    'focus-blur-restore',
+    'pointer-button-link',
+    'pointer-default-area',
+    'text-cursor-area',
+  ];
+}
+
+function browserHostNativeOsUiActionId(value: unknown): string | undefined {
+  const token = stringField(value);
+  if (!token) return undefined;
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(token)
+    && !/https?:|file:|data:|blob:|javascript:|<html|<input|endpoint|url:|title:|selector|coords?|payload|provider|secret|api[-_]?key|raw-leak/i.test(token)
+    ? token
+    : undefined;
 }
 
 function browserHostSessionCaptureMode(value: unknown): BrowserHostSessionActionInput['capture'] | undefined {
@@ -371,6 +747,11 @@ function browserHostSearchInput(body: Record<string, unknown>): BrowserHostSearc
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function safeBrowserHostNativeSurfaceSessionId(value: unknown) {
+  const sessionId = stringField(value);
+  return sessionId && /^[A-Za-z0-9_.:-]{1,128}$/.test(sessionId) ? sessionId : undefined;
 }
 
 function textField(value: unknown) {

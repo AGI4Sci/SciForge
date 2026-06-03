@@ -51,6 +51,8 @@ const TRANSPORT_ARTIFACT_INLINE_DATA_BYTES = 12_000;
 const TRANSPORT_TEXT_PREVIEW_CHARS = 500;
 const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef', 'contentRef', 'stdoutRef', 'stderrRef', 'outputRef'] as const;
 const WORKSPACE_TOOL_STREAM_PATH = '/api/sciforge/tools/run/stream';
+const CODEX_RUNTIME_SELECTED_MESSAGE_CONTEXT_LIMIT = 2;
+const CODEX_RUNTIME_SELECTED_MESSAGE_TEXT_LIMIT = 2_000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -678,6 +680,8 @@ function buildCodexRuntimeCommandText(
     return readableRefs.length ? readableRefs : [reference.id];
   })).slice(0, 12);
   const computerUseCommand = /^\/(?:computer-use|computer\s+use)\b/i.test(prompt);
+  const exactComputerUseCommand = computerUseCommandRequiresExactTerminalText(prompt);
+  if (exactComputerUseCommand) return prompt;
   const taskText = computerUseCommand
     ? [prompt, refs.length ? ['Approval/source refs:', ...refs.map((ref) => `- ${ref}`)].join('\n') : undefined].filter(Boolean).join('\n\n')
     : refs.length
@@ -690,22 +694,97 @@ function buildCodexRuntimeCommandText(
       'Runtime resume context: continue the active Runtime Codex session only as transport/session context; the slash command above remains the terminal-equivalent task command.',
     ].join('\n\n');
   }
+  const selectedMessageContext = selectedVisibleMessageContextForRuntimeCommand(input.input);
   const continuityContext = !options.resumeRequested
     ? sameChatContinuityContextForRuntimeCommand(input.input)
     : undefined;
-  if (continuityContext) {
+  if (continuityContext || selectedMessageContext) {
     return [
       continuityContext,
+      selectedMessageContext,
       'Current request:',
       taskText,
-    ].join('\n\n');
+    ].filter(Boolean).join('\n\n');
   }
   if (!options.resumeRequested) return taskText;
   const resumeContext = 'Continue the active Runtime Codex session. Interpret relative references such as "previous turn", "last answer", or "that passphrase" against the immediately preceding non-seed user/assistant exchange in this native Codex session unless selected refs say otherwise.';
   return [
     resumeContext,
+    selectedMessageContext,
     taskText,
-  ].join('\n\n');
+  ].filter(Boolean).join('\n\n');
+}
+
+function computerUseCommandRequiresExactTerminalText(prompt: string) {
+  return /^\/(?:computer-use|computer\s+use)\s+(?:screen\s+(?:attach|reconnect)|permission-handoff|permission-recheck|input-intent|approve|reject|continue|repair)\b/i.test(prompt.trim());
+}
+
+function selectedVisibleMessageContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {
+  const selectedMessageRefs = selectedMessageRefsForRuntimeCommand(input.references ?? []);
+  if (!selectedMessageRefs.size) return undefined;
+  const selectedMessages = (input.messages ?? [])
+    .filter((message) => selectedRuntimeMessageRefs(message).some((ref) => selectedMessageRefs.has(ref)))
+    .filter((message) => isSelectedReferenceContentMessage(message))
+    .filter((message) => !isSeedDemoOrFixtureMessage(message))
+    .slice(-CODEX_RUNTIME_SELECTED_MESSAGE_CONTEXT_LIMIT)
+    .map((message) => selectedRuntimeMessageContextEntry(message))
+    .filter((entry): entry is string => Boolean(entry));
+  if (!selectedMessages.length) return undefined;
+  return [
+    'Selected visible context (bounded terminal-equivalent text; use only when the current request refers to selected refs):',
+    ...selectedMessages,
+  ].join('\n');
+}
+
+function selectedMessageRefsForRuntimeCommand(references: NonNullable<SendAgentMessageInput['references']>) {
+  return new Set(references.flatMap((reference) => {
+    const refs = selectedReferenceAliases(reference);
+    if (reference.kind === 'message') return refs.flatMap(messageRefAliasesForRuntimeCommand);
+    return refs.filter((ref) => ref.startsWith('message:'));
+  }));
+}
+
+function messageRefAliasesForRuntimeCommand(ref: string) {
+  if (ref.startsWith('message:')) return [ref, ref.slice('message:'.length)];
+  if (ref.startsWith('artifact:') || ref.startsWith('run:') || ref.includes(':')) return [];
+  return [ref, `message:${ref}`];
+}
+
+function selectedRuntimeMessageRefs(message: NonNullable<SendAgentMessageInput['messages']>[number]) {
+  return uniqueRuntimeStringList([message.id, `message:${message.id}`]);
+}
+
+function isSelectedReferenceContentMessage(message: NonNullable<SendAgentMessageInput['messages']>[number]) {
+  return isRecord(message) && message.selectedReferenceContent === true;
+}
+
+function selectedRuntimeMessageContextEntry(message: NonNullable<SendAgentMessageInput['messages']>[number]) {
+  const content = selectedRuntimeMessageContextText(message.content);
+  if (!content) return undefined;
+  const role = String(message.role || 'message').replace(/[^a-z0-9_-]/gi, '').slice(0, 24) || 'message';
+  const ref = `message:${message.id}`;
+  return `- ${ref} (${role}):\n${indentRuntimeContextText(content)}`;
+}
+
+function selectedRuntimeMessageContextText(content: unknown) {
+  const text = asString(content);
+  if (!text) return undefined;
+  return redactSensitiveRuntimeContextText(text)
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .slice(0, CODEX_RUNTIME_SELECTED_MESSAGE_TEXT_LIMIT)
+    .trim();
+}
+
+function redactSensitiveRuntimeContextText(text: string) {
+  return text
+    .replace(/\bsk-[A-Za-z0-9_-]{12,}\b/g, '[redacted-secret]')
+    .replace(/\bAuthorization\s*:\s*Bearer\s+[^\s"'`]+/gi, 'Authorization: Bearer [redacted-secret]')
+    .replace(/\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s"'`]+/gi, '$1=[redacted-secret]')
+    .replace(/\b(?:rawProviderBody|providerRawBody|raw_provider_body|rawProviderPayload|providerPayload)\b/gi, '[redacted-provider-payload-label]');
+}
+
+function indentRuntimeContextText(text: string) {
+  return text.split(/\r?\n/).map((line) => `  ${line}`).join('\n');
 }
 
 function computerUseApprovalRuntimeMetadata(
@@ -982,8 +1061,10 @@ function selectedReferenceAliases(reference: NonNullable<SendAgentMessageInput['
     asString(objectProvenance.dataRef),
   ];
   if (reference.sourceId) aliases.push(`artifact:${reference.sourceId}`);
+  if (reference.kind === 'message' && reference.sourceId) aliases.push(`message:${reference.sourceId}`);
   const currentId = asString(currentReference.id);
   if (currentId) aliases.push(`artifact:${currentId}`);
+  if (reference.kind === 'message' && currentId) aliases.push(`message:${currentId}`);
   const objectId = asString(objectReference.id);
   if (objectId) aliases.push(`artifact:${objectId}`);
   return uniqueRuntimeStringList(aliases);

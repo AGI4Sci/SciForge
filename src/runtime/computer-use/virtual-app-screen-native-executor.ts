@@ -1,6 +1,7 @@
 import type { VirtualAppScreenRuntimeCommand } from './virtual-app-screen-command.js';
 import { virtualAppScreenRuntimeCommandRunId } from './virtual-app-screen-command.js';
 import {
+  deriveNativeHostMinimalEvidenceReplayRefs,
   InMemoryNativeVirtualAppScreenHost,
   validateNativeHostEvidenceLedger,
   type NativeHostLiveSurface,
@@ -21,6 +22,7 @@ import {
 } from './virtual-display-provider.js';
 import { createVirtualDisplayProviderNativeHostAdapter } from './virtual-app-screen-host-provider-adapter.js';
 import { recordVirtualAppScreenNativeHostSession } from './virtual-app-screen-native-host-session-store.js';
+import { resolveVirtualAppScreenAppProfile } from './virtual-app-screen-app-profiles.js';
 import {
   blockedVirtualAppScreenSessionManagerResult,
   registerVirtualAppScreenSessionExecutor,
@@ -63,10 +65,20 @@ async function attachWithNativeProvider(
   options: VirtualAppScreenNativeExecutorOptions,
 ): Promise<VirtualAppScreenSessionManagerAttachResult> {
   const runId = virtualAppScreenRuntimeCommandRunId(command);
+  const profile = resolveVirtualAppScreenAppProfile({
+    profile: command.profile,
+    targetAppRef: command.refs.targetAppRef,
+  });
+  if (profile.status === 'blocked' && !options.targetAppKind) {
+    return blockedVirtualAppScreenSessionManagerResult(command, profile.blockedReason);
+  }
+  const targetAppKind = options.targetAppKind ?? (profile.status === 'resolved' ? profile.targetAppKind : undefined);
+  const targetAppName = options.targetAppName ?? (profile.status === 'resolved' ? profile.targetAppName : command.profile);
+  const targetAppRef = profile.status === 'resolved' ? profile.targetAppRef : command.refs.targetAppRef;
   const operationOptions: VirtualDisplayProviderOperationOptions = {
     runId,
-    targetAppKind: options.targetAppKind ?? command.profile ?? targetAppKindFromRef(command.refs.targetAppRef),
-    targetAppName: options.targetAppName ?? command.profile,
+    targetAppKind,
+    targetAppName,
   };
   const probe = await options.provider.probe(operationOptions);
   const readiness = probe.readiness;
@@ -79,22 +91,22 @@ async function attachWithNativeProvider(
 
   const launchApp = await options.provider.launchApp(operationOptions);
   const launchBlocked = blockedOperation(command, options, 'launchApp', launchApp, readiness);
-  if (launchBlocked) return launchBlocked;
+  if (launchBlocked) return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, launchBlocked);
 
   const attachSurface = await options.provider.attachSurface(operationOptions);
   const attachBlocked = blockedOperation(command, options, 'attachSurface', attachSurface, readiness);
-  if (attachBlocked) return attachBlocked;
+  if (attachBlocked) return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, attachBlocked);
 
   const readFrame = await options.provider.readFrame(operationOptions);
   const readFrameBlocked = blockedOperation(command, options, 'readFrame', readFrame, readiness);
-  if (readFrameBlocked) return readFrameBlocked;
+  if (readFrameBlocked) return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, readFrameBlocked);
 
   const unsafeSurfaceTransport = unsafeExplicitSurfaceTransport(attachSurface, readFrame);
   if (unsafeSurfaceTransport) {
-    return blockedVirtualAppScreenSessionManagerResult(
+    return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, blockedVirtualAppScreenSessionManagerResult(
       command,
       `VirtualAppScreen native executor rejected unsafe provider surface transport evidence from ${unsafeSurfaceTransport}.`,
-    );
+    ));
   }
   const platformDriverRefForRun = command.refs.platformDriverRef
     ?? platformDriverRef(providerId(options, probe), readiness, probe, createSession, attachSurface, readFrame);
@@ -112,16 +124,16 @@ async function attachWithNativeProvider(
     command.refs.guiPresentRef ? undefined : 'guiPresentRef',
   ].filter((entry): entry is string => Boolean(entry));
   if (missing.length) {
-    return blockedVirtualAppScreenSessionManagerResult(
+    return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, blockedVirtualAppScreenSessionManagerResult(
       command,
       `VirtualAppScreen native executor did not materialize required provider refs: ${missing.join(', ')}.`,
-    );
+    ));
   }
   if (!surfaceTransport) {
-    return blockedVirtualAppScreenSessionManagerResult(
+    return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, blockedVirtualAppScreenSessionManagerResult(
       command,
       'VirtualAppScreen native executor did not materialize required provider refs: surfaceTransport.',
-    );
+    ));
   }
   const inconsistentChain = validateProviderOperationChain(options, {
     probe,
@@ -132,13 +144,13 @@ async function attachWithNativeProvider(
     surfaceTransport,
   });
   if (inconsistentChain) {
-    return blockedVirtualAppScreenSessionManagerResult(
+    return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, blockedVirtualAppScreenSessionManagerResult(
       command,
       `VirtualAppScreen native provider operation chain was inconsistent: ${inconsistentChain}.`,
-    );
+    ));
   }
 
-  return attachWithNativeHost(command, options, {
+  const hostResult = attachWithNativeHost(command, options, {
     probe,
     createSession,
     launchApp,
@@ -148,7 +160,65 @@ async function attachWithNativeProvider(
     surfaceTransport,
     readiness,
     platformDriverRef: platformDriverRefForRun,
+    targetAppRef,
+    profileId: profile.status === 'resolved' ? profile.profileId : command.profile ?? targetAppKindFromRef(targetAppRef),
+    targetAppKind: targetAppKind ?? targetAppKindFromRef(targetAppRef),
+    targetAppName,
   });
+  if (hostResult.status !== 'attached') {
+    return cleanupNativeProviderSessionAfterBlockedAttach(command, options, operationOptions, createSession, hostResult);
+  }
+  return hostResult;
+}
+
+async function cleanupNativeProviderSessionAfterBlockedAttach(
+  command: VirtualAppScreenRuntimeCommand,
+  options: Pick<VirtualAppScreenNativeExecutorOptions, 'provider'>,
+  operationOptions: VirtualDisplayProviderOperationOptions,
+  createSession: VirtualDisplayProviderInvokeResult,
+  result: VirtualAppScreenSessionManagerAttachResult,
+): Promise<VirtualAppScreenSessionManagerAttachResult> {
+  const sessionRef = stringRef(createSession, 'sessionRef');
+  if (!sessionRef || createSession.status !== 'ready' || createSession.providerExecuted !== true) return result;
+  try {
+    const closeSession = await options.provider.closeSession({
+      ...operationOptions,
+      inputIntent: {
+        source: 'virtual-app-screen-native-executor-cleanup',
+        kind: 'stop-session',
+        controlKind: 'stop-session',
+        refs: {
+          sessionRef,
+          screenRef: command.refs.screenRef,
+          targetAppRef: command.refs.targetAppRef,
+          evidenceLedgerRef: command.refs.evidenceLedgerRef,
+        },
+      },
+    });
+    return {
+      ...result,
+      refs: {
+        ...result.refs,
+        blockedRef: result.refs.blockedRef ?? stringRef(closeSession, 'blockedRef'),
+      },
+      evidence: {
+        ...result.evidence,
+        evidenceRefs: uniqueRefs([
+          ...result.evidence.evidenceRefs,
+          stringRef(closeSession, 'safeStopRef'),
+          stringRef(closeSession, 'agentQueueRef'),
+          stringRef(closeSession, 'lifecycleEventRef'),
+          evidenceLedgerRef(closeSession),
+          stringRef(closeSession, 'blockedRef'),
+        ]),
+      },
+    };
+  } catch (error) {
+    return {
+      ...result,
+      blockedReason: `${result.blockedReason ?? 'VirtualAppScreen attach failed closed.'} Cleanup closeSession also failed: ${error instanceof Error ? error.message : String(error)}.`,
+    };
+  }
 }
 
 function attachWithNativeHost(
@@ -164,6 +234,10 @@ function attachWithNativeHost(
     surfaceTransport: VirtualDisplaySurfaceTransportDescriptor;
     readiness: VirtualDisplayReadiness | undefined;
     platformDriverRef: string | undefined;
+    targetAppRef: string | undefined;
+    profileId: string | undefined;
+    targetAppKind: string;
+    targetAppName: string | undefined;
   },
 ): VirtualAppScreenSessionManagerAttachResult {
   const runId = virtualAppScreenRuntimeCommandRunId(command);
@@ -183,7 +257,7 @@ function attachWithNativeHost(
   }));
   const hostSession = host.createSession(
     {
-      profileId: command.profile ?? targetAppKindFromRef(command.refs.targetAppRef),
+      profileId: input.profileId ?? input.targetAppKind,
       defaultSurfaceTransport: nativeHostSurfaceTransport(input.surfaceTransport.transport),
       metadata: {
         providerId: providerIdForRun,
@@ -209,9 +283,9 @@ function attachWithNativeHost(
   }
 
   const launched = host.launchOrAttachApp(hostSession.value.sessionId, {
-    appId: targetAppKindFromRef(command.refs.targetAppRef),
-    appRef: command.refs.targetAppRef ?? stringRef(input.launchApp, 'targetAppRef') ?? `app:${runId}/generic`,
-    title: options.targetAppName ?? command.profile,
+    appId: input.targetAppKind,
+    appRef: input.targetAppRef ?? stringRef(input.launchApp, 'targetAppRef') ?? `app:${runId}/generic`,
+    title: input.targetAppName,
     metadata: {
       providerTargetAppRef: stringRef(input.launchApp, 'targetAppRef'),
       providerLifecycleEventRef: stringRef(input.launchApp, 'lifecycleEventRef'),
@@ -261,6 +335,8 @@ function attachWithNativeHost(
   if (!ledgerValidation.ok) {
     return hostBlockedResult(command, options, `Native Host evidence ledger failed validation: ${ledgerValidation.issues.join(' ')}`);
   }
+  const hostLifecycleReplayRefs = deriveNativeHostLifecycleReplayRefs(ledger);
+  const minimalEvidenceReplayRefs = deriveNativeHostMinimalEvidenceReplayRefs(ledger);
 
   const hostSurfaceTransport = hostSurfaceTransportDescriptor(providerIdForRun, attached.value, frame.value);
   const readinessRefForRun = adapterReadinessRef(input.probe, input.createSession, input.attachSurface, input.readFrame)!;
@@ -275,6 +351,7 @@ function attachWithNativeHost(
       actionAdapterRef: actionAdapterRefForRun,
       adapterReadinessRef: readinessRefForRun,
       evidenceLedgerRef: ledger.ledgerRef,
+      currentRunPointerRef: hostSession.value.currentRunPointerRef,
       grantValidationRef: presented.value.validationLedgerEntryRef,
     },
   });
@@ -285,6 +362,7 @@ function attachWithNativeHost(
     providerId: providerIdForRun,
     refs: {
       currentRunRef: hostSession.value.evidenceContext.currentRunRef,
+      currentRunPointerRef: hostSession.value.currentRunPointerRef,
       sessionRef: hostSession.value.sessionRef,
       liveSurfaceRef: attached.value.liveSurfaceRef,
       surfaceTransportRef: attached.value.surfaceTransportRef,
@@ -300,7 +378,7 @@ function attachWithNativeHost(
       surfaceOwnerRef: attached.value.surfaceOwnerRef,
       displayOwnerRef: attached.value.displayOwnerRef,
       screenRef: attached.value.screenRef,
-      targetAppRef: launched.value.app?.appRef ?? command.refs.targetAppRef ?? stringRef(input.createSession, 'targetAppRef') ?? stringRef(input.launchApp, 'targetAppRef'),
+      targetAppRef: input.targetAppRef ?? launched.value.app?.appRef ?? stringRef(input.createSession, 'targetAppRef') ?? stringRef(input.launchApp, 'targetAppRef'),
       targetWindowRef: attached.value.targetWindowRef,
       displayGroupRef: command.refs.displayGroupRef ?? stringRef(input.createSession, 'displayGroupRef'),
       inputLeaseRef: stringRef(input.readFrame, 'inputLeaseRef') ?? stringRef(input.attachSurface, 'inputLeaseRef'),
@@ -309,6 +387,9 @@ function attachWithNativeHost(
       platformDriverRef: input.platformDriverRef,
       permissionRef: command.refs.permissionRef ?? permissionRef(input.readiness),
       evidenceLedgerRef: ledger.ledgerRef,
+      hostEvidenceLedgerRef: ledger.ledgerRef,
+      hostLifecycleReplayRefs,
+      minimalEvidenceReplayRefs,
       guiPresentRef: command.refs.guiPresentRef,
     },
     evidence: {
@@ -343,6 +424,9 @@ function attachWithNativeHost(
         evidenceLedgerRef(input.createSession, input.launchApp, input.attachSurface, input.readFrame),
         ledger.ledgerRef,
         ledger.headSha256 ? `${ledger.ledgerRef}#${ledger.headSha256}` : undefined,
+        hostSession.value.currentRunPointerRef,
+        ...hostLifecycleReplayRefs,
+        ...minimalEvidenceReplayRefs,
         attached.value.surfaceOwnerRef,
         attached.value.displayOwnerRef,
         attached.value.liveBindingAttachGrantRef,
@@ -356,6 +440,16 @@ function attachWithNativeHost(
       ]),
     },
   };
+}
+
+function deriveNativeHostLifecycleReplayRefs(ledger: { entries: Array<{ type: string; eventRef: string }> }): string[] {
+  return [
+    'session.created',
+    'app.launched',
+    'surface.attached',
+    'grant.validated',
+    'frame.read',
+  ].flatMap((type) => ledger.entries.find((entry) => entry.type === type)?.eventRef ?? []);
 }
 
 function hostBlockedResult(

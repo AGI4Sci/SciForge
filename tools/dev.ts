@@ -12,8 +12,9 @@ import { isOwnedSciForgeViteDevProcess, parseListeningPids, type DevProcessOwner
 import { normalizeInstanceName, parallelProfile } from '../src/runtime/parallel-instance-profile.js';
 import {
   agentServerEnvFromLocalSettings,
-  providerEnvFromLocalSettings,
+  computerUseWorkspaceEnvFromLocalSettings,
   readLocalProviderSettings,
+  runtimeCodexEnvFromLocalSettings,
 } from '../packages/backend/src/local-provider-config.js';
 
 applyInstanceDefaults();
@@ -47,7 +48,11 @@ function agentServerModelEnvFromLocalConfig() {
 }
 
 function runtimeCodexEnvFromLocalConfig() {
-  return providerEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
+  return runtimeCodexEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
+}
+
+function computerUseWorkspaceEnvFromLocalConfig() {
+  return computerUseWorkspaceEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
 function stringValue(value: unknown) {
@@ -78,7 +83,7 @@ if (workspaceWriterHealthOk(workspaceHealth)) {
 } else if (await isListening(WORKSPACE_PORT)) {
   console.warn(`SciForge workspace writer is running on http://127.0.0.1:${WORKSPACE_PORT}, but its health check failed. Stop the old workspace server and rerun npm run dev.`);
 } else {
-  children.push(start('workspace', ['run', 'workspace:server'], process.cwd(), runtimeCodexEnvFromLocalConfig()));
+  children.push(start('workspace', ['run', 'workspace:server'], process.cwd(), computerUseWorkspaceEnvFromLocalConfig()));
 }
 
 if (await isListening(UI_PORT)) {

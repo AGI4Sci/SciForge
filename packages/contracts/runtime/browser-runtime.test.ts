@@ -4,12 +4,15 @@ import test from 'node:test';
 import {
   BROWSER_RUNTIME_CAPABILITY_ID,
   BROWSER_RUNTIME_CONTRACT_ID,
+  BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   browserRuntimeCommandRisk,
   browserRuntimeProjection,
   browserRuntimeSnapshotFromRefs,
   browserRuntimeTraceForCommand,
   buildBrowserRuntimeStableRef,
   normalizeBrowserRuntimePageQuery,
+  type BrowserHostSessionActionRequest,
+  type BrowserHostSessionState,
 } from './browser-runtime';
 
 test('browser runtime shared contract is usable by GUI and TUI packages without provider ownership', () => {
@@ -63,4 +66,60 @@ test('browser runtime shared helpers keep risk and page-query validation determi
   });
   assert.equal(query.limit, 100);
   assert.deepEqual(query.fields, ['tagName', 'bbox', 'attribute.aria-label']);
+});
+
+test('BrowserHostSession public contract carries bounded native OS UI proof requests and state', () => {
+  const request = {
+    sessionId: 'native-proof-session',
+    action: 'native-os-ui-proof',
+    capture: 'none',
+    proofGroup: 'cursorCaret',
+    probe: 'focus-caret',
+    expectedProofNames: ['input-caret-visible', 'focus-blur-restore'],
+    actionId: 'focus-input-caret',
+  } satisfies BrowserHostSessionActionRequest;
+
+  const state = {
+    schemaVersion: 'sciforge.browser-host-session.state.v1',
+    id: request.sessionId,
+    owner: 'host',
+    providerId: 'sciforge.browser-host-session',
+    status: 'ready',
+    workspacePath: '/workspace',
+    requestedUrl: 'https://example.org',
+    url: 'https://example.org',
+    startedAt: '2026-06-03T00:00:00.000Z',
+    updatedAt: '2026-06-03T00:00:01.000Z',
+    viewport: { width: 1280, height: 720 },
+    canGoBack: false,
+    canGoForward: false,
+    liveSurfaceRef: 'browser-host-session:native-proof-session/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    nativeOsUiProof: {
+      schemaVersion: BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
+      boundedEvidenceOnly: true,
+      rawDomRecorded: false,
+      rawTextRecorded: false,
+      rawUrlRecorded: false,
+      rawTitleRecorded: false,
+      rawSelectorRecorded: false,
+      rawCoordsRecorded: false,
+      rawPayloadRecorded: false,
+      source: 'native-embedded-action-state',
+      proofGroup: 'cursorCaret',
+      actionId: 'focus-input-caret',
+      observedProofNames: ['input-caret-visible', 'focus-blur-restore'],
+      evidenceTokens: ['proof:input-caret-visible:observed', 'proof:focus-blur-restore:observed'],
+      diagnostics: ['proof:input-caret-visible:observed'],
+    },
+    diagnostics: [],
+  } satisfies BrowserHostSessionState;
+
+  assert.equal(request.action, 'native-os-ui-proof');
+  assert.equal(request.capture, 'none');
+  assert.deepEqual(request.expectedProofNames, state.nativeOsUiProof.observedProofNames);
+  assert.equal(state.nativeOsUiProof.boundedEvidenceOnly, true);
+  assert.doesNotMatch(JSON.stringify(state.nativeOsUiProof), /<html|data:image|https?:|clipboard:raw|payload:|secret/i);
 });

@@ -4,10 +4,12 @@ import {
   type VirtualScreenInputIntentCommand,
   type VirtualScreenInputIntentSource,
 } from './input-intent-command.js';
-import type {
-  NativeHostAutomationBarrier,
-  NativeHostHumanInputEvent,
-  NativeHostSession,
+import {
+  deriveNativeHostMinimalEvidenceReplayRefs,
+  type NativeHostAutomationBarrier,
+  type NativeHostEvidenceLedger,
+  type NativeHostHumanInputEvent,
+  type NativeHostSession,
 } from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
 import type { GenericVisionAction } from './types.js';
 import { sanitizeId } from './utils.js';
@@ -102,6 +104,11 @@ interface NativeHostControlEvidence {
   agentQueueRef?: string;
   currentFrameRefreshRef?: string;
   safeStopRef?: string;
+}
+
+interface NativeHostReplayProjection {
+  currentRunPointerRef: string;
+  minimalEvidenceReplayRefs: string[];
 }
 
 const registeredVirtualAppScreenInputRuntimeExecutors = new Map<string, VirtualAppScreenInputRuntimeExecutor>();
@@ -450,6 +457,7 @@ function executedInputRuntimeResult(
   runId: string,
   results: VirtualDisplayProviderInvokeResult[],
   providerSessionRef = command.refs.sessionRef,
+  nativeHostReplay?: NativeHostReplayProjection,
 ): VirtualAppScreenInputRuntimeProjection {
   const runtimeRefs = inputRuntimeRefs(command, runId);
   const refs = executedRefs(results);
@@ -494,6 +502,8 @@ function executedInputRuntimeResult(
       providerControlEvidenceRefs.agentQueueRef,
       providerControlEvidenceRefs.currentFrameRefreshRef,
       providerControlEvidenceRefs.safeStopRef,
+      nativeHostReplay?.currentRunPointerRef,
+      ...(nativeHostReplay?.minimalEvidenceReplayRefs ?? []),
     ]),
   };
   const routeDecision = {
@@ -515,6 +525,8 @@ function executedInputRuntimeResult(
     adapterReadinessRef: refs.adapterReadinessRef,
     actionAdapterRef: refs.actionAdapterRef,
     evidenceLedgerRef: refs.evidenceLedgerRef,
+    currentRunPointerRef: nativeHostReplay?.currentRunPointerRef,
+    minimalEvidenceReplayRefs: nativeHostReplay?.minimalEvidenceReplayRefs,
     inputLeaseRef: refs.inputLeaseRef,
     rawPayloadWritten: false,
     providerOperations: results.map((result) => result.intent),
@@ -541,6 +553,7 @@ function executedInputRuntimeResult(
       attachState: 'observe-only',
       surfaceMode: 'replay',
       currentRunRef: refs.currentRunRef ?? `.sciforge/vision-runs/${runId}/current-run.json`,
+      currentRunPointerRef: nativeHostReplay?.currentRunPointerRef,
       screenRef: command.refs.screenRef,
       visibleScreenRefs: [command.refs.screenRef].filter((ref): ref is string => Boolean(ref)),
       targetAppRef: command.refs.targetAppRef,
@@ -566,6 +579,7 @@ function executedInputRuntimeResult(
       actionAdapterRef: refs.actionAdapterRef,
       adapterReadinessRef: refs.adapterReadinessRef,
       evidenceLedgerRef: refs.evidenceLedgerRef,
+      minimalEvidenceReplayRefs: nativeHostReplay?.minimalEvidenceReplayRefs,
       inputIntentRefs,
       executorEventRefs,
       verificationRefs,
@@ -592,6 +606,8 @@ function executedInputRuntimeResult(
           actionAdapterRef: refs.actionAdapterRef,
           adapterReadinessRef: refs.adapterReadinessRef,
           evidenceLedgerRef: refs.evidenceLedgerRef,
+          currentRunPointerRef: nativeHostReplay?.currentRunPointerRef,
+          minimalEvidenceReplayRefs: nativeHostReplay?.minimalEvidenceReplayRefs,
           inputIntentRefs,
           executorEventRefs,
           beforeFrameRef: refs.beforeFrameRef,
@@ -635,6 +651,8 @@ function executedInputRuntimeResult(
         mutatingActionExecuted: evidence.mutatingActionExecuted,
         completionEligible: false,
         evidenceLedgerRef: refs.evidenceLedgerRef,
+        currentRunPointerRef: nativeHostReplay?.currentRunPointerRef,
+        minimalEvidenceReplayRefs: nativeHostReplay?.minimalEvidenceReplayRefs,
         agentQueueRef: providerControlEvidenceRefs.agentQueueRef,
         currentFrameRefreshRef: providerControlEvidenceRefs.currentFrameRefreshRef,
         safeStopRef: providerControlEvidenceRefs.safeStopRef,
@@ -704,7 +722,14 @@ async function executeNativeHostCanvasInput(
     currentFrameRef: afterFrame.value.frameRef,
     mutatingActionExecuted: false,
   });
-  return executedInputRuntimeResult(command, options, runId, [actionResult, readFrameResult]);
+  return executedInputRuntimeResult(
+    command,
+    options,
+    runId,
+    [actionResult, readFrameResult],
+    command.refs.sessionRef,
+    nativeHostReplayProjection(record),
+  );
 }
 
 async function executeNativeHostControlInput(
@@ -799,7 +824,14 @@ async function executeNativeHostControlInput(
         }),
       ]
     : [controlResult];
-  return executedInputRuntimeResult(command, options, runId, results);
+  return executedInputRuntimeResult(
+    command,
+    options,
+    runId,
+    results,
+    command.refs.sessionRef,
+    nativeHostReplayProjection(record),
+  );
 }
 
 function virtualAppScreenInputRuntimeVirtualScreenData(
@@ -981,6 +1013,7 @@ function blockedInputRuntimeEvidence(
     systemKeyboardEventsSent: false,
     evidenceRefs: uniqueRefs([
       command.refs.sessionRef,
+      command.refs.currentRunPointerRef,
       command.refs.frameRef,
       command.refs.inputLeaseRef,
       command.refs.leaseControlRef,
@@ -1177,6 +1210,7 @@ function nativeHostInputBinding(command: VirtualScreenInputIntentCommand): Nativ
     command.refs.actionAdapterRef && command.refs.actionAdapterRef !== record.actionAdapterRef ? 'actionAdapterRef' : undefined,
     command.refs.adapterReadinessRef && command.refs.adapterReadinessRef !== record.adapterReadinessRef ? 'adapterReadinessRef' : undefined,
     command.refs.evidenceLedgerRef && command.refs.evidenceLedgerRef !== record.evidenceLedgerRef ? 'evidenceLedgerRef' : undefined,
+    command.refs.currentRunPointerRef && command.refs.currentRunPointerRef !== record.currentRunPointerRef ? 'currentRunPointerRef' : undefined,
     command.refs.frameRef && record.currentFrameRef && command.refs.frameRef !== record.currentFrameRef ? 'currentFrameRef' : undefined,
     providerSessionRecord.sessionRef !== record.sessionRef ? 'providerSessionRecord.sessionRef' : undefined,
     providerSessionRecord.liveSurfaceRef !== record.liveSurfaceRef ? 'liveSurfaceRef' : undefined,
@@ -1237,6 +1271,7 @@ function nativeHostBlockedProjection(
         record?.liveSurfaceRef,
         record?.frameStreamRef,
         record?.currentFrameRef,
+        record?.currentRunPointerRef,
       ]),
     },
     routeDecision: {
@@ -1247,6 +1282,7 @@ function nativeHostBlockedProjection(
       blockedReason: reason,
       providerExecuted: false,
       mutatingActionExecuted: false,
+      providerBlockedReason: reason,
       adapterReadinessRef: record?.adapterReadinessRef ?? command.refs.adapterReadinessRef,
       evidenceLedgerRef: record?.evidenceLedgerRef ?? runtimeRefs.evidenceLedgerRef,
     },
@@ -1256,6 +1292,7 @@ function nativeHostBlockedProjection(
       attachState: 'blocked',
       adapterReadinessRef: record?.adapterReadinessRef ?? command.refs.adapterReadinessRef,
       evidenceLedgerRef: record?.evidenceLedgerRef ?? runtimeRefs.evidenceLedgerRef,
+      currentRunPointerRef: record?.currentRunPointerRef,
       blockedReason: reason,
       runSummary: {
         ...recordValue(projection.virtualScreenData.runSummary),
@@ -1355,12 +1392,26 @@ function nativeHostControlBarrier(
   record: VirtualAppScreenNativeHostSessionRecord,
   beforeFrameRef: string,
 ): NativeHostAutomationBarrier {
+  const latestRecheckRef = latestPermissionRecheckRef(record);
   return {
     barrierRef: command.refs.leaseControlRef ?? nativeHostRuntimeRef(record, 'barriers', `${command.controlKind}.json`),
     currentRunRef: record.currentRunRef,
     requiredReadinessRef: record.adapterReadinessRef,
     beforeFrameRef,
+    resumeAfterPermissionRecheckRef: latestRecheckRef,
   };
+}
+
+function latestPermissionRecheckRef(record: VirtualAppScreenNativeHostSessionRecord): string | undefined {
+  const ledger = record.host.getLedger(record.sessionId);
+  const latestHandoff = ledger?.entries.findLast((entry) => entry.type === 'permission.handoff');
+  if (!latestHandoff) return undefined;
+  return ledger?.entries.findLast((entry) =>
+    entry.type === 'permission.recheck'
+    && entry.sequence > latestHandoff.sequence
+    && typeof entry.refs.recheckRef === 'string'
+    && entry.refs.recheckRef.trim()
+  )?.refs.recheckRef;
 }
 
 function nativeHostControlEvidenceFromSession(session: NativeHostSession): NativeHostControlEvidence {
@@ -1369,6 +1420,14 @@ function nativeHostControlEvidenceFromSession(session: NativeHostSession): Nativ
     agentQueueRef: stringValue(evidence.agentQueueRef),
     currentFrameRefreshRef: stringValue(evidence.currentFrameRefreshRef),
     safeStopRef: stringValue(evidence.safeStopRef),
+  };
+}
+
+function nativeHostReplayProjection(record: VirtualAppScreenNativeHostSessionRecord): NativeHostReplayProjection {
+  const ledger: NativeHostEvidenceLedger | undefined = record.host.getLedger(record.sessionId);
+  return {
+    currentRunPointerRef: record.currentRunPointerRef,
+    minimalEvidenceReplayRefs: ledger ? deriveNativeHostMinimalEvidenceReplayRefs(ledger) : [],
   };
 }
 

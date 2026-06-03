@@ -2,6 +2,7 @@ export const BROWSER_RUNTIME_CAPABILITY_ID = 'browser_runtime' as const;
 export const BROWSER_RUNTIME_CONTRACT_ID = 'sciforge.browser-runtime.v1' as const;
 export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' as const;
 export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
+export const BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA = 'sciforge.browser-host-session.native-os-ui-proof.v1' as const;
 
 export type BrowserRuntimeMode = 'agent-headless' | 'visible-takeover';
 export type BrowserRuntimeTabStatus = 'new' | 'loading' | 'ready' | 'failed' | 'closed';
@@ -55,10 +56,18 @@ export type BrowserRuntimeCommandType =
 export type BrowserRuntimeRiskLevel = 'low' | 'medium' | 'high';
 export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-snapshot' | 'ax-snapshot' | 'console-log' | 'network-log' | 'search-result' | 'download';
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
-export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'snapshot' | 'state' | 'close';
+export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'native-os-ui-proof' | 'snapshot' | 'state' | 'close';
 export type BrowserHostSessionCaptureMode = 'full' | 'frame' | 'none';
 export type BrowserHostSessionLiveSurfaceTransport = 'host-stream' | 'native-embedded' | 'webrtc-data-channel';
 export type BrowserHostMouseButton = 'left' | 'right' | 'middle';
+export type BrowserHostNativeOsUiProofGroup = 'cursorCaret' | 'mouseContextMenu' | 'keyboardImeClipboardSelection' | 'rerenderFocus';
+export type BrowserHostNativeOsUiProofProbe =
+  | 'focus-caret'
+  | 'blur-restore'
+  | 'mouse-context-menu-owner'
+  | 'bounded-keyboard-ime-clipboard-selection'
+  | 'bounded-rerender-focus'
+  | 'rerender-focus';
 
 export interface BrowserHostSessionViewport {
   width: number;
@@ -96,6 +105,24 @@ export interface BrowserHostSessionActionTimingSummary {
   lastMs: number;
 }
 
+export interface BrowserHostSessionNativeOsUiProof {
+  schemaVersion: typeof BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA;
+  boundedEvidenceOnly: true;
+  rawDomRecorded: false;
+  rawTextRecorded: false;
+  rawUrlRecorded: false;
+  rawTitleRecorded: false;
+  rawSelectorRecorded: false;
+  rawCoordsRecorded: false;
+  rawPayloadRecorded: false;
+  source: 'native-embedded-action-state';
+  proofGroup: BrowserHostNativeOsUiProofGroup;
+  actionId: string;
+  observedProofNames: string[];
+  evidenceTokens: string[];
+  diagnostics: string[];
+}
+
 export interface BrowserHostSessionState {
   schemaVersion: typeof BROWSER_HOST_SESSION_SCHEMA;
   id: string;
@@ -115,6 +142,7 @@ export interface BrowserHostSessionState {
   liveSurfaceTransport?: BrowserHostSessionLiveSurfaceTransport;
   nativeAdapterUrl?: string;
   singleInteractiveTruth?: true;
+  secondTruthSource?: false;
   frameStreamRef?: string;
   frameRef?: string;
   frameUrl?: string;
@@ -126,6 +154,7 @@ export interface BrowserHostSessionState {
   searchResultRef?: string;
   workspaceWriterBaseUrl?: string;
   cursor?: string;
+  nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics?: string[];
@@ -145,6 +174,9 @@ export interface BrowserHostSessionActionRequest {
   deltaX?: number;
   deltaY?: number;
   actionId?: string;
+  proofGroup?: BrowserHostNativeOsUiProofGroup;
+  probe?: BrowserHostNativeOsUiProofProbe;
+  expectedProofNames?: string[];
   uiEventReceivedAt?: string;
   adapterSentAt?: string;
 }

@@ -13,6 +13,11 @@ import { chromium, type Browser, type Locator, type Page } from 'playwright-core
 const EDGE_EXECUTABLE = '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 const DOGFOOD_SCHEMA = 'sciforge.browser-pane-dogfood.v1';
 const REAL_EXTERNAL_DOGFOOD_SCHEMA = 'sciforge.browser-pane-real-external-dogfood.v1';
+const DOGFOOD_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
+  'browser-host-native-surface',
+  'browser-host-search',
+  'browser-host-session',
+] as const;
 const fixtureHost = 'sciforge-browser-dogfood.test';
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-dogfood');
 const manifestPath = join(artifactDir, 'manifest.json');
@@ -38,6 +43,49 @@ type BrowserPaneLiveAcceptance = {
     frameTransport?: string;
   };
   blockedReason?: string;
+  blockedReasonCode?: 'missing-native-attach/preflight' | 'missing-native-attach';
+};
+
+type DogfoodNativeAttachPreflightEvidence = {
+  bounded: true;
+  status: 'ready' | 'blocked';
+  blockedReasonCode?: 'missing-native-attach/preflight';
+  writerHealth: {
+    available: boolean;
+    ok?: boolean;
+    service?: string;
+    status?: string;
+    capabilitySummary: string[];
+    capabilities: {
+      browserHostSession: 'ready' | 'missing';
+      nativeSurface: 'ready' | 'missing';
+      browserHostSearch: 'ready' | 'missing';
+    };
+    nativeSurfaceEndpoint: 'present' | 'missing';
+    endpointKeys: string[];
+    errorHash?: string;
+  };
+  rightPaneBridge: {
+    available: boolean;
+    state?: string;
+    hostFrameCount: number;
+    nativeSurfaceCount: number;
+    sessionRefCount: number;
+    liveSurfaceRefCount: number;
+    frameStreamRefCount: number;
+    rendererHashes: string[];
+    diagnosticHealthCapability?: string;
+    diagnosticLiveSurfaceTransport?: string;
+    writerDiagnosticStatus?: string;
+  };
+  nativeAttach: {
+    status: 'attached' | 'missing' | 'blocked';
+    liveSurfaceTransport?: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+  };
 };
 
 type DogfoodFixtureEvent = {
@@ -84,6 +132,7 @@ type BrowserPaneDogfoodManifest = {
       networkLogRef?: string;
     };
   };
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence;
   liveAcceptance: BrowserPaneLiveAcceptance;
   blockedReason?: string;
   scenarios: {
@@ -149,6 +198,7 @@ type BrowserPaneRealExternalDogfoodManifest = {
     rawDomCaptured: false;
   };
   browserHostSession?: BrowserPaneDogfoodManifest['browserHostSession'];
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence;
   liveAcceptance: BrowserPaneLiveAcceptance;
   interactionCoverage: {
     openUrl: boolean;
@@ -195,6 +245,57 @@ type BrowserPaneRealExternalDogfoodManifest = {
   forbiddenFallbacks: BrowserPaneDogfoodManifest['forbiddenFallbacks'];
   verificationCommand: string;
 };
+
+test('Browser pane dogfood blocked manifests include typed native attach preflight evidence', () => {
+  const nativeAttachPreflight = buildDogfoodNativeAttachPreflightEvidence({
+    writerHealth: {
+      ok: true,
+      service: 'sciforge-workspace-writer',
+      capabilities: ['workspace-files', 'browser-host-session', 'browser-host-search'],
+      endpoints: {
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+        browserHostSearch: '/api/sciforge/browser-host/search',
+      },
+    },
+    rightPane: {
+      state: 'blocked',
+      hostFrameCount: 0,
+      nativeSurfaceCount: 0,
+      sessionRefs: [],
+      liveSurfaceRefs: [],
+      frameStreamRefs: [],
+      renderers: [],
+      diagnostics: {
+        healthCapability: 'browser-host-session',
+        liveSurfaceTransport: 'missing-native-attach',
+        writerDiagnosticStatus: 'ready',
+      },
+    },
+  });
+
+  const manifest = buildBlockedDogfoodManifest(
+    'dogfood-preflight-test',
+    'http://sciforge-browser-dogfood.test:1111',
+    'Browser pane dogfood did not expose native-embedded BrowserHostSession evidence.',
+    { iframe: 0, proxy: 0, systemPopup: 0, httpFrameLiveView: 0 },
+    nativeAttachPreflight,
+  );
+
+  assert.equal(nativeAttachPreflight.status, 'blocked');
+  assert.equal(nativeAttachPreflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.equal(nativeAttachPreflight.writerHealth.capabilities.nativeSurface, 'missing');
+  assert.deepEqual(nativeAttachPreflight.writerHealth.capabilitySummary, [
+    'browser-host-native-surface:missing',
+    'browser-host-search:ready',
+    'browser-host-session:ready',
+  ]);
+  assert.equal(nativeAttachPreflight.rightPaneBridge.available, false);
+  assert.equal(nativeAttachPreflight.nativeAttach.status, 'missing');
+  assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+  assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+  assertBrowserPaneDogfoodManifest(manifest);
+  assert.doesNotMatch(JSON.stringify(manifest), /https?:\/\/|<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+});
 
 test('SciForge Browser pane dogfood covers search, result click, scroll, and form input through BrowserHostSession', { timeout: 180_000 }, async () => {
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
@@ -261,9 +362,29 @@ test('SciForge Browser pane dogfood covers search, result click, scroll, and for
     await ensureBrowserPane(page);
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, `${fixtureOrigin}/search`);
+    const nativeAttachPreflight = await collectDogfoodNativeAttachPreflightEvidence({ page, writerUrl });
+    if (nativeAttachPreflight.status === 'blocked') {
+      const manifest = buildBlockedDogfoodManifest(
+        runId,
+        fixtureOrigin,
+        'missing-native-attach/preflight',
+        await fallbackCounts(page),
+        nativeAttachPreflight,
+      );
+      assertBrowserPaneDogfoodManifest(manifest);
+      await mkdir(artifactDir, { recursive: true });
+      await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
     const hostFrame = await waitForHostFrame(surface, /^http:\/\/sciforge-browser-dogfood\.test:\d+\/search/);
     if (!hostFrame) {
-      const manifest = buildBlockedDogfoodManifest(runId, fixtureOrigin, 'Browser pane dogfood did not expose native-embedded BrowserHostSession evidence.', await fallbackCounts(page));
+      const manifest = buildBlockedDogfoodManifest(
+        runId,
+        fixtureOrigin,
+        'Browser pane dogfood did not expose native-embedded BrowserHostSession evidence.',
+        await fallbackCounts(page),
+        nativeAttachPreflight,
+      );
       assertBrowserPaneDogfoodManifest(manifest);
       await mkdir(artifactDir, { recursive: true });
       await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -301,6 +422,7 @@ test('SciForge Browser pane dogfood covers search, result click, scroll, and for
       session,
       events,
       fallbackCounts: await fallbackCounts(page),
+      nativeAttachPreflight,
     });
     assertBrowserPaneDogfoodManifest(manifest);
     await mkdir(artifactDir, { recursive: true });
@@ -386,9 +508,27 @@ test('SciForge Browser pane real external dogfood records configurable refs-firs
     await ensureBrowserPane(page);
     const surface = page.locator('.right-pane-browser-surface');
     await openBrowserPaneUrl(surface, target.value.url);
+    const nativeAttachPreflight = await collectDogfoodNativeAttachPreflightEvidence({ page, writerUrl });
+    if (nativeAttachPreflight.status === 'blocked') {
+      const manifest = buildBlockedRealExternalDogfoodManifest(
+        runId,
+        'missing-native-attach/preflight',
+        target.value,
+        nativeAttachPreflight,
+      );
+      assertBrowserPaneRealExternalDogfoodManifest(manifest);
+      await mkdir(realExternalArtifactDir, { recursive: true });
+      await writeFile(realExternalManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+      return;
+    }
     const hostFrame = await waitForReadyHostFrame(surface);
     if (!hostFrame) {
-      const manifest = buildBlockedRealExternalDogfoodManifest(runId, 'Browser pane real external dogfood did not expose native-embedded BrowserHostSession evidence.', target.value);
+      const manifest = buildBlockedRealExternalDogfoodManifest(
+        runId,
+        'Browser pane real external dogfood did not expose native-embedded BrowserHostSession evidence.',
+        target.value,
+        nativeAttachPreflight,
+      );
       assertBrowserPaneRealExternalDogfoodManifest(manifest);
       await mkdir(realExternalArtifactDir, { recursive: true });
       await writeFile(realExternalManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -466,7 +606,12 @@ test('SciForge Browser pane real external dogfood records configurable refs-firs
 
     await clickBrowserCommand(surface, 'Reload');
     if (!await waitForReadyHostFrame(surface)) {
-      const manifest = buildBlockedRealExternalDogfoodManifest(runId, 'Browser pane real external dogfood lost native-embedded BrowserHostSession evidence after reload.', target.value);
+      const manifest = buildBlockedRealExternalDogfoodManifest(
+        runId,
+        'Browser pane real external dogfood lost native-embedded BrowserHostSession evidence after reload.',
+        target.value,
+        await collectDogfoodNativeAttachPreflightEvidence({ page, writerUrl }),
+      );
       assertBrowserPaneRealExternalDogfoodManifest(manifest);
       await mkdir(realExternalArtifactDir, { recursive: true });
       await writeFile(realExternalManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -482,6 +627,7 @@ test('SciForge Browser pane real external dogfood records configurable refs-firs
       textInputAttempted,
       liveSurfaceBeforeReload,
       publicSearchBoxEvidence,
+      nativeAttachPreflight,
     });
     assertBrowserPaneRealExternalDogfoodManifest(manifest);
     await mkdir(realExternalArtifactDir, { recursive: true });
@@ -631,12 +777,183 @@ async function assertNoLegacyBrowserLiveFallback(surface: Locator) {
   assert.equal(await surface.locator('img[src*="/api/sciforge/browser-host/sessions/"][data-browser-host-surface="browser-host-session"]').count(), 0);
 }
 
+async function collectDogfoodNativeAttachPreflightEvidence(input: {
+  page: Page;
+  writerUrl: string;
+}): Promise<DogfoodNativeAttachPreflightEvidence> {
+  const [writerHealthResult, rightPane] = await Promise.all([
+    fetchWorkspaceWriterHealth(input.writerUrl),
+    collectDogfoodRightPanePreflightEvidence(input.page).catch(() => undefined),
+  ]);
+  return buildDogfoodNativeAttachPreflightEvidence({
+    writerHealth: writerHealthResult.health,
+    writerHealthError: writerHealthResult.error,
+    rightPane,
+  });
+}
+
+async function fetchWorkspaceWriterHealth(writerUrl: string): Promise<{ health?: JsonRecord; error?: unknown }> {
+  try {
+    const response = await fetch(`${writerUrl}/health`, { signal: AbortSignal.timeout(3_000) });
+    const text = await response.text();
+    const health = text ? parseJsonRecord(text) : {};
+    if (!response.ok || health.ok === false) return { error: new Error(`workspace-writer-health:${response.status}`) };
+    return { health };
+  } catch (error) {
+    return { error };
+  }
+}
+
+async function collectDogfoodRightPanePreflightEvidence(page: Page): Promise<{
+  state: string;
+  hostFrameCount: number;
+  nativeSurfaceCount: number;
+  sessionRefs: string[];
+  liveSurfaceRefs: string[];
+  frameStreamRefs: string[];
+  renderers: string[];
+  diagnostics?: {
+    healthCapability?: string;
+    liveSurfaceTransport?: string;
+    writerDiagnosticStatus?: string;
+  };
+}> {
+  const snapshot = await page.evaluate(() => {
+    const root = document.querySelector('.right-pane-browser-surface');
+    const attrValues = (name: string) => Array.from(new Set(Array.from(root?.querySelectorAll('*') ?? [])
+      .map((node) => node.getAttribute(name) ?? '')
+      .filter(Boolean))).sort();
+    const liveSurfaceRefs = attrValues('data-browser-live-surface-ref');
+    const diagnostics = root?.querySelector<HTMLElement>('.browser-workbench-viewer-diagnostics');
+    return {
+      state: root?.querySelector('.browser-workbench-viewer')?.getAttribute('data-browser-state') ?? '',
+      hostFrameCount: root?.querySelectorAll('.browser-workbench-host-frame[data-browser-host-surface="browser-host-session"]').length ?? 0,
+      nativeSurfaceCount: root?.querySelectorAll('[data-browser-native-surface="true"]').length ?? 0,
+      liveSurfaceRefs,
+      frameStreamRefs: attrValues('data-browser-frame-stream-ref'),
+      renderers: attrValues('data-browser-frame-renderer'),
+      diagnostics: {
+        healthCapability: diagnostics?.getAttribute('data-browser-health-capability') ?? '',
+        liveSurfaceTransport: diagnostics?.getAttribute('data-browser-diagnostic-live-surface-transport') ?? '',
+        writerDiagnosticStatus: diagnostics?.getAttribute('data-browser-writer-diagnostic') ?? '',
+      },
+    };
+  });
+  const liveSurfaceRefs = boundedUnique(snapshot.liveSurfaceRefs, 24);
+  return {
+    state: boundedDiagnosticString(snapshot.state) ?? '',
+    hostFrameCount: snapshot.hostFrameCount,
+    nativeSurfaceCount: snapshot.nativeSurfaceCount,
+    sessionRefs: boundedUnique(liveSurfaceRefs.flatMap((ref) => {
+      const match = /^browser-host-session:([^/]+)/.exec(ref);
+      return match ? [`browser-host-session:${match[1]}`] : [];
+    }), 24),
+    liveSurfaceRefs,
+    frameStreamRefs: boundedUnique(snapshot.frameStreamRefs, 24),
+    renderers: boundedUnique(snapshot.renderers, 8),
+    diagnostics: {
+      healthCapability: boundedDiagnosticString(snapshot.diagnostics.healthCapability) ?? '',
+      liveSurfaceTransport: boundedDiagnosticString(snapshot.diagnostics.liveSurfaceTransport) ?? '',
+      writerDiagnosticStatus: boundedDiagnosticString(snapshot.diagnostics.writerDiagnosticStatus) ?? '',
+    },
+  };
+}
+
+function buildDogfoodNativeAttachPreflightEvidence(input: {
+  writerHealth?: JsonRecord;
+  writerHealthError?: unknown;
+  rightPane?: {
+    state: string;
+    hostFrameCount: number;
+    nativeSurfaceCount: number;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+    frameStreamRefs: string[];
+    renderers: string[];
+    diagnostics?: {
+      healthCapability?: string;
+      liveSurfaceTransport?: string;
+      writerDiagnosticStatus?: string;
+    };
+  };
+}): DogfoodNativeAttachPreflightEvidence {
+  const capabilities = Array.isArray(input.writerHealth?.capabilities)
+    ? input.writerHealth.capabilities.filter((capability): capability is string => typeof capability === 'string')
+    : [];
+  const capabilitySet = new Set(capabilities);
+  const endpoints = recordField(input.writerHealth?.endpoints);
+  const endpointKeys = endpoints ? boundedUnique(Object.keys(endpoints).sort(), 16) : [];
+  const capabilityState = (capability: string): 'ready' | 'missing' => capabilitySet.has(capability) ? 'ready' : 'missing';
+  const nativeSurfaceEndpoint = typeof endpoints?.browserHostNativeSurface === 'string' ? 'present' : 'missing';
+  const liveSurfaceRefs = boundedUnique(input.rightPane?.liveSurfaceRefs ?? [], 24);
+  const sessionRefs = boundedUnique(input.rightPane?.sessionRefs ?? [], 24);
+  const attached = input.rightPane?.hostFrameCount === 1
+    && input.rightPane.nativeSurfaceCount === 1
+    && liveSurfaceRefs.some((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref))
+    && input.rightPane.renderers.includes('native-embedded');
+  const missingWriterNativeSurface = capabilityState('browser-host-native-surface') === 'missing'
+    || nativeSurfaceEndpoint === 'missing';
+  const blocked = missingWriterNativeSurface || !attached;
+  const nativeAttachStatus: DogfoodNativeAttachPreflightEvidence['nativeAttach']['status'] = attached
+    ? 'attached'
+    : (input.rightPane?.hostFrameCount ?? 0) > 0 || (input.rightPane?.nativeSurfaceCount ?? 0) > 0
+      ? 'blocked'
+      : 'missing';
+  return {
+    bounded: true,
+    status: blocked ? 'blocked' : 'ready',
+    blockedReasonCode: blocked ? 'missing-native-attach/preflight' : undefined,
+    writerHealth: {
+      available: Boolean(input.writerHealth),
+      ok: typeof input.writerHealth?.ok === 'boolean' ? input.writerHealth.ok : undefined,
+      service: boundedDiagnosticString(stringField(input.writerHealth?.service)),
+      status: boundedDiagnosticString(stringField(input.writerHealth?.status)),
+      capabilitySummary: DOGFOOD_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES
+        .map((capability) => `${capability}:${capabilityState(capability)}`),
+      capabilities: {
+        browserHostSession: capabilityState('browser-host-session'),
+        nativeSurface: capabilityState('browser-host-native-surface'),
+        browserHostSearch: capabilityState('browser-host-search'),
+      },
+      nativeSurfaceEndpoint,
+      endpointKeys,
+      errorHash: input.writerHealthError
+        ? hashText(input.writerHealthError instanceof Error ? input.writerHealthError.message : String(input.writerHealthError))
+        : undefined,
+    },
+    rightPaneBridge: {
+      available: (input.rightPane?.hostFrameCount ?? 0) > 0,
+      state: boundedDiagnosticString(input.rightPane?.state ?? ''),
+      hostFrameCount: input.rightPane?.hostFrameCount ?? 0,
+      nativeSurfaceCount: input.rightPane?.nativeSurfaceCount ?? 0,
+      sessionRefCount: sessionRefs.length,
+      liveSurfaceRefCount: liveSurfaceRefs.length,
+      frameStreamRefCount: input.rightPane?.frameStreamRefs.length ?? 0,
+      rendererHashes: boundedUnique((input.rightPane?.renderers ?? []).filter(Boolean).map(hashText), 8),
+      diagnosticHealthCapability: boundedDiagnosticString(input.rightPane?.diagnostics?.healthCapability ?? ''),
+      diagnosticLiveSurfaceTransport: boundedDiagnosticString(input.rightPane?.diagnostics?.liveSurfaceTransport ?? ''),
+      writerDiagnosticStatus: boundedDiagnosticString(input.rightPane?.diagnostics?.writerDiagnosticStatus ?? ''),
+    },
+    nativeAttach: {
+      status: nativeAttachStatus,
+      liveSurfaceTransport: attached
+        ? 'native-embedded'
+        : boundedDiagnosticString(input.rightPane?.diagnostics?.liveSurfaceTransport ?? ''),
+      singleInteractiveTruth: attached,
+      secondTruthSource: false,
+      sessionRefs,
+      liveSurfaceRefs: boundedUnique(liveSurfaceRefs.filter((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref)), 24),
+    },
+  };
+}
+
 function buildManifest(input: {
   runId: string;
   fixtureOrigin: string;
   session: JsonRecord;
   events: DogfoodFixtureEvent[];
   fallbackCounts: { iframe: number; proxy: number; systemPopup: number; httpFrameLiveView: number };
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence;
 }): BrowserPaneDogfoodManifest {
   const eventTypes = (path: string) => input.events.filter((event) => event.path === path).map((event) => event.type);
   const formEvents = input.events.filter((event) => event.path === '/form');
@@ -677,6 +994,7 @@ function buildManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    nativeAttachPreflight: input.nativeAttachPreflight,
     liveAcceptance,
     blockedReason: liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined,
     scenarios: {
@@ -721,12 +1039,13 @@ function buildBlockedDogfoodManifest(
   fixtureOrigin: string,
   reason: string,
   fallbackCounts: { iframe: number; proxy: number; systemPopup: number; httpFrameLiveView: number },
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence,
 ): BrowserPaneDogfoodManifest {
   assert.equal(fallbackCounts.iframe, 0);
   assert.equal(fallbackCounts.proxy, 0);
   assert.equal(fallbackCounts.systemPopup, 0);
   assert.equal(fallbackCounts.httpFrameLiveView, 0);
-  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason);
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason, nativeAttachPreflight);
   return {
     schemaVersion: DOGFOOD_SCHEMA,
     status: 'blocked',
@@ -744,6 +1063,7 @@ function buildBlockedDogfoodManifest(
       rawUrlCaptured: false,
       allowedUse: 'right-pane-product-path-contract-not-external-web-pass',
     },
+    nativeAttachPreflight,
     liveAcceptance,
     blockedReason: liveAcceptance.blockedReason,
     scenarios: {
@@ -795,6 +1115,10 @@ function assertBrowserPaneDogfoodManifest(manifest: BrowserPaneDogfoodManifest) 
     assert.equal(manifest.scenarios.search.status, 'blocked');
     assert.equal(manifest.scenarios.documentScroll.status, 'blocked');
     assert.equal(manifest.scenarios.formInput.status, 'blocked');
+    if (manifest.nativeAttachPreflight) {
+      assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+      assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+    }
   }
   assert.deepEqual(Object.values(manifest.forbiddenFallbacks), [false, false, false, false, false, false]);
   const serialized = JSON.stringify(manifest);
@@ -913,8 +1237,9 @@ function buildBlockedRealExternalDogfoodManifest(
   runId: string,
   reason: string,
   target?: RealExternalDogfoodTarget,
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence,
 ): BrowserPaneRealExternalDogfoodManifest {
-  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason);
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(reason, nativeAttachPreflight);
   return {
     schemaVersion: REAL_EXTERNAL_DOGFOOD_SCHEMA,
     status: 'blocked',
@@ -931,6 +1256,7 @@ function buildBlockedRealExternalDogfoodManifest(
       rawUrlCaptured: false,
       rawDomCaptured: false,
     },
+    nativeAttachPreflight,
     liveAcceptance,
     interactionCoverage: {
       openUrl: false,
@@ -961,6 +1287,7 @@ function buildPassedRealExternalDogfoodManifest(input: {
   textInputAttempted: boolean;
   liveSurfaceBeforeReload: string;
   publicSearchBoxEvidence?: BrowserPaneRealExternalDogfoodManifest['publicSearchBoxEvidence'];
+  nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence;
 }): BrowserPaneRealExternalDogfoodManifest {
   const frameTransport = stringField(input.session.liveSurfaceTransport) === 'native-embedded' ? 'native-embedded' : undefined;
   const liveAcceptance = browserPaneLiveAcceptance(input.session, frameTransport);
@@ -1000,6 +1327,7 @@ function buildPassedRealExternalDogfoodManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
+    nativeAttachPreflight: input.nativeAttachPreflight,
     liveAcceptance,
     interactionCoverage: {
       openUrl: true,
@@ -1067,6 +1395,10 @@ function assertBrowserPaneRealExternalDogfoodManifest(manifest: BrowserPaneRealE
     assert.equal(manifest.targetEvidence.realExternalSiteClaim, false);
     assert.ok(manifest.blockedReason);
     assert.equal(manifest.liveAcceptance.passClaim, false);
+    if (manifest.nativeAttachPreflight) {
+      assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+      assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+    }
   }
   assert.equal(manifest.fallbackCounts.iframe, 0);
   assert.equal(manifest.fallbackCounts.proxy, 0);
@@ -1105,7 +1437,7 @@ function browserPaneLiveAcceptance(session: JsonRecord, frameTransport?: string)
   };
 }
 
-function blockedBrowserPaneLiveAcceptance(reason: string): BrowserPaneLiveAcceptance {
+function blockedBrowserPaneLiveAcceptance(reason: string, nativeAttachPreflight?: DogfoodNativeAttachPreflightEvidence): BrowserPaneLiveAcceptance {
   return {
     status: 'blocked',
     claimScope: 'diagnostic-only',
@@ -1122,6 +1454,11 @@ function blockedBrowserPaneLiveAcceptance(reason: string): BrowserPaneLiveAccept
       secondTruthSource: false,
     },
     blockedReason: sanitizeExternalBlockedReason(reason),
+    blockedReasonCode: nativeAttachPreflight?.status === 'blocked'
+      ? 'missing-native-attach/preflight'
+      : reason === 'missing-native-attach/preflight'
+        ? 'missing-native-attach/preflight'
+        : undefined,
   };
 }
 
@@ -1141,7 +1478,41 @@ function assertBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptan
     assert.equal(liveAcceptance.claimScope, 'diagnostic-only');
     assert.equal(liveAcceptance.passClaim, false);
     assert.ok(liveAcceptance.blockedReason);
+    if (liveAcceptance.blockedReasonCode) {
+      assert.ok(['missing-native-attach/preflight', 'missing-native-attach'].includes(liveAcceptance.blockedReasonCode));
+    }
   }
+}
+
+function assertNativeAttachPreflightEvidence(preflight: DogfoodNativeAttachPreflightEvidence | undefined): asserts preflight is DogfoodNativeAttachPreflightEvidence {
+  assert.ok(preflight, 'native attach preflight evidence is required for native attach blocked dogfood manifests');
+  assert.equal(preflight.bounded, true);
+  assert.ok(['ready', 'blocked'].includes(preflight.status));
+  if (preflight.status === 'blocked') assert.equal(preflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.equal(typeof preflight.writerHealth.available, 'boolean');
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
+  assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
+  assert.ok(preflight.writerHealth.capabilitySummary.length <= DOGFOOD_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
+  assert.ok(preflight.writerHealth.endpointKeys.length <= 16);
+  assert.equal(typeof preflight.rightPaneBridge.available, 'boolean');
+  assert.ok(preflight.rightPaneBridge.hostFrameCount >= 0);
+  assert.ok(preflight.rightPaneBridge.nativeSurfaceCount >= 0);
+  assert.ok(preflight.rightPaneBridge.sessionRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.liveSurfaceRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.frameStreamRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.rendererHashes.length <= 8);
+  for (const hash of preflight.rightPaneBridge.rendererHashes) assert.match(hash, /^[a-f0-9]{16}$/);
+  assert.ok(['attached', 'missing', 'blocked'].includes(preflight.nativeAttach.status));
+  assert.equal(typeof preflight.nativeAttach.singleInteractiveTruth, 'boolean');
+  assert.equal(typeof preflight.nativeAttach.secondTruthSource, 'boolean');
+  assert.ok(preflight.nativeAttach.sessionRefs.length <= 24);
+  assert.ok(preflight.nativeAttach.liveSurfaceRefs.length <= 24);
+  for (const ref of preflight.nativeAttach.sessionRefs) assert.match(ref, /^browser-host-session:[^/]+$/);
+  for (const ref of preflight.nativeAttach.liveSurfaceRefs) assert.match(ref, /^browser-host-session:[^/]+\/live-surface$/);
+  const serialized = JSON.stringify(preflight);
+  assert.doesNotMatch(serialized, /https?:\/\/|<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
 }
 
 function assertPublicSearchBoxEvidence(evidence: BrowserPaneRealExternalDogfoodManifest['publicSearchBoxEvidence']) {
@@ -1471,6 +1842,18 @@ function recordField(value: unknown): JsonRecord | undefined {
 
 function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function boundedUnique(values: string[], limit: number): string[] {
+  return Array.from(new Set(values.filter(Boolean))).slice(0, limit);
+}
+
+function boundedDiagnosticString(value: string): string | undefined {
+  const normalized = value
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => `url:${hashText(url)}`)
+    .replace(/<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/gi, 'redacted')
+    .slice(0, 160);
+  return normalized || undefined;
 }
 
 function hashText(value: string) {

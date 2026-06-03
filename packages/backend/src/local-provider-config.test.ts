@@ -6,10 +6,13 @@ import test from 'node:test';
 
 import {
   agentServerEnvFromLocalSettings,
+  computerUseWorkspaceEnvFromLocalSettings,
   LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS,
   localProviderSettings,
   providerEnvFromLocalSettings,
   readLocalProviderSettings,
+  runtimeCodexEnvFromLocalSettings,
+  virtualAppScreenEnvFromLocalSettings,
 } from './local-provider-config';
 
 test('local provider settings preserve dev launcher precedence across root llm textLLM and proxy config', () => {
@@ -125,6 +128,91 @@ test('agent server env uses the same shared local provider settings', () => {
   assert.equal(env.AGENT_SERVER_MODEL, 'text-model');
   assert.equal(env.AGENT_SERVER_MODEL_NAME, 'text-model');
   assert.equal(env.AGENT_SERVER_ADAPTER_LLM_MODEL, 'text-model');
+});
+
+test('local provider settings expose only safe VirtualAppScreen native driver env', () => {
+  const settings = localProviderSettings({
+    computerUse: {
+      virtualAppScreen: {
+        env: {
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: true,
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON: {
+            kind: 'vscode-editor',
+            bundleId: 'com.microsoft.VSCode',
+          },
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON: [
+            'run',
+            'virtual-app-screen-macos-pid-scoped-ax-hook',
+            '--silent',
+          ],
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS: 45000,
+          SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS: true,
+          SCIFORGE_RUNTIME_API_KEY: 'must-not-leak',
+          EMPTY_VALUE: '',
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(virtualAppScreenEnvFromLocalSettings(settings), {
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: '1',
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON: JSON.stringify({
+      kind: 'vscode-editor',
+      bundleId: 'com.microsoft.VSCode',
+    }),
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON: JSON.stringify([
+      'run',
+      'virtual-app-screen-macos-pid-scoped-ax-hook',
+      '--silent',
+    ]),
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_TIMEOUT_MS: '45000',
+  });
+});
+
+test('local provider settings support root VirtualAppScreen env aliases without merging them into provider env', () => {
+  const settings = localProviderSettings({
+    apiKey: 'root-key',
+    virtualAppScreen: {
+      env: {
+        SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'word',
+        SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_WINDOW_TITLE_PATTERN: '.*',
+      },
+    },
+  });
+
+  assert.deepEqual(virtualAppScreenEnvFromLocalSettings(settings), {
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'word',
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_WINDOW_TITLE_PATTERN: '.*',
+  });
+  assert.deepEqual(providerEnvFromLocalSettings(settings), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+  });
+});
+
+test('runtime codex env keeps VirtualAppScreen native driver env out of the app-server boundary', () => {
+  const settings = localProviderSettings({
+    apiKey: 'root-key',
+    modelName: 'root-model',
+    computerUse: {
+      virtualAppScreen: {
+        env: {
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: true,
+          SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'vscode-editor',
+        },
+      },
+    },
+  });
+
+  assert.deepEqual(runtimeCodexEnvFromLocalSettings(settings), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_RUNTIME_MODEL: 'root-model',
+  });
+  assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_RUNTIME_MODEL: 'root-model',
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: '1',
+    SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'vscode-editor',
+  });
 });
 
 test('local provider api key candidate paths include textLLM env and runtimeCodexProxy', () => {

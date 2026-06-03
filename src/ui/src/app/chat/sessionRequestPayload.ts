@@ -42,6 +42,7 @@ const REQUEST_PAYLOAD_INLINE_DATA_LIMIT = 3_000;
 export function requestPayloadForTurn(session: SciForgeSession, userMessage: SciForgeMessage, references: SciForgeReference[]) {
   const hasExplicitReferences = references.length > 0;
   const selectedRefSet = selectedReferenceScope(references);
+  const selectedMessageRefSet = selectedMessageReferenceScope(references);
   const priorMessages = session.messages.filter((message) => message.id !== userMessage.id);
   const hasRealPriorMessages = priorMessages.some((message) => !isSeedDemoOrFixtureMessage(message));
   const hasPriorWork = hasRealPriorMessages
@@ -49,7 +50,7 @@ export function requestPayloadForTurn(session: SciForgeSession, userMessage: Sci
     || session.artifacts.length > 0
     || session.executionUnits.length > 0;
   if (hasPriorWork || hasExplicitReferences) {
-    const messages = compactMessagesForRequestPayload(session.messages, userMessage.id, selectedRefSet);
+    const messages = compactMessagesForRequestPayload(session.messages, userMessage.id, selectedRefSet, selectedMessageRefSet);
     const projectionContexts = projectionContinuationContexts(session, references);
     const selectedRunIds = new Set([
       ...selectedRunIdsFromReferences(references),
@@ -79,6 +80,20 @@ function selectedReferenceScope(references: SciForgeReference[]) {
   return new Set(references.flatMap(selectedReferenceAliases).filter(Boolean));
 }
 
+function selectedMessageReferenceScope(references: SciForgeReference[]) {
+  return new Set(references.flatMap((reference) => {
+    const refs = selectedReferenceAliases(reference);
+    if (reference.kind === 'message') return refs.flatMap(messageRefAliasesForSelectedReference);
+    return refs.filter((ref) => ref.startsWith('message:'));
+  }).filter(Boolean));
+}
+
+function messageRefAliasesForSelectedReference(ref: string) {
+  if (ref.startsWith('message:')) return [ref, ref.slice('message:'.length)];
+  if (ref.startsWith('artifact:') || ref.startsWith('run:')) return [];
+  return [ref, `message:${ref}`];
+}
+
 function selectedReferenceAliases(reference: SciForgeReference): string[] {
   const payload = isRecord(reference.payload) ? reference.payload : {};
   const currentReference = isRecord(payload.currentReference) ? payload.currentReference : isRecord(payload.objectReference) ? payload.objectReference : {};
@@ -99,8 +114,10 @@ function selectedReferenceAliases(reference: SciForgeReference): string[] {
     stringField(provenance.dataRef),
   ];
   if (reference.sourceId) aliases.push(`artifact:${reference.sourceId}`);
+  if (reference.kind === 'message' && reference.sourceId) aliases.push(`message:${reference.sourceId}`);
   const currentId = stringField(currentReference.id);
   if (currentId) aliases.push(`artifact:${currentId}`);
+  if (reference.kind === 'message' && currentId) aliases.push(`message:${currentId}`);
   return Array.from(new Set(aliases.filter((value): value is string => Boolean(value && value.trim()))));
 }
 
@@ -215,7 +232,12 @@ function runsForRequestPayload(
   return scoped.slice(-REQUEST_PAYLOAD_RUN_LIMIT);
 }
 
-function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMessageId: string, selectedRefs = new Set<string>()) {
+function compactMessagesForRequestPayload(
+  messages: SciForgeMessage[],
+  currentMessageId: string,
+  selectedRefs = new Set<string>(),
+  selectedMessageRefs = new Set<string>(),
+) {
   const currentMessage = messages.find((message) => message.id === currentMessageId);
   const continuityMessageIds = sameChatContinuityMessageIds(messages, currentMessageId, currentMessage?.content);
   return messages
@@ -224,13 +246,14 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
     .slice(-REQUEST_PAYLOAD_MESSAGE_LIMIT)
     .map((message) => {
       const isCurrentMessage = message.id === currentMessageId;
+      const isSelectedMessage = selectedMessageRefs.size > 0 && messageOwnRefs(message).some((ref) => selectedMessageRefs.has(ref));
       const continuityContent = !isCurrentMessage && continuityMessageIds.has(message.id)
         ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
         : undefined;
       return {
         id: message.id,
         role: message.role,
-        content: isCurrentMessage
+        content: isCurrentMessage || isSelectedMessage
           ? clipText(message.content, REQUEST_PAYLOAD_MESSAGE_TEXT_LIMIT)
           : omittedTextDigestLabel('previous-message', message.content),
         confidence: message.confidence,
@@ -248,7 +271,8 @@ function compactMessagesForRequestPayload(messages: SciForgeMessage[], currentMe
         goalSnapshot: compactGoalSnapshotForRequestPayload(message.goalSnapshot, isCurrentMessage),
         acceptance: compactAcceptanceForRequestPayload(message.acceptance),
         guidanceQueue: compactGuidanceQueueForRequestPayload(message.guidanceQueue),
-        contentDigest: isCurrentMessage ? undefined : digestTextField(message.content),
+        contentDigest: isCurrentMessage || isSelectedMessage ? undefined : digestTextField(message.content),
+        selectedReferenceContent: isSelectedMessage || undefined,
         continuityContent,
       };
     });
@@ -413,6 +437,10 @@ function messageRefs(message: SciForgeMessage) {
     ...(message.objectReferences ?? []).flatMap(objectReferenceAliases),
     ...(message.acceptance?.objectReferences ?? []).flatMap(objectReferenceAliases),
   ]);
+}
+
+function messageOwnRefs(message: SciForgeMessage) {
+  return uniqueStringRefs([message.id, `message:${message.id}`]);
 }
 
 function runRefs(run: SciForgeRun) {

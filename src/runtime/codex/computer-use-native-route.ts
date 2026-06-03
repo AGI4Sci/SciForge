@@ -27,7 +27,7 @@ export function isComputerUseNativeRouteCommand(commandText: string): boolean {
 export function computerUseNativeRouteCommandText(commandText: string): string | undefined {
   const text = commandText.trimStart();
   if (!/^\/(?:computer-use|computer\s+use)\b/i.test(text)) return undefined;
-  return text.trim();
+  return text.split(/\r?\n\s*\r?\n/, 1)[0]?.trim();
 }
 
 export function createComputerUseNativeRouteStream(input: ComputerUseNativeRouteInput): CodexAppServerTurnStream | undefined {

@@ -76,6 +76,7 @@ function nativeHostSession(overrides: Record<string, unknown> = {}) {
     liveSurfaceTransport: 'native-embedded',
     nativeAdapterUrl: 'http://127.0.0.1:61234',
     singleInteractiveTruth: true,
+    secondTruthSource: false,
     screenshotRef: 'browser-host-session:native-session-1/screenshot.png',
     domSnapshotRef: 'browser-host-session:native-session-1/dom.html',
     axSnapshotRef: 'browser-host-session:native-session-1/ax.json',
@@ -250,8 +251,28 @@ test('browser-workbench renders native embedded BrowserHostSession mount without
   assert.match(html, /data-browser-native-surface="true"/);
   assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-single-interactive-truth="true"/);
+  assert.match(html, /data-browser-second-truth-source="false"/);
   assert.match(html, /browser-host-session:native-session-1\/live-surface/);
   assert.doesNotMatch(html, /<img|<iframe|<canvas|<webview|data-browser-frame-stream-ref=/);
+});
+
+test('browser-workbench rejects native embedded sessions without explicit no-second-truth proof', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        frameTransport: 'native-embedded',
+        hostSession: nativeHostSession({ secondTruthSource: undefined }),
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.doesNotMatch(html, /data-browser-native-surface="true"/);
+  assert.doesNotMatch(html, /browser-workbench-host-frame-native/);
+  assertNoProductFallbackSurface(html);
 });
 
 test('browser-workbench keeps native surface stable across loading refs diagnostics and topbar state changes', () => {
@@ -370,6 +391,73 @@ test('browser-workbench renders missing native attach as typed blocked handoff r
   assertNoProductFallbackSurface(html);
 });
 
+test('browser-workbench renders reachable native-surface route with unavailable right-pane bridge as bounded handoff diagnostics', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native-route',
+        hostSession: nativeHostSession({
+          id: 'native-route-session-1',
+          url: 'https://external.example/native-route',
+          requestedUrl: 'https://external.example/native-route',
+          liveSurfaceRef: undefined,
+          nativeSurfaceBridge: {
+            routeStatus: 'reachable',
+            capability: 'missing',
+            rightPaneBridge: false,
+            status: 'native-bridge-unavailable',
+            healthPath: '/api/sciforge/browser-host/native-surface/health',
+            statePath: '/api/sciforge/browser-host/native-surface/state',
+            attachPath: '/api/sciforge/browser-host/native-surface/attach',
+          },
+        }),
+        writerDiagnostic: {
+          status: 'missing-browser-host-capability',
+          effectiveDisplayUrl: 'http://127.0.0.1:6173',
+          health: {
+            ok: true,
+            service: 'sciforge-workspace-writer',
+            capabilities: ['workspace-files', 'browser-host-session'],
+          },
+        },
+        state: {
+          status: 'blocked',
+          url: 'https://external.example/native-route',
+          hostSurface: 'browser-host-session',
+          canRenderFrame: false,
+          reason: 'Native surface route is reachable, but the right pane native bridge is unavailable.',
+          ref: 'browser:host-surface/right-pane/native-bridge-unavailable',
+          loadingProgress: {
+            state: 'handoff',
+            reason: 'native-bridge-unavailable',
+            source: 'native-surface-route',
+            status: 'blocked',
+            canRetry: true,
+            blocked: true,
+            requiresHandoff: true,
+          },
+        },
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-object-type="browser-state"/);
+  assert.match(html, /data-browser-loading-progress-state="handoff"/);
+  assert.match(html, /data-browser-loading-progress-reason="native-bridge-unavailable"/);
+  assert.match(html, /data-browser-loading-progress-source="native-surface-route"/);
+  assert.match(html, /data-browser-native-surface-route-status="reachable"/);
+  assert.match(html, /data-browser-native-surface-capability="missing"/);
+  assert.match(html, /data-browser-right-pane-bridge="false"/);
+  assert.match(html, /data-browser-native-surface-bridge-status="native-bridge-unavailable"/);
+  assert.match(html, /nativeSurfaceBridge<\/dt><dd>native-bridge-unavailable:route=reachable,capability=missing,rightPaneBridge=false/);
+  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
+  assert.match(html, /data-browser-state-action="handoff"/);
+  assert.doesNotMatch(html, /data-browser-native-surface="true"|data-browser-live-surface-ref=|data-browser-frame-transport="native-embedded"/);
+  assertNoProductFallbackSurface(html);
+});
+
 test('browser-workbench renders native BrowserHostSession timing diagnostics with transport latency summary', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,
@@ -475,12 +563,12 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
   assert.match(html, /data-status="error"/);
   assert.match(html, /browser-workbench-viewer-diagnostics/);
   assert.match(html, /data-browser-writer-url="http:\/\/127\.0\.0\.1:6173"/);
-  assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-search:missing"/);
+  assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing"/);
   assert.match(html, /data-browser-native-adapter-url="http:\/\/127\.0\.0\.1:6180"/);
   assert.match(html, /data-browser-diagnostic-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-last-action-timing="click:130ms:failed"/);
   assert.match(html, /writerUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6173/);
-  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-search:missing/);
+  assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
   assert.match(html, /nativeAdapterUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6180/);
   assert.match(html, /blockedReason<\/dt><dd>Native adapter blocked \[url-redacted\]/);
   assert.match(html, /diagnostics<\/dt><dd>Retry same native surface through http:\/\/127\.0\.0\.1:6173/);
@@ -733,6 +821,7 @@ test('browser-workbench source has no product live fallback DOM/input transport'
   assert.match(source, /data-browser-native-surface-stability-key/);
   assert.match(source, /data-browser-loading-progress-state/);
   assert.match(source, /data-browser-live-surface-transport=\{hostSession\?\.liveSurfaceTransport\}/);
+  assert.match(source, /data-browser-second-truth-source=\{hostSession\?\.secondTruthSource === false \? 'false' : undefined\}/);
 });
 
 test('browser-workbench imports no TUI runtime or browser provider packages', () => {

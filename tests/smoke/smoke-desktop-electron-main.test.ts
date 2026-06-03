@@ -10,6 +10,7 @@ import {
   createDesktopNativeBrowserController,
   createElectronDesktopMainController,
   installSciForgeDesktopPreload,
+  registerDesktopIpcHandlers,
   resolveDesktopAppPaths,
   type DesktopContextBridge,
   type DesktopIpcRenderer,
@@ -95,7 +96,10 @@ test('R-DESK main controller starts launcher before loading dist-ui and wires IP
 	    'desktop:native-browser:open',
 	    'desktop:native-browser:reload',
 	    'desktop:native-browser:screenshot',
-	    'desktop:native-browser:state',
+    'desktop:native-browser:state',
+      'desktop:virtual-app-screen-surface:attach',
+      'desktop:virtual-app-screen-surface:detach',
+      'desktop:virtual-app-screen-surface:present',
 	    'platform:open-external',
 	    'platform:pick-directory',
 	    'platform:reveal-path',
@@ -177,6 +181,10 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
   await api.attachBrowserHostSessionSurface({ sessionId: 'browser-host-1', bounds: { x: 1, y: 2, width: 300, height: 200 } });
   await api.getBrowserHostSessionSurfaceState({ sessionId: 'browser-host-1' });
   await api.detachBrowserHostSessionSurface({ sessionId: 'browser-host-1' });
+  const virtualAppScreenApi = api as Record<string, (input: unknown) => Promise<unknown>>;
+  await virtualAppScreenApi.attachVirtualAppScreenSurface(validVirtualAppScreenSurfaceRequest());
+  await virtualAppScreenApi.presentVirtualAppScreenSurface(validVirtualAppScreenSurfaceRequest());
+  await virtualAppScreenApi.detachVirtualAppScreenSurface(validVirtualAppScreenSurfaceDetachRequest());
   await api.revealPath('/tmp/example');
   await api.pickDirectory('/tmp/workspace');
 
@@ -196,13 +204,18 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'desktop:browser-host-surface:attach',
     'desktop:browser-host-surface:state',
     'desktop:browser-host-surface:detach',
+    'desktop:virtual-app-screen-surface:attach',
+    'desktop:virtual-app-screen-surface:present',
+    'desktop:virtual-app-screen-surface:detach',
     'platform:reveal-path',
     'platform:pick-directory',
   ]);
 	  assert.deepEqual(Object.keys(api).sort(), [
 	    'attachBrowserHostSessionSurface',
+      'attachVirtualAppScreenSurface',
 	    'captureNativeBrowserScreenshot',
 	    'detachBrowserHostSessionSurface',
+      'detachVirtualAppScreenSurface',
 	    'getBrowserHostSessionSurfaceState',
 	    'getNativeBrowserState',
 	    'getRuntimeConfig',
@@ -214,9 +227,143 @@ test('R-DESK preload exposes only the narrow desktop bridge API', async () => {
     'openExternal',
     'openNativeBrowser',
     'pickDirectory',
+    'presentVirtualAppScreenSurface',
     'requestShutdown',
     'revealPath',
   ]);
+});
+
+test('P0.2 desktop VirtualAppScreenSurface presenter accepts only refs-only Native Host observe requests', async () => {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  registerDesktopIpcHandlers({
+    electron: {
+      BrowserWindow: class {
+        async loadFile(): Promise<void> {}
+        on(): void {}
+      },
+      ipcMain: {
+        handle(channel, listener) {
+          handlers.set(channel, listener);
+        },
+      },
+    },
+    launcher: {
+      health: () => ({
+        ok: true,
+        ready: true,
+        schemaVersion: 'sciforge.desktop.launcher-health.v1',
+        appData: dummyDesktopAppData(),
+        ports: [],
+        services: [],
+        auditLogPath: '/tmp/sciforge-runtime-audit.ndjson',
+        productionContract: {
+          rendererLoadsBuildArtifact: true,
+          startsViteDevServer: false,
+          rendererTransport: 'stable-ipc-or-loopback',
+          rawProcessOutputSurface: 'folded-audit',
+          fixedDevPortsAreContract: false,
+        },
+      }),
+      ready: () => true,
+      shutdown: async () => undefined,
+    },
+    launcherResult: {
+      controlUrl: 'http://127.0.0.1:61111',
+      auditLogPath: '/tmp/sciforge-runtime-audit.ndjson',
+      appData: dummyDesktopAppData(),
+      ports: [],
+    },
+    runtimeConfig: {
+      schemaVersion: 'sciforge.desktop.runtime-config.v1',
+      runtimeControlUrl: 'http://127.0.0.1:61111',
+      workspaceWriterBaseUrl: '',
+      modelBaseUrl: '',
+      runtimeCodexBaseUrl: '',
+      workspacePath: '/tmp/workspace',
+      appDataRoot: '/tmp/app-data',
+      appRoot: process.cwd(),
+      sidecarCwd: process.cwd(),
+      ports: [],
+    },
+    platformService: new DesktopPlatformService(),
+  });
+
+  const attach = handlers.get('desktop:virtual-app-screen-surface:attach');
+  const present = handlers.get('desktop:virtual-app-screen-surface:present');
+  const detach = handlers.get('desktop:virtual-app-screen-surface:detach');
+  assert.equal(typeof attach, 'function');
+  assert.equal(typeof present, 'function');
+  assert.equal(typeof detach, 'function');
+
+  const attached = await attach?.({}, validVirtualAppScreenSurfaceRequest());
+  assert.deepEqual(attached, {
+    ok: true,
+    owner: 'VirtualAppScreenSurface',
+    presenterRole: 'observe-only-host-ref-presenter',
+    surfaceMode: 'live',
+    liveSurfaceTransport: 'native-frame-stream',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    sessionRef: 'computer-use:native-host/run-live/session.json',
+    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
+    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
+    bounds: { x: 10, y: 20, width: 640, height: 480 },
+    visible: true,
+  });
+
+  const presented = await present?.({}, {
+    ...validVirtualAppScreenSurfaceRequest(),
+    bounds: { x: 12, y: 22, width: 800, height: 600 },
+  });
+  assert.equal((presented as { ok?: unknown }).ok, true);
+  assert.deepEqual((presented as { bounds?: unknown }).bounds, { x: 12, y: 22, width: 800, height: 600 });
+
+  assert.deepEqual(await detach?.({}, validVirtualAppScreenSurfaceDetachRequest()), {
+    ok: true,
+    owner: 'VirtualAppScreenSurface',
+    presenterRole: 'observe-only-host-ref-presenter',
+    surfaceMode: 'live',
+    liveSurfaceTransport: 'native-frame-stream',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    sessionRef: 'computer-use:native-host/run-live/session.json',
+    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
+    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
+    visible: false,
+  });
+
+  assert.deepEqual(await attach?.({}, {
+    ...validVirtualAppScreenSurfaceRequest(),
+    liveSurfaceRef: 'computer-use:provider-session/run-live/live-surface.json',
+  }), {
+    ok: false,
+    reason: 'non-native-host-live-ref:liveSurfaceRef',
+  });
+
+  assert.deepEqual(await present?.({}, {
+    ...validVirtualAppScreenSurfaceRequest(),
+    currentFrameRef: 'computer-use:native-host/run-live/replay/current.png',
+  }), {
+    ok: false,
+    reason: 'non-product-live-ref:currentFrameRef',
+  });
+
+  assert.deepEqual(await attach?.({}, {
+    ...validVirtualAppScreenSurfaceRequest(),
+    surfaceTransportDescriptor: {
+      ...validVirtualAppScreenSurfaceRequest().surfaceTransportDescriptor,
+      dataUrl: 'data:image/png;base64,raw',
+    },
+  }), {
+    ok: false,
+    reason: 'raw-live-payload-forbidden:surfaceTransportDescriptor.dataUrl',
+  });
 });
 
 test('R-DESK native browser controller opens frame-blocked sites in an Electron-owned top-level window', async () => {
@@ -419,6 +566,73 @@ test('R-DESK BrowserHostSession native surface controller attaches an embedded W
     'removeChildView',
   ]);
 });
+
+function validVirtualAppScreenSurfaceRequest() {
+  return {
+    kind: 'right-pane-virtual-app-screen-surface',
+    sessionRef: 'computer-use:native-host/run-live/session.json',
+    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
+    liveBindingAttachGrantRef: 'computer-use:native-host/run-live/live-binding-attach-grant.json',
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: 'computer-use:native-host/run-live/grant-validation.json',
+    grantValidationStatus: 'validated',
+    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+    surfaceTransport: 'native-frame-stream',
+    platformDriverRef: 'computer-use:native-host/run-live/platform-driver.json',
+    platformDriverStatus: 'ready',
+    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
+    currentFrameSequence: {
+      ref: 'computer-use:native-host/run-live/frame-sequence.json',
+      sequence: 23,
+    },
+    surfaceTransportDescriptor: {
+      owner: 'VirtualDisplayProvider',
+      providerId: 'provider:run-live',
+      transport: 'native-frame-stream',
+      surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+      liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+      frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+      currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
+      frameTransportContractRef: 'computer-use:native-host/run-live/frame-contract.json',
+      frameTelemetryRef: 'computer-use:native-host/run-live/frame-telemetry.json',
+      mediaChannelRef: 'computer-use:native-host/run-live/media-channel.json',
+      dataChannelRef: 'computer-use:native-host/run-live/data-channel.json',
+      currentFrameSequence: 23,
+      diagnosticOnly: false,
+      productFallback: false,
+      singleInteractiveTruth: true,
+    },
+    bounds: { x: 10, y: 20, width: 640, height: 480 },
+    visible: true,
+    focus: false,
+  };
+}
+
+function dummyDesktopAppData() {
+  return {
+    schemaVersion: 'sciforge.desktop.app-data.v1',
+    appName: 'SciForge',
+    appDataRoot: '/tmp/app-data',
+    configDir: '/tmp/app-data/config',
+    runtimeCodexRoot: '/tmp/app-data/runtime-codex',
+    runtimeCodexHome: '/tmp/app-data/runtime-codex/codex-home',
+    logDir: '/tmp/app-data/logs',
+    cacheDir: '/tmp/app-data/cache',
+    globalStateDir: '/tmp/app-data/state',
+    userWorkspaceStateDir: '/tmp/workspace/.sciforge',
+  } as const;
+}
+
+function validVirtualAppScreenSurfaceDetachRequest() {
+  return {
+    ...validVirtualAppScreenSurfaceRequest(),
+    bounds: undefined,
+    visible: false,
+    focus: undefined,
+  };
+}
 
 function fakeElectron(input: {
   appDataRoot: string;

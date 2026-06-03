@@ -59,6 +59,7 @@ type OwnershipMap = {
 const criticalProductApi = [
   'describe',
   'probe',
+  'recordPreflight',
   'createSession',
   'launchOrAttachApp',
   'attachSurface',
@@ -78,7 +79,9 @@ type CheckName =
   | 'manifest-api'
   | 'ownership-map'
   | 'provider-readiness'
+  | 'preflight-readiness'
   | 'contract-ledger'
+  | 'minimal-replay'
   | 'permission-ledger'
   | 'ui-only-negative'
   | 'fixture-only-negative'
@@ -90,7 +93,9 @@ const checkProfiles: Record<NativeVirtualAppScreenHostValidationProfile, CheckNa
     'manifest-api',
     'ownership-map',
     'provider-readiness',
+    'preflight-readiness',
     'contract-ledger',
+    'minimal-replay',
     'permission-ledger',
     'ui-only-negative',
     'fixture-only-negative',
@@ -98,10 +103,10 @@ const checkProfiles: Record<NativeVirtualAppScreenHostValidationProfile, CheckNa
     'unverified-grant-negative',
   ],
   'manifest-api': ['manifest-api', 'ownership-map'],
-  viewer: ['manifest-api', 'ownership-map', 'contract-ledger', 'permission-ledger', 'ui-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
+  viewer: ['manifest-api', 'ownership-map', 'preflight-readiness', 'contract-ledger', 'minimal-replay', 'permission-ledger', 'ui-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
   fixtures: ['manifest-api', 'fixture-only-negative'],
-  'provider-readiness': ['manifest-api', 'provider-readiness', 'contract-ledger', 'permission-ledger'],
-  'user-acceptance': ['manifest-api', 'contract-ledger', 'permission-ledger', 'ui-only-negative', 'fixture-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
+  'provider-readiness': ['manifest-api', 'provider-readiness', 'preflight-readiness', 'contract-ledger', 'minimal-replay', 'permission-ledger'],
+  'user-acceptance': ['manifest-api', 'contract-ledger', 'minimal-replay', 'permission-ledger', 'ui-only-negative', 'fixture-only-negative', 'missing-frame-negative', 'unverified-grant-negative'],
 };
 
 export async function runNativeVirtualAppScreenHostValidation(
@@ -132,7 +137,9 @@ async function runCheck(checkName: CheckName): Promise<void> {
   if (checkName === 'manifest-api') return assertNativeHostManifestAndApi();
   if (checkName === 'ownership-map') return assertNativeHostOwnershipMap();
   if (checkName === 'provider-readiness') return assertProviderReadiness();
+  if (checkName === 'preflight-readiness') return assertPreflightReadiness();
   if (checkName === 'contract-ledger') return assertContractLedgerPasses();
+  if (checkName === 'minimal-replay') return assertMinimalReplayPasses();
   if (checkName === 'permission-ledger') return assertPermissionLedgerPasses();
   if (checkName === 'ui-only-negative') return assertUiOnlyLedgerRejected();
   if (checkName === 'fixture-only-negative') return assertFixtureOnlyLedgerRejected();
@@ -224,6 +231,55 @@ function assertProviderReadiness(): void {
   assert.ok(ready.driverRefs.length > 0);
 }
 
+function assertPreflightReadiness(): void {
+  const failClosedHost = new InMemoryNativeVirtualAppScreenHost(new FailClosedNativeHostPlatformAdapter());
+  const blocked = failClosedHost.recordPreflight({
+    currentRunRef: 'computer-use:native-host/runs/preflight-blocked/current-run.json',
+    evidenceRootRef: 'computer-use:native-host/runs/preflight-blocked',
+    currentRunPointerRef: 'computer-use:native-host/runs/preflight-blocked/current-run-pointer.json',
+  });
+  assert.equal(blocked.status, 'ok');
+  assert.equal(blocked.value.status, 'blocked');
+  assert.equal(blocked.value.currentRunPointerRef, 'computer-use:native-host/runs/preflight-blocked/current-run-pointer.json');
+  assert.match(blocked.value.preflightRef, /^computer-use:native-host\/preflights\/preflight-\d+\/preflight\.json$/u);
+  assert.match(blocked.value.adapterReadinessRef, /^computer-use:native-host\/preflights\/preflight-\d+\/adapter-readiness\.json$/u);
+  assert.match(blocked.value.hostReadinessRef, /^computer-use:native-host\/preflights\/preflight-\d+\/host-readiness\.json$/u);
+  assert.match(blocked.value.blockedRef ?? '', /^computer-use:native-host\/preflights\/preflight-\d+\/blocked\.json$/u);
+  assert.equal(blocked.value.diagnosticOnly, true);
+  assert.match(blocked.value.preflightLedgerRef, /^computer-use:native-host\/preflights\/preflight-\d+\/preflight-ledger\.json$/u);
+  assert.equal(blocked.value.preflightLedgerEntryRef.endsWith('/events/0001-preflight.recorded.json'), true);
+  assert.deepEqual(blocked.value.driverRefs, []);
+  assert.deepEqual(blocked.value.providerRefs, []);
+  const blockedLedger = failClosedHost.getPreflightLedger(blocked.value.preflightRef);
+  assert.ok(blockedLedger);
+  assert.deepEqual(blockedLedger.entries.map((entry) => entry.type), ['preflight.recorded']);
+  const blockedLedgerValidation = failClosedHost.validatePreflightLedger(blocked.value.preflightRef);
+  assert.equal(blockedLedgerValidation.ok, true, blockedLedgerValidation.issues.join('\n'));
+
+  const uiOwned = failClosedHost.recordPreflight({
+    currentRunRef: 'computer-use:native-host/runs/preflight-ui-owned/current-run.json',
+    evidenceRootRef: 'computer-use:native-host/runs/preflight-ui-owned',
+    requestedPermissionRefs: ['ui:permission/fake'],
+  });
+  assert.equal(uiOwned.status, 'blocked');
+  assert.equal(uiOwned.error.code, 'ui-owned-source-blocked');
+
+  const readyHost = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter());
+  const ready = readyHost.recordPreflight({
+    currentRunRef: 'computer-use:native-host/runs/preflight-ready/current-run.json',
+    evidenceRootRef: 'computer-use:native-host/runs/preflight-ready',
+    providerReadinessRef: 'computer-use:native-host/providers/preflight-ready/provider-readiness.json',
+    platformDriverRef: 'computer-use:native-host/platform-drivers/preflight-ready/driver.json',
+  });
+  assert.equal(ready.status, 'ok');
+  assert.equal(ready.value.status, 'ready');
+  assert.equal(ready.value.permissionRefs.length > 0, true);
+  assert.ok(ready.value.driverRefs.includes('computer-use:native-host/platform-drivers/preflight-ready/driver.json'));
+  assert.ok(ready.value.providerRefs.includes('computer-use:native-host/providers/preflight-ready/provider-readiness.json'));
+  const readyLedgerValidation = readyHost.validatePreflightLedger(ready.value.preflightRef);
+  assert.equal(readyLedgerValidation.ok, true, readyLedgerValidation.issues.join('\n'));
+}
+
 function assertContractLedgerPasses(): void {
   const { ledger } = buildNativeHostContractRun();
   const validation = validateNativeHostEvidenceLedger(ledger, {
@@ -233,6 +289,55 @@ function assertContractLedgerPasses(): void {
     requireGrantValidation: true,
   });
   assert.equal(validation.ok, true, validation.issues.join('\n'));
+}
+
+function assertMinimalReplayPasses(): void {
+  const { ledger } = buildNativeHostMinimalReplayRun();
+  const validation = validateNativeHostEvidenceLedger(ledger, {
+    requireFrame: true,
+    requireHumanInput: true,
+    requireGrantValidation: true,
+  });
+  assert.equal(validation.ok, true, validation.issues.join('\n'));
+  assert.equal(ledger.currentRunRef, 'computer-use:native-host/runs/minimal-replay/current-run.json');
+  assert.match(ledger.currentRunPointerRef, /^computer-use:native-host\/runs\/session-\d+\/current-run-pointer\.json$/u);
+  assert.notEqual(ledger.currentRunPointerRef, ledger.currentRunRef);
+  assert.deepEqual(ledger.entries.map((entry) => entry.type), [
+    'session.created',
+    'app.launched',
+    'surface.attached',
+    'grant.validated',
+    'frame.read',
+    'human-input.accepted',
+    'frame.read',
+    'agent.paused',
+    'agent.resumed',
+    'frame.read',
+  ]);
+  for (const entry of ledger.entries) {
+    assert.equal(entry.currentRunRef, ledger.currentRunRef);
+    assert.equal(entry.sessionId, ledger.sessionId);
+    assert.match(entry.eventRef, /^computer-use:native-host\/ledgers\/session-\d+\/evidence-ledger\.json\/events\//);
+  }
+
+  const surface = requiredEntry(ledger, 'surface.attached');
+  const grant = requiredEntry(ledger, 'grant.validated');
+  const firstFrame = ledger.entries.find((entry) => entry.type === 'frame.read');
+  const input = requiredEntry(ledger, 'human-input.accepted');
+  const pause = requiredEntry(ledger, 'agent.paused');
+  const resume = requiredEntry(ledger, 'agent.resumed');
+  const postResumeFrame = ledger.entries.findLast((entry) => entry.type === 'frame.read');
+
+  assert.ok(surface.refs.liveSurfaceRef, 'surface replay requires liveSurfaceRef');
+  assert.equal(grant.refs.liveSurfaceRef, surface.refs.liveSurfaceRef);
+  assert.equal(input.refs.frameRef, firstFrame?.refs.frameRef);
+  assert.ok(input.refs.inputAcceptedRef, 'input replay requires inputAcceptedRef');
+  assert.ok(pause.refs.agentQueueRef, 'pause replay requires agentQueueRef');
+  assert.ok(resume.refs.agentQueueRef, 'resume replay requires agentQueueRef');
+  assert.ok(resume.refs.currentFrameRefreshRef, 'resume replay requires currentFrameRefreshRef');
+  assert.ok(postResumeFrame, 'resume replay requires a later frame.read');
+  assert.ok(postResumeFrame.sequence > resume.sequence, 'resume replay frame must be recorded after agent.resumed');
+  assert.equal(postResumeFrame.refs.liveSurfaceRef, surface.refs.liveSurfaceRef);
 }
 
 function assertPermissionLedgerPasses(): void {
@@ -270,6 +375,12 @@ function assertPermissionLedgerPasses(): void {
   assert.equal(missingValidation.ok, false);
   assert.ok(missingValidation.issues.includes('permission.handoff entry is required.'), missingValidation.issues.join('\n'));
   assert.ok(missingValidation.issues.includes('permission.recheck entry is required.'), missingValidation.issues.join('\n'));
+}
+
+function requiredEntry(ledger: NativeHostEvidenceLedger, type: string) {
+  const entry = ledger.entries.find((candidate) => candidate.type === type);
+  assert.ok(entry, `expected ${type} entry`);
+  return entry;
 }
 
 function assertUiOnlyLedgerRejected(): void {
@@ -415,6 +526,60 @@ export function buildNativeHostContractRun(options: { presentSurface?: boolean }
   ), 'executeAutomationIntent');
   const ledger = host.getLedger(launched.sessionId);
   assert.ok(ledger, 'expected host ledger');
+  return {
+    host,
+    session: launched,
+    surface,
+    ledger: cloneLedger(ledger),
+  };
+}
+
+export function buildNativeHostMinimalReplayRun(): NativeHostContractRun {
+  const host = new InMemoryNativeVirtualAppScreenHost(new ContractSmokeNativeHostPlatformAdapter());
+  const created = mustOk(host.createSession(
+    {
+      profileId: 'native-host-minimal-replay',
+      defaultSurfaceTransport: 'native-frame-stream',
+    },
+    { allowBackgroundRendering: true, allowSharedSystemInput: false },
+    {
+      currentRunRef: 'computer-use:native-host/runs/minimal-replay/current-run.json',
+      evidenceRootRef: 'computer-use:native-host/runs/minimal-replay',
+      currentRunPointerRef: 'computer-use:native-host/runs/minimal-replay/current-run-pointer.json',
+      guiPresentRef: 'computer-use:native-host/runs/minimal-replay/gui-present/screen-pane.json',
+    },
+  ), 'createSession minimal replay');
+  const launched = mustOk(host.launchOrAttachApp(created.sessionId, {
+    appId: 'minimal-replay',
+    appRef: 'app:minimal-replay',
+    title: 'Native Host Minimal Replay',
+    workspaceRef: 'workspace:minimal-replay',
+  }), 'launchOrAttachApp minimal replay');
+  const surface = mustOk(host.attachSurface(launched.sessionId, {
+    screenRef: 'computer-use:native-host/screen/minimal-replay.json',
+    targetWindowRef: 'window:minimal-replay/main',
+    transport: 'native-frame-stream',
+  }), 'attachSurface minimal replay');
+  mustOk(host.presentSurface(launched.sessionId, surface.liveBindingAttachGrantRef), 'presentSurface minimal replay');
+  const beforeFrame = mustOk(host.readFrame(launched.sessionId, 'minimal-replay-before-input'), 'readFrame minimal replay before input');
+  const input = mustOk(host.sendHumanInput(launched.sessionId, {
+    kind: 'click',
+    screenRef: surface.screenRef,
+    targetWindowRef: surface.targetWindowRef,
+    xRatio: 0.5,
+    yRatio: 0.5,
+    inputIntentRef: 'computer-use:native-host/runs/minimal-replay/input-intents/click.json',
+  }), 'sendHumanInput minimal replay');
+  mustOk(host.readFrame(launched.sessionId, input.inputAcceptedRef), 'readFrame minimal replay after input');
+  mustOk(host.pauseAgent(launched.sessionId, 'human takeover'), 'pauseAgent minimal replay');
+  mustOk(host.resumeAgent(launched.sessionId, {
+    barrierRef: 'computer-use:native-host/runs/minimal-replay/barriers/resume.json',
+    currentRunRef: launched.evidenceContext.currentRunRef,
+    requiredReadinessRef: launched.readiness.adapterReadinessRef,
+    beforeFrameRef: beforeFrame.frameRef,
+  }), 'resumeAgent minimal replay');
+  const ledger = host.getLedger(launched.sessionId);
+  assert.ok(ledger, 'expected minimal replay host ledger');
   return {
     host,
     session: launched,

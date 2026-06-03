@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { execFile, execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,6 +7,52 @@ import { dirname, join, relative } from 'node:path';
 import { promisify } from 'node:util';
 
 import type { VirtualDisplayProviderProbeOptions } from '../virtual-display-provider.js';
+
+export interface MacosTargetAppDiscoverySpec {
+  kind?: string;
+  name?: string;
+  bundleId?: string;
+  appPath?: string;
+  command?: string;
+  args?: string[];
+  processMatch?: string;
+  windowTitlePattern?: string;
+  editableWindowReadiness?: MacosEditableWindowReadinessSpec;
+}
+
+export interface MacosEditableWindowReadinessSpec {
+  required?: boolean;
+  mode?: 'document' | 'presentation';
+  rejectTitlePattern?: string;
+  requireAxWindow?: boolean;
+  requireNonEmptyTitle?: boolean;
+  requireEditableSurfaceEvidence?: boolean;
+}
+
+export interface MacosEditableWindowReadinessEvidence {
+  required: boolean;
+  mode?: 'document' | 'presentation';
+  title: string;
+  titlePresent: boolean;
+  rejectedByTitlePattern: boolean;
+  axWindowPresent: boolean;
+  axWindowMatchesTarget: boolean;
+  editableSurfaceEvidencePresent: boolean;
+  accepted: boolean;
+}
+
+export interface MacosTargetAppLaunchOptions {
+  runId?: string;
+  targetAppKind?: string;
+  targetAppName?: string;
+}
+
+export interface MacosTargetAppLaunchResult {
+  pids: number[];
+  targetAppRef?: string;
+  launchRef?: string;
+  details?: Record<string, unknown>;
+}
 
 export interface MacosDisplayInventoryEntry {
   id: number;
@@ -85,6 +131,25 @@ export function probeMacosAccessibility(
   try {
     const stdout = runOsascript(ACCESSIBILITY_PROBE_APPLESCRIPT, [], runner);
     return { ok: Number(String(stdout).trim()) >= 1 };
+  } catch (error) {
+    return { ok: false, detail: shortError(error) };
+  }
+}
+
+export function probeMacosScreenRecording(
+  runner: Pick<MacosNativeDriverCommandRunner, 'execFileSync'> = macosNativeDriverCommandRunner,
+): { ok: boolean; detail?: string } {
+  try {
+    const stdout = runner.execFileSync('swift', ['-'], {
+      input: SCREEN_RECORDING_PREFLIGHT_SWIFT,
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      timeout: 15000,
+    });
+    const value = String(stdout).trim();
+    return value === '1'
+      ? { ok: true }
+      : { ok: false, detail: 'CGPreflightScreenCaptureAccess returned false' };
   } catch (error) {
     return { ok: false, detail: shortError(error) };
   }
@@ -207,6 +272,8 @@ export async function waitForMacosCgWindow(
   deps: {
     inventory?: (pids: number[]) => MacosCgWindowInventoryEntry[];
     sleep?: (ms: number) => Promise<void>;
+    windowTitlePattern?: string;
+    editableWindowReadiness?: MacosEditableWindowReadinessSpec;
   } = {},
 ): Promise<MacosCgWindowInventoryEntry | undefined> {
   const startedAt = Date.now();
@@ -215,18 +282,200 @@ export async function waitForMacosCgWindow(
   let windows: MacosCgWindowInventoryEntry[] = [];
   do {
     windows = inventory(pids);
-    const targetWindow = selectMacosCgTargetWindow(windows);
+    const targetWindow = selectMacosCgTargetWindow(windows, {
+      pids,
+      windowTitlePattern: deps.windowTitlePattern,
+      editableWindowReadiness: deps.editableWindowReadiness,
+    });
     if (targetWindow) return targetWindow;
     await sleepFn(500);
   } while (Date.now() - startedAt < timeoutMs);
-  return selectMacosCgTargetWindow(windows);
+  return selectMacosCgTargetWindow(windows, {
+    pids,
+    windowTitlePattern: deps.windowTitlePattern,
+    editableWindowReadiness: deps.editableWindowReadiness,
+  });
 }
 
-export function selectMacosCgTargetWindow(windows: MacosCgWindowInventoryEntry[]): MacosCgWindowInventoryEntry | undefined {
+export function selectMacosCgTargetWindow(
+  windows: MacosCgWindowInventoryEntry[],
+  options: {
+    pids?: number[];
+    windowTitlePattern?: string;
+    editableWindowReadiness?: MacosEditableWindowReadinessSpec;
+  } = {},
+): MacosCgWindowInventoryEntry | undefined {
+  const pidSet = new Set((options.pids ?? []).filter((pid) => Number.isInteger(pid) && pid > 0));
+  const titlePattern = compileOptionalPattern(options.windowTitlePattern, 'windowTitlePattern');
   const visibleWindows = windows
-    .filter((window) => window.layer === 0 && window.width >= 200 && window.height >= 120)
+    .filter((window) => (!pidSet.size || pidSet.has(window.pid))
+      && (!titlePattern || titlePattern.test(window.title))
+      && macosCgWindowTitleReadinessAccepted(options.editableWindowReadiness, window)
+      && window.layer === 0
+      && window.width >= 200
+      && window.height >= 120)
     .sort((left, right) => (right.width * right.height) - (left.width * left.height));
   return visibleWindows[0];
+}
+
+export function macosEditableWindowReadinessEvidence(
+  spec: MacosEditableWindowReadinessSpec | undefined,
+  cgWindow: Pick<MacosCgWindowInventoryEntry, 'pid' | 'title' | 'x' | 'y' | 'width' | 'height'>,
+  axWindow?: MacosAxWindowInventoryEntry,
+): MacosEditableWindowReadinessEvidence {
+  const title = String(cgWindow.title ?? '').trim();
+  const required = spec?.required === true;
+  const titlePresent = title.length > 0;
+  const rejectTitlePattern = compileOptionalPattern(spec?.rejectTitlePattern, 'editableWindowReadiness.rejectTitlePattern');
+  const rejectedByTitlePattern = rejectTitlePattern ? rejectTitlePattern.test(title) : false;
+  const axWindowMatchesTarget = axWindow ? macosAxWindowMatchesCgWindow(axWindow, cgWindow) : false;
+  const axWindowPresent = axWindowMatchesTarget;
+  const needsTitle = spec?.requireNonEmptyTitle === true || required;
+  const editableSurfaceEvidencePresent = titlePresent && !rejectedByTitlePattern;
+  const needsAxWindow = spec?.requireAxWindow === true || required;
+  const accepted = (!needsTitle || titlePresent)
+    && !rejectedByTitlePattern
+    && (!needsAxWindow || axWindowPresent)
+    && (spec?.requireEditableSurfaceEvidence === true ? editableSurfaceEvidencePresent : true);
+  return {
+    required,
+    mode: spec?.mode,
+    title,
+    titlePresent,
+    rejectedByTitlePattern,
+    axWindowPresent,
+    axWindowMatchesTarget,
+    editableSurfaceEvidencePresent,
+    accepted,
+  };
+}
+
+function macosCgWindowTitleReadinessAccepted(
+  spec: MacosEditableWindowReadinessSpec | undefined,
+  cgWindow: Pick<MacosCgWindowInventoryEntry, 'title'>,
+) {
+  const title = String(cgWindow.title ?? '').trim();
+  const needsTitle = spec?.required === true || spec?.requireNonEmptyTitle === true;
+  if (needsTitle && !title) return false;
+  const rejectTitlePattern = compileOptionalPattern(spec?.rejectTitlePattern, 'editableWindowReadiness.rejectTitlePattern');
+  return rejectTitlePattern ? !rejectTitlePattern.test(title) : true;
+}
+
+export function selectMacosAxWindowForCgWindow(
+  windows: MacosAxWindowInventoryEntry[],
+  cgWindow: Pick<MacosCgWindowInventoryEntry, 'pid' | 'title' | 'x' | 'y' | 'width' | 'height'>,
+): MacosAxWindowInventoryEntry | undefined {
+  return windows
+    .filter((window) => macosAxWindowMatchesCgWindow(window, cgWindow))
+    .sort((left, right) => macosAxWindowMatchScore(right, cgWindow) - macosAxWindowMatchScore(left, cgWindow))[0];
+}
+
+export function macosAxWindowMatchesCgWindow(
+  axWindow: MacosAxWindowInventoryEntry,
+  cgWindow: Pick<MacosCgWindowInventoryEntry, 'pid' | 'title' | 'x' | 'y' | 'width' | 'height'>,
+): boolean {
+  return macosAxWindowMatchScore(axWindow, cgWindow) >= 2;
+}
+
+function macosAxWindowMatchScore(
+  axWindow: MacosAxWindowInventoryEntry,
+  cgWindow: Pick<MacosCgWindowInventoryEntry, 'pid' | 'title' | 'x' | 'y' | 'width' | 'height'>,
+): number {
+  if (axWindow.pid !== cgWindow.pid) return Number.NEGATIVE_INFINITY;
+  const leftTitle = normalizeMacosWindowTitle(axWindow.title);
+  const rightTitle = normalizeMacosWindowTitle(cgWindow.title);
+  const titlesPresent = Boolean(leftTitle && rightTitle);
+  const titlesCompatible = macosWindowTitlesCompatible(axWindow.title, cgWindow.title);
+  if (titlesPresent && !titlesCompatible) return Number.NEGATIVE_INFINITY;
+  let score = 0;
+  if (titlesCompatible) score += 2;
+  const overlapRatio = macosWindowBoundsOverlapRatio(axWindow, cgWindow);
+  if (overlapRatio >= 0.65) score += 2;
+  else if (overlapRatio >= 0.3) score += 1;
+  return score;
+}
+
+function macosWindowTitlesCompatible(leftTitle: string, rightTitle: string): boolean {
+  const left = normalizeMacosWindowTitle(leftTitle);
+  const right = normalizeMacosWindowTitle(rightTitle);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (Math.min(left.length, right.length) < 8) return false;
+  return left.includes(right) || right.includes(left);
+}
+
+function normalizeMacosWindowTitle(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/gu, ' ');
+}
+
+function macosWindowBoundsOverlapRatio(
+  left: Pick<MacosAxWindowInventoryEntry, 'x' | 'y' | 'width' | 'height'>,
+  right: Pick<MacosCgWindowInventoryEntry, 'x' | 'y' | 'width' | 'height'>,
+): number {
+  const leftArea = Math.max(0, left.width) * Math.max(0, left.height);
+  const rightArea = Math.max(0, right.width) * Math.max(0, right.height);
+  if (!leftArea || !rightArea) return 0;
+  const overlapWidth = Math.max(0, Math.min(left.x + left.width, right.x + right.width) - Math.max(left.x, right.x));
+  const overlapHeight = Math.max(0, Math.min(left.y + left.height, right.y + right.height) - Math.max(left.y, right.y));
+  const overlapArea = overlapWidth * overlapHeight;
+  return overlapArea / Math.min(leftArea, rightArea);
+}
+
+export function defaultLaunchMacosTargetApp(
+  spec: MacosTargetAppDiscoverySpec,
+  operationOptions: MacosTargetAppLaunchOptions,
+  runner: Pick<MacosNativeDriverCommandRunner, 'execFileSync'> = macosNativeDriverCommandRunner,
+): MacosTargetAppLaunchResult {
+  const target = sanitizeMacosTargetId(operationOptions.targetAppKind ?? spec.kind ?? spec.name ?? 'generic');
+  if (spec.bundleId) {
+    runner.execFileSync('open', ['-b', spec.bundleId, '--background'], { stdio: 'ignore' });
+    return macosLaunchResult(spec, operationOptions, 'bundleId', target, findMacosTargetProcessIds(spec.processMatch, runner));
+  }
+  if (spec.appPath) {
+    runner.execFileSync('open', ['-a', spec.appPath, '--background'], { stdio: 'ignore' });
+    return macosLaunchResult(spec, operationOptions, 'appPath', target, findMacosTargetProcessIds(spec.processMatch, runner));
+  }
+  if (!spec.command) {
+    throw new Error(`No macOS launch dependency or explicit command is registered for target app ${spec.kind ?? spec.name ?? 'generic'}.`);
+  }
+  const child = spawn(spec.command, spec.args ?? [], {
+    detached: false,
+    stdio: 'ignore',
+  });
+  if (!child.pid) {
+    throw new Error(`macOS VirtualDisplayProvider could not start target command for ${spec.kind ?? spec.name ?? spec.command}.`);
+  }
+  child.unref();
+  return macosLaunchResult(spec, operationOptions, 'command', target, [child.pid], { argsCount: spec.args?.length ?? 0 });
+}
+
+export function findMacosTargetProcessIds(
+  processMatch: string | undefined,
+  runner: Pick<MacosNativeDriverCommandRunner, 'execFileSync'> = macosNativeDriverCommandRunner,
+): number[] {
+  if (!processMatch?.trim()) return [];
+  const pattern = compileOptionalPattern(processMatch, 'processMatch');
+  if (!pattern) return [];
+  try {
+    const stdout = runner.execFileSync('ps', ['-axo', 'pid=,comm=,args='], {
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024,
+      timeout: 10000,
+    });
+    return String(stdout)
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = /^(\d+)\s+(.+)$/u.exec(line);
+        if (!match) return undefined;
+        const pid = Number(match[1]);
+        return Number.isInteger(pid) && pid > 0 && pattern.test(match[2]) ? pid : undefined;
+      })
+      .filter((pid): pid is number => typeof pid === 'number');
+  } catch {
+    return [];
+  }
 }
 
 export function moveMacosAxWindow(
@@ -295,6 +544,41 @@ export function windowWithinDisplay(
     && windowTop >= display.y - inset
     && windowRight <= display.x + display.width + inset
     && windowBottom <= display.y + display.height + inset;
+}
+
+function compileOptionalPattern(pattern: string | undefined, label: string): RegExp | undefined {
+  if (!pattern?.trim()) return undefined;
+  try {
+    return new RegExp(pattern, 'u');
+  } catch (error) {
+    throw new Error(`Invalid macOS target app ${label} regex: ${shortError(error)}.`);
+  }
+}
+
+function macosLaunchResult(
+  spec: MacosTargetAppDiscoverySpec,
+  operationOptions: MacosTargetAppLaunchOptions,
+  launchMode: string,
+  target: string,
+  pids: number[],
+  details: Record<string, unknown> = {},
+): MacosTargetAppLaunchResult {
+  return {
+    pids: [...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0))],
+    targetAppRef: `app:macos-${launchMode}/${target}`,
+    launchRef: `.sciforge/vision-runs/${sanitizeMacosTargetId(operationOptions.runId || 'macos-virtual-display-driver')}/virtual-display-provider/launch.json`,
+    details: {
+      launchMode,
+      targetKind: target,
+      hasProcessMatch: Boolean(spec.processMatch),
+      hasWindowTitlePattern: Boolean(spec.windowTitlePattern),
+      ...details,
+    },
+  };
+}
+
+function sanitizeMacosTargetId(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '') || 'generic';
 }
 
 export function runOsascript(
@@ -378,6 +662,12 @@ for index in 0..<Int(displayCount) {
 let output: [String: Any] = ["error": Int(error.rawValue), "displays": displays]
 let data = try JSONSerialization.data(withJSONObject: output, options: [])
 FileHandle.standardOutput.write(data)
+`;
+
+const SCREEN_RECORDING_PREFLIGHT_SWIFT = `
+import CoreGraphics
+
+print(CGPreflightScreenCaptureAccess() ? "1" : "0")
 `;
 
 const CG_WINDOW_INVENTORY_SWIFT = `

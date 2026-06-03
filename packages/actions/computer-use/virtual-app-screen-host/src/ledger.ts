@@ -73,10 +73,31 @@ function isFixtureOwnedRef(value: string | undefined): boolean {
   return Boolean(value && /^(fixture|replay-fixture|snapshot-fixture):/i.test(value));
 }
 
+function isHostOwnedPreflightRef(value: string | undefined): boolean {
+  return Boolean(
+    value?.startsWith('computer-use:native-host/preflights/')
+    && !isUiOwnedRef(value)
+    && !isFixtureOwnedRef(value)
+    && !/(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(value),
+  );
+}
+
+function isHostOwnedRef(value: string | undefined): boolean {
+  return Boolean(
+    value?.startsWith('computer-use:native-host/')
+    && !isUiOwnedRef(value)
+    && !isFixtureOwnedRef(value)
+    && !/(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(value),
+  );
+}
+
 export interface NativeHostLedgerValidationOptions {
+  scope?: 'session' | 'preflight';
+  requirePreflight?: boolean;
   requireFrame?: boolean;
   requireHumanInput?: boolean;
   requireAutomationBarrier?: boolean;
+  requireTakeoverQueue?: boolean;
   requireGrantValidation?: boolean;
   requirePermissionHandoff?: boolean;
   requirePermissionRecheck?: boolean;
@@ -127,15 +148,100 @@ export function validateNativeHostEvidenceLedger(
   if (ledger.headSha256 !== previousSha256) issues.push('ledger headSha256 does not match last entry.');
 
   const types = new Set(ledger.entries.map((entry) => entry.type));
+  const scope = options.scope ?? 'session';
+  if (scope === 'preflight') {
+    if (!isHostOwnedPreflightRef(ledger.ledgerRef)) {
+      issues.push('preflight ledgerRef must be a Host-owned preflight ref.');
+    }
+    if (!isHostOwnedPreflightRef(ledger.sessionRef)) {
+      issues.push('preflight sessionRef must be a Host-owned preflight ref.');
+    }
+    if (types.has('session.created')) issues.push('preflight ledger must not contain session.created.');
+    if (types.has('app.launched')) issues.push('preflight ledger must not contain app.launched.');
+    if (types.has('surface.attached')) issues.push('preflight ledger must not contain surface.attached.');
+    if ((options.requirePreflight ?? true) && !types.has('preflight.recorded')) {
+      issues.push('preflight.recorded entry is required.');
+    }
+    const preflight = ledger.entries.find((entry) => entry.type === 'preflight.recorded');
+    if (preflight) {
+      for (const key of ['preflightRef', 'preflightLedgerRef', 'preflightLedgerEntryRef', 'hostReadinessRef', 'adapterReadinessRef'] as const) {
+        const ref = preflight.refs[key];
+        if (!ref) {
+          issues.push(`preflight.recorded ${key} is required.`);
+        } else if (!isHostOwnedPreflightRef(ref)) {
+          issues.push(`preflight.recorded ${key} must be a Host-owned preflight ref.`);
+        }
+      }
+      if (preflight.refs.preflightRef && preflight.refs.preflightRef !== ledger.sessionRef) {
+        issues.push('preflight.recorded preflightRef must equal sessionRef.');
+      }
+      if (preflight.refs.preflightLedgerRef && preflight.refs.preflightLedgerRef !== ledger.ledgerRef) {
+        issues.push('preflight.recorded preflightLedgerRef must equal ledgerRef.');
+      }
+      if (preflight.refs.preflightLedgerEntryRef && preflight.refs.preflightLedgerEntryRef !== preflight.eventRef) {
+        issues.push('preflight.recorded preflightLedgerEntryRef must equal eventRef.');
+      }
+    }
+    return {
+      ok: issues.length === 0,
+      issues,
+    };
+  }
   if (!types.has('session.created')) issues.push('session.created entry is required.');
   if (!types.has('app.launched')) issues.push('app.launched entry is required.');
   if (!types.has('surface.attached')) issues.push('surface.attached entry is required.');
+  if (!isHostOwnedRef(ledger.currentRunPointerRef)) {
+    issues.push('currentRunPointerRef must be Host-owned session evidence.');
+  }
   if (options.requireFrame && !types.has('frame.read')) issues.push('frame.read entry is required.');
   if (options.requireHumanInput && !types.has('human-input.accepted')) {
     issues.push('human-input.accepted entry is required.');
   }
+  if (options.requireHumanInput) {
+    for (const inputEntry of ledger.entries.filter((entry) => entry.type === 'human-input.accepted')) {
+      if (!inputEntry.refs.inputAcceptedRef) issues.push('human-input.accepted inputAcceptedRef is required.');
+      if (!inputEntry.refs.beforeFrameRef) issues.push('human-input.accepted beforeFrameRef is required.');
+      if (!inputEntry.refs.currentFrameRef) issues.push('human-input.accepted currentFrameRef is required.');
+      if (inputEntry.refs.beforeFrameRef && !isHostOwnedRef(inputEntry.refs.beforeFrameRef)) {
+        issues.push('human-input.accepted beforeFrameRef must be Host-owned frame evidence.');
+      }
+      if (inputEntry.refs.currentFrameRef && !isHostOwnedRef(inputEntry.refs.currentFrameRef)) {
+        issues.push('human-input.accepted currentFrameRef must be Host-owned frame evidence.');
+      }
+      if (inputEntry.refs.frameRef && inputEntry.refs.currentFrameRef && inputEntry.refs.frameRef !== inputEntry.refs.currentFrameRef) {
+        issues.push('human-input.accepted frameRef must equal currentFrameRef.');
+      }
+    }
+  }
   if (options.requireAutomationBarrier && !types.has('automation.barrier-completed')) {
     issues.push('automation.barrier-completed entry is required.');
+  }
+  if (options.requireTakeoverQueue) {
+    const pauseEntry = ledger.entries.find((entry) => entry.type === 'agent.paused');
+    const resumeEntry = ledger.entries.find((entry) => entry.type === 'agent.resumed');
+    if (!pauseEntry) {
+      issues.push('agent.paused entry is required.');
+    } else {
+      if (!pauseEntry.refs.agentQueueRef) {
+        issues.push('agent.paused agentQueueRef is required.');
+      } else if (!isHostOwnedRef(pauseEntry.refs.agentQueueRef)) {
+        issues.push('agent.paused agentQueueRef must be Host-owned session evidence.');
+      }
+    }
+    if (!resumeEntry) {
+      issues.push('agent.resumed entry is required.');
+    } else {
+      if (!resumeEntry.refs.agentQueueRef) {
+        issues.push('agent.resumed agentQueueRef is required.');
+      } else if (!isHostOwnedRef(resumeEntry.refs.agentQueueRef)) {
+        issues.push('agent.resumed agentQueueRef must be Host-owned session evidence.');
+      }
+      if (!resumeEntry.refs.currentFrameRefreshRef) {
+        issues.push('agent.resumed currentFrameRefreshRef is required.');
+      } else if (!isHostOwnedRef(resumeEntry.refs.currentFrameRefreshRef)) {
+        issues.push('agent.resumed currentFrameRefreshRef must be Host-owned session evidence.');
+      }
+    }
   }
   if (options.requireGrantValidation && !types.has('grant.validated')) issues.push('grant.validated entry is required.');
   const permissionHandoff = ledger.entries.find((entry) => entry.type === 'permission.handoff');
@@ -144,7 +250,7 @@ export function validateNativeHostEvidenceLedger(
     if (!permissionHandoff) {
       issues.push('permission.handoff entry is required.');
     } else {
-      for (const key of ['sessionRef', 'permissionHandoffRef', 'recheckRef', 'adapterReadinessRef'] as const) {
+      for (const key of ['sessionRef', 'permissionHandoffRef', 'recheckRef', 'adapterReadinessRef', 'platformDriverRef', 'providerReadinessSummaryRef'] as const) {
         if (!permissionHandoff.refs[key]) issues.push(`permission.handoff ${key} is required.`);
       }
     }
@@ -153,7 +259,7 @@ export function validateNativeHostEvidenceLedger(
     if (!permissionRecheck) {
       issues.push('permission.recheck entry is required.');
     } else {
-      for (const key of ['sessionRef', 'permissionHandoffRef', 'recheckRef', 'adapterReadinessRef'] as const) {
+      for (const key of ['sessionRef', 'permissionHandoffRef', 'recheckRef', 'adapterReadinessRef', 'platformDriverRef', 'providerReadinessSummaryRef'] as const) {
         if (!permissionRecheck.refs[key]) issues.push(`permission.recheck ${key} is required.`);
       }
     }
@@ -175,4 +281,27 @@ export function validateNativeHostEvidenceLedger(
     ok: issues.length === 0,
     issues,
   };
+}
+
+export function deriveNativeHostMinimalEvidenceReplayRefs(ledger: NativeHostEvidenceLedger): string[] {
+  const refs = [
+    ledger.entries.find((entry) => entry.type === 'session.created')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'surface.attached')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'grant.validated')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'frame.read')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'human-input.accepted')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'agent.paused')?.eventRef,
+    ledger.entries.find((entry) => entry.type === 'agent.resumed')?.eventRef,
+    frameReadAfter(ledger, 'agent.resumed')?.eventRef,
+  ];
+  return refs.filter((entry): entry is string => Boolean(entry));
+}
+
+function frameReadAfter(
+  ledger: NativeHostEvidenceLedger,
+  type: NativeHostLedgerEventType,
+): NativeHostLedgerEntry | undefined {
+  const marker = ledger.entries.find((entry) => entry.type === type);
+  if (!marker) return undefined;
+  return ledger.entries.find((entry) => entry.type === 'frame.read' && entry.sequence > marker.sequence);
 }

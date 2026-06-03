@@ -232,8 +232,18 @@ test('Browser pane keyboard editing actions stay on BrowserHostSession without c
     assert.equal(report.selectionRangePolicy.editingKeysCovered, true);
     assert.equal(report.productAcceptance.status, 'blocked');
     assert.equal(report.productAcceptance.blocker, 'real-product-native-os-ui-run-not-executed');
+    assert.equal(report.productAcceptance.owner, 'BrowserHostSession');
+    assert.equal(report.productAcceptance.liveSurfaceTransport, 'native-embedded');
+    assert.equal(report.productAcceptance.browserHostSessionRef, `browser-host-session:${finalState.id}/session`);
+    assert.equal(report.productAcceptance.liveSurfaceRef, finalState.liveSurfaceRef);
     assert.equal(report.realOsUiRunHandoff.status, 'blocked');
     assert.equal(report.realOsUiRunHandoff.passClaim, false);
+    assert.equal(report.realOsUiRunHandoff.requiredProofs.length, report.productAcceptance.requiredProofs.length);
+    assert.ok(report.realOsUiRunHandoff.requiredProofs.every((proof) => proof.proofRef.startsWith(`browser-host-session:${finalState.id}/`)));
+    assert.ok(report.clipboardPolicy.requiredProofs.every((proof) => proof.browserHostSessionRef === `browser-host-session:${finalState.id}/session`));
+    assert.ok(report.clipboardPolicy.requiredProofs.every((proof) => proof.liveSurfaceRef === finalState.liveSurfaceRef));
+    assert.ok(report.selectionRangePolicy.requiredProofs.every((proof) => proof.browserHostSessionRef === `browser-host-session:${finalState.id}/session`));
+    assert.ok(report.selectionRangePolicy.requiredProofs.every((proof) => proof.liveSurfaceRef === finalState.liveSurfaceRef));
     assert.ok(report.productAcceptance.requiredProofs.every((proof) => proof.proofRef.startsWith(`browser-host-session:${finalState.id}/`)));
     assert.doesNotMatch(reportText, /data:image|base64|<\s*(?:!doctype|html|body|textarea|input|iframe|webview)\b/i);
     assert.doesNotMatch(reportText, new RegExp(escapeRegExp(ORDINARY_TEXT_INITIAL)));
@@ -285,6 +295,7 @@ function assertBrowserPaneKeyboardSourceGuards(): void {
           liveSurfaceTransport: 'native-embedded',
           nativeAdapterUrl: 'http://127.0.0.1:39303',
           singleInteractiveTruth: true,
+          secondTruthSource: false,
           diagnostics: [],
         } satisfies BrowserHostSessionState,
       },
@@ -304,6 +315,7 @@ function assertBrowserPaneKeyboardSourceGuards(): void {
   assert.match(html, /data-browser-native-surface="true"/);
   assert.match(html, /data-browser-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-single-interactive-truth="true"/);
+  assert.match(html, /data-browser-second-truth-source="false"/);
   assert.match(html, /data-browser-frame-transport="native-embedded"/);
   assert.doesNotMatch(html, /browser-workbench-host-keyboard-input|hidden-input|<canvas\b|<iframe|<webview|system-browser-window|\/api\/sciforge\/browser\/proxy|data:image|base64/i);
 
@@ -877,6 +889,12 @@ function boundedKeyboardEditingReport(state: BrowserHostSessionState, driver: Ke
     productAcceptance: {
       status: 'blocked',
       blocker: 'real-product-native-os-ui-run-not-executed',
+      owner: 'BrowserHostSession',
+      productSurface: 'right-pane-browser',
+      inputChannel: 'browser-host-session',
+      liveSurfaceTransport: 'native-embedded',
+      browserHostSessionRef: `${sessionScope}/session`,
+      liveSurfaceRef: state.liveSurfaceRef,
       handoffRef: `${sessionScope}/os-ui-handoff/keyboard-input-fidelity`,
       requiredRealProofs: [
         'right-pane-native-surface-keyboard-focus',
@@ -912,6 +930,7 @@ function keyboardOsUiRunHandoff(state: BrowserHostSessionState) {
       `${sessionScope}/audit/selection-range-owner`,
       `${sessionScope}/audit/shell-composer-not-targeted`,
     ],
+    requiredProofs: keyboardRequiredProofs(state),
     rawPayloadsCaptured: false,
     refsFirst: true,
   };
@@ -930,30 +949,43 @@ function keyboardRequiredProofs(state: BrowserHostSessionState) {
 }
 
 function keyboardClipboardRequiredProofs(state: BrowserHostSessionState) {
+  const sessionScope = `browser-host-session:${state.id}`;
   return ['copy', 'paste', 'cut'].map((operation) => ({
     operation,
     status: 'blocked' as const,
     blocker: 'real-product-native-os-ui-run-not-executed' as const,
     owner: 'BrowserHostSession' as const,
-    actionRef: `browser-host-session:${state.id}/clipboard/${operation}/action`,
-    confirmationAuditRef: `browser-host-session:${state.id}/clipboard/${operation}/confirmation-audit`,
-    roundTripRef: `browser-host-session:${state.id}/clipboard/${operation}/round-trip-required`,
+    productSurface: 'right-pane-browser' as const,
+    browserHostSessionRef: `${sessionScope}/session`,
+    liveSurfaceRef: state.liveSurfaceRef,
+    proofRef: `${sessionScope}/required-proof/clipboard-${operation}`,
+    actionRef: `${sessionScope}/clipboard/${operation}/action`,
+    confirmationAuditRef: `${sessionScope}/clipboard/${operation}/confirmation-audit`,
+    roundTripRef: `${sessionScope}/clipboard/${operation}/round-trip-required`,
     payloadPolicy: 'length-and-hash-only' as const,
     rawClipboardPayloadRecorded: false as const,
+    rawPayloadRecorded: false as const,
     shellComposerTarget: 'not-targeted' as const,
   }));
 }
 
 function keyboardSelectionRequiredProofs(state: BrowserHostSessionState) {
+  const sessionScope = `browser-host-session:${state.id}`;
   return (['input', 'contenteditable', 'page-text'] as const).map((target) => ({
     target,
     status: 'blocked' as const,
     blocker: 'real-product-native-os-ui-run-not-executed' as const,
     owner: 'BrowserHostSession' as const,
-    rangeRef: `browser-host-session:${state.id}/selection/${target}/range`,
+    productSurface: 'right-pane-browser' as const,
+    browserHostSessionRef: `${sessionScope}/session`,
+    liveSurfaceRef: state.liveSurfaceRef,
+    proofRef: `${sessionScope}/required-proof/selection-${target}`,
+    rangeRef: `${sessionScope}/selection/${target}/range`,
     requiredFields: ['selectedLength', 'selectedHashSha256'] as const,
     rawSelectionTextRecorded: false as const,
     rawDomRecorded: false as const,
+    rawPayloadRecorded: false as const,
+    shellComposerTarget: 'not-targeted' as const,
   }));
 }
 
@@ -967,7 +999,9 @@ function keyboardRequiredProof(kind: string, state: BrowserHostSessionState, ext
     browserHostSessionRef: `browser-host-session:${state.id}/session`,
     liveSurfaceRef: state.liveSurfaceRef,
     proofRef: `browser-host-session:${state.id}/required-proof/${kind}`,
+    auditRef: `browser-host-session:${state.id}/audit/${kind}`,
     rawPayloadRecorded: false as const,
+    shellComposerTarget: 'not-targeted' as const,
     secondTruthSource: false as const,
     ...extra,
   };

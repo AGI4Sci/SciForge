@@ -7,6 +7,7 @@
   "publicApi": [
     "describe",
     "probe",
+    "recordPreflight",
     "createSession",
     "launchOrAttachApp",
     "attachSurface",

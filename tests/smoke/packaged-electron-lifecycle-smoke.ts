@@ -109,8 +109,10 @@ try {
     await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort()),
     [
       'attachBrowserHostSessionSurface',
+      'attachVirtualAppScreenSurface',
       'captureNativeBrowserScreenshot',
       'detachBrowserHostSessionSurface',
+      'detachVirtualAppScreenSurface',
       'getBrowserHostSessionSurfaceState',
       'getNativeBrowserState',
       'getRuntimeConfig',
@@ -122,6 +124,7 @@ try {
       'openExternal',
       'openNativeBrowser',
       'pickDirectory',
+      'presentVirtualAppScreenSurface',
       'requestShutdown',
       'revealPath',
     ],

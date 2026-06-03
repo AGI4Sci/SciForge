@@ -81,6 +81,7 @@ export type {
   VirtualScreenLeaseOwner,
   VirtualScreenPayload,
   VirtualScreenPointerButton,
+  VirtualScreenPresentationState,
 } from './virtual-screen-viewer/render';
 export {
   WORKSPACE_FILE_VIEWER_DEFAULT_INLINE_TEXT_LIMIT_BYTES,

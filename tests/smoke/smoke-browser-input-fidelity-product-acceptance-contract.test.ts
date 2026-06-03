@@ -126,6 +126,7 @@ type BrowserInputFidelityProductAcceptanceEvidence = {
     runId: string;
     platform: 'macos' | 'windows' | 'linux';
     productSurface: 'right-pane-browser';
+    liveSurfaceTransport: 'native-embedded';
     startedAt: string;
     completedAt: string;
     browserHostSessionRef: string;
@@ -221,6 +222,7 @@ test('Browser input fidelity contract rejects forged pass without real IME, clip
       runId: 'input-fidelity-forged',
       platform: 'macos',
       productSurface: 'right-pane-browser',
+      liveSurfaceTransport: 'native-embedded',
       startedAt: '2026-06-02T00:00:00.000Z',
       completedAt: '2026-06-02T00:01:00.000Z',
       browserHostSessionRef: 'browser-host-session:input-fidelity-product-contract/session',
@@ -322,6 +324,7 @@ test('Browser input fidelity contract allows only bounded real OS UI pass eviden
   assert.equal(evidence.secondTruthSource, false);
   assert.equal(evidence.inputChannel, 'browser-host-session');
   assert.equal(evidence.osUiRun?.frameStreamRef, undefined);
+  assert.equal(evidence.osUiRun?.liveSurfaceTransport, 'native-embedded');
   assert.equal(evidence.capabilities.ime.details?.kind, 'ime-composition');
   assert.equal(evidence.capabilities.clipboard.details?.kind, 'clipboard-round-trip');
   assert.equal(evidence.capabilities.selectionRange.details?.kind, 'selection-range');
@@ -673,6 +676,7 @@ function boundedPassedInputFidelityEvidence(): BrowserInputFidelityProductAccept
       runId: 'input-fidelity-os-ui-20260602T000000Z',
       platform: 'macos',
       productSurface: 'right-pane-browser',
+      liveSurfaceTransport: 'native-embedded',
       startedAt: '2026-06-02T00:00:00.000Z',
       completedAt: '2026-06-02T00:03:00.000Z',
       browserHostSessionRef: 'browser-host-session:input-fidelity-os-ui/session',
@@ -859,6 +863,7 @@ function hasValidOsUiRun(evidence: BrowserInputFidelityProductAcceptanceEvidence
     run
       && run.runId.length > 0
       && run.productSurface === 'right-pane-browser'
+      && run.liveSurfaceTransport === 'native-embedded'
       && run.browserHostSessionRef.startsWith('browser-host-session:')
 	      && run.liveSurfaceRef.startsWith('browser-host-session:')
 	      && run.auditRefs.length >= 3

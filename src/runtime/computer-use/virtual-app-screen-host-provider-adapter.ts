@@ -12,6 +12,7 @@ import {
   type NativeHostHumanInputEvent,
   type NativeHostInputAdapterKind,
   type NativeHostLiveSurface,
+  type NativeHostPermissionLedgerRequest,
   type NativeHostReadinessRecord,
   type NativeHostResult,
   type NativeHostSession,
@@ -121,6 +122,28 @@ class MaterializedVirtualDisplayProviderNativeHostAdapter implements NativeVirtu
         : undefined,
       recheckRef: `computer-use:native-host/recheck/${sanitizeId(this.providerId)}.json`,
     };
+  }
+
+  async refreshReadiness(
+    session: NativeHostSession,
+    _request: NativeHostPermissionLedgerRequest = {},
+  ): Promise<NativeHostResult<NativeHostReadinessRecord>> {
+    if (!this.provider) {
+      return nativeHostBlocked('provider-unavailable', 'Native Host provider adapter has no provider readiness refresher.', this.probe());
+    }
+    const runId = this.operationOptions?.runId ?? sanitizeId(session.evidenceContext.currentRunRef || session.sessionId);
+    const providerResult = await this.provider.probe({
+      ...(this.operationOptions ?? { runId }),
+      runId,
+    });
+    this.lifecycle.probe = providerResult;
+    if (providerResult.rawPayloadWritten !== false) {
+      return nativeHostBlocked('unsafe-input', 'provider.probe returned an inline/raw provider payload.', this.probe());
+    }
+    if (!stringRef(providerResult, 'adapterReadinessRef')) {
+      return nativeHostBlocked('missing-evidence', 'provider.probe did not return adapterReadinessRef evidence.', this.probe());
+    }
+    return { status: 'ok', value: this.probe() };
   }
 
   launchOrAttachApp(_session: NativeHostSession, appProfile: NativeHostAppProfile): NativeHostResult<NativeHostAppProfile> {
@@ -238,6 +261,7 @@ class MaterializedVirtualDisplayProviderNativeHostAdapter implements NativeVirtu
         acceptedAt: new Date().toISOString(),
         fireAndRelease: true,
         evidenceWillCatchUp: true,
+        providerEvidenceRefs: providerEvidenceRefsFromInputResult(providerResult),
       },
     };
   }
@@ -330,6 +354,7 @@ class MaterializedVirtualDisplayProviderNativeHostAdapter implements NativeVirtu
     const readFrame = await this.provider.readFrame(input.value.operationOptions);
     const readFrameBlocked = this.validateProviderControlReadFrame(readFrame, input.value, 'resume.readFrame');
     if (readFrameBlocked) return readFrameBlocked;
+    this.lifecycle.readFrame = readFrame;
     this.recordControlEvidence(session, input.value, providerResult, 'resume', readFrame);
     return { status: 'ok', value: session };
   }
@@ -387,7 +412,8 @@ class MaterializedVirtualDisplayProviderNativeHostAdapter implements NativeVirtu
       ?? stringRef(this.lifecycle.attachSurface, 'inputLeaseRef');
     const actionAdapterRef = stringRef(this.lifecycle.readFrame, 'actionAdapterRef')
       ?? stringRef(this.lifecycle.attachSurface, 'actionAdapterRef');
-    const adapterReadinessRef = stringRef(this.lifecycle.readFrame, 'adapterReadinessRef')
+    const adapterReadinessRef = session.readiness.adapterReadinessRef
+      ?? stringRef(this.lifecycle.readFrame, 'adapterReadinessRef')
       ?? stringRef(this.lifecycle.attachSurface, 'adapterReadinessRef')
       ?? stringRef(this.lifecycle.createSession, 'adapterReadinessRef')
       ?? stringRef(this.lifecycle.probe, 'adapterReadinessRef')
@@ -567,10 +593,7 @@ class MaterializedVirtualDisplayProviderNativeHostAdapter implements NativeVirtu
           stringRef(result, 'currentFrameRefreshRef'),
           stringRef(result, 'safeStopRef'),
           stringRef(readFrame ?? result, 'currentFrameRef'),
-          ...stringListRef(result, 'inputIntentRefs'),
-          ...stringListRef(result, 'executorEventRefs'),
-          ...stringListRef(result, 'beforeAfterFrameRefs'),
-          ...stringListRef(result, 'verificationRefs'),
+          ...providerEvidenceRefsFromInputResult(result),
         ]),
       },
     };
@@ -685,6 +708,19 @@ function stringListRef(result: VirtualDisplayProviderInvokeResult, key: string):
   if (typeof value === 'string' && value.trim()) return [value];
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()));
+}
+
+function providerEvidenceRefsFromInputResult(result: VirtualDisplayProviderInvokeResult): string[] {
+  return uniqueRefs([
+    stringRef(result, 'beforeFrameRef'),
+    stringRef(result, 'afterFrameRef'),
+    ...stringListRef(result, 'inputIntentRefs'),
+    ...stringListRef(result, 'executorEventRefs'),
+    ...stringListRef(result, 'beforeAfterFrameRefs'),
+    ...stringListRef(result, 'verificationRefs'),
+    ...stringListRef(result, 'isolationEvidenceRefs'),
+    ...stringListRef(result, 'physicalDesktopProbeRefs'),
+  ]);
 }
 
 function nativeHostBlocked<T>(

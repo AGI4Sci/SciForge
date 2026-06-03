@@ -26,12 +26,18 @@ const FIXTURE_HOST = 'sciforge-browser-pane-product-long-session.test';
 const DEFAULT_QUICK_ITERATIONS = 2;
 const TRUE_LONG_SESSION_MINUTES = 30;
 const MAX_PRODUCT_LONG_SESSION_MANIFEST_BYTES = 96_000;
+const PRODUCT_LONG_SESSION_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
+  'browser-host-native-surface',
+  'browser-host-search',
+  'browser-host-session',
+] as const;
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-product-long-session');
 const manifestPath = join(artifactDir, 'manifest.json');
 const PRODUCT_LONG_SESSION_CONFIG = productLongSessionConfig();
 
 type JsonRecord = Record<string, unknown>;
 type BrowserPaneLiveBlockedReasonCode =
+  | 'missing-native-attach/preflight'
   | 'missing-native-attach'
   | 'non-native-live-surface'
   | 'single-interactive-truth-missing'
@@ -232,6 +238,11 @@ type BrowserWorkbenchFailureSnapshot = {
     forward: 'enabled' | 'disabled' | 'missing';
     reload: 'enabled' | 'disabled' | 'missing';
   };
+  diagnostics?: {
+    healthCapability?: string;
+    liveSurfaceTransport?: string;
+    writerDiagnosticStatus?: string;
+  };
 };
 
 type ProductLongSessionResourceEvidence = {
@@ -310,6 +321,8 @@ type ProductLongSessionNativeOnlyAttemptEvidence = {
     base64Attributes: number;
     sessionRefCount: number;
   };
+  evidenceRefs: ProductLongSessionNativeEvidenceRefs;
+  nativeAttachPreflight: ProductLongSessionNativeAttachPreflightEvidence;
   blockedWhenNativeAttachMissing: true;
   legacyFallbackObserved: {
     hostStream: false;
@@ -323,8 +336,61 @@ type ProductLongSessionNativeOnlyAttemptEvidence = {
   };
 };
 
+type ProductLongSessionNativeEvidenceRefs = {
+  bounded: true;
+  source: 'native-embedded-browser-host-session';
+  status: 'attached' | 'blocked';
+  sessionRefs: string[];
+  liveSurfaceRefs: string[];
+  frameStreamRefs: string[];
+  rendererHashes: string[];
+};
+
+type ProductLongSessionNativeAttachPreflightEvidence = {
+  bounded: true;
+  status: 'ready' | 'blocked';
+  blockedReasonCode?: Extract<BrowserPaneLiveBlockedReasonCode, 'missing-native-attach/preflight'>;
+  writerHealth: {
+    available: boolean;
+    ok?: boolean;
+    service?: string;
+    status?: string;
+    capabilitySummary: string[];
+    capabilities: {
+      browserHostSession: 'ready' | 'missing';
+      nativeSurface: 'ready' | 'missing';
+      browserHostSearch: 'ready' | 'missing';
+    };
+    nativeSurfaceEndpoint: 'present' | 'missing';
+    endpointKeys: string[];
+    errorHash?: string;
+  };
+  rightPaneBridge: {
+    available: boolean;
+    state?: string;
+    hostFrameCount: number;
+    nativeSurfaceCount: number;
+    sessionRefCount: number;
+    liveSurfaceRefCount: number;
+    frameStreamRefCount: number;
+    rendererHashes: string[];
+    diagnosticHealthCapability?: string;
+    diagnosticLiveSurfaceTransport?: string;
+    writerDiagnosticStatus?: string;
+  };
+  nativeAttach: {
+    status: 'attached' | 'missing' | 'blocked';
+    liveSurfaceTransport?: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+  };
+};
+
 type ProductLongSessionFailureClassification = {
   kind:
+    | 'missing-native-attach/preflight'
     | 'address-details-ready-timeout'
     | 'browser-workbench-url-timeout'
     | 'browser-host-session-url-timeout'
@@ -365,6 +431,7 @@ type ProductLongSessionFailureClassification = {
     recentLoadingStates: BoundedCount[];
     recentLoadingReasons: BoundedCount[];
     observedUiStates: BoundedCount[];
+    nativeAttachPreflight?: ProductLongSessionNativeAttachPreflightEvidence;
     resourceHealth?: ProductLongSessionResourceEvidence;
   };
 };
@@ -447,6 +514,7 @@ type WorkspaceWriterRestartEvidence = {
 type ProductLongSessionManifest = {
   schemaVersion: typeof PRODUCT_LONG_SESSION_SCHEMA;
   status: 'passed' | 'blocked';
+  passClaim: boolean;
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
@@ -564,6 +632,7 @@ type ProductLongSessionManifest = {
 type ProductLongSessionBlockedManifest = {
   schemaVersion: typeof PRODUCT_LONG_SESSION_SCHEMA;
   status: 'blocked';
+  passClaim: false;
   runId: string;
   observedAt: string;
   shell: 'web-right-pane';
@@ -981,6 +1050,35 @@ test('product long-session runner contract rejects pass-shaped truncated thirty-
   ));
 });
 
+test('product long-session runner contract rejects pass-shaped truncated five-minute artifacts', () => {
+  const runner: ProductLongSessionManifest['runner'] = {
+    mode: 'quick-contract',
+    requestedMinutes: 5,
+    iterationsCompleted: 4,
+    durationMs: 60_000,
+    durationTargetMs: 300_000,
+    defaultSmokeIsThirtyMinuteBenchmark: false,
+    extensionEnv: {
+      minutes: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES',
+      iterations: 'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_ITERATIONS',
+    },
+  };
+
+  assert.throws(
+    () => assertProductLongSessionRunnerContract(
+      runner,
+      'passed',
+      'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=5 node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+    ),
+    /requested product long-session pass must run for the requested duration/,
+  );
+  assert.doesNotThrow(() => assertProductLongSessionRunnerContract(
+    runner,
+    'blocked',
+    'SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=5 node --import tsx --test tests/smoke/smoke-browser-pane-product-long-session.test.ts',
+  ));
+});
+
 test('product long-session runner contract requires minutes env when artifact requests a deadline', () => {
   const runner: ProductLongSessionManifest['runner'] = {
     mode: 'extended-product-long-session',
@@ -1003,6 +1101,128 @@ test('product long-session runner contract requires minutes env when artifact re
     ),
     /requested minutes artifact must include its minutes env in verificationCommand/,
   );
+});
+
+test('product long-session native-only attempt preserves native refs in blocked manifests after attach', () => {
+  const liveAcceptance = blockedBrowserPaneLiveAcceptance(new Error('later failure after native attach'));
+  const attempt = buildNativeOnlyAttemptEvidence({
+    config: {
+      mode: 'quick-contract',
+      requestedMinutes: 5,
+      iterations: Number.MAX_SAFE_INTEGER,
+      runUntilDeadline: true,
+      durationTargetMs: 300_000,
+      testTimeoutMs: 540_000,
+      defaultSmokeIsThirtyMinuteBenchmark: false,
+    },
+    durationMs: 12_345,
+    iterationsCompleted: 1,
+    liveAcceptance,
+    rightPaneSample: {
+      ...productLongSessionEmptyRightPaneEvidence(),
+      maxHostFrames: 1,
+      hostFrames: 1,
+      nativeSurfaces: 1,
+      sessionIds: ['session-native-9'],
+      liveSurfaceRefs: ['browser-host-session:session-native-9/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-native-9/frame-stream'],
+      renderers: ['native-embedded'],
+      hiddenKeyboardFocusKeys: ['browser-host-session:session-native-9'],
+    },
+  });
+
+  assert.equal(attempt.expectations.nativeAttach.status, 'attached');
+  assert.equal(attempt.expectations.nativeAttach.observedLiveSurfaceTransport, 'native-embedded');
+  assert.equal(attempt.evidenceRefs.status, 'attached');
+  assert.deepEqual(attempt.evidenceRefs.sessionRefs, ['browser-host-session:session-native-9']);
+  assert.deepEqual(attempt.evidenceRefs.liveSurfaceRefs, ['browser-host-session:session-native-9/live-surface']);
+  assert.deepEqual(attempt.evidenceRefs.frameStreamRefs, ['browser-host-session:session-native-9/frame-stream']);
+  assert.deepEqual(attempt.evidenceRefs.rendererHashes, [hashText('native-embedded')]);
+  assert.doesNotMatch(JSON.stringify(attempt), /<html|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+});
+
+test('product long-session native-only attempt keeps missing-native diagnostic with no native evidence', () => {
+  const attempt = buildNativeOnlyAttemptEvidence({
+    config: {
+      mode: 'quick-contract',
+      iterations: DEFAULT_QUICK_ITERATIONS,
+      runUntilDeadline: false,
+      durationTargetMs: 0,
+      testTimeoutMs: 240_000,
+      defaultSmokeIsThirtyMinuteBenchmark: false,
+    },
+    durationMs: 100,
+    iterationsCompleted: 0,
+    liveAcceptance: blockedBrowserPaneLiveAcceptance(new Error('setup failed')),
+  });
+
+  assert.equal(attempt.expectations.nativeAttach.status, 'blocked');
+  assert.equal(attempt.expectations.nativeAttach.observedLiveSurfaceTransport, 'missing-native-attach');
+  assert.equal(attempt.expectations.nativeAttach.blockedReasonCode, 'missing-native-attach');
+  assert.equal(attempt.evidenceRefs.status, 'blocked');
+  assert.deepEqual(attempt.evidenceRefs.sessionRefs, []);
+  assert.deepEqual(attempt.evidenceRefs.liveSurfaceRefs, []);
+  assert.deepEqual(attempt.evidenceRefs.frameStreamRefs, []);
+  assert.deepEqual(attempt.evidenceRefs.rendererHashes, []);
+});
+
+test('product long-session native attach preflight blocks stale writer health before URL wait', () => {
+  const preflight = buildNativeAttachPreflightEvidence({
+    writerHealth: {
+      ok: true,
+      service: 'sciforge-workspace-writer',
+      capabilities: ['workspace-files', 'browser-host-session', 'browser-host-search'],
+      endpoints: {
+        browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
+        browserHostSearch: '/api/sciforge/browser-host/search',
+      },
+    },
+    rightPane: productLongSessionEmptyRightPaneEvidence(),
+    workbenchSnapshot: {
+      hasViewer: true,
+      state: 'blocked',
+      displayedUrlLength: 0,
+      addressDraftLength: 0,
+      liveSurfaceRefs: [],
+      sessionRefs: [],
+      frameStreamRefs: [],
+      hostFrameCount: 0,
+      hiddenKeyboardActive: false,
+      commandAvailability: {
+        back: 'disabled',
+        forward: 'disabled',
+        reload: 'disabled',
+      },
+    },
+  });
+
+  assert.equal(preflight.status, 'blocked');
+  assert.equal(preflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.equal(preflight.writerHealth.available, true);
+  assert.equal(preflight.writerHealth.capabilities.nativeSurface, 'missing');
+  assert.deepEqual(preflight.writerHealth.capabilitySummary, [
+    'browser-host-native-surface:missing',
+    'browser-host-search:ready',
+    'browser-host-session:ready',
+  ]);
+  assert.equal(preflight.rightPaneBridge.available, false);
+  assert.equal(preflight.nativeAttach.status, 'missing');
+  assert.doesNotMatch(JSON.stringify(preflight), /<html|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+});
+
+test('product long-session classifies native attach preflight misses before browser URL timeout', () => {
+  const error = new Error('missing-native-attach/preflight: browser-host-native-surface capability missing');
+  const classification = classifyProductLongSessionFailure({
+    phase: 'iteration-0-native-attach-preflight',
+    error,
+    rightPaneBeforeFailure: productLongSessionEmptyRightPaneEvidence(),
+    networkSamples: [],
+  });
+
+  assert.equal(classification.kind, 'missing-native-attach/preflight');
+  assert.equal(classification.phaseCategory, 'browser-navigation');
+  assert.equal(classification.retryable, true);
+  assert.equal(classification.expectedRoute, 'unknown');
 });
 
 test('SciForge Browser pane product long-session harness emits bounded continuity and reconnect evidence', { timeout: PRODUCT_LONG_SESSION_CONFIG.testTimeoutMs }, async () => {
@@ -1036,6 +1256,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
   let iterationsCompleted = 0;
   const tabSwitchContinuity: boolean[] = [];
   const addressDetailsRecovery: AddressDetailsRecoveryEvidence[] = [];
+  let nativeAttachPreflight: ProductLongSessionNativeAttachPreflightEvidence | undefined;
   let currentPhase = 'setup';
 
   if (!existsSync(browserExecutable)) {
@@ -1111,6 +1332,9 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
     await installRightPaneObserver(page);
     const surface = page.locator('.right-pane-browser-surface');
     rightPaneInitial = await collectRightPaneEvidence(page);
+    currentPhase = 'native-attach-preflight';
+    nativeAttachPreflight = await collectNativeAttachPreflightEvidence({ page, writerUrl });
+    assertNativeAttachPreflightReady(nativeAttachPreflight);
 
     loopStartedAt = Date.now();
 
@@ -1127,6 +1351,9 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
         metrics,
         networkRecorder,
         addressDetailsRecovery,
+        onNativeAttachPreflight: (evidence) => {
+          nativeAttachPreflight = evidence;
+        },
         onPhase: (phase) => {
           currentPhase = phase;
         },
@@ -1173,6 +1400,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       networkSamples: networkRecorder.samples,
       frameStream: frameStream.stats,
       restartEvidence: restart.evidence,
+      nativeAttachPreflight,
       tabSwitchContinuity,
       addressDetailsRecovery,
       diagnostics: pageDiagnostics,
@@ -1205,6 +1433,7 @@ test('SciForge Browser pane product long-session harness emits bounded continuit
       frameStream: frameStreamStats,
       diagnostics: pageDiagnostics,
       rightPaneInitial,
+      nativeAttachPreflight,
       addressDetailsRecovery,
     }).then(() => {
       blockedArtifactWritten = true;
@@ -1241,6 +1470,7 @@ async function runProductLongSessionIteration(input: {
   metrics: ProductLongSessionMetrics;
   networkRecorder: ReturnType<typeof recordBrowserHostNetwork>;
   addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
+  onNativeAttachPreflight?: (evidence: ProductLongSessionNativeAttachPreflightEvidence) => void;
   onPhase?: (phase: string) => void;
 }): Promise<{ firstSession: JsonRecord; finalSession: JsonRecord; tabSwitchSameSession: boolean }> {
   const sessionUrl = `${input.fixtureOrigin}/session?iteration=${input.iteration}`;
@@ -1249,7 +1479,10 @@ async function runProductLongSessionIteration(input: {
   input.onPhase?.(`iteration-${input.iteration}-address-session`);
   await input.metrics.measure('navigation', `iteration-${input.iteration}-address-session`, async () => {
     await openBrowserPaneUrl(input.surface, sessionUrl);
-    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/session\\?iteration=${input.iteration}`));
+    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/session\\?iteration=${input.iteration}`), {
+      writerUrl: input.writerUrl,
+      onEvidence: input.onNativeAttachPreflight,
+    });
     await waitForFixtureEvent(
       input.fixtureUrl,
       (event) => event.type === 'page-load' && event.path === '/session' && event.iteration === input.iteration,
@@ -1327,21 +1560,30 @@ async function runProductLongSessionIteration(input: {
     const cursor = input.networkRecorder.samples.length;
     await clickBrowserCommand(input.surface, 'Back');
     await input.networkRecorder.waitForAction('back', cursor, 20_000, `back ${input.iteration}`);
-    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/session\\?iteration=${input.iteration}`));
+    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/session\\?iteration=${input.iteration}`), {
+      writerUrl: input.writerUrl,
+      onEvidence: input.onNativeAttachPreflight,
+    });
   }, input.iteration);
   input.onPhase?.(`iteration-${input.iteration}-toolbar-forward`);
   await input.metrics.measure('history-reload', `iteration-${input.iteration}-toolbar-forward`, async () => {
     const cursor = input.networkRecorder.samples.length;
     await clickBrowserCommand(input.surface, 'Forward');
     await input.networkRecorder.waitForAction('forward', cursor, 20_000, `forward ${input.iteration}`);
-    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`));
+    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`), {
+      writerUrl: input.writerUrl,
+      onEvidence: input.onNativeAttachPreflight,
+    });
   }, input.iteration);
   input.onPhase?.(`iteration-${input.iteration}-toolbar-reload`);
   await input.metrics.measure('history-reload', `iteration-${input.iteration}-toolbar-reload`, async () => {
     const cursor = input.networkRecorder.samples.length;
     await clickBrowserCommand(input.surface, 'Reload');
     await input.networkRecorder.waitForAction('reload', cursor, 20_000, `reload ${input.iteration}`);
-    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`));
+    await waitForWorkbenchUrl(input.surface, new RegExp(`^http://${fixtureHostPattern}:\\d+/details\\?iteration=${input.iteration}`), {
+      writerUrl: input.writerUrl,
+      onEvidence: input.onNativeAttachPreflight,
+    });
   }, input.iteration);
   await waitForFrameCaptureReady(input.surface, `iteration-${input.iteration}-after-history-frame`, input.metrics, input.iteration);
 
@@ -1377,6 +1619,7 @@ async function navigateToAddressDetailsWithRetry(input: {
   metrics: ProductLongSessionMetrics;
   networkRecorder: ReturnType<typeof recordBrowserHostNetwork>;
   addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
+  onNativeAttachPreflight?: (evidence: ProductLongSessionNativeAttachPreflightEvidence) => void;
 }) {
   const actionSequence: AddressDetailsRecoveryEvidence['actionSequence'] = ['open-url'];
   const firstAttemptCursor = input.networkRecorder.samples.length;
@@ -1520,11 +1763,15 @@ async function verifyAddressDetailsNavigation(input: {
   workspacePath: string;
   metrics: ProductLongSessionMetrics;
   shouldOpen: boolean;
+  onNativeAttachPreflight?: (evidence: ProductLongSessionNativeAttachPreflightEvidence) => void;
 }) {
   if (input.shouldOpen) {
     await openBrowserPaneUrl(input.surface, input.detailsUrl);
   }
-  await waitForWorkbenchUrl(input.surface, input.expectedWorkbenchUrl);
+  await waitForWorkbenchUrl(input.surface, input.expectedWorkbenchUrl, {
+    writerUrl: input.writerUrl,
+    onEvidence: input.onNativeAttachPreflight,
+  });
   await waitForSessionUrl(input.page, input.writerUrl, input.workspacePath, /\/details\?iteration=/, input.metrics, `iteration-${input.iteration}-state-details`);
   await waitForFixtureEvent(
     input.fixtureUrl,
@@ -1699,7 +1946,22 @@ async function waitForFrameCaptureReady(
   }, iteration);
 }
 
-async function waitForWorkbenchUrl(surface: Locator, expectedUrl: RegExp) {
+async function waitForWorkbenchUrl(
+  surface: Locator,
+  expectedUrl: RegExp,
+  nativeAttachPreflight?: {
+    writerUrl: string;
+    onEvidence?: (evidence: ProductLongSessionNativeAttachPreflightEvidence) => void;
+  },
+) {
+  if (nativeAttachPreflight) {
+    const preflight = await collectNativeAttachPreflightEvidence({
+      page: surface.page(),
+      writerUrl: nativeAttachPreflight.writerUrl,
+    });
+    nativeAttachPreflight.onEvidence?.(preflight);
+    assertNativeAttachPreflightReady(preflight);
+  }
   try {
     await surface.page().waitForFunction(({ source, flags }) => {
       const viewer = document.querySelector('.right-pane-browser-surface .browser-workbench-viewer');
@@ -2074,6 +2336,7 @@ async function collectBrowserWorkbenchFailureSnapshot(page: Page): Promise<Brows
       if (!button) return 'missing';
       return button.disabled ? 'disabled' : 'enabled';
     };
+    const diagnostics = root?.querySelector<HTMLElement>('.browser-workbench-viewer-diagnostics');
     return {
       hasViewer: Boolean(viewer),
       state: viewer?.getAttribute('data-browser-state') ?? '',
@@ -2087,6 +2350,11 @@ async function collectBrowserWorkbenchFailureSnapshot(page: Page): Promise<Brows
         back: availability('back'),
         forward: availability('forward'),
         reload: availability('reload'),
+      },
+      diagnostics: {
+        healthCapability: diagnostics?.getAttribute('data-browser-health-capability') ?? '',
+        liveSurfaceTransport: diagnostics?.getAttribute('data-browser-diagnostic-live-surface-transport') ?? '',
+        writerDiagnosticStatus: diagnostics?.getAttribute('data-browser-writer-diagnostic') ?? '',
       },
     };
   });
@@ -2110,6 +2378,11 @@ async function collectBrowserWorkbenchFailureSnapshot(page: Page): Promise<Brows
       back: snapshot.commandAvailability.back as BrowserWorkbenchFailureSnapshot['commandAvailability']['back'],
       forward: snapshot.commandAvailability.forward as BrowserWorkbenchFailureSnapshot['commandAvailability']['forward'],
       reload: snapshot.commandAvailability.reload as BrowserWorkbenchFailureSnapshot['commandAvailability']['reload'],
+    },
+    diagnostics: {
+      healthCapability: boundedDiagnosticString(snapshot.diagnostics.healthCapability),
+      liveSurfaceTransport: boundedDiagnosticString(snapshot.diagnostics.liveSurfaceTransport),
+      writerDiagnosticStatus: boundedDiagnosticString(snapshot.diagnostics.writerDiagnosticStatus),
     },
   };
 }
@@ -2274,6 +2547,7 @@ function buildProductLongSessionManifest(input: {
   networkSamples: BrowserHostNetworkSample[];
   frameStream: FrameStreamStats;
   restartEvidence: WorkspaceWriterRestartEvidence;
+  nativeAttachPreflight?: ProductLongSessionNativeAttachPreflightEvidence;
   tabSwitchContinuity: boolean[];
   addressDetailsRecovery: AddressDetailsRecoveryEvidence[];
   diagnostics: ReturnType<typeof recordPageDiagnostics>;
@@ -2296,6 +2570,7 @@ function buildProductLongSessionManifest(input: {
     durationMs: input.durationMs,
     iterationsCompleted: input.iterationsCompleted,
     liveAcceptance,
+    nativeAttachPreflight: input.nativeAttachPreflight,
     rightPaneInitial: input.rightPaneInitial,
     rightPaneSample: input.rightPaneBeforeRestart,
     restartEvidence: input.restartEvidence,
@@ -2312,6 +2587,7 @@ function buildProductLongSessionManifest(input: {
   return {
     schemaVersion: PRODUCT_LONG_SESSION_SCHEMA,
     status: liveAcceptance.status,
+    passClaim: liveAcceptance.status === 'passed',
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
@@ -2461,6 +2737,7 @@ function boundedNetworkSamples(samples: BrowserHostNetworkSample[], limit: numbe
 function assertProductLongSessionManifest(manifest: ProductLongSessionManifest) {
   assert.equal(manifest.schemaVersion, PRODUCT_LONG_SESSION_SCHEMA);
   assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
+  assert.equal(manifest.passClaim, manifest.status === 'passed');
   assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
   assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, manifest.status);
@@ -2562,6 +2839,7 @@ function buildNativeOnlyAttemptEvidence(input: {
   durationMs: number;
   iterationsCompleted: number;
   liveAcceptance: BrowserPaneLiveAcceptance;
+  nativeAttachPreflight?: ProductLongSessionNativeAttachPreflightEvidence;
   rightPaneInitial?: RightPaneBoundedEvidence;
   rightPaneSample?: RightPaneBoundedEvidence;
   restartEvidence?: WorkspaceWriterRestartEvidence;
@@ -2571,6 +2849,9 @@ function buildNativeOnlyAttemptEvidence(input: {
   const addressOutcomes = input.addressDetailsRecovery ?? [];
   const tabSwitchContinuity = input.tabSwitchContinuity ?? [];
   const rightPane = input.rightPaneSample;
+  const evidenceRefs = productLongSessionNativeEvidenceRefs(rightPane);
+  const nativeAttached = input.liveAcceptance.status === 'passed' || evidenceRefs.status === 'attached';
+  const nativeAttachPreflight = input.nativeAttachPreflight ?? buildNativeAttachPreflightEvidence({ rightPane });
   return {
     mode: 'native-only-right-pane-product-long-session',
     target: {
@@ -2589,9 +2870,11 @@ function buildNativeOnlyAttemptEvidence(input: {
     expectations: {
       nativeAttach: {
         requiredTransport: 'native-embedded',
-        status: input.liveAcceptance.status === 'passed' ? 'attached' : 'blocked',
-        observedLiveSurfaceTransport: input.liveAcceptance.observed.liveSurfaceTransport || 'missing-native-attach',
-        blockedReasonCode: input.liveAcceptance.blockedReasonCode,
+        status: nativeAttached ? 'attached' : 'blocked',
+        observedLiveSurfaceTransport: nativeAttached
+          ? 'native-embedded'
+          : input.liveAcceptance.observed.liveSurfaceTransport || 'missing-native-attach',
+        blockedReasonCode: nativeAttached ? undefined : input.liveAcceptance.blockedReasonCode,
       },
       addressDetailsRecovery: {
         expected: true,
@@ -2643,6 +2926,8 @@ function buildNativeOnlyAttemptEvidence(input: {
       base64Attributes: rightPane?.base64Attributes ?? 0,
       sessionRefCount: rightPane?.sessionIds.length ?? 0,
     },
+    evidenceRefs,
+    nativeAttachPreflight,
     blockedWhenNativeAttachMissing: true,
     legacyFallbackObserved: {
       hostStream: false,
@@ -2655,6 +2940,180 @@ function buildNativeOnlyAttemptEvidence(input: {
       systemPopup: false,
     },
   };
+}
+
+function productLongSessionNativeEvidenceRefs(rightPane: RightPaneBoundedEvidence | undefined): ProductLongSessionNativeEvidenceRefs {
+  if (!rightPane) return emptyProductLongSessionNativeEvidenceRefs();
+  const hasNativeBrowserHostSession = rightPane.hostFrames === 1
+    && rightPane.nativeSurfaces === 1
+    && rightPane.sessionIds.length > 0
+    && rightPane.liveSurfaceRefs.some((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref))
+    && rightPane.iframeSurfaces === 0
+    && rightPane.proxySurfaces === 0
+    && rightPane.webviewSurfaces === 0
+    && rightPane.systemPopupSurfaces === 0
+    && rightPane.dataImageSurfaces === 0
+    && rightPane.base64Attributes === 0
+    && rightPane.renderers.includes('native-embedded');
+  if (!hasNativeBrowserHostSession) return emptyProductLongSessionNativeEvidenceRefs();
+  return {
+    bounded: true,
+    source: 'native-embedded-browser-host-session',
+    status: 'attached',
+    sessionRefs: boundedUnique(rightPane.sessionIds.map((id) => `browser-host-session:${id}`), 24),
+    liveSurfaceRefs: boundedUnique(
+      rightPane.liveSurfaceRefs.filter((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref)),
+      24,
+    ),
+    frameStreamRefs: boundedUnique(
+      rightPane.frameStreamRefs.filter((ref) => /^browser-host-session:[^/]+\/frame-stream$/.test(ref)),
+      24,
+    ),
+    rendererHashes: boundedUnique(rightPane.renderers.filter(Boolean).map(hashText), 8),
+  };
+}
+
+function emptyProductLongSessionNativeEvidenceRefs(): ProductLongSessionNativeEvidenceRefs {
+  return {
+    bounded: true,
+    source: 'native-embedded-browser-host-session',
+    status: 'blocked',
+    sessionRefs: [],
+    liveSurfaceRefs: [],
+    frameStreamRefs: [],
+    rendererHashes: [],
+  };
+}
+
+async function collectNativeAttachPreflightEvidence(input: {
+  page: Page;
+  writerUrl: string;
+}): Promise<ProductLongSessionNativeAttachPreflightEvidence> {
+  const [writerHealthResult, rightPane, workbenchSnapshot] = await Promise.all([
+    fetchWorkspaceWriterHealth(input.writerUrl),
+    collectRightPaneEvidence(input.page).catch(() => undefined),
+    collectBrowserWorkbenchFailureSnapshot(input.page).catch(() => undefined),
+  ]);
+  return buildNativeAttachPreflightEvidence({
+    writerHealth: writerHealthResult.health,
+    writerHealthError: writerHealthResult.error,
+    rightPane,
+    workbenchSnapshot,
+  });
+}
+
+async function fetchWorkspaceWriterHealth(writerUrl: string): Promise<{ health?: JsonRecord; error?: unknown }> {
+  try {
+    const response = await fetch(`${writerUrl}/health`, { signal: AbortSignal.timeout(3_000) });
+    const text = await response.text();
+    const health = text ? parseJsonRecord(text) : {};
+    if (!response.ok || health.ok === false) return { error: new Error(`workspace-writer-health:${response.status}`) };
+    return { health };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function buildNativeAttachPreflightEvidence(input: {
+  writerHealth?: JsonRecord;
+  writerHealthError?: unknown;
+  rightPane?: RightPaneBoundedEvidence;
+  workbenchSnapshot?: BrowserWorkbenchFailureSnapshot;
+}): ProductLongSessionNativeAttachPreflightEvidence {
+  const capabilities = Array.isArray(input.writerHealth?.capabilities)
+    ? input.writerHealth.capabilities.filter((capability): capability is string => typeof capability === 'string')
+    : [];
+  const capabilitySet = new Set(capabilities);
+  const endpoints = recordField(input.writerHealth?.endpoints);
+  const endpointKeys = endpoints ? boundedUnique(Object.keys(endpoints).sort(), 16) : [];
+  const nativeSurfaceEndpoint = typeof endpoints?.browserHostNativeSurface === 'string' ? 'present' : 'missing';
+  const capabilityState = (capability: string): 'ready' | 'missing' => capabilitySet.has(capability) ? 'ready' : 'missing';
+  const rightPane = input.rightPane;
+  const nativeRefs = productLongSessionNativeEvidenceRefs(rightPane);
+  const hostFrameCount = input.workbenchSnapshot?.hostFrameCount ?? rightPane?.hostFrames ?? 0;
+  const nativeSurfaceCount = rightPane?.nativeSurfaces ?? 0;
+  const forbiddenSecondTruth = Boolean(rightPane && (
+    rightPane.hostFrames > 1
+    || rightPane.canvasSurfaces > 0
+    || rightPane.iframeSurfaces > 0
+    || rightPane.proxySurfaces > 0
+    || rightPane.webviewSurfaces > 0
+    || rightPane.systemPopupSurfaces > 0
+    || rightPane.dataImageSurfaces > 0
+  ));
+  const missingWriterNativeSurface = capabilityState('browser-host-native-surface') === 'missing'
+    || nativeSurfaceEndpoint === 'missing';
+  const missingNativeAttach = nativeRefs.status !== 'attached';
+  const blocked = missingWriterNativeSurface || missingNativeAttach;
+  const nativeAttachStatus: ProductLongSessionNativeAttachPreflightEvidence['nativeAttach']['status'] = nativeRefs.status === 'attached'
+    ? 'attached'
+    : nativeSurfaceCount > 0 || hostFrameCount > 0
+      ? 'blocked'
+      : 'missing';
+  return {
+    bounded: true,
+    status: blocked ? 'blocked' : 'ready',
+    blockedReasonCode: blocked ? 'missing-native-attach/preflight' : undefined,
+    writerHealth: {
+      available: Boolean(input.writerHealth),
+      ok: typeof input.writerHealth?.ok === 'boolean' ? input.writerHealth.ok : undefined,
+      service: boundedDiagnosticString(stringField(input.writerHealth?.service)),
+      status: boundedDiagnosticString(stringField(input.writerHealth?.status)),
+      capabilitySummary: PRODUCT_LONG_SESSION_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES
+        .map((capability) => `${capability}:${capabilityState(capability)}`),
+      capabilities: {
+        browserHostSession: capabilityState('browser-host-session'),
+        nativeSurface: capabilityState('browser-host-native-surface'),
+        browserHostSearch: capabilityState('browser-host-search'),
+      },
+      nativeSurfaceEndpoint,
+      endpointKeys,
+      errorHash: input.writerHealthError
+        ? hashText(input.writerHealthError instanceof Error ? input.writerHealthError.message : String(input.writerHealthError))
+        : undefined,
+    },
+    rightPaneBridge: {
+      available: hostFrameCount > 0,
+      state: boundedDiagnosticString(input.workbenchSnapshot?.state || rightPane?.state || ''),
+      hostFrameCount,
+      nativeSurfaceCount,
+      sessionRefCount: rightPane?.sessionIds.length ?? input.workbenchSnapshot?.sessionRefs.length ?? 0,
+      liveSurfaceRefCount: rightPane?.liveSurfaceRefs.length ?? input.workbenchSnapshot?.liveSurfaceRefs.length ?? 0,
+      frameStreamRefCount: rightPane?.frameStreamRefs.length ?? input.workbenchSnapshot?.frameStreamRefs.length ?? 0,
+      rendererHashes: boundedUnique((rightPane?.renderers ?? []).filter(Boolean).map(hashText), 8),
+      diagnosticHealthCapability: boundedDiagnosticString(input.workbenchSnapshot?.diagnostics?.healthCapability ?? ''),
+      diagnosticLiveSurfaceTransport: boundedDiagnosticString(input.workbenchSnapshot?.diagnostics?.liveSurfaceTransport ?? ''),
+      writerDiagnosticStatus: boundedDiagnosticString(input.workbenchSnapshot?.diagnostics?.writerDiagnosticStatus ?? ''),
+    },
+    nativeAttach: {
+      status: nativeAttachStatus,
+      liveSurfaceTransport: nativeRefs.status === 'attached'
+        ? 'native-embedded'
+        : boundedDiagnosticString(input.workbenchSnapshot?.diagnostics?.liveSurfaceTransport ?? ''),
+      singleInteractiveTruth: nativeRefs.status === 'attached',
+      secondTruthSource: forbiddenSecondTruth,
+      sessionRefs: nativeRefs.sessionRefs,
+      liveSurfaceRefs: nativeRefs.liveSurfaceRefs,
+    },
+  };
+}
+
+function assertNativeAttachPreflightReady(preflight: ProductLongSessionNativeAttachPreflightEvidence): void {
+  assertNativeAttachPreflightEvidence(preflight);
+  if (preflight.status === 'blocked') {
+    throw new Error(`missing-native-attach/preflight:${JSON.stringify({
+      writerHealth: preflight.writerHealth.capabilitySummary,
+      nativeSurfaceEndpoint: preflight.writerHealth.nativeSurfaceEndpoint,
+      rightPaneBridge: preflight.rightPaneBridge.available,
+      nativeAttach: preflight.nativeAttach.status,
+    })}`);
+  }
+}
+
+function boundedDiagnosticString(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed.replace(/https?:\/\/[^\s"'<>]+/gi, (url) => `url:${hashText(url)}`).slice(0, 160);
 }
 
 function browserPaneLiveAcceptance(session: JsonRecord, frameTransport?: string): BrowserPaneLiveAcceptance {
@@ -2699,6 +3158,8 @@ function observedFrameTransport(session: JsonRecord): string | undefined {
 }
 
 function blockedBrowserPaneLiveAcceptance(error: unknown): BrowserPaneLiveAcceptance {
+  const message = error instanceof Error ? error.message : String(error);
+  const preflightBlocked = /missing-native-attach\/preflight|native-attach-preflight/i.test(message);
   return {
     status: 'blocked',
     claimScope: 'diagnostic-only',
@@ -2715,7 +3176,7 @@ function blockedBrowserPaneLiveAcceptance(error: unknown): BrowserPaneLiveAccept
       secondTruthSource: false,
     },
     blockedReason: boundedLiveBlockedReason(error),
-    blockedReasonCode: 'missing-native-attach',
+    blockedReasonCode: preflightBlocked ? 'missing-native-attach/preflight' : 'missing-native-attach',
   };
 }
 
@@ -2769,6 +3230,18 @@ function assertNativeOnlyAttemptEvidence(
   assert.ok(attempt.boundedCounters.objectUrls.liveEstimate >= 0);
   assert.ok(attempt.boundedCounters.objectUrls.maxLiveEstimate >= attempt.boundedCounters.objectUrls.liveEstimate);
   assert.ok(attempt.boundedCounters.objectUrls.revokeDeficit >= 0);
+  assert.equal(attempt.evidenceRefs.bounded, true);
+  assert.equal(attempt.evidenceRefs.source, 'native-embedded-browser-host-session');
+  assert.ok(['attached', 'blocked'].includes(attempt.evidenceRefs.status));
+  assert.ok(attempt.evidenceRefs.sessionRefs.length <= 24);
+  assert.ok(attempt.evidenceRefs.liveSurfaceRefs.length <= 24);
+  assert.ok(attempt.evidenceRefs.frameStreamRefs.length <= 24);
+  assert.ok(attempt.evidenceRefs.rendererHashes.length <= 8);
+  for (const ref of attempt.evidenceRefs.sessionRefs) assert.match(ref, /^browser-host-session:[^/]+$/);
+  for (const ref of attempt.evidenceRefs.liveSurfaceRefs) assert.match(ref, /^browser-host-session:[^/]+\/live-surface$/);
+  for (const ref of attempt.evidenceRefs.frameStreamRefs) assert.match(ref, /^browser-host-session:[^/]+\/frame-stream$/);
+  for (const hash of attempt.evidenceRefs.rendererHashes) assert.match(hash, /^[a-f0-9]{16}$/);
+  assertNativeAttachPreflightEvidence(attempt.nativeAttachPreflight);
   assert.equal(attempt.boundedCounters.canvasSurfaces, 0);
   assert.equal(attempt.boundedCounters.iframeSurfaces, 0);
   assert.equal(attempt.boundedCounters.proxySurfaces, 0);
@@ -2786,8 +3259,41 @@ function assertNativeOnlyAttemptEvidence(
     }
   } else if (attempt.expectations.nativeAttach.observedLiveSurfaceTransport === 'missing-native-attach') {
     assert.equal(attempt.expectations.nativeAttach.status, 'blocked');
-    assert.equal(attempt.expectations.nativeAttach.blockedReasonCode, 'missing-native-attach');
+    assert.ok(
+      attempt.expectations.nativeAttach.blockedReasonCode === 'missing-native-attach'
+        || attempt.expectations.nativeAttach.blockedReasonCode === 'missing-native-attach/preflight',
+    );
   }
+}
+
+function assertNativeAttachPreflightEvidence(preflight: ProductLongSessionNativeAttachPreflightEvidence): void {
+  assert.equal(preflight.bounded, true);
+  assert.ok(['ready', 'blocked'].includes(preflight.status));
+  if (preflight.status === 'blocked') assert.equal(preflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.equal(typeof preflight.writerHealth.available, 'boolean');
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
+  assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
+  assert.ok(preflight.writerHealth.capabilitySummary.length <= PRODUCT_LONG_SESSION_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
+  assert.ok(preflight.writerHealth.endpointKeys.length <= 16);
+  assert.equal(typeof preflight.rightPaneBridge.available, 'boolean');
+  assert.ok(preflight.rightPaneBridge.hostFrameCount >= 0);
+  assert.ok(preflight.rightPaneBridge.nativeSurfaceCount >= 0);
+  assert.ok(preflight.rightPaneBridge.sessionRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.liveSurfaceRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.frameStreamRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.rendererHashes.length <= 8);
+  for (const hash of preflight.rightPaneBridge.rendererHashes) assert.match(hash, /^[a-f0-9]{16}$/);
+  assert.ok(['attached', 'missing', 'blocked'].includes(preflight.nativeAttach.status));
+  assert.equal(typeof preflight.nativeAttach.singleInteractiveTruth, 'boolean');
+  assert.equal(typeof preflight.nativeAttach.secondTruthSource, 'boolean');
+  assert.ok(preflight.nativeAttach.sessionRefs.length <= 24);
+  assert.ok(preflight.nativeAttach.liveSurfaceRefs.length <= 24);
+  for (const ref of preflight.nativeAttach.sessionRefs) assert.match(ref, /^browser-host-session:[^/]+$/);
+  for (const ref of preflight.nativeAttach.liveSurfaceRefs) assert.match(ref, /^browser-host-session:[^/]+\/live-surface$/);
+  const serialized = JSON.stringify(preflight);
+  assert.doesNotMatch(serialized, /<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
 }
 
 function boundedLiveBlockedReason(error: unknown): string {
@@ -2813,6 +3319,7 @@ async function writeProductLongSessionBlockedManifest(input: {
   frameStream?: FrameStreamStats;
   diagnostics?: ReturnType<typeof recordPageDiagnostics>;
   rightPaneInitial?: RightPaneBoundedEvidence;
+  nativeAttachPreflight?: ProductLongSessionNativeAttachPreflightEvidence;
   addressDetailsRecovery?: AddressDetailsRecoveryEvidence[];
 }): Promise<void> {
   await input.networkRecorder?.drain().catch(() => undefined);
@@ -2833,6 +3340,7 @@ async function writeProductLongSessionBlockedManifest(input: {
     workbenchFailureSnapshot,
     rightPaneBeforeFailure,
     initialRightPaneEvidence: input.rightPaneInitial,
+    nativeAttachPreflight: input.nativeAttachPreflight,
     networkSamples,
   });
   const liveAcceptance = blockedBrowserPaneLiveAcceptance(input.error);
@@ -2841,6 +3349,7 @@ async function writeProductLongSessionBlockedManifest(input: {
     durationMs: input.durationMs,
     iterationsCompleted: input.currentIteration,
     liveAcceptance,
+    nativeAttachPreflight: input.nativeAttachPreflight,
     rightPaneInitial: input.rightPaneInitial,
     rightPaneSample: rightPaneBeforeFailure,
     addressDetailsRecovery: input.addressDetailsRecovery,
@@ -2848,6 +3357,7 @@ async function writeProductLongSessionBlockedManifest(input: {
   const manifest: ProductLongSessionBlockedManifest = {
     schemaVersion: PRODUCT_LONG_SESSION_SCHEMA,
     status: 'blocked',
+    passClaim: false,
     runId: input.runId,
     observedAt: new Date().toISOString(),
     shell: 'web-right-pane',
@@ -2937,6 +3447,7 @@ async function writeProductLongSessionBlockedManifest(input: {
 function assertProductLongSessionBlockedManifest(manifest: ProductLongSessionBlockedManifest) {
   assert.equal(manifest.schemaVersion, PRODUCT_LONG_SESSION_SCHEMA);
   assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.passClaim, false);
   assertProductLongSessionManifestIsBounded(manifest);
   assert.equal(manifest.shell, 'web-right-pane');
   assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, 'blocked');
@@ -3079,14 +3590,17 @@ function assertProductLongSessionRunnerContract(
     );
   }
 
+  if (runner.requestedMinutes !== undefined && status === 'passed' && runner.durationMs < runner.durationTargetMs) {
+    assert.fail(
+      runner.requestedMinutes >= TRUE_LONG_SESSION_MINUTES
+        ? 'requested 30+ minute product long-session pass must run for the requested duration'
+        : 'requested product long-session pass must run for the requested duration',
+    );
+  }
+
   if ((runner.requestedMinutes ?? 0) >= TRUE_LONG_SESSION_MINUTES) {
     assert.equal(runner.mode, 'extended-product-long-session');
-    if (status === 'passed') {
-      assert.ok(
-        runner.durationMs >= runner.durationTargetMs,
-        'requested 30+ minute product long-session pass must run for the requested duration',
-      );
-    } else {
+    if (status !== 'passed') {
       assert.equal(status, 'blocked', 'truncated requested 30+ minute product long-session artifacts must remain blocked');
     }
   }
@@ -3125,6 +3639,36 @@ function emptyObjectUrlStats(): ObjectUrlBoundedStats {
   };
 }
 
+function productLongSessionEmptyRightPaneEvidence(): RightPaneBoundedEvidence {
+  return {
+    state: '',
+    mutationCount: 0,
+    attachChanges: 0,
+    detachChanges: 0,
+    maxHostFrames: 0,
+    sessionIds: [],
+    liveSurfaceRefs: [],
+    frameStreamRefs: [],
+    renderers: [],
+    browserStates: [],
+    browserStateCounts: {},
+    browserStateTransitions: [],
+    browserStateSampleCount: 0,
+    hiddenKeyboardFocusKeys: [],
+    hostFrames: 0,
+    canvasSurfaces: 0,
+    imageSurfaces: 0,
+    nativeSurfaces: 0,
+    iframeSurfaces: 0,
+    proxySurfaces: 0,
+    webviewSurfaces: 0,
+    systemPopupSurfaces: 0,
+    dataImageSurfaces: 0,
+    base64Attributes: 0,
+    objectUrls: emptyObjectUrlStats(),
+  };
+}
+
 function boundedFailurePhase(value: string): string {
   return /^[a-z0-9-]+$/i.test(value) ? value.slice(0, 96) : 'unknown';
 }
@@ -3135,6 +3679,7 @@ function classifyProductLongSessionFailure(input: {
   workbenchFailureSnapshot?: BrowserWorkbenchFailureSnapshot;
   rightPaneBeforeFailure?: RightPaneBoundedEvidence;
   initialRightPaneEvidence?: RightPaneBoundedEvidence;
+  nativeAttachPreflight?: ProductLongSessionNativeAttachPreflightEvidence;
   networkSamples: BrowserHostNetworkSample[];
 }): ProductLongSessionFailureClassification {
   const baseReasonCode = productLongSessionFailureReasonCode(input.error, input.phase);
@@ -3183,6 +3728,7 @@ function classifyProductLongSessionFailure(input: {
         ...(input.rightPaneBeforeFailure?.browserStates ?? []),
         input.workbenchFailureSnapshot?.state ?? '',
       ].filter(Boolean), 12),
+      nativeAttachPreflight: input.nativeAttachPreflight,
       resourceHealth: input.rightPaneBeforeFailure
         ? buildResourceEvidence('before-failure', input.rightPaneBeforeFailure, input.initialRightPaneEvidence)
         : undefined,
@@ -3226,6 +3772,7 @@ function heapDelta(
 
 function productLongSessionFailureReasonCode(error: unknown, phase = ''): ProductLongSessionFailureClassification['kind'] {
   const message = error instanceof Error ? error.message : String(error);
+  if (/missing-native-attach\/preflight|native-attach-preflight/i.test(`${phase} ${message}`)) return 'missing-native-attach/preflight';
   if (/cleanup|Timed out during (?:page-close|browser-context-close|browser-close|ui-server-stop|workspace-writer-stop|fixture-close|temp-root-rm)/i.test(`${phase} ${message}`)) {
     return 'product-long-session-cleanup-blocked';
   }
@@ -3246,7 +3793,7 @@ function productLongSessionFailurePhaseCategory(
   phase: string,
 ): ProductLongSessionFailureClassification['phaseCategory'] {
   if (kind === 'address-details-ready-timeout' || phase.includes('address-details')) return 'address-details-navigation';
-  if (kind === 'browser-workbench-url-timeout' || kind === 'browser-host-session-url-timeout') return 'browser-navigation';
+  if (kind === 'missing-native-attach/preflight' || kind === 'browser-workbench-url-timeout' || kind === 'browser-host-session-url-timeout') return 'browser-navigation';
   if (kind === 'fixture-event-timeout') return 'fixture-readiness';
   if (kind === 'browser-host-session-continuity-break') return 'session-continuity';
   if (kind === 'product-long-session-cleanup-blocked') return 'cleanup';
@@ -3258,6 +3805,7 @@ function productLongSessionFailurePhaseCategory(
 function productLongSessionFailureRetryable(kind: ProductLongSessionFailureClassification['kind']): boolean {
   return [
     'address-details-ready-timeout',
+    'missing-native-attach/preflight',
     'browser-workbench-url-timeout',
     'browser-host-session-url-timeout',
     'fixture-event-timeout',

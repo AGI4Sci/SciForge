@@ -1,6 +1,6 @@
 # VirtualAppScreen / Native Host / Virtual Display Provider 设计
 
-最后更新：2026-06-02
+最后更新：2026-06-03
 
 ## 目标结论
 
@@ -58,6 +58,8 @@ SciForge 自己不应该实现：
 SciForge 应该实现：
 
 - `NativeVirtualAppScreenHost` protocol、grant、session ownership、input queue 和 evidence writer。
+- Host-owned `recordPreflight`，用于无 attached session 时记录当前 run 的 permission、driver、provider readiness、blocked/handoff/recheck refs 和 preflight-scoped ledger；它不能创建 live surface，也不能让 UI placeholder 冒充 Host preflight。
+- Host-owned preflight/readiness refs 的一等传播：UI、dogfood、presentation viewer 和 runtime attach payload 必须保留 `nativeHostPreflight`、`preflightRef`、`preflightLedgerRef`、`preflightLedgerEntryRef` 和 `hostReadinessRef`，并把它们视为 Host evidence，而不是 provider/UI placeholder evidence。
 - provider discovery、install check、health check 和 readiness refs。
 - VirtualAppScreen session lifecycle。
 - app/window/session/display refs。
@@ -112,7 +114,7 @@ SciForge 应该实现：
 | `NativeVirtualAppScreenHost` | Native surface/display/session 的权威 owner。负责 permission、session lifecycle、surface presentation、input queue、automation barrier、grant 和 evidence writer。React viewer、runtime command 和 provider adapter 都不是 live truth owner。 |
 | `App Surface` | app 的可渲染、可输入、可验证界面层。VirtualAppScreen 用户级验收只接受原生虚拟 display、Xpra window、Windows IDD display 或 app protocol 绑定到同一 native provider 的 surface。 |
 | `VirtualDisplayProvider` | Host 内部平台 adapter。负责创建/销毁虚拟显示资源、启动 app、绑定窗口、输出 frame stream、接收 scoped input、产出 readiness/evidence refs。 |
-| `SurfaceTransport` | 把 provider frame 送到 GUI 的 transport。当前用户级验收只接受 WebRTC 或 native frame stream。 |
+| `SurfaceTransport` | 把 provider frame 送到 GUI 的 transport。当前用户级 live path 只接受 native presented surface、WebRTC 或等价 Host-owned native frame stream；WebCodecs 是 implementation layer，MJPEG/PNG delta 只能 diagnostic/fallback。 |
 | `InputIntent` | GUI 产生的终端等价鼠标/键盘/滚动/拖拽/菜单意图。GUI 不直接执行输入，只提交给 Computer Use action provider。 |
 | `ActionAdapter` | 将 `InputIntent` 变成 app/window scoped action 的执行器，例如 AX/UIA/AT-SPI、app command、isolated virtual-display input。 |
 
@@ -224,7 +226,10 @@ src/runtime/computer-use
 - `packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json` 是 host package 的 single-truth manifest：session、surface、frame、permission、grant、ledger 都必须 host-owned；UI、fixture、replay、第三方 viewer 都是 forbidden live truth source。
 - `src/contracts.ts` 是完整包级 contract；`src/in-memory-host.ts` + `src/ledger.ts` 是当前可运行的 fail-closed / contract-smoke host。顶层 `types.ts`、`errors.ts`、`evidence-ledger.ts` 只 re-export 该唯一 contract。默认无平台 adapter 时返回 blocked，contract-smoke adapter `diagnosticOnly=true`，只能证明 API/ledger/grant/barrier 形状。
 - Dogfood smoke 当前从产品 UI 右侧 `Screen` 读取 DOM/ref chips/terminal-equivalent command，而不是直接调用 provider internals。它校验 `rightPane`、`runtimeCommandAcceptance`、`providerReadiness`、`permissionRefs`、`lastFrameRefs`、`lastInputRefs`、`vscodeOperation`、`humanIntervention`、`bounded`、`nativeHost`、`humanInputHotPath`、`automationBarrierRefs` 和 `backgroundEvidenceRefs`。
+- UI/dogfood/presentation/runtime 对 Host preflight 已是 refs-first 一等传播：`nativeHostPreflight`、`preflightRef`、`preflightLedgerRef`、`preflightLedgerEntryRef` 和 `hostReadinessRef` 必须跨 runtime attach、viewer normalization、DOM/ref chips 和 bounded manifest 保持 Host-owned。`computer-use:screen-activation/...` 只表示 UI activation request / provider-readiness placeholder，不能升级为 Host preflight、不能填充 Host ledger refs。
 - `nativeHost`、`humanInputHotPath`、`automationBarrierRefs` 和 `backgroundEvidenceRefs` 已是 current smoke 的 passed gate：缺 Host session/surface/display refs、缺 fire-and-release input accepted refs、缺 automation barrier refs 或缺 background evidence refs 时，即使 Screen 呈 attached-shaped 状态也必须 blocked。它们是 fail-closed gate，不是用户级通过声明；真实通过仍需要 `diagnosticOnly=false` 的 platform provider evidence、live frame transport、hot-path input、automation barrier、takeover/resume 和 current-run ledger replay。
+- Real-driver opt-in smoke 包括 `npm run smoke:virtual-app-screen-macos-real-driver:opt-in`、`npm run smoke:virtual-app-screen-macos-real-human-input:opt-in`、`npm run smoke:virtual-app-screen-linux-xpra-real-driver:opt-in`、`npm run smoke:virtual-app-screen-linux-xpra-real-human-input:opt-in`、`npm run smoke:virtual-app-screen-windows-idd-real-driver:opt-in` 和 `npm run smoke:virtual-app-screen-windows-idd-real-human-input:opt-in`。它们是显式 opt-in，不属于普通 `verify`；平台、权限、driver、target app/window、frame capture 或 isolated input/control hook 不满足时必须 blocked/fail-closed，不能把 driver evidence 升级成 product pass。Windows real-human-input 还必须先通过 passed Linux real closed-loop manifest gate，并满足 Windows `win32` / IDD driver 条件。
+- Dogfood product smoke 和 real-driver opt-in smoke 是不同证据面：dogfood 证明产品 UI/right-pane gate 不假成功；real-driver opt-in 证明显式环境中的平台 attach/readFrame/native refs 或 Linux/macOS human-input ledger replay。Linux Xpra 的 isolated input 只在 agent-owned Xpra display + scoped `xdotool` 证据成立时有效，不能代表 macOS、Windows 或 general user-level pass。
 
 这意味着当前可声明的进展是 “Native Host package contract、manifest、error taxonomy、ledger validator、Host-owned public attach refs、viewer/runtime grant validation 和 dogfood Native Host gates 已对齐”；还不能声明 “真实 Native Host 产品路径已通过”。
 
@@ -343,6 +348,8 @@ type NativeHostReadinessRecord = {
 - Accessibility 可用于标准控件，但必须有 hit-test/action refs、before/after frame、verifier。
 - CGEvent / shared system input 只能 diagnostic 或 explicit handoff，不能作为后台隔离成功证据。
 
+macOS real-driver smoke 入口是 `npm run smoke:virtual-app-screen-macos-real-driver:opt-in`；macOS human-input/ledger replay 入口是 `npm run smoke:virtual-app-screen-macos-real-human-input:opt-in`。真实 runtime hooks 必须显式开启：`SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1|true|yes|on`；target app 必须通过 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_*` 标量变量或 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON` 指定。human-input smoke 还需要 `SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_HUMAN_INPUT=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_DRIVER=1` 和 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND`，可选 args 通过 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON` 提供。内置 hook command 是 `npm run virtual-app-screen-macos-pid-scoped-ax-hook --silent`，只能在 env hook bridge 下运行，并且只允许 target pid/window scoped Accessibility hit-test/AXPress、AXValue 或 AX scroll action；CGEvent、System Events keystroke、共享键盘、共享 pointer 和焦点抢占都必须 blocked/diagnostic-only。外部 hook 在 `capabilityProbe=true` 调用中必须返回安全 `inputAdapterCapability`，正常 input/control 调用返回 refs-first evidence 和隔离字段。平台专用 script 只是 opt-in smoke 入口；缺 Screen Recording、Accessibility、driver helper、target app/window、readFrame、isolated input/control hook 或 Host ledger replay 条件时保持 blocked/fail-closed，不能声明 product pass。
+
 ### Linux
 
 主线：Native Host adapter + Xpra 或 headless compositor。
@@ -357,9 +364,13 @@ type NativeHostReadinessRecord = {
 - X session 内的 XTest/xdotool 只要绑定到 agent-owned virtual X display，就不影响用户物理桌面，可以作为 isolated input。
 - 宿主全局输入、真实桌面 DISPLAY 输入必须 rejected 或 diagnostic。
 
+Linux Xpra real-driver smoke 入口是 `npm run smoke:virtual-app-screen-linux-xpra-real-driver:opt-in`，覆盖 attach、readFrame 和 Host-owned native refs。Linux Xpra real-human-input smoke 入口是 `npm run smoke:virtual-app-screen-linux-xpra-real-human-input:opt-in`，只在 `SCIFORGE_VIRTUAL_APP_SCREEN_LINUX_XPRA_REAL_HUMAN_INPUT=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_LINUX_XPRA_REAL_DRIVER=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1`、`xpra`、`xdotool` 和 agent-owned Xpra display 都满足时验证 Host runtime input、pause/resume 和 ledger replay。输入工具必须绑定 `DISPLAY=<session.display>`；如果会使用宿主真实 DISPLAY、全局键鼠、焦点抢占或无法证明 window 属于 Xpra session，必须 rejected/blocked。
+
 ### Windows
 
 主线：Native Host adapter + Windows Indirect Display Driver (IDD) provider + Windows Graphics Capture / DXGI path。
+
+Windows IDD real-driver smoke 入口是 `npm run smoke:virtual-app-screen-windows-idd-real-driver:opt-in`，由 shell-neutral Node launcher 设置 opt-in env 并支持 `--linux-manifest` / `--evidence-manifest` 参数，覆盖 opt-in attach、readFrame、Host-owned refs、`diagnosticOnly=false` evidence 和 Host ledger replay。它只在 `win32`、`SCIFORGE_VIRTUAL_APP_SCREEN_WINDOWS_IDD_REAL_DRIVER=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1`、driver/permission/target app 条件满足时允许真实 pass；普通平台或缺条件时必须 blocked/fail-closed，且 opted-in blocked attach 不能绿色通过实际 pass smoke。
 
 推荐顺序：
 
@@ -372,16 +383,51 @@ type NativeHostReadinessRecord = {
 - UIA、app command 优先。
 - `SendInput` 是系统级输入；除非 provider 能证明输入只进入 agent-owned display/session 且不扰动用户，否则只能 diagnostic/handoff。
 
-## Surface Transport 推荐
+## Surface Transport 推荐 / 选型评估
 
-| Transport | 角色 | 是否主线 |
+选型评估必须平台中立：transport 选择由 Host 报告的 shell/provider/runtime capability refs、当前 run 的 surface/input/evidence refs 和实测 streamQuality refs 决定，不把选择硬编码到 macOS/Linux/Windows 任一平台。平台 adapter 可以暴露不同 capture、present、codec 或 reconnect 能力；产品层只消费 Host-owned refs-first 描述。
+
+| Contract id | Candidate | 角色 | 优点 | 产品 live path gate |
+|---|---|---|---|---|
+| `native-presented-surface` | native presented surface | 桌面 shell 直接 present Host-owned surface/texture/window bounds；native frame stream 是同一类本地优化实现。 | 最低 copy/encode 开销，输入到 frame 延迟最低，适合本机 Electron/Tauri/WebView shell。 | 桌面优先主线；必须有 Host-minted `liveSurfaceRef` 或 `frameStreamRef`、`transportTelemetryRef`、grant/current-run refs、single interactive truth 和 bounded evidence refs。缺任一证明时 fail-closed 到 blocked/handoff/retry。 |
+| `webrtc` | WebRTC | media track 承载 live frame，data channel 承载 fire-and-release input 或 Host route refs。 | 浏览器原生支持、跨进程/远程 shell 成熟、拥塞控制和 reconnect 生态完整。 | Web shell、远程 shell 或跨进程主线；pass 只接受 Host-owned media/data-channel refs、input/result refs 和 streamQuality refs，不能让 peer 或 viewer 成为第二 truth。缺 refs 或 fallbackRequired=true 时 fail-closed 到 blocked/handoff/retry 或 clearly marked fallback。 |
+| `webcodecs` | WebCodecs | 浏览器/native codec primitive，可服务 WebRTC insertable stream、本地 encoded frame stream 或实验 encoder/decoder。 | 可降低 browser decode latency，便于做硬件 codec、backpressure 和 per-frame timing 实验。 | 评估为 implementation layer，不是 standalone product truth；必须挂在 Host-owned transport 上并保留 `liveSurfaceRef`/`frameStreamRef`、`transportTelemetryRef`、input causality refs 和 single interactive truth。无法证明 backpressure/reconnect/input-to-frame causality 时 fail-closed。 |
+| `mjpeg-png-delta` | MJPEG/PNG delta | diagnostic/fallback only 的简单 frame diff/HTTP stream。 | 易实现、便于 provider bring-up、可用于低频 preflight 或 failure diagnosis。 | 不能作为 user-level live pass；只可在 clearly marked fallback、diagnostic 或 blocked artifact 中出现。若当前 run 使用它，必须写 `fallbackRequired=true`、fallback reason refs、bounded frame refs 和 no-live-pass decision refs。 |
+
+产品 live path 固定 refs-first：frame bytes、视频、PNG/JPEG delta、codec payload 和 input logs 都不得 inline 到主 payload，只能通过 Host-owned refs 关联。无论候选 transport 是 native surface、WebRTC、WebCodecs 包装的 frame stream，还是 MJPEG/PNG delta fallback，它都只能呈现同一个 Host-owned live surface，不能成为第二套 interactive truth。
+
+## Provider Stream Quality Measurement Contract
+
+Provider-level stream quality measurement 是 VirtualDisplayProvider 自己产出的 bounded summary contract，不是 UI、viewer、runtime 或 browser adapter 后补的 pass 证据。contract owner 固定为 `owner=VirtualDisplayProvider`，surface/session truth 仍由 `hostSurfaceOwner=NativeVirtualAppScreenHost` 持有；产品层只消费 refs-first 结果，不读取原始 frame bytes、video chunk、provider payload 或 input log。
+
+该 contract 复用现有 VirtualDisplay frame telemetry/transport 概念：`VirtualDisplayFrameTransportContract` 提供同一 live surface 的 media/data channel refs，`VirtualDisplayFrameTelemetrySummary` 提供 bounded end-to-end frame telemetry，`VirtualDisplaySurfaceTransportDescriptor` 关联 `liveSurfaceRef`、`frameStreamRef`、`currentFrameRef` 和 transport refs，`frameTransportReadiness` 把 readiness probe 里的 low-latency/drop/backpressure summary 暴露给 Host。
+
+每个 provider 必须先写 refs，再让 Host/UI 消费。required refs 为：`frameTransportContractRef`、`frameTelemetryRef`、`providerStreamQualityRef`、`inputToFrameCausalityRef`、`reconnectProbeRef`、`boundedMetricSummaryRef`、`fallbackDecisionRef`。metric field source 固定是 `provider-owned-bounded-summary-ref`，`artifactPayloadMode=bounded-summary-refs-only`，`maxInlineEvidenceBytes=0`，每个字段 `inlineEvidence=forbidden`。
+
+必需 metric fields：
+
+| Field | Unit | Source |
 |---|---|---|
-| native presented surface | 桌面 shell 的最低延迟路径，host 把 native surface/texture/window bounds 交给 shell present。 | 是，桌面优先 |
-| WebRTC | 低延迟 frame + data channel input，适合 Web shell、远程 shell 或跨进程边界。 | 是，非桌面/跨进程优先 |
-| native frame stream | 本机 Electron/Tauri/WebView 内部 transport，可作为 native surface 与 WebRTC 之间的本地优化。 | 是 |
-| Sunshine/Moonlight style | 高性能编码/低延迟设计参考，可用于实验。 | 参考，不作为默认 API |
+| `latencyP50Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `latencyP95Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `framerateAvgFps` | fps | `provider-owned-bounded-summary-ref` |
+| `framerateP5Fps` | fps | `provider-owned-bounded-summary-ref` |
+| `inputToFrameP50Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `inputToFrameP95Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `reconnectP50Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `reconnectP95Ms` | ms | `provider-owned-bounded-summary-ref` |
+| `sampleCount` | count | `provider-owned-bounded-summary-ref` |
+| `fallbackRequired` | boolean | `provider-owned-bounded-summary-ref` |
 
-桌面 shell 支持时优先 native presented surface；WebRTC 仍是 Web shell、远程 shell 或跨进程 transport 的主线。无论 transport 是 native surface、WebRTC 还是 frame stream，它都只能呈现同一个 Host-owned live surface，不能成为第二套交互 truth。
+`fallbackRequired=true` 必须 `status=fail-closed`：不能升级成 user-level live pass，`userLevelLivePassAllowed=false`，只允许 `allowedPresentationStates=fallback|blocked|handoff`。provider 还必须写 `fallbackDecisionRef`、fallback reason refs 和 bounded metric refs，UI 才能进入 clearly marked fallback；否则保持 blocked/handoff。
+
+当前 real stream benchmark 状态仍是 `realRunStatus=pending-provider-samples`，`realStreamRunClaim=false`。只有真实 provider 在当前 run 产出 actual provider samples，并且 refs-first metric summary、input-to-frame causality 和 reconnect probe 都通过 Host validator 后，才能把该状态改成 real run evidence。
+
+Checker 支持可选 sample manifest：`sampleManifestPath` 指向 `schemaVersion=sciforge.computer-use.virtual-app-screen-provider-stream-quality-sample-manifest.v1` 的 provider-owned bounded JSON。没有 manifest 时默认保持 `realRunStatus=pending-provider-samples` 和 `realStreamRunClaim=false`；有 manifest 也只表示 `sampleManifestStatus=provider-samples-validated`，不得声明 actual provider run completion。
+
+sample manifest 必须包含 `providerRootRef`，且 `frameTransportContractRef`、`frameTelemetryRef`、`providerStreamQualityRef`、`inputToFrameCausalityRef`、`reconnectProbeRef`、`boundedMetricSummaryRef` 和 `fallbackDecisionRef` 都必须落在该 provider root 下。它还必须携带 Host-owned `currentRunPointerRef` 和 `currentRunLedgerRef`，用于把 provider metric samples 关联到当前 run，而不是让 provider refs 自己冒充 Host ledger/current-run truth。
+
+manifest 的 `metrics` 只能包含 bounded summary numbers/booleans：`latencyP50Ms`、`latencyP95Ms`、`framerateAvgFps`、`framerateP5Fps`、`inputToFrameP50Ms`、`inputToFrameP95Ms`、`reconnectP50Ms`、`reconnectP95Ms`、`sampleCount` 和 `fallbackRequired`。`rawFrameBytes`、base64 image、video chunk、provider payload、input log 和 full trace 禁止 inline；需要回看时只能通过 refs/hash 读取外部 evidence。
 
 ## 状态机
 

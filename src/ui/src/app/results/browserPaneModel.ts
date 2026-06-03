@@ -46,7 +46,8 @@ export type RightPaneBrowserLoadingProgressReason =
   | 'host-loading'
   | 'host-ready'
   | 'host-error'
-  | 'host-diagnostic';
+  | 'host-diagnostic'
+  | 'native-bridge-unavailable';
 export type RightPaneBrowserLoadingProgressSource =
   | 'host-lifecycle'
   | 'host-progress'
@@ -55,7 +56,8 @@ export type RightPaneBrowserLoadingProgressSource =
   | 'host-state'
   | 'host-session'
   | 'ui-command'
-  | 'host-error';
+  | 'host-error'
+  | 'native-surface-route';
 
 export interface RightPaneBrowserLoadingProgressLifecycle {
   schemaVersion: typeof RIGHT_PANE_BROWSER_LOADING_PROGRESS_LIFECYCLE_SCHEMA;
@@ -169,6 +171,7 @@ export interface RightPaneBrowserHostSessionState {
   liveSurfaceRef?: string;
   liveSurfaceTransport?: 'native-embedded' | 'host-stream' | 'webrtc-data-channel';
   singleInteractiveTruth?: true;
+  secondTruthSource?: false;
   frameStreamRef?: string;
   frameRef?: string;
   frameUrl?: string;
@@ -180,7 +183,19 @@ export interface RightPaneBrowserHostSessionState {
   searchResultRef?: string;
   reason?: string;
   diagnostics?: string[];
+  nativeSurfaceBridge?: RightPaneBrowserNativeSurfaceBridgeState;
   loadingProgress?: RightPaneBrowserLoadingProgressLifecycle | RightPaneBrowserHostLoadingProgressRecord;
+}
+
+export interface RightPaneBrowserNativeSurfaceBridgeState {
+  routeStatus?: 'unknown' | 'reachable' | 'unreachable';
+  capability?: 'ready' | 'missing' | 'unknown';
+  rightPaneBridge?: boolean;
+  status?: 'ready' | 'native-bridge-unavailable' | 'route-unreachable' | 'unknown';
+  healthPath?: string;
+  attachPath?: string;
+  statePath?: string;
+  diagnosticRef?: string;
 }
 
 export interface RightPaneBrowserProjectionOptions {
@@ -229,6 +244,7 @@ export function browserHostSessionForFocusedObjectReference(
     liveSurfaceRef: stringField(hostSession?.liveSurfaceRef),
     liveSurfaceTransport: browserHostLiveSurfaceTransport(hostSession?.liveSurfaceTransport),
     singleInteractiveTruth: hostSession?.singleInteractiveTruth === true ? true : undefined,
+    secondTruthSource: hostSession?.secondTruthSource === false ? false : undefined,
     frameStreamRef: stringField(hostSession?.frameStreamRef),
     frameRef: stringField(hostSession?.frameRef),
     frameUrl: stringField(hostSession?.frameUrl),
@@ -240,6 +256,7 @@ export function browserHostSessionForFocusedObjectReference(
     searchResultRef: stringField(hostSession?.searchResultRef),
     reason: stringField(hostSession?.reason),
     diagnostics: arrayOfStrings(hostSession?.diagnostics),
+    nativeSurfaceBridge: rightPaneBrowserNativeSurfaceBridgeState(hostSession?.nativeSurfaceBridge),
     loadingProgress: rightPaneBrowserLoadingProgressLifecycle({ hostSession }),
   };
 }
@@ -282,6 +299,41 @@ function booleanField(value: unknown) {
 
 function arrayOfStrings(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : undefined;
+}
+
+function rightPaneBrowserNativeSurfaceBridgeState(value: unknown): RightPaneBrowserNativeSurfaceBridgeState | undefined {
+  const record = recordValue(value);
+  if (!record) return undefined;
+  const routeStatus = nativeSurfaceRouteStatus(record.routeStatus);
+  const capability = nativeSurfaceCapabilityStatus(record.capability);
+  const rightPaneBridge = booleanField(record.rightPaneBridge);
+  const status = nativeSurfaceBridgeStatus(record.status)
+    ?? (routeStatus === 'reachable' && rightPaneBridge === false ? 'native-bridge-unavailable' : undefined)
+    ?? (routeStatus === 'unreachable' ? 'route-unreachable' : undefined)
+    ?? (routeStatus || capability || rightPaneBridge !== undefined ? 'unknown' : undefined);
+  if (!routeStatus && !capability && rightPaneBridge === undefined && !status) return undefined;
+  return {
+    routeStatus,
+    capability,
+    rightPaneBridge,
+    status,
+    healthPath: stringField(record.healthPath),
+    attachPath: stringField(record.attachPath),
+    statePath: stringField(record.statePath),
+    diagnosticRef: stringField(record.diagnosticRef),
+  };
+}
+
+function nativeSurfaceRouteStatus(value: unknown): RightPaneBrowserNativeSurfaceBridgeState['routeStatus'] | undefined {
+  return value === 'unknown' || value === 'reachable' || value === 'unreachable' ? value : undefined;
+}
+
+function nativeSurfaceCapabilityStatus(value: unknown): RightPaneBrowserNativeSurfaceBridgeState['capability'] | undefined {
+  return value === 'ready' || value === 'missing' || value === 'unknown' ? value : undefined;
+}
+
+function nativeSurfaceBridgeStatus(value: unknown): RightPaneBrowserNativeSurfaceBridgeState['status'] | undefined {
+  return value === 'ready' || value === 'native-bridge-unavailable' || value === 'route-unreachable' || value === 'unknown' ? value : undefined;
 }
 
 const RIGHT_PANE_BROWSER_LOADING_PROGRESS_REASON_BY_STATE: Record<RightPaneBrowserLoadingProgressState, RightPaneBrowserLoadingProgressReason> = {
@@ -338,6 +390,7 @@ const RIGHT_PANE_BROWSER_LOADING_PROGRESS_REASON_ALIASES = loadingProgressAliasM
   'host-ready': ['host-ready', 'browser-host-ready'],
   'host-error': ['host-error', 'browser-host-error'],
   'host-diagnostic': ['host-diagnostic', 'diagnostic'],
+  'native-bridge-unavailable': ['native-bridge-unavailable', 'right-pane-bridge-unavailable'],
 });
 
 const RIGHT_PANE_BROWSER_LOADING_PROGRESS_SOURCES = new Set<RightPaneBrowserLoadingProgressSource>([
@@ -349,6 +402,7 @@ const RIGHT_PANE_BROWSER_LOADING_PROGRESS_SOURCES = new Set<RightPaneBrowserLoad
   'host-session',
   'ui-command',
   'host-error',
+  'native-surface-route',
 ]);
 
 const RIGHT_PANE_BROWSER_LOADING_PROGRESS_NESTED_FIELDS: Array<{
@@ -366,9 +420,15 @@ const RIGHT_PANE_BROWSER_LOADING_PROGRESS_NESTED_FIELDS: Array<{
 export function rightPaneBrowserLoadingProgressLifecycle(input: RightPaneBrowserLoadingProgressInput = {}): RightPaneBrowserLoadingProgressLifecycle | undefined {
   const hostSession = recordValue(input.hostSession);
   const hostState = recordValue(input.hostState);
+  const nativeSurfaceBridge = rightPaneBrowserNativeSurfaceBridgeState(hostSession?.nativeSurfaceBridge)
+    ?? rightPaneBrowserNativeSurfaceBridgeState(hostState?.nativeSurfaceBridge);
+  const nativeSurfaceBridgeProgress = rightPaneBrowserNativeSurfaceBridgeLoadingProgress(input, nativeSurfaceBridge);
   const explicit = explicitRightPaneBrowserLoadingProgress(hostSession)
     ?? explicitRightPaneBrowserLoadingProgress(hostState);
-  if (explicit) return buildRightPaneBrowserLoadingProgressLifecycle(input, explicit.state, explicit.reason, explicit.source);
+  if (explicit) {
+    if (nativeSurfaceBridgeProgress && rightPaneBrowserNativeSurfaceBridgeShouldOverrideProgress(explicit)) return nativeSurfaceBridgeProgress;
+    return buildRightPaneBrowserLoadingProgressLifecycle(input, explicit.state, explicit.reason, explicit.source);
+  }
 
   const lastActionTiming = recordValue(hostSession?.lastActionTiming);
   if (stringField(lastActionTiming?.blockedReason) || stringField(hostSession?.blockedReason) || stringField(hostState?.blockedReason)) {
@@ -380,6 +440,7 @@ export function rightPaneBrowserLoadingProgressLifecycle(input: RightPaneBrowser
   if (booleanField(hostSession?.retrying) || booleanField(hostState?.retrying) || stringField(hostSession?.retryReason) || stringField(hostState?.retryReason)) {
     return buildRightPaneBrowserLoadingProgressLifecycle(input, 'retry', 'navigation-retry', 'host-state');
   }
+  if (nativeSurfaceBridgeProgress) return nativeSurfaceBridgeProgress;
 
   const hostStatus = stringField(hostSession?.status);
   const hostStateStatus = stringField(hostState?.status);
@@ -404,6 +465,25 @@ export function rightPaneBrowserLoadingProgressLifecycle(input: RightPaneBrowser
     return buildRightPaneBrowserLoadingProgressLifecycle(input, 'network-quiet', 'host-ready', 'host-session');
   }
   return undefined;
+}
+
+function rightPaneBrowserNativeSurfaceBridgeLoadingProgress(
+  input: RightPaneBrowserLoadingProgressInput,
+  nativeSurfaceBridge: RightPaneBrowserNativeSurfaceBridgeState | undefined,
+): RightPaneBrowserLoadingProgressLifecycle | undefined {
+  if (nativeSurfaceBridge?.status === 'native-bridge-unavailable') {
+    return buildRightPaneBrowserLoadingProgressLifecycle(input, 'handoff', 'native-bridge-unavailable', 'native-surface-route');
+  }
+  if (nativeSurfaceBridge?.status === 'route-unreachable') {
+    return buildRightPaneBrowserLoadingProgressLifecycle(input, 'blocked', 'host-diagnostic', 'native-surface-route');
+  }
+  return undefined;
+}
+
+function rightPaneBrowserNativeSurfaceBridgeShouldOverrideProgress(progress: {
+  state: RightPaneBrowserLoadingProgressState;
+}): boolean {
+  return progress.state !== 'blocked' && progress.state !== 'handoff';
 }
 
 function explicitRightPaneBrowserLoadingProgress(record: Record<string, unknown> | undefined): {

@@ -295,12 +295,13 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
 
     drivers[0]?.releaseHeldAction();
     const navigated = await navigating;
-    assert.equal(navigated.status, 'loading');
+    assert.equal(navigated.status, 'ready');
     assert.equal(navigated.loadingProgress?.state, 'stalled');
     assert.equal(navigated.loadingProgress?.reason, 'navigation-stalled');
     assert.equal(navigated.loadingProgress?.source, 'host-progress');
     assert.equal(navigated.loadingProgress?.action, 'navigate');
-    assert.equal(navigated.loadingProgress?.urls?.final, undefined);
+    assert.equal(navigated.loadingProgress?.status, 'ready');
+    assert.deepEqual(navigated.loadingProgress?.urls?.final, navigated.loadingProgress?.urls?.current);
 
     drivers[0]?.emitNavigationProgress({
       state: 'network-quiet',
@@ -331,6 +332,51 @@ test('BrowserHostSession emits bounded refs-first loadingProgress for host navig
     assert.doesNotMatch(JSON.stringify(stopped.loadingProgress), /progress\.example|secret-value|<html|Ready/);
   } finally {
     drivers[0]?.releaseHeldAction();
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession completes committed navigation when network quiet stalls', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-committed-stall-'));
+  const { factory, drivers } = fakeDriverFactory({ holdNavigation: true, failScreenshots: true });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const opening = manager.openSession(workspacePath, {
+      url: 'https://progress.example/slow?token=secret-value',
+      sessionId: 'committed-stall-session',
+    });
+    await waitFor(() => drivers[0]?.isHoldingAction() === true);
+
+    drivers[0]?.emitNavigationProgress({
+      state: 'navigation-committed',
+      reason: 'navigation-committed',
+      source: 'host-lifecycle',
+    });
+    drivers[0]?.emitNavigationProgress({
+      state: 'interactive',
+      reason: 'page-interactive',
+      source: 'host-lifecycle',
+    });
+    drivers[0]?.emitNavigationProgress({
+      state: 'stalled',
+      reason: 'navigation-stalled',
+      source: 'host-progress',
+      canRetry: true,
+    });
+    drivers[0]?.releaseHeldAction();
+
+    const opened = await opening;
+    assert.equal(opened.status, 'ready');
+    assert.equal(opened.url, 'https://progress.example/slow?token=secret-value');
+    assert.equal(opened.loadingProgress?.state, 'stalled');
+    assert.equal(opened.loadingProgress?.reason, 'navigation-stalled');
+    assert.equal(opened.loadingProgress?.source, 'host-progress');
+    assert.equal(opened.loadingProgress?.status, 'ready');
+    assert.equal(opened.loadingProgress?.canRetry, true);
+    assert.deepEqual(opened.loadingProgress?.urls?.final, opened.loadingProgress?.urls?.current);
+    assert.doesNotMatch(JSON.stringify(opened.loadingProgress), /progress\.example|secret-value|<html|Ready/);
+    assert.match(opened.diagnostics.join('\n'), /BrowserHostSession screenshot capture placeholder/);
+  } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
 });
@@ -484,7 +530,49 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
         writeJsonResponse(res, { ok: true, results: [{ title: 'Result', url: 'https://example.org/result', snippet: 'Native result' }] });
       } else if (route.endsWith('/actions')) {
         if (body.action === 'reload') currentProgress = { state: 'stalled', reason: 'navigation-stalled', source: 'host-state', canRetry: true };
-        writeJsonResponse(res, { ok: true, url: currentUrl, title: 'Native embedded page', canGoBack: false, canGoForward: false, diagnostics: body.action === 'cursor' ? ['cursor:pointer'] : [], navigation: currentProgress });
+        writeJsonResponse(res, {
+          ok: true,
+          url: currentUrl,
+          title: 'Native embedded page',
+          canGoBack: false,
+          canGoForward: false,
+          diagnostics: body.action === 'cursor' ? ['cursor:pointer'] : [],
+          nativeOsUiProof: body.action === 'native-os-ui-proof'
+            ? {
+              schemaVersion: 'sciforge.browser-host-session.native-os-ui-proof.v1',
+              boundedEvidenceOnly: true,
+              rawDomRecorded: false,
+              rawTextRecorded: false,
+              rawUrlRecorded: false,
+              rawTitleRecorded: false,
+              rawSelectorRecorded: false,
+              rawCoordsRecorded: false,
+              rawPayloadRecorded: false,
+              source: 'native-embedded-action-state',
+              proofGroup: 'cursorCaret',
+              actionId: 'focus-input-caret',
+              observedProofNames: ['input-caret-visible', 'focus-blur-restore', 'keyboard-enter-owner'],
+              evidenceTokens: [
+                'proof:input-caret-visible:observed',
+                'proof:focus-blur-restore:observed',
+                'proof:keyboard-enter-owner:observed',
+                'caret:active-editable:true',
+                'caret:visible:true',
+                'focus:blurred:true',
+                'focus:restored:true',
+                'native-surface:attached:true',
+              ],
+              diagnostics: [
+                'proof:input-caret-visible:observed',
+                'proof:focus-blur-restore:observed',
+                'url:https://example.invalid/raw-leak',
+                'dom:<html>raw leak</html>',
+                'payload:secret-value',
+              ],
+            }
+            : undefined,
+          navigation: currentProgress,
+        });
       } else {
         writeJsonResponse(res, { ok: false, reason: `unexpected route ${route}` }, 404);
       }
@@ -514,6 +602,18 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
       y: 24,
       capture: 'none',
     });
+    const contentCallsBeforeProof = calls.filter((call) => call.route.endsWith('/content')).length;
+    const axCallsBeforeProof = calls.filter((call) => call.route.endsWith('/ax')).length;
+    const proofed = await manager.act(workspacePath, 'native-session', {
+      action: 'native-os-ui-proof',
+      proofGroup: 'cursorCaret',
+      probe: 'focus-caret',
+      expectedProofNames: ['input-caret-visible', 'focus-blur-restore', 'keyboard-enter-owner'],
+      actionId: 'focus-input-caret',
+      capture: 'full',
+    });
+    const contentCallsAfterProof = calls.filter((call) => call.route.endsWith('/content')).length;
+    const axCallsAfterProof = calls.filter((call) => call.route.endsWith('/ax')).length;
     const reloaded = await manager.act(workspacePath, 'native-session', {
       action: 'reload',
       capture: 'none',
@@ -524,15 +624,35 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
     assert.equal(session.liveSurfaceTransport, 'native-embedded');
     assert.equal(session.nativeAdapterUrl, `http://127.0.0.1:${address.port}`);
     assert.equal(session.singleInteractiveTruth, true);
+    assert.equal(session.secondTruthSource, false);
     assert.equal(session.frameStreamRef, undefined);
     assert.match(session.liveSurfaceRef ?? '', /^browser-host-session:native-session\/live-surface$/);
     assert.equal(session.frameRef, undefined);
     assert.match(session.screenshotRef ?? '', /^browser-host-session:native-session\/screenshot-/);
     assert.equal(clicked.liveSurfaceTransport, 'native-embedded');
+    assert.equal(clicked.secondTruthSource, false);
     assert.equal(clicked.frameStreamRef, undefined);
     assert.equal(clicked.lastActionTiming?.action, 'click');
     assert.equal(clicked.lastActionTiming?.capture, 'none');
     assert.equal(clicked.lastActionTiming?.paintAckSource, 'native-adapter-action-state');
+    assert.equal(proofed.lastActionTiming?.action, 'native-os-ui-proof');
+    assert.equal(proofed.lastActionTiming?.capture, 'none');
+    assert.equal(contentCallsAfterProof, contentCallsBeforeProof);
+    assert.equal(axCallsAfterProof, axCallsBeforeProof);
+    assert.equal(proofed.nativeOsUiProof?.schemaVersion, 'sciforge.browser-host-session.native-os-ui-proof.v1');
+    assert.equal(proofed.nativeOsUiProof?.boundedEvidenceOnly, true);
+    assert.equal(proofed.nativeOsUiProof?.rawDomRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawTextRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawUrlRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawTitleRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawSelectorRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawCoordsRecorded, false);
+    assert.equal(proofed.nativeOsUiProof?.rawPayloadRecorded, false);
+    assert.deepEqual(proofed.nativeOsUiProof?.observedProofNames, ['input-caret-visible', 'focus-blur-restore']);
+    assert.ok(proofed.nativeOsUiProof?.evidenceTokens.includes('proof:input-caret-visible:observed'));
+    assert.ok(proofed.nativeOsUiProof?.evidenceTokens.includes('proof:focus-blur-restore:observed'));
+    assert.ok(!proofed.nativeOsUiProof?.observedProofNames.includes('keyboard-enter-owner'));
+    assert.doesNotMatch(JSON.stringify(proofed.nativeOsUiProof), /secret|<html|data:image|https?:|selector:|coords:|payload:|"x"|"y"|"url"|"title"|raw-leak/i);
     assert.equal(cursor.cursor, 'pointer');
     assert.equal(reloaded.loadingProgress?.state, 'stalled');
     assert.equal(reloaded.loadingProgress?.reason, 'navigation-stalled');
@@ -544,6 +664,10 @@ test('BrowserHostSessionManager can drive a native embedded BrowserHostSession a
     assert.doesNotMatch(JSON.stringify(reloaded.loadingProgress), /example\.org\/native|<html|base64|data:image/i);
     assert.deepEqual(calls.find((call) => call.route === '/sessions/start')?.body.sessionId, 'native-session');
     assert.ok(calls.some((call) => call.route.endsWith('/actions') && call.body.action === 'click'));
+    const nativeProofCall = calls.find((call) => call.route.endsWith('/actions') && call.body.action === 'native-os-ui-proof');
+    assert.ok(nativeProofCall);
+    assert.equal(nativeProofCall.body.capture, 'none');
+    assert.deepEqual(nativeProofCall.body.expectedProofNames, ['input-caret-visible', 'focus-blur-restore']);
   } finally {
     server.close();
     await rm(workspacePath, { recursive: true, force: true });
@@ -797,6 +921,42 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
     });
     assert.equal(action.session.url, 'http://localhost:4173/result');
 
+    const nativeProof = await postJson(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/actions`, {
+      workspacePath,
+      action: 'native-os-ui-proof',
+      capture: 'full',
+      proofGroup: 'cursorCaret',
+      probe: 'focus-caret',
+      expectedProofNames: ['input-caret-visible', 'focus-blur-restore', 'https://raw.example/proof'],
+      actionId: 'route-focus-input-caret',
+      url: 'https://secret.example/proof?token=secret-value',
+      x: 12,
+      y: 24,
+      text: 'raw clipboard text',
+      clipboard: 'raw clipboard text',
+      dom: '<html>raw DOM</html>',
+      payload: { token: 'secret-value' },
+    });
+    assert.equal(nativeProof.session.nativeOsUiProof?.schemaVersion, 'sciforge.browser-host-session.native-os-ui-proof.v1');
+    assert.equal(nativeProof.session.nativeOsUiProof?.boundedEvidenceOnly, true);
+    assert.deepEqual(nativeProof.session.nativeOsUiProof?.observedProofNames, ['input-caret-visible', 'focus-blur-restore']);
+    assert.doesNotMatch(JSON.stringify(nativeProof.session.nativeOsUiProof), /secret|<html|https?:|clipboard text|payload:/i);
+
+    const proofActionInput = manager.actionInputs.find((entry) => entry.input.action === 'native-os-ui-proof')?.input;
+    assert.ok(proofActionInput);
+    assert.equal(proofActionInput.capture, 'none');
+    assert.equal(proofActionInput.proofGroup, 'cursorCaret');
+    assert.equal(proofActionInput.probe, 'focus-caret');
+    assert.deepEqual(proofActionInput.expectedProofNames, ['input-caret-visible', 'focus-blur-restore']);
+    assert.equal(proofActionInput.actionId, 'route-focus-input-caret');
+    assert.equal(proofActionInput.url, undefined);
+    assert.equal(proofActionInput.x, undefined);
+    assert.equal(proofActionInput.y, undefined);
+    assert.equal(proofActionInput.text, undefined);
+    assert.equal(proofActionInput.clipboard, undefined);
+    assert.equal(proofActionInput.dom, undefined);
+    assert.equal(proofActionInput.payload, undefined);
+
     const computerUseAction = await postJson(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/computer-use-actions`, {
       workspacePath,
       action: { type: 'click', x: 22, y: 33 },
@@ -838,6 +998,264 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
     assert.deepEqual(streamFrame.binary, PNG_1X1);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession native surface routes fail closed with bounded blocked diagnostics', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-surface-routes-'));
+  const manager = createRouteManager(workspacePath);
+  const routeOptions = {
+    manager: manager as unknown as BrowserHostSessionManager,
+    workspaceRootFromRequest: async () => workspacePath,
+    workspaceRootFromBodyOrRequest: async (body: Record<string, unknown>) => String(body.workspacePath || workspacePath),
+  };
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    void handleBrowserHostSessionRoutes(req, res, url, routeOptions).then((handled) => {
+      if (!handled && !res.headersSent) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'not found' }));
+      }
+    });
+  });
+
+  try {
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    assert.ok(address && typeof address === 'object');
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+
+    const healthResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/health`);
+    assert.equal(healthResponse.status, 503);
+    const health = await healthResponse.json() as Record<string, unknown>;
+    assert.equal(health.ok, false);
+    assert.equal(health.schemaVersion, 'sciforge.browser-host.native-surface.preflight.v1');
+    assert.equal(health.status, 'blocked');
+    assert.equal(health.reason, 'native-bridge-unavailable');
+    assert.equal(health.capability, 'browser-host-native-surface');
+    assert.equal(health.owner, 'BrowserHostSession');
+    assert.equal(health.liveSurfaceTransport, 'native-embedded');
+    assert.equal(health.rightPaneBridge, false);
+    assert.equal(health.ready, false);
+
+    const attachResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath, sessionId: 'native-route-session' }),
+    });
+    assert.equal(attachResponse.status, 503);
+    const attach = await attachResponse.json() as Record<string, unknown>;
+    assert.equal(attach.ok, false);
+    assert.equal(attach.status, 'blocked');
+    assert.equal(attach.action, 'attach');
+    assert.equal(attach.sessionId, 'native-route-session');
+    assert.equal(attach.rightPaneBridge, false);
+    assert.doesNotMatch(JSON.stringify(attach), /frame-stream|webrtc|iframe|proxy/i);
+
+    const stateResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/state?sessionId=native-route-session`);
+    assert.equal(stateResponse.status, 503);
+    const state = await stateResponse.json() as Record<string, unknown>;
+    assert.equal(state.ok, false);
+    assert.equal(state.status, 'blocked');
+    assert.equal(state.action, 'state');
+    assert.equal(state.sessionId, 'native-route-session');
+    assert.equal(state.rightPaneBridge, false);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession native surface routes proxy only trusted session-scoped loopback adapter responses', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-native-surface-proxy-'));
+  const previousNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  const adapterCalls: Array<{ route: string; method: string; body: Record<string, unknown> }> = [];
+  const adapterServer = createServer((req, res) => {
+    void (async () => {
+      const route = req.url ?? '/';
+      const body = req.method === 'POST' ? await readJsonRequest(req) : {};
+      adapterCalls.push({ route, method: req.method ?? 'GET', body });
+      if (route === '/health' && req.method === 'GET') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'ready',
+          ready: true,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          attachAvailable: true,
+          stateAvailable: true,
+          rightPaneBridge: false,
+        });
+        return;
+      }
+      if (route === '/sessions/proxy-session/attach' && req.method === 'POST') {
+        writeJsonResponse(res, {
+          ok: false,
+          status: 'blocked',
+          reason: 'main-window-unavailable',
+          ready: false,
+          passClaim: false,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          sessionId: 'proxy-session',
+          liveSurfaceRef: 'browser-host-session:proxy-session/live-surface',
+          diagnostics: ['main-window-unavailable'],
+        }, 503);
+        return;
+      }
+      if (route === '/sessions/forged-session/attach' && req.method === 'POST') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'attached',
+          ready: true,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          secondTruthSource: false,
+          sessionId: 'forged-session',
+          liveSurfaceRef: 'browser-host-session:forged-session/live-surface',
+        });
+        return;
+      }
+      if (route === '/sessions/wrong-ref/state' && req.method === 'GET') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'ready',
+          ready: true,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          sessionId: 'wrong-ref',
+          liveSurfaceRef: 'browser-host-session:other-session/live-surface',
+        });
+        return;
+      }
+      if (route === '/sessions/raw-session/attach' && req.method === 'POST') {
+        writeJsonResponse(res, {
+          ok: true,
+          status: 'attached',
+          ready: true,
+          owner: 'BrowserHostSession',
+          adapterRole: 'display-input-adapter',
+          liveSurfaceTransport: 'native-embedded',
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          sessionId: 'raw-session',
+          liveSurfaceRef: 'browser-host-session:raw-session/live-surface',
+          currentUrl: 'https://example.test/secret-token',
+          providerPayload: 'secret-provider',
+          screenshotDataUrl: `data:image/png;base64,${PNG_1X1.toString('base64')}`,
+        });
+        return;
+      }
+      writeJsonResponse(res, { ok: false, reason: `unexpected native surface route ${route}` }, 404);
+    })().catch((error) => writeJsonResponse(res, { ok: false, reason: error instanceof Error ? error.message : String(error) }, 500));
+  });
+  const manager = createRouteManager(workspacePath);
+  const routeOptions = {
+    manager: manager as unknown as BrowserHostSessionManager,
+    workspaceRootFromRequest: async () => workspacePath,
+    workspaceRootFromBodyOrRequest: async (body: Record<string, unknown>) => String(body.workspacePath || workspacePath),
+  };
+  const routeServer = createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1');
+    void handleBrowserHostSessionRoutes(req, res, url, routeOptions).then((handled) => {
+      if (!handled && !res.headersSent) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: false, error: 'not found' }));
+      }
+    });
+  });
+
+  try {
+    await new Promise<void>((resolve) => adapterServer.listen(0, '127.0.0.1', resolve));
+    const adapterAddress = adapterServer.address();
+    assert.ok(adapterAddress && typeof adapterAddress === 'object');
+    process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = `http://127.0.0.1:${adapterAddress.port}`;
+
+    await new Promise<void>((resolve) => routeServer.listen(0, '127.0.0.1', resolve));
+    const routeAddress = routeServer.address();
+    assert.ok(routeAddress && typeof routeAddress === 'object');
+    const baseUrl = `http://127.0.0.1:${routeAddress.port}`;
+
+    const healthResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/health`);
+    assert.equal(healthResponse.status, 200);
+    const health = await healthResponse.json() as Record<string, unknown>;
+    assert.equal(health.ok, true);
+    assert.equal(health.status, 'ready');
+    assert.equal(health.owner, 'BrowserHostSession');
+    assert.equal(health.adapterRole, 'display-input-adapter');
+    assert.equal(health.liveSurfaceTransport, 'native-embedded');
+    assert.equal(health.singleInteractiveTruth, true);
+    assert.equal(health.secondTruthSource, false);
+    assert.equal(health.rightPaneBridge, false);
+
+    const attachResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath, sessionId: 'proxy-session' }),
+    });
+    assert.equal(attachResponse.status, 503);
+    const attach = await attachResponse.json() as Record<string, unknown>;
+    assert.equal(attach.ok, false);
+    assert.equal(attach.status, 'blocked');
+    assert.equal(attach.reason, 'main-window-unavailable');
+    assert.equal(attach.passClaim, false);
+    assert.equal(attach.sessionId, 'proxy-session');
+    assert.equal(attach.liveSurfaceRef, 'browser-host-session:proxy-session/live-surface');
+    assert.equal(attach.singleInteractiveTruth, true);
+    assert.equal(attach.secondTruthSource, false);
+
+    const forgedResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath, sessionId: 'forged-session' }),
+    });
+    assert.equal(forgedResponse.status, 503);
+    const forged = await forgedResponse.json() as Record<string, unknown>;
+    assert.equal(forged.ok, false);
+    assert.equal(forged.status, 'blocked');
+    assert.equal(forged.reason, 'native-adapter-response-invalid');
+    assert.equal(forged.passClaim, false);
+
+    const wrongRefResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/state?sessionId=wrong-ref`);
+    assert.equal(wrongRefResponse.status, 503);
+    const wrongRef = await wrongRefResponse.json() as Record<string, unknown>;
+    assert.equal(wrongRef.ok, false);
+    assert.equal(wrongRef.reason, 'native-adapter-response-invalid');
+
+    const rawResponse = await fetch(`${baseUrl}/api/sciforge/browser-host/native-surface/attach`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspacePath, sessionId: 'raw-session' }),
+    });
+    assert.equal(rawResponse.status, 503);
+    const raw = await rawResponse.json() as Record<string, unknown>;
+    assert.equal(raw.ok, false);
+    assert.equal(raw.reason, 'native-adapter-response-invalid');
+    assert.doesNotMatch(JSON.stringify(raw), /example\.test|secret-token|provider|data:image|base64|screenshot/i);
+
+    assert.deepEqual(adapterCalls.map((call) => `${call.method} ${call.route}`), [
+      'GET /health',
+      'POST /sessions/proxy-session/attach',
+      'POST /sessions/forged-session/attach',
+      'GET /sessions/wrong-ref/state',
+      'POST /sessions/raw-session/attach',
+    ]);
+  } finally {
+    if (previousNativeAdapterUrl === undefined) delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+    else process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL = previousNativeAdapterUrl;
+    await new Promise<void>((resolve) => routeServer.close(() => resolve()));
+    await new Promise<void>((resolve) => adapterServer.close(() => resolve()));
     await rm(workspacePath, { recursive: true, force: true });
   }
 });
@@ -1343,6 +1761,7 @@ function createRouteManager(
 ) {
   const sessions = new Map<string, BrowserHostSessionState>();
   const framePaths = new Map<string, string>();
+  const actionInputs: Array<{ root: string; sessionId: string; input: Record<string, unknown> }> = [];
   let frameStreamSkipIndex = 0;
   const captureFrame = async (sessionId: string) => {
     const session = sessions.get(sessionId);
@@ -1359,6 +1778,7 @@ function createRouteManager(
     return session;
   };
   return {
+    actionInputs,
     async openSession(root: string, input: { url: string; sessionId?: string }) {
       const id = input.sessionId || 'route-session';
       const session: BrowserHostSessionState = {
@@ -1383,10 +1803,44 @@ function createRouteManager(
     async sessionState(_root: string, sessionId: string) {
       return sessions.get(sessionId);
     },
-    async act(_root: string, sessionId: string, input: { action: string; url?: string }) {
+    async act(root: string, sessionId: string, input: Record<string, unknown>) {
+      actionInputs.push({
+        root,
+        sessionId,
+        input: {
+          ...input,
+          expectedProofNames: Array.isArray(input.expectedProofNames) ? input.expectedProofNames.slice() : input.expectedProofNames,
+        },
+      });
       const session = sessions.get(sessionId);
       if (!session) throw new Error(`missing ${sessionId}`);
-      if (input.action === 'navigate' && input.url) session.url = normalizeBrowserHostUrl(input.url);
+      if (input.action === 'navigate' && input.url) session.url = normalizeBrowserHostUrl(String(input.url));
+      if (
+        input.action === 'native-os-ui-proof' &&
+        input.proofGroup === 'cursorCaret' &&
+        input.probe === 'focus-caret' &&
+        Array.isArray(input.expectedProofNames) &&
+        input.expectedProofNames.includes('input-caret-visible') &&
+        input.expectedProofNames.includes('focus-blur-restore')
+      ) {
+        session.nativeOsUiProof = {
+          schemaVersion: 'sciforge.browser-host-session.native-os-ui-proof.v1',
+          boundedEvidenceOnly: true,
+          rawDomRecorded: false,
+          rawTextRecorded: false,
+          rawUrlRecorded: false,
+          rawTitleRecorded: false,
+          rawSelectorRecorded: false,
+          rawCoordsRecorded: false,
+          rawPayloadRecorded: false,
+          source: 'native-embedded-action-state',
+          proofGroup: 'cursorCaret',
+          actionId: typeof input.actionId === 'string' ? input.actionId : 'route-native-proof',
+          observedProofNames: ['input-caret-visible', 'focus-blur-restore'],
+          evidenceTokens: ['proof:input-caret-visible:observed', 'proof:focus-blur-restore:observed'],
+          diagnostics: ['proof:input-caret-visible:observed'],
+        };
+      }
       session.updatedAt = '2026-06-01T00:00:01.000Z';
       return session;
     },

@@ -49,6 +49,9 @@ export type DesktopPreloadApiMethod =
   | 'attachBrowserHostSessionSurface'
   | 'detachBrowserHostSessionSurface'
   | 'getBrowserHostSessionSurfaceState'
+  | 'attachVirtualAppScreenSurface'
+  | 'presentVirtualAppScreenSurface'
+  | 'detachVirtualAppScreenSurface'
   | 'revealPath'
   | 'pickDirectory';
 
@@ -72,6 +75,9 @@ export type DesktopPreloadContract = {
     | 'desktop:browser-host-surface:attach'
     | 'desktop:browser-host-surface:detach'
     | 'desktop:browser-host-surface:state'
+    | 'desktop:virtual-app-screen-surface:attach'
+    | 'desktop:virtual-app-screen-surface:present'
+    | 'desktop:virtual-app-screen-surface:detach'
     | 'platform:open-external'
     | 'platform:reveal-path'
     | 'platform:pick-directory'
@@ -381,6 +387,9 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'attachBrowserHostSessionSurface',
         'detachBrowserHostSessionSurface',
         'getBrowserHostSessionSurfaceState',
+        'attachVirtualAppScreenSurface',
+        'presentVirtualAppScreenSurface',
+        'detachVirtualAppScreenSurface',
         'revealPath',
         'pickDirectory',
       ],
@@ -398,6 +407,9 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'desktop:browser-host-surface:attach',
         'desktop:browser-host-surface:detach',
         'desktop:browser-host-surface:state',
+        'desktop:virtual-app-screen-surface:attach',
+        'desktop:virtual-app-screen-surface:present',
+        'desktop:virtual-app-screen-surface:detach',
         'platform:open-external',
         'platform:reveal-path',
         'platform:pick-directory',

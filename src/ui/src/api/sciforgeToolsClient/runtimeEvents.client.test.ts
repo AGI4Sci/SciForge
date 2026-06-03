@@ -407,6 +407,60 @@ test('Computer Use approval retry stays terminal-equivalent text through Codex R
   assert.equal('uiState' in rejectBody, false);
 });
 
+test('Runtime Codex keeps VirtualAppScreen slash commands exact even when refs are selected', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  const commandText = [
+    '/computer-use screen attach',
+    '--source right-pane-screen',
+    '--profile "vscode-editor"',
+    '--target-app-ref "app:profile/vscode-editor"',
+    '--screen-ref "virtual-app-screen:right-pane-command-test/screen-request"',
+    '--activation-ref "computer-use:screen-activation/right-pane-command-test/attach-request.json"',
+    '--adapter-readiness-ref "computer-use:screen-activation/right-pane-command-test/provider-readiness.json"',
+    '--platform-driver-ref "computer-use:screen-activation/right-pane-command-test/platform-driver.json"',
+    '--permission-ref "computer-use:screen-activation/right-pane-command-test/permissions/platform-gates.json"',
+    '--evidence-ledger-ref "ledger:computer-use/right-pane-command-test/screen-activation.json"',
+    '--gui-present-ref "gui.present:right-pane-command-test/screen-pane-activation"',
+  ].join(' ');
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response(`${JSON.stringify({
+        result: {
+          status: 'done',
+          message: 'accepted',
+          claimType: 'execution',
+          evidenceLevel: 'runtime',
+          reasoningTrace: 'test VirtualAppScreen command text',
+          claims: [],
+          uiManifest: [],
+          executionUnits: [{ id: 'EU-screen-attach', status: 'done' }],
+          artifacts: [],
+        },
+      })}\n`, { status: 200, headers: { 'Content-Type': 'application/x-ndjson' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: commandText,
+      references: [{
+        id: 'selected-screen',
+        kind: 'task-result',
+        title: 'Selected screen evidence',
+        ref: 'artifact:computer-use-virtual-screen-old',
+        summary: 'computer-use:native-host/sessions/old/session.json',
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  assert.equal(body.commandText, commandText);
+  assert.doesNotMatch(String(body.commandText), /Approval\/source refs|artifact:computer-use-virtual-screen-old|computer-use:native-host\/sessions\/old/);
+});
+
 test('Computer Use approval retry does not serialize prior gui.ask_user provenance from GUI', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
@@ -979,6 +1033,54 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   assert.doesNotMatch(JSON.stringify(body), /legacy\.skill|127\.0\.0\.1:7777|preserve-context/);
   assert.deepEqual(recursiveForbiddenKeys(body, ['pty', 'rawBytes', 'rawTerminalBytes', 'rawTerminalPayload']), []);
   assert.doesNotMatch(JSON.stringify(body), /raw-terminal|raw-bytes/);
+});
+
+test('Runtime Codex commandText carries explicit selected message content as bounded terminal-equivalent context', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: 'Use only the selected artifact ref and answer what it says in one concise sentence.',
+      references: [{
+        id: 'ref-visible-answer',
+        kind: 'message',
+        title: 'Selected visible answer',
+        ref: 'message:msg-selected-answer',
+      }],
+      messages: [{
+        id: 'msg-selected-answer',
+        role: 'assistant',
+        content: [
+          'SELECTED_VISIBLE_MESSAGE_BODY_SHOULD_ENTER_COMMAND_TEXT',
+          'Authorization: Bearer sk-selected-secret-1234567890',
+          'rawProviderPayload label must not survive verbatim',
+        ].join('\n'),
+        createdAt: '2026-05-19T00:00:00.000Z',
+        status: 'completed',
+        selectedReferenceContent: true,
+      } as unknown as SendAgentMessageInput['messages'][number] & { selectedReferenceContent: true }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const commandText = String(body.commandText ?? '');
+  assert.match(commandText, /Selected visible context \(bounded terminal-equivalent text/);
+  assert.match(commandText, /message:msg-selected-answer \(assistant\):/);
+  assert.match(commandText, /SELECTED_VISIBLE_MESSAGE_BODY_SHOULD_ENTER_COMMAND_TEXT/);
+  assert.match(commandText, /Current request:\n\nask --ref "message:msg-selected-answer"/);
+  assert.doesNotMatch(commandText, /sk-selected-secret-1234567890|rawProviderPayload/);
+  assert.deepEqual(recursiveForbiddenKeys(body, ['sessionMessages', 'references', 'conversationEnvelope']), []);
 });
 
 test('Runtime Codex stream request resumes from persisted nested Runtime Codex session metadata', async () => {

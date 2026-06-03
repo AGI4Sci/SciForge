@@ -21,6 +21,8 @@ export const WORKSPACE_WRITER_HEALTH_CAPABILITIES = [
   'stable-version-registry',
 ] as const;
 
+export const WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT = '/api/sciforge/browser-host/native-surface/{health,attach,state}' as const;
+
 export interface WorkspaceWriterHealthInput {
   pid: number;
   startedAt: string;
@@ -48,9 +50,7 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
     endpoints: {
       runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
       browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-      ...(nativeAdapterUrl
-        ? { browserHostNativeSurface: `${nativeAdapterUrl}/{health,sessions/{sessionId}/{attach,state}}` }
-        : {}),
+      browserHostNativeSurface: WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT,
       browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
@@ -58,7 +58,7 @@ export function buildWorkspaceWriterHealth(input: WorkspaceWriterHealthInput) {
   };
 }
 
-function normalizeBrowserHostNativeAdapterUrl(value: string | undefined): string | undefined {
+export function normalizeBrowserHostNativeAdapterUrl(value: string | undefined): string | undefined {
   const trimmed = value?.trim().replace(/\/+$/, '');
   if (!trimmed) return undefined;
   try {

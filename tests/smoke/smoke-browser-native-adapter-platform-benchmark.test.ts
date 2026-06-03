@@ -17,8 +17,10 @@ import {
 } from '../../src/desktop/browser-native-adapter-comparison.js';
 import {
   DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE_SCHEMA,
+  DESKTOP_BROWSER_NATIVE_M0_SURFING_LOOP_SCHEMA,
   rejectedDesktopLiveSubstitutes,
   type DesktopBrowserNativeLiveAcceptanceEvidence,
+  type DesktopBrowserNativeM0Action,
 } from '../../src/desktop/desktop-browser-native-live-acceptance.js';
 import {
   BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_EXTERNAL_RESULT_SCHEMA,
@@ -26,10 +28,18 @@ import {
   BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_OPT_IN_ENV,
   DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF,
   runBrowserNativeAdapterPlatformBenchmark,
+  type BrowserNativeAdapterPlatformBenchmarkCandidateResult,
+  type BrowserNativeAdapterPlatformBenchmarkExternalResult,
 } from '../../tools/browser-native-adapter-platform-benchmark-runner.js';
 import {
   ELECTRON_WEB_CONTENTS_VIEW_LIVE_EVIDENCE_PATH_ENV,
 } from '../../tools/browser-native-adapter-electron-web-contents-view-external-result.js';
+import {
+  buildStandaloneChromiumSurfaceExternalBenchmarkResult,
+} from '../../tools/browser-native-adapter-standalone-chromium-surface-external-result.js';
+import {
+  buildWkwebviewExternalBenchmarkResult,
+} from '../../tools/browser-native-adapter-wkwebview-external-result.js';
 
 const PLATFORM_BENCHMARK_MANIFEST_SCHEMA = 'sciforge.browser-native-adapter-platform-benchmark-manifest.v1' as const;
 const artifactDir = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-native-adapter-comparison');
@@ -42,6 +52,8 @@ const REAL_RUNNER_OPT_IN_ENV = BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_OPT_IN_
 const REAL_RUNNER_COMMAND_REF = 'tsx tools/browser-native-adapter-platform-benchmark-runner.ts';
 const MAX_PLATFORM_BENCHMARK_MANIFEST_BYTES = 96_000;
 const EXTERNAL_FIXTURE_CANDIDATE: BrowserNativeAdapterCandidateId = 'electron-web-contents-view';
+const STANDALONE_CHROMIUM_FIXTURE_CANDIDATE: BrowserNativeAdapterCandidateId = 'standalone-chromium-surface';
+const WKWEBVIEW_FIXTURE_CANDIDATE: BrowserNativeAdapterCandidateId = 'wkwebview';
 
 type RealPlatformBenchmarkMetricSection = BrowserNativeAdapterBenchmarkMetricSection;
 type PlatformBenchmarkStatus = 'blocked' | 'not-run';
@@ -133,6 +145,12 @@ type PlatformBenchmarkManifest = {
         forbiddenResultKinds: Array<'schema-validation-only'>;
         forbiddenPassEvidenceTokens: typeof REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES[number][];
       };
+      passRequiresNestedAdapterCommandProofRefs: {
+        candidates: Array<'wkwebview' | 'standalone-chromium-surface'>;
+        proofKinds: Array<'policy' | 'entrypoint' | 'helper-chain' | 'live-smoke'>;
+        boundedRefsOnly: true;
+        missingStatus: 'failed';
+      };
       realProofRefusalPolicy: {
         currentProcessPlatform: NodeJS.Platform;
         unsupportedPlatformStatus: 'blocked';
@@ -184,6 +202,8 @@ const REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS: RealPlatformBenchmarkMetricSect
   [...REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS];
 
 test('browser native adapter platform benchmark manifest is opt-in, refs-first, and not-run by default', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-default-benchmark-'));
+  const defaultResultPath = join(tempDir, 'platform-benchmark-results.json');
   const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
     manifestId: 'browser-native-adapter-platform-benchmark-source-comparison',
     createdAt: '2026-06-02T00:00:00.000Z',
@@ -206,7 +226,7 @@ test('browser native adapter platform benchmark manifest is opt-in, refs-first, 
   const defaultRunnerResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {},
     inputManifestPath: platformBenchmarkManifestRef,
-    outputPath: DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF,
+    outputPath: defaultResultPath,
     now: '2026-06-02T00:00:00.000Z',
   });
   assert.equal(defaultRunnerResult.schemaVersion, BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_SCHEMA);
@@ -229,12 +249,12 @@ test('browser native adapter platform benchmark manifest is opt-in, refs-first, 
     candidate.blockerRefs.includes(`env:${REAL_RUNNER_OPT_IN_ENV}:not-set`)
   )));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(defaultRunnerResult));
-  assert.equal(defaultRunnerResult.resultRef, DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF);
+  assert.equal(defaultRunnerResult.resultRef, defaultResultPath);
 
   const optInBlockedRunnerResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: { [REAL_RUNNER_OPT_IN_ENV]: '1' },
     inputManifestPath: platformBenchmarkManifestRef,
-    outputPath: DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF,
+    outputPath: defaultResultPath,
     now: '2026-06-02T00:00:01.000Z',
   });
   assert.equal(optInBlockedRunnerResult.status, 'blocked');
@@ -244,10 +264,20 @@ test('browser native adapter platform benchmark manifest is opt-in, refs-first, 
   assert.ok(optInBlockedRunnerResult.candidates.some((candidate) => (
     candidate.blockerRefs.some((ref) => ref.includes(':missing-real-adapter-command'))
   )));
+  const optInBlockedWebView2 = optInBlockedRunnerResult.candidates.find((candidate) => candidate.id === 'webview2');
+  assert.ok(optInBlockedWebView2, 'WebView2 blocked result should be present');
+  if (process.platform === 'darwin') {
+    assert.equal(optInBlockedWebView2.supportedOnCurrentPlatform, false);
+    assert.ok(optInBlockedWebView2.blockerRefs.includes('platform:windows:unsupported-on-darwin'));
+    assert.ok(
+      optInBlockedWebView2.blockerRefs.every((ref) => !ref.includes('missing-real-adapter-command')),
+      'typed unsupported WebView2 must not also report a missing adapter command on Darwin',
+    );
+  }
   assert.ok(optInBlockedRunnerResult.decisionGate.status === 'blocked');
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(optInBlockedRunnerResult));
 
-  const persistedResultText = await readFile(platformBenchmarkResultPath, 'utf8');
+  const persistedResultText = await readFile(defaultResultPath, 'utf8');
   assertPlatformBenchmarkArtifactIsBounded(persistedResultText);
   const persistedResult = JSON.parse(persistedResultText) as typeof optInBlockedRunnerResult;
   assert.equal(persistedResult.schemaVersion, BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_SCHEMA);
@@ -255,15 +285,300 @@ test('browser native adapter platform benchmark manifest is opt-in, refs-first, 
   assert.equal(persistedResult.benchmarkClaim, false);
 });
 
+test('browser native adapter blocked helpers default to every required metric section', async () => {
+  const helperResults = [
+    {
+      candidateId: STANDALONE_CHROMIUM_FIXTURE_CANDIDATE,
+      result: await buildStandaloneChromiumSurfaceExternalBenchmarkResult({}),
+    },
+    {
+      candidateId: WKWEBVIEW_FIXTURE_CANDIDATE,
+      result: await buildWkwebviewExternalBenchmarkResult({}),
+    },
+  ];
+
+  for (const { candidateId, result } of helperResults) {
+    assert.equal(result.status, 'blocked');
+    assert.equal(result.benchmarkClaim, false);
+    assert.ok(result.adapterRun);
+    assert.equal(result.adapterRun.realAdapterResult, false);
+    for (const section of REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS) {
+      const metricSection = result.metricSections?.[section];
+      assert.ok(metricSection, `${candidateId} default blocked helper should include ${section}`);
+      assert.equal(metricSection.status, 'blocked');
+      const resultRefs = metricSection.resultRefs ?? [];
+      assert.ok(resultRefs.length > 0);
+      assert.ok(resultRefs.every((ref) => (
+        ref.startsWith(`benchmark-result:${candidateId}:${section}:typed-blocked-native-display-input-adapter-missing`)
+      )));
+    }
+  }
+});
+
+test('browser native adapter platform benchmark requires trusted helper registry for pass-grade candidates', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-trusted-helper-registry-'));
+  const registryResultPath = join(tempDir, 'trusted-helper-registry-results.json');
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-trusted-helper-registry-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:trusted-helper-registry'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writePlatformBenchmarkManifest(manifest);
+
+  const result = await runBrowserNativeAdapterPlatformBenchmark({
+    env: { [REAL_RUNNER_OPT_IN_ENV]: '1' },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: registryResultPath,
+    now: '2026-06-02T00:00:01.750Z',
+  });
+
+  const contract = result.externalAdapterCommandContract as typeof result.externalAdapterCommandContract & {
+    trustedPassGradeHelpers?: Record<string, {
+      helperRef: string;
+      helperBasename: string;
+      requiredOptInEnv: string;
+      forbiddenEnv: string[];
+      actualEntrypointForms: string[];
+      passGradeStatus: 'active' | 'contract-defined-fail-closed';
+    }>;
+  };
+  assert.ok(contract.trustedPassGradeHelpers, 'platform benchmark contract should publish trusted pass-grade helper registry');
+  assert.deepEqual(Object.keys(contract.trustedPassGradeHelpers).sort(), [
+    'electron-web-contents-view',
+    'standalone-chromium-surface',
+    'wkwebview',
+  ]);
+  assert.equal(
+    contract.trustedPassGradeHelpers['electron-web-contents-view']?.helperRef,
+    'tools/browser-native-adapter-electron-web-contents-view-external-result.ts',
+  );
+  assert.equal(
+    contract.trustedPassGradeHelpers.wkwebview?.helperRef,
+    'tools/browser-native-adapter-wkwebview-external-result.ts',
+  );
+  assert.equal(
+    contract.trustedPassGradeHelpers['standalone-chromium-surface']?.helperRef,
+    'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts',
+  );
+  assert.ok(Object.values(contract.trustedPassGradeHelpers).every((helper) => (
+    helper.actualEntrypointForms.includes('tsx <helper>')
+    && helper.actualEntrypointForms.includes('node --import tsx <helper>')
+    && helper.actualEntrypointForms.includes('node --import=tsx <helper>')
+  )));
+  assert.equal(contract.trustedPassGradeHelpers.wkwebview?.passGradeStatus, 'active');
+  assert.equal(contract.trustedPassGradeHelpers['standalone-chromium-surface']?.passGradeStatus, 'active');
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('WKWebView helper forwards complete live-smoke REAL_COMMAND proof refs as pass-grade external result', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-wk-helper-pass-'));
+  const realCommandPath = join(tempDir, 'wk-real-adapter-command.js');
+  await writeFile(realCommandPath, buildRealAdapterCommandScriptSource({
+    includeNestedAdapterCommandProofRefs: true,
+  }), 'utf8');
+
+  const result = await buildWkwebviewExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_RUN_LIVE_SMOKE: '1',
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+  });
+
+  assertCompleteExternalCandidatePass(result, WKWEBVIEW_FIXTURE_CANDIDATE);
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('WKWebView helper refuses live-smoke REAL_COMMAND pass stdout without nested adapter command proof refs', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-wk-helper-nested-proof-'));
+  const realCommandPath = join(tempDir, 'wk-real-adapter-command.js');
+  await writeFile(realCommandPath, buildRealAdapterCommandScriptSource(), 'utf8');
+
+  const result = await buildWkwebviewExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_RUN_LIVE_SMOKE: '1',
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  assert.equal(result.adapterRun?.realAdapterResult, false);
+  assert.ok(result.diagnosticRefs?.some((ref) => ref.includes('nested adapter command provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('WKWebView external helper refuses pass-shaped REAL_COMMAND stdout without trusted live adapter helper provenance', async () => {
+  const result = await buildWkwebviewExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify(buildRealAdapterCommandArgs()),
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  assert.equal(result.adapterRun?.realAdapterResult, false);
+  assert.ok(result.diagnosticRefs?.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('standalone Chromium surface helper forwards complete live-smoke REAL_COMMAND proof refs as pass-grade external result', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-standalone-helper-pass-'));
+  const realCommandPath = join(tempDir, 'standalone-real-adapter-command.js');
+  await writeFile(realCommandPath, buildRealAdapterCommandScriptSource({
+    includeNestedAdapterCommandProofRefs: true,
+  }), 'utf8');
+
+  const result = await buildStandaloneChromiumSurfaceExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+  });
+
+  assertCompleteExternalCandidatePass(result, STANDALONE_CHROMIUM_FIXTURE_CANDIDATE);
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('standalone Chromium surface helper refuses live-smoke REAL_COMMAND pass stdout without nested adapter command proof refs', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-standalone-helper-nested-proof-'));
+  const realCommandPath = join(tempDir, 'standalone-real-adapter-command.js');
+  await writeFile(realCommandPath, buildRealAdapterCommandScriptSource(), 'utf8');
+
+  const result = await buildStandaloneChromiumSurfaceExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  assert.equal(result.adapterRun?.realAdapterResult, false);
+  assert.ok(result.diagnosticRefs?.some((ref) => ref.includes('nested adapter command provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('standalone Chromium surface helper refuses standalone process pass without native display-input adapter provenance', async () => {
+  const result = await buildStandaloneChromiumSurfaceExternalBenchmarkResult({
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_COMMAND: process.execPath,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_ARGS_JSON: JSON.stringify(
+      buildStandaloneProcessSecondTruthPassArgs(),
+    ),
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  assert.equal(result.adapterRun?.realAdapterResult, false);
+  assert.ok(result.diagnosticRefs?.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+});
+
+test('trusted WKWebView and standalone helpers pass through only complete nested real-native-adapter-run refs', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-wk-standalone-pass-through-'));
+  const passThroughManifestPath = join(tempDir, 'platform-benchmark-manifest.json');
+  const standaloneResultPath = join(tempDir, 'standalone-pass-through-results.json');
+  const wkResultPath = join(tempDir, 'wk-pass-through-results.json');
+  const realCommandPath = join(tempDir, 'real-adapter-command.js');
+  const standaloneHelperPath = resolve(
+    process.cwd(),
+    'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts',
+  );
+  const wkHelperPath = resolve(process.cwd(), 'tools/browser-native-adapter-wkwebview-external-result.ts');
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-wk-standalone-pass-through-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:wk-standalone-pass-through-contract'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writeFile(passThroughManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(realCommandPath, buildRealAdapterCommandScriptSource({
+    includeNestedAdapterCommandProofRefs: true,
+  }), 'utf8');
+
+  const standaloneResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_ARGS_JSON: JSON.stringify([
+        '--import',
+        'tsx',
+        standaloneHelperPath,
+      ]),
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+    },
+    inputManifestPath: passThroughManifestPath,
+    outputPath: standaloneResultPath,
+    now: '2026-06-02T00:00:01.000Z',
+  });
+
+  assert.equal(standaloneResult.status, 'blocked');
+  assert.equal(standaloneResult.benchmarkClaim, false);
+  const standaloneCandidate = standaloneResult.candidates.find((candidate) => (
+    candidate.id === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE
+  ));
+  assert.ok(standaloneCandidate, 'standalone pass-through candidate should be present');
+  assertCompleteRunnerCandidatePass(standaloneCandidate, STANDALONE_CHROMIUM_FIXTURE_CANDIDATE);
+  assert.deepEqual(candidateAvailability(standaloneCandidate), {
+    helperCommandPresent: true,
+    realAdapterCommandPresent: true,
+    availabilityStatus: 'real-adapter-command-present',
+  });
+  assert.ok(standaloneResult.candidates.some((candidate) => (
+    candidate.id !== STANDALONE_CHROMIUM_FIXTURE_CANDIDATE && candidate.status === 'blocked'
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(standaloneResult));
+
+  if (process.platform === 'darwin') {
+    const wkResult = await runBrowserNativeAdapterPlatformBenchmark({
+      env: {
+        [REAL_RUNNER_OPT_IN_ENV]: '1',
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_RUN_LIVE_SMOKE: '1',
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_COMMAND: process.execPath,
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_ARGS_JSON: JSON.stringify([
+          '--import',
+          'tsx',
+          wkHelperPath,
+        ]),
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify([realCommandPath]),
+      },
+      inputManifestPath: passThroughManifestPath,
+      outputPath: wkResultPath,
+      now: '2026-06-02T00:00:01.500Z',
+    });
+
+    assert.equal(wkResult.status, 'blocked');
+    assert.equal(wkResult.benchmarkClaim, false);
+    const wkCandidate = wkResult.candidates.find((candidate) => candidate.id === WKWEBVIEW_FIXTURE_CANDIDATE);
+    assert.ok(wkCandidate, 'WK pass-through candidate should be present');
+    assertCompleteRunnerCandidatePass(wkCandidate, WKWEBVIEW_FIXTURE_CANDIDATE);
+    assert.deepEqual(candidateAvailability(wkCandidate), {
+      helperCommandPresent: true,
+      realAdapterCommandPresent: true,
+      availabilityStatus: 'real-adapter-command-present',
+    });
+    assert.ok(wkResult.candidates.some((candidate) => (
+      candidate.id !== WKWEBVIEW_FIXTURE_CANDIDATE && candidate.status === 'blocked'
+    )));
+    assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wkResult));
+  }
+});
+
 test('browser native adapter platform benchmark runner validates sample external adapter stdout schema', async () => {
   const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-benchmark-'));
   const fixtureOutputPath = join(tempDir, 'schema-fixture-results.json');
+  const genericRealExternalOutputPath = join(tempDir, 'generic-real-external-results.json');
   const electronExternalOutputPath = join(tempDir, 'electron-external-results.json');
+  const standaloneChromiumExternalOutputPath = join(tempDir, 'standalone-chromium-external-results.json');
+  const standaloneChromiumRealExternalOutputPath = join(tempDir, 'standalone-chromium-real-external-results.json');
+  const wkwebviewExternalOutputPath = join(tempDir, 'wkwebview-external-results.json');
+  const wkwebviewRealExternalOutputPath = join(tempDir, 'wkwebview-real-external-results.json');
   const electronLiveEvidencePath = join(tempDir, 'electron-native-live-evidence.json');
   const invalidSchemaOutputPath = join(tempDir, 'invalid-schema-results.json');
   const falsePassOutputPath = join(tempDir, 'false-pass-results.json');
   const partialProofRefsFalsePassOutputPath = join(tempDir, 'partial-proof-refs-false-pass-results.json');
   const legacyPassEvidenceFalsePassOutputPath = join(tempDir, 'legacy-pass-evidence-false-pass-results.json');
+  const rawFieldFalsePassOutputPath = join(tempDir, 'raw-field-false-pass-results.json');
+  const rawStringFalsePassOutputPath = join(tempDir, 'raw-string-false-pass-results.json');
   const fixtureMetricRefsFalsePassOutputPath = join(tempDir, 'fixture-metric-refs-false-pass-results.json');
   const missingMetricSummaryFalsePassOutputPath = join(tempDir, 'missing-metric-summary-false-pass-results.json');
   const wrongTypeMetricSummaryFalsePassOutputPath = join(tempDir, 'wrong-type-metric-summary-false-pass-results.json');
@@ -345,6 +660,30 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(fixtureResult.decisionGate.status, 'blocked');
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(fixtureResult));
 
+  const genericRealExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify(buildRealAdapterCommandArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: genericRealExternalOutputPath,
+    now: '2026-06-02T00:00:02.250Z',
+  });
+  assert.equal(genericRealExternalResult.status, 'failed');
+  assert.equal(genericRealExternalResult.benchmarkClaim, false);
+  const genericRealExternalCandidate = genericRealExternalResult.candidates.find((candidate) => (
+    candidate.id === EXTERNAL_FIXTURE_CANDIDATE
+  ));
+  assert.ok(genericRealExternalCandidate, 'generic real external adapter candidate should be present');
+  assert.equal(genericRealExternalCandidate.status, 'failed');
+  assert.equal(genericRealExternalCandidate.benchmarkClaim, false);
+  assert.equal(genericRealExternalCandidate.realAdapterResult, false);
+  assert.ok(genericRealExternalCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('trusted live adapter helper provenance')
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(genericRealExternalResult));
+
   await writeFile(electronLiveEvidencePath, `${JSON.stringify(buildDesktopNativeLiveAcceptanceFixture(), null, 2)}\n`, 'utf8');
   const electronExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {
@@ -369,39 +708,15 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.ok(electronExternalCandidate, 'Electron external adapter candidate should be present');
   assert.equal(electronExternalCandidate.status, 'blocked');
   assert.equal(electronExternalCandidate.benchmarkClaim, false);
-  assert.equal(electronExternalCandidate.realAdapterResult, true);
+  assert.equal(electronExternalCandidate.realAdapterResult, false);
   assert.equal(electronExternalCandidate.liveSurfaceTransport, 'native-embedded');
   assert.equal(electronExternalCandidate.singleInteractiveTruth, true);
   assert.equal(electronExternalCandidate.secondTruthSource, false);
-  assert.equal(electronExternalCandidate.adapterProofRefs.proofMode, 'real-native-adapter-run');
-  assert.match(electronExternalCandidate.adapterProofRefs.browserHostSessionRef ?? '', /^browser-host-session:/);
-  assert.match(electronExternalCandidate.adapterProofRefs.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
-  assert.match(electronExternalCandidate.adapterRunRef, /^benchmark-result:electron-web-contents-view:platform-summary:/);
-  assert.deepEqual(
-    electronExternalCandidate.metricSections
-      .filter((section) => section.status === 'passed')
-      .map((section) => section.section)
-      .sort(),
-    ['cpu', 'inputCompleteness', 'latency', 'lifecycle', 'memory'],
-  );
-  assert.deepEqual(
-    electronExternalCandidate.metricSections
-      .filter((section) => section.status === 'blocked')
-      .map((section) => section.section)
-      .sort(),
-    ['reconnect'],
-  );
-  assert.ok(electronExternalCandidate.metricSections
-    .filter((section) => section.status === 'passed')
-    .every((section) => section.numericSummary !== undefined));
-  assert.ok(electronExternalCandidate.metricSections
-    .filter((section) => section.status === 'blocked')
-    .every((section) => section.numericSummary === undefined));
-  assert.ok(electronExternalCandidate.metricSections.every((section) => (
-    section.resultRefs.every((ref) => ref.startsWith(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:${section.section}:`))
-  )));
-  assert.ok(electronExternalCandidate.blockerRefs.includes(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-required-metric-section-results`));
-  assert.ok(!electronExternalCandidate.blockerRefs.includes(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`));
+  assert.equal(electronExternalCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
+  assert.ok(electronExternalCandidate.blockerRefs.includes(`benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`));
+  assert.ok(electronExternalCandidate.diagnosticRefs.includes(
+    'electron-web-contents-view:explicit-live-evidence-file-diagnostic-only',
+  ));
   assert.ok(electronExternalResult.candidates.some((candidate) => candidate.id !== EXTERNAL_FIXTURE_CANDIDATE && candidate.status === 'blocked'));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(electronExternalResult));
   const persistedElectronExternalText = await readFile(electronExternalOutputPath, 'utf8');
@@ -414,18 +729,228 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(persistedElectronExternalResult.status, 'blocked');
   assert.equal(persistedElectronExternalResult.benchmarkClaim, false);
   assert.equal(persistedElectronExternalResult.decisionGate.status, 'blocked');
-  assert.equal(persistedElectronExternalCandidate.realAdapterResult, true);
+  assert.equal(persistedElectronExternalCandidate.realAdapterResult, false);
+  assert.equal(persistedElectronExternalCandidate.status, 'blocked');
   assert.equal(persistedElectronExternalCandidate.benchmarkClaim, false);
-  assert.deepEqual(
-    persistedElectronExternalCandidate.metricSections
-      .filter((section) => section.status === 'passed')
-      .map((section) => section.section)
-      .sort(),
-    ['cpu', 'inputCompleteness', 'latency', 'lifecycle', 'memory'],
-  );
   assert.ok(persistedElectronExternalCandidate.blockerRefs.includes(
-    `benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-required-metric-section-results`,
+    `benchmark-result:${EXTERNAL_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`,
   ));
+
+  const standaloneChromiumExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_ARGS_JSON: JSON.stringify([
+        '--import',
+        'tsx',
+        resolve(process.cwd(), 'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts'),
+      ]),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: standaloneChromiumExternalOutputPath,
+    now: '2026-06-02T00:00:02.750Z',
+  });
+  assert.equal(standaloneChromiumExternalResult.status, 'blocked');
+  assert.equal(standaloneChromiumExternalResult.benchmarkClaim, false);
+  assert.equal(standaloneChromiumExternalResult.runner.status, 'blocked');
+  assert.equal(standaloneChromiumExternalResult.decisionGate.status, 'blocked');
+  const standaloneChromiumCandidate = standaloneChromiumExternalResult.candidates.find((candidate) => (
+    candidate.id === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE
+  ));
+  assert.ok(standaloneChromiumCandidate, 'standalone Chromium external adapter candidate should be present');
+  assert.equal(standaloneChromiumCandidate.status, 'blocked');
+  assert.equal(standaloneChromiumCandidate.benchmarkClaim, false);
+  assert.equal(standaloneChromiumCandidate.realAdapterResult, false);
+  assert.deepEqual(candidateAvailability(standaloneChromiumCandidate), {
+    helperCommandPresent: true,
+    realAdapterCommandPresent: false,
+    availabilityStatus: 'missing-real-adapter-command',
+  });
+  assert.equal(standaloneChromiumCandidate.supportedOnCurrentPlatform, true);
+  assert.equal(standaloneChromiumCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
+  assert.ok(standaloneChromiumCandidate.blockerRefs.includes(
+    `benchmark-result:${STANDALONE_CHROMIUM_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`,
+  ));
+  assert.ok(standaloneChromiumCandidate.blockerRefs.includes(
+    `benchmark-result:${STANDALONE_CHROMIUM_FIXTURE_CANDIDATE}:missing-required-metric-section-results`,
+  ));
+  assert.ok(standaloneChromiumCandidate.diagnosticRefs.includes(
+    'standalone-chromium-surface:typed-blocked-no-native-display-input-adapter',
+  ));
+  assert.ok(standaloneChromiumCandidate.diagnosticRefs.includes(
+    'standalone-chromium-surface:missing-browser-host-session-native-surface-attach',
+  ));
+  assert.ok(standaloneChromiumCandidate.diagnosticRefs.includes(
+    'standalone-chromium-surface:missing-native-input-routing-proof',
+  ));
+  assert.ok(standaloneChromiumCandidate.metricSections.every((section) => section.status === 'blocked'));
+  assert.ok(standaloneChromiumCandidate.metricSections.every((section) => (
+    section.resultRefs.every((ref) => ref.startsWith(
+      `benchmark-result:${STANDALONE_CHROMIUM_FIXTURE_CANDIDATE}:${section.section}:typed-blocked-native-display-input-adapter-missing`,
+    ))
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(standaloneChromiumExternalResult));
+
+  const standaloneChromiumRealExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_ARGS_JSON: JSON.stringify([
+        '--import',
+        'tsx',
+        resolve(process.cwd(), 'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts'),
+      ]),
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_REAL_ARGS_JSON: JSON.stringify(buildRealAdapterCommandArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: standaloneChromiumRealExternalOutputPath,
+    now: '2026-06-02T00:00:02.800Z',
+  });
+  assert.equal(standaloneChromiumRealExternalResult.status, 'failed');
+  assert.equal(standaloneChromiumRealExternalResult.benchmarkClaim, false);
+  const standaloneChromiumRealCandidate = standaloneChromiumRealExternalResult.candidates.find((candidate) => (
+    candidate.id === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE
+  ));
+  assert.ok(standaloneChromiumRealCandidate, 'standalone Chromium real external adapter candidate should be present');
+  assert.equal(standaloneChromiumRealCandidate.status, 'failed');
+  assert.equal(standaloneChromiumRealCandidate.benchmarkClaim, false);
+  assert.equal(standaloneChromiumRealCandidate.realAdapterResult, false);
+  assert.equal(standaloneChromiumRealCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
+  assert.ok(
+    standaloneChromiumRealCandidate.blockerRefs.includes('env:SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND:execution-failed')
+    || standaloneChromiumRealCandidate.blockerRefs.includes(`benchmark-result:${STANDALONE_CHROMIUM_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`),
+  );
+  assert.ok(standaloneChromiumRealCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('missing metric section streamQuality')
+    || ref.includes('real proof must include candidate-scoped')
+    || ref.includes('real candidate-scoped benchmark result refs')
+    || ref.includes('trusted live adapter helper provenance')
+  )));
+  assert.ok(standaloneChromiumRealCandidate.metricSections.every((section) => section.status === 'blocked'));
+  assert.ok(standaloneChromiumRealExternalResult.candidates.some((candidate) => (
+    candidate.id !== STANDALONE_CHROMIUM_FIXTURE_CANDIDATE && candidate.status === 'blocked'
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(standaloneChromiumRealExternalResult));
+
+  const wkwebviewExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_ARGS_JSON: JSON.stringify([
+        '--import',
+        'tsx',
+        resolve(process.cwd(), 'tools/browser-native-adapter-wkwebview-external-result.ts'),
+      ]),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: wkwebviewExternalOutputPath,
+    now: '2026-06-02T00:00:02.875Z',
+  });
+  assert.equal(wkwebviewExternalResult.status, 'blocked');
+  assert.equal(wkwebviewExternalResult.benchmarkClaim, false);
+  assert.equal(wkwebviewExternalResult.runner.status, 'blocked');
+  assert.equal(wkwebviewExternalResult.decisionGate.status, 'blocked');
+  assert.equal(wkwebviewExternalResult.decisionGate.selectedAdapterId, null);
+  const wkwebviewCandidate = wkwebviewExternalResult.candidates.find((candidate) => (
+    candidate.id === WKWEBVIEW_FIXTURE_CANDIDATE
+  ));
+  assert.ok(wkwebviewCandidate, 'WKWebView external adapter candidate should be present');
+  assert.equal(wkwebviewCandidate.platform, 'macos');
+  assert.equal(wkwebviewCandidate.status, 'blocked');
+  assert.equal(wkwebviewCandidate.benchmarkClaim, false);
+  assert.equal(wkwebviewCandidate.realAdapterResult, false);
+  assert.deepEqual(candidateAvailability(wkwebviewCandidate), {
+    helperCommandPresent: true,
+    realAdapterCommandPresent: false,
+    availabilityStatus: process.platform === 'darwin' ? 'missing-real-adapter-command' : 'unsupported-on-current-platform',
+  });
+  assert.equal(wkwebviewCandidate.supportedOnCurrentPlatform, process.platform === 'darwin');
+  assert.equal(wkwebviewCandidate.liveSurfaceTransport, 'native-embedded');
+  assert.equal(wkwebviewCandidate.singleInteractiveTruth, true);
+  assert.equal(wkwebviewCandidate.secondTruthSource, false);
+  assert.equal(wkwebviewCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
+  assert.ok(wkwebviewCandidate.blockerRefs.includes(
+    `benchmark-result:${WKWEBVIEW_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`,
+  ));
+  assert.ok(wkwebviewCandidate.blockerRefs.includes(
+    `benchmark-result:${WKWEBVIEW_FIXTURE_CANDIDATE}:missing-required-metric-section-results`,
+  ));
+  assert.ok(wkwebviewCandidate.blockerRefs.includes(
+    `benchmark-result:${WKWEBVIEW_FIXTURE_CANDIDATE}:schema-validation-only-not-a-benchmark`,
+  ));
+  assert.ok(wkwebviewCandidate.diagnosticRefs.includes(
+    'wkwebview:typed-blocked-native-display-input-adapter-missing',
+  ));
+  assert.ok(wkwebviewCandidate.diagnosticRefs.includes(
+    'wkwebview:missing-browser-host-session-native-surface-attach',
+  ));
+  assert.ok(wkwebviewCandidate.diagnosticRefs.includes(
+    'wkwebview:missing-native-input-routing-proof',
+  ));
+  assert.ok(wkwebviewCandidate.diagnosticRefs.includes(
+    'browser-native-adapter-platform-benchmark:typed-blocked-external-result',
+  ));
+  assert.ok(wkwebviewCandidate.metricSections.every((section) => section.status === 'blocked'));
+  assert.ok(wkwebviewCandidate.metricSections.every((section) => (
+    section.resultRefs.every((ref) => ref.startsWith(
+      `benchmark-result:${WKWEBVIEW_FIXTURE_CANDIDATE}:${section.section}:typed-blocked-native-display-input-adapter-missing`,
+    ))
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wkwebviewExternalResult));
+
+  const wkwebviewRealExternalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_ARGS_JSON: JSON.stringify([
+        '--import',
+        'tsx',
+        resolve(process.cwd(), 'tools/browser-native-adapter-wkwebview-external-result.ts'),
+      ]),
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify(buildRealAdapterCommandArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: wkwebviewRealExternalOutputPath,
+    now: '2026-06-02T00:00:02.900Z',
+  });
+  assert.equal(wkwebviewRealExternalResult.status, process.platform === 'darwin' ? 'failed' : 'blocked');
+  assert.equal(wkwebviewRealExternalResult.benchmarkClaim, false);
+  const webview2UnsupportedCandidate = wkwebviewRealExternalResult.candidates.find((candidate) => candidate.id === 'webview2');
+  assert.ok(webview2UnsupportedCandidate, 'WebView2 candidate should be present');
+  if (process.platform === 'darwin') {
+    assert.equal(webview2UnsupportedCandidate.supportedOnCurrentPlatform, false);
+    assert.ok(webview2UnsupportedCandidate.blockerRefs.includes('platform:windows:unsupported-on-darwin'));
+  }
+  const wkwebviewRealCandidate = wkwebviewRealExternalResult.candidates.find((candidate) => (
+    candidate.id === WKWEBVIEW_FIXTURE_CANDIDATE
+  ));
+  assert.ok(wkwebviewRealCandidate, 'WKWebView real external adapter candidate should be present');
+  assert.equal(wkwebviewRealCandidate.status, process.platform === 'darwin' ? 'failed' : 'blocked');
+  assert.equal(wkwebviewRealCandidate.benchmarkClaim, false);
+  assert.equal(wkwebviewRealCandidate.realAdapterResult, false);
+  assert.equal(wkwebviewRealCandidate.supportedOnCurrentPlatform, process.platform === 'darwin');
+  assert.equal(wkwebviewRealCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
+  if (process.platform === 'darwin') {
+    assert.ok(
+      wkwebviewRealCandidate.blockerRefs.includes('env:SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_COMMAND:execution-failed')
+      || wkwebviewRealCandidate.blockerRefs.includes(`benchmark-result:${WKWEBVIEW_FIXTURE_CANDIDATE}:missing-real-native-adapter-result`),
+    );
+    assert.ok(wkwebviewRealCandidate.diagnosticRefs.some((ref) => (
+      ref.includes('real native adapter result proof')
+      || ref.includes('real candidate-scoped benchmark result refs')
+      || ref.includes('real proof must include candidate-scoped')
+      || ref.includes('missing metric section streamQuality')
+      || ref.includes('trusted live adapter helper provenance')
+    )));
+  } else {
+    assert.ok(wkwebviewRealCandidate.blockerRefs.includes(`platform:macos:unsupported-on-${process.platform}`));
+  }
+  assert.ok(wkwebviewRealExternalResult.candidates.some((candidate) => (
+    candidate.id !== WKWEBVIEW_FIXTURE_CANDIDATE && candidate.status === 'blocked'
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wkwebviewRealExternalResult));
 
   const invalidSchemaResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {
@@ -483,7 +1008,12 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(partialProofRefsCandidate.benchmarkClaim, false);
   assert.equal(partialProofRefsCandidate.realAdapterResult, false);
   assert.equal(partialProofRefsCandidate.adapterProofRefs.proofMode, 'blocked-or-invalid');
-  assert.ok(partialProofRefsCandidate.diagnosticRefs.some((ref) => ref.includes('real native adapter result proof')));
+  assert.ok(partialProofRefsCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('real native adapter result proof')
+    || ref.includes('real proof must include candidate-scoped')
+    || ref.includes('real proof refs must not contain')
+    || ref.includes('real candidate-scoped benchmark result refs')
+  )));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(partialProofRefsFalsePassResult));
 
   const legacyPassEvidenceFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
@@ -509,6 +1039,55 @@ test('browser native adapter platform benchmark runner validates sample external
     ref.includes('legacy frame-stream/canvas/WebRTC tokens')
   )));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(legacyPassEvidenceFalsePassResult));
+
+  const rawFieldFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify(buildFalsePassWithForbiddenRawFieldsArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: rawFieldFalsePassOutputPath,
+    now: '2026-06-02T00:00:05.750Z',
+  });
+  assert.equal(rawFieldFalsePassResult.status, 'failed');
+  assert.equal(rawFieldFalsePassResult.benchmarkClaim, false);
+  const rawFieldFalsePassCandidate = rawFieldFalsePassResult.candidates.find((candidate) => (
+    candidate.id === EXTERNAL_FIXTURE_CANDIDATE
+  ));
+  assert.ok(rawFieldFalsePassCandidate, 'raw field false pass candidate should be present');
+  assert.equal(rawFieldFalsePassCandidate.status, 'failed');
+  assert.equal(rawFieldFalsePassCandidate.benchmarkClaim, false);
+  assert.equal(rawFieldFalsePassCandidate.realAdapterResult, false);
+  assert.ok(rawFieldFalsePassCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('raw URL, DOM, screenshot, provider payload, log, or secret fields')
+    || ref.includes('raw URLs')
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(rawFieldFalsePassResult));
+
+  const rawStringFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify(buildFalsePassWithRawUrlStringArgs()),
+    },
+    inputManifestPath: platformBenchmarkManifestRef,
+    outputPath: rawStringFalsePassOutputPath,
+    now: '2026-06-02T00:00:05.875Z',
+  });
+  assert.equal(rawStringFalsePassResult.status, 'failed');
+  assert.equal(rawStringFalsePassResult.benchmarkClaim, false);
+  const rawStringFalsePassCandidate = rawStringFalsePassResult.candidates.find((candidate) => (
+    candidate.id === EXTERNAL_FIXTURE_CANDIDATE
+  ));
+  assert.ok(rawStringFalsePassCandidate, 'raw string false pass candidate should be present');
+  assert.equal(rawStringFalsePassCandidate.status, 'failed');
+  assert.equal(rawStringFalsePassCandidate.benchmarkClaim, false);
+  assert.equal(rawStringFalsePassCandidate.realAdapterResult, false);
+  assert.ok(rawStringFalsePassCandidate.diagnosticRefs.some((ref) => (
+    ref.includes('raw URL') || ref.includes('refs-first')
+  )));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(rawStringFalsePassResult));
 
   const fixtureMetricRefsFalsePassResult = await runBrowserNativeAdapterPlatformBenchmark({
     env: {
@@ -566,6 +1145,238 @@ test('browser native adapter platform benchmark runner validates sample external
   assert.equal(wrongTypeMetricSummaryCandidate.benchmarkClaim, false);
   assert.ok(wrongTypeMetricSummaryCandidate.diagnosticRefs.some((ref) => ref.includes('bounded aggregate summary keys')));
   assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wrongTypeMetricSummaryFalsePassResult));
+});
+
+test('browser native adapter platform benchmark rejects raw URL string false-pass output independently', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-raw-url-'));
+  const rawStringManifestPath = join(tempDir, 'platform-benchmark-manifest.json');
+  const rawStringResultPath = join(tempDir, 'raw-string-results.json');
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-raw-url-guard-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:raw-url-string-guard'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writeFile(rawStringManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
+  const result = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify(buildFalsePassWithRawUrlStringArgs()),
+    },
+    inputManifestPath: rawStringManifestPath,
+    outputPath: rawStringResultPath,
+    now: '2026-06-02T00:00:09.000Z',
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  const candidate = result.candidates.find((item) => item.id === EXTERNAL_FIXTURE_CANDIDATE);
+  assert.ok(candidate, 'raw URL false-pass candidate should be present');
+  assert.equal(candidate.status, 'failed');
+  assert.equal(candidate.benchmarkClaim, false);
+  assert.equal(candidate.realAdapterResult, false);
+  assert.ok(candidate.diagnosticRefs.some((ref) => ref.includes('raw URLs') || ref.includes('refs-first')));
+  const persisted = await readFile(rawStringResultPath, 'utf8');
+  assertPlatformBenchmarkArtifactIsBounded(persisted);
+});
+
+test('browser native adapter platform benchmark requires the Electron helper as the actual executed entrypoint', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-helper-provenance-'));
+  const helperProvenanceManifestPath = join(tempDir, 'platform-benchmark-manifest.json');
+  const helperProvenanceResultPath = join(tempDir, 'helper-provenance-results.json');
+  const helperEvalProvenanceResultPath = join(tempDir, 'helper-eval-provenance-results.json');
+  const fakePassScriptPath = join(tempDir, 'fake-pass.js');
+  const electronHelperPath = resolve(process.cwd(), 'tools/browser-native-adapter-electron-web-contents-view-external-result.ts');
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-helper-provenance-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:helper-provenance-guard'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writeFile(helperProvenanceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(fakePassScriptPath, buildRealAdapterCommandScriptSource(), 'utf8');
+
+  const result = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify([
+        fakePassScriptPath,
+        electronHelperPath,
+      ]),
+    },
+    inputManifestPath: helperProvenanceManifestPath,
+    outputPath: helperProvenanceResultPath,
+    now: '2026-06-02T00:00:10.000Z',
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  const electronCandidate = result.candidates.find((candidate) => candidate.id === EXTERNAL_FIXTURE_CANDIDATE);
+  assert.ok(electronCandidate, 'Electron helper provenance candidate should be present');
+  assert.equal(electronCandidate.status, 'failed');
+  assert.equal(electronCandidate.benchmarkClaim, false);
+  assert.equal(electronCandidate.realAdapterResult, false);
+  assert.ok(electronCandidate.diagnosticRefs.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
+
+  const evalResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON: JSON.stringify([
+        `--eval=${buildRealAdapterCommandScriptSource()}`,
+        electronHelperPath,
+      ]),
+    },
+    inputManifestPath: helperProvenanceManifestPath,
+    outputPath: helperEvalProvenanceResultPath,
+    now: '2026-06-02T00:00:10.500Z',
+  });
+
+  assert.equal(evalResult.status, 'failed');
+  assert.equal(evalResult.benchmarkClaim, false);
+  const evalElectronCandidate = evalResult.candidates.find((candidate) => candidate.id === EXTERNAL_FIXTURE_CANDIDATE);
+  assert.ok(evalElectronCandidate, 'Electron --eval provenance candidate should be present');
+  assert.equal(evalElectronCandidate.status, 'failed');
+  assert.equal(evalElectronCandidate.benchmarkClaim, false);
+  assert.equal(evalElectronCandidate.realAdapterResult, false);
+  assert.ok(evalElectronCandidate.diagnosticRefs.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(evalResult));
+});
+
+test('trusted helper basename in argv does not satisfy actual executed entrypoint provenance for WK and standalone', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-wk-standalone-helper-provenance-'));
+  const helperProvenanceManifestPath = join(tempDir, 'platform-benchmark-manifest.json');
+  const standaloneHelperProvenanceResultPath = join(tempDir, 'standalone-helper-provenance-results.json');
+  const wkHelperProvenanceResultPath = join(tempDir, 'wk-helper-provenance-results.json');
+  const fakePassScriptPath = join(tempDir, 'fake-pass.js');
+  const standaloneHelperPath = resolve(
+    process.cwd(),
+    'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts',
+  );
+  const wkHelperPath = resolve(process.cwd(), 'tools/browser-native-adapter-wkwebview-external-result.ts');
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-wk-standalone-helper-provenance-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:wk-standalone-helper-provenance-guard'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writeFile(helperProvenanceManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(fakePassScriptPath, buildRealAdapterCommandScriptSource(), 'utf8');
+
+  const standaloneResult = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_ARGS_JSON: JSON.stringify([
+        fakePassScriptPath,
+        standaloneHelperPath,
+      ]),
+    },
+    inputManifestPath: helperProvenanceManifestPath,
+    outputPath: standaloneHelperProvenanceResultPath,
+    now: '2026-06-02T00:00:11.000Z',
+  });
+
+  assert.equal(standaloneResult.status, 'failed');
+  assert.equal(standaloneResult.benchmarkClaim, false);
+  const standaloneCandidate = standaloneResult.candidates.find((candidate) => (
+    candidate.id === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE
+  ));
+  assert.ok(standaloneCandidate, 'standalone helper provenance candidate should be present');
+  assert.equal(standaloneCandidate.status, 'failed');
+  assert.equal(standaloneCandidate.benchmarkClaim, false);
+  assert.equal(standaloneCandidate.realAdapterResult, false);
+  assert.ok(standaloneCandidate.diagnosticRefs.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(standaloneResult));
+
+  if (process.platform === 'darwin') {
+    const wkRunnerResult = await runBrowserNativeAdapterPlatformBenchmark({
+      env: {
+        [REAL_RUNNER_OPT_IN_ENV]: '1',
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_RUN_LIVE_SMOKE: '1',
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_COMMAND: process.execPath,
+        SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_ARGS_JSON: JSON.stringify([
+          fakePassScriptPath,
+          wkHelperPath,
+        ]),
+      },
+      inputManifestPath: helperProvenanceManifestPath,
+      outputPath: wkHelperProvenanceResultPath,
+      now: '2026-06-02T00:00:11.500Z',
+    });
+
+    assert.equal(wkRunnerResult.status, 'failed');
+    assert.equal(wkRunnerResult.benchmarkClaim, false);
+    const wkCandidate = wkRunnerResult.candidates.find((candidate) => candidate.id === WKWEBVIEW_FIXTURE_CANDIDATE);
+    assert.ok(wkCandidate, 'WK helper provenance candidate should be present');
+    assert.equal(wkCandidate.status, 'failed');
+    assert.equal(wkCandidate.benchmarkClaim, false);
+    assert.equal(wkCandidate.realAdapterResult, false);
+    assert.ok(wkCandidate.diagnosticRefs.some((ref) => ref.includes('trusted live adapter helper provenance')));
+    assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wkRunnerResult));
+  } else {
+    const wkDirectResult = await buildWkwebviewExternalBenchmarkResult({
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_COMMAND: process.execPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_REAL_ARGS_JSON: JSON.stringify([
+        fakePassScriptPath,
+        wkHelperPath,
+      ]),
+    });
+    assert.equal(wkDirectResult.status, 'failed');
+    assert.equal(wkDirectResult.benchmarkClaim, false);
+    assert.ok(wkDirectResult.diagnosticRefs?.some((ref) => ref.includes('trusted live adapter helper provenance')));
+    assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(wkDirectResult));
+  }
+});
+
+test('fake executable named tsx cannot satisfy trusted helper provenance for WK or standalone', async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-native-adapter-fake-tsx-helper-provenance-'));
+  const fakeTsxManifestPath = join(tempDir, 'platform-benchmark-manifest.json');
+  const fakeTsxResultPath = join(tempDir, 'fake-tsx-helper-provenance-results.json');
+  const fakeTsxPath = join(tempDir, 'tsx');
+  const standaloneHelperPath = resolve(
+    process.cwd(),
+    'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts',
+  );
+  const comparisonManifest = buildBrowserNativeAdapterComparisonManifest({
+    manifestId: 'browser-native-adapter-fake-tsx-helper-provenance-source-comparison',
+    createdAt: '2026-06-02T00:00:00.000Z',
+    evidenceRefs: ['browser-native-adapter-platform-benchmark:fake-tsx-helper-provenance-guard'],
+  });
+  const manifest = buildPlatformBenchmarkManifest(comparisonManifest);
+  await writeFile(fakeTsxManifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  await writeFile(fakeTsxPath, fakeTsxPassScriptSource(), { mode: 0o755 });
+
+  const result = await runBrowserNativeAdapterPlatformBenchmark({
+    env: {
+      [REAL_RUNNER_OPT_IN_ENV]: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE: '1',
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_COMMAND: fakeTsxPath,
+      SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_ARGS_JSON: JSON.stringify([
+        standaloneHelperPath,
+      ]),
+    },
+    inputManifestPath: fakeTsxManifestPath,
+    outputPath: fakeTsxResultPath,
+    now: '2026-06-02T00:00:12.000Z',
+  });
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.benchmarkClaim, false);
+  const candidate = result.candidates.find((entry) => entry.id === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE);
+  assert.ok(candidate, 'standalone fake tsx candidate should be present');
+  assert.equal(candidate.status, 'failed');
+  assert.equal(candidate.benchmarkClaim, false);
+  assert.equal(candidate.realAdapterResult, false);
+  assert.ok(candidate.diagnosticRefs.some((ref) => ref.includes('trusted live adapter helper provenance')));
+  assertPlatformBenchmarkArtifactIsBounded(JSON.stringify(result));
 });
 
 function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapterComparisonManifest): PlatformBenchmarkManifest {
@@ -656,6 +1467,12 @@ function buildPlatformBenchmarkManifest(comparisonManifest: BrowserNativeAdapter
           ],
           forbiddenResultKinds: ['schema-validation-only'],
           forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
+        },
+        passRequiresNestedAdapterCommandProofRefs: {
+          candidates: ['wkwebview', 'standalone-chromium-surface'],
+          proofKinds: ['policy', 'entrypoint', 'helper-chain', 'live-smoke'],
+          boundedRefsOnly: true,
+          missingStatus: 'failed',
         },
         realProofRefusalPolicy: {
           currentProcessPlatform: process.platform,
@@ -799,6 +1616,12 @@ function assertPlatformBenchmarkManifest(
     forbiddenResultKinds: ['schema-validation-only'],
     forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
   });
+  assert.deepEqual(manifest.platformRunner.externalAdapterCommandContract.passRequiresNestedAdapterCommandProofRefs, {
+    candidates: ['wkwebview', 'standalone-chromium-surface'],
+    proofKinds: ['policy', 'entrypoint', 'helper-chain', 'live-smoke'],
+    boundedRefsOnly: true,
+    missingStatus: 'failed',
+  });
   assert.deepEqual(manifest.platformRunner.externalAdapterCommandContract.realProofRefusalPolicy, {
     currentProcessPlatform: process.platform,
     unsupportedPlatformStatus: 'blocked',
@@ -888,6 +1711,110 @@ function adapterEnvName(candidateId: BrowserNativeAdapterCandidateId, suffix: 'C
   return `SCIFORGE_BROWSER_NATIVE_ADAPTER_${candidateId.toUpperCase().replace(/-/g, '_')}_${suffix}`;
 }
 
+function candidateAvailability(candidate: unknown): {
+  helperCommandPresent: boolean;
+  realAdapterCommandPresent: boolean;
+  availabilityStatus: string;
+} | undefined {
+  const availability = (candidate as { adapterAvailability?: {
+    helperCommandPresent: boolean;
+    realAdapterCommandPresent: boolean;
+    availabilityStatus: string;
+  } }).adapterAvailability;
+  return availability && {
+    helperCommandPresent: availability.helperCommandPresent,
+    realAdapterCommandPresent: availability.realAdapterCommandPresent,
+    availabilityStatus: availability.availabilityStatus,
+  };
+}
+
+function assertCompleteExternalCandidatePass(
+  result: BrowserNativeAdapterPlatformBenchmarkExternalResult,
+  candidateId: BrowserNativeAdapterCandidateId,
+): void {
+  assert.equal(result.status, 'passed');
+  assert.equal(result.benchmarkClaim, true);
+  assert.equal(result.owner, 'BrowserHostSession');
+  assert.equal(result.liveSurfaceTransport, 'native-embedded');
+  assert.equal(result.singleInteractiveTruth, true);
+  assert.equal(result.secondTruthSource, false);
+  assert.equal(result.adapterRun?.resultKind, 'real-native-adapter-run');
+  assert.equal(result.adapterRun?.realAdapterResult, true);
+  assert.equal(result.adapterRun?.rawPayloadsCaptured, false);
+  assert.match(result.adapterRun?.browserHostSessionRef ?? '', /^browser-host-session:/);
+  assert.equal(
+    result.adapterRun?.liveSurfaceRef,
+    `${result.adapterRun?.browserHostSessionRef}/live-surface`,
+  );
+  assert.match(
+    result.adapterRun?.nativeAdapterSurfaceRef ?? '',
+    new RegExp(`^benchmark-result:${candidateId}:native-adapter-surface:`),
+  );
+  assert.match(
+    result.adapterRun?.actionTraceRef ?? '',
+    new RegExp(`^benchmark-result:${candidateId}:action-trace:`),
+  );
+  assert.match(
+    result.adapterRun?.platformResultRef ?? '',
+    new RegExp(`^benchmark-result:${candidateId}:platform-summary:`),
+  );
+  if (candidateId === WKWEBVIEW_FIXTURE_CANDIDATE || candidateId === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE) {
+    assertNestedAdapterCommandProofRefs(result.nestedAdapterCommandProofRefs, candidateId);
+  }
+  for (const section of REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS) {
+    const metricSection = result.metricSections?.[section];
+    assert.ok(metricSection, `${candidateId} pass result should include metric section ${section}`);
+    assert.equal(metricSection.status, 'passed');
+    assert.ok(metricSection.resultRefs?.every((ref) => (
+      ref.startsWith(`benchmark-result:${candidateId}:${section}:`)
+    )));
+    assert.ok(metricSection.numericSummary, `${candidateId} ${section} should include bounded numeric summary`);
+  }
+}
+
+function assertCompleteRunnerCandidatePass(
+  candidate: BrowserNativeAdapterPlatformBenchmarkCandidateResult,
+  candidateId: BrowserNativeAdapterCandidateId,
+): void {
+  assert.equal(candidate.status, 'passed');
+  assert.equal(candidate.benchmarkClaim, true);
+  assert.equal(candidate.realAdapterResult, true);
+  assert.equal(candidate.liveSurfaceTransport, 'native-embedded');
+  assert.equal(candidate.singleInteractiveTruth, true);
+  assert.equal(candidate.secondTruthSource, false);
+  assert.equal(candidate.adapterProofRefs.proofMode, 'real-native-adapter-run');
+  assert.match(candidate.adapterProofRefs.browserHostSessionRef ?? '', /^browser-host-session:/);
+  assert.equal(
+    candidate.adapterProofRefs.liveSurfaceRef,
+    `${candidate.adapterProofRefs.browserHostSessionRef}/live-surface`,
+  );
+  assert.match(candidate.adapterRunRef, new RegExp(`^benchmark-result:${candidateId}:platform-summary:`));
+  if (candidateId === WKWEBVIEW_FIXTURE_CANDIDATE || candidateId === STANDALONE_CHROMIUM_FIXTURE_CANDIDATE) {
+    assertNestedAdapterCommandProofRefs(candidate.adapterProofRefs.nestedAdapterCommandProofRefs, candidateId);
+  }
+  assert.deepEqual(candidate.metricSections.map((section) => section.section), REQUIRED_REAL_PLATFORM_BENCHMARK_SECTIONS);
+  assert.ok(candidate.metricSections.every((section) => section.status === 'passed'));
+  assert.ok(candidate.metricSections.every((section) => (
+    section.resultRefs.every((ref) => ref.startsWith(`benchmark-result:${candidateId}:${section.section}:`))
+  )));
+  assert.ok(candidate.metricSections.every((section) => section.numericSummary !== undefined));
+  assert.deepEqual(candidate.blockerRefs, []);
+}
+
+function assertNestedAdapterCommandProofRefs(
+  refs: string[] | undefined,
+  candidateId: BrowserNativeAdapterCandidateId,
+): void {
+  assert.ok(Array.isArray(refs), `${candidateId} pass should include nested adapter command proof refs`);
+  for (const proofKind of ['policy', 'entrypoint', 'helper-chain', 'live-smoke']) {
+    assert.ok(
+      refs.some((ref) => ref.startsWith(`benchmark-result:${candidateId}:nested-real-adapter-command:${proofKind}:`)),
+      `${candidateId} nested adapter command proof refs should include ${proofKind}`,
+    );
+  }
+  assert.ok(refs.every((ref) => /^[a-zA-Z0-9_.:/-]{1,240}$/.test(ref)));
+}
+
 function platformSupported(platform: BrowserNativeAdapterComparisonManifest['candidates'][number]['platform']): boolean {
   if (platform === 'cross-platform') {
     return true;
@@ -914,12 +1841,12 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
     claimScope: 'desktop-native-embedded-browser-pane-live',
     desktopLaunch: {
       mode: 'production-electron',
-      mainPath: 'dist-desktop/src/desktop/main.js',
-      rendererPath: 'dist-ui/index.html',
-      rendererUrl: 'file:///bounded/renderer/index.html',
+      mainPathRef: 'desktop-launch-main:1111111111111111',
+      rendererPathRef: 'desktop-launch-renderer:2222222222222222',
+      rendererUrl: { length: 36, hash: '3333333333333333' },
     },
     nativeAdapter: {
-      url: nativeAdapterUrl,
+      endpoint: { length: nativeAdapterUrl.length, hash: '4444444444444444', loopbackHttp: true },
       healthOk: true,
       service: 'sciforge-desktop-browser-native-adapter',
       owner: 'BrowserHostSession',
@@ -940,10 +1867,10 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
       owner: 'BrowserHostSession',
       providerId: 'desktop-native-browser-host-provider',
       status: 'ready',
-      requestedUrl: targetUrl,
-      url: targetUrl,
+      requestedUrl: { length: targetUrl.length, hash: '5555555555555555' },
+      url: { length: targetUrl.length, hash: '6666666666666666' },
       liveSurfaceTransport: 'native-embedded',
-      nativeAdapterUrl,
+      nativeAdapterEndpoint: { length: nativeAdapterUrl.length, hash: '4444444444444444', loopbackHttp: true },
       singleInteractiveTruth: true,
       frameStreamRefPresent: false,
       frameRefPresent: false,
@@ -968,7 +1895,7 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
       },
     },
     interaction: {
-      targetUrl,
+      targetUrl: { length: targetUrl.length, hash: '5555555555555555' },
       typedTokenObserved: true,
       textProbe: 'native-adapter-text-endpoint',
       actionTimingTransport: 'native-embedded',
@@ -986,7 +1913,8 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
       },
       stateHeartbeat: {
         source: 'native-adapter-state-endpoint',
-        url: targetUrl,
+        url: { length: targetUrl.length, hash: '6666666666666666' },
+        urlMatchesTarget: true,
         title: 'Native Live Fixture',
         loading: false,
         canGoBack: false,
@@ -997,6 +1925,7 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
       },
     },
     rejectedDesktopLiveSubstitutes: rejectedDesktopLiveSubstitutes(),
+    m0SurfingLoop: buildDesktopNativeM0SurfingLoopFixture(sessionId),
     benchmarkMetrics: {
       schemaVersion: 'sciforge.desktop.browser-native-live-acceptance.benchmark-metrics.v1',
       source: 'desktop-native-browser-pane-smoke',
@@ -1049,22 +1978,132 @@ function buildDesktopNativeLiveAcceptanceFixture(): DesktopBrowserNativeLiveAcce
           status: 'passed',
           resultRef: 'benchmark-result:electron-web-contents-view:lifecycle:realrun',
           numericSummary: {
-            operationsCompleted: 2,
-            sameLiveSurfaceRefAfterResize: true,
-            sameLiveSurfaceRefAfterRestore: true,
-            visibleAfterResize: true,
-            visibleAfterRestore: true,
-            surfaceStateOkAfterRestore: true,
+            open: true,
+            navigationStart: true,
+            navigationCommitted: true,
+            interactive: true,
+            load: true,
+            networkQuiet: true,
+            blocked: true,
+            retry: true,
+            close: true,
           },
         },
         reconnect: {
-          status: 'blocked',
+          status: 'passed',
           resultRef: 'benchmark-result:electron-web-contents-view:reconnect:realrun',
+          numericSummary: {
+            disconnectDetected: true,
+            sameBrowserHostSessionOwner: true,
+            stateHeartbeatRestored: true,
+            inputRoutedAfterReconnect: true,
+          },
+        },
+        streamQuality: {
+          status: 'passed',
+          resultRef: 'benchmark-result:electron-web-contents-view:streamQuality:realrun',
+          numericSummary: {
+            latencyP50Ms: 21,
+            latencyP95Ms: 48,
+            framerateAvgFps: 59,
+            framerateP5Fps: 52,
+            inputToFrameP50Ms: 26,
+            inputToFrameP95Ms: 63,
+            reconnectP50Ms: 180,
+            reconnectP95Ms: 420,
+            sampleCount: 32,
+            fallbackRequired: false,
+          },
         },
       },
     },
     verificationCommand: 'npm run smoke:desktop-browser-native-live-acceptance --silent',
     strictVerificationCommand: 'SCIFORGE_REQUIRE_DESKTOP_BROWSER_NATIVE_LIVE_ACCEPTANCE=1 npm run smoke:desktop-browser-native-live-acceptance --silent',
+  };
+}
+
+function buildDesktopNativeM0SurfingLoopFixture(
+  sessionId: string,
+): NonNullable<DesktopBrowserNativeLiveAcceptanceEvidence['m0SurfingLoop']> {
+  const actionEvidence = (action: DesktopBrowserNativeM0Action, latencyMs = 12) => ({
+    status: 'passed' as const,
+    latencyMs,
+    resultRef: `browser-host-session:${sessionId}/m0/${action}`,
+  });
+  return {
+    schemaVersion: DESKTOP_BROWSER_NATIVE_M0_SURFING_LOOP_SCHEMA,
+    status: 'passed',
+    claimScope: 'desktop-native-m0-surfing-loop',
+    passClaim: true,
+    shell: 'desktop-right-pane',
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    refsFirst: true,
+    evidenceMode: 'bounded-refs-and-summaries',
+    sessionRef: `browser-host-session:${sessionId}`,
+    liveSurfaceRef: `browser-host-session:${sessionId}/live-surface`,
+    nativeAdapterRef: 'native-adapter:loopback:0123456789abcdef',
+    surfaceRef: 'desktop-native-surface:electron-web-contents-view:fedcba9876543210',
+    transport: {
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      surfaceType: 'electron-web-contents-view',
+    },
+    health: {
+      nativeAdapterHealthOk: true,
+      nativeAdapterService: 'sciforge-desktop-browser-native-adapter',
+      nativeStateHeartbeat: true,
+      actionAckSource: 'native-adapter-action-state',
+    },
+    urlEvidence: {
+      requested: { length: 34, hash: 'aaaaaaaaaaaaaaaa' },
+      final: { length: 34, hash: 'bbbbbbbbbbbbbbbb' },
+      rawUrlCaptured: false,
+    },
+    actionCoverage: {
+      open: actionEvidence('open', 240),
+      click: actionEvidence('click', 12),
+      type: {
+        ...actionEvidence('type', 18),
+        textLength: 28,
+        textHash: 'cccccccccccccccc',
+      },
+      scroll: actionEvidence('scroll', 14),
+      drag: actionEvidence('drag', 22),
+      reload: actionEvidence('reload', 90),
+      back: actionEvidence('back', 24),
+      forward: actionEvidence('forward', 26),
+      stop: actionEvidence('stop', 10),
+    },
+    inputHotPath: {
+      dependsOnScreenshot: false,
+      dependsOnFrameStream: false,
+      screenshotRequestsDuringAck: 0,
+      frameStreamRequestsDuringAck: 0,
+    },
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    noLegacyFallback: {
+      hostStream: false,
+      canvas: false,
+      webRtc: false,
+      httpFrame: false,
+      snapshot: false,
+      iframe: false,
+      proxy: false,
+      webview: false,
+      systemPopup: false,
+      externalBrowser: false,
+    },
+    payloadPolicy: {
+      rawDom: false,
+      rawLogs: false,
+      rawScreenshot: false,
+      base64: false,
+      providerPayload: false,
+      secret: false,
+    },
+    coverageGaps: [],
   };
 }
 
@@ -1105,6 +2144,123 @@ process.stdout.write(JSON.stringify({
 }));
 `;
   return ['-e', fixtureSource];
+}
+
+function buildRealAdapterCommandArgs(): string[] {
+  return ['-e', buildRealAdapterCommandScriptSource()];
+}
+
+function buildRealAdapterCommandScriptSource(options: {
+  includeNestedAdapterCommandProofRefs?: boolean;
+} = {}): string {
+  const nestedProofRefsSource = options.includeNestedAdapterCommandProofRefs
+    ? `[
+    'benchmark-result:' + candidateId + ':nested-real-adapter-command:policy:' + proofSuffix,
+    'benchmark-result:' + candidateId + ':nested-real-adapter-command:entrypoint:' + proofSuffix,
+    'benchmark-result:' + candidateId + ':nested-real-adapter-command:helper-chain:' + proofSuffix,
+    'benchmark-result:' + candidateId + ':nested-real-adapter-command:live-smoke:' + proofSuffix,
+  ]`
+    : 'undefined';
+  return `
+const sections = JSON.parse(process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON || '[]');
+const candidateId = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE;
+const platform = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM;
+const proofSuffix = 'measured-run';
+const browserHostSessionRef = 'browser-host-session:' + candidateId + '-measured-run';
+const nestedAdapterCommandProofRefs = ${nestedProofRefsSource};
+const summaryBySection = {
+  latency: {
+    openAckMs: 11,
+    navigationAckMs: 23,
+    inputAckMs: 5,
+    paintAckLagMs: 13,
+    p95ActionAckMs: 27,
+  },
+  cpu: {
+    processCpuAveragePercent: 2,
+    processCpuP95Percent: 7,
+    sampleCount: 18,
+  },
+  memory: {
+    rssMb: 118,
+    heapUsedMb: 41,
+    nativeSurfaceMb: 31,
+    peakRssMb: 124,
+  },
+  inputCompleteness: {
+    keyboard: true,
+    textEditing: true,
+    pointerClick: true,
+    drag: true,
+    scroll: true,
+    navigationControls: true,
+  },
+  lifecycle: {
+    open: true,
+    navigationStart: true,
+    navigationCommitted: true,
+    interactive: true,
+    load: true,
+    networkQuiet: true,
+    blocked: true,
+    retry: true,
+    close: true,
+  },
+  reconnect: {
+    disconnectDetected: true,
+    sameBrowserHostSessionOwner: true,
+    stateHeartbeatRestored: true,
+    inputRoutedAfterReconnect: true,
+  },
+  streamQuality: {
+    latencyP50Ms: 11,
+    latencyP95Ms: 28,
+    framerateAvgFps: 60,
+    framerateP5Fps: 55,
+    inputToFrameP50Ms: 14,
+    inputToFrameP95Ms: 32,
+    reconnectP50Ms: 120,
+    reconnectP95Ms: 260,
+    sampleCount: 18,
+    fallbackRequired: false,
+  },
+};
+const metricSections = Object.fromEntries(sections.map((section) => [section, {
+  status: 'passed',
+  resultRefs: [
+    'benchmark-result:' + candidateId + ':' + section + ':' + proofSuffix,
+  ],
+  numericSummary: summaryBySection[section],
+}]));
+process.stdout.write(JSON.stringify({
+  schemaVersion: process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA,
+  candidateId,
+  platform,
+  owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
+  singleInteractiveTruth: true,
+  secondTruthSource: false,
+  adapterRun: {
+    resultKind: 'real-native-adapter-run',
+    realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    browserHostSessionRef,
+    liveSurfaceRef: browserHostSessionRef + '/live-surface',
+    nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:' + proofSuffix,
+    actionTraceRef: 'benchmark-result:' + candidateId + ':action-trace:' + proofSuffix,
+    platformResultRef: 'benchmark-result:' + candidateId + ':platform-summary:' + proofSuffix,
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+  },
+  status: 'passed',
+  benchmarkClaim: true,
+  ...(nestedAdapterCommandProofRefs ? { nestedAdapterCommandProofRefs } : {}),
+  metricSections,
+  diagnosticRefs: [
+    'benchmark-result:' + candidateId + ':real-command-bounded-summary',
+  ],
+}));
+`;
 }
 
 function buildFalsePassWithoutRealAdapterProofArgs(): string[] {
@@ -1273,6 +2429,18 @@ const summaryBySection = {
     stateHeartbeatRestored: true,
     inputRoutedAfterReconnect: true,
   },
+  streamQuality: {
+    latencyP50Ms: 12,
+    latencyP95Ms: 30,
+    framerateAvgFps: 59,
+    framerateP5Fps: 54,
+    inputToFrameP50Ms: 16,
+    inputToFrameP95Ms: 35,
+    reconnectP50Ms: 140,
+    reconnectP95Ms: 280,
+    sampleCount: 30,
+    fallbackRequired: false,
+  },
 };
 const metricSections = Object.fromEntries(sections.map((section) => [section, {
   status: 'passed',
@@ -1305,6 +2473,251 @@ process.stdout.write(JSON.stringify({
   benchmarkClaim: true,
   metricSections,
   diagnosticRefs: ['benchmark-result:' + candidateId + ':attempted-pass-with-legacy-frame-stream-canvas-webrtc'],
+}));
+`;
+  return ['-e', fixtureSource];
+}
+
+function buildStandaloneProcessSecondTruthPassArgs(): string[] {
+  const fixtureSource = `
+const sections = JSON.parse(process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON || '[]');
+const candidateId = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE || 'standalone-chromium-surface';
+const platform = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM || 'cross-platform';
+const summaryBySection = {
+  latency: {
+    openAckMs: 10,
+    navigationAckMs: 20,
+    inputAckMs: 4,
+    paintAckLagMs: 12,
+    p95ActionAckMs: 25,
+  },
+  cpu: {
+    processCpuAveragePercent: 3,
+    processCpuP95Percent: 8,
+    sampleCount: 30,
+  },
+  memory: {
+    rssMb: 120,
+    heapUsedMb: 40,
+    nativeSurfaceMb: 35,
+    peakRssMb: 130,
+  },
+  inputCompleteness: {
+    keyboard: true,
+    textEditing: true,
+    pointerClick: true,
+    drag: true,
+    scroll: true,
+    navigationControls: true,
+  },
+  lifecycle: {
+    open: true,
+    navigationStart: true,
+    navigationCommitted: true,
+    interactive: true,
+    load: true,
+    networkQuiet: true,
+    blocked: true,
+    retry: true,
+    close: true,
+  },
+  reconnect: {
+    disconnectDetected: true,
+    sameBrowserHostSessionOwner: true,
+    stateHeartbeatRestored: true,
+    inputRoutedAfterReconnect: true,
+  },
+  streamQuality: {
+    latencyP50Ms: 10,
+    latencyP95Ms: 24,
+    framerateAvgFps: 60,
+    framerateP5Fps: 56,
+    inputToFrameP50Ms: 13,
+    inputToFrameP95Ms: 29,
+    reconnectP50Ms: 115,
+    reconnectP95Ms: 240,
+    sampleCount: 24,
+    fallbackRequired: false,
+  },
+};
+const metricSections = Object.fromEntries(sections.map((section) => [section, {
+  status: 'passed',
+  resultRefs: [
+    'benchmark-result:' + candidateId + ':' + section + ':standalone-process-without-native-embedder',
+  ],
+  numericSummary: summaryBySection[section],
+}]));
+process.stdout.write(JSON.stringify({
+  schemaVersion: process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA || 'sciforge.browser-native-adapter-platform-benchmark-external-result.v1',
+  candidateId,
+  platform,
+  owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
+  singleInteractiveTruth: true,
+  secondTruthSource: false,
+  adapterRun: {
+    resultKind: 'real-native-adapter-run',
+    realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    browserHostSessionRef: 'browser-host-session:standalone-second-viewer-proof',
+    liveSurfaceRef: 'browser-host-session:standalone-second-viewer-proof/live-surface',
+    nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:standalone-process-without-native-embedder',
+    actionTraceRef: 'benchmark-result:' + candidateId + ':action-trace:external-browser',
+    platformResultRef: 'benchmark-result:' + candidateId + ':platform-summary:second-viewer',
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+  },
+  status: 'passed',
+  benchmarkClaim: true,
+  metricSections,
+  diagnosticRefs: ['benchmark-result:' + candidateId + ':attempted-standalone-process-without-native-embedder'],
+}));
+`;
+  return ['-e', fixtureSource];
+}
+
+function buildFalsePassWithForbiddenRawFieldsArgs(): string[] {
+  const fixtureSource = `
+const sections = JSON.parse(process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON || '[]');
+const candidateId = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE;
+const platform = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM;
+const metricSections = Object.fromEntries(sections.map((section) => [section, {
+  status: 'passed',
+  resultRefs: [
+    'benchmark-result:' + candidateId + ':' + section + ':bounded-summary',
+  ],
+  numericSummary: {
+    sampleCount: 1,
+  },
+}]));
+process.stdout.write(JSON.stringify({
+  schemaVersion: process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA,
+  candidateId,
+  platform,
+  owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
+  singleInteractiveTruth: true,
+  secondTruthSource: false,
+  adapterRun: {
+    resultKind: 'real-native-adapter-run',
+    realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    browserHostSessionRef: 'browser-host-session:native-adapter-raw-field-proof',
+    liveSurfaceRef: 'browser-host-session:native-adapter-raw-field-proof/live-surface',
+    nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:raw-field',
+    actionTraceRef: 'benchmark-result:' + candidateId + ':action-trace:raw-field',
+    platformResultRef: 'benchmark-result:' + candidateId + ':platform-summary:raw-field',
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+  },
+  status: 'passed',
+  benchmarkClaim: true,
+  metricSections,
+  diagnosticRefs: ['benchmark-result:' + candidateId + ':attempted-raw-field-pass'],
+  screenshot: 'raw-screenshot-pixels-must-not-persist',
+  provider: 'raw-provider-payload-must-not-persist',
+  payload: 'raw-inline-payload-must-not-persist',
+}));
+`;
+  return ['-e', fixtureSource];
+}
+
+function buildFalsePassWithRawUrlStringArgs(): string[] {
+  const fixtureSource = `
+const sections = JSON.parse(process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON || '[]');
+const candidateId = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE;
+const platform = process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM;
+const summaryBySection = {
+  latency: {
+    openAckMs: 10,
+    navigationAckMs: 20,
+    inputAckMs: 4,
+    paintAckLagMs: 12,
+    p95ActionAckMs: 25,
+  },
+  cpu: {
+    processCpuAveragePercent: 3,
+    processCpuP95Percent: 8,
+    sampleCount: 30,
+  },
+  memory: {
+    rssMb: 120,
+    heapUsedMb: 40,
+    nativeSurfaceMb: 35,
+    peakRssMb: 130,
+  },
+  inputCompleteness: {
+    keyboard: true,
+    textEditing: true,
+    pointerClick: true,
+    drag: true,
+    scroll: true,
+    navigationControls: true,
+  },
+  lifecycle: {
+    open: true,
+    navigationStart: true,
+    navigationCommitted: true,
+    interactive: true,
+    load: true,
+    networkQuiet: true,
+    blocked: true,
+    retry: true,
+    close: true,
+  },
+  reconnect: {
+    disconnectDetected: true,
+    sameBrowserHostSessionOwner: true,
+    stateHeartbeatRestored: true,
+    inputRoutedAfterReconnect: true,
+  },
+  streamQuality: {
+    latencyP50Ms: 10,
+    latencyP95Ms: 24,
+    framerateAvgFps: 60,
+    framerateP5Fps: 56,
+    inputToFrameP50Ms: 13,
+    inputToFrameP95Ms: 29,
+    reconnectP50Ms: 115,
+    reconnectP95Ms: 240,
+    sampleCount: 24,
+    fallbackRequired: false,
+  },
+};
+const metricSections = Object.fromEntries(sections.map((section) => [section, {
+  status: 'passed',
+  resultRefs: [
+    'benchmark-result:' + candidateId + ':' + section + ':bounded-run',
+  ],
+  numericSummary: summaryBySection[section],
+}]));
+process.stdout.write(JSON.stringify({
+  schemaVersion: process.env.SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA,
+  candidateId,
+  platform,
+  owner: 'BrowserHostSession',
+  liveSurfaceTransport: 'native-embedded',
+  singleInteractiveTruth: true,
+  secondTruthSource: false,
+  adapterRun: {
+    resultKind: 'real-native-adapter-run',
+    realAdapterResult: true,
+    liveSurfaceTransport: 'native-embedded',
+    browserHostSessionRef: 'browser-host-session:native-adapter-raw-string-proof',
+    liveSurfaceRef: 'browser-host-session:native-adapter-raw-string-proof/live-surface',
+    nativeAdapterSurfaceRef: 'benchmark-result:' + candidateId + ':native-adapter-surface:bounded-run',
+    actionTraceRef: 'benchmark-result:' + candidateId + ':action-trace:bounded-run',
+    platformResultRef: 'benchmark-result:' + candidateId + ':platform-summary:bounded-run',
+    secondTruthSource: false,
+    rawPayloadsCaptured: false,
+  },
+  status: 'passed',
+  benchmarkClaim: true,
+  metricSections,
+  diagnosticRefs: [
+    'benchmark-result:' + candidateId + ':attempted-pass-with-raw-url-string',
+    'https://example.invalid/raw-diagnostic-must-not-persist',
+  ],
 }));
 `;
   return ['-e', fixtureSource];
@@ -1438,6 +2851,11 @@ process.stdout.write(JSON.stringify({
 
 function assertPlatformBenchmarkArtifactIsBounded(text: string): void {
   assert.doesNotMatch(text, /data:image|;base64,|iVBORw0KGgo|<\s*(?:!doctype|html|body|script|iframe|webview)\b/i);
-  assert.doesNotMatch(text, /"(?:rawDom|domSnapshot|screenshotBase64|providerPayload|consoleLog|networkLog)"\s*:/i);
+  assert.doesNotMatch(text, /https?:\/\//i);
+  assert.doesNotMatch(text, /"(?:rawUrl|url|requestedUrl|currentUrl|finalUrl|rawDom|dom|domSnapshot|screenshot|rawScreenshot|screenshotBase64|screenshotBytes|clipboard|selection|menu|provider|payload|rawPayload|providerPayload|consoleLog|networkLog|secret|token|password|credential|cookie|authorization|apiKey)"\s*:/i);
   assert.doesNotMatch(text, /"payload"\s*:\s*"(?:\{|<|data:)/i);
+}
+
+function fakeTsxPassScriptSource() {
+  return `#!/usr/bin/env node\n${buildRealAdapterCommandScriptSource()}`;
 }

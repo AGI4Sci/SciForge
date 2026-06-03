@@ -115,6 +115,76 @@ test('screen pane model uses the active run only and does not reuse stale sessio
   assert.equal(JSON.stringify(payload).includes('run-old-screen'), false);
 });
 
+test('screen pane model prefers newer live VirtualAppScreen evidence over older blocked artifacts', () => {
+  const blockedArtifact: RuntimeArtifact = {
+    id: 'blocked-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'blocked',
+      attachState: 'blocked',
+      surfaceMode: 'empty',
+      screenRef: 'virtual-app-screen:blocked/screen-request',
+      targetAppRef: 'app:profile/vscode-editor',
+      adapterReadinessRef: 'computer-use:screen-activation/blocked/provider-readiness.json',
+      blockedRef: 'computer-use:screen-activation/blocked/blocked/no-native-session.json',
+      blockedReason: 'Old blocked projection.',
+    },
+  };
+  const liveArtifact: RuntimeArtifact = {
+    id: 'live-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: liveNativeHostScreenData('live-selected'),
+  };
+  const session = emptySession({ artifacts: [blockedArtifact, liveArtifact] });
+
+  const payload = rightPaneVirtualScreenPayload(session, undefined, testConfig());
+
+  assert.equal(payload.surfaceMode, 'live');
+  assert.equal(payload.presentationState, 'live');
+  assert.equal(payload.attachState, 'attached');
+  assert.equal(payload.screenRef, 'virtual-app-screen:live-selected/screen-request');
+  assert.equal(payload.currentFrameRef, 'computer-use:native-host/frames/live-selected/current.png');
+  assert.equal(payload.blockedRef, undefined);
+  assert.equal(payload.blockedReason, undefined);
+});
+
+test('screen pane model lets newer same-id run raw artifacts replace stale session artifacts', () => {
+  const staleArtifact: RuntimeArtifact = {
+    id: 'same-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'blocked',
+      attachState: 'blocked',
+      screenRef: 'virtual-app-screen:same-screen/stale',
+      blockedRef: 'computer-use:screen-activation/same-screen/stale-blocked.json',
+    },
+  };
+  const activeRun = run('run-same-screen', {
+    raw: {
+      payload: {
+        artifacts: [{
+          id: 'same-screen',
+          type: 'computer-use-virtual-screen',
+          data: liveNativeHostScreenData('same-screen-live'),
+        }],
+      },
+    },
+  } as Partial<SciForgeRun>);
+  const session = emptySession({ artifacts: [staleArtifact], runs: [activeRun] });
+
+  const payload = rightPaneVirtualScreenPayload(session, activeRun, testConfig());
+
+  assert.equal(payload.surfaceMode, 'live');
+  assert.equal(payload.screenRef, 'virtual-app-screen:same-screen-live/screen-request');
+  assert.equal(payload.blockedRef, undefined);
+});
+
 test('screen pane model emits activation refs when Screen is opened without a current session', () => {
   const session = emptySession({ sessionId: 'session needs screen' });
   const scope = 'session-needs-screen/custom-screen-204-1';
@@ -127,6 +197,13 @@ test('screen pane model emits activation refs when Screen is opened without a cu
   assert.equal(payload.status, 'blocked');
   assert.equal(payload.attachState, 'blocked');
   assert.equal(payload.surfaceMode, 'empty');
+  assert.equal(payload.presentationState, 'permission');
+  assert.equal(payload.presentationStateReason, 'permission-gate');
+  assert.deepEqual(payload.presentationStateReasonRefs, [
+    `computer-use:screen-activation/${scope}/permissions/platform-gates.json`,
+    `computer-use:screen-activation/${scope}/permission-handoff.json`,
+    `computer-use:screen-activation/${scope}/permission-recheck.json`,
+  ]);
   assert.equal(payload.targetAppRef, 'app:profile/vscode-editor');
   assert.equal(payload.screenRef, `virtual-app-screen:${scope}/screen-request`);
   assert.equal(payload.adapterReadinessRef, `computer-use:screen-activation/${scope}/provider-readiness.json`);
@@ -139,16 +216,11 @@ test('screen pane model emits activation refs when Screen is opened without a cu
   assert.equal(payload.permissionRequired, true);
   assert.equal(payload.permissionGranted, false);
   assert.equal(payload.permissionHandoffRef, `computer-use:screen-activation/${scope}/permission-handoff.json`);
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/macos-screen-recording.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/macos-accessibility.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/macos-automation.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/macos-virtual-display-helper.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/linux-xpra-install.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/linux-xpra-session-permission.json`));
-  assert.ok(payload.permissionHandoffRefs?.includes(`computer-use:screen-activation/${scope}/permission-handoff/windows-idd-driver-install.json`));
+  assert.deepEqual(payload.permissionHandoffRefs, [`computer-use:screen-activation/${scope}/permission-handoff.json`]);
   assert.equal(payload.permissionRecheckRef, `computer-use:screen-activation/${scope}/permission-recheck.json`);
   assert.equal(payload.recheckRef, `computer-use:screen-activation/${scope}/permission-recheck.json`);
-  assert.ok(payload.permissionRecheckRefs?.includes(`computer-use:screen-activation/${scope}/permission-recheck/windows-idd-driver-install.json`));
+  assert.deepEqual(payload.permissionRecheckRefs, [`computer-use:screen-activation/${scope}/permission-recheck.json`]);
+  assert.doesNotMatch(JSON.stringify(payload), /macos|linux|windows|xpra|idd/i);
   assert.equal(payload.evidenceLedgerRef, `ledger:computer-use/${scope}/screen-activation.json`);
   assert.deepEqual(payload.guiPresentRefs, [`gui.present:${scope}/screen-pane-activation`]);
   assert.match(payload.blockedReason ?? '', /12000ms bootstrap window/);
@@ -163,6 +235,47 @@ test('screen pane model emits activation refs when Screen is opened without a cu
   assert.equal(payload.isolationFlags?.diagnosticOnly, true);
   assert.equal(payload.isolationFlags?.affectsPhysicalDisplay, false);
   assert.doesNotMatch(JSON.stringify(payload), /noVNC|desktop fallback|shell fallback|desktopBridge/i);
+});
+
+test('screen pane model emits one canonical presentation state for conflicting blocked permission and replay evidence', () => {
+  const payload = virtualScreenPayloadFromArtifact({
+    id: 'conflicting-screen-state',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'blocked',
+      attachState: 'blocked',
+      surfaceMode: 'live',
+      sessionRef: 'computer-use:native-host/sessions/conflict/session.json',
+      liveSurfaceRef: 'computer-use:native-host/surfaces/conflict/live-surface.json',
+      frameStreamRef: 'computer-use:native-host/surfaces/conflict/frame-stream.json',
+      currentFrameRef: 'computer-use:native-host/frames/conflict/0001.png',
+      replayRef: 'computer-use:native-host/replay/conflict/replay.json',
+      blockedRef: 'computer-use:native-host/blocked/conflict.json',
+      permissionRef: 'computer-use:native-host/permissions/conflict/platform-gates.json',
+      permissionRequired: true,
+      permissionGranted: false,
+      permissionStatus: 'missing',
+      permissionHandoffRef: 'computer-use:native-host/permissions/conflict/handoff.json',
+      permissionRecheckRef: 'computer-use:native-host/permissions/conflict/recheck.json',
+      frameRefs: [{
+        ref: 'computer-use:native-host/frames/conflict/0001.png',
+        screenRef: 'virtual-app-screen:conflict/screen',
+      }],
+    },
+  }, testConfig());
+
+  assert.ok(payload);
+  assert.equal(payload.status, 'blocked');
+  assert.equal(payload.surfaceMode, 'replay');
+  assert.equal(payload.presentationState, 'permission');
+  assert.equal(payload.presentationStateReason, 'permission-gate');
+  assert.deepEqual(payload.presentationStateReasonRefs, [
+    'computer-use:native-host/permissions/conflict/platform-gates.json',
+    'computer-use:native-host/permissions/conflict/handoff.json',
+    'computer-use:native-host/permissions/conflict/recheck.json',
+  ]);
 });
 
 test('screen pane model does not share activation placeholders between custom screen tabs', () => {
@@ -338,6 +451,107 @@ test('screen pane model consumes blocked artifact refs without fabricating live 
   assert.equal(payload.frameStreamRef || undefined, undefined);
 });
 
+test('screen pane model preserves Host-owned preflight refs without attached session', () => {
+  const payload = virtualScreenPayloadFromArtifact({
+    id: 'host-owned-preflight-only',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'blocked',
+      attachState: 'blocked',
+      surfaceMode: 'empty',
+      targetAppRef: 'app:profile/vscode-editor',
+      screenRef: 'virtual-app-screen:preflight-only/screen-request',
+      blockedRef: 'computer-use:native-host/preflights/preflight-1/blocked.json',
+      blockedReason: 'Native Host preflight recorded missing platform gates before attach.',
+      nativeHostPreflight: {
+        preflightRef: 'computer-use:native-host/preflights/preflight-1/preflight.json',
+        preflightLedgerRef: 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json',
+        preflightLedgerEntryRef: 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json/events/0001-preflight.recorded.json',
+        hostReadinessRef: 'computer-use:native-host/preflights/preflight-1/host-readiness.json',
+        adapterReadinessRef: 'computer-use:native-host/preflights/preflight-1/adapter-readiness.json',
+        platformDriverRefs: ['computer-use:native-host/preflights/preflight-1/platform-driver.json'],
+        permissionRefs: ['computer-use:native-host/preflights/preflight-1/permissions/platform-gates.json'],
+        providerReadinessRefs: ['computer-use:native-host/preflights/preflight-1/provider-readiness.json'],
+      },
+    },
+  }, testConfig());
+
+  assert.ok(payload);
+  assert.equal(payload.sessionRef || undefined, undefined);
+  assert.equal(payload.liveSurfaceRef || undefined, undefined);
+  assert.equal(payload.frameStreamRef || undefined, undefined);
+  assert.equal(payload.currentFrameRef || undefined, undefined);
+  assert.equal((payload as Record<string, unknown>).preflightRef, 'computer-use:native-host/preflights/preflight-1/preflight.json');
+  assert.equal((payload as Record<string, unknown>).preflightLedgerRef, 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json');
+  assert.equal((payload as Record<string, unknown>).preflightLedgerEntryRef, 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json/events/0001-preflight.recorded.json');
+  assert.equal((payload as Record<string, unknown>).hostReadinessRef, 'computer-use:native-host/preflights/preflight-1/host-readiness.json');
+  assert.equal(payload.adapterReadinessRef, 'computer-use:native-host/preflights/preflight-1/adapter-readiness.json');
+  assert.equal(payload.platformDriverRef, 'computer-use:native-host/preflights/preflight-1/platform-driver.json');
+  assert.equal(payload.permissionRef, 'computer-use:native-host/preflights/preflight-1/permissions/platform-gates.json');
+  assert.deepEqual((payload as Record<string, unknown>).providerReadinessRefs, ['computer-use:native-host/preflights/preflight-1/provider-readiness.json']);
+  assert.deepEqual((payload as Record<string, unknown>).nativeHostPreflight, {
+    preflightRef: 'computer-use:native-host/preflights/preflight-1/preflight.json',
+    preflightLedgerRef: 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json',
+    preflightLedgerEntryRef: 'computer-use:native-host/preflights/preflight-1/preflight-ledger.json/events/0001-preflight.recorded.json',
+    hostReadinessRef: 'computer-use:native-host/preflights/preflight-1/host-readiness.json',
+    adapterReadinessRef: 'computer-use:native-host/preflights/preflight-1/adapter-readiness.json',
+    platformDriverRefs: ['computer-use:native-host/preflights/preflight-1/platform-driver.json'],
+    permissionRefs: ['computer-use:native-host/preflights/preflight-1/permissions/platform-gates.json'],
+    providerReadinessRefs: ['computer-use:native-host/preflights/preflight-1/provider-readiness.json'],
+  });
+  assert.ok(payload.artifactRefs?.includes('computer-use:native-host/preflights/preflight-1/preflight.json'));
+  assert.ok(payload.artifactRefs?.includes('computer-use:native-host/preflights/preflight-1/preflight-ledger.json'));
+  assert.ok(payload.verificationRefs?.includes('computer-use:native-host/preflights/preflight-1/preflight-ledger.json/events/0001-preflight.recorded.json'));
+  assert.ok(payload.verificationRefs?.includes('computer-use:native-host/preflights/preflight-1/host-readiness.json'));
+  assert.doesNotMatch(JSON.stringify(payload), /computer-use:screen-activation\/preflight-only\/preflight/);
+});
+
+test('screen pane model does not promote screen activation placeholders to Host preflight refs', () => {
+  const payload = virtualScreenPayloadFromArtifact({
+    id: 'placeholder-preflight-looking-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'blocked',
+      attachState: 'blocked',
+      surfaceMode: 'empty',
+      targetAppRef: 'app:profile/vscode-editor',
+      screenRef: 'virtual-app-screen:placeholder-preflight/screen-request',
+      adapterReadinessRef: 'computer-use:screen-activation/placeholder-preflight/provider-readiness.json',
+      nativeHostPreflight: {
+        preflightRef: 'computer-use:screen-activation/placeholder-preflight/preflight.json',
+        preflightLedgerRef: 'ledger:computer-use/placeholder-preflight/preflight.json',
+        preflightLedgerEntryRef: 'computer-use:screen-activation/placeholder-preflight/preflight-ledger.json/events/0001-preflight.recorded.json',
+        hostReadinessRef: 'computer-use:screen-activation/placeholder-preflight/host-readiness.json',
+      },
+      nativeHost: {
+        preflight: {
+          preflightRef: 'computer-use:native-host/readiness/placeholder-preflight/preflight.json',
+          preflightLedgerRef: 'computer-use:native-host/readiness/placeholder-preflight/preflight-ledger.json',
+          preflightLedgerEntryRef: 'computer-use:native-host/readiness/placeholder-preflight/preflight-ledger.json/events/0001-preflight.recorded.json',
+          hostReadinessRef: 'computer-use:native-host/readiness/placeholder-preflight/host-readiness.json',
+        },
+      },
+      preflightRef: 'computer-use:screen-activation/placeholder-preflight/preflight.json',
+      preflightLedgerEntryRef: 'computer-use:screen-activation/placeholder-preflight/preflight-ledger.json/events/0001-preflight.recorded.json',
+    },
+  }, testConfig());
+
+  assert.ok(payload);
+  assert.equal((payload as Record<string, unknown>).preflightRef, undefined);
+  assert.equal((payload as Record<string, unknown>).preflightLedgerRef, undefined);
+  assert.equal((payload as Record<string, unknown>).preflightLedgerEntryRef, undefined);
+  assert.equal((payload as Record<string, unknown>).hostReadinessRef, undefined);
+  assert.equal((payload as Record<string, unknown>).nativeHostPreflight, undefined);
+  assert.equal(payload.verificationRefs?.some((ref) => ref.includes('/placeholder-preflight/preflight')), false);
+  assert.equal(payload.artifactRefs?.some((ref) => ref.includes('/placeholder-preflight/preflight')), false);
+  assert.doesNotMatch(JSON.stringify(payload), /computer-use:native-host\/readiness\/placeholder-preflight/);
+  assert.equal(payload.adapterReadinessRef, 'computer-use:screen-activation/placeholder-preflight/provider-readiness.json');
+});
+
 test('screen pane model extracts nested run artifacts and keeps static frames in replay mode', () => {
   const activeRun = run('run-nested-screen', {
     raw: {
@@ -386,43 +600,46 @@ test('screen pane model preserves host-owned live surface refs for attached scre
               surfaceMode: 'live',
               targetAppRef: 'app:run-live-vscode/vscode',
               targetWindowRef: 'window:run-live-vscode/vscode/main',
-              sessionRef: 'computer-use:session/run-live-vscode/session.json',
+              sessionRef: 'computer-use:native-host/sessions/session-run-live-vscode/session.json',
+              hostSessionRef: 'computer-use:native-host/sessions/session-run-live-vscode/session.json',
               screenRef: 'virtual-app-screen:run-live-vscode/screen',
-              liveSurfaceRef: 'computer-use:session/run-live-vscode/live-surface.json',
+              liveSurfaceRef: 'computer-use:native-host/surfaces/run-live-vscode/live-surface.json',
               surfaceTransport: 'webrtc',
-              surfaceTransportRef: 'computer-use:session/run-live-vscode/surface-transport.json',
+              surfaceTransportRef: 'computer-use:native-host/surfaces/run-live-vscode/surface-transport.json',
               surfaceTransportDescriptor: {
                 owner: 'VirtualDisplayProvider',
                 providerId: 'provider:run-live-vscode',
                 transport: 'webrtc',
-                surfaceTransportRef: 'computer-use:session/run-live-vscode/surface-transport.json',
-                liveSurfaceRef: 'computer-use:session/run-live-vscode/live-surface.json',
-                frameStreamRef: 'computer-use:session/run-live-vscode/frame-stream.json',
-                currentFrameRef: 'computer-use:session/run-live-vscode/frames/current.png',
+                surfaceTransportRef: 'computer-use:native-host/surfaces/run-live-vscode/surface-transport.json',
+                liveSurfaceRef: 'computer-use:native-host/surfaces/run-live-vscode/live-surface.json',
+                frameStreamRef: 'computer-use:native-host/surfaces/run-live-vscode/frame-stream.json',
+                currentFrameRef: 'computer-use:native-host/frames/run-live-vscode/0031.png',
                 currentFrameSequence: 31,
                 diagnosticOnly: false,
                 productFallback: false,
                 singleInteractiveTruth: true,
               },
-              frameStreamRef: 'computer-use:session/run-live-vscode/frame-stream.json',
-              providerSessionOwnerRef: 'computer-use:provider-session/run-live-vscode/owner.json',
-              providerSessionReconnectRef: 'computer-use:provider-session/run-live-vscode/reconnect.json',
-              liveBindingAttachGrantRef: 'computer-use:provider-session/run-live-vscode/live-binding-attach-grant.json',
+              frameStreamRef: 'computer-use:native-host/surfaces/run-live-vscode/frame-stream.json',
+              surfaceOwnerRef: 'computer-use:native-host/surfaces/run-live-vscode/surface-owner.json',
+              displayOwnerRef: 'computer-use:native-host/surfaces/run-live-vscode/display-owner.json',
+              providerSessionOwnerRef: 'computer-use:native-host/provider-sessions/run-live-vscode/owner.json',
+              providerSessionReconnectRef: 'computer-use:native-host/reconnect/run-live-vscode/reconnect.json',
+              liveBindingAttachGrantRef: 'computer-use:native-host/grants/run-live-vscode/live-binding-attach-grant.json',
               liveBindingAttachGrantStatus: 'validated',
-              grantValidationRef: 'computer-use:provider-session/run-live-vscode/grant-validation.json',
+              grantValidationRef: 'computer-use:native-host/ledgers/session-run-live-vscode/evidence-ledger.json/events/0031-grant.validated.json',
               grantValidationStatus: 'validated',
-              platformDriverRef: 'computer-use:session/run-live-vscode/platform-driver.json',
+              platformDriverRef: 'computer-use:native-host/platform-drivers/run-live-vscode/platform-driver.json',
               platformDriverStatus: 'ready',
               permissionStatus: 'granted',
               permissionGranted: true,
-              evidenceLedgerRef: 'computer-use:session/run-live-vscode/evidence-ledger.json',
+              evidenceLedgerRef: 'computer-use:native-host/ledgers/session-run-live-vscode/evidence-ledger.json',
               providerExecuted: true,
               currentFrameSequence: {
-                ref: 'computer-use:session/run-live-vscode/frame-sequence.json',
+                ref: 'computer-use:native-host/surfaces/run-live-vscode/frame-sequence.json',
                 status: 'running',
                 sequence: 31,
               },
-              currentFrameRef: 'computer-use:session/run-live-vscode/frames/current.png',
+              currentFrameRef: 'computer-use:native-host/frames/run-live-vscode/0031.png',
               isolationFlags: {
                 backgroundRenderable: true,
                 affectsPhysicalDisplay: false,
@@ -447,16 +664,21 @@ test('screen pane model preserves host-owned live surface refs for attached scre
   assert.equal(payload.status, 'ready');
   assert.equal(payload.attachState, 'attached');
   assert.equal(payload.surfaceMode, 'live');
-  assert.equal(payload.liveSurfaceRef, 'computer-use:session/run-live-vscode/live-surface.json');
+  assert.equal(payload.sessionRef, 'computer-use:native-host/sessions/session-run-live-vscode/session.json');
+  assert.equal(payload.hostSessionRef, 'computer-use:native-host/sessions/session-run-live-vscode/session.json');
+  assert.equal(payload.liveSurfaceRef, 'computer-use:native-host/surfaces/run-live-vscode/live-surface.json');
   assert.equal(payload.surfaceTransport, 'webrtc');
-  assert.equal(payload.surfaceTransportRef, 'computer-use:session/run-live-vscode/surface-transport.json');
-  assert.equal(payload.frameStreamRef, 'computer-use:session/run-live-vscode/frame-stream.json');
-  assert.equal(payload.providerSessionOwnerRef, 'computer-use:provider-session/run-live-vscode/owner.json');
-  assert.equal(payload.providerSessionReconnectRef, 'computer-use:provider-session/run-live-vscode/reconnect.json');
-  assert.equal(payload.liveBindingAttachGrantRef, 'computer-use:provider-session/run-live-vscode/live-binding-attach-grant.json');
-  assert.equal(payload.grantValidationRef, 'computer-use:provider-session/run-live-vscode/grant-validation.json');
+  assert.equal(payload.surfaceTransportRef, 'computer-use:native-host/surfaces/run-live-vscode/surface-transport.json');
+  assert.equal(payload.frameStreamRef, 'computer-use:native-host/surfaces/run-live-vscode/frame-stream.json');
+  assert.equal(payload.surfaceOwnerRef, 'computer-use:native-host/surfaces/run-live-vscode/surface-owner.json');
+  assert.equal(payload.displayOwnerRef, 'computer-use:native-host/surfaces/run-live-vscode/display-owner.json');
+  assert.equal(payload.providerSessionOwnerRef, 'computer-use:native-host/provider-sessions/run-live-vscode/owner.json');
+  assert.equal(payload.providerSessionReconnectRef, 'computer-use:native-host/reconnect/run-live-vscode/reconnect.json');
+  assert.equal(payload.liveBindingAttachGrantRef, 'computer-use:native-host/grants/run-live-vscode/live-binding-attach-grant.json');
+  assert.equal(payload.grantValidationRef, 'computer-use:native-host/ledgers/session-run-live-vscode/evidence-ledger.json/events/0031-grant.validated.json');
+  assert.equal(payload.evidenceLedgerRef, 'computer-use:native-host/ledgers/session-run-live-vscode/evidence-ledger.json');
   assert.deepEqual(payload.currentFrameSequence, {
-    ref: 'computer-use:session/run-live-vscode/frame-sequence.json',
+    ref: 'computer-use:native-host/surfaces/run-live-vscode/frame-sequence.json',
     label: undefined,
     status: 'running',
     transport: undefined,
@@ -476,9 +698,118 @@ test('screen pane model preserves host-owned live surface refs for attached scre
   });
 });
 
-test('screen pane model extracts live binding refs from surface transport descriptors', () => {
+test('screen pane model treats stream-quality fallbackRequired as provider fallback evidence', () => {
+  const liveNativeHostData = (scope: string, fallbackRequired: boolean) => ({
+    status: 'ready',
+    attachState: 'attached',
+    surfaceMode: 'live',
+    targetAppRef: `app:${scope}/vscode`,
+    targetWindowRef: `window:${scope}/vscode/main`,
+    sessionRef: `computer-use:native-host/sessions/session-${scope}/session.json`,
+    hostSessionRef: `computer-use:native-host/sessions/session-${scope}/session.json`,
+    screenRef: `virtual-app-screen:${scope}/screen`,
+    liveSurfaceRef: `computer-use:native-host/surfaces/${scope}/live-surface.json`,
+    surfaceTransport: 'webrtc',
+    surfaceTransportRef: `computer-use:native-host/surfaces/${scope}/surface-transport.json`,
+    surfaceTransportDescriptor: {
+      owner: 'VirtualDisplayProvider',
+      providerId: `provider:${scope}`,
+      transport: 'webrtc',
+      surfaceTransportRef: `computer-use:native-host/surfaces/${scope}/surface-transport.json`,
+      liveSurfaceRef: `computer-use:native-host/surfaces/${scope}/live-surface.json`,
+      frameStreamRef: `computer-use:native-host/surfaces/${scope}/frame-stream.json`,
+      currentFrameRef: `computer-use:native-host/frames/${scope}/0042.png`,
+      frameTransportContractRef: `computer-use:native-host/surfaces/${scope}/frame-transport-contract.json`,
+      frameTelemetryRef: `computer-use:native-host/surfaces/${scope}/frame-telemetry.json`,
+      currentFrameSequence: 42,
+      diagnosticOnly: false,
+      productFallback: false,
+      singleInteractiveTruth: true,
+    },
+    frameStreamRef: `computer-use:native-host/surfaces/${scope}/frame-stream.json`,
+    surfaceOwnerRef: `computer-use:native-host/surfaces/${scope}/surface-owner.json`,
+    displayOwnerRef: `computer-use:native-host/surfaces/${scope}/display-owner.json`,
+    providerSessionOwnerRef: `computer-use:native-host/provider-sessions/${scope}/owner.json`,
+    providerSessionReconnectRef: `computer-use:native-host/reconnect/${scope}/reconnect.json`,
+    liveBindingAttachGrantRef: `computer-use:native-host/grants/${scope}/live-binding-attach-grant.json`,
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: `computer-use:native-host/ledgers/session-${scope}/evidence-ledger.json/events/0042-grant.validated.json`,
+    grantValidationStatus: 'validated',
+    platformDriverRef: `computer-use:native-host/platform-drivers/${scope}/platform-driver.json`,
+    platformDriverStatus: 'ready',
+    permissionStatus: 'granted',
+    permissionGranted: true,
+    evidenceLedgerRef: `computer-use:native-host/ledgers/session-${scope}/evidence-ledger.json`,
+    providerExecuted: true,
+    frameTransport: {
+      ref: `computer-use:native-host/surfaces/${scope}/frame-transport-contract.json`,
+      status: 'ready',
+      transport: 'webrtc',
+    },
+    frameTelemetry: {
+      ref: `computer-use:native-host/surfaces/${scope}/frame-telemetry.json`,
+      status: fallbackRequired ? 'degraded' : 'ready',
+      transport: 'webrtc',
+      sequence: 42,
+      fallbackRequired,
+    },
+    streamQuality: {
+      ref: `computer-use:native-host/surfaces/${scope}/stream-quality.json`,
+      status: fallbackRequired ? 'degraded' : 'ready',
+      fallbackRequired,
+      degradationRef: fallbackRequired ? `computer-use:native-host/surfaces/${scope}/stream-quality-degradation.json` : undefined,
+    },
+    currentFrameSequence: {
+      ref: `computer-use:native-host/surfaces/${scope}/frame-sequence.json`,
+      status: 'running',
+      sequence: 42,
+    },
+    currentFrameRef: `computer-use:native-host/frames/${scope}/0042.png`,
+    isolationFlags: {
+      backgroundRenderable: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      singleInteractiveTruth: true,
+      secondInteractiveSurfacePresent: false,
+      diagnosticOnly: false,
+    },
+  });
+  const degraded = virtualScreenPayloadFromArtifact({
+    id: 'stream-quality-degraded-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: liveNativeHostData('stream-quality-degraded', true),
+  }, testConfig());
+  const healthy = virtualScreenPayloadFromArtifact({
+    id: 'stream-quality-healthy-screen',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: liveNativeHostData('stream-quality-healthy', false),
+  }, testConfig());
+
+  assert.equal(degraded?.surfaceMode, 'fallback');
+  assert.equal(degraded?.presentationState, 'fallback');
+  assert.equal(degraded?.presentationStateReason, 'stream-quality-fallback-required');
+  assert.deepEqual(degraded?.presentationStateReasonRefs, [
+    'computer-use:native-host/surfaces/stream-quality-degraded/stream-quality.json',
+    'computer-use:native-host/surfaces/stream-quality-degraded/frame-telemetry.json',
+    'computer-use:native-host/surfaces/stream-quality-degraded/stream-quality-degradation.json',
+  ]);
+  assert.equal(degraded?.liveSurfaceRef, 'computer-use:native-host/surfaces/stream-quality-degraded/live-surface.json');
+  assert.equal(degraded?.frameTelemetry?.ref, 'computer-use:native-host/surfaces/stream-quality-degraded/frame-telemetry.json');
+  assert.equal(healthy?.surfaceMode, 'live');
+  assert.equal(healthy?.presentationState, 'live');
+  assert.equal(healthy?.frameTelemetry?.ref, 'computer-use:native-host/surfaces/stream-quality-healthy/frame-telemetry.json');
+});
+
+test('screen pane model downgrades legacy provider/session refs even when live-shaped fields are present', () => {
   const payload = virtualScreenPayloadFromArtifact({
-    id: 'descriptor-live-screen',
+    id: 'descriptor-legacy-live-screen',
     type: 'computer-use-virtual-screen',
     producerScenario: 'computer-use',
     schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
@@ -530,7 +861,7 @@ test('screen pane model extracts live binding refs from surface transport descri
     },
   }, testConfig());
 
-  assert.equal(payload?.surfaceMode, 'live');
+  assert.equal(payload?.surfaceMode, 'replay');
   assert.equal(payload?.liveSurfaceRef, 'computer-use:session/descriptor/live-surface.json');
   assert.equal(payload?.surfaceTransport, 'native-frame-stream');
   assert.equal(payload?.surfaceTransportRef, 'computer-use:session/descriptor/surface-transport.json');
@@ -548,6 +879,75 @@ test('screen pane model extracts live binding refs from surface transport descri
     diagnosticOnly: undefined,
     sequence: 0,
   });
+});
+
+test('screen pane model does not mark native host refs live without surface owner evidence', () => {
+  const payload = virtualScreenPayloadFromArtifact({
+    id: 'missing-native-host-owner-evidence',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    data: {
+      status: 'ready',
+      attachState: 'attached',
+      surfaceMode: 'live',
+      targetAppRef: 'app:missing-owner/vscode',
+      targetWindowRef: 'window:missing-owner/vscode/main',
+      sessionRef: 'computer-use:native-host/sessions/session-missing-owner/session.json',
+      hostSessionRef: 'computer-use:native-host/sessions/session-missing-owner/session.json',
+      screenRef: 'virtual-app-screen:missing-owner/screen',
+      liveSurfaceRef: 'computer-use:native-host/surfaces/missing-owner/live-surface.json',
+      surfaceTransport: 'native-frame-stream',
+      surfaceTransportRef: 'computer-use:native-host/surfaces/missing-owner/surface-transport.json',
+      surfaceTransportDescriptor: {
+        owner: 'VirtualDisplayProvider',
+        transport: 'native-frame-stream',
+        surfaceTransportRef: 'computer-use:native-host/surfaces/missing-owner/surface-transport.json',
+        liveSurfaceRef: 'computer-use:native-host/surfaces/missing-owner/live-surface.json',
+        frameStreamRef: 'computer-use:native-host/surfaces/missing-owner/frame-stream.json',
+        currentFrameRef: 'computer-use:native-host/frames/missing-owner/0007.png',
+        currentFrameSequence: 7,
+        diagnosticOnly: false,
+        productFallback: false,
+        singleInteractiveTruth: true,
+      },
+      frameStreamRef: 'computer-use:native-host/surfaces/missing-owner/frame-stream.json',
+      displayOwnerRef: 'computer-use:native-host/surfaces/missing-owner/display-owner.json',
+      providerSessionOwnerRef: 'computer-use:native-host/provider-sessions/missing-owner/owner.json',
+      providerSessionReconnectRef: 'computer-use:native-host/reconnect/missing-owner/reconnect.json',
+      liveBindingAttachGrantRef: 'computer-use:native-host/grants/missing-owner/live-binding-attach-grant.json',
+      liveBindingAttachGrantStatus: 'validated',
+      grantValidationRef: 'computer-use:native-host/ledgers/session-missing-owner/evidence-ledger.json/events/0007-grant.validated.json',
+      grantValidationStatus: 'validated',
+      platformDriverRef: 'computer-use:native-host/platform-drivers/missing-owner/platform-driver.json',
+      platformDriverStatus: 'ready',
+      permissionStatus: 'granted',
+      permissionGranted: true,
+      evidenceLedgerRef: 'computer-use:native-host/ledgers/session-missing-owner/evidence-ledger.json',
+      providerExecuted: true,
+      currentFrameSequence: {
+        ref: 'computer-use:native-host/surfaces/missing-owner/frame-sequence.json',
+        sequence: 7,
+      },
+      currentFrameRef: 'computer-use:native-host/frames/missing-owner/0007.png',
+      isolationFlags: {
+        backgroundRenderable: true,
+        affectsPhysicalDisplay: false,
+        requiresFocusSteal: false,
+        sharedSystemInputUsed: false,
+        systemPointerMoved: false,
+        systemKeyboardEventsSent: false,
+        singleInteractiveTruth: true,
+        secondInteractiveSurfacePresent: false,
+        diagnosticOnly: false,
+      },
+    },
+  }, testConfig());
+
+  assert.equal(payload?.attachState, 'attached');
+  assert.equal(payload?.surfaceMode, 'replay');
+  assert.equal(payload?.surfaceOwnerRef || undefined, undefined);
+  assert.equal(payload?.displayOwnerRef, 'computer-use:native-host/surfaces/missing-owner/display-owner.json');
 });
 
 test('screen pane model downgrades active run artifacts that only look shape-compatible with live attach', () => {
@@ -698,6 +1098,80 @@ function run(id: string, overrides: Partial<SciForgeRun> = {}): SciForgeRun {
     completedAt: '2026-06-01T00:00:01.000Z',
     ...overrides,
   } as SciForgeRun;
+}
+
+function liveNativeHostScreenData(scope: string): Record<string, unknown> {
+  const screenRef = `virtual-app-screen:${scope}/screen-request`;
+  const currentFrameRef = `computer-use:native-host/frames/${scope}/current.png`;
+  const liveSurfaceRef = `computer-use:native-host/surfaces/${scope}/live-surface.json`;
+  const frameStreamRef = `computer-use:native-host/surfaces/${scope}/frame-stream.json`;
+  const surfaceTransportRef = `computer-use:native-host/surfaces/${scope}/surface-transport.json`;
+  return {
+    status: 'ready',
+    attachState: 'attached',
+    surfaceMode: 'live',
+    screenRef,
+    targetAppRef: 'app:profile/vscode-editor',
+    targetWindowRef: `window:${scope}/main`,
+    sessionRef: `computer-use:native-host/sessions/${scope}/session.json`,
+    hostSessionRef: `computer-use:native-host/sessions/${scope}/session.json`,
+    liveSurfaceRef,
+    surfaceTransport: 'native-frame-stream',
+    surfaceTransportRef,
+    surfaceOwnerRef: `computer-use:native-host/surfaces/${scope}/surface-owner.json`,
+    displayOwnerRef: `computer-use:native-host/surfaces/${scope}/display-owner.json`,
+    providerSessionOwnerRef: `computer-use:native-host/provider-session/${scope}/owner.json`,
+    providerSessionReconnectRef: `computer-use:native-host/provider-session/${scope}/reconnect.json`,
+    liveBindingAttachGrantRef: `computer-use:native-host/grants/${scope}/live-binding-attach-grant.json`,
+    liveBindingAttachGrantStatus: 'validated',
+    grantValidationRef: `computer-use:native-host/ledgers/${scope}/evidence-ledger.json/events/0004-grant.validated.json`,
+    grantValidationStatus: 'validated',
+    frameStreamRef,
+    currentFrameRef,
+    currentFrameSequence: {
+      ref: currentFrameRef,
+      transport: 'native-frame-stream',
+      sequence: 1,
+    },
+    surfaceTransportDescriptor: {
+      schemaVersion: 'sciforge.virtual-display.surface-transport.v1',
+      owner: 'VirtualDisplayProvider',
+      providerId: 'native-virtual-app-screen-host',
+      transport: 'native-frame-stream',
+      surfaceTransportRef,
+      liveSurfaceRef,
+      frameStreamRef,
+      currentFrameRef,
+      frameTransportContractRef: `computer-use:native-host/surfaces/${scope}/frame-transport-contract.json`,
+      frameTelemetryRef: `computer-use:native-host/surfaces/${scope}/frame-telemetry.json`,
+      currentFrameSequence: 1,
+      diagnosticOnly: false,
+      productFallback: false,
+      singleInteractiveTruth: true,
+    },
+    inputLeaseRef: `computer-use:native-host/leases/${scope}/input-lease.json`,
+    actionAdapterRef: `computer-use:native-host/adapters/${scope}/action-adapter.json`,
+    adapterReadinessRef: `computer-use:native-host/readiness/${scope}/provider-readiness.json`,
+    platformDriverRef: `computer-use:native-host/platform-drivers/${scope}/ready.json`,
+    platformDriverStatus: 'ready',
+    permissionRef: `computer-use:native-host/permissions/${scope}/screen-recording.json`,
+    permissionStatus: 'granted',
+    permissionRequired: true,
+    permissionGranted: true,
+    evidenceLedgerRef: `computer-use:native-host/ledgers/${scope}/evidence-ledger.json`,
+    providerExecuted: true,
+    isolationFlags: {
+      backgroundRenderable: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      singleInteractiveTruth: true,
+      secondInteractiveSurfacePresent: false,
+      diagnosticOnly: false,
+    },
+  };
 }
 
 function emptySession(overrides: Partial<SciForgeSession> = {}): SciForgeSession {

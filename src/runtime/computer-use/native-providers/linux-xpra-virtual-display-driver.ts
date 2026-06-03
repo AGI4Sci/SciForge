@@ -18,7 +18,10 @@ import {
 } from './linux-xpra-virtual-display-provider.js';
 import {
   missingNativeDriverInputControlRefs,
+  nativeDriverInputControlIsolationIssues,
+  nativeDriverInputControlRefScopeIssues,
   nativeDriverInputIntentProjection,
+  type NativeVirtualDisplayDriverInputControlContext,
   type NativeVirtualDisplayDriverInputControlHook,
   type NativeVirtualDisplayDriverInputControlOperation,
 } from './native-driver-input-control.js';
@@ -27,13 +30,16 @@ import {
   commandExists,
   launchLinuxXpraApp,
   probeLinuxXpraInputIsolation,
+  runLinuxXpraInputControlHook,
   shortError,
   sleep,
   startLinuxXpraSession,
   waitForLinuxXpraWindow,
   writeJsonRef,
   xpraDisplayForRunId,
+  type LinuxXpraCommandRunner,
   type LinuxXpraFrameCapture,
+  type LinuxXpraInputControlTool,
   type LinuxXpraInputIsolationProbe,
   type LinuxXpraLaunchResult,
   type LinuxXpraSessionHandle,
@@ -76,6 +82,8 @@ export interface LinuxXpraVirtualDisplayDriverDependencies {
   pauseAgentQueue?: NativeVirtualDisplayDriverInputControlHook;
   resumeAgentQueue?: NativeVirtualDisplayDriverInputControlHook;
   safeStopSession?: NativeVirtualDisplayDriverInputControlHook;
+  inputControlRunner?: Pick<LinuxXpraCommandRunner, 'execFile'>;
+  inputControlTool?: LinuxXpraInputControlTool;
   writeJsonRef?: (outDir: string, runDirRef: string, ref: string, data: unknown) => void | Promise<void>;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
@@ -368,15 +376,6 @@ async function runInputControlHook(input: {
       `Linux Xpra VirtualDisplayProvider ${input.operation} requires an attached Xpra app session and target window.`,
     );
   }
-  if (!input.hook) {
-    return blockedEvidence(
-      effectiveOptions,
-      input.providerId,
-      readiness,
-      `Linux Xpra VirtualDisplayProvider ${input.operation} isolated input/control hook is not registered.`,
-    );
-  }
-
   const refs = input.state.refs;
   if (!refs) {
     return blockedEvidence(
@@ -395,7 +394,9 @@ async function runInputControlHook(input: {
       `Linux Xpra VirtualDisplayProvider ${input.operation} input sessionRef does not match the attached provider session.`,
     );
   }
-  const result = await input.hook({
+  const currentRunDirRef = runDirRefForRefs(refs, effectiveOptions);
+  const currentOutDir = outDirForRunDir(input.options, currentRunDirRef);
+  const context: NativeVirtualDisplayDriverInputControlContext = {
     providerId: input.providerId,
     operation: input.operation,
     operationOptions: effectiveOptions,
@@ -406,7 +407,24 @@ async function runInputControlHook(input: {
       targetWindow: input.state.targetWindow,
       frameSequence: input.state.frameSequence,
     },
-  });
+  };
+  const hook: NativeVirtualDisplayDriverInputControlHook = input.hook ?? ((hookContext) => runLinuxXpraInputControlHook({
+    context: hookContext,
+    outDir: currentOutDir,
+    runDirRef: currentRunDirRef,
+    runner: input.deps.inputControlRunner,
+    writeJsonRef: input.deps.writeJsonRef,
+    inputTool: input.deps.inputControlTool,
+    now: input.deps.now,
+    captureFrame: (phase) => captureDriverFrame({
+      outDir: currentOutDir,
+      runDirRef: currentRunDirRef,
+      phase,
+      session: input.state.session as LinuxXpraSessionHandle,
+      providerId: input.providerId,
+    }, input.deps),
+  }));
+  const result = await hook(context);
   if (!result.ok) {
     return blockedEvidence(
       effectiveOptions,
@@ -439,6 +457,24 @@ async function runInputControlHook(input: {
       input.providerId,
       readiness,
       `Linux Xpra VirtualDisplayProvider ${input.operation} hook did not return required provider-owned evidence refs: ${missingRefs.join(', ')}.`,
+    );
+  }
+  const refScopeIssues = nativeDriverInputControlRefScopeIssues(refs, result.refs);
+  if (refScopeIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `Linux Xpra VirtualDisplayProvider ${input.operation} hook returned evidence refs outside the current provider root: ${refScopeIssues.join(', ')}.`,
+    );
+  }
+  const isolationIssues = nativeDriverInputControlIsolationIssues(result);
+  if (isolationIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `Linux Xpra VirtualDisplayProvider ${input.operation} hook did not prove isolated virtual-display input with no physical desktop effects: ${isolationIssues.join(', ')}.`,
     );
   }
   const mergedRefs = { ...refs, ...result.refs };
@@ -533,7 +569,12 @@ async function probeDriverReadiness(
       blockedReason,
     };
   }
-  const inputProbe = await probeDriverCapability(deps.probeInputIsolation ? deps.probeInputIsolation() : probeLinuxXpraInputIsolation());
+  const inputProbe = await probeDriverCapability(deps.probeInputIsolation
+    ? deps.probeInputIsolation()
+    : probeLinuxXpraInputIsolation({
+      probeOptions: operationOptions.probeOptions,
+      inputTool: deps.inputControlTool,
+    }));
   if (!inputProbe.ok) {
     const blockedReason = `Linux Xpra isolated input adapter is not proven for the VirtualDisplayProvider driver${inputProbe.detail ? `: ${inputProbe.detail}` : ''}.`;
     return {

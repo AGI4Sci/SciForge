@@ -28,6 +28,11 @@ const MAX_RIGHT_PANE_REF_COUNT = 24;
 const ARTIFACT_DIR = resolve(process.cwd(), 'docs', 'test-artifacts', 'browser-pane-bottleneck-audit');
 const MANIFEST_PATH = join(ARTIFACT_DIR, 'manifest.json');
 const VERIFICATION_COMMAND = 'npm run smoke:browser-pane-bottleneck-audit --silent';
+const BOTTLENECK_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES = [
+  'browser-host-session',
+  'browser-host-native-surface',
+  'browser-host-search',
+] as const;
 const INPUT_TEXT = [
   'SciForge Browser pane bottleneck audit continuous input route',
   'refs-first no raw payloads bounded metrics long segment 001 002 003',
@@ -67,6 +72,7 @@ type BrowserPaneLiveAcceptance = {
     legacyFallbackAllowed: false;
   };
   blockedReason?: string;
+  blockedReasonCode?: 'missing-native-attach/preflight' | 'missing-native-attach';
 };
 type BottleneckCategory =
   | 'input-routing'
@@ -131,6 +137,48 @@ type CoverageGapSummary = {
 };
 type NativeRightPaneEvidence = CoverageGapSummary['nativeEvidence'];
 
+type BottleneckNativeAttachPreflightEvidence = {
+  bounded: true;
+  status: 'ready' | 'blocked';
+  blockedReasonCode?: 'missing-native-attach/preflight';
+  writerHealth: {
+    available: boolean;
+    ok?: boolean;
+    service?: string;
+    status?: string;
+    capabilitySummary: string[];
+    capabilities: {
+      browserHostSession: 'ready' | 'missing';
+      nativeSurface: 'ready' | 'missing';
+      browserHostSearch: 'ready' | 'missing';
+    };
+    nativeSurfaceEndpoint: 'present' | 'missing';
+    endpointKeys: string[];
+    errorHash?: string;
+  };
+  rightPaneBridge: {
+    available: boolean;
+    state?: string;
+    hostFrameCount: number;
+    nativeSurfaceCount: number;
+    sessionRefCount: number;
+    liveSurfaceRefCount: number;
+    frameStreamRefCount: number;
+    rendererHashes: string[];
+    diagnosticHealthCapability?: string;
+    diagnosticLiveSurfaceTransport?: string;
+    writerDiagnosticStatus?: string;
+  };
+  nativeAttach: {
+    status: 'attached' | 'missing' | 'blocked';
+    liveSurfaceTransport?: string;
+    singleInteractiveTruth: boolean;
+    secondTruthSource: boolean;
+    sessionRefs: string[];
+    liveSurfaceRefs: string[];
+  };
+};
+
 type AuditFixtureEvent = {
   type: string;
   path: string;
@@ -161,6 +209,17 @@ type BottleneckRankingEntry = {
   p95Ms: number;
   maxMs: number;
   sampleLabels: string[];
+  nativeEvidence: BoundedNativeLiveEvidenceRefs;
+};
+
+type BoundedNativeLiveEvidenceRefs = {
+  bounded: true;
+  source: 'native-embedded-browser-host-session';
+  status: 'attached' | 'blocked';
+  sessionRefs: string[];
+  liveSurfaceRefs: string[];
+  frameStreamRefs: string[];
+  transportHashes: string[];
 };
 
 type TimingCategorySummary = {
@@ -237,6 +296,7 @@ type RightPaneBoundedEvidence = {
 type BrowserPaneBottleneckAuditManifest = {
   schemaVersion: typeof AUDIT_SCHEMA;
   status: 'passed' | 'blocked';
+  passClaim: boolean;
   refsFirst: true;
   runId: string;
   observedAt: string;
@@ -332,6 +392,7 @@ type BrowserPaneBottleneckAuditManifest = {
     };
   };
   liveAcceptance: BrowserPaneLiveAcceptance;
+  nativeAttachPreflight?: BottleneckNativeAttachPreflightEvidence;
   coverageGaps: CoverageGapSummary;
   bottleneckRanking: BottleneckRankingEntry[];
   timingSummary: TimingSummary;
@@ -403,7 +464,12 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
   const browserExecutable = process.env.SCIFORGE_RIGHT_PANE_BROWSER_EXECUTABLE || EDGE_EXECUTABLE;
   if (!existsSync(browserExecutable)) {
     const blockedReason = `missing-browser-executable:${hashText(browserExecutable)}`;
-    await writeBlockedBottleneckManifest(blockedReason);
+    await writeBlockedBottleneckManifest(blockedReason, {
+      nativeAttachPreflight: buildBottleneckNativeAttachPreflightEvidence({
+        writerHealthError: new Error('workspace-writer-not-started'),
+        rightPane: emptyRightPaneEvidence(),
+      }),
+    });
     console.log(`[blocked] Browser pane bottleneck audit ${JSON.stringify({
       reason: blockedReason,
       manifestPath: 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json',
@@ -411,17 +477,14 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     return;
   }
 
-  const tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-browser-pane-bottleneck-audit-'));
-  const workspacePath = join(tempRoot, 'workspace');
-  const configPath = join(tempRoot, 'config.local.json');
-  const writerPort = await getFreePort();
-  const uiPort = await getFreePort();
-  const fixturePort = await getFreePort();
-  const writerUrl = `http://127.0.0.1:${writerPort}`;
-  const uiUrl = `http://127.0.0.1:${uiPort}`;
-  const fixtureOrigin = `http://${FIXTURE_HOST}:${fixturePort}`;
-  const targetUrl = `${fixtureOrigin}/audit`;
   const runId = `browser-pane-bottleneck-audit-${Date.now().toString(36)}`;
+  let tempRoot: string | undefined;
+  let workspacePath = '';
+  let configPath = '';
+  let writerUrl = 'http://127.0.0.1:0';
+  let uiUrl = 'http://127.0.0.1:0';
+  let fixtureOrigin = '';
+  let targetUrl = '';
   const children: ChildProcess[] = [];
   let browser: Browser | undefined;
   let page: Page = undefined as unknown as Page;
@@ -432,21 +495,31 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
   const surfaceCheckpoints: SurfaceContinuityCheckpoint[] = [];
   let latestSession: JsonRecord = {};
 
-  await mkdir(workspacePath);
-  await writeFile(configPath, JSON.stringify({
-    schemaVersion: 1,
-    workspaceWriterBaseUrl: writerUrl,
-    workspacePath,
-    agentServerBaseUrl: 'http://127.0.0.1:1',
-    locale: 'en-US',
-    theme: 'dark',
-    modelProvider: 'bottleneck-local',
-    modelBaseUrl: '',
-    modelName: '',
-    apiKey: '',
-  }), 'utf8');
-
   try {
+    tempRoot = await mkdtemp(join(tmpdir(), 'sciforge-browser-pane-bottleneck-audit-'));
+    workspacePath = join(tempRoot, 'workspace');
+    configPath = join(tempRoot, 'config.local.json');
+    const writerPort = await getFreePort();
+    const uiPort = await getFreePort();
+    const fixturePort = await getFreePort();
+    writerUrl = `http://127.0.0.1:${writerPort}`;
+    uiUrl = `http://127.0.0.1:${uiPort}`;
+    fixtureOrigin = `http://${FIXTURE_HOST}:${fixturePort}`;
+    targetUrl = `${fixtureOrigin}/audit`;
+    await mkdir(workspacePath);
+    await writeFile(configPath, JSON.stringify({
+      schemaVersion: 1,
+      workspaceWriterBaseUrl: writerUrl,
+      workspacePath,
+      agentServerBaseUrl: 'http://127.0.0.1:1',
+      locale: 'en-US',
+      theme: 'dark',
+      modelProvider: 'bottleneck-local',
+      modelBaseUrl: '',
+      modelName: '',
+      apiKey: '',
+    }), 'utf8');
+
     fixture = await startBottleneckFixture(fixturePort);
     const fixtureServer = fixture;
     const commonEnv = {
@@ -664,6 +737,11 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     assert.ok(stringField(finalSession.id), 'final BrowserHostSession should expose an id');
 
     const events = await fetchFixtureEvents(fixtureServer.url);
+    const rightPane = await collectRightPaneEvidence(page);
+    const nativeAttachPreflight = await collectBottleneckNativeAttachPreflightEvidence({
+      writerUrl,
+      rightPane,
+    });
     const manifest = buildManifest({
       runId,
       fixtureOrigin,
@@ -673,8 +751,9 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       metrics: metrics.samples,
       networkSamples: networkRecorder!.samples,
       frameStream: frameStream!.stats,
-      rightPane: await collectRightPaneEvidence(page),
+      rightPane,
       surfaceCheckpoints,
+      nativeAttachPreflight,
     });
     assertBrowserPaneBottleneckAuditManifest(manifest);
     await mkdir(ARTIFACT_DIR, { recursive: true });
@@ -694,10 +773,14 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     const events = fixture
       ? await fetchFixtureEvents(fixture.url).catch(() => [])
       : [];
+    const nativeAttachPreflight = await collectBottleneckNativeAttachPreflightEvidence({
+      writerUrl,
+      rightPane,
+    });
     await writeBlockedBottleneckManifest(blockedReason, {
       runId,
-      targetUrl,
-      targetOrigin: fixtureOrigin,
+      targetUrl: targetUrl || undefined,
+      targetOrigin: fixtureOrigin || undefined,
       resolverRuleApplied: Boolean(fixture),
       session: latestSession,
       events,
@@ -706,6 +789,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
       frameStream: frameStream?.stats ?? emptyFrameStreamStats(),
       rightPane,
       surfaceCheckpoints,
+      nativeAttachPreflight,
     });
     console.log(`[blocked] Browser pane bottleneck audit ${JSON.stringify({
       reason: blockedReason,
@@ -715,7 +799,7 @@ test('SciForge Browser pane dogfood emits a bounded bottleneck ranking for real 
     await browser?.close().catch(() => undefined);
     for (const child of children.reverse()) await stopProcess(child);
     await fixture?.close();
-    await rm(tempRoot, { recursive: true, force: true });
+    if (tempRoot) await rm(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -739,7 +823,10 @@ class BottleneckMetrics {
     });
   }
 
-  ranking(requiredCategories: BottleneckCategory[] = REQUIRED_BOTTLENECK_CATEGORIES): BottleneckRankingEntry[] {
+  ranking(
+    requiredCategories: BottleneckCategory[] = REQUIRED_BOTTLENECK_CATEGORIES,
+    nativeEvidence: BoundedNativeLiveEvidenceRefs = emptyNativeLiveEvidenceRefs(),
+  ): BottleneckRankingEntry[] {
     const groups = new Map<BottleneckCategory, MetricSample[]>();
     for (const sample of this.samples) {
       groups.set(sample.category, [...(groups.get(sample.category) ?? []), sample]);
@@ -759,12 +846,163 @@ class BottleneckMetrics {
           p95Ms: percentile(durations, 0.95),
           maxMs,
           sampleLabels: boundedUnique(samples.map((sample) => sample.label), 8),
+          nativeEvidence,
         };
       })
       .sort((left, right) => right.p95Ms - left.p95Ms || right.maxMs - left.maxMs || left.category.localeCompare(right.category))
       .map((entry, index) => ({ ...entry, rank: index + 1 }));
   }
 }
+
+test('bottleneck ranking carries bounded native BrowserHostSession refs when native evidence is attached', () => {
+  const metrics = new BottleneckMetrics();
+  metrics.add('input-routing', 'native-input-route', 42);
+  const nativeEvidence = boundedNativeLiveEvidenceRefs({
+    session: {
+      id: 'session-native-1',
+      liveSurfaceTransport: 'native-embedded',
+      frameTransport: 'native-embedded',
+      liveSurfaceRef: 'browser-host-session:session-native-1/live-surface',
+      frameStreamRef: 'browser-host-session:session-native-1/frame-stream',
+    },
+    rightPane: {
+      ...emptyRightPaneEvidence(),
+      maxHostFrames: 1,
+      maxNativeSurfaces: 1,
+      sessionIds: ['session-native-1'],
+      liveSurfaceRefs: ['browser-host-session:session-native-1/live-surface'],
+      frameStreamRefs: ['browser-host-session:session-native-1/frame-stream'],
+      liveSurfaceTransports: ['native-embedded'],
+      frameTransports: ['native-embedded'],
+    },
+  });
+
+  const ranking = metrics.ranking(REQUIRED_BOTTLENECK_CATEGORIES, nativeEvidence);
+
+  assert.equal(ranking[0].nativeEvidence.status, 'attached');
+  assert.deepEqual(ranking[0].nativeEvidence.sessionRefs, ['browser-host-session:session-native-1']);
+  assert.deepEqual(ranking[0].nativeEvidence.liveSurfaceRefs, ['browser-host-session:session-native-1/live-surface']);
+  assert.deepEqual(ranking[0].nativeEvidence.frameStreamRefs, ['browser-host-session:session-native-1/frame-stream']);
+  assert.deepEqual(ranking[0].nativeEvidence.transportHashes, [hashText('native-embedded')]);
+  assert.doesNotMatch(JSON.stringify(ranking), /<html|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+});
+
+test('bottleneck ranking keeps a blocked diagnostic when no native evidence is attached', () => {
+  const ranking = new BottleneckMetrics().ranking(REQUIRED_BOTTLENECK_CATEGORIES, boundedNativeLiveEvidenceRefs({
+    session: {},
+    rightPane: emptyRightPaneEvidence(),
+  }));
+
+  assert.equal(ranking[0].nativeEvidence.status, 'blocked');
+  assert.deepEqual(ranking[0].nativeEvidence.sessionRefs, []);
+  assert.deepEqual(ranking[0].nativeEvidence.liveSurfaceRefs, []);
+  assert.deepEqual(ranking[0].nativeEvidence.frameStreamRefs, []);
+  assert.deepEqual(ranking[0].nativeEvidence.transportHashes, []);
+});
+
+test('blocked bottleneck manifest carries typed native attach preflight evidence', () => {
+  const manifest = buildBlockedBottleneckManifest('run-blocked:test-hash', {
+    runId: 'browser-pane-bottleneck-preflight-contract',
+    targetUrl: 'http://sciforge-browser-pane-bottleneck-audit.test:43123/audit',
+    targetOrigin: 'http://sciforge-browser-pane-bottleneck-audit.test:43123',
+    resolverRuleApplied: true,
+    nativeAttachPreflight: buildBottleneckNativeAttachPreflightEvidence({
+      writerHealth: {
+        ok: true,
+        service: 'sciforge-workspace-writer',
+        status: 'ok',
+        capabilities: ['browser-host-session', 'browser-host-search'],
+        endpoints: {
+          browserHostSession: '/api/sciforge/browser-host/sessions',
+          browserHostSearch: '/api/sciforge/browser-host/search',
+        },
+      },
+      rightPane: emptyRightPaneEvidence(),
+    }),
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+  assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+  assert.equal(manifest.nativeAttachPreflight.status, 'blocked');
+  assert.equal(manifest.nativeAttachPreflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.deepEqual(manifest.nativeAttachPreflight.writerHealth.capabilitySummary, [
+    'browser-host-session:ready',
+    'browser-host-native-surface:missing',
+    'browser-host-search:ready',
+  ]);
+  assert.equal(manifest.nativeAttachPreflight.writerHealth.nativeSurfaceEndpoint, 'missing');
+  assert.equal(manifest.nativeAttachPreflight.rightPaneBridge.available, false);
+  assert.equal(manifest.nativeAttachPreflight.nativeAttach.status, 'missing');
+  assert.doesNotMatch(JSON.stringify(manifest.nativeAttachPreflight), /https?:\/\/|<html|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+});
+
+test('bottleneck manifest does not claim pass from native attach without pass-grade interaction coverage', () => {
+  const session = {
+    id: 'session-native-no-coverage',
+    owner: 'host',
+    status: 'ready',
+    liveSurfaceTransport: 'native-embedded',
+    frameTransport: 'native-embedded',
+    liveSurfaceRef: 'browser-host-session:session-native-no-coverage/live-surface',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+  };
+  const rightPane = {
+    ...emptyRightPaneEvidence(),
+    maxHostFrames: 1,
+    maxNativeSurfaces: 1,
+    sessionIds: ['session-native-no-coverage'],
+    liveSurfaceRefs: ['browser-host-session:session-native-no-coverage/live-surface'],
+    liveSurfaceTransports: ['native-embedded'],
+    frameTransports: ['native-embedded'],
+  };
+  const checkpoints: SurfaceContinuityCheckpoint[] = [
+    'before-resize',
+    'after-resize',
+    'after-tab-return',
+    'after-reload',
+  ].map((label) => ({
+    label: label as SurfaceContinuityCheckpoint['label'],
+    sessionId: 'session-native-no-coverage',
+    liveSurfaceRef: 'browser-host-session:session-native-no-coverage/live-surface',
+    hostFrameCount: 1,
+    hiddenKeyboardPath: 'native-embedded',
+  }));
+
+  const manifest = buildManifest({
+    runId: 'browser-pane-bottleneck-native-no-coverage',
+    fixtureOrigin: 'http://sciforge-browser-pane-bottleneck-audit.test:43123',
+    targetUrl: 'http://sciforge-browser-pane-bottleneck-audit.test:43123/audit',
+    session,
+    events: [],
+    metrics: [],
+    networkSamples: [],
+    frameStream: emptyFrameStreamStats(),
+    rightPane,
+    surfaceCheckpoints: checkpoints,
+    nativeAttachPreflight: buildBottleneckNativeAttachPreflightEvidence({
+      writerHealth: {
+        ok: true,
+        service: 'sciforge-workspace-writer',
+        status: 'ok',
+        capabilities: ['browser-host-session', 'browser-host-native-surface', 'browser-host-search'],
+        endpoints: {
+          browserHostSession: '/api/sciforge/browser-host/sessions',
+          browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/health',
+          browserHostSearch: '/api/sciforge/browser-host/search',
+        },
+      },
+      rightPane,
+    }),
+  });
+
+  assert.equal(manifest.liveAcceptance.observed.liveSurfaceTransport, 'native-embedded');
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.liveAcceptance.passClaim, false);
+  assert.equal(manifest.coverageGaps.status, 'blocked');
+  assert.match(manifest.blockedReason ?? '', /pass-grade-coverage/);
+});
 
 async function ensureBrowserPane(page: Page) {
   const tab = page.locator('.result-page-tab', { hasText: 'Browser' }).first();
@@ -1080,6 +1318,116 @@ async function collectRightPaneEvidence(page: Page): Promise<RightPaneBoundedEvi
   });
 }
 
+async function collectBottleneckNativeAttachPreflightEvidence(input: {
+  writerUrl: string;
+  rightPane: RightPaneBoundedEvidence;
+}): Promise<BottleneckNativeAttachPreflightEvidence> {
+  const writerHealthResult = await fetchBottleneckWorkspaceWriterHealth(input.writerUrl);
+  return buildBottleneckNativeAttachPreflightEvidence({
+    writerHealth: writerHealthResult.health,
+    writerHealthError: writerHealthResult.error,
+    rightPane: input.rightPane,
+  });
+}
+
+async function fetchBottleneckWorkspaceWriterHealth(writerUrl: string): Promise<{ health?: JsonRecord; error?: unknown }> {
+  try {
+    const response = await fetch(`${writerUrl}/health`, { signal: AbortSignal.timeout(3_000) });
+    const text = await response.text();
+    const health = text ? parseJsonRecord(text) : {};
+    if (!response.ok || health.ok === false) return { error: new Error(`workspace-writer-health:${response.status}`) };
+    return { health };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function buildBottleneckNativeAttachPreflightEvidence(input: {
+  writerHealth?: JsonRecord;
+  writerHealthError?: unknown;
+  rightPane?: RightPaneBoundedEvidence;
+}): BottleneckNativeAttachPreflightEvidence {
+  const capabilities = Array.isArray(input.writerHealth?.capabilities)
+    ? input.writerHealth.capabilities.filter((capability): capability is string => typeof capability === 'string')
+    : [];
+  const capabilitySet = new Set(capabilities);
+  const endpoints = recordField(input.writerHealth?.endpoints);
+  const endpointKeys = endpoints ? boundedUnique(Object.keys(endpoints).sort(), 16) : [];
+  const capabilityState = (capability: string): 'ready' | 'missing' => capabilitySet.has(capability) ? 'ready' : 'missing';
+  const nativeSurfaceEndpoint = typeof endpoints?.browserHostNativeSurface === 'string' ? 'present' : 'missing';
+  const rightPane = input.rightPane ?? emptyRightPaneEvidence();
+  const sessionRefs = boundedUnique([
+    ...rightPane.sessionIds.map((sessionId) => `browser-host-session:${sessionId}`),
+    ...rightPane.liveSurfaceRefs.flatMap((ref) => {
+      const match = /^browser-host-session:([^/]+)/.exec(ref);
+      return match ? [`browser-host-session:${match[1]}`] : [];
+    }),
+  ].filter(Boolean), MAX_RIGHT_PANE_REF_COUNT);
+  const liveSurfaceRefs = boundedUnique(
+    rightPane.liveSurfaceRefs.filter((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref)),
+    MAX_RIGHT_PANE_REF_COUNT,
+  );
+  const attached = rightPane.maxHostFrames === 1
+    && rightPane.maxNativeSurfaces === 1
+    && liveSurfaceRefs.length > 0
+    && rightPane.liveSurfaceTransports.includes('native-embedded')
+    && (rightPane.frameTransports.includes('native-embedded') || rightPane.frameTransports.length === 0)
+    && rightPane.iframeSurfaces === 0
+    && rightPane.proxySurfaces === 0
+    && rightPane.dataImageSurfaces === 0;
+  const missingWriterNativeSurface = capabilityState('browser-host-native-surface') === 'missing'
+    || nativeSurfaceEndpoint === 'missing';
+  const blocked = missingWriterNativeSurface || !attached;
+  const nativeAttachStatus: BottleneckNativeAttachPreflightEvidence['nativeAttach']['status'] = attached
+    ? 'attached'
+    : rightPane.maxHostFrames > 0 || rightPane.maxNativeSurfaces > 0
+      ? 'blocked'
+      : 'missing';
+  return {
+    bounded: true,
+    status: blocked ? 'blocked' : 'ready',
+    blockedReasonCode: blocked ? 'missing-native-attach/preflight' : undefined,
+    writerHealth: {
+      available: Boolean(input.writerHealth),
+      ok: typeof input.writerHealth?.ok === 'boolean' ? input.writerHealth.ok : undefined,
+      service: boundedDiagnosticString(stringField(input.writerHealth?.service)),
+      status: boundedDiagnosticString(stringField(input.writerHealth?.status)),
+      capabilitySummary: BOTTLENECK_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES
+        .map((capability) => `${capability}:${capabilityState(capability)}`),
+      capabilities: {
+        browserHostSession: capabilityState('browser-host-session'),
+        nativeSurface: capabilityState('browser-host-native-surface'),
+        browserHostSearch: capabilityState('browser-host-search'),
+      },
+      nativeSurfaceEndpoint,
+      endpointKeys,
+      errorHash: input.writerHealthError
+        ? hashText(input.writerHealthError instanceof Error ? input.writerHealthError.message : String(input.writerHealthError))
+        : undefined,
+    },
+    rightPaneBridge: {
+      available: rightPane.maxHostFrames > 0,
+      state: boundedDiagnosticString(rightPane.browserStates[0] ?? ''),
+      hostFrameCount: rightPane.maxHostFrames,
+      nativeSurfaceCount: rightPane.maxNativeSurfaces,
+      sessionRefCount: sessionRefs.length,
+      liveSurfaceRefCount: liveSurfaceRefs.length,
+      frameStreamRefCount: rightPane.frameStreamRefs.length,
+      rendererHashes: boundedUnique(rightPane.renderers.filter(Boolean).map(hashText), 8),
+    },
+    nativeAttach: {
+      status: nativeAttachStatus,
+      liveSurfaceTransport: attached
+        ? 'native-embedded'
+        : boundedDiagnosticString(rightPane.liveSurfaceTransports[0] ?? ''),
+      singleInteractiveTruth: attached,
+      secondTruthSource: false,
+      sessionRefs,
+      liveSurfaceRefs,
+    },
+  };
+}
+
 async function collectSurfaceContinuityCheckpoint(
   page: Page,
   surface: Locator,
@@ -1352,6 +1700,60 @@ function nativeRightPaneEvidence(
   };
 }
 
+function boundedNativeLiveEvidenceRefs(input: {
+  session: JsonRecord;
+  rightPane: RightPaneBoundedEvidence;
+}): BoundedNativeLiveEvidenceRefs {
+  const liveSurfaceTransport = stringField(input.session.liveSurfaceTransport);
+  const frameTransport = observedFrameTransport(input.session);
+  const hasNativeBrowserHostSurface = (liveSurfaceTransport === 'native-embedded' || input.rightPane.liveSurfaceTransports.includes('native-embedded'))
+    && (frameTransport === 'native-embedded' || input.rightPane.frameTransports.includes('native-embedded'))
+    && (input.rightPane.maxNativeSurfaces === 1 || input.rightPane.liveSurfaceRefs.length > 0)
+    && input.rightPane.iframeSurfaces === 0
+    && input.rightPane.proxySurfaces === 0
+    && input.rightPane.dataImageSurfaces === 0;
+  if (!hasNativeBrowserHostSurface) return emptyNativeLiveEvidenceRefs();
+  const sessionRefs = boundedUnique([
+    stringField(input.session.id) ? `browser-host-session:${stringField(input.session.id)}` : '',
+    ...input.rightPane.sessionIds.map((id) => `browser-host-session:${id}`),
+  ].filter(Boolean), MAX_RIGHT_PANE_REF_COUNT);
+  const liveSurfaceRefs = boundedUnique([
+    stringField(input.session.liveSurfaceRef),
+    ...input.rightPane.liveSurfaceRefs,
+  ].filter((ref) => /^browser-host-session:[^/]+\/live-surface$/.test(ref)), MAX_RIGHT_PANE_REF_COUNT);
+  const frameStreamRefs = boundedUnique([
+    stringField(input.session.frameStreamRef),
+    ...input.rightPane.frameStreamRefs,
+  ].filter((ref) => /^browser-host-session:[^/]+\/frame-stream$/.test(ref)), MAX_RIGHT_PANE_REF_COUNT);
+  if (sessionRefs.length === 0 || liveSurfaceRefs.length === 0) return emptyNativeLiveEvidenceRefs();
+  return {
+    bounded: true,
+    source: 'native-embedded-browser-host-session',
+    status: 'attached',
+    sessionRefs,
+    liveSurfaceRefs,
+    frameStreamRefs,
+    transportHashes: boundedUnique([
+      liveSurfaceTransport,
+      frameTransport,
+      ...input.rightPane.liveSurfaceTransports,
+      ...input.rightPane.frameTransports,
+    ].filter((value): value is string => Boolean(value)).map(hashText), 8),
+  };
+}
+
+function emptyNativeLiveEvidenceRefs(): BoundedNativeLiveEvidenceRefs {
+  return {
+    bounded: true,
+    source: 'native-embedded-browser-host-session',
+    status: 'blocked',
+    sessionRefs: [],
+    liveSurfaceRefs: [],
+    frameStreamRefs: [],
+    transportHashes: [],
+  };
+}
+
 function isLegacyLiveTransport(value: string): boolean {
   return Boolean(value && value !== 'native-embedded');
 }
@@ -1400,6 +1802,31 @@ function buildCoverageGaps(
   };
 }
 
+function bottleneckPassGradeCoverageBlocker(coverage: CoverageGapSummary): string | undefined {
+  const missingCategories = coverage.categories
+    .filter((entry) => !entry.covered)
+    .map((entry) => entry.category);
+  const missingInteractions = coverage.interactions
+    .filter((entry) => !entry.covered)
+    .map((entry) => entry.class);
+  const native = coverage.nativeEvidence;
+  const nativeMissing: string[] = [];
+  if (native.liveSurfaceTransport !== 'native-embedded') nativeMissing.push('native-live-surface');
+  if (native.frameTransport !== 'native-embedded') nativeMissing.push('native-frame-transport');
+  if (!native.singleInteractiveTruth) nativeMissing.push('single-interactive-truth');
+  if (native.secondTruthSource !== false) nativeMissing.push('no-second-truth-source');
+  if (!native.sameLiveSurfaceRef) nativeMissing.push('same-live-surface-ref');
+  if (!native.rightPaneNativeEvidence) nativeMissing.push('right-pane-native-evidence');
+  if (native.legacyFallbackObserved) nativeMissing.push('no-legacy-fallback');
+  if (missingCategories.length === 0 && missingInteractions.length === 0 && nativeMissing.length === 0) return undefined;
+  return [
+    'pass-grade-coverage-incomplete',
+    `categories:${boundedUnique(missingCategories, 8).join('|') || 'none'}`,
+    `interactions:${boundedUnique(missingInteractions, 12).join('|') || 'none'}`,
+    `native:${boundedUnique(nativeMissing, 8).join('|') || 'none'}`,
+  ].join(';');
+}
+
 function buildManifest(input: {
   runId: string;
   fixtureOrigin: string;
@@ -1411,10 +1838,15 @@ function buildManifest(input: {
   frameStream: FrameStreamStats;
   rightPane: RightPaneBoundedEvidence;
   surfaceCheckpoints: SurfaceContinuityCheckpoint[];
+  nativeAttachPreflight?: BottleneckNativeAttachPreflightEvidence;
 }): BrowserPaneBottleneckAuditManifest {
   const metrics = new BottleneckMetrics();
   for (const sample of input.metrics) metrics.add(sample.category, sample.label, sample.durationMs);
-  const bottleneckRanking = metrics.ranking();
+  const nativeEvidenceRefs = boundedNativeLiveEvidenceRefs({
+    session: input.session,
+    rightPane: input.rightPane,
+  });
+  const bottleneckRanking = metrics.ranking(REQUIRED_BOTTLENECK_CATEGORIES, nativeEvidenceRefs);
   const timingSummary = buildTimingSummary(input.metrics, input.networkSamples, input.frameStream);
   const inputEvents = input.events.filter((event) => event.type === 'audit-input');
   const scrollEvents = input.events.filter((event) => event.type === 'audit-scroll');
@@ -1437,13 +1869,30 @@ function buildManifest(input: {
   const afterReload = checkpointByLabel(input.surfaceCheckpoints, 'after-reload');
   const frameTransport = observedFrameTransport(input.session);
   const nativeEvidence = nativeRightPaneEvidence(input.session, input.rightPane, input.surfaceCheckpoints, frameTransport);
-  const liveAcceptance = browserPaneLiveAcceptance(input.session, nativeEvidence);
+  const liveAcceptance = applyNativeAttachPreflightToLiveAcceptance(
+    browserPaneLiveAcceptance(input.session, nativeEvidence),
+    input.nativeAttachPreflight,
+  );
   const targetUrlDigest = boundedUrlDigest(input.targetUrl);
   const finalUrl = stringField(input.session.url);
-  const blockedReason = liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined;
+  const coverageGaps = buildCoverageGaps(
+    liveAcceptance.status === 'blocked' ? liveAcceptance.blockedReason : undefined,
+    input.metrics,
+    input.events,
+    input.networkSamples,
+    input.surfaceCheckpoints,
+    nativeEvidence,
+  );
+  const coverageBlocker = bottleneckPassGradeCoverageBlocker(coverageGaps);
+  const finalLiveAcceptance = liveAcceptance.status === 'passed' && coverageBlocker
+    ? forceBlockedBrowserPaneLiveAcceptance(liveAcceptance, coverageBlocker, input.nativeAttachPreflight)
+    : liveAcceptance;
+  const blockedReason = finalLiveAcceptance.status === 'blocked' ? finalLiveAcceptance.blockedReason : undefined;
+  const finalCoverageGaps = buildCoverageGaps(blockedReason, input.metrics, input.events, input.networkSamples, input.surfaceCheckpoints, nativeEvidence);
   return {
     schemaVersion: AUDIT_SCHEMA,
-    status: liveAcceptance.status,
+    status: finalLiveAcceptance.status,
+    passClaim: finalLiveAcceptance.status === 'passed',
     refsFirst: true,
     runId: input.runId,
     observedAt: new Date().toISOString(),
@@ -1538,8 +1987,9 @@ function buildManifest(input: {
         networkLogRef: stringField(input.session.networkLogRef),
       },
     },
-    liveAcceptance,
-    coverageGaps: buildCoverageGaps(blockedReason, input.metrics, input.events, input.networkSamples, input.surfaceCheckpoints, nativeEvidence),
+    liveAcceptance: finalLiveAcceptance,
+    nativeAttachPreflight: input.nativeAttachPreflight,
+    coverageGaps: finalCoverageGaps,
     bottleneckRanking,
     timingSummary,
     boundedMetrics: {
@@ -1570,6 +2020,7 @@ function buildManifest(input: {
 function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottleneckAuditManifest) {
   assert.equal(manifest.schemaVersion, AUDIT_SCHEMA);
   assert.ok(manifest.status === 'passed' || manifest.status === 'blocked');
+  assert.equal(manifest.passClaim, manifest.status === 'passed');
   assert.equal(manifest.refsFirst, true);
   assert.equal(manifest.verificationCommand, VERIFICATION_COMMAND);
   assert.equal(manifest.targetOriginRef, manifest.targetEvidence.originRef);
@@ -1597,6 +2048,12 @@ function assertBrowserPaneBottleneckAuditManifest(manifest: BrowserPaneBottlenec
   });
   if (manifest.status === 'passed') assert.equal(manifest.browserHostSession.secondTruthSource, false);
   if (manifest.status === 'blocked') assert.ok(manifest.blockedReason, 'diagnostic bottleneck manifest must include a blocked reason');
+  if (manifest.status === 'blocked' || manifest.nativeAttachPreflight) {
+    assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+    if (manifest.nativeAttachPreflight.status === 'blocked') {
+      assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+    }
+  }
   assert.match(manifest.browserHostSession.liveSurfaceRef ?? '', /^browser-host-session:[^/]+\/live-surface$/);
   if (manifest.browserHostSession.refs.frameStreamRef) {
     assert.match(manifest.browserHostSession.refs.frameStreamRef, /^browser-host-session:[^/]+\/frame-stream$/);
@@ -1690,9 +2147,10 @@ type BlockedBottleneckManifestOptions = {
   frameStream?: FrameStreamStats;
   rightPane?: RightPaneBoundedEvidence;
   surfaceCheckpoints?: SurfaceContinuityCheckpoint[];
+  nativeAttachPreflight?: BottleneckNativeAttachPreflightEvidence;
 };
 
-async function writeBlockedBottleneckManifest(blockedReason: string, options: BlockedBottleneckManifestOptions = {}): Promise<void> {
+function buildBlockedBottleneckManifest(blockedReason: string, options: BlockedBottleneckManifestOptions = {}): BrowserPaneBottleneckAuditManifest {
   const session = options.session ?? {};
   const events = options.events ?? [];
   const metrics = options.metrics ?? [];
@@ -1700,9 +2158,16 @@ async function writeBlockedBottleneckManifest(blockedReason: string, options: Bl
   const frameStream = options.frameStream ?? emptyFrameStreamStats();
   const rightPane = options.rightPane ?? emptyRightPaneEvidence();
   const surfaceCheckpoints = options.surfaceCheckpoints ?? [];
+  const nativeAttachPreflight = options.nativeAttachPreflight ?? buildBottleneckNativeAttachPreflightEvidence({
+    rightPane,
+  });
   const frameTransport = observedFrameTransport(session);
   const nativeEvidence = nativeRightPaneEvidence(session, rightPane, surfaceCheckpoints, frameTransport);
-  const liveAcceptance = forceBlockedBrowserPaneLiveAcceptance(browserPaneLiveAcceptance(session, nativeEvidence), blockedReason);
+  const liveAcceptance = forceBlockedBrowserPaneLiveAcceptance(
+    applyNativeAttachPreflightToLiveAcceptance(browserPaneLiveAcceptance(session, nativeEvidence), nativeAttachPreflight),
+    blockedReason,
+    nativeAttachPreflight,
+  );
   const targetUrlDigest = options.targetUrl ? boundedUrlDigest(options.targetUrl) : undefined;
   const targetOriginRef = options.targetOrigin ? `fixture-origin:${hashText(options.targetOrigin)}` : 'blocked:no-real-product-evidence';
   const targetHostRef = options.targetOrigin ? `fixture-host:${hashText(FIXTURE_HOST)}` : 'blocked:no-real-product-evidence';
@@ -1725,9 +2190,11 @@ async function writeBlockedBottleneckManifest(blockedReason: string, options: Bl
   const summary = buildTimingSummary(metrics, networkSamples, frameStream);
   const ranking = new BottleneckMetrics();
   for (const sample of metrics) ranking.add(sample.category, sample.label, sample.durationMs);
+  const nativeEvidenceRefs = boundedNativeLiveEvidenceRefs({ session, rightPane });
   const manifest: BrowserPaneBottleneckAuditManifest = {
     schemaVersion: AUDIT_SCHEMA,
     status: 'blocked',
+    passClaim: false,
     refsFirst: true,
     runId: options.runId ?? `browser-pane-bottleneck-audit-blocked-${Date.now().toString(36)}`,
     observedAt: new Date().toISOString(),
@@ -1825,8 +2292,9 @@ async function writeBlockedBottleneckManifest(blockedReason: string, options: Bl
       },
     },
     liveAcceptance,
+    nativeAttachPreflight,
     coverageGaps: buildCoverageGaps(blockedReason, metrics, events, networkSamples, surfaceCheckpoints, nativeEvidence),
-    bottleneckRanking: ranking.ranking(),
+    bottleneckRanking: ranking.ranking(REQUIRED_BOTTLENECK_CATEGORIES, nativeEvidenceRefs),
     timingSummary: summary,
     boundedMetrics: {
       totalSamples: metrics.length,
@@ -1852,6 +2320,11 @@ async function writeBlockedBottleneckManifest(blockedReason: string, options: Bl
     verificationCommand: VERIFICATION_COMMAND,
   };
   assertBlockedBottleneckManifest(manifest);
+  return manifest;
+}
+
+async function writeBlockedBottleneckManifest(blockedReason: string, options: BlockedBottleneckManifestOptions = {}): Promise<void> {
+  const manifest = buildBlockedBottleneckManifest(blockedReason, options);
   await mkdir(ARTIFACT_DIR, { recursive: true });
   await writeFile(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 }
@@ -1859,10 +2332,15 @@ async function writeBlockedBottleneckManifest(blockedReason: string, options: Bl
 function assertBlockedBottleneckManifest(manifest: BrowserPaneBottleneckAuditManifest): void {
   assert.equal(manifest.schemaVersion, AUDIT_SCHEMA);
   assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.passClaim, false);
   assert.equal(manifest.refsFirst, true);
   assert.ok(manifest.blockedReason, 'blocked manifest must record bounded reason');
   assertBrowserPaneLiveAcceptance(manifest.liveAcceptance, 'blocked');
   assert.equal(manifest.liveAcceptance.passClaim, false);
+  assertNativeAttachPreflightEvidence(manifest.nativeAttachPreflight);
+  if (manifest.nativeAttachPreflight.status === 'blocked') {
+    assert.equal(manifest.liveAcceptance.blockedReasonCode, 'missing-native-attach/preflight');
+  }
   assert.equal(manifest.coverageGaps.status, 'blocked');
   assert.deepEqual(manifest.coverageGaps.categories.map((entry) => entry.category), REQUIRED_BOTTLENECK_CATEGORIES);
   assert.deepEqual(manifest.coverageGaps.interactions.map((entry) => entry.class), REQUIRED_INTERACTION_COVERAGE);
@@ -1894,7 +2372,42 @@ function assertBlockedBottleneckManifest(manifest: BrowserPaneBottleneckAuditMan
   assert.doesNotMatch(serialized, new RegExp(escapeRegExp(EXPECTED_FINAL_INPUT)));
 }
 
-function forceBlockedBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAcceptance, reason: string): BrowserPaneLiveAcceptance {
+function assertNativeAttachPreflightEvidence(preflight: BottleneckNativeAttachPreflightEvidence | undefined): asserts preflight is BottleneckNativeAttachPreflightEvidence {
+  assert.ok(preflight, 'blocked bottleneck manifests must include bounded native attach preflight evidence');
+  assert.equal(preflight.bounded, true);
+  assert.ok(['ready', 'blocked'].includes(preflight.status));
+  if (preflight.status === 'blocked') assert.equal(preflight.blockedReasonCode, 'missing-native-attach/preflight');
+  assert.equal(typeof preflight.writerHealth.available, 'boolean');
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSession));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.nativeSurface));
+  assert.ok(['ready', 'missing'].includes(preflight.writerHealth.capabilities.browserHostSearch));
+  assert.ok(['present', 'missing'].includes(preflight.writerHealth.nativeSurfaceEndpoint));
+  assert.ok(preflight.writerHealth.capabilitySummary.length <= BOTTLENECK_NATIVE_ATTACH_PREFLIGHT_CAPABILITIES.length);
+  assert.ok(preflight.writerHealth.endpointKeys.length <= 16);
+  assert.equal(typeof preflight.rightPaneBridge.available, 'boolean');
+  assert.ok(preflight.rightPaneBridge.hostFrameCount >= 0);
+  assert.ok(preflight.rightPaneBridge.nativeSurfaceCount >= 0);
+  assert.ok(preflight.rightPaneBridge.sessionRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.liveSurfaceRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.frameStreamRefCount >= 0);
+  assert.ok(preflight.rightPaneBridge.rendererHashes.length <= 8);
+  for (const hash of preflight.rightPaneBridge.rendererHashes) assert.match(hash, /^[a-f0-9]{16}$/);
+  assert.ok(['attached', 'missing', 'blocked'].includes(preflight.nativeAttach.status));
+  assert.equal(typeof preflight.nativeAttach.singleInteractiveTruth, 'boolean');
+  assert.equal(typeof preflight.nativeAttach.secondTruthSource, 'boolean');
+  assert.ok(preflight.nativeAttach.sessionRefs.length <= MAX_RIGHT_PANE_REF_COUNT);
+  assert.ok(preflight.nativeAttach.liveSurfaceRefs.length <= MAX_RIGHT_PANE_REF_COUNT);
+  for (const ref of preflight.nativeAttach.sessionRefs) assert.match(ref, /^browser-host-session:[^/]+$/);
+  for (const ref of preflight.nativeAttach.liveSurfaceRefs) assert.match(ref, /^browser-host-session:[^/]+\/live-surface$/);
+  const serialized = JSON.stringify(preflight);
+  assert.doesNotMatch(serialized, /https?:\/\/|<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/i);
+}
+
+function forceBlockedBrowserPaneLiveAcceptance(
+  liveAcceptance: BrowserPaneLiveAcceptance,
+  reason: string,
+  nativeAttachPreflight?: BottleneckNativeAttachPreflightEvidence,
+): BrowserPaneLiveAcceptance {
   return {
     ...liveAcceptance,
     status: 'blocked',
@@ -1906,6 +2419,9 @@ function forceBlockedBrowserPaneLiveAcceptance(liveAcceptance: BrowserPaneLiveAc
       legacyFallbackAllowed: false,
     },
     blockedReason: reason.slice(0, 240) || 'blocked',
+    blockedReasonCode: nativeAttachPreflight?.status === 'blocked'
+      ? 'missing-native-attach/preflight'
+      : liveAcceptance.blockedReasonCode,
   };
 }
 
@@ -1948,6 +2464,26 @@ function browserPaneLiveAcceptance(session: JsonRecord, nativeEvidence: NativeRi
     blockedReason: passed
       ? undefined
       : boundedLiveAcceptanceBlocker(session, nativeEvidence),
+  };
+}
+
+function applyNativeAttachPreflightToLiveAcceptance(
+  liveAcceptance: BrowserPaneLiveAcceptance,
+  nativeAttachPreflight?: BottleneckNativeAttachPreflightEvidence,
+): BrowserPaneLiveAcceptance {
+  if (nativeAttachPreflight?.status !== 'blocked') return liveAcceptance;
+  return {
+    ...liveAcceptance,
+    status: 'blocked',
+    claimScope: 'diagnostic-only',
+    passClaim: false,
+    handoff: {
+      state: 'needs-native-attach',
+      canRetry: true,
+      legacyFallbackAllowed: false,
+    },
+    blockedReason: 'missing-native-attach/preflight',
+    blockedReasonCode: 'missing-native-attach/preflight',
   };
 }
 
@@ -2383,6 +2919,14 @@ function boundedUrlDigest(value: string): { length: number; hash: string } {
     length: value.length,
     hash: hashText(value),
   };
+}
+
+function boundedDiagnosticString(value: string): string | undefined {
+  if (!value) return undefined;
+  if (/https?:\/\/|<!doctype|<html|<body|outerHTML|innerHTML|data:image|;base64,|screenshot/i.test(value)) {
+    return `diagnostic:${hashText(value)}`;
+  }
+  return value.slice(0, 96);
 }
 
 function emptyFrameStreamStats(): FrameStreamStats {

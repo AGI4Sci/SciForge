@@ -18,12 +18,15 @@ import {
   type NativeHostLiveBindingGrant,
   type NativeHostLiveSurface,
   type NativeHostPermissionLedgerRequest,
+  type NativeHostPreflightRecord,
+  type NativeHostPreflightRequest,
   type NativeHostPermissionRequest,
   type NativeHostReadinessRecord,
   type NativeHostResult,
   type NativeHostSession,
   type NativeHostSessionProfile,
   type NativeHostSurfaceTarget,
+  type NativeHostValidationResult,
   type NativeVirtualAppScreenHost,
   type NativeVirtualAppScreenHostDescription,
   type NativeVirtualAppScreenPlatformAdapter,
@@ -220,8 +223,10 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
   private readonly adapter: NativeVirtualAppScreenPlatformAdapter;
   private readonly sessions = new Map<string, NativeHostSession>();
   private readonly ledgers = new Map<string, NativeHostEvidenceLedger>();
+  private readonly preflightLedgers = new Map<string, NativeHostEvidenceLedger>();
   private readonly grants = new Map<string, NativeHostLiveBindingGrant>();
   private sequence = 0;
+  private preflightSequence = 0;
 
   constructor(adapter: NativeVirtualAppScreenPlatformAdapter = new FailClosedNativeHostPlatformAdapter()) {
     this.adapter = adapter;
@@ -233,6 +238,108 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
 
   probe(): NativeHostReadinessRecord {
     return this.adapter.probe();
+  }
+
+  refreshPermissionReadiness(
+    sessionId: string,
+    request: NativeHostPermissionLedgerRequest = {},
+  ): NativeHostMaybePromise<NativeHostResult<NativeHostReadinessRecord>> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    const requestedRefIssue = unsafeRefsIssue(request);
+    if (requestedRefIssue) return blocked(requestedRefIssue.code, requestedRefIssue.message, session.readiness);
+    if (!this.adapter.refreshReadiness) {
+      const recoveredReadiness = this.permissionReadinessFromRequest(session.readiness, request);
+      session.readiness = recoveredReadiness;
+      session.updatedAt = now();
+      return { status: 'ok', value: recoveredReadiness };
+    }
+    const refreshed = this.adapter.refreshReadiness(session, request);
+    if (isPromiseLike(refreshed)) {
+      return refreshed.then((result) => this.refreshPermissionReadinessAfterAdapter(sessionId, request, result));
+    }
+    return this.refreshPermissionReadinessAfterAdapter(sessionId, request, refreshed);
+  }
+
+  recordPreflight(request: NativeHostPreflightRequest): NativeHostResult<NativeHostPreflightRecord> {
+    const readiness = this.probe();
+    const requestedRefIssue = unsafeRefsIssue(request);
+    if (requestedRefIssue) return blocked(requestedRefIssue.code, requestedRefIssue.message, readiness);
+
+    const id = `preflight-${++this.preflightSequence}`;
+    const base = (leaf: string) => ref('preflights', id, leaf);
+    const permissionRefs = uniqueStringRefs([
+      ...readiness.permissionRefs,
+      ...(request.requestedPermissionRefs ?? []),
+    ]);
+    const driverRefs = uniqueStringRefs([
+      ...readiness.driverRefs,
+      request.platformDriverRef,
+    ]);
+    const providerRefs = uniqueStringRefs([
+      ...readiness.providerRefs,
+      request.providerReadinessRef,
+    ]);
+    const preflightLedgerRef = base('preflight-ledger.json');
+    const preflightLedgerEntryRef = `${preflightLedgerRef}/events/0001-preflight.recorded.json`;
+    const preflight: NativeHostPreflightRecord = {
+      schemaVersion: NATIVE_VIRTUAL_APP_SCREEN_HOST_SCHEMA_VERSION,
+      preflightRef: base('preflight.json'),
+      preflightLedgerRef,
+      preflightLedgerEntryRef,
+      hostId: this.describe().hostId,
+      platform: readiness.platform,
+      adapterKind: readiness.adapterKind,
+      status: readiness.status,
+      checkedAt: readiness.checkedAt,
+      currentRunRef: request.currentRunRef,
+      evidenceRootRef: request.evidenceRootRef,
+      currentRunPointerRef: request.currentRunPointerRef ?? base('current-run-pointer.json'),
+      guiPresentRef: request.guiPresentRef,
+      adapterReadinessRef: hostPreflightRef(request.adapterReadinessRef) ?? base('adapter-readiness.json'),
+      hostReadinessRef: base('host-readiness.json'),
+      permissionRefs,
+      driverRefs,
+      providerRefs,
+      capabilities: readiness.capabilities,
+      diagnosticOnly: readiness.diagnosticOnly,
+      blockedReason: readiness.blockedReason,
+      handoffRef: request.permissionHandoffRef ?? base('handoff.json'),
+      recheckRef: request.recheckRef ?? base('recheck.json'),
+      blockedRef: request.blockedRef ?? (readiness.status === 'ready' ? undefined : base('blocked.json')),
+    };
+    const finalRefIssue = unsafeRefsIssue(preflight);
+    if (finalRefIssue) return blocked(finalRefIssue.code, finalRefIssue.message, readiness);
+    const ledger: NativeHostEvidenceLedger = {
+      schemaVersion: NATIVE_VIRTUAL_APP_SCREEN_HOST_SCHEMA_VERSION,
+      ledgerRef: preflight.preflightLedgerRef,
+      sessionId: id,
+      sessionRef: preflight.preflightRef,
+      currentRunRef: preflight.currentRunRef,
+      currentRunPointerRef: preflight.currentRunPointerRef,
+      entries: [],
+    };
+    const entry = appendNativeHostLedgerEntry({
+      ledger,
+      type: 'preflight.recorded',
+      refs: compactRefs({
+        preflightRef: preflight.preflightRef,
+        preflightLedgerRef: preflight.preflightLedgerRef,
+        preflightLedgerEntryRef: preflight.preflightLedgerEntryRef,
+        hostReadinessRef: preflight.hostReadinessRef,
+        adapterReadinessRef: preflight.adapterReadinessRef,
+        platformDriverRef: preflight.driverRefs[0],
+        permissionRef: preflight.permissionRefs[0],
+        providerReadinessSummaryRef: preflight.providerRefs[0],
+        permissionHandoffRef: preflight.handoffRef,
+        recheckRef: preflight.recheckRef,
+        blockedRef: preflight.blockedRef,
+      }),
+      diagnosticOnly: preflight.diagnosticOnly,
+    });
+    preflight.preflightLedgerEntryRef = entry.eventRef;
+    this.preflightLedgers.set(preflight.preflightRef, ledger);
+    return { status: 'ok', value: preflight };
   }
 
   createSession(
@@ -253,7 +360,7 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
 
     const id = `session-${++this.sequence}`;
     const sessionRef = ref('sessions', id, 'session.json');
-    const currentRunPointerRef = evidenceContext.currentRunPointerRef ?? ref('runs', id, 'current-run-pointer.json');
+    const currentRunPointerRef = ref('runs', id, 'current-run-pointer.json');
     const requiredEvidenceContext: Required<NativeHostEvidenceContext> = {
       currentRunRef: evidenceContext.currentRunRef,
       evidenceRootRef: evidenceContext.evidenceRootRef,
@@ -299,6 +406,12 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const session = this.sessions.get(sessionId);
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    const missingProductHook = productHookMissing<NativeHostSession>(
+      session.readiness,
+      this.adapter.launchOrAttachApp,
+      'launchOrAttachApp',
+    );
+    if (missingProductHook) return missingProductHook;
     const adapterApp = this.adapter.launchOrAttachApp?.(session, appProfile);
     if (adapterApp?.status === 'blocked') return adapterBlocked(adapterApp);
     session.app = adapterApp?.status === 'ok' ? adapterApp.value : appProfile;
@@ -325,6 +438,12 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
     if (!session.app) return blocked('surface-not-attached', 'Cannot attach a surface before launchOrAttachApp.');
+    const missingProductHook = productHookMissing<NativeHostLiveSurface>(
+      session.readiness,
+      this.adapter.attachSurface,
+      'attachSurface',
+    );
+    if (missingProductHook) return missingProductHook;
     if (!this.describe().supportedTransports.includes(surfaceTarget.transport)) {
       return blocked('provider-unavailable', `Unsupported Native Host transport: ${surfaceTarget.transport}`);
     }
@@ -422,6 +541,12 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
     if (!session.surface) return blocked('surface-not-attached', 'Cannot read a frame before attachSurface.');
+    const missingProductHook = productHookMissing<NativeHostFrame>(
+      session.readiness,
+      this.adapter.readFrame,
+      'readFrame',
+    );
+    if (missingProductHook) return missingProductHook;
     const nextSequence = session.surface.currentFrameSequence + 1;
     const defaultFrameRef = ref('frames', session.surface.surfaceId, `${String(nextSequence).padStart(4, '0')}.png`);
     const defaultFrame: NativeHostFrame = {
@@ -467,18 +592,27 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const session = this.sessions.get(sessionId);
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    const sessionStateBlock = blockStoppedOrClosedSession<NativeHostHumanInputAccepted>(session, 'human input');
+    if (sessionStateBlock) return sessionStateBlock;
     if (!session.surface) return blocked('surface-not-attached', 'Cannot send input before attachSurface.');
+    if (!session.surface.currentFrameRef) {
+      return blocked('missing-frame', 'Cannot send human input before Native Host has read a current frame.', session.readiness);
+    }
+    const beforeFrameRef = session.surface.currentFrameRef;
     if (inputEvent.screenRef !== session.surface.screenRef) {
       return blocked('unsafe-input', 'Human input screenRef does not match the attached host surface.');
+    }
+    if (inputEvent.targetWindowRef && inputEvent.targetWindowRef !== session.surface.targetWindowRef) {
+      return blocked('unsafe-input', 'Human input targetWindowRef does not match the attached host surface.');
     }
     if (!this.adapter.sendHumanInput) {
       return blocked('provider-unavailable', 'Native Host platform adapter does not implement human input delivery.', session.readiness);
     }
     const adapterInput = this.adapter.sendHumanInput(session, inputEvent);
     if (isPromiseLike(adapterInput)) {
-      return adapterInput.then((resolved) => this.acceptHumanInputAfterAdapter(sessionId, session, ledger, inputEvent, resolved));
+      return adapterInput.then((resolved) => this.acceptHumanInputAfterAdapter(sessionId, session, ledger, inputEvent, beforeFrameRef, resolved));
     }
-    return this.acceptHumanInputAfterAdapter(sessionId, session, ledger, inputEvent, adapterInput);
+    return this.acceptHumanInputAfterAdapter(sessionId, session, ledger, inputEvent, beforeFrameRef, adapterInput);
   }
 
   private acceptHumanInputAfterAdapter(
@@ -486,6 +620,7 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     session: NativeHostSession,
     ledger: NativeHostEvidenceLedger,
     inputEvent: NativeHostHumanInputEvent,
+    beforeFrameRef: string,
     adapterInput: NativeHostResult<NativeHostHumanInputAccepted>,
   ): NativeHostResult<NativeHostHumanInputAccepted> {
     const surface = session.surface;
@@ -504,6 +639,7 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
       acceptedAt: now(),
       fireAndRelease: true,
       evidenceWillCatchUp: true,
+      providerEvidenceRefs: adapterInput.value.providerEvidenceRefs,
     };
     appendNativeHostLedgerEntry({
       ledger,
@@ -514,8 +650,11 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         liveSurfaceRef: surface.liveSurfaceRef,
         frameStreamRef: surface.frameStreamRef,
         frameRef: surface.currentFrameRef,
+        beforeFrameRef,
+        currentFrameRef: surface.currentFrameRef,
         inputIntentRef: inputEvent.inputIntentRef,
         inputAcceptedRef: accepted.inputAcceptedRef,
+        providerEvidenceRefs: accepted.providerEvidenceRefs,
       },
       diagnosticOnly: session.readiness.diagnosticOnly,
     });
@@ -530,29 +669,46 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const session = this.sessions.get(sessionId);
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    const sessionStateBlock = blockAutomationSessionState<NativeHostAutomationResult>(session);
+    if (sessionStateBlock) return sessionStateBlock;
     if (!session.surface?.currentFrameRef) return blocked('missing-frame', 'Automation requires a current host frame.');
+    if (barrier.currentRunRef !== session.evidenceContext.currentRunRef) {
+      return blocked('stale-current-run', 'Automation barrier currentRunRef does not match the Native Host session current run.', session.readiness);
+    }
     if (barrier.requiredReadinessRef !== session.readiness.adapterReadinessRef) {
       return blocked('automation-barrier-not-ready', 'Automation barrier does not match current provider readiness.');
+    }
+    if (intent.targetWindowRef !== session.surface.targetWindowRef) {
+      return blocked('unsafe-input', 'Automation intent targetWindowRef does not match the attached host surface.', session.readiness);
     }
     if (!this.adapter.executeAutomationIntent) {
       return blocked('provider-unavailable', 'Native Host platform adapter does not implement automation intent execution.', session.readiness);
     }
     const adapterAutomation = this.adapter.executeAutomationIntent(session, intent, barrier);
     if (isPromiseLike(adapterAutomation)) {
-      return adapterAutomation.then((resolved) => this.completeAutomationAfterAdapter(sessionId, session, ledger, intent, barrier, resolved));
+      return adapterAutomation.then((resolved) => this.completeAutomationAfterAdapter(sessionId, ledger, intent, barrier, resolved));
     }
-    return this.completeAutomationAfterAdapter(sessionId, session, ledger, intent, barrier, adapterAutomation);
+    return this.completeAutomationAfterAdapter(sessionId, ledger, intent, barrier, adapterAutomation);
   }
 
   private completeAutomationAfterAdapter(
     sessionId: string,
-    session: NativeHostSession,
     ledger: NativeHostEvidenceLedger,
     intent: NativeHostAutomationIntent,
     barrier: NativeHostAutomationBarrier,
     adapterAutomation: NativeHostResult<NativeHostAutomationResult>,
   ): NativeHostResult<NativeHostAutomationResult> {
-    const surface = session.surface;
+    const currentSession = this.sessions.get(sessionId);
+    if (!currentSession) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    const sessionStateBlock = blockAutomationSessionState<NativeHostAutomationResult>(currentSession);
+    if (sessionStateBlock) return sessionStateBlock;
+    if (barrier.currentRunRef !== currentSession.evidenceContext.currentRunRef) {
+      return blocked('stale-current-run', 'Automation barrier currentRunRef no longer matches the Native Host session current run.', currentSession.readiness);
+    }
+    if (barrier.requiredReadinessRef !== currentSession.readiness.adapterReadinessRef) {
+      return blocked('automation-barrier-not-ready', 'Automation barrier no longer matches current provider readiness.');
+    }
+    const surface = currentSession.surface;
     if (!surface) return blocked('surface-not-attached', 'Cannot complete automation before attachSurface.');
     if (adapterAutomation.status === 'blocked') return adapterBlocked(adapterAutomation);
     if (adapterAutomation.value.automationBarrierRef !== barrier.barrierRef) {
@@ -568,14 +724,14 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
       beforeFrameRef: intent.beforeFrameRef,
       afterFrameRef: afterFrame.value.frameRef,
       verifierRef: intent.verifierRef ?? ref('verifiers', sessionId, `${intent.kind}.json`),
-      evidenceLedgerRef: session.ledgerRef,
+      evidenceLedgerRef: currentSession.ledgerRef,
       completedAt: now(),
     };
     appendNativeHostLedgerEntry({
       ledger,
       type: 'automation.barrier-completed',
       refs: {
-        sessionRef: session.sessionRef,
+        sessionRef: currentSession.sessionRef,
         targetWindowRef: intent.targetWindowRef,
         liveSurfaceRef: surface.liveSurfaceRef,
         frameStreamRef: surface.frameStreamRef,
@@ -585,7 +741,7 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         afterFrameRef: result.afterFrameRef,
         verifierRef: result.verifierRef,
       },
-      diagnosticOnly: session.readiness.diagnosticOnly,
+      diagnosticOnly: currentSession.readiness.diagnosticOnly,
     });
     return { status: 'ok', value: result };
   }
@@ -615,30 +771,64 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const readiness = this.probe();
     const requestedRefIssue = unsafeRefsIssue(request);
     if (requestedRefIssue) return blocked(requestedRefIssue.code, requestedRefIssue.message, readiness);
+    const recoveredReadiness = this.permissionReadinessFromRequest(readiness, request);
 
-    session.readiness = readiness;
+    session.readiness = recoveredReadiness;
     session.updatedAt = now();
     const refs = compactRefs({
       sessionRef: session.sessionRef,
-      permissionHandoffRef: request.permissionHandoffRef ?? readiness.handoffRef ?? ref('permission-handoffs', sessionId, 'handoff.json'),
-      recheckRef: request.recheckRef ?? readiness.recheckRef ?? ref('permission-rechecks', sessionId, 'recheck.json'),
-      permissionRef: request.permissionRef ?? readiness.permissionRefs[0],
-      adapterReadinessRef: readiness.adapterReadinessRef,
-      platformDriverRef: request.platformDriverRef ?? readiness.driverRefs[0],
-      blockedRef: request.blockedRef ?? (readiness.status === 'ready'
+      permissionHandoffRef: request.permissionHandoffRef ?? recoveredReadiness.handoffRef ?? ref('permission-handoffs', sessionId, 'handoff.json'),
+      recheckRef: request.recheckRef ?? recoveredReadiness.recheckRef ?? ref('permission-rechecks', sessionId, 'recheck.json'),
+      permissionRef: request.permissionRef ?? recoveredReadiness.permissionRefs[0],
+      adapterReadinessRef: recoveredReadiness.adapterReadinessRef,
+      platformDriverRef: recoveredReadiness.driverRefs[0],
+      providerReadinessSummaryRef: recoveredReadiness.providerRefs[0],
+      blockedRef: request.blockedRef ?? (recoveredReadiness.status === 'ready'
         ? undefined
         : ref('blocked', sessionId, `${type}.json`)),
     });
     const finalRefIssue = unsafeRefsIssue(refs);
-    if (finalRefIssue) return blocked(finalRefIssue.code, finalRefIssue.message, readiness);
+    if (finalRefIssue) return blocked(finalRefIssue.code, finalRefIssue.message, recoveredReadiness);
 
     const entry = appendNativeHostLedgerEntry({
       ledger,
       type,
       refs,
-      diagnosticOnly: readiness.diagnosticOnly,
+      diagnosticOnly: recoveredReadiness.diagnosticOnly,
     });
     return { status: 'ok', value: entry };
+  }
+
+  private refreshPermissionReadinessAfterAdapter(
+    sessionId: string,
+    request: NativeHostPermissionLedgerRequest,
+    result: NativeHostResult<NativeHostReadinessRecord>,
+  ): NativeHostResult<NativeHostReadinessRecord> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    if (result.status === 'blocked') return adapterBlocked(result);
+    const recoveredReadiness = this.permissionReadinessFromRequest(result.value, request);
+    const finalRefIssue = unsafeRefsIssue({
+      adapterReadinessRef: recoveredReadiness.adapterReadinessRef,
+      platformDriverRef: recoveredReadiness.driverRefs[0],
+      providerReadinessRef: recoveredReadiness.providerRefs[0],
+    });
+    if (finalRefIssue) return blocked(finalRefIssue.code, finalRefIssue.message, recoveredReadiness);
+    session.readiness = recoveredReadiness;
+    session.updatedAt = now();
+    return { status: 'ok', value: recoveredReadiness };
+  }
+
+  private permissionReadinessFromRequest(
+    readiness: NativeHostReadinessRecord,
+    request: NativeHostPermissionLedgerRequest,
+  ): NativeHostReadinessRecord {
+    return {
+      ...readiness,
+      adapterReadinessRef: request.adapterReadinessRef ?? readiness.adapterReadinessRef,
+      driverRefs: request.platformDriverRef ? [request.platformDriverRef, ...readiness.driverRefs] : readiness.driverRefs,
+      providerRefs: request.providerReadinessRef ? [request.providerReadinessRef, ...readiness.providerRefs] : readiness.providerRefs,
+    };
   }
 
   pauseAgent(sessionId: string, reason: string): NativeHostMaybePromise<NativeHostResult<NativeHostSession>> {
@@ -663,6 +853,12 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     adapterPause: NativeHostResult<NativeHostSession>,
   ): NativeHostResult<NativeHostSession> {
     if (adapterPause.status === 'blocked') return adapterBlocked(adapterPause);
+    const controlRefs = controlRefsForOperation(session, sessionId, 'pause');
+    const missingControlRefs = missingRequiredControlRefs(session, controlRefs, 'pause');
+    if (missingControlRefs.length) {
+      return blocked('missing-evidence', `Native Host pause control evidence is missing: ${missingControlRefs.join(', ')}.`, session.readiness);
+    }
+    writeControlEvidenceMetadata(session, controlRefs);
     session.status = 'paused';
     session.updatedAt = now();
     appendNativeHostLedgerEntry({
@@ -672,6 +868,8 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         sessionRef: session.sessionRef,
         liveSurfaceRef: session.surface?.liveSurfaceRef,
         agentPauseRef: ref('agent-pauses', sessionId, `${sha256({ reason }).slice(0, 12)}.json`),
+        agentQueueRef: controlRefs.agentQueueRef,
+        providerEvidenceRefs: controlRefs.providerEvidenceRefs,
       },
       diagnosticOnly: session.readiness.diagnosticOnly,
     });
@@ -682,6 +880,9 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     const session = this.sessions.get(sessionId);
     const ledger = this.ledgers.get(sessionId);
     if (!session || !ledger) return blocked('session-not-found', `Unknown Native Host session: ${sessionId}`);
+    if (barrier.currentRunRef !== session.evidenceContext.currentRunRef) {
+      return blocked('stale-current-run', 'Resume barrier currentRunRef does not match the Native Host session current run.', session.readiness);
+    }
     if (barrier.requiredReadinessRef !== session.readiness.adapterReadinessRef) {
       return blocked('automation-barrier-not-ready', 'Resume barrier does not match current provider readiness.');
     }
@@ -694,18 +895,25 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     }
     const adapterResume = this.adapter.resumeAgent(session, barrier);
     if (isPromiseLike(adapterResume)) {
-      return adapterResume.then((resolved) => this.resumeAgentAfterAdapter(session, ledger, barrier, resolved));
+      return adapterResume.then((resolved) => this.resumeAgentAfterAdapter(sessionId, session, ledger, barrier, resolved));
     }
-    return this.resumeAgentAfterAdapter(session, ledger, barrier, adapterResume);
+    return this.resumeAgentAfterAdapter(sessionId, session, ledger, barrier, adapterResume);
   }
 
   private resumeAgentAfterAdapter(
+    sessionId: string,
     session: NativeHostSession,
     ledger: NativeHostEvidenceLedger,
     barrier: NativeHostAutomationBarrier,
     adapterResume: NativeHostResult<NativeHostSession>,
   ): NativeHostResult<NativeHostSession> {
     if (adapterResume.status === 'blocked') return adapterBlocked(adapterResume);
+    const controlRefs = controlRefsForOperation(session, sessionId, 'resume');
+    const missingControlRefs = missingRequiredControlRefs(session, controlRefs, 'resume');
+    if (missingControlRefs.length) {
+      return blocked('missing-evidence', `Native Host resume control evidence is missing: ${missingControlRefs.join(', ')}.`, session.readiness);
+    }
+    writeControlEvidenceMetadata(session, controlRefs);
     session.status = session.surface ? 'surface-attached' : 'app-attached';
     session.updatedAt = now();
     appendNativeHostLedgerEntry({
@@ -716,9 +924,16 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         liveSurfaceRef: session.surface?.liveSurfaceRef,
         automationBarrierRef: barrier.barrierRef,
         agentResumeRef: ref('agent-resumes', session.sessionId, `${sha256({ barrier }).slice(0, 12)}.json`),
+        agentQueueRef: controlRefs.agentQueueRef,
+        currentFrameRefreshRef: controlRefs.currentFrameRefreshRef,
+        providerEvidenceRefs: controlRefs.providerEvidenceRefs,
       },
       diagnosticOnly: session.readiness.diagnosticOnly,
     });
+    if (session.surface) {
+      const refreshedFrame = this.readFrame(session.sessionId, controlRefs.currentFrameRefreshRef);
+      if (refreshedFrame.status === 'blocked') return adapterBlocked(refreshedFrame);
+    }
     return { status: 'ok', value: session };
   }
 
@@ -744,6 +959,12 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     adapterStop: NativeHostResult<NativeHostSession>,
   ): NativeHostResult<NativeHostSession> {
     if (adapterStop.status === 'blocked') return adapterBlocked(adapterStop);
+    const controlRefs = controlRefsForOperation(session, sessionId, 'close');
+    const missingControlRefs = missingRequiredControlRefs(session, controlRefs, 'close');
+    if (missingControlRefs.length) {
+      return blocked('missing-evidence', `Native Host stop control evidence is missing: ${missingControlRefs.join(', ')}.`, session.readiness);
+    }
+    writeControlEvidenceMetadata(session, controlRefs);
     session.status = 'stopped';
     session.updatedAt = now();
     appendNativeHostLedgerEntry({
@@ -753,6 +974,9 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         sessionRef: session.sessionRef,
         liveSurfaceRef: session.surface?.liveSurfaceRef,
         stoppedRef: ref('stopped', sessionId, `${sha256({ reason }).slice(0, 12)}.json`),
+        agentQueueRef: controlRefs.agentQueueRef,
+        safeStopRef: controlRefs.safeStopRef,
+        providerEvidenceRefs: controlRefs.providerEvidenceRefs,
       },
       diagnosticOnly: session.readiness.diagnosticOnly,
     });
@@ -768,17 +992,24 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     }
     const adapterClose = this.adapter.closeSession(session);
     if (isPromiseLike(adapterClose)) {
-      return adapterClose.then((resolved) => this.closeSessionAfterAdapter(session, ledger, resolved));
+      return adapterClose.then((resolved) => this.closeSessionAfterAdapter(sessionId, session, ledger, resolved));
     }
-    return this.closeSessionAfterAdapter(session, ledger, adapterClose);
+    return this.closeSessionAfterAdapter(sessionId, session, ledger, adapterClose);
   }
 
   private closeSessionAfterAdapter(
+    sessionId: string,
     session: NativeHostSession,
     ledger: NativeHostEvidenceLedger,
     adapterClose: NativeHostResult<NativeHostSession>,
   ): NativeHostResult<NativeHostSession> {
     if (adapterClose.status === 'blocked') return adapterBlocked(adapterClose);
+    const controlRefs = controlRefsForOperation(session, sessionId, 'close');
+    const missingControlRefs = missingRequiredControlRefs(session, controlRefs, 'close');
+    if (missingControlRefs.length) {
+      return blocked('missing-evidence', `Native Host close control evidence is missing: ${missingControlRefs.join(', ')}.`, session.readiness);
+    }
+    writeControlEvidenceMetadata(session, controlRefs);
     session.status = 'closed';
     session.updatedAt = now();
     appendNativeHostLedgerEntry({
@@ -788,6 +1019,9 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
         sessionRef: session.sessionRef,
         liveSurfaceRef: session.surface?.liveSurfaceRef,
         closedRef: ref('closed', session.sessionId, 'session-closed.json'),
+        agentQueueRef: controlRefs.agentQueueRef,
+        safeStopRef: controlRefs.safeStopRef,
+        providerEvidenceRefs: controlRefs.providerEvidenceRefs,
       },
       diagnosticOnly: session.readiness.diagnosticOnly,
     });
@@ -802,6 +1036,9 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
     }
     const session = this.sessions.get(grant.sessionId);
     if (!session) issues.push('Grant session is missing.');
+    if (grant.revokedAt) issues.push('Grant was revoked.');
+    if (session?.status === 'stopped') issues.push('Grant session is stopped.');
+    if (session?.status === 'closed') issues.push('Grant session is closed.');
     if (session && grant.currentRunRef !== session.evidenceContext.currentRunRef) issues.push('Grant currentRunRef is stale.');
     if (session?.surface?.liveSurfaceRef !== grant.liveSurfaceRef) issues.push('Grant liveSurfaceRef does not match current surface.');
     if (session?.surface?.surfaceTransportRef !== grant.surfaceTransportRef) issues.push('Grant surfaceTransportRef does not match current surface.');
@@ -822,6 +1059,19 @@ export class InMemoryNativeVirtualAppScreenHost implements NativeVirtualAppScree
 
   getLedger(sessionId: string): NativeHostEvidenceLedger | undefined {
     return this.ledgers.get(sessionId);
+  }
+
+  getPreflightLedger(preflightRef: string): NativeHostEvidenceLedger | undefined {
+    return this.preflightLedgers.get(preflightRef);
+  }
+
+  validatePreflightLedger(preflightRef: string): NativeHostValidationResult {
+    const ledger = this.getPreflightLedger(preflightRef);
+    if (!ledger) return { ok: false, issues: [`Unknown Native Host preflight: ${preflightRef}`] };
+    return validateNativeHostEvidenceLedger(ledger, {
+      scope: 'preflight',
+      requirePreflight: true,
+    });
   }
 
   validateLedger(
@@ -876,29 +1126,147 @@ function validateAdapterFrame(session: NativeHostSession, frame: NativeHostFrame
   return undefined;
 }
 
+function productHookMissing<T>(
+  readiness: NativeHostReadinessRecord,
+  hook: unknown,
+  method: string,
+): NativeHostResult<T> | undefined {
+  if (readiness.diagnosticOnly !== false || typeof hook === 'function') return undefined;
+  return blocked(
+    'provider-unavailable',
+    `Native Host product adapter must implement ${method}; product live refs cannot be synthesized by the host default path.`,
+    readiness,
+  );
+}
+
+function blockAutomationSessionState<T>(session: NativeHostSession): NativeHostResult<T> | undefined {
+  if (session.status === 'paused') {
+    return blocked('session-paused', 'Native Host automation is paused while human takeover owns the session.', session.readiness);
+  }
+  return blockStoppedOrClosedSession(session, 'automation');
+}
+
+function blockStoppedOrClosedSession<T>(
+  session: NativeHostSession,
+  operation: string,
+): NativeHostResult<T> | undefined {
+  if (session.status === 'stopped') {
+    return blocked('session-stopped', `Native Host refuses ${operation} after safe stop.`, session.readiness);
+  }
+  if (session.status === 'closed') {
+    return blocked('session-closed', `Native Host refuses ${operation} after session close.`, session.readiness);
+  }
+  return undefined;
+}
+
+type NativeHostControlOperation = 'pause' | 'resume' | 'close';
+
+interface NativeHostControlRefs {
+  agentQueueRef?: string;
+  currentFrameRefreshRef?: string;
+  safeStopRef?: string;
+  providerEvidenceRefs?: string[];
+}
+
+function controlRefsForOperation(
+  session: NativeHostSession,
+  sessionId: string,
+  operation: NativeHostControlOperation,
+): NativeHostControlRefs {
+  const evidence = recordValue(session.profile.metadata?.nativeHostControlEvidence);
+  const diagnostic = session.readiness.diagnosticOnly !== false;
+  return {
+    agentQueueRef: stringValue(evidence?.agentQueueRef)
+      ?? (diagnostic ? ref('agent-queues', sessionId, `${operation}.json`) : undefined),
+    currentFrameRefreshRef: operation === 'resume'
+      ? stringValue(evidence?.currentFrameRefreshRef)
+        ?? (diagnostic ? ref('frame-refreshes', sessionId, 'resume-current-frame.json') : undefined)
+      : undefined,
+    safeStopRef: operation === 'close'
+      ? stringValue(evidence?.safeStopRef)
+        ?? (diagnostic ? ref('safe-stops', sessionId, 'session-close.json') : undefined)
+      : undefined,
+    providerEvidenceRefs: stringListValue(evidence?.providerEvidenceRefs),
+  };
+}
+
+function missingRequiredControlRefs(
+  session: NativeHostSession,
+  refs: NativeHostControlRefs,
+  operation: NativeHostControlOperation,
+): string[] {
+  const required = [
+    refs.agentQueueRef ? undefined : 'agentQueueRef',
+    operation === 'resume' && !refs.currentFrameRefreshRef ? 'currentFrameRefreshRef' : undefined,
+    operation === 'close' && !refs.safeStopRef ? 'safeStopRef' : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+  if (session.readiness.diagnosticOnly !== false) return required;
+  return required;
+}
+
+function writeControlEvidenceMetadata(session: NativeHostSession, refs: NativeHostControlRefs): void {
+  session.profile.metadata = {
+    ...(session.profile.metadata ?? {}),
+    nativeHostControlEvidence: {
+      ...(recordValue(session.profile.metadata?.nativeHostControlEvidence) ?? {}),
+      ...refs,
+    },
+  };
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
+function stringListValue(value: unknown): string[] {
+  if (typeof value === 'string' && value.trim()) return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && Boolean(entry.trim()));
+}
+
 function compactRefs(refs: NativeHostLedgerRefs): NativeHostLedgerRefs {
   return Object.fromEntries(
     Object.entries(refs).filter(([, value]) => value !== undefined),
   ) as NativeHostLedgerRefs;
 }
 
-function unsafeRefsIssue(refs: NativeHostLedgerRefs | NativeHostPermissionLedgerRequest): {
+function uniqueStringRefs(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())))];
+}
+
+function hostPreflightRef(value: string | undefined): string | undefined {
+  return value?.startsWith('computer-use:native-host/preflights/') ? value : undefined;
+}
+
+function unsafeRefsIssue(refs: Record<string, unknown> | NativeHostLedgerRefs | NativeHostPermissionLedgerRequest): {
   code: 'ui-owned-source-blocked' | 'fixture-live-source-blocked';
   message: string;
 } | undefined {
   for (const [key, value] of Object.entries(refs)) {
-    if (typeof value !== 'string') continue;
-    if (/^(ui|gui-viewer|screen-pane):/iu.test(value)) {
-      return {
-        code: 'ui-owned-source-blocked',
-        message: `Native Host refuses UI-owned permission ledger ref ${key}.`,
-      };
-    }
-    if (/^(fixture|replay-fixture|snapshot-fixture):/iu.test(value)) {
-      return {
-        code: 'fixture-live-source-blocked',
-        message: `Native Host refuses fixture-owned permission ledger ref ${key}.`,
-      };
+    const values = typeof value === 'string'
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+    for (const refValue of values) {
+      if (/^(ui|gui-viewer|screen-pane):/iu.test(refValue)) {
+        return {
+          code: 'ui-owned-source-blocked',
+          message: `Native Host refuses UI-owned permission ledger ref ${key}.`,
+        };
+      }
+      if (/^(fixture|replay-fixture|snapshot-fixture):/iu.test(refValue)) {
+        return {
+          code: 'fixture-live-source-blocked',
+          message: `Native Host refuses fixture-owned permission ledger ref ${key}.`,
+        };
+      }
     }
   }
   return undefined;

@@ -37,6 +37,12 @@ export interface VirtualAppScreenEvidenceClaim {
   refs?: string[];
   evidenceRefs?: string[];
   sessionRefs?: string[];
+  realHostProviderSessionRef?: string;
+  realOptInRunRef?: string;
+  currentRunPointerRef?: string;
+  realPlatformEvidenceRefs?: string[];
+  minimalEvidenceReplayRefs?: string[];
+  diagnosticOnly?: boolean;
   completionEvidence?: boolean;
   userAcceptanceEligible?: boolean;
   note?: string;
@@ -172,6 +178,10 @@ function hasRef(value: string | undefined): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function nativeHostRef(value: string | undefined): boolean {
+  return typeof value === 'string' && value.trim().startsWith('computer-use:native-host/');
+}
+
 function normalizeIsolationFlags(flags: VirtualAppScreenIsolationFlags | undefined): Required<VirtualAppScreenIsolationFlags> {
   return {
     backgroundRenderable: flags?.backgroundRenderable === true,
@@ -242,12 +252,20 @@ function hasRealVirtualAppScreenEvidence(claims: VirtualAppScreenEvidenceClaim[]
     claim.kind === 'real-virtual-app-screen'
     && claim.status !== 'missing'
     && claim.status !== 'blocked'
+    && claim.status !== 'diagnostic-only'
+    && claim.diagnosticOnly === false
+    && nativeHostRef(claim.realHostProviderSessionRef)
+    && nativeHostRef(claim.realOptInRunRef)
+    && nativeHostRef(claim.currentRunPointerRef)
+    && (claim.realPlatformEvidenceRefs ?? []).some((ref) => nativeHostRef(ref))
+    && (claim.minimalEvidenceReplayRefs ?? []).length >= 4
+    && (claim.minimalEvidenceReplayRefs ?? []).every((ref) => nativeHostRef(ref))
     && [
       claim.ref,
       ...(claim.refs ?? []),
       ...(claim.evidenceRefs ?? []),
       ...(claim.sessionRefs ?? []),
-    ].some((ref) => typeof ref === 'string' && ref.trim().length > 0)
+    ].some((ref) => nativeHostRef(ref))
   ));
 }
 
@@ -281,7 +299,7 @@ export function validateVirtualAppScreenUserAcceptanceManifest(
   if (!hasRef(manifest.replayRef)) missingRefs.push('replayRef');
   if (!hasRef(manifest.evidenceLedgerRef)) missingRefs.push('evidenceLedgerRef');
   if (!hasRealVirtualAppScreenEvidence(manifest.evidenceClaims)) {
-    issues.push('real VirtualAppScreen action-causality evidence is required.');
+    issues.push('real VirtualAppScreen action-causality evidence is required; real opt-in Host provider session evidence is required.');
   }
 
   const rejected = rejectedClaimKinds(manifest.evidenceClaims);

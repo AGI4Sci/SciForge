@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
 import { normalizeWorkspaceRootPath } from './workspace-paths.js';
 import {
+  BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
   BROWSER_HOST_SEARCH_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
@@ -27,6 +28,7 @@ import type {
   BrowserHostSessionLoadingProgressSource,
   BrowserHostSessionLoadingProgressState,
   BrowserHostSessionLoadingProgressUrls,
+  BrowserHostSessionNativeOsUiProof,
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
@@ -53,6 +55,7 @@ import {
 } from './browser-host-session-search.js';
 
 export {
+  BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
   BROWSER_HOST_SEARCH_SCHEMA,
   BROWSER_HOST_SESSION_PROVIDER_ID,
@@ -80,6 +83,7 @@ export type {
   BrowserHostSessionLoadingProgressState,
   BrowserHostSessionLoadingProgressUrlDigest,
   BrowserHostSessionLoadingProgressUrls,
+  BrowserHostSessionNativeOsUiProof,
   BrowserHostSessionStartInput,
   BrowserHostSessionState,
   BrowserHostSessionStatus,
@@ -93,6 +97,52 @@ export {
 const BROWSER_HOST_CAPTURE_FALLBACK_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
   'base64',
+);
+
+const BROWSER_HOST_NATIVE_OS_UI_PROOF_NAMES_BY_GROUP = {
+  cursorCaret: [
+    'input-caret-visible',
+    'focus-blur-restore',
+    'pointer-button-link',
+    'pointer-default-area',
+    'text-cursor-area',
+  ],
+  mouseContextMenu: [
+    'left-click-owner',
+    'right-click-context-menu-owner',
+    'middle-click-owner',
+    'double-click-owner',
+    'mouse-down-up-owner',
+    'continuous-move-owner',
+    'drag-drop-owner',
+    'text-selection-range-owner',
+    'wheel-vertical-owner',
+    'wheel-horizontal-owner',
+    'scrollbar-thumb-owner',
+  ],
+  keyboardImeClipboardSelection: [
+    'keyboard-backspace-delete-owner',
+    'keyboard-enter-owner',
+    'keyboard-tab-owner',
+    'keyboard-arrow-home-end-page-owner',
+    'keyboard-shortcuts-select-copy-paste-cut-owner',
+    'keyboard-escape-owner',
+    'ime-candidate-window-owner',
+    'system-clipboard-round-trip-owner',
+    'selection-range-owner',
+  ],
+  rerenderFocus: [
+    'native-surface-not-detached',
+    'address-bar-rerender-stable',
+    'tab-state-rerender-stable',
+    'diagnostic-expand-stable',
+    'focus-retained-after-rerender',
+    'tab-switch-resize-minimize-restore',
+  ],
+} as const satisfies Record<BrowserHostSessionNativeOsUiProof['proofGroup'], readonly string[]>;
+
+const BROWSER_HOST_NATIVE_OS_UI_PROOF_NAMES = new Set(
+  Object.values(BROWSER_HOST_NATIVE_OS_UI_PROOF_NAMES_BY_GROUP).flat(),
 );
 
 interface ActiveBrowserHostSession extends BrowserHostSessionState {
@@ -201,6 +251,7 @@ export class BrowserHostSessionManager {
       await persistBrowserHostSession(session);
       await session.driver.goto(requestedUrl, timeoutMs(input.timeoutMs));
       markBrowserHostActionTimingActionEnd(timing);
+      await this.refreshNavigationState(session);
       completeBrowserHostNavigationAction(session, 'open');
       await this.capture(session, { includeDom: true, includeAx: true, includeLogs: true }, timing);
       completeBrowserHostNavigationAction(session, 'open');
@@ -263,7 +314,9 @@ export class BrowserHostSessionManager {
     if (session.status === 'closed') throw new Error(`BrowserHostSession is closed: ${sessionId}`);
     if (!session.driver) throw new Error(`BrowserHostSession has no active browser driver: ${sessionId}`);
     const timeout = timeoutMs(input.timeoutMs);
-    const captureMode = browserHostCaptureMode(input.capture) ?? browserHostDefaultCaptureMode(input.action);
+    const captureMode = input.action === 'native-os-ui-proof'
+      ? 'none'
+      : browserHostCaptureMode(input.capture) ?? browserHostDefaultCaptureMode(input.action);
     const timing = createBrowserHostActionTiming(session, input.action, {
       capture: captureMode,
       actionId: input.actionId,
@@ -290,6 +343,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.goto(nextUrl, timeout);
+        await this.refreshNavigationState(session);
         completeBrowserHostNavigationAction(session, 'navigate');
       } else if (input.action === 'back') {
         session.status = 'loading';
@@ -303,6 +357,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.back(timeout);
+        await this.refreshNavigationState(session);
         completeBrowserHostNavigationAction(session, 'back');
       } else if (input.action === 'forward') {
         session.status = 'loading';
@@ -316,6 +371,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.forward(timeout);
+        await this.refreshNavigationState(session);
         completeBrowserHostNavigationAction(session, 'forward');
       } else if (input.action === 'reload') {
         session.status = 'loading';
@@ -329,6 +385,7 @@ export class BrowserHostSessionManager {
         });
         await persistBrowserHostSession(session);
         await session.driver.reload(timeout);
+        await this.refreshNavigationState(session);
         completeBrowserHostNavigationAction(session, 'reload');
       } else if (input.action === 'stop') {
         session.status = 'loading';
@@ -380,6 +437,8 @@ export class BrowserHostSessionManager {
         const cursor = await session.driver.cursor?.(requiredNumber(input.x, 'x'), requiredNumber(input.y, 'y')).catch(() => 'default');
         session.cursor = normalizeBrowserHostCursor(cursor);
         didCursor = true;
+      } else if (input.action === 'native-os-ui-proof') {
+        session.nativeOsUiProof = await browserHostDriverNativeOsUiProof(session.driver, input);
       } else if (input.action === 'close') {
         await session.driver.close();
         session.status = 'closed';
@@ -389,7 +448,7 @@ export class BrowserHostSessionManager {
         throw new Error(`Unsupported BrowserHostSession action: ${input.action}`);
       }
       markBrowserHostActionTimingActionEnd(timing);
-      const captureOptions = browserHostCaptureOptions(input.action, input.capture);
+      const captureOptions = browserHostCaptureOptions(input.action, captureMode);
       if (didCursor) {
         finishBrowserHostActionTiming(session, timing, 'ok');
         await persistBrowserHostSession(session);
@@ -757,6 +816,7 @@ function cloneBrowserHostActionInput(input: BrowserHostSessionActionInput): Brow
   return {
     ...input,
     path: input.path?.map((point) => ({ x: point.x, y: point.y })),
+    expectedProofNames: input.expectedProofNames?.slice(),
   };
 }
 
@@ -989,6 +1049,7 @@ async function createPlaywrightBrowserHostDriver(input: { viewport: BrowserHostS
 class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
   readonly liveSurfaceTransport = 'native-embedded' as const;
   readonly nativeAdapterUrl: string;
+  nativeOsUiProof?: BrowserHostSessionNativeOsUiProof;
   private readonly navigationProgressListeners = new Set<(progress: BrowserHostNavigationProgressEvent) => void>();
   private lastNavigationProgressKey?: string;
 
@@ -1123,6 +1184,21 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
     return diagnostic?.slice('cursor:'.length) || 'default';
   }
 
+  async proveNativeOsUi(input: BrowserHostSessionActionInput): Promise<BrowserHostSessionNativeOsUiProof | undefined> {
+    const state = await this.action({
+      action: 'native-os-ui-proof',
+      proofGroup: input.proofGroup,
+      probe: input.probe,
+      expectedProofNames: browserHostNativeOsUiExpectedProofNames(
+        input.expectedProofNames,
+        browserHostNativeOsUiProofGroup(input.proofGroup),
+      ),
+      actionId: input.actionId,
+      capture: 'none',
+    });
+    return browserHostNativeOsUiProofFromNativeState(state);
+  }
+
   async close(): Promise<void> {
     await this.action({ action: 'close' });
   }
@@ -1141,6 +1217,9 @@ class NativeEmbeddedBrowserHostDriver implements BrowserHostSessionDriver {
 
   private async action(body: Record<string, unknown>): Promise<Record<string, unknown>> {
     const state = await this.post(`/sessions/${encodeURIComponent(this.sessionId)}/actions`, body);
+    const proof = browserHostNativeOsUiProofFromNativeState(state);
+    if (proof) this.nativeOsUiProof = proof;
+    else if (body.action === 'native-os-ui-proof') this.nativeOsUiProof = undefined;
     const emittedProgress = this.cacheState(state);
     if (!emittedProgress && browserHostNativeActionRequiresLoadingProgress(body.action)) {
       this.emitMissingNativeProgress(String(body.action), state);
@@ -1651,6 +1730,14 @@ async function browserHostDriverDrag(driver: BrowserHostSessionDriver, path: Bro
   throw new Error('BrowserHostSession driver does not support streamed drag pointer events.');
 }
 
+async function browserHostDriverNativeOsUiProof(
+  driver: BrowserHostSessionDriver,
+  input: BrowserHostSessionActionInput,
+): Promise<BrowserHostSessionNativeOsUiProof | undefined> {
+  if (!driver.proveNativeOsUi) throw new Error('BrowserHostSession driver does not support bounded native OS UI proof actions.');
+  return browserHostNativeOsUiProofFromUnknown(await driver.proveNativeOsUi(input));
+}
+
 function attachDriverDiagnostics(session: ActiveBrowserHostSession) {
   session.driver?.onConsole?.((entry) => {
     session.consoleLog.push(scrubBrowserHostLogEntry(entry));
@@ -1741,6 +1828,7 @@ function browserHostCaptureOptions(
 
 function browserHostDefaultCaptureMode(action: BrowserHostSessionAction): BrowserHostSessionCaptureMode {
   if (action === 'cursor') return 'none';
+  if (action === 'native-os-ui-proof') return 'none';
   if (action === 'mouse-down' || action === 'mouse-move') return 'none';
   if (action === 'type' || action === 'press' || action === 'scroll') return 'none';
   if (action === 'click' || action === 'double-click' || action === 'mouse-up' || action === 'drag') return 'frame';
@@ -1791,6 +1879,7 @@ async function readStoredBrowserHostSession(workspacePath: string, sessionId: st
       searchResultRef: stringField(record.searchResultRef),
       cursor: normalizeBrowserHostCursor(record.cursor),
       loadingProgress: browserHostSessionLoadingProgress(record.loadingProgress),
+      nativeOsUiProof: browserHostNativeOsUiProofFromUnknown(record.nativeOsUiProof),
       lastActionTiming: browserHostActionTiming(record.lastActionTiming),
       actionTimingSummary: browserHostActionTimingSummary(record.actionTimingSummary),
       diagnostics: Array.isArray(record.diagnostics) ? record.diagnostics.filter((item): item is string => typeof item === 'string') : [],
@@ -1870,6 +1959,7 @@ function publicBrowserHostSessionState(session: ActiveBrowserHostSession): Brows
     liveSurfaceTransport,
     nativeAdapterUrl: localHttpUrlField(session.driver?.nativeAdapterUrl ?? session.nativeAdapterUrl),
     singleInteractiveTruth: true,
+    secondTruthSource: liveSurfaceTransport === 'native-embedded' ? false : undefined,
     frameStreamRef: undefined,
     frameRef: undefined,
     screenshotRef: session.screenshotRef,
@@ -1883,6 +1973,7 @@ function publicBrowserHostSessionState(session: ActiveBrowserHostSession): Brows
     actionTimingSummary: session.actionTimingSummary ?? summarizeBrowserHostActionTimings(session.actionTimingSamples),
     diagnostics: session.diagnostics.slice(-20),
   };
+  state.nativeOsUiProof = browserHostNativeOsUiProofFromUnknown(session.nativeOsUiProof);
   state.loadingProgress = publicBrowserHostSessionLoadingProgress(session, state);
   return state;
 }
@@ -1948,7 +2039,12 @@ function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, 
   const progress = browserHostSessionLoadingProgress(session.loadingProgress);
   const onlyInitialHostNavigation = progress?.state === 'navigation-start' && progress.source === 'host-navigation';
   if (progress?.state && progress.state !== 'network-quiet' && !onlyInitialHostNavigation) {
-    session.status = progress.state === 'blocked' || progress.state === 'handoff' ? 'failed' : 'loading';
+    const status = browserHostNavigationProgressHasCommittedSurface(session, progress)
+      ? 'ready'
+      : progress.state === 'blocked' || progress.state === 'handoff'
+        ? 'failed'
+        : 'loading';
+    session.status = status;
     session.updatedAt = new Date().toISOString();
     setBrowserHostSessionLoadingProgress(session, {
       state: progress.state,
@@ -1958,7 +2054,7 @@ function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, 
       canRetry: progress.canRetry,
       blocked: progress.blocked,
       requiresHandoff: progress.requiresHandoff,
-      urlHints: browserHostNavigationControlUrlHints(session, action),
+      urlHints: browserHostNavigationControlUrlHints(session, action, status === 'ready'),
     });
     return;
   }
@@ -1971,6 +2067,17 @@ function completeBrowserHostNavigationAction(session: ActiveBrowserHostSession, 
     action,
     urlHints: browserHostNavigationControlUrlHints(session, action, true),
   });
+}
+
+function browserHostNavigationProgressHasCommittedSurface(
+  session: Pick<ActiveBrowserHostSession, 'requestedUrl' | 'url'>,
+  progress: Pick<BrowserHostSessionLoadingProgress, 'state' | 'blocked' | 'requiresHandoff'>,
+): boolean {
+  if (progress.blocked || progress.requiresHandoff) return false;
+  if (progress.state === 'blocked' || progress.state === 'handoff' || progress.state === 'retry' || progress.state === 'navigation-start') return false;
+  const currentUrl = browserHostUrlField(session.url);
+  if (!currentUrl || currentUrl === 'about:blank') return false;
+  return true;
 }
 
 function buildBrowserHostSessionLoadingProgress(
@@ -2049,6 +2156,18 @@ function browserHostLoadingProgressInputForPublicState(
     };
   }
   if (state.status === 'ready') {
+    if (existing && browserHostReadyStateKeepsExistingProgress(existing)) {
+      return {
+        state: existing.state,
+        reason: existing.reason,
+        source: existing.source,
+        action: existing.action ?? action,
+        canRetry: existing.canRetry,
+        blocked: existing.blocked,
+        requiresHandoff: existing.requiresHandoff,
+        urlHints: browserHostNavigationControlUrlHints(state, existing.action ?? action, true),
+      };
+    }
     return {
       state: 'network-quiet',
       reason: existing?.state === 'network-quiet' ? existing.reason : 'host-ready',
@@ -2089,6 +2208,10 @@ function browserHostLoadingProgressInputForPublicState(
   return undefined;
 }
 
+function browserHostReadyStateKeepsExistingProgress(existing: BrowserHostSessionLoadingProgress): boolean {
+  return existing.state === 'stalled';
+}
+
 function browserHostSessionLoadingProgress(value: unknown): BrowserHostSessionLoadingProgress | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
@@ -2112,6 +2235,103 @@ function browserHostSessionLoadingProgress(value: unknown): BrowserHostSessionLo
     blocked: record.blocked === true ? true : undefined,
     requiresHandoff: record.requiresHandoff === true ? true : undefined,
   };
+}
+
+function browserHostNativeOsUiProofFromNativeState(state: unknown): BrowserHostSessionNativeOsUiProof | undefined {
+  const record = objectRecord(state);
+  return browserHostNativeOsUiProofFromUnknown(record.nativeOsUiProof)
+    ?? browserHostNativeOsUiProofFromUnknown(objectRecord(record.session).nativeOsUiProof);
+}
+
+function browserHostNativeOsUiProofFromUnknown(value: unknown): BrowserHostSessionNativeOsUiProof | undefined {
+  const record = objectRecord(value);
+  if (record.schemaVersion !== BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA) return undefined;
+  if (record.boundedEvidenceOnly !== true) return undefined;
+  if (
+    record.rawDomRecorded !== false ||
+    record.rawTextRecorded !== false ||
+    record.rawUrlRecorded !== false ||
+    record.rawTitleRecorded !== false ||
+    record.rawSelectorRecorded !== false ||
+    record.rawCoordsRecorded !== false ||
+    record.rawPayloadRecorded !== false
+  ) {
+    return undefined;
+  }
+  if (record.source !== 'native-embedded-action-state') return undefined;
+  const proofGroup = browserHostNativeOsUiProofGroup(record.proofGroup);
+  const actionId = browserHostNativeOsUiToken(record.actionId);
+  if (!proofGroup || !actionId) return undefined;
+  return {
+    schemaVersion: BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
+    boundedEvidenceOnly: true,
+    rawDomRecorded: false,
+    rawTextRecorded: false,
+    rawUrlRecorded: false,
+    rawTitleRecorded: false,
+    rawSelectorRecorded: false,
+    rawCoordsRecorded: false,
+    rawPayloadRecorded: false,
+    source: 'native-embedded-action-state',
+    proofGroup,
+    actionId,
+    observedProofNames: browserHostNativeOsUiExpectedProofNames(record.observedProofNames, proofGroup),
+    evidenceTokens: uniqueBoundedNativeOsUiTokens(record.evidenceTokens),
+    diagnostics: uniqueBoundedNativeOsUiTokens(record.diagnostics),
+  };
+}
+
+function browserHostNativeOsUiProofGroup(value: unknown): BrowserHostSessionNativeOsUiProof['proofGroup'] | undefined {
+  return value === 'cursorCaret' ||
+    value === 'mouseContextMenu' ||
+    value === 'keyboardImeClipboardSelection' ||
+    value === 'rerenderFocus'
+    ? value
+    : undefined;
+}
+
+function browserHostNativeOsUiExpectedProofNames(
+  value: unknown,
+  proofGroup?: BrowserHostSessionNativeOsUiProof['proofGroup'],
+): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map((entry) => browserHostNativeOsUiProofName(entry, proofGroup)).filter((entry): entry is string => Boolean(entry)))]
+    : [];
+}
+
+function browserHostNativeOsUiProofName(
+  value: unknown,
+  proofGroup?: BrowserHostSessionNativeOsUiProof['proofGroup'],
+): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const proofName = value.trim();
+  const allowed = proofGroup
+    ? new Set<string>(BROWSER_HOST_NATIVE_OS_UI_PROOF_NAMES_BY_GROUP[proofGroup])
+    : BROWSER_HOST_NATIVE_OS_UI_PROOF_NAMES;
+  return allowed.has(proofName) ? proofName : undefined;
+}
+
+function uniqueBoundedNativeOsUiTokens(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.map(browserHostNativeOsUiToken).filter((entry): entry is string => Boolean(entry)))]
+    : [];
+}
+
+function browserHostNativeOsUiToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const token = value.trim();
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._:/-]{0,127}$/.test(token)) return undefined;
+  if (browserHostNativeOsUiRawTextForbidden(token)) return undefined;
+  return token;
+}
+
+function browserHostNativeOsUiRawTextForbidden(value: string): boolean {
+  return /https?:|file:|data:|blob:|javascript:|<html|<input|endpoint|url:|title:|selector|coords?|payload|provider|secret|api[-_]?key|raw-leak/i.test(value)
+    || /"x"\s*:|"y"\s*:/.test(value);
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function browserHostLoadingProgressRefs(
@@ -2217,6 +2437,7 @@ function browserHostLoadingProgressAction(value: unknown): BrowserHostSessionAct
   return value === 'open' || value === 'navigate' || value === 'back' || value === 'forward' || value === 'reload' || value === 'stop'
     || value === 'click' || value === 'double-click' || value === 'mouse-down' || value === 'mouse-move' || value === 'mouse-up'
     || value === 'drag' || value === 'type' || value === 'press' || value === 'scroll' || value === 'cursor'
+    || value === 'native-os-ui-proof'
     || value === 'snapshot' || value === 'state' || value === 'close'
     ? value
     : undefined;

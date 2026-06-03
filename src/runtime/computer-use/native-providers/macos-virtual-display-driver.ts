@@ -19,17 +19,26 @@ import {
 } from './macos-virtual-display-provider.js';
 import {
   missingNativeDriverInputControlRefs,
+  nativeDriverInputControlIsolationIssues,
+  nativeDriverInputControlRefScopeIssues,
+  nativeDriverInputControlSafeFailureDetail,
   nativeDriverInputIntentProjection,
+  type NativeVirtualDisplayDriverInputControlContext,
   type NativeVirtualDisplayDriverInputControlHook,
   type NativeVirtualDisplayDriverInputControlOperation,
 } from './native-driver-input-control.js';
 import {
   captureMacosDisplayFrame,
   commandExists,
+  defaultLaunchMacosTargetApp,
+  findMacosTargetProcessIds,
   inventoryMacosAxWindows,
   listMacosDisplays,
+  macosEditableWindowReadinessEvidence,
   moveMacosAxWindow,
   probeMacosAccessibility,
+  probeMacosScreenRecording,
+  selectMacosAxWindowForCgWindow,
   shortError,
   sleep,
   waitForMacosCgWindow,
@@ -40,6 +49,8 @@ import {
   type MacosCgWindowInventoryEntry,
   type MacosDisplayFrameCapture,
   type MacosDisplayInventoryEntry,
+  type MacosEditableWindowReadinessEvidence,
+  type MacosEditableWindowReadinessSpec,
 } from './macos-native-driver-helpers.js';
 
 export interface MacosVirtualDisplayDriverTargetAppSpec {
@@ -51,6 +62,7 @@ export interface MacosVirtualDisplayDriverTargetAppSpec {
   args?: string[];
   processMatch?: string;
   windowTitlePattern?: string;
+  editableWindowReadiness?: MacosEditableWindowReadinessSpec;
 }
 
 export interface MacosVirtualDisplayDriverDisplayHandle {
@@ -61,6 +73,7 @@ export interface MacosVirtualDisplayDriverDisplayHandle {
   x?: number;
   y?: number;
   name?: string;
+  destroy?: () => void | Promise<void>;
   raw?: unknown;
 }
 
@@ -69,6 +82,13 @@ export interface MacosVirtualDisplayDriverLaunchResult {
   targetAppRef?: string;
   launchRef?: string;
   details?: Record<string, unknown>;
+}
+
+export interface MacosVirtualDisplayDriverInputAdapterCapability {
+  ok: boolean;
+  mechanism?: string;
+  detail?: string;
+  refs?: Record<string, string | string[] | undefined>;
 }
 
 export interface MacosVirtualDisplayDriverTargetWindow {
@@ -85,6 +105,7 @@ export interface MacosVirtualDisplayDriverDependencies {
     displayName: string;
   }) => MacosVirtualDisplayDriverDisplayHandle | Promise<MacosVirtualDisplayDriverDisplayHandle>;
   commandExists?: (command: string, options: VirtualDisplayProviderOperationOptions['probeOptions']) => boolean | Promise<boolean>;
+  probeScreenRecording?: () => boolean | { ok: boolean; detail?: string } | Promise<boolean | { ok: boolean; detail?: string }>;
   probeAccessibility?: () => boolean | { ok: boolean; detail?: string } | Promise<boolean | { ok: boolean; detail?: string }>;
   listDisplays?: () => MacosDisplayInventoryEntry[] | Promise<MacosDisplayInventoryEntry[]>;
   launchApp?: (
@@ -107,6 +128,9 @@ export interface MacosVirtualDisplayDriverDependencies {
     display: MacosDisplayInventoryEntry;
     providerId: string;
   }) => MacosDisplayFrameCapture | Promise<MacosDisplayFrameCapture>;
+  probeInputAdapterCapability?: (
+    context: NativeVirtualDisplayDriverInputControlContext,
+  ) => MacosVirtualDisplayDriverInputAdapterCapability | Promise<MacosVirtualDisplayDriverInputAdapterCapability>;
   sendInputIntent?: NativeVirtualDisplayDriverInputControlHook;
   pauseAgentQueue?: NativeVirtualDisplayDriverInputControlHook;
   resumeAgentQueue?: NativeVirtualDisplayDriverInputControlHook;
@@ -139,6 +163,14 @@ interface MacosVirtualDisplayDriverState {
   refs?: DriverRefs;
   frameSequence: number;
 }
+
+type MacosVirtualDisplayProviderRunResult = {
+  refs: Record<string, string | string[] | undefined>;
+  readiness?: VirtualDisplayReadiness;
+  blockedReason?: string;
+  mutatingActionExecuted?: boolean;
+  providerEvidenceWritten?: boolean;
+};
 
 interface DriverRefs extends Record<string, string | string[] | undefined> {
   currentRunRef: string;
@@ -216,7 +248,7 @@ export function createMacosVirtualDisplayDriverHooks(
         displayGroupRef: refs.displayGroupRef,
         screenRef: refs.screenRef,
         targetAppRef: refs.targetAppRef,
-        displayHandle: safeRecord(displayHandle),
+        displayHandle: displayHandleEvidence(displayHandle),
         displayIdentity: state.display,
         currentRunOnly: true,
       });
@@ -224,7 +256,7 @@ export function createMacosVirtualDisplayDriverHooks(
         schemaVersion: 'sciforge.virtual-display.macos.display.v1',
         providerId,
         displayRef: refs.displayRef,
-        displayHandle: safeRecord(displayHandle),
+        displayHandle: displayHandleEvidence(displayHandle),
         displayIdentity: state.display,
         currentRunOnly: true,
       });
@@ -243,22 +275,31 @@ export function createMacosVirtualDisplayDriverHooks(
       if (!state.display) return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp requires a created virtual display session.');
       const spec = targetAppSpecFor(effectiveOptions, options);
       if (!hasLaunchSpec(spec)) {
-        return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp requires an explicit generic target app launch spec.');
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp requires an explicit generic target app launch spec.');
       }
-      const launch = await launchDriverApp(spec, effectiveOptions, deps);
-      state.launch = launch;
-      if (!launch.pids.length) {
-        return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp did not materialize a target process id.');
+      let launch: MacosVirtualDisplayDriverLaunchResult;
+      let targetWindow: MacosVirtualDisplayDriverTargetWindow;
+      let editableWindowReadiness: MacosEditableWindowReadinessEvidence;
+      try {
+        launch = await launchDriverApp(spec, effectiveOptions, deps);
+        state.launch = launch;
+        if (!launch.pids.length && !hasDiscoverySpec(spec)) {
+          return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp did not materialize a target process id.');
+        }
+        const discoveredWindow = await waitForDriverWindow({
+          pids: launch.pids,
+          spec,
+          timeoutMs: options.windowTimeoutMs ?? 15000,
+        }, deps);
+        if (!discoveredWindow) {
+          return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp could not find a target app window.');
+        }
+        targetWindow = discoveredWindow;
+        state.targetWindow = targetWindow;
+        editableWindowReadiness = editableWindowReadinessEvidenceFor(spec, targetWindow);
+      } catch (error) {
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, `macOS VirtualDisplayProvider launchApp failed: ${shortError(error)}.`);
       }
-      const targetWindow = await waitForDriverWindow({
-        pids: launch.pids,
-        spec,
-        timeoutMs: options.windowTimeoutMs ?? 15000,
-      }, deps);
-      if (!targetWindow) {
-        return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider launchApp could not find a target app window.');
-      }
-      state.targetWindow = targetWindow;
       await writeDriverJson(deps, outDirFor(options, effectiveOptions), runDirRef(effectiveOptions), refs.targetWindowRef, {
         schemaVersion: 'sciforge.virtual-display.macos.target-window.v1',
         providerId,
@@ -267,9 +308,13 @@ export function createMacosVirtualDisplayDriverHooks(
         pids: launch.pids,
         cgWindow: targetWindow.cgWindow,
         axWindow: targetWindow.axWindow,
+        editableWindowReadiness,
         launchDetails: launch.details,
         currentRunOnly: true,
       });
+      if (editableWindowReadiness.required && !editableWindowReadiness.accepted) {
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, editableWindowReadinessBlockedReason());
+      }
       return {
         refs: {
           ...refs,
@@ -286,19 +331,29 @@ export function createMacosVirtualDisplayDriverHooks(
         return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider attachSurface requires a display and target window.');
       }
       if (!state.targetWindow.axWindow) {
-        return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider attachSurface requires Accessibility window identity for isolated window placement.');
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider attachSurface requires Accessibility window identity for isolated window placement.');
       }
       const moveResult = await moveDriverWindow(state.targetWindow.axWindow, state.display, deps);
       if (!moveResult.ok) {
-        return blockedEvidence(operationOptions, providerId, readiness, `macOS VirtualDisplayProvider attachSurface could not move the target window: ${moveResult.stdout}.`);
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, `macOS VirtualDisplayProvider attachSurface could not move the target window: ${moveResult.stdout}.`);
       }
       const positionedWindow = {
         ...state.targetWindow.cgWindow,
         ...moveResult.targetBounds,
       };
       if (!windowWithinDisplay(positionedWindow, state.display)) {
-        return blockedEvidence(operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider attachSurface could not prove the target window is inside the virtual display.');
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, 'macOS VirtualDisplayProvider attachSurface could not prove the target window is inside the virtual display.');
       }
+      state.targetWindow = {
+        ...state.targetWindow,
+        cgWindow: positionedWindow,
+        axWindow: state.targetWindow.axWindow
+          ? {
+            ...state.targetWindow.axWindow,
+            ...moveResult.targetBounds,
+          }
+          : undefined,
+      };
       const transportRecords = transportRecordsFor(refs, providerId, readiness, state.frameSequence);
       await writeTransportRecords(deps, outDirFor(options, effectiveOptions), runDirRef(effectiveOptions), refs, transportRecords, readiness);
       await writeDriverJson(deps, outDirFor(options, effectiveOptions), runDirRef(effectiveOptions), refs.liveSurfaceRef, {
@@ -343,7 +398,7 @@ export function createMacosVirtualDisplayDriverHooks(
           providerId,
         }, deps);
       } catch (error) {
-        return blockedEvidence(operationOptions, providerId, readiness, `macOS VirtualDisplayProvider readFrame capture failed: ${shortError(error)}.`);
+        return cleanupAndBlockAfterCreatedDisplay(state, operationOptions, providerId, readiness, `macOS VirtualDisplayProvider readFrame capture failed: ${shortError(error)}.`);
       }
       state.frameSequence += 1;
       const frameRecord = {
@@ -400,8 +455,8 @@ export function createMacosVirtualDisplayDriverHooks(
         state,
         hook: deps.resumeAgentQueue,
       })),
-    closeSession: (operationOptions) => withProviderEvidence(providerId, operationOptions, 'closeSession', async () =>
-      runInputControlHook({
+    closeSession: (operationOptions) => withProviderEvidence(providerId, operationOptions, 'closeSession', async () => {
+      const evidence = await runInputControlHook({
         operation: 'closeSession',
         operationOptions,
         options,
@@ -409,8 +464,37 @@ export function createMacosVirtualDisplayDriverHooks(
         providerId,
         state,
         hook: deps.safeStopSession,
-      })),
+      });
+      if (!hasBlockedReason(evidence)) {
+        await destroyDisplayHandle(state.displayHandle);
+        state.displayHandle = undefined;
+        state.display = undefined;
+        state.targetWindow = undefined;
+      }
+      return evidence;
+    }),
   };
+}
+
+async function cleanupAndBlockAfterCreatedDisplay(
+  state: MacosVirtualDisplayDriverState,
+  operationOptions: VirtualDisplayProviderOperationOptions,
+  providerId: string,
+  readiness: VirtualDisplayReadiness,
+  blockedReason: string,
+): Promise<MacosVirtualDisplayProviderRunResult> {
+  await destroyDisplayHandle(state.displayHandle);
+  state.displayHandle = undefined;
+  state.display = undefined;
+  state.launch = undefined;
+  state.targetWindow = undefined;
+  return blockedEvidence(operationOptions, providerId, readiness, blockedReason);
+}
+
+function hasBlockedReason(evidence: MacosVirtualDisplayProviderRunResult): boolean {
+  return 'blockedReason' in evidence
+    && typeof evidence.blockedReason === 'string'
+    && evidence.blockedReason.length > 0;
 }
 
 async function runInputControlHook(input: {
@@ -421,7 +505,7 @@ async function runInputControlHook(input: {
   providerId: string;
   state: MacosVirtualDisplayDriverState;
   hook?: NativeVirtualDisplayDriverInputControlHook;
-}) {
+}): Promise<MacosVirtualDisplayProviderRunResult> {
   const effectiveOptions = driverOperationOptions(input.operationOptions, input.options);
   const probe = await probeDriverReadiness(effectiveOptions, input.providerId, input.deps);
   input.state.packageModule = probe.packageModule;
@@ -462,24 +546,52 @@ async function runInputControlHook(input: {
       `macOS VirtualDisplayProvider ${input.operation} input sessionRef does not match the attached provider session.`,
     );
   }
-  const result = await input.hook({
+  const platformState = {
+    display: input.state.display,
+    targetWindow: input.state.targetWindow,
+    frameSequence: input.state.frameSequence,
+  };
+  const hookContext: NativeVirtualDisplayDriverInputControlContext = {
     providerId: input.providerId,
     operation: input.operation,
     operationOptions: effectiveOptions,
     inputIntent,
     refs,
-    platformState: {
-      display: input.state.display,
-      targetWindow: input.state.targetWindow,
-      frameSequence: input.state.frameSequence,
-    },
-  });
+    platformState,
+  };
+  const inputAdapterCapability = await probeDriverInputAdapterCapability(input.deps, hookContext);
+  if (!inputAdapterCapability.ok) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `macOS VirtualDisplayProvider ${input.operation} safe macOS AX/app-protocol input adapter capability is not proven${safeInputControlDetailSuffix(inputAdapterCapability.detail)}.`,
+    );
+  }
+  if (!safeInputAdapterMechanism(inputAdapterCapability.mechanism)) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `macOS VirtualDisplayProvider ${input.operation} forbidden macOS input adapter mechanism.`,
+    );
+  }
+  const capabilityRefScopeIssues = nativeDriverInputControlRefScopeIssues(refs, inputAdapterCapability.refs);
+  if (capabilityRefScopeIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `macOS VirtualDisplayProvider ${input.operation} capability evidence refs outside the current provider root: ${capabilityRefScopeIssues.join(', ')}.`,
+    );
+  }
+  const result = await input.hook(hookContext);
   if (!result.ok) {
     return blockedEvidence(
       effectiveOptions,
       input.providerId,
       readiness,
-      `macOS VirtualDisplayProvider ${input.operation} hook did not complete${result.detail ? `: ${result.detail}` : ''}.`,
+      `macOS VirtualDisplayProvider ${input.operation} hook did not complete${safeInputControlDetailSuffix(result.detail)}.`,
     );
   }
   if (result.mutatingActionExecuted !== true) {
@@ -508,6 +620,24 @@ async function runInputControlHook(input: {
       `macOS VirtualDisplayProvider ${input.operation} hook did not return required provider-owned evidence refs: ${missingRefs.join(', ')}.`,
     );
   }
+  const refScopeIssues = nativeDriverInputControlRefScopeIssues(refs, result.refs);
+  if (refScopeIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `macOS VirtualDisplayProvider ${input.operation} hook returned evidence refs outside the current provider root: ${refScopeIssues.join(', ')}.`,
+    );
+  }
+  const isolationIssues = nativeDriverInputControlIsolationIssues(result);
+  if (isolationIssues.length) {
+    return blockedEvidence(
+      effectiveOptions,
+      input.providerId,
+      readiness,
+      `macOS VirtualDisplayProvider ${input.operation} hook did not prove isolated virtual-display input with no physical desktop effects: ${isolationIssues.join(', ')}.`,
+    );
+  }
   const mergedRefs = { ...refs, ...result.refs };
   return {
     refs: {
@@ -520,17 +650,30 @@ async function runInputControlHook(input: {
   };
 }
 
+async function probeDriverInputAdapterCapability(
+  deps: MacosVirtualDisplayDriverDependencies,
+  context: NativeVirtualDisplayDriverInputControlContext,
+): Promise<MacosVirtualDisplayDriverInputAdapterCapability> {
+  if (!deps.probeInputAdapterCapability) {
+    return { ok: false, detail: 'probeInputAdapterCapability hook is not registered' };
+  }
+  return resolveMaybe(deps.probeInputAdapterCapability(context));
+}
+
+function safeInputAdapterMechanism(mechanism: string | undefined) {
+  return mechanism === 'pid-scoped-ax' || mechanism === 'app-protocol';
+}
+
+function safeInputControlDetailSuffix(detail: unknown) {
+  const safeDetail = nativeDriverInputControlSafeFailureDetail(detail);
+  return safeDetail ? `: ${safeDetail}` : '';
+}
+
 async function withProviderEvidence(
   providerId: string,
   operationOptions: VirtualDisplayProviderOperationOptions,
   operation: string,
-  run: () => Promise<{
-    refs: Record<string, string | string[] | undefined>;
-    readiness?: VirtualDisplayReadiness;
-    blockedReason?: string;
-    mutatingActionExecuted?: boolean;
-    providerEvidenceWritten?: boolean;
-  }>,
+  run: () => Promise<MacosVirtualDisplayProviderRunResult>,
 ): Promise<MacosVirtualDisplayOperationEvidence> {
   try {
     const result = await run();
@@ -599,11 +742,16 @@ async function probeDriverReadiness(
       blockedReason: 'screencapture is not available for the macOS VirtualDisplayProvider driver.',
     };
   }
-  if (operationOptions.probeOptions?.permissionGrants?.['permission:macos/screen-recording'] !== true) {
+  const screenRecording = await probeDriverScreenRecording(operationOptions, deps);
+  if (!screenRecording.ok) {
     return {
       packageModule,
-      readiness: permissionMissingReadinessFor(operationOptions, providerId, 'macOS Screen Recording permission is not proven for the VirtualDisplayProvider driver.'),
-      blockedReason: 'macOS Screen Recording permission is not proven for the VirtualDisplayProvider driver.',
+      readiness: permissionMissingReadinessFor(
+        operationOptions,
+        providerId,
+        `macOS Screen Recording permission is not proven for the VirtualDisplayProvider driver${screenRecording.detail ? `: ${screenRecording.detail}` : ''}.`,
+      ),
+      blockedReason: `macOS Screen Recording permission is not proven for the VirtualDisplayProvider driver${screenRecording.detail ? `: ${screenRecording.detail}` : ''}.`,
     };
   }
   const accessibility = await probeDriverAccessibility(deps);
@@ -619,6 +767,16 @@ async function probeDriverReadiness(
     readiness: readyReadinessFor(operationOptions, providerId),
     blockedReason: undefined,
   };
+}
+
+async function probeDriverScreenRecording(
+  operationOptions: VirtualDisplayProviderOperationOptions,
+  deps: MacosVirtualDisplayDriverDependencies,
+): Promise<{ ok: boolean; detail?: string }> {
+  const grant = operationOptions.probeOptions?.permissionGrants?.['permission:macos/screen-recording'];
+  if (grant === false) return { ok: false };
+  const result = await resolveMaybe(deps.probeScreenRecording ? deps.probeScreenRecording() : probeMacosScreenRecording());
+  return typeof result === 'boolean' ? { ok: result } : result;
 }
 
 async function loadDriverPackage(deps: MacosVirtualDisplayDriverDependencies) {
@@ -656,20 +814,24 @@ async function defaultCreateVirtualDisplay(
 ): Promise<MacosVirtualDisplayDriverDisplayHandle> {
   const moduleRecord = recordLike(packageModule);
   const defaultRecord = recordLike(moduleRecord?.default);
-  const factory = functionValue(moduleRecord?.createVirtualDisplay)
-    ?? functionValue(moduleRecord?.createDisplay)
-    ?? functionValue(moduleRecord?.create)
-    ?? functionValue(defaultRecord?.createVirtualDisplay)
-    ?? functionValue(defaultRecord?.createDisplay)
-    ?? functionValue(defaultRecord?.create);
+  const constructorInstance = createVirtualDisplayPackageInstance(packageModule)
+    ?? createVirtualDisplayPackageInstance(moduleRecord?.default);
+  const constructorRecord = recordLike(constructorInstance);
+  const factory = displayFactoryCandidate(moduleRecord)
+    ?? displayFactoryCandidate(defaultRecord)
+    ?? displayFactoryCandidate(constructorRecord, constructorInstance);
   if (!factory) throw new Error('node-mac-virtual-display does not expose a recognized create display function.');
-  const raw = await factory({
+  const raw = await factory.create.call(factory.thisArg, {
     width: input.width,
     height: input.height,
     name: input.displayName,
     displayName: input.displayName,
   });
   const rawRecord = recordLike(raw);
+  const destroy = displayDestroyCandidate(rawRecord, raw)
+    ?? displayDestroyCandidate(moduleRecord)
+    ?? displayDestroyCandidate(defaultRecord)
+    ?? displayDestroyCandidate(constructorInstance, constructorInstance);
   return {
     displayId: scalarStringOrNumber(rawRecord?.displayId ?? rawRecord?.id),
     displayIndex: numberValue(rawRecord?.displayIndex ?? rawRecord?.index),
@@ -678,8 +840,45 @@ async function defaultCreateVirtualDisplay(
     x: numberValue(rawRecord?.x),
     y: numberValue(rawRecord?.y),
     name: stringValue(rawRecord?.name) ?? input.displayName,
+    destroy,
     raw,
   };
+}
+
+function displayFactoryCandidate(
+  record: Record<string, unknown> | undefined,
+  thisArg: unknown = record,
+) {
+  const create = functionValue(record?.createVirtualDisplay)
+    ?? functionValue(record?.createDisplay)
+    ?? functionValue(record?.create);
+  return create ? { create, thisArg } : undefined;
+}
+
+function createVirtualDisplayPackageInstance(value: unknown) {
+  if (typeof value !== 'function') return undefined;
+  try {
+    return new (value as new () => unknown)();
+  } catch {
+    return undefined;
+  }
+}
+
+function displayDestroyCandidate(
+  value: unknown,
+  thisArg: unknown = value,
+): (() => void | Promise<void>) | undefined {
+  const record = recordLike(value);
+  const destroy = zeroArgFunctionValue(record?.destroyVirtualDisplay)
+    ?? zeroArgFunctionValue(record?.destroyDisplay)
+    ?? zeroArgFunctionValue(record?.destroy);
+  return destroy ? async () => {
+    await destroy.call(thisArg);
+  } : undefined;
+}
+
+async function destroyDisplayHandle(handle: MacosVirtualDisplayDriverDisplayHandle | undefined) {
+  if (handle?.destroy) await handle.destroy();
 }
 
 async function listDriverDisplays(deps: MacosVirtualDisplayDriverDependencies) {
@@ -712,7 +911,14 @@ async function launchDriverApp(
   deps: MacosVirtualDisplayDriverDependencies,
 ) {
   if (deps.launchApp) return deps.launchApp(spec, operationOptions);
-  throw new Error(`No macOS launch dependency is registered for target app ${spec.kind ?? spec.name ?? 'generic'}.`);
+  return defaultLaunchDriverApp(spec, operationOptions);
+}
+
+function defaultLaunchDriverApp(
+  spec: MacosVirtualDisplayDriverTargetAppSpec,
+  operationOptions: VirtualDisplayProviderOperationOptions,
+): MacosVirtualDisplayDriverLaunchResult {
+  return defaultLaunchMacosTargetApp(spec, operationOptions);
 }
 
 async function waitForDriverWindow(
@@ -720,12 +926,32 @@ async function waitForDriverWindow(
   deps: MacosVirtualDisplayDriverDependencies,
 ) {
   if (deps.waitForTargetWindow) return deps.waitForTargetWindow(input);
-  const cgWindow = await waitForMacosCgWindow(input.pids, input.timeoutMs, {
+  const discoveryPids = findMacosTargetProcessIds(input.spec.processMatch);
+  const targetPids = [...new Set([...input.pids, ...discoveryPids])];
+  const cgWindow = await waitForMacosCgWindow(targetPids, input.timeoutMs, {
     sleep: deps.sleep ?? sleep,
+    windowTitlePattern: input.spec.windowTitlePattern,
+    editableWindowReadiness: input.spec.editableWindowReadiness,
   });
   if (!cgWindow) return undefined;
-  const axWindow = inventoryMacosAxWindows(input.pids).find((window) => window.pid === cgWindow.pid);
+  const axPids = targetPids.includes(cgWindow.pid) ? targetPids : [...targetPids, cgWindow.pid];
+  const axWindow = selectMacosAxWindowForCgWindow(inventoryMacosAxWindows(axPids), cgWindow);
   return { cgWindow, axWindow };
+}
+
+function editableWindowReadinessEvidenceFor(
+  spec: MacosVirtualDisplayDriverTargetAppSpec,
+  targetWindow: MacosVirtualDisplayDriverTargetWindow,
+): MacosEditableWindowReadinessEvidence {
+  return macosEditableWindowReadinessEvidence(
+    spec.editableWindowReadiness,
+    targetWindow.cgWindow,
+    targetWindow.axWindow,
+  );
+}
+
+function editableWindowReadinessBlockedReason() {
+  return 'Editable target window readiness was not proven.';
 }
 
 async function moveDriverWindow(
@@ -765,6 +991,10 @@ function targetAppSpecFor(
 
 function hasLaunchSpec(spec: MacosVirtualDisplayDriverTargetAppSpec) {
   return Boolean(spec.bundleId || spec.appPath || spec.command || spec.processMatch);
+}
+
+function hasDiscoverySpec(spec: MacosVirtualDisplayDriverTargetAppSpec) {
+  return Boolean(spec.processMatch || spec.windowTitlePattern);
 }
 
 function refsFor(
@@ -951,7 +1181,7 @@ function blockedEvidence(
   providerId: string,
   readiness: VirtualDisplayReadiness,
   blockedReason: string,
-) {
+): MacosVirtualDisplayProviderRunResult {
   const readinessStatus: VirtualDisplayReadiness['readinessStatus'] = /permission|screen recording|accessibility/i.test(blockedReason)
     ? 'permission-missing'
     : 'blocked';
@@ -1058,14 +1288,22 @@ async function writeDriverJson(
   await writer(outDir, runDir, ref, data);
 }
 
-function safeRecord(value: unknown): Record<string, unknown> {
-  const record = recordLike(value);
-  if (!record) return {};
-  return Object.fromEntries(
-    Object.entries(record)
-      .filter(([, entry]) => entry === undefined || typeof entry !== 'function')
-      .map(([key, entry]) => [key, entry === undefined ? null : entry]),
-  );
+function displayHandleEvidence(displayHandle: MacosVirtualDisplayDriverDisplayHandle) {
+  return {
+    displayId: scalarEvidenceValue(displayHandle.displayId),
+    displayIndex: scalarEvidenceValue(displayHandle.displayIndex),
+    x: scalarEvidenceValue(displayHandle.x),
+    y: scalarEvidenceValue(displayHandle.y),
+    width: scalarEvidenceValue(displayHandle.width),
+    height: scalarEvidenceValue(displayHandle.height),
+    name: scalarEvidenceValue(displayHandle.name),
+  };
+}
+
+function scalarEvidenceValue(value: unknown): string | number | boolean | null {
+  return typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+    ? value
+    : null;
 }
 
 function recordLike(value: unknown): Record<string, unknown> | undefined {
@@ -1077,6 +1315,12 @@ function recordLike(value: unknown): Record<string, unknown> | undefined {
 function functionValue(value: unknown): ((input: Record<string, unknown>) => unknown | Promise<unknown>) | undefined {
   return typeof value === 'function'
     ? value as (input: Record<string, unknown>) => unknown | Promise<unknown>
+    : undefined;
+}
+
+function zeroArgFunctionValue(value: unknown): (() => unknown | Promise<unknown>) | undefined {
+  return typeof value === 'function'
+    ? value as () => unknown | Promise<unknown>
     : undefined;
 }
 

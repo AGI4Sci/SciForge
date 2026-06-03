@@ -27,12 +27,13 @@ test('workspace writer health helper preserves the public health response shape'
     endpoints: {
       runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
       browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-      browserHostNativeSurface: 'http://127.0.0.1:4999/{health,sessions/{sessionId}/{attach,state}}',
+      browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
       browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
     },
   });
+  assert.doesNotMatch(JSON.stringify(health), /127\.0\.0\.1|localhost|http:\/\/|4999/);
   assert.ok(health.capabilities.includes('workspace-files'));
   assert.ok(health.capabilities.includes('runtime-module-dispatcher'));
   assert.ok(health.capabilities.includes('workspace-terminal-websocket-pty'));
@@ -52,7 +53,7 @@ test('workspace writer health does not claim native browser surface readiness wi
   });
 
   assert.equal(health.capabilities.includes('browser-host-native-surface'), false);
-  assert.equal('browserHostNativeSurface' in health.endpoints, false);
+  assert.equal(health.endpoints.browserHostNativeSurface, '/api/sciforge/browser-host/native-surface/{health,attach,state}');
   assert.equal(health.endpoints.browserHostDiagnostics, '/api/sciforge/browser-host/sessions/{frame,frame-stream}');
 });
 

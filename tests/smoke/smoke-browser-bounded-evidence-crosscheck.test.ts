@@ -4,6 +4,13 @@ import { resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import test from 'node:test';
 
+import {
+  RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS,
+  RIGHT_PANE_NATIVE_OS_UI_REQUIRED_PROOF_NAMES,
+  validateRightPaneNativeOsUiRunManifest,
+  type RightPaneNativeOsUiRunManifest,
+} from '../../src/desktop/right-pane-native-os-ui-run-contract.js';
+
 const BOTTLENECK_SCHEMA = 'sciforge.browser-pane-bottleneck-audit.v1';
 const DOGFOOD_SCHEMA = 'sciforge.browser-pane-dogfood.v1';
 const REAL_EXTERNAL_DOGFOOD_SCHEMA = 'sciforge.browser-pane-real-external-dogfood.v1';
@@ -12,6 +19,15 @@ const WEBRTC_BRIDGE_SCHEMA = 'sciforge.browser-host-session.webrtc-transport-bri
 const NATIVE_PLATFORM_BENCHMARK_SCHEMA = 'sciforge.browser-native-adapter-platform-benchmark-results.v1';
 const INPUT_FIDELITY_SCHEMA = 'sciforge.browser.input-fidelity-product-acceptance.v1';
 const MOUSE_GESTURE_SCHEMA = 'sciforge.browser-host-session.mouse-gesture-completeness-smoke.v1';
+const DESKTOP_NATIVE_LIVE_SCHEMA = 'sciforge.desktop.browser-native-live-acceptance.v1';
+const DESKTOP_NATIVE_M0_SCHEMA = 'sciforge.desktop.browser-native-live-acceptance.m0-surfing-loop.v1';
+const RIGHT_PANE_NATIVE_OS_UI_SCHEMA = 'sciforge.browser.right-pane-native-os-ui-run.v1';
+const RIGHT_PANE_NATIVE_OS_UI_PROOF_GROUP_AREAS = {
+  cursorCaret: 'cursor-caret',
+  mouseContextMenu: 'mouse-context-menu',
+  keyboardImeClipboardSelection: 'keyboard-ime-clipboard-selection',
+  rerenderFocus: 'rerender-focus',
+} as const satisfies Record<keyof typeof RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS, string>;
 const BOTTLENECK_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/browser-pane-bottleneck-audit/manifest.json');
 const DOGFOOD_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/browser-pane-dogfood/manifest.json');
 const REAL_EXTERNAL_DOGFOOD_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/browser-pane-real-external-dogfood/manifest.json');
@@ -20,6 +36,8 @@ const WEBRTC_BRIDGE_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/brows
 const NATIVE_PLATFORM_BENCHMARK_RESULTS = resolve(process.cwd(), 'docs/test-artifacts/browser-native-adapter-comparison/platform-benchmark-results.json');
 const INPUT_FIDELITY_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/browser-input-fidelity-product-acceptance/manifest.json');
 const MOUSE_GESTURE_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/browser-mouse-gesture-completeness/manifest.json');
+const DESKTOP_NATIVE_LIVE_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json');
+const RIGHT_PANE_NATIVE_OS_UI_MANIFEST = resolve(process.cwd(), 'docs/test-artifacts/right-pane-native-os-ui-run/manifest.json');
 const MAX_MANIFEST_BYTES = 96_000;
 const REAL_NATIVE_PLATFORM_METRIC_SECTIONS = [
   'latency',
@@ -28,7 +46,66 @@ const REAL_NATIVE_PLATFORM_METRIC_SECTIONS = [
   'inputCompleteness',
   'lifecycle',
   'reconnect',
+  'streamQuality',
 ] as const;
+const REAL_NATIVE_PLATFORM_NUMERIC_SUMMARY_REQUIRED_FIELDS: Record<typeof REAL_NATIVE_PLATFORM_METRIC_SECTIONS[number], {
+  numbers: readonly string[];
+  booleans: readonly string[];
+}> = {
+  latency: {
+    numbers: ['openAckMs', 'navigationAckMs', 'inputAckMs', 'paintAckLagMs', 'p95ActionAckMs'],
+    booleans: [],
+  },
+  cpu: {
+    numbers: ['processCpuAveragePercent', 'processCpuP95Percent', 'sampleCount'],
+    booleans: [],
+  },
+  memory: {
+    numbers: ['rssMb', 'heapUsedMb', 'nativeSurfaceMb', 'peakRssMb'],
+    booleans: [],
+  },
+  inputCompleteness: {
+    numbers: [],
+    booleans: ['keyboard', 'textEditing', 'pointerClick', 'drag', 'scroll', 'navigationControls'],
+  },
+  lifecycle: {
+    numbers: [],
+    booleans: [
+      'open',
+      'navigationStart',
+      'navigationCommitted',
+      'interactive',
+      'load',
+      'networkQuiet',
+      'blocked',
+      'retry',
+      'close',
+      'sameLiveSurfaceRefAfterResize',
+      'sameLiveSurfaceRefAfterRestore',
+      'visibleAfterResize',
+      'visibleAfterRestore',
+      'surfaceStateOkAfterRestore',
+    ],
+  },
+  reconnect: {
+    numbers: [],
+    booleans: ['disconnectDetected', 'sameBrowserHostSessionOwner', 'stateHeartbeatRestored', 'inputRoutedAfterReconnect'],
+  },
+  streamQuality: {
+    numbers: [
+      'latencyP50Ms',
+      'latencyP95Ms',
+      'framerateAvgFps',
+      'framerateP5Fps',
+      'inputToFrameP50Ms',
+      'inputToFrameP95Ms',
+      'reconnectP50Ms',
+      'reconnectP95Ms',
+      'sampleCount',
+    ],
+    booleans: ['fallbackRequired'],
+  },
+};
 
 type JsonRecord = Record<string, unknown>;
 
@@ -41,8 +118,21 @@ test('Browser bounded manifests cross-check bounded evidence while native-only l
   const nativeBenchmark = await readManifest(NATIVE_PLATFORM_BENCHMARK_RESULTS);
   const inputFidelity = await readManifest(INPUT_FIDELITY_MANIFEST);
   const mouseGesture = await readManifest(MOUSE_GESTURE_MANIFEST);
+  const desktopNativeLive = await readManifest(DESKTOP_NATIVE_LIVE_MANIFEST);
+  const rightPaneNativeOsUi = await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST);
 
-  const validation = validateBoundedBrowserEvidence({ bottleneck, dogfood, realExternalDogfood, longSession, webrtcBridge, nativeBenchmark, inputFidelity, mouseGesture });
+  const validation = validateBoundedBrowserEvidence({
+    bottleneck,
+    dogfood,
+    realExternalDogfood,
+    longSession,
+    webrtcBridge,
+    nativeBenchmark,
+    inputFidelity,
+    mouseGesture,
+    desktopNativeLive,
+    rightPaneNativeOsUi,
+  });
 
   assert.deepEqual(validation.blockers, []);
   assert.equal(validation.canUseAsBoundedDiagnosticEvidence, true);
@@ -62,6 +152,7 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   const webrtcBridge = await readManifest(WEBRTC_BRIDGE_MANIFEST);
   const nativeBenchmark = await readManifest(NATIVE_PLATFORM_BENCHMARK_RESULTS);
   const inputFidelity = await readManifest(INPUT_FIDELITY_MANIFEST);
+  const desktopNativeLive = await readManifest(DESKTOP_NATIVE_LIVE_MANIFEST);
   const forgedBottleneck = structuredClone(bottleneck);
   const forgedDogfood = structuredClone(dogfood);
   const forgedRealExternalDogfood = structuredClone(realExternalDogfood);
@@ -70,6 +161,8 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   const forgedNativeBenchmark = structuredClone(nativeBenchmark);
   const forgedInputFidelity = structuredClone(inputFidelity);
   const forgedMouseGesture = structuredClone(await readManifest(MOUSE_GESTURE_MANIFEST));
+  const forgedDesktopNativeLive = structuredClone(desktopNativeLive);
+  const forgedRightPaneNativeOsUi = structuredClone(await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST));
 
   setPath(forgedBottleneck, ['status'], 'passed');
   setPath(forgedBottleneck, ['browserHostSession', 'owner'], 'BrowserWorkbench');
@@ -207,6 +300,22 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   setPath(forgedMouseGesture, ['productAcceptance', 'osUiRun', 'composerAudit', 'composerAuditRef'], 'browser-host-session:other-mouse-run/composer-audit');
   setPath(forgedMouseGesture, ['systemInputUsed'], true);
   setPath(forgedMouseGesture, ['secondTruthSource'], true);
+  setPath(forgedDesktopNativeLive, ['status'], 'passed');
+  setPath(forgedDesktopNativeLive, ['canClaimDesktopNativeLivePass'], true);
+  setPath(forgedDesktopNativeLive, ['claimScope'], 'desktop-native-embedded-browser-pane-live');
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'status'], 'passed');
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'claimScope'], 'desktop-native-m0-surfing-loop');
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'passClaim'], true);
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'transport', 'liveSurfaceTransport'], 'host-stream');
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'secondTruthSource'], true);
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'noLegacyFallback', 'snapshot'], true);
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'actionCoverage', 'type', 'latencyMs'], undefined);
+  setPath(forgedDesktopNativeLive, ['m0SurfingLoop', 'urlEvidence', 'requested', 'hash'], 'http://raw.example.invalid/');
+  setPath(forgedRightPaneNativeOsUi, ['status'], 'passed');
+  setPath(forgedRightPaneNativeOsUi, ['passClaim'], true);
+  setPath(forgedRightPaneNativeOsUi, ['source'], 'real-product-os-ui-run');
+  setPath(forgedRightPaneNativeOsUi, ['capturePolicy', 'rawClipboardPayloadUsedAsProof'], true);
+  setPath(forgedRightPaneNativeOsUi, ['proofGroups', 'cursorCaret', 'proofRefs'], ['raw-dom:caret']);
 
   const validation = validateBoundedBrowserEvidence({
     bottleneck: forgedBottleneck,
@@ -217,6 +326,8 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
     nativeBenchmark: forgedNativeBenchmark,
     inputFidelity: forgedInputFidelity,
     mouseGesture: forgedMouseGesture,
+    desktopNativeLive: forgedDesktopNativeLive,
+    rightPaneNativeOsUi: forgedRightPaneNativeOsUi,
   });
 
   assert.equal(validation.canUseAsBoundedProductEvidence, false);
@@ -308,7 +419,241 @@ test('Browser bounded evidence cross-check rejects forged pass-shaped manifests'
   assert.ok(allBlockers.includes('mouse-real-product-ref-cohesion-required'));
   assert.ok(allBlockers.includes('mouse-system-input-forbidden'));
   assert.ok(allBlockers.includes('mouse-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('desktop-native-m0-live-pass-requires-native-embedded'));
+  assert.ok(allBlockers.includes('desktop-native-m0-second-truth-source-forbidden'));
+  assert.ok(allBlockers.includes('desktop-native-m0-legacy-fallback-forbidden'));
+  assert.ok(allBlockers.includes('desktop-native-m0-action-latency-required:type'));
+  assert.ok(allBlockers.includes('desktop-native-m0-url-evidence-must-be-bounded'));
+  assert.ok(allBlockers.includes('right-pane-native-os-ui-pass-must-satisfy-contract'));
+  assert.ok(allBlockers.includes('right-pane-native-os-ui-raw-payloads-forbidden'));
 });
+
+test('Browser bounded evidence cross-check rejects non-canonical right-pane OS UI action ledger ids', async () => {
+  const forgedRightPaneNativeOsUi = structuredClone(await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST));
+  setPath(forgedRightPaneNativeOsUi, ['status'], 'blocked');
+  setPath(forgedRightPaneNativeOsUi, ['passClaim'], false);
+  setPath(forgedRightPaneNativeOsUi, ['source'], 'contract-fixture');
+  setPath(forgedRightPaneNativeOsUi, ['blocker'], 'native-os-ui-proof-incomplete');
+  setPath(forgedRightPaneNativeOsUi, ['osUiRun'], undefined);
+  setPath(forgedRightPaneNativeOsUi, ['actionLedger', 'entries'], [{
+    status: 'partial',
+    proofGroup: 'cursorCaret',
+    actionId: 'focus-input-caret-shadow',
+    actionRef: 'real-product-os-ui-action:m1-native-live/cursor-caret/focus-input-caret-shadow',
+    targetSurfaceRef: 'browser-host-session:m1-native-live/live-surface',
+    productSurface: 'right-pane-browser',
+    owner: 'BrowserHostSession',
+    inputChannel: 'browser-host-session',
+    expectedProofNames: RIGHT_PANE_NATIVE_OS_UI_REQUIRED_PROOF_NAMES.cursorCaret,
+    observedProofNames: ['input-caret-visible'],
+    evidenceTokenRef: 'macos-accessibility-observer/m1-native-live/cursor-caret/focus-input-caret-shadow/bounded-action-ledger',
+    rawPayloadRecorded: false,
+  }]);
+
+  assert.equal(
+    RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS.cursorCaret,
+    'focus-input-caret',
+    'test fixture should prove a non-canonical action id is being forged',
+  );
+
+  const blockers = validateRightPaneNativeOsUiManifest(forgedRightPaneNativeOsUi);
+  assert.ok(blockers.includes('right-pane-native-os-ui-action-ledger-canonical-action-required'));
+});
+
+test('Browser bounded evidence cross-check rejects right-pane action-channel raw endpoint and payload leaks', async () => {
+  const forgedRightPaneNativeOsUi = structuredClone(await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST));
+  setPath(forgedRightPaneNativeOsUi, ['status'], 'blocked');
+  setPath(forgedRightPaneNativeOsUi, ['passClaim'], false);
+  setPath(forgedRightPaneNativeOsUi, ['source'], 'contract-fixture');
+  setPath(forgedRightPaneNativeOsUi, ['blocker'], 'native-os-ui-proof-incomplete');
+  setPath(forgedRightPaneNativeOsUi, ['osUiRun'], undefined);
+  setPath(forgedRightPaneNativeOsUi, ['browserHostActionChannel'], {
+    status: 'available',
+    channelRef: 'http://127.0.0.1:3891/api/sciforge/browser-host/sessions/m1-native-live/actions?token=sentinel-query-token',
+    browserHostSessionRef: 'browser-host-session:m1-native-live',
+    liveSurfaceRef: 'browser-host-session:m1-native-live/live-surface',
+    productSurface: 'right-pane-browser',
+    owner: 'BrowserHostSession',
+    inputChannel: 'browser-host-session',
+    rawEndpointRecorded: false,
+    loopbackOnly: true,
+    endpoint: 'http://credential-user:credential-password@127.0.0.1:3891/api/sciforge/browser-host/sessions/m1-native-live/actions#sentinel-fragment-token',
+  });
+  setPath(forgedRightPaneNativeOsUi, ['actionLedger', 'entries'], [{
+    status: 'partial',
+    proofGroup: 'cursorCaret',
+    actionId: RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS.cursorCaret,
+    actionRef: 'real-product-os-ui-action:m1-native-live/cursor-caret/focus-input-caret',
+    targetSurfaceRef: 'browser-host-session:m1-native-live/live-surface',
+    productSurface: 'right-pane-browser',
+    owner: 'BrowserHostSession',
+    inputChannel: 'browser-host-session',
+    expectedProofNames: RIGHT_PANE_NATIVE_OS_UI_REQUIRED_PROOF_NAMES.cursorCaret,
+    observedProofNames: ['input-caret-visible'],
+    evidenceTokenRef: 'macos-accessibility-observer/m1-native-live/cursor-caret/focus-input-caret/bounded-action-ledger',
+    rawPayloadRecorded: false,
+    rawEndpoint: 'http://127.0.0.1:3891/api/sciforge/browser-host/sessions/m1-native-live/actions?token=sentinel-query-token',
+    payload: { action: 'cursor', x: 11, y: 12 },
+  }]);
+
+  const blockers = validateRightPaneNativeOsUiManifest(forgedRightPaneNativeOsUi);
+  assert.ok(blockers.includes('right-pane-native-os-ui-action-channel-raw-endpoint-forbidden'));
+  assert.ok(blockers.includes('right-pane-native-os-ui-action-ledger-raw-endpoint-forbidden'));
+  assert.ok(blockers.includes('right-pane-native-os-ui-action-ledger-raw-payloads-forbidden'));
+});
+
+test('Browser bounded evidence cross-check rejects native adapter pass with duplicate metric sections', async () => {
+  const bottleneck = await readManifest(BOTTLENECK_MANIFEST);
+  const dogfood = await readManifest(DOGFOOD_MANIFEST);
+  const realExternalDogfood = await readRealExternalDogfoodManifest();
+  const longSession = await readManifest(LONG_SESSION_MANIFEST);
+  const webrtcBridge = await readManifest(WEBRTC_BRIDGE_MANIFEST);
+  const nativeBenchmark = structuredClone(await readManifest(NATIVE_PLATFORM_BENCHMARK_RESULTS));
+  const inputFidelity = await readManifest(INPUT_FIDELITY_MANIFEST);
+  const mouseGesture = await readManifest(MOUSE_GESTURE_MANIFEST);
+  const desktopNativeLive = await readManifest(DESKTOP_NATIVE_LIVE_MANIFEST);
+  const rightPaneNativeOsUi = await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST);
+  const electronCandidate = makeNativeBenchmarkElectronCandidatePassShaped(nativeBenchmark);
+  const candidates = arrayAt(nativeBenchmark, ['candidates']).map(recordFromUnknown);
+  assert.equal(candidates.some((candidate) => candidate === electronCandidate), true);
+  assert.ok(electronCandidate, 'platform benchmark fixture should include the Electron candidate');
+  const latencySection = arrayAt(electronCandidate, ['metricSections'])
+    .map(recordFromUnknown)
+    .find((section) => stringField(section.section) === 'latency');
+  assert.ok(latencySection, 'platform benchmark fixture should include a latency section');
+  setPath(electronCandidate, ['metricSections'], Array.from({ length: REAL_NATIVE_PLATFORM_METRIC_SECTIONS.length }, () => (
+    structuredClone(latencySection)
+  )));
+
+  const validation = validateBoundedBrowserEvidence({
+    bottleneck,
+    dogfood,
+    realExternalDogfood,
+    longSession,
+    webrtcBridge,
+    nativeBenchmark,
+    inputFidelity,
+    mouseGesture,
+    desktopNativeLive,
+    rightPaneNativeOsUi,
+  });
+
+  assert.equal(validation.canUseAsBoundedProductEvidence, false);
+  assert.ok(validation.allBlockers.includes('native-platform-candidate-must-not-claim-benchmark-pass'));
+  assert.ok(validation.allBlockers.includes('native-platform-candidate-must-not-pass-without-real-result:electron-web-contents-view'));
+});
+
+test('Browser bounded evidence cross-check rejects native adapter pass with invalid numeric summaries', async () => {
+  const bottleneck = await readManifest(BOTTLENECK_MANIFEST);
+  const dogfood = await readManifest(DOGFOOD_MANIFEST);
+  const realExternalDogfood = await readRealExternalDogfoodManifest();
+  const longSession = await readManifest(LONG_SESSION_MANIFEST);
+  const webrtcBridge = await readManifest(WEBRTC_BRIDGE_MANIFEST);
+  const inputFidelity = await readManifest(INPUT_FIDELITY_MANIFEST);
+  const mouseGesture = await readManifest(MOUSE_GESTURE_MANIFEST);
+  const desktopNativeLive = await readManifest(DESKTOP_NATIVE_LIVE_MANIFEST);
+  const rightPaneNativeOsUi = await readManifest(RIGHT_PANE_NATIVE_OS_UI_MANIFEST);
+  const variants = [
+    {
+      name: 'missing required latency summary field',
+      mutate(nativeBenchmark: JsonRecord) {
+        const latencySummary = nativePlatformCandidateSectionSummary(nativeBenchmark, 'electron-web-contents-view', 'latency');
+        delete latencySummary.openAckMs;
+      },
+    },
+    {
+      name: 'wrong type stream quality summary field',
+      mutate(nativeBenchmark: JsonRecord) {
+        const streamQualitySummary = nativePlatformCandidateSectionSummary(nativeBenchmark, 'electron-web-contents-view', 'streamQuality');
+        streamQualitySummary.fallbackRequired = 'false';
+      },
+    },
+  ];
+
+  for (const variant of variants) {
+    const nativeBenchmark = structuredClone(await readManifest(NATIVE_PLATFORM_BENCHMARK_RESULTS));
+    makeNativeBenchmarkElectronCandidatePassShaped(nativeBenchmark);
+    variant.mutate(nativeBenchmark);
+
+    const validation = validateBoundedBrowserEvidence({
+      bottleneck,
+      dogfood,
+      realExternalDogfood,
+      longSession,
+      webrtcBridge,
+      nativeBenchmark,
+      inputFidelity,
+      mouseGesture,
+      desktopNativeLive,
+      rightPaneNativeOsUi,
+    });
+
+    assert.equal(validation.canUseAsBoundedDiagnosticEvidence, false, variant.name);
+    assert.ok(
+      validation.allBlockers.includes('native-platform-candidate-must-not-claim-benchmark-pass'),
+      `${variant.name}: ${validation.allBlockers.join(', ')}`,
+    );
+    assert.ok(
+      validation.allBlockers.includes('native-platform-candidate-must-not-pass-without-real-result:electron-web-contents-view'),
+      `${variant.name}: ${validation.allBlockers.join(', ')}`,
+    );
+  }
+});
+
+function nativePlatformCandidateSectionSummary(nativeBenchmark: JsonRecord, candidateId: string, sectionName: string): JsonRecord {
+  const candidate = arrayAt(nativeBenchmark, ['candidates'])
+    .map(recordFromUnknown)
+    .find((item) => stringField(item.id) === candidateId);
+  assert.ok(candidate, `platform benchmark fixture should include candidate ${candidateId}`);
+  const section = arrayAt(candidate, ['metricSections'])
+    .map(recordFromUnknown)
+    .find((item) => stringField(item.section) === sectionName);
+  assert.ok(section, `platform benchmark fixture should include section ${sectionName}`);
+  return recordAt(section, ['numericSummary']);
+}
+
+function makeNativeBenchmarkElectronCandidatePassShaped(nativeBenchmark: JsonRecord): JsonRecord {
+  const candidateId = 'electron-web-contents-view';
+  const candidate = arrayAt(nativeBenchmark, ['candidates'])
+    .map(recordFromUnknown)
+    .find((item) => stringField(item.id) === candidateId);
+  assert.ok(candidate, `platform benchmark fixture should include candidate ${candidateId}`);
+  const browserHostSessionRef = 'browser-host-session:bounded-crosscheck-electron';
+  setPath(candidate, ['status'], 'passed');
+  setPath(candidate, ['benchmarkClaim'], true);
+  setPath(candidate, ['realAdapterResult'], true);
+  setPath(candidate, ['supportedOnCurrentPlatform'], true);
+  setPath(candidate, ['adapterCommandRef'], 'env:SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND');
+  setPath(candidate, ['adapterRunRef'], 'benchmark-result:electron-web-contents-view:platform-summary:bounded-crosscheck');
+  setPath(candidate, ['diagnosticRefs'], []);
+  setPath(candidate, ['adapterProofRefs'], {
+    proofMode: 'real-native-adapter-run',
+    browserHostSessionRef,
+    liveSurfaceRef: `${browserHostSessionRef}/live-surface`,
+    nativeAdapterSurfaceRef: 'benchmark-result:electron-web-contents-view:native-adapter-surface:bounded-crosscheck',
+    actionTraceRef: 'benchmark-result:electron-web-contents-view:action-trace:bounded-crosscheck',
+    platformResultRef: 'benchmark-result:electron-web-contents-view:platform-summary:bounded-crosscheck',
+  });
+  setPath(candidate, ['metricSections'], REAL_NATIVE_PLATFORM_METRIC_SECTIONS.map((section) => ({
+    section,
+    status: 'passed',
+    evidenceMode: 'bounded-summary-ref',
+    inlineEvidence: 'forbidden',
+    resultRefs: [`benchmark-result:${candidateId}:${section}:bounded-crosscheck`],
+    numericSummary: nativePlatformNumericSummaryFixture(section),
+  })));
+  return candidate;
+}
+
+function nativePlatformNumericSummaryFixture(
+  section: typeof REAL_NATIVE_PLATFORM_METRIC_SECTIONS[number],
+): JsonRecord {
+  const fields = REAL_NATIVE_PLATFORM_NUMERIC_SUMMARY_REQUIRED_FIELDS[section];
+  const summary: JsonRecord = {};
+  for (const field of fields.numbers) summary[field] = 1;
+  for (const field of fields.booleans) summary[field] = section === 'streamQuality' && field === 'fallbackRequired' ? false : true;
+  return summary;
+}
 
 function validateBoundedBrowserEvidence(input: {
   bottleneck: JsonRecord;
@@ -319,6 +664,8 @@ function validateBoundedBrowserEvidence(input: {
   nativeBenchmark: JsonRecord;
   inputFidelity: JsonRecord;
   mouseGesture: JsonRecord;
+  desktopNativeLive: JsonRecord;
+  rightPaneNativeOsUi: JsonRecord;
 }) {
   const blockers: string[] = [];
   const liveAcceptanceBlockers: string[] = [];
@@ -330,6 +677,8 @@ function validateBoundedBrowserEvidence(input: {
   blockers.push(...validateNativePlatformBenchmarkResults(input.nativeBenchmark));
   blockers.push(...validateInputFidelityManifest(input.inputFidelity));
   blockers.push(...validateMouseGestureManifest(input.mouseGesture));
+  blockers.push(...validateDesktopNativeLiveManifest(input.desktopNativeLive));
+  blockers.push(...validateRightPaneNativeOsUiManifest(input.rightPaneNativeOsUi));
   blockers.push(...validateSharedBrowserEvidence(input.bottleneck, 'bottleneck'));
   blockers.push(...validateSharedBrowserEvidence(input.dogfood, 'dogfood'));
   blockers.push(...validateSharedBrowserEvidence(input.realExternalDogfood, 'real-external-dogfood'));
@@ -338,6 +687,8 @@ function validateBoundedBrowserEvidence(input: {
   blockers.push(...validateSharedBrowserEvidence(input.nativeBenchmark, 'native-platform-benchmark'));
   blockers.push(...validateSharedBrowserEvidence(input.inputFidelity, 'input-fidelity'));
   blockers.push(...validateSharedBrowserEvidence(input.mouseGesture, 'mouse-gesture'));
+  blockers.push(...validateSharedBrowserEvidence(input.desktopNativeLive, 'desktop-native-live'));
+  blockers.push(...validateSharedBrowserEvidence(input.rightPaneNativeOsUi, 'right-pane-native-os-ui'));
   liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.bottleneck, 'bottleneck', ['browserHostSession']));
   liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.dogfood, 'dogfood', ['browserHostSession']));
   liveAcceptanceBlockers.push(...validateBrowserPaneLiveAcceptanceClaim(input.realExternalDogfood, 'real-external-dogfood', ['browserHostSession']));
@@ -1069,6 +1420,7 @@ function hasRealNativePlatformCandidatePass(candidate: JsonRecord): boolean {
   if (diagnosticRefs.some((ref) => hasNonRealNativePlatformProofToken(ref))) return false;
   const sections = arrayAt(candidate, ['metricSections']).map(recordFromUnknown);
   if (sections.length !== REAL_NATIVE_PLATFORM_METRIC_SECTIONS.length) return false;
+  if (!hasEveryRealNativePlatformMetricSectionExactlyOnce(sections)) return false;
   return sections.every((section) => (
     stringField(section.status) === 'passed'
       && valueAt(section, ['evidenceMode']) === 'bounded-summary-ref'
@@ -1077,7 +1429,24 @@ function hasRealNativePlatformCandidatePass(candidate: JsonRecord): boolean {
       && stringArrayAt(section, ['resultRefs']).every((ref) => (
         isRealNativePlatformMetricRef(ref, id, stringField(section.section))
       ))
+      && hasRequiredNativePlatformNumericSummary(section)
   ));
+}
+
+function hasEveryRealNativePlatformMetricSectionExactlyOnce(sections: JsonRecord[]): boolean {
+  const sectionNames = sections.map((section) => stringField(section.section));
+  const uniqueSectionNames = new Set(sectionNames);
+  return uniqueSectionNames.size === REAL_NATIVE_PLATFORM_METRIC_SECTIONS.length
+    && REAL_NATIVE_PLATFORM_METRIC_SECTIONS.every((section) => uniqueSectionNames.has(section));
+}
+
+function hasRequiredNativePlatformNumericSummary(section: JsonRecord): boolean {
+  const sectionName = stringField(section.section) as typeof REAL_NATIVE_PLATFORM_METRIC_SECTIONS[number];
+  const requiredFields = REAL_NATIVE_PLATFORM_NUMERIC_SUMMARY_REQUIRED_FIELDS[sectionName];
+  if (!requiredFields) return false;
+  const summary = recordAt(section, ['numericSummary']);
+  return requiredFields.numbers.every((field) => numberField(summary, field) !== undefined)
+    && requiredFields.booleans.every((field) => typeof summary[field] === 'boolean');
 }
 
 function isBrowserHostSessionRef(value: string): boolean {
@@ -1109,7 +1478,7 @@ function isRealNativePlatformMetricRef(value: string, candidateId: string, secti
 }
 
 function hasNonRealNativePlatformProofToken(value: string): boolean {
-  return /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial/i.test(value);
+  return /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial|sample|synthetic|mock|fake|test-fixture|dry-run/i.test(value);
 }
 
 function hasNativePlatformRefusalPolicy(manifest: JsonRecord): boolean {
@@ -1304,9 +1673,228 @@ function hasMouseGestureOsUiRunRefCohesion(acceptance: JsonRecord): boolean {
   return refs.length > 0 && refs.every((ref) => browserHostRefBelongsToScope(ref, runScope));
 }
 
+function validateDesktopNativeLiveManifest(manifest: JsonRecord): string[] {
+  const blockers: string[] = [];
+  if (manifest.schemaVersion !== DESKTOP_NATIVE_LIVE_SCHEMA) blockers.push('desktop-native-live-schema-mismatch');
+  const status = stringAt(manifest, ['status']);
+  const m0 = recordAt(manifest, ['m0SurfingLoop']);
+  const claimsLivePass = status === 'passed'
+    || valueAt(manifest, ['canClaimDesktopNativeLivePass']) === true
+    || valueAt(m0, ['passClaim']) === true;
+  if (!claimsLivePass) return blockers;
+
+  if (status !== 'passed'
+    || valueAt(manifest, ['canClaimDesktopNativeLivePass']) !== true
+    || stringAt(manifest, ['claimScope']) !== 'desktop-native-embedded-browser-pane-live') {
+    blockers.push('desktop-native-live-pass-claim-required');
+  }
+  if (m0.schemaVersion !== DESKTOP_NATIVE_M0_SCHEMA) blockers.push('desktop-native-m0-schema-mismatch');
+  if (stringField(m0.status) !== 'passed'
+    || stringField(m0.claimScope) !== 'desktop-native-m0-surfing-loop'
+    || valueAt(m0, ['passClaim']) !== true) {
+    blockers.push('desktop-native-m0-pass-claim-required');
+  }
+  if (stringField(m0.shell) !== 'desktop-right-pane') blockers.push('desktop-native-m0-shell-required');
+  if (stringField(m0.owner) !== 'BrowserHostSession') blockers.push('desktop-native-m0-owner-required');
+  if (stringField(m0.adapterRole) !== 'display-input-adapter') blockers.push('desktop-native-m0-adapter-role-required');
+  if (valueAt(m0, ['refsFirst']) !== true || stringField(m0.evidenceMode) !== 'bounded-refs-and-summaries') {
+    blockers.push('desktop-native-m0-refs-first-required');
+  }
+  const sessionRef = stringField(m0.sessionRef);
+  if (!/^browser-host-session:[A-Za-z0-9_.:-]{1,128}$/.test(sessionRef)) blockers.push('desktop-native-m0-session-ref-required');
+  if (!browserHostRefBelongsToScope(stringField(m0.liveSurfaceRef), sessionRef)
+    || !stringField(m0.liveSurfaceRef).endsWith('/live-surface')) {
+    blockers.push('desktop-native-m0-live-surface-ref-required');
+  }
+  if (!/^native-adapter:loopback:[a-f0-9]{16}$/.test(stringField(m0.nativeAdapterRef))) blockers.push('desktop-native-m0-native-adapter-ref-required');
+  if (!/^desktop-native-surface:electron-web-contents-view:[a-f0-9]{16}$/.test(stringField(m0.surfaceRef))) blockers.push('desktop-native-m0-surface-ref-required');
+  if (stringAt(m0, ['transport', 'liveSurfaceTransport']) !== 'native-embedded'
+    || stringAt(m0, ['transport', 'frameTransport']) !== 'native-embedded') {
+    blockers.push('desktop-native-m0-live-pass-requires-native-embedded');
+  }
+  if (stringAt(m0, ['transport', 'surfaceType']) !== 'electron-web-contents-view') blockers.push('desktop-native-m0-surface-type-required');
+  if (valueAt(m0, ['health', 'nativeAdapterHealthOk']) !== true
+    || valueAt(m0, ['health', 'nativeStateHeartbeat']) !== true
+    || stringAt(m0, ['health', 'actionAckSource']) !== 'native-adapter-action-state') {
+    blockers.push('desktop-native-m0-health-required');
+  }
+  if (valueAt(m0, ['urlEvidence', 'rawUrlCaptured']) !== false
+    || !hasDesktopM0BoundedDigest(recordAt(m0, ['urlEvidence', 'requested']))
+    || !hasDesktopM0BoundedDigest(recordAt(m0, ['urlEvidence', 'final']))) {
+    blockers.push('desktop-native-m0-url-evidence-must-be-bounded');
+  }
+  for (const action of ['open', 'click', 'type', 'scroll', 'drag', 'reload', 'back', 'forward', 'stop']) {
+    const evidence = recordAt(m0, ['actionCoverage', action]);
+    if (stringField(evidence.status) !== 'passed'
+      || (numberField(evidence, 'latencyMs') ?? -1) < 0
+      || stringField(evidence.resultRef) !== `${sessionRef}/m0/${action}`) {
+      blockers.push(`desktop-native-m0-action-latency-required:${action}`);
+    }
+  }
+  const typeEvidence = recordAt(m0, ['actionCoverage', 'type']);
+  if ((numberField(typeEvidence, 'textLength') ?? 0) <= 0 || !isBoundedHash(stringField(typeEvidence.textHash))) {
+    blockers.push('desktop-native-m0-type-evidence-must-be-bounded');
+  }
+  if (valueAt(m0, ['inputHotPath', 'dependsOnScreenshot']) !== false
+    || valueAt(m0, ['inputHotPath', 'dependsOnFrameStream']) !== false
+    || (numberAt(m0, ['inputHotPath', 'screenshotRequestsDuringAck']) ?? -1) !== 0
+    || (numberAt(m0, ['inputHotPath', 'frameStreamRequestsDuringAck']) ?? -1) !== 0) {
+    blockers.push('desktop-native-m0-hot-path-must-not-depend-on-evidence');
+  }
+  if (valueAt(m0, ['singleInteractiveTruth']) !== true) blockers.push('desktop-native-m0-single-interactive-truth-required');
+  if (valueAt(m0, ['secondTruthSource']) !== false) blockers.push('desktop-native-m0-second-truth-source-forbidden');
+  if (Object.values(recordAt(m0, ['noLegacyFallback'])).some((value) => value !== false)) {
+    blockers.push('desktop-native-m0-legacy-fallback-forbidden');
+  }
+  if (Object.values(recordAt(m0, ['payloadPolicy'])).some((value) => value !== false)) {
+    blockers.push('desktop-native-m0-payload-policy-forbidden');
+  }
+  if (arrayAt(m0, ['coverageGaps']).length > 0 || stringField(m0.blockedReason)) {
+    blockers.push('desktop-native-m0-pass-must-not-keep-coverage-gaps');
+  }
+  const serializedM0 = JSON.stringify(m0);
+  if (/https?:\/\/|<!doctype|<html|<body|data:image|;base64,|outerHTML|innerHTML|rawProviderPayload|rawSecret|api[-_]?key/i.test(serializedM0)) {
+    blockers.push('desktop-native-m0-raw-payloads-forbidden');
+  }
+  return blockers;
+}
+
+function validateRightPaneNativeOsUiManifest(manifest: JsonRecord): string[] {
+  const blockers: string[] = [];
+  const serialized = JSON.stringify(manifest);
+  if (manifest.schemaVersion !== RIGHT_PANE_NATIVE_OS_UI_SCHEMA) blockers.push('right-pane-native-os-ui-schema-mismatch');
+  const status = stringAt(manifest, ['status']);
+  const claimsPass = status === 'passed'
+    || valueAt(manifest, ['passClaim']) === true
+    || stringAt(manifest, ['source']) === 'real-product-os-ui-run';
+
+  if (!['blocked', 'passed'].includes(status)) blockers.push('right-pane-native-os-ui-status-required');
+  if (status === 'blocked') {
+    if (valueAt(manifest, ['passClaim']) !== false) blockers.push('right-pane-native-os-ui-blocked-must-not-claim-pass');
+    if (valueAt(manifest, ['osUiRun']) !== undefined) blockers.push('right-pane-native-os-ui-blocked-must-not-include-os-ui-run');
+    if (!['missing-os-observer', 'native-os-ui-proof-incomplete'].includes(stringAt(manifest, ['blocker']))) {
+      blockers.push('right-pane-native-os-ui-blocked-reason-required');
+    }
+  }
+
+  if (claimsPass) {
+    try {
+      const validation = validateRightPaneNativeOsUiRunManifest(manifest as unknown as RightPaneNativeOsUiRunManifest);
+      if (!validation.canClaimPass) blockers.push('right-pane-native-os-ui-pass-must-satisfy-contract');
+    } catch {
+      blockers.push('right-pane-native-os-ui-pass-must-satisfy-contract');
+    }
+  }
+
+  if (Object.values(recordAt(manifest, ['capturePolicy'])).some((value) => value !== false)
+    || Object.values(recordAt(manifest, ['forbiddenSubstitutes'])).some((value) => value !== false)) {
+    blockers.push('right-pane-native-os-ui-raw-payloads-forbidden');
+  }
+  if (serialized.includes('"nativeOsUiProof"')) {
+    blockers.push('right-pane-native-os-ui-action-state-must-not-be-inlined');
+  }
+  const channel = recordAt(manifest, ['browserHostActionChannel']);
+  if (channel.status === 'available') {
+    if (channel.rawEndpointRecorded !== false || channel.loopbackOnly !== true) {
+      blockers.push('right-pane-native-os-ui-action-channel-must-be-bounded');
+    }
+    if (hasRawRightPaneActionChannelEndpointLeak(channel)) {
+      blockers.push('right-pane-native-os-ui-action-channel-raw-endpoint-forbidden');
+    }
+  }
+  const actionEntries = arrayAt(manifest, ['actionLedger', 'entries']);
+  for (const entry of actionEntries) {
+    const action = recordFromUnknown(entry);
+    if (action.rawPayloadRecorded !== false || hasRawRightPaneActionLedgerPayloadLeak(action)) {
+      blockers.push('right-pane-native-os-ui-action-ledger-raw-payloads-forbidden');
+    }
+    if (
+      stringField(action.actionRef).startsWith('http')
+      || stringField(action.evidenceTokenRef).startsWith('http')
+      || hasRawRightPaneActionLedgerEndpointLeak(action)
+    ) {
+      blockers.push('right-pane-native-os-ui-action-ledger-raw-endpoint-forbidden');
+    }
+    const proofGroup = rightPaneNativeOsUiProofGroup(action.proofGroup);
+    const canonicalActionId = proofGroup ? RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS[proofGroup] : undefined;
+    const actionRefParts = rightPaneNativeOsUiActionRefParts(stringField(action.actionRef));
+    if (
+      !proofGroup
+      || stringField(action.actionId) !== canonicalActionId
+      || actionRefParts?.area !== RIGHT_PANE_NATIVE_OS_UI_PROOF_GROUP_AREAS[proofGroup]
+      || actionRefParts?.actionId !== canonicalActionId
+    ) {
+      blockers.push('right-pane-native-os-ui-action-ledger-canonical-action-required');
+    }
+  }
+  return blockers;
+}
+
+function hasRawRightPaneActionChannelEndpointLeak(channel: JsonRecord): boolean {
+  const allowedKeys = new Set([
+    'status',
+    'channelRef',
+    'browserHostSessionRef',
+    'liveSurfaceRef',
+    'productSurface',
+    'owner',
+    'inputChannel',
+    'rawEndpointRecorded',
+    'loopbackOnly',
+  ]);
+  return Object.keys(channel).some((key) => !allowedKeys.has(key))
+    || hasRawEndpointText(channel);
+}
+
+function hasRawRightPaneActionLedgerEndpointLeak(action: JsonRecord): boolean {
+  return /"(?:endpoint|rawEndpoint|url|href|username|password|search|query|hash)"\s*:/i.test(JSON.stringify(action))
+    || hasRawEndpointText(action);
+}
+
+function hasRawRightPaneActionLedgerPayloadLeak(action: JsonRecord): boolean {
+  return /"(?:payload|body|request|response|requestBody|responseBody|coords|x|y|clipboardPayload|imePayload|selectionText|text|dom)"\s*:/i.test(JSON.stringify(action));
+}
+
+function hasRawEndpointText(value: JsonRecord): boolean {
+  return /https?:\/\/|localhost|127\.0\.0\.1|\[::1\]|api\/sciforge\/browser-host\/sessions|[?#]/i.test(JSON.stringify(value));
+}
+
+function rightPaneNativeOsUiProofGroup(value: unknown): keyof typeof RIGHT_PANE_NATIVE_OS_UI_ACTION_IDS | undefined {
+  return value === 'cursorCaret'
+    || value === 'mouseContextMenu'
+    || value === 'keyboardImeClipboardSelection'
+    || value === 'rerenderFocus'
+    ? value
+    : undefined;
+}
+
+function rightPaneNativeOsUiActionRefParts(ref: string): { area: string; actionId: string } | undefined {
+  const prefix = 'real-product-os-ui-action:';
+  if (!ref.startsWith(prefix)) return undefined;
+  const parts = ref.slice(prefix.length).split('/');
+  if (parts.length < 3) return undefined;
+  const area = parts[parts.length - 2];
+  const actionId = parts[parts.length - 1];
+  return area && actionId ? { area, actionId } : undefined;
+}
+
+function hasDesktopM0BoundedDigest(value: JsonRecord): boolean {
+  return (numberField(value, 'length') ?? 0) > 0 && isBoundedHash(stringField(value.hash));
+}
+
 function validateSharedBrowserEvidence(
   manifest: JsonRecord,
-  label: 'bottleneck' | 'dogfood' | 'real-external-dogfood' | 'long-session' | 'webrtc-bridge' | 'native-platform-benchmark' | 'input-fidelity' | 'mouse-gesture',
+  label:
+    | 'bottleneck'
+    | 'dogfood'
+    | 'real-external-dogfood'
+    | 'long-session'
+    | 'webrtc-bridge'
+    | 'native-platform-benchmark'
+    | 'input-fidelity'
+    | 'mouse-gesture'
+    | 'desktop-native-live'
+    | 'right-pane-native-os-ui',
 ): string[] {
   const blockers: string[] = [];
   const serialized = JSON.stringify(manifest);

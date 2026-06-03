@@ -15,7 +15,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-test('VirtualAppScreen user acceptance manifest passes only with refs-first causality evidence', () => {
+test('VirtualAppScreen user acceptance contract fixture passes only with real-host-shaped provider evidence fields', () => {
   const manifest = buildVirtualAppScreenUserAcceptanceManifest(validInput());
 
   assert.equal(manifest.schemaVersion, VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_SCHEMA_VERSION);
@@ -26,23 +26,135 @@ test('VirtualAppScreen user acceptance manifest passes only with refs-first caus
   assert.equal(manifest.validation.ok, true);
   assert.equal(manifest.taskId, 'P0-CU-UA-FIRST-SCENARIO');
   assert.equal(manifest.scenarioId, 'virtual-app-screen-local-research-note');
-  assert.deepEqual(manifest.targetAppRefs, ['app:browser-research-profile']);
-  assert.deepEqual(manifest.targetWindowRefs, ['window:browser-research-profile/main']);
-  assert.deepEqual(manifest.sessionRefs, ['computer-use-session:vas-local-research-note']);
-  assert.deepEqual(manifest.adapterReadinessRefs, ['computer-use:adapter-readiness/browser-background.json']);
+  assert.deepEqual(manifest.targetAppRefs, ['app:profile/vscode-editor']);
+  assert.deepEqual(manifest.targetWindowRefs, ['computer-use:native-host/windows/vas-local-research-note/main.json']);
+  assert.deepEqual(manifest.sessionRefs, ['computer-use:native-host/sessions/vas-local-research-note/session.json']);
+  assert.deepEqual(manifest.adapterReadinessRefs, ['computer-use:native-host/readiness/vas-local-research-note/native-provider.json']);
   assert.deepEqual(manifest.screenFrameRefs, [
-    'computer-use:session/vas-local-research-note/frames/before.png',
-    'computer-use:session/vas-local-research-note/frames/after.png',
+    'computer-use:native-host/frames/vas-local-research-note/before.png',
+    'computer-use:native-host/frames/vas-local-research-note/after.png',
   ]);
-  assert.deepEqual(manifest.inputIntentRefs, ['computer-use:session/vas-local-research-note/input-intents/highlight-title.json']);
-  assert.deepEqual(manifest.executorEventRefs, ['computer-use:session/vas-local-research-note/executor-events/highlight-title.json']);
-  assert.deepEqual(manifest.beforeAfterFrameRefs, ['computer-use:session/vas-local-research-note/before-after/highlight-title.json']);
+  assert.deepEqual(manifest.inputIntentRefs, ['computer-use:native-host/input-intents/vas-local-research-note/highlight-title.json']);
+  assert.deepEqual(manifest.executorEventRefs, ['computer-use:native-host/executor-events/vas-local-research-note/highlight-title.json']);
+  assert.deepEqual(manifest.beforeAfterFrameRefs, ['computer-use:native-host/before-after/vas-local-research-note/highlight-title.json']);
   assert.deepEqual(manifest.annotationProposalRefs, ['computer-use:session/vas-local-research-note/annotation-proposals/highlight-title.json']);
   assert.deepEqual(manifest.artifactRefs, ['file:research-note.md']);
-  assert.deepEqual(manifest.verificationRefs, ['computer-use:session/vas-local-research-note/verifier/research-note.json']);
+  assert.deepEqual(manifest.verificationRefs, ['computer-use:native-host/verifiers/vas-local-research-note/research-note.json']);
   assert.deepEqual(manifest.guiPresentRefs, ['gui.present:virtual-app-screen/research-note']);
-  assert.equal(manifest.replayRef, 'computer-use:session/vas-local-research-note/replay.json');
-  assert.equal(manifest.evidenceLedgerRef, 'computer-use:session/vas-local-research-note/evidence-ledger.json');
+  assert.equal(manifest.replayRef, 'computer-use:native-host/replay/vas-local-research-note/replay.json');
+  assert.equal(manifest.evidenceLedgerRef, 'computer-use:native-host/ledgers/vas-local-research-note/evidence-ledger.json');
+});
+
+test('VirtualAppScreen user acceptance blocks Host-shaped claims without real opt-in provider evidence', () => {
+  const {
+    realOptInRunRef: _realOptInRunRef,
+    realPlatformEvidenceRefs: _realPlatformEvidenceRefs,
+    ...hostShapedClaim
+  } = realVirtualAppScreenClaim();
+  const manifest = buildVirtualAppScreenUserAcceptanceManifest({
+    ...validInput(),
+    evidenceClaims: [{
+      ...hostShapedClaim,
+      id: 'host-shaped-without-real-opt-in-provider',
+    }],
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.userAcceptanceEligible, false);
+  assert.match(manifest.validation.issues.join('\n'), /real opt-in Host provider session evidence is required/);
+});
+
+test('VirtualAppScreen user acceptance P1.3 coverage rejects claims without the concrete evidence tuple', () => {
+  type MutableRealVirtualAppScreenClaim = ReturnType<typeof realVirtualAppScreenClaim> & Record<string, unknown>;
+  const cases = [
+    {
+      field: 'targetAppRef',
+      mutate: (input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        input.targetAppRefs = [];
+        Reflect.deleteProperty(claim, 'targetAppRef');
+      },
+    },
+    {
+      field: 'sessionRefs',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'sessionRefs');
+      },
+    },
+    {
+      field: 'realHostProviderSessionRef',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'realHostProviderSessionRef');
+      },
+    },
+    {
+      field: 'realOptInRunRef',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'realOptInRunRef');
+      },
+    },
+    {
+      field: 'minimalEvidenceReplayRefs',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'minimalEvidenceReplayRefs');
+      },
+    },
+    {
+      field: 'realAgentQueueEvidenceRefs',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'realAgentQueueEvidenceRefs');
+      },
+    },
+    {
+      field: 'realPlatformEvidenceRefs',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        Reflect.deleteProperty(claim, 'realPlatformEvidenceRefs');
+      },
+    },
+    {
+      field: 'diagnosticOnly=false',
+      mutate: (_input: VirtualAppScreenUserAcceptanceInput, claim: MutableRealVirtualAppScreenClaim): void => {
+        claim.diagnosticOnly = true;
+      },
+    },
+  ];
+
+  assert.deepEqual(projectCuP13RealAppSessionCoverage(buildVirtualAppScreenUserAcceptanceManifest(validInput())), {
+    ok: true,
+    missing: [],
+  });
+
+  for (const { field, mutate } of cases) {
+    const incompleteClaim: MutableRealVirtualAppScreenClaim = { ...realVirtualAppScreenClaim() };
+    const input: VirtualAppScreenUserAcceptanceInput = {
+      ...validInput(),
+      evidenceClaims: [{
+        ...incompleteClaim,
+        id: `real-app-session-missing-${field}`,
+      }],
+    };
+    mutate(input, incompleteClaim);
+
+    const manifest = buildVirtualAppScreenUserAcceptanceManifest({
+      ...input,
+      evidenceClaims: [{
+        ...incompleteClaim,
+        id: `real-app-session-missing-${field}`,
+      }],
+    });
+    const coverage = projectCuP13RealAppSessionCoverage(manifest);
+
+    assert.equal(coverage.ok, false, `${field} must be required for PROJECT_CU.md P1.3 real app session coverage`);
+    assert.deepEqual(coverage.missing, [field]);
+  }
+});
+
+test('VirtualAppScreen user acceptance manifest blocks BrowserRuntime fixture evidence', () => {
+  const manifest = buildVirtualAppScreenUserAcceptanceManifest(browserRuntimeInput());
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.userAcceptanceEligible, false);
+  assert.equal(manifest.diagnosticOnly, false);
+  assert.match(manifest.validation.issues.join('\n'), /real VirtualAppScreen action-causality evidence is required/);
 });
 
 test('VirtualAppScreen manifest blocks missing refs instead of fabricating user acceptance', () => {
@@ -156,7 +268,7 @@ test('VirtualAppScreen adapter readiness schema fail-closes unsafe capabilities'
   assert.equal(validation.ok, false);
 });
 
-test('VirtualAppScreen manifest CLI writes refs-first status output', async () => {
+test('VirtualAppScreen manifest contract fixture CLI writes refs-first status output', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-vas-acceptance-'));
   try {
     const inputPath = join(workspace, 'input.json');
@@ -183,18 +295,79 @@ test('VirtualAppScreen manifest CLI writes refs-first status output', async () =
   }
 });
 
+function projectCuP13RealAppSessionCoverage(
+  manifest: ReturnType<typeof buildVirtualAppScreenUserAcceptanceManifest>,
+): { ok: boolean; missing: string[] } {
+  const claim = manifest.evidenceClaims.find((entry) => entry.kind === 'real-virtual-app-screen');
+  const extendedClaim = claim as (typeof claim & {
+    targetAppRef?: string;
+    realAgentQueueEvidenceRefs?: string[];
+  });
+  const targetAppRef = extendedClaim?.targetAppRef;
+  const missing = [
+    typeof targetAppRef === 'string' && isAppProfileRef(targetAppRef) && manifest.targetAppRefs.includes(targetAppRef)
+      ? undefined
+      : 'targetAppRef',
+    hasNativeHostRef(claim?.sessionRefs) ? undefined : 'sessionRefs',
+    isNativeHostRef(claim?.realHostProviderSessionRef) ? undefined : 'realHostProviderSessionRef',
+    isNativeHostRef(claim?.realOptInRunRef) ? undefined : 'realOptInRunRef',
+    hasMinimalReplayRefs(claim?.minimalEvidenceReplayRefs) ? undefined : 'minimalEvidenceReplayRefs',
+    hasRealAgentQueueRefs(extendedClaim?.realAgentQueueEvidenceRefs) ? undefined : 'realAgentQueueEvidenceRefs',
+    hasRealPlatformEvidenceRefs(claim?.realPlatformEvidenceRefs) ? undefined : 'realPlatformEvidenceRefs',
+    manifest.diagnosticOnly === false && claim?.diagnosticOnly === false ? undefined : 'diagnosticOnly=false',
+  ].filter((field): field is string => Boolean(field));
+
+  return {
+    ok: missing.length === 0,
+    missing,
+  };
+}
+
+function isAppProfileRef(ref: string | undefined): boolean {
+  return typeof ref === 'string' && /^app:profile\/[a-z0-9._-]+$/iu.test(ref);
+}
+
+function isNativeHostRef(ref: string | undefined): boolean {
+  return typeof ref === 'string' && ref.startsWith('computer-use:native-host/');
+}
+
+function hasNativeHostRef(refs: string[] | undefined): boolean {
+  return refs?.some(isNativeHostRef) === true;
+}
+
+function hasMinimalReplayRefs(refs: string[] | undefined): boolean {
+  const requiredEvents = ['session.created', 'surface.attached', 'human-input.accepted', 'agent.resumed'];
+  return (refs?.length ?? 0) >= requiredEvents.length
+    && refs?.every(isNativeHostRef) === true
+    && requiredEvents.every((eventName) => refs?.some((ref) => ref.includes(eventName)) === true);
+}
+
+function hasRealAgentQueueRefs(refs: string[] | undefined): boolean {
+  return (refs?.length ?? 0) >= 3
+    && refs?.every(isNativeHostRef) === true
+    && refs?.some((ref) => ref.includes('/pause/') && ref.endsWith('/agent-queue.json')) === true
+    && refs?.some((ref) => ref.includes('/resume/') && ref.endsWith('/agent-queue.json')) === true
+    && refs?.some((ref) => ref.includes('/resume/') && ref.endsWith('/current-frame-refresh.json')) === true;
+}
+
+function hasRealPlatformEvidenceRefs(refs: string[] | undefined): boolean {
+  return (refs?.length ?? 0) >= 2
+    && refs?.every(isNativeHostRef) === true
+    && refs?.some((ref) => ref.endsWith('/diagnostic-only-false.json')) === true;
+}
+
 function validInput(): VirtualAppScreenUserAcceptanceInput {
   return {
     taskId: 'P0-CU-UA-FIRST-SCENARIO',
     scenarioId: 'virtual-app-screen-local-research-note',
     userIntent: 'Read local research notes in a background app screen, annotate a sentence, and produce research-note.md.',
-    targetAppRefs: ['app:browser-research-profile'],
-    targetWindowRefs: ['window:browser-research-profile/main'],
-    sessionRefs: ['computer-use-session:vas-local-research-note'],
-    adapterReadinessRefs: ['computer-use:adapter-readiness/browser-background.json'],
+    targetAppRefs: ['app:profile/vscode-editor'],
+    targetWindowRefs: ['computer-use:native-host/windows/vas-local-research-note/main.json'],
+    sessionRefs: ['computer-use:native-host/sessions/vas-local-research-note/session.json'],
+    adapterReadinessRefs: ['computer-use:native-host/readiness/vas-local-research-note/native-provider.json'],
     adapterReadinessRecords: [{
-      adapterKind: 'browser-runtime-window',
-      targetScope: 'window',
+      adapterKind: 'native-virtual-app-screen-host',
+      targetScope: 'app',
       supportedActions: ['click', 'type', 'scroll', 'hotkey', 'annotate'],
       captureSupported: true,
       backgroundRenderable: true,
@@ -205,18 +378,18 @@ function validInput(): VirtualAppScreenUserAcceptanceInput {
       schemaRefs: ['schema:computer-use/action-adapter-readiness.v1'],
     }],
     screenFrameRefs: [
-      'computer-use:session/vas-local-research-note/frames/before.png',
-      'computer-use:session/vas-local-research-note/frames/after.png',
+      'computer-use:native-host/frames/vas-local-research-note/before.png',
+      'computer-use:native-host/frames/vas-local-research-note/after.png',
     ],
-    inputIntentRefs: ['computer-use:session/vas-local-research-note/input-intents/highlight-title.json'],
-    executorEventRefs: ['computer-use:session/vas-local-research-note/executor-events/highlight-title.json'],
-    beforeAfterFrameRefs: ['computer-use:session/vas-local-research-note/before-after/highlight-title.json'],
+    inputIntentRefs: ['computer-use:native-host/input-intents/vas-local-research-note/highlight-title.json'],
+    executorEventRefs: ['computer-use:native-host/executor-events/vas-local-research-note/highlight-title.json'],
+    beforeAfterFrameRefs: ['computer-use:native-host/before-after/vas-local-research-note/highlight-title.json'],
     annotationProposalRefs: ['computer-use:session/vas-local-research-note/annotation-proposals/highlight-title.json'],
     artifactRefs: ['file:research-note.md'],
-    verificationRefs: ['computer-use:session/vas-local-research-note/verifier/research-note.json'],
+    verificationRefs: ['computer-use:native-host/verifiers/vas-local-research-note/research-note.json'],
     guiPresentRefs: ['gui.present:virtual-app-screen/research-note'],
-    replayRef: 'computer-use:session/vas-local-research-note/replay.json',
-    evidenceLedgerRef: 'computer-use:session/vas-local-research-note/evidence-ledger.json',
+    replayRef: 'computer-use:native-host/replay/vas-local-research-note/replay.json',
+    evidenceLedgerRef: 'computer-use:native-host/ledgers/vas-local-research-note/evidence-ledger.json',
     isolationFlags: {
       backgroundRenderable: true,
       affectsPhysicalDisplay: false,
@@ -251,9 +424,60 @@ function realVirtualAppScreenClaim() {
     id: 'real-virtual-app-screen',
     kind: 'real-virtual-app-screen' as const,
     status: 'present' as const,
-    ref: 'computer-use:session/vas-local-research-note/evidence-ledger.json',
-    refs: ['computer-use:session/vas-local-research-note/replay.json'],
-    evidenceRefs: ['computer-use:session/vas-local-research-note/before-after/highlight-title.json'],
+    targetAppRef: 'app:profile/vscode-editor',
+    ref: 'computer-use:native-host/ledgers/vas-local-research-note/evidence-ledger.json',
+    refs: ['computer-use:native-host/replay/vas-local-research-note/replay.json'],
+    evidenceRefs: ['computer-use:native-host/before-after/vas-local-research-note/highlight-title.json'],
+    sessionRefs: ['computer-use:native-host/sessions/vas-local-research-note/session.json'],
+    realHostProviderSessionRef: 'computer-use:native-host/provider-sessions/vas-local-research-note/session.json',
+    realOptInRunRef: 'computer-use:native-host/real-opt-in-runs/vas-local-research-note/run.json',
+    currentRunPointerRef: 'computer-use:native-host/runs/vas-local-research-note/current-run-pointer.json',
+    realPlatformEvidenceRefs: [
+      'computer-use:native-host/provider-sessions/vas-local-research-note/diagnostic-only-false.json',
+      'computer-use:native-host/provider-sessions/vas-local-research-note/platform-evidence.json',
+    ],
+    minimalEvidenceReplayRefs: [
+      'computer-use:native-host/ledgers/vas-local-research-note/events/0001-session.created.json',
+      'computer-use:native-host/ledgers/vas-local-research-note/events/0003-surface.attached.json',
+      'computer-use:native-host/ledgers/vas-local-research-note/events/0006-human-input.accepted.json',
+      'computer-use:native-host/ledgers/vas-local-research-note/events/0008-agent.resumed.json',
+    ],
+    realAgentQueueEvidenceRefs: [
+      'computer-use:native-host/provider-adapter-control/vas-local-research-note/pause/agent-queue.json',
+      'computer-use:native-host/provider-adapter-control/vas-local-research-note/resume/agent-queue.json',
+      'computer-use:native-host/provider-adapter-control/vas-local-research-note/resume/current-frame-refresh.json',
+    ],
+    diagnosticOnly: false,
+  };
+}
+
+function browserRuntimeInput(): VirtualAppScreenUserAcceptanceInput {
+  return {
+    ...validInput(),
+    targetAppRefs: ['app:browser-research-profile'],
+    targetWindowRefs: ['window:browser-research-profile/main'],
     sessionRefs: ['computer-use-session:vas-local-research-note'],
+    adapterReadinessRefs: ['computer-use:adapter-readiness/browser-background.json'],
+    adapterReadinessRecords: [{
+      adapterKind: 'browser-runtime-window',
+      targetScope: 'window',
+      supportedActions: ['click', 'type', 'scroll', 'hotkey', 'annotate'],
+      captureSupported: true,
+      backgroundRenderable: true,
+      affectsPhysicalDisplay: false,
+      requiresFocusSteal: false,
+      sharedSystemInputUsed: false,
+      blockedReason: null,
+      schemaRefs: ['schema:computer-use/action-adapter-readiness.v1'],
+    }],
+    evidenceClaims: [{
+      id: 'browser-runtime-fixture',
+      kind: 'real-virtual-app-screen',
+      status: 'present',
+      ref: 'computer-use:session/vas-local-research-note/evidence-ledger.json',
+      refs: ['computer-use:session/vas-local-research-note/replay.json'],
+      evidenceRefs: ['computer-use:session/vas-local-research-note/before-after/highlight-title.json'],
+      sessionRefs: ['computer-use-session:vas-local-research-note'],
+    }],
   };
 }

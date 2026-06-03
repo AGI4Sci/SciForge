@@ -56,6 +56,17 @@ export interface BrowserWorkbenchLoadingProgress {
   requiresHandoff?: boolean;
 }
 
+export interface BrowserWorkbenchNativeSurfaceBridgeState {
+  routeStatus?: 'unknown' | 'reachable' | 'unreachable';
+  capability?: 'ready' | 'missing' | 'unknown';
+  rightPaneBridge?: boolean;
+  status?: 'ready' | 'native-bridge-unavailable' | 'route-unreachable' | 'unknown';
+  healthPath?: string;
+  attachPath?: string;
+  statePath?: string;
+  diagnosticRef?: string;
+}
+
 export interface BrowserWorkbenchEmbedPolicy {
   embeddable?: boolean;
   status?: BrowserWorkbenchStateStatus | string;
@@ -108,7 +119,7 @@ export interface BrowserWorkbenchHostAction {
 }
 
 const BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX = 240;
-const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-search'] as const;
+const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-native-surface', 'browser-host-search'] as const;
 
 export interface BrowserWorkbenchPayload {
   projection?: BrowserRuntimeProjection;
@@ -377,6 +388,51 @@ function loadingProgressFromStateInput(value: unknown): BrowserWorkbenchLoadingP
     : undefined;
 }
 
+function nativeSurfaceBridgeFromHostSession(hostSession: BrowserHostSessionState | undefined): BrowserWorkbenchNativeSurfaceBridgeState | undefined {
+  const bridge = isRecord(hostSession)
+    ? isRecord((hostSession as { nativeSurfaceBridge?: unknown }).nativeSurfaceBridge)
+      ? (hostSession as { nativeSurfaceBridge?: Record<string, unknown> }).nativeSurfaceBridge
+      : undefined
+    : undefined;
+  if (!bridge) return undefined;
+  const routeStatus = bridge.routeStatus === 'reachable' || bridge.routeStatus === 'unreachable' || bridge.routeStatus === 'unknown'
+    ? bridge.routeStatus
+    : undefined;
+  const capability = bridge.capability === 'ready' || bridge.capability === 'missing' || bridge.capability === 'unknown'
+    ? bridge.capability
+    : undefined;
+  const rightPaneBridge = asBoolean(bridge.rightPaneBridge);
+  const status = bridge.status === 'ready' || bridge.status === 'native-bridge-unavailable' || bridge.status === 'route-unreachable' || bridge.status === 'unknown'
+    ? bridge.status
+    : routeStatus === 'reachable' && rightPaneBridge === false
+      ? 'native-bridge-unavailable'
+      : routeStatus === 'unreachable'
+        ? 'route-unreachable'
+        : undefined;
+  if (!routeStatus && !capability && rightPaneBridge === undefined && !status) return undefined;
+  return {
+    routeStatus,
+    capability,
+    rightPaneBridge,
+    status,
+    healthPath: asRefString(bridge.healthPath),
+    attachPath: asRefString(bridge.attachPath),
+    statePath: asRefString(bridge.statePath),
+    diagnosticRef: asRefString(bridge.diagnosticRef),
+  };
+}
+
+function nativeSurfaceBridgeDiagnosticSummary(bridge: BrowserWorkbenchNativeSurfaceBridgeState | undefined) {
+  if (!bridge) return undefined;
+  const status = bridge.status ?? 'unknown';
+  const parts = [
+    `route=${bridge.routeStatus ?? 'unknown'}`,
+    `capability=${bridge.capability ?? 'unknown'}`,
+    `rightPaneBridge=${bridge.rightPaneBridge === true ? 'true' : bridge.rightPaneBridge === false ? 'false' : 'unknown'}`,
+  ];
+  return `${status}:${parts.join(',')}`;
+}
+
 function errorMessage(value: BrowserWorkbenchPayload['error']) {
   if (typeof value === 'string') return asString(value);
   return isRecord(value) ? asString(value.message) : undefined;
@@ -578,6 +634,8 @@ interface BrowserWorkbenchBoundedDiagnostics {
   writerDiagnosticStatus?: string;
   writerDiagnosticRef?: string;
   nativeAdapterUrl?: string;
+  nativeSurfaceBridge?: BrowserWorkbenchNativeSurfaceBridgeState;
+  nativeSurfaceBridgeSummary?: string;
   transport?: string;
   timing?: BrowserHostSessionState['lastActionTiming'];
   summary: NonNullable<BrowserHostSessionState['actionTimingSummary']>;
@@ -624,6 +682,8 @@ function browserWorkbenchBoundedDiagnostics(
 ): BrowserWorkbenchBoundedDiagnostics | undefined {
   const timing = hostSession?.lastActionTiming;
   const summary = hostSession?.actionTimingSummary ?? [];
+  const nativeSurfaceBridge = nativeSurfaceBridgeFromHostSession(hostSession);
+  const nativeSurfaceBridgeSummary = nativeSurfaceBridgeDiagnosticSummary(nativeSurfaceBridge);
   const diagnostics = (hostSession?.diagnostics ?? [])
     .slice(-3)
     .map((diagnostic) => sanitizeBrowserWorkbenchDiagnosticText(diagnostic))
@@ -634,6 +694,8 @@ function browserWorkbenchBoundedDiagnostics(
     writerDiagnosticStatus: sanitizeBrowserWorkbenchDiagnosticText(payload.writerDiagnostic?.status),
     writerDiagnosticRef: asRefString(payload.writerDiagnostic?.diagnosticRef),
     nativeAdapterUrl: safeLocalHttpOrigin(hostSession?.nativeAdapterUrl),
+    nativeSurfaceBridge,
+    nativeSurfaceBridgeSummary,
     transport: hostSession?.liveSurfaceTransport ?? timing?.liveSurfaceTransport,
     timing,
     summary,
@@ -646,6 +708,7 @@ function browserWorkbenchBoundedDiagnostics(
     || bounded.writerDiagnosticStatus
     || bounded.writerDiagnosticRef
     || bounded.nativeAdapterUrl
+    || bounded.nativeSurfaceBridgeSummary
     || bounded.transport
     || bounded.timing
     || bounded.summary.length
@@ -679,12 +742,24 @@ function renderBrowserWorkbenchDiagnostics(
       data-browser-last-blocked-reason={diagnostics.lastBlockedReason}
       data-browser-writer-diagnostic={diagnostics.writerDiagnosticStatus}
       data-browser-writer-diagnostic-ref={diagnostics.writerDiagnosticRef}
+      data-browser-native-surface-route-status={diagnostics.nativeSurfaceBridge?.routeStatus}
+      data-browser-native-surface-capability={diagnostics.nativeSurfaceBridge?.capability}
+      data-browser-right-pane-bridge={diagnostics.nativeSurfaceBridge?.rightPaneBridge === true ? 'true' : diagnostics.nativeSurfaceBridge?.rightPaneBridge === false ? 'false' : undefined}
+      data-browser-native-surface-bridge-status={diagnostics.nativeSurfaceBridge?.status}
+      data-browser-native-surface-health-path={diagnostics.nativeSurfaceBridge?.healthPath}
+      data-browser-native-surface-attach-path={diagnostics.nativeSurfaceBridge?.attachPath}
+      data-browser-native-surface-state-path={diagnostics.nativeSurfaceBridge?.statePath}
+      data-browser-native-surface-diagnostic-ref={diagnostics.nativeSurfaceBridge?.diagnosticRef}
     >
       <dl>
         {renderStateValue('writerUrl', diagnostics.writerUrl)}
         {renderStateValue('healthCapability', diagnostics.healthCapability)}
         {renderStateValue('writerDiagnostic', diagnostics.writerDiagnosticStatus)}
         {renderStateValue('writerDiagnosticRef', diagnostics.writerDiagnosticRef)}
+        {renderStateValue('nativeSurfaceBridge', diagnostics.nativeSurfaceBridgeSummary)}
+        {renderStateValue('nativeSurfaceHealthPath', diagnostics.nativeSurfaceBridge?.healthPath)}
+        {renderStateValue('nativeSurfaceAttachPath', diagnostics.nativeSurfaceBridge?.attachPath)}
+        {renderStateValue('nativeSurfaceStatePath', diagnostics.nativeSurfaceBridge?.statePath)}
         {renderStateValue('transport', diagnostics.transport)}
         {renderStateValue('nativeAdapterUrl', diagnostics.nativeAdapterUrl)}
         {timing ? renderStateValue('lastAction', timing.action) : null}
@@ -798,6 +873,7 @@ function canRenderHostBrowser(state: BrowserWorkbenchState, hostSession?: Browse
     && (state.status === 'ready' || state.status === 'loading')
     && hostSession?.liveSurfaceTransport === 'native-embedded'
     && hostSession.singleInteractiveTruth === true
+    && hostSession.secondTruthSource === false
     && Boolean(hostSession.liveSurfaceRef);
 }
 
@@ -952,6 +1028,7 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
             data-browser-live-surface-ref={hostSession?.liveSurfaceRef}
             data-browser-live-surface-transport={hostSession?.liveSurfaceTransport}
             data-browser-single-interactive-truth={hostSession?.singleInteractiveTruth ? 'true' : undefined}
+            data-browser-second-truth-source={hostSession?.secondTruthSource === false ? 'false' : undefined}
             data-browser-frame-transport={hostFrameTransport}
             role="application"
             aria-label="Browser page"

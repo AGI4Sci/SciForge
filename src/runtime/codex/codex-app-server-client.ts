@@ -17,6 +17,7 @@ import { callSubagentMcpTool } from './subagent-mcp-tools.js';
 import { defaultGuiExtensionStatePath, prepareRuntimeGuiExtensionInjection } from './gui-extension-manifest.js';
 import {
   createComputerUseNativeRouteStream,
+  isComputerUseNativeRouteCommand,
   type ComputerUseNativeRouteInput,
 } from './computer-use-native-route.js';
 import {
@@ -93,6 +94,11 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
 
   async startTurn(request: CodexAppServerStartTurnRequest): Promise<CodexAppServerTurnStream> {
     const baseEnv = this.options.env ?? process.env;
+    const commandId = request.commandId;
+    const attemptId = request.attemptId;
+    const nativeRouteStream = await this.startComputerUseNativeRoute(request, baseEnv, commandId);
+    if (nativeRouteStream) return nativeRouteStream;
+
     const config = await assertCodexRuntimeConfig({
       workspacePath: request.workspacePath,
       profile: request.profile,
@@ -102,36 +108,6 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     const env = codexRuntimeEnv(baseEnv, config.codexHome);
     const sandbox = this.options.sandbox ?? resolveRuntimeCodexSandbox(baseEnv);
     const approvalPolicy = this.options.approvalPolicy ?? approvalPolicyFromEnv(baseEnv) ?? 'never';
-    const commandId = request.commandId;
-    const attemptId = request.attemptId;
-    const nativeAbort = new AbortController();
-    const abortNativeRoute = () => nativeAbort.abort();
-    if (request.abortSignal?.aborted) nativeAbort.abort();
-    else request.abortSignal?.addEventListener('abort', abortNativeRoute, { once: true });
-    const nativeRouteRunner = this.options.computerUseNativeRouteRunner ?? createComputerUseNativeRouteStream;
-    const nativeRouteStream = await nativeRouteRunner({
-      request: {
-        ...request,
-        abortSignal: nativeAbort.signal,
-      },
-      workspace: config.workspace,
-      provider: config.provider,
-      model: config.model,
-      profile: config.profile,
-      abortSignal: nativeAbort.signal,
-    });
-    if (nativeRouteStream) {
-      const nativeTurnId = nativeRouteStream.turnId ?? commandId;
-      this.activeNativeTurns.set(nativeTurnId, nativeAbort);
-      return {
-        ...nativeRouteStream,
-        turnId: nativeTurnId,
-        events: cleanupAsyncIterable(nativeRouteStream.events, () => {
-          this.activeNativeTurns.delete(nativeTurnId);
-        }),
-      };
-    }
-    request.abortSignal?.removeEventListener('abort', abortNativeRoute);
     const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(request.guiExtension, {
       commandId,
       attemptId,
@@ -227,6 +203,48 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
         this.activeSessions.delete(turnId);
       }),
     };
+  }
+
+  private async startComputerUseNativeRoute(
+    request: CodexAppServerStartTurnRequest,
+    baseEnv: NodeJS.ProcessEnv,
+    commandId: string,
+  ): Promise<CodexAppServerTurnStream | undefined> {
+    if (!isComputerUseNativeRouteCommand(request.commandText)) return undefined;
+    const config = await assertCodexRuntimeConfig({
+      workspacePath: request.workspacePath,
+      allowOpenAiRuntime: request.allowOpenAiRuntime,
+      env: baseEnv,
+    });
+    const nativeAbort = new AbortController();
+    const abortNativeRoute = () => nativeAbort.abort();
+    if (request.abortSignal?.aborted) nativeAbort.abort();
+    else request.abortSignal?.addEventListener('abort', abortNativeRoute, { once: true });
+    const nativeRouteRunner = this.options.computerUseNativeRouteRunner ?? createComputerUseNativeRouteStream;
+    const nativeRouteStream = await nativeRouteRunner({
+      request: {
+        ...request,
+        abortSignal: nativeAbort.signal,
+      },
+      workspace: config.workspace,
+      provider: config.provider,
+      model: config.model,
+      profile: request.profile ?? baseEnv.SCIFORGE_RUNTIME_PROFILE ?? 'computer-use-native-route',
+      abortSignal: nativeAbort.signal,
+    });
+    if (nativeRouteStream) {
+      const nativeTurnId = nativeRouteStream.turnId ?? commandId;
+      this.activeNativeTurns.set(nativeTurnId, nativeAbort);
+      return {
+        ...nativeRouteStream,
+        turnId: nativeTurnId,
+        events: cleanupAsyncIterable(nativeRouteStream.events, () => {
+          this.activeNativeTurns.delete(nativeTurnId);
+        }),
+      };
+    }
+    request.abortSignal?.removeEventListener('abort', abortNativeRoute);
+    return undefined;
   }
 
   async steerTurn(request: { threadId?: string; turnId: string; text: string; abortSignal?: AbortSignal }): Promise<void> {

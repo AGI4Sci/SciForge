@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { promisify } from 'node:util';
@@ -29,15 +30,73 @@ export const DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_MANIFEST_REF =
   'docs/test-artifacts/browser-native-adapter-comparison/platform-benchmark-manifest.json';
 export const DEFAULT_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_RESULT_REF =
   'docs/test-artifacts/browser-native-adapter-comparison/platform-benchmark-results.json';
+export const NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS = [
+  'policy',
+  'entrypoint',
+  'helper-chain',
+  'live-smoke',
+] as const;
 
 const MAX_RESULT_BYTES = 96_000;
 const DEFAULT_ADAPTER_TIMEOUT_MS = 120_000;
 const REAL_METRIC_SECTIONS = REQUIRED_BROWSER_NATIVE_ADAPTER_BENCHMARK_METRIC_SECTIONS;
+const TRUSTED_HELPER_ENTRYPOINT_FORMS = [
+  'tsx <helper>',
+  'node --import tsx <helper>',
+  'node --import=tsx <helper>',
+] as const;
+const TRUSTED_TSX_BIN_REF = 'node_modules/.bin/tsx';
 
 type EnvRecord = Record<string, string | undefined>;
 type RunnerCandidateStatus = 'passed' | 'blocked' | 'failed';
 type RunnerStatus = 'passed' | 'blocked' | 'failed' | 'not-run';
 type RealMetricSection = BrowserNativeAdapterBenchmarkMetricSection;
+type AdapterAvailabilityStatus =
+  | 'real-adapter-command-present'
+  | 'missing-real-adapter-command'
+  | 'unsupported-on-current-platform'
+  | 'blocked-or-invalid';
+type AdapterAvailability = {
+  helperCommandPresent: boolean;
+  realAdapterCommandPresent: boolean;
+  availabilityStatus: AdapterAvailabilityStatus;
+  provenanceRefs: string[];
+};
+type TrustedPassGradeHelperContract = {
+  helperRef: string;
+  helperBasename: string;
+  requiredOptInEnv: string;
+  forbiddenEnv: string[];
+  actualEntrypointForms: readonly (typeof TRUSTED_HELPER_ENTRYPOINT_FORMS)[number][];
+  passGradeStatus: 'active' | 'contract-defined-fail-closed';
+};
+
+const TRUSTED_PASS_GRADE_HELPERS: Partial<Record<BrowserNativeAdapterCandidateId, TrustedPassGradeHelperContract>> = {
+  'electron-web-contents-view': {
+    helperRef: 'tools/browser-native-adapter-electron-web-contents-view-external-result.ts',
+    helperBasename: 'browser-native-adapter-electron-web-contents-view-external-result.ts',
+    requiredOptInEnv: 'SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE',
+    forbiddenEnv: ['SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_LIVE_EVIDENCE_PATH'],
+    actualEntrypointForms: TRUSTED_HELPER_ENTRYPOINT_FORMS,
+    passGradeStatus: 'active',
+  },
+  wkwebview: {
+    helperRef: 'tools/browser-native-adapter-wkwebview-external-result.ts',
+    helperBasename: 'browser-native-adapter-wkwebview-external-result.ts',
+    requiredOptInEnv: 'SCIFORGE_BROWSER_NATIVE_ADAPTER_WKWEBVIEW_RUN_LIVE_SMOKE',
+    forbiddenEnv: [],
+    actualEntrypointForms: TRUSTED_HELPER_ENTRYPOINT_FORMS,
+    passGradeStatus: 'active',
+  },
+  'standalone-chromium-surface': {
+    helperRef: 'tools/browser-native-adapter-standalone-chromium-surface-external-result.ts',
+    helperBasename: 'browser-native-adapter-standalone-chromium-surface-external-result.ts',
+    requiredOptInEnv: 'SCIFORGE_BROWSER_NATIVE_ADAPTER_STANDALONE_CHROMIUM_SURFACE_RUN_LIVE_SMOKE',
+    forbiddenEnv: [],
+    actualEntrypointForms: TRUSTED_HELPER_ENTRYPOINT_FORMS,
+    passGradeStatus: 'active',
+  },
+};
 
 const REQUIRED_REAL_METRIC_SUMMARY_KEYS = {
   latency: [
@@ -83,6 +142,18 @@ const REQUIRED_REAL_METRIC_SUMMARY_KEYS = {
     'stateHeartbeatRestored',
     'inputRoutedAfterReconnect',
   ],
+  streamQuality: [
+    'latencyP50Ms',
+    'latencyP95Ms',
+    'framerateAvgFps',
+    'framerateP5Fps',
+    'inputToFrameP50Ms',
+    'inputToFrameP95Ms',
+    'reconnectP50Ms',
+    'reconnectP95Ms',
+    'sampleCount',
+    'fallbackRequired',
+  ],
 } as const satisfies Record<RealMetricSection, readonly string[]>;
 const REQUIRED_REAL_METRIC_SUMMARY_TYPES = {
   latency: 'number',
@@ -91,7 +162,19 @@ const REQUIRED_REAL_METRIC_SUMMARY_TYPES = {
   inputCompleteness: 'boolean',
   lifecycle: 'boolean',
   reconnect: 'boolean',
-} as const satisfies Record<RealMetricSection, 'number' | 'boolean'>;
+  streamQuality: {
+    latencyP50Ms: 'number',
+    latencyP95Ms: 'number',
+    framerateAvgFps: 'number',
+    framerateP5Fps: 'number',
+    inputToFrameP50Ms: 'number',
+    inputToFrameP95Ms: 'number',
+    reconnectP50Ms: 'number',
+    reconnectP95Ms: 'number',
+    sampleCount: 'number',
+    fallbackRequired: 'boolean',
+  },
+} as const satisfies Record<RealMetricSection, 'number' | 'boolean' | Record<string, 'number' | 'boolean'>>;
 
 export type BrowserNativeAdapterPlatformBenchmarkExternalSection = {
   status?: RunnerCandidateStatus;
@@ -121,6 +204,7 @@ export type BrowserNativeAdapterPlatformBenchmarkExternalResult = {
   singleInteractiveTruth?: true;
   secondTruthSource?: false;
   adapterRun?: BrowserNativeAdapterPlatformBenchmarkExternalAdapterRun;
+  nestedAdapterCommandProofRefs?: string[];
   status?: RunnerCandidateStatus;
   benchmarkClaim?: boolean;
   metricSections?: Partial<Record<RealMetricSection, BrowserNativeAdapterPlatformBenchmarkExternalSection>>;
@@ -137,6 +221,7 @@ export type BrowserNativeAdapterPlatformBenchmarkCandidateResult = {
   benchmarkClaim: boolean;
   realAdapterResult: boolean;
   supportedOnCurrentPlatform: boolean;
+  adapterAvailability?: AdapterAvailability;
   adapterCommandRef: string;
   adapterRunRef: string;
   adapterProofRefs: {
@@ -146,6 +231,7 @@ export type BrowserNativeAdapterPlatformBenchmarkCandidateResult = {
     nativeAdapterSurfaceRef: string | null;
     actionTraceRef: string | null;
     platformResultRef: string | null;
+    nestedAdapterCommandProofRefs?: string[];
   };
   metricSections: Array<{
     section: RealMetricSection;
@@ -204,6 +290,12 @@ export type BrowserNativeAdapterPlatformBenchmarkResult = {
       forbiddenResultKinds: Array<'schema-validation-only'>;
       forbiddenPassEvidenceTokens: RejectedBrowserNativeAdapterPassEvidenceSubstitute[];
     };
+    passRequiresNestedAdapterCommandProofRefs: {
+      candidates: Array<'wkwebview' | 'standalone-chromium-surface'>;
+      proofKinds: Array<(typeof NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS)[number]>;
+      boundedRefsOnly: true;
+      missingStatus: 'failed';
+    };
     realProofRefusalPolicy: {
       currentProcessPlatform: NodeJS.Platform;
       unsupportedPlatformStatus: 'blocked';
@@ -225,6 +317,14 @@ export type BrowserNativeAdapterPlatformBenchmarkResult = {
       argsJsonEnv: string;
       supportedOnCurrentPlatform: boolean;
     }>;
+    trustedPassGradeHelpers: Partial<Record<BrowserNativeAdapterCandidateId, {
+      helperRef: string;
+      helperBasename: string;
+      requiredOptInEnv: string;
+      forbiddenEnv: string[];
+      actualEntrypointForms: string[];
+      passGradeStatus: 'active' | 'contract-defined-fail-closed';
+    }>>;
   };
   payloadPolicy: {
     refsFirst: true;
@@ -387,12 +487,12 @@ async function runCandidateBenchmark(
   const commandEnv = adapterEnvName(candidate.id, 'COMMAND');
   const argsEnv = adapterEnvName(candidate.id, 'ARGS_JSON');
   const command = env[commandEnv];
+  const availability = adapterAvailability(candidate, env, Boolean(command));
   if (!supportedOnCurrentPlatform || !command) {
-    const blockerRefs = [
-      ...(!supportedOnCurrentPlatform ? [`platform:${candidate.platform}:unsupported-on-${process.platform}`] : []),
-      ...(!command ? [`env:${commandEnv}:missing-real-adapter-command`] : []),
-    ];
-    return blockedCandidate(candidate, blockerRefs);
+    const blockerRefs = !supportedOnCurrentPlatform
+      ? [`platform:${candidate.platform}:unsupported-on-${process.platform}`]
+      : [`env:${commandEnv}:missing-real-adapter-command`];
+    return blockedCandidate(candidate, blockerRefs, availability);
   }
 
   try {
@@ -400,31 +500,98 @@ async function runCandidateBenchmark(
     const { stdout } = await execFileAsync(command, args, {
       timeout: timeoutMs,
       maxBuffer: MAX_RESULT_BYTES,
-      env: {
-        ...process.env,
-        ...env,
-        SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE: candidate.id,
-        SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM: candidate.platform,
-        SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA: BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_EXTERNAL_RESULT_SCHEMA,
-        SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON: JSON.stringify(REAL_METRIC_SECTIONS),
-      },
+      env: boundedAdapterCommandEnv(env, candidate),
     });
     assertBoundedArtifact(stdout);
     const external = JSON.parse(stdout) as BrowserNativeAdapterPlatformBenchmarkExternalResult;
-    return normalizeExternalCandidateResult(candidate, external, `env:${commandEnv}`);
+    if (external.status === 'passed' || external.benchmarkClaim === true) {
+      assertExternalCandidateResultSchema(candidate, external);
+    }
+    assertTrustedPassGradeAdapterCommand(candidate, command, args, env, external);
+    return normalizeExternalCandidateResult(candidate, external, `env:${commandEnv}`, availability);
   } catch (error) {
     return {
-      ...blockedCandidate(candidate, [`env:${commandEnv}:execution-failed`]),
+      ...blockedCandidate(candidate, [`env:${commandEnv}:execution-failed`], availability),
       status: 'failed',
       diagnosticRefs: [`error:${shortError(error)}`],
     };
   }
 }
 
+function assertTrustedPassGradeAdapterCommand(
+  candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
+  command: string,
+  args: string[],
+  env: EnvRecord,
+  external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
+): void {
+  if (external.status !== 'passed' && external.benchmarkClaim !== true) return;
+  assert.ok(
+    isTrustedPassGradeAdapterCommand(candidate, command, args, env),
+    'external adapter stdout pass evidence requires trusted live adapter helper provenance',
+  );
+}
+
+function isTrustedPassGradeAdapterCommand(
+  candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
+  command: string,
+  args: string[],
+  env: EnvRecord,
+): boolean {
+  const helperContract = TRUSTED_PASS_GRADE_HELPERS[candidate.id];
+  if (!helperContract) return false;
+  if (helperContract.passGradeStatus !== 'active') return false;
+  if (env[helperContract.requiredOptInEnv] !== '1') return false;
+  if (helperContract.forbiddenEnv.some((name) => Boolean(env[name]))) return false;
+  if (args.some(isNodeEvalArg)) return false;
+  return actualTrustedHelperEntrypoint(command, args, helperContract) === resolve(process.cwd(), helperContract.helperRef);
+}
+
+function actualTrustedHelperEntrypoint(
+  command: string,
+  args: string[],
+  helperContract: TrustedPassGradeHelperContract,
+): string | undefined {
+  const commandName = executableName(command);
+  if (commandName === 'tsx') {
+    if (resolvedCommandPath(command) !== resolve(process.cwd(), TRUSTED_TSX_BIN_REF)) return undefined;
+    const entrypoint = args[0];
+    return helperPath(entrypoint, helperContract);
+  }
+  if (commandName !== 'node' || resolvedCommandPath(command) !== resolve(process.execPath)) return undefined;
+  if (args[0] === '--import' && args[1] === 'tsx') {
+    return helperPath(args[2], helperContract);
+  }
+  if (args[0] === '--import=tsx') {
+    return helperPath(args[1], helperContract);
+  }
+  return undefined;
+}
+
+function helperPath(entrypoint: string | undefined, helperContract: TrustedPassGradeHelperContract): string | undefined {
+  if (!entrypoint || !entrypoint.endsWith(helperContract.helperBasename)) return undefined;
+  return resolve(process.cwd(), entrypoint);
+}
+
+function executableName(command: string): string {
+  const normalized = command.replace(/\\/g, '/');
+  const name = normalized.slice(normalized.lastIndexOf('/') + 1).toLowerCase();
+  return name.endsWith('.exe') || name.endsWith('.cmd') ? name.slice(0, name.lastIndexOf('.')) : name;
+}
+
+function resolvedCommandPath(command: string): string {
+  return resolve(process.cwd(), command);
+}
+
+function isNodeEvalArg(arg: string): boolean {
+  return arg === '-e' || arg === '--eval' || arg.startsWith('--eval=');
+}
+
 function normalizeExternalCandidateResult(
   candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
   external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
   adapterCommandRef: string,
+  availability: AdapterAvailability,
 ): BrowserNativeAdapterPlatformBenchmarkCandidateResult {
   assertBoundedArtifact(JSON.stringify(external));
   assertExternalCandidateResultSchema(candidate, external);
@@ -461,6 +628,7 @@ function normalizeExternalCandidateResult(
     benchmarkClaim: status === 'passed',
     realAdapterResult,
     supportedOnCurrentPlatform: platformSupported(candidate.platform),
+    adapterAvailability: availability,
     adapterCommandRef,
     adapterRunRef: isRealNativeAdapterProofRef(external.adapterRun?.platformResultRef, candidate.id, 'platform-summary')
       ? external.adapterRun.platformResultRef
@@ -472,7 +640,7 @@ function normalizeExternalCandidateResult(
   };
 }
 
-function assertExternalCandidateResultSchema(
+export function assertExternalCandidateResultSchema(
   candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
   external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
 ): void {
@@ -496,12 +664,17 @@ function assertExternalCandidateResultSchema(
   const metricSections = external.metricSections as Partial<Record<RealMetricSection, BrowserNativeAdapterPlatformBenchmarkExternalSection>>;
   if (external.status === 'passed' || external.benchmarkClaim === true) {
     assert.ok(
+      !hasForbiddenRawEvidenceFields(external),
+      'external adapter stdout pass evidence must not include raw URL, DOM, screenshot, provider payload, log, or secret fields',
+    );
+    assert.ok(
       !hasLegacyPassEvidenceTokens(external),
       'external adapter stdout pass evidence must not use legacy frame-stream/canvas/WebRTC tokens',
     );
+    const proofIssue = realExternalAdapterRunProofIssue(candidate, external);
     assert.ok(
-      hasRealExternalAdapterRunProof(candidate, external),
-      'external adapter stdout must include real native adapter result proof before claiming benchmark pass',
+      !proofIssue,
+      proofIssue ?? 'external adapter stdout must include real native adapter result proof before claiming benchmark pass',
     );
     for (const section of REAL_METRIC_SECTIONS) {
       const sectionResult: BrowserNativeAdapterPlatformBenchmarkExternalSection | undefined = metricSections[section];
@@ -557,6 +730,12 @@ function buildExternalAdapterCommandContract(
       forbiddenResultKinds: ['schema-validation-only'],
       forbiddenPassEvidenceTokens: [...REJECTED_BROWSER_NATIVE_ADAPTER_PASS_EVIDENCE_SUBSTITUTES],
     },
+    passRequiresNestedAdapterCommandProofRefs: {
+      candidates: ['wkwebview', 'standalone-chromium-surface'],
+      proofKinds: [...NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS],
+      boundedRefsOnly: true,
+      missingStatus: 'failed',
+    },
     realProofRefusalPolicy: {
       currentProcessPlatform: process.platform,
       unsupportedPlatformStatus: 'blocked',
@@ -582,12 +761,30 @@ function buildExternalAdapterCommandContract(
         supportedOnCurrentPlatform: platformSupported(candidate.platform),
       }];
     })) as BrowserNativeAdapterPlatformBenchmarkResult['externalAdapterCommandContract']['perCandidateCommandEnv'],
+    trustedPassGradeHelpers: trustedPassGradeHelperContractDocs(),
   };
+}
+
+function trustedPassGradeHelperContractDocs(): BrowserNativeAdapterPlatformBenchmarkResult['externalAdapterCommandContract']['trustedPassGradeHelpers'] {
+  return Object.fromEntries(
+    Object.entries(TRUSTED_PASS_GRADE_HELPERS).map(([candidateId, helper]) => [
+      candidateId,
+      {
+        helperRef: helper.helperRef,
+        helperBasename: helper.helperBasename,
+        requiredOptInEnv: helper.requiredOptInEnv,
+        forbiddenEnv: [...helper.forbiddenEnv],
+        actualEntrypointForms: [...helper.actualEntrypointForms],
+        passGradeStatus: helper.passGradeStatus,
+      },
+    ]),
+  ) as BrowserNativeAdapterPlatformBenchmarkResult['externalAdapterCommandContract']['trustedPassGradeHelpers'];
 }
 
 function blockedCandidate(
   candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
   blockerRefs: string[],
+  availability = adapterAvailability(candidate, {}, false),
 ): BrowserNativeAdapterPlatformBenchmarkCandidateResult {
   return {
     id: candidate.id,
@@ -599,6 +796,7 @@ function blockedCandidate(
     benchmarkClaim: false,
     realAdapterResult: false,
     supportedOnCurrentPlatform: platformSupported(candidate.platform),
+    adapterAvailability: availability,
     adapterCommandRef: `env:${adapterEnvName(candidate.id, 'COMMAND')}`,
     adapterRunRef: `benchmark-result:${candidate.id}:blocked`,
     adapterProofRefs: {
@@ -621,10 +819,54 @@ function blockedCandidate(
   };
 }
 
+function adapterAvailability(
+  candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
+  env: EnvRecord,
+  helperCommandPresent: boolean,
+): AdapterAvailability {
+  const realCommandEnv = adapterRealEnvName(candidate.id, 'COMMAND');
+  const realAdapterCommandPresent = Boolean(env[realCommandEnv]);
+  const supportedOnCurrentPlatform = platformSupported(candidate.platform);
+  const expectsRealAdapterCommand = expectsNestedRealAdapterCommand(candidate.id);
+  const availabilityStatus: AdapterAvailabilityStatus = !supportedOnCurrentPlatform
+    ? 'unsupported-on-current-platform'
+    : expectsRealAdapterCommand && !realAdapterCommandPresent
+      ? 'missing-real-adapter-command'
+      : helperCommandPresent
+        ? 'real-adapter-command-present'
+        : 'missing-real-adapter-command';
+  const provenanceRefs = [
+    `env:${adapterEnvName(candidate.id, 'COMMAND')}:${helperCommandPresent ? 'helper-command-present' : 'missing-helper-command'}`,
+  ];
+  if (expectsRealAdapterCommand) {
+    provenanceRefs.push(`env:${realCommandEnv}:${realAdapterCommandPresent ? 'real-adapter-command-present' : 'missing-real-adapter-command'}`);
+  }
+  if (!supportedOnCurrentPlatform) {
+    provenanceRefs.push(`platform:${candidate.platform}:unsupported-on-${process.platform}`);
+  }
+  return {
+    helperCommandPresent,
+    realAdapterCommandPresent: expectsRealAdapterCommand ? realAdapterCommandPresent : helperCommandPresent,
+    availabilityStatus,
+    provenanceRefs,
+  };
+}
+
+function expectsNestedRealAdapterCommand(candidateId: BrowserNativeAdapterCandidateId): boolean {
+  return candidateId === 'wkwebview' || candidateId === 'standalone-chromium-surface';
+}
+
 function hasRealExternalAdapterRunProof(
   candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
   external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
 ): boolean {
+  return realExternalAdapterRunProofIssue(candidate, external) === undefined;
+}
+
+function realExternalAdapterRunProofIssue(
+  candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
+  external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
+): string | undefined {
   const adapterRun = external.adapterRun;
   if (
     external.owner !== 'BrowserHostSession'
@@ -632,26 +874,26 @@ function hasRealExternalAdapterRunProof(
     || external.singleInteractiveTruth !== true
     || external.secondTruthSource !== false
   ) {
-    return false;
+    return 'external adapter stdout must keep BrowserHostSession/native-embedded/single-truth proof fields';
   }
   if (!adapterRun || adapterRun.resultKind !== 'real-native-adapter-run' || adapterRun.realAdapterResult !== true) {
-    return false;
+    return 'external adapter stdout must include real native adapter result proof before claiming benchmark pass';
   }
   if (
     adapterRun.liveSurfaceTransport !== 'native-embedded'
     || adapterRun.secondTruthSource !== false
     || adapterRun.rawPayloadsCaptured !== false
   ) {
-    return false;
+    return 'external adapter stdout real proof must be native-embedded, single-source, and rawPayloadsCaptured=false';
   }
   if (!isSessionRef(adapterRun.browserHostSessionRef)
     || !isSessionScopedRefForSession(adapterRun.liveSurfaceRef, adapterRun.browserHostSessionRef)) {
-    return false;
+    return 'external adapter stdout real proof must include BrowserHostSession-scoped live surface refs';
   }
   if (!isRealNativeAdapterProofRef(adapterRun.nativeAdapterSurfaceRef, candidate.id, 'native-adapter-surface')
     || !isRealNativeAdapterProofRef(adapterRun.actionTraceRef, candidate.id, 'action-trace')
     || !isRealNativeAdapterProofRef(adapterRun.platformResultRef, candidate.id, 'platform-summary')) {
-    return false;
+    return 'external adapter stdout real proof must include candidate-scoped native adapter surface, action trace, and platform summary refs';
   }
   const proofRefs = [
     adapterRun.browserHostSessionRef,
@@ -661,13 +903,17 @@ function hasRealExternalAdapterRunProof(
     adapterRun.platformResultRef,
   ];
   if (proofRefs.some((ref) => hasNonRealBenchmarkProofToken(ref))) {
-    return false;
+    return 'external adapter stdout real proof refs must not contain blocked, fixture, schema-only, partial, or legacy tokens';
   }
   const diagnosticRefs = boundedStringRefs(external.diagnosticRefs);
   if (diagnosticRefs.some((ref) => hasNonRealBenchmarkProofToken(ref))) {
-    return false;
+    return 'external adapter stdout diagnostic refs must not contain blocked, fixture, schema-only, partial, or legacy tokens when claiming pass';
   }
-  return true;
+  const nestedProofIssue = nestedAdapterCommandProofIssue(candidate, external);
+  if (nestedProofIssue) {
+    return nestedProofIssue;
+  }
+  return undefined;
 }
 
 function hasLegacyPassEvidenceTokens(external: BrowserNativeAdapterPlatformBenchmarkExternalResult): boolean {
@@ -677,10 +923,34 @@ function hasLegacyPassEvidenceTokens(external: BrowserNativeAdapterPlatformBench
     external.adapterRun?.nativeAdapterSurfaceRef,
     external.adapterRun?.actionTraceRef,
     external.adapterRun?.platformResultRef,
+    ...(external.nestedAdapterCommandProofRefs ?? []),
     ...REAL_METRIC_SECTIONS.flatMap((section) => external.metricSections?.[section]?.resultRefs ?? []),
     ...(external.diagnosticRefs ?? []),
   ];
   return refs.some((ref) => hasLegacyPassEvidenceToken(ref));
+}
+
+function nestedAdapterCommandProofIssue(
+  candidate: { id: BrowserNativeAdapterCandidateId },
+  external: BrowserNativeAdapterPlatformBenchmarkExternalResult,
+): string | undefined {
+  if (!expectsNestedRealAdapterCommand(candidate.id)) {
+    return undefined;
+  }
+  const refs = boundedStringRefs(external.nestedAdapterCommandProofRefs);
+  if (!Array.isArray(external.nestedAdapterCommandProofRefs) || refs.length !== external.nestedAdapterCommandProofRefs.length) {
+    return 'external adapter stdout nested adapter command provenance refs must be bounded refs';
+  }
+  if (refs.some((ref) => hasNonRealBenchmarkProofToken(ref))) {
+    return 'external adapter stdout nested adapter command provenance refs must not contain blocked, fixture, schema-only, partial, mock, fake, or legacy tokens';
+  }
+  const missingProofKinds = NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS.filter((kind) => (
+    !refs.some((ref) => isNestedAdapterCommandProofRef(ref, candidate.id, kind))
+  ));
+  if (missingProofKinds.length > 0) {
+    return 'external adapter stdout nested adapter command provenance refs required before claiming benchmark pass';
+  }
+  return undefined;
 }
 
 function externalAdapterProofRefs(
@@ -698,6 +968,12 @@ function externalAdapterProofRefs(
     platformResultRef: isRealNativeAdapterProofRef(adapterRun?.platformResultRef, candidate.id, 'platform-summary')
       ? adapterRun.platformResultRef
       : (boundedAdapterRunRef(adapterRun?.platformResultRef) ?? null),
+    nestedAdapterCommandProofRefs: expectsNestedRealAdapterCommand(candidate.id)
+      ? boundedStringRefs(external.nestedAdapterCommandProofRefs)
+        .filter((ref) => NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS.some((kind) => (
+          isNestedAdapterCommandProofRef(ref, candidate.id, kind)
+        )))
+      : undefined,
   };
 }
 
@@ -720,6 +996,9 @@ function missingRealAdapterResultBlockers(
   if (external.adapterRun?.resultKind === 'schema-validation-only') {
     blockers.push(`benchmark-result:${candidate.id}:schema-validation-only-not-a-benchmark`);
   }
+  if (nestedAdapterCommandProofIssue(candidate, external)) {
+    blockers.push(`benchmark-result:${candidate.id}:missing-nested-real-adapter-command-provenance`);
+  }
   return blockers;
 }
 
@@ -735,7 +1014,7 @@ function hasNonRealMetricResultRefs(
 }
 
 function boundedAdapterRunRef(value: unknown): string | undefined {
-  return typeof value === 'string' && /^[a-zA-Z0-9_./:-]{1,240}$/.test(value) ? value : undefined;
+  return typeof value === 'string' && /^[a-zA-Z0-9_.:/-]{1,240}$/.test(value) ? value : undefined;
 }
 
 function isSessionRef(value: unknown): boolean {
@@ -756,7 +1035,7 @@ function isRealNativeAdapterProofRef(
 ): value is string {
   return typeof value === 'string'
     && value.startsWith(`benchmark-result:${candidateId}:${proofKind}`)
-    && /^[a-zA-Z0-9_./:-]{1,240}$/.test(value)
+    && /^[a-zA-Z0-9_.:/-]{1,240}$/.test(value)
     && !hasNonRealBenchmarkProofToken(value);
 }
 
@@ -767,7 +1046,18 @@ function isRealNativeAdapterMetricResultRef(
 ): boolean {
   return typeof value === 'string'
     && value.startsWith(`benchmark-result:${candidateId}:${section}:`)
-    && /^[a-zA-Z0-9_./:-]{1,240}$/.test(value)
+    && /^[a-zA-Z0-9_.:/-]{1,240}$/.test(value)
+    && !hasNonRealBenchmarkProofToken(value);
+}
+
+function isNestedAdapterCommandProofRef(
+  value: unknown,
+  candidateId: BrowserNativeAdapterCandidateId,
+  proofKind: (typeof NESTED_REAL_ADAPTER_COMMAND_PROOF_KINDS)[number],
+): value is string {
+  return typeof value === 'string'
+    && value.startsWith(`benchmark-result:${candidateId}:nested-real-adapter-command:${proofKind}:`)
+    && /^[a-zA-Z0-9_.:/-]{1,240}$/.test(value)
     && !hasNonRealBenchmarkProofToken(value);
 }
 
@@ -779,7 +1069,10 @@ function hasRequiredMetricSummary(section: RealMetricSection, value: unknown): b
   const expectedType = REQUIRED_REAL_METRIC_SUMMARY_TYPES[section];
   return REQUIRED_REAL_METRIC_SUMMARY_KEYS[section].every((key) => {
     const metricValue = summary[key];
-    if (expectedType === 'number') {
+    const expectedKeyType = typeof expectedType === 'string'
+      ? expectedType
+      : (expectedType as Record<string, 'number' | 'boolean'>)[key];
+    if (expectedKeyType === 'number') {
       return typeof metricValue === 'number' && Number.isFinite(metricValue);
     }
     return typeof metricValue === 'boolean';
@@ -789,18 +1082,35 @@ function hasRequiredMetricSummary(section: RealMetricSection, value: unknown): b
 function hasNonRealBenchmarkProofToken(value: unknown): boolean {
   return typeof value === 'string'
     && (
-      /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial/i.test(value)
+      /blocked|fixture|schema-fixture|schema-validation-only|schema-only|no-real-native-adapter|partial|sample|synthetic|mock|fake|test-fixture|dry-run/i.test(value)
       || hasLegacyPassEvidenceToken(value)
     );
 }
 
 function hasLegacyPassEvidenceToken(value: unknown): boolean {
   return typeof value === 'string'
-    && /(?:^|[/:_-])(?:host-stream|frame-stream|legacy-frame|canvas|canvas-binary|webrtc|web-rtc|websocket-binary|http-frame|iframe|proxy|snapshot|webview|webview-tag|system-popup|external-browser|second-viewer)(?:$|[/:_-])/i.test(value);
+    && /(?:^|[/:_-])(?:host-stream|frame-stream|legacy-frame|canvas|canvas-binary|webrtc|web-rtc|websocket-binary|http-frame|iframe|proxy|snapshot|webview|webview-tag|system-popup|external-browser|second-viewer|standalone-process|standalone-process-without-native-embedder)(?:$|[/:_-])/i.test(value);
+}
+
+function hasForbiddenRawEvidenceFields(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some((item) => hasForbiddenRawEvidenceFields(item));
+  }
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  return Object.entries(value).some(([key, nested]) => (
+    /^(?:rawUrl|url|requestedUrl|currentUrl|finalUrl|rawDom|dom|domSnapshot|screenshot|rawScreenshot|screenshotBase64|screenshotBytes|clipboard|selection|menu|provider|payload|rawPayload|providerPayload|consoleLog|networkLog|secret|token|password|credential|cookie|authorization|apiKey)$/i.test(key)
+    || hasForbiddenRawEvidenceFields(nested)
+  ));
 }
 
 function adapterEnvName(candidateId: BrowserNativeAdapterCandidateId, suffix: 'COMMAND' | 'ARGS_JSON'): string {
   return `SCIFORGE_BROWSER_NATIVE_ADAPTER_${candidateId.toUpperCase().replace(/-/g, '_')}_${suffix}`;
+}
+
+function adapterRealEnvName(candidateId: BrowserNativeAdapterCandidateId, suffix: 'COMMAND' | 'ARGS_JSON'): string {
+  return `SCIFORGE_BROWSER_NATIVE_ADAPTER_${candidateId.toUpperCase().replace(/-/g, '_')}_REAL_${suffix}`;
 }
 
 function platformSupported(platform: BrowserNativeAdapterPlatform): boolean {
@@ -845,7 +1155,12 @@ function boundedStringRefs(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 240).slice(0, 24);
+  return value.filter((item): item is string => (
+    typeof item === 'string'
+    && item.length > 0
+    && item.length <= 240
+    && !/https?:\/\//i.test(item)
+  )).slice(0, 24);
 }
 
 async function writeResult(path: string, result: BrowserNativeAdapterPlatformBenchmarkResult): Promise<void> {
@@ -864,12 +1179,60 @@ function pathRef(path: string, cwd: string): string {
 function assertBoundedArtifact(text: string): void {
   assert.ok(Buffer.byteLength(text, 'utf8') <= MAX_RESULT_BYTES, 'platform benchmark artifact must stay bounded');
   assert.doesNotMatch(text, /data:image|;base64,|iVBORw0KGgo|<\s*(?:!doctype|html|body|script|iframe|webview)\b/i);
-  assert.doesNotMatch(text, /"(?:rawDom|domSnapshot|screenshotBase64|providerPayload|consoleLog|networkLog)"\s*:/i);
+  assert.doesNotMatch(text, /https?:\/\//i, 'platform benchmark artifact must not include raw URLs; evidence must use bounded refs');
+  assert.ok(
+    !/"(?:rawUrl|url|requestedUrl|currentUrl|finalUrl|rawDom|dom|domSnapshot|screenshot|rawScreenshot|screenshotBase64|screenshotBytes|clipboard|selection|menu|provider|payload|rawPayload|providerPayload|consoleLog|networkLog|secret|token|password|credential|cookie|authorization|apiKey)"\s*:/i.test(text),
+    'platform benchmark artifact must not include raw URL, DOM, screenshot, provider payload, log, or secret fields',
+  );
   assert.doesNotMatch(text, /"payload"\s*:\s*"(?:\{|<|data:)/i);
 }
 
 function shortError(error: unknown): string {
-  return error instanceof Error ? error.message.slice(0, 180) : String(error).slice(0, 180);
+  const message = error instanceof Error ? error.message : String(error);
+  const safeDiagnostic = safeInternalDiagnosticMessage(message);
+  if (safeDiagnostic) return safeDiagnostic;
+  return boundedErrorToken(message);
+}
+
+function boundedErrorToken(value: string): string {
+  return `hash-${createHash('sha256').update(value).digest('hex').slice(0, 12)}`;
+}
+
+function safeInternalDiagnosticMessage(message: string): string | undefined {
+  const safePhrases = [
+    'trusted live adapter helper provenance',
+    'external adapter stdout must declare',
+    'real native adapter result proof',
+    'real proof must include candidate-scoped',
+    'real proof refs must not contain',
+    'real candidate-scoped benchmark result refs',
+    'legacy frame-stream/canvas/WebRTC tokens',
+    'raw URL, DOM, screenshot, provider payload, log, or secret fields',
+    'raw URLs',
+    'refs-first',
+    'bounded aggregate summary keys',
+    'missing metric section streamQuality',
+  ];
+  return safePhrases.find((phrase) => message.includes(phrase));
+}
+
+function boundedAdapterCommandEnv(
+  env: EnvRecord,
+  candidate: { id: BrowserNativeAdapterCandidateId; platform: BrowserNativeAdapterPlatform },
+): EnvRecord {
+  const bounded: EnvRecord = {
+    PATH: process.env.PATH,
+    HOME: process.env.HOME,
+    TMPDIR: process.env.TMPDIR,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_CANDIDATE: candidate.id,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM: candidate.platform,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_EXTERNAL_RESULT_SCHEMA: BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK_EXTERNAL_RESULT_SCHEMA,
+    SCIFORGE_BROWSER_NATIVE_ADAPTER_REQUIRED_SECTIONS_JSON: JSON.stringify(REAL_METRIC_SECTIONS),
+  };
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith('SCIFORGE_BROWSER_NATIVE_ADAPTER_')) bounded[key] = value;
+  }
+  return bounded;
 }
 
 async function main(): Promise<void> {

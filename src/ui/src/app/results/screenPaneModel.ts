@@ -1,6 +1,7 @@
 import {
   type VirtualScreenFrame,
   type VirtualScreenPayload,
+  type VirtualScreenPresentationState,
 } from '../../../../../packages/presentation/components';
 import { normalizeWorkspaceRootPath } from '../../config';
 import type { RuntimeArtifact, SciForgeConfig, SciForgeRun, SciForgeSession } from '../../domain';
@@ -17,30 +18,7 @@ export function rightPaneVirtualScreenPayload(
   activation?: RightPaneVirtualScreenActivationPolicy,
 ): VirtualScreenPayload {
   const candidates = virtualScreenPayloadCandidates(session, activeRun, config);
-  const payload = candidates.find((candidate) =>
-    candidate.currentFrameRef
-    || candidate.frameStreamRef
-    || candidate.replayRef
-    || candidate.targetAppRef
-    || candidate.targetWindowRef
-    || candidate.sessionRef
-    || candidate.adapterReadinessRef
-    || candidate.blockedRef
-    || candidate.errorRef
-    || candidate.currentFrameSequence
-    || candidate.permissionRef
-    || candidate.permissionHandoffRef
-    || (candidate.permissionHandoffRefs?.length ?? 0)
-    || candidate.permissionRecheckRef
-    || (candidate.permissionRecheckRefs?.length ?? 0)
-    || candidate.recheckRef
-    || (candidate.actorCursorRefs?.length ?? 0)
-    || (candidate.annotationOverlayRefs?.length ?? 0)
-    || (candidate.annotationProposalRefs?.length ?? 0)
-    || (candidate.artifactRefs?.length ?? 0)
-    || (candidate.verificationRefs?.length ?? 0)
-    || (candidate.frameRefs?.length ?? 0)
-  );
+  const payload = bestVirtualScreenPayloadCandidate(candidates);
   if (payload) return payload;
   return rightPaneVirtualScreenActivationPayload(session, activeRun, locale, activation);
 }
@@ -71,20 +49,13 @@ export function rightPaneVirtualScreenActivationPayload(
   const reason = rightPaneVirtualScreenActivationReason(activation.activeTabId);
   const bootstrapWindowMs = activation.bootstrapWindowMs ?? 8000;
   const defaultProfile = activation.defaultProfile ?? 'vscode-editor';
-  const platformPermissionHandoffRefs = [
-    'macos-screen-recording',
-    'macos-accessibility',
-    'macos-automation',
-    'macos-virtual-display-helper',
-    'linux-xpra-install',
-    'linux-xpra-session-permission',
-    'windows-idd-driver-install',
-  ].map((gate) => `computer-use:screen-activation/${refs.scope}/permission-handoff/${gate}.json`);
-  const platformPermissionRecheckRefs = platformPermissionHandoffRefs.map((ref) => ref.replace('/permission-handoff/', '/permission-recheck/'));
   return {
     title: resultText(locale, { 'zh-CN': 'Computer Use 虚拟屏幕', 'en-US': 'Computer Use Virtual Screen' }),
     status: 'blocked',
     attachState: 'blocked',
+    presentationState: 'permission',
+    presentationStateReason: 'permission-gate',
+    presentationStateReasonRefs: [refs.permissionRef, refs.permissionHandoffRef, refs.permissionRecheckRef],
     surfaceMode: 'empty',
     screenRef: refs.screenRef,
     targetAppRef: `app:profile/${defaultProfile}`,
@@ -98,14 +69,14 @@ export function rightPaneVirtualScreenActivationPayload(
     permissionRequired: true,
     permissionGranted: false,
     permissionHandoffRef: refs.permissionHandoffRef,
-    permissionHandoffRefs: platformPermissionHandoffRefs,
+    permissionHandoffRefs: [refs.permissionHandoffRef],
     permissionRecheckRef: refs.permissionRecheckRef,
-    permissionRecheckRefs: platformPermissionRecheckRefs,
+    permissionRecheckRefs: [refs.permissionRecheckRef],
     recheckRef: refs.permissionRecheckRef,
     evidenceLedgerRef: refs.evidenceLedgerRef,
     guiPresentRefs: [refs.guiPresentRef],
-    verificationRefs: [refs.readinessRef, refs.blockedRef, refs.permissionRef, refs.permissionRecheckRef, ...platformPermissionRecheckRefs],
-    artifactRefs: [refs.activationRef, refs.permissionHandoffRef, ...platformPermissionHandoffRefs],
+    verificationRefs: [refs.readinessRef, refs.blockedRef, refs.permissionRef, refs.permissionRecheckRef],
+    artifactRefs: [refs.activationRef, refs.permissionHandoffRef],
     blockedReason: `Screen pane activation requested a native VirtualDisplayProvider session; no current session is attached after the ${bootstrapWindowMs}ms bootstrap window. Resolve platform authorization or install gates with permission handoff refs, then recheck provider readiness.`,
     isolationFlags: {
       diagnosticOnly: true,
@@ -151,6 +122,74 @@ export function virtualScreenPayloadCandidates(session: SciForgeSession, activeR
     .filter((payload): payload is VirtualScreenPayload => Boolean(payload));
 }
 
+function bestVirtualScreenPayloadCandidate(candidates: VirtualScreenPayload[]): VirtualScreenPayload | undefined {
+  let best: { payload: VirtualScreenPayload; score: number; index: number } | undefined;
+  candidates.forEach((payload, index) => {
+    if (!virtualScreenPayloadHasPaneSignal(payload)) return;
+    const score = virtualScreenPayloadCandidateScore(payload);
+    if (!best || score > best.score || (score === best.score && index > best.index)) {
+      best = { payload, score, index };
+    }
+  });
+  return best?.payload;
+}
+
+function virtualScreenPayloadHasPaneSignal(candidate: VirtualScreenPayload) {
+  return Boolean(
+    candidate.currentFrameRef
+    || candidate.frameStreamRef
+    || candidate.replayRef
+    || candidate.targetAppRef
+    || candidate.targetWindowRef
+    || candidate.sessionRef
+    || candidate.currentRunPointerRef
+    || candidate.preflightRef
+    || candidate.preflightLedgerRef
+    || candidate.preflightLedgerEntryRef
+    || candidate.hostReadinessRef
+    || candidate.adapterReadinessRef
+    || candidate.frameTransport
+    || candidate.frameTelemetry
+    || candidate.blockedRef
+    || candidate.errorRef
+    || candidate.currentFrameSequence
+    || candidate.permissionRef
+    || candidate.permissionHandoffRef
+    || (candidate.permissionHandoffRefs?.length ?? 0)
+    || candidate.permissionRecheckRef
+    || (candidate.permissionRecheckRefs?.length ?? 0)
+    || candidate.recheckRef
+    || (candidate.actorCursorRefs?.length ?? 0)
+    || (candidate.annotationOverlayRefs?.length ?? 0)
+    || (candidate.annotationProposalRefs?.length ?? 0)
+    || (candidate.artifactRefs?.length ?? 0)
+    || (candidate.verificationRefs?.length ?? 0)
+    || (candidate.minimalEvidenceReplayRefs?.length ?? 0)
+    || (candidate.frameRefs?.length ?? 0)
+  );
+}
+
+function virtualScreenPayloadCandidateScore(candidate: VirtualScreenPayload) {
+  let score = 0;
+  if (candidate.presentationState === 'live') score += 1000;
+  if (candidate.surfaceMode === 'live') score += 800;
+  if (candidate.attachState === 'attached') score += 500;
+  if (candidate.sessionRef) score += 120;
+  if (candidate.liveSurfaceRef) score += 120;
+  if (candidate.frameStreamRef) score += 100;
+  if (candidate.currentFrameRef) score += 140;
+  if (candidate.currentFrameSequence?.ref && typeof candidate.currentFrameSequence.sequence === 'number') score += 120;
+  if (candidate.inputLeaseRef && candidate.actionAdapterRef && candidate.adapterReadinessRef) score += 140;
+  if (candidate.providerExecuted === true || candidate.providerSessionRevalidated === true) score += 100;
+  if (candidate.permissionGranted === true || candidate.permissionStatus === 'granted' || candidate.permissionStatus === 'not-required') score += 40;
+  if (candidate.platformDriverStatus === 'ready' || candidate.platformDriverStatus === 'attached') score += 40;
+  if (candidate.replayRef || candidate.surfaceMode === 'replay') score += 25;
+  if (candidate.blockedRef || candidate.attachState === 'blocked' || candidate.status === 'blocked') score -= 300;
+  if (candidate.errorRef || candidate.attachState === 'error' || candidate.status === 'error') score -= 500;
+  if (candidate.presentationState === 'permission' || candidate.attachState === 'requires-handoff' || candidate.status === 'requires-handoff') score -= 200;
+  return score;
+}
+
 export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, config: SciForgeConfig): VirtualScreenPayload | undefined {
   const data = isRecord(artifact.data) ? artifact.data : {};
   const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
@@ -159,6 +198,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     : isRecord(metadata.runSummary)
       ? metadata.runSummary
       : {};
+  const nativeHostPreflight = nativeHostPreflightEvidence(data, metadata, runSummary);
   const sidecarBinding = isRecord(data.sidecarBinding) ? data.sidecarBinding : {};
   const sidecarCapabilities = isRecord(data.sidecarCapabilities) ? data.sidecarCapabilities : {};
   const sidecarDiscovery = isRecord(data.sidecarDiscovery) ? data.sidecarDiscovery : {};
@@ -285,6 +325,13 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refsFromList(data.events, ['ref', 'executorEventRef', 'eventRef']),
     refsFromList(metadata.events, ['ref', 'executorEventRef', 'eventRef']),
   );
+  const minimalEvidenceReplayRefs = rightPaneRefList(
+    stringListField(data.minimalEvidenceReplayRefs),
+    stringListField(metadata.minimalEvidenceReplayRefs),
+    stringListField(runSummary.minimalEvidenceReplayRefs),
+    stringListField(isRecord(data.nativeHost) ? data.nativeHost.minimalEvidenceReplayRefs : undefined),
+    stringListField(isRecord(metadata.nativeHost) ? metadata.nativeHost.minimalEvidenceReplayRefs : undefined),
+  );
   const leaseOwnerRefs = rightPaneRefList(
     stringField(data.inputLeaseRef),
     stringField(metadata.inputLeaseRef),
@@ -319,6 +366,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refFromValue(data.providerReadiness, ['ref', 'providerReadinessRef', 'readinessRef']),
     refFromValue(metadata.providerReadiness, ['ref', 'providerReadinessRef', 'readinessRef']),
     refFromValue(sidecarCapabilities, ['ref', 'sidecarCapabilitiesRef', 'capabilitiesRef']),
+    nativeHostPreflight?.adapterReadinessRef,
   );
   const platformDriverRef = firstNonEmptyString(
     stringField(data.platformDriverRef),
@@ -329,6 +377,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refFromValue(metadata.platformDriver, ['ref', 'platformDriverRef', 'driverRef']),
     refFromValue(data.providerReadiness, ['platformDriverRef', 'driverRef']),
     refFromValue(metadata.providerReadiness, ['platformDriverRef', 'driverRef']),
+    nativeHostPreflight?.platformDriverRefs?.[0],
   );
   const platformDriverStatus = firstNonEmptyString(
     stringField(data.platformDriverStatus),
@@ -348,6 +397,13 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     stringField(artifact.dataRef),
   );
   const sessionRef = firstNonEmptyString(stringField(data.sessionRef), stringField(metadata.sessionRef));
+  const currentRunPointerRef = firstNonEmptyString(
+    stringField(data.currentRunPointerRef),
+    stringField(metadata.currentRunPointerRef),
+    stringField(runSummary.currentRunPointerRef),
+    refFromValue(data.nativeHost, ['currentRunPointerRef']),
+    refFromValue(metadata.nativeHost, ['currentRunPointerRef']),
+  );
   const hostSessionRef = firstNonEmptyString(
     stringField(data.hostSessionRef),
     stringField(metadata.hostSessionRef),
@@ -419,6 +475,24 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refFromValue(data.surfaceTransportDescriptor, ['ref', 'surfaceTransportRef']),
     refFromValue(metadata.surfaceTransportDescriptor, ['ref', 'surfaceTransportRef']),
   );
+  const frameTransport = virtualScreenQualityRefFromValue(
+    data.frameTransport,
+    metadata.frameTransport,
+    stringField(data.frameTransportRef),
+    stringField(metadata.frameTransportRef),
+    stringField(data.frameTransportContractRef),
+    stringField(metadata.frameTransportContractRef),
+    refFromValue(data.surfaceTransportDescriptor, ['frameTransportContractRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['frameTransportContractRef']),
+  );
+  const frameTelemetry = virtualScreenQualityRefFromValue(
+    data.frameTelemetry,
+    metadata.frameTelemetry,
+    stringField(data.frameTelemetryRef),
+    stringField(metadata.frameTelemetryRef),
+    refFromValue(data.surfaceTransportDescriptor, ['frameTelemetryRef']),
+    refFromValue(metadata.surfaceTransportDescriptor, ['frameTelemetryRef']),
+  );
   const currentFrameSequence = virtualScreenQualityRefFromValue(
     data.currentFrameSequence,
     metadata.currentFrameSequence,
@@ -435,6 +509,12 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     data.surfaceTransportDescriptor,
     metadata.surfaceTransportDescriptor,
   );
+  const streamQualityFallback = virtualScreenStreamQualityFallbackEvidence({
+    data,
+    metadata,
+    runSummary,
+    frameTelemetryRef: frameTelemetry?.ref,
+  });
   const providerExecuted = firstBoolean(
     booleanField(data.providerExecuted),
     booleanField(metadata.providerExecuted),
@@ -461,6 +541,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refFromValue(metadata.permission, ['ref', 'permissionRef']),
     refsFromList(data.permissions, ['ref', 'permissionRef'])[0],
     refsFromList(metadata.permissions, ['ref', 'permissionRef'])[0],
+    nativeHostPreflight?.permissionRefs?.[0],
   );
   const permissionStatus = firstNonEmptyString(
     stringField(data.permissionStatus),
@@ -505,6 +586,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     stringField(metadata.recheckRef),
     permissionRecheckRefs[0],
   );
+  const permissionHandoffRef = permissionHandoffRefs[0];
+  const permissionRecheckRef = permissionRecheckRefs[0];
   const validationRef = firstNonEmptyString(stringField(data.validationRef), stringField(metadata.validationRef), stringField(runSummary.validationRef));
   const completionEvidenceRef = firstNonEmptyString(stringField(data.completionEvidenceRef), stringField(metadata.completionEvidenceRef));
   const evidenceLedgerRef = firstNonEmptyString(
@@ -539,6 +622,9 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     frameRecords.map((frame) => frame.frameDataRef),
     frameRecords.map((frame) => frame.screenshotRef),
     frameRecords.map((frame) => frame.evidenceRef),
+    nativeHostPreflight?.preflightRef,
+    nativeHostPreflight?.preflightLedgerRef,
+    frameTransport?.ref,
     permissionHandoffRefs,
   );
   const verificationRefs = rightPaneRefList(
@@ -552,6 +638,12 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     permissionRecheckRefs,
     sidecarDiscoveryRef,
     adapterReadinessRef,
+    nativeHostPreflight?.preflightLedgerEntryRef,
+    nativeHostPreflight?.hostReadinessRef,
+    nativeHostPreflight?.adapterReadinessRef,
+    nativeHostPreflight?.providerReadinessRefs,
+    frameTelemetry?.ref,
+    streamQualityFallback?.reasonRefs,
   );
   const guiPresentRefs = rightPaneRefList(
     stringField(data.guiPresentRef),
@@ -566,6 +658,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     && !targetAppRef
     && !targetWindowRef
     && !sessionRef
+    && !currentRunPointerRef
     && !blockedRef
     && !errorRef
     && !currentFrameSequence
@@ -573,12 +666,16 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     && !permissionHandoffRefs.length
     && !permissionRecheckRefs.length
     && !recheckRef
+    && !nativeHostPreflight
     && !adapterReadinessRef
+    && !frameTransport
+    && !frameTelemetry
     && !actorCursorRefs.length
     && !annotationOverlayRefs.length
     && !proposalRefs.length
     && !artifactRefs.length
     && !verificationRefs.length
+    && !minimalEvidenceReplayRefs.length
     && !frameRecords.length
   ) return undefined;
   const authorizationIncomplete = virtualScreenAuthorizationIncomplete({ permissionRequired, permissionGranted, permissionStatus, platformDriverStatus, permissionHandoffRefs });
@@ -592,45 +689,82 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
   const attachState = normalizeVirtualScreenAttachState(firstNonEmptyString(stringField(data.attachState), stringField(metadata.attachState)))
     ?? (authorizationIncomplete ? 'requires-handoff' : undefined);
   const isolationFlags = virtualScreenIsolationFlagsFromValue(data.isolationFlags ?? metadata.isolationFlags ?? data.isolation ?? metadata.isolation);
+  const surfaceMode = deriveVirtualScreenSurfaceMode({
+    attachState,
+    explicitSurfaceMode: normalizeVirtualScreenSurfaceMode(stringField(data.surfaceMode) ?? stringField(metadata.surfaceMode)),
+    sessionRef,
+    hostSessionRef,
+    liveSurfaceRef,
+    surfaceTransport,
+    surfaceTransportRef,
+    surfaceOwnerRef,
+    displayOwnerRef,
+    frameStreamRef,
+    currentFrameRef,
+    providerSessionOwnerRef,
+    providerSessionReconnectRef,
+    liveBindingAttachGrantRef,
+    liveBindingAttachGrantStatus,
+    grantValidationRef,
+    grantValidationStatus,
+    currentFrameSequence,
+    surfaceTransportDescriptor,
+    platformDriverRef,
+    platformDriverStatus,
+    permissionRequired,
+    permissionGranted,
+    permissionStatus,
+    evidenceLedgerRef,
+    providerExecuted,
+    providerSessionRevalidated,
+    replayRef,
+    frameRecords,
+    isolationFlags,
+    streamQualityFallbackRequired: streamQualityFallback?.fallbackRequired === true,
+  });
+  const presentation = deriveVirtualScreenPresentationState({
+    attachState,
+    surfaceMode,
+    blockedRef,
+    errorRef,
+    replayRef,
+    currentFrameRef,
+    frameStreamRef,
+    liveSurfaceRef,
+    frameRecords,
+    permissionRequired,
+    permissionGranted,
+    permissionStatus,
+    platformDriverStatus,
+    permissionRef,
+    permissionHandoffRef,
+    permissionHandoffRefs,
+    permissionRecheckRef,
+    permissionRecheckRefs,
+    recheckRef,
+    streamQualityFallback,
+  });
   return {
     title: stringField(data.title) ?? stringField(metadata.title) ?? 'Computer Use Virtual Screen',
     status,
     attachState,
-    surfaceMode: deriveVirtualScreenSurfaceMode({
-      attachState,
-      explicitSurfaceMode: normalizeVirtualScreenSurfaceMode(stringField(data.surfaceMode) ?? stringField(metadata.surfaceMode)),
-      sessionRef,
-      liveSurfaceRef,
-      surfaceTransport,
-      surfaceTransportRef,
-      frameStreamRef,
-      currentFrameRef,
-      providerSessionOwnerRef,
-      providerSessionReconnectRef,
-      liveBindingAttachGrantRef,
-      liveBindingAttachGrantStatus,
-      grantValidationRef,
-      grantValidationStatus,
-      currentFrameSequence,
-      surfaceTransportDescriptor,
-      platformDriverRef,
-      platformDriverStatus,
-      permissionRequired,
-      permissionGranted,
-      permissionStatus,
-      evidenceLedgerRef,
-      providerExecuted,
-      providerSessionRevalidated,
-      replayRef,
-      frameRecords,
-      isolationFlags,
-    }),
+    surfaceMode,
+    presentationState: presentation.state,
+    presentationStateReason: presentation.reason,
+    presentationStateReasonRefs: presentation.reasonRefs,
     displayGroupRef: firstNonEmptyString(stringField(data.displayGroupRef), stringField(metadata.displayGroupRef)),
+    currentRunPointerRef,
     screenRef: explicitScreenRef,
     liveSurfaceRef,
     surfaceTransport,
     platformDriverRef,
     platformDriverStatus,
+    preflightRef: nativeHostPreflight?.preflightRef,
+    preflightLedgerRef: nativeHostPreflight?.preflightLedgerRef,
+    preflightLedgerEntryRef: nativeHostPreflight?.preflightLedgerEntryRef,
+    hostReadinessRef: nativeHostPreflight?.hostReadinessRef,
+    providerReadinessRefs: nativeHostPreflight?.providerReadinessRefs,
+    ...(nativeHostPreflight ? { nativeHostPreflight } : {}),
     visibleScreenRefs,
     targetAppRef,
     targetWindowRef,
@@ -645,6 +779,8 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     grantValidationRef,
     grantValidationStatus,
     surfaceTransportRef,
+    frameTransport,
+    frameTelemetry,
     currentFrameSequence,
     ...(surfaceTransportDescriptor ? { surfaceTransportDescriptor } : {}),
     ...(providerExecuted === undefined ? {} : { providerExecuted }),
@@ -659,6 +795,7 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
       stringListField(data.beforeAfterFrameRefs),
       stringListField(metadata.beforeAfterFrameRefs),
     ),
+    minimalEvidenceReplayRefs,
     actorCursorRefs,
     annotationOverlayRefs,
     annotationProposalRefs: proposalRefs,
@@ -672,19 +809,19 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     artifactRefs,
     verificationRefs,
     guiPresentRefs,
-    blockedRef,
-    errorRef,
-    blockedReason,
-    errorReason,
+    blockedRef: blockedRef || undefined,
+    errorRef: errorRef || undefined,
+    blockedReason: blockedReason || undefined,
+    errorReason: errorReason || undefined,
     permissionRef,
     permissionStatus,
     permissionRequired,
     permissionGranted,
     stopRef: firstNonEmptyString(stringField(data.stopRef), stringField(metadata.stopRef)),
     handoffRef: firstNonEmptyString(stringField(data.handoffRef), stringField(metadata.handoffRef)),
-    permissionHandoffRef: permissionHandoffRefs[0],
+    permissionHandoffRef,
     permissionHandoffRefs,
-    permissionRecheckRef: permissionRecheckRefs[0],
+    permissionRecheckRef,
     permissionRecheckRefs,
     recheckRef,
     isolationFlags,
@@ -760,7 +897,7 @@ function runtimeArtifactFromRecord(record: Record<string, unknown>, fallbackScen
 function dedupeRuntimeArtifacts(artifacts: RuntimeArtifact[]) {
   const byId = new Map<string, RuntimeArtifact>();
   for (const artifact of artifacts) {
-    if (!artifact.id || byId.has(artifact.id)) continue;
+    if (!artifact.id) continue;
     byId.set(artifact.id, artifact);
   }
   return Array.from(byId.values());
@@ -797,6 +934,95 @@ function refFromValue(value: unknown, keys: string[]) {
     if (ref) return ref;
   }
   return undefined;
+}
+
+function nativeHostPreflightEvidence(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  runSummary: Record<string, unknown>,
+): VirtualScreenPayload['nativeHostPreflight'] {
+  const sources = nativeHostPreflightSources(data, metadata, runSummary);
+  const preflightRef = firstNativeHostPreflightRefFromSources(sources, ['preflightRef']);
+  const preflightLedgerRef = firstNativeHostPreflightRefFromSources(sources, ['preflightLedgerRef']);
+  const preflightLedgerEntryRef = firstNativeHostPreflightRefFromSources(sources, ['preflightLedgerEntryRef', 'ledgerEntryRef']);
+  const hostReadinessRef = firstNativeHostPreflightRefFromSources(sources, ['hostReadinessRef']);
+  const adapterReadinessRef = firstNativeHostPreflightRefFromSources(sources, ['adapterReadinessRef', 'providerReadinessRef', 'readinessRef']);
+  const platformDriverRefs = nativeHostPreflightRefsFromSources(sources, ['platformDriverRef', 'driverRef'], ['platformDriverRefs', 'driverRefs', 'platformDrivers', 'drivers']);
+  const permissionRefs = nativeHostPreflightRefsFromSources(sources, ['permissionRef'], ['permissionRefs', 'permissions']);
+  const providerReadinessRefs = nativeHostPreflightRefsFromSources(sources, ['providerReadinessRef', 'readinessRef'], ['providerReadinessRefs', 'providerRefs', 'providers']);
+  const hasPreflight = Boolean(
+    preflightRef
+    || preflightLedgerRef
+    || preflightLedgerEntryRef
+    || hostReadinessRef
+    || adapterReadinessRef
+    || platformDriverRefs.length
+    || permissionRefs.length
+    || providerReadinessRefs.length
+  );
+  return hasPreflight
+    ? {
+      preflightRef,
+      preflightLedgerRef,
+      preflightLedgerEntryRef,
+      hostReadinessRef,
+      adapterReadinessRef,
+      ...(platformDriverRefs.length ? { platformDriverRefs } : {}),
+      ...(permissionRefs.length ? { permissionRefs } : {}),
+      ...(providerReadinessRefs.length ? { providerReadinessRefs } : {}),
+    }
+    : undefined;
+}
+
+function nativeHostPreflightSources(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  runSummary: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const direct = [data, metadata, runSummary];
+  const nested = direct.flatMap((source) => {
+    const nativeHost = isRecord(source.nativeHost) ? source.nativeHost : undefined;
+    return [
+      source.nativeHostPreflight,
+      source.preflight,
+      nativeHost?.preflight,
+      nativeHost?.nativeHostPreflight,
+    ];
+  });
+  return [...direct, ...nested].filter((source): source is Record<string, unknown> => isRecord(source));
+}
+
+function firstNativeHostPreflightRefFromSources(sources: Record<string, unknown>[], keys: string[]) {
+  for (const source of sources) {
+    const ref = nativeHostPreflightRef(refFromValue(source, keys));
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
+function nativeHostPreflightRefsFromSources(sources: Record<string, unknown>[], scalarKeys: string[], listKeys: string[]) {
+  return rightPaneRefList(
+    sources.map((source) => nativeHostPreflightRef(refFromValue(source, scalarKeys))),
+    sources.flatMap((source) => listKeys.flatMap((key) => nativeHostPreflightRefs(source[key], scalarKeys))),
+  );
+}
+
+function nativeHostPreflightRefs(value: unknown, keys: string[]) {
+  if (typeof value === 'string') return nativeHostPreflightRef(value) ? [nativeHostPreflightRef(value)] : [];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      const ref = nativeHostPreflightRef(entry);
+      return ref ? [ref] : [];
+    }
+    if (!isRecord(entry)) return [];
+    const ref = nativeHostPreflightRef(refFromValue(entry, keys));
+    return ref ? [ref] : [];
+  });
+}
+
+function nativeHostPreflightRef(ref: string | undefined) {
+  return ref?.startsWith('computer-use:native-host/preflights/') && isNativeHostLiveTruthRef(ref) ? ref : undefined;
 }
 
 function surfaceTransportSequenceRef(value: unknown): VirtualScreenPayload['currentFrameSequence'] {
@@ -936,6 +1162,49 @@ function virtualScreenQualityRefValue(value: unknown): VirtualScreenPayload['cur
   };
 }
 
+function virtualScreenStreamQualityFallbackEvidence(options: {
+  data: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  runSummary: Record<string, unknown>;
+  frameTelemetryRef?: string;
+}): { fallbackRequired: true; reasonRefs: string[] } | undefined {
+  const sources = virtualScreenStreamQualitySources(options.data, options.metadata, options.runSummary);
+  const fallbackRequired = sources.some((source) => booleanField(source.fallbackRequired) === true);
+  if (!fallbackRequired) return undefined;
+  return {
+    fallbackRequired: true,
+    reasonRefs: rightPaneRefList(
+      sources.map((source) => safeDescriptorRef(refFromValue(source, ['ref', 'streamQualityRef', 'resultRef', 'qualityRef']))),
+      options.frameTelemetryRef,
+      sources.flatMap((source) => streamQualityFallbackReasonRefs(source)),
+    ),
+  };
+}
+
+function virtualScreenStreamQualitySources(
+  data: Record<string, unknown>,
+  metadata: Record<string, unknown>,
+  runSummary: Record<string, unknown>,
+): Record<string, unknown>[] {
+  const direct = [data, metadata, runSummary];
+  return direct.flatMap((source) => [
+    source.streamQuality,
+    source.frameTelemetry,
+    source.frameTransportReadiness,
+    isRecord(source.providerReadiness) ? source.providerReadiness.frameTransportReadiness : undefined,
+    isRecord(source.nativeHost) ? source.nativeHost.streamQuality : undefined,
+  ]).filter((source): source is Record<string, unknown> => isRecord(source));
+}
+
+function streamQualityFallbackReasonRefs(source: Record<string, unknown>) {
+  return [
+    'degradationRef',
+    'fallbackRef',
+    'fallbackReasonRef',
+    'recoveryRef',
+  ].map((key) => safeDescriptorRef(source[key])).filter((ref): ref is string => Boolean(ref));
+}
+
 function normalizeVirtualScreenAttachState(value: string | undefined): VirtualScreenPayload['attachState'] {
   const normalized = value?.replace('requires-user-handoff', 'requires-handoff');
   if (
@@ -968,9 +1237,12 @@ function deriveVirtualScreenSurfaceMode(options: {
   attachState: VirtualScreenPayload['attachState'];
   explicitSurfaceMode: VirtualScreenPayload['surfaceMode'];
   sessionRef: string;
+  hostSessionRef: string;
   liveSurfaceRef: string;
   surfaceTransport: VirtualScreenPayload['surfaceTransport'];
   surfaceTransportRef: string;
+  surfaceOwnerRef: string;
+  displayOwnerRef: string;
   frameStreamRef: string;
   currentFrameRef: string;
   providerSessionOwnerRef: string;
@@ -992,13 +1264,21 @@ function deriveVirtualScreenSurfaceMode(options: {
   replayRef: string;
   frameRecords: VirtualScreenFrame[];
   isolationFlags: VirtualScreenPayload['isolationFlags'];
+  streamQualityFallbackRequired: boolean;
 }): VirtualScreenPayload['surfaceMode'] {
+  if (
+    options.streamQualityFallbackRequired
+    && (options.currentFrameRef || options.frameStreamRef || options.liveSurfaceRef || options.replayRef || options.frameRecords.length)
+  ) return 'fallback';
   const canRepresentLive = Boolean(
     options.attachState === 'attached'
     && options.sessionRef
+    && options.hostSessionRef
     && options.liveSurfaceRef
     && options.surfaceTransport
     && options.surfaceTransportRef
+    && options.surfaceOwnerRef
+    && options.displayOwnerRef
     && options.frameStreamRef
     && options.currentFrameRef
     && options.providerSessionOwnerRef
@@ -1013,6 +1293,7 @@ function deriveVirtualScreenSurfaceMode(options: {
     && isReadyGateStatus(options.platformDriverStatus)
     && virtualScreenPermissionReady(options)
     && options.evidenceLedgerRef
+    && nativeHostLiveTruthRefsReady(options)
     && (options.providerExecuted === true || options.providerSessionRevalidated === true)
     && virtualScreenSurfaceTransportDescriptorMatchesLiveRefs(options)
     && options.isolationFlags?.backgroundRenderable === true
@@ -1029,6 +1310,121 @@ function deriveVirtualScreenSurfaceMode(options: {
   if (options.explicitSurfaceMode === 'empty' && !options.currentFrameRef && !options.replayRef && !options.frameStreamRef && !options.liveSurfaceRef && !options.frameRecords.length) return 'empty';
   if (options.explicitSurfaceMode === 'replay') return 'replay';
   return options.currentFrameRef || options.replayRef || options.frameStreamRef || options.liveSurfaceRef || options.frameRecords.length ? 'replay' : 'empty';
+}
+
+function deriveVirtualScreenPresentationState(options: {
+  attachState: VirtualScreenPayload['attachState'];
+  surfaceMode: VirtualScreenPayload['surfaceMode'];
+  blockedRef?: string;
+  errorRef?: string;
+  replayRef?: string;
+  currentFrameRef?: string;
+  frameStreamRef?: string;
+  liveSurfaceRef?: string;
+  frameRecords: VirtualScreenFrame[];
+  permissionRequired: boolean | undefined;
+  permissionGranted: boolean | undefined;
+  permissionStatus: string;
+  platformDriverStatus: string;
+  permissionRef?: string;
+  permissionHandoffRef?: string;
+  permissionHandoffRefs: string[];
+  permissionRecheckRef?: string;
+  permissionRecheckRefs: string[];
+  recheckRef?: string;
+  streamQualityFallback?: { fallbackRequired: true; reasonRefs: string[] };
+}): { state: VirtualScreenPresentationState; reason: string; reasonRefs: string[] } {
+  if (options.surfaceMode === 'live' && options.attachState === 'attached') {
+    return {
+      state: 'live',
+      reason: 'host-live-surface',
+      reasonRefs: rightPaneRefList(options.liveSurfaceRef, options.frameStreamRef, options.currentFrameRef),
+    };
+  }
+  const permissionGate = virtualScreenAuthorizationIncomplete({
+    permissionRequired: options.permissionRequired,
+    permissionGranted: options.permissionGranted,
+    permissionStatus: options.permissionStatus,
+    platformDriverStatus: options.platformDriverStatus,
+    permissionHandoffRefs: options.permissionHandoffRefs,
+  });
+  if (permissionGate || options.permissionHandoffRef || options.permissionHandoffRefs.length) {
+    return {
+      state: 'permission',
+      reason: 'permission-gate',
+      reasonRefs: rightPaneRefList(
+        options.permissionRef,
+        options.permissionHandoffRef,
+        options.permissionHandoffRefs,
+        options.permissionRecheckRef,
+        options.permissionRecheckRefs,
+        options.recheckRef,
+      ),
+    };
+  }
+  if (options.blockedRef || options.errorRef || options.attachState === 'blocked' || options.attachState === 'error' || options.attachState === 'adapter-unavailable') {
+    return {
+      state: 'blocked',
+      reason: options.errorRef || options.attachState === 'error' ? 'error-gate' : 'blocked-gate',
+      reasonRefs: rightPaneRefList(options.blockedRef, options.errorRef),
+    };
+  }
+  if (options.surfaceMode === 'replay') {
+    return {
+      state: 'replay',
+      reason: 'replay-evidence',
+      reasonRefs: rightPaneRefList(options.replayRef, options.currentFrameRef, options.frameStreamRef, options.frameRecords.map((frame) => frame.ref)),
+    };
+  }
+  if (options.surfaceMode === 'fallback') {
+    return {
+      state: 'fallback',
+      reason: options.streamQualityFallback?.fallbackRequired ? 'stream-quality-fallback-required' : 'fallback-evidence',
+      reasonRefs: options.streamQualityFallback?.fallbackRequired
+        ? options.streamQualityFallback.reasonRefs
+        : rightPaneRefList(options.currentFrameRef, options.frameStreamRef, options.replayRef),
+    };
+  }
+  return { state: 'empty', reason: 'empty', reasonRefs: [] };
+}
+
+function nativeHostLiveTruthRefsReady(options: {
+  sessionRef: string;
+  hostSessionRef: string;
+  liveSurfaceRef: string;
+  surfaceTransportRef: string;
+  surfaceOwnerRef: string;
+  displayOwnerRef: string;
+  frameStreamRef: string;
+  currentFrameRef: string;
+  liveBindingAttachGrantRef: string;
+  grantValidationRef: string;
+  currentFrameSequence: VirtualScreenPayload['currentFrameSequence'];
+  platformDriverRef: string;
+  evidenceLedgerRef: string;
+}) {
+  return [
+    options.sessionRef,
+    options.hostSessionRef,
+    options.liveSurfaceRef,
+    options.surfaceTransportRef,
+    options.surfaceOwnerRef,
+    options.displayOwnerRef,
+    options.frameStreamRef,
+    options.currentFrameRef,
+    options.liveBindingAttachGrantRef,
+    options.grantValidationRef,
+    options.currentFrameSequence?.ref,
+    options.platformDriverRef,
+    options.evidenceLedgerRef,
+  ].every((ref) => typeof ref === 'string' && isNativeHostLiveTruthRef(ref));
+}
+
+function isNativeHostLiveTruthRef(ref: string) {
+  return ref.startsWith('computer-use:native-host/')
+    && !unsafeDescriptorRef(ref)
+    && !/(?:^|[:/.-])(?:fixture|fixtures|replay-fixture|snapshot-fixture|mock)(?:[:/.-]|$)/i.test(ref)
+    && !/^computer-use:native-host\/replay(?:[/:]|$)/i.test(ref);
 }
 
 function virtualScreenLiveBindingGrantValidated(options: {

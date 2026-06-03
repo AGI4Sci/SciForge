@@ -17,7 +17,10 @@ const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.lo
 const RUNTIME_LOG_DIR = resolve(process.env.SCIFORGE_LOG_DIR || 'workspace/.sciforge/logs');
 const runtimeChildren = new Map<string, ReturnType<typeof spawn>>();
 const STARTUP_TIMEOUT_MS = Number(process.env.SCIFORGE_RUNTIME_START_TIMEOUT_MS || 30_000);
-const BROWSER_HOST_SESSION_FINAL_ENDPOINT_TOKENS = ['computer-use-actions', 'frame-stream'] as const;
+const BROWSER_HOST_SESSION_RUNTIME_ENDPOINT_TOKENS = ['start', 'state', 'actions', 'computer-use-actions'] as const;
+const BROWSER_HOST_SESSION_NATIVE_ENDPOINT_TOKENS = ['start', 'state', 'actions', 'computer-use-actions'] as const;
+const BROWSER_HOST_NATIVE_SURFACE_ENDPOINT_TOKENS = ['health', 'attach', 'state'] as const;
+const BROWSER_HOST_SEARCH_ENDPOINT_TOKENS = ['search'] as const;
 
 export default defineConfig({
   base: './',
@@ -132,6 +135,8 @@ function sciForgeRuntimeLauncher() {
           return;
         }
         try {
+          const body = await readJsonBody(req);
+          const requireBrowserHostNativeSurface = body.requireBrowserHostNativeSurface === true;
           const [workspace, agentserver] = await Promise.all([
             ensureRuntimeProcess({
               id: 'workspace',
@@ -140,11 +145,9 @@ function sciForgeRuntimeLauncher() {
               healthUrl: `http://127.0.0.1:${WORKSPACE_PORT}/health`,
               cwd: process.cwd(),
               args: ['run', 'workspace:server'],
-              requiredCapability: 'browser-host-session',
-              requiredEndpoint: {
-                key: 'browserHostSession',
-                tokens: BROWSER_HOST_SESSION_FINAL_ENDPOINT_TOKENS,
-              },
+              requiredCapabilities: browserRuntimeWorkspaceCapabilities(requireBrowserHostNativeSurface),
+              requiredEndpoints: browserRuntimeWorkspaceEndpoints(requireBrowserHostNativeSurface),
+              startupBlocked: requireBrowserHostNativeSurface ? browserRuntimeNativeSurfaceStartupBlocker : undefined,
             }),
             ensureRuntimeProcess({
               id: 'agentserver',
@@ -167,6 +170,17 @@ function sciForgeRuntimeLauncher() {
   };
 }
 
+type RuntimeHealth = {
+  ok: boolean;
+  capabilities: string[];
+  endpoints: Record<string, unknown>;
+};
+
+type RuntimeRequiredEndpoint = {
+  key: string;
+  tokens: readonly string[];
+};
+
 async function ensureRuntimeProcess(options: {
   id: string;
   label: string;
@@ -177,17 +191,17 @@ async function ensureRuntimeProcess(options: {
   env?: Record<string, string>;
   enabled?: boolean;
   missingReason?: string;
-  requiredCapability?: string;
-  requiredEndpoint?: {
-    key: string;
-    tokens: readonly string[];
-  };
+  requiredCapabilities?: readonly string[];
+  requiredEndpoints?: readonly RuntimeRequiredEndpoint[];
+  startupBlocked?: (health: RuntimeHealth) => { status: string; detail: string } | undefined;
 }) {
   if (options.enabled === false) return { id: options.id, label: options.label, ok: false, status: 'missing', detail: options.missingReason };
   const health = await readHealth(options.healthUrl);
-  if (runtimeHealthSatisfiesRequirements(health, options.requiredCapability, options.requiredEndpoint)) {
+  if (runtimeHealthSatisfiesRequirements(health, options.requiredCapabilities, options.requiredEndpoints)) {
     return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl };
   }
+  const blocked = options.startupBlocked?.(health);
+  if (blocked) return { id: options.id, label: options.label, ok: false, status: blocked.status, detail: blocked.detail };
   const existing = runtimeChildren.get(options.id);
   if (existing && existing.exitCode === null && !existing.killed) {
     await stopRuntimeChild(options.id, existing);
@@ -210,7 +224,7 @@ async function ensureRuntimeProcess(options: {
     runtimeChildren.delete(options.id);
   });
   runtimeChildren.set(options.id, child);
-  const healthy = await waitForHealthy(options.healthUrl, STARTUP_TIMEOUT_MS, options.requiredCapability, options.requiredEndpoint);
+  const healthy = await waitForHealthy(options.healthUrl, STARTUP_TIMEOUT_MS, options.requiredCapabilities, options.requiredEndpoints);
   if (healthy) {
     return { id: options.id, label: options.label, ok: true, status: 'online', detail: options.healthUrl, logPath };
   }
@@ -657,29 +671,76 @@ async function readHealth(url: string) {
 async function waitForHealthy(
   url: string,
   timeoutMs: number,
-  requiredCapability?: string,
-  requiredEndpoint?: { key: string; tokens: readonly string[] },
+  requiredCapabilities?: readonly string[],
+  requiredEndpoints?: readonly RuntimeRequiredEndpoint[],
 ) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const health = await readHealth(url);
-    if (runtimeHealthSatisfiesRequirements(health, requiredCapability, requiredEndpoint)) return true;
+    if (runtimeHealthSatisfiesRequirements(health, requiredCapabilities, requiredEndpoints)) return true;
     await sleep(350);
   }
   return false;
 }
 
 function runtimeHealthSatisfiesRequirements(
-  health: { ok: boolean; capabilities: string[]; endpoints: Record<string, unknown> },
-  requiredCapability?: string,
-  requiredEndpoint?: { key: string; tokens: readonly string[] },
+  health: RuntimeHealth,
+  requiredCapabilities: readonly string[] = [],
+  requiredEndpoints: readonly RuntimeRequiredEndpoint[] = [],
 ) {
   if (!health.ok) return false;
-  if (requiredCapability && !health.capabilities.includes(requiredCapability)) return false;
-  if (!requiredEndpoint) return true;
-  const endpoint = health.endpoints[requiredEndpoint.key];
-  if (typeof endpoint !== 'string') return false;
-  return requiredEndpoint.tokens.every((token) => endpoint.includes(token));
+  for (const capability of requiredCapabilities) {
+    if (!health.capabilities.includes(capability)) return false;
+  }
+  for (const requiredEndpoint of requiredEndpoints) {
+    const endpoint = health.endpoints[requiredEndpoint.key];
+    if (typeof endpoint !== 'string') return false;
+    if (!requiredEndpoint.tokens.every((token) => endpoint.includes(token))) return false;
+  }
+  return true;
+}
+
+function browserRuntimeWorkspaceCapabilities(requireBrowserHostNativeSurface: boolean): readonly string[] {
+  return requireBrowserHostNativeSurface
+    ? ['browser-host-session', 'browser-host-native-surface', 'browser-host-search']
+    : ['browser-host-session'];
+}
+
+function browserRuntimeWorkspaceEndpoints(requireBrowserHostNativeSurface: boolean): readonly RuntimeRequiredEndpoint[] {
+  return requireBrowserHostNativeSurface ? [{
+    key: 'browserHostSession',
+    tokens: BROWSER_HOST_SESSION_NATIVE_ENDPOINT_TOKENS,
+  }, {
+    key: 'browserHostNativeSurface',
+    tokens: BROWSER_HOST_NATIVE_SURFACE_ENDPOINT_TOKENS,
+  }, {
+    key: 'browserHostSearch',
+    tokens: BROWSER_HOST_SEARCH_ENDPOINT_TOKENS,
+  }] : [{
+    key: 'browserHostSession',
+    tokens: BROWSER_HOST_SESSION_RUNTIME_ENDPOINT_TOKENS,
+  }];
+}
+
+function browserRuntimeNativeSurfaceStartupBlocker(_health: RuntimeHealth) {
+  if (browserHostNativeAdapterEnvIsLoopback()) return undefined;
+  return {
+    status: 'native-surface-adapter-missing',
+    detail: 'BrowserHostSession live browser sessions require a Desktop Electron native surface adapter. The Vite web dev server cannot create a right-pane native surface by itself; launch the Desktop Electron host or start Workspace Writer with SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL from the Desktop surface server.',
+  };
+}
+
+function browserHostNativeAdapterEnvIsLoopback() {
+  const value = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL?.trim();
+  if (!value) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:'
+      && (url.hostname === '127.0.0.1' || url.hostname === 'localhost' || url.hostname === '::1')
+      && Boolean(url.port);
+  } catch {
+    return false;
+  }
 }
 
 function sleep(ms: number) {

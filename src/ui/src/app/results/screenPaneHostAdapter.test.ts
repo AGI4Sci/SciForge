@@ -142,7 +142,24 @@ test('screen pane host adapter forwards frame input intents as terminal-equivale
   }]);
 });
 
-test('screen pane host adapter marks live refs as host-presentation ready without owning the session', () => {
+test('screen pane host adapter does not mark legacy live-shaped refs as host-presentation ready', () => {
+  const html = renderToStaticMarkup(createElement(RightPaneVirtualScreenTool, {
+    config: configFixture(),
+    session: sessionFixture(),
+    payload: attachedLegacyHostPresentationPayload(),
+    locale: 'en-US',
+    onCommandRequest: () => undefined,
+  }));
+
+  assert.match(html, /data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
+  assert.match(html, /data-host-presentation-ready="false"/);
+  assert.match(html, /data-presentation-mode="fallback-ref-inspector"/);
+  assert.doesNotMatch(html, /data-live-surface-ref="computer-use:session\/run-live\/live-surface\.json"/);
+  assert.match(html, /data-rejection-kind="non-host-live-ref"/);
+  assert.doesNotMatch(html, /attachVirtualAppScreenSession|runComputerUse|executorLease/);
+});
+
+test('screen pane host adapter marks Host-owned live refs as host-presentation ready', () => {
   const html = renderToStaticMarkup(createElement(RightPaneVirtualScreenTool, {
     config: configFixture(),
     session: sessionFixture(),
@@ -154,7 +171,7 @@ test('screen pane host adapter marks live refs as host-presentation ready withou
   assert.match(html, /data-host-presentation-boundary="virtual-app-screen-ref-bridge"/);
   assert.match(html, /data-host-presentation-ready="true"/);
   assert.match(html, /data-presentation-mode="live-surface-ref"/);
-  assert.match(html, /data-live-surface-ref="computer-use:session\/run-live\/live-surface\.json"/);
+  assert.match(html, /data-live-surface-ref="computer-use:native-host\/run-live\/live-surface\.json"/);
   assert.doesNotMatch(html, /startBrowserHostSession|attachVirtualAppScreenSession|runComputerUse|executorLease/);
 });
 
@@ -168,44 +185,45 @@ test('screen pane host adapter builds refs-only live presentation attach request
 
   assert.deepEqual(request, {
     kind: 'right-pane-virtual-app-screen-surface',
-    sessionRef: 'computer-use:session/run-live/session.json',
-    screenRef: 'virtual-app-screen:run-live/screen-a',
-    liveSurfaceRef: 'computer-use:session/run-live/live-surface.json',
-    frameStreamRef: 'computer-use:session/run-live/frame-stream.json',
-    currentFrameRef: 'computer-use:session/run-live/frames/current.png',
-    providerSessionOwnerRef: 'computer-use:provider-session/run-live/owner.json',
-    providerSessionReconnectRef: 'computer-use:provider-session/run-live/reconnect.json',
-    liveBindingAttachGrantRef: 'computer-use:provider-session/run-live/live-binding-attach-grant.json',
+    sessionRef: 'computer-use:native-host/run-live/session.json',
+    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
+    liveBindingAttachGrantRef: 'computer-use:native-host/run-live/live-binding-attach-grant.json',
     liveBindingAttachGrantStatus: 'validated',
-    grantValidationRef: 'computer-use:provider-session/run-live/grant-validation.json',
+    grantValidationRef: 'computer-use:native-host/run-live/grant-validation.json',
     grantValidationStatus: 'validated',
-    surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
+    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
     surfaceTransport: 'native-frame-stream',
-    platformDriverRef: 'computer-use:session/run-live/platform-driver.json',
+    platformDriverRef: 'computer-use:native-host/run-live/platform-driver.json',
     platformDriverStatus: 'ready',
-    evidenceLedgerRef: 'computer-use:session/run-live/evidence-ledger.json',
-    providerExecuted: true,
+    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
     surfaceTransportDescriptor: {
       owner: 'VirtualDisplayProvider',
       providerId: 'provider:run-live',
       transport: 'native-frame-stream',
-      surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
-      liveSurfaceRef: 'computer-use:session/run-live/live-surface.json',
-      frameStreamRef: 'computer-use:session/run-live/frame-stream.json',
-      currentFrameRef: 'computer-use:session/run-live/frames/current.png',
+      surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+      liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+      frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+      currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
       currentFrameSequence: 23,
       diagnosticOnly: false,
       productFallback: false,
       singleInteractiveTruth: true,
     },
     currentFrameSequence: {
-      ref: 'computer-use:session/run-live/frame-sequence.json',
+      ref: 'computer-use:native-host/run-live/frame-sequence.json',
       sequence: 23,
     },
     bounds: { x: 12, y: 42, width: 1024, height: 769 },
     visible: true,
     focus: true,
   });
+  assert.equal(JSON.stringify(request).includes('screenRef'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionOwnerRef'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionReconnectRef'), false);
+  assert.equal(JSON.stringify(request).includes('providerExecuted'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionRevalidated'), false);
   assert.equal(JSON.stringify(request).includes('inputLeaseRef'), false);
   assert.equal(JSON.stringify(request).includes('actionAdapterRef'), false);
   assert.equal(JSON.stringify(request).includes('executor'), false);
@@ -226,9 +244,11 @@ test('screen pane host adapter accepts revalidated provider sessions without fak
     height: 480,
   });
 
-  assert.equal(request?.providerExecuted, undefined);
-  assert.equal(request?.providerSessionRevalidated, true);
   assert.equal(request?.visible, true);
+  assert.equal(JSON.stringify(request).includes('providerExecuted'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionRevalidated'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionOwnerRef'), false);
+  assert.equal(JSON.stringify(request).includes('providerSessionReconnectRef'), false);
 });
 
 test('screen pane host adapter fails closed without live complete safe refs', () => {
@@ -349,45 +369,45 @@ function attachedHostPresentationPayload(): VirtualScreenPayload {
     status: 'ready',
     attachState: 'attached',
     surfaceMode: 'live',
-    platformDriverRef: 'computer-use:session/run-live/platform-driver.json',
+    platformDriverRef: 'computer-use:native-host/run-live/platform-driver.json',
     platformDriverStatus: 'ready',
     permissionStatus: 'granted',
     permissionGranted: true,
-    sessionRef: 'computer-use:session/run-live/session.json',
+    sessionRef: 'computer-use:native-host/run-live/session.json',
     screenRef: 'virtual-app-screen:run-live/screen-a',
-    liveSurfaceRef: 'computer-use:session/run-live/live-surface.json',
-    frameStreamRef: 'computer-use:session/run-live/frame-stream.json',
-    currentFrameRef: 'computer-use:session/run-live/frames/current.png',
+    liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+    frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+    currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
     providerSessionOwnerRef: 'computer-use:provider-session/run-live/owner.json',
     providerSessionReconnectRef: 'computer-use:provider-session/run-live/reconnect.json',
-    liveBindingAttachGrantRef: 'computer-use:provider-session/run-live/live-binding-attach-grant.json',
+    liveBindingAttachGrantRef: 'computer-use:native-host/run-live/live-binding-attach-grant.json',
     liveBindingAttachGrantStatus: 'validated',
-    grantValidationRef: 'computer-use:provider-session/run-live/grant-validation.json',
+    grantValidationRef: 'computer-use:native-host/run-live/grant-validation.json',
     grantValidationStatus: 'validated',
-    surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
+    surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
     surfaceTransport: 'native-frame-stream',
-    evidenceLedgerRef: 'computer-use:session/run-live/evidence-ledger.json',
+    evidenceLedgerRef: 'computer-use:native-host/run-live/evidence-ledger.json',
     providerExecuted: true,
     surfaceTransportDescriptor: {
       owner: 'VirtualDisplayProvider',
       providerId: 'provider:run-live',
       transport: 'native-frame-stream',
-      surfaceTransportRef: 'computer-use:session/run-live/surface-transport.json',
-      liveSurfaceRef: 'computer-use:session/run-live/live-surface.json',
-      frameStreamRef: 'computer-use:session/run-live/frame-stream.json',
-      currentFrameRef: 'computer-use:session/run-live/frames/current.png',
+      surfaceTransportRef: 'computer-use:native-host/run-live/surface-transport.json',
+      liveSurfaceRef: 'computer-use:native-host/run-live/live-surface.json',
+      frameStreamRef: 'computer-use:native-host/run-live/frame-stream.json',
+      currentFrameRef: 'computer-use:native-host/run-live/frames/current.png',
       currentFrameSequence: 23,
       diagnosticOnly: false,
       productFallback: false,
       singleInteractiveTruth: true,
     },
     currentFrameSequence: {
-      ref: 'computer-use:session/run-live/frame-sequence.json',
+      ref: 'computer-use:native-host/run-live/frame-sequence.json',
       sequence: 23,
     },
-    inputLeaseRef: 'computer-use:session/run-live/leases/active.json',
-    actionAdapterRef: 'computer-use:session/run-live/adapters/native.json',
-    adapterReadinessRef: 'computer-use:session/run-live/readiness/native.json',
+    inputLeaseRef: 'computer-use:native-host/run-live/leases/active.json',
+    actionAdapterRef: 'computer-use:native-host/run-live/adapters/native.json',
+    adapterReadinessRef: 'computer-use:native-host/run-live/readiness/native.json',
     isolationFlags: {
       affectsPhysicalDisplay: false,
       requiresFocusSteal: false,
@@ -400,6 +420,10 @@ function attachedHostPresentationPayload(): VirtualScreenPayload {
       diagnosticOnly: false,
     },
   } as VirtualScreenPayload;
+}
+
+function attachedLegacyHostPresentationPayload(): VirtualScreenPayload {
+  return JSON.parse(JSON.stringify(attachedHostPresentationPayload()).replaceAll('computer-use:native-host/run-live', 'computer-use:session/run-live')) as VirtualScreenPayload;
 }
 
 function sessionFixture(overrides: Partial<SciForgeSession> = {}): SciForgeSession {

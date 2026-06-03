@@ -67,17 +67,19 @@ test('VirtualAppScreen local smoke distinguishes missing adapter from missing pe
   assert.equal(missingPermission.manifest.adapterReadinessRecords[0]?.blockedReason, missingPermission.blockedDiagnostic?.blockedReason);
 });
 
-test('VirtualAppScreen local smoke real-evidence mode passes only when refs are complete', () => {
+test('VirtualAppScreen local smoke contract real-evidence mode remains blocked without real Host opt-in evidence', () => {
   const complete = buildVirtualAppScreenLocalSmokeBundle({
     runId: 'complete-real-evidence',
     mode: 'real-evidence',
   });
 
-  assert.equal(complete.blockedDiagnostic, undefined);
-  assert.equal(complete.manifest.status, 'passed');
+  assert.equal(complete.blockedDiagnostic?.category, 'real-evidence-incomplete');
+  assert.equal(complete.appSessionAttach.status, 'blocked');
+  assert.equal(complete.manifest.status, 'blocked');
   assert.equal(complete.manifest.diagnosticOnly, false);
-  assert.equal(complete.manifest.userAcceptanceEligible, true);
+  assert.equal(complete.manifest.userAcceptanceEligible, false);
   assert.deepEqual(complete.manifest.validation.missingRefs, []);
+  assert.ok(complete.manifest.validation.issues.some((issue) => issue.includes('real VirtualAppScreen action-causality evidence is required')));
   assert.deepEqual(complete.refsFirstFlow.beforeAfterFrameRefs, [complete.refs.beforeAfterRef]);
   assert.deepEqual(complete.refsFirstFlow.guiPresentRefs, [complete.refs.guiPresentRef]);
 

@@ -96,11 +96,19 @@ test('Linux and Windows provider shells can drive native attach only through inj
       assert.equal(result.evidence.providerExecuted, true);
       assert.equal(result.evidence.surfaceTransport?.owner, 'VirtualDisplayProvider');
       assert.equal(result.evidence.surfaceTransport?.transport, 'webrtc');
-      assert.equal(result.refs.sessionRef, `${providerRoot}/session.json`);
-      assert.equal(result.refs.liveSurfaceRef, `${providerRoot}/live-surface.json`);
-      assert.equal(result.refs.currentFrameRef, `${providerRoot}/frames/current.png`);
-      assert.equal(result.refs.surfaceTransportRef, `${providerRoot}/surface-transport.json`);
-      assert.equal(result.refs.frameTransportContractRef, `${providerRoot}/frame-transport-contract.json`);
+      assert.match(requiredString(result.refs.sessionRef), /^computer-use:native-host\/sessions\//u);
+      assert.match(requiredString(result.refs.liveSurfaceRef), /^computer-use:native-host\/surfaces\//u);
+      assert.match(requiredString(result.refs.currentFrameRef), /^computer-use:native-host\/frames\//u);
+      assert.match(requiredString(result.refs.surfaceTransportRef), /^computer-use:native-host\/surfaces\//u);
+      assert.match(requiredString(result.refs.frameTransportContractRef), /^computer-use:native-host\/surfaces\//u);
+      for (const ref of [
+        `${providerRoot}/session.json`,
+        `${providerRoot}/frames/current.png`,
+        `${providerRoot}/surface-transport.json`,
+        `${providerRoot}/frame-transport-contract.json`,
+      ]) {
+        assert.ok(result.evidence.evidenceRefs.includes(ref), `missing provider evidence ref ${ref}`);
+      }
     });
   }
 });
@@ -229,6 +237,11 @@ function parsedAttachCommand(runId: string) {
   assert.equal(parsed.kind, 'parsed');
   if (parsed.kind !== 'parsed') throw new Error('expected parsed command');
   return parsed.command;
+}
+
+function requiredString(value: string | string[] | undefined) {
+  assert.equal(typeof value, 'string');
+  return value as string;
 }
 
 function readyLinuxProbeOptions() {
