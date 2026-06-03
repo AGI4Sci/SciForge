@@ -3,7 +3,9 @@ import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { Browser, BrowserContext, Page } from 'playwright-core';
-import { normalizeWorkspaceRootPath, workspaceBrowserProfileDir } from './workspace-paths.js';
+import { browserRuntimeAutomationSummary } from '@sciforge-ui/runtime-contract/browser-runtime';
+import type { BrowserRuntimeAutomationSummary } from '@sciforge-ui/runtime-contract/browser-runtime';
+import { ensureWorkspaceBrowserProfileDir, normalizeWorkspaceRootPath } from './workspace-paths.js';
 import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   BROWSER_HOST_LOADING_PROGRESS_SCHEMA,
@@ -225,7 +227,7 @@ export class BrowserHostSessionManager {
       networkLog: [],
       actionTimingSamples: new Map(),
     };
-    await publishBrowserHostVisibleAction(session, 'open', input.sessionId, input.actorCursor);
+    await publishBrowserHostVisibleAction(session, 'open', input.sessionId, input.actorCursor, { url: requestedUrl });
     setBrowserHostSessionLoadingProgress(session, {
       state: 'navigation-start',
       reason: 'host-starting',
@@ -240,12 +242,13 @@ export class BrowserHostSessionManager {
       actionId: input.sessionId,
     });
     try {
+      const profileState = await ensureWorkspaceBrowserProfileDir(root);
       session.driver = await this.driverFactory().create({
         sessionId,
         viewport: session.viewport,
         timeoutMs: timeoutMs(input.timeoutMs),
         workspacePath: root,
-        workspaceProfileDir: workspaceBrowserProfileDir(root),
+        workspaceProfileDir: profileState.profileDir,
       });
       attachDriverDiagnostics(session);
       session.status = 'loading';
@@ -333,7 +336,7 @@ export class BrowserHostSessionManager {
       adapterSentAt: input.adapterSentAt,
       hostReceivedAtMs,
     });
-    await publishBrowserHostVisibleAction(session, input.action, input.actionId, input.actorCursor);
+    await publishBrowserHostVisibleAction(session, input.action, input.actionId, input.actorCursor, input);
     try {
       let didClose = false;
       let didCursor = false;
@@ -569,8 +572,25 @@ export class BrowserHostSessionManager {
       finalUrl: active?.url || session.url,
       results,
     });
+    const automationSummary = browserHostAutomationSummary({
+      kind: 'scrape',
+      status: results.length ? 'completed' : 'partial',
+      title: 'BrowserHostSession search scrape',
+      summary: `Search automation returned ${results.length} bounded result${results.length === 1 ? '' : 's'} and materialized refs for browser evidence.`,
+      itemCount: results.length,
+      refs: browserHostAutomationRefs({
+        searchResultRef: resultRef,
+        frameRef: active?.frameRef ?? session.frameRef,
+        screenshotRef: active?.screenshotRef ?? session.screenshotRef,
+        domSnapshotRef: active?.domSnapshotRef ?? session.domSnapshotRef,
+        axSnapshotRef: active?.axSnapshotRef ?? session.axSnapshotRef,
+        consoleLogRef: active?.consoleLogRef ?? session.consoleLogRef,
+        networkLogRef: active?.networkLogRef ?? session.networkLogRef,
+      }),
+    });
     if (active) {
       active.searchResultRef = resultRef;
+      active.automationSummary = automationSummary;
       await persistBrowserHostSession(active);
     }
     const state = active ? publicBrowserHostSessionState(active) : session;
@@ -583,6 +603,7 @@ export class BrowserHostSessionManager {
       results,
       session: state,
       searchResultRef: resultRef,
+      automationSummary,
       screenshotRef: state.screenshotRef,
       domSnapshotRef: state.domSnapshotRef,
       axSnapshotRef: state.axSnapshotRef,
@@ -1903,6 +1924,7 @@ async function readStoredBrowserHostSession(workspacePath: string, sessionId: st
       actorCursors: browserHostActorCursorsFromUnknown(record.actorCursors),
       visibleAction: browserHostVisibleActionFromUnknown(record.visibleAction),
       riskLedger: browserHostRiskLedgerFromUnknown(record.riskLedger),
+      automationSummary: browserHostAutomationSummary(record.automationSummary),
       lastActionTiming: browserHostActionTiming(record.lastActionTiming),
       actionTimingSummary: browserHostActionTimingSummary(record.actionTimingSummary),
       diagnostics: Array.isArray(record.diagnostics) ? record.diagnostics.filter((item): item is string => typeof item === 'string') : [],
@@ -1996,6 +2018,7 @@ function publicBrowserHostSessionState(session: ActiveBrowserHostSession): Brows
     actorCursors: browserHostActorCursorsFromUnknown(session.actorCursors),
     visibleAction: browserHostVisibleActionFromUnknown(session.visibleAction),
     riskLedger: browserHostRiskLedgerFromUnknown(session.riskLedger),
+    automationSummary: browserHostAutomationSummary(session.automationSummary),
     lastActionTiming: session.lastActionTiming,
     actionTimingSummary: session.actionTimingSummary ?? summarizeBrowserHostActionTimings(session.actionTimingSamples),
     diagnostics: session.diagnostics.slice(-20),
@@ -2361,14 +2384,62 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function browserHostAutomationSummary(value: unknown): BrowserRuntimeAutomationSummary | undefined {
+  const record = objectRecord(value);
+  return browserRuntimeAutomationSummary({
+    kind: stringField(record.kind),
+    status: stringField(record.status),
+    title: stringField(record.title),
+    summary: stringField(record.summary),
+    itemCount: Number(record.itemCount),
+    refs: Array.isArray(record.refs) ? record.refs as BrowserRuntimeAutomationSummary['refs'] : [],
+    diagnostics: Array.isArray(record.diagnostics) ? record.diagnostics.filter((item): item is string => typeof item === 'string') : [],
+  });
+}
+
+function browserHostAutomationRefs(input: {
+  searchResultRef?: string;
+  frameRef?: string;
+  screenshotRef?: string;
+  domSnapshotRef?: string;
+  axSnapshotRef?: string;
+  consoleLogRef?: string;
+  networkLogRef?: string;
+}): BrowserRuntimeAutomationSummary['refs'] {
+  const refs: BrowserRuntimeAutomationSummary['refs'] = [];
+  pushBrowserHostAutomationRef(refs, 'search-result', input.searchResultRef);
+  pushBrowserHostAutomationRef(refs, 'browser-frame', input.frameRef);
+  pushBrowserHostAutomationRef(refs, 'screenshot', input.screenshotRef);
+  pushBrowserHostAutomationRef(refs, 'dom-snapshot', input.domSnapshotRef);
+  pushBrowserHostAutomationRef(refs, 'ax-snapshot', input.axSnapshotRef);
+  pushBrowserHostAutomationRef(refs, 'console-log', input.consoleLogRef);
+  pushBrowserHostAutomationRef(refs, 'network-log', input.networkLogRef);
+  return refs;
+}
+
+function pushBrowserHostAutomationRef(
+  refs: BrowserRuntimeAutomationSummary['refs'],
+  kind: BrowserRuntimeAutomationSummary['refs'][number]['kind'],
+  ref: string | undefined,
+): void {
+  if (ref) refs.push({ kind, ref });
+}
+
 async function publishBrowserHostVisibleAction(
   session: ActiveBrowserHostSession,
   action: BrowserHostSessionAction | 'open',
   requestedActionId: string | undefined,
   actorCursorInput?: BrowserHostSessionActorCursorInput,
+  riskInput?: {
+    riskType?: BrowserHostSessionActionRiskType;
+    url?: string;
+    text?: string;
+    key?: string;
+    actionId?: string;
+  },
 ): Promise<void> {
   const actionId = browserHostActionId(requestedActionId, action);
-  const riskType = browserHostActionRiskType(action);
+  const riskType = browserHostActionRiskType(action, { ...riskInput, actionId });
   const visibleAction: BrowserHostSessionVisibleAction = {
     actionId,
     action,
@@ -2537,7 +2608,23 @@ function browserHostWindowActionKind(action: BrowserHostSessionAction | 'open'):
   return 'wait';
 }
 
-function browserHostActionRiskType(action: BrowserHostSessionAction | 'open'): BrowserHostSessionActionRiskType {
+function browserHostActionRiskType(
+  action: BrowserHostSessionAction | 'open',
+  input: {
+    riskType?: BrowserHostSessionActionRiskType;
+    url?: string;
+    text?: string;
+    key?: string;
+    actionId?: string;
+  } = {},
+): BrowserHostSessionActionRiskType {
+  const explicit = browserHostRiskType(input.riskType);
+  if (explicit) return explicit;
+  const signal = [input.url, input.text, input.key, input.actionId].filter(Boolean).join(' ');
+  if (/\b(?:delete|remove|destroy|drop|revoke|wipe|erase|cancel\s+account|删除|移除|销毁|撤销)\b/i.test(signal)) return 'destructive';
+  if (/\b(?:pay|payment|purchase|checkout|card|billing|invoice|order|subscribe|支付|付款|购买|下单|银行卡)\b/i.test(signal)) return 'payment';
+  if (/\b(?:password|passwd|passcode|token|api[_-]?key|secret|credential|login|sign\s*in|oauth|authorize|2fa|otp|captcha|验证码|密码|密钥|登录|授权)\b/i.test(signal)) return 'credential';
+  if (/\b(?:submit|send|post|publish|form|保存|提交|发送|发布)\b/i.test(signal)) return 'form-submit';
   if (action === 'open' || action === 'navigate' || action === 'back' || action === 'forward' || action === 'reload') return 'navigation-external';
   if (action === 'type' || action === 'press') return 'low-risk-input';
   if (action === 'scroll') return 'scroll';

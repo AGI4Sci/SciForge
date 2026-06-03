@@ -142,6 +142,7 @@ test('desktop annotation overlay hides and restores itself while capturing selec
     'show',
   ]);
   assert.equal(output.schemaVersion, 'sciforge.desktop.annotation-overlay.capture.v1');
+  assert.equal(output.displayModel, 'sciforge.annotation-reference.v1');
   assert.equal(output.workspaceId, 'workspace-a');
   assert.equal(output.sessionId, 'session-a');
   assert.equal(output.windowRef, 'window:alpha');
@@ -198,6 +199,10 @@ test('desktop annotation overlay returns owned refs only and rejects raw screens
     windowRef: 'window:alpha',
     targetRef: 'window-target:alpha',
   });
+  assert.equal(output.sourceKind, 'window');
+  assert.equal(output.coordinateSpace, 'window-local');
+  assert.equal(output.threadId, 'thread-1');
+  assert.equal(output.messageDraftId, 'draft-1');
   assertNoRawImagePayload(output);
 
   const rawHarness = createOverlayHarness({

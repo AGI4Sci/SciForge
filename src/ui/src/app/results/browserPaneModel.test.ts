@@ -33,6 +33,10 @@ test('browser pane model builds refs-first annotation composer references from B
     axSnapshotRef: 'browser-host-session:browser-host-annotation-1/ax.json',
   }, {
     cropRef: 'browser-host-session:browser-host-annotation-1/crops/selection.json',
+    bounds: { x: 12, y: 24, width: 320, height: 180 },
+    threadId: 'thread-browser-annotation',
+    messageDraftId: 'draft-browser-annotation',
+    createdAt: '2026-06-03T00:00:00.000Z',
   });
 
   assert.ok(reference);
@@ -44,8 +48,16 @@ test('browser pane model builds refs-first annotation composer references from B
   assert.equal(payload.targetRef, 'browser-host-session:browser-host-annotation-1/frame.png');
   assert.equal(payload.cropRef, 'browser-host-session:browser-host-annotation-1/crops/selection.json');
   assert.equal(payload.screenshotRef, 'browser-host-session:browser-host-annotation-1/screenshot.png');
+  assert.equal(payload.sourceKind, 'browser');
+  assert.equal(payload.coordinateSpace, 'browser-viewport');
+  assert.equal(payload.browserSessionRef, 'browser-host-session:browser-host-annotation-1/session.json');
+  assert.deepEqual(payload.bounds, { x: 12, y: 24, width: 320, height: 180 });
+  assert.equal(payload.threadId, 'thread-browser-annotation');
+  assert.equal(payload.messageDraftId, 'draft-browser-annotation');
+  assert.equal(payload.createdAt, '2026-06-03T00:00:00.000Z');
   assert.deepEqual(payload.refs, [
     'annotation:browser-host-annotation-1',
+    'browser-host-session:browser-host-annotation-1/session.json',
     'browser-host-session:browser-host-annotation-1/frame.png',
     'browser-host-session:browser-host-annotation-1/crops/selection.json',
     'browser-host-session:browser-host-annotation-1/screenshot.png',
@@ -54,6 +66,33 @@ test('browser pane model builds refs-first annotation composer references from B
   ]);
   const serialized = JSON.stringify(reference);
   assert.doesNotMatch(serialized, /data:image|base64|rawDom|rawScreenshot|annotatedDataUrl/);
+});
+
+test('browser pane model creates viewport annotation refs from current BrowserHostSession without URL-specific data', () => {
+  const reference = browserAnnotationComposerReferenceForHostSession({
+    id: 'right-pane-tab-a-12345678',
+    status: 'ready',
+    requestedUrl: 'https://example.org/private?token=secret',
+    url: 'https://example.org/private?token=secret',
+    liveSurfaceRef: 'browser-host-session:right-pane-tab-a-12345678/live-surface',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    secondTruthSource: false,
+    screenshotRef: 'browser-host-session:right-pane-tab-a-12345678/screenshot.png',
+  }, {
+    bounds: { x: 0, y: 0, width: 1280, height: 720 },
+  });
+
+  assert.ok(reference);
+  const payload = reference.payload as Record<string, unknown>;
+  assert.equal(payload.annotationRef, 'annotation:right-pane-tab-a-12345678');
+  assert.equal(payload.targetRef, 'browser-host-session:right-pane-tab-a-12345678/live-surface');
+  assert.equal(payload.cropRef, 'browser-host-session:right-pane-tab-a-12345678/annotations/annotation-right-pane-tab-a-12345678/crop.json');
+  assert.equal(payload.screenshotRef, 'browser-host-session:right-pane-tab-a-12345678/screenshot.png');
+  assert.equal(payload.sourceKind, 'browser');
+  assert.equal(payload.coordinateSpace, 'browser-viewport');
+  assert.deepEqual(payload.bounds, { x: 0, y: 0, width: 1280, height: 720 });
+  assert.equal(JSON.stringify(payload).includes('token=secret'), false);
 });
 
 test('browser pane model normalizes focused URL object refs into Browser targets', () => {

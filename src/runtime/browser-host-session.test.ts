@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import test from 'node:test';
@@ -208,6 +208,7 @@ test('BrowserHostSessionManager gives drivers an ignored workspace browser profi
     const expectedProfileDir = join(workspacePath, '.sciforge', 'browser-host', 'profile');
     assert.equal(createInputs[0]?.workspaceProfileDir, expectedProfileDir);
     assert.equal(createInputs[0]?.workspacePath, workspacePath);
+    assert.equal((await stat(expectedProfileDir)).isDirectory(), true);
 
     const sessionDir = browserHostSessionDir(workspacePath, 'profile-session');
     const manifest = await readFile(join(sessionDir, 'session.json'), 'utf8');
@@ -229,11 +230,11 @@ test('BrowserHostSession publishes bounded visible action and risk ledger withou
     });
 
     assert.equal(opened.visibleAction?.action, 'open');
-    assert.equal(opened.visibleAction?.riskType, 'navigation-external');
+    assert.equal(opened.visibleAction?.riskType, 'credential');
     assert.match(opened.visibleAction?.visibleActionRef ?? '', /^browser-host-session:visible-action-session\/visible-actions\//);
     assert.equal(opened.visibleAction?.actorCursorRef, undefined);
     assert.deepEqual(opened.riskLedger?.map((entry) => [entry.action, entry.riskType]), [
-      ['open', 'navigation-external'],
+      ['open', 'credential'],
     ]);
 
     const clicked = await manager.act(workspacePath, opened.id, {
@@ -267,7 +268,7 @@ test('BrowserHostSession publishes bounded visible action and risk ledger withou
       actionId: 'ui-type-visible',
     });
     assert.equal(typed.visibleAction?.action, 'type');
-    assert.equal(typed.visibleAction?.riskType, 'low-risk-input');
+    assert.equal(typed.visibleAction?.riskType, 'credential');
 
     const cursor = await manager.act(workspacePath, opened.id, {
       action: 'cursor',
@@ -320,14 +321,28 @@ test('BrowserHostSession publishes bounded visible action and risk ledger withou
       capture: 'none',
     });
     assert.equal(navigated.visibleAction?.action, 'navigate');
-    assert.equal(navigated.visibleAction?.riskType, 'navigation-external');
+    assert.equal(navigated.visibleAction?.riskType, 'payment');
+    const deleted = await manager.act(workspacePath, opened.id, {
+      action: 'click',
+      actionId: 'delete-account-submit',
+      capture: 'none',
+      riskType: 'destructive',
+      x: 44,
+      y: 60,
+    });
+    assert.equal(deleted.visibleAction?.riskType, 'destructive');
     assert.deepEqual(navigated.riskLedger?.slice(-6).map((entry) => [entry.action, entry.riskType]), [
       ['click', 'click'],
       ['scroll', 'scroll'],
-      ['type', 'low-risk-input'],
+      ['type', 'credential'],
       ['cursor', 'click'],
       ['click', 'click'],
-      ['navigate', 'navigation-external'],
+      ['navigate', 'payment'],
+    ]);
+    assert.deepEqual(deleted.riskLedger?.slice(-3).map((entry) => [entry.action, entry.riskType]), [
+      ['click', 'click'],
+      ['navigate', 'payment'],
+      ['click', 'destructive'],
     ]);
 
     const sessionDir = browserHostSessionDir(workspacePath, opened.id);
@@ -337,7 +352,7 @@ test('BrowserHostSession publishes bounded visible action and risk ledger withou
       riskLedger: manifest.riskLedger,
       loadingProgress: manifest.loadingProgress,
     });
-    const visibleActionRefPayload = await readFile(join(sessionDir, 'visible-actions', basename(navigated.visibleAction?.visibleActionRef ?? '')), 'utf8');
+    const visibleActionRefPayload = await readFile(join(sessionDir, 'visible-actions', basename(deleted.visibleAction?.visibleActionRef ?? '')), 'utf8');
     const actorCursorRefPayload = await readFile(join(sessionDir, 'actor-cursors', basename(actorClicked.actorCursor?.evidenceRefs?.[0] ?? '')), 'utf8');
     assert.doesNotMatch(`${boundedActions}\n${visibleActionRefPayload}\n${actorCursorRefPayload}`, /visible\.example|payments\.example|secret-value|secret search text|4111111111111111|<html/i);
   } finally {
@@ -1007,6 +1022,12 @@ test('BrowserHostSession search persists bounded search refs and excludes search
     ]);
     assert.match(output.searchResultRef, /^browser-host-session:/);
     assert.match(browserHostSearchSummary(output), /BrowserHostSession search: browser host session/);
+    assert.equal(output.automationSummary?.schemaVersion, 'sciforge.browser-runtime.automation-summary.v1');
+    assert.equal(output.automationSummary?.kind, 'scrape');
+    assert.equal(output.automationSummary?.boundedRefsOnly, true);
+    assert.equal(output.automationSummary?.refs.some((ref) => ref.kind === 'search-result' && ref.ref === output.searchResultRef), true);
+    assert.match(output.automationSummary?.summary ?? '', /2 bounded result/);
+    assert.doesNotMatch(JSON.stringify(output.automationSummary), /duckduckgo\.com|browser host session|<html|secret/i);
 
     const visible = await manager.openSession(workspacePath, { url: 'https://example.org/visible', sessionId: 'visible-search-session' });
     const reused = await manager.search(workspacePath, {
@@ -1015,6 +1036,8 @@ test('BrowserHostSession search persists bounded search refs and excludes search
       limit: 1,
     });
     assert.equal(reused.session.id, visible.id);
+    assert.equal(reused.session.automationSummary?.kind, 'scrape');
+    assert.equal(reused.session.automationSummary?.refs.some((ref) => ref.kind === 'search-result' && ref.ref === reused.searchResultRef), true);
     assert.equal(drivers.length, 2);
     assert.ok(drivers[1]?.actions.some((action) => action.startsWith('goto:https://www.bing.com/search?')));
   } finally {

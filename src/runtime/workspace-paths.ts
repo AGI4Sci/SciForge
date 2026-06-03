@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 const MANAGED_WORKSPACE_NAMESPACES = new Set([
@@ -12,6 +13,18 @@ const MANAGED_WORKSPACE_NAMESPACES = new Set([
   'verifications',
   'versions',
 ]);
+
+export const WORKSPACE_BROWSER_PROFILE_REF = '.sciforge/browser-host/profile' as const;
+
+export interface WorkspaceBrowserProfileState {
+  workspaceRoot: string;
+  runtimeDir: string;
+  profileDir: string;
+  profileRef: typeof WORKSPACE_BROWSER_PROFILE_REF;
+  ignoredRuntimeState: true;
+  storageScope: 'workspace';
+  reusesUserMainProfile: false;
+}
 
 export function normalizeWorkspaceRootPath(value: string) {
   const trimmed = value.trim().replace(/\/+$/, '');
@@ -48,7 +61,29 @@ export function workspaceBrowserRuntimeDir(workspacePath: string) {
 }
 
 export function workspaceBrowserProfileDir(workspacePath: string) {
-  return join(workspaceBrowserRuntimeDir(workspacePath), 'profile');
+  return workspaceBrowserProfileState(workspacePath).profileDir;
+}
+
+export function workspaceBrowserProfileState(workspacePath: string): WorkspaceBrowserProfileState {
+  const workspaceRoot = normalizeWorkspaceRootPath(resolve(workspacePath || process.cwd()));
+  if (!workspaceRoot) throw new Error('workspace path is required');
+  const runtimeDir = join(workspaceRoot, '.sciforge', 'browser-host');
+  return {
+    workspaceRoot,
+    runtimeDir,
+    profileDir: join(runtimeDir, 'profile'),
+    profileRef: WORKSPACE_BROWSER_PROFILE_REF,
+    ignoredRuntimeState: true,
+    storageScope: 'workspace',
+    reusesUserMainProfile: false,
+  };
+}
+
+export async function ensureWorkspaceBrowserProfileDir(workspacePath: string): Promise<WorkspaceBrowserProfileState> {
+  const state = workspaceBrowserProfileState(workspacePath);
+  await mkdir(state.profileDir, { recursive: true });
+  await ensureWorkspaceRuntimeGitignore(state.workspaceRoot);
+  return state;
 }
 
 export function workspaceBrowserOutputDir(workspacePath: string, runtime = 'output') {
@@ -89,4 +124,18 @@ function resolveInsideWorkspace(workspaceRoot: string, relativePath: string) {
 function safeWorkspaceRuntimeSegment(value: string) {
   const segment = value.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return segment || 'output';
+}
+
+async function ensureWorkspaceRuntimeGitignore(workspaceRoot: string) {
+  const gitignorePath = join(workspaceRoot, '.gitignore');
+  const ignoredLine = '.sciforge/';
+  let current = '';
+  try {
+    current = await readFile(gitignorePath, 'utf8');
+  } catch {
+    current = '';
+  }
+  if (current.split(/\r?\n/).some((line) => line.trim() === ignoredLine)) return;
+  const prefix = current && !current.endsWith('\n') ? `${current}\n` : current;
+  await writeFile(gitignorePath, `${prefix}${ignoredLine}\n`, 'utf8');
 }

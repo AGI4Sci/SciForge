@@ -5,6 +5,8 @@ import {
   BROWSER_RUNTIME_CAPABILITY_ID,
   BROWSER_RUNTIME_CONTRACT_ID,
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
+  BROWSER_RUNTIME_AUTOMATION_SUMMARY_SCHEMA,
+  browserRuntimeAutomationSummary,
   browserRuntimeCommandRisk,
   browserRuntimeProjection,
   browserRuntimeSnapshotFromRefs,
@@ -40,6 +42,40 @@ test('browser runtime shared contract is usable by GUI and TUI packages without 
   assert.equal(projection.guiBoundary.presentationOnly, true);
   assert.equal(projection.guiBoundary.providerRouting, false);
   assert.deepEqual(projection.traceRefs, [{ kind: 'screenshot', ref: 'blob://browser/screenshot.png' }]);
+});
+
+test('browser runtime projection carries bounded automation summaries with refs only', () => {
+  const summary = browserRuntimeAutomationSummary({
+    kind: 'batch-check',
+    status: 'completed',
+    title: 'Batch page checks for https://private.example/path?token=secret-value',
+    summary: 'Checked DOM, console, network, and assertions for https://private.example/path?token=secret-value',
+    itemCount: 12,
+    refs: Array.from({ length: 12 }, (_, index) => ({
+      kind: index % 2 === 0 ? 'dom-snapshot' : 'console-log',
+      ref: `browser-host-session:summary-session/ref-${index}.json`,
+    })),
+    diagnostics: ['raw dom <html> and Bearer secret-token were dropped'],
+  });
+  assert.ok(summary);
+
+  const projection = browserRuntimeProjection({
+    session: {
+      id: 'browser-session-automation',
+      mode: 'agent-headless',
+      providerId: 'sciforge.observe.browser-runtime',
+      activeTabId: 'tab-1',
+      tabs: [{ id: 'tab-1', url: 'https://example.org', status: 'ready' }],
+    },
+    automationSummary: summary,
+  });
+
+  assert.equal(summary.schemaVersion, BROWSER_RUNTIME_AUTOMATION_SUMMARY_SCHEMA);
+  assert.equal(summary.boundedRefsOnly, true);
+  assert.equal(summary.refs.length, 8);
+  assert.equal(projection.automationSummary?.kind, 'batch-check');
+  assert.equal(projection.automationSummary?.itemCount, 12);
+  assert.doesNotMatch(JSON.stringify(projection.automationSummary), /private\.example|secret-value|<html|Bearer secret-token/i);
 });
 
 test('browser runtime shared helpers keep risk and page-query validation deterministic', () => {

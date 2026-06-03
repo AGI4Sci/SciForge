@@ -1,10 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
 
-import { normalizeWorkspaceRootPath, resolveWorkspaceFilePreviewPath, resolveWorkspaceFileRefPath } from './workspace-paths';
+import {
+  ensureWorkspaceBrowserProfileDir,
+  normalizeWorkspaceRootPath,
+  resolveWorkspaceFilePreviewPath,
+  resolveWorkspaceFileRefPath,
+  WORKSPACE_BROWSER_PROFILE_REF,
+  workspaceBrowserProfileState,
+} from './workspace-paths';
 
 test('workspace preview paths resolve logical artifact refs into managed .sciforge artifacts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-paths-'));
@@ -87,5 +94,32 @@ test('workspace preview paths keep path traversal outside the workspace blocked'
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace browser profile state is an ignored workspace-local runtime directory', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-browser-profile-'));
+  const otherRoot = await mkdtemp(join(tmpdir(), 'sciforge-workspace-browser-profile-'));
+  try {
+    const state = workspaceBrowserProfileState(`${root}/.sciforge/sessions/run-1`);
+    const otherState = workspaceBrowserProfileState(otherRoot);
+
+    assert.equal(state.workspaceRoot, root);
+    assert.equal(state.profileRef, WORKSPACE_BROWSER_PROFILE_REF);
+    assert.equal(state.profileDir, join(root, '.sciforge', 'browser-host', 'profile'));
+    assert.equal(state.ignoredRuntimeState, true);
+    assert.equal(state.storageScope, 'workspace');
+    assert.equal(state.reusesUserMainProfile, false);
+    assert.notEqual(state.profileDir, otherState.profileDir);
+
+    await ensureWorkspaceBrowserProfileDir(root);
+    assert.equal((await stat(state.profileDir)).isDirectory(), true);
+
+    const gitignore = await readFile(join(root, '.gitignore'), 'utf8');
+    assert.match(gitignore, /^\.sciforge\/$/m);
+    assert.doesNotMatch(gitignore, /token|secret|Authorization|api.?key/i);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(otherRoot, { recursive: true, force: true });
   }
 });

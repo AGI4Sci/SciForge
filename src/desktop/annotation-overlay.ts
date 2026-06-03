@@ -1,3 +1,5 @@
+import { SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL } from '../shared/annotation-reference-contract.js';
+
 export const DESKTOP_ANNOTATION_OVERLAY_CAPTURE_SCHEMA =
   'sciforge.desktop.annotation-overlay.capture.v1' as const;
 
@@ -129,6 +131,7 @@ export type DesktopAnnotationSubmittedComment = Omit<DesktopAnnotationSelection,
 
 export type DesktopAnnotationCaptureOutput = Omit<DesktopAnnotationSubmittedComment, 'status'> & {
   schemaVersion: typeof DESKTOP_ANNOTATION_OVERLAY_CAPTURE_SCHEMA;
+  displayModel: typeof SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL;
   status: 'captured';
   annotationRef: string;
   screenshotRef: string;
@@ -369,6 +372,7 @@ export function createDesktopAnnotationOverlayController(
       const capturedAt = providerResult.capturedAt ?? now();
       const output: DesktopAnnotationCaptureOutput = {
         schemaVersion: DESKTOP_ANNOTATION_OVERLAY_CAPTURE_SCHEMA,
+        displayModel: SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
         status: 'captured',
         workspaceId: submitted.workspaceId,
         sessionId: submitted.sessionId,

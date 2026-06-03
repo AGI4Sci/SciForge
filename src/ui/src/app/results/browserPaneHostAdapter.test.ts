@@ -1,8 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { normalizeRightPaneBrowserUrl } from './browserPaneModel';
-import { rightPaneBrowserRequiresExternalHost } from './browserPaneHostAdapter';
+import { normalizeRightPaneBrowserUrl, rightPaneBrowserRequiresExternalHost } from './browserPaneModel';
 
 test('browser host adapter owns native-only BrowserHostSession rendering extraction from ResultsRenderer', () => {
   const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
@@ -133,6 +132,7 @@ test('browser host adapter promotes Browser annotations as pending composer refs
   const surfaceSource = readFileSync(new URL('./rightPaneSurfaceAdapter.tsx', import.meta.url), 'utf8');
   const rendererSource = readFileSync(new URL('../ResultsRenderer.tsx', import.meta.url), 'utf8');
   const workbenchSource = readFileSync(new URL('../sciforgeApp/SciForgeWorkbench.tsx', import.meta.url), 'utf8');
+  const chatPanelSource = readFileSync(new URL('../ChatPanel.tsx', import.meta.url), 'utf8');
   const browserWorkbenchSource = readFileSync(new URL('../../../../../packages/presentation/components/browser-workbench/render.tsx', import.meta.url), 'utf8');
   const annotationHelperSource = modelSource.slice(
     modelSource.indexOf('export function browserAnnotationComposerReferenceForHostSession'),
@@ -145,11 +145,17 @@ test('browser host adapter promotes Browser annotations as pending composer refs
   assert.match(adapterSource, /browserAnnotationComposerReferenceForHostSession/);
   assert.match(adapterSource, /onAnnotationReferenceRequest\?: \(reference: SciForgeReference\) => void/);
   assert.match(adapterSource, /if \(command\.id === 'annotate'\) \{[\s\S]*browserAnnotationComposerReferenceForHostSession\(hostSessionRef\.current/);
+  assert.match(adapterSource, /bounds: browserAnnotationViewportBounds\(viewportRef\.current\)/);
   assert.match(adapterSource, /onAnnotationReferenceRequest\?\.\(reference\)/);
   assert.match(surfaceSource, /onAnnotationReferenceRequest=\{onExternalReferenceRequest\}/);
   assert.match(rendererSource, /onExternalReferenceRequest\?: \(reference: SciForgeReference\) => void/);
   assert.match(workbenchSource, /onExternalReferenceRequest\(reference\)/);
+  assert.match(chatPanelSource, /addPendingReferenceToComposer\(externalReferenceRequest\.reference\)/);
+  assert.match(chatPanelSource, /await runPrompt\(prompt, activeSessionRef\.current, references\)/);
   assert.match(modelSource, /annotationRef[\s\S]*targetRef[\s\S]*cropRef[\s\S]*screenshotRef/);
+  assert.match(modelSource, /SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL/);
+  assert.match(modelSource, /sourceKind: 'browser'/);
+  assert.match(modelSource, /coordinateSpace: 'browser-viewport'/);
 
   assert.doesNotMatch(adapterSource, /toDataURL|document\.body|rawDom|rawScreenshot|base64|data:image/);
   assert.doesNotMatch(annotationHelperSource, /toDataURL|document\.body|rawDom|rawScreenshot|base64|data:image|annotatedDataUrl/);

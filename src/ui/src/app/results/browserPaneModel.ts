@@ -14,6 +14,10 @@ import {
   normalizeBrowserWorkbenchUrl,
   shouldUseBrowserWorkbenchPdfViewerUrl,
 } from '../browserWorkbenchUrlModel';
+import {
+  SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
+  type SciForgeAnnotationBounds,
+} from '../../../../shared/annotation-reference-contract';
 
 export type RightPaneBrowserProjectionStatus = BrowserWorkbenchStateStatus;
 export type RightPaneBrowserProjectionTabStatus = 'new' | 'loading' | 'ready' | 'failed' | 'closed';
@@ -249,6 +253,9 @@ export interface RightPaneBrowserAnnotationReferenceOptions {
   targetRef?: string;
   cropRef?: string;
   screenshotRef?: string;
+  bounds?: SciForgeAnnotationBounds;
+  threadId?: string;
+  messageDraftId?: string;
   createdAt?: string;
 }
 
@@ -314,12 +321,16 @@ export function browserAnnotationComposerReferenceForHostSession(
 ): SciForgeReference | undefined {
   if (!hostSession?.id) return undefined;
   const annotationRef = safeBrowserAnnotationRef(options.annotationRef) ?? `annotation:${hostSession.id}`;
+  const browserSessionRef = `browser-host-session:${hostSession.id}/session.json`;
   const targetRef = stringField(options.targetRef) ?? hostSession.frameRef ?? hostSession.liveSurfaceRef;
   const screenshotRef = stringField(options.screenshotRef) ?? hostSession.screenshotRef;
   if (!targetRef || !screenshotRef) return undefined;
-  const cropRef = stringField(options.cropRef) ?? `browser-host-session:${hostSession.id}/annotation-crop.json`;
+  const cropRef = stringField(options.cropRef)
+    ?? `browser-host-session:${hostSession.id}/annotations/${safeBrowserRefPathPart(annotationRef)}/crop.json`;
+  const bounds = browserAnnotationBounds(options.bounds);
   const refs = uniqueStrings([
     annotationRef,
+    browserSessionRef,
     targetRef,
     cropRef,
     screenshotRef,
@@ -329,7 +340,7 @@ export function browserAnnotationComposerReferenceForHostSession(
     hostSession.networkLogRef,
     hostSession.searchResultRef,
   ]);
-  const title = `Browser annotation · ${hostSession.title || hostSession.url || hostSession.id}`;
+  const title = `Browser annotation · ${hostSession.title || hostSession.id}`;
   return {
     id: `ref-${safeBrowserReferenceIdPart(annotationRef)}`,
     kind: 'ui',
@@ -339,14 +350,20 @@ export function browserAnnotationComposerReferenceForHostSession(
     payload: {
       schemaVersion: 'sciforge.browser-annotation.composer-reference.v1',
       source: 'browser-pane',
-      displayModel: 'sciforge.annotation-reference.v1',
+      displayModel: SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
       annotationRef,
+      browserSessionRef,
       targetRef,
       cropRef,
       screenshotRef,
+      sourceKind: 'browser',
+      coordinateSpace: 'browser-viewport',
+      bounds,
       refs,
-      url: hostSession.url,
+      urlDigest: boundedUrlDigest(hostSession.url),
       title: hostSession.title,
+      threadId: stringField(options.threadId),
+      messageDraftId: stringField(options.messageDraftId),
       createdAt: options.createdAt,
       provenance: {
         producer: 'browser-pane',
@@ -410,6 +427,33 @@ function safeBrowserAnnotationRef(value: unknown) {
 
 function safeBrowserReferenceIdPart(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9._:-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96) || 'browser-annotation';
+}
+
+function safeBrowserRefPathPart(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 96) || 'browser-annotation';
+}
+
+function browserAnnotationBounds(value: SciForgeAnnotationBounds | undefined): SciForgeAnnotationBounds | undefined {
+  if (!value) return undefined;
+  const x = finiteNonNegativeNumber(value.x);
+  const y = finiteNonNegativeNumber(value.y);
+  const width = finitePositiveNumber(value.width);
+  const height = finitePositiveNumber(value.height);
+  return x === undefined || y === undefined || width === undefined || height === undefined
+    ? undefined
+    : { x, y, width, height };
+}
+
+function finiteNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, roundBrowserAnnotationNumber(value)) : undefined;
+}
+
+function finitePositiveNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? roundBrowserAnnotationNumber(value) : undefined;
+}
+
+function roundBrowserAnnotationNumber(value: number): number {
+  return Number(value.toFixed(6));
 }
 
 function uniqueStrings(values: Array<string | undefined>) {
@@ -1189,6 +1233,12 @@ export function parseRightPaneBrowserUrl(url: string) {
   } catch {
     return undefined;
   }
+}
+
+export function rightPaneBrowserRequiresExternalHost(url: string) {
+  if (url === 'about:blank') return false;
+  const parsed = parseRightPaneBrowserUrl(url);
+  return Boolean(parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:'));
 }
 
 export function rightPaneBrowserUrlIsLocal(parsed: URL) {

@@ -1,5 +1,6 @@
 export const BROWSER_RUNTIME_CAPABILITY_ID = 'browser_runtime' as const;
 export const BROWSER_RUNTIME_CONTRACT_ID = 'sciforge.browser-runtime.v1' as const;
+export const BROWSER_RUNTIME_AUTOMATION_SUMMARY_SCHEMA = 'sciforge.browser-runtime.automation-summary.v1' as const;
 export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' as const;
 export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
 export const BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA = 'sciforge.browser-host-session.native-os-ui-proof.v1' as const;
@@ -155,6 +156,21 @@ export interface BrowserHostSessionRiskLedgerEntry extends BrowserHostSessionVis
   recordedAt: string;
 }
 
+export type BrowserRuntimeAutomationKind = 'batch-check' | 'scrape' | 'test' | 'inspection';
+export type BrowserRuntimeAutomationStatus = 'completed' | 'partial' | 'failed';
+
+export interface BrowserRuntimeAutomationSummary {
+  schemaVersion: typeof BROWSER_RUNTIME_AUTOMATION_SUMMARY_SCHEMA;
+  boundedRefsOnly: true;
+  kind: BrowserRuntimeAutomationKind;
+  status: BrowserRuntimeAutomationStatus;
+  title: string;
+  summary: string;
+  itemCount?: number;
+  refs: BrowserRuntimeTraceRef[];
+  diagnostics: string[];
+}
+
 export interface BrowserHostSessionState {
   schemaVersion: typeof BROWSER_HOST_SESSION_SCHEMA;
   id: string;
@@ -191,6 +207,7 @@ export interface BrowserHostSessionState {
   actorCursors?: BrowserHostSessionActorCursor[];
   visibleAction?: BrowserHostSessionVisibleAction;
   riskLedger?: BrowserHostSessionRiskLedgerEntry[];
+  automationSummary?: BrowserRuntimeAutomationSummary;
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics?: string[];
@@ -215,6 +232,7 @@ export interface BrowserHostSessionActionRequest {
   expectedProofNames?: string[];
   uiEventReceivedAt?: string;
   adapterSentAt?: string;
+  riskType?: BrowserHostSessionActionRiskType;
 }
 
 export interface BrowserRuntimeTab {
@@ -300,6 +318,7 @@ export interface BrowserRuntimeProjection {
   activeTab?: BrowserRuntimeTab;
   snapshot?: BrowserRuntimeSnapshot;
   hostSession?: BrowserHostSessionState;
+  automationSummary?: BrowserRuntimeAutomationSummary;
   traceRefs: BrowserRuntimeTraceRef[];
   guiBoundary: {
     taskReasoning: false;
@@ -638,13 +657,16 @@ export function browserRuntimeProjection(input: {
   snapshot?: BrowserRuntimeSnapshot;
   hostSession?: BrowserHostSessionState;
   trace?: BrowserRuntimeTrace;
+  automationSummary?: BrowserRuntimeAutomationSummary;
 }): BrowserRuntimeProjection {
+  const automationSummary = browserRuntimeAutomationSummary(input.automationSummary ?? input.hostSession?.automationSummary);
   return {
     schemaVersion: 'sciforge.browser-runtime.projection.v1',
     session: input.session,
     activeTab: input.session.tabs.find((tab) => tab.id === input.session.activeTabId),
     snapshot: input.snapshot,
     hostSession: input.hostSession,
+    automationSummary,
     traceRefs: input.trace?.refs ?? [],
     guiBoundary: {
       taskReasoning: false,
@@ -652,6 +674,38 @@ export function browserRuntimeProjection(input: {
       promptAssembly: false,
       presentationOnly: true,
     },
+  };
+}
+
+export function browserRuntimeAutomationSummary(input: {
+  kind?: string;
+  status?: string;
+  title?: string;
+  summary?: string;
+  itemCount?: number;
+  refs?: BrowserRuntimeTraceRef[];
+  diagnostics?: string[];
+} | undefined): BrowserRuntimeAutomationSummary | undefined {
+  if (!input) return undefined;
+  const kind = browserRuntimeAutomationKind(input.kind);
+  const status = browserRuntimeAutomationStatus(input.status);
+  const refs = browserRuntimeAutomationRefs(input.refs);
+  const title = browserRuntimeAutomationText(input.title, 120) ?? 'Browser automation';
+  const summary = browserRuntimeAutomationText(input.summary, 500) ?? `${kind} automation returned ${refs.length} bounded refs.`;
+  const diagnostics = (input.diagnostics ?? [])
+    .map((diagnostic) => browserRuntimeAutomationText(diagnostic, 160))
+    .filter((diagnostic): diagnostic is string => Boolean(diagnostic))
+    .slice(0, 8);
+  return {
+    schemaVersion: BROWSER_RUNTIME_AUTOMATION_SUMMARY_SCHEMA,
+    boundedRefsOnly: true,
+    kind,
+    status,
+    title,
+    summary,
+    ...(Number.isFinite(input.itemCount) ? { itemCount: Math.max(0, Math.round(input.itemCount as number)) } : {}),
+    refs,
+    diagnostics,
   };
 }
 
@@ -739,6 +793,67 @@ function refsFromRaw(raw: Record<string, unknown>): BrowserRuntimeTraceRef[] {
 
 function pushTraceRef(refs: BrowserRuntimeTraceRef[], kind: BrowserRuntimeTraceRefKind, value: unknown) {
   if (typeof value === 'string' && value.trim()) refs.push({ kind, ref: value.trim() });
+}
+
+function browserRuntimeAutomationKind(value: unknown): BrowserRuntimeAutomationKind {
+  return value === 'batch-check' || value === 'scrape' || value === 'test' || value === 'inspection'
+    ? value
+    : 'inspection';
+}
+
+function browserRuntimeAutomationStatus(value: unknown): BrowserRuntimeAutomationStatus {
+  return value === 'completed' || value === 'partial' || value === 'failed' ? value : 'partial';
+}
+
+function browserRuntimeAutomationRefs(value: unknown): BrowserRuntimeTraceRef[] {
+  if (!Array.isArray(value)) return [];
+  const output: BrowserRuntimeTraceRef[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    const record = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : undefined;
+    const kind = browserRuntimeTraceRefKind(record?.kind);
+    const ref = typeof record?.ref === 'string' && /^[a-z][a-z0-9+.-]*:[a-z0-9][a-z0-9._:/#?-]*$/i.test(record.ref.trim())
+      ? record.ref.trim().slice(0, 240)
+      : undefined;
+    if (!kind || !ref) continue;
+    const key = `${kind}\n${ref}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({
+      kind,
+      ref,
+      ...(typeof record?.sha256 === 'string' && /^[a-f0-9]{64}$/i.test(record.sha256) ? { sha256: record.sha256.toLowerCase() } : {}),
+      ...(Number.isFinite(record?.bytes) ? { bytes: Math.max(0, Math.round(record?.bytes as number)) } : {}),
+    });
+    if (output.length >= 8) break;
+  }
+  return output;
+}
+
+function browserRuntimeTraceRefKind(value: unknown): BrowserRuntimeTraceRefKind | undefined {
+  return value === 'browser-frame'
+    || value === 'screenshot'
+    || value === 'dom-snapshot'
+    || value === 'ax-snapshot'
+    || value === 'console-log'
+    || value === 'network-log'
+    || value === 'search-result'
+    || value === 'download'
+    ? value
+    : undefined;
+}
+
+function browserRuntimeAutomationText(value: unknown, max: number) {
+  if (typeof value !== 'string') return undefined;
+  const text = value
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[url-redacted]')
+    .replace(/<[^>]*>/g, '[html-redacted]')
+    .replace(/\b(?:bearer\s+)?(?:token|secret|api[_-]?key|password|passwd|card|authorization)\b[^\s,;)]*/gi, '[secret-redacted]')
+    .replace(/data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+/gi, '[image-redacted]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+  return text || undefined;
 }
 
 function inlineLargeObjectKeys(raw: Record<string, unknown>) {

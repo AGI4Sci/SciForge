@@ -111,6 +111,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
     hostSession: output.session,
     snapshot,
     trace,
+    automationSummary: output.automationSummary,
   });
   const summary = browserHostSearchSummary(output, Math.min(5, output.results.length || 5));
   return {
@@ -176,6 +177,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
         axSnapshotRef: output.axSnapshotRef,
         consoleLogRef: output.consoleLogRef,
         networkLogRef: output.networkLogRef,
+        automationSummary: output.automationSummary,
       },
     }, {
       id: `browser-host-projection-${id}`,

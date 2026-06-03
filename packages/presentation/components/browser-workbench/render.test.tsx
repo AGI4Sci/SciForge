@@ -383,6 +383,66 @@ test('browser-workbench renders bounded actor cursor status on the native surfac
   assertNoProductFallbackSurface(html);
 });
 
+test('browser-workbench renders bounded visible action, risk, and automation summary diagnostics', () => {
+  const html = renderToStaticMarkup(renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        hostSession: nativeHostSession({
+          visibleAction: {
+            actionId: 'checkout-submit',
+            action: 'click',
+            riskType: 'payment',
+            visibleActionRef: 'browser-host-session:native-session-1/visible-actions/checkout-submit.json',
+          },
+          riskLedger: [
+            {
+              actionId: 'type-password',
+              action: 'type',
+              riskType: 'credential',
+              visibleActionRef: 'browser-host-session:native-session-1/visible-actions/type-password.json',
+              recordedAt: '2026-06-02T00:00:02.000Z',
+            },
+            {
+              actionId: 'checkout-submit',
+              action: 'click',
+              riskType: 'payment',
+              visibleActionRef: 'browser-host-session:native-session-1/visible-actions/checkout-submit.json',
+              recordedAt: '2026-06-02T00:00:03.000Z',
+            },
+          ],
+          automationSummary: {
+            schemaVersion: 'sciforge.browser-runtime.automation-summary.v1',
+            boundedRefsOnly: true,
+            kind: 'test',
+            status: 'completed',
+            title: 'Checkout regression for https://private.example/checkout?token=secret',
+            summary: 'Ran checkout assertions against raw <html> secret-token payload',
+            itemCount: 4,
+            refs: [
+              { kind: 'dom-snapshot', ref: 'browser-host-session:native-session-1/dom-checkout.json' },
+              { kind: 'console-log', ref: 'browser-host-session:native-session-1/console-checkout.jsonl' },
+            ],
+            diagnostics: ['raw private.example URL and token dropped'],
+          },
+        }),
+      },
+    },
+  }));
+
+  assert.match(html, /data-browser-visible-action="click"/);
+  assert.match(html, /data-browser-visible-action-risk="payment"/);
+  assert.match(html, /data-browser-visible-action-ref="browser-host-session:native-session-1\/visible-actions\/checkout-submit\.json"/);
+  assert.match(html, /data-browser-risk-ledger-summary="type:credential \| click:payment"/);
+  assert.match(html, /data-browser-automation-kind="test"/);
+  assert.match(html, /data-browser-automation-status="completed"/);
+  assert.match(html, /data-browser-automation-ref-count="2"/);
+  assert.match(html, /automationSummary/);
+  assert.doesNotMatch(html, /private\.example|secret-token|token=secret|raw &lt;html|raw <html/i);
+  assertNoProductFallbackSurface(html);
+});
+
 test('browser-workbench renders missing native attach as typed blocked handoff retry refs only', () => {
   const html = renderToStaticMarkup(renderBrowserWorkbench({
     ...emptyBrowserWorkbenchFixture,

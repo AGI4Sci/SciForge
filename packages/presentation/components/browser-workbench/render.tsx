@@ -271,7 +271,13 @@ function snapshotFromPayload(payload: BrowserWorkbenchPayload): BrowserRuntimeSn
 }
 
 function hostSessionFromPayload(payload: BrowserWorkbenchPayload): BrowserHostSessionState | undefined {
-  return payload.projection?.hostSession ?? payload.hostSession;
+  if (payload.hostSession) {
+    return {
+      ...(payload.projection?.hostSession ?? {}),
+      ...payload.hostSession,
+    } as BrowserHostSessionState;
+  }
+  return payload.projection?.hostSession;
 }
 
 function traceRefsFromPayload(payload: BrowserWorkbenchPayload): BrowserRuntimeTraceRef[] {
@@ -631,6 +637,18 @@ interface BrowserWorkbenchBoundedDiagnostics {
   transport?: string;
   timing?: BrowserHostSessionState['lastActionTiming'];
   summary: NonNullable<BrowserHostSessionState['actionTimingSummary']>;
+  visibleAction?: {
+    action: string;
+    riskType: string;
+    ref?: string;
+  };
+  riskLedgerSummary?: string;
+  automationSummary?: {
+    kind: string;
+    status: string;
+    summary: string;
+    refCount: number;
+  };
   lastBlockedReason?: string;
   diagnostics: string[];
 }
@@ -674,6 +692,9 @@ function browserWorkbenchBoundedDiagnostics(
 ): BrowserWorkbenchBoundedDiagnostics | undefined {
   const timing = hostSession?.lastActionTiming;
   const summary = hostSession?.actionTimingSummary ?? [];
+  const visibleAction = browserWorkbenchVisibleAction(hostSession?.visibleAction);
+  const riskLedgerSummary = browserWorkbenchRiskLedgerSummary(hostSession?.riskLedger);
+  const automationSummary = browserWorkbenchAutomationSummary(hostSession?.automationSummary);
   const nativeSurfaceBridge = nativeSurfaceBridgeFromHostSession(hostSession);
   const nativeSurfaceBridgeSummary = nativeSurfaceBridgeDiagnosticSummary(nativeSurfaceBridge);
   const diagnostics = (hostSession?.diagnostics ?? [])
@@ -691,6 +712,9 @@ function browserWorkbenchBoundedDiagnostics(
     transport: hostSession?.liveSurfaceTransport ?? timing?.liveSurfaceTransport,
     timing,
     summary,
+    visibleAction,
+    riskLedgerSummary,
+    automationSummary,
     lastBlockedReason: browserWorkbenchLastBlockedReason(state, hostSession, payload),
     diagnostics,
   };
@@ -704,10 +728,55 @@ function browserWorkbenchBoundedDiagnostics(
     || bounded.transport
     || bounded.timing
     || bounded.summary.length
+    || bounded.visibleAction
+    || bounded.riskLedgerSummary
+    || bounded.automationSummary
     || bounded.lastBlockedReason
     || bounded.diagnostics.length
   ) return bounded;
   return undefined;
+}
+
+function browserWorkbenchVisibleAction(value: unknown): BrowserWorkbenchBoundedDiagnostics['visibleAction'] {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const action = asString(record?.action);
+  const riskType = asString(record?.riskType);
+  if (!action || !riskType) return undefined;
+  return {
+    action: sanitizeBrowserWorkbenchDiagnosticText(action) ?? 'unknown',
+    riskType: sanitizeBrowserWorkbenchDiagnosticText(riskType) ?? 'unknown',
+    ref: asRefString(record?.visibleActionRef) ?? asRefString(record?.actorCursorRef),
+  };
+}
+
+function browserWorkbenchRiskLedgerSummary(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.slice(-8).map((entry) => {
+    const record = entry && typeof entry === 'object' && !Array.isArray(entry) ? entry as Record<string, unknown> : undefined;
+    const action = sanitizeBrowserWorkbenchDiagnosticText(asString(record?.action));
+    const riskType = sanitizeBrowserWorkbenchDiagnosticText(asString(record?.riskType));
+    return action && riskType ? `${action}:${riskType}` : undefined;
+  }).filter((entry): entry is string => Boolean(entry));
+  return rows.length ? rows.join(' | ') : undefined;
+}
+
+function browserWorkbenchAutomationSummary(value: unknown): BrowserWorkbenchBoundedDiagnostics['automationSummary'] {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  if (!record || record.boundedRefsOnly !== true) return undefined;
+  const kind = sanitizeBrowserWorkbenchDiagnosticText(asString(record.kind));
+  const status = sanitizeBrowserWorkbenchDiagnosticText(asString(record.status));
+  const summary = sanitizeBrowserWorkbenchDiagnosticText(asString(record.summary));
+  if (!kind || !status || !summary) return undefined;
+  const refs = Array.isArray(record.refs) ? record.refs.filter((ref) => {
+    const refRecord = ref && typeof ref === 'object' && !Array.isArray(ref) ? ref as Record<string, unknown> : undefined;
+    return Boolean(asRefString(refRecord?.ref));
+  }) : [];
+  return {
+    kind,
+    status,
+    summary,
+    refCount: Math.min(8, refs.length),
+  };
 }
 
 function renderBrowserWorkbenchDiagnostics(
@@ -731,6 +800,13 @@ function renderBrowserWorkbenchDiagnostics(
       data-browser-last-action-total-ms={timing?.totalMs}
       data-browser-last-action-timing={lastActionTiming}
       data-browser-last-action-status={timing?.status}
+      data-browser-visible-action={diagnostics.visibleAction?.action}
+      data-browser-visible-action-risk={diagnostics.visibleAction?.riskType}
+      data-browser-visible-action-ref={diagnostics.visibleAction?.ref}
+      data-browser-risk-ledger-summary={diagnostics.riskLedgerSummary}
+      data-browser-automation-kind={diagnostics.automationSummary?.kind}
+      data-browser-automation-status={diagnostics.automationSummary?.status}
+      data-browser-automation-ref-count={diagnostics.automationSummary?.refCount}
       data-browser-last-blocked-reason={diagnostics.lastBlockedReason}
       data-browser-writer-diagnostic={diagnostics.writerDiagnosticStatus}
       data-browser-writer-diagnostic-ref={diagnostics.writerDiagnosticRef}
@@ -760,6 +836,10 @@ function renderBrowserWorkbenchDiagnostics(
         {timing ? renderStateValue('hostActionMs', String(timing.hostActionMs)) : null}
         {timing?.evidenceMs !== undefined ? renderStateValue('evidenceMs', String(timing.evidenceMs)) : null}
         {timing?.paintAckSource ? renderStateValue('paintAckSource', timing.paintAckSource) : null}
+        {diagnostics.visibleAction ? renderStateValue('visibleAction', `${diagnostics.visibleAction.action}:${diagnostics.visibleAction.riskType}`) : null}
+        {renderStateValue('visibleActionRef', diagnostics.visibleAction?.ref)}
+        {renderStateValue('riskLedger', diagnostics.riskLedgerSummary)}
+        {diagnostics.automationSummary ? renderStateValue('automationSummary', `${diagnostics.automationSummary.kind}:${diagnostics.automationSummary.status}:${diagnostics.automationSummary.summary}`) : null}
         {renderStateValue('blockedReason', diagnostics.lastBlockedReason)}
         {diagnostics.summary.length ? renderStateValue('latencySummary', diagnostics.summary.map((row) => `${row.action}:p50=${row.p50Ms}ms,p95=${row.p95Ms}ms`).join(' | ')) : null}
         {diagnostics.diagnostics.length ? renderStateValue('diagnostics', diagnostics.diagnostics.join(' | ')) : null}

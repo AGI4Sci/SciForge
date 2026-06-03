@@ -61,10 +61,16 @@ redactionRef
 
 ### P0：统一数据模型
 
-- [ ] 定义 `annotationRef`、`targetRef`、`cropRef`、`screenshotRef` 的 shared contract。
-- [ ] Browser pane 和 Global Annotate 输出同一 schema。
-- [ ] Composer 支持 pending annotation context chip。
-- [ ] 用户发送消息时，annotation refs 随 user message 进入 thread。
+- [x] 定义 `annotationRef`、`targetRef`、`cropRef`、`screenshotRef` 的 shared contract。
+- [x] Browser pane 和 Global Annotate 输出同一 schema。
+- [x] Composer 支持 pending annotation context chip。
+- [x] 用户发送消息时，annotation refs 随 user message 进入 thread。
+
+完成记录（2026-06-03）：
+
+- evidence refs：`src/shared/annotation-reference-contract.ts`、`src/ui/src/app/results/browserPaneModel.test.ts`、`src/ui/src/app/results/browserPaneHostAdapter.test.ts`、`tests/smoke/smoke-desktop-annotation-overlay.test.ts`、`annotation:right-pane-tab-a-12345678`、`desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed`。
+- 验证命令：`node --import tsx --test src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts tests/smoke/smoke-desktop-annotation-overlay.test.ts`。
+- 最终状态：passed。Browser annotation 和 Global window annotation 共用 `sciforge.annotation-reference.v1` 展示模型，Browser pending payload 为 refs-first contract 并包含 `annotationRef`、`targetRef`、`cropRef`、`screenshotRef`、`sourceKind`、`coordinateSpace` 和 bounds；Browser adapter 将 pending reference 送入 composer，ChatPanel 随下一条 user message references 提交。
 
 ### P0：Browser Annotation
 

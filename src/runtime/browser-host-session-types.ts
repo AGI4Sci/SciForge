@@ -1,3 +1,5 @@
+import type { BrowserRuntimeAutomationSummary } from '@sciforge-ui/runtime-contract/browser-runtime';
+
 export const BROWSER_HOST_SESSION_PROVIDER_ID = 'sciforge.browser-host-session' as const;
 export const BROWSER_HOST_SESSION_SCHEMA = 'sciforge.browser-host-session.state.v1' as const;
 export const BROWSER_HOST_SEARCH_SCHEMA = 'sciforge.browser-host-session.search-result.v1' as const;
@@ -269,6 +271,7 @@ export interface BrowserHostSessionState {
   actorCursors?: BrowserHostSessionActorCursor[];
   visibleAction?: BrowserHostSessionVisibleAction;
   riskLedger?: BrowserHostSessionRiskLedgerEntry[];
+  automationSummary?: BrowserRuntimeAutomationSummary;
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics: string[];
@@ -303,6 +306,7 @@ export interface BrowserHostSessionActionInput {
   uiEventReceivedAt?: string;
   adapterSentAt?: string;
   actorCursor?: BrowserHostSessionActorCursorInput;
+  riskType?: BrowserHostSessionActionRiskType;
 }
 
 export interface BrowserHostSearchInput {
@@ -334,6 +338,7 @@ export interface BrowserHostSearchOutput {
   axSnapshotRef?: string;
   consoleLogRef?: string;
   networkLogRef?: string;
+  automationSummary?: BrowserRuntimeAutomationSummary;
 }
 
 export interface BrowserHostSessionDriver {

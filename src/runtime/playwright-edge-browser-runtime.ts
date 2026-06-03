@@ -10,7 +10,13 @@ import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from './r
 import { capabilityProviderRoutesForGatewayInvocation } from './gateway/capability-provider-preflight.js';
 import { sha1 } from './workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from './workspace-runtime-events.js';
-import { normalizeWorkspaceRootPath, workspaceBrowserOutputDir, workspaceBrowserProfileDir } from './workspace-paths.js';
+import {
+  ensureWorkspaceBrowserProfileDir,
+  normalizeWorkspaceRootPath,
+  WORKSPACE_BROWSER_PROFILE_REF,
+  workspaceBrowserOutputDir,
+  workspaceBrowserProfileState,
+} from './workspace-paths.js';
 
 const TOOL_ID = PLAYWRIGHT_EDGE_MCP_CAPABILITY_ID;
 
@@ -30,6 +36,7 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
     detail: JSON.stringify(playwrightEdgeBrowserExecutionDiagnostic(input)),
   });
   try {
+    if (input.workspaceProfileDir) await ensureWorkspaceBrowserProfileDir(request.workspacePath || process.cwd());
     const output = await invokePlaywrightEdgeBrowser(input);
     const message = playwrightEdgeBrowserMarkdown(output);
     emitWorkspaceRuntimeEvent(callbacks, {
@@ -88,7 +95,7 @@ export async function tryRunPlaywrightEdgeBrowserRuntime(
           title: output.title,
           edgeDetected: output.providerDiagnostics.edgeDetected,
           transport: output.providerDiagnostics.transport,
-          workspaceProfileRef: input.workspaceProfileDir ? '.sciforge/browser-host/profile' : undefined,
+          workspaceProfileRef: input.workspaceProfileDir ? WORKSPACE_BROWSER_PROFILE_REF : undefined,
         },
         data: {
           markdown: message,
@@ -127,6 +134,7 @@ export function playwrightEdgeBrowserInvocationInputFromRequest(request: Gateway
   const query = url ? undefined : queryFromPrompt(request.prompt);
   if (!url && !query) return undefined;
   const workspaceRoot = request.workspacePath ? normalizeWorkspaceRootPath(request.workspacePath) : '';
+  const workspaceProfile = workspaceRoot ? workspaceBrowserProfileState(workspaceRoot) : undefined;
   return {
     task: request.prompt,
     ...(url ? { url } : {}),
@@ -134,8 +142,8 @@ export function playwrightEdgeBrowserInvocationInputFromRequest(request: Gateway
     maxChars: 1800,
     timeoutMs: 60_000,
     ...(mcpUrl ? { mcpUrl } : {}),
-    ...(workspaceRoot ? {
-      workspaceProfileDir: workspaceBrowserProfileDir(workspaceRoot),
+    ...(workspaceRoot && workspaceProfile ? {
+      workspaceProfileDir: workspaceProfile.profileDir,
       outputDir: workspaceBrowserOutputDir(workspaceRoot, 'playwright-edge-output'),
     } : {}),
   };
@@ -252,7 +260,7 @@ function playwrightEdgeBrowserExecutionDiagnostic(input: PlaywrightEdgeBrowserIn
     queryDigest: input?.query ? textDigest(input.query) : undefined,
     urlDigest: input?.url ? urlDigest(input.url) : undefined,
     mcpRoute: input?.mcpUrl ? 'configured-loopback-or-provider-route' : undefined,
-    workspaceProfileRef: input?.workspaceProfileDir ? '.sciforge/browser-host/profile' : undefined,
+    workspaceProfileRef: input?.workspaceProfileDir ? WORKSPACE_BROWSER_PROFILE_REF : undefined,
     outputRef: input?.outputDir ? '.sciforge/browser-host/playwright-edge-output' : undefined,
   };
 }

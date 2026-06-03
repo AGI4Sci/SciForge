@@ -23,18 +23,12 @@ import {
   browserAnnotationComposerReferenceForHostSession,
   browserHostSessionForFocusedObjectReference,
   normalizeRightPaneBrowserUrl,
-  parseRightPaneBrowserUrl,
   rightPaneBrowserProjectionForUrl,
+  rightPaneBrowserRequiresExternalHost,
   rightPaneBrowserUrlsEquivalent,
   type RightPaneBrowserNativeSurfaceBridgeState,
 } from './browserPaneModel';
 import { resultText, type ResultLocale } from './resultLocale';
-
-export function rightPaneBrowserRequiresExternalHost(url: string) {
-  if (url === 'about:blank') return false;
-  const parsed = parseRightPaneBrowserUrl(url);
-  return Boolean(parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:'));
-}
 
 type RightPaneBrowserHostAction = {
   action: 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor';
@@ -304,7 +298,9 @@ export function RightPaneBrowserTool({
       return;
     }
     if (command.id === 'annotate') {
-      const reference = browserAnnotationComposerReferenceForHostSession(hostSessionRef.current);
+      const reference = browserAnnotationComposerReferenceForHostSession(hostSessionRef.current, {
+        bounds: browserAnnotationViewportBounds(viewportRef.current),
+      });
       if (reference) {
         onAnnotationReferenceRequest?.(reference);
         return;
@@ -1251,6 +1247,15 @@ function rightPaneBrowserHostViewport(width: number, height: number) {
   return {
     width: clampBrowserHostViewport(Math.round(width || 1365), 640, 2400),
     height: clampBrowserHostViewport(Math.round((height || 900) - 42), 480, 1800),
+  };
+}
+
+function browserAnnotationViewportBounds(viewport: { width: number; height: number }) {
+  return {
+    x: 0,
+    y: 0,
+    width: clampBrowserHostViewport(Math.round(viewport.width || 1365), 1, 2400),
+    height: clampBrowserHostViewport(Math.round(viewport.height || 900), 1, 1800),
   };
 }
 
