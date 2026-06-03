@@ -1,158 +1,221 @@
-# SciForge Browser Roadmap
+# SciForge Browser Product Protocol
 
-最后更新：2026-06-03
+Last updated: 2026-06-03
 
-本文档只保留 SciForge 右侧 Browser pane 的当前执行路线。旧任务、历史证据和已完成细节不在这里重复归档；需要追溯时看 Git 历史、对应 smoke manifest 或 `docs/test-artifacts/**`。
+This document is the current design contract for the SciForge right-pane
+Browser. Historical TODO lists and completed task logs are intentionally
+removed; use Git history and `docs/test-artifacts/**` when old evidence is
+needed.
 
-## 核心判断
+## Product Decision
 
-先打通最小冲浪闭环，再做周边体验、长测和多平台。不要把 IME、系统 clipboard、多平台 benchmark、5 分钟长会话和 Runtime Codex service env 这类周边事项挡在最小闭环之前。
+The Browser product is a Desktop-native capability.
 
-最小闭环的定义：
+`localhost:5173` is a React development and diagnostic surface. It can render
+the Browser UI, show health, and explain why native attach is blocked. It must
+not claim that a real webpage is open inside the product Browser.
 
-- 在 SciForge 产品右侧 Browser pane 内打开一个真实 HTTP/HTTPS 页面。
-- 页面是同一个 `BrowserHostSession` 拥有的 `native-embedded` live surface。
-- 用户可以完成 open/search、click、type、scroll、reload、back、forward、stop。
-- loading、blocked、retry、handoff 状态可见且不伪造 ready。
-- 输入热路径不被 screenshot、DOM/AX、console/network、search summary 或 state polling 阻塞。
-- 证据只记录 refs、hash、长度、计数、latency、transport、surface type、health；不记录 raw DOM、raw logs、raw screenshot、base64、provider payload 或 secret。
+The Desktop Electron app is the product shell for real browsing. It loads the
+same React UI, but it also owns the native window bridge required to embed a
+real page through Electron `WebContentsView`.
 
-## 不可变规则
+## Mental Model
 
-- `BrowserHostSession` 是唯一 owner：导航、输入、state、refs、screenshot、DOM、AX、console、network、search refs 都归它。
-- 产品 Browser pane 的唯一 live path 是 `BrowserHostSession` owned `native-embedded` surface。
-- Electron `WebContentsView` / WebView2 / WKWebView / 独立 Chromium surface 只能是 display/input adapter，不能成为第二个 browser owner。
-- 缺 native attach 时显示 typed blocked / needs-human / handoff / retry，不切到 host-stream、canvas、WebRTC、HTTP `/frame`、snapshot、iframe、proxy、`<webview>` 或系统 popup。
-- 所有修改必须通用，不能为当前页面、截图、URL、文件名、localhost、某个站点或历史 run 写硬编码补丁。
-- 代码路径保持唯一真相源；旧逻辑和最终方案冲突时删除或迁移旧逻辑，不做长期并行实现。
-- 旧 streaming transport 只能作为 evidence / diagnostic / migration audit，不能参与交互热路径。
-- 已完成 TODO 必须打勾，并补充：`完成：日期；evidence：...；验证：...；状态：...`。
-- 一边工作可以一边可以发现新的task和tdod放在本文件, 最终目标不变
+```text
+Web dev mode
+  Browser / Codex in-app Browser
+    -> http://localhost:5173
+       -> React UI
+       -> diagnostics only for external pages
 
-## 当前状态
+Desktop product mode
+  Electron app
+    -> React UI
+    -> Desktop native surface bridge
+    -> Workspace Writer
+    -> BrowserHostSession
+    -> Electron WebContentsView display/input adapter
+       -> real HTTP/HTTPS page
+```
 
-已完成的基础收口：
+## Ownership
 
-- [x] `native-embedded` single truth 已收口。完成：2026-06-02；evidence：`browserPaneHostAdapter.test.ts`、`browser-workbench/render.test.tsx`、`browser-host-session.test.ts`、`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json`；验证：`npm run smoke:desktop-browser-native-live-acceptance --silent`、`npm run smoke:desktop-browser-native-live-acceptance:strict --silent`、`npm run smoke:browser-bounded-evidence-crosscheck --silent`；状态：旧 transports 只能 diagnostic/evidence。
-- [x] Workspace Writer preflight 已要求 native surface health/attach/state readiness。完成：2026-06-02；evidence：`workspaceClient.browser-host-preflight.test.ts`、`workspace-server-health.test.ts`、`browser-host-session.test.ts` native-surface fail-closed/proxy routes；验证：`node --import tsx --test src/ui/src/api/workspaceClient.browser-host-preflight.test.ts src/runtime/workspace-server-health.test.ts src/runtime/browser-host-session.test.ts`；状态：仅有 `frame` / `frame-stream` 的 writer 判为 stale/blocked；无真实 native adapter 时只暴露 bounded native-surface endpoint key 和 `native-bridge-unavailable` diagnostics，不标记 `browser-host-native-surface` ready；有 loopback adapter 时 `/api/sciforge/browser-host/native-surface/{health,attach,state}` 只代理通过 owner/role/transport/single-truth/session-scoped ref 校验的 bounded response，raw URL/DOM/screenshot/base64/provider/secret 或 forged `liveSurfaceRef` 会被 typed blocked；2026-06-03 workspace `/health` 中 `endpoints.browserHostNativeSurface` 已改为 relative proxy descriptor，不再把 raw loopback adapter origin 写进 health JSON，capability readiness 仍由 runtime-only adapter env 决定。
-- [x] Web/right-pane native-surface route diagnostic handoff 已建立。完成：2026-06-03；evidence：`browserPaneHostAdapter.tsx`、`browserPaneHostAdapter.test.ts`、`browserPaneModel.test.ts`、`browser-workbench/render.test.tsx`、`smoke-desktop-browser-native-surface-lifecycle.test.ts`；验证：`node --import tsx --test src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts packages/presentation/components/browser-workbench/render.test.tsx`、`node --import tsx --test tests/smoke/smoke-desktop-browser-native-surface-lifecycle.test.ts tests/smoke/smoke-desktop-electron-main.test.ts src/runtime/browser-host-session.test.ts`；状态：UI 可探测 `/api/sciforge/browser-host/native-surface/health` 并通过 Workspace Writer route-backed attach/state bridge 尝试 native attach；ready gate 必须同时满足 `rightPaneBridge=true`、`liveSurfaceTransport=native-embedded`、`singleInteractiveTruth=true`、`secondTruthSource=false`、session-scoped `liveSurfaceRef`、attach/state 未声明 `passClaim=false` / `embedded=false` / `attached=false`；Desktop `WebContentsView` loopback adapter health/attach/state 现在显式返回 `ready`、`nativeBridge`、`rightPaneBridge`、`attachAvailable`、`stateAvailable`、`passClaim` 等 bounded readiness 字段，attach/state 仅在真实 embedded 时 claim；route reachable 但 `rightPaneBridge=false` 时只渲染 bounded handoff diagnostic，不标记 attached，也不 fallback。
-- [x] Native paint ACK / lightweight heartbeat contract 已建立。完成：2026-06-02；evidence：`smoke-desktop-browser-native-paint-ack-heartbeat.test.ts`、`desktop-browser-native-live-acceptance/manifest.json`；验证：`npm run smoke:desktop-browser-native-paint-ack-heartbeat --silent`；状态：action ACK 不依赖 screenshot/frame-stream。
-- [x] Loading/progress model contract 已建立。完成：2026-06-02；evidence：`browser-host-session.test.ts`、`browserPaneModel.test.ts`、`smoke-browser-loading-progress-lifecycle.test.ts`；验证：`npm run smoke:browser-loading-progress-lifecycle --silent`；状态：requested/current/final URL 走 bounded digest。
-- [x] Legacy Host-Stream / WebRTC live path 已删除或降级为 diagnostic。完成：2026-06-02；evidence：`browserPaneHostAdapter.test.ts`、`browser-workbench/render.test.tsx`、WebRTC manifests claimScope=`legacy-transport-diagnostic-only`；验证：`npm run smoke:browser-bounded-evidence-crosscheck --silent`；状态：不再参与产品 live path。
+- `BrowserHostSession` is the only Browser owner.
+- React owns layout, toolbar controls, mount bounds, and typed diagnostics.
+- Workspace Writer owns local HTTP routes, session state, refs, and bounded
+  proxying to a trusted Desktop native adapter.
+- Electron `WebContentsView` is only a display/input adapter. It is not a
+  second browser owner.
+- Desktop Electron main process owns creation, placement, resize, focus, and
+  lifecycle of native embedded surfaces.
 
-仍然阻塞最小闭环的事实：
+## Required Live Path
 
-- 产品 Web/right-pane dogfood 仍会在缺真实 right-pane attach bridge 时写 bounded blocked manifest，不能 claim pass；UI 现在会把 native-surface route reachable / adapter-ready / rightPaneBridge=false 显示为 bounded handoff diagnostic，而不是 fallback live surface；缺显式 `secondTruthSource=false` 的 native-shaped session 也不会进入 live mount/cache/attach path。
-- `browser-pane-bottleneck-audit` 和 `browser-pane-product-long-session` 当前能记录 blocked diagnostic，但还没有真实 right-pane native pass-grade 操作证据。
-- Desktop Electron native live acceptance 已输出 refs-first M0 surfing-loop projection，覆盖 open/click/type/scroll/drag/reload/back/forward/stop 的 `native-embedded` latency；全量 pass manifest 已改为 bounded URL/path digest/ref，不记录 raw URL-like payload；公开外部 URL pair 已在 Desktop right pane 跑出 `realExternalNavigation.passClaim=true`，Web/right-pane dogfood 缺 native bridge 时仍只能 typed blocked。
+A product-live Browser pane must satisfy all of these:
 
-## M0：最小冲浪闭环
-
-优先级：最高。没有 M0，不继续追求长会话、多平台和高级输入。
-
-- [x] Desktop Electron 产品右栏 native attach 真正可见。完成：2026-06-02；evidence：`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json` `surface.liveSurfaceTransport=native-embedded`、`surface.surface=electron-web-contents-view`、`m0SurfingLoop.liveSurfaceRef`；验证：`npm run smoke:desktop-browser-native-live-acceptance --silent`、`npm run smoke:browser-bounded-evidence-crosscheck --silent`；状态：Desktop Electron right pane 可见 native attach 已通过，Web/right-pane dogfood 缺 native bridge 时仍只能写 typed blocked diagnostic。
-  验收：SciForge 右侧 Browser pane 中出现同一个 `BrowserHostSession` 的 `native-embedded` surface；`liveSurfaceRef` 稳定；无 fallback surface。
-  当前状态：desktop native live path passed with refs-first M0 projection；Web/right-pane dogfood 仍可能 missing-native-attach blocked。
-  验证：`npm run smoke:desktop-browser-native-live-acceptance --silent`；`npm run smoke:browser-pane-bottleneck-audit --silent`；`npm run smoke:browser-bounded-evidence-crosscheck --silent`。
-
-- [x] 最小导航闭环。完成：2026-06-02；evidence：`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json` `realExternalNavigation.status=passed`、`targetEvidence.publicTarget=true`、`actionCoverage.open/navigate/reload/back/forward/stop=passed`、`targetEvidence.rawUrlCaptured=false`、`targetEvidence.rawDomCaptured=false`；验证：`SCIFORGE_DESKTOP_BROWSER_NATIVE_REAL_EXTERNAL_TARGET_JSON='<bounded-public-target-pair-json>' npm run smoke:desktop-browser-native-live-acceptance:strict --silent`、`node --import tsx --test src/desktop/desktop-browser-native-live-acceptance.test.ts`；状态：Desktop Electron product right pane 真实公开 URL 导航闭环已通过，Web/right-pane dogfood 缺 native attach bridge 时仍写 typed blocked diagnostic；roadmap 不记录 raw URL，artifact 仅记录 URL length/hash/ref。
-  验收：真实公开 URL 或搜索页可以 open/search/reload/stop/back/forward；地址栏、loading 状态和最终 URL 不滞后；慢/失败页面显示 stalled/blocked/retry/handoff。
-  当前状态：desktop M0 projection 已覆盖 open/reload/stop/back/forward latency；真实公开 URL pair 已通过 bounded evidence；`browser-pane-bottleneck-audit` 当前仍是 Web/right-pane missing-native-attach blocked diagnostic。
-  验证：`npm run smoke:browser-loading-progress-lifecycle --silent`；`npm run smoke:browser-pane-real-external-dogfood --silent`；`npm run smoke:browser-pane-bottleneck-audit --silent`。
-
-- [x] 最小输入闭环。完成：2026-06-02；evidence：`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json` `m0SurfingLoop.actionCoverage.click/type/scroll/drag` latency、`inputHotPath.dependsOnScreenshot=false`、`inputHotPath.dependsOnFrameStream=false`；验证：`npm run smoke:desktop-browser-native-live-acceptance --silent`、`npm run smoke:browser-cursor-caret-parity --silent`、`npm run smoke:browser-mouse-gesture-completeness --silent`、`npm run smoke:browser-keyboard-editing-behavior --silent`、`npm run smoke:browser-bounded-evidence-crosscheck --silent`；状态：Desktop native BrowserHostSession input channel passed，latest strict artifact type latency / p95 action ACK 为 19ms；real OS UI parity remains M1。
-  验收：click、type、scroll、drag 在 BrowserHostSession 输入通道内可见生效；普通文本输入 p95 目标 < 50ms；不进入聊天输入框。
-  当前状态：desktop M0 native path 已有 pass evidence；M1 real OS UI context menu / IME / clipboard / selection proof 仍未完成。
-  验证：`npm run smoke:browser-cursor-caret-parity --silent`；`npm run smoke:browser-mouse-gesture-completeness --silent`；`npm run smoke:browser-keyboard-editing-behavior --silent`；`npm run smoke:browser-pane-bottleneck-audit --silent`。
-
-- [x] 最小 evidence manifest。完成：2026-06-02；evidence：`docs/test-artifacts/desktop-browser-native-live-acceptance/manifest.json` `m0SurfingLoop` schema=`sciforge.desktop.browser-native-live-acceptance.m0-surfing-loop.v1`、action refs/latency、transport/surface/health、bounded URL/path length/hash/ref、no legacy fallback booleans、full-manifest raw URL-like scan=false；验证：`npm run smoke:desktop-browser-native-live-acceptance --silent`、`node --import tsx --test src/desktop/desktop-browser-native-live-acceptance.test.ts`、`npm run smoke:browser-bounded-evidence-crosscheck --silent`；状态：desktop M0 pass-grade evidence 已建立，Web/right-pane blocked manifests 仍不能冒充 pass。
-  验收：输出一个能代表 M0 的 bounded manifest，至少包含：session refs、liveSurfaceRef、transport、surface type、writer/native health、open/click/type/scroll/reload/back/forward latency、blocked/coverage gaps、no legacy fallback booleans。
-  当前状态：desktop native live acceptance 已有 pass-grade M0 schema；`browser-pane-bottleneck-audit` 和 `browser-pane-product-long-session` 仍保留 bounded blocked schema。
-  验证：`npm run smoke:browser-pane-bottleneck-audit --silent`；`npm run smoke:browser-pane-product-long-session --silent`；`npm run smoke:browser-bounded-evidence-crosscheck --silent`。
-
-M0 完成标准：
-
+- `owner=BrowserHostSession`
+- `adapterRole=display-input-adapter`
 - `liveSurfaceTransport=native-embedded`
 - `singleInteractiveTruth=true`
 - `secondTruthSource=false`
-- 没有 host-stream/canvas/WebRTC/HTTP frame/snapshot/iframe/proxy/webview/system popup fallback
-- 用户动作后 live surface 可见更新，不依赖 PNG screenshot
-- blocked manifest 只在真实缺 native attach 或环境缺失时出现，不被当作 pass
+- Session-scoped `sessionRef` and `liveSurfaceRef`
+- Trusted attach/state responses from Desktop native adapter or its Workspace
+  Writer route proxy
+- User input goes through BrowserHostSession actions, not host shell capture
 
-## M1：真实体验打磨
+If any item is missing, the Browser pane must render a typed blocked,
+handoff, or retry state.
 
-优先级：高，但必须排在 M0 之后。目标是把“能冲浪”打磨成“像正常浏览器”。
+## Forbidden Product Fallbacks
 
-- [ ] Cursor / pointer / caret parity。
-  验收：输入框 text cursor/caret 可见；按钮/链接 pointer；普通区域 default；文本区域 text；窗口失焦/恢复后焦点正确。
-  当前状态：`npm run smoke:browser-cursor-caret-parity --silent` 通过 deterministic native contract；新增 `src/desktop/right-pane-native-os-ui-run-contract.ts`、`tools/right-pane-native-os-ui-runner.ts`、`tools/right-pane-native-os-ui-macos-observer.ts`，缺 OS observer 时写 refs-first `missing-os-observer` blocked manifest；2026-06-03 收紧 `RIGHT_PANE_NATIVE_OS_UI_REQUIRED_PROOF_NAMES`，pass-grade `real-product-os-ui-run` 必须同时具备 input caret、pointer/default/text cursor、focus blur/restore 等 bounded proof refs 和 `real-product-os-ui-audit:*` refs，且 proof ref area 必须匹配所属 proof group，`wrong-area/<proof>` 不能补齐 required matrix；env JSON、`node -e`/command-backed accessibility JSON 和 metadata-probe 现在都只能作为 bounded diagnostic，缺真实 adapter/OS UI observer provenance 时落到 typed blocked `native-os-ui-proof-incomplete`，并拒绝转成 pass-grade `real-product-os-ui-run` / `real-product-os-ui-audit`；2026-06-03 macOS built-in observer opt-in 入口已从静态 unavailable refs 升级为 bounded availability diagnostic：`SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_MACOS_OBSERVER_ENABLE=1` 且无 env JSON / command 时运行最小 System Events availability probe，只写 `macos-accessibility-observer/diagnostic-probe/*` refs，仍保持 `blocked/passClaim=false`，不记录窗口标题、DOM、clipboard、screenshot、base64 或原始 probe 输出；2026-06-03 新增 trusted macOS helper provenance gate：只有实际执行入口为 repo 内 `tools/right-pane-native-os-ui-macos-accessibility-helper.ts` 且显式 `SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_MACOS_TRUSTED_HELPER_ENABLE=1` 的命令，才会被考虑转成 pass-grade real OS UI manifest；2026-06-03 进一步收紧 executable provenance：`tsx` 入口只信任 repo 内 `node_modules/.bin/tsx`，`node --import tsx` 入口只信任当前 `process.execPath`，fake `/tmp/.../tsx` 即使输出 pass-shaped macOS accessibility JSON 也只能落到 `trusted-helper-provenance-missing` blocked refs；`node -e`/`--eval`、helper basename 作为普通 argv、env JSON、metadata probe 和 availability probe 均继续 blocked；正式 runner 使用该 helper 时会写出 `trusted-helper-proof-incomplete` 四组 proof refs；2026-06-03 trusted helper 的 partial probe 已扩展为 bounded `partialProofLedger`，可把 `input-caret-visible`、`focus-blur-restore`、`native-surface-not-detached`、`focus-retained-after-rerender` 等白名单 partial proof refs 合入 blocked diagnostic，并记录 proof names/count/latency/hash-style evidence token；2026-06-03 新增 bounded `actionLedger`：partial/blocked helper 会记录四组 actionId、expected/observed proof names、targetSurfaceRef、owner/inputChannel 和 rawPayloadRecorded=false；pass-grade validator 现在强制要求同一 `real-product-os-ui-run:<runId>` scope 覆盖 observer/run/audit/proof/action refs，并要求四组 actionLedger 均为 passed、同 liveSurfaceRef、同 BrowserHostSession owner/inputChannel、observed/expected proof names 覆盖 required matrix，且 actionId 必须是 canonical `focus-input-caret` / `verify-mouse-context-menu` / `verify-ime-clipboard-selection` / `verify-rerender-focus`；helper/observer/runner ingestion 和 bounded crosscheck 现在也拒绝非 canonical actionId/actionRef，避免 blocked diagnostic ledger 漂移；2026-06-03 新增 `browserHostActionChannel` pass gate，runner/helper 只接受无 userinfo/query/hash 的 loopback `/sessions/:id/actions` 或 `/api/sciforge/browser-host/sessions/:id/actions` handoff，manifest 只写 channel hash/ref，不记录 raw endpoint；runner 已覆盖 credentials/query/hash 端点不可用和 trusted helper 不调用这些端点，bounded crosscheck 也拒绝 channel/action ledger 中的 raw endpoint 字段或文本；2026-06-03 runner 现在也可从 runtime-only `SCIFORGE_WORKSPACE_WRITER_BASE_URL` / `SCIFORGE_WORKSPACE_WRITER_URL` 派生 BrowserHostSession action route，并把派生 endpoint 只传给 observer/helper 子进程，manifest/evidence 仍只保留 bounded channel ref；2026-06-03 新增符号 `SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_BROWSER_HOST_ACTION_PLAN_JSON`，trusted helper 只接受各 proofGroup 的白名单 proof names，不接受 endpoint/URL/坐标/payload/DOM/clipboard/screenshot/secret 字段；helper 可通过 action channel 的规范化 `session.cursor` / bounded `cursor:*` token 收集 `pointer-button-link`、`pointer-default-area`、`text-cursor-area` partial proof，也可通过 bounded `native-os-ui-proof` action plan 记录 cursorCaret、mouseContextMenu、keyboardImeClipboardSelection、rerenderFocus 的匹配 proofGroup/actionId proof names，并保持 manifest `blocked/passClaim=false`；trusted helper 收到 action-channel env 时会执行一个低风险 bounded `cursor` action POST 来打通 BrowserHostSession action path，响应被丢弃且不写入 evidence；2026-06-03 新增 `native-os-ui-proof` semantic action 和 `sciforge.browser-host-session.native-os-ui-proof.v1` bounded action-state：Desktop `WebContentsView` adapter 只把 active-editable/caret-visible/blur-restore 布尔结果映射成 `input-caret-visible`、`focus-blur-restore` 与 `proof:*`/`caret:*`/`focus:*` token，不记录 URL/title/DOM/text/selector/coords/payload；BrowserHostSession native adapter 会按 proofGroup sanitizer 后缓存/公开该 proof，错组 proof name 会被丢弃，`native-os-ui-proof` 即使请求 `capture=full/frame` 也强制 `none`；Workspace Writer 公共 `/actions` route 与 public contract 已透传 bounded `proofGroup/probe/expectedProofNames/nativeOsUiProof` 字段，同时丢弃 raw URL/coords/text/payload；trusted helper action plan 可请求这两个 proof 并写入 blocked `partialProofLedger` / `actionLedger`；完整 cursorCaret fixture 现在可让 `actionLedger.cursorCaret/focus-input-caret` 达到 `passed`，partial mouse fixture 可让 `mouseContextMenu/verify-mouse-context-menu` 记录 left/middle/double/down-up/continuous-move/wheel owner proofs 为 `partial`，direct mouse action-plan fixture 已覆盖 right-click context menu 与 drag/drop proof 接受、错组/非 bounded proof 拒绝；keyboard action-plan fixture 可记录 keyboard/clipboard/selection owner partial proofs；action-channel rerender/focus fixture 可让 `rerenderFocus/verify-rerender-focus` 记录 `native-surface-not-detached` 和 `focus-retained-after-rerender` 为 `partial`，direct rerender action-plan fixture 已覆盖 bounded matching proof 接受、错 actionId/非 bounded proof 拒绝；blocked manifest 的 proof group status 仍保持 `blocked`，避免把单组 diagnostic 冒充 M1 pass；该 ledger 仍只作为 blocked diagnostic，`status=blocked`、`passClaim=false`、`osUiRun=undefined`，不能替代完整 real OS UI pass；`docs/test-artifacts/right-pane-native-os-ui-run/manifest.json` 已接入 bounded evidence crosscheck，当前 trusted helper artifact 仍为 `native-os-ui-proof-incomplete` blocked，且 `browserHostActionChannel.status=missing`；observer/runner 子进程 env 已最小化为 PATH/HOME/TMPDIR 与必要 opt-in/provenance/action-channel/action-plan env；forbidden key guard 已覆盖裸 `title/text/url/dom/screenshot/clipboard/menu/selection/provider/payload`、raw variants、secret/API key，bounded evidence crosscheck 也拒绝 inline `nativeOsUiProof`、raw action endpoint、raw action ledger payload、payload-like action fields；unused pass-shaped metadata-probe builder 已删除；完整 OS UI observer pass-grade cursor/caret evidence 仍未完成。
-  验证：`npm run smoke:browser-m1 --silent`；`npm run smoke:browser-bounded-evidence-crosscheck --silent`；`node --import tsx --test src/desktop/right-pane-native-os-ui-run-contract.test.ts tests/smoke/smoke-right-pane-native-os-ui-runner.test.ts tests/smoke/smoke-right-pane-native-os-ui-macos-observer.test.ts`；trusted helper artifact runner with `node --import tsx tools/right-pane-native-os-ui-macos-accessibility-helper.ts`；`node --import tsx -e "<validate docs/test-artifacts/right-pane-native-os-ui-run/manifest.json>"`。
+These may exist only as migration diagnostics, test fixtures, or explicit
+external handoff. They must not be used as the product live Browser surface:
 
-- [ ] 鼠标完整 fidelity。
-  验收：left/right/middle/double click、context menu、mouse down/up、continuous move、drag/drop、文本选择、滚轮/横向滚轮、滚动条拖动都走 BrowserHostSession 且可预测。
-  当前状态：`npm run smoke:browser-mouse-gesture-completeness --silent` 通过 deterministic owner/policy contract；2026-06-03 `right-pane-native-os-ui-run` contract 已把 left/right/middle/double click、down/up、continuous move、drag/drop、selection、wheel/scrollbar 等纳入 required proof matrix；trusted helper/actionLedger 已可把 `mouseContextMenu/verify-mouse-context-menu` 的 bounded owner proof names 作为 blocked partial diagnostic 记录，不能 claim pass；真实 real OS context menu / selection / scrollbar audit refs 仍缺 OS observer run。
-  验证：`npm run smoke:browser-mouse-gesture-completeness --silent`；`node --import tsx --test src/desktop/right-pane-native-os-ui-run-contract.test.ts`。
+- iframe
+- HTTP proxy page rendering
+- screenshot or snapshot replay
+- canvas stream
+- WebRTC stream
+- HTTP `/frame` or frame-stream transport
+- `<webview>`
+- system popup or external browser as a claimed embedded pass
+- site-specific or URL-specific patches
 
-- [ ] 键盘 / IME / clipboard / selection。
-  验收：Backspace/Delete、Enter、Tab、方向键、Home/End、PageUp/PageDown、Cmd/Ctrl+A/C/V/X、Escape 可用；IME composition、clipboard round-trip、selection range 有 owner/audit；不记录 raw payload。
-  当前状态：`npm run smoke:browser-keyboard-editing-behavior --silent` 通过 deterministic native BrowserHostSession editor contract；2026-06-03 `right-pane-native-os-ui-run` contract 已要求 keyboard editing、IME candidate、system clipboard round-trip、selection range owner/audit proof refs，并禁止 raw clipboard/IME/selection payload 作为 proof；trusted helper action plan 已支持 `proofGroup=keyboardImeClipboardSelection` / `mode=bounded-keyboard-ime-clipboard-selection`，runner 可从 Workspace Writer base 派生 action channel 并端到端发送 `native-os-ui-proof` 请求，blocked manifest 只记录 `keyboard-enter-owner`、`system-clipboard-round-trip-owner`、`selection-range-owner` 等白名单 partial proof names，且不写 raw clipboard/IME/selection/URL/DOM/payload；真实 IME candidate、system clipboard、selection proof 未完成。
-  验证：`npm run smoke:browser-keyboard-editing-behavior --silent`；`npm run smoke:browser-input-fidelity-product-acceptance-contract --silent`；`node --import tsx --test src/desktop/right-pane-native-os-ui-run-contract.test.ts tests/smoke/smoke-right-pane-native-os-ui-runner.test.ts tests/smoke/smoke-right-pane-native-os-ui-macos-observer.test.ts`。
+## Development Modes
 
-- [ ] React rerender / surface stability 真机证明。
-  验收：地址栏输入、tab 状态、refs 更新、diagnostic 展开不会导致 native surface detach/remount 或焦点丢失。
-  当前状态：render contract 已完成；2026-06-03 `right-pane-native-os-ui-run` contract 已定义 rerender/focus proof group，并要求 native surface 不 detach、address/tab/diagnostic rerender 稳定、focus retained、tab switch / resize / minimize / restore proof refs；trusted helper/actionLedger 已可把 `rerenderFocus/verify-rerender-focus` 的 `native-surface-not-detached`、`focus-retained-after-rerender` 作为 blocked partial diagnostic 记录，不能 claim pass；真实 tab switch / detach / resize / minimize / restore focus proof 未完成。
-  验证：`npm run smoke:browser-pane-surface-rerender-stability --silent`；`npm run smoke:browser-pane-tab-focus-retention --silent`；`node --import tsx --test src/desktop/right-pane-native-os-ui-run-contract.test.ts`。
+### Web Dev Mode
 
-## M2：可靠性、长会话和证据
+Entry: `npm run dev`, then open `http://localhost:5173`.
 
-优先级：中。M0 过后再做，否则长测只会反复证明 missing-native-attach。
+Use this mode for:
 
-- [ ] 复测 native-only 当前最大瓶颈并重新排序。
-  验收：用真实产品右栏 native run 给出瓶颈排序；只记录 latency/count/hash/refs/transport/surface/writer/native health。
-  当前状态：bounded ranking schema 已有；setup/listen/preflight 失败现在会落到 bounded blocked manifest，并写成 typed `nativeAttachPreflight` / setup-listen diagnostic，不能 claim native-only bottleneck pass；2026-06-03 新增 attach-only pass refusal，只有真实 native attach 同时具备 pass-grade interaction/category coverage 时才可 claim bottleneck pass；2026-06-03 native-surface route 已支持受信 loopback adapter typed proxy，校验 `owner=BrowserHostSession`、`adapterRole=display-input-adapter`、`liveSurfaceTransport=native-embedded`、`singleInteractiveTruth=true`、`secondTruthSource=false` 和 session-scoped `liveSurfaceRef`，无 adapter 或 forged/raw response 仍 blocked/passClaim=false；2026-06-03 Web/right-pane blocked manifest 顶层也显式写 `passClaim=false`，与内部 `liveAcceptance.passClaim=false` 保持一致，避免聚合器把 blocked diagnostic 误读成 pass；当前 `npm run smoke:browser-pane-bottleneck-audit --silent` 仍写出 typed blocked diagnostic，缺 Web/right-pane pass-grade native run。
-  验证：`npm run smoke:browser-pane-bottleneck-audit --silent`。
+- React layout
+- toolbar behavior
+- address bar state
+- loading, blocked, retry, and handoff copy
+- Workspace Writer health diagnostics
+- command text and refs projection
 
-- [ ] 5 分钟产品长会话。
-  验收：连续 5 分钟冲浪、多 tab、reload、back/forward、右栏 resize、workspace writer restart 后不丢 session；否则给出明确恢复状态。
-  当前状态：`npm run smoke:browser-pane-product-long-session --silent` 可生成 bounded blocked attempt；2026-06-03 quick/5min run 在 URL wait 前先写 `nativeAttachPreflight` typed evidence，当前 reason=`missing-native-attach/preflight`、writer `browserHostNativeSurface` endpoint key present 但 `browser-host-native-surface` capability 仍 missing、rightPaneBridge=false；新增 `tools/desktop-browser-native-product-long-session-runner.ts` Desktop-native M2 runner，表达 5min target 与 continuous-surfing / multi-tab / reload / back / forward / right-pane-resize / writer-restart proof groups，M0 pass 不冒充长会话 pass；caller-supplied `REAL_RUN_JSON` / `realRunEvidence` 现在只作为 bounded diagnostic/raw-payload scan 输入，不能提升为 pass；2026-06-03 追加 trusted in-process long-run executor seam，仅当 runner 以 `executeRealLongRun=true` 调用内部 `realLongRunExecutor` 并登记 bounded evidence 时才可 claim pass，executor 存在但未显式启用、env JSON、CLI JSON 和 raw payload evidence 仍 blocked；2026-06-03 进一步收紧 pass-grade proof：每个 session continuity proof group 的 `sessionRef` / `liveSurfaceRef` 必须匹配 manifest 顶层同一个 `BrowserHostSession`，`realLongSessionRun.auditRefs` 必须覆盖所有 proof group audit refs，且 proof group audit ref 的动作 token 必须匹配对应 required action（如 `reload` 不能冒充 `back-forward`）；2026-06-03 Web/right-pane blocked manifest 顶层也显式写 `passClaim=false`，与内部 `liveAcceptance.passClaim=false` 保持一致；2026-06-03 已跑 `SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=5 npm run smoke:browser-pane-product-long-session --silent`，13/13 通过但 manifest 仍是 `status=blocked`、`phase=native-attach-preflight`、`reasonCode=missing-native-attach/preflight`、`iterationsCompleted=0`、`passClaim=false`；缺 Web/right-pane native attach 后的真实 5min pass run。
-  验证：`SCIFORGE_BROWSER_PRODUCT_LONG_SESSION_MINUTES=5 npm run smoke:browser-pane-product-long-session --silent`；`npm run smoke:desktop-browser-native-product-long-session --silent`；`npm run desktop-browser-native-product-long-session:runner --silent`。
+Do not use this mode to claim:
 
-- [x] Runtime Codex browser acceptance service-env rerun。完成：2026-06-03；evidence：`docs/test-artifacts/parallel/p3/manifest.json`、`docs/test-artifacts/parallel/p3/browser-acceptance-dom.txt`、`docs/test-artifacts/parallel/p3/browser-acceptance-notes.md`、`docs/test-artifacts/parallel/p3/browser-acceptance.png`。
-  验收：service env 配齐后重新跑 acceptance；blocked evidence 不冒充右栏 Browser live pass。
-  当前状态：p3 default-chat Runtime Codex in-app Browser acceptance 已用真实 Browser 操作完成 single-turn、显式 selected message ref follow-up、multi-turn passphrase；manifest 为 `status=passed`、`releaseEligible=true`，evidence 仅记录 bounded semantic DOM/notes/screenshot refs，不记录 key/provider payload；该完成项只覆盖 Runtime Codex default-chat acceptance，不冒充 native right-pane Browser live path，M1/M2 native attach/OS observer/5min right-pane tasks 仍按各自 TODO 跟踪。
-  验证：`SCIFORGE_INSTANCE_ID=p3 SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-acceptance --silent`（service env 提供 Runtime key/upstream）；`node --import tsx --test tests/smoke/smoke-runtime-codex-browser-acceptance-service-env.test.ts`。
+- real external webpage attach
+- click/type/scroll fidelity
+- native focus/caret/cursor behavior
+- M0/M1 Browser pass
 
-## M3：平台 Benchmark 和 Adapter 决策
+When Web dev mode lacks a Desktop native adapter, the correct state is
+`native-surface-adapter-missing` or an equivalent typed blocked diagnostic.
 
-优先级：中低。它服务于平台选择和长期稳定性，不阻塞 M0。
+### Desktop Product Mode
 
-- [x] Electron `WebContentsView` benchmark 完整性。完成：2026-06-02；evidence：`docs/test-artifacts/browser-native-adapter-comparison/platform-benchmark-results.json` candidate=`electron-web-contents-view` status=`passed`、`realAdapterResult=true`、metricSections latency/cpu/memory/inputCompleteness/lifecycle/reconnect/streamQuality all passed；验证：`SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK=1 SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND="$(pwd)/node_modules/.bin/tsx" SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON='["tools/browser-native-adapter-electron-web-contents-view-external-result.ts"]' SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE=1 npm run browser-native-adapter-platform-benchmark:runner --silent`、`npm run smoke:browser-native-adapter-platform-benchmark --silent`；状态：Electron candidate 完整，整体 platform benchmark 仍 blocked 因其它候选缺 real command 或当前平台 unsupported。
-  验收：latency/cpu/memory/inputCompleteness/lifecycle/reconnect/streamQuality 七段都有真实 bounded result。
-  当前状态：Electron candidate 只有经 trusted helper + `SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE=1` 执行 live smoke 后才可输出 pass-grade real native bounded result；2026-06-03 trusted helper provenance 已收紧为实际执行入口必须是 repo 内 Electron helper（`tsx <helper>` 或 `node --import tsx <helper>`），helper basename 仅作为无关 argv、`-e`、`--eval`、`--eval=...` 均不能 claim pass；显式 `SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_LIVE_EVIDENCE_PATH` fixture 文件、任意 env `ARGS_JSON` / `node -e` stdout、raw URL/raw field 输出均 fail-closed 或 typed blocked，不能 claim pass；整体 platform benchmark 仍 blocked，因为其它候选缺 real command。
-  验证：`npm run smoke:browser-native-adapter-platform-benchmark --silent`；`SCIFORGE_BROWSER_NATIVE_ADAPTER_PLATFORM_BENCHMARK=1 SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_COMMAND="$(pwd)/node_modules/.bin/tsx" SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_WEB_CONTENTS_VIEW_ARGS_JSON='["tools/browser-native-adapter-electron-web-contents-view-external-result.ts"]' SCIFORGE_BROWSER_NATIVE_ADAPTER_ELECTRON_RUN_LIVE_SMOKE=1 npm run browser-native-adapter-platform-benchmark:runner --silent`。
+Entry: `npm run desktop:start:prod`.
 
-- [ ] WebView2 / WKWebView / standalone Chromium surface real runner。
-  验收：每个候选输出 `real-native-adapter-run` bounded proof refs；平台 unsupported 时必须 typed blocked。
-  当前状态：WebView2 在 darwin 属于当前平台真实 unsupported；typed unsupported 只能按当前平台真实 unsupported 计入，不能替代 real adapter proof；2026-06-03 `tools/browser-native-adapter-wkwebview-external-result.ts` 与 `tools/browser-native-adapter-standalone-chromium-surface-external-result.ts` 已支持 `*_REAL_COMMAND` / `*_REAL_ARGS_JSON` 诊断透传，并对 invalid / oversized / raw URL / raw DOM / screenshot / base64 / provider payload / secret output fail-closed；2026-06-03 platform benchmark runner 已把 pass-grade helper provenance 抽成 `trustedPassGradeHelpers` contract，Electron/WK/standalone 均为 active helper seam，但 WK/standalone 只有在 trusted helper actual entrypoint + 显式 `*_RUN_LIVE_SMOKE=1` + nested `*_REAL_COMMAND` 返回完整 `real-native-adapter-run` refs/metrics 时才可 pass-through；`tsx` 入口必须是 repo 内 `node_modules/.bin/tsx`，`node --import tsx` 必须是当前 `process.execPath`，fake executable named `tsx`、`node -e`/`--eval`、fake script argv 携带 helper basename、任意 pass-shaped stdout 仍不能 claim pass；runner/helper 子进程 env 已最小化为 PATH/HOME/TMPDIR 与 `SCIFORGE_BROWSER_NATIVE_ADAPTER_*` contract env，失败 diagnostic 对任意 stderr 使用 bounded hash 或固定安全 token；raw evidence guard 已覆盖裸 `screenshot/provider/payload`、raw variants、URL/DOM/log/secret keys，pass-shaped extra raw fields 会失败；无真实命令时仍 typed blocked，明确 `realAdapterResult=false`，且默认 blocked helper evidence 已覆盖 latency/cpu/memory/inputCompleteness/lifecycle/reconnect/streamQuality 七段 typed refs；2026-06-03 新增 bounded `adapterAvailability` provenance，候选会显式记录 `helperCommandPresent`、`realAdapterCommandPresent`、`availabilityStatus` 和 env/platform scoped refs；WK/standalone helper command present 但 `*_REAL_COMMAND` missing 时保持 `status=blocked`、`benchmarkClaim=false`、`realAdapterResult=false`，并记录 `missing-real-adapter-command`，不再折叠成泛化 blocked；standalone Chromium blocker 已明确缺 native display/input adapter、BrowserHostSession native surface attach 和 native input routing proof；WKWebView blocker 也已明确 `typed-blocked-native-display-input-adapter-missing`、缺 BrowserHostSession native surface attach 和 native input routing proof；仍缺真实 WKWebView/standalone native display-input adapter command 与 pass-grade bounded proof refs。
-  验证：`npm run smoke:browser-native-adapter-platform-benchmark --silent`。
+Use this mode for:
 
-- [ ] 是否需要 platform-specific native sidecar。
-  验收：基于同 session ownership、refs 采集、input routing、security isolation、lifecycle、packaging 风险做决策。
-  当前状态：新增 `src/desktop/browser-native-sidecar-decision.ts` bounded decision evidence；2026-06-03 sidecar decision 增加 same-session ownership、refs collection、input routing、security isolation、lifecycle、packaging risk decision requirement ledger，并要求真实 `real-native-adapter-run` proof refs 和完整 required metric sections（latency/cpu/memory/inputCompleteness/lifecycle/reconnect/streamQuality）后才能 claim decision；bounded evidence crosscheck 也要求每段 metric section 恰好一次且具备 required numericSummary keys/types（streamQuality 的 `fallbackRequired` 必须是 boolean），缺字段或错类型的 pass-shaped manifest 会被拒绝；typed unsupported 只按当前平台真实 unsupported 计入，不作为 real-run substitute，也不生成误导性的 WebView2 missing-metric blockers；2026-06-03 进一步修正 sidecar ready gate：WebView2 在 darwin 的 typed unsupported 不再要求 command present，当前平台候选全部具备 real bounded results 时可进入 `ready-for-human-decision`；2026-06-03 sidecar `requiredCommands` 透传 benchmark `adapterAvailability`，helper 已 present 但 real adapter command missing 时会显示 `status=missing` 和 bounded provenance refs，而不是只写 `blocked-or-invalid`；当前 artifact 仍缺 WKWebView/standalone real adapter results，因此保持 `status=blocked`、`selectedAdapterId=null`、`benchmarkClaim=false`、`sidecarDecision.requiresPlatformSpecificNativeSidecar=null`、`claimsDecision=false`；这不是最终 sidecar 选择。
-  验证：`npm run smoke:browser-native-sidecar-decision --silent`；`npm run browser-native-sidecar-decision:runner --silent`。
+- real external HTTP/HTTPS navigation
+- real click/type/scroll/reload/back/forward/stop
+- native surface attach and resize
+- BrowserHostSession input latency
+- focus, cursor, caret, and OS UI parity
+- pass-grade Browser evidence
 
-## 执行顺序
+### Desired Desktop Dev Mode
 
-1. 先做 M0：产品右栏 native attach、真实外部 URL、最小导航、最小输入、bounded M0 manifest。
-2. M0 pass 后做 M1：cursor/caret、mouse、keyboard/IME/clipboard/selection、rerender/focus。
-3. M1 稳定后做 M2：瓶颈排序、5 分钟长会话、Runtime Codex service-env acceptance。
-4. 最后做 M3：多平台 adapter benchmark 和 sidecar 决策。
+The intended developer experience is a dedicated Desktop dev shell:
 
-任何阶段发现 M0 回归，立即停止周边任务，先恢复 M0。
+```text
+desktop dev shell
+  starts Vite
+  starts Workspace Writer
+  starts Electron
+  Electron loads the Vite URL
+  Electron injects the native Browser adapter URL into Workspace Writer
+```
 
-## 验证规则
+This keeps React hot reload while preserving the real native Browser path.
+Until this mode exists, use Web dev mode for UI-only work and Desktop product
+mode for real Browser verification.
 
-- 纯文档改动：运行 `git diff --check`。
-- Browser 代码或契约改动至少运行：`npm run typecheck --silent`；`git diff --check`；`node --import tsx --test src/runtime/browser-host-session.test.ts src/runtime/browser-host-search-runtime.test.ts`；`node --import tsx --test packages/presentation/components/browser-workbench/render.test.tsx src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts`。
-- Native Browser live path 改动：运行 `npm run smoke:desktop-browser-native-live-acceptance --silent`、`npm run smoke:desktop-browser-native-live-acceptance:strict --silent` 和 `npm run smoke:browser-bounded-evidence-crosscheck --silent`。
-- 真实体验验收必须使用 SciForge 右侧 Browser pane 完成 dogfood run，并只记录 transport、surface、latency、卡顿点、bounded refs、writer/native adapter health；不记录 raw DOM、raw screenshot、base64、provider payload、secret 或一次性页面内容。
+## Workspace Writer Contract
+
+Workspace Writer `/health` may advertise `browser-host-native-surface` only
+when a trusted loopback Desktop adapter is configured by
+`SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL`.
+
+The public route
+`/api/sciforge/browser-host/native-surface/{health,attach,state}` may proxy the
+Desktop adapter only if the bounded response passes the BrowserHostSession
+trust checks. Raw URLs, raw DOM, raw logs, screenshots, base64, provider
+payloads, secrets, or forged refs must be blocked.
+
+## Evidence Rules
+
+Pass-grade Browser evidence records only bounded facts:
+
+- session refs
+- live surface refs
+- transport and surface type
+- capability health
+- action coverage
+- latency summaries
+- hashes, lengths, counts, and refs
+
+It must not record:
+
+- raw DOM
+- raw console or network logs
+- raw screenshot or base64
+- raw page content
+- provider payloads
+- secrets
+- full private URLs
+
+## Current Status
+
+- Desktop Electron native live acceptance has passed for the M0 Browser path.
+- Web dev mode correctly fails closed when no Desktop native adapter is
+  present.
+- Workspace Writer native-surface routes exist and must stay bounded.
+- M1 real OS UI parity remains separate from M0 browsing and requires Desktop
+  observation, not Web dev mode.
+
+## Next Design Work
+
+1. Add a first-class Desktop dev shell that loads the Vite renderer while
+   injecting Desktop native adapter capability into Workspace Writer.
+2. Keep Web dev mode diagnostics explicit so users do not mistake 5173 for the
+   product Browser host.
+3. Continue M1 work only in Desktop product/dev mode: cursor, caret, context
+   menu, IME, clipboard, selection, rerender, resize, and focus retention.
+4. Keep all Browser evidence bounded and refs-first.
+
+## Verification
+
+For Browser UI or model changes:
+
+```bash
+npm run typecheck --silent
+node --import tsx --test packages/presentation/components/browser-workbench/render.test.tsx src/ui/src/app/results/browserPaneModel.test.ts src/ui/src/app/results/browserPaneHostAdapter.test.ts src/ui/src/api/workspaceClient.browser-host-preflight.test.ts
+node --import tsx --test src/runtime/browser-host-session.test.ts src/runtime/browser-host-search-runtime.test.ts
+git diff --check
+```
+
+For native Browser product changes:
+
+```bash
+npm run smoke:desktop-browser-native-live-acceptance --silent
+npm run smoke:desktop-browser-native-live-acceptance:strict --silent
+npm run smoke:browser-bounded-evidence-crosscheck --silent
+```
+
+For Web dev diagnostics:
+
+```bash
+npm run dev
+curl -sS -X POST http://127.0.0.1:5173/api/sciforge/runtime/start \
+  -H 'Content-Type: application/json' \
+  -d '{"requireBrowserHostNativeSurface":true}'
+```
+
+The expected Web dev result without Desktop native adapter is a typed blocked
+diagnostic, not a claimed live Browser pass.

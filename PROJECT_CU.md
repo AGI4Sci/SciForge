@@ -1,164 +1,239 @@
-# SciForge Computer Use 项目协议
+# SciForge Computer Use Product Protocol
 
-最后更新：2026-06-03
+Last updated: 2026-06-03
 
-当前目标是把 Computer Use 做成 SciForge 的一等产品能力：用户在工作区内可以打开、观察、接管、暂停、恢复并复盘真实应用。现在的推进顺序必须先收敛到一个真实可用的最小闭环，再处理权限预检、质量、dogfood 和周边扩展；Linux/Windows 跨平台实机 provider pass 暂缓，只保留 fail-closed / no-overclaim / handoff gate。
+This document is the current design contract for Computer Use and
+VirtualAppScreen. Historical task logs are intentionally removed; use Git
+history, smoke manifests, and `docs/test-artifacts/**` for old evidence.
 
-## 优先级原则
+## Product Decision
 
-- **先最小闭环，再周边完整性**：先让一个真实 app session 跑通 create -> observe -> human input -> pause/resume -> evidence；之后再补长会话、流质量和完整 dogfood。Linux/Windows 实机 provider pass 当前先放放，不作为本阶段完成口径。
-- **先产品路径，再诊断路径**：产品 live path 必须走 package-owned Native Host。第三方 VNC、noVNC、Xvfb、xpra、Playwright、Electron 等只能作为诊断、兼容、测试或 fallback adapter。
-- **先真实执行，再漂亮展示**：UI 只展示 Host 已证明的 session/surface/frame/input/evidence。缺权限、缺驱动、缺 provider、缺 evidence 时必须 fail closed。
-- **先一条清晰链路，再多场景泛化**：先选一个 app profile 和一个平台完成闭环；确认 contract 后再扩到多窗口、多屏、更多 app。Linux/Windows 只保留 no-pass guard，等外部平台条件满足后再恢复实机验证。
-- **先 refs，后内联**：大图、帧、日志、payload、证据文件必须先落到可追踪引用，再由 UI 或 agent 消费。
-- **同一事实只归一个源头**：session、surface、frame、permission、handoff、provider readiness、ledger hash 都必须有唯一 owner。
-- 已完成 TODO 必须打勾，并补充：`完成：日期；evidence：...；验证：...；状态：...`。
-- 所有修改必须通用，不能写硬编码补丁。
-- 代码路径保持唯一真相源；旧逻辑和最终方案冲突时删除或迁移旧逻辑，不做长期并行实现。
-- 一边工作可以一边可以发现新的task和tdod放在本文件, 最终目标不变
+VirtualAppScreen is a Native Host capability.
 
-## 模块边界
+`localhost:5173` is a React development and diagnostic surface. It can render
+the Screen pane, show refs, expose commands, and explain blocked/handoff
+states. It cannot create an isolated app session, own a native surface, route
+real human input safely, or prove that input did not hit the user's physical
+desktop.
 
-- 前端入口：`apps/desktop-app`。
-- Computer Use 模块边界：`packages/actions/computer-use`。
-- VirtualAppScreen 产品宿主：`packages/actions/computer-use/virtual-app-screen-host`。
-- `apps/desktop-app` 只负责编排和展示，不直接拥有 native screen 的事实源。
-- App profile、provider、permission、handoff、evidence、agent barrier 必须归入 Computer Use 模块的稳定契约。
-- 平台差异只能藏在 host/provider adapter 内，不能分叉产品逻辑。
+The product path must run through the package-owned Computer Use Native Host
+and a platform provider.
 
-## 最小闭环定义
+## Mental Model
 
-最小闭环只要求先跑通一个真实平台、一个真实 app、一个真实 session。完成标准：
+```text
+Web dev mode
+  Browser / Codex in-app Browser
+    -> http://localhost:5173
+       -> React Screen pane
+       -> diagnostics, commands, refs, blocked/handoff states
 
-1. Screen tab 触发 Native Host create/launch/attach/readFrame。
-2. UI 观察同一个 Host-owned `sessionRef`、`liveSurfaceRef`、`frameStreamRef`、`currentFrameRef`。
-3. 用户输入从右侧 Screen pane 发出，经过 Host `sendHumanInput`，真实打到目标 app session，而不是用户物理桌面。
-4. takeover/pause 能停止 agent 后续自动化输入；resume 必须经过 readiness/barrier。
-5. session ledger 至少包含 `session.created`、`app.launched`、`surface.attached`、`grant.validated`、`frame.read`、`human-input.accepted`。
-6. 缺权限或驱动时呈现 blocked/handoff 状态，不展示伪 live。
-7. 一条 focused smoke 能证明以上链路，且失败时能指出缺的是平台条件还是代码能力。
+Native product mode
+  Desktop app or native-capable runtime
+    -> React Screen pane
+    -> Workspace Writer / runtime
+    -> VirtualAppScreen Native Host
+    -> platform provider
+       -> real app session
+       -> host-owned surface/frame/input/ledger refs
+```
 
-## 当前基线
+## Ownership
 
-以下内容已经作为基础能力存在，后续任务不应重复实现：
+- React owns UI layout, controls, visible state, and command projection.
+- Workspace Writer/runtime owns local orchestration, artifacts, refs, and
+  dispatch into Computer Use contracts.
+- `packages/actions/computer-use/virtual-app-screen-host` owns the product
+  Host API, session lifecycle, surface refs, frame refs, input acceptance,
+  control barriers, and ledger validation.
+- Platform providers own OS-specific attach, frame capture, isolated input,
+  permissions, and readiness evidence.
+- Desktop app owns presentation and bridging. It does not become the source of
+  truth for the VirtualAppScreen session.
 
-- `virtual-app-screen-host` package 边界、capability manifest、public API、fail-closed in-memory host、error taxonomy、refs-first ledger/hash-chain validator。
-- 产品 attach 的 public session/surface/frame/grant/owner refs 已收敛为 `computer-use:native-host/...`；provider lifecycle refs 只能作为 Host evidence/ledger 关联。
-- runtime attach 成功后会记录同一个 Host session binding；InputIntent bootstrap 会先让 source-specific product executor 优先，再尝试 current-session Host binding，最后才走 provider fallback。
-- Host `sendHumanInput` / `executeAutomationIntent` 已能通过 provider `sendInputIntent` gate，要求 `rawPayloadWritten=false`、`providerExecuted=true`、`mutatingActionExecuted=true` 和 session/inputLease/actionAdapter/readiness/evidence/before-after/verification refs 一致。
-- Host `pauseAgent` / `resumeAgent` / `closeSession` 已能通过 provider control hooks gate，要求 `agentQueueRef`、resume `currentFrameRefreshRef`、stop `safeStopRef` 和 resume 后 `readFrame` evidence。
-- Existing-session permission handoff/recheck 已能写 Host ledger；Host resume 在 handoff 后要求更新的 recheck barrier。
-- viewer/runtime grant validation 已阻止未验证 Host grant 进入 live。
-- dogfood smoke 已把 `nativeHost`、`humanInputHotPath`、`automationBarrierRefs`、`backgroundEvidenceRefs` 纳入 passed gate。
+## Required Live Path
 
-当前已完成 macOS + `vscode-editor` 的真实最小闭环：`diagnosticOnly=false` attach/readFrame/sendHumanInput/takeover/resume/closeSession、Host ledger replay、provider-owned isolation/physical-desktop-probe evidence，以及 dogfood/user-acceptance manifest ingestion。Word/PowerPoint 已通过同一 Host API 的 app-profile current-run dogfood gate；Linux/Windows 实机 provider pass 暂缓；profile-specific stream sample 和其它 profile 的实际 dogfood 仍必须分别用自己的 current-run provider evidence 证明，不能由 macOS VS Code 或其它 profile 结果替代。
+A product-live VirtualAppScreen must satisfy all of these:
 
-## P0：先做最小产品闭环
+- Host-owned `sessionRef`
+- Host-owned `liveSurfaceRef`
+- Host-owned `frameStreamRef` or `currentFrameRef`
+- validated grant or attach proof
+- platform readiness and permission readiness
+- `diagnosticOnly=false`
+- user input accepted through Host `sendHumanInput`
+- input evidence proves it targets the app session, not the user's physical
+  desktop
+- ledger can replay create, app launch, surface attach, grant validation,
+  frame read, human input, pause/resume, and close where applicable
 
-- [x] **P0.1 真实 Host attach 默认路径**。完成：2026-06-03；状态：macOS `vscode-editor` real Host attach/readFrame/input/control evidence complete，跨平台 provider pass 已转为 P2.1 暂缓 / no-pass guard 约束。
-  - [x] Screen tab bootstrap 默认选择 Native Host 产品路径，而不是只生成 blocked artifact。完成：2026-06-03；evidence：`createDefaultProductNativeVirtualAppScreenHost` / `selectProductNativeVirtualAppScreenAdapter` 收敛默认产品 adapter 选择，`attachVirtualAppScreenSession` 无 executor/dry-run 路径写 Host-owned `recordPreflight` refs；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-session-manager.test.ts tests/smoke/virtual-app-screen-native-host.test.ts` 33/33 pass；状态：fail-closed default product selector + Host preflight complete，真实 platform pass 仍由下一子项约束。
-  - [x] 一个真实 platform adapter 返回 `diagnosticOnly=false` 的 session/surface/frame/input/evidence refs。完成：2026-06-03；evidence：real-human-input opt-in smoke writes durable refs-first `sciforge.computer-use.virtual-app-screen-real-host-session-evidence.v1` via `tools/virtual-app-screen-real-host-session-evidence.ts`; macOS driver supports `bundleId`/`appPath` launch, `processMatch`/`windowTitlePattern` target discovery, the real `node-mac-virtual-display` class-export API, safe display teardown, and post-create blocked cleanup; built-in `virtual-app-screen-macos-pid-scoped-ax-hook` provides the isolated input/control hook; direct real run wrote `docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json` with `status=passed`, `diagnosticOnly=false`, `targetAppProfile=vscode-editor`, `validation.missing=[]`, Host-owned `realHostProviderSessionRef`/`realOptInRunRef`, 4 platform refs, 3 agent queue refs and 8 minimal replay refs；验证：`node --import tsx --test tests/smoke/virtual-app-screen-real-host-session-evidence.test.ts` 2/2 pass，`node --import tsx --test src/runtime/computer-use/native-providers/macos-virtual-display-driver.test.ts` 30/30 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_HUMAN_INPUT=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_DRIVER=1 SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS=1 SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND=vscode-editor SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_COMMAND='/Applications/Visual Studio Code.app/Contents/MacOS/Electron' SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_PROCESS_MATCH='Visual Studio Code|Electron' SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_WINDOW_TITLE_PATTERN='.*' SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_COMMAND=npm SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_INPUT_CONTROL_HOOK_ARGS_JSON='["run","virtual-app-screen-macos-pid-scoped-ax-hook","--silent"]' SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST=docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json node --import tsx --test tests/smoke/smoke-virtual-app-screen-macos-real-human-input-opt-in.test.ts` 1/1 pass；状态：actual macOS VS Code attach/readFrame/input/control closed loop complete。
-  - [x] runtime 用 Host validator 复验 create/launch/attach/readFrame/current-run consistency。完成：2026-06-03；evidence：`virtual-app-screen-native-executor` 先校验 provider operation chain，再用 `validateNativeHostEvidenceLedger(requireFrame, requireGrantValidation)` 复验 Host ledger，并向 runtime/UI 暴露 `hostLifecycleReplayRefs`（`session.created`、`app.launched`、`surface.attached`、`grant.validated`、`frame.read`）和 Host-minted `currentRunPointerRef`；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-native-executor.test.ts` 26/26 pass，`node --import tsx --test src/runtime/computer-use/virtual-app-screen-session-manager.test.ts src/runtime/computer-use/virtual-app-screen-runtime-executors.test.ts` 64/64 pass；状态：runtime validator/replay evidence complete，真实 macOS platform adapter pass 已由上一子项覆盖。
-  - [x] 缺 adapter、权限或 driver 时继续 fail closed，并输出明确 blocked reason。完成：2026-06-03；evidence：默认产品 Host selector 拒绝 diagnostic-only/未隔离/缺 hooks adapter，blocked attach 携带 Host-owned `preflightRef`、`preflightLedgerRef`、`preflightLedgerEntryRef`、`hostReadinessRef`、`blockedRef`；验证：`npm run smoke:virtual-app-screen-native-host --silent` 23/23 pass，`npm run smoke:computer-use-viewer --silent` 23/23 pass，`npm run smoke:virtual-app-screen-dogfood-product --silent` 10/10 pass；状态：complete for fail-closed evidence，真实 driver 缺失仍保持 blocked。
+If any item is missing, the Screen pane must render a typed blocked, handoff,
+permission, replay, fallback, or retry state. It must not render pseudo-live.
 
-- [x] **P0.2 真实 app observe**。完成：2026-06-03；evidence：`vscode-editor` app profile 已收敛到 Host API，macOS Native Host 已在真实 opt-in run 中启动/接入 VS Code 并返回 `diagnosticOnly=false` target window/session/surface/frame refs，Screen pane/desktop presenter 只消费 Host-owned live surface/frame refs 且拒绝 fixture/provider lifecycle/replay-only live；验证：`node --import tsx --test src/runtime/computer-use/native-providers/macos-virtual-display-driver.test.ts` 30/30 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_VSCODE_REAL_NATIVE_HOST=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_DRIVER=1 SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS=1 node --import tsx --test tests/smoke/smoke-virtual-app-screen-vscode-real-native-host-opt-in.test.ts` 1/1 pass；状态：real app observe complete，完整 human input/control 闭环已由 P0.3/P0.4 覆盖。
-  - [x] 选择一个首个 app profile，优先 `vscode-editor` 或最小通用 workbench。完成：2026-06-03；evidence：新增 `virtual-app-screen-app-profiles` resolver，`vscode-editor` / `vscode-editor-low-risk` / `vscode-local-native-virtual-display` / `code` / `visual-studio-code` 均解析到 canonical `profileId=vscode-editor`、`adapterProfileRef=adapter-profile:virtual-app-screen/vscode-local-native-virtual-display`、provider `targetAppKind=vscode`、`targetAppRef=app:profile/vscode-editor`，未知 profile fail closed，`generic-editor` 保持显式 contract profile 而非 fallback；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-app-profiles.test.ts src/runtime/computer-use/virtual-app-screen-native-executor.test.ts` 31/31 pass，`node --import tsx --test src/runtime/computer-use/virtual-app-screen-runtime-executors.test.ts` 44/44 pass；状态：首个 app profile contract complete，真实 app attach 已由下一子项覆盖。
-  - [x] Native Host 启动/接入该 app，并拿到真实 target window/surface。完成：2026-06-03；evidence：macOS `MacosVirtualDisplayDriverTargetAppSpec` can launch by `bundleId`/`appPath` via `open`, discover process ids by `processMatch`, and select target windows by `windowTitlePattern` instead of only returned child pids; the driver now supports the real `node-mac-virtual-display` class-export API, destroys class-export display instances on closeSession after safe-stop evidence, and cleans up created displays on post-create blocked attach paths; `smoke-virtual-app-screen-vscode-real-native-host-opt-in.test.ts` keeps normal runs fail-closed and locally proved opted-in `vscode-editor` attach returns `attached`、`diagnosticOnly=false`、Host-owned target window/session/surface/frame refs and ledger events for `session.created`、`app.launched`、`surface.attached`、`grant.validated`、`frame.read`；验证：`node --import tsx --test src/runtime/computer-use/native-providers/macos-virtual-display-driver.test.ts` 30/30 pass，`node --import tsx --test tests/smoke/smoke-virtual-app-screen-vscode-real-native-host-opt-in.test.ts` 1/1 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_VSCODE_REAL_NATIVE_HOST=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_DRIVER=1 SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS=1 node --import tsx --test tests/smoke/smoke-virtual-app-screen-vscode-real-native-host-opt-in.test.ts` 1/1 pass；状态：actual macOS VS Code attach/observe pass complete，human input/control closed loop 已由 P0.3/P0.4 覆盖。
-  - [x] Screen pane 渲染同一个 Host-owned live surface 或 native frame stream。完成：2026-06-03；evidence：`src/desktop/virtual-app-screen-surface.ts` refs-only presenter + `desktop:virtual-app-screen-surface:{attach,present,detach}` IPC；验证：`node --import tsx --test tests/smoke/smoke-desktop-electron-main.test.ts src/ui/src/app/results/screenPaneHostAdapter.test.ts` 18/18 pass；状态：observe-only desktop presenter complete，真实 app attach 已由上一项覆盖。
-  - [x] UI 不允许仅凭 provider lifecycle refs、fixture refs、replay refs 进入 live。完成：2026-06-03；evidence：`screenPaneHostAdapter` live presenter request 只携带 Host-owned session/surface/frame/grant/transport/evidence refs；验证：`node --import tsx --test src/ui/src/app/results/screenPaneHostAdapter.test.ts` pass；状态：complete。
+## Forbidden Product Fallbacks
 
-- [x] **P0.3 真人输入热路径**。完成：2026-06-03；状态：Host-bound hot path + real macOS pid-scoped AX proof complete。
-  - [x] 右侧 Screen pane 的 click/type/scroll 通过 Host `sendHumanInput` 到目标 app session。完成：2026-06-03；evidence：viewer terminal-equivalent `--current-run-pointer-ref` commands + Native Host binding in `virtual-app-screen-input-runtime.ts`；验证：`node --import tsx --test src/runtime/computer-use/input-intent-command.test.ts src/runtime/computer-use/virtual-app-screen-input-runtime.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx` pass；状态：generic Host-bound hot path complete。
-  - [x] 真实 platform hook 证明输入没有打到用户物理桌面。完成：2026-06-03；evidence：native driver input-control contract requires provider-owned `isolationEvidenceRefs`、`physicalDesktopProbeRefs` and explicit `affectsPhysicalDisplay=false`、`sharedSystemInputUsed=false`、`systemPointerMoved=false`、`systemKeyboardEventsSent=false`; drivers fail closed on missing/out-of-root/traversal refs; env hook bootstrap performs non-mutating `capabilityProbe=true`, preserves capability refs, passes `evidenceRoot.outDir`/`runDirRef`/`providerRootRef`, redacts diagnostics, handles stdin close and terminates child process groups; built-in `virtual-app-screen-macos-pid-scoped-ax-hook` writes provider-owned evidence, compiles against the current macOS SDK, accepts Host `kind` + ratio click payloads, maps to target-window-scoped AX coordinates, uses pid/window-scoped AXPress or target-window focus/raise fallback, rejects shared/system actions, and writes control-plane pause/resume/closeSession evidence without CGEvent/System Events/shared keyboard/pointer; Host ledger now carries provider evidence refs as sidecar refs while keeping Host-owned accepted/queue refs as truth; direct real run `manual-20260603T0534` opened provider verification/isolation/physical-desktop-probe JSON for input, takeover, resume and closeSession safe-stop and produced passed manifest；验证：`node --import tsx --test src/runtime/computer-use/native-providers/macos-ax-input-control-hook.test.ts` 7/7 pass，`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` 19/19 pass，direct macOS real-human-input opt-in command above 1/1 pass；状态：contract gate + real macOS pid-scoped AX platform proof complete。
-  - [x] ledger 写入 `human-input.accepted`，并能关联 before/current frame refs。完成：2026-06-03；evidence：Host ledger event now records `inputAcceptedRef`、`beforeFrameRef`、`currentFrameRef` and validator rejects missing refs；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` 14/14 pass；状态：complete。
-  - [x] 输入失败时保持 blocked，不伪造 executed。完成：2026-06-03；evidence：Native Host input binding rejects mismatched `currentRunPointerRef` and missing execution hooks; provider evidence path remains fail-closed；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-input-runtime.test.ts tests/smoke/virtual-app-screen-native-host.test.ts` pass；状态：complete。
+These may exist only as diagnostics, compatibility experiments, or explicit
+fallback adapters. They must not be used as product live proof:
 
-- [x] **P0.4 接管、暂停、恢复**。完成：2026-06-03；状态：same-session takeover/pause/resume/closeSession real platform proof complete。
-  - [x] takeover/pause 连接真实 agent queue，使用户输入优先。完成：2026-06-03；evidence：Host pause/resume ledger has a `requireTakeoverQueue` validator gate requiring Host-owned `agent.paused.agentQueueRef`、`agent.resumed.agentQueueRef` and resume `currentFrameRefreshRef`; in-flight automation completion re-checks current session state/readiness after the adapter returns; runtime control commands fail closed without `agentQueueRef` / refresh / safe-stop evidence; macOS real-human-input opt-in smoke exercises takeover/pause, resume and `stop-session` through provider `closeSession`, asserts Host-owned queue/safe-stop refs, validates `session.closed`, opens provider-owned `/control-plane/*/{verification,isolation-evidence,physical-desktop-probe,safe-stop}.json`, and durable manifest separates `realAgentQueueEvidenceRefs` from generic barrier refs; direct manifest `manual-20260603T0534` has 3 real agent queue refs and dogfood/user-acceptance ingestion passes with it；验证：`node --import tsx --test tests/smoke/virtual-app-screen-real-host-session-evidence.test.ts` 2/2 pass，direct macOS real-human-input opt-in command above 1/1 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST=docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json npm run smoke:virtual-app-screen-dogfood-product --silent` 10/10 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST=docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json npm run smoke:virtual-app-screen-user-acceptance-contract --silent` 31/31 pass；状态：Host/runtime + durable dogfood queue evidence gate + real macOS control proof complete。
-  - [x] resume 必须等待 readiness/barrier，并在 handoff 后要求新的 permission recheck。完成：2026-06-03；evidence：Host `resumeAgent` enforces current-run/readiness/recheck barrier and session manager records permission recheck before attach resumes；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts src/runtime/computer-use/virtual-app-screen-session-manager.test.ts` pass；状态：same-session barrier complete。
-  - [x] safe stop 阻止后续自动化输入落入已接管 session。完成：2026-06-03；evidence：Host rejects automation in `paused`/`stopped`/`closed` session states and validates stopped/closed grants fail closed; macOS real-human-input opt-in smoke now requires closeSession safe-stop provider evidence before writing the real Host session evidence manifest；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` pass，`node --import tsx --test tests/smoke/smoke-virtual-app-screen-macos-real-human-input-opt-in.test.ts` 1/1 pass；状态：complete。
-  - [x] 这一阶段只要求同一 session 内闭环，不要求多 session 或跨进程恢复。完成：2026-06-03；evidence：`virtual-app-screen-native-host-session-store.ts` remains `currentSessionOnly: true` and stores Host pointer for same-session input/control checks；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-input-runtime.test.ts src/runtime/computer-use/virtual-app-screen-session-manager.test.ts` pass；状态：complete。
+- noVNC, VNC, xpra, Xvfb, MJPEG, PNG delta, WebRTC, WebCodecs, Playwright, or
+  Electron as a claimed product owner
+- fixture refs
+- replay-only refs
+- provider lifecycle refs without Host-owned session and surface proof
+- screenshots pretending to be live control
+- user physical desktop input
+- raw payload evidence
+- app-specific shortcuts that bypass the Host API
 
-- [x] **P0.5 最小 evidence replay**。完成：2026-06-03；evidence：Host ledger replay refs are derived from the ledger, current-run pointer is Host-minted, and runtime/UI/dogfood consume explicit pointer/replay refs only；验证：`npm run smoke:virtual-app-screen-native-host --silent`、`npm run smoke:computer-use-viewer --silent`、`npm run smoke:virtual-app-screen-dogfood-product --silent` pass；状态：complete。
-  - [x] Host ledger 串起 frame、grant、human input、pause/resume events。完成：2026-06-03；evidence：`deriveNativeHostMinimalEvidenceReplayRefs` returns canonical Host ledger event refs and Host smoke covers frame/grant/input/pause/resume chain；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` pass；状态：complete。
-  - [x] current-run pointer 由 Host 写入，并由 runtime/dogfood 复验。完成：2026-06-03；evidence：Host `createSession` mints `computer-use:native-host/runs/session-*/current-run-pointer.json`; native executor/session store/input runtime/viewer/dogfood carry and validate explicit pointer refs；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-native-executor.test.ts src/runtime/computer-use/virtual-app-screen-input-runtime.test.ts tests/smoke/smoke-virtual-app-screen-dogfood-product.test.ts` pass；状态：complete。
-  - [x] 一条 smoke 能从 ledger 复盘 create -> observe -> human input -> resume 的关键 refs。完成：2026-06-03；evidence：`tools/check-native-virtual-app-screen-host-validation.ts` minimal-replay profile and dogfood replay gate require Host event refs for create/observe/human input/resume；验证：`npm run smoke:virtual-app-screen-native-host --silent` and `npm run smoke:virtual-app-screen-dogfood-product --silent` pass；状态：complete。
+## Development Modes
 
-## P1：最小闭环后的硬化
+### Web Dev Mode
 
-- [x] **P1.1 权限 preflight**。完成：2026-06-03；状态：Host-owned preflight + permission ledger + same-session provider-backed readiness recovery/resume complete。
-  - [x] 无 attached session 时也能由 Host-owned preflight 记录 platform permission、driver readiness、provider readiness。完成：2026-06-03；evidence：Host `recordPreflight` 在无 session 时写入 `preflightRef`、`preflightLedgerRef`、`preflightLedgerEntryRef`、`hostReadinessRef`，并把 `requestedPermissionRefs`、`platformDriverRef`、`providerReadinessRef` 记录到同一条 Host-owned `preflight.recorded` ledger entry，且 ledger 不包含 `session.created`/`app.launched`/`surface.attached`；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` 16/16 pass，`node --import tsx --test src/runtime/computer-use/virtual-app-screen-session-manager.test.ts` 18/18 pass；状态：contract/preflight evidence complete，真实 adapter readiness recovery 仍由下方子项约束。
-  - [x] 用户完成授权后的 re-probe/recheck 进入 Host ledger。完成：2026-06-03；evidence：`recordPermissionHandoff` / `recordPermissionRecheck` now write Host-owned permission ledger events with `adapterReadinessRef`、`platformDriverRef`、`providerReadinessSummaryRef` and validator requires those refs when permission handoff/recheck is requested；验证：`node --import tsx --test tests/smoke/virtual-app-screen-native-host.test.ts` 17/17 pass；状态：Host re-probe ledger contract complete。
-  - [x] 真实 adapter resume 证明 readiness 已恢复，而不是只记录 UI recheck command。完成：2026-06-03；evidence：Host resume barrier rejects stale `requiredReadinessRef` after handoff/recheck; session manager now refreshes an existing provider-backed Host session through `provider.probe()` on permission recheck, syncs Host + provider session readiness refs without creating a second native attach/session, and input runtime carries the latest Host permission-recheck ref into the resume barrier. The real macOS VS Code opt-in smoke now executes pause -> permission.handoff -> stale resume blocked -> permission.recheck -> provider-backed resume/readFrame on the same Host session with recovered readiness refs；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-session-manager.test.ts src/runtime/computer-use/virtual-app-screen-input-runtime.test.ts tests/smoke/virtual-app-screen-native-host.test.ts tests/smoke/smoke-virtual-app-screen-macos-real-human-input-opt-in.test.ts` 58/58 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_HUMAN_INPUT=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_REAL_DRIVER=1 SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1 SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS=1 ... node --import tsx --test tests/smoke/smoke-virtual-app-screen-macos-real-human-input-opt-in.test.ts` 1/1 pass，`npm run typecheck --silent` pass；状态：real provider-backed readiness recovery and resume complete。
+Entry: `npm run dev`, then open `http://localhost:5173`.
 
-- [x] **P1.2 右侧 live binding 稳定性**。完成：2026-06-03；evidence：provider session store 持久化 immutable surface identity refs，reconnect 只复验已有 Host/provider session，UI state model 对 blocked/permission/handoff/live/replay/fallback 做互斥归一并输出可解释 reason refs；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-command.test.ts src/runtime/computer-use/virtual-app-screen-session-manager.test.ts src/ui/src/app/results/rightPaneLiveBindingRegistry.test.ts src/ui/src/app/results/rightPaneScreenController.test.ts` 42/42 pass，`node --import tsx --test src/ui/src/app/results/screenPaneModel.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx` 40/40 pass；状态：same-session live binding stability complete。
-  - [x] 多窗口、多屏、tab switch、workspace restore 保持稳定 surface identity。完成：2026-06-03；evidence：provider session store records first-class `surfaceIdentityRef` / `surfaceIdentity` excluding frame cursor, reconnect requires `surfaceIdentityRef`、`surfaceOwnerRef`、`displayOwnerRef`, blocks immutable identity drift while allowing `currentFrameRef/currentFrameSequence` advance, UI live binding registry preserves identity across tab restore/resize and emits blocked evidence instead of silently overwriting same-screen owner refs；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-command.test.ts src/runtime/computer-use/virtual-app-screen-session-manager.test.ts src/ui/src/app/results/rightPaneLiveBindingRegistry.test.ts src/ui/src/app/results/rightPaneScreenController.test.ts` 42/42 pass；状态：same-session surface identity stability complete。
-  - [x] reconnect 只复验已有 Host/provider session，不偷偷 create/launch 新 session。完成：2026-06-03；evidence：`reconnectVirtualAppScreenSession` 只调用 provider session store `revalidateVirtualAppScreenProviderSession` 并重建 surface transport descriptor，测试用 `attachCalled=false` 证明 reconnect 不执行 native attach executor；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-session-manager.test.ts` 19/19 pass；状态：same-session reconnect revalidation complete。
-  - [x] blocked、permission、handoff、live、replay、fallback 状态互斥且可解释。完成：2026-06-03；evidence：Screen pane model emits canonical `presentationState` with `presentationStateReason` / `presentationStateReasonRefs`; activation placeholders resolve to `permission`; conflicting blocked+permission+replay evidence chooses one winning gate; right-pane reconnect now requires complete identity refs and blocked identity drift is surfaced via explicit `blockedRef` / `blockedReason`；验证：`node --import tsx --test src/ui/src/app/results/screenPaneModel.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx` 39/39 pass，`node --import tsx --test src/ui/src/app/results/rightPaneLiveBindingRegistry.test.ts src/ui/src/app/results/rightPaneScreenController.test.ts` 15/15 pass；状态：UI canonical state + registry identity gate complete。
+Use this mode for:
 
-- [x] **P1.3 Contract 和 dogfood 对齐**。完成：2026-06-03；状态：contract/dogfood/user-acceptance ingestion aligned with real macOS VS Code session evidence。
-  - [x] manifest、runbook、smoke evidence 与真实 Host provider 能力同步。完成：2026-06-03；evidence：Native Host README protocol matches manifest public API; dogfood manifest separates contract shape from real pass by keeping Host-shaped fixtures blocked unless `diagnosticOnly=false` real opt-in Host provider evidence is present; `tools/virtual-app-screen-real-host-session-evidence.ts` projects real opt-in attach/input/takeover/resume/stop projections into durable refs-first dogfood + user-acceptance input; real-human-input opt-in smoke writes that manifest using `SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST` or default path; dogfood product and user-acceptance contract both ingest `manual-20260603T0534/manifest.json` and require `realHostProviderSessionRef`、`realOptInRunRef`、`realPlatformEvidenceRefs`、`realAgentQueueEvidenceRefs`、Host current-run pointer and minimal replay refs；验证：`SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST=docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json npm run smoke:virtual-app-screen-dogfood-product --silent` 10/10 pass，`SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST=docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json npm run smoke:virtual-app-screen-user-acceptance-contract --silent` 31/31 pass；状态：real evidence manifest/dogfood ingestion complete。
-  - [x] dogfood manifest 至少覆盖一次真实 app 会话。完成：2026-06-03；evidence：`docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json` is `status=passed`, `diagnosticOnly=false`, `platformProvider=macos`, `targetAppProfile=vscode-editor`, `refsFirst=true`, includes real Host provider/session/run/platform/agent/replay refs and `real-virtual-app-screen` user-acceptance claim；验证：manifest JSON parse summary passed，dogfood product 10/10 pass with `SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST` pointing to this manifest；状态：complete for macOS VS Code real app session。
-  - [x] 文档不能声称 user-level pass 领先于实际 smoke。完成：2026-06-03；evidence：dogfood runbook labels Native Host fields as contract shape gate / real pass prerequisite fields; package script exposes `smoke:computer-use-user-acceptance-contract`; first-scenario/local-smoke tests assert contract-shaped evidence remains blocked without real Host opt-in evidence; current user-level pass claim is now backed by direct macOS VS Code real smoke and passed manifest `manual-20260603T0534`；验证：direct macOS real-human-input opt-in command above 1/1 pass，user-acceptance contract with manifest 31/31 pass；状态：docs/script naming no-overclaim complete。
+- Screen pane layout
+- blocked, handoff, permission, replay, fallback, and live state rendering
+- command text generation
+- ref projection
+- artifact inspection
+- Workspace Writer/runtime route diagnostics
 
-## P2：扩展和体验质量
+Do not use this mode to claim:
 
-- [ ] **P2.1 跨平台实机 provider pass（暂缓）**。状态：暂缓 / 外部平台条件待满足；当前不声明 Linux/Windows provider pass，也不纳入本阶段完成口径。已完成的 no-overclaim、handoff、fail-closed smoke 只作为恢复实机验证时的前置约束。
-  - [ ] macOS 最小闭环稳定后，再接 Linux provider。暂缓：需要 Linux 实机、Xpra/driver/input hook、agent-owned display 和平台权限条件。已完成：Linux Xpra real-driver and real-human-input opt-in smokes stay fail-closed by default and, when opted in, both require a passed macOS real closed-loop evidence manifest via shared `tests/smoke/helpers/virtual-app-screen-real-host-evidence-manifest-gates.ts` before any Linux pass claim. The gate requires `sciforge.computer-use.virtual-app-screen-real-host-session-evidence.v1`、`status=passed`、`platformProvider=macos`、`diagnosticOnly=false`、`refsFirst=true`、Host current-run refs、Host-owned real/session/platform/agent/replay refs and a `real-virtual-app-screen` claim, while rejecting blocked/diagnostic/fixture manifests and current-run/replay refs that do not belong to the same Host ledger; macOS VS Code closed-loop evidence is available at `docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json`, but no actual Linux Xpra provider run has been executed on Linux；验证：`node --import tsx --test tests/smoke/virtual-app-screen-real-host-evidence-manifest-gates.test.ts tests/smoke/smoke-virtual-app-screen-linux-xpra-real-driver-opt-in.test.ts tests/smoke/smoke-virtual-app-screen-linux-xpra-real-human-input-opt-in.test.ts tests/smoke/smoke-virtual-app-screen-windows-idd-real-driver-opt-in.test.ts` 5/5 pass；状态：shared no-overclaim macOS->Linux sequencing gate ready，actual Linux provider pass deferred。
-  - [ ] Linux 稳定后，再接 Windows provider。暂缓：依赖 Linux real closed-loop pass，并需要 Windows `win32`、IDD/driver/permission readiness、isolated input/control hook 和平台权限条件。已完成：Windows IDD real-driver opt-in smoke stays fail-closed by default and, when opted in, uses the same real Host session evidence manifest gate with `SCIFORGE_VIRTUAL_APP_SCREEN_LINUX_REAL_CLOSED_LOOP_EVIDENCE_MANIFEST`, accepting only passed `platformProvider=linux-xpra|linux` manifests and rejecting macOS/blocked/diagnostic/fixture manifests before it can reach any Windows `win32` provider pass path; Windows real-human-input opt-in defaults to `status=not-run` / `windowsCompletionClaim=false`, requires explicit opt-in on `win32` with runtime hooks plus a passed Linux manifest, and Windows npm scripts use the cross-platform `tools/run-virtual-app-screen-real-opt-in-smoke.ts` launcher for native shell args；验证：`node --import tsx --test tests/smoke/virtual-app-screen-real-host-evidence-manifest-gates.test.ts tests/smoke/virtual-app-screen-real-host-evidence-manifest-handoff.test.ts tests/smoke/smoke-virtual-app-screen-linux-xpra-real-driver-opt-in.test.ts tests/smoke/smoke-virtual-app-screen-linux-xpra-real-human-input-opt-in.test.ts tests/smoke/smoke-virtual-app-screen-windows-idd-real-driver-opt-in.test.ts tests/smoke/smoke-virtual-app-screen-windows-idd-real-human-input-opt-in.test.ts` 9/9 pass；状态：shared Linux->Windows prerequisite gate/no-overclaim smoke ready，actual Windows provider pass deferred。
-  - [x] 平台差异只进入 adapter，不进入 UI 或产品分支。完成：2026-06-03；evidence：Screen pane activation placeholders no longer hard-code macOS/Linux/Windows permission gate refs; UI emits only generic handoff/recheck refs and continues to surface platform-specific refs only when they arrive from Host/provider artifacts；验证：`node --import tsx --test --test-name-pattern "activation refs" src/ui/src/app/results/screenPaneModel.test.ts` 1/1 pass，`node --import tsx --test src/ui/src/app/results/screenPaneModel.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx` 40/40 pass；状态：UI/product platform-ref leak removed; actual Linux/Windows provider passes remain gated by Linux then Windows platform conditions.
+- a real virtual screen session
+- isolated app launch
+- real frame stream quality
+- real click/type/scroll safety
+- physical-desktop isolation
+- takeover/pause/resume correctness
 
-- [x] **P2.2 Stream quality**。完成：2026-06-03；状态：transport contract + UI fallback gate + one real macOS provider stream sample manifest complete。
-  - [x] 评估 native surface、WebRTC、WebCodecs、MJPEG/PNG delta 等传输选型。完成：2026-06-03；evidence：`docs/VirtualAppScreenArchitecture.md` Surface Transport 选型评估 now compares `native-presented-surface`、`webrtc`、`webcodecs` and `mjpeg-png-delta` as platform-neutral candidates, keeps product live path refs-first/single-truth/fail-closed, and limits MJPEG/PNG delta to diagnostic/fallback with `fallbackRequired=true` rather than user-level live pass；验证：`node --import tsx --test tests/smoke/virtual-app-screen-stream-transport-contract.test.ts` 2/2 pass；状态：transport option evaluation contract complete，real provider stream benchmark/selection remains covered by the next metric item。
-  - [x] 记录 latency、framerate、input-to-frame 延迟、reconnect 时间。完成：2026-06-03；evidence：Browser native adapter platform benchmark contract already has required `streamQuality` metrics, and VirtualAppScreen now has a provider-level measurement contract in `tools/check-virtual-app-screen-provider-stream-quality-contract.ts` / `docs/VirtualAppScreenArchitecture.md` requiring `latencyP50Ms`、`latencyP95Ms`、`framerateAvgFps`、`framerateP5Fps`、`inputToFrameP50Ms`、`inputToFrameP95Ms`、`reconnectP50Ms`、`reconnectP95Ms`、`sampleCount` and `fallbackRequired` as provider-owned bounded summary refs; it reuses `VirtualDisplayFrameTransportContract`、`VirtualDisplayFrameTelemetrySummary`、`VirtualDisplaySurfaceTransportDescriptor` and `frameTransportReadiness`, requires `fallbackRequired=true` to fail closed, and validates `sciforge.computer-use.virtual-app-screen-provider-stream-quality-sample-manifest.v1` via `--sample-manifest` for provider-root-scoped refs, Host current-run refs, bounded actual sample metrics and forbidden raw payloads while keeping default/no-manifest `realRunStatus=pending-provider-samples` and `realStreamRunClaim=false`；验证：`node --import tsx --test tests/smoke/virtual-app-screen-provider-stream-quality-contract.test.ts` 11/11 pass，`node --import tsx tools/check-virtual-app-screen-provider-stream-quality-contract.ts` pass；状态：VirtualAppScreen provider-level stream quality measurement contract + sample-manifest validator complete。
-  - [x] 至少一次真实 provider stream benchmark sample manifest 通过，并由 Host current-run refs 关联当前 run。完成：2026-06-03；evidence：`tools/virtual-app-screen-provider-stream-quality-sample.ts` builds/writes provider-owned bounded sample refs only from a passed `sciforge.computer-use.virtual-app-screen-real-host-session-evidence.v1` manifest plus real measured frame-read/input-to-frame/reconnect samples; direct macOS real-human-input opt-in run wrote `docs/test-artifacts/virtual-app-screen-provider-stream-quality/manual-20260603T0534/sample-manifest.json` and sidecars (`frame-transport-contract.json`、`frame-telemetry-summary.json`、`stream-quality.json`、`input-to-frame-causality.json`、`reconnect-probe.json`、`bounded-metric-summary.json`、`fallback-decision.json`、`fallback-reason.json`) with `providerRootRef=provider:virtual-display/macos/.../stream-quality`, `currentRunPointerRef=computer-use:native-host/runs/session-1/current-run-pointer.json`, `currentRunLedgerRef=computer-use:native-host/ledgers/session-1/evidence-ledger.json`, `fallbackRequired=false`；验证：direct macOS real-human-input opt-in command with `SCIFORGE_VIRTUAL_APP_SCREEN_PROVIDER_STREAM_QUALITY_SAMPLE_MANIFEST=docs/test-artifacts/virtual-app-screen-provider-stream-quality/manual-20260603T0534/sample-manifest.json` 1/1 pass，`node --import tsx tools/check-virtual-app-screen-provider-stream-quality-contract.ts --sample-manifest docs/test-artifacts/virtual-app-screen-provider-stream-quality/manual-20260603T0534/sample-manifest.json` passed with `sampleManifestStatus=provider-samples-validated`；状态：actual macOS provider stream sample complete，future Linux/Windows/profile-specific samples still require their own provider evidence。
-  - [x] 高延迟时 UI 降级为 clearly marked fallback，而不是伪装 live。完成：2026-06-03；evidence：Screen pane model now normalizes provider `frameTransport` / `frameTelemetry` stream-quality refs, treats explicit `fallbackRequired=true` as degraded stream-quality evidence, and derives `surfaceMode` / `presentationState` as `fallback` with reason refs; healthy telemetry remains live；验证：`node --import tsx --test src/ui/src/app/results/screenPaneModel.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx` 40/40 pass；状态：VirtualAppScreen UI fallback gate complete，provider measurement/threshold source still covered by previous metric item。
+### Native Product Mode
 
-- [x] **P2.3 更多 app profile**。完成：2026-06-03；状态：Word/PowerPoint generic Host API app-profile dogfood pass complete，Linux/Windows 实机 provider pass 仍按 P2.1 暂缓。
-  - [x] VS Code 闭环稳定后再接 Word / PowerPoint 文档编辑 profile。完成：2026-06-03；evidence：根据本机目标 app 可用性，移除不合理的 Obsidian/Slack/Chrome Remote Desktop P2.3 target 任务，registry-only profile contracts now exist for `word` and `powerpoint`, both routed through `adapter-profile:virtual-app-screen/generic-host-api` instead of app-specific product shortcuts。
-    `evaluateVirtualAppScreenAppProfilePreflight` emits `sciforge.computer-use.virtual-app-screen-app-profile-preflight.v1` manifests from injected availability or explicit local installed-app probe input, with `launch-spec-ready` / `target-app-unavailable` / `blocked` and `realDogfoodPassClaim=false` until the independent target pass gate validates real current-run evidence。Direct local probe on this Mac recorded `launchSpecReady=2/2` for `/Applications/Microsoft Word.app` (`com.microsoft.Word`) and `/Applications/Microsoft PowerPoint.app` (`com.microsoft.Powerpoint`) with `checkedBy=local-installed-app-probe/darwin`; its `realRunCommandTemplates[]` now launch stable editable targets via `/usr/bin/open -b <bundle> <target-file>`, require `editableWindowReadiness` (`mode=document|presentation`, AX window, non-empty title, editable-surface evidence, shell/auth/protected/read-only title rejection), and set `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_WINDOW_TIMEOUT_MS=45000` for Office cold-start tolerance。
-    Stable target files are `tests/fixtures/virtual-app-screen-app-profile-target-documents/word-current-run.docx` and `tests/fixtures/virtual-app-screen-app-profile-target-documents/powerpoint-current-run.pptx`; both were rendered/previewed before use. App-profile dogfood sequencing guard accepts passed VS Code evidence only as sequencing prerequisite; `evaluateVirtualAppScreenAppProfileTargetDogfoodPassGate` plus `npm run virtual-app-screen-app-profile-target-dogfood-gate` remains the separate target-app pass gate, requiring VS Code sequencing evidence, `launch-spec-ready` preflight evidence, refs-backed file inputs, and a same-profile current-run real Host session manifest before it can set `realDogfoodPassClaim=true`。
-    Real target runs wrote `docs/test-artifacts/virtual-app-screen-real-app-session/word-current-run/manifest.json` and `docs/test-artifacts/virtual-app-screen-real-app-session/powerpoint-current-run/manifest.json`, both `status=passed`, `platformProvider=macos`, `diagnosticOnly=false`, `targetAppProfile` matching the profile, `validation.ok=true`, Host-owned current-run/ledger/platform/agent/replay refs, and no fixture/mock/snapshot/replay-shaped evidence strings。Additional fail-closed guards now require selected CG windows to have matching AX window evidence, reject invalid programmatic editable-readiness regexes, and block Linux/Windows target manifests from current Word/PowerPoint pass claims while P2.1 remains deferred；验证：`node --import tsx --test src/runtime/computer-use/native-providers/macos-virtual-display-driver.test.ts src/runtime/computer-use/virtual-app-screen-runtime-executors.test.ts src/runtime/computer-use/virtual-app-screen-app-profiles.test.ts tests/smoke/virtual-app-screen-app-profile-preflight-tool.test.ts tests/smoke/virtual-app-screen-app-profile-dogfood-gates.test.ts` 114/114 pass；Word real-human-input current-run 1/1 pass；PowerPoint real-human-input current-run 1/1 pass；`node --import tsx tools/check-virtual-app-screen-app-profile-target-dogfood-gate.ts --profile word --vscode-manifest docs/test-artifacts/virtual-app-screen-real-app-session/manual-20260603T0534/manifest.json --preflight-manifest docs/test-artifacts/virtual-app-screen-app-profile-preflight/local-probe/manifest.json --target-manifest docs/test-artifacts/virtual-app-screen-real-app-session/word-current-run/manifest.json` passed；same command for `--profile powerpoint` / `powerpoint-current-run` passed；状态：VS Code sequencing prerequisite + generic Host API Word/PowerPoint preflight + real current-run target dogfood pass complete.
-  - [x] 每个 profile 必须复用同一 Host API，不引入 app-specific 产品捷径。完成：2026-06-03；evidence：profile tests cover aliases and `app:profile/...` resolution for `word` / `powerpoint` via the generic Host API adapter ref, while retired targets (`obsidian` / `slack` / `chrome-remote-desktop`) and artifact-ish shortcuts like `doc` / `deck` / `slides` stay blocked and unknown profile fail-closed behavior remains unchanged；验证：`node --import tsx --test src/runtime/computer-use/virtual-app-screen-app-profiles.test.ts` 8/8 pass，`node --import tsx --test --test-name-pattern "VirtualAppScreen native executor (resolves app profiles|blocks unknown app profiles)" src/runtime/computer-use/virtual-app-screen-native-executor.test.ts` 2/2 pass；状态：generic Host API profile contract complete.
+Use this mode for:
 
-## 暂缓事项
+- app launch/attach/readFrame
+- real Host session and surface identity
+- isolated human input
+- pause, resume, takeover, and closeSession
+- stream quality
+- platform permission and driver readiness
+- pass-grade dogfood and user acceptance
 
-以下内容必须等最小闭环完成后再做：
+On macOS, current real-pass evidence is centered on Native Host + platform
+provider runs for app profiles such as VS Code, Word, and PowerPoint. Linux and
+Windows real provider pass remain gated by their platform conditions and must
+not be inferred from macOS evidence.
 
-- 云端远程桌面或多租户 host pool。
-- 高级视频编码、远程音频、剪贴板同步、文件拖放。
-- 长期自动修复权限与驱动安装器。
-- 大规模跨平台 dogfood 矩阵。
+### Desired Desktop Dev Mode
 
-## 验证规则
+The intended developer experience is a Desktop dev shell:
 
-每次修改都至少执行与改动相关的验证：
+```text
+desktop dev shell
+  starts Vite
+  starts Workspace Writer/runtime
+  starts Electron/Desktop shell
+  connects React UI to Native Host capabilities
+  keeps hot reload for UI-only edits
+  verifies real Screen behavior in the native product path
+```
 
-- 文档和 JSON：
-  - `git diff --check`
-  - 相关 JSON parse 或 schema 校验。
-- Native Host contract：
-  - `npm run smoke:virtual-app-screen-native-host --silent`
-  - `npm run smoke:native-extension-ownership --silent`
-- Viewer/runtime：
-  - `npm run smoke:computer-use-viewer --silent`
-  - `npm run smoke:virtual-app-screen-dogfood-product --silent`
-- Native provider / real app：
-  - host API smoke。
-  - platform adapter smoke。
-  - session ledger/hash/current-run validator。
-  - 至少一个真实 app profile 的 attach/readFrame/sendHumanInput 验证。
-- UI 变更：
-  - 启动对应 dev server。
-  - 使用 in-app Browser 或 Playwright 截图验证真实状态。
+Until this mode is first-class, use Web dev mode for UI-only work and native
+product/opt-in smoke runs for real VirtualAppScreen behavior.
 
-若验证因平台权限、驱动或 sandbox 不可用而失败，必须保留 fail-closed evidence，并说明缺失的是平台条件还是代码能力。
+## State Model
 
-## 必读文档
+Screen state must be mutually exclusive and explainable:
 
-- `docs/VirtualAppScreenNativeHost.md`
-- `docs/VirtualAppScreenArchitecture.md`
-- `docs/NativeExtensionOwnershipMap.md`
-- `docs/runbooks/virtual-app-screen-dogfood-runbook.md`
-- `packages/actions/computer-use/README.md`
-- `packages/actions/computer-use/virtual-app-screen-host/README.md`
+- `permission`: platform or user authorization is missing
+- `blocked`: driver, provider, Host, session, or identity requirements failed
+- `handoff`: a human or platform action is required before retry
+- `live`: Host-owned session and live surface are validated
+- `replay`: bounded evidence is available, but no live control is claimed
+- `fallback`: degraded stream or diagnostic view is explicitly marked
+- `empty`: no current Host session or replay evidence exists
+
+React may display these states, but it does not decide that a session is live
+without Host/provider evidence.
+
+## Evidence Rules
+
+Pass-grade Computer Use evidence records only bounded facts:
+
+- Host session refs
+- surface and frame refs
+- current-run pointer refs
+- permission/readiness refs
+- ledger refs and event names
+- provider isolation refs
+- latency/framerate/reconnect summaries
+- counts, hashes, lengths, and refs
+
+It must not record:
+
+- raw screenshots or base64
+- raw app payloads
+- raw clipboard or IME contents
+- raw user text
+- raw provider data
+- secrets
+- unbounded OS or accessibility dumps
+
+## Current Status
+
+- The product design is Native Host first.
+- macOS real Host evidence exists for the minimal VirtualAppScreen loop.
+- VS Code, Word, and PowerPoint profiles use the same Host API contract rather
+  than app-specific product shortcuts.
+- Web dev mode remains useful for UI and diagnostic work but is not a product
+  proof environment.
+- Linux and Windows real provider passes remain deferred and fail closed by
+  design until their platform requirements are available.
+
+## Next Design Work
+
+1. Add a first-class Desktop dev shell so UI hot reload and native product
+   verification share one workflow.
+2. Keep Web dev mode honest: it may show blocked/handoff diagnostics, but not
+   product pass claims.
+3. Continue improving real Native Host evidence for app profiles through the
+   same Host API.
+4. Keep platform-specific logic inside provider adapters, never in product UI.
+5. Keep all Computer Use evidence bounded and refs-first.
+
+## Verification
+
+For UI/model changes:
+
+```bash
+npm run typecheck --silent
+node --import tsx --test src/ui/src/app/results/screenPaneModel.test.ts src/ui/src/app/results/screenPaneHostAdapter.test.ts packages/presentation/components/virtual-screen-viewer/render.test.tsx
+git diff --check
+```
+
+For Native Host contract changes:
+
+```bash
+npm run smoke:virtual-app-screen-native-host --silent
+npm run smoke:native-extension-ownership --silent
+```
+
+For viewer/runtime dogfood:
+
+```bash
+npm run smoke:computer-use-viewer --silent
+npm run smoke:virtual-app-screen-dogfood-product --silent
+```
+
+For real app/provider changes:
+
+```bash
+node --import tsx --test src/runtime/computer-use/native-providers/macos-virtual-display-driver.test.ts
+node --import tsx --test src/runtime/computer-use/native-providers/macos-ax-input-control-hook.test.ts
+```
+
+Real provider opt-in smokes must remain explicit. If platform permissions,
+drivers, or app availability are missing, the correct result is bounded
+fail-closed evidence, not a claimed pass.
