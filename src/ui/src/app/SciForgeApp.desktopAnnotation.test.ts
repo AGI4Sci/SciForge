@@ -7,6 +7,7 @@ import { transformSync } from 'esbuild';
 const appSource = readFileSync(new URL('./SciForgeApp.tsx', import.meta.url), 'utf8');
 const topBarSource = readFileSync(new URL('./appShell/TopBar.tsx', import.meta.url), 'utf8');
 const configSource = readFileSync(new URL('../config.ts', import.meta.url), 'utf8');
+const appShellCssSource = readFileSync(new URL('../styles/app-01.css', import.meta.url), 'utf8');
 
 function desktopAnnotationModel() {
   const start = appSource.indexOf('const desktopAnnotationReferenceKeys');
@@ -54,6 +55,16 @@ test('top bar presents Annotate as a three-mode menu separate from Global Vision
   assert.match(topBarSource, /aria-label=\{annotationButtonLabel\}/);
   assert.match(topBarSource, /'en-US': 'Annotate'/);
   assert.doesNotMatch(topBarSource, /Open annotations/);
+});
+
+test('top bar annotation menu stacks above content panes for pointer hit testing', () => {
+  const topbarRule = appShellCssSource.match(/\.topbar\s*{[^}]*}/)?.[0] ?? '';
+  const popoverRule = appShellCssSource.match(/\.topbar-annotation-menu-popover\s*{[^}]*}/)?.[0] ?? '';
+  const zIndex = Number(topbarRule.match(/z-index:\s*(\d+)/)?.[1] ?? Number.NaN);
+
+  assert.match(topbarRule, /position:\s*relative/);
+  assert.ok(Number.isFinite(zIndex) && zIndex > 20, 'topbar must stack above the popover/content overlap');
+  assert.match(popoverRule, /z-index:\s*20/);
 });
 
 test('SciForgeApp starts explicit annotation mode and never polls or submits selection', () => {

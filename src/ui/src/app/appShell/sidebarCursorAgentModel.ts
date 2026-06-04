@@ -55,6 +55,7 @@ export interface SidebarCursorAgentThreadInput {
   pinned?: boolean;
   archived?: boolean;
   discarded?: boolean;
+  badges?: string[];
 }
 
 export interface SidebarCursorAgentBranchInput {
@@ -135,6 +136,7 @@ export interface SidebarCursorAgentAction {
   effect: SidebarCursorAgentActionEffect;
   targetRef: string;
   commandText?: string;
+  impactDescription?: string;
   mutates: boolean;
   localPresentation: boolean;
   presentationMutation?: SidebarCursorAgentPresentationMutation;
@@ -409,7 +411,7 @@ function buildThreadProjection(args: {
     selected: selectionMatches(args.selection?.threadId, rawKey, publicId),
     updatedAt: safeTimestamp(args.thread.updatedAt ?? args.thread.createdAt),
     createdAt: safeTimestamp(args.thread.createdAt ?? args.thread.updatedAt),
-    badges: threadBadges(state, pinned),
+    badges: uniquePublicBadges([...threadBadges(state, pinned), ...(args.thread.badges ?? [])]),
     actions: buildThreadCommandActions(resourceRef, args.projectRef, state, pinned),
     presentationActions: [
       buildSelectThreadAction(resourceRef),
@@ -498,6 +500,16 @@ function threadBadges(state: SidebarCursorAgentThreadState, pinned: boolean): st
   return badges;
 }
 
+function uniquePublicBadges(badges: string[]): string[] {
+  const seen = new Set<string>();
+  return badges.filter((badge) => {
+    const clean = safeVisibleLine(badge, '', 28);
+    if (!clean || seen.has(clean)) return false;
+    seen.add(clean);
+    return true;
+  });
+}
+
 function buildThreadCommandActions(
   threadRef: string,
   projectRef: string,
@@ -512,6 +524,7 @@ function buildThreadCommandActions(
       scope: 'thread',
       targetRef: threadRef,
       mutates: true,
+      impactDescription: 'Restores the parent chat and reconnects background child agents, status, and resume candidates.',
       commandText: commandText('chat', 'restore', ['--project-ref', projectRef, '--thread-ref', threadRef]),
     }));
     return actions;
@@ -532,6 +545,7 @@ function buildThreadCommandActions(
       scope: 'thread',
       targetRef: threadRef,
       mutates: true,
+      impactDescription: 'Discards this parent chat draft while background child agents keep their checkpoints for resume.',
       commandText: commandText('chat', 'discard', ['--project-ref', projectRef, '--thread-ref', threadRef]),
     }));
     return actions;
@@ -542,6 +556,7 @@ function buildThreadCommandActions(
     scope: 'thread',
     targetRef: threadRef,
     mutates: true,
+    impactDescription: 'Archives the parent chat; background child agents keep running and remain available through resume candidates.',
     commandText: commandText('chat', 'archive', ['--project-ref', projectRef, '--thread-ref', threadRef]),
   }));
   return actions;
@@ -716,6 +731,7 @@ function commandAction(args: {
   scope: SidebarCursorAgentAction['scope'];
   targetRef: string;
   commandText: string;
+  impactDescription?: string;
   mutates: boolean;
 }): SidebarCursorAgentAction {
   return {
@@ -726,6 +742,7 @@ function commandAction(args: {
     effect: 'agent-host-command',
     targetRef: args.targetRef,
     commandText: args.commandText,
+    impactDescription: args.impactDescription,
     mutates: args.mutates,
     localPresentation: false,
   };

@@ -2205,6 +2205,8 @@
 }
 
 .topbar {
+  position: relative;
+  z-index: 40;
   height: 64px;
   flex-shrink: 0;
   display: flex;

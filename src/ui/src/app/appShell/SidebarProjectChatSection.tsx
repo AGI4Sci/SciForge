@@ -501,7 +501,7 @@ function sidebarSearchResultRows(
 function sidebarSearchGroup(match: SidebarSearchMatch): SidebarSearchGroupId {
   if (match.workspaceRelativePath) return 'files';
   if (match.action && match.action !== 'new-agent' && match.action !== 'open-settings' && match.action !== 'open-mcp-settings') return 'actions';
-  if (match.kind === 'agent' || match.kind === 'thread') return 'agents';
+  if (match.kind === 'agent' || match.kind === 'thread' || match.kind === 'agent-result') return 'agents';
   if (match.kind === 'file') return 'actions';
   if (match.kind === 'mode') return 'modes';
   if (match.kind === 'model') return 'models';

@@ -5,8 +5,10 @@ import { resultText, type ResultLocale } from './resultLocale';
 export interface SubagentArtifactPreviewModel {
   agentId?: string;
   parentAgentId?: string;
+  agentType?: string;
   status?: string;
   createdAt?: string;
+  durationMs?: number;
   resultSummary?: string;
   resultRef?: string;
   transcriptRef?: string;
@@ -39,8 +41,10 @@ export function subagentPreviewForReference(session: SciForgeSession, reference:
       return {
         agentId: stringField(native.agentId),
         parentAgentId: stringField(native.parentAgentId),
+        agentType: safeSubagentPreviewLabel(stringField(native.agentType) ?? stringField(native.agent_type)),
         status: stringField(native.status),
         createdAt: stringField(event.createdAt),
+        durationMs: nonNegativeNumberField(native.durationMs) ?? nonNegativeNumberField(native.duration_ms),
         resultSummary: stringField(native.resultSummary),
         resultRef,
         transcriptRef,
@@ -151,6 +155,21 @@ function recordField(value: unknown): Record<string, unknown> | undefined {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function nonNegativeNumberField(value: unknown): number | undefined {
+  const number = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function safeSubagentPreviewLabel(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text || rightPaneTextIsSensitive(text)) return undefined;
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(text)) return undefined;
+  if (/^(?:codex-command|runtime-codex|runtime-command)(?:$|[_.:-])/i.test(text)) return undefined;
+  return text;
 }
 
 function stringArrayField(value: unknown): string[] {

@@ -1,5 +1,6 @@
 import type { ResultPaneTab, ResultPaneTabInstance } from './ResultShell';
 import { resultText, type ResultLocale } from './resultLocale';
+import { publicScopeToken } from '../../publicProjectionSanitizer';
 
 const DEFAULT_RIGHT_PANE_TABS: ResultPaneTab[] = ['primary', 'browser', 'image', 'terminal', 'files', 'evidence'];
 
@@ -115,7 +116,7 @@ export function queueRightPaneFocus(target: RightPaneFocusTarget) {
 }
 
 export function rightPaneStateStorageKey(workspacePath: string | undefined) {
-  return `sciforge.right-pane-state.v1.${workspacePath || 'default'}`;
+  return `sciforge.right-pane-state.v1.${publicScopeToken(workspacePath)}`;
 }
 
 export function loadStoredRightPaneState(storageKey: string, locale: ResultLocale | undefined, initialResultTab: ResultPaneTab): StoredRightPaneState {

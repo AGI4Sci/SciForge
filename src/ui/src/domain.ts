@@ -828,6 +828,7 @@ export type ComposerDeclaredModelIntentId =
 
 export type ComposerDeclaredModelMode = 'auto' | 'max' | 'assistant';
 export type ComposerDeclaredCapabilityTier = 'auto' | 'max' | 'fast' | 'balanced' | 'deep';
+export type ComposerDeclaredModeIntentId = 'plan' | 'debug' | 'multitask' | 'ask';
 
 export interface ComposerDeclaredModelIntentProjection {
   modelIntentId: ComposerDeclaredModelIntentId;
@@ -838,10 +839,63 @@ export interface ComposerDeclaredModelIntentProjection {
   declaredAt: string;
 }
 
+export interface ComposerDeclaredModeIntentProjection {
+  modeIntentId: ComposerDeclaredModeIntentId;
+  publicLabel: string;
+  summaryGuidance?: string;
+  actionId: string;
+  declaredAt: string;
+}
+
 export interface ComposerDeclaredIntentSnapshot {
   schemaVersion: 'sciforge.composer-declared-intents.v1';
   source: 'ui-action-audit-log';
   model?: ComposerDeclaredModelIntentProjection;
+  mode?: ComposerDeclaredModeIntentProjection;
+}
+
+export interface AgentHostWindowActionHandoffBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface AgentHostWindowActionHandoffRef {
+  referenceId: string;
+  ref: string;
+  title: string;
+  sourceKind?: string;
+  annotationRef?: string;
+  imageRef?: string;
+  screenshotRef?: string;
+  cropRef?: string;
+  targetRef?: string;
+  evidenceRefs: Array<{ kind: string; ref: string }>;
+  windowBinding: {
+    status: 'manual-bound' | 'auto-bound';
+    confidence?: number;
+    reason?: string;
+    windowRef: string;
+    appName?: string;
+    bundleId?: string;
+    pid?: number;
+    title?: string;
+    screenId?: string;
+    scale?: number;
+    windowBounds?: AgentHostWindowActionHandoffBounds;
+    windowLocalBounds?: AgentHostWindowActionHandoffBounds;
+  };
+}
+
+export interface AgentHostWindowActionHandoff {
+  schemaVersion: 'sciforge.window-action-handoff.v1';
+  source: 'run-orchestrator';
+  mode: 'enter-or-reuse-window-action-session';
+  intent: 'annotation-quick-action' | 'explicit-modification';
+  actionFlowRef: string;
+  highConfidenceThreshold: number;
+  promotedRefs: AgentHostWindowActionHandoffRef[];
 }
 
 export interface SendAgentMessageInput {
@@ -872,6 +926,7 @@ export interface SendAgentMessageInput {
   conversationLaneId?: string;
   runtimeResumePolicy?: RuntimeResumePolicy;
   composerDeclaredIntents?: ComposerDeclaredIntentSnapshot;
+  windowActionHandoff?: AgentHostWindowActionHandoff;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
+  chatToolNameAliasesFromResponsesTools,
   chatCompletionToResponse,
   functionCallOutputItem,
   makeId,
@@ -9,6 +10,7 @@ import {
   responsesToChatCompletions,
   type ChatCompletionRequest,
   type ChatToolCall,
+  type ChatToolNameAliasMap,
   type CodexResponsesProxyOptions,
   type JsonObject,
   type ResponsesRequest,
@@ -105,6 +107,7 @@ type StreamingState = {
   messageStarted: boolean;
   toolCalls: Map<number, MutableToolCall>;
   nextOutputIndex: number;
+  toolNameAliases: ChatToolNameAliasMap;
 };
 
 type MutableToolCall = {
@@ -322,6 +325,7 @@ async function handleResponsesRequest(
   const body = await readJson(request);
   const responsesRequest = body && typeof body === 'object' && !Array.isArray(body) ? body as ResponsesRequest : {};
   const chatRequest = responsesToChatCompletions(responsesRequest, options);
+  const toolNameAliases = chatToolNameAliasesFromResponsesTools(responsesRequest.tools);
   const originalFeatures = chatRequestFeatures(chatRequest);
   const profileKey = providerCapabilityProfileKey(upstreamBaseUrl, chatRequest.model, options, request);
   const profile = capabilityProfiles.get(profileKey) ?? createProviderCapabilityProfile(profileKey);
@@ -346,13 +350,13 @@ async function handleResponsesRequest(
       capabilityProfiles.set(profile.key, profile);
       if (chatRequest.stream === true && attempt.request.stream !== true) {
         const completion = await upstream.json();
-        return streamChatCompletionObjectAsResponses(response, completion, responsesRequest);
+        return streamChatCompletionObjectAsResponses(response, completion, responsesRequest, toolNameAliases);
       }
       if (chatRequest.stream === true) {
-        return streamChatCompletionAsResponses(response, upstream, chatRequest.model);
+        return streamChatCompletionAsResponses(response, upstream, chatRequest.model, toolNameAliases);
       }
       const completion = await upstream.json();
-      return sendJson(response, 200, chatCompletionToResponse(completion, responsesRequest));
+      return sendJson(response, 200, chatCompletionToResponse(completion, responsesRequest, toolNameAliases));
     }
 
     const failure: ChatCompletionFailure = {
@@ -661,8 +665,9 @@ function streamChatCompletionObjectAsResponses(
   response: ServerResponse,
   completion: unknown,
   request: Pick<ResponsesRequest, 'model'> = {},
+  toolNameAliases: ChatToolNameAliasMap = {},
 ) {
-  const converted = chatCompletionToResponse(completion, request);
+  const converted = chatCompletionToResponse(completion, request, toolNameAliases);
   const state: StreamingState = {
     responseId: typeof converted.id === 'string' ? converted.id : makeId('resp'),
     model: typeof converted.model === 'string' ? converted.model : 'unknown',
@@ -671,6 +676,7 @@ function streamChatCompletionObjectAsResponses(
     messageStarted: false,
     toolCalls: new Map(),
     nextOutputIndex: 0,
+    toolNameAliases,
   };
   const output = Array.isArray(converted.output) ? converted.output.filter(isJsonObject) : [];
   const outputText = typeof converted.output_text === 'string' ? converted.output_text : '';
@@ -774,6 +780,7 @@ async function streamChatCompletionAsResponses(
   response: ServerResponse,
   upstream: Response,
   model: string,
+  toolNameAliases: ChatToolNameAliasMap = {},
 ) {
   response.writeHead(200, {
     'access-control-allow-origin': '*',
@@ -791,6 +798,7 @@ async function streamChatCompletionAsResponses(
     messageStarted: false,
     toolCalls: new Map(),
     nextOutputIndex: 0,
+    toolNameAliases,
   };
 
   writeResponseEvent(response, 'response.created', {
@@ -870,7 +878,7 @@ function applyToolCallDelta(response: ServerResponse, state: StreamingState, val
         id: typeof record.id === 'string' && record.id ? record.id : makeId('call'),
         type: 'function',
         function: {
-          name: typeof fn.name === 'string' && fn.name ? fn.name : '',
+          name: typeof fn.name === 'string' && fn.name ? state.toolNameAliases[fn.name] ?? fn.name : '',
           arguments: '',
         },
       },
@@ -878,7 +886,7 @@ function applyToolCallDelta(response: ServerResponse, state: StreamingState, val
     state.toolCalls.set(index, entry);
   }
   if (typeof record.id === 'string' && record.id) entry.call.id = record.id;
-  if (typeof fn.name === 'string' && fn.name) entry.call.function.name = fn.name;
+  if (typeof fn.name === 'string' && fn.name) entry.call.function.name = state.toolNameAliases[fn.name] ?? fn.name;
   ensureToolCallStarted(response, entry);
   if (typeof fn.arguments === 'string' && fn.arguments) {
     entry.call.function.arguments += fn.arguments;

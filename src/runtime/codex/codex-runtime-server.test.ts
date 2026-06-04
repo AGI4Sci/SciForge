@@ -72,6 +72,64 @@ test('runtime bridge request detection does not treat legacy exec JSON as a prod
   assert.equal(codexRuntimeBridgeRequested({ useCodexRuntimeBridge: true }), true);
 });
 
+test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metadata', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Compare the runtime and UI paths, then summarize the blockers.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-multitask-intent',
+        attemptId: 'codex-command-multitask-intent-attempt-1',
+        auditMetadata: {
+          schemaVersion: 'sciforge.codex-runtime-stream-audit.v1',
+          guiLocalProjection: {
+            composerDeclaredIntents: {
+              mode: {
+                modeIntentId: 'multitask',
+                publicLabel: 'Multitask',
+                summaryGuidance: 'Coordinate parallel tasks.',
+                actionId: 'action-mode-multitask',
+                declaredAt: '2026-06-04T00:00:00.000Z',
+                provider: 'private-provider-should-drop',
+              },
+            },
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: done/);
+    assert.equal(adapter.lastInput?.commandText, 'Compare the runtime and UI paths, then summarize the blockers.');
+    assert.deepEqual(adapter.lastInput?.declaredIntents, {
+      mode: {
+        modeIntentId: 'multitask',
+        publicLabel: 'Multitask',
+        summaryGuidance: 'Coordinate parallel tasks.',
+        actionId: 'action-mode-multitask',
+        declaredAt: '2026-06-04T00:00:00.000Z',
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput?.declaredIntents), /private-provider/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('product Runtime Codex factory stays on Codex app-server and does not import exec JSON fallback', async () => {
   const productSources = [
     ['runtime factory', './codex-runtime-adapter.ts'],

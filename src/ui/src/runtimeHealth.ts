@@ -76,23 +76,23 @@ export function workspaceWriterHealth(
         id: 'workspace',
         label: 'Workspace Writer',
         status: RUNTIME_HEALTH_STATUS.OFFLINE,
-        detail: config.workspaceWriterBaseUrl,
+        detail: workspaceWriterConfiguredDetail(config),
         recoverAction: `Workspace Writer 在线但缺少 ${RUNTIME_MODULE_DISPATCHER_CAPABILITY}；重启 npm run workspace:server 后刷新`,
       };
     }
-    return { id: 'workspace', label: 'Workspace Writer', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: config.workspaceWriterBaseUrl };
+    return { id: 'workspace', label: 'Workspace Writer', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: workspaceWriterConfiguredDetail(config) };
   }
   const defaultUrl = defaultSciForgeConfig.workspaceWriterBaseUrl;
   const configuredUrl = config.workspaceWriterBaseUrl.replace(/\/+$/, '');
   const defaultMatchesConfigured = configuredUrl === defaultUrl.replace(/\/+$/, '');
   const portDriftAction = !defaultMatchesConfigured && defaultWorkspaceProbe.online
-    ? `当前 Workspace Writer URL 无法访问；默认 writer ${defaultUrl} 在线。打开 Settings 将 Workspace Writer URL 改回默认值后刷新。`
+    ? '当前 Workspace Writer URL 无法访问；默认 writer 在线。打开 Settings 将 Workspace Writer URL 改回默认值后刷新。'
     : undefined;
   return {
     id: 'workspace',
     label: 'Workspace Writer',
     status: RUNTIME_HEALTH_STATUS.OFFLINE,
-    detail: config.workspaceWriterBaseUrl,
+    detail: workspaceWriterConfiguredDetail(config),
     recoverAction: portDriftAction ?? '启动 npm run workspace:server 后刷新',
   };
 }
@@ -115,16 +115,22 @@ export function codexRuntimeHealth(config: SciForgeConfig, workspaceOnline: bool
       label: 'Codex Runtime',
       status: RUNTIME_HEALTH_STATUS.NOT_CONFIGURED,
       detail: 'Runtime Profile missing',
-      recoverAction: `配置 Runtime Profile，默认 ${DEFAULT_CODEX_RUNTIME_PROFILE}`,
+      recoverAction: '配置 Runtime Profile。',
     };
   }
   return {
     id: 'codex-runtime',
     label: 'Codex Runtime',
     status: workspaceOnline ? RUNTIME_HEALTH_STATUS.ONLINE : RUNTIME_HEALTH_STATUS.CHECKING,
-    detail: `Runtime Profile ${profile}`,
+    detail: 'Runtime profile configured',
     recoverAction: workspaceOnline ? undefined : '等待 Workspace Writer 暴露 Codex runtime bridge health',
   };
+}
+
+function workspaceWriterConfiguredDetail(config: SciForgeConfig) {
+  return config.workspaceWriterBaseUrl.trim()
+    ? 'Workspace Writer configured (masked)'
+    : 'Workspace Writer missing';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

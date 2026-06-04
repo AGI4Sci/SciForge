@@ -29,6 +29,19 @@ export type CursorAgentActionKind =
 
 export type CursorAgentActionStatus = 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled' | 'unknown';
 export type CursorAgentGroupKind = 'worked' | 'explored';
+export type CursorChildAgentStatus = CursorAgentActionStatus | 'background-running' | 'resumed';
+
+export interface CursorChildAgentCard {
+  id: string;
+  title: string;
+  publicAgentLane?: string;
+  publicModelLane?: string;
+  status: CursorChildAgentStatus;
+  durationLabel?: string;
+  summary?: string;
+  refs: string[];
+  createdAt: string;
+}
 
 export interface CursorAgentAction {
   id: string;
@@ -59,6 +72,7 @@ export interface CursorAgentAction {
   itemId?: string;
   traceStepId?: string;
   refs: string[];
+  childAgentCard?: CursorChildAgentCard;
   createdAt: string;
   initiallyExpanded: boolean;
 }
@@ -324,6 +338,17 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
       outputSummary,
       exitCode,
     }, locale);
+  const childAgentCard = actionKind === 'subagent'
+    ? childAgentCardForEvent(event, {
+      fallbackTitle: title,
+      status,
+      resultSummary,
+      outputSummary,
+      resultRefs,
+      refs,
+      transcriptRef,
+    }, locale)
+    : undefined;
   return {
     id: event.id,
     kind: actionKind,
@@ -351,8 +376,11 @@ function actionFromEntry(entry: StreamWorklogEntry, mode: 'live' | 'recorded', l
     itemId,
     traceStepId,
     refs,
+    childAgentCard,
     createdAt: event.createdAt,
-    initiallyExpanded: mode === 'live' && (status === 'running' || status === 'blocked' || actionKind === 'approval'),
+    initiallyExpanded: actionKind === 'subagent'
+      ? false
+      : mode === 'live' && (status === 'running' || status === 'blocked' || actionKind === 'approval'),
   };
 }
 
@@ -465,7 +493,7 @@ function foldedGroupKind(actions: CursorAgentAction[]): CursorAgentGroupKind {
 function cursorActionLifecycleKey(action: CursorAgentAction) {
   let explicit: string | undefined;
   if (action.kind === 'subagent') {
-    explicit = action.itemId ?? action.traceStepId ?? action.agentId;
+    explicit = action.itemId ?? action.traceStepId ?? action.agentId ?? action.transcriptRef ?? action.resultRefs[0] ?? action.refs.find(isSubagentLifecyclePublicRef);
   } else if (action.kind === 'window_action') {
     explicit = action.itemId ?? action.traceStepId;
   } else {
@@ -516,7 +544,27 @@ function mergeCursorActionLifecycle(previous: CursorAgentAction, next: CursorAge
     itemId: next.itemId ?? previous.itemId,
     traceStepId: next.traceStepId ?? previous.traceStepId,
     refs,
-    initiallyExpanded: next.status === 'running' || (next.status === 'unknown' && previous.initiallyExpanded),
+    childAgentCard: mergeChildAgentCard(previous.childAgentCard, next.childAgentCard),
+    initiallyExpanded: previous.kind === 'subagent'
+      ? false
+      : next.status === 'running' || (next.status === 'unknown' && previous.initiallyExpanded),
+  };
+}
+
+function mergeChildAgentCard(previous: CursorChildAgentCard | undefined, next: CursorChildAgentCard | undefined): CursorChildAgentCard | undefined {
+  if (!previous) return next;
+  if (!next) return previous;
+  return {
+    ...previous,
+    ...next,
+    id: previous.id,
+    title: next.title || previous.title,
+    publicAgentLane: next.publicAgentLane ?? previous.publicAgentLane,
+    publicModelLane: next.publicModelLane ?? previous.publicModelLane,
+    durationLabel: next.durationLabel ?? previous.durationLabel,
+    summary: next.summary ?? previous.summary,
+    refs: uniqueStrings([...previous.refs, ...next.refs]),
+    createdAt: previous.createdAt,
   };
 }
 
@@ -977,6 +1025,266 @@ function cleanCursorActionSummary(value: string | undefined) {
   return text;
 }
 
+function childAgentCardForEvent(
+  event: AgentStreamEvent,
+  input: {
+    fallbackTitle: string;
+    status: CursorAgentActionStatus;
+    resultSummary?: string;
+    outputSummary?: string;
+    resultRefs: string[];
+    refs: string[];
+    transcriptRef?: string;
+  },
+  locale?: SupportedLocale,
+): CursorChildAgentCard {
+  const title = publicChildAgentText(firstString(
+    nativeString(event, 'title'),
+    nativeString(event, 'taskTitle'),
+    nativeString(event, 'task_title'),
+    nativeString(event, 'name'),
+    nativeString(event, 'agentTitle'),
+    nativeString(event, 'agent_title'),
+    input.fallbackTitle,
+  ), 90) ?? chatText(locale, { 'zh-CN': '子代理', 'en-US': 'Sub agent' });
+  const publicAgentLane = publicChildAgentLane(event);
+  const publicModelLane = publicChildModelLane(event);
+  const summary = cleanChildAgentCardSummary(input.resultSummary ?? input.outputSummary ?? nativeString(event, 'summary') ?? nativeString(event, 'message'));
+  const refs = childAgentCardRefs(input.resultRefs, input.refs, input.transcriptRef);
+  return {
+    id: childAgentCardId(event, input),
+    title,
+    publicAgentLane,
+    publicModelLane,
+    status: childAgentCardStatus(event, input.status),
+    durationLabel: childAgentDurationLabel(event),
+    summary,
+    refs,
+    createdAt: event.createdAt,
+  };
+}
+
+function childAgentCardId(
+  event: AgentStreamEvent,
+  input: { resultRefs: string[]; refs: string[]; transcriptRef?: string },
+) {
+  return sanitizeCursorIdentifier(
+    nativeString(event, 'itemId')
+    ?? nativeString(event, 'item_id')
+    ?? nativeString(event, 'traceStepId')
+    ?? nativeString(event, 'trace_step_id')
+    ?? nativeString(event, 'agentId')
+    ?? nativeString(event, 'agent_id'),
+  )
+    ?? input.resultRefs[0]
+    ?? input.transcriptRef
+    ?? input.refs.find(isSubagentLifecyclePublicRef)
+    ?? event.id;
+}
+
+function childAgentCardStatus(event: AgentStreamEvent, fallback: CursorAgentActionStatus): CursorChildAgentStatus {
+  const status = normalizeStatusToken(nativeString(event, 'status') ?? nativeRecordString(event, 'action', 'status'));
+  if (/^(?:background_running|background-running|running_background|running-in-background|running_in_background|background)$/.test(status)) {
+    return 'background-running';
+  }
+  if (/^(?:resumed|resume|resuming|resume_candidate|resume-candidate)$/.test(status)) return 'resumed';
+  return fallback;
+}
+
+function childAgentCardRefs(resultRefs: string[], refs: string[], transcriptRef: string | undefined) {
+  return uniqueStrings([...resultRefs, transcriptRef, ...refs])
+    .filter(isSubagentLifecyclePublicRef);
+}
+
+function isSubagentLifecyclePublicRef(ref: string | undefined): ref is string {
+  if (!ref) return false;
+  if (isTranscriptLikeRef(ref)) return isPublicSubagentTranscriptRef(ref);
+  return Boolean(sanitizeCursorRef(ref) || sanitizeCursorResultRef(ref));
+}
+
+function isPublicSubagentTranscriptRef(ref: string) {
+  return Boolean(sanitizeCursorRef(ref))
+    && !/(?:^|[_.:-])(?:raw|stdout|stderr|provider|private|secret|token|api[-_]?key|authorization|\.sciforge)(?:$|[_.:-])/i.test(ref);
+}
+
+function isTranscriptLikeRef(ref: string | undefined) {
+  return /\btranscript\b/i.test(ref ?? '');
+}
+
+function childAgentDurationLabel(event: AgentStreamEvent) {
+  const milliseconds = nativeNumber(event, 'durationMs')
+    ?? nativeNumber(event, 'duration_ms')
+    ?? nativeNumber(event, 'elapsedMs')
+    ?? nativeNumber(event, 'elapsed_ms');
+  if (milliseconds !== undefined && milliseconds !== null && milliseconds >= 0) {
+    return formatDurationSeconds(milliseconds / 1000);
+  }
+  const seconds = nativeNumber(event, 'durationSeconds')
+    ?? nativeNumber(event, 'duration_seconds')
+    ?? nativeNumber(event, 'elapsedSeconds')
+    ?? nativeNumber(event, 'elapsed_seconds');
+  if (seconds !== undefined && seconds !== null && seconds >= 0) {
+    return formatDurationSeconds(seconds);
+  }
+  const startedAt = firstString(
+    nativeString(event, 'startedAt'),
+    nativeString(event, 'started_at'),
+    nativeString(event, 'startTime'),
+    nativeString(event, 'start_time'),
+  );
+  const endedAt = firstString(
+    nativeString(event, 'completedAt'),
+    nativeString(event, 'completed_at'),
+    nativeString(event, 'endedAt'),
+    nativeString(event, 'ended_at'),
+    nativeString(event, 'endTime'),
+    nativeString(event, 'end_time'),
+    event.createdAt,
+  );
+  const start = startedAt ? Date.parse(startedAt) : Number.NaN;
+  const end = endedAt ? Date.parse(endedAt) : Number.NaN;
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) {
+    return formatDurationSeconds((end - start) / 1000);
+  }
+  return undefined;
+}
+
+function formatDurationSeconds(value: number) {
+  const seconds = Math.max(1, Math.round(value));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+}
+
+function publicChildAgentLane(event: AgentStreamEvent): string | undefined {
+  return firstPublicChildAgentText([
+    nativeString(event, 'publicAgentLane'),
+    nativeString(event, 'public_agent_lane'),
+    nativeString(event, 'agentLane'),
+    nativeString(event, 'agent_lane'),
+    nativeString(event, 'agentAlias'),
+    nativeString(event, 'agent_alias'),
+    nativeRecordString(event, 'agent', 'publicLane'),
+    nativeRecordString(event, 'agent', 'public_lane'),
+    nativeRecordString(event, 'agent', 'alias'),
+  ], 64)
+    ?? publicChildAgentTypeAlias([
+      nativeString(event, 'agentType'),
+      nativeString(event, 'agent_type'),
+      nativeString(event, 'type'),
+      nativeString(event, 'role'),
+      nativeString(event, 'agentName'),
+      nativeString(event, 'agent_name'),
+      nativeRecordString(event, 'agent', 'type'),
+      nativeRecordString(event, 'agent', 'agentType'),
+      nativeRecordString(event, 'agent', 'agent_type'),
+      nativeRecordString(event, 'agent', 'role'),
+      nativeRecordString(event, 'agent', 'name'),
+    ])
+    ?? firstPublicChildAgentText([
+      nativeString(event, 'agentName'),
+      nativeString(event, 'agent_name'),
+      nativeRecordString(event, 'agent', 'name'),
+    ], 64);
+}
+
+function publicChildModelLane(event: AgentStreamEvent): string | undefined {
+  return firstPublicChildModelText([
+    nativeString(event, 'publicModelLane'),
+    nativeString(event, 'public_model_lane'),
+    nativeString(event, 'modelLane'),
+    nativeString(event, 'model_lane'),
+    nativeString(event, 'modelAlias'),
+    nativeString(event, 'model_alias'),
+    nativeRecordString(event, 'model', 'publicLane'),
+    nativeRecordString(event, 'model', 'public_lane'),
+    nativeRecordString(event, 'model', 'alias'),
+  ], 64);
+}
+
+function firstPublicChildAgentText(values: Array<string | undefined>, limit: number) {
+  for (const value of values) {
+    const publicText = publicChildAgentText(value, limit);
+    if (publicText) return publicText;
+  }
+  return undefined;
+}
+
+function firstPublicChildModelText(values: Array<string | undefined>, limit: number) {
+  for (const value of values) {
+    const publicText = publicChildModelText(value, limit);
+    if (publicText) return publicText;
+  }
+  return undefined;
+}
+
+function publicChildAgentTypeAlias(values: Array<string | undefined>) {
+  for (const value of values) {
+    const alias = publicChildAgentTypeAliasFromText(value);
+    if (alias) return alias;
+  }
+  return undefined;
+}
+
+function publicChildAgentTypeAliasFromText(value: string | undefined): 'explore' | 'worker' | 'review' | 'shell' | undefined {
+  const normalized = normalizeText(sanitizeCursorText(value));
+  if (!normalized) return undefined;
+  if (/\b(?:shell|terminal|command|cli|bash|zsh|powershell)\b/.test(normalized)) return 'shell';
+  if (/\b(?:review|reviewer|verify|verifier|verification|audit|critic|critique|qa)\b/.test(normalized)) return 'review';
+  if (/\b(?:explore|explorer|exploration|exploratory|research|discover|scan)\b/.test(normalized)) return 'explore';
+  if (/\b(?:worker|work|task|executor|runner|analysis|analyze|analyst)\b/.test(normalized)) return 'worker';
+  return undefined;
+}
+
+function publicChildAgentText(value: string | undefined, limit: number) {
+  const text = sanitizeCursorText(value)
+    .replace(/\[url\]/gi, '')
+    .replace(/\[local-path\]\/[^\s"'`<>]+/gi, '')
+    .replace(/\[(?:redacted-secret|redacted)\]/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || looksLikePrivateChildAgentText(text)) return undefined;
+  return compactInline(text, limit);
+}
+
+function publicChildModelText(value: string | undefined, limit: number) {
+  const text = publicChildAgentText(value, limit);
+  if (!text || looksLikeRawModelLane(text)) return undefined;
+  return text;
+}
+
+function cleanChildAgentCardSummary(value: string | undefined) {
+  const text = stripTruncatedSubagentPromptTail(sanitizeCursorText(value));
+  if (!text || looksLikeBackendEnvelopeSummary(text)) return undefined;
+  const segments = text
+    .split(/(?:\r?\n|(?<=[.!?。！？])\s+)/)
+    .map((segment) => publicChildAgentText(segment, 220))
+    .filter((segment): segment is string => Boolean(segment))
+    .filter((segment) => !isPromptEchoSubagentSegment(segment));
+  const summary = segments.join(' ').trim();
+  return summary ? compactInline(summary, 260) : undefined;
+}
+
+function looksLikePrivateChildAgentText(value: string) {
+  return /\b(?:provider(?:url)?|api[-_ ]?key|token|secret|password|credential|authorization)\b/i.test(value)
+    || /\b(?:stdout|stderr|raw\s+(?:json|jsonl|payload|transcript)|transcriptRef|stdoutRef|stderrRef|rawRef)\b/i.test(value)
+    || /\bprovider\.[A-Za-z0-9.-]+\b/i.test(value)
+    || /\[(?:url|local-path|redacted)\]/i.test(value)
+    || /https?:\/\//i.test(value)
+    || /(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\//i.test(value)
+    || /\bsk-[A-Za-z0-9._-]+/i.test(value)
+    || looksLikeBackendEnvelopeSummary(value);
+}
+
+function looksLikeRawModelLane(value: string) {
+  const text = value.trim();
+  return /[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._/-]*/.test(text)
+    || /\b(?:provider|model)[-_\s/]?(?:route|slug|name|config|id)\b/i.test(text)
+    || /\b(?:openai|anthropic|bailian|deepseek|gemini|qwen|llama|mistral|moonshot|kimi)[-_./]?[A-Za-z0-9._-]*\d/i.test(text)
+    || /\b(?:gpt|claude|sonnet|opus|haiku)[-_./]?\d/i.test(text);
+}
+
 function looksLikeBackendEnvelopeSummary(value: string | undefined) {
   const text = value?.trim();
   if (!text) return false;
@@ -1108,9 +1416,10 @@ function actionStatus(
   type: string,
   context?: { actionKind?: CursorAgentActionKind; command?: string; exitCode?: number | null; diffSource?: string },
 ): CursorAgentActionStatus {
-  const status = (nativeString(event, 'status') ?? nativeRecordString(event, 'action', 'status'))?.toLowerCase();
+  const status = normalizeStatusToken(nativeString(event, 'status') ?? nativeRecordString(event, 'action', 'status'));
   const failedByResultPayload = nativeFailureSignal(event);
   if (isDiffDifferenceResult(context) && !failedByResultPayload) return 'completed';
+  if (/^(?:background_running|background-running|running_background|running-in-background|running_in_background|background|resumed|resume|resuming|resume_candidate|resume-candidate)$/.test(status)) return 'running';
   if (status && /^(?:running|in_progress|started|pending)$/.test(status)) return 'running';
   if (status && /^(?:blocked|approval-required|approval_required|requires_approval|requires-user-confirmation|requires_user_confirmation|waiting_for_approval|needs-human|needs_human|needs-human-verification|needs_human_verification|repair-needed|repair_needed)$/.test(status)) return 'blocked';
   if (status && /^(?:cancelled|canceled|aborted|interrupted)$/.test(status)) return 'cancelled';
@@ -1124,6 +1433,10 @@ function actionStatus(
   if (type.includes('failed') || type.includes('error')) return 'failed';
   if (type.includes('cancel')) return 'cancelled';
   return 'unknown';
+}
+
+function normalizeStatusToken(value: string | undefined) {
+  return (value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
 }
 
 function isDiffDifferenceResult(context: { actionKind?: CursorAgentActionKind; command?: string; exitCode?: number | null; diffSource?: string } | undefined) {
@@ -1916,6 +2229,15 @@ function cursorEntryDedupeKey(entry: StreamWorklogEntry) {
     ?? nativeRecordString(entry.event, 'action', 'actionId')
     ?? nativeRecordString(entry.event, 'action', 'action_id'),
   );
+  if (kind === 'subagent') {
+    const subagentKey = itemId
+      ?? sanitizeCursorIdentifier(nativeString(entry.event, 'agentId') ?? nativeString(entry.event, 'agent_id'))
+      ?? sanitizeCursorRef(nativeString(entry.event, 'transcriptRef') ?? nativeString(entry.event, 'transcript_ref'))
+      ?? resultRefsForEvent(entry.event)[0]
+      ?? nativeStringList(entry.event, 'refs').map(sanitizeCursorRef).find(Boolean)
+      ?? entry.event.id;
+    return `${kind}:${normalizeText(subagentKey)}`;
+  }
   if (kind === 'window_action') {
     return `${kind}:${normalizeText(windowActionVerb(entry.event))}:${normalizeText(windowActionTarget(entry.event))}:${itemId ?? windowActionRefsForEvent(entry.event)[0] ?? entry.event.id}`;
   }

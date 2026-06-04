@@ -1,6 +1,6 @@
 import { deflateSync } from 'node:zlib';
-import { readFile, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 
 import type { CaptureDiagnostic, ComputerUseConfig, GenericVisionAction, WindowTargetResolution } from './types.js';
 import { sanitizeId, workspaceRel } from './utils.js';
@@ -84,6 +84,7 @@ export async function writeVirtualRemoteSessionState(
   state: VirtualRemoteSessionState,
 ) {
   const path = virtualRemoteSessionPath(runDir);
+  await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, 'utf8');
   return workspaceRel(workspace, path);
 }

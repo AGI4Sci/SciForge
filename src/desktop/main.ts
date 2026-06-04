@@ -31,6 +31,7 @@ import {
   type DesktopAnnotationCaptureProvider,
   type DesktopAnnotationCaptureProviderInput,
   type DesktopAnnotationCoordinateSpace,
+  type DesktopAnnotationDisplayMetadata,
   type DesktopAnnotationOverlayScreen,
   type DesktopAnnotationOverlayWindow,
   type DesktopAnnotationSourceKind,
@@ -484,13 +485,46 @@ export function registerDesktopIpcHandlers(input: {
       const active = activeScreenRegionOverlaySelection;
       try {
         const internalEvent = desktopAnnotationOverlayInternalEvent(value);
+        if (internalEvent.event === 'screen-region-active-display-changed') {
+          annotationOverlay.setActiveDisplay({ display: internalEvent.display });
+          return {
+            schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event-result.v1',
+            ok: true,
+            status: 'active-display-updated',
+            refs: [],
+            metadata: {
+              refsOnly: true,
+              windowListPayloadReturned: false,
+              screenshotPayloadReturned: false,
+              providerPayloadReturned: false,
+            },
+          };
+        }
+        if (internalEvent.event === 'screen-region-selection-drag-state-changed') {
+          annotationOverlay.setDragState({
+            active: internalEvent.active,
+            display: internalEvent.display,
+          });
+          return {
+            schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event-result.v1',
+            ok: true,
+            status: 'drag-state-updated',
+            refs: [],
+            metadata: {
+              refsOnly: true,
+              windowListPayloadReturned: false,
+              screenshotPayloadReturned: false,
+              providerPayloadReturned: false,
+            },
+          };
+        }
         if (internalEvent.event === 'screen-region-selection-cancelled') {
           const cancelled = annotationOverlay.cancel();
           activeScreenRegionOverlaySelection = undefined;
           active.resolve(cancelled);
           return cancelled;
         }
-        annotationOverlay.updateSelection({ bounds: internalEvent.bounds });
+        annotationOverlay.updateSelection({ bounds: internalEvent.bounds, display: internalEvent.display });
         annotationOverlay.submitComment({
           comment: internalEvent.comment,
           threadId: internalEvent.threadId,
@@ -508,11 +542,13 @@ export function registerDesktopIpcHandlers(input: {
     });
   }
   input.electron.ipcMain.handle('desktop:annotation-overlay:update', (_event: unknown, value: unknown) => {
+    const record = requireRecord(value, 'desktop:annotation-overlay:update requires an object');
     return annotationOverlay.updateSelection({
       bounds: desktopAnnotationBounds(
-        requireRecord(value, 'desktop:annotation-overlay:update requires an object').bounds,
+        record.bounds,
         'bounds',
       ),
+      display: desktopAnnotationOptionalDisplayMetadata(record.display),
     });
   });
   input.electron.ipcMain.handle('desktop:annotation-overlay:submit', (_event: unknown, value: unknown) => {
@@ -1305,12 +1341,22 @@ type DesktopAnnotationOverlayInternalEvent =
   | {
       event: 'screen-region-selection-submitted';
       bounds: DesktopAnnotationBounds;
+      display?: DesktopAnnotationDisplayMetadata;
       comment: string;
       threadId?: string;
       messageDraftId?: string;
     }
   | {
       event: 'screen-region-selection-cancelled';
+    }
+  | {
+      event: 'screen-region-active-display-changed';
+      display: DesktopAnnotationDisplayMetadata;
+    }
+  | {
+      event: 'screen-region-selection-drag-state-changed';
+      active: boolean;
+      display?: DesktopAnnotationDisplayMetadata;
     };
 
 function desktopAnnotationOverlayInternalEvent(value: unknown): DesktopAnnotationOverlayInternalEvent {
@@ -1322,12 +1368,26 @@ function desktopAnnotationOverlayInternalEvent(value: unknown): DesktopAnnotatio
   if (record.event === 'screen-region-selection-cancelled') {
     return { event: 'screen-region-selection-cancelled' };
   }
+  if (record.event === 'screen-region-active-display-changed') {
+    return {
+      event: 'screen-region-active-display-changed',
+      display: desktopAnnotationDisplayMetadata(record.display),
+    };
+  }
+  if (record.event === 'screen-region-selection-drag-state-changed') {
+    return {
+      event: 'screen-region-selection-drag-state-changed',
+      active: record.active === true,
+      display: desktopAnnotationOptionalDisplayMetadata(record.display),
+    };
+  }
   if (record.event !== 'screen-region-selection-submitted') {
     throw new Error('desktop:annotation-overlay:internal-event requires a supported event');
   }
   return {
     event: 'screen-region-selection-submitted',
     bounds: desktopAnnotationBounds(record.bounds, 'bounds'),
+    display: desktopAnnotationOptionalDisplayMetadata(record.display),
     comment: requireString(record.comment, 'comment'),
     threadId: optionalString(record.threadId, 'threadId'),
     messageDraftId: optionalString(record.messageDraftId, 'messageDraftId'),
@@ -1410,6 +1470,29 @@ function desktopAnnotationBounds(value: unknown, label: string): DesktopAnnotati
   };
 }
 
+function desktopAnnotationOptionalDisplayMetadata(value: unknown): DesktopAnnotationDisplayMetadata | undefined {
+  if (value === undefined || value === null) return undefined;
+  const record = requireRecord(value, 'desktop:annotation-overlay requires display');
+  const display: DesktopAnnotationDisplayMetadata = {
+    bounds: desktopAnnotationBounds(record.bounds, 'display.bounds'),
+  };
+  const id = optionalString(record.id ?? record.displayId ?? record.screenId, 'display.id');
+  if (id) display.id = id;
+  const displayId = optionalString(record.displayId, 'display.displayId');
+  if (displayId) display.displayId = displayId;
+  const screenId = optionalString(record.screenId ?? record.displayId ?? record.id, 'display.screenId');
+  if (screenId) display.screenId = screenId;
+  const scaleFactor = optionalAnnotationNumberField(record.scaleFactor ?? record.scale, 'display.scaleFactor');
+  if (scaleFactor !== undefined) display.scaleFactor = scaleFactor;
+  return display;
+}
+
+function desktopAnnotationDisplayMetadata(value: unknown): DesktopAnnotationDisplayMetadata {
+  const display = desktopAnnotationOptionalDisplayMetadata(value);
+  if (!display) throw new Error('desktop:annotation-overlay:internal-event requires display metadata');
+  return display;
+}
+
 function optionalDesktopAnnotationSourceKind(value: unknown): DesktopAnnotationSourceKind | undefined {
   if (value === undefined || value === null) return undefined;
   if (value === 'window' || value === 'screen-region' || value === 'browser' || value === 'image') return value;
@@ -1446,6 +1529,11 @@ function annotationNumberField(value: unknown, field: string): number {
     throw new Error(`desktop:annotation-overlay requires numeric ${field}`);
   }
   return value;
+}
+
+function optionalAnnotationNumberField(value: unknown, field: string): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  return annotationNumberField(value, field);
 }
 
 function numberField(value: unknown, field: string): number {

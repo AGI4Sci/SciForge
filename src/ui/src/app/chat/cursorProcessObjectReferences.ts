@@ -86,6 +86,12 @@ function cursorRefSpec(ref: string): CursorRefSpec | undefined {
   }
   if (lower.startsWith('folder:') || lower.startsWith('workspace:')) return { kind: 'folder', preferredView: 'folder-viewer', actions: FILE_ACTIONS };
   if (lower.startsWith('artifact:')) {
+    if (isSubagentTranscriptArtifactRef(ref)) {
+      return { kind: 'artifact', preferredView: 'subagent-transcript', actions: EVIDENCE_ACTIONS };
+    }
+    if (isSubagentResultArtifactRef(ref)) {
+      return { kind: 'artifact', preferredView: 'subagent-result', actions: EVIDENCE_ACTIONS };
+    }
     return isImageEvidenceArtifactRef(ref)
       ? IMAGE_EVIDENCE_SPEC
       : { kind: 'artifact', preferredView: 'generic-artifact-inspector', actions: INSPECT_ACTIONS };
@@ -99,7 +105,10 @@ function cursorRefSpec(ref: string): CursorRefSpec | undefined {
   if (isBrowserRef(ref)) return { kind: 'url', preferredView: 'browser-object', actions: EXTERNAL_ACTIONS };
   if (isImageEvidenceRef(ref)) return IMAGE_EVIDENCE_SPEC;
   if (isLegacyScreenEvidenceRef(ref)) return IMAGE_EVIDENCE_SPEC;
-  if (lower.startsWith('subagent:') || lower.startsWith('agent-result:') || lower.startsWith('agent-transcript:')) {
+  if (lower.startsWith('agent-transcript:') || lower.startsWith('transcript:')) {
+    return { kind: 'run', preferredView: 'subagent-transcript', actions: EVIDENCE_ACTIONS };
+  }
+  if (lower.startsWith('subagent:') || lower.startsWith('agent-result:')) {
     return { kind: 'run', preferredView: 'subagent-result', actions: EVIDENCE_ACTIONS };
   }
   if (/^(?:evidence|source|citation|claim|workevidence|message):/i.test(ref)) {
@@ -124,6 +133,16 @@ function isImageEvidenceRef(ref: string) {
 function isImageEvidenceArtifactRef(ref: string) {
   const payload = artifactPayload(ref);
   return Boolean(payload) && /(?:^|[_.:-])(?:image|image-evidence|screenshot|annotation|browser-evidence|window-capture|screen-region|artifact-preview|replay|window-action-evidence)(?:$|[_.:-])/i.test(payload);
+}
+
+function isSubagentResultArtifactRef(ref: string) {
+  const payload = artifactPayload(ref);
+  return Boolean(payload) && /(?:^|[_.:-])subagent-result(?:$|[_.:-])/i.test(payload);
+}
+
+function isSubagentTranscriptArtifactRef(ref: string) {
+  const payload = artifactPayload(ref);
+  return Boolean(payload) && /(?:^|[_.:-])subagent-transcript(?:$|[_.:-])/i.test(payload);
 }
 
 function isLegacyScreenEvidenceRef(ref: string) {

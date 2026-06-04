@@ -781,7 +781,7 @@ test('browser-workbench renders native BrowserHostSession timing diagnostics wit
   assert.match(html, /data-browser-last-action="click"/);
   assert.match(html, /data-browser-last-action-total-ms="130"/);
   assert.match(html, /transport<\/dt><dd>native-embedded/);
-  assert.match(html, /nativeAdapterUrl<\/dt><dd>http:\/\/127\.0\.0\.1:61234/);
+  assert.match(html, /nativeAdapterUrl<\/dt><dd>configured/);
   assert.match(html, /lastActionTotalMs<\/dt><dd>130/);
   assert.match(html, /latencySummary<\/dt><dd>click:p50=42ms,p95=95ms \| scroll:p50=31ms,p95=64ms/);
 });
@@ -842,17 +842,17 @@ test('browser-workbench renders bounded actionable diagnostics for blocked host 
 
   assert.match(html, /data-status="error"/);
   assert.match(html, /browser-workbench-viewer-diagnostics/);
-  assert.match(html, /data-browser-writer-url="http:\/\/127\.0\.0\.1:6173"/);
+  assert.match(html, /data-browser-writer-url="configured"/);
   assert.match(html, /data-browser-health-capability="browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing"/);
-  assert.match(html, /data-browser-native-adapter-url="http:\/\/127\.0\.0\.1:6180"/);
+  assert.match(html, /data-browser-native-adapter-url="configured"/);
   assert.match(html, /data-browser-diagnostic-live-surface-transport="native-embedded"/);
   assert.match(html, /data-browser-last-action-timing="click:130ms:failed"/);
-  assert.match(html, /writerUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6173/);
+  assert.match(html, /writerUrl<\/dt><dd>configured/);
   assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
-  assert.match(html, /nativeAdapterUrl<\/dt><dd>http:\/\/127\.0\.0\.1:6180/);
+  assert.match(html, /nativeAdapterUrl<\/dt><dd>configured/);
   assert.match(html, /blockedReason<\/dt><dd>Native adapter blocked \[url-redacted\]/);
-  assert.match(html, /diagnostics<\/dt><dd>Retry same native surface through http:\/\/127\.0\.0\.1:6173/);
-  assert.doesNotMatch(html, /token=|apiKey=|sk-(?:writer|native|page|config|message|retry)-secret|data:image|base64|external\.example\/private\?token|<iframe|<webview/);
+  assert.match(html, /diagnostics<\/dt><dd>Retry same native surface through \[url-redacted\]/);
+  assert.doesNotMatch(html, /token=|apiKey=|sk-(?:writer|native|page|config|message|retry)-secret|127\.0\.0\.1:6173|127\.0\.0\.1:6180|data:image|base64|external\.example\/private\?token|<iframe|<webview/);
 });
 
 test('browser-workbench renders system-browser host handoff as state, not a fake iframe', () => {

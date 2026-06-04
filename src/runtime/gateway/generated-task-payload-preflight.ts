@@ -316,11 +316,12 @@ function generatedTaskProviderFirstNetworkIssuesForSource(
   const unavailableProviderSdkUses = unavailableProviderSdkUsesForReadyRoutes(source);
   if (!directNetworkUses.length && !unavailableProviderSdkUses.length) return [];
   const evidence = [...directNetworkUses, ...unavailableProviderSdkUses];
+  const capabilityIds = providerFirstPolicyCapabilityIds(request, routes);
   const policy = generatedTaskProviderFirstNetworkIssuePolicy({
     sourceRef,
     directNetworkUses,
     unavailableProviderSdkUses,
-    capabilityIds: routes.map((route) => route.capabilityId),
+    capabilityIds,
   });
   return [{
     id: policy.id,
@@ -345,9 +346,10 @@ function generatedTaskProviderHelperIssuesForSource(
   const usesHelper = generatedTaskUsesProviderInvocationHelper(stripped);
   if (!usesHelper) return [];
   if (generatedTaskDefinesOrImportsProviderInvocationHelper(stripped)) return [];
+  const capabilityIds = providerFirstPolicyCapabilityIds(request, routes);
   const policy = generatedTaskProviderHelperMissingImportIssuePolicy({
     sourceRef,
-    capabilityIds: routes.map((route) => route.capabilityId),
+    capabilityIds,
     evidence: generatedTaskProviderInvocationHelperEvidence(stripped),
   });
   return [{
@@ -377,6 +379,23 @@ function readyWebProviderRoutes(request?: GatewayRequest) {
 }
 
 const WEB_PROVIDER_CAPABILITY_IDS = ['web_search', 'web_fetch', 'browser_search', 'browser_fetch', 'pdf_extract'];
+
+function providerFirstPolicyCapabilityIds(
+  request: GatewayRequest | undefined,
+  routes: ReturnType<typeof readyWebProviderRoutes>,
+) {
+  const routeIds = uniqueNonEmptyStrings(routes.map((route) => route.capabilityId));
+  if (!request) return routeIds;
+  const routeIdSet = new Set(routeIds);
+  const requestScopedReadyIds = capabilityProviderRoutesForGatewayInvocation(request).routes
+    .filter((route) => (
+      route.status === 'ready'
+      && WEB_PROVIDER_CAPABILITY_IDS.includes(route.capabilityId)
+      && routeIdSet.has(route.capabilityId)
+    ))
+    .map((route) => route.capabilityId);
+  return requestScopedReadyIds.length ? uniqueNonEmptyStrings(requestScopedReadyIds) : routeIds;
+}
 
 function requestNeedsPdfExtraction(request: GatewayRequest) {
   if ((request.selectedToolIds ?? []).includes('pdf_extract')) return true;

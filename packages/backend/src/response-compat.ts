@@ -32,6 +32,8 @@ export interface ChatCompletionRequest {
   metadata?: unknown;
 }
 
+export type ChatToolNameAliasMap = Record<string, string>;
+
 export interface CodexResponsesProxyOptions {
   defaultModel?: string;
 }
@@ -77,8 +79,10 @@ export function responsesToChatCompletions(
     messages,
   };
   if (request.stream === true) chatRequest.stream = true;
-  if (toolsToChatTools(request.tools)) chatRequest.tools = toolsToChatTools(request.tools);
-  if (request.tool_choice !== undefined) chatRequest.tool_choice = request.tool_choice;
+  const chatTools = toolsToChatTools(request.tools);
+  const toolNameAliases = dynamicToolAliasPairs(request.tools);
+  if (chatTools) chatRequest.tools = chatTools;
+  if (request.tool_choice !== undefined) chatRequest.tool_choice = toolChoiceToChatToolChoice(request.tool_choice, toolNameAliases);
   if (request.temperature !== undefined) chatRequest.temperature = request.temperature;
   if (request.top_p !== undefined) chatRequest.top_p = request.top_p;
   if (request.max_output_tokens !== undefined || request.max_tokens !== undefined) {
@@ -92,13 +96,14 @@ export function responsesToChatCompletions(
 export function chatCompletionToResponse(
   value: unknown,
   request: Pick<ResponsesRequest, 'model'> = {},
+  toolNameAliases: ChatToolNameAliasMap = {},
 ): JsonObject {
   const completion = asRecord(value);
   const choice = firstRecord(completion.choices);
   const message = asRecord(choice.message);
   const text = textFromContent(message.content);
   const toolCalls = Array.isArray(message.tool_calls)
-    ? message.tool_calls.map(chatToolCallToResponseItem).filter(isRecord)
+    ? message.tool_calls.map((toolCall) => chatToolCallToResponseItem(toolCall, toolNameAliases)).filter(isRecord)
     : [];
 
   const output: JsonObject[] = [];
@@ -179,23 +184,80 @@ function toolsToChatTools(tools: unknown): unknown[] | undefined {
   if (!Array.isArray(tools)) return undefined;
   const converted = tools.flatMap((tool) => {
     const record = asRecord(tool);
-    if (record.type !== 'function') return [];
-    if (isRecord(record.function)) {
-      return [tool];
+    if (record.type === 'function') {
+      if (isRecord(record.function)) {
+        return [tool];
+      }
+      const name = stringOrUndefined(record.name);
+      if (!name) return [];
+      return [{
+        type: 'function',
+        function: compactObject({
+          name,
+          description: record.description,
+          parameters: record.parameters ?? record.input_schema ?? { type: 'object', properties: {} },
+          strict: record.strict,
+        }),
+      }];
     }
-    const name = stringOrUndefined(record.name);
-    if (!name) return [];
+
+    const dynamicTool = namespacedDynamicTool(record);
+    if (!dynamicTool) return [];
     return [{
       type: 'function',
       function: compactObject({
-        name,
+        name: dynamicTool.chatName,
         description: record.description,
-        parameters: record.parameters ?? record.input_schema ?? { type: 'object', properties: {} },
+        parameters: record.parameters ?? record.inputSchema ?? record.input_schema ?? { type: 'object', properties: {} },
         strict: record.strict,
       }),
     }];
   });
   return converted.length ? converted : undefined;
+}
+
+export function chatToolNameAliasesFromResponsesTools(tools: unknown): ChatToolNameAliasMap {
+  return Object.fromEntries(dynamicToolAliasPairs(tools).map((pair) => [pair.chatName, pair.responseName]));
+}
+
+function dynamicToolAliasPairs(tools: unknown): Array<{ chatName: string; responseName: string }> {
+  if (!Array.isArray(tools)) return [];
+  return tools
+    .map((tool) => namespacedDynamicTool(asRecord(tool)))
+    .filter((tool): tool is NonNullable<ReturnType<typeof namespacedDynamicTool>> => Boolean(tool));
+}
+
+function namespacedDynamicTool(record: Record<string, unknown>): { chatName: string; responseName: string } | undefined {
+  const namespace = stringOrUndefined(record.namespace);
+  const name = stringOrUndefined(record.name);
+  if (!namespace || !name) return undefined;
+  const responseName = `${namespace}.${name}`;
+  return {
+    responseName,
+    chatName: providerSafeFunctionName(`${namespace}__${name}`),
+  };
+}
+
+function providerSafeFunctionName(value: string): string {
+  const safe = value.replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  return (safe || 'dynamic_tool').slice(0, 64);
+}
+
+function toolChoiceToChatToolChoice(value: unknown, aliases: Array<{ chatName: string; responseName: string }>): unknown {
+  if (!aliases.length || !isRecord(value)) return value;
+  const mapped = responseToolNameToChatToolName(value.name, aliases);
+  if (mapped) return { ...value, name: mapped };
+  if (isRecord(value.function)) {
+    const mappedFunctionName = responseToolNameToChatToolName(value.function.name, aliases);
+    if (mappedFunctionName) return { ...value, function: { ...value.function, name: mappedFunctionName } };
+  }
+  return value;
+}
+
+function responseToolNameToChatToolName(value: unknown, aliases: Array<{ chatName: string; responseName: string }>): string | undefined {
+  const name = stringOrUndefined(value);
+  if (!name) return undefined;
+  return aliases.find((alias) => alias.responseName === name)?.chatName;
 }
 
 function responseFunctionCallToChatToolCall(record: Record<string, unknown>): ChatToolCall {
@@ -209,16 +271,17 @@ function responseFunctionCallToChatToolCall(record: Record<string, unknown>): Ch
   };
 }
 
-function chatToolCallToResponseItem(value: unknown): JsonObject | undefined {
+function chatToolCallToResponseItem(value: unknown, toolNameAliases: ChatToolNameAliasMap): JsonObject | undefined {
   const record = asRecord(value);
   const fn = asRecord(record.function);
   const name = stringOrUndefined(fn.name);
   if (!name) return undefined;
+  const responseName = toolNameAliases[name] ?? name;
   return functionCallOutputItem({
     id: stringOrUndefined(record.id) ?? makeId('call'),
     type: 'function',
     function: {
-      name,
+      name: responseName,
       arguments: typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {}),
     },
   });

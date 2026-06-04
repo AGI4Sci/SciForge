@@ -11,6 +11,7 @@ import {
 import type { SciForgeConfig } from '../domain';
 import { loadRuntimeProviderPreflightManifest, startRuntimeServices } from '../api/workspaceClient';
 import { providerReadinessNoticeFromManifest } from '../providerReadiness';
+import { sanitizePublicTextRequired } from '../publicProjectionSanitizer';
 import { Badge, cx } from './uiPrimitives';
 
 export type { RuntimeHealthItem };
@@ -70,11 +71,28 @@ async function loadProviderPreflightNotice(config: SciForgeConfig) {
   }
 }
 
+export function runtimeStartServicesPublicDetail(result: { ok: boolean; services: Array<Record<string, unknown>>; error?: string }) {
+  const summary = result.services
+    .map((service, index) => {
+      const label = sanitizePublicTextRequired(service.label ?? service.id, `Service ${index + 1}`);
+      const status = sanitizePublicTextRequired(service.status ?? 'unknown', 'unknown');
+      return `${label}: ${status}`;
+    })
+    .join('；');
+  return summary || (result.ok
+    ? '启动请求已发送。'
+    : sanitizePublicTextRequired(result.error, '部分服务未启动。'));
+}
+
+export function runtimeStartServicesPublicError(error: unknown) {
+  return sanitizePublicTextRequired(error instanceof Error ? error.message : String(error), '启动服务失败。');
+}
+
 function buildInitialHealth(config: SciForgeConfig, libraryCount?: number): RuntimeHealthItem[] {
   return [
     { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
-    { id: 'workspace', label: 'Workspace Writer', status: 'checking', detail: config.workspaceWriterBaseUrl },
-    { id: 'codex-runtime', label: 'Codex Runtime', status: 'checking', detail: `Runtime Profile ${config.runtimeProfile || 'sciforge-runtime-deepseek'}` },
+    { id: 'workspace', label: 'Workspace Writer', status: 'checking', detail: config.workspaceWriterBaseUrl.trim() ? 'Workspace Writer configured (masked)' : 'Workspace Writer missing' },
+    { id: 'codex-runtime', label: 'Codex Runtime', status: 'checking', detail: config.runtimeProfile?.trim() ? 'Runtime profile configured' : 'Runtime Profile missing' },
     modelHealth(config),
     {
       id: 'library',
@@ -112,15 +130,12 @@ export function RuntimeHealthPanel({ items, compact = false }: { items: RuntimeH
     setStartDetail('正在启动 Workspace Writer 和 Codex Runtime bridge...');
     try {
       const result = await startRuntimeServices();
-      const summary = result.services
-        .map((service) => `${String(service.label ?? service.id)}: ${String(service.status ?? 'unknown')}`)
-        .join('；');
       setStartState(result.ok ? 'done' : 'error');
-      setStartDetail(summary || (result.ok ? '启动请求已发送。' : result.error || '部分服务未启动。'));
+      setStartDetail(runtimeStartServicesPublicDetail(result));
       window.setTimeout(() => window.location.reload(), 1400);
     } catch (error) {
       setStartState('error');
-      setStartDetail(error instanceof Error ? error.message : String(error));
+      setStartDetail(runtimeStartServicesPublicError(error));
     }
   }
 

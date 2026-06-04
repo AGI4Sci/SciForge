@@ -377,6 +377,7 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
   const source = await readFile(join(process.cwd(), 'src', 'desktop', 'annotation-overlay-preload.cjs'), 'utf8');
   const exposed: Record<string, Record<string, (...args: unknown[]) => Promise<unknown>>> = {};
   const invoked: Array<{ channel: string; payload: Record<string, unknown> }> = [];
+  const listeners = new Map<string, Array<(event: unknown, payload: unknown) => void>>();
 
   runInNewContext(source, {
     require(name: string) {
@@ -392,6 +393,12 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
             invoked.push({ channel, payload });
             return { ok: true, channel };
           },
+          on(channel: string, listener: (event: unknown, payload: unknown) => void) {
+            listeners.set(channel, [...(listeners.get(channel) ?? []), listener]);
+          },
+          removeListener(channel: string, listener: (event: unknown, payload: unknown) => void) {
+            listeners.set(channel, (listeners.get(channel) ?? []).filter((candidate) => candidate !== listener));
+          },
         },
       };
     },
@@ -399,10 +406,46 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
 
   const api = exposed.sciforgeAnnotationOverlay;
   assert.ok(api);
-  assert.deepEqual(Object.keys(api).sort(), ['cancelSelection', 'submitSelection']);
+  assert.deepEqual(Object.keys(api).sort(), [
+    'cancelSelection',
+    'onActiveDisplayChanged',
+    'setActiveDisplay',
+    'setDragState',
+    'submitSelection',
+  ]);
+  await api.setActiveDisplay({
+    id: 'display-right',
+    bounds: { x: 0.2, y: 159.6, width: 1440.1, height: 900.4 },
+    scaleFactor: 1.25,
+    rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+    screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+    providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+  });
+  await api.setDragState({
+    active: true,
+    display: {
+      id: 'display-right',
+      bounds: { x: 0.2, y: 159.6, width: 1440.1, height: 900.4 },
+      scaleFactor: 1.25,
+      rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+      screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+      providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+    },
+    rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+    screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+    providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+  });
   await api.submitSelection({
     bounds: { x: 10.4, y: -20.6, width: 240.2, height: 160.8 },
-    comment: '  Please   inspect this crop.  ',
+    comment: '  Please   inspect\nthis crop.  ',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0.2, y: 159.6, width: 1440.1, height: 900.4 },
+      scaleFactor: 1.25,
+      rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+      screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+      providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+    },
     threadId: 'thread-1',
     messageDraftId: 'draft-1',
     rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
@@ -410,23 +453,69 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
     providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
   });
   await api.cancelSelection();
+  const activeDisplayPayloads: unknown[] = [];
+  const unsubscribe = await api.onActiveDisplayChanged((payload: unknown) => {
+    activeDisplayPayloads.push(payload);
+  });
+  for (const listener of listeners.get('desktop:annotation-overlay:active-display') ?? []) {
+    listener({}, {
+      id: 'display-left',
+      bounds: { x: -1280.2, y: 0.4, width: 1024.2, height: 768.2 },
+      scaleFactor: 2,
+      rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+      screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+      providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+    });
+  }
+  if (typeof unsubscribe === 'function') unsubscribe();
 
   assert.deepEqual(invoked.map((item) => item.channel), [
+    'desktop:annotation-overlay:internal-event',
+    'desktop:annotation-overlay:internal-event',
     'desktop:annotation-overlay:internal-event',
     'desktop:annotation-overlay:internal-event',
   ]);
   assert.deepEqual(JSON.parse(JSON.stringify(invoked[0].payload)), {
     schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
-    event: 'screen-region-selection-submitted',
-    bounds: { x: 10, y: -21, width: 240, height: 161 },
-    comment: 'Please inspect this crop.',
-    threadId: 'thread-1',
-    messageDraftId: 'draft-1',
+    event: 'screen-region-active-display-changed',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
   });
   assert.deepEqual(JSON.parse(JSON.stringify(invoked[1].payload)), {
     schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-drag-state-changed',
+    active: true,
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(invoked[2].payload)), {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-submitted',
+    bounds: { x: 10, y: -21, width: 240, height: 161 },
+    comment: 'Please inspect\nthis crop.',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+    threadId: 'thread-1',
+    messageDraftId: 'draft-1',
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(invoked[3].payload)), {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
     event: 'screen-region-selection-cancelled',
   });
+  assert.deepEqual(JSON.parse(JSON.stringify(activeDisplayPayloads)), [{
+    id: 'display-left',
+    bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+    scaleFactor: 2,
+  }]);
   assertNoRawImagePayload(invoked);
   assertNoRawProviderPayload(invoked);
 });
@@ -572,7 +661,10 @@ test('P0.2 desktop annotation overlay IPC drives global refs-only annotation lif
   assert.match(JSON.stringify(captureResult.metadata), /desktop\.window-capture\.(provider-(unavailable|capture-failed)|window-id-required)/);
   assertNoRawImagePayload(captureResult);
 
-  assert.equal(asRecord(await status?.({})).status, 'submitted');
+  const afterCapture = asRecord(await status?.({}));
+  assert.equal(afterCapture.status, 'idle');
+  assert.equal(afterCapture.visible, false);
+  assert.equal(afterCapture.clickThrough, true);
   assert.equal(asRecord(await cancel?.({})).status, 'cancelled');
   const idle = asRecord(await status?.({}));
   assert.equal(idle.status, 'idle');
@@ -931,9 +1023,21 @@ test('P0 desktop annotation screen-region start can complete through trusted int
   const captureInputs: Array<Record<string, any>> = [];
   const handlers = registerDesktopAnnotationStartSmokeHandlers({
     screen: {
+      getAllDisplays: () => [
+        {
+          id: 'display-left',
+          bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+          scaleFactor: 2,
+        },
+        {
+          id: 'display-right',
+          bounds: { x: 0, y: 160, width: 1440, height: 900 },
+          scaleFactor: 1.25,
+        },
+      ],
       getPrimaryDisplay: () => ({
-        id: 'display-main',
-        bounds: { x: 0, y: 0, width: 1440, height: 900 },
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
         scaleFactor: 2,
       }),
     },
@@ -957,6 +1061,9 @@ test('P0 desktop annotation screen-region start can complete through trusted int
               sourceKind: 'screen-region',
               coordinateSpace: 'screen-global',
               screenBounds: input.screenBounds,
+              displayId: input.displayId,
+              screenId: input.screenId,
+              scale: input.scale,
             },
           },
         };
@@ -970,10 +1077,27 @@ test('P0 desktop annotation screen-region start can complete through trusted int
   assert.equal(typeof internalEvent, 'function');
 
   const pendingResult = start?.({}, validOneClickDesktopAnnotationRequest());
+  const dragResult = asRecord(await internalEvent?.({}, {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-drag-state-changed',
+    active: true,
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+    rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+    screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+  }));
   const eventResult = asRecord(await internalEvent?.({}, {
     schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
     event: 'screen-region-selection-submitted',
-    bounds: { x: 120, y: 140, width: 240, height: 160 },
+    bounds: { x: -500, y: 100, width: 620, height: 120 },
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
     comment: 'Please inspect this region.',
     threadId: 'thread-1',
     messageDraftId: 'draft-1',
@@ -982,6 +1106,9 @@ test('P0 desktop annotation screen-region start can complete through trusted int
   }));
   const result = asRecord(await pendingResult);
 
+  assert.equal(dragResult.status, 'drag-state-updated');
+  assertNoRawImagePayload(dragResult);
+  assertNoRawProviderPayload(dragResult);
   assert.equal(eventResult.status, 'captured');
   assert.equal(result.status, 'captured');
   assert.equal(result.schemaVersion, 'sciforge.desktop.annotation-overlay.capture.v1');
@@ -991,8 +1118,15 @@ test('P0 desktop annotation screen-region start can complete through trusted int
   assert.equal(result.sessionId, 'session-a');
   assert.equal(result.windowRef, undefined);
   assert.equal(result.targetRef.startsWith('desktop-screen-region:workspace-a:session-a/'), true);
-  assert.deepEqual(result.screenBounds, { x: 120, y: 140, width: 240, height: 160 });
-  assert.deepEqual(result.bounds, { x: 120, y: 140, width: 240, height: 160 });
+  assert.deepEqual(result.screenBounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.deepEqual(result.bounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.equal(result.metadata.displayId, 'display-right');
+  assert.equal(result.metadata.screenId, 'display-right');
+  assert.equal(result.metadata.scale, 1.25);
+  assert.deepEqual(result.metadata.windowBinding.screenBounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.equal(result.metadata.windowBinding.displayId, 'display-right');
+  assert.equal(result.metadata.windowBinding.screenId, 'display-right');
+  assert.equal(result.metadata.windowBinding.scale, 1.25);
   assert.equal(result.comment, 'Please inspect this region.');
   assert.equal(result.threadId, 'thread-1');
   assert.equal(result.messageDraftId, 'draft-1');
@@ -1007,10 +1141,13 @@ test('P0 desktop annotation screen-region start can complete through trusted int
     result.imageRef,
   ]);
   assert.equal(captureInputs.length, 1);
-  assert.deepEqual(captureInputs[0].screenBounds, { x: 120, y: 140, width: 240, height: 160 });
+  assert.deepEqual(captureInputs[0].screenBounds, { x: 0, y: 160, width: 120, height: 60 });
   assert.equal(captureInputs[0].sourceKind, 'screen-region');
   assert.equal(captureInputs[0].coordinateSpace, 'screen-global');
   assert.equal(captureInputs[0].windowRef, undefined);
+  assert.equal(captureInputs[0].displayId, 'display-right');
+  assert.equal(captureInputs[0].screenId, 'display-right');
+  assert.equal(captureInputs[0].scale, 1.25);
   assertNoRawImagePayload(result);
   assertNoRawProviderPayload(result);
   assertNoRawImagePayload(eventResult);

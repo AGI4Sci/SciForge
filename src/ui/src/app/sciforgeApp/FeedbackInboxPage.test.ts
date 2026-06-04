@@ -18,6 +18,7 @@ const githubFeedbackSource = readFileSync(new URL('../../feedback/githubFeedback
 const feedbackScreenshotPreviewSource = readFileSync(new URL('../../feedback/FeedbackScreenshotPreview.tsx', import.meta.url), 'utf8');
 const sciForgeAppSource = readFileSync(new URL('../SciForgeApp.tsx', import.meta.url), 'utf8');
 const workspaceServerSource = readFileSync(new URL('../../../../runtime/workspace-server.ts', import.meta.url), 'utf8');
+const workspaceServerFeedbackCodexTerminalSource = readFileSync(new URL('../../../../runtime/workspace-server-feedback-codex-terminal.ts', import.meta.url), 'utf8');
 
 const repairPeer: PeerInstance = {
   name: 'repair',
@@ -263,9 +264,10 @@ test('feedback inbox defaults repair to system Terminal with optional Web Viewer
   assert.match(directCodexTerminalSource, /系统 Terminal 是推荐控制面/);
   assert.match(directCodexTerminalSource, /Web Viewer 只是 attach/);
   assert.match(directCodexTerminalSource, /provider 状态只展示，不改变 repair 目标路由/);
-  assert.match(workspaceServerSource, /SCIFORGE_RUNTIME_API_KEY=<from config\.local\.json>/);
-  assert.match(workspaceServerSource, /systemTerminalRuntimeKeyReaderScript/);
-  assert.match(workspaceServerSource, /systemTerminalCodexShellCommand/);
+  assert.match(workspaceServerFeedbackCodexTerminalSource, /SCIFORGE_RUNTIME_API_KEY=<from config\.local\.json>/);
+  assert.match(workspaceServerFeedbackCodexTerminalSource, /systemTerminalRuntimeKeyReaderScript/);
+  assert.match(workspaceServerFeedbackCodexTerminalSource, /systemTerminalCodexShellCommand/);
+  assert.match(workspaceServerSource, /startFeedbackCodexPtyTerminal/);
   assert.equal((directCodexTerminalSource.match(/startPtyTerminal\('system-terminal'\)/g) ?? []).length >= 2, true);
   assert.equal((directCodexTerminalSource.match(/startPtyTerminal\('web-viewer'\)/g) ?? []).length, 1);
   assert.match(feedbackInboxCss, /\.feedback-codex-terminal\s*\{/);
@@ -341,10 +343,10 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
 });
 
 test('PROJECT.md records the current active task board and archives the annotation sidebar protocol', () => {
-  assert.match(projectSource, /当前任务板：SciForge 对话栏 Computer Use E2E/);
-  assert.match(projectSource, /chat -> runtime -> computer_use\.runTask\(request, hostPorts\) -> gui\.present \/ gui\.ask_user -> verifier/);
-  assert.match(projectSource, /旧任务历史已在 Git 历史中保留/);
-  assert.match(projectSource, /旧 package-local、fixture-only、target-bound harness 只能作为 contract\/diagnostic/);
+  assert.match(projectSource, /当前任务板：Cursor-like Sub-agent Parity/);
+  assert.match(projectSource, /Cursor-like Multi-agent \/ Sub-agent Workbench/);
+  assert.match(projectSource, /Codex app-server \/ Agent Host 是 sub-agent 创建、调度、provider route、workspace 写入/);
+  assert.match(projectSource, /旧 left\/middle\/right\/browser\/image\/desktop\/annotation\/window-action\/computer-use 分散任务板已合并/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);
   assert.match(sciForgeAppSource, /runPromptOrchestrator/);

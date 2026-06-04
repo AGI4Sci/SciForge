@@ -115,7 +115,9 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
   });
   const electronEnv: NodeJS.ProcessEnv = compactEnv({
     SCIFORGE_DESKTOP_DEV: '1',
+    SCIFORGE_DESKTOP_APP_ROOT: projectRoot,
     SCIFORGE_DESKTOP_RENDERER_URL: rendererUrl,
+    SCIFORGE_DESKTOP_WORKSPACE_PATH: workspacePath,
     SCIFORGE_WORKSPACE_PATH: workspacePath,
     ...(nativeAdapterUrl ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: nativeAdapterUrl } : {}),
   });

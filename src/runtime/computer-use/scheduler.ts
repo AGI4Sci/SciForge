@@ -6,6 +6,7 @@ import type {
   ComputerUseActionProvenance,
   ComputerUseActiveLease,
   ComputerUseApprovalState,
+  ComputerUseFocusLeaseProjection,
   ComputerUseLeaseScope,
   ComputerUseObserveBeforeMutateEvidence,
   ComputerUseSchedulerDecisionRefs,
@@ -22,6 +23,7 @@ import { sanitizeId, sleep } from './utils.js';
 
 type ScreenGlobalComputerUseAction = Extract<GenericVisionAction, { type: 'open_app' | 'hotkey' | 'save' | 'open_menu' | 'wait' }>;
 type SchedulerValidationFailureStatus = 'rejected' | 'needs-confirmation' | 'needs-observation' | 'blocked';
+const GLOBAL_FOCUS_LEASE_LOCK_ID = 'cu-focus-lease-global';
 
 export interface ComputerUseSchedulerLease {
   mode: 'real-gui-executor-lock';
@@ -29,6 +31,7 @@ export interface ComputerUseSchedulerLease {
   lockPath: string;
   ownerId: string;
   leaseScope?: ComputerUseLeaseScope;
+  focusLeaseProjection?: ComputerUseFocusLeaseProjection;
   displayGroupId?: string;
   screenId?: string;
   windowId?: string;
@@ -58,7 +61,15 @@ export async function acquireComputerUseSchedulerLease(params: {
     ?? (actionScopeResult && actionScopeResult.ok ? actionScopeResult.leaseScope : undefined);
   const provenance = params.provenance
     ?? (params.action ? deriveComputerUseActionProvenance({ action: params.action, targetResolution: params.targetResolution }) : undefined);
-  const lockId = params.lockId || computerUseSchedulerLockId(params.targetResolution, { leaseScope: actionScope }) || params.targetResolution.schedulerLockId || 'display-fallback';
+  const focusLeaseProjection = params.action && actionScope
+    ? computerUseFocusLeaseProjectionForAction({
+      action: params.action,
+      targetResolution: params.targetResolution,
+      provenance,
+      leaseScope: actionScope,
+    })
+    : undefined;
+  const lockId = params.lockId || focusLeaseProjection?.lockId || computerUseSchedulerLockId(params.targetResolution, { leaseScope: actionScope }) || params.targetResolution.schedulerLockId || 'display-fallback';
   const lockPath = schedulerLockPath(lockId);
   const ownerId = sanitizeId(`${params.runId || 'unknown-run'}-${params.stepId || 'unknown-step'}-${Date.now()}`);
   const timeoutMs = Math.max(1, params.timeoutMs ?? 60_000);
@@ -80,6 +91,7 @@ export async function acquireComputerUseSchedulerLease(params: {
           stepId: params.stepId,
           acquiredAt,
           leaseScope: actionScope,
+          focusLeaseProjection,
           provenance,
           targetWindow: {
             windowId: params.targetResolution.windowId,
@@ -100,6 +112,7 @@ export async function acquireComputerUseSchedulerLease(params: {
         lockPath,
         ownerId,
         leaseScope: actionScope,
+        focusLeaseProjection,
         displayGroupId: actionScope?.displayGroupId ?? provenance?.displayGroupId,
         screenId: actionScope?.screenId ?? provenance?.screenId,
         windowId: actionScope?.windowId ?? provenance?.windowId,
@@ -145,18 +158,11 @@ export async function acquireComputerUseSchedulerLease(params: {
   };
 }
 
-export function computerUseSchedulerLockId(targetResolution: ResolvedWindowTarget, options: { sharedSystemInput?: boolean; leaseScope?: ComputerUseLeaseScope } = {}) {
+export function computerUseSchedulerLockId(targetResolution: ResolvedWindowTarget, options: { sharedSystemInput?: boolean; leaseScope?: ComputerUseLeaseScope; focusLeaseProjection?: ComputerUseFocusLeaseProjection } = {}) {
   if (options.sharedSystemInput) return 'shared-system-input';
-  if (options.leaseScope) {
-    return sanitizeId([
-      'cu-lease',
-      options.leaseScope.kind,
-      options.leaseScope.displayGroupId,
-      options.leaseScope.screenId,
-      options.leaseScope.windowId,
-    ].filter(Boolean).join('-'));
-  }
-  return targetResolution.schedulerLockId || 'display-fallback';
+  if (options.focusLeaseProjection) return options.focusLeaseProjection.lockId;
+  if (options.leaseScope && targetResolution.inputIsolation === 'require-focused-target') return GLOBAL_FOCUS_LEASE_LOCK_ID;
+  return scopedSchedulerLockId(targetResolution, options.leaseScope);
 }
 
 export function schedulerLeaseTrace(lease: ComputerUseSchedulerLease | undefined) {
@@ -167,6 +173,7 @@ export function schedulerLeaseTrace(lease: ComputerUseSchedulerLease | undefined
     lockPath: lease.lockPath,
     ownerId: lease.ownerId,
     leaseScope: lease.leaseScope,
+    focusLeaseProjection: lease.focusLeaseProjection,
     displayGroupId: lease.displayGroupId,
     screenId: lease.screenId,
     windowId: lease.windowId,
@@ -205,6 +212,23 @@ export function scheduleComputerUseActionProposals(
   const ordered = [...proposals].sort(compareSchedulerProposals);
 
   for (const [index, proposal] of ordered.entries()) {
+    const proposalCancelled = cancelled.has(proposal.id);
+    const cancelReason = proposal.cancelReason || (proposalCancelled ? 'cancelled-by-request' : '');
+    const prevalidationProvenance = {
+      ...deriveComputerUseActionProvenance({
+        action: proposal.action,
+        targetResolution: proposal.targetResolution,
+      }),
+      ...proposal.provenance,
+    };
+    const prevalidationScopeResult = computerUseLeaseScopeForAction(
+      proposal.action,
+      proposal.targetResolution,
+      prevalidationProvenance,
+    );
+    const prevalidationStopReason = prevalidationScopeResult.ok
+      ? schedulerStopSignalReason(options.stopSignal, proposal, prevalidationScopeResult.leaseScope)
+      : '';
     const validation = validateComputerUseScopedAction({
       action: proposal.action,
       targetResolution: proposal.targetResolution,
@@ -213,7 +237,7 @@ export function scheduleComputerUseActionProposals(
       observeBeforeMutate: proposal.observeBeforeMutate,
       now: options.now,
       maxObservationAgeMs: options.maxObservationAgeMs,
-      enforceObserveBeforeMutate: !proposal.cancelReason && !cancelled.has(proposal.id) && !options.stopSignal,
+      enforceObserveBeforeMutate: !cancelReason && !prevalidationStopReason,
     });
     const submittedAt = proposal.submittedAt;
     const sequence = proposal.sequence ?? index;
@@ -225,10 +249,9 @@ export function scheduleComputerUseActionProposals(
       approvalState: proposal.approvalState ?? proposal.action.approvalState,
     };
     const timeoutReason = timeoutRejectionReason(proposal, nowMs, options.defaultTimeoutMs);
-    const cancelReason = proposal.cancelReason || (cancelled.has(proposal.id) ? 'cancelled-by-request' : '');
     const stopReason = validation.leaseScope
       ? schedulerStopSignalReason(options.stopSignal, proposal, validation.leaseScope)
-      : '';
+      : prevalidationStopReason;
 
     if (cancelReason || stopReason) {
       const reason = stopReason || cancelReason;
@@ -244,6 +267,7 @@ export function scheduleComputerUseActionProposals(
         reason,
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
         executorEventRef: refs.executorEventRef,
         schedulerDecisionRefs: refs,
         blocksFollowingActions: Boolean(stopReason),
@@ -258,6 +282,7 @@ export function scheduleComputerUseActionProposals(
         reason: timeoutReason,
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
       });
       continue;
     }
@@ -269,6 +294,7 @@ export function scheduleComputerUseActionProposals(
         reason: validation.reason,
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
         observeBeforeMutate: validation.observeBeforeMutate,
         schedulerDecisionRefs: validation.schedulerDecisionRefs,
         approvalState: validation.approvalState,
@@ -288,6 +314,7 @@ export function scheduleComputerUseActionProposals(
         reason,
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
         schedulerDecisionRefs: schedulerDecisionRefs({
           proposalId: proposal.id,
           status: 'cancelled',
@@ -305,6 +332,7 @@ export function scheduleComputerUseActionProposals(
         reason: 'approval-stop: an earlier action on this screen is waiting for confirmation',
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
       });
       continue;
     }
@@ -314,21 +342,25 @@ export function scheduleComputerUseActionProposals(
         status: 'ready',
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
       });
       continue;
     }
-    const conflictingLease = activeLeases.find((lease) => leaseScopesConflict(lease.scope, validation.leaseScope, {
-      sameScreenWindowLocal: options.executorLeaseConflictPolicy === 'window-local-parallel'
-        ? 'window-parallel'
-        : 'screen-serial',
-    }));
+    const conflictingLease = activeLeases.find((lease) => focusLeaseProjectionsConflict(lease.focusLeaseProjection, validation.focusLeaseProjection)
+      || leaseScopesConflict(lease.scope, validation.leaseScope, {
+        sameScreenWindowLocal: options.executorLeaseConflictPolicy === 'window-local-parallel'
+          ? 'window-parallel'
+          : 'screen-serial',
+      }));
     if (conflictingLease) {
+      const focusConflict = focusLeaseProjectionsConflict(conflictingLease.focusLeaseProjection, validation.focusLeaseProjection);
       entries.push({
         ...base,
         status: 'queued',
-        reason: `waiting-for-lease:${conflictingLease.leaseId}`,
+        reason: `${focusConflict ? 'waiting-for-focus-lease' : 'waiting-for-lease'}:${conflictingLease.leaseId}`,
         provenance: validation.provenance,
         leaseScope: validation.leaseScope,
+        focusLeaseProjection: validation.focusLeaseProjection,
       });
       continue;
     }
@@ -336,6 +368,7 @@ export function scheduleComputerUseActionProposals(
     activeLeases.push({
       leaseId,
       scope: validation.leaseScope,
+      focusLeaseProjection: validation.focusLeaseProjection,
       actorId: validation.provenance.actorId,
       cursorId: validation.provenance.cursorId,
       acquiredAt: options.now,
@@ -345,6 +378,7 @@ export function scheduleComputerUseActionProposals(
       status: 'ready',
       provenance: validation.provenance,
       leaseScope: validation.leaseScope,
+      focusLeaseProjection: validation.focusLeaseProjection,
       leaseId,
       executorEventRef: stableExecutorEventRef(proposal.id),
       staleEvidenceInvalidation: validation.staleEvidenceInvalidation,
@@ -374,6 +408,7 @@ export function validateComputerUseScopedAction(params: {
   status: 'ready';
   provenance: ComputerUseActionProvenance;
   leaseScope: ComputerUseLeaseScope;
+  focusLeaseProjection: ComputerUseFocusLeaseProjection;
   staleEvidenceInvalidation?: ComputerUseVisibleEvidenceInvalidation;
   observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence;
   approvalState: ComputerUseApprovalState;
@@ -383,6 +418,7 @@ export function validateComputerUseScopedAction(params: {
   reason: string;
   provenance: ComputerUseActionProvenance;
   leaseScope?: ComputerUseLeaseScope;
+  focusLeaseProjection?: ComputerUseFocusLeaseProjection;
   observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence;
   schedulerDecisionRefs?: ComputerUseSchedulerDecisionRefs;
   approvalState: ComputerUseApprovalState;
@@ -407,6 +443,12 @@ export function validateComputerUseScopedAction(params: {
       approvalState,
     };
   }
+  const focusLeaseProjection = computerUseFocusLeaseProjectionForAction({
+    action: params.action,
+    targetResolution: params.targetResolution,
+    provenance,
+    leaseScope: scopeResult.leaseScope,
+  });
   const bareGlobalReason = bareGlobalCoordinateRejectionReason(params.action, params.targetResolution, scopeResult.leaseScope);
   if (bareGlobalReason) {
     return {
@@ -415,6 +457,7 @@ export function validateComputerUseScopedAction(params: {
       reason: bareGlobalReason,
       provenance: { ...provenance, leaseScope: scopeResult.leaseScope, approvalState },
       leaseScope: scopeResult.leaseScope,
+      focusLeaseProjection,
       approvalState,
     };
   }
@@ -425,6 +468,7 @@ export function validateComputerUseScopedAction(params: {
       reason: 'approval-denied: Computer Use action was refused before executor event creation',
       provenance: { ...provenance, leaseScope: scopeResult.leaseScope, approvalState },
       leaseScope: scopeResult.leaseScope,
+      focusLeaseProjection,
       approvalState,
     };
   }
@@ -435,6 +479,7 @@ export function validateComputerUseScopedAction(params: {
       reason: 'approval-required: high-risk Computer Use action stopped before executor event creation',
       provenance: { ...provenance, leaseScope: scopeResult.leaseScope, approvalState },
       leaseScope: scopeResult.leaseScope,
+      focusLeaseProjection,
       approvalState,
     };
   }
@@ -460,6 +505,7 @@ export function validateComputerUseScopedAction(params: {
       reason: observationRequirement.reason,
       provenance: { ...provenance, leaseScope: scopeResult.leaseScope, approvalState },
       leaseScope: scopeResult.leaseScope,
+      focusLeaseProjection,
       observeBeforeMutate,
       schedulerDecisionRefs: refs,
       approvalState,
@@ -470,6 +516,7 @@ export function validateComputerUseScopedAction(params: {
     status: 'ready',
     provenance: { ...provenance, leaseScope: scopeResult.leaseScope, approvalState },
     leaseScope: scopeResult.leaseScope,
+    focusLeaseProjection,
     staleEvidenceInvalidation: computerUseStaleEvidenceInvalidationForAction(params.action, scopeResult.leaseScope),
     observeBeforeMutate: observationRequirement.observeBeforeMutate,
     approvalState,
@@ -573,6 +620,29 @@ export function computerUseLeaseScopeForAction(
   };
 }
 
+export function computerUseFocusLeaseProjectionForAction(params: {
+  action: GenericVisionAction;
+  targetResolution: WindowTargetResolution;
+  provenance?: ComputerUseActionProvenance;
+  leaseScope?: ComputerUseLeaseScope;
+}): ComputerUseFocusLeaseProjection {
+  const provenance = params.provenance
+    ?? deriveComputerUseActionProvenance({ action: params.action, targetResolution: params.targetResolution });
+  const scopeResult = params.leaseScope
+    ? { ok: true as const, leaseScope: params.leaseScope }
+    : computerUseLeaseScopeForAction(params.action, params.targetResolution, provenance);
+  if (!scopeResult.ok) {
+    const fallbackScope: ComputerUseLeaseScope = {
+      kind: 'screen-global',
+      displayGroupId: provenance.displayGroupId,
+      screenId: provenance.screenId,
+      reason: 'focus-lease-projection-fallback-for-unscoped-action',
+    };
+    return focusLeaseProjection(params.action, params.targetResolution, provenance, fallbackScope);
+  }
+  return focusLeaseProjection(params.action, params.targetResolution, provenance, scopeResult.leaseScope);
+}
+
 export function computerUseActionMutatesVisibleEvidence(action: GenericVisionAction) {
   return action.type !== 'wait';
 }
@@ -590,7 +660,8 @@ export function computerUseActionRequiresObserveBeforeMutate(action: GenericVisi
     || action.type === 'hotkey'
     || action.type === 'scroll'
     || action.type === 'save'
-    || action.type === 'open_menu';
+    || action.type === 'open_menu'
+    || action.type === 'open_app';
 }
 
 export function computerUseStaleEvidenceInvalidationForAction(
@@ -618,6 +689,61 @@ export function leaseScopesConflict(
   if (left.kind === 'screen-global' || right.kind === 'screen-global') return true;
   if ((options.sameScreenWindowLocal ?? 'window-parallel') === 'screen-serial') return true;
   return Boolean(left.windowId && right.windowId && left.windowId === right.windowId);
+}
+
+function focusLeaseProjection(
+  action: GenericVisionAction,
+  targetResolution: WindowTargetResolution,
+  provenance: ComputerUseActionProvenance,
+  leaseScope: ComputerUseLeaseScope,
+): ComputerUseFocusLeaseProjection {
+  const inputIsolation = targetResolution.ok
+    ? targetResolution.inputIsolation
+    : targetResolution.target.inputIsolation;
+  const requiresGlobalFocus = inputIsolation === 'require-focused-target'
+    && computerUseActionRequiresExecutorLease(action);
+  const lockId = requiresGlobalFocus
+    ? GLOBAL_FOCUS_LEASE_LOCK_ID
+    : targetResolution.ok
+      ? scopedSchedulerLockId(targetResolution, leaseScope)
+      : sanitizeId(['cu-lease', leaseScope.kind, leaseScope.displayGroupId, leaseScope.screenId, leaseScope.windowId].filter(Boolean).join('-'));
+  return {
+    schemaVersion: 'sciforge.computer-use.focus-lease-projection.v1',
+    lane: requiresGlobalFocus ? 'global-focus' : 'adapter-local',
+    inputClassification: requiresGlobalFocus ? 'focused-system-input' : 'non-focus-adapter',
+    requiresGlobalFocus,
+    lockId,
+    laneId: requiresGlobalFocus ? 'focus:global' : `adapter:${lockId}`,
+    leaseScope,
+    displayGroupId: leaseScope.displayGroupId,
+    screenId: leaseScope.screenId,
+    windowId: leaseScope.windowId,
+    actorId: provenance.actorId,
+    cursorId: provenance.cursorId,
+    reason: requiresGlobalFocus
+      ? 'target inputIsolation requires focused system input; serializing on the global focus lane'
+      : 'target can use a non-focus adapter lane compatible with scoped parallel scheduling',
+  };
+}
+
+function focusLeaseProjectionsConflict(
+  left: ComputerUseFocusLeaseProjection | undefined,
+  right: ComputerUseFocusLeaseProjection | undefined,
+) {
+  return left?.requiresGlobalFocus === true && right?.requiresGlobalFocus === true;
+}
+
+function scopedSchedulerLockId(targetResolution: ResolvedWindowTarget, leaseScope: ComputerUseLeaseScope | undefined) {
+  if (leaseScope) {
+    return sanitizeId([
+      'cu-lease',
+      leaseScope.kind,
+      leaseScope.displayGroupId,
+      leaseScope.screenId,
+      leaseScope.windowId,
+    ].filter(Boolean).join('-'));
+  }
+  return targetResolution.schedulerLockId || 'display-fallback';
 }
 
 function schedulerLockPath(lockId: string) {
@@ -781,15 +907,24 @@ function observeBeforeMutateStaleReason(
   if (freshness.status !== 'current') {
     return freshness.reason || freshness.staleBy || `freshness status is ${freshness.status}`;
   }
-  const nowMs = timestampSortKey(now ?? new Date().toISOString());
-  const observedAtMs = timestampSortKey(evidence.observedAt ?? evidence.capturedAt ?? freshness.observedAt);
-  const checkedAtMs = timestampSortKey(freshness.checkedAt ?? evidence.freshnessCheckedAt);
-  const expiresAtMs = timestampSortKey(freshness.expiresAt);
-  if (Number.isFinite(expiresAtMs) && nowMs > expiresAtMs) return `observation expired at ${freshness.expiresAt}`;
+  const nowMs = timestampMs(now ?? new Date().toISOString());
+  const observedAtMs = timestampMs(evidence.observedAt ?? evidence.capturedAt ?? freshness.observedAt);
+  const checkedAtMs = timestampMs(freshness.checkedAt ?? evidence.freshnessCheckedAt);
+  const expiresAtMs = timestampMs(freshness.expiresAt);
+  if (nowMs === undefined) return 'current timestamp is missing or invalid';
+  if (observedAtMs === undefined) return 'observation timestamp is missing or invalid';
+  if (checkedAtMs === undefined) return 'freshness check timestamp is missing or invalid';
+  if (expiresAtMs !== undefined && nowMs > expiresAtMs) return `observation expired at ${freshness.expiresAt}`;
   const maxAgeMs = Math.max(1, freshness.maxAgeMs ?? defaultMaxAgeMs ?? 30_000);
-  if (Number.isFinite(observedAtMs) && nowMs - observedAtMs > maxAgeMs) return `observation is older than ${maxAgeMs}ms`;
-  if (Number.isFinite(checkedAtMs) && nowMs - checkedAtMs > maxAgeMs) return `freshness check is older than ${maxAgeMs}ms`;
+  if (nowMs - observedAtMs > maxAgeMs) return `observation is older than ${maxAgeMs}ms`;
+  if (nowMs - checkedAtMs > maxAgeMs) return `freshness check is older than ${maxAgeMs}ms`;
   return '';
+}
+
+function timestampMs(value: string | undefined) {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function schedulerStopSignalReason(

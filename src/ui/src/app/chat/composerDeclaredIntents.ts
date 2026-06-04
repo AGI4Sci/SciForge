@@ -1,6 +1,7 @@
 import type {
   ComposerDeclaredCapabilityTier,
   ComposerDeclaredIntentSnapshot,
+  ComposerDeclaredModeIntentId,
   ComposerDeclaredModelIntentId,
   ComposerDeclaredModelMode,
   SciForgeSession,
@@ -20,25 +21,39 @@ const MODEL_INTENT_IDS = new Set<ComposerDeclaredModelIntentId>([
 
 const MODEL_MODES = new Set<ComposerDeclaredModelMode>(['auto', 'max', 'assistant']);
 const CAPABILITY_TIERS = new Set<ComposerDeclaredCapabilityTier>(['auto', 'max', 'fast', 'balanced', 'deep']);
+const MODE_INTENT_IDS = new Set<ComposerDeclaredModeIntentId>(['plan', 'debug', 'multitask', 'ask']);
+const MULTITASK_SUMMARY_GUIDANCE = 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.';
 
 export function composerDeclaredIntentsForSession(session: SciForgeSession): ComposerDeclaredIntentSnapshot | undefined {
-  const modelAction = [...uiActionAuditLogForSession(session)]
-    .reverse()
-    .find((action) => {
-      if (action.type !== 'update-capability-preference') return false;
-      return action.preference.intent === 'composer-model-selection'
-        && action.preference.source === 'composer-model-menu';
-    });
-  if (!modelAction || modelAction.type !== 'update-capability-preference') return undefined;
-  const model = composerModelIntentFromPreference(modelAction.preference, {
-    actionId: modelAction.id,
-    declaredAt: modelAction.createdAt,
+  const actions = [...uiActionAuditLogForSession(session)].reverse();
+  const modelAction = actions.find((action) => {
+    if (action.type !== 'update-capability-preference') return false;
+    return action.preference.intent === 'composer-model-selection'
+      && action.preference.source === 'composer-model-menu';
   });
-  if (!model) return undefined;
+  const modeAction = actions.find((action) => {
+    if (action.type !== 'update-capability-preference') return false;
+    return action.preference.intent === 'composer-mode-selection'
+      && action.preference.source === 'composer-mode-chip';
+  });
+  const model = modelAction?.type === 'update-capability-preference'
+    ? composerModelIntentFromPreference(modelAction.preference, {
+      actionId: modelAction.id,
+      declaredAt: modelAction.createdAt,
+    })
+    : undefined;
+  const mode = modeAction?.type === 'update-capability-preference'
+    ? composerModeIntentFromPreference(modeAction.preference, {
+      actionId: modeAction.id,
+      declaredAt: modeAction.createdAt,
+    })
+    : undefined;
+  if (!model && !mode) return undefined;
   return {
     schemaVersion: SCHEMA_VERSION,
     source: 'ui-action-audit-log',
-    model,
+    ...(model ? { model } : {}),
+    ...(mode ? { mode } : {}),
   };
 }
 
@@ -50,7 +65,7 @@ function composerModelIntentFromPreference(
   const mode = asKnownValue(preference.mode, MODEL_MODES);
   const capabilityTier = asKnownValue(preference.capabilityTier, CAPABILITY_TIERS);
   if (!modelIntentId || !mode || !capabilityTier) return undefined;
-  const publicLabel = publicIntentLabel(preference.publicLabel, modelIntentId);
+  const publicLabel = publicIntentLabel(preference.publicLabel, publicModelLabelForIntent(modelIntentId));
   return {
     modelIntentId,
     mode,
@@ -61,25 +76,48 @@ function composerModelIntentFromPreference(
   };
 }
 
+function composerModeIntentFromPreference(
+  preference: Record<string, unknown>,
+  provenance: { actionId: string; declaredAt: string },
+): NonNullable<ComposerDeclaredIntentSnapshot['mode']> | undefined {
+  const modeIntentId = asKnownValue(preference.modeIntentId, MODE_INTENT_IDS);
+  if (!modeIntentId) return undefined;
+  return {
+    modeIntentId,
+    publicLabel: publicIntentLabel(preference.publicLabel, publicModeLabelForIntent(modeIntentId)),
+    ...(modeIntentId === 'multitask' ? { summaryGuidance: MULTITASK_SUMMARY_GUIDANCE } : {}),
+    actionId: provenance.actionId,
+    declaredAt: provenance.declaredAt,
+  };
+}
+
 function asKnownValue<T extends string>(value: unknown, allowed: Set<T>): T | undefined {
   if (typeof value !== 'string') return undefined;
   return allowed.has(value as T) ? value as T : undefined;
 }
 
-function publicIntentLabel(value: unknown, fallbackId: ComposerDeclaredModelIntentId) {
-  if (typeof value !== 'string') return publicLabelForIntent(fallbackId);
+function publicIntentLabel(value: unknown, fallbackLabel: string) {
+  if (typeof value !== 'string') return fallbackLabel;
   const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
-  if (!compact || containsInternalTerm(compact)) return publicLabelForIntent(fallbackId);
+  if (!compact || containsInternalTerm(compact)) return fallbackLabel;
   return compact;
 }
 
-function publicLabelForIntent(intentId: ComposerDeclaredModelIntentId) {
+function publicModelLabelForIntent(intentId: ComposerDeclaredModelIntentId) {
   if (intentId === 'auto') return 'Auto';
   if (intentId === 'max') return 'MAX Mode';
   if (intentId === 'assistant-fast') return 'Assistant Fast';
   if (intentId === 'assistant-balanced') return 'Assistant Balanced';
   if (intentId === 'assistant-deep') return 'Assistant Deep';
   return 'Assistant Auto';
+}
+
+function publicModeLabelForIntent(intentId: ComposerDeclaredModeIntentId) {
+  if (intentId === 'plan') return 'Plan';
+  if (intentId === 'debug') return 'Debug';
+  if (intentId === 'multitask') return 'Multitask';
+  if (intentId === 'ask') return 'Ask';
+  return 'Mode';
 }
 
 function containsInternalTerm(value: string) {

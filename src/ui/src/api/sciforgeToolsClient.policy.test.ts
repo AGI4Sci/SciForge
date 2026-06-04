@@ -176,7 +176,7 @@ test('selected Computer Use action provider remains terminal-equivalent text thr
   assert.doesNotMatch(JSON.stringify(bodies[0]), /computerUseNext|computerUseLong|local\.vision-sense|action\.sciforge\.computer-use/);
 });
 
-test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据', async () => {
+test('聊天流式请求连接到 Codex Runtime bridge，但 public run event 不暴露运行私有元数据', async () => {
   const urls: string[] = [];
   const bodies: Array<Record<string, unknown>> = [];
   globalThis.fetch = (async (url, init) => {
@@ -222,10 +222,16 @@ test('聊天流式请求连接到 Codex Runtime bridge 并暴露运行元数据'
   assert.equal('conversationEnvelope' in body, false);
   const metadataEvent = events.find((event) => event.type === 'codex-runtime-run');
   assert.ok(metadataEvent);
-  assert.match(metadataEvent.detail ?? '', /provider sciforge-deepseek-proxy/);
-  assert.match(metadataEvent.detail ?? '', /profile sciforge-runtime-deepseek/);
-  assert.match(metadataEvent.detail ?? '', /workspace \/tmp\/current/);
+  assert.match(metadataEvent.detail ?? '', /Runtime Codex run started/);
   assert.match(metadataEvent.detail ?? '', /command codex-command-/);
+  const publicRunRaw = metadataEvent.raw as Record<string, unknown>;
+  assert.equal('provider' in publicRunRaw, false);
+  assert.equal('model' in publicRunRaw, false);
+  assert.equal('profile' in publicRunRaw, false);
+  assert.equal('workspacePath' in publicRunRaw, false);
+  assert.equal(publicRunRaw.runtimeLane, 'codex');
+  assert.equal(publicRunRaw.status, 'started');
+  assert.doesNotMatch(JSON.stringify(metadataEvent), /sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek|\/tmp\/current/);
 });
 
 test('composer model picker declared intent rides as read-only gui projection metadata', async () => {
@@ -296,6 +302,125 @@ test('composer model picker declared intent rides as read-only gui projection me
     declaredAt: '2026-06-01T00:00:02.000Z',
   });
   assert.doesNotMatch(JSON.stringify(projectionEvent), /provider\.local|sk-private|private-provider|private\/model-name|token secret/i);
+});
+
+test('composer mode declared intents can project without a model intent', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const events: AgentStreamEvent[] = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-composer-mode-intent', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Coordinate parallel literature checks',
+    composerDeclaredIntents: {
+      schemaVersion: 'sciforge.composer-declared-intents.v1',
+      source: 'ui-action-audit-log',
+      mode: {
+        modeIntentId: 'multitask',
+        publicLabel: 'Multitask',
+        actionId: 'ui-action-mode-multitask',
+        declaredAt: '2026-06-01T00:00:05.000Z',
+        provider: 'private-provider',
+        baseUrl: 'https://provider.local/v1',
+        token: 'sk-private',
+        workspacePath: '/Applications/workspace/private',
+      } as NonNullable<SendAgentMessageInput['composerDeclaredIntents']>['mode'] & Record<string, unknown>,
+    } as SendAgentMessageInput['composerDeclaredIntents'] & Record<string, unknown>,
+  }), { onEvent: (event) => events.push(event) });
+
+  const body = bodies[0]!;
+  assert.equal(body.commandText, 'Coordinate parallel literature checks');
+  assert.equal('composerDeclaredIntents' in body, false);
+  const projection = ((body.auditMetadata as Record<string, unknown>).guiLocalProjection as Record<string, unknown>);
+  assert.deepEqual(projection.composerDeclaredIntents, {
+    schemaVersion: 'sciforge.composer-declared-intents.v1',
+    source: 'ui-action-audit-log',
+    mode: {
+      modeIntentId: 'multitask',
+      publicLabel: 'Multitask',
+      summaryGuidance: 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.',
+      actionId: 'ui-action-mode-multitask',
+      declaredAt: '2026-06-01T00:00:05.000Z',
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(body), /provider\.local|sk-private|private-provider|Applications\/workspace|baseUrl|token/i);
+  const projectionEvent = events.find((event) => event.type === 'composer-declared-intent-projection');
+  assert.ok(projectionEvent);
+  assert.equal(projectionEvent.detail, 'Shared Multitask mode preference with Agent Host.');
+  assert.deepEqual((projectionEvent.raw as { native?: Record<string, unknown> }).native, {
+    rawType: 'composer_declared_intent_projection',
+    operationKind: 'message',
+    status: 'completed',
+    text: 'Shared Multitask mode preference with Agent Host.',
+    modeIntentId: 'multitask',
+    summaryGuidance: 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.',
+    sourceActionId: 'ui-action-mode-multitask',
+    declaredAt: '2026-06-01T00:00:05.000Z',
+  });
+  assert.doesNotMatch(JSON.stringify(projectionEvent), /provider\.local|sk-private|private-provider|Applications\/workspace|baseUrl|token/i);
+});
+
+test('composer Plan Ask Debug modes project as public declared intent metadata without slash directives', async () => {
+  for (const modeIntentId of ['plan', 'ask', 'debug'] as const) {
+    const bodies: Array<Record<string, unknown>> = [];
+    const events: AgentStreamEvent[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return streamResponse([{
+        result: {
+          message: 'Codex Runtime result ready.',
+          executionUnits: [{ id: `unit-composer-mode-${modeIntentId}`, status: 'done' }],
+          artifacts: [],
+        },
+      }]);
+    }) as typeof fetch;
+
+    const publicLabel = modeIntentId === 'plan' ? 'Plan' : modeIntentId === 'ask' ? 'Ask' : 'Debug';
+    await sendSciForgeToolMessage(messageInput(undefined, {
+      prompt: 'Use the user text exactly as written',
+      composerDeclaredIntents: {
+        schemaVersion: 'sciforge.composer-declared-intents.v1',
+        source: 'ui-action-audit-log',
+        mode: {
+          modeIntentId,
+          publicLabel,
+          actionId: `ui-action-mode-${modeIntentId}`,
+          declaredAt: '2026-06-01T00:00:05.000Z',
+          provider: 'private-provider',
+          modelName: 'private/model-name',
+          workspacePath: '/Applications/workspace/private',
+        } as NonNullable<SendAgentMessageInput['composerDeclaredIntents']>['mode'] & Record<string, unknown>,
+      } as SendAgentMessageInput['composerDeclaredIntents'] & Record<string, unknown>,
+    }), { onEvent: (event) => events.push(event) });
+
+    const body = bodies[0]!;
+    assert.equal(body.commandText, 'Use the user text exactly as written');
+    assert.doesNotMatch(String(body.commandText), new RegExp(`^/${modeIntentId}\\b`));
+    const projection = ((body.auditMetadata as Record<string, unknown>).guiLocalProjection as Record<string, unknown>);
+    assert.deepEqual(projection.composerDeclaredIntents, {
+      schemaVersion: 'sciforge.composer-declared-intents.v1',
+      source: 'ui-action-audit-log',
+      mode: {
+        modeIntentId,
+        publicLabel,
+        actionId: `ui-action-mode-${modeIntentId}`,
+        declaredAt: '2026-06-01T00:00:05.000Z',
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(projection.composerDeclaredIntents), /private-provider|private\/model-name|Applications\/workspace|workspacePath|modelName/i);
+    const projectionEvent = events.find((event) => event.type === 'composer-declared-intent-projection');
+    assert.ok(projectionEvent);
+    assert.equal(projectionEvent.detail, `Shared ${publicLabel} mode preference with Agent Host.`);
+    assert.doesNotMatch(JSON.stringify(projectionEvent), /private-provider|private\/model-name|Applications\/workspace|workspacePath|modelName/i);
+  }
 });
 
 test('/computer-use 默认聊天请求只生成 terminal-equivalent text 给 Codex Runtime', async () => {

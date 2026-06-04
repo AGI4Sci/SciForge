@@ -1,4 +1,5 @@
 import { localeText, type SupportedLocale } from '../../i18n';
+import { sanitizePublicTextRequired } from '../../publicProjectionSanitizer';
 
 export type ConfigSaveState = {
   status: 'idle' | 'saving' | 'saved' | 'error';
@@ -7,14 +8,17 @@ export type ConfigSaveState = {
 };
 
 export function settingsSaveStateText(state: ConfigSaveState, locale?: SupportedLocale) {
+  const saveErrorFallback = localeText(locale, {
+    'zh-CN': '无法保存 config.local.json。请检查 Workspace Writer。',
+    'en-US': 'Could not save config.local.json. Check Workspace Writer.',
+  });
   if (state.status === 'saving') return localeText(locale, {
     'zh-CN': '正在保存到 config.local.json...',
     'en-US': 'Saving to config.local.json...',
   });
-  if (state.status === 'error') return state.message || localeText(locale, {
-    'zh-CN': '无法保存 config.local.json。请检查 Workspace Writer。',
-    'en-US': 'Could not save config.local.json. Check Workspace Writer.',
-  });
+  if (state.status === 'error') return state.message
+    ? sanitizePublicTextRequired(state.message, saveErrorFallback)
+    : saveErrorFallback;
   if (state.status === 'saved') {
     const time = state.savedAt ? new Date(state.savedAt).toLocaleTimeString(undefined, { hour12: false }) : '';
     const saved = localeText(locale, {

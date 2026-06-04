@@ -37,9 +37,10 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
   const displayContent = foldLeadingInlineRawDiagnostic(
     foldLeadingRawWebPageDump(normalizeFinalMessageMarkdownInput(stripLeadingAssistantScratchpad(content))),
   );
-  const blocks = parseContentBlocks(displayContent);
+  const subagentAggregation = aggregateSubagentResultSections(displayContent);
+  const blocks = parseContentBlocks(subagentAggregation?.content ?? displayContent);
   const primary: string[] = [];
-  const auditSections: FinalMessageAuditSection[] = [];
+  const auditSections: FinalMessageAuditSection[] = [...(subagentAggregation?.auditSections ?? [])];
   let activeAuditHeading = '';
 
   for (const block of blocks) {
@@ -73,10 +74,280 @@ export function splitFinalMessagePresentation(content: string, resultPresentatio
   }
 
   return {
-    primaryContent: normalizeAssistantProseForDisplay(primary.join('\n\n')),
+    primaryContent: normalizeFinalPrimaryContent(primary.join('\n\n')),
     auditSections,
     summary: auditSectionsSummary(auditSections),
   };
+}
+
+type MarkdownSection = {
+  heading: string;
+  headingLine: string;
+  body: string;
+  text: string;
+};
+
+type SubagentResultSection = {
+  title: string;
+  status: string;
+  summary: string;
+  refs: string[];
+  auditNote?: string;
+};
+
+function aggregateSubagentResultSections(content: string): { content: string; auditSections: FinalMessageAuditSection[] } | undefined {
+  const sections = markdownSections(content);
+  if (!sections.length) return undefined;
+  const subagentIndexes = new Map<number, SubagentResultSection>();
+  sections.forEach((section, index) => {
+    const subagent = subagentResultFromSection(section);
+    if (subagent) subagentIndexes.set(index, subagent);
+  });
+  const subagents = [...subagentIndexes.values()];
+  const hasExplicitContainer = sections.some((section) => isSubagentAggregateContainerHeading(section.heading));
+  if (subagents.length < 2 && !(hasExplicitContainer && subagents.length)) return undefined;
+
+  const aggregateMarkdown = subagentAggregateMarkdown(subagents);
+  const output: string[] = [];
+  let insertedAggregate = false;
+  sections.forEach((section, index) => {
+    if (subagentIndexes.has(index)) {
+      if (!insertedAggregate) {
+        output.push(aggregateMarkdown);
+        insertedAggregate = true;
+      }
+      return;
+    }
+    if (isSubagentAggregateContainerHeading(section.heading)) return;
+    const text = section.text.trim();
+    if (text) output.push(text);
+  });
+  if (!insertedAggregate) output.push(aggregateMarkdown);
+
+  return {
+    content: output.join('\n\n').trim(),
+    auditSections: subagents
+      .map((section) => section.auditNote)
+      .filter((note): note is string => Boolean(note))
+      .map((text) => ({
+        label: 'Process',
+        text,
+        evidenceType: 'execution-audit',
+        importance: 'diagnostic',
+      })),
+  };
+}
+
+function markdownSections(content: string): MarkdownSection[] {
+  const sections: MarkdownSection[] = [];
+  let current: { heading: string; headingLine: string; bodyLines: string[]; textLines: string[] } = {
+    heading: '',
+    headingLine: '',
+    bodyLines: [],
+    textLines: [],
+  };
+  const flush = () => {
+    const text = current.textLines.join('\n').trim();
+    if (!text) return;
+    sections.push({
+      heading: current.heading,
+      headingLine: current.headingLine,
+      body: current.bodyLines.join('\n').trim(),
+      text,
+    });
+  };
+  for (const line of content.replace(/\r\n?/g, '\n').split('\n')) {
+    const heading = line.match(/^(#{1,6})\s+(.+?)\s*$/);
+    if (heading) {
+      flush();
+      current = {
+        heading: heading[2].trim(),
+        headingLine: line,
+        bodyLines: [],
+        textLines: [line],
+      };
+      continue;
+    }
+    current.textLines.push(line);
+    current.bodyLines.push(line);
+  }
+  flush();
+  return sections;
+}
+
+function subagentResultFromSection(section: MarkdownSection): SubagentResultSection | undefined {
+  if (!looksLikeSubagentResultSection(section)) return undefined;
+  const summary = subagentSectionSummary(section.body);
+  const refs = collectPublicSubagentRefs(section.body);
+  if (!summary && !refs.length) return undefined;
+  const title = subagentSectionTitle(section);
+  const status = subagentSectionStatus(section.body);
+  const auditNote = subagentSectionAuditNote(section, { title, refs });
+  return {
+    title,
+    status,
+    summary: summary ?? 'No public summary provided.',
+    refs,
+    auditNote,
+  };
+}
+
+function looksLikeSubagentResultSection(section: MarkdownSection) {
+  const body = section.body.toLowerCase();
+  const bodySignal = /\b(?:multi_agent_v1\.spawn_agent|spawn_agent|subagent|sub-agent|child agent|delegated worker|agentid|agent_id|parentagentid|resultref|result_ref|resultsummary|transcriptref|transcript_ref|artifact:subagent|subagent:|agent-transcript:)\b/.test(body);
+  const lifecycleSignal = /\b(?:multi_agent_v1\.spawn_agent|spawn_agent|agentid|agent_id|parentagentid|parent_agent_id|resultref|result_ref|resultsummary|result_summary|transcriptref|transcript_ref|status\s*[:：=])\b/.test(body);
+  const explicitLifecycleField = /(?:^|\n)\s*(?:[-*+]\s*)?(?:status|summary|result\s*summary|resultSummary|result\s*ref|resultRef|result_ref|refs?|transcript\s*ref|transcriptRef|transcript_ref|agentId|agent_id|parentAgentId|parent_agent_id)\s*[:：=]/i.test(section.body);
+  if (/\b(?:sub[- ]?agent|child agent|delegated worker)\b/i.test(section.heading)) return bodySignal || explicitLifecycleField;
+  if (/^(?:worker|explorer|review|reviewer|verifier|shell)(?:\b|[:：-])/i.test(section.heading)) return bodySignal;
+  return bodySignal && lifecycleSignal && explicitLifecycleField;
+}
+
+function isSubagentAggregateContainerHeading(heading: string) {
+  return /^(?:sub[- ]?agents?|child agents?|delegated workers?|workers?)\s+(?:results?|summar(?:y|ies)|outcomes?|notes?)$/i.test(heading.trim());
+}
+
+function subagentSectionTitle(section: MarkdownSection) {
+  const fromHeading = sanitizeSubagentAggregateText(
+    section.heading
+      .replace(/^(?:sub[- ]?agent|child agent|delegated worker|worker|agent)\s*[:：-]\s*/i, '')
+      .replace(/\s+(?:result|summary|outcome|note)s?$/i, ''),
+    72,
+  );
+  if (fromHeading) return fromHeading;
+  const agentId = section.body.match(/\b(?:agentId|agent_id)\s*[:=]\s*["']?([A-Za-z0-9_.:-]{3,})/i)?.[1];
+  return sanitizeSubagentAggregateText(agentId, 72) ?? 'Sub-agent';
+}
+
+function subagentSectionStatus(body: string) {
+  const explicit = body.match(/\bstatus\s*[:：=]\s*["']?([A-Za-z][A-Za-z0-9_-]{2,32})/i)?.[1];
+  const normalized = normalizeSubagentStatus(explicit);
+  if (normalized) return normalized;
+  if (/\b(?:failed|failure|error)\b/i.test(body)) return 'failed';
+  if (/\bblocked\b/i.test(body)) return 'blocked';
+  if (/\bcancell?ed\b/i.test(body)) return 'cancelled';
+  if (/\b(?:background-running|background_running|running in background)\b/i.test(body)) return 'background-running';
+  if (/\bresum(?:ed|ing|e)\b/i.test(body)) return 'resumed';
+  if (/\b(?:completed|done|succeeded|success)\b/i.test(body)) return 'completed';
+  if (/\brunning\b/i.test(body)) return 'running';
+  return 'unknown';
+}
+
+function normalizeSubagentStatus(value: string | undefined) {
+  const status = value?.trim().toLowerCase().replace(/[_\s]+/g, '-');
+  if (!status) return undefined;
+  if (status === 'done' || status === 'success' || status === 'succeeded') return 'completed';
+  if (status === 'error' || status === 'failure') return 'failed';
+  if (status === 'canceled') return 'cancelled';
+  if (status === 'background' || status === 'running-background' || status === 'running-in-background') return 'background-running';
+  if (/^(?:completed|failed|blocked|cancelled|running|background-running|resumed)$/.test(status)) return status;
+  return status.slice(0, 32);
+}
+
+function subagentSectionSummary(body: string) {
+  const lines = body.split('\n');
+  for (const line of lines) {
+    const trimmed = stripMarkdownListMarker(line.trim());
+    if (/^request\s+summary\s*[:：]/i.test(trimmed)) continue;
+    const match = trimmed.match(/^(?:result\s+summary|resultSummary|summary|outcome|finding|conclusion)\s*[:：=]\s*(.+)$/i);
+    const summary = sanitizeSubagentAggregateText(match?.[1], 220);
+    if (summary) return summary;
+  }
+  for (const line of lines) {
+    const candidate = stripMarkdownListMarker(line.trim());
+    if (!candidate || /^```/.test(candidate)) continue;
+    if (/^(?:status|refs?|result\s*refs?|resultRef|result_ref|transcript|transcriptRef|raw|request\s+summary)\s*[:：=]/i.test(candidate)) continue;
+    const summary = sanitizeSubagentAggregateText(candidate, 220);
+    if (summary) return summary;
+  }
+  return undefined;
+}
+
+function stripMarkdownListMarker(value: string) {
+  return value.replace(/^(?:[-*+]|\d+[.)])\s+/, '').trim();
+}
+
+function collectPublicSubagentRefs(text: string) {
+  const refs: string[] = [];
+  const pattern = /\b(?:artifact|subagent|agent-transcript|transcript|file|verification|claim|view|dataset|table|figure|image|notebook|diff)::?[A-Za-z0-9][A-Za-z0-9._:/#-]*/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const ref = match[0].replace(/[),.;]+$/, '');
+    if (isPublicSubagentAggregateRef(ref)) refs.push(ref);
+  }
+  return uniqueStrings(refs).slice(0, 6);
+}
+
+function isPublicSubagentAggregateRef(ref: string) {
+  if (ref.length > 160) return false;
+  if (/https?:\/\/|(?:^|:)data:|(?:^|:)\/|(?:^|:)[A-Za-z]:\\|(?:^|:)(?:\.\.|~)(?:\/|$)/i.test(ref)) return false;
+  if (/(?:^|[_.:/-])(?:raw|stdout|stderr|provider|private|secret|token|api[-_]?key|authorization|credential|password|\.sciforge)(?:$|[_.:/-])/i.test(ref)) return false;
+  return /^[A-Za-z][A-Za-z0-9-]*:{1,2}[A-Za-z0-9][A-Za-z0-9._:/#-]*$/.test(ref);
+}
+
+function sanitizeSubagentAggregateText(value: string | undefined, max: number) {
+  let text = (value ?? '').replace(/\s+/g, ' ').trim();
+  if (!text) return undefined;
+  if (looksLikePrivateSubagentAggregateText(text)) return undefined;
+  text = text
+    .replace(/\b(?:stdout|stderr|trace|raw|runtimeEvents?|diagnostics?)Ref\s*=?\s*["']?[^"',;\s]+["']?/gi, '')
+    .replace(/https?:\/\/[^\s"',;]+/gi, 'configured service')
+    .replace(/\bsk-[A-Za-z0-9._-]+\b/g, '[redacted]')
+    .replace(/(?:^|\s)\/(?:Applications|Users|Volumes|private|var|tmp)\/[^\s"',;]+/g, ' project context')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .trim();
+  if (!text || looksLikePrivateSubagentAggregateText(text)) return undefined;
+  return text.length > max ? `${text.slice(0, max - 3).trim()}...` : text;
+}
+
+function looksLikePrivateSubagentAggregateText(value: string) {
+  return /\b(?:provider(?:url)?|api[-_ ]?key|token|secret|password|credential|authorization)\b/i.test(value)
+    || /\b(?:stdout|stderr|raw\s+(?:json|jsonl|payload|transcript)|commandExecution|transcriptRef|stdoutRef|stderrRef|rawRef)\b/i.test(value)
+    || /https?:\/\/|(?:\/Users|\/Applications|\/Volumes|\/private|\/var\/folders|\/tmp)\//i.test(value)
+    || /\bsk-[A-Za-z0-9._-]+/i.test(value);
+}
+
+function subagentSectionAuditNote(section: MarkdownSection, input: { title: string; refs: string[] }) {
+  if (!/(?:raw transcript|```|commandExecution|stdoutRef|stderrRef|traceRef|rawRef|provider|token|secret|\/Users|\/Applications|\.sciforge)/i.test(section.text)) return undefined;
+  return [
+    `${input.title}: raw sub-agent transcript and private diagnostics were omitted from the final answer.`,
+    input.refs.length ? `Public refs: ${input.refs.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+function subagentAggregateMarkdown(subagents: SubagentResultSection[]) {
+  const table = [
+    '| Task | Status | Summary | Refs |',
+    '| --- | --- | --- | --- |',
+    ...subagents.map((section) => [
+      section.title,
+      section.status,
+      section.summary,
+      section.refs.join(', ') || 'none',
+    ].map(markdownTableCell).join(' | ')).map((row) => `| ${row} |`),
+  ].join('\n');
+  const notes = subagents.map((section) => [
+    `### ${section.title}`,
+    `- Status: ${section.status}`,
+    `- Summary: ${section.summary}`,
+    section.refs.length ? `- Refs: ${section.refs.join(', ')}` : '',
+  ].filter(Boolean).join('\n')).join('\n\n');
+  return [
+    '## Sub-agent results',
+    table,
+    '## Sub-agent notes',
+    notes,
+  ].join('\n\n');
+}
+
+function markdownTableCell(value: string) {
+  return value.replace(/\|/g, '\\|').replace(/\n+/g, ' ').trim();
+}
+
+function normalizeFinalPrimaryContent(content: string) {
+  return normalizeAssistantProseForDisplay(content)
+    .replace(/^##\s+sub-agent results$/gmi, '## Sub-agent results')
+    .replace(/^##\s+sub-agent notes$/gmi, '## Sub-agent notes');
 }
 
 function normalizeFinalMessageMarkdownInput(content: string) {

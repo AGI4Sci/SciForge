@@ -225,14 +225,17 @@ try {
   assert.equal(aliasedManifestPayload?.reasoningTrace, 'queried arXiv API\nprovider returned HTTP 500');
   assert.equal((aliasedManifestPayload?.artifacts.find((artifact) => artifact.id === 'research-report')?.data as { markdown?: string } | undefined)?.markdown, '# Error');
 
-  const malformedPayload = coerceWorkspaceTaskPayload({
+  const looseStructuredAnswerPayload = coerceWorkspaceTaskPayload({
     message: '搜索到 2 条结果。',
     claims: [],
     uiManifest: { type: 'list', items: [{ title: 'Result A', url: 'https://example.test/a' }, { title: 'Result B' }] },
     executionUnits: [{ id: 'search', status: 'done' }],
     artifacts: [],
   });
-  assert.equal(malformedPayload, undefined);
+  assert.ok(looseStructuredAnswerPayload);
+  assert.equal(looseStructuredAnswerPayload.uiManifest[0]?.componentId, 'list');
+  assert.equal(looseStructuredAnswerPayload.artifacts[0]?.id, 'research-report');
+  assert.equal(looseStructuredAnswerPayload.executionUnits[0]?.status, 'done');
 
   const generation = parseGenerationResponse({
     taskFiles: [{ path: '.sciforge/tasks/task.py', content: 'print(1)' }],

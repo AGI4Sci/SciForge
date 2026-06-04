@@ -1,4 +1,4 @@
-import { Bot, ChevronDown, ChevronRight, ChevronUp, CircleStop, FileUp, Folder, Image, Mic, Plus, Quote, Send, ShieldCheck, Sparkles, Wrench } from 'lucide-react';
+import { Bot, ChevronDown, ChevronRight, ChevronUp, CircleStop, FileUp, Folder, Image, Mic, Plus, Quote, Send, ShieldCheck, Sparkles, Wrench, X } from 'lucide-react';
 import { ActionButton } from '../uiPrimitives';
 import { useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import type { SciForgeConfig, SciForgeReference } from '../../domain';
@@ -7,12 +7,14 @@ import {
   applyComposerToolDirective,
   buildComposerCapabilityMenu,
   buildComposerToolMenu,
+  composerModeSelectionIntentForToolItem,
   composerModelSelectionIntents,
   filterComposerCapabilityMenuItems,
   filterComposerToolMenuItems,
   publicComposerModel,
   type ComposerAgentHostCatalogItem,
   type ComposerCapabilityMenuItem,
+  type ComposerModeSelectionIntent,
   type ComposerModelSelectionIntent,
   type ComposerToolMenuItem,
 } from './composerToolMenu';
@@ -41,8 +43,11 @@ export function ChatComposer({
   onSend,
   onAbort,
   onModelIntentSelect,
+  onModeIntentSelect,
+  onClearModeIntent,
   onBeginResize,
   copy,
+  selectedModeIntent,
   disabled = false,
   showReferencePicker = true,
   showFileUpload = true,
@@ -77,7 +82,10 @@ export function ChatComposer({
   onSend: () => void;
   onAbort: () => void;
   onModelIntentSelect?: (intent: ComposerModelSelectionIntent) => void;
+  onModeIntentSelect?: (intent: ComposerModeSelectionIntent) => void;
+  onClearModeIntent?: () => void;
   onBeginResize: (event: React.MouseEvent<HTMLDivElement>) => void;
+  selectedModeIntent?: ComposerModeSelectionIntent | null;
   copy?: {
     collapsedText?: string;
     referenceHint?: string;
@@ -97,6 +105,9 @@ export function ChatComposer({
   const referenceHint = copy?.referenceHint ?? t({ 'zh-CN': '选择可见对象作为上下文', 'en-US': 'Select visible objects as context' });
   const placeholder = copy?.placeholder ?? t({ 'zh-CN': '提问，或附加上下文...', 'en-US': 'Ask a question, or attach context...' });
   const sendingPlaceholder = copy?.sendingPlaceholder ?? t({ 'zh-CN': '当前任务运行中，追加指令会排队...', 'en-US': 'Additional guidance will queue while this runs...' });
+  const activePlaceholder = selectedModeIntent?.id === 'multitask' && !input.trim()
+    ? t({ 'zh-CN': '协调并行任务...', 'en-US': 'Coordinate parallel tasks...' })
+    : placeholder;
   const sendLabel = copy?.sendLabel ?? t({ 'zh-CN': '发送', 'en-US': 'Send' });
   const sendingLabel = copy?.sendingLabel ?? t({ 'zh-CN': '排队', 'en-US': 'Queue' });
   const toolMenu = buildComposerToolMenu(locale);
@@ -125,7 +136,7 @@ export function ChatComposer({
   }
 
   return (
-    <div className="composer" aria-expanded={true}>
+    <div className="composer" aria-expanded={true} data-selected-mode={selectedModeIntent?.id}>
       {showCollapseButton ? (
         <button
           type="button"
@@ -153,18 +164,26 @@ export function ChatComposer({
                 value={addMenuQuery}
                 onChange={(event) => setAddMenuQuery(event.currentTarget.value)}
               />
-              {visibleToolMenu.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  data-composer-tool={item.id}
-                  onClick={() => handleToolMenuItem(item)}
-                >
-                  <ComposerToolIcon item={item} />
-                  <span>{item.label}</span>
-                  {(item.id === 'models' || item.id === 'skills' || item.id === 'mcp-servers') ? <ChevronRight size={13} aria-hidden /> : null}
-                </button>
-              ))}
+              {visibleToolMenu.map((item) => {
+                const modeIntent = composerModeSelectionIntentForToolItem(item, locale);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={modeIntent ? 'composer-mode-chip' : undefined}
+                    data-composer-tool={item.id}
+                    data-mode-option={modeIntent?.id}
+                    data-mode-intent={modeIntent?.id}
+                    data-mode-selected={modeIntent && selectedModeIntent?.id === modeIntent.id ? 'true' : undefined}
+                    aria-pressed={modeIntent ? selectedModeIntent?.id === modeIntent.id : undefined}
+                    onClick={() => handleToolMenuItem(item)}
+                  >
+                    <ComposerToolIcon item={item} />
+                    <span>{item.label}</span>
+                    {(item.id === 'models' || item.id === 'skills' || item.id === 'mcp-servers') ? <ChevronRight size={13} aria-hidden /> : null}
+                  </button>
+                );
+              })}
               {visibleSkills.length ? (
                 <div className="composer-add-menu-section" aria-label={t({ 'zh-CN': '技能', 'en-US': 'Skills' })}>
                   <small>{t({ 'zh-CN': 'Skills', 'en-US': 'Skills' })}</small>
@@ -235,6 +254,28 @@ export function ChatComposer({
           </span>
         </div>
       ) : null}
+      {selectedModeIntent ? (
+        <div className="composer-selected-mode-row">
+          <button
+            type="button"
+            className="composer-mode-chip selected"
+            data-selected-mode={selectedModeIntent.id}
+            onClick={onClearModeIntent}
+            aria-label={t({
+              'zh-CN': `移除 ${selectedModeIntent.label} 模式`,
+              'en-US': `Remove ${selectedModeIntent.label} mode`,
+            })}
+            title={t({
+              'zh-CN': `移除 ${selectedModeIntent.label} 模式`,
+              'en-US': `Remove ${selectedModeIntent.label} mode`,
+            })}
+          >
+            <Sparkles size={13} aria-hidden />
+            <span>{selectedModeIntent.label}</span>
+            <X size={12} aria-hidden />
+          </button>
+        </div>
+      ) : null}
       <textarea
         ref={textareaRef}
         value={input}
@@ -244,7 +285,7 @@ export function ChatComposer({
           event.preventDefault();
           onSend();
         }}
-        placeholder={isSending ? sendingPlaceholder : placeholder}
+        placeholder={isSending ? sendingPlaceholder : activePlaceholder}
         disabled={disabled}
         rows={1}
         style={{ height: `${composerHeight}px` }}
@@ -310,6 +351,11 @@ export function ChatComposer({
     }
     if (item.id === 'models') {
       modelMenuRef.current?.setAttribute('open', '');
+      return;
+    }
+    const modeIntent = composerModeSelectionIntentForToolItem(item, locale);
+    if (modeIntent) {
+      onModeIntentSelect?.(modeIntent);
       return;
     }
     onInputChange(applyComposerToolDirective(input, item));

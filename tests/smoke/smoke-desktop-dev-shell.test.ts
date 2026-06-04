@@ -73,6 +73,9 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
     assert.equal(process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61337');
   }
   assert.equal(electron.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
+  assert.equal(electron.env.SCIFORGE_DESKTOP_APP_ROOT, process.cwd());
+  assert.equal(electron.env.SCIFORGE_DESKTOP_WORKSPACE_PATH, join(root, 'workspace'));
+  assert.equal(electron.env.SCIFORGE_WORKSPACE_PATH, join(root, 'workspace'));
   assert.equal(electron.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61337');
   assert.equal(workspace.env.SCIFORGE_WORKSPACE_PORT, '5174');
   assert.equal(runtimeCodex.env.SCIFORGE_RUNTIME_CODEX_HOST, '127.0.0.1');
@@ -119,6 +122,8 @@ test('P1-DESK dev shell controller starts planned processes through injected spa
   ]);
   assert.deepEqual(spawned.map((process) => process.command), ['npm', 'npm', 'npm', 'npm', 'npx']);
   assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
+  assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_APP_ROOT, process.cwd());
+  assert.equal(spawned[4]?.env.SCIFORGE_DESKTOP_WORKSPACE_PATH, join(root, 'workspace'));
   assert.equal(spawned[1]?.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61338');
   assert.equal(children.every((child) => child.killed), true);
 });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 import {
+  computerUseFocusLeaseProjectionForAction,
   computerUseStaleEvidenceInvalidationForAction,
   leaseScopesConflict,
   scheduleComputerUseActionProposals,
@@ -10,7 +11,7 @@ import {
 import type { ComputerUseLeaseScope, ComputerUseObserveBeforeMutateEvidence, GenericVisionAction, ResolvedWindowTarget } from './types.js';
 
 test('scheduler orders actor proposals deterministically and serializes window-local lease conflicts', () => {
-  const target = resolvedWindowTarget();
+  const target = bestEffortWindowTarget();
   const queue = scheduleComputerUseActionProposals([
     {
       id: 'proposal-b',
@@ -218,7 +219,7 @@ test('lease conflict rules distinguish screen-global and window-local scopes', (
 });
 
 test('scheduler defaults native executor leases to same-screen serial while allowing cross-screen lanes', () => {
-  const windowA = resolvedWindowTarget();
+  const windowA = bestEffortWindowTarget();
   const windowB: ResolvedWindowTarget = {
     ...windowA,
     windowId: 202,
@@ -294,6 +295,113 @@ test('scheduler defaults native executor leases to same-screen serial while allo
   assert.equal(parallelQueue.entries.find((entry) => entry.proposalId === 'window-b-click')?.status, 'ready');
 });
 
+test('scheduler projects focused system input onto a global focus lane while non-focus adapters stay parallel', () => {
+  const focusedA = resolvedWindowTarget();
+  const focusedB: ResolvedWindowTarget = {
+    ...focusedA,
+    displayGroupId: 'display-group-sidecar',
+    screenId: 'screen-sidecar',
+    displayId: 2,
+    windowId: 202,
+    virtualWindowId: 'window-202',
+    schedulerLockId: 'remote-session-202',
+    target: {
+      ...focusedA.target,
+      displayGroupId: 'display-group-sidecar',
+      screenId: 'screen-sidecar',
+      windowId: 202,
+      virtualWindowId: 'window-202',
+    },
+  };
+  const nonFocusAdapter: ResolvedWindowTarget = {
+    ...focusedA,
+    inputIsolation: 'best-effort',
+    windowId: 303,
+    virtualWindowId: 'window-303',
+    schedulerLockId: 'browser-adapter-303',
+    target: {
+      ...focusedA.target,
+      inputIsolation: 'best-effort',
+      windowId: 303,
+      virtualWindowId: 'window-303',
+    },
+  };
+
+  const queue = scheduleComputerUseActionProposals([
+    {
+      id: 'focused-a',
+      action: { type: 'click', x: 10, y: 10, observeBeforeMutate: observeEvidence(), actorId: 'actor-a', cursorId: 'cursor-a' },
+      targetResolution: focusedA,
+      sequence: 1,
+    },
+    {
+      id: 'focused-b',
+      action: {
+        type: 'type_text',
+        text: 'must wait for global focus',
+        observeBeforeMutate: observeEvidence({
+          displayGroupId: 'display-group-sidecar',
+          screenId: 'screen-sidecar',
+          windowId: 'window-202',
+        }),
+        actorId: 'actor-b',
+        cursorId: 'cursor-b',
+      },
+      targetResolution: focusedB,
+      sequence: 2,
+    },
+    {
+      id: 'non-focus-adapter',
+      action: {
+        type: 'click',
+        x: 30,
+        y: 30,
+        observeBeforeMutate: observeEvidence({ windowId: 'window-303' }),
+        actorId: 'actor-c',
+        cursorId: 'cursor-c',
+      },
+      targetResolution: nonFocusAdapter,
+      sequence: 3,
+    },
+  ], {
+    now: '2026-05-31T10:00:01.000Z',
+    executorLeaseConflictPolicy: 'window-local-parallel',
+  });
+
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'focused-a')?.status, 'ready');
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'focused-a')?.focusLeaseProjection?.lane, 'global-focus');
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'focused-a')?.focusLeaseProjection?.lockId, 'cu-focus-lease-global');
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'focused-b')?.status, 'queued');
+  assert.match(queue.entries.find((entry) => entry.proposalId === 'focused-b')?.reason ?? '', /waiting-for-focus-lease/);
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'non-focus-adapter')?.status, 'ready');
+  assert.equal(queue.entries.find((entry) => entry.proposalId === 'non-focus-adapter')?.focusLeaseProjection?.lane, 'adapter-local');
+});
+
+test('scheduler focus lease projection keeps legacy lease scope and classifies target isolation generically', () => {
+  const focused = resolvedWindowTarget();
+  const scoped = validateComputerUseScopedAction({
+    action: { type: 'press_key', key: 'Enter', observeBeforeMutate: observeEvidence() },
+    targetResolution: focused,
+    now: '2026-05-31T10:00:01.000Z',
+  });
+  assert.equal(scoped.ok, true);
+  assert.equal(scoped.ok ? scoped.leaseScope.kind : undefined, 'window-local');
+  assert.equal(scoped.ok ? scoped.focusLeaseProjection.lane : undefined, 'global-focus');
+  assert.equal(scoped.ok ? scoped.focusLeaseProjection.leaseScope.kind : undefined, 'window-local');
+
+  const bestEffort: ResolvedWindowTarget = {
+    ...focused,
+    inputIsolation: 'best-effort',
+    target: { ...focused.target, inputIsolation: 'best-effort' },
+  };
+  const projection = computerUseFocusLeaseProjectionForAction({
+    action: { type: 'press_key', key: 'Enter' },
+    targetResolution: bestEffort,
+  });
+  assert.equal(projection.lane, 'adapter-local');
+  assert.equal(projection.requiresGlobalFocus, false);
+});
+
 test('scheduler returns needs-observation when mutating action lacks current refs', () => {
   const target = resolvedWindowTarget();
   const decision = validateComputerUseScopedAction({
@@ -313,6 +421,33 @@ test('scheduler returns needs-observation when mutating action lacks current ref
   assert.match(decision.reason, /appStateRef/);
   assert.equal(decision.schedulerDecisionRefs?.mutatingActionExecuted, false);
   assert.match(decision.schedulerDecisionRefs?.blockedManifestRef ?? '', /scheduler-blocked-manifest/);
+});
+
+test('scheduler requires current observation evidence before open_app mutations', () => {
+  const target = resolvedWindowTarget();
+  const missingEvidence = validateComputerUseScopedAction({
+    action: { type: 'open_app', appName: 'Browser' },
+    targetResolution: target,
+    now: '2026-05-31T10:00:00.000Z',
+  });
+
+  assert.equal(missingEvidence.ok, false);
+  assert.equal(missingEvidence.status, 'needs-observation');
+  assert.match(missingEvidence.reason, /mutating Computer Use action requires current/);
+
+  const ready = validateComputerUseScopedAction({
+    action: {
+      type: 'open_app',
+      appName: 'Browser',
+      observeBeforeMutate: observeEvidence(),
+    },
+    targetResolution: target,
+    now: '2026-05-31T10:00:00.000Z',
+  });
+
+  assert.equal(ready.ok, true);
+  assert.equal(ready.ok ? ready.leaseScope.kind : undefined, 'screen-global');
+  assert.equal(ready.ok ? ready.staleEvidenceInvalidation?.invalidatesVisibleState : undefined, true);
 });
 
 test('scheduler blocks observe-before-mutate scope mismatches and stale freshness checks', () => {
@@ -353,6 +488,73 @@ test('scheduler blocks observe-before-mutate scope mismatches and stale freshnes
   assert.equal(stale.ok, false);
   assert.equal(stale.status, 'needs-observation');
   assert.match(stale.reason, /invalidated/);
+});
+
+test('scheduler rejects freshness evidence with missing observation or check timestamps', () => {
+  const target = resolvedWindowTarget();
+  const missingObservationTimestamp = observeEvidence();
+  delete missingObservationTimestamp.observedAt;
+  delete missingObservationTimestamp.capturedAt;
+  if (missingObservationTimestamp.freshnessCheck) {
+    delete missingObservationTimestamp.freshnessCheck.observedAt;
+  }
+  const noObservationTime = validateComputerUseScopedAction({
+    action: {
+      type: 'click',
+      targetDescription: 'Search field',
+      observeBeforeMutate: missingObservationTimestamp,
+    },
+    targetResolution: target,
+    now: '2026-05-31T10:00:01.000Z',
+  });
+
+  assert.equal(noObservationTime.ok, false);
+  assert.equal(noObservationTime.status, 'needs-observation');
+  assert.match(noObservationTime.reason, /observation timestamp is missing or invalid/);
+
+  const missingFreshnessCheckTimestamp = observeEvidence();
+  delete missingFreshnessCheckTimestamp.freshnessCheckedAt;
+  if (missingFreshnessCheckTimestamp.freshnessCheck) {
+    delete missingFreshnessCheckTimestamp.freshnessCheck.checkedAt;
+  }
+  const noFreshnessCheckTime = validateComputerUseScopedAction({
+    action: {
+      type: 'scroll',
+      direction: 'down',
+      observeBeforeMutate: missingFreshnessCheckTimestamp,
+    },
+    targetResolution: target,
+    now: '2026-05-31T10:00:01.000Z',
+  });
+
+  assert.equal(noFreshnessCheckTime.ok, false);
+  assert.equal(noFreshnessCheckTime.status, 'needs-observation');
+  assert.match(noFreshnessCheckTime.reason, /freshness check timestamp is missing or invalid/);
+});
+
+test('scheduler keeps observe-before-mutate enforcement for non-matching stop signals', () => {
+  const target = resolvedWindowTarget();
+  const queue = scheduleComputerUseActionProposals([
+    {
+      id: 'needs-observe',
+      action: { type: 'click', targetDescription: 'Needs a fresh observation first' },
+      targetResolution: target,
+      submittedAt: '2026-05-31T10:00:00.000Z',
+    },
+  ], {
+    now: '2026-05-31T10:00:01.000Z',
+    stopSignal: {
+      aborted: true,
+      reason: 'user stopped a different proposal',
+      proposalIds: ['other-proposal'],
+      screenId: 'screen-main',
+      displayGroupId: 'display-group-main',
+    },
+  });
+
+  assert.equal(queue.entries[0]?.status, 'needs-observation');
+  assert.match(queue.entries[0]?.reason ?? '', /requires current appStateRef/);
+  assert.equal(queue.entries[0]?.executorEventRef, undefined);
 });
 
 test('scheduler stop signal cancels lease and blocks following same-screen proposals without executor mutation', () => {
@@ -421,6 +623,18 @@ function resolvedWindowTarget(): ResolvedWindowTarget {
     schedulerLockId: 'remote-session-101',
     source: 'config',
     diagnostics: [],
+  };
+}
+
+function bestEffortWindowTarget(): ResolvedWindowTarget {
+  const target = resolvedWindowTarget();
+  return {
+    ...target,
+    inputIsolation: 'best-effort',
+    target: {
+      ...target.target,
+      inputIsolation: 'best-effort',
+    },
   };
 }
 

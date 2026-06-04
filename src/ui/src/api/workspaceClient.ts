@@ -499,6 +499,7 @@ export interface BrowserHostSessionState {
   lastActionTiming?: BrowserHostSessionActionTiming;
   actionTimingSummary?: BrowserHostSessionActionTimingSummary[];
   diagnostics: string[];
+  reason?: string;
 }
 
 export interface BrowserHostSessionActionTiming {

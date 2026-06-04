@@ -210,7 +210,7 @@ export async function attachVirtualAppScreenSession(
       command,
     );
   }
-  const result = await executor.attach(command);
+  const result = normalizeNativeHostEvidenceRefs(await executor.attach(command));
   return withPermissionLedgerResult(
     attachProviderSessionOwnerRefs(command, validateVirtualAppScreenSessionManagerResult(command, result)),
     permissionRecheckLedger,
@@ -569,6 +569,34 @@ export function validateVirtualAppScreenSessionManagerResult(
     );
   }
   return failClosedResult(command, result);
+}
+
+function normalizeNativeHostEvidenceRefs(
+  result: VirtualAppScreenSessionManagerAttachResult,
+): VirtualAppScreenSessionManagerAttachResult {
+  const hostEvidenceLedgerRef = result.refs.hostEvidenceLedgerRef
+    ?? (isNativeHostProductRef(result.refs.evidenceLedgerRef) ? result.refs.evidenceLedgerRef : undefined);
+  const replayRefs = [
+    hostEvidenceLedgerRef,
+    result.refs.evidenceLedgerRef,
+    result.refs.currentRunPointerRef,
+    result.refs.currentFrameRef,
+    result.refs.liveBindingAttachGrantRef,
+    result.refs.grantValidationRef,
+    ...(result.refs.minimalEvidenceReplayRefs ?? []),
+  ].filter(isNativeHostProductRef);
+  if (!hostEvidenceLedgerRef && replayRefs.length === 0) return result;
+  return {
+    ...result,
+    refs: {
+      ...result.refs,
+      hostEvidenceLedgerRef: hostEvidenceLedgerRef ?? result.refs.hostEvidenceLedgerRef,
+    },
+    evidence: {
+      ...result.evidence,
+      evidenceRefs: uniqueRefs([...result.evidence.evidenceRefs, ...replayRefs]),
+    },
+  };
 }
 
 export function virtualAppScreenSessionManagerResultToVirtualScreenData(

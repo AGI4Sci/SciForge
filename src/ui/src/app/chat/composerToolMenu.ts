@@ -45,6 +45,13 @@ export interface ComposerModelSelectionIntent {
   capabilityTier: 'auto' | 'max' | 'fast' | 'balanced' | 'deep';
 }
 
+export type ComposerModeIntentId = 'plan' | 'debug' | 'multitask' | 'ask';
+
+export interface ComposerModeSelectionIntent {
+  id: ComposerModeIntentId;
+  label: string;
+}
+
 export type ComposerCapabilityKind = 'domain-skill' | 'pipeline-skill' | 'tool-skill' | 'app-skill' | 'mcp-server' | 'connector';
 
 export interface ComposerAgentHostCatalogItem {
@@ -79,10 +86,10 @@ export interface ComposerCapabilityMenu {
 
 export function buildComposerToolMenu(locale?: SupportedLocale): ComposerToolMenuItem[] {
   return [
-    { id: 'plan', label: chatText(locale, { 'zh-CN': 'Plan', 'en-US': 'Plan' }), commandPrefix: '/plan ', group: 'agent' },
-    { id: 'debug', label: chatText(locale, { 'zh-CN': 'Debug', 'en-US': 'Debug' }), commandPrefix: '/debug ', group: 'agent' },
-    { id: 'multitask', label: chatText(locale, { 'zh-CN': 'Multitask', 'en-US': 'Multitask' }), commandPrefix: '/multitask ', group: 'agent' },
-    { id: 'ask', label: chatText(locale, { 'zh-CN': 'Ask', 'en-US': 'Ask' }), commandPrefix: '/ask ', group: 'agent' },
+    { id: 'plan', label: chatText(locale, { 'zh-CN': 'Plan', 'en-US': 'Plan' }), group: 'agent' },
+    { id: 'debug', label: chatText(locale, { 'zh-CN': 'Debug', 'en-US': 'Debug' }), group: 'agent' },
+    { id: 'multitask', label: chatText(locale, { 'zh-CN': 'Multitask', 'en-US': 'Multitask' }), group: 'agent' },
+    { id: 'ask', label: chatText(locale, { 'zh-CN': 'Ask', 'en-US': 'Ask' }), group: 'agent' },
     { id: 'image', label: chatText(locale, { 'zh-CN': 'Image', 'en-US': 'Image' }), group: 'context' },
     { id: 'models', label: chatText(locale, { 'zh-CN': 'Models', 'en-US': 'Models' }), group: 'context' },
     { id: 'skills', label: chatText(locale, { 'zh-CN': 'Skills', 'en-US': 'Skills' }), commandPrefix: '/skills ', group: 'context' },
@@ -234,6 +241,19 @@ export function composerModelSelectionIntents(locale?: SupportedLocale): Compose
     modelIntent('assistant-balanced', assistantBalanced, 'balanced'),
     modelIntent('assistant-deep', assistantDeep, 'deep'),
   ];
+}
+
+export function composerModeSelectionIntents(locale?: SupportedLocale): ComposerModeSelectionIntent[] {
+  return [
+    { id: 'plan', label: chatText(locale, { 'zh-CN': 'Plan', 'en-US': 'Plan' }) },
+    { id: 'debug', label: chatText(locale, { 'zh-CN': 'Debug', 'en-US': 'Debug' }) },
+    { id: 'multitask', label: chatText(locale, { 'zh-CN': 'Multitask', 'en-US': 'Multitask' }) },
+    { id: 'ask', label: chatText(locale, { 'zh-CN': 'Ask', 'en-US': 'Ask' }) },
+  ];
+}
+
+export function composerModeSelectionIntentForToolItem(item: Pick<ComposerToolMenuItem, 'id'>, locale?: SupportedLocale): ComposerModeSelectionIntent | undefined {
+  return composerModeSelectionIntents(locale).find((intent) => intent.id === item.id);
 }
 
 function modelIntent(id: ComposerModelIntentId, model: ComposerPublicModel | undefined, tier: ComposerModelSelectionIntent['capabilityTier']): ComposerModelSelectionIntent {

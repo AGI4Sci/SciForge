@@ -214,6 +214,7 @@ export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneCon
       'image-evidence:',
       'screenshot:',
       'annotation:',
+      'crop:',
       'browser-evidence:',
       'window-capture:',
       'screen-region:',
@@ -229,12 +230,12 @@ export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneCon
     requiredRefs: [{
       name: 'imageRef',
       description: 'Stable image evidence ref; binary image bytes, raw screenshots, and data URLs stay outside the thread payload.',
-      prefixes: ['image:', 'image-evidence:', 'screenshot:', 'annotation:', 'browser-evidence:', 'window-capture:', 'screen-region:', 'artifact-preview:', 'replay:', 'computer-use:frame', 'computer-use:frames', 'screen:', 'virtual-app-screen:'],
+      prefixes: ['image:', 'image-evidence:', 'screenshot:', 'annotation:', 'crop:', 'browser-evidence:', 'window-capture:', 'screen-region:', 'artifact-preview:', 'replay:', 'computer-use:frame', 'computer-use:frames', 'screen:', 'virtual-app-screen:'],
       requiredFor: ['ready', 'error', 'blocked'],
     }, {
       name: 'provenanceRef',
       description: 'Provenance ref describing source, time, dimensions, hash, and target for the image evidence.',
-      prefixes: ['provenance:', 'evidence:', 'browser-evidence:', 'annotation:', 'artifact:', 'replay:', 'computer-use:'],
+      prefixes: ['provenance:', 'evidence:', 'browser-evidence:', 'annotation:', 'crop:', 'artifact:', 'replay:', 'computer-use:'],
       requiredFor: ['ready', 'error', 'blocked'],
     }],
     redactionHints: [
@@ -339,7 +340,11 @@ export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneCon
       'citation:',
       'claim:',
       'workEvidence:',
+      'trace:',
       'subagent:',
+      'artifact:subagent-result-',
+      'artifact:subagent-transcript-',
+      'transcript:',
       'agent-result:',
       'agent-transcript:',
       'audit:',
@@ -359,10 +364,10 @@ export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneCon
       'https://',
       'scenario-package:',
     ],
-    states: paneStates('Evidence object'),
+    states: paneStates('References object'),
     allowedActions: ['focus-right-pane', 'inspect', 'open-external', 'copy-path', 'pin', 'compare'],
     requiredRefs: [{
-      name: 'evidenceRef',
+      name: 'referenceRef',
       description: 'Object ref used by the References pane to inspect focus target, provenance, and cited context.',
       prefixes: [
         'run:',
@@ -372,7 +377,11 @@ export const RESULT_PANE_CONTRACTS: Record<CanonicalResultPaneTab, ResultPaneCon
         'citation:',
         'claim:',
         'workEvidence:',
+        'trace:',
         'subagent:',
+        'artifact:subagent-result-',
+        'artifact:subagent-transcript-',
+        'transcript:',
         'agent-result:',
         'agent-transcript:',
         'audit:',
@@ -446,8 +455,10 @@ export function openResultPaneRouteForObjectReference(reference: unknown): Resul
 export function resolveResultPaneRoute(reference: unknown, options: { purpose?: ResultPaneRoutePurpose } = {}): ResultPaneRoute {
   const purpose = options.purpose ?? 'focus';
   const record = isRecord(reference) ? reference : undefined;
+  const rawStringRef = typeof reference === 'string' ? cleanInlineString(reference) : undefined;
   const objectKind = cleanInlineString(record?.kind);
   const objectRef = cleanInlineString(record?.ref);
+  const routeRef = objectRef ?? rawStringRef;
   const artifactType = cleanInlineString(record?.artifactType);
   const preferredView = cleanInlineString(record?.preferredView);
   const preferredRoute = paneForPreferredView(preferredView);
@@ -478,7 +489,7 @@ export function resolveResultPaneRoute(reference: unknown, options: { purpose?: 
       preferredView,
     };
   }
-  const refRoute = paneForRefPrefix(objectRef);
+  const refRoute = paneForRefPrefix(routeRef);
   if (refRoute) {
     return {
       pane: refRoute.pane,
@@ -487,7 +498,7 @@ export function resolveResultPaneRoute(reference: unknown, options: { purpose?: 
       composerInsertion: false,
       matched: refRoute.prefix,
       objectKind,
-      objectRef,
+      objectRef: routeRef,
       artifactType,
       preferredView,
     };
@@ -620,11 +631,13 @@ function paneForArtifactType(artifactType: string | undefined): { pane: ResultPa
 
 function paneForRefPrefix(ref: string | undefined): { pane: ResultPaneTab; prefix: string } | undefined {
   if (!ref) return undefined;
+  let best: { pane: ResultPaneTab; prefix: string } | undefined;
   for (const pane of RESULT_PANE_TABS) {
     const match = RESULT_PANE_CONTRACTS[pane].refPrefixes.find((prefix) => refStartsWithPrefix(ref, prefix));
-    if (match) return { pane, prefix: match };
+    if (!match) continue;
+    if (!best || match.length > best.prefix.length) best = { pane, prefix: match };
   }
-  return undefined;
+  return best;
 }
 
 function canonicalResultPaneTab(tab: ResultPaneTab): CanonicalResultPaneTab {

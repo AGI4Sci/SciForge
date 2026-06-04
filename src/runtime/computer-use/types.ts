@@ -1,6 +1,8 @@
 import type { ComputerUsePlannerContractIssue } from '../../../packages/actions/computer-use/runtime-policy.js';
 
 export type ComputerUseLeaseScopeKind = 'screen-global' | 'window-local';
+export type ComputerUseFocusLeaseLane = 'global-focus' | 'adapter-local';
+export type ComputerUseInputFocusClassification = 'focused-system-input' | 'non-focus-adapter';
 
 export type ComputerUseApprovalState = 'not-required' | 'needs-confirmation' | 'approved' | 'denied';
 
@@ -20,6 +22,22 @@ export interface ComputerUseLeaseScope {
   screenId: string;
   windowId?: string;
   reason?: string;
+}
+
+export interface ComputerUseFocusLeaseProjection {
+  schemaVersion: 'sciforge.computer-use.focus-lease-projection.v1';
+  lane: ComputerUseFocusLeaseLane;
+  inputClassification: ComputerUseInputFocusClassification;
+  requiresGlobalFocus: boolean;
+  lockId: string;
+  laneId: string;
+  leaseScope: ComputerUseLeaseScope;
+  displayGroupId: string;
+  screenId: string;
+  windowId?: string;
+  actorId?: string;
+  cursorId?: string;
+  reason: string;
 }
 
 export interface ComputerUseActorCursorProvenance {
@@ -297,6 +315,7 @@ export interface ComputerUseSchedulerActionProposal {
 export interface ComputerUseActiveLease {
   leaseId: string;
   scope: ComputerUseLeaseScope;
+  focusLeaseProjection?: ComputerUseFocusLeaseProjection;
   ownerId?: string;
   actorId?: string;
   cursorId?: string;
@@ -313,6 +332,7 @@ export interface ComputerUseSchedulerQueueEntry {
   sequence: number;
   provenance: ComputerUseActionProvenance;
   leaseScope?: ComputerUseLeaseScope;
+  focusLeaseProjection?: ComputerUseFocusLeaseProjection;
   leaseId?: string;
   executorEventRef?: string;
   staleEvidenceInvalidation?: ComputerUseVisibleEvidenceInvalidation;

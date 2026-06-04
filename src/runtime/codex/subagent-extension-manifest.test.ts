@@ -12,6 +12,7 @@ import {
   SUBAGENT_SPAWN_AGENT_TOOL_NAME,
 } from './subagent-extension-manifest.js';
 import { callSubagentMcpTool } from './subagent-mcp-tools.js';
+import { createReadOnlySubagentRunner } from './subagent-runner.js';
 
 test('Runtime sub-agent extension manifest exposes a local delegated-worker MCP tool', async () => {
   const workspace = await tempWorkspace();
@@ -20,6 +21,7 @@ test('Runtime sub-agent extension manifest exposes a local delegated-worker MCP 
     workspace,
     profile: 'sciforge-runtime-deepseek',
     sandbox: 'workspace-write',
+    approvalPolicy: 'on-request',
     codexHome: join(workspace, 'codex-home'),
     codexCommand: 'codex',
     parentCommandId: 'codex-command-test',
@@ -33,6 +35,7 @@ test('Runtime sub-agent extension manifest exposes a local delegated-worker MCP 
   assert.ok(injection.configArgs.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
   assert.ok(injection.configArgs.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
   assert.ok(injection.configArgs.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.transcriptRoot}="${transcriptRoot}"`));
+  assert.ok(injection.configArgs.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.SCIFORGE_SUBAGENT_APPROVAL_POLICY="on-request"`));
   assert.equal(JSON.stringify(manifest).includes('provider route'), false);
   assert.equal(JSON.stringify(manifest).includes('raw transcript'), false);
   assert.equal(JSON.stringify(manifest).includes(workspace), false);
@@ -100,15 +103,16 @@ test('Runtime sub-agent tool returns safe refs and bounded PROJECT TODO summary'
     parentCommandId: 'codex-command-parent',
     parentAttemptId: 'attempt-1',
     now: () => new Date('2026-05-30T00:00:00.000Z'),
+    runner: createReadOnlySubagentRunner(),
   });
 
   const content = result.structuredContent;
   assert.equal(content.ok, true);
   assert.match(content.agentId, /^explorer-[a-f0-9]{12}$/);
   assert.match(content.resultSummary, /sub-agent\/delegated-worker MCP tool surface/);
-  assert.match(content.transcriptRef, /^artifact:subagent-transcript-[a-f0-9]{12}$/);
-  assert.match(content.resultRef, /^artifact:subagent-result-[a-f0-9]{12}$/);
-  assert.deepEqual(content.refs.sort(), [content.resultRef, content.transcriptRef, 'file:PROJECT.md'].sort());
+  const transcriptRef = requirePublicSubagentRef(content.transcriptRef, /^artifact:subagent-transcript-[a-f0-9]{12}$/);
+  const resultRef = requirePublicSubagentRef(content.resultRef, /^artifact:subagent-result-[a-f0-9]{12}$/);
+  assert.deepEqual([...content.refs].sort(), [resultRef, transcriptRef, `subagent:${content.agentId}`, 'file:PROJECT.md'].sort());
   assert.doesNotMatch(JSON.stringify(result), /super-secret|Users|Applications|\.sciforge|raw-jsonl|stderr/i);
 
   const transcriptPath = join(transcriptRoot, `${content.agentId}.json`);
@@ -129,4 +133,10 @@ async function tempWorkspace() {
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-subagent-extension-'));
   await mkdir(dir, { recursive: true });
   return dir;
+}
+
+function requirePublicSubagentRef(value: string | undefined, pattern: RegExp): string {
+  if (typeof value !== 'string') assert.fail('Expected public sub-agent ref');
+  assert.match(value, pattern);
+  return value;
 }

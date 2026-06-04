@@ -93,6 +93,78 @@ export type ComputerUseHostAdapter = {
   dispatchHostPort: (call: ComputerUseHostPortCall) => Promise<unknown>;
 };
 
+export type ComputerUseWindowActionEvidenceSideEffectFlags = {
+  inputExecuted?: boolean;
+  sharedSystemInputUsed?: boolean;
+  systemPointerMoved?: boolean;
+  systemKeyboardEventsSent?: boolean;
+  rawPayloadWritten?: boolean;
+  inlineImageWritten?: boolean;
+  [flag: string]: boolean | undefined;
+};
+
+export type ComputerUseHostOutputEvidenceProjectionInput = {
+  currentObservation?: {
+    ref?: string;
+    observationRef?: string;
+    screenshotRef?: string;
+    evidenceRef?: string;
+    evidenceRefs?: readonly string[];
+  };
+  currentObservationRef?: string;
+  currentObservationEvidenceRefs?: readonly string[];
+  target?: {
+    targetRef?: string;
+    windowRef?: string;
+    targetWindowRef?: string;
+    screenRef?: string;
+  };
+  session?: {
+    sessionRef?: string;
+    windowActionSessionRef?: string;
+    scopedInputAdapterRef?: string;
+  };
+  executorEvent?: {
+    ref?: string;
+    executorEventRef?: string;
+    actionRef?: string;
+    sideEffectFlags?: ComputerUseWindowActionEvidenceSideEffectFlags;
+  };
+  executorEventRef?: string;
+  actionRef?: string;
+  beforeEvidenceRefs?: readonly string[];
+  afterEvidenceRefs?: readonly string[];
+  verificationRefs?: readonly string[];
+  artifactRefs?: readonly string[];
+  traceRefs?: readonly string[];
+  sideEffectFlags?: ComputerUseWindowActionEvidenceSideEffectFlags;
+};
+
+export type ComputerUseWindowActionEvidenceProjection = {
+  schemaVersion: 'sciforge.computer-use.window-action-evidence-projection.v1';
+  currentObservationRef?: string;
+  currentObservationEvidenceRefs: string[];
+  targetRefs: {
+    targetRef?: string;
+    windowRef?: string;
+    screenRef?: string;
+  };
+  sessionRefs: {
+    sessionRef?: string;
+    windowActionSessionRef?: string;
+    scopedInputAdapterRef?: string;
+  };
+  executorEventRef?: string;
+  actionRef?: string;
+  beforeEvidenceRefs: string[];
+  afterEvidenceRefs: string[];
+  verificationRefs: string[];
+  artifactRefs: string[];
+  traceRefs: string[];
+  sideEffectFlags: ComputerUseWindowActionEvidenceSideEffectFlags;
+  allEvidenceRefs: string[];
+};
+
 export type ComputerUseHostPortsContractInput = {
   owner: string;
   ports: {
@@ -121,6 +193,73 @@ export function createComputerUseHostAdapter(input: {
     actionProvider: computerUseActionProviderContractIds.actionProviderId,
     hostPorts: input.hostPorts,
     dispatchHostPort: (call) => Promise.resolve(input.dispatchHostPort(call)),
+  };
+}
+
+export function projectComputerUseHostOutputToWindowActionEvidenceRefs(
+  input: ComputerUseHostOutputEvidenceProjectionInput,
+): ComputerUseWindowActionEvidenceProjection {
+  const currentObservationRef = firstString(
+    input.currentObservationRef,
+    input.currentObservation?.observationRef,
+    input.currentObservation?.ref,
+    input.currentObservation?.evidenceRef,
+  );
+  const currentObservationEvidenceRefs = uniqueStrings([
+    currentObservationRef,
+    input.currentObservation?.observationRef,
+    input.currentObservation?.ref,
+    input.currentObservation?.evidenceRef,
+    input.currentObservation?.screenshotRef,
+    ...(input.currentObservation?.evidenceRefs ?? []),
+    ...(input.currentObservationEvidenceRefs ?? []),
+  ]);
+  const executorEventRef = firstString(
+    input.executorEventRef,
+    input.executorEvent?.executorEventRef,
+    input.executorEvent?.ref,
+  );
+  const actionRef = firstString(input.actionRef, input.executorEvent?.actionRef);
+  const beforeEvidenceRefs = uniqueStrings(input.beforeEvidenceRefs ?? []);
+  const afterEvidenceRefs = uniqueStrings(input.afterEvidenceRefs ?? []);
+  const verificationRefs = uniqueStrings(input.verificationRefs ?? []);
+  const artifactRefs = uniqueStrings(input.artifactRefs ?? []);
+  const traceRefs = uniqueStrings(input.traceRefs ?? []);
+
+  return {
+    schemaVersion: 'sciforge.computer-use.window-action-evidence-projection.v1',
+    currentObservationRef,
+    currentObservationEvidenceRefs,
+    targetRefs: definedStringFields({
+      targetRef: input.target?.targetRef,
+      windowRef: firstString(input.target?.windowRef, input.target?.targetWindowRef),
+      screenRef: input.target?.screenRef,
+    }),
+    sessionRefs: definedStringFields({
+      sessionRef: input.session?.sessionRef,
+      windowActionSessionRef: input.session?.windowActionSessionRef,
+      scopedInputAdapterRef: input.session?.scopedInputAdapterRef,
+    }),
+    executorEventRef,
+    actionRef,
+    beforeEvidenceRefs,
+    afterEvidenceRefs,
+    verificationRefs,
+    artifactRefs,
+    traceRefs,
+    sideEffectFlags: {
+      ...(input.executorEvent?.sideEffectFlags ?? {}),
+      ...(input.sideEffectFlags ?? {}),
+    },
+    allEvidenceRefs: uniqueStrings([
+      ...currentObservationEvidenceRefs,
+      ...beforeEvidenceRefs,
+      ...afterEvidenceRefs,
+      ...verificationRefs,
+      ...artifactRefs,
+      ...traceRefs,
+      executorEventRef,
+    ]),
   };
 }
 
@@ -214,4 +353,18 @@ export function computerUseHostPortsContractViolations(contract: {
 
 export function isComputerUseForbiddenHostPortName(port: string): port is (typeof computerUseHostAdapterForbiddenPorts)[number] {
   return (computerUseHostAdapterForbiddenPorts as readonly string[]).includes(port);
+}
+
+function firstString(...values: readonly (string | undefined)[]): string | undefined {
+  return values.find((value) => typeof value === 'string' && value.trim().length > 0);
+}
+
+function uniqueStrings(values: readonly (string | undefined)[]): string[] {
+  return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
+}
+
+function definedStringFields<T extends Record<string, string | undefined>>(fields: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(fields).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  ) as Partial<T>;
 }

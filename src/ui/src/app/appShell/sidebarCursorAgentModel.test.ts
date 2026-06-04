@@ -135,6 +135,28 @@ test('pinned archived and discarded visible state does not leak internal runtime
   assert.doesNotMatch(JSON.stringify(visibleState), internalTerms);
 });
 
+test('thread projection drops unsafe externally supplied badges', () => {
+  const projection = buildSidebarCursorAgentProjection({
+    workspace: { id: 'lab', path: '/tmp/lab' },
+    projects: [{
+      id: 'project-a',
+      label: 'Project A',
+      threads: [{
+        sessionId: 'thread-with-child-badges',
+        title: 'Worker thread',
+        badges: [
+          'Child active',
+          'provider token /tmp/raw.jsonl stdout stderr',
+          'Child active',
+        ],
+      }],
+    }],
+  });
+
+  assert.deepEqual(projection.groups[0]?.threads[0]?.badges, ['Child active']);
+  assert.doesNotMatch(JSON.stringify(projection.groups[0]?.threads[0]), /provider|token|stdout|stderr|raw|\/tmp/i);
+});
+
 test('archived and discarded threads expose restore command without archive or discard commands', () => {
   const projection = buildSidebarCursorAgentProjection({
     workspace: { id: 'lab', path: '/tmp/lab' },
@@ -163,7 +185,50 @@ test('archived and discarded threads expose restore command without archive or d
     assert.deepEqual(intents, ['restore-thread']);
     assert.deepEqual(thread.presentationActions.map((action) => action.intent), ['select-thread']);
     assert.ok(thread.actions.some((action) => action.intent === 'restore-thread' && action.commandText?.includes('chat restore')));
+    assert.match(thread.actions[0]?.impactDescription ?? '', /background child agents/i);
+    assert.match(thread.actions[0]?.impactDescription ?? '', /resume candidates/i);
     assert.ok(thread.actions.every((action) => action.intent !== 'archive-thread' && action.intent !== 'discard-thread'));
+  }
+});
+
+test('thread archive discard and restore commands describe background child-agent impact', () => {
+  const projection = buildSidebarCursorAgentProjection({
+    workspace: { id: 'lab', path: '/tmp/lab' },
+    projects: [{
+      id: 'project-a',
+      label: 'Project A',
+      threads: [{
+        sessionId: 'active-parent',
+        title: 'Parent with background child',
+        badges: ['Background child', 'Resume ready'],
+      }, {
+        sessionId: 'draft-parent',
+        title: 'Draft with delegated child',
+        state: 'draft',
+        badges: ['Background child'],
+      }],
+      archivedThreads: [{
+        sessionId: 'archived-parent',
+        archived: true,
+        title: 'Archived parent with child',
+        badges: ['Resume ready'],
+      }],
+    }],
+  });
+
+  const active = projection.groups[0]?.threads.find((thread) => thread.title === 'Parent with background child');
+  const draft = projection.groups[0]?.threads.find((thread) => thread.title === 'Draft with delegated child');
+  const archived = projection.groups[0]?.threads.find((thread) => thread.title === 'Archived parent with child');
+  const archive = active?.actions.find((action) => action.intent === 'archive-thread');
+  const discard = draft?.actions.find((action) => action.intent === 'discard-thread');
+  const restore = archived?.actions.find((action) => action.intent === 'restore-thread');
+
+  for (const action of [archive, discard, restore]) {
+    assert.ok(action?.impactDescription, action?.intent);
+    assert.match(action.impactDescription, /background child agents/i);
+    assert.match(action.impactDescription, /parent chat/i);
+    assert.match(action.impactDescription, /resume/i);
+    assert.doesNotMatch(action.impactDescription, internalTerms);
   }
 });
 

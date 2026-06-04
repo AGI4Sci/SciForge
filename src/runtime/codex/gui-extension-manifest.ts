@@ -1,4 +1,5 @@
-import { access, chmod, mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { access, chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getRuntimeHomePaths } from '../../../packages/backend/src/runtime-home.js';
@@ -131,7 +132,7 @@ async function writeGuiPresentShim(input: {
   const shimPath = join(binDir, 'gui.present');
   const commandShimPath = join(binDir, 'gui');
   await mkdir(binDir, { recursive: true });
-  await writeFile(shimPath, [
+  await writeExecutableShim(shimPath, [
     '#!/bin/sh',
     `if [ -z "\${${GUI_EXTENSION_STATE_ENV}:-}" ]; then`,
     `  ${GUI_EXTENSION_STATE_ENV}=${shellQuote(input.statePath)}`,
@@ -139,8 +140,8 @@ async function writeGuiPresentShim(input: {
     `export ${GUI_EXTENSION_STATE_ENV}`,
     `exec node ${input.shimEntry.args.map(shellQuote).join(' ')} "$@"`,
     '',
-  ].join('\n'), 'utf8');
-  await writeFile(commandShimPath, [
+  ].join('\n'));
+  await writeExecutableShim(commandShimPath, [
     '#!/bin/sh',
     'case "$1" in',
     '  present|gui.present)',
@@ -159,10 +160,20 @@ async function writeGuiPresentShim(input: {
     '    ;;',
     'esac',
     '',
-  ].join('\n'), 'utf8');
-  await chmod(shimPath, 0o755);
-  await chmod(commandShimPath, 0o755);
+  ].join('\n'));
   return { binDir, shimPath };
+}
+
+async function writeExecutableShim(path: string, content: string) {
+  const tmpPath = `${path}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmpPath, content, 'utf8');
+    await chmod(tmpPath, 0o755);
+    await rename(tmpPath, path);
+  } catch (error) {
+    await rm(tmpPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function missingFiles(paths: string[]): Promise<string[]> {

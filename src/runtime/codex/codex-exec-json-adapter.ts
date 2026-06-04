@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import type { Readable } from 'node:stream';
 import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent, guiAskUserEvent, guiPresentEvent, invalidJsonlAuditEvent, normalizeCodexJsonlEvent, resumeFailureAuditEvent, runStartedEvent, stderrAuditEvent, type CodexRuntimeMetadata, type NormalizedAgentEvent } from './codex-event-normalizer.js';
-import { type AgentCliAdapter, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
+import { type AgentCliAdapter, type AgentCliApprovalPolicy, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexNoForkGate } from '../../../packages/backend/src/codex-compatibility-gate.js';
 import {
   resolveRuntimeCodexSandbox,
@@ -27,7 +27,7 @@ export type SpawnCodexProcess = (
   options: { cwd: string; env: NodeJS.ProcessEnv; stdio: ['ignore', 'pipe', 'pipe'] },
 ) => CodexChildProcess;
 
-const RUNTIME_CODEX_APPROVAL_POLICY = 'never';
+const RUNTIME_CODEX_APPROVAL_POLICY: AgentCliApprovalPolicy = 'never';
 
 interface CodexChildProcess {
   stdout: Readable;
@@ -57,7 +57,8 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
     const resumeRequested = Boolean(input.codexSessionId);
     const evidenceRefs = evidenceRefsForTurn(commandId, attemptId);
     const runtimeEnv = this.options.env ?? process.env;
-    const runtimeSandbox = resolveRuntimeCodexSandbox(runtimeEnv);
+    const runtimeSandbox = input.sandbox ?? resolveRuntimeCodexSandbox(runtimeEnv);
+    const approvalPolicy = input.approvalPolicy ?? RUNTIME_CODEX_APPROVAL_POLICY;
     const codexGate = assertCodexNoForkGate({ codexCommand: runtimeEnv.SCIFORGE_RUNTIME_CODEX_COMMAND });
     const guiInjection = await prepareRuntimeGuiExtensionInjection(guiExtensionOptions(input.guiExtension, {
       workspace: config.workspace,
@@ -68,6 +69,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       workspace: config.workspace,
       profile: config.profile,
       sandbox: runtimeSandbox,
+      approvalPolicy,
       codexHome: config.codexHome,
       codexCommand: codexGate.codexCommand,
       parentCommandId: commandId,
@@ -94,6 +96,7 @@ export class CodexExecJsonAdapter implements AgentCliAdapter {
       commandText,
       codexSessionId: input.codexSessionId,
       sandbox: runtimeSandbox,
+      approvalPolicy,
       configArgs: [
         ...(guiInjection?.configArgs ?? []),
         ...subagentInjection.configArgs,
@@ -395,6 +398,7 @@ function codexExecArgs(input: {
   workspace: string;
   commandText: string;
   sandbox: string;
+  approvalPolicy: AgentCliApprovalPolicy;
   codexSessionId?: string;
   configArgs?: string[];
 }): string[] {
@@ -408,7 +412,7 @@ function codexExecArgs(input: {
     '--sandbox',
     input.sandbox,
     '--ask-for-approval',
-    RUNTIME_CODEX_APPROVAL_POLICY,
+    input.approvalPolicy,
   ];
   if (input.codexSessionId) {
     return [

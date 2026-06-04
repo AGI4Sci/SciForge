@@ -10,11 +10,89 @@ import {
   createComputerUseHostAdapter,
   createComputerUseHostPortsContract,
   isComputerUseForbiddenHostPortName,
+  projectComputerUseHostOutputToWindowActionEvidenceRefs,
 } from './host-adapter-contract.js';
 import {
   computerUseHostPortLists,
   computerUseHostPortProviderIds,
 } from './provider-policy.js';
+
+test('Computer Use host output projects to WindowActionEvidenceRef-style refs', () => {
+  const projection = projectComputerUseHostOutputToWindowActionEvidenceRefs({
+    currentObservation: {
+      observationRef: 'observation:run-1/current.json',
+      screenshotRef: 'image:run-1/current.png',
+    },
+    target: {
+      targetRef: 'target:annotation/manual-bound-1',
+      windowRef: 'window:macos/TextEdit/123',
+      screenRef: 'screen:main',
+    },
+    session: {
+      sessionRef: 'computer-use:session/run-1',
+      windowActionSessionRef: 'window-action-session:agent-a/run-1',
+      scopedInputAdapterRef: 'scoped-input-adapter:agent-a/window-123',
+    },
+    executorEvent: {
+      executorEventRef: 'executor-event:run-1/step-001.json',
+      actionRef: 'window-action:run-1/step-001',
+    },
+    beforeEvidenceRefs: ['image:run-1/before.png', 'observation:run-1/current.json'],
+    afterEvidenceRefs: ['image:run-1/after.png'],
+    verificationRefs: ['verification:run-1/step-001.json'],
+    artifactRefs: ['artifact:run-1/output.md'],
+    traceRefs: ['trace:run-1/vision-trace.json'],
+    sideEffectFlags: {
+      inputExecuted: true,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      rawPayloadWritten: false,
+      inlineImageWritten: false,
+    },
+  });
+
+  assert.deepEqual(projection, {
+    schemaVersion: 'sciforge.computer-use.window-action-evidence-projection.v1',
+    currentObservationRef: 'observation:run-1/current.json',
+    currentObservationEvidenceRefs: ['observation:run-1/current.json', 'image:run-1/current.png'],
+    targetRefs: {
+      targetRef: 'target:annotation/manual-bound-1',
+      windowRef: 'window:macos/TextEdit/123',
+      screenRef: 'screen:main',
+    },
+    sessionRefs: {
+      sessionRef: 'computer-use:session/run-1',
+      windowActionSessionRef: 'window-action-session:agent-a/run-1',
+      scopedInputAdapterRef: 'scoped-input-adapter:agent-a/window-123',
+    },
+    executorEventRef: 'executor-event:run-1/step-001.json',
+    actionRef: 'window-action:run-1/step-001',
+    beforeEvidenceRefs: ['image:run-1/before.png', 'observation:run-1/current.json'],
+    afterEvidenceRefs: ['image:run-1/after.png'],
+    verificationRefs: ['verification:run-1/step-001.json'],
+    artifactRefs: ['artifact:run-1/output.md'],
+    traceRefs: ['trace:run-1/vision-trace.json'],
+    sideEffectFlags: {
+      inputExecuted: true,
+      sharedSystemInputUsed: false,
+      systemPointerMoved: false,
+      systemKeyboardEventsSent: false,
+      rawPayloadWritten: false,
+      inlineImageWritten: false,
+    },
+    allEvidenceRefs: [
+      'observation:run-1/current.json',
+      'image:run-1/current.png',
+      'image:run-1/before.png',
+      'image:run-1/after.png',
+      'verification:run-1/step-001.json',
+      'artifact:run-1/output.md',
+      'trace:run-1/vision-trace.json',
+      'executor-event:run-1/step-001.json',
+    ],
+  });
+});
 
 test('ComputerUseHostAdapter contract is reusable and GUI-free at the package boundary', () => {
   const contract = createComputerUseHostPortsContract({

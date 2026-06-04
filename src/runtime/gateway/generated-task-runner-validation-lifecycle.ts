@@ -637,11 +637,18 @@ function providerInvocationForGeneratedTask(providerRoutes: ReturnType<typeof ca
         kind: 'unavailable',
         reason: 'No generated-task invocation adapter is registered for this provider.',
       };
-    });
+    })
+    .sort((left, right) => generatedTaskProviderInvocationAdapterRank(left) - generatedTaskProviderInvocationAdapterRank(right));
   return {
     schemaVersion: 'sciforge.generated-task-provider-invocation.v1',
     adapters,
   };
+}
+
+function generatedTaskProviderInvocationAdapterRank(adapter: { kind?: unknown }) {
+  if (adapter.kind === 'node-cli' || adapter.kind === 'http') return 0;
+  if (adapter.kind === 'unavailable') return 2;
+  return 1;
 }
 
 function localWebWorkerCliAdapter() {

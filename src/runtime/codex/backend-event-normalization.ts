@@ -53,11 +53,28 @@ export interface BackendNormalizedEvent {
   ref?: string;
   agentId?: string;
   parentAgentId?: string;
+  agentType?: string;
+  resultRef?: string;
   transcriptRef?: string;
   refs?: string[];
+  durationMs?: number;
+  background?: BackendSubagentBackgroundMetadata;
+  resume?: BackendSubagentResumeMetadata;
   approvalId?: string;
   traceStepId?: string;
   raw?: unknown;
+}
+
+export interface BackendSubagentBackgroundMetadata {
+  runInBackground: boolean;
+  stateRef?: string;
+}
+
+export interface BackendSubagentResumeMetadata {
+  resumeRequested: boolean;
+  resumeAgentId?: string;
+  resumeRef?: string;
+  resumeBoundary: 'explicit' | 'none';
 }
 
 export interface BackendEventNormalizationOptions {
@@ -119,11 +136,20 @@ export function normalizeBackendEvent(
 }
 
 export function redactBackendEventValue(value: unknown, keyHint = ''): unknown {
+  if (isPrivateBackendPayloadKey(keyHint)) return undefined;
   if (typeof value === 'string') return redactBackendStringValue(keyHint, value);
+  if (Array.isArray(value) && isBackendRefArrayKey(keyHint)) {
+    return value
+      .map((entry) => typeof entry === 'string' ? safeBackendRef(entry) : undefined)
+      .filter((entry): entry is string => Boolean(entry));
+  }
   if (Array.isArray(value)) return value.map((entry) => redactBackendEventValue(entry, keyHint));
   if (!isRecord(value)) return value;
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, redactBackendEventValue(entry, key)]),
+    Object.entries(value)
+      .filter(([key]) => !isPrivateBackendPayloadKey(key))
+      .map(([key, entry]) => [key, redactBackendEventValue(entry, key)])
+      .filter(([, entry]) => entry !== undefined),
   );
 }
 
@@ -176,8 +202,13 @@ function normalizeCodexExecJsonEvent(
     ref: safeBackendPreviewRef(stringField(codex.ref)),
     agentId: safeBackendIdentifier(stringField(codex.agentId)),
     parentAgentId: safeBackendIdentifier(stringField(codex.parentAgentId)),
+    agentType: safeBackendIdentifier(stringField(codex.agentType)),
+    resultRef: safeBackendRef(stringField(codex.resultRef)),
     transcriptRef: safeBackendRef(stringField(codex.transcriptRef)),
     refs: safeBackendRefs(codex.refs),
+    durationMs: numberField(codex.durationMs),
+    background: backendSubagentBackgroundMetadata([codex]),
+    resume: backendSubagentResumeMetadata([codex]),
   });
   const traceStep = traceStepFromTool({
     backend: 'codex-exec-json',
@@ -226,6 +257,15 @@ function normalizeCodexAppServerEvent(
 
   if (/approval.*(resolved|responded|response|completed)|serverrequest\/resolved|control_response/.test(lowerType)) {
     return eventWithTrace(backend, 'approval_resolved', raw, options, approvalTraceStatus(raw));
+  }
+
+  const appServerItemType = stringField(item.type) ?? stringField(payload.type) ?? stringField(raw.item_type);
+  if (/^response_item$/i.test(type) && /^function_call$/i.test(appServerItemType ?? '') && toolNameFromRaw(raw, item)) {
+    return eventWithTrace(backend, 'tool_started', raw, options, 'started');
+  }
+
+  if (/^response_item$/i.test(type) && /^function_call_output$/i.test(appServerItemType ?? '') && toolNameFromRaw(raw, item)) {
+    return eventWithTrace(backend, 'tool_completed', raw, options, terminalTraceStatus(raw));
   }
 
   if (/tool.*(started|call_started)|item[./]started|function_call.*started/.test(lowerType) && toolNameFromRaw(raw, item)) {
@@ -408,12 +448,32 @@ function backendEvent(
     ref: fields.ref,
     agentId: fields.agentId,
     parentAgentId: fields.parentAgentId,
+    agentType: fields.agentType,
+    resultRef: fields.resultRef,
     transcriptRef: fields.transcriptRef,
     refs: fields.refs,
+    durationMs: fields.durationMs,
+    background: fields.background,
+    resume: fields.resume,
     approvalId: fields.approvalId,
     traceStepId: fields.traceStepId,
-    raw: redactBackendEventValue(raw),
+    raw: backendPublicRaw(raw, fields),
   };
+}
+
+function backendPublicRaw(
+  raw: unknown,
+  fields: Partial<Omit<BackendNormalizedEvent, 'schemaVersion' | 'backend' | 'type' | 'timestamp' | 'raw'>>,
+): unknown {
+  const hasSubagentProjection = Boolean(
+    fields.agentId
+      || fields.parentAgentId
+      || fields.agentType
+      || fields.resultRef
+      || fields.transcriptRef
+      || fields.refs?.some((ref) => /^subagent:|^artifact:subagent-/i.test(ref)),
+  );
+  return hasSubagentProjection ? undefined : redactBackendEventValue(raw);
 }
 
 function traceStepFromTool(input: {
@@ -726,14 +786,23 @@ function toolNameFromRaw(raw: Record<string, unknown>, item: Record<string, unkn
   const tool = recordField(raw.tool) ?? recordField(payload.tool) ?? {};
   const request = recordField(raw.request) ?? recordField(raw.control_request) ?? {};
   const itemType = stringField(item.type) ?? stringField(payload.type) ?? stringField(raw.item_type);
+  if (/function_call_output/i.test(itemType ?? '')) {
+    const refs = backendReferenceFields(raw, payload, item);
+    if (
+      refs.agentId
+      || refs.resultRef
+      || refs.transcriptRef
+      || refs.refs?.some((ref) => /^subagent:|^artifact:subagent-/i.test(ref))
+    ) return 'multi_agent_v1.spawn_agent';
+  }
   const namespace = stringField(item.namespace) ?? stringField(payload.namespace);
   const dynamicTool = stringField(item.tool) ?? stringField(payload.tool);
   const mcpServer = stringField(item.server) ?? stringField(payload.server);
-  if (dynamicTool && /mcptoolcall/i.test(itemType ?? '')) return mcpServer ? `${mcpServer}.${dynamicTool}` : dynamicTool;
-  if (dynamicTool) return namespace ? `${namespace}.${dynamicTool}` : dynamicTool;
+  if (dynamicTool && /mcptoolcall/i.test(itemType ?? '')) return normalizeBackendToolName(mcpServer ? `${mcpServer}.${dynamicTool}` : dynamicTool);
+  if (dynamicTool) return normalizeBackendToolName(namespace ? `${namespace}.${dynamicTool}` : dynamicTool);
   const mcpTool = stringField(tool.tool);
-  if (mcpTool) return mcpServer ? `${mcpServer}.${mcpTool}` : mcpTool;
-  return stringField(item.name)
+  if (mcpTool) return normalizeBackendToolName(mcpServer ? `${mcpServer}.${mcpTool}` : mcpTool);
+  return normalizeBackendToolName(stringField(item.name)
     ?? stringField(item.tool_name)
     ?? stringField(tool.name)
     ?? stringField(tool.tool_name)
@@ -742,7 +811,12 @@ function toolNameFromRaw(raw: Record<string, unknown>, item: Record<string, unkn
     ?? stringField(raw.tool_name)
     ?? stringField(raw.name)
     ?? stringField(payload.name)
-    ?? toolNameFromItemType(itemType, commandFromRaw(raw, item));
+    ?? toolNameFromItemType(itemType, commandFromRaw(raw, item)));
+}
+
+function normalizeBackendToolName(value: string | undefined): string | undefined {
+  if (value === 'multi_agent_v1_spawn_agent') return 'multi_agent_v1.spawn_agent';
+  return value;
 }
 
 function toolNameFromItemType(itemType: string | undefined, command: string | undefined): string | undefined {
@@ -935,10 +1009,12 @@ function backendReferenceFields(
   raw: Record<string, unknown>,
   payload: Record<string, unknown>,
   item: Record<string, unknown>,
-): Partial<Pick<BackendNormalizedEvent, 'ref' | 'agentId' | 'parentAgentId' | 'transcriptRef' | 'resultSummary' | 'refs'>> {
+): Partial<Pick<BackendNormalizedEvent, 'ref' | 'agentId' | 'parentAgentId' | 'agentType' | 'resultRef' | 'transcriptRef' | 'resultSummary' | 'refs' | 'durationMs' | 'background' | 'resume'>> {
   const records = backendReferenceRecords(raw, payload, item);
   const ref = firstSafeBackendPreviewRef(records, 'ref', 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref')
     ?? firstSafeBackendPreviewRefFromArrays(records, 'refs', 'evidenceRefs', 'evidence_refs', 'artifactRefs', 'artifact_refs', 'outputRefs', 'output_refs');
+  const resultRef = firstSafeBackendRef(records, 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref')
+    ?? ref;
   const transcriptRef = firstSafeBackendRef(records, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref');
   const refs = mergeBackendRefs(
     backendRefsFromArrays(records, 'refs', 'evidenceRefs', 'evidence_refs', 'artifactRefs', 'artifact_refs', 'outputRefs', 'output_refs'),
@@ -948,10 +1024,69 @@ function backendReferenceFields(
     ref,
     agentId: firstSafeBackendIdentifier(records, 'agentId', 'agent_id', 'agentPath', 'agent_path'),
     parentAgentId: firstSafeBackendIdentifier(records, 'parentAgentId', 'parent_agent_id', 'parentId', 'parent_id'),
+    agentType: firstSafeBackendIdentifier(records, 'agentType', 'agent_type', 'role'),
+    resultRef,
     transcriptRef,
     resultSummary: compactBackendText(firstStringFromRecords(records, 'resultSummary', 'result_summary', 'summary'), 320),
     refs,
+    durationMs: firstBackendNumberFromRecords(records, 'durationMs', 'duration_ms'),
+    background: backendSubagentBackgroundMetadata(records),
+    resume: backendSubagentResumeMetadata(records),
   };
+}
+
+function backendSubagentBackgroundMetadata(records: Record<string, unknown>[]): BackendSubagentBackgroundMetadata | undefined {
+  for (const record of records) {
+    const background = recordField(record.background);
+    const source = background ?? record;
+    const runInBackground = booleanField(source.runInBackground) ?? booleanField(source.run_in_background);
+    const stateRef = safeBackendRef(stringField(source.stateRef) ?? stringField(source.state_ref));
+    if (runInBackground !== undefined || stateRef) {
+      return {
+        runInBackground: runInBackground ?? false,
+        ...(stateRef ? { stateRef } : {}),
+      };
+    }
+  }
+  return undefined;
+}
+
+function backendSubagentResumeMetadata(records: Record<string, unknown>[]): BackendSubagentResumeMetadata | undefined {
+  for (const record of records) {
+    const resume = recordField(record.resume);
+    const source = resume ?? record;
+    const resumeAgentId = safeBackendIdentifier(stringField(source.resumeAgentId) ?? stringField(source.resume_agent_id));
+    const resumeRef = safeBackendRef(stringField(source.resumeRef) ?? stringField(source.resume_ref) ?? stringField(source.resumeCandidateRef) ?? stringField(source.resume_candidate_ref));
+    const resumeRequested = booleanField(source.resumeRequested) ?? booleanField(source.resume_requested);
+    const boundary = backendSubagentResumeBoundary(stringField(source.resumeBoundary) ?? stringField(source.resume_boundary));
+    if (resumeRequested !== undefined || resumeAgentId || resumeRef || boundary) {
+      const requested = resumeRequested ?? Boolean(resumeAgentId || resumeRef);
+      return {
+        resumeRequested: requested,
+        ...(resumeAgentId ? { resumeAgentId } : {}),
+        ...(resumeRef ? { resumeRef } : {}),
+        resumeBoundary: boundary ?? (requested ? 'explicit' : 'none'),
+      };
+    }
+  }
+  return undefined;
+}
+
+function backendSubagentResumeBoundary(value: string | undefined): 'explicit' | 'none' | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'explicit') return 'explicit';
+  if (normalized === 'none') return 'none';
+  return undefined;
+}
+
+function firstBackendNumberFromRecords(records: Record<string, unknown>[], ...keys: string[]): number | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = numberField(record[key]);
+      if (typeof value === 'number') return Math.max(0, value);
+    }
+  }
+  return undefined;
 }
 
 function backendReferenceRecords(raw: Record<string, unknown>, payload: Record<string, unknown>, item: Record<string, unknown>) {
@@ -971,18 +1106,26 @@ function backendReferenceRecords(raw: Record<string, unknown>, payload: Record<s
   ].filter((entry): entry is Record<string, unknown> => Boolean(entry));
 }
 
-function nestedBackendRecords(value: unknown): Record<string, unknown>[] {
+function nestedBackendRecords(value: unknown, seen = new Set<Record<string, unknown>>()): Record<string, unknown>[] {
   const root = parseJsonRecord(value);
-  if (!root) return [];
+  if (!root || seen.has(root)) return [];
+  seen.add(root);
   const records = [root];
   for (const key of ['value', 'result', 'output', 'input', 'arguments', 'args', 'structuredContent', 'structured_content'] as const) {
-    const nested = parseJsonRecord(root[key]);
-    if (nested) records.push(nested);
+    records.push(...nestedBackendRecords(root[key], seen));
   }
-  const contentItems = Array.isArray(root.contentItems) ? root.contentItems : Array.isArray(root.content_items) ? root.content_items : [];
+  const contentItems = Array.isArray(root.contentItems)
+    ? root.contentItems
+    : Array.isArray(root.content_items)
+      ? root.content_items
+      : Array.isArray(root.content)
+        ? root.content
+        : [];
   for (const item of contentItems) {
-    const nested = parseJsonRecord(isRecord(item) ? item.text ?? item.content : item);
-    if (nested) records.push(nested, ...nestedBackendRecords(nested.structuredContent ?? nested.structured_content));
+    records.push(...nestedBackendRecords(isRecord(item) ? item.text ?? item.content : item, seen));
+    if (isRecord(item)) {
+      records.push(...nestedBackendRecords(item.structuredContent ?? item.structured_content, seen));
+    }
   }
   return records;
 }
@@ -1270,6 +1413,14 @@ function isSensitiveKey(key: string): boolean {
   return /api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|authorization/i.test(key);
 }
 
+function isPrivateBackendPayloadKey(key: string): boolean {
+  return /^(?:raw|raw[_-]?json|raw[_-]?transcript|transcript|stdout|stderr|logs?|debug[_-]?payload|provider[_-]?config|model[_-]?config)$/i.test(key);
+}
+
+function isBackendRefArrayKey(key: string): boolean {
+  return /^(?:refs|evidenceRefs|evidence_refs|artifactRefs|artifact_refs|outputRefs|output_refs)$/i.test(key);
+}
+
 function isUrlKey(key: string): boolean {
   return /url|uri|endpoint|base[_-]?url|upstream/i.test(key);
 }
@@ -1292,6 +1443,15 @@ function textField(value: unknown): string | undefined {
 
 function numberField(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return undefined;
 }
 
 function stringArrayField(value: unknown): string[] | undefined {

@@ -53,6 +53,7 @@ const TRANSPORT_REF_KEYS = ['ref', 'dataRef', 'path', 'filePath', 'markdownRef',
 const WORKSPACE_TOOL_STREAM_PATH = '/api/sciforge/tools/run/stream';
 const CODEX_RUNTIME_SELECTED_MESSAGE_CONTEXT_LIMIT = 2;
 const CODEX_RUNTIME_SELECTED_MESSAGE_TEXT_LIMIT = 2_000;
+const MULTITASK_SUMMARY_GUIDANCE = 'Use Multitask for parallel research, long commands, or independent verification. Keep strongly coupled same-file edits or full-chat-history work with the main agent.';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -547,11 +548,13 @@ function auditOnlyGuiProjectionRefs(
   const executionRefs = (input.executionUnits ?? []).slice(-16).map((unit) => `execution-unit:${unit.id}`);
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
   const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents);
+  const windowActionHandoff = safeWindowActionHandoff(input.windowActionHandoff);
   return {
     currentTurnId: input.currentTurnId,
     selectedRefCount: referenceSummary.length,
     refs: uniqueRuntimeStringList([...references, ...runRefs, ...artifactRefs, ...claimRefs, ...executionRefs]).slice(0, 48),
     ...(composerDeclaredIntents ? { composerDeclaredIntents } : {}),
+    ...(windowActionHandoff ? { windowActionHandoff } : {}),
     counts: {
       nonSeedMessages: nonSeedMessageCount,
       seedMessagesExcluded: (input.messages ?? []).length - nonSeedMessageCount,
@@ -563,15 +566,142 @@ function auditOnlyGuiProjectionRefs(
   };
 }
 
+function safeWindowActionHandoff(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.window-action-handoff.v1') return undefined;
+  if (value.source !== 'run-orchestrator') return undefined;
+  if (value.mode !== 'enter-or-reuse-window-action-session') return undefined;
+  const intent = knownString(value.intent, ['annotation-quick-action', 'explicit-modification']);
+  const actionFlowRef = safeAuditRef(value.actionFlowRef);
+  const highConfidenceThreshold = asFiniteNumber(value.highConfidenceThreshold);
+  const promotedRefs = Array.isArray(value.promotedRefs)
+    ? value.promotedRefs.map(safeWindowActionHandoffRef).filter((ref): ref is NonNullable<ReturnType<typeof safeWindowActionHandoffRef>> => Boolean(ref)).slice(0, 8)
+    : [];
+  if (!intent || !actionFlowRef || highConfidenceThreshold === undefined || !promotedRefs.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.window-action-handoff.v1',
+    source: 'run-orchestrator',
+    mode: 'enter-or-reuse-window-action-session',
+    intent,
+    actionFlowRef,
+    highConfidenceThreshold,
+    promotedRefs,
+  };
+}
+
+function safeWindowActionHandoffRef(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const referenceId = boundedAuditText(value.referenceId, 96);
+  const ref = safeAuditRef(value.ref);
+  const title = boundedAuditText(value.title, 120);
+  const binding = safeWindowActionBinding(value.windowBinding);
+  if (!referenceId || !ref || !title || !binding) return undefined;
+  const sourceKind = boundedAuditText(value.sourceKind, 64);
+  const annotationRef = safeAuditRef(value.annotationRef);
+  const imageRef = safeAuditRef(value.imageRef);
+  const screenshotRef = safeAuditRef(value.screenshotRef);
+  const cropRef = safeAuditRef(value.cropRef);
+  const targetRef = safeAuditRef(value.targetRef);
+  const evidenceRefs = safeWindowActionEvidenceRefs(value.evidenceRefs);
+  return {
+    referenceId,
+    ref,
+    title,
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(annotationRef ? { annotationRef } : {}),
+    ...(imageRef ? { imageRef } : {}),
+    ...(screenshotRef ? { screenshotRef } : {}),
+    ...(cropRef ? { cropRef } : {}),
+    ...(targetRef ? { targetRef } : {}),
+    evidenceRefs,
+    windowBinding: binding,
+  };
+}
+
+function safeWindowActionBinding(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const status = knownString(value.status, ['manual-bound', 'auto-bound']);
+  const windowRef = safeAuditRef(value.windowRef);
+  if (!status || !windowRef) return undefined;
+  const confidence = asFiniteNumber(value.confidence);
+  const reason = boundedAuditText(value.reason, 160);
+  const appName = boundedAuditText(value.appName, 80);
+  const bundleId = boundedAuditText(value.bundleId, 120);
+  const title = boundedAuditText(value.title, 160);
+  const screenId = boundedAuditText(value.screenId, 80);
+  const pid = asFiniteNumber(value.pid);
+  const scale = asFiniteNumber(value.scale);
+  const windowBounds = safeWindowActionBounds(value.windowBounds);
+  const windowLocalBounds = safeWindowActionBounds(value.windowLocalBounds);
+  return {
+    status,
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(reason ? { reason } : {}),
+    windowRef,
+    ...(appName ? { appName } : {}),
+    ...(bundleId ? { bundleId } : {}),
+    ...(pid !== undefined ? { pid: Math.trunc(pid) } : {}),
+    ...(title ? { title } : {}),
+    ...(screenId ? { screenId } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+    ...(windowBounds ? { windowBounds } : {}),
+    ...(windowLocalBounds ? { windowLocalBounds } : {}),
+  };
+}
+
+function safeWindowActionBounds(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const x = asFiniteNumber(value.x);
+  const y = asFiniteNumber(value.y);
+  const width = asFiniteNumber(value.width);
+  const height = asFiniteNumber(value.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return { x, y, width: Math.max(1, width), height: Math.max(1, height) };
+}
+
+function safeWindowActionEvidenceRefs(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const output: Array<{ kind: string; ref: string }> = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const kind = boundedAuditText(item.kind, 64);
+    const ref = safeAuditRef(item.ref);
+    if (!kind || !ref) continue;
+    const key = `${kind}\n${ref}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push({ kind, ref });
+  }
+  return output.slice(0, 8);
+}
+
+function safeAuditRef(value: unknown) {
+  const text = asString(value);
+  if (!text) return undefined;
+  if (!/^[a-z][a-z0-9+.-]*:[a-z0-9][a-z0-9._:/#?-]*$/i.test(text)) return undefined;
+  if (/^(?:data|https?):/i.test(text)) return undefined;
+  return text.slice(0, 240);
+}
+
+function boundedAuditText(value: unknown, max: number) {
+  const text = asString(value);
+  if (!text) return undefined;
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  return normalized ? normalized.slice(0, max) : undefined;
+}
+
 function safeComposerDeclaredIntents(value: unknown) {
   if (!isRecord(value)) return undefined;
   if (value.schemaVersion !== 'sciforge.composer-declared-intents.v1' || value.source !== 'ui-action-audit-log') return undefined;
   const model = safeComposerDeclaredModelIntent(value.model);
-  if (!model) return undefined;
+  const mode = safeComposerDeclaredModeIntent(value.mode);
+  if (!model && !mode) return undefined;
   return {
     schemaVersion: 'sciforge.composer-declared-intents.v1',
     source: 'ui-action-audit-log',
-    model,
+    ...(model ? { model } : {}),
+    ...(mode ? { mode } : {}),
   };
 }
 
@@ -594,6 +724,22 @@ function safeComposerDeclaredModelIntent(value: unknown) {
   };
 }
 
+function safeComposerDeclaredModeIntent(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const modeIntentId = knownString(value.modeIntentId, ['plan', 'debug', 'multitask', 'ask']);
+  const publicLabel = publicComposerDeclaredModeLabel(value.publicLabel, modeIntentId);
+  const actionId = asString(value.actionId);
+  const declaredAt = asString(value.declaredAt);
+  if (!modeIntentId || !publicLabel || !actionId || !declaredAt) return undefined;
+  return {
+    modeIntentId,
+    publicLabel,
+    ...(modeIntentId === 'multitask' ? { summaryGuidance: MULTITASK_SUMMARY_GUIDANCE } : {}),
+    actionId,
+    declaredAt,
+  };
+}
+
 function knownString<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T : undefined;
 }
@@ -610,6 +756,22 @@ function publicComposerDeclaredLabel(value: unknown, modelIntentId: string | und
           : modelIntentId === 'auto'
             ? 'Auto'
             : 'Assistant Auto';
+  if (typeof value !== 'string') return fallback;
+  const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
+  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
+  return compact;
+}
+
+function publicComposerDeclaredModeLabel(value: unknown, modeIntentId: string | undefined) {
+  const fallback = modeIntentId === 'plan'
+    ? 'Plan'
+    : modeIntentId === 'debug'
+      ? 'Debug'
+      : modeIntentId === 'multitask'
+        ? 'Multitask'
+        : modeIntentId === 'ask'
+          ? 'Ask'
+          : undefined;
   if (typeof value !== 'string') return fallback;
   const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
   if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
@@ -716,7 +878,7 @@ function buildCodexRuntimeCommandText(
 }
 
 function computerUseCommandRequiresExactTerminalText(prompt: string) {
-  return /^\/(?:computer-use|computer\s+use)\s+(?:screen\s+(?:attach|reconnect)|permission-handoff|permission-recheck|input-intent|approve|reject|continue|repair)\b/i.test(prompt.trim());
+  return /^\/(?:computer-use|computer\s+use)\s+(?:screen\s+(?:attach|reconnect)|permission-handoff|permission-recheck|input-intent|reject|continue|repair)\b/i.test(prompt.trim());
 }
 
 function selectedVisibleMessageContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {
@@ -1231,14 +1393,8 @@ function quoteTerminalArg(value: string) {
 
 function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStreamRequest>): AgentStreamEvent {
   const auditMetadata: Record<string, unknown> = isRecord(request.auditMetadata) ? request.auditMetadata : {};
-  const runtime: Record<string, unknown> = isRecord(auditMetadata.runtime) ? auditMetadata.runtime : {};
-  const provider = asString(runtime.provider) ?? 'unknown';
-  const model = asString(runtime.model) ?? 'unknown';
   const detail = [
-    `provider ${provider}`,
-    `model ${model}`,
-    `profile ${request.profile}`,
-    `workspace ${request.workspacePath}`,
+    'Runtime Codex run started',
     `command ${request.commandId}`,
   ].join(' · ');
   return {
@@ -1249,13 +1405,11 @@ function codexRuntimeRunEvent(request: ReturnType<typeof buildCodexRuntimeStream
     createdAt: nowIso(),
     raw: {
       type: 'codex-runtime-run',
-      provider,
-      model,
-      profile: request.profile,
-      workspacePath: request.workspacePath,
+      runtimeLane: 'codex',
+      status: 'started',
       commandId: request.commandId,
       attemptId: request.attemptId,
-      codexSessionId: request.codexSessionId,
+      codexSessionRestored: Boolean(request.codexSessionId),
       allowOpenAiRuntime: request.allowOpenAiRuntime,
       boundary: asString(auditMetadata.boundary),
     },
@@ -1267,8 +1421,11 @@ function composerDeclaredIntentProjectionEvent(request: ReturnType<typeof buildC
   const projection = isRecord(auditMetadata.guiLocalProjection) ? auditMetadata.guiLocalProjection : {};
   const declaredIntents = safeComposerDeclaredIntents(projection.composerDeclaredIntents);
   const model = declaredIntents?.model;
-  if (!model) return undefined;
-  const text = `Shared ${model.publicLabel} preference with Agent Host.`;
+  const mode = declaredIntents?.mode;
+  if (!model && !mode) return undefined;
+  const text = model
+    ? `Shared ${model.publicLabel} preference with Agent Host.`
+    : `Shared ${mode?.publicLabel} mode preference with Agent Host.`;
   return {
     id: makeId('evt'),
     type: 'composer-declared-intent-projection',
@@ -1281,11 +1438,19 @@ function composerDeclaredIntentProjectionEvent(request: ReturnType<typeof buildC
         operationKind: 'message',
         status: 'completed',
         text,
-        modelIntentId: model.modelIntentId,
-        mode: model.mode,
-        capabilityTier: model.capabilityTier,
-        sourceActionId: model.actionId,
-        declaredAt: model.declaredAt,
+        ...(model ? {
+          modelIntentId: model.modelIntentId,
+          mode: model.mode,
+          capabilityTier: model.capabilityTier,
+          sourceActionId: model.actionId,
+          declaredAt: model.declaredAt,
+        } : {}),
+        ...(mode ? {
+          modeIntentId: mode.modeIntentId,
+          ...(mode.summaryGuidance ? { summaryGuidance: mode.summaryGuidance } : {}),
+          sourceActionId: mode.actionId,
+          declaredAt: mode.declaredAt,
+        } : {}),
       },
     },
   };

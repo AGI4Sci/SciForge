@@ -76,6 +76,35 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.equal(events.at(-1)?.type, 'done');
 });
 
+test('adapter accepts inherited approval policy for child Runtime Codex turns', async () => {
+  const child = fakeChild();
+  let spawnCall: Parameters<SpawnCodexProcess> | undefined;
+  const workspace = await tempWorkspace();
+  const adapter = new CodexExecJsonAdapter({
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    spawnProcess(command, args, options) {
+      spawnCall = [command, args, options];
+      setTimeout(() => child.close(0), 0);
+      return child.process;
+    },
+  });
+
+  const turn = await adapter.startTurn({
+    commandText: 'Run guarded child task',
+    workspacePath: workspace,
+    guiExtension: { enabled: false },
+    approvalPolicy: 'on-request',
+    sandbox: 'read-only',
+  });
+  await collect(turn.events);
+
+  const argv = spawnCall?.[1] ?? [];
+  assert.ok(argv.includes('--sandbox'));
+  assert.equal(argv[(argv.indexOf('--sandbox') ?? -2) + 1], 'read-only');
+  assert.ok(argv.includes('--ask-for-approval'));
+  assert.equal(argv[(argv.indexOf('--ask-for-approval') ?? -2) + 1], 'on-request');
+});
+
 test('adapter injects local sub-agent MCP server by default when GUI extension is disabled', async () => {
   const child = fakeChild();
   let spawnCall: Parameters<SpawnCodexProcess> | undefined;

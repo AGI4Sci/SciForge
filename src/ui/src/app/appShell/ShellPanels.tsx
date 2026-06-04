@@ -106,6 +106,7 @@ import {
   type SidebarWorkspaceIntentKind,
   type SidebarWorkspaceIntentSource,
 } from './sidebarWorkspaceIntent';
+import { conversationProjectionForSession } from '../conversation-projection-view-model';
 export { SettingsPage } from './SettingsPage';
 export { SettingsDialog } from './ShellPanelsSettingsDialog';
 export { TopBar } from './TopBar';
@@ -136,6 +137,8 @@ export interface SidebarThreadItem {
   pinned?: boolean;
   archived?: boolean;
   discarded?: boolean;
+  badges?: string[];
+  agentCandidates?: SidebarPublicAgentCandidate[];
 }
 
 export interface SidebarProjectThreadGroup {
@@ -159,14 +162,28 @@ export interface SidebarSearchMatch {
   projectId?: string;
   sessionId?: string;
   threadState?: SidebarCursorAgentThreadState;
+  candidateKind?: SidebarPublicAgentCandidateKind;
+  candidateRef?: string;
   shortcut?: string;
   workspaceRelativePath?: string;
   workspaceFileName?: string;
 }
 
+export type SidebarPublicAgentCandidateKind = 'subagent-result' | 'background-task' | 'resume-candidate';
+
+export interface SidebarPublicAgentCandidate {
+  id: string;
+  kind: SidebarPublicAgentCandidateKind;
+  label: string;
+  detail: string;
+  refs: string[];
+  status?: 'active' | 'background' | 'resume' | 'done';
+}
+
 export type SidebarSearchKind =
   | 'action'
   | 'agent'
+  | 'agent-result'
   | 'file'
   | 'mode'
   | 'model'
@@ -252,16 +269,21 @@ export function buildSidebarThreadItems(
   const pool: SciForgeSession[] = Object.values(sessionsByScenario).filter((s): s is SciForgeSession => Boolean(s));
   const items = pool
     .filter((session) => sidebarSessionActivityScore(session) > 0)
-    .map((session) => ({
-      sessionId: session.sessionId,
-      scenarioId: session.scenarioId,
-      title: sidebarThreadTitle(session, locale),
-      detail: sidebarThreadDetail(session, locale),
-      updatedAt: session.updatedAt || session.createdAt,
-      createdAt: session.createdAt,
-      pinned: pinned.has(session.sessionId),
-      state: sidebarSessionThreadState(session),
-    }));
+    .map((session) => {
+      const agentCandidates = sidebarPublicAgentCandidatesForSession(session, locale);
+      return {
+        sessionId: session.sessionId,
+        scenarioId: session.scenarioId,
+        title: sidebarThreadTitle(session, locale),
+        detail: sidebarThreadDetail(session, locale, agentCandidates),
+        updatedAt: session.updatedAt || session.createdAt,
+        createdAt: session.createdAt,
+        pinned: pinned.has(session.sessionId),
+        state: sidebarSessionThreadState(session),
+        badges: sidebarPublicAgentCandidateBadges(agentCandidates, locale),
+        agentCandidates,
+      };
+    });
   return sortSidebarThreadItems(items, sort).slice(0, limit).map((item) => ({
     sessionId: item.sessionId,
     scenarioId: item.scenarioId,
@@ -271,6 +293,8 @@ export function buildSidebarThreadItems(
     createdAt: item.createdAt,
     pinned: item.pinned,
     state: item.state,
+    badges: item.badges,
+    agentCandidates: item.agentCandidates,
   }));
 }
 
@@ -283,16 +307,21 @@ export function buildSidebarArchivedThreadItems(
   const locale = options.locale;
   const items = archivedSessions
     .filter((session) => sidebarSessionActivityScore(session) > 0)
-    .map((session) => ({
-      sessionId: session.sessionId,
-      scenarioId: session.scenarioId,
-      title: sidebarThreadTitle(session, locale),
-      detail: sidebarThreadDetail(session, locale),
-      updatedAt: session.updatedAt || session.createdAt,
-      createdAt: session.createdAt,
-      pinned: pinned.has(session.sessionId),
-      session,
-    }));
+    .map((session) => {
+      const agentCandidates = sidebarPublicAgentCandidatesForSession(session, locale);
+      return {
+        sessionId: session.sessionId,
+        scenarioId: session.scenarioId,
+        title: sidebarThreadTitle(session, locale),
+        detail: sidebarThreadDetail(session, locale, agentCandidates),
+        updatedAt: session.updatedAt || session.createdAt,
+        createdAt: session.createdAt,
+        pinned: pinned.has(session.sessionId),
+        badges: sidebarPublicAgentCandidateBadges(agentCandidates, locale),
+        agentCandidates,
+        session,
+      };
+    });
   return sortSidebarThreadItems(items, sort).map((item) => {
     const state = sidebarArchivedSessionState(item.session);
     return {
@@ -306,6 +335,8 @@ export function buildSidebarArchivedThreadItems(
       state,
       archived: state === 'archived',
       discarded: state === 'discarded',
+      badges: item.badges,
+      agentCandidates: item.agentCandidates,
     };
   });
 }
@@ -593,6 +624,7 @@ export function buildSidebarCursorAgentProjectionForShell(
         createdAt: thread.createdAt,
         state: thread.state ?? 'done',
         pinned: thread.pinned,
+        badges: thread.badges,
       })),
       archivedThreads: sidebarHiddenArchiveThreadItems(group).filter((thread) => thread.archived !== false && !thread.discarded).map((thread) => ({
         id: thread.sessionId,
@@ -605,6 +637,7 @@ export function buildSidebarCursorAgentProjectionForShell(
         state: 'archived',
         archived: true,
         pinned: thread.pinned,
+        badges: thread.badges,
       })),
       discardedThreads: sidebarHiddenArchiveThreadItems(group).filter((thread) => thread.discarded).map((thread) => ({
         id: thread.sessionId,
@@ -617,6 +650,7 @@ export function buildSidebarCursorAgentProjectionForShell(
         state: 'discarded',
         discarded: true,
         pinned: thread.pinned,
+        badges: thread.badges,
       })),
     })),
     selection: {
@@ -694,18 +728,22 @@ export function buildSidebarSearchMatches(
       });
     }
   }
-  for (const thread of buildSidebarThreadItems(sessionsByScenario, { locale })) {
-    if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
-      matches.push({
-        id: `thread:${thread.sessionId}`,
-        label: thread.title,
-        detail: thread.detail,
-        page: 'workbench',
-        kind: 'thread',
-        scenarioId: thread.scenarioId,
-        sessionId: thread.sessionId,
-        threadState: thread.state,
-      });
+  const hasScopedGroups = (options.groups?.length ?? 0) > 0;
+  if (!hasScopedGroups) {
+    for (const thread of buildSidebarThreadItems(sessionsByScenario, { locale })) {
+      if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
+        matches.push({
+          id: `thread:${thread.sessionId}`,
+          label: thread.title,
+          detail: thread.detail,
+          page: 'workbench',
+          kind: 'thread',
+          scenarioId: thread.scenarioId,
+          sessionId: thread.sessionId,
+          threadState: thread.state,
+        });
+      }
+      matches.push(...sidebarPublicAgentCandidateSearchMatches(thread, needle, locale));
     }
   }
   for (const project of options.groups ?? []) {
@@ -723,8 +761,9 @@ export function buildSidebarSearchMatches(
       });
     }
     for (const thread of sidebarSearchableThreadItems(project)) {
+      const projectTargetId = sidebarSearchProjectTargetId(project);
+      matches.push(...sidebarPublicAgentCandidateSearchMatches(thread, needle, locale, projectTargetId));
       if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
-        const projectTargetId = sidebarSearchProjectTargetId(project);
         matches.push({
           id: `${thread.state === 'archived' || thread.state === 'discarded' ? 'archived-thread' : thread.state === 'draft' ? 'draft-thread' : 'thread'}:${thread.sessionId}`,
           label: thread.title,
@@ -745,20 +784,22 @@ export function buildSidebarSearchMatches(
       }
     }
   }
-  for (const thread of buildSidebarArchivedThreadItems(options.archivedSessions ?? [], { locale })) {
-    if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
-      matches.push({
-        id: `${thread.discarded ? 'archived-thread-discarded' : 'archived-thread'}:${thread.sessionId}`,
-        label: thread.title,
-        detail: thread.discarded
-          ? shellText(locale, { 'zh-CN': '已删除聊天', 'en-US': 'Deleted chat' })
-          : shellText(locale, { 'zh-CN': '已归档聊天', 'en-US': 'Archived chat' }),
-        page: 'workbench',
-        kind: 'thread',
-        scenarioId: thread.scenarioId,
-        sessionId: thread.sessionId,
-        threadState: thread.state,
-      });
+  if (!hasScopedGroups) {
+    for (const thread of buildSidebarArchivedThreadItems(options.archivedSessions ?? [], { locale })) {
+      if (containsNeedle(`${thread.title} ${thread.detail} ${thread.scenarioId}`, needle)) {
+        matches.push({
+          id: `${thread.discarded ? 'archived-thread-discarded' : 'archived-thread'}:${thread.sessionId}`,
+          label: thread.title,
+          detail: thread.discarded
+            ? shellText(locale, { 'zh-CN': '已删除聊天', 'en-US': 'Deleted chat' })
+            : shellText(locale, { 'zh-CN': '已归档聊天', 'en-US': 'Archived chat' }),
+          page: 'workbench',
+          kind: 'thread',
+          scenarioId: thread.scenarioId,
+          sessionId: thread.sessionId,
+          threadState: thread.state,
+        });
+      }
     }
   }
 
@@ -791,6 +832,225 @@ async function collectSidebarWorkspaceSearchEntries(rootPath: string, config: Sc
   return collected;
 }
 
+function sidebarPublicAgentCandidatesForSession(session: SciForgeSession, locale?: SupportedLocale): SidebarPublicAgentCandidate[] {
+  const candidates: SidebarPublicAgentCandidate[] = [];
+  for (const run of session.runs) {
+    for (const reference of run.objectReferences ?? []) {
+      const candidate = sidebarPublicAgentCandidateFromObjectReference(reference, {
+        sourceRunStatus: run.status,
+      });
+      if (candidate) candidates.push(candidate);
+    }
+
+    const raw = isSidebarRecord(run.raw) ? run.raw : undefined;
+    const backgroundCompletion = isSidebarRecord(raw?.backgroundCompletion) ? raw.backgroundCompletion : undefined;
+    if (backgroundCompletion) {
+      const backgroundStatus = sidebarString(backgroundCompletion.status);
+      for (const reference of sidebarRecordList(backgroundCompletion.refs)) {
+        const candidate = sidebarPublicAgentCandidateFromBackgroundRef(reference, backgroundStatus);
+        if (candidate) candidates.push(candidate);
+      }
+      for (const reference of sidebarRecordList(backgroundCompletion.objectReferences)) {
+        const candidate = sidebarPublicAgentCandidateFromObjectReference(reference, {
+          defaultKind: 'background-task',
+          backgroundStatus,
+        });
+        if (candidate) candidates.push(candidate);
+      }
+    }
+  }
+
+  const projection = conversationProjectionForSession(session);
+  const backgroundState = projection?.backgroundState;
+  if (backgroundState) {
+    const refs = (backgroundState.checkpointRefs ?? []).map(sidebarPublicRef).filter(Boolean);
+    const status = backgroundState.status ?? '';
+    const revisionPlan = sidebarPublicLine(backgroundState.revisionPlan, 72);
+    if ((refs.length || revisionPlan) && /background|running|resume|recover|checkpoint/i.test(`${status} ${revisionPlan} ${refs.join(' ')}`)) {
+      candidates.push({
+        id: sidebarSearchMatchId('agent-candidate', `projection:${session.sessionId}:${status}:${refs.join('|')}:${revisionPlan}`),
+        kind: /resume|recover|checkpoint/i.test(`${revisionPlan} ${refs.join(' ')}`) ? 'resume-candidate' : 'background-task',
+        label: revisionPlan || shellText(locale, { 'zh-CN': '后台子智能体', 'en-US': 'Background child agent' }),
+        detail: sidebarPublicCandidateDetail(refs, '', locale),
+        refs,
+        status: /resume|recover|checkpoint/i.test(`${revisionPlan} ${refs.join(' ')}`) ? 'resume' : 'background',
+      });
+    }
+  }
+
+  return uniqueSidebarPublicAgentCandidates(candidates).slice(0, 6);
+}
+
+function sidebarPublicAgentCandidateFromObjectReference(
+  reference: unknown,
+  context: {
+    defaultKind?: SidebarPublicAgentCandidateKind;
+    sourceRunStatus?: string;
+    backgroundStatus?: string;
+  } = {},
+): SidebarPublicAgentCandidate | undefined {
+  if (!isSidebarRecord(reference)) return undefined;
+  if (sidebarPublicValueIsUnsafe(sidebarString(reference.title)) || sidebarPublicValueIsUnsafe(sidebarString(reference.summary))) return undefined;
+  const ref = sidebarPublicRef(sidebarString(reference.ref));
+  if (!ref) return undefined;
+  const rawTitle = sidebarPublicLine(sidebarString(reference.title), 56);
+  const summary = sidebarPublicLine(sidebarString(reference.summary), 88);
+  const label = rawTitle || sidebarPublicLabelFromRef(ref);
+  if (!label) return undefined;
+  const kind = sidebarInferPublicAgentCandidateKind(`${ref} ${label} ${summary}`) ?? context.defaultKind;
+  if (!kind) return undefined;
+  const status = sidebarPublicAgentCandidateStatus(kind, `${context.sourceRunStatus ?? ''} ${context.backgroundStatus ?? ''} ${ref} ${label} ${summary}`);
+  return {
+    id: sidebarSearchMatchId('agent-candidate', `${kind}:${ref}:${label}`),
+    kind,
+    label,
+    detail: sidebarPublicCandidateDetail([ref], summary, undefined),
+    refs: [ref],
+    status,
+  };
+}
+
+function sidebarPublicAgentCandidateFromBackgroundRef(reference: unknown, backgroundStatus?: string): SidebarPublicAgentCandidate | undefined {
+  if (!isSidebarRecord(reference)) return undefined;
+  if (sidebarPublicValueIsUnsafe(sidebarString(reference.title))) return undefined;
+  const ref = sidebarPublicRef(sidebarString(reference.ref));
+  if (!ref) return undefined;
+  const label = sidebarPublicLine(sidebarString(reference.title), 56) || sidebarPublicLabelFromRef(ref);
+  if (!label) return undefined;
+  const inferredKind = sidebarInferPublicAgentCandidateKind(`${ref} ${label}`);
+  const kind: SidebarPublicAgentCandidateKind = inferredKind === 'resume-candidate' ? inferredKind : 'background-task';
+  return {
+    id: sidebarSearchMatchId('agent-candidate', `${kind}:${ref}:${label}`),
+    kind,
+    label,
+    detail: sidebarPublicCandidateDetail([ref], '', undefined),
+    refs: [ref],
+    status: sidebarPublicAgentCandidateStatus(kind, `${backgroundStatus ?? ''} ${ref} ${label}`),
+  };
+}
+
+function sidebarPublicAgentCandidateSearchMatches(
+  thread: SidebarThreadItem,
+  needle: string,
+  locale?: SupportedLocale,
+  projectId?: string,
+): SidebarSearchMatch[] {
+  return (thread.agentCandidates ?? [])
+    .filter((candidate) => containsNeedle(`${candidate.label} ${candidate.detail} ${candidate.refs.join(' ')} ${thread.scenarioId}`, needle))
+    .map((candidate) => ({
+      id: `agent-result:${thread.sessionId}:${candidate.id}`,
+      label: candidate.label,
+      detail: `${sidebarPublicAgentCandidateKindLabel(candidate.kind, locale)} · ${candidate.detail}`,
+      page: 'workbench' as const,
+      kind: 'agent-result' as const,
+      scenarioId: thread.scenarioId,
+      projectId,
+      sessionId: thread.sessionId,
+      threadState: thread.state,
+      candidateKind: candidate.kind,
+      candidateRef: candidate.refs[0],
+    }));
+}
+
+function sidebarPublicAgentCandidateBadges(candidates: SidebarPublicAgentCandidate[], locale?: SupportedLocale): string[] {
+  const badges: string[] = [];
+  const hasActive = candidates.some((candidate) => candidate.status === 'active' || candidate.kind === 'subagent-result');
+  const hasBackground = candidates.some((candidate) => candidate.status === 'background' || candidate.kind === 'background-task');
+  const hasResume = candidates.some((candidate) => candidate.status === 'resume' || candidate.kind === 'resume-candidate');
+  if (hasActive) badges.push(shellText(locale, { 'zh-CN': '子智能体活跃', 'en-US': 'Child active' }));
+  if (hasBackground) badges.push(shellText(locale, { 'zh-CN': '后台子智能体', 'en-US': 'Background child' }));
+  if (hasResume) badges.push(shellText(locale, { 'zh-CN': '可恢复', 'en-US': 'Resume ready' }));
+  return badges;
+}
+
+function sidebarPublicAgentCandidateKindLabel(kind: SidebarPublicAgentCandidateKind, locale?: SupportedLocale): string {
+  if (kind === 'background-task') return shellText(locale, { 'zh-CN': '后台任务', 'en-US': 'Background task' });
+  if (kind === 'resume-candidate') return shellText(locale, { 'zh-CN': '恢复候选', 'en-US': 'Resume candidate' });
+  return shellText(locale, { 'zh-CN': '子智能体结果', 'en-US': 'Sub-agent result' });
+}
+
+function sidebarPublicAgentCandidateStatus(
+  kind: SidebarPublicAgentCandidateKind,
+  haystack: string,
+): SidebarPublicAgentCandidate['status'] {
+  if (kind === 'resume-candidate' || /resume|recover|checkpoint/i.test(haystack)) return 'resume';
+  if (kind === 'background-task' || /background|running/i.test(haystack)) return 'background';
+  if (kind === 'subagent-result') return 'active';
+  return 'done';
+}
+
+function sidebarInferPublicAgentCandidateKind(value: string): SidebarPublicAgentCandidateKind | undefined {
+  if (/resume|recover|checkpoint/i.test(value)) return 'resume-candidate';
+  if (/background|bg[-_\s]?task/i.test(value)) return 'background-task';
+  if (/^subagent:/i.test(value.trim()) || /\bsub[-_\s]?agent\b/i.test(value)) return 'subagent-result';
+  return undefined;
+}
+
+function sidebarPublicCandidateDetail(refs: string[], summary: string, locale?: SupportedLocale) {
+  const safeSummary = sidebarPublicLine(summary, 88);
+  const safeRefs = refs.map(sidebarPublicRef).filter(Boolean).slice(0, 2);
+  const refText = safeRefs.length ? `${shellText(locale, { 'zh-CN': '引用', 'en-US': 'Refs' })}: ${safeRefs.join(', ')}` : '';
+  return [safeSummary, refText].filter(Boolean).join(' · ') || shellText(locale, { 'zh-CN': '公共候选', 'en-US': 'Public candidate' });
+}
+
+function sidebarThreadDetailWithAgentCandidates(detail: string, candidates: SidebarPublicAgentCandidate[], locale?: SupportedLocale) {
+  if (!candidates.length) return detail;
+  const labels = candidates.map((candidate) => sidebarPublicLine(candidate.label, 36)).filter(Boolean).slice(0, 2);
+  if (!labels.length) return detail;
+  const prefix = shellText(locale, { 'zh-CN': '子智能体', 'en-US': 'Child agents' });
+  return compactSidebarLine(`${detail} · ${prefix}: ${labels.join(', ')}`, 96);
+}
+
+function uniqueSidebarPublicAgentCandidates(candidates: SidebarPublicAgentCandidate[]) {
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const key = `${candidate.kind}:${candidate.refs[0] ?? candidate.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function sidebarPublicLabelFromRef(ref: string) {
+  const label = ref.replace(/^[a-z-]+:/i, '').replace(/[-_.]+/g, ' ');
+  return sidebarPublicLine(label, 56);
+}
+
+function sidebarPublicRef(value: string | undefined) {
+  const ref = (value ?? '').trim();
+  if (!ref || containsSidebarInternalTerm(ref)) return '';
+  if (!/^(?:subagent|run|artifact|checkpoint|message|execution-unit):[A-Za-z0-9][A-Za-z0-9._:-]*$/i.test(ref)) return '';
+  return ref;
+}
+
+function sidebarPublicLine(value: string | undefined, maxLength: number) {
+  const primary = sidebarPreviewPrimaryText(value);
+  if (sidebarPublicValueIsUnsafe(primary)) return '';
+  const compact = compactSidebarLine(primary.replace(/[`*_>#\-\[\]()]/g, ' '), maxLength);
+  if (!compact || containsSidebarInternalTerm(compact) || sidebarPreviewLooksLikeRawToolOutput(compact)) return '';
+  return compact;
+}
+
+function sidebarPublicValueIsUnsafe(value: string | undefined) {
+  const text = (value ?? '').trim();
+  if (!text) return false;
+  return containsSidebarInternalTerm(text)
+    || sidebarPreviewLooksLikeRawToolOutput(text)
+    || /\b(?:raw|provider|stdout|stderr|token|secret|authorization|credential|password)\b/i.test(text);
+}
+
+function sidebarRecordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value) ? value.filter(isSidebarRecord) : [];
+}
+
+function isSidebarRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function sidebarString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
 function compactSidebarLine(value: string | undefined, maxLength: number) {
   const compact = (value ?? '').replace(/\s+/g, ' ').trim();
   if (compact.length <= maxLength) return compact;
@@ -804,27 +1064,36 @@ function isEvidenceLikeThreadTitle(title: string) {
     || containsSidebarInternalTerm(title);
 }
 
-function sidebarThreadDetail(session: SciForgeSession, locale?: SupportedLocale) {
+function sidebarThreadDetail(
+  session: SciForgeSession,
+  locale?: SupportedLocale,
+  agentCandidates: SidebarPublicAgentCandidate[] = [],
+) {
   const latestMessage = [...session.messages].reverse().find((message) => !message.id.startsWith('seed'));
+  let detail = '';
   if (latestMessage) {
     const snippet = sidebarUserSemanticSnippet(latestMessage.content);
     if (snippet) {
       if (latestMessage.role === 'user') {
-        return shellText(locale, { 'zh-CN': `上次提问：${snippet}`, 'en-US': `Last question: ${snippet}` });
+        detail = shellText(locale, { 'zh-CN': `上次提问：${snippet}`, 'en-US': `Last question: ${snippet}` });
+      } else if (latestMessage.role === 'scenario') {
+        detail = shellText(locale, { 'zh-CN': `上次回答：${snippet}`, 'en-US': `Last answer: ${snippet}` });
+      } else {
+        detail = shellText(locale, { 'zh-CN': `最近更新：${snippet}`, 'en-US': `Last update: ${snippet}` });
       }
-      if (latestMessage.role === 'scenario') {
-        return shellText(locale, { 'zh-CN': `上次回答：${snippet}`, 'en-US': `Last answer: ${snippet}` });
-      }
-      return shellText(locale, { 'zh-CN': `最近更新：${snippet}`, 'en-US': `Last update: ${snippet}` });
+      return sidebarThreadDetailWithAgentCandidates(detail, agentCandidates, locale);
     }
-    return latestMessage.role === 'user'
+    detail = latestMessage.role === 'user'
       ? shellText(locale, { 'zh-CN': '最近提问', 'en-US': 'Recent question' })
       : shellText(locale, { 'zh-CN': '最近进展', 'en-US': 'Recent progress' });
+    return sidebarThreadDetailWithAgentCandidates(detail, agentCandidates, locale);
   }
   if (session.runs.length || session.artifacts.length || session.executionUnits.length || session.notebook.length) {
-    return shellText(locale, { 'zh-CN': '已有结果', 'en-US': 'Results available' });
+    detail = shellText(locale, { 'zh-CN': '已有结果', 'en-US': 'Results available' });
+    return sidebarThreadDetailWithAgentCandidates(detail, agentCandidates, locale);
   }
-  return shellText(locale, { 'zh-CN': '新聊天', 'en-US': 'New chat' });
+  detail = shellText(locale, { 'zh-CN': '新聊天', 'en-US': 'New chat' });
+  return sidebarThreadDetailWithAgentCandidates(detail, agentCandidates, locale);
 }
 
 function sidebarThreadStateLabel(state: SidebarCursorAgentThreadState, locale?: SupportedLocale) {
@@ -895,6 +1164,7 @@ function uniqueSidebarMatches(matches: SidebarSearchMatch[]) {
 }
 
 function sidebarSearchMatchDedupeKey(match: SidebarSearchMatch) {
+  if (match.kind === 'agent-result') return match.id;
   if (match.sessionId) {
     return `thread:${match.scenarioId ?? ''}:${match.sessionId}:${match.threadState ?? ''}`;
   }
@@ -2182,6 +2452,9 @@ export function Sidebar({
             {showMetadata ? (
               <span className="sidebar-thread-meta">
                 {threadState !== 'done' ? <span className="sidebar-thread-state-badge">{stateLabel}</span> : null}
+                {(item.badges ?? []).map((badge) => (
+                  <span key={badge} className="sidebar-thread-state-badge">{badge}</span>
+                ))}
                 {timeLabel ? <time dateTime={item.updatedAt || item.createdAt}>{timeLabel}</time> : null}
               </span>
             ) : null}

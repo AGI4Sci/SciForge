@@ -1421,7 +1421,187 @@ test('live execution process keeps running terminal deltas expanded and active',
   assert.match(html, /open=""/);
 });
 
-test('execution process merges sub-agent lifecycle and shows transcript affordance', () => {
+test('execution process renders parallel child-agent cards without compacting missing agent ids', () => {
+  const html = renderNativeStream([
+    nativeEventAt('2026-05-25T00:00:01.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      publicAgentLane: 'Explorer lane',
+      publicModelLane: 'Fast lane',
+      resultSummary: 'Explorer found the relevant process contract.',
+      resultRefs: ['subagent:explorer-result'],
+      transcriptRef: 'agent-transcript:explorer-trace',
+    }),
+    nativeEventAt('2026-05-25T00:00:02.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      publicAgentLane: 'Verifier lane',
+      publicModelLane: 'Careful lane',
+      resultSummary: 'Verifier checked the presentation contract.',
+      resultRefs: ['subagent:verifier-result'],
+      transcriptRef: 'agent-transcript:verifier-trace',
+    }),
+  ]);
+
+  assert.equal((html.match(/data-child-agent-card="true"/g) ?? []).length, 2);
+  assert.match(html, /Explorer lane/);
+  assert.match(html, /Verifier lane/);
+  assert.match(html, />explorer-result<\/button>/);
+  assert.match(html, />verifier-result<\/button>/);
+  assert.match(html, />explorer-trace<\/button>/);
+  assert.match(html, />verifier-trace<\/button>/);
+  assert.doesNotMatch(html, /agent-transcript:explorer-trace|agent-transcript:verifier-trace/);
+});
+
+test('execution process child-agent card shows public lanes duration summary and safe refs only', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'failed',
+      title: 'Presentation worker',
+      publicAgentLane: 'Presentation lane',
+      publicModelLane: 'Reasoning lane',
+      durationMs: 12_400,
+      resultSummary: [
+        'Checked the child-agent card projection.',
+        'provider.local https://provider.local/v1 token=sk-private-secret /Users/alice/private stdout stderr raw transcript should stay private.',
+      ].join(' '),
+      resultRefs: ['subagent:presentation-result', 'artifact:child-card-summary'],
+      refs: ['subagent:presentation-result', 'artifact:child-card-summary', 'provider:private', 'stdout:.sciforge/stdout.log', 'file:/Users/alice/private.md'],
+      transcriptRef: 'agent-transcript:presentation-trace',
+      providerUrl: 'https://provider.local/v1',
+      apiKey: 'sk-private-secret',
+      stdout: 'stdout should not render',
+      stderr: 'stderr should not render',
+    }),
+  ]);
+
+  assert.match(html, /data-child-agent-card="true"/);
+  assert.match(html, /data-child-agent-status="failed"/);
+  assert.match(html, /Presentation worker/);
+  assert.match(html, /Presentation lane/);
+  assert.match(html, /Reasoning lane/);
+  assert.match(html, /12s/);
+  assert.match(html, /Checked the child-agent card projection/);
+  assert.match(html, />presentation-result<\/button>/);
+  assert.match(html, />child-card-summary<\/button>/);
+  assert.match(html, />presentation-trace<\/button>/);
+  assert.doesNotMatch(html, /provider\.local|sk-private|\/Users\/alice|stdout|stderr|raw transcript|agent-transcript:presentation-trace|provider:private|\.sciforge/i);
+});
+
+test('execution process child-agent cards expose public agent type aliases without raw provider or model slugs', () => {
+  const html = renderNativeStream([
+    nativeEventAt('2026-05-25T00:00:01.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      itemId: 'alias-explore',
+      title: 'Explore literature',
+      publicAgentLane: 'provider route sciforge-deepseek-proxy',
+      agentType: 'exploration',
+      modelLane: 'bailian/deepseek-v4-flash',
+      modelName: 'bailian/deepseek-v4-flash',
+      resultSummary: 'Exploration finished with public refs.',
+      resultRefs: ['subagent:alias-explore'],
+    }),
+    nativeEventAt('2026-05-25T00:00:02.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      itemId: 'alias-worker',
+      title: 'Worker analysis',
+      agent_type: 'worker',
+      publicModelLane: 'openai/gpt-5.4-codex-superlong',
+      resultSummary: 'Worker finished with public refs.',
+      resultRefs: ['subagent:alias-worker'],
+    }),
+    nativeEventAt('2026-05-25T00:00:03.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      itemId: 'alias-review',
+      title: 'Review findings',
+      agent: { type: 'verifier-reviewer', alias: 'review-provider/model-slug' },
+      model: { publicLane: 'provider/model-private-slug' },
+      resultSummary: 'Review finished with public refs.',
+      resultRefs: ['subagent:alias-review'],
+    }),
+    nativeEventAt('2026-05-25T00:00:04.000Z', 'tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      itemId: 'alias-shell',
+      title: 'Shell check',
+      agentName: 'terminal-shell-runner',
+      modelAlias: 'claude-4-opus-provider-slug',
+      resultSummary: 'Shell check finished with public refs.',
+      resultRefs: ['subagent:alias-shell'],
+    }),
+  ]);
+
+  assert.equal((html.match(/data-child-agent-card="true"/g) ?? []).length, 4);
+  for (const alias of ['explore', 'worker', 'review', 'shell']) {
+    assert.match(html, new RegExp(`data-child-agent-lane="agent">${alias}<`), alias);
+  }
+  assert.doesNotMatch(html, /sciforge-deepseek-proxy|bailian|deepseek|openai|gpt-5|provider\/model|model-private|claude-4-opus|provider slug|model slug|modelName|publicModelLane/i);
+});
+
+test('execution process child-agent card filters unsafe transcript refs', () => {
+  const html = renderNativeStream([
+    nativeEvent('tool-result', 'Sub agent completed', {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status: 'completed',
+      title: 'Unsafe trace worker',
+      resultSummary: 'Worker completed with bounded summary.',
+      resultRefs: ['subagent:unsafe-trace-result'],
+      transcriptRef: 'agent-transcript:raw-transcript-private',
+    }),
+  ]);
+
+  assert.match(html, />unsafe-trace-result<\/button>/);
+  assert.doesNotMatch(html, /raw-transcript-private|agent-transcript:/i);
+});
+
+test('live execution process maps child-agent statuses and keeps internal trace folded', () => {
+  const events = [
+    ['failed-agent', 'failed'],
+    ['blocked-agent', 'blocked'],
+    ['cancelled-agent', 'cancelled'],
+    ['background-agent', 'background-running'],
+    ['resumed-agent', 'resumed'],
+  ].map(([itemId, status], index) => agentNativeEventAt(
+    `2026-05-25T00:00:${String(index + 1).padStart(2, '0')}.000Z`,
+    'tool-result',
+    'Sub agent update',
+    {
+      rawType: 'tool_completed',
+      toolName: 'multi_agent_v1.spawn_agent',
+      status,
+      itemId,
+      publicAgentLane: itemId,
+      resultSummary: `${itemId} public summary`,
+      resultRefs: [`subagent:${itemId}`],
+      transcriptRef: `agent-transcript:${itemId}`,
+    },
+  ));
+  const html = renderLiveNativeStream(events);
+
+  for (const status of ['failed', 'blocked', 'cancelled', 'background-running', 'resumed']) {
+    assert.match(html, new RegExp(`data-child-agent-status="${status}"`), status);
+    assert.match(html, new RegExp(`child-agent-card status-${status}`), status);
+  }
+  assert.doesNotMatch(html, /cursor-agent-action-subagent[^>]* open=""/);
+  for (const itemId of ['failed-agent', 'blocked-agent', 'cancelled-agent', 'background-agent', 'resumed-agent']) {
+    assert.match(html, new RegExp(`>${itemId}<\\/button>`), itemId);
+  }
+  assert.doesNotMatch(html, /agent-transcript:failed-agent|agent-transcript:blocked-agent|agent-transcript:cancelled-agent|agent-transcript:background-agent|agent-transcript:resumed-agent/);
+});
+
+test('execution process merges sub-agent lifecycle into a public child-agent card', () => {
   const html = renderNativeStream([
     nativeEvent('tool-call', 'Sub agent started', {
       rawType: 'tool_started',
@@ -1446,13 +1626,11 @@ test('execution process merges sub-agent lifecycle and shows transcript affordan
   assert.match(html, /1 sub agent/);
   assert.match(html, /Sub agent/);
   assert.match(html, /status-completed/);
+  assert.match(html, /data-child-agent-card="true"/);
   assert.doesNotMatch(html, />done<\/span>/);
-  assert.match(html, /Transcript/);
-  assert.match(html, /subagent-transcript-1/);
-  assert.doesNotMatch(html, /artifact:subagent-transcript-1/);
   assert.match(html, /Checked diff presentation gaps/);
-  assert.ok(html.indexOf('subagent-transcript-1') < html.indexOf('Checked diff presentation gaps'));
-  assert.doesNotMatch(html, /trace:unsafe-subagent|parentAgentId/);
+  assert.match(html, />subagent-transcript-1<\/button>/);
+  assert.doesNotMatch(html, /Transcript|artifact:subagent-transcript-1|trace:unsafe-subagent|parentAgentId/);
 });
 
 test('execution process treats explicit app-server sub-agent MCP lifecycle as one action', () => {
@@ -1489,12 +1667,9 @@ test('execution process treats explicit app-server sub-agent MCP lifecycle as on
   assert.doesNotMatch(html, /Sub agent sub agent/);
   assert.match(html, /Read-only delegated worker completed/);
   assert.match(html, /subagent-result-42fc45dcfc3f/);
-  assert.match(html, /subagent-transcript-42fc45dcfc3f/);
+  assert.match(html, />subagent-transcript-42fc45dcfc3f<\/button>/);
   assert.match(html, /PROJECT\.md/);
   assert.doesNotMatch(html, /artifact:subagent-result-42fc45dcfc3f|artifact:subagent-transcript-42fc45dcfc3f|file:PROJECT\.md/);
-  assert.ok(html.indexOf('subagent-transcript-42fc45dcfc3f') < html.indexOf('Read-only delegated worker completed'));
-  assert.ok(html.indexOf('subagent-result-42fc45dcfc3f') < html.indexOf('Read-only delegated worker completed'));
-  assert.ok(html.indexOf('PROJECT.md') < html.indexOf('Read-only delegated worker completed'));
   assert.doesNotMatch(html, /Request summary|read PROJECT\.md only|Sub agent reads|Main agent summarize|Do not use shell substitute|ll substitute|should stay folded/);
 });
 
@@ -1523,7 +1698,7 @@ test('execution process replaces sub-agent input refs with terminal result refs 
   ]);
 
   assert.equal((html.match(/cursor-agent-action-subagent/g) ?? []).length, 1);
-  assert.match(html, /Result/);
+  assert.match(html, /data-child-agent-card="true"/);
   assert.match(html, /Produced a cleaned result bundle/);
   assert.match(html, /subagent-result/);
   assert.match(html, /subagent-result-snake/);
@@ -1736,6 +1911,105 @@ test('stream process persistence keeps safe sub-agent lifecycle fields', () => {
   assert.equal(event.transcriptRef, 'artifact:subagent-transcript-1');
   assert.equal(event.resultSummary, 'Checked diff presentation gaps.');
   assert.deepEqual(event.refs, ['artifact:subagent-transcript-1']);
+});
+
+test('stream process persistence replays safe singular sub-agent result aliases', () => {
+  const response = persistedStreamResponse('run-subagent-alias-stream', {
+    type: 'tool_completed',
+    toolName: 'multi_agent_v1.spawn_agent',
+    status: 'completed',
+    agentId: 'worker-alias',
+    resultSummary: 'Produced replay-safe delegated output.',
+    resultRef: 'artifact:subagent-result-alias',
+    artifactRef: 'subagent-artifact-alias',
+    outputRef: 'reports/subagent-output-alias.md',
+    evidenceRefs: [
+      'artifact:subagent-evidence-alias',
+      'file:reports/subagent-evidence-alias.md',
+      'trace:unsafe-evidence',
+      'file:/tmp/private-evidence.md',
+    ],
+    transcriptRef: 'artifact:subagent-transcript-alias',
+    providerUrl: 'https://provider.example.invalid/v1',
+    apiKey: 'sk-private-alias-secret-1234567890',
+  });
+  const event = persistedStreamNativeEvent(response);
+  const serialized = JSON.stringify(response.run.raw);
+  const html = renderPersistedStreamResponse(response, 'run-subagent-alias-stream');
+
+  assert.deepEqual(event.resultRefs, [
+    'artifact:subagent-result-alias',
+    'artifact:subagent-artifact-alias',
+    'file:reports/subagent-output-alias.md',
+    'artifact:subagent-evidence-alias',
+    'file:reports/subagent-evidence-alias.md',
+  ]);
+  assert.match(html, /data-child-agent-card="true"/);
+  for (const label of [
+    'subagent-result-alias',
+    'subagent-artifact-alias',
+    'subagent-output-alias.md',
+    'subagent-evidence-alias',
+    'subagent-evidence-alias.md',
+    'subagent-transcript-alias',
+  ]) {
+    assert.match(html, new RegExp(`>${label.replace('.', '\\.')}<\\/button>`), label);
+  }
+  assert.doesNotMatch(serialized, /provider\.example|sk-private-alias|\/tmp\/private|trace:unsafe|apiKey|providerUrl/i);
+  assert.doesNotMatch(html, /artifact:subagent-result-alias|file:reports\/subagent-output-alias|trace:unsafe|provider\.example|sk-private-alias|\/tmp\/private/i);
+});
+
+test('stream process persistence replays nested safe sub-agent refs from result envelopes', () => {
+  const response = persistedStreamResponse('run-subagent-nested-stream', {
+    type: 'tool_completed',
+    toolName: 'multi_agent_v1.spawn_agent',
+    status: 'completed',
+    agentId: 'worker-nested',
+    resultSummary: 'Nested result envelope completed.',
+    result: {
+      resultRef: 'artifact:nested-subagent-result',
+      evidenceRefs: ['artifact:nested-subagent-evidence', 'file:reports/nested-evidence.md', 'provider:private'],
+      rawPayload: {
+        providerUrl: 'https://provider.example.invalid/v1',
+        apiKey: 'sk-nested-secret-1234567890',
+      },
+    },
+    output: {
+      artifactRef: 'nested-subagent-artifact',
+      outputRef: 'reports/nested-output.md',
+    },
+    structuredContent: {
+      transcriptRef: 'artifact:nested-subagent-transcript',
+      refs: ['artifact:nested-supporting-ref', 'file:/Users/alice/private.md'],
+    },
+  });
+  const event = persistedStreamNativeEvent(response);
+  const serialized = JSON.stringify(response.run.raw);
+  const html = renderPersistedStreamResponse(response, 'run-subagent-nested-stream');
+
+  assert.deepEqual(event.resultRefs, [
+    'artifact:nested-subagent-result',
+    'artifact:nested-subagent-evidence',
+    'file:reports/nested-evidence.md',
+    'artifact:nested-subagent-artifact',
+    'file:reports/nested-output.md',
+    'artifact:nested-subagent-transcript',
+    'artifact:nested-supporting-ref',
+  ]);
+  assert.match(html, /data-child-agent-card="true"/);
+  for (const label of [
+    'nested-subagent-result',
+    'nested-subagent-evidence',
+    'nested-evidence.md',
+    'nested-subagent-artifact',
+    'nested-output.md',
+    'nested-subagent-transcript',
+    'nested-supporting-ref',
+  ]) {
+    assert.match(html, new RegExp(`>${label.replace('.', '\\.')}<\\/button>`), label);
+  }
+  assert.doesNotMatch(serialized, /provider\.example|sk-nested-secret|rawPayload|\/Users\/alice|provider:private|apiKey|providerUrl/i);
+  assert.doesNotMatch(html, /provider\.example|sk-nested-secret|rawPayload|\/Users\/alice|provider:private|artifact:nested|file:reports\/nested/i);
 });
 
 test('stream process persistence keeps redacted unified diff text for replay detail', () => {
@@ -1974,6 +2248,42 @@ test('execution process keeps final Runtime Codex metadata out of the default pr
   assert.doesNotMatch(html, /Agent runtime|service|configured|local workspace|trace|诊断引用已收起/);
   assert.doesNotMatch(html, /sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek|\/Applications\/workspace|codex-command-visible|RAW_JSONL|RAW_STDERR|RAW_STDOUT|stderr|stdout/i);
 });
+
+function persistedStreamResponse(runId: string, raw: Record<string, unknown>) {
+  return attachStreamProcessToResponse({
+    message: { id: `msg-${runId}`, role: 'assistant', content: 'done', createdAt: '2026-05-25T00:00:02.000Z' },
+    run: {
+      id: runId,
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'delegate audit',
+      response: 'done',
+      createdAt: '2026-05-25T00:00:00.000Z',
+    },
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+  } as never, [agentStreamEvent({
+    type: 'tool-result',
+    label: 'Tool result',
+    detail: `Tool completed: ${String(raw.toolName ?? 'tool')}`,
+    raw,
+  })]);
+}
+
+function persistedStreamNativeEvent(response: { run: { raw?: unknown } }) {
+  return (((response as never as { run: { raw?: { streamProcess?: { events?: Array<{ native?: Record<string, unknown> }> } } } }).run.raw?.streamProcess?.events) ?? [])[0]?.native ?? {};
+}
+
+function renderPersistedStreamResponse(response: { run: unknown }, runId: string) {
+  return renderToStaticMarkup(createElement(RunExecutionProcess, {
+    runId,
+    session: { ...session([]), runs: [response.run] as never, executionUnits: [] },
+    onObjectFocus: () => undefined,
+  }));
+}
 
 function renderProcess(executionUnits: RuntimeExecutionUnit[]) {
   return renderToStaticMarkup(createElement(RunExecutionProcess, {

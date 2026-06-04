@@ -197,6 +197,72 @@ test('CodexAppServerAdapter preserves Computer Use native-route workspace events
   assert.equal(events[2]?.status, 'needs-confirmation');
 });
 
+test('CodexAppServerAdapter projects host-owned native-route events without provider, workspace, or raw leaks', async () => {
+  const client: CodexAppServerClient = {
+    async startTurn(input) {
+      return {
+        threadId: 'thread-cu-private',
+        turnId: 'turn-cu-private',
+        provider: 'private-provider',
+        model: 'private-model',
+        profile: 'private-profile',
+        workspacePath: '/Applications/private/sciforge-workspace',
+        events: asyncGenerator([
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'message',
+            timestamp: new Date().toISOString(),
+            provider: 'private-provider',
+            model: 'private-model',
+            profile: 'private-profile',
+            workspace: '/Applications/private/sciforge-workspace',
+            commandId: input.commandId,
+            attemptId: input.attemptId,
+            text: 'Native route inspected provider https://private-provider.example/v1 with token=sk-private-secret-123456 and /Applications/private/sciforge-workspace raw stdout.',
+            raw: {
+              provider: 'private-provider',
+              model: 'private-model',
+              workspacePath: '/Applications/private/sciforge-workspace',
+              payload: { secret: 'sk-private-secret-123456' },
+            },
+          },
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            timestamp: new Date().toISOString(),
+            provider: 'private-provider',
+            model: 'private-model',
+            profile: 'private-profile',
+            workspace: '/Applications/private/sciforge-workspace',
+            commandId: input.commandId,
+            attemptId: input.attemptId,
+            status: 'completed',
+            raw: { workspace: '/Applications/private/sciforge-workspace' },
+          },
+        ]),
+      };
+    },
+  };
+  const adapter = new CodexAppServerAdapter({ client });
+
+  const turn = await adapter.startTurn({
+    commandText: '/computer-use inspect the focused window',
+    workspacePath: '/tmp/sciforge-workspace',
+    commandId: 'cu-public-command',
+    attemptId: 'attempt-1',
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
+  });
+  const events = await collect(turn.events);
+  const serialized = JSON.stringify(events);
+
+  assert.ok(events.every((event) => event.provider === 'host-owned-runtime'));
+  assert.ok(events.every((event) => event.model === 'computer-use-native-route'));
+  assert.ok(events.every((event) => event.profile === 'host-owned'));
+  assert.ok(events.every((event) => event.workspace === 'workspace:current'));
+  assert.doesNotMatch(serialized, /private-provider|private-model|private-profile|private-provider\.example|sk-private-secret|\/Applications\/private|"raw"|workspacePath|stdout/);
+  assert.match(serialized, /\[redacted-url\]|\[redacted-secret\]|\[redacted-path\]|runtime audit/);
+});
+
 test('CodexAppServerAdapter promotes sub-agent refs into normalized events', async () => {
   const client: CodexAppServerClient = {
     async startTurn() {
@@ -214,10 +280,24 @@ test('CodexAppServerAdapter promotes sub-agent refs into normalized events', asy
               result: {
                 agentId: '019e7649-worker',
                 parentAgentId: 'root-agent',
+                agentType: 'review-worker',
                 ref: 'artifact:subagent-result',
+                resultRef: 'artifact:subagent-result',
                 transcriptRef: 'transcript:worker-1',
                 resultSummary: 'Sub-agent audit completed.',
-                refs: ['artifact:subagent-result'],
+                refs: ['artifact:subagent-result', 'transcript:worker-1', 'trace:unsafe-ref'],
+                durationMs: 42,
+                background: {
+                  runInBackground: true,
+                  stateRef: 'subagent:019e7649-worker',
+                  providerUrl: 'https://provider.example/v1',
+                },
+                resume: {
+                  resumeRequested: true,
+                  resumeRef: 'subagent:resume-candidate',
+                  resumeBoundary: 'explicit',
+                  apiKey: 'sk-secret-123456789',
+                },
               },
             },
           },
@@ -239,10 +319,23 @@ test('CodexAppServerAdapter promotes sub-agent refs into normalized events', asy
   assert.equal(toolCompleted?.toolName, 'multi_agent_v1.spawn_agent');
   assert.equal(toolCompleted?.agentId, '019e7649-worker');
   assert.equal(toolCompleted?.parentAgentId, 'root-agent');
+  assert.equal(toolCompleted?.agentType, 'review-worker');
   assert.equal(toolCompleted?.ref, 'artifact:subagent-result');
+  assert.equal(toolCompleted?.resultRef, 'artifact:subagent-result');
   assert.equal(toolCompleted?.transcriptRef, 'transcript:worker-1');
   assert.deepEqual(toolCompleted?.refs, ['artifact:subagent-result', 'transcript:worker-1']);
+  assert.equal(toolCompleted?.durationMs, 42);
+  assert.deepEqual(toolCompleted?.background, {
+    runInBackground: true,
+    stateRef: 'subagent:019e7649-worker',
+  });
+  assert.deepEqual(toolCompleted?.resume, {
+    resumeRequested: true,
+    resumeRef: 'subagent:resume-candidate',
+    resumeBoundary: 'explicit',
+  });
   assert.match(toolCompleted?.resultSummary ?? '', /Sub-agent audit/);
+  assert.doesNotMatch(JSON.stringify(toolCompleted), /trace:unsafe-ref|provider\.example|sk-secret|apiKey/i);
 });
 
 test('CodexAppServerAdapter preserves trusted read-file preview refs', async () => {
@@ -415,6 +508,14 @@ test('ClaudeStreamJsonAdapter spawns Claude stream-json and maps partial plus co
 
 async function* asyncGenerator(values: unknown[]) {
   for (const value of values) yield value;
+}
+
+function hostOwnedComputerUseRuntimeIntent() {
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+  } as const;
 }
 
 async function collect(events: AsyncIterable<NormalizedAgentEvent>) {

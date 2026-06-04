@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   buildWorkspaceWriterHealth,
+  WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT,
   WORKSPACE_WRITER_HEALTH_CAPABILITIES,
 } from './workspace-server-health.js';
 
@@ -27,7 +28,7 @@ test('workspace writer health helper preserves the public health response shape'
     endpoints: {
       runtimeModuleDispatcher: '/api/sciforge/modules/{describe,query,read,invoke}',
       browserHostSession: '/api/sciforge/browser-host/sessions/{start,state,actions,computer-use-actions}',
-      browserHostNativeSurface: '/api/sciforge/browser-host/native-surface/{health,attach,state}',
+      browserHostNativeSurface: WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT,
       browserHostDiagnostics: '/api/sciforge/browser-host/sessions/{frame,frame-stream}',
       browserHostSearch: '/api/sciforge/browser-host/search',
       runtimeCodex: '/api/sciforge/runtime/codex/{stream,realtime/ws}',
@@ -53,7 +54,7 @@ test('workspace writer health does not claim native browser surface readiness wi
   });
 
   assert.equal(health.capabilities.includes('browser-host-native-surface'), false);
-  assert.equal(health.endpoints.browserHostNativeSurface, '/api/sciforge/browser-host/native-surface/{health,attach,state}');
+  assert.equal(health.endpoints.browserHostNativeSurface, WORKSPACE_WRITER_BROWSER_HOST_NATIVE_SURFACE_ENDPOINT);
   assert.equal(health.endpoints.browserHostDiagnostics, '/api/sciforge/browser-host/sessions/{frame,frame-stream}');
 });
 

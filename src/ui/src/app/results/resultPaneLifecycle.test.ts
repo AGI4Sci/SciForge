@@ -189,6 +189,17 @@ test('right pane lifecycle storage preserves explicit empty state and prunes sta
   }
 });
 
+test('right pane storage key scopes by stable token without embedding raw workspace paths', () => {
+  const privatePath = '/Applications/workspace/ailab/research/private-project';
+  const key = rightPaneStateStorageKey(privatePath);
+
+  assert.equal(key, rightPaneStateStorageKey(privatePath));
+  assert.notEqual(key, rightPaneStateStorageKey('/Applications/workspace/ailab/research/other-project'));
+  assert.match(key, /^sciforge\.right-pane-state\.v1\.scope-[a-z0-9]+$/);
+  assert.doesNotMatch(key, /Applications|workspace|private-project|research/);
+  assert.equal(rightPaneStateStorageKey(undefined), 'sciforge.right-pane-state.v1.default');
+});
+
 test('right pane lifecycle storage falls back to requested initial tab outside the browser', () => {
   const previousWindow = globalThis.window;
   Object.defineProperty(globalThis, 'window', {

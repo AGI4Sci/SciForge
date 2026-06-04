@@ -157,6 +157,9 @@ test('result pane route helper maps preferred view, ref prefix, and object kind 
     ['workspace diff preferred view', { kind: 'file', ref: 'file:patches/update.diff', preferredView: 'workspace-diff-viewer' }, 'files', 'preferred-view'],
     ['run evidence', { kind: 'run', ref: 'run:latest' }, 'evidence', 'ref-prefix'],
     ['subagent evidence', { kind: 'run', ref: 'subagent:worker-1' }, 'evidence', 'ref-prefix'],
+    ['subagent result artifact evidence', { kind: 'artifact', ref: 'artifact:subagent-result-worker-1' }, 'evidence', 'ref-prefix'],
+    ['subagent transcript artifact evidence', { kind: 'artifact', ref: 'artifact:subagent-transcript-worker-1' }, 'evidence', 'ref-prefix'],
+    ['plain transcript evidence', { kind: 'run', ref: 'transcript:worker-1' }, 'evidence', 'ref-prefix'],
     ['preferred view override', { kind: 'file', ref: 'file:trace.txt', preferredView: 'terminal-session-viewer' }, 'terminal', 'preferred-view'],
     ['subagent preferred view', { kind: 'run', ref: 'run:worker-1', preferredView: 'subagent-result' }, 'evidence', 'preferred-view'],
     ['screen artifact type', { kind: 'artifact', ref: 'artifact:screen-run', artifactType: 'computer-use-virtual-screen' }, 'image', 'artifact-type'],
@@ -178,6 +181,42 @@ test('result pane route helper maps preferred view, ref prefix, and object kind 
   assert.equal(focusRoute.purpose, 'focus');
   assert.equal(openRoute.purpose, 'open');
   assert.equal(openRoute.composerInsertion, false);
+});
+
+test('object ref route matrix sends typed and raw refs to the owning right pane without composer insertion', () => {
+  const cases: Array<[string, unknown, string, string]> = [
+    ['subagent ref opens References', { kind: 'run', ref: 'subagent:reviewer-1' }, 'evidence', 'ref-prefix'],
+    ['trace ref opens References', { kind: 'run', ref: 'trace:planner-audit' }, 'evidence', 'ref-prefix'],
+    ['run ref opens References', { kind: 'run', ref: 'run:latest' }, 'evidence', 'ref-prefix'],
+    ['subagent result artifact opens References', { kind: 'artifact', ref: 'artifact:subagent-result-reviewer-1' }, 'evidence', 'ref-prefix'],
+    ['subagent transcript artifact opens References', { kind: 'artifact', ref: 'artifact:subagent-transcript-reviewer-1' }, 'evidence', 'ref-prefix'],
+    ['plain transcript opens References', { kind: 'run', ref: 'transcript:reviewer-1' }, 'evidence', 'ref-prefix'],
+    ['raw subagent result string opens References', 'artifact:subagent-result-reviewer-raw', 'evidence', 'ref-prefix'],
+    ['raw transcript string opens References', 'transcript:reviewer-raw', 'evidence', 'ref-prefix'],
+    ['browser ref opens Browser', { kind: 'url', ref: 'browser:session-1' }, 'browser', 'ref-prefix'],
+    ['https ref opens Browser', { kind: 'url', ref: 'https://example.test/paper' }, 'browser', 'ref-prefix'],
+    ['raw https string opens Browser', 'https://example.test/raw-url', 'browser', 'ref-prefix'],
+    ['raw http string opens Browser', 'http://example.test/raw-url', 'browser', 'ref-prefix'],
+    ['annotation ref opens Image / Evidence', { kind: 'artifact', ref: 'annotation:mark-1' }, 'image', 'ref-prefix'],
+    ['image ref opens Image / Evidence', { kind: 'artifact', ref: 'image:figure-1.png' }, 'image', 'ref-prefix'],
+    ['crop ref opens Image / Evidence', { kind: 'artifact', ref: 'crop:figure-1#xywh' }, 'image', 'ref-prefix'],
+    ['screenshot ref opens Image / Evidence', { kind: 'artifact', ref: 'screenshot:browser-before' }, 'image', 'ref-prefix'],
+    ['terminal ref opens Terminal', { kind: 'execution-unit', ref: 'terminal:session-1' }, 'terminal', 'ref-prefix'],
+    ['file ref opens Files', { kind: 'file', ref: 'file:src/ui/src/app/ResultsRenderer.tsx' }, 'files', 'ref-prefix'],
+  ];
+
+  for (const [label, reference, pane, reason] of cases) {
+    const route = resolveResultPaneRoute(reference);
+    assert.equal(route.pane, pane, label);
+    assert.equal(route.reason, reason, label);
+    assert.equal(route.composerInsertion, false, label);
+  }
+
+  const unsupportedRawRoute = resolveResultPaneRoute('sk-secret-raw-unmatched-payload');
+  assert.equal(unsupportedRawRoute.pane, 'primary');
+  assert.equal(unsupportedRawRoute.reason, 'unsupported');
+  assert.equal(unsupportedRawRoute.objectRef, undefined);
+  assert.doesNotMatch(JSON.stringify(unsupportedRawRoute), /sk-secret-raw-unmatched-payload/);
 });
 
 test('unknown result objects resolve to typed unsupported state without raw payload leakage', () => {
@@ -244,7 +283,20 @@ test('terminal and references contracts separate terminal sessions from provenan
   assert.ok(references.refPrefixes.includes('file:'));
   assert.ok(references.refPrefixes.includes('execution-unit:'));
   assert.ok(references.refPrefixes.includes('subagent:'));
+  assert.ok(references.refPrefixes.includes('artifact:subagent-result-'));
+  assert.ok(references.refPrefixes.includes('artifact:subagent-transcript-'));
+  assert.ok(references.refPrefixes.includes('transcript:'));
+  assert.ok(references.refPrefixes.includes('trace:'));
   assert.ok(references.refPrefixes.includes('agent-result:'));
+});
+
+test('evidence tab keeps the existing tab kind while naming its contract as References', () => {
+  const references = resultPaneContractForTab('evidence');
+
+  assert.equal(references.pane, 'evidence');
+  assert.equal(references.states.ready.title, 'References object ready');
+  assert.equal(references.requiredRefs[0]?.name, 'referenceRef');
+  assert.match(references.requiredRefs[0]?.description ?? '', /References pane/);
 });
 
 test('object focus/open routes cover chat, process, references, and tool panes without composer insertion', () => {

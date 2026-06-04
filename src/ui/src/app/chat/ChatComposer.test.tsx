@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 
 import { ChatComposer } from './ChatComposer';
 
@@ -132,6 +133,10 @@ test('composer folds Cursor-like tools, models, skills, and SciForge references 
   for (const label of ['Plan', 'Debug', 'Multitask', 'Ask', 'Image', 'Models', 'Skills', 'MCP Servers', 'Pick visible context', 'Attach file']) {
     assert.match(html, new RegExp(label));
   }
+  for (const modeId of ['plan', 'debug', 'multitask', 'ask']) {
+    assert.match(html, new RegExp(`data-mode-option="${modeId}"`));
+    assert.match(html, new RegExp(`data-mode-intent="${modeId}"`));
+  }
   for (const label of ['Literature Research', 'Domain skill', 'Pipeline skill', 'PubMed', 'Tool skill', 'Citation verifier', 'Notebook Connector', 'Vision MCP']) {
     assert.match(html, new RegExp(label));
   }
@@ -147,4 +152,48 @@ test('composer folds Cursor-like tools, models, skills, and SciForge references 
   assert.match(html, /Queued guidance/);
   assert.doesNotMatch(html, /gpt-5-fast-private|private-provider|\/Users\/private|127\.0\.0\.1|token|secret|provider|runtime codex|run id|raw schema|manifest/i);
   assert.doesNotMatch(html, /\bprofile\b/i);
+  assert.doesNotMatch(html, /\/multitask/i);
+});
+
+test('composer renders selected multitask mode as a removable chip and focused placeholder', () => {
+  const html = renderToStaticMarkup(React.createElement(ChatComposer, {
+    expanded: true,
+    input: '',
+    isSending: false,
+    composerHeight: 58,
+    referencePickMode: false,
+    pendingReferences: [],
+    contextMeter: null,
+    fileInputRef: React.createRef<HTMLInputElement>(),
+    referenceChips: null,
+    selectedModeIntent: {
+      id: 'multitask',
+      label: 'Multitask',
+    },
+    copy: {
+      placeholder: 'Ask a question, or attach context...',
+    },
+    onExpand: () => undefined,
+    onCollapse: () => undefined,
+    onToggleReferencePickMode: () => undefined,
+    onFileUpload: () => undefined,
+    onInputChange: () => undefined,
+    onSend: () => undefined,
+    onAbort: () => undefined,
+    onClearModeIntent: () => undefined,
+    onBeginResize: () => undefined,
+  }));
+
+  assert.match(html, /data-selected-mode="multitask"/);
+  assert.match(html, /Multitask/);
+  assert.match(html, /Remove Multitask mode/);
+  assert.match(html, /placeholder="Coordinate parallel tasks\.\.\."/);
+  assert.doesNotMatch(html, /\/multitask/i);
+  assert.doesNotMatch(html, /Ask a question, or attach context\.\.\./);
+});
+
+test('composer source keeps multitask out of slash command injection paths', () => {
+  const source = readFileSync(new URL('./ChatComposer.tsx', import.meta.url), 'utf8');
+  assert.match(source, /onModeIntentSelect/);
+  assert.doesNotMatch(source, /['"`]\/multitask\b/);
 });

@@ -59,11 +59,28 @@ export interface NormalizedAgentEvent {
   exitCode?: number | null;
   agentId?: string;
   parentAgentId?: string;
+  agentType?: string;
+  resultRef?: string;
   transcriptRef?: string;
   refs?: string[];
+  durationMs?: number;
+  background?: NormalizedSubagentBackgroundMetadata;
+  resume?: NormalizedSubagentResumeMetadata;
   traceStepId?: string;
   signal?: NodeJS.Signals | string | null;
   raw?: unknown;
+}
+
+export interface NormalizedSubagentBackgroundMetadata {
+  runInBackground: boolean;
+  stateRef?: string;
+}
+
+export interface NormalizedSubagentResumeMetadata {
+  resumeRequested: boolean;
+  resumeAgentId?: string;
+  resumeRef?: string;
+  resumeBoundary: 'explicit' | 'none';
 }
 
 export interface GuiPresentRuntimePayload {
@@ -143,8 +160,33 @@ export function stderrAuditEvent(metadata: CodexRuntimeMetadata, chunk: string):
 export function rawJsonlAuditEvent(metadata: CodexRuntimeMetadata, raw: unknown): NormalizedAgentEvent {
   return event(metadata, 'audit', {
     status: 'raw-jsonl',
-    raw,
+    raw: rawJsonlAuditProjection(raw),
   });
+}
+
+function rawJsonlAuditProjection(raw: unknown): Record<string, unknown> {
+  if (!isRecord(raw)) {
+    return { redacted: true, valueType: raw === null ? 'null' : typeof raw };
+  }
+  const item = isRecord(raw.item) ? raw.item : undefined;
+  const payload = isRecord(raw.payload) ? raw.payload : undefined;
+  const output: Record<string, unknown> = {
+    redacted: true,
+    type: safeRuntimeIdentifier(stringField(raw.type)) ?? compactRuntimeText(stringField(raw.type), 80),
+  };
+  const itemId = safeRuntimeIdentifier(stringField(item?.id) ?? stringField(raw.itemId) ?? stringField(raw.item_id));
+  const itemType = safeRuntimeIdentifier(stringField(item?.type) ?? stringField(raw.itemType) ?? stringField(raw.item_type));
+  const itemName = safeRuntimeIdentifier(stringField(item?.name) ?? stringField(raw.name));
+  const status = safeRuntimeIdentifier(stringField(item?.status) ?? stringField(raw.status) ?? stringField(payload?.status));
+  if (itemId || itemType || itemName || status) {
+    output.item = {
+      ...(itemId ? { id: itemId } : {}),
+      ...(itemType ? { type: itemType } : {}),
+      ...(itemName ? { name: itemName } : {}),
+      ...(status ? { status } : {}),
+    };
+  }
+  return output;
 }
 
 export function guiPresentEvent(metadata: CodexRuntimeMetadata, presentation: Omit<GuiPresentRuntimePayload, 'source'> & { source?: string }): NormalizedAgentEvent {
@@ -724,7 +766,7 @@ function subagentMetadataFromTool(
   item: Record<string, unknown>,
   payload: Record<string, unknown> | undefined,
   toolName: string | undefined,
-): Pick<NormalizedAgentEvent, 'ref' | 'agentId' | 'parentAgentId' | 'transcriptRef' | 'resultSummary' | 'refs'> {
+): Pick<NormalizedAgentEvent, 'ref' | 'agentId' | 'parentAgentId' | 'agentType' | 'resultRef' | 'transcriptRef' | 'resultSummary' | 'refs' | 'durationMs' | 'background' | 'resume'> {
   const candidates = subagentCandidateRecords(rawEvent, item, payload);
   const records = candidates.ordered;
   const resultRecords = candidates.resultRecords.length ? candidates.resultRecords : records;
@@ -741,6 +783,9 @@ function subagentMetadataFromTool(
       ...(stringArrayField(record.artifact_refs) ?? []),
     ].map(safeExplicitPreviewRef))
     .find(Boolean);
+  const resultRef = safeOpaqueRuntimeRef(firstStringField(resultRecords, 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref'))
+    ?? safeOpaqueRuntimeRef(firstStringField(records, 'resultRef', 'result_ref', 'artifactRef', 'artifact_ref', 'outputRef', 'output_ref'))
+    ?? ref;
   const refs = uniqueRuntimeRefs(resultRecords.flatMap((record) => [
     ...(stringArrayField(record.refs) ?? []),
     ...(stringArrayField(record.evidenceRefs) ?? []),
@@ -752,11 +797,70 @@ function subagentMetadataFromTool(
     ref,
     agentId: safeRuntimeIdentifier(firstStringField(records, 'agentId', 'agent_id', 'agentPath', 'agent_path')),
     parentAgentId: safeRuntimeIdentifier(firstStringField(records, 'parentAgentId', 'parent_agent_id', 'parentId', 'parent_id')),
+    agentType: safeRuntimeIdentifier(firstStringField(records, 'agentType', 'agent_type', 'role')),
+    resultRef,
     transcriptRef: safeOpaqueRuntimeRef(firstStringField(resultRecords, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref'))
       ?? safeOpaqueRuntimeRef(firstStringField(records, 'transcriptRef', 'transcript_ref', 'transcriptArtifactRef', 'transcript_artifact_ref')),
     resultSummary: compactRuntimeText(firstStringField(resultRecords, 'resultSummary', 'result_summary', 'summary') ?? firstStringField(records, 'resultSummary', 'result_summary', 'summary'), 320),
     refs: refs.length ? refs : undefined,
+    durationMs: firstRuntimeNumberField(resultRecords, 'durationMs', 'duration_ms') ?? firstRuntimeNumberField(records, 'durationMs', 'duration_ms'),
+    background: subagentBackgroundMetadata(resultRecords) ?? subagentBackgroundMetadata(records),
+    resume: subagentResumeMetadata(resultRecords) ?? subagentResumeMetadata(records),
   };
+}
+
+function subagentBackgroundMetadata(records: Record<string, unknown>[]): NormalizedSubagentBackgroundMetadata | undefined {
+  for (const record of records) {
+    const background = isRecord(record.background) ? record.background : undefined;
+    const source = background ?? record;
+    const runInBackground = booleanField(source.runInBackground) ?? booleanField(source.run_in_background);
+    const stateRef = safeOpaqueRuntimeRef(stringField(source.stateRef) ?? stringField(source.state_ref));
+    if (runInBackground !== undefined || stateRef) {
+      return {
+        runInBackground: runInBackground ?? false,
+        ...(stateRef ? { stateRef } : {}),
+      };
+    }
+  }
+  return undefined;
+}
+
+function subagentResumeMetadata(records: Record<string, unknown>[]): NormalizedSubagentResumeMetadata | undefined {
+  for (const record of records) {
+    const resume = isRecord(record.resume) ? record.resume : undefined;
+    const source = resume ?? record;
+    const resumeAgentId = safeRuntimeIdentifier(stringField(source.resumeAgentId) ?? stringField(source.resume_agent_id));
+    const resumeRef = safeOpaqueRuntimeRef(stringField(source.resumeRef) ?? stringField(source.resume_ref) ?? stringField(source.resumeCandidateRef) ?? stringField(source.resume_candidate_ref));
+    const resumeRequested = booleanField(source.resumeRequested) ?? booleanField(source.resume_requested);
+    const boundary = subagentResumeBoundary(stringField(source.resumeBoundary) ?? stringField(source.resume_boundary));
+    if (resumeRequested !== undefined || resumeAgentId || resumeRef || boundary) {
+      const requested = resumeRequested ?? Boolean(resumeAgentId || resumeRef);
+      return {
+        resumeRequested: requested,
+        ...(resumeAgentId ? { resumeAgentId } : {}),
+        ...(resumeRef ? { resumeRef } : {}),
+        resumeBoundary: boundary ?? (requested ? 'explicit' : 'none'),
+      };
+    }
+  }
+  return undefined;
+}
+
+function subagentResumeBoundary(value: string | undefined): 'explicit' | 'none' | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'explicit') return 'explicit';
+  if (normalized === 'none') return 'none';
+  return undefined;
+}
+
+function firstRuntimeNumberField(records: Record<string, unknown>[], ...keys: string[]): number | undefined {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = numberField(record[key]);
+      if (typeof value === 'number') return Math.max(0, value);
+    }
+  }
+  return undefined;
 }
 
 function subagentCandidateRecords(
@@ -780,13 +884,29 @@ function subagentCandidateRecords(
 }
 
 function pushParsedCandidateRecords(out: Record<string, unknown>[], value: unknown) {
-  const parsed = parseJsonRecord(value);
-  if (!parsed) return;
-  out.push(parsed);
-  for (const key of ['value', 'result', 'output', 'input', 'arguments', 'args'] as const) {
-    const nested = parseJsonRecord(parsed[key]);
-    if (nested) out.push(nested);
+  out.push(...nestedRuntimeRecords(value));
+}
+
+function nestedRuntimeRecords(value: unknown, seen = new Set<Record<string, unknown>>()): Record<string, unknown>[] {
+  const root = parseJsonRecord(value);
+  if (!root || seen.has(root)) return [];
+  seen.add(root);
+  const records = [root];
+  for (const key of ['value', 'result', 'output', 'input', 'arguments', 'args', 'structuredContent', 'structured_content'] as const) {
+    records.push(...nestedRuntimeRecords(root[key], seen));
   }
+  const contentItems = Array.isArray(root.contentItems)
+    ? root.contentItems
+    : Array.isArray(root.content_items)
+      ? root.content_items
+      : [];
+  for (const item of contentItems) {
+    records.push(...nestedRuntimeRecords(isRecord(item) ? item.text ?? item.content : item, seen));
+    if (isRecord(item)) {
+      records.push(...nestedRuntimeRecords(item.structuredContent ?? item.structured_content, seen));
+    }
+  }
+  return records;
 }
 
 function uniqueRecordReferences(records: Record<string, unknown>[]) {
@@ -963,6 +1083,15 @@ function redactRuntimeText(value: string): string {
 function numberField(value: unknown): number | null | undefined {
   if (value === null) return null;
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return undefined;
 }
 
 function stringField(value: unknown): string | undefined {

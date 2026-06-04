@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, readFile } from 'node:fs/promises';
+import { access, mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -9,15 +9,16 @@ import { runAgentServerGeneratedTask } from '../../src/runtime/gateway/generated
 import { makeGeneratedTaskRunnerDeps, runtimeGatewaySkill } from './runtime-gateway-runner-fixtures.js';
 
 const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-task-payload-preflight-'));
+const expectedArtifactType = 'analysis-report';
 const request = normalizeGatewayRequest({
-  skillDomain: 'literature',
+  skillDomain: 'knowledge',
   prompt: 'Run a generated task payload preflight smoke.',
   workspacePath: workspace,
   agentServerBaseUrl: 'http://agentserver.local',
-  expectedArtifactTypes: ['research-report'],
+  expectedArtifactTypes: [expectedArtifactType],
   uiState: { sessionId: 'payload-preflight-smoke' },
 });
-const skill = runtimeGatewaySkill();
+const skill = runtimeGatewaySkill('knowledge');
 
 const malformedSource = [
   'import json, pathlib, sys',
@@ -35,7 +36,7 @@ const malformedSource = [
 const report = evaluateGeneratedTaskPayloadPreflight({
   taskFiles: [{ path: '.sciforge/tasks/malformed-output.py', language: 'python', content: malformedSource }],
   entrypoint: { path: '.sciforge/tasks/malformed-output.py' },
-  expectedArtifacts: ['research-report'],
+  expectedArtifacts: [expectedArtifactType],
   request,
 });
 assert.equal(report.status, 'blocked');
@@ -85,8 +86,8 @@ const paramsJsonDumps = evaluateGeneratedTaskPayloadPreflight({
       'payload["reasoningTrace"] = "smoke"',
       'payload["claims"] = []',
       'payload["uiManifest"] = []',
-      'payload["executionUnits"] = [{"id": "run", "status": "done", "params": json.dumps({"expected": ["research-report"]})}]',
-      'payload["artifacts"] = [{"id": "report", "type": "research-report", "data": {"markdown": "ok"}}]',
+      `payload["executionUnits"] = [{"id": "run", "status": "done", "params": json.dumps({"expected": [${JSON.stringify(expectedArtifactType)}]})}]`,
+      `payload["artifacts"] = [{"id": "report", "type": ${JSON.stringify(expectedArtifactType)}, "data": {"markdown": "ok"}}]`,
       'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
     ].join('\n'),
   }],
@@ -102,7 +103,7 @@ const artifactVariables = evaluateGeneratedTaskPayloadPreflight({
       'import json, sys',
       '_, input_path, output_path = sys.argv',
       'markdown = "# Report"',
-      'artifact_report = {"ref": "research-report.md", "type": "research-report", "content": markdown, "mimeType": "text/markdown"}',
+      `artifact_report = {"ref": "analysis-report.md", "type": ${JSON.stringify(expectedArtifactType)}, "content": markdown, "mimeType": "text/markdown"}`,
       'artifact_papers = {"ref": "paper-list.json", "type": "paper-list", "data": {"papers": []}}',
       'payload = {',
       '  "message": "ok",',
@@ -111,7 +112,7 @@ const artifactVariables = evaluateGeneratedTaskPayloadPreflight({
       '  "evidenceLevel": "runtime",',
       '  "reasoningTrace": "smoke",',
       '  "claims": [],',
-      '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "research-report.md"}],',
+      '  "uiManifest": [{"componentId": "report-viewer", "artifactRef": "analysis-report.md"}],',
       '  "executionUnits": [{"id": "run", "status": "done"}],',
       '  "artifacts": [artifact_report, artifact_papers]',
       '}',
@@ -132,7 +133,7 @@ const artifactVariablesWithIds = evaluateGeneratedTaskPayloadPreflight({
     content: [
       'import json, sys',
       '_, input_path, output_path = sys.argv',
-      'artifact_report = {"id": "research-report", "type": "research-report", "content": "# Report", "mimeType": "text/markdown"}',
+      `artifact_report = {"id": "analysis-report", "type": ${JSON.stringify(expectedArtifactType)}, "content": "# Report", "mimeType": "text/markdown"}`,
       'artifact_papers = {"id": "paper-list", "type": "paper-list", "data": {"papers": []}}',
       'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": [artifact_report, artifact_papers]}',
       'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
@@ -149,7 +150,7 @@ const artifactArrayVariable = evaluateGeneratedTaskPayloadPreflight({
     content: [
       'import json, sys',
       '_, input_path, output_path = sys.argv',
-      'artifact_report = {"id": "research-report", "type": "research-report", "content": "# Report"}',
+      `artifact_report = {"id": "analysis-report", "type": ${JSON.stringify(expectedArtifactType)}, "content": "# Report"}`,
       'artifact_list = [artifact_report]',
       'payload = {"message": "ok", "confidence": 0.8, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": artifact_list}',
       'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
@@ -166,7 +167,7 @@ const badArtifactArrayVariable = evaluateGeneratedTaskPayloadPreflight({
     content: [
       'import json, sys',
       '_, input_path, output_path = sys.argv',
-      'artifact_list = ["research-report.md"]',
+      'artifact_list = ["analysis-report.md"]',
       'payload = {"message": "bad", "confidence": 0.2, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": artifact_list}',
       'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
     ].join('\n'),
@@ -183,7 +184,7 @@ const artifactStringList = evaluateGeneratedTaskPayloadPreflight({
     content: [
       'import json, sys',
       '_, input_path, output_path = sys.argv',
-      'payload = {"message": "bad", "confidence": 0.2, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": ["research-report.md"]}',
+      'payload = {"message": "bad", "confidence": 0.2, "claimType": "fact", "evidenceLevel": "runtime", "reasoningTrace": "smoke", "claims": [], "uiManifest": [], "executionUnits": [], "artifacts": ["analysis-report.md"]}',
       'open(output_path, "w", encoding="utf-8").write(json.dumps(payload))',
     ].join('\n'),
   }],
@@ -206,23 +207,26 @@ const payload = await runAgentServerGeneratedTask(request, skill, [skill], {}, m
       entrypoint: { language: 'python', path: '.sciforge/tasks/malformed-output.py' },
       environmentRequirements: {},
       validationCommand: '',
-      expectedArtifacts: ['research-report'],
+      expectedArtifacts: [expectedArtifactType],
     },
   }),
 }));
 
 assert.equal(payload?.executionUnits[0]?.status, 'repair-needed');
 assert.match(payload?.message ?? '', /payload preflight blocked expensive execution/i);
-assert.match(JSON.stringify(payload?.executionUnits[0]?.refs ?? {}), /generatedTaskPayloadPreflight/);
+assert.match(JSON.stringify(payload), /Generated task payload preflight blocked expensive execution/i);
 await assert.rejects(access(join(workspace, 'should-not-run.txt')));
 
-const taskRef = String(payload?.executionUnits[0]?.codeRef ?? '');
-assert.match(taskRef, /^\.sciforge\/sessions\/.+\/tasks\/generated-literature-/);
-assert.match(await readFile(join(workspace, taskRef), 'utf8'), /This is not a ToolPayload envelope/);
+const diagnosticRef = String(payload?.artifacts[0]?.dataRef ?? '');
+assert.match(diagnosticRef, /^\.sciforge\/sessions\/.+\/task-results\/agentserver-generation-retry-repair-knowledge-/);
+assert.ok(payload?.objectReferences?.some((reference) => {
+  const record = reference as Record<string, unknown>;
+  return record.kind === 'run' && /agentserver-generation-retry-repair-knowledge-/.test(String(record.ref ?? ''));
+}));
 
 console.log(JSON.stringify({
   ok: true,
   workspace,
   blockedIssues: report.issues.map((issue) => issue.path),
-  taskRef,
+  diagnosticRef,
 }, null, 2));

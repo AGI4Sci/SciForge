@@ -18,6 +18,11 @@ import { localeText, type SupportedLocale } from './i18n';
 import { makeId, nowIso } from './domain';
 import type { RuntimeResponsePlan } from './latencyPolicy';
 import { isRuntimeAuditOnlyEvent } from './runtimeAuditEvents';
+import {
+  PUBLIC_RUNTIME_AUDIT_FALLBACK,
+  sanitizePublicText,
+  sanitizePublicTextArray,
+} from './publicProjectionSanitizer';
 
 export type { ProcessProgressModel, ProcessProgressPhase } from '@sciforge-ui/runtime-contract';
 
@@ -38,17 +43,13 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function asStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
-}
-
 export function progressModelFromEvent(event: AgentStreamEvent): ProcessProgressModel | undefined {
   const raw = isRecord(event.raw) ? event.raw : {};
-  const interactionProgress = runtimeInteractionProgressEventFromUnknown(raw)
-    ?? runtimeInteractionProgressEventFromCompactRecord(raw)
+  const directInteractionProgress = runtimeInteractionProgressEventFromUnknown(raw)
     ?? (isRecord(raw.raw) ? runtimeInteractionProgressEventFromUnknown(raw.raw) : undefined);
-  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
+  if (directInteractionProgress) return progressModelFromInteractionProgress(directInteractionProgress, { compactDetail: false });
+  const compactInteractionProgress = runtimeInteractionProgressEventFromCompactRecord(raw);
+  if (compactInteractionProgress) return progressModelFromInteractionProgress(compactInteractionProgress, { compactDetail: true });
   const progress = isRecord(raw.progress) ? raw.progress : isRecord(raw.raw) && isRecord(raw.raw.progress) ? raw.raw.progress : undefined;
   if (progress) return normalizeProgressModel(progress, event);
   if (event.type === PROCESS_PROGRESS_EVENT_TYPE) return normalizeProgressModel(raw, event);
@@ -272,18 +273,18 @@ function firstProgressPhase(responsePlan: RuntimeResponsePlan | undefined) {
 
 function normalizeProgressModel(progress: Record<string, unknown>, event: AgentStreamEvent): ProcessProgressModel {
   const phase = normalizePhase(asString(progress.phase) ?? event.type);
-  const detail = asString(progress.detail) ?? event.detail;
+  const detail = sanitizePublicText(asString(progress.detail) ?? event.detail, { fallback: PUBLIC_RUNTIME_AUDIT_FALLBACK });
   return {
     phase,
-    title: asString(progress.title) ?? titleForPhase(phase, event.label),
+    title: sanitizePublicText(asString(progress.title), { fallback: titleForPhase(phase, event.label) }) ?? titleForPhase(phase, event.label),
     detail: detail || titleForPhase(phase, event.label),
-    reading: asStringArray(progress.reading),
-    writing: asStringArray(progress.writing),
-    waitingFor: asString(progress.waitingFor) ?? asString(progress.waiting_for),
-    nextStep: asString(progress.nextStep) ?? asString(progress.next_step),
+    reading: sanitizePublicTextArray(progress.reading),
+    writing: sanitizePublicTextArray(progress.writing),
+    waitingFor: sanitizePublicText(asString(progress.waitingFor) ?? asString(progress.waiting_for), { fallback: 'workspace activity' }),
+    nextStep: sanitizePublicText(asString(progress.nextStep) ?? asString(progress.next_step), { fallback: 'Continue when new workspace activity arrives.' }),
     lastEvent: normalizeLastEvent(progress.lastEvent) ?? normalizeLastEvent(progress.last_event),
     reason: asString(progress.reason),
-    recoveryHint: asString(progress.recoveryHint) ?? asString(progress.recovery_hint),
+    recoveryHint: sanitizePublicText(asString(progress.recoveryHint) ?? asString(progress.recovery_hint), { fallback: 'Recovery details are available in the run audit.' }),
     canAbort: progress.canAbort === true || progress.can_abort === true,
     canContinue: progress.canContinue === true || progress.can_continue === true,
     status: normalizeStatus(asString(progress.status), phase),
@@ -337,7 +338,7 @@ function progressModelFromCompactEvent(value: unknown): ProcessProgressModel | u
     });
   }
   const interactionProgress = runtimeInteractionProgressEventFromCompactRecord(value);
-  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress);
+  if (interactionProgress) return progressModelFromInteractionProgress(interactionProgress, { compactDetail: true });
   const raw = compactEventRaw(value, type, label, detail);
   if (isInteractionProgressCompactType(type) && !isRecord(raw.progress)) return undefined;
   const model = progressModelFromEvent({
@@ -493,14 +494,18 @@ function splitCompactList(value: string) {
   return value.split(/[、,]/).map((item) => item.trim()).filter(Boolean);
 }
 
-function progressModelFromInteractionProgress(progress: RuntimeInteractionProgressEvent): ProcessProgressModel {
+function progressModelFromInteractionProgress(
+  progress: RuntimeInteractionProgressEvent,
+  options: { compactDetail?: boolean } = {},
+): ProcessProgressModel {
   const presentation = runtimeInteractionProgressPresentation(progress);
   const phase = normalizePhase(progress.phase ?? progress.type);
   const interactionKind = progress.interaction?.kind;
+  const detail = interactionProgressModelDetail(progress, presentation?.detail, options);
   return {
     phase,
     title: presentation?.label ?? titleForPhase(phase, progress.type),
-    detail: presentation?.detail || progress.reason || progress.type,
+    detail,
     reading: [],
     writing: [],
     waitingFor: waitingForInteraction(progress.type, interactionKind, progress.interaction?.required),
@@ -511,6 +516,25 @@ function progressModelFromInteractionProgress(progress: RuntimeInteractionProgre
     canContinue: progress.type === GUIDANCE_QUEUED_EVENT_TYPE || progress.status === 'blocked',
     status: normalizeInteractionStatus(progress),
   };
+}
+
+function interactionProgressModelDetail(
+  progress: RuntimeInteractionProgressEvent,
+  publicDetail: string | undefined,
+  options: { compactDetail?: boolean },
+) {
+  const structuredDetail = [
+    publicDetail,
+    progress.reason ? `Reason: ${progress.reason}` : '',
+    options.compactDetail ? interactionProgressModelInteractionLine(progress.interaction) : '',
+  ].filter(Boolean).join('\n');
+  return structuredDetail || progress.reason || progress.type;
+}
+
+function interactionProgressModelInteractionLine(interaction: RuntimeInteractionProgressEvent['interaction']) {
+  if (!interaction?.kind) return '';
+  const requirement = interaction.required === false ? 'optional' : 'required';
+  return `Interaction: ${interaction.kind} ${requirement}`;
 }
 
 function latestNonSyntheticEvent(events: AgentStreamEvent[]) {
@@ -561,9 +585,12 @@ function latestSilentStreamDecision(events: AgentStreamEvent[]) {
 }
 
 function summarizeLastEvent(event: AgentStreamEvent) {
+  const label = sanitizePublicText(event.label || event.type || 'Event', { fallback: 'Event', maxLength: 80 }) ?? 'Event';
+  const detail = sanitizePublicText(event.detail || event.type || event.label || 'event', { fallback: PUBLIC_RUNTIME_AUDIT_FALLBACK, maxLength: 180 })
+    ?? PUBLIC_RUNTIME_AUDIT_FALLBACK;
   return {
-    label: event.label || event.type || 'Event',
-    detail: (event.detail || event.type || event.label || 'event').trim().slice(0, 180),
+    label,
+    detail,
     createdAt: event.createdAt,
   };
 }
@@ -571,13 +598,13 @@ function summarizeLastEvent(event: AgentStreamEvent) {
 function normalizeLastEvent(value: unknown): ProcessProgressModel['lastEvent'] | undefined {
   if (!isRecord(value)) return undefined;
   if (isRuntimeAuditOnlyEvent(value)) return undefined;
-  const label = asString(value.label) ?? asString(value.type);
-  const detail = asString(value.detail) ?? asString(value.message) ?? asString(value.text);
+  const label = sanitizePublicText(asString(value.label) ?? asString(value.type), { fallback: 'Event', maxLength: 80 });
+  const detail = sanitizePublicText(asString(value.detail) ?? asString(value.message) ?? asString(value.text), { fallback: PUBLIC_RUNTIME_AUDIT_FALLBACK, maxLength: 180 });
   if (!label || !detail) return undefined;
   return {
     label,
     detail,
-    createdAt: asString(value.createdAt) ?? asString(value.created_at),
+    createdAt: sanitizePublicText(asString(value.createdAt) ?? asString(value.created_at), { maxLength: 80 }),
   };
 }
 

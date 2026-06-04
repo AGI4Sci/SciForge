@@ -1,22 +1,36 @@
-import { createHash } from 'node:crypto';
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
-import { scrubRuntimeCodexAuditText } from './codex-runtime-audit-bundle.js';
+import { createHash, randomBytes } from 'node:crypto';
+import { resolve } from 'node:path';
 import { SUBAGENT_SPAWN_AGENT_TOOL_NAME } from './subagent-extension-manifest.js';
+import {
+  createSubagentRuntimeStore,
+  type StoredSubagentBackgroundMetadata,
+  type StoredSubagentResumeMetadata,
+  type StoredSubagentRun,
+  type StoredSubagentStatus,
+} from './subagent-runtime-store.js';
+import type { AgentCliApprovalPolicy, AgentCliSandbox } from './agent-cli-adapter.js';
+import { compactSubagentPublicText, createAgentHostSubagentRunner, type SubagentRunner } from './subagent-runner.js';
 
 export type SubagentMcpToolName = typeof SUBAGENT_SPAWN_AGENT_TOOL_NAME;
 
-export interface SubagentSpawnAgentResult extends Record<string, unknown> {
-  ok: true;
+export interface SubagentSpawnAgentResult {
+  ok: boolean;
   agentId: string;
   parentAgentId: string;
+  agentType: string;
   resultSummary: string;
-  ref: string;
-  resultRef: string;
-  transcriptRef: string;
+  ref?: string;
+  resultRef?: string;
+  transcriptRef?: string;
   refs: string[];
-  status: 'completed';
-  exitCode: 0;
+  status: StoredSubagentStatus;
+  exitCode?: number | null;
+  startedAt: string;
+  completedAt?: string;
+  durationMs?: number;
+  background: StoredSubagentBackgroundMetadata;
+  resume: StoredSubagentResumeMetadata;
+  errorCode?: string;
 }
 
 export interface SubagentMcpToolCallResult extends Record<string, unknown> {
@@ -27,14 +41,17 @@ export interface SubagentMcpToolCallResult extends Record<string, unknown> {
 export interface SubagentRuntimeOptions {
   workspace: string;
   profile?: string;
-  sandbox?: string;
+  approvalPolicy?: AgentCliApprovalPolicy;
+  sandbox?: AgentCliSandbox;
   codexHome?: string;
   codexCommand?: string;
   env?: NodeJS.ProcessEnv;
   transcriptRoot?: string;
   parentCommandId?: string;
   parentAttemptId?: string;
+  timeoutMs?: number;
   now?: () => Date;
+  runner?: SubagentRunner;
 }
 
 interface SubagentInvocation {
@@ -44,10 +61,10 @@ interface SubagentInvocation {
   refs: string[];
 }
 
-type WorkspaceTextRef = {
-  relPath: string;
-  text: string;
-};
+type SubagentBaseProjection = Pick<
+  SubagentSpawnAgentResult,
+  'agentId' | 'parentAgentId' | 'agentType' | 'startedAt' | 'background' | 'resume'
+>;
 
 export async function callSubagentMcpTool(
   name: SubagentMcpToolName,
@@ -55,7 +72,16 @@ export async function callSubagentMcpTool(
   options: SubagentRuntimeOptions,
 ): Promise<SubagentMcpToolCallResult> {
   if (name !== SUBAGENT_SPAWN_AGENT_TOOL_NAME) {
-    throw new Error(`Unsupported sub-agent MCP tool: ${name}`);
+    const structuredContent = blockedSubagentResult({
+      args,
+      options,
+      resultSummary: 'NO_SUBAGENT_TOOL_AVAILABLE: The requested sub-agent tool is not available in this runtime.',
+      errorCode: 'NO_SUBAGENT_TOOL_AVAILABLE',
+    });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(structuredContent, null, 2) }],
+      structuredContent,
+    };
   }
   const structuredContent = await spawnLocalSubagent(args, options);
   return {
@@ -67,58 +93,340 @@ export async function callSubagentMcpTool(
 export async function spawnLocalSubagent(args: Record<string, unknown>, options: SubagentRuntimeOptions): Promise<SubagentSpawnAgentResult> {
   const workspace = resolve(options.workspace);
   const invocation = subagentInvocationFromArgs(args);
+  const base = subagentBaseProjection(args, options, invocation);
+  const requestedExplicitRefs = uniqueStrings(invocation.refs);
+  const unsafeRef = requestedExplicitRefs.find((ref) => !safeRuntimeRef(ref));
+  if (unsafeRef) {
+    return blockedFromBase(base, options, 'Sub-agent request blocked: unsafe reference requested.');
+  }
+  const unsafeResumeBoundary = unsafeResumeBoundarySummary(args);
+  if (unsafeResumeBoundary) {
+    return blockedFromBase(base, options, unsafeResumeBoundary);
+  }
   const requestedRefs = uniqueStrings([
-    ...invocation.refs,
+    ...requestedExplicitRefs.map((ref) => safeRuntimeRef(ref)),
     ...extractCandidatePaths(invocation.prompt).map((path) => `file:${path}`),
   ]);
-  const readableRefs = await Promise.all(requestedRefs.map((ref) => readWorkspaceTextRef(workspace, ref)));
-  const readable = uniqueWorkspaceTextRefs(readableRefs.filter((entry): entry is WorkspaceTextRef => Boolean(entry)));
-  const createdAt = (options.now?.() ?? new Date()).toISOString();
+  const resumeBlocker = await validateExplicitResumeBoundary(base, options);
+  if (resumeBlocker) {
+    return blockedFromBase(base, options, resumeBlocker);
+  }
+  const runner = options.runner ?? createAgentHostSubagentRunner({ env: options.env });
+
+  if (base.background.runInBackground) {
+    return spawnBackgroundSubagent({
+      workspace,
+      invocation,
+      base,
+      options,
+      requestedRefs,
+      runner,
+    });
+  }
+
+  const runnerResult = await runner.spawn({
+    workspace,
+    prompt: invocation.prompt,
+    refs: requestedRefs,
+    agentId: base.agentId,
+    parentAgentId: base.parentAgentId,
+    agentType: base.agentType,
+    profile: options.profile,
+    approvalPolicy: options.approvalPolicy,
+    sandbox: options.sandbox,
+    codexCommand: options.codexCommand,
+    timeoutMs: options.timeoutMs,
+    runInBackground: false,
+    ...base.resume,
+  });
+  return completedSubagentResult({
+    invocation,
+    base,
+    options,
+    runnerResult,
+    writeTranscript: Boolean(options.transcriptRoot),
+  });
+}
+
+async function spawnBackgroundSubagent(input: {
+  workspace: string;
+  invocation: SubagentInvocation;
+  base: SubagentBaseProjection;
+  options: SubagentRuntimeOptions;
+  requestedRefs: string[];
+  runner: SubagentRunner;
+}): Promise<SubagentSpawnAgentResult> {
+  if (!input.options.transcriptRoot) {
+    return blockedFromBase(input.base, input.options, 'Sub-agent request blocked: background state store unavailable.');
+  }
+  const stateRef = input.base.background.stateRef;
+  const refs = uniqueRefs([stateRef]);
+  const resultSummary = 'Sub-agent is running in background. Track the runtime state ref and resume only by explicit child agent id or ref.';
+  const storeRecord: StoredSubagentRun = {
+    schemaVersion: 'sciforge.runtime-codex.subagent-run.v1',
+    agentId: input.base.agentId,
+    parentAgentId: input.base.parentAgentId,
+    workspaceScope: workspaceScopeFromPath(input.workspace),
+    agentType: input.base.agentType,
+    status: 'running',
+    resultSummary,
+    refs,
+    startedAt: input.base.startedAt,
+    background: input.base.background,
+    resume: input.base.resume,
+    inspectedRefs: input.requestedRefs,
+    promptDigest: sha256(input.invocation.prompt),
+  };
+  const store = createSubagentRuntimeStore({ transcriptRoot: input.options.transcriptRoot });
+  try {
+    await store.writeRun(storeRecord);
+  } catch {
+    return blockedFromBase(input.base, input.options, 'Sub-agent request blocked: background state store unavailable.');
+  }
+
+  void settleBackgroundSubagent(input);
+
+  return {
+    ...input.base,
+    ok: true,
+    status: 'running',
+    resultSummary,
+    ref: stateRef,
+    refs,
+  };
+}
+
+async function settleBackgroundSubagent(input: {
+  workspace: string;
+  invocation: SubagentInvocation;
+  base: SubagentBaseProjection;
+  options: SubagentRuntimeOptions;
+  requestedRefs: string[];
+  runner: SubagentRunner;
+}): Promise<void> {
+  const runnerResult = await input.runner.spawn({
+    workspace: input.workspace,
+    prompt: input.invocation.prompt,
+    refs: input.requestedRefs,
+    agentId: input.base.agentId,
+    parentAgentId: input.base.parentAgentId,
+    agentType: input.base.agentType,
+    profile: input.options.profile,
+    approvalPolicy: input.options.approvalPolicy,
+    sandbox: input.options.sandbox,
+    codexCommand: input.options.codexCommand,
+    timeoutMs: input.options.timeoutMs,
+    runInBackground: true,
+    ...input.base.resume,
+  }).catch((error): Awaited<ReturnType<SubagentRunner['spawn']>> => ({
+    status: 'blocked',
+    exitCode: null,
+    resultSummary: compactSubagentPublicText(
+      `Sub-agent request blocked: Agent Host execution unavailable. ${error instanceof Error ? error.message : String(error)}`,
+      420,
+    ) ?? 'Sub-agent request blocked: Agent Host execution unavailable.',
+    inspectedRefs: [],
+    readable: [],
+  }));
+  await completedSubagentResult({
+    invocation: input.invocation,
+    base: input.base,
+    options: input.options,
+    runnerResult,
+    writeTranscript: true,
+  });
+}
+
+async function completedSubagentResult(input: {
+  invocation: SubagentInvocation;
+  base: SubagentBaseProjection;
+  options: SubagentRuntimeOptions;
+  runnerResult: Awaited<ReturnType<SubagentRunner['spawn']>>;
+  writeTranscript: boolean;
+}): Promise<SubagentSpawnAgentResult> {
+  const { invocation, base, options, runnerResult } = input;
+  const completedAt = (options.now?.() ?? new Date()).toISOString();
+  const durationMs = Math.max(0, Date.parse(completedAt) - Date.parse(base.startedAt));
   const digest = sha256([
-    createdAt,
+    base.agentId,
+    base.startedAt,
     invocation.prompt,
-    ...readable.map((entry) => `${entry.relPath}\n${entry.text.slice(0, 2048)}`),
+    ...runnerResult.readable.map((entry) => `${entry.relPath}\n${entry.text.slice(0, 2048)}`),
   ].join('\0')).slice(0, 12);
-  const agentType = safeRuntimeIdentifier(invocation.agentType)?.slice(0, 32) ?? 'worker';
-  const agentId = safeRuntimeIdentifier(invocation.agentId) ?? `${agentType}-${digest}`;
-  const parentAgentId = safeRuntimeIdentifier(options.parentCommandId) ?? 'runtime-codex';
   const transcriptRef = `artifact:subagent-transcript-${digest}`;
   const resultRef = `artifact:subagent-result-${digest}`;
-  const resultSummary = subagentResultSummary({
-    prompt: invocation.prompt,
-    readable,
-  });
   const refs = uniqueRefs([
     resultRef,
     transcriptRef,
-    ...readable.map((entry) => `file:${entry.relPath}`),
+    base.background.stateRef,
+    ...runnerResult.inspectedRefs,
   ]);
   const result: SubagentSpawnAgentResult = {
+    ...base,
     ok: true,
-    agentId,
-    parentAgentId,
-    resultSummary,
+    resultSummary: compactSubagentPublicText(runnerResult.resultSummary, 720) ?? 'Delegated worker completed.',
     ref: resultRef,
     resultRef,
     transcriptRef,
     refs,
-    status: 'completed',
-    exitCode: 0,
+    status: runnerResult.status,
+    exitCode: runnerResult.exitCode,
+    completedAt,
+    durationMs,
   };
-  await persistTranscript(options, {
+  if (input.writeTranscript && options.transcriptRoot) {
+    const storeRecord: StoredSubagentRun = {
+      schemaVersion: 'sciforge.runtime-codex.subagent-run.v1',
+      agentId: result.agentId,
+      parentAgentId: result.parentAgentId,
+      workspaceScope: workspaceScopeFromPath(options.workspace),
+      agentType: result.agentType,
+      status: result.status,
+      resultSummary: result.resultSummary,
+      resultRef,
+      transcriptRef,
+      refs,
+      startedAt: result.startedAt,
+      completedAt,
+      durationMs,
+      background: result.background,
+      resume: result.resume,
+      inspectedRefs: runnerResult.inspectedRefs,
+      promptDigest: sha256(invocation.prompt),
+    };
+    try {
+      await createSubagentRuntimeStore({ transcriptRoot: options.transcriptRoot }).writeRun(storeRecord);
+    } catch {
+      return {
+        ...base,
+        ok: false,
+        status: 'blocked',
+        resultSummary: 'Sub-agent request blocked: transcript store unavailable.',
+        refs: [],
+        completedAt,
+        durationMs,
+      };
+    }
+  }
+  return result;
+}
+
+function subagentBaseProjection(
+  args: Record<string, unknown>,
+  options: SubagentRuntimeOptions,
+  invocation: SubagentInvocation,
+): SubagentBaseProjection {
+  const startedAt = (options.now?.() ?? new Date()).toISOString();
+  const digest = sha256([
+    startedAt,
+    randomBytes(8).toString('hex'),
+    invocation.prompt,
+    invocation.agentType ?? '',
+    invocation.agentId ?? '',
+    options.parentCommandId ?? '',
+  ].join('\0')).slice(0, 12);
+  const agentType = safeRuntimeIdentifier(invocation.agentType)?.slice(0, 32) ?? 'worker';
+  const agentId = safeRuntimeIdentifier(invocation.agentId) ?? `${agentType}-${digest}`;
+  const parentAgentId = safeRuntimeIdentifier(options.parentCommandId) ?? 'runtime-codex';
+  const stateRef = safeRuntimeRef(`subagent:${agentId}`);
+  const rawResumeAgentId = resumeAgentIdFromArgs(args);
+  const resumeAgentId = safeRuntimeIdentifier(rawResumeAgentId);
+  const rawResumeRef = resumeRefFromArgs(args);
+  const resumeRef = rawResumeRef ? safeRuntimeRef(rawResumeRef) : undefined;
+  const resumeRequested = Boolean(rawResumeAgentId || rawResumeRef);
+  return {
     agentId,
     parentAgentId,
-    createdAt,
-    transcriptRef,
-    resultRef,
-    refs,
-    status: 'completed',
-    exitCode: 0,
+    agentType,
+    startedAt,
+    background: {
+      runInBackground: booleanField(args.runInBackground) ?? booleanField(args.run_in_background) ?? booleanField(args.background) ?? false,
+      stateRef,
+    },
+    resume: {
+      resumeRequested,
+      ...(resumeAgentId ? { resumeAgentId } : {}),
+      ...(resumeRef ? { resumeRef } : {}),
+      resumeBoundary: resumeRequested ? 'explicit' : 'none',
+    },
+  };
+}
+
+function unsafeResumeBoundarySummary(args: Record<string, unknown>): string | undefined {
+  const rawResumeAgentId = resumeAgentIdFromArgs(args);
+  if (rawResumeAgentId && !safeRuntimeIdentifier(rawResumeAgentId)) {
+    return 'Sub-agent request blocked: unsafe resume boundary requested.';
+  }
+  const rawResumeRef = resumeRefFromArgs(args);
+  if (rawResumeRef && !safeRuntimeRef(rawResumeRef)) {
+    return 'Sub-agent request blocked: unsafe resume reference requested.';
+  }
+  return undefined;
+}
+
+async function validateExplicitResumeBoundary(
+  base: SubagentBaseProjection,
+  options: SubagentRuntimeOptions,
+): Promise<string | undefined> {
+  if (!base.resume.resumeRequested) return undefined;
+  if (!options.transcriptRoot) return 'Sub-agent request blocked: resume boundary store unavailable.';
+  const store = createSubagentRuntimeStore({ transcriptRoot: options.transcriptRoot });
+  try {
+    const agentRun = base.resume.resumeAgentId
+      ? await store.readRunByAgentId(base.resume.resumeAgentId)
+      : undefined;
+    const refRun = base.resume.resumeRef
+      ? await store.findRunByRef(base.resume.resumeRef)
+      : undefined;
+    if (base.resume.resumeAgentId && !agentRun) return 'Sub-agent request blocked: explicit resume boundary not found.';
+    if (base.resume.resumeRef && !refRun) return 'Sub-agent request blocked: explicit resume boundary not found.';
+    if (agentRun && refRun && agentRun.agentId !== refRun.agentId) {
+      return 'Sub-agent request blocked: ambiguous resume boundary requested.';
+    }
+    if (!agentRun && !refRun) return 'Sub-agent request blocked: explicit resume boundary not found.';
+    const currentWorkspaceScope = workspaceScopeFromPath(options.workspace);
+    for (const run of [agentRun, refRun].filter((entry): entry is StoredSubagentRun => Boolean(entry))) {
+      if (run.parentAgentId !== base.parentAgentId) {
+        return 'Sub-agent request blocked: explicit resume boundary is outside the current parent.';
+      }
+      if (run.workspaceScope !== currentWorkspaceScope) {
+        return 'Sub-agent request blocked: explicit resume boundary is outside the current workspace.';
+      }
+    }
+  } catch {
+    return 'Sub-agent request blocked: resume boundary store unavailable.';
+  }
+  return undefined;
+}
+
+function blockedSubagentResult(input: {
+  args: Record<string, unknown>;
+  options: SubagentRuntimeOptions;
+  resultSummary: string;
+  errorCode?: string;
+}): SubagentSpawnAgentResult {
+  const invocation = subagentInvocationFromArgs(input.args);
+  const base = subagentBaseProjection(input.args, input.options, invocation);
+  return blockedFromBase(base, input.options, input.resultSummary, input.errorCode);
+}
+
+function blockedFromBase(
+  base: Omit<SubagentSpawnAgentResult, 'ok' | 'status' | 'resultSummary' | 'refs'>,
+  options: SubagentRuntimeOptions,
+  resultSummary: string,
+  errorCode?: string,
+): SubagentSpawnAgentResult {
+  const completedAt = (options.now?.() ?? new Date()).toISOString();
+  return {
+    ...base,
+    ok: false,
+    status: 'blocked',
     resultSummary,
-    promptDigest: sha256(invocation.prompt),
-    inspectedRefs: readable.map((entry) => `file:${entry.relPath}`),
-  });
-  return result;
+    refs: [],
+    completedAt,
+    durationMs: Math.max(0, Date.parse(completedAt) - Date.parse(base.startedAt)),
+    ...(errorCode ? { errorCode } : {}),
+  };
 }
 
 function subagentInvocationFromArgs(args: Record<string, unknown>): SubagentInvocation {
@@ -162,62 +470,6 @@ function inputItems(value: unknown): Array<{ name?: string; path?: string; text?
   });
 }
 
-async function readWorkspaceTextRef(workspace: string, ref: string): Promise<WorkspaceTextRef | undefined> {
-  const relPath = ref.startsWith('file:')
-    ? safeRelativePath(ref.slice('file:'.length))
-    : safeRelativePath(ref);
-  if (!relPath) return undefined;
-  const absolutePath = resolve(workspace, relPath);
-  if (!isPathInside(workspace, absolutePath)) return undefined;
-  const info = await stat(absolutePath).catch(() => undefined);
-  if (!info?.isFile() || info.size > 256_000) return undefined;
-  const text = await readFile(absolutePath, 'utf8').catch(() => undefined);
-  if (!text) return undefined;
-  return { relPath, text: text.slice(0, 48_000) };
-}
-
-function subagentResultSummary(input: { prompt: string; readable: WorkspaceTextRef[] }): string {
-  const combined = input.readable.map((entry) => `# ${entry.relPath}\n${entry.text}`).join('\n\n');
-  const todoLines = combined
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => /sub-?agent|delegated-worker|tool surface|mcp tool|transcript\/ref|transcript ref|result ref|live evidence|open difference|blocked/i.test(line))
-    .filter((line) => !/^[-*]\s*\[[xX]\]/.test(line))
-    .slice(0, 4)
-    .map((line) => line.replace(/^[-*]\s*\[[^\]]*\]\s*/, '').replace(/^\s*[-*]\s*/, ''));
-  if (todoLines.length) {
-    return compactRuntimeText(
-      `Read ${input.readable.map((entry) => entry.relPath).join(', ')}. Remaining live parity TODO: ${todoLines.join(' ')}`,
-      520,
-    ) ?? 'Read-only delegated worker completed.';
-  }
-  if (input.readable.length) {
-    return compactRuntimeText(
-      `Read ${input.readable.map((entry) => entry.relPath).join(', ')}. No explicit sub-agent live parity TODO was found in the inspected refs.`,
-      360,
-    ) ?? 'Read-only delegated worker completed.';
-  }
-  return compactRuntimeText(
-    `Read-only delegated worker completed. Request summary: ${input.prompt}`,
-    360,
-  ) ?? 'Read-only delegated worker completed.';
-}
-
-async function persistTranscript(options: SubagentRuntimeOptions, transcript: Record<string, unknown>): Promise<void> {
-  if (!options.transcriptRoot) return;
-  try {
-    await mkdir(options.transcriptRoot, { recursive: true });
-    await writeFile(join(options.transcriptRoot, `${transcript.agentId}.json`), `${JSON.stringify({
-      schemaVersion: 'sciforge.runtime-codex.subagent-transcript.v1',
-      parentCommandId: safeRuntimeIdentifier(options.parentCommandId),
-      parentAttemptId: safeRuntimeIdentifier(options.parentAttemptId),
-      ...transcript,
-    }, null, 2)}\n`, 'utf8');
-  } catch {
-    // Transcript persistence is best-effort; the public MCP result remains stable and safe.
-  }
-}
-
 function extractCandidatePaths(text: string): string[] {
   const matches = [...text.matchAll(/(?:^|[\s`"'])((?:\.\/)?(?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9][\w.-]*)(?=$|[\s`"',.;:!?，。；：！？)])/g)]
     .map((match) => match[1])
@@ -227,39 +479,12 @@ function extractCandidatePaths(text: string): string[] {
   return matches;
 }
 
-function sanitizeRuntimeResultText(value: string): string {
-  return scrubRuntimeCodexAuditText(value)
-    .replace(/(^|[\s("'`])(?:\/(?:Users|Applications|Volumes|private|var|tmp)\/[^\s"'`),;]*)/gi, '$1[local-path]')
-    .replace(/(^|[\s("'`])~\/[^\s"'`),;]*/g, '$1[local-path]')
-    .replace(/(^|[\s("'`])[A-Za-z]:[\\/][^\s"'`),;]*/g, '$1[local-path]')
-    .replace(/(^|[\s("'`])\.sciforge(?:\/[^\s"'`),;]*)?/gi, '$1[private-workspace-state]')
-    .replace(/\b(?:stdout|stderr|raw|logs?)\b/gi, 'diagnostic')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function compactRuntimeText(value: string | undefined, limit: number): string | undefined {
-  const text = sanitizeRuntimeResultText(value ?? '');
-  if (!text) return undefined;
-  if (text.length <= limit) return text;
-  return `${text.slice(0, Math.max(0, limit - 18)).replace(/\s+\S*$/, '')} ... ${text.slice(-14)}`;
-}
-
 function uniqueRefs(values: Array<string | undefined>): string[] {
   return Array.from(new Set(values.map(safeRuntimeRef).filter((value): value is string => Boolean(value))));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {
   return Array.from(new Set(values.filter((value): value is string => Boolean(value?.trim()))));
-}
-
-function uniqueWorkspaceTextRefs(values: WorkspaceTextRef[]): WorkspaceTextRef[] {
-  const seen = new Set<string>();
-  return values.filter((value) => {
-    if (seen.has(value.relPath)) return false;
-    seen.add(value.relPath);
-    return true;
-  });
 }
 
 function safeRuntimeRef(value: string | undefined): string | undefined {
@@ -319,17 +544,33 @@ function safeRelativePath(value: string | undefined): string | undefined {
   return text;
 }
 
-function isPathInside(root: string, candidate: string) {
-  const rel = relative(resolve(root), resolve(candidate));
-  return rel === '' || (!rel.startsWith('..') && !rel.startsWith('/'));
-}
-
 function recordField(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function booleanField(value: unknown): boolean | undefined {
+  if (typeof value === 'boolean') return value;
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  return undefined;
+}
+
+function resumeRefFromArgs(args: Record<string, unknown>): string | undefined {
+  return stringField(args.resumeRef)
+    ?? stringField(args.resume_ref)
+    ?? stringField(args.resume)
+    ?? stringField(args.resumeCandidateRef)
+    ?? stringField(args.resume_candidate_ref);
+}
+
+function resumeAgentIdFromArgs(args: Record<string, unknown>): string | undefined {
+  return stringField(args.resumeAgentId) ?? stringField(args.resume_agent_id);
 }
 
 function stringArrayField(value: unknown): string[] {
@@ -339,4 +580,8 @@ function stringArrayField(value: unknown): string[] {
 
 function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function workspaceScopeFromPath(workspace: string): string {
+  return `scope-${sha256(resolve(workspace)).slice(0, 16)}`;
 }

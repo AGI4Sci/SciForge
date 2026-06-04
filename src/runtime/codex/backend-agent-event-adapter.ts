@@ -77,8 +77,13 @@ function baseEvent(
     ref: event.ref,
     agentId: event.agentId,
     parentAgentId: event.parentAgentId,
+    agentType: event.agentType,
+    resultRef: event.resultRef,
     transcriptRef: event.transcriptRef,
     refs: event.refs,
+    durationMs: event.durationMs,
+    background: event.background,
+    resume: event.resume,
     traceStepId: event.traceStepId,
   };
 }

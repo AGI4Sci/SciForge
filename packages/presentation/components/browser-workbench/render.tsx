@@ -243,7 +243,7 @@ function sanitizeBrowserWorkbenchDiagnosticText(value: unknown) {
     .replace(/data:[^\s"'<>]+/gi, '[inline-payload-redacted]')
     .replace(/\b(?:api[-_]?key|token|secret|password|authorization|cookie)=([^&\s]+)/gi, (match) => `${match.split('=')[0]}=[redacted]`)
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[secret-redacted]')
-    .replace(/https?:\/\/[^\s"'<>]+/gi, (match) => safeLocalHttpOrigin(match) ?? '[url-redacted]')
+    .replace(/https?:\/\/[^\s"'<>]+/gi, '[url-redacted]')
     .replace(/\s+/g, ' ')
     .trim();
   return scrubbed ? scrubbed.slice(0, BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX) : undefined;
@@ -905,13 +905,15 @@ interface BrowserWorkbenchBoundedDiagnostics {
 }
 
 function browserWorkbenchWriterUrl(payload: BrowserWorkbenchPayload, hostSession: BrowserHostSessionState | undefined) {
-  return safeLocalHttpOrigin(hostSession?.workspaceWriterBaseUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.effectiveBaseUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.effectiveDisplayUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.configuredBaseUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.configuredDisplayUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.recommendedBaseUrl)
-    ?? safeLocalHttpOrigin(payload.writerDiagnostic?.recommendedDisplayUrl);
+  return [
+    hostSession?.workspaceWriterBaseUrl,
+    payload.writerDiagnostic?.effectiveBaseUrl,
+    payload.writerDiagnostic?.effectiveDisplayUrl,
+    payload.writerDiagnostic?.configuredBaseUrl,
+    payload.writerDiagnostic?.configuredDisplayUrl,
+    payload.writerDiagnostic?.recommendedBaseUrl,
+    payload.writerDiagnostic?.recommendedDisplayUrl,
+  ].some((value) => Boolean(asString(value))) ? 'configured' : undefined;
 }
 
 function browserWorkbenchHealthCapability(payload: BrowserWorkbenchPayload) {
@@ -957,7 +959,7 @@ function browserWorkbenchBoundedDiagnostics(
     healthCapability: browserWorkbenchHealthCapability(payload),
     writerDiagnosticStatus: sanitizeBrowserWorkbenchDiagnosticText(payload.writerDiagnostic?.status),
     writerDiagnosticRef: asRefString(payload.writerDiagnostic?.diagnosticRef),
-    nativeAdapterUrl: safeLocalHttpOrigin(hostSession?.nativeAdapterUrl),
+    nativeAdapterUrl: asString(hostSession?.nativeAdapterUrl) ? 'configured' : undefined,
     nativeSurfaceBridge,
     nativeSurfaceBridgeSummary,
     transport: hostSession?.liveSurfaceTransport ?? timing?.liveSurfaceTransport,

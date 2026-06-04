@@ -48,27 +48,18 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.match(adapterSource, /startRuntimeServices\(\{ requireBrowserHostNativeSurface: true \}\)/);
   assert.match(adapterSource, /const runtime = await startRuntimeServices\(\{ requireBrowserHostNativeSurface: true \}\);[\s\S]*if \(runtime\.ok !== true\) throw new Error\(browserRuntimeServicesError\(runtime\)\);/);
   assert.match(adapterSource, /function browserRuntimeServicesError/);
-  assert.match(adapterSource, /sendBrowserHostComputerUseAction/);
+  assert.match(adapterSource, /function publicBrowserHostSessionProjection/);
+  assert.match(adapterSource, /function publicBrowserHostWriterDiagnostic/);
+  assert.match(adapterSource, /writerDiagnostic: publicWriterDiagnostic/);
   assert.match(adapterSource, /sendBrowserHostSessionAction/);
-  assert.match(adapterSource, /bufferedTextRef/);
-  assert.match(adapterSource, /bufferedScrollRef/);
-  assert.match(adapterSource, /pendingCursorRef/);
-  assert.match(adapterSource, /pendingMouseMoveRef/);
-  assert.match(adapterSource, /mouseMoveRequestInFlightRef/);
-  assert.match(adapterSource, /actionId\?: string;[\s\S]*uiEventReceivedAt\?: string;/);
-  assert.match(adapterSource, /function requestHostMouseMove\(action: RightPaneBrowserHostAction\)[\s\S]*pendingMouseMoveRef\.current = action[\s\S]*flushPendingHostMouseMove/);
-  assert.match(adapterSource, /function flushPendingHostMouseMove\(\)[\s\S]*mouseMoveRequestInFlightRef\.current = true[\s\S]*await sendHostAction\(action, 'none'\)[\s\S]*if \(pendingMouseMoveRef\.current\) void flushPendingHostMouseMove\(\)/);
-  assert.match(adapterSource, /dispatchHostAction\(timedAction, 'none'\)/);
-  assert.match(adapterSource, /dispatchHostAction\(browserHostActionWithUiTiming\(\{ action: 'type', text,[\s\S]*uiEventReceivedAt: textReceivedAt[\s\S]*\}\), 'none'\)/);
-  assert.match(adapterSource, /dispatchHostAction\(browserHostActionWithUiTiming\(\{ action: 'scroll'[\s\S]*uiEventReceivedAt: scrollReceivedAt[\s\S]*\}\), 'none'\)/);
-  assert.match(adapterSource, /type: 'mouse_down'/);
-  assert.match(adapterSource, /type: 'mouse_move'/);
-  assert.match(adapterSource, /type: 'mouse_up'/);
-  assert.match(adapterSource, /type: 'wheel'/);
-  assert.match(adapterSource, /type: 'cursor'/);
-  assert.match(adapterSource, /type: 'press_key'/);
-  assert.match(adapterSource, /type: 'hotkey'/);
+  assert.match(adapterSource, /return `workspace:\$\{browserHostSessionIdHash\(config\.workspacePath \|\| 'default'\)\}::\$\{tabId\}::\$\{normalizedUrl\}`/);
 
+  assert.doesNotMatch(adapterSource, /data-browser-writer-configured-url|data-browser-writer-recommended-url|title=\{candidate\.displayUrl\}/);
+  assert.doesNotMatch(adapterSource, /configuredBaseUrl: writerDiagnostic|configuredDisplayUrl: writerDiagnostic|effectiveBaseUrl: writerDiagnostic|effectiveDisplayUrl: writerDiagnostic|recommendedBaseUrl: writerDiagnostic|recommendedDisplayUrl: writerDiagnostic/);
+  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|BrowserHostComputerUseAction|RightPaneBrowserHostAction/);
+  assert.doesNotMatch(adapterSource, /onHostActionRequest|requestHostAction|dispatchHostAction|sendHostAction/);
+  assert.doesNotMatch(adapterSource, /bufferedTextRef|bufferedScrollRef|pendingCursorRef|pendingMouseMoveRef|mouseMoveRequestInFlightRef/);
+  assert.doesNotMatch(adapterSource, /browserHostComputerUseActionFromHostAction|browserHostComputerUseKeyAction|browserHostActionWithUiTiming/);
   assert.doesNotMatch(adapterSource, /browserHostSessionFrameStreamUrl|connectHostFrameStream|parseBrowserHostFrameStreamMessage|reportHostFrameStreamIssue/);
   assert.doesNotMatch(adapterSource, /BROWSER_HOST_FRAME_STREAM|frameStreamSocketRef|frameStreamReceivedBinaryRef|frameStreamCandidateTransportRef/);
   assert.doesNotMatch(adapterSource, /hostFrameObjectUrlRef|pendingBinaryFrameSessionRef|pendingCanvasBinaryFrameRef|createObjectURL|revokeObjectURL/);
@@ -98,9 +89,7 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.doesNotMatch(browserWorkbenchSource, /<iframe|<webview|<canvas|<img/);
   assert.doesNotMatch(browserWorkbenchSource, /browser-workbench-host-keyboard-input|data-browser-host-keyboard-path|setPointerCapture/);
   assert.match(browserWorkbenchSource, /function browserWorkbenchFramePoint/);
-  assert.match(browserWorkbenchSource, /onPointerDown/);
-  assert.match(browserWorkbenchSource, /onPointerMove/);
-  assert.match(browserWorkbenchSource, /onPointerUp/);
+  assert.match(browserWorkbenchSource, /if \(!onHostActionRequest\) return/);
   assert.doesNotMatch(browserWorkbenchSource, /BrowserWorkbenchLiveTransportHandoff|BrowserWorkbenchFrameRenderer|frameRenderer|liveTransportHandoff/);
   assert.doesNotMatch(browserWorkbenchSource, /canvas-binary|webrtc-data-channel|websocket-binary|host-stream/);
 
@@ -117,16 +106,12 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.doesNotMatch(rendererSource, /renderBrowserWorkbench/);
 });
 
-test('browser host adapter routes search text and edit keys into BrowserHostSession without host-shell capture', () => {
+test('browser host adapter does not route pane input through Computer Use execution', () => {
   const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
 
-  assert.match(adapterSource, /if \(timedAction\.action === 'type' && timedAction\.text\) \{[\s\S]*bufferedTextRef\.current \+= timedAction\.text;[\s\S]*scheduleBufferedHostActionFlush\(\);[\s\S]*return;[\s\S]*\}/);
-  assert.match(adapterSource, /if \(timedAction\.action === 'press'\) \{[\s\S]*flushBufferedHostActions\(\);[\s\S]*dispatchHostAction\(timedAction, 'none'\);[\s\S]*return;[\s\S]*\}/);
-  assert.match(adapterSource, /if \(text\) dispatchHostAction\(browserHostActionWithUiTiming\(\{ action: 'type', text, uiEventReceivedAt: textReceivedAt \}\), 'none'\);/);
-  assert.match(adapterSource, /const computerUseAction = browserHostComputerUseActionFromHostAction\(action\);[\s\S]*sendBrowserHostComputerUseAction\([\s\S]*action: computerUseAction,[\s\S]*capture,[\s\S]*workspaceWriterBaseUrl: currentSession\.workspaceWriterBaseUrl/);
-  assert.match(adapterSource, /if \(action\.action === 'type'\) return \{ type: 'type_text', text: action\.text \?\? '' \};/);
-  assert.match(adapterSource, /if \(action\.action === 'press'\) return browserHostComputerUseKeyAction\(action\.key\);/);
-  assert.match(adapterSource, /function browserHostComputerUseKeyAction\(key: string \| undefined\): BrowserHostComputerUseAction \{[\s\S]*return keys\.length > 1 \? \{ type: 'hotkey', keys \} : \{ type: 'press_key', key: normalized \};[\s\S]*\}/);
+  assert.match(adapterSource, /sendBrowserHostSessionAction/);
+  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|browserHostComputerUseActionFromHostAction|onHostActionRequest/);
+  assert.doesNotMatch(adapterSource, /type_text|press_key|hotkey|mouse_down|mouse_move|mouse_up|wheel/);
   assert.doesNotMatch(adapterSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|\.focus\(\)[\s\S]*composer|window\.dispatchEvent\([\s\S]*KeyboardEvent/);
 });
 
@@ -154,7 +139,8 @@ test('browser host adapter promotes Browser annotations as pending composer refs
   assert.match(adapterSource, /onAnnotationReferenceRequest\?: \(reference: SciForgeReference\) => void/);
   assert.match(adapterSource, /import type \{ BrowserWorkbenchAnnotationRequest \}/);
   assert.match(adapterSource, /function requestCommand\(command: BrowserWorkbenchCommand\) \{[\s\S]*if \(command\.id === 'annotate'\) \{[\s\S]*return;[\s\S]*\}/);
-  assert.match(adapterSource, /async function requestBrowserAnnotationReference\(selection\?: BrowserWorkbenchAnnotationRequest\): Promise<void> \{[\s\S]*flushBufferedHostActions\(\);[\s\S]*await actionChainRef\.current;[\s\S]*const freshSession = await captureFreshBrowserAnnotationSession\(\);[\s\S]*browserAnnotationComposerReferenceForHostSession\(freshSession/);
+  assert.match(adapterSource, /async function requestBrowserAnnotationReference\(selection\?: BrowserWorkbenchAnnotationRequest\): Promise<void> \{[\s\S]*setBusy\(true\);[\s\S]*const freshSession = await captureFreshBrowserAnnotationSession\(\);[\s\S]*browserAnnotationComposerReferenceForHostSession\(freshSession/);
+  assert.doesNotMatch(adapterSource, /flushBufferedHostActions|actionChainRef/);
   assert.match(adapterSource, /async function captureFreshBrowserAnnotationSession\(\): Promise<BrowserHostSessionState \| undefined> \{[\s\S]*sendBrowserHostSessionAction\([\s\S]*action: 'state',[\s\S]*capture: 'full',[\s\S]*workspaceWriterBaseUrl: currentSession\.workspaceWriterBaseUrl[\s\S]*\);[\s\S]*hostSessionRef\.current = nextSession;[\s\S]*setHostSession\(nextSession\);[\s\S]*return nextSession;[\s\S]*\}/);
   assert.match(adapterSource, /bounds: browserAnnotationSelectionBounds\(selection, viewportRef\.current\)/);
   assert.match(adapterSource, /comment: selection\?\.comment/);

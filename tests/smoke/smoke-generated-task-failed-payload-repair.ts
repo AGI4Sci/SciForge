@@ -19,22 +19,23 @@ input_path = sys.argv[1]
 output_path = sys.argv[2]
 
 payload = {
-  "message": "Task failed before real artifacts were created.",
-  "confidence": 0.0,
-  "claimType": "error",
-  "evidenceLevel": "none",
-  "reasoningTrace": "intentional failing payload",
+  "message": "Task exited after writing a provisional payload before real artifacts were created.",
+  "confidence": 0.2,
+  "claimType": "fact",
+  "evidenceLevel": "runtime",
+  "reasoningTrace": "intentional nonzero exit after provisional payload",
   "claims": [],
   "uiManifest": [],
   "executionUnits": [{
     "id": "generic-task",
-    "status": "failed-with-reason",
-    "failureReason": "Intentional transient bug in generated task"
+    "status": "done",
+    "summary": "The task wrote a provisional payload but exited before real artifacts were created."
   }],
   "artifacts": []
 }
 with open(output_path, "w", encoding="utf-8") as handle:
   json.dump(payload, handle, indent=2)
+print("Intentional transient bug in generated task", file=sys.stderr)
 sys.exit(1)
 `;
 
@@ -70,7 +71,7 @@ payload = {
   }],
   "artifacts": [{
     "id": "artifact.repaired",
-    "type": "research-report",
+    "type": "analysis-report",
     "data": { "markdown": "Repaired generic task completed." }
   }]
 }
@@ -79,7 +80,31 @@ with open(output_path, "w", encoding="utf-8") as handle:
 `;
 
 const stillBrokenRepairTask = String.raw`
-raise RuntimeError("repair attempt still needs another AgentServer pass")
+import json
+import sys
+
+input_path = sys.argv[1]
+output_path = sys.argv[2]
+
+payload = {
+  "message": "First repair still exited after a provisional payload.",
+  "confidence": 0.25,
+  "claimType": "fact",
+  "evidenceLevel": "runtime",
+  "reasoningTrace": "first repair still needs another pass",
+  "claims": [],
+  "uiManifest": [],
+  "executionUnits": [{
+    "id": "generic-task",
+    "status": "done",
+    "summary": "The first repair wrote a provisional payload but still exited nonzero."
+  }],
+  "artifacts": []
+}
+with open(output_path, "w", encoding="utf-8") as handle:
+  json.dump(payload, handle, indent=2)
+print("repair attempt still needs another AgentServer pass", file=sys.stderr)
+sys.exit(1)
 `;
 
 const server = createServer(async (req, res) => {
@@ -93,7 +118,7 @@ const server = createServer(async (req, res) => {
   if (metadata.purpose === 'workspace-task-repair') {
     repairRequests += 1;
     const codeRef = String(metadata.codeRef || '');
-    assert.match(codeRef, /^\.sciforge\/sessions\/.+\/tasks\/generated-literature-/);
+    assert.match(codeRef, /^\.sciforge\/sessions\/.+\/tasks\/generated-knowledge-/);
     await writeFile(join(workspace, codeRef), repairRequests === 1 ? stillBrokenRepairTask : fixedTask);
     const result = {
       ok: true,
@@ -132,7 +157,7 @@ const server = createServer(async (req, res) => {
             },
             environmentRequirements: { language: 'python' },
             validationCommand: 'python .sciforge/tasks/generic-failing-task.py <input> <output>',
-            expectedArtifacts: ['research-report'],
+            expectedArtifacts: ['analysis-report'],
             patchSummary: 'Generated a task that intentionally fails once.',
           },
         },
@@ -155,12 +180,12 @@ const baseUrl = `http://127.0.0.1:${address.port}`;
 
 try {
   const result = await runWorkspaceRuntimeGateway({
-    skillDomain: 'literature',
+    skillDomain: 'knowledge',
     prompt: 'Generic complex task that must be generated, repaired if it writes a failed payload, and rerun.',
     workspacePath: workspace,
     agentServerBaseUrl: baseUrl,
     availableSkills: ['missing.skill'],
-    expectedArtifactTypes: ['research-report'],
+    expectedArtifactTypes: ['analysis-report'],
     uiState: {
       sessionId: 'session-failed-payload-repair',
       forceAgentServerGeneration: true,
@@ -181,8 +206,8 @@ try {
   const attemptHistory = await readTaskAttempts(workspace, taskId);
   assert.equal(attemptHistory.length, 3);
   assert.equal(attemptHistory[0].status, 'repair-needed');
-  assert.match(String(attemptHistory[0].failureReason || ''), /failed payload|Intentional transient bug/);
-  assert.equal(attemptHistory[1].status, 'failed-with-reason');
+  assert.match(String(attemptHistory[0].failureReason || ''), /Intentional transient bug|Task exited 1/);
+  assert.equal(attemptHistory[1].status, 'repair-needed');
   assert.match(String(attemptHistory[1].failureReason || ''), /still needs another AgentServer pass/);
   assert.equal(attemptHistory[2].status, 'done');
 

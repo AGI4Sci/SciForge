@@ -9,6 +9,7 @@ import {
   rightPaneScopedSmokeNavigationPath,
   rightPaneScopedSmokeStorageKey,
 } from './rightPaneScopedSmokeState';
+import { rightPaneStateStorageKey } from './resultPaneLifecycle';
 
 test('right pane scoped smoke seed creates scoped sanitized storage entries', () => {
   const seed = createRightPaneScopedSmokeStorageSeed({
@@ -25,7 +26,7 @@ test('right pane scoped smoke seed creates scoped sanitized storage entries', ()
 
   assert.equal(seed.keys.config, 'sciforge.config.v1.right-pane-ui-smoke');
   assert.equal(seed.keys.workspace, 'sciforge.workspace.v2.right-pane-ui-smoke');
-  assert.equal(seed.keys.rightPane, 'sciforge.right-pane-state.v1./tmp/sciforge-smoke');
+  assert.equal(seed.keys.rightPane, rightPaneStateStorageKey('/tmp/sciforge-smoke'));
   assert.equal(seed.entries.length, 3);
   assert.equal(seed.navigationPath, '/?page=workbench&scenarioId=literature-evidence-review');
 

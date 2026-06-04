@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Script, createContext } from 'node:vm';
 
 type Bounds = { x: number; y: number; width: number; height: number };
 type ControllerFactory = (deps: unknown, options?: unknown) => {
@@ -9,6 +10,8 @@ type ControllerFactory = (deps: unknown, options?: unknown) => {
   beginSelection(input: unknown): unknown;
   updateSelection(input: unknown): unknown;
   submitComment(input: unknown): unknown;
+  setActiveDisplay(input: unknown): unknown;
+  setDragState(input: unknown): unknown;
   cancel(): unknown;
   captureSelectionToRefs(input?: unknown): Promise<unknown>;
   getState(): unknown;
@@ -35,6 +38,7 @@ test('desktop annotation overlay creates a transparent topmost click-through Ele
   assert.equal(window.options.alwaysOnTop, true);
   assert.equal(window.options.skipTaskbar, true);
   assert.equal(window.options.focusable, false);
+  assert.equal(window.options.enableLargerThanScreen, true);
   assert.equal(window.options.webPreferences.contextIsolation, true);
   assert.equal(window.options.webPreferences.nodeIntegration, false);
   assert.equal(window.options.webPreferences.sandbox, true);
@@ -76,6 +80,265 @@ test('desktop annotation overlay loads the trusted screen-region renderer when p
   assert.match(html, /"y":0/);
 });
 
+test('desktop annotation overlay creates one native overlay per connected display to cover the display union', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: 720, y: 500 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+
+  assert.equal(harness.windows.length, 2);
+  assert.deepEqual(harness.windows.map((window) => window.options.bounds), [
+    { x: -1280, y: 0, width: 1024, height: 768 },
+    { x: 0, y: 160, width: 1440, height: 900 },
+  ]);
+  assert.ok(harness.windows[0]?.calls.includes('setBounds:-1280,0,1024,768'));
+  assert.ok(harness.windows[1]?.calls.includes('setBounds:0,160,1440,900'));
+  const html = harness.windows
+    .map((window) => decodeURIComponent(window.loadedUrls[0].replace(/^data:text\/html;charset=utf-8,/, '')));
+  assert.match(html[0] ?? '', /display-left/);
+  assert.match(html[0] ?? '', /display-right/);
+  assert.match(html[0] ?? '', /"windowDisplayId":"display-left"/);
+  assert.match(html[1] ?? '', /"windowDisplayId":"display-right"/);
+  assert.match(html.join('\n'), /active-display/);
+});
+
+test('desktop annotation overlay shows only the display under the cursor', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: 720, y: 500 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+  controller.show();
+
+  assert.deepEqual(harness.windows.map((window) => window.visible), [false, true]);
+  assert.equal(harness.windows[0]?.calls.includes('show'), false);
+  assert.ok(harness.windows[1]?.calls.includes('show'));
+  assert.equal(harness.windows[0]?.calls.includes('focus'), false);
+  assert.ok(harness.windows[1]?.calls.includes('focus'));
+  controller.cancel();
+});
+
+test('desktop annotation overlay switches the only visible overlay when the cursor changes displays', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: -900, y: 300 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+  controller.show();
+  assert.deepEqual(harness.windows.map((window) => window.visible), [true, false]);
+
+  harness.setCursorPoint({ x: -60, y: 20 });
+  await wait(90);
+  assert.deepEqual(harness.windows.map((window) => window.visible), [true, false]);
+
+  harness.setCursorPoint({ x: 720, y: 500 });
+  await wait(120);
+  assert.deepEqual(harness.windows.map((window) => window.visible), [false, true]);
+  assert.deepEqual(
+    harness.windows[0]?.sentMessages.slice(-1)[0],
+    {
+      channel: 'desktop:annotation-overlay:active-display',
+      value: {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    },
+  );
+  assert.ok(harness.windows[1]?.calls.includes('focus'));
+  controller.cancel();
+});
+
+test('desktop annotation overlay keeps the locked display visible while dragging across screens', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: -900, y: 300 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+  controller.show();
+  controller.setDragState({
+    active: true,
+    display: {
+      id: 'display-left',
+      bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+      scaleFactor: 2,
+    },
+  });
+  assert.deepEqual(harness.windows.map((window) => window.visible), [true, false]);
+
+  harness.setCursorPoint({ x: 720, y: 500 });
+  await wait(120);
+  assert.deepEqual(harness.windows.map((window) => window.visible), [true, false]);
+
+  controller.setDragState({ active: false });
+  await wait(120);
+  assert.deepEqual(harness.windows.map((window) => window.visible), [false, true]);
+  controller.cancel();
+});
+
+test('desktop annotation overlay sets per-display bounds before show and skips visible macOS reasserts', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: 720, y: 450 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: -900, width: 1280, height: 900 },
+        scaleFactor: 1,
+      },
+      {
+        id: 'display-main',
+        bounds: { x: 0, y: 0, width: 1440, height: 900 },
+        scaleFactor: 2,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+  controller.show();
+  await new Promise((resolve) => setTimeout(resolve, 180));
+
+  assert.equal(harness.windows.length, 2);
+  for (const window of harness.windows) {
+    const showIndex = window.calls.indexOf('show');
+    if (window.visible) {
+      assert.ok(showIndex > 0, 'visible overlay should set bounds before becoming visible');
+      assert.ok(window.calls.slice(0, showIndex).some((call) => call.startsWith('setBounds:')));
+    } else {
+      assert.equal(showIndex, -1, 'inactive display overlay should stay hidden');
+      assert.ok(window.calls.some((call) => call.startsWith('setBounds:')));
+    }
+    if (showIndex >= 0) {
+      assert.deepEqual(
+        window.calls.slice(showIndex + 1).filter((call) => call.startsWith('setBounds:')),
+        [],
+        'visible setBounds reasserts can drift transparent overlays on macOS mixed displays',
+      );
+    }
+  }
+});
+
+test('desktop annotation overlay canonicalizes active display updates against current topology', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    cursorPoint: { x: 720, y: 500 },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    overlayPreloadPath: '/app/dist-desktop/src/desktop/annotation-overlay-preload.cjs',
+  });
+
+  controller.create();
+  controller.show();
+  controller.setActiveDisplay({
+    display: {
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  });
+
+  assert.deepEqual(harness.windows.map((window) => window.sentMessages.slice(-1)), [
+    [{
+      channel: 'desktop:annotation-overlay:active-display',
+      value: {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    }],
+    [{
+      channel: 'desktop:annotation-overlay:active-display',
+      value: {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    }],
+  ]);
+  assert.ok(harness.windows[1]?.calls.includes('focus'));
+  assert.equal(harness.windows[0]?.calls.includes('focus'), false);
+  controller.cancel();
+});
+
 test('desktop annotation overlay renderer data URL is refs-only UI code without raw payload hooks', async () => {
   const desktop = await import('../../src/desktop/index.js') as Record<string, unknown>;
   const dataUrl = (desktop.desktopAnnotationOverlayRendererDataUrl as (html: string) => string)('<main>safe</main>');
@@ -88,6 +351,172 @@ test('desktop annotation overlay renderer data URL is refs-only UI code without 
   assert.match(html, /cancelSelection/);
   assert.match(html, /screenRect/);
   assert.doesNotMatch(html, /screenshotBase64|rawWindowList|providerPayload|data:image/i);
+});
+
+test('desktop annotation overlay renderer supports keyboard submit, cancel, focus, and multiline comments', async () => {
+  const desktop = await import('../../src/desktop/index.js') as Record<string, unknown>;
+  const htmlFactory = desktop.desktopAnnotationOverlayRendererHtml as (
+    bounds: Bounds,
+    displays?: Array<Record<string, unknown>>,
+  ) => string;
+  const renderer = createRendererHarness(htmlFactory(
+    { x: 0, y: 0, width: 1440, height: 900 },
+    [{ id: 'display-main', bounds: { x: 0, y: 0, width: 1440, height: 900 }, scaleFactor: 2 }],
+  ));
+
+  renderer.dispatchKey('Enter', renderer.comment);
+  assert.deepEqual(renderer.submittedSelections, []);
+
+  renderer.dispatchPointer('pointerdown', 100, 100);
+  renderer.dispatchPointer('pointermove', 260, 220);
+  renderer.dispatchPointer('pointerup', 260, 220);
+  assert.equal(renderer.document.activeElement, renderer.comment);
+
+  renderer.dispatchKey('Enter', renderer.comment);
+  assert.deepEqual(renderer.submittedSelections, []);
+  assert.equal(renderer.document.activeElement, renderer.comment);
+
+  renderer.comment.value = 'First line';
+  renderer.dispatchKey('Enter', renderer.comment, { shiftKey: true });
+  if (!renderer.lastKeyEvent?.defaultPrevented) renderer.comment.value += '\n';
+  renderer.comment.value += 'Second line';
+  assert.equal(renderer.comment.value, 'First line\nSecond line');
+  assert.deepEqual(renderer.submittedSelections, []);
+
+  renderer.dispatchKey('Enter', renderer.comment);
+  assert.equal(renderer.submittedSelections.length, 1);
+  assert.deepEqual(renderer.submittedSelections[0], {
+    bounds: { x: 100, y: 100, width: 160, height: 120 },
+    comment: 'First line\nSecond line',
+    display: {
+      id: 'display-main',
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      scaleFactor: 2,
+    },
+  });
+
+  renderer.dispatchKey('Escape', renderer.body);
+  assert.equal(renderer.cancelledSelections, 1);
+});
+
+test('desktop annotation overlay renderer tracks active display, retains it in gaps, and clips locked selections', async () => {
+  const desktop = await import('../../src/desktop/index.js') as Record<string, unknown>;
+  const htmlFactory = desktop.desktopAnnotationOverlayRendererHtml as (
+    bounds: Bounds,
+    displays?: Array<Record<string, unknown>>,
+  ) => string;
+  const renderer = createRendererHarness(htmlFactory(
+    { x: -1280, y: 0, width: 2720, height: 1060 },
+    [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  ));
+
+  renderer.dispatchPointer('pointermove', 200, 100);
+  assert.equal(renderer.activeDisplay.dataset.displayId, 'display-left');
+  assert.deepEqual(pickStyle(renderer.activeDisplay, ['display', 'left', 'top', 'width', 'height']), {
+    display: 'block',
+    left: '0px',
+    top: '0px',
+    width: '1024px',
+    height: '768px',
+  });
+
+  renderer.dispatchPointer('pointermove', 1180, 80);
+  assert.equal(renderer.activeDisplay.dataset.displayId, 'display-left');
+
+  renderer.dispatchPointer('pointermove', 1380, 200);
+  assert.equal(renderer.activeDisplay.dataset.displayId, 'display-right');
+
+  renderer.dispatchPointer('pointerdown', 1380, 200);
+  renderer.dispatchPointer('pointermove', 780, 100);
+  assert.deepEqual(pickStyle(renderer.selection, ['display', 'left', 'top', 'width', 'height']), {
+    display: 'block',
+    left: '1280px',
+    top: '160px',
+    width: '100px',
+    height: '40px',
+  });
+  renderer.dispatchPointer('pointerup', 780, 100);
+  renderer.comment.value = 'Clip to the locked display.';
+  renderer.dispatchKey('Enter', renderer.comment);
+
+  assert.deepEqual(renderer.dragStates, [
+    {
+      active: true,
+      display: {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    },
+    {
+      active: false,
+      display: {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    },
+  ]);
+  assert.deepEqual(renderer.submittedSelections, [{
+    bounds: { x: 0, y: 160, width: 100, height: 40 },
+    comment: 'Clip to the locked display.',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  }]);
+});
+
+test('desktop annotation overlay renderer anchors the comment panel inside the active display', async () => {
+  const desktop = await import('../../src/desktop/index.js') as Record<string, unknown>;
+  const htmlFactory = desktop.desktopAnnotationOverlayRendererHtml as (
+    bounds: Bounds,
+    displays?: Array<Record<string, unknown>>,
+  ) => string;
+  const renderer = createRendererHarness(htmlFactory(
+    { x: -1840, y: -1440, width: 5120, height: 2422 },
+    [
+      {
+        id: 'display-primary',
+        bounds: { x: 0, y: 0, width: 1512, height: 982 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-left-large',
+        bounds: { x: -1840, y: -1440, width: 2560, height: 1440 },
+        scaleFactor: 1,
+      },
+    ],
+  ));
+
+  assert.deepEqual(pickStyle(renderer.document.panel, ['left', 'top', 'width', 'bottom']), {
+    left: '2596px',
+    top: '2344px',
+    width: '620px',
+    bottom: '',
+  });
+
+  renderer.dispatchPointer('pointermove', 100, 100);
+  assert.equal(renderer.activeDisplay.dataset.displayId, 'display-left-large');
+  assert.equal(renderer.document.activeElement, renderer.comment);
+  assert.deepEqual(pickStyle(renderer.document.panel, ['left', 'top', 'width', 'bottom']), {
+    left: '1280px',
+    top: '1362px',
+    width: '620px',
+    bottom: '',
+  });
 });
 
 test('desktop annotation overlay supports cancel, reselect, and non-empty comment submit flow', async () => {
@@ -142,7 +571,119 @@ test('desktop annotation overlay supports cancel, reselect, and non-empty commen
   assert.equal(submitted.targetRef, 'window-target:alpha');
 });
 
-test('desktop annotation overlay hides and restores itself while capturing selected crop refs', async () => {
+test('desktop annotation overlay hides the native overlay when cancelling selection', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness();
+  const controller = createDesktopAnnotationOverlayController(harness.deps);
+
+  controller.create();
+  controller.show();
+  controller.setClickThrough(false);
+  controller.beginSelection({
+    workspaceId: 'workspace-a',
+    sessionId: 'session-a',
+    targetRef: 'screen-region:workspace-a/session-a/region-1',
+    sourceKind: 'screen-region',
+    coordinateSpace: 'screen-global',
+  });
+
+  const cancelled = asRecord(controller.cancel());
+  const window = harness.windows[0];
+  assert.ok(window);
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(window.visible, false);
+  assert.equal(window.ignoreMouseEvents, true);
+  assert.deepEqual(window.calls.slice(-2), [
+    'setIgnoreMouseEvents:true:forward',
+    'hide',
+  ]);
+});
+
+test('desktop annotation overlay locks screen-region capture metadata to the selected display', async () => {
+  const createDesktopAnnotationOverlayController = await loadControllerFactory();
+  const harness = createOverlayHarness({
+    display: {
+      id: 'display-left',
+      bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+      scaleFactor: 2,
+    },
+    displays: [
+      {
+        id: 'display-left',
+        bounds: { x: -1280, y: 0, width: 1024, height: 768 },
+        scaleFactor: 2,
+      },
+      {
+        id: 'display-right',
+        bounds: { x: 0, y: 160, width: 1440, height: 900 },
+        scaleFactor: 1.25,
+      },
+    ],
+  });
+  const controller = createDesktopAnnotationOverlayController(harness.deps, {
+    captureIdFactory: () => 'capture-fixed',
+    now: () => '2026-06-04T00:00:00.000Z',
+  });
+
+  controller.beginSelection({
+    workspaceId: 'workspace-a',
+    sessionId: 'session-a',
+    targetRef: 'screen-region:workspace-a/session-a/right-display-region',
+    sourceKind: 'screen-region',
+    coordinateSpace: 'screen-global',
+  });
+  const selection = asRecord(controller.updateSelection({
+    bounds: { x: -500, y: 100, width: 620, height: 120 },
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  }));
+  assert.deepEqual(selection.screenBounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.deepEqual(selection.bounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.deepEqual(selection.display, {
+    id: 'display-right',
+    bounds: { x: 0, y: 160, width: 1440, height: 900 },
+    scaleFactor: 1.25,
+  });
+
+  controller.submitComment({ comment: 'Right display only.' });
+  const output = asRecord(await controller.captureSelectionToRefs());
+  assert.deepEqual(harness.captureInputs.map((input) => ({
+    displayId: input.displayId,
+    screenId: input.screenId,
+    scale: input.scale,
+    display: input.display,
+    screenBounds: input.screenBounds,
+    bounds: input.bounds,
+    normalizedBounds: input.normalizedBounds,
+  })), [{
+    displayId: 'display-right',
+    screenId: 'display-right',
+    scale: 1.25,
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+    screenBounds: { x: 0, y: 160, width: 120, height: 60 },
+    bounds: { x: 0, y: 160, width: 120, height: 60 },
+    normalizedBounds: { x: 0, y: 0, width: 0.083333, height: 0.066667 },
+  }]);
+  assert.equal(output.metadata.displayId, 'display-right');
+  assert.equal(output.metadata.screenId, 'display-right');
+  assert.equal(output.metadata.scale, 1.25);
+  assert.deepEqual(output.metadata.screenBounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.deepEqual(output.metadata.windowBinding.screenBounds, { x: 0, y: 160, width: 120, height: 60 });
+  assert.equal(output.metadata.windowBinding.displayId, 'display-right');
+  assert.equal(output.metadata.windowBinding.screenId, 'display-right');
+  assert.equal(output.metadata.windowBinding.scale, 1.25);
+  assertNoRawImagePayload(output);
+  assertNoRawProviderPayload(output);
+});
+
+test('desktop annotation overlay exits after capturing selected crop refs', async () => {
   const createDesktopAnnotationOverlayController = await loadControllerFactory();
   const harness = createOverlayHarness();
   const controller = createDesktopAnnotationOverlayController(harness.deps, {
@@ -176,13 +717,11 @@ test('desktop annotation overlay hides and restores itself while capturing selec
     overlayVisible: false,
     ignoreMouseEvents: true,
   }]);
-  assert.equal(window.visible, true);
-  assert.equal(window.ignoreMouseEvents, false);
-  assert.deepEqual(window.calls.slice(-4), [
-    'hide',
+  assert.equal(window.visible, false);
+  assert.equal(window.ignoreMouseEvents, true);
+  assert.deepEqual(window.calls.slice(-2), [
     'setIgnoreMouseEvents:true:forward',
-    'setIgnoreMouseEvents:false:none',
-    'show',
+    'hide',
   ]);
   assert.equal(output.schemaVersion, 'sciforge.desktop.annotation-overlay.capture.v1');
   assert.equal(output.displayModel, 'sciforge.annotation-reference.v1');
@@ -901,20 +1440,28 @@ function beginSubmitReadySelection(controller: ReturnType<ControllerFactory>): v
 
 function createOverlayHarness(options: {
   captureResult?: Record<string, unknown>;
+  cursorPoint?: { x: number; y: number };
   display?: {
     id?: string | number;
     bounds: Bounds;
     scaleFactor?: number;
   };
+  displays?: Array<{
+    id?: string | number;
+    bounds: Bounds;
+    scaleFactor?: number;
+  }>;
 } = {}): {
   deps: unknown;
   windows: FakeOverlayWindow[];
   captureInputs: Array<Record<string, unknown>>;
   captureObservations: Array<{ overlayVisible: boolean; ignoreMouseEvents: boolean }>;
+  setCursorPoint(point: { x: number; y: number }): void;
 } {
   const windows: FakeOverlayWindow[] = [];
   const captureInputs: Array<Record<string, unknown>> = [];
   const captureObservations: Array<{ overlayVisible: boolean; ignoreMouseEvents: boolean }> = [];
+  let cursorPoint = options.cursorPoint ?? { x: 0, y: 0 };
   const deps = {
     screen: {
       getPrimaryDisplay() {
@@ -922,6 +1469,15 @@ function createOverlayHarness(options: {
           bounds: { x: 0, y: 0, width: 1440, height: 900 },
           scaleFactor: 2,
         };
+      },
+      getAllDisplays() {
+        return options.displays ?? [options.display ?? {
+          bounds: { x: 0, y: 0, width: 1440, height: 900 },
+          scaleFactor: 2,
+        }];
+      },
+      getCursorScreenPoint() {
+        return cursorPoint;
       },
     },
     createBrowserWindow(windowOptions: Record<string, unknown>) {
@@ -949,7 +1505,15 @@ function createOverlayHarness(options: {
       },
     },
   };
-  return { deps, windows, captureInputs, captureObservations };
+  return {
+    deps,
+    windows,
+    captureInputs,
+    captureObservations,
+    setCursorPoint(point: { x: number; y: number }) {
+      cursorPoint = point;
+    },
+  };
 }
 
 class FakeOverlayWindow {
@@ -957,6 +1521,13 @@ class FakeOverlayWindow {
   ignoreMouseEvents = false;
   readonly calls: string[] = [];
   readonly loadedUrls: string[] = [];
+  readonly sentMessages: Array<{ channel: string; value: unknown }> = [];
+  readonly webContents = {
+    send: (channel: string, value: unknown): void => {
+      this.sentMessages.push({ channel, value });
+      this.calls.push(`send:${channel}`);
+    },
+  };
 
   constructor(readonly options: Record<string, any>) {}
 
@@ -991,11 +1562,215 @@ class FakeOverlayWindow {
   setBounds(bounds: Bounds): void {
     this.calls.push(`setBounds:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`);
   }
+
+  focus(): void {
+    this.calls.push('focus');
+  }
 }
 
 function asRecord(value: unknown): Record<string, any> {
   assert.ok(value && typeof value === 'object');
   return value as Record<string, any>;
+}
+
+function createRendererHarness(html: string): {
+  body: FakeRendererElement;
+  comment: FakeRendererElement;
+  selection: FakeRendererElement;
+  activeDisplay: FakeRendererElement;
+  document: FakeRendererDocument;
+  submittedSelections: Array<Record<string, unknown>>;
+  cancelledSelections: number;
+  dragStates: Array<Record<string, unknown>>;
+  lastKeyEvent?: FakeRendererEvent;
+  dispatchPointer(type: string, clientX: number, clientY: number, target?: FakeRendererElement): FakeRendererEvent;
+  dispatchKey(key: string, target: FakeRendererElement, options?: { shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }): FakeRendererEvent;
+} {
+  const document = new FakeRendererDocument();
+  const submittedSelections: Array<Record<string, unknown>> = [];
+  const dragStates: Array<Record<string, unknown>> = [];
+  let cancelledSelections = 0;
+  const windowListeners = new Map<string, Array<(event: FakeRendererEvent) => void>>();
+  const fakeWindow = {
+    sciforgeAnnotationOverlay: {
+      submitSelection(input: Record<string, unknown>) {
+        submittedSelections.push(JSON.parse(JSON.stringify(input)));
+      },
+      cancelSelection() {
+        cancelledSelections += 1;
+      },
+      setDragState(input: Record<string, unknown>) {
+        dragStates.push(JSON.parse(JSON.stringify(input)));
+      },
+    },
+    addEventListener(type: string, listener: (event: FakeRendererEvent) => void) {
+      windowListeners.set(type, [...(windowListeners.get(type) ?? []), listener]);
+    },
+    getSelection() {
+      return { removeAllRanges() {} };
+    },
+  };
+  const script = html.match(/<script>([\s\S]*)<\/script>/)?.[1];
+  assert.ok(script, 'renderer HTML should include an inline script');
+  new Script(script).runInContext(createContext({
+    window: fakeWindow,
+    document,
+  }));
+
+  let lastKeyEvent: FakeRendererEvent | undefined;
+  function dispatchWindowEvent(type: string, event: FakeRendererEvent): FakeRendererEvent {
+    event.type = type;
+    for (const listener of windowListeners.get(type) ?? []) listener(event);
+    return event;
+  }
+  return {
+    body: document.body,
+    comment: document.comment,
+    selection: document.selection,
+    activeDisplay: document.activeDisplay,
+    document,
+    submittedSelections,
+    dragStates,
+    get cancelledSelections() {
+      return cancelledSelections;
+    },
+    get lastKeyEvent() {
+      return lastKeyEvent;
+    },
+    dispatchPointer(type: string, clientX: number, clientY: number, target = document.body) {
+      return dispatchWindowEvent(type, new FakeRendererEvent({
+        button: 0,
+        clientX,
+        clientY,
+        target,
+      }));
+    },
+    dispatchKey(key: string, target: FakeRendererElement, options = {}) {
+      lastKeyEvent = dispatchWindowEvent('keydown', new FakeRendererEvent({
+        key,
+        target,
+        shiftKey: options.shiftKey === true,
+        ctrlKey: options.ctrlKey === true,
+        metaKey: options.metaKey === true,
+      }));
+      return lastKeyEvent;
+    },
+  };
+}
+
+function pickStyle(element: FakeRendererElement, keys: string[]): Record<string, string | undefined> {
+  return Object.fromEntries(keys.map((key) => [key, element.style[key]]));
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class FakeRendererDocument {
+  readonly body = new FakeRendererElement('body');
+  readonly selection = new FakeRendererElement('selection');
+  readonly activeDisplay = new FakeRendererElement('active-display');
+  readonly panel = new FakeRendererElement('panel');
+  readonly comment = new FakeRendererElement('comment');
+  readonly save = new FakeRendererElement('save');
+  readonly cancel = new FakeRendererElement('cancel');
+  activeElement: FakeRendererElement | undefined;
+  private readonly elements = new Map<string, FakeRendererElement>();
+
+  constructor() {
+    for (const element of [
+      this.selection,
+      this.activeDisplay,
+      this.panel,
+      this.comment,
+      this.save,
+      this.cancel,
+    ]) {
+      this.elements.set(element.id, element);
+      element.ownerDocument = this;
+    }
+    this.panel.children.push(this.comment, this.cancel, this.save);
+    this.comment.parent = this.panel;
+    this.cancel.parent = this.panel;
+    this.save.parent = this.panel;
+  }
+
+  getElementById(id: string): FakeRendererElement | null {
+    return this.elements.get(id) ?? null;
+  }
+}
+
+class FakeRendererElement {
+  readonly style: Record<string, string> = {};
+  readonly dataset: Record<string, string> = {};
+  readonly children: FakeRendererElement[] = [];
+  readonly classList = {
+    classes: new Set<string>(),
+    add: (...classes: string[]) => classes.forEach((className) => this.classList.classes.add(className)),
+    remove: (...classes: string[]) => classes.forEach((className) => this.classList.classes.delete(className)),
+    contains: (className: string) => this.classList.classes.has(className),
+  };
+  ownerDocument: FakeRendererDocument | undefined;
+  parent: FakeRendererElement | undefined;
+  value = '';
+  disabled = false;
+  private readonly listeners = new Map<string, Array<(event: FakeRendererEvent) => void>>();
+
+  constructor(readonly id: string) {}
+
+  contains(target: unknown): boolean {
+    if (target === this) return true;
+    return this.children.some((child) => child.contains(target));
+  }
+
+  focus(): void {
+    if (this.ownerDocument) this.ownerDocument.activeElement = this;
+  }
+
+  addEventListener(type: string, listener: (event: FakeRendererEvent) => void): void {
+    this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
+  }
+
+  dispatchEvent(event: FakeRendererEvent): void {
+    for (const listener of this.listeners.get(event.type ?? '') ?? []) listener(event);
+  }
+}
+
+class FakeRendererEvent {
+  type?: string;
+  defaultPrevented = false;
+  button: number;
+  clientX: number;
+  clientY: number;
+  key: string;
+  target: FakeRendererElement;
+  shiftKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+
+  constructor(input: {
+    button?: number;
+    clientX?: number;
+    clientY?: number;
+    key?: string;
+    target: FakeRendererElement;
+    shiftKey?: boolean;
+    ctrlKey?: boolean;
+    metaKey?: boolean;
+  }) {
+    this.button = input.button ?? 0;
+    this.clientX = input.clientX ?? 0;
+    this.clientY = input.clientY ?? 0;
+    this.key = input.key ?? '';
+    this.target = input.target;
+    this.shiftKey = input.shiftKey === true;
+    this.ctrlKey = input.ctrlKey === true;
+    this.metaKey = input.metaKey === true;
+  }
+
+  preventDefault(): void {
+    this.defaultPrevented = true;
+  }
 }
 
 function assertNoRawImagePayload(value: unknown): void {

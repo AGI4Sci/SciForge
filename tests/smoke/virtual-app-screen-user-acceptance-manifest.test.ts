@@ -15,7 +15,20 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-test('VirtualAppScreen user acceptance contract fixture passes only with real-host-shaped provider evidence fields', () => {
+test('legacy VirtualAppScreen host manifest is historical compatibility, not the active product route', async () => {
+  const manifest = JSON.parse(await readFile(
+    new URL('../../packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json', import.meta.url),
+    'utf8',
+  ));
+
+  assert.equal(manifest.routeStatus, 'historical-compatibility');
+  assert.equal(manifest.currentProductRoute, false);
+  assert.equal(manifest.productTruthOwner, false);
+  assert.match(manifest.compatibilityWording, /historical compatibility/i);
+  assert.match(manifest.compatibilityWording, /not.*current.*blocking.*product route/i);
+});
+
+test('legacy VirtualAppScreen compatibility fixture passes only with real-host-shaped provider evidence fields', () => {
   const manifest = buildVirtualAppScreenUserAcceptanceManifest(validInput());
 
   assert.equal(manifest.schemaVersion, VIRTUAL_APP_SCREEN_USER_ACCEPTANCE_SCHEMA_VERSION);
@@ -45,7 +58,7 @@ test('VirtualAppScreen user acceptance contract fixture passes only with real-ho
   assert.equal(manifest.evidenceLedgerRef, 'computer-use:native-host/ledgers/vas-local-research-note/evidence-ledger.json');
 });
 
-test('VirtualAppScreen user acceptance blocks Host-shaped claims without real opt-in provider evidence', () => {
+test('legacy VirtualAppScreen compatibility blocks Host-shaped claims without real opt-in provider evidence', () => {
   const {
     realOptInRunRef: _realOptInRunRef,
     realPlatformEvidenceRefs: _realPlatformEvidenceRefs,
@@ -64,7 +77,7 @@ test('VirtualAppScreen user acceptance blocks Host-shaped claims without real op
   assert.match(manifest.validation.issues.join('\n'), /real opt-in Host provider session evidence is required/);
 });
 
-test('VirtualAppScreen user acceptance P1.3 coverage rejects claims without the concrete evidence tuple', () => {
+test('legacy VirtualAppScreen P1.3 compatibility coverage rejects claims without the concrete evidence tuple', () => {
   type MutableRealVirtualAppScreenClaim = ReturnType<typeof realVirtualAppScreenClaim> & Record<string, unknown>;
   const cases = [
     {
@@ -148,7 +161,7 @@ test('VirtualAppScreen user acceptance P1.3 coverage rejects claims without the 
   }
 });
 
-test('VirtualAppScreen user acceptance manifest blocks BrowserRuntime fixture evidence', () => {
+test('legacy VirtualAppScreen compatibility manifest blocks BrowserRuntime fixture evidence', () => {
   const manifest = buildVirtualAppScreenUserAcceptanceManifest(browserRuntimeInput());
 
   assert.equal(manifest.status, 'blocked');

@@ -17,6 +17,7 @@ export const SUBAGENT_MCP_ENV = {
   workspace: 'SCIFORGE_SUBAGENT_WORKSPACE',
   profile: 'SCIFORGE_SUBAGENT_PROFILE',
   sandbox: 'SCIFORGE_SUBAGENT_SANDBOX',
+  approvalPolicy: 'SCIFORGE_SUBAGENT_APPROVAL_POLICY',
   codexHome: 'SCIFORGE_SUBAGENT_CODEX_HOME',
   codexCommand: 'SCIFORGE_SUBAGENT_CODEX_COMMAND',
   transcriptRoot: 'SCIFORGE_SUBAGENT_TRANSCRIPT_ROOT',
@@ -30,6 +31,7 @@ export interface RuntimeSubagentInjectionOptions {
   workspace: string;
   profile: string;
   sandbox: string;
+  approvalPolicy?: string;
   codexHome: string;
   runtimeDir?: string;
   codexCommand?: string;
@@ -69,6 +71,7 @@ export async function prepareRuntimeSubagentInjection(options: RuntimeSubagentIn
     [SUBAGENT_MCP_ENV.workspace, resolve(options.workspace)],
     [SUBAGENT_MCP_ENV.profile, options.profile],
     [SUBAGENT_MCP_ENV.sandbox, options.sandbox],
+    [SUBAGENT_MCP_ENV.approvalPolicy, options.approvalPolicy],
     [SUBAGENT_MCP_ENV.codexHome, resolve(options.codexHome)],
     [SUBAGENT_MCP_ENV.codexCommand, options.codexCommand?.trim() || 'codex'],
     [SUBAGENT_MCP_ENV.transcriptRoot, transcriptRoot],
@@ -100,6 +103,7 @@ export async function prepareRuntimeSubagentExtensionInjection(options: {
   statePath?: string;
   profile?: string;
   sandbox?: string;
+  approvalPolicy?: string;
   codexHome?: string;
   codexCommand?: string;
   commandId?: string;
@@ -114,6 +118,7 @@ export async function prepareRuntimeSubagentExtensionInjection(options: {
     workspace: options.workspacePath,
     profile: options.profile ?? RUNTIME_PROFILE,
     sandbox: options.sandbox ?? DEFAULT_RUNTIME_CODEX_SANDBOX,
+    approvalPolicy: options.approvalPolicy,
     codexHome: options.codexHome ?? paths.codexHome,
     codexCommand: options.codexCommand,
     parentCommandId: options.commandId,
@@ -130,7 +135,19 @@ export function runtimeSubagentManifest(injection: RuntimeSubagentInjection): Re
     tools: injection.toolNames.map((name) => ({
       name,
       boundary: 'local-sub-agent',
-      returns: ['agentId', 'resultSummary', 'transcriptRef', 'refs'],
+      returns: [
+        'agentId',
+        'parentAgentId',
+        'agentType',
+        'status',
+        'resultSummary',
+        'resultRef',
+        'transcriptRef',
+        'refs',
+        'durationMs',
+        'background',
+        'resume',
+      ],
     })),
   };
 }

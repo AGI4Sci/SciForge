@@ -140,14 +140,12 @@ function workspaceRuntimeEvent(metadata: RouteMetadata, event: WorkspaceRuntimeE
       text: event.text,
       detail: event.detail,
       output: event.output,
-      raw: event.raw ?? event,
     });
   }
   return operationEvent(
     metadata,
     event.message ?? event.text ?? event.detail ?? event.type,
     event.status ?? 'running',
-    event,
   );
 }
 
@@ -155,14 +153,12 @@ function operationEvent(
   metadata: RouteMetadata,
   message: string,
   status: string,
-  raw?: unknown,
 ): Record<string, unknown> {
   return compactRecord({
     ...baseEvent(metadata, 'operation_progress'),
     status,
     message,
     text: message,
-    raw,
   });
 }
 
@@ -175,15 +171,7 @@ function doneEvent(metadata: RouteMetadata, payload: ToolPayload): Record<string
     text: payload.message,
     commandId: metadata.commandId,
     attemptId: metadata.attemptId,
-    provider: metadata.provider,
-    model: metadata.model,
-    profile: metadata.profile,
-    workspace: metadata.workspace,
     evidenceRefs: metadata.evidenceRefs,
-    raw: {
-      boundary: 'runtime-codex-computer-use-native-route',
-      payload,
-    },
   });
 }
 
@@ -193,10 +181,6 @@ function failedEvent(metadata: RouteMetadata, message: string): Record<string, u
     status: 'failed',
     message,
     text: message,
-    raw: {
-      boundary: 'runtime-codex-computer-use-native-route',
-      error: message,
-    },
   });
 }
 
@@ -215,10 +199,6 @@ function firstExecutionUnitStatus(payload: ToolPayload) {
 }
 
 interface RouteMetadata {
-  provider: string;
-  model: string;
-  profile: string;
-  workspace: string;
   commandId: string;
   attemptId: string;
   evidenceRefs: string[];
@@ -226,10 +206,6 @@ interface RouteMetadata {
 
 function routeMetadata(input: ComputerUseNativeRouteInput): RouteMetadata {
   return {
-    provider: input.provider,
-    model: input.model,
-    profile: input.profile,
-    workspace: input.workspace,
     commandId: input.request.commandId,
     attemptId: input.request.attemptId,
     evidenceRefs: [
@@ -244,10 +220,6 @@ function baseEvent(metadata: RouteMetadata, type: string) {
     schemaVersion: NORMALIZED_SCHEMA_VERSION,
     type,
     timestamp: new Date().toISOString(),
-    provider: metadata.provider,
-    model: metadata.model,
-    profile: metadata.profile,
-    workspace: metadata.workspace,
     commandId: metadata.commandId,
     attemptId: metadata.attemptId,
     evidenceRefs: metadata.evidenceRefs,

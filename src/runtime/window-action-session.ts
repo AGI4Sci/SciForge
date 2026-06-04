@@ -18,9 +18,12 @@ export type WindowActionAdapter =
   | 'browser-host-session'
   | 'browser-cdp-playwright'
   | 'app-native-command'
+  | 'terminal'
   | 'accessibility-ui-automation'
   | 'system-input'
   | 'blocked';
+export type ScopedInputAdapterFocusMode = 'focus-free' | 'requires-focus' | 'blocked';
+export type WindowActionFocusLeaseStatus = 'active' | 'released';
 
 export interface WindowActionTarget {
   type: 'browser-pane' | 'window-action-session';
@@ -31,6 +34,24 @@ export interface WindowActionTarget {
 export interface WindowActionEvidenceRef {
   kind: string;
   ref: string;
+}
+
+export interface WindowActionObserveBeforeMutateEvidence {
+  status?: string;
+  observedAt?: string;
+  capturedAt?: string;
+  freshnessCheckedAt?: string;
+  screenId?: string;
+  windowRef?: string;
+  freshnessCheck?: {
+    status?: string;
+    observedAt?: string;
+    checkedAt?: string;
+    expiresAt?: string;
+    maxAgeMs?: number;
+    reason?: string;
+    staleBy?: string;
+  };
 }
 
 export interface ActorCursorLastAction {
@@ -49,6 +70,38 @@ export interface ActorCursor {
   target?: WindowActionTarget;
   lastAction?: ActorCursorLastAction;
   evidenceRefs?: string[];
+}
+
+export interface ScopedInputAdapter {
+  schemaVersion: 'sciforge.scoped-input-adapter.v1';
+  ref: string;
+  agentId: string;
+  actorCursorRef?: string;
+  windowActionSessionRef: string;
+  targetWindowRef: string;
+  adapter: WindowActionAdapter;
+  focusMode: ScopedInputAdapterFocusMode;
+  inputQueueRef: string;
+  focusLeaseRef?: string;
+  evidenceRefs: WindowActionEvidenceRef[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WindowActionFocusLease {
+  schemaVersion: 'sciforge.window-action-focus-lease.v1';
+  ref: string;
+  status: WindowActionFocusLeaseStatus;
+  scopedInputAdapterRef: string;
+  target: WindowActionTarget;
+  actor: {
+    agentId: string;
+    actorCursorRef?: string;
+  };
+  actionRefs: string[];
+  acquiredAt: string;
+  releasedAt?: string;
+  evidenceRefs: WindowActionEvidenceRef[];
 }
 
 export interface WindowActionProcessInfo {
@@ -93,6 +146,7 @@ export interface WindowActionSession {
   screenId?: string;
   status: WindowActionSessionStatus;
   actorCursor?: ActorCursor;
+  scopedInputAdapters: ScopedInputAdapter[];
   events: WindowActionEvent[];
   evidenceRefs: WindowActionEvidenceRef[];
   createdAt: string;
@@ -103,11 +157,18 @@ export interface WindowActionRecordInput {
   action: WindowActionKind;
   status: WindowActionEventStatus;
   timestamp?: string;
+  scopedInputAdapterRef?: string;
+  actorCursorRef?: string;
+  focusLeaseRef?: string;
   point?: { x: number; y: number };
   delta?: { x?: number; y?: number };
   durationMs?: number;
   textLength?: number;
+  sourceAnnotationRefs?: unknown[];
+  beforeEvidenceRefs?: unknown[];
+  afterEvidenceRefs?: unknown[];
   evidenceRefs?: unknown[];
+  observeBeforeMutate?: WindowActionObserveBeforeMutateEvidence;
 }
 
 export interface WindowActionEvent {
@@ -116,10 +177,16 @@ export interface WindowActionEvent {
   status: WindowActionEventStatus;
   timestamp: string;
   actorCursor?: ActorCursor;
+  actorCursorRef?: string;
+  scopedInputAdapterRef?: string;
+  focusLeaseRef?: string;
   point?: { x: number; y: number };
   delta?: { x?: number; y?: number };
   durationMs?: number;
   textLength?: number;
+  sourceAnnotationRefs?: WindowActionEvidenceRef[];
+  beforeEvidenceRefs?: WindowActionEvidenceRef[];
+  afterEvidenceRefs?: WindowActionEvidenceRef[];
   evidenceRefs: WindowActionEvidenceRef[];
 }
 
@@ -132,6 +199,7 @@ export interface WindowActionRouteInput {
       playwright?: boolean;
       webContentsView?: boolean;
       appNativeCommand?: boolean;
+      terminal?: boolean;
       accessibility?: boolean;
       uiAutomation?: boolean;
       atSpi?: boolean;
@@ -151,6 +219,7 @@ export interface WindowActionRoute {
   evidence?: {
     sharedSystemInput?: true;
     bounded?: true;
+    requiresFocusLease?: true;
   };
 }
 
@@ -161,11 +230,16 @@ export interface WindowActionDispatchInput extends WindowActionRecordInput {
 export interface WindowActionAdapterContext {
   session: WindowActionSession;
   route: WindowActionRoute;
+  scopedInputAdapter: ScopedInputAdapter;
+  focusLease?: WindowActionFocusLease;
   input: WindowActionDispatchInput;
 }
 
 export interface WindowActionAdapterResult {
   status?: WindowActionEventStatus;
+  sourceAnnotationRefs?: unknown[];
+  beforeEvidenceRefs?: unknown[];
+  afterEvidenceRefs?: unknown[];
   evidenceRefs?: unknown[];
 }
 
@@ -176,8 +250,40 @@ export type WindowActionAdapterHandlers = Partial<Record<WindowActionAdapter, (
 export interface WindowActionDispatchResult {
   route: WindowActionRoute;
   adapterResult: WindowActionAdapterResult;
+  scopedInputAdapter: ScopedInputAdapter;
+  focusLease?: WindowActionFocusLease | WindowActionFocusLeasePlan;
   session: WindowActionSession;
 }
+
+export interface WindowActionDispatchOptions {
+  agentId?: string;
+  actorCursorRef?: string;
+  activeFocusLeases?: WindowActionFocusLease[];
+  timestamp?: string;
+}
+
+export type WindowActionFocusLeasePlan =
+  | {
+    status: 'not-required';
+    ref?: undefined;
+    lease?: undefined;
+    reason?: undefined;
+    conflictingLeaseRef?: undefined;
+  }
+  | {
+    status: 'acquired';
+    ref: string;
+    lease: WindowActionFocusLease;
+    reason?: undefined;
+    conflictingLeaseRef?: undefined;
+  }
+  | {
+    status: 'queued';
+    ref: string;
+    reason: string;
+    conflictingLeaseRef: string;
+    lease?: undefined;
+  };
 
 export type WindowActionAnnotationBindingStatus = 'manual-bound' | 'auto-bound' | 'unbound' | 'blocked';
 export type WindowActionAnnotationCandidateStatus = 'candidate' | 'explanatory-target' | 'blocked';
@@ -262,6 +368,7 @@ export function createWindowActionSession(input: WindowActionSessionInput): Wind
     ...(Number.isFinite(input.scale) ? { scale: Number(input.scale) } : {}),
     ...(input.screenId ? { screenId: safeIdentifier(input.screenId, 'screen') } : {}),
     status: 'active',
+    scopedInputAdapters: [],
     events: [],
     evidenceRefs: boundedEvidenceRefs(input.evidenceRefs),
     createdAt: now,
@@ -272,7 +379,7 @@ export function createWindowActionSession(input: WindowActionSessionInput): Wind
 export function enterWindowActionSession(
   session: WindowActionSession,
   actorCursor: ActorCursor,
-  options: { timestamp?: string } = {},
+  options: { timestamp?: string; actorCursorRef?: string; scopedInputAdapterRef?: string } = {},
 ): WindowActionSession {
   if (session.status !== 'active') return session;
   const timestamp = options.timestamp ?? new Date().toISOString();
@@ -292,6 +399,8 @@ export function enterWindowActionSession(
     status: 'completed',
     timestamp,
     actorCursor: nextCursor,
+    ...(boundedRef(options.actorCursorRef) ? { actorCursorRef: boundedRef(options.actorCursorRef) } : {}),
+    ...(boundedRef(options.scopedInputAdapterRef) ? { scopedInputAdapterRef: boundedRef(options.scopedInputAdapterRef) } : {}),
     evidenceRefs: [],
   });
 }
@@ -325,6 +434,12 @@ export function recordWindowAction(
   if (session.status !== 'active') return session;
   const timestamp = input.timestamp ?? new Date().toISOString();
   const evidenceRefs = boundedEvidenceRefs(input.evidenceRefs);
+  const sourceAnnotationRefs = boundedEvidenceRefs(input.sourceAnnotationRefs);
+  const beforeEvidenceRefs = boundedEvidenceRefs(input.beforeEvidenceRefs);
+  const afterEvidenceRefs = boundedEvidenceRefs(input.afterEvidenceRefs);
+  const scopedInputAdapterRef = boundedRef(input.scopedInputAdapterRef);
+  const actorCursorRef = boundedRef(input.actorCursorRef);
+  const focusLeaseRef = boundedRef(input.focusLeaseRef);
   const cursor = session.actorCursor
     ? createActorCursor({
         ...session.actorCursor,
@@ -347,10 +462,16 @@ export function recordWindowAction(
     status: input.status,
     timestamp,
     ...(cursor ? { actorCursor: cursor } : {}),
+    ...(actorCursorRef ? { actorCursorRef } : {}),
+    ...(scopedInputAdapterRef ? { scopedInputAdapterRef } : {}),
+    ...(focusLeaseRef ? { focusLeaseRef } : {}),
     ...(input.point ? { point: point(input.point) } : {}),
     ...(input.delta ? { delta: input.delta } : {}),
     ...(Number.isFinite(input.durationMs) ? { durationMs: Math.max(0, Math.round(input.durationMs as number)) } : {}),
     ...(Number.isFinite(input.textLength) ? { textLength: Math.max(0, Math.round(input.textLength as number)) } : {}),
+    ...(sourceAnnotationRefs.length ? { sourceAnnotationRefs } : {}),
+    ...(beforeEvidenceRefs.length ? { beforeEvidenceRefs } : {}),
+    ...(afterEvidenceRefs.length ? { afterEvidenceRefs } : {}),
     evidenceRefs,
   });
 }
@@ -388,6 +509,9 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
   if (capabilities.appNativeCommand || appKind === 'editor') {
     return route(2, 'app-native-command');
   }
+  if (capabilities.terminal) {
+    return route(2, 'terminal');
+  }
   if (capabilities.accessibility || capabilities.uiAutomation || capabilities.atSpi) {
     const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
     return {
@@ -418,43 +542,260 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
       evidence: {
         sharedSystemInput: true,
         bounded: true,
+        requiresFocusLease: true,
       },
     };
   }
   return route(99, 'blocked');
 }
 
+export function createScopedInputAdapter(
+  session: WindowActionSession,
+  route: WindowActionRoute,
+  options: {
+    agentId?: string;
+    actorCursorRef?: string;
+    focusLeaseRef?: string;
+    timestamp?: string;
+  } = {},
+): ScopedInputAdapter {
+  const timestamp = options.timestamp ?? new Date().toISOString();
+  const agentId = safeIdentifier(options.agentId ?? session.actorCursor?.agentId ?? 'agent', 'agent');
+  const adapterPart = safeRefPart(route.adapter) || 'adapter';
+  const scopedInputAdapterRef = `scoped-input-adapter:${safeRefPart(session.id)}/${safeRefPart(agentId)}/${adapterPart}`;
+  const focusMode = focusModeForRoute(route);
+  return {
+    schemaVersion: 'sciforge.scoped-input-adapter.v1',
+    ref: scopedInputAdapterRef,
+    agentId,
+    ...(boundedRef(options.actorCursorRef) ? { actorCursorRef: boundedRef(options.actorCursorRef) } : {}),
+    windowActionSessionRef: `window-action-session:${safeRefPart(session.id)}`,
+    targetWindowRef: session.windowRef,
+    adapter: route.adapter,
+    focusMode,
+    inputQueueRef: `input-queue:${safeRefPart(session.id)}/${safeRefPart(agentId)}/${adapterPart}`,
+    ...(boundedRef(options.focusLeaseRef) ? { focusLeaseRef: boundedRef(options.focusLeaseRef) } : {}),
+    evidenceRefs: route.evidenceRefs,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  };
+}
+
+export function createWindowActionFocusLease(input: {
+  session: WindowActionSession;
+  scopedInputAdapterRef: string;
+  agentId?: string;
+  actorCursorRef?: string;
+  actionRef?: string;
+  timestamp?: string;
+  evidenceRefs?: unknown[];
+}): WindowActionFocusLease {
+  const timestamp = input.timestamp ?? new Date().toISOString();
+  const scopedInputAdapterRef = boundedRef(input.scopedInputAdapterRef)
+    ?? `scoped-input-adapter:${safeRefPart(input.session.id)}/agent/system-input`;
+  const agentId = safeIdentifier(input.agentId ?? input.session.actorCursor?.agentId ?? 'agent', 'agent');
+  const actionRef = boundedRef(input.actionRef);
+  return {
+    schemaVersion: 'sciforge.window-action-focus-lease.v1',
+    ref: `focus-lease:${safeRefPart(input.session.screenId ?? input.session.windowRef)}/${safeRefPart(agentId)}/${safeRefPart(timestamp)}`,
+    status: 'active',
+    scopedInputAdapterRef,
+    target: targetForSession(input.session),
+    actor: {
+      agentId,
+      ...(boundedRef(input.actorCursorRef) ? { actorCursorRef: boundedRef(input.actorCursorRef) } : {}),
+    },
+    actionRefs: actionRef ? [actionRef] : [],
+    acquiredAt: timestamp,
+    evidenceRefs: boundedEvidenceRefs(input.evidenceRefs),
+  };
+}
+
+export function planWindowActionFocusLease(input: {
+  session: WindowActionSession;
+  scopedInputAdapter: ScopedInputAdapter;
+  actionRef?: string;
+  activeLeases?: WindowActionFocusLease[];
+  timestamp?: string;
+  evidenceRefs?: unknown[];
+}): WindowActionFocusLeasePlan {
+  if (input.scopedInputAdapter.focusMode !== 'requires-focus') return { status: 'not-required' };
+  const conflictingLease = (input.activeLeases ?? []).find((lease) => (
+    lease.status === 'active' && lease.target.windowRef !== ''
+  ));
+  if (conflictingLease) {
+    return {
+      status: 'queued',
+      ref: `focus-lease-wait:${safeRefPart(input.session.id)}/${safeRefPart(input.scopedInputAdapter.agentId)}`,
+      reason: `waiting-for-focus-lease:${conflictingLease.ref}`,
+      conflictingLeaseRef: conflictingLease.ref,
+    };
+  }
+  const lease = createWindowActionFocusLease({
+    session: input.session,
+    scopedInputAdapterRef: input.scopedInputAdapter.ref,
+    agentId: input.scopedInputAdapter.agentId,
+    actorCursorRef: input.scopedInputAdapter.actorCursorRef,
+    actionRef: input.actionRef,
+    timestamp: input.timestamp,
+    evidenceRefs: input.evidenceRefs,
+  });
+  return {
+    status: 'acquired',
+    ref: lease.ref,
+    lease,
+  };
+}
+
+export function releaseWindowActionFocusLease(
+  lease: WindowActionFocusLease,
+  options: {
+    actionRef?: string;
+    timestamp?: string;
+    evidenceRefs?: unknown[];
+  } = {},
+): WindowActionFocusLease {
+  const actionRef = boundedRef(options.actionRef);
+  return {
+    ...lease,
+    status: 'released',
+    releasedAt: options.timestamp ?? new Date().toISOString(),
+    actionRefs: uniqueStrings([
+      ...lease.actionRefs,
+      ...(actionRef ? [actionRef] : []),
+    ]),
+    evidenceRefs: uniqueEvidenceRefs([
+      ...lease.evidenceRefs,
+      ...boundedEvidenceRefs(options.evidenceRefs),
+    ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+  };
+}
+
 export async function dispatchWindowAction(
   session: WindowActionSession,
   input: WindowActionDispatchInput,
   handlers: WindowActionAdapterHandlers,
+  options: WindowActionDispatchOptions = {},
 ): Promise<WindowActionDispatchResult> {
   const route = routeWindowAction({
     target: input.target,
     action: input.action,
     evidenceRefs: input.evidenceRefs,
   });
+  const actionRef = eventId(session, input.action, input.timestamp ?? options.timestamp ?? new Date().toISOString());
+  const scopedInputAdapter = createScopedInputAdapter(session, route, {
+    agentId: options.agentId,
+    actorCursorRef: options.actorCursorRef,
+    timestamp: input.timestamp ?? options.timestamp,
+  });
+  const focusLease = planWindowActionFocusLease({
+    session,
+    scopedInputAdapter,
+    actionRef,
+    activeLeases: options.activeFocusLeases,
+    timestamp: input.timestamp ?? options.timestamp,
+    evidenceRefs: route.evidenceRefs,
+  });
   if (session.status !== 'active') {
     return {
       route,
       adapterResult: { status: 'blocked', evidenceRefs: route.evidenceRefs },
+      scopedInputAdapter,
+      focusLease,
       session,
+    };
+  }
+  if (focusLease.status === 'queued') {
+    return {
+      route,
+      adapterResult: { status: 'blocked', evidenceRefs: route.evidenceRefs },
+      scopedInputAdapter,
+      focusLease,
+      session: recordWindowAction(addScopedInputAdapter(session, scopedInputAdapter), {
+        ...input,
+        status: 'blocked',
+        scopedInputAdapterRef: scopedInputAdapter.ref,
+        actorCursorRef: scopedInputAdapter.actorCursorRef,
+        focusLeaseRef: focusLease.ref,
+        evidenceRefs: [
+          ...route.evidenceRefs,
+          { kind: 'focus-lease', ref: focusLease.ref },
+        ],
+      }),
+    };
+  }
+  const beforeEvidenceRefs = boundedEvidenceRefs(input.beforeEvidenceRefs);
+  const observeBeforeMutateReason = windowActionRequiresObserveBeforeMutate(input.action)
+    ? windowActionObserveBeforeMutateReason(session, input, beforeEvidenceRefs)
+    : '';
+  if (observeBeforeMutateReason) {
+    const blockedEvidenceRefs = [
+      ...route.evidenceRefs,
+      { kind: 'observe-before-mutate', ref: `observe-before-mutate:${safeRefPart(session.id)}:${safeRefPart(input.action)}:${safeRefPart(observeBeforeMutateReason)}` },
+    ];
+    return {
+      route,
+      adapterResult: { status: 'blocked', evidenceRefs: blockedEvidenceRefs },
+      scopedInputAdapter,
+      focusLease,
+      session: recordWindowAction(addScopedInputAdapter(session, scopedInputAdapter), {
+        ...input,
+        status: 'blocked',
+        scopedInputAdapterRef: scopedInputAdapter.ref,
+        actorCursorRef: scopedInputAdapter.actorCursorRef,
+        focusLeaseRef: focusLease.status === 'acquired' ? focusLease.ref : undefined,
+        evidenceRefs: blockedEvidenceRefs,
+      }),
     };
   }
   const handler = handlers[route.adapter];
   const adapterResult = handler
-    ? await handler({ session, route, input })
+    ? await handler({
+        session,
+        route,
+        scopedInputAdapter: {
+          ...scopedInputAdapter,
+          ...(focusLease.status === 'acquired' ? { focusLeaseRef: focusLease.ref } : {}),
+        },
+        ...(focusLease.status === 'acquired' ? { focusLease: focusLease.lease } : {}),
+        input,
+      })
     : { status: 'blocked' as const, evidenceRefs: route.evidenceRefs };
   const evidenceRefs = [
     ...route.evidenceRefs,
+    ...(focusLease.status === 'acquired' ? [{ kind: 'focus-lease', ref: focusLease.ref }] : []),
     ...(adapterResult.evidenceRefs ?? []),
   ];
+  const sessionWithAdapter = addScopedInputAdapter(session, {
+    ...scopedInputAdapter,
+    ...(focusLease.status === 'acquired' ? { focusLeaseRef: focusLease.ref } : {}),
+  });
   return {
     route,
     adapterResult,
-    session: recordWindowAction(session, {
+    scopedInputAdapter: {
+      ...scopedInputAdapter,
+      ...(focusLease.status === 'acquired' ? { focusLeaseRef: focusLease.ref } : {}),
+    },
+    focusLease,
+    session: recordWindowAction(sessionWithAdapter, {
       ...input,
       status: adapterResult.status ?? input.status,
+      scopedInputAdapterRef: scopedInputAdapter.ref,
+      actorCursorRef: scopedInputAdapter.actorCursorRef,
+      focusLeaseRef: focusLease.status === 'acquired' ? focusLease.ref : undefined,
+      sourceAnnotationRefs: [
+        ...(input.sourceAnnotationRefs ?? []),
+        ...(adapterResult.sourceAnnotationRefs ?? []),
+      ],
+      beforeEvidenceRefs: [
+        ...(input.beforeEvidenceRefs ?? []),
+        ...(adapterResult.beforeEvidenceRefs ?? []),
+      ],
+      afterEvidenceRefs: [
+        ...(input.afterEvidenceRefs ?? []),
+        ...(adapterResult.afterEvidenceRefs ?? []),
+      ],
       evidenceRefs,
     }),
   };
@@ -624,6 +965,22 @@ function route(priority: WindowActionRoute['priority'], adapter: WindowActionAda
   };
 }
 
+function focusModeForRoute(route: WindowActionRoute): ScopedInputAdapterFocusMode {
+  if (route.adapter === 'blocked') return 'blocked';
+  return route.evidence?.requiresFocusLease ? 'requires-focus' : 'focus-free';
+}
+
+function addScopedInputAdapter(
+  session: WindowActionSession,
+  adapter: ScopedInputAdapter,
+): WindowActionSession {
+  const existing = session.scopedInputAdapters.filter((item) => item.ref !== adapter.ref);
+  return {
+    ...session,
+    scopedInputAdapters: [...existing, adapter],
+  };
+}
+
 function appendEvent(session: WindowActionSession, event: WindowActionEvent): WindowActionSession {
   const evidenceRefs = uniqueEvidenceRefs([
     ...session.evidenceRefs,
@@ -651,6 +1008,53 @@ function cursorStatusForAction(action: WindowActionKind): ActorCursorStatus {
   if (action === 'type') return 'typing';
   if (action === 'scroll') return 'scrolling';
   return 'waiting';
+}
+
+function windowActionRequiresObserveBeforeMutate(action: WindowActionKind) {
+  return action === 'click' || action === 'type' || action === 'scroll';
+}
+
+function windowActionObserveBeforeMutateReason(
+  session: WindowActionSession,
+  input: WindowActionDispatchInput,
+  beforeEvidenceRefs: WindowActionEvidenceRef[],
+) {
+  if (!beforeEvidenceRefs.length) return 'missing-before-evidence';
+  const evidence = input.observeBeforeMutate;
+  if (!evidence) return 'missing-current-observe-evidence';
+  const freshness = evidence.freshnessCheck;
+  const status = textOrUndefined(freshness?.status) ?? textOrUndefined(evidence.status);
+  if (status !== 'current') {
+    return textOrUndefined(freshness?.reason)
+      ?? textOrUndefined(freshness?.staleBy)
+      ?? `freshness-status-${status ?? 'missing'}`;
+  }
+  const screenId = textOrUndefined(evidence.screenId);
+  if (screenId && session.screenId && safeIdentifier(screenId, 'screen') !== session.screenId) return 'scope-mismatch-screen';
+  const windowRef = textOrUndefined(evidence.windowRef);
+  if (windowRef) {
+    const boundedWindowRef = boundedRef(windowRef);
+    if (!boundedWindowRef) return 'invalid-window-ref';
+    if (boundedWindowRef !== session.windowRef) return 'scope-mismatch-window';
+  }
+  const nowMs = timestampMs(input.timestamp ?? new Date().toISOString());
+  const observedAtMs = timestampMs(evidence.observedAt ?? evidence.capturedAt ?? freshness?.observedAt);
+  const checkedAtMs = timestampMs(evidence.freshnessCheckedAt ?? freshness?.checkedAt);
+  const expiresAtMs = timestampMs(freshness?.expiresAt);
+  if (nowMs === undefined) return 'invalid-current-timestamp';
+  if (observedAtMs === undefined) return 'missing-observation-timestamp';
+  if (checkedAtMs === undefined) return 'missing-freshness-check-timestamp';
+  if (expiresAtMs !== undefined && nowMs > expiresAtMs) return 'observation-expired';
+  const maxAgeMs = Math.max(1, Number.isFinite(freshness?.maxAgeMs) ? Math.round(freshness?.maxAgeMs as number) : 30_000);
+  if (nowMs - observedAtMs > maxAgeMs) return 'stale-observation';
+  if (nowMs - checkedAtMs > maxAgeMs) return 'stale-freshness-check';
+  return '';
+}
+
+function timestampMs(value: string | undefined) {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function sessionIdForWindowRef(windowRef: string) {
@@ -766,6 +1170,10 @@ function uniqueEvidenceRefs(values: Array<WindowActionEvidenceRef | undefined>):
     output.push(value);
   }
   return output;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {

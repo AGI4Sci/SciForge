@@ -1386,8 +1386,139 @@
   border-left: 1px solid rgba(123, 147, 176, 0.22);
 }
 
+.cursor-agent-actions.has-child-agent-cards {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 7px;
+  align-items: stretch;
+}
+
 .cursor-agent-actions .cursor-agent-action {
   padding: 0;
+}
+
+.cursor-agent-action-subagent.has-child-agent-card {
+  min-width: 0;
+}
+
+.child-agent-card {
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 8px 9px;
+  color: var(--bio-200);
+  background: rgba(8, 21, 34, 0.56);
+  border: 1px solid rgba(123, 147, 176, 0.2);
+  border-radius: 6px;
+}
+
+.child-agent-card-head {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.child-agent-card-title {
+  min-width: 0;
+  color: var(--bio-75);
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.child-agent-card-status {
+  color: var(--bio-350);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.child-agent-card-lanes {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  color: var(--bio-350);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.child-agent-card-lanes span {
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 5px;
+  overflow: hidden;
+  color: var(--bio-300);
+  background: rgba(123, 147, 176, 0.1);
+  border: 1px solid rgba(123, 147, 176, 0.18);
+  border-radius: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.child-agent-card-summary {
+  min-width: 0;
+  color: var(--bio-250);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: break-word;
+}
+
+.child-agent-card-refs {
+  min-width: 0;
+}
+
+.child-agent-card.status-running,
+.child-agent-card.status-background-running {
+  border-color: rgba(0, 229, 160, 0.32);
+}
+
+.child-agent-card.status-running .cursor-agent-action-icon,
+.child-agent-card.status-running .child-agent-card-status,
+.child-agent-card.status-background-running .cursor-agent-action-icon,
+.child-agent-card.status-background-running .child-agent-card-status {
+  color: var(--accent);
+}
+
+.child-agent-card.status-resumed {
+  border-color: rgba(119, 166, 255, 0.34);
+}
+
+.child-agent-card.status-resumed .cursor-agent-action-icon,
+.child-agent-card.status-resumed .child-agent-card-status {
+  color: var(--info, #78a6ff);
+}
+
+.child-agent-card.status-failed {
+  border-color: rgba(255, 91, 91, 0.36);
+}
+
+.child-agent-card.status-failed .cursor-agent-action-icon,
+.child-agent-card.status-failed .child-agent-card-status {
+  color: var(--danger);
+}
+
+.child-agent-card.status-blocked {
+  border-color: rgba(255, 193, 86, 0.38);
+}
+
+.child-agent-card.status-blocked .cursor-agent-action-icon,
+.child-agent-card.status-blocked .child-agent-card-status {
+  color: var(--warning);
+}
+
+.child-agent-card.status-cancelled {
+  border-color: rgba(123, 147, 176, 0.22);
+}
+
+.child-agent-card.status-cancelled .cursor-agent-action-icon,
+.child-agent-card.status-cancelled .child-agent-card-status {
+  color: var(--bio-500);
 }
 
 .native-event-stream.is-recorded .cursor-agent-action.status-running {

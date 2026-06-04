@@ -60,8 +60,8 @@ test('normalizes Python process-progress events into visible work model', () => 
 
   const model = progressModelFromEvent(progressEvent);
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
-  assert.deepEqual(model?.reading, ['/workspace/input/papers.csv']);
-  assert.deepEqual(model?.writing, ['/workspace/tasks/review.py']);
+  assert.deepEqual(model?.reading, ['[redacted-path]']);
+  assert.deepEqual(model?.writing, ['[redacted-path]']);
   assert.match(formatProgressHeadline(model) ?? '', /Next 收到新事件后继续执行/);
 });
 
@@ -106,6 +106,61 @@ test('silent waiting progress does not use audit-only stderr as the recent foreg
   assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
   assert.equal(model?.lastEvent?.label, 'Runtime Codex');
   assert.doesNotMatch(formatProgressHeadline(model) ?? '', /Plugin manifest warning|failed to load plugin|\/tmp\/plugin\.json/);
+});
+
+test('process progress public model redacts private runtime text and local paths', () => {
+  const progressEvent = event({
+    type: PROCESS_PROGRESS_EVENT_TYPE,
+    label: 'Runtime progress',
+    detail: 'fallback detail includes https://provider.internal/v1 and sk-live-fallback-secret',
+    raw: {
+      type: PROCESS_PROGRESS_EVENT_TYPE,
+      progress: {
+        phase: PROCESS_PROGRESS_PHASE.EXECUTE,
+        title: 'Executing provider call at https://provider.internal/v1',
+        detail: '{"stdout":"raw JSON stdout from /Applications/workspace/private/project","token":"sk-live-private-token"}',
+        reading: ['/Applications/workspace/private/project/input.json', '/workspace/input/papers.csv'],
+        writing: ['/Users/alice/private-output/result.json', '/workspace/tasks/review.py'],
+        waitingFor: 'stderr from /tmp/sciforge/raw-transcript.json',
+        nextStep: 'Open http://127.0.0.1:5174/raw?token=writer-secret',
+        lastEvent: {
+          label: 'stderr',
+          message: 'provider stderr token sk-last-event-secret from /Applications/workspace/private/project',
+          text: 'raw transcript should not be used',
+        },
+      },
+    },
+  });
+
+  const model = progressModelFromEvent(progressEvent);
+  const serialized = JSON.stringify(model);
+
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.EXECUTE);
+  assert.doesNotMatch(serialized, /provider\.internal|127\.0\.0\.1:5174|sk-live|sk-last-event|Applications\/workspace|\/workspace\/input|\/workspace\/tasks|Users\/alice|\/tmp\/sciforge|raw JSON stdout|raw transcript/i);
+  assert.match(model?.detail ?? '', /Runtime event recorded|redacted|structured details/i);
+});
+
+test('silent waiting latest event summary redacts private runtime text', () => {
+  const silent = buildSilentStreamProgressEvent({
+    events: [
+      event({
+        type: 'tool-result',
+        label: 'Shell result',
+        detail: 'stderr token sk-silent-secret from /Applications/workspace/private/project; raw JSON {"url":"https://provider.internal/v1"}',
+        createdAt: '2026-05-08T00:00:10.000Z',
+      }),
+    ],
+    nowMs: Date.parse('2026-05-08T00:00:16.000Z'),
+    backend: 'codex',
+  });
+
+  const model = silent ? progressModelFromEvent(silent) : undefined;
+  const serialized = JSON.stringify(model);
+
+  assert.equal(model?.phase, PROCESS_PROGRESS_PHASE.WAIT);
+  assert.equal(model?.lastEvent?.label, 'Shell result');
+  assert.doesNotMatch(serialized, /sk-silent-secret|Applications\/workspace|provider\.internal|raw JSON/i);
+  assert.doesNotMatch(formatProgressHeadline(model) ?? '', /sk-silent-secret|Applications\/workspace|provider\.internal|raw JSON/i);
 });
 
 test('builds generic waiting progress after 5s without any real backend event', () => {

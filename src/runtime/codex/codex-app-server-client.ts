@@ -119,6 +119,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       sandbox,
       codexHome: config.codexHome,
       codexCommand: this.options.command ?? baseEnv.SCIFORGE_CODEX_APP_SERVER_COMMAND ?? 'codex',
+      approvalPolicy,
       parentCommandId: commandId,
       parentAttemptId: attemptId,
       transcriptRoot,
@@ -148,6 +149,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       parentCommandId: commandId,
       parentAttemptId: attemptId,
       sandbox,
+      approvalPolicy,
       profile: config.profile,
       codexHome: config.codexHome,
     });
@@ -170,16 +172,10 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
         sandbox,
         ephemeral: this.options.ephemeral ?? baseEnv.SCIFORGE_CODEX_APP_SERVER_EPHEMERAL === '1',
         serviceName: this.options.serviceName ?? 'SciForge',
+        developerInstructions: runtimeDeveloperInstructions(request.declaredIntents),
       });
 
-    const explicitSubagentInvocation = explicitSubagentToolInvocationFromText(request.commandText);
-    const turnId = explicitSubagentInvocation
-      ? session.startExplicitSubagentToolTurn({
-        threadId,
-        commandText: request.commandText,
-        invocation: explicitSubagentInvocation,
-      })
-      : await session.startTurn({
+    const turnId = await session.startTurn({
       threadId,
       input: [{ type: 'text', text: request.commandText, text_elements: [] }],
       cwd: config.workspace,
@@ -210,6 +206,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     baseEnv: NodeJS.ProcessEnv,
     commandId: string,
   ): Promise<CodexAppServerTurnStream | undefined> {
+    if (!isHostOwnedComputerUseRuntimeIntent(request.runtimeIntent)) return undefined;
     if (!isComputerUseNativeRouteCommand(request.commandText)) return undefined;
     const config = await assertCodexRuntimeConfig({
       workspacePath: request.workspacePath,
@@ -238,7 +235,11 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       return {
         ...nativeRouteStream,
         turnId: nativeTurnId,
-        events: cleanupAsyncIterable(nativeRouteStream.events, () => {
+        provider: 'host-owned-runtime',
+        model: 'computer-use-native-route',
+        profile: 'host-owned',
+        workspacePath: 'workspace:current',
+        events: cleanupAsyncIterable(publicNativeRouteEvents(nativeRouteStream.events), () => {
           this.activeNativeTurns.delete(nativeTurnId);
         }),
       };
@@ -288,6 +289,7 @@ interface CodexAppServerJsonRpcSessionOptions {
   parentCommandId: string;
   parentAttemptId: string;
   sandbox: RuntimeCodexSandbox;
+  approvalPolicy: CodexAppServerApprovalPolicy;
   profile: string;
   codexHome: string;
 }
@@ -344,6 +346,7 @@ class CodexAppServerJsonRpcSession {
     sandbox: RuntimeCodexSandbox;
     ephemeral: boolean;
     serviceName: string;
+    developerInstructions?: string;
   }): Promise<string> {
     const result = await this.request('thread/start', {
       cwd: input.cwd,
@@ -353,6 +356,7 @@ class CodexAppServerJsonRpcSession {
       sandbox: input.sandbox,
       ephemeral: input.ephemeral,
       serviceName: input.serviceName,
+      ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
       threadSource: 'user',
       dynamicTools: runtimeDynamicToolSpecs(),
       experimentalRawEvents: false,
@@ -390,23 +394,6 @@ class CodexAppServerJsonRpcSession {
     const resultRecord = isRecord(result) ? result : undefined;
     const turnId = stringAt(recordAt(resultRecord, 'turn'), 'id');
     if (!turnId) throw new Error('Codex app-server turn/start response did not include turn.id.');
-    return turnId;
-  }
-
-  startExplicitSubagentToolTurn(input: {
-    threadId: string;
-    commandText: string;
-    invocation: ExplicitSubagentToolInvocation;
-  }): string {
-    const turnId = `explicit-subagent-${safeRuntimeId(this.options.parentCommandId) ?? Date.now().toString(36)}`;
-    const itemId = `${turnId}-tool`;
-    setTimeout(() => {
-      void this.runExplicitSubagentToolTurn({
-        ...input,
-        turnId,
-        itemId,
-      });
-    }, 0);
     return turnId;
   }
 
@@ -531,11 +518,12 @@ class CodexAppServerJsonRpcSession {
     let success = true;
 
     try {
-      if (toolName === SUBAGENT_SPAWN_AGENT_TOOL_NAME) {
+      if (isSubagentSpawnToolName(toolName)) {
         result = await callSubagentMcpTool(SUBAGENT_SPAWN_AGENT_TOOL_NAME, args, {
           workspace: this.options.cwd,
           profile: this.options.profile,
           sandbox: this.options.sandbox,
+          approvalPolicy: this.options.approvalPolicy,
           codexHome: this.options.codexHome,
           transcriptRoot: this.options.transcriptRoot,
           parentCommandId: this.options.parentCommandId,
@@ -564,95 +552,6 @@ class CodexAppServerJsonRpcSession {
     };
   }
 
-  private async runExplicitSubagentToolTurn(input: {
-    threadId: string;
-    turnId: string;
-    itemId: string;
-    commandText: string;
-    invocation: ExplicitSubagentToolInvocation;
-  }) {
-    const baseItem = {
-      id: input.itemId,
-      type: 'mcpToolCall',
-      server: SUBAGENT_MCP_SERVER_NAME,
-      tool: SUBAGENT_SPAWN_AGENT_TOOL_NAME,
-      arguments: input.invocation.arguments,
-    };
-    this.queue.push({
-      method: 'turn/started',
-      params: { threadId: input.threadId, turn: { id: input.turnId, status: 'running' } },
-    });
-    this.queue.push({
-      method: 'item/started',
-      params: {
-        threadId: input.threadId,
-        turnId: input.turnId,
-        item: { ...baseItem, status: 'inProgress' },
-      },
-    });
-    try {
-      const result = await this.request('mcpServer/tool/call', {
-        threadId: input.threadId,
-        server: SUBAGENT_MCP_SERVER_NAME,
-        tool: SUBAGENT_SPAWN_AGENT_TOOL_NAME,
-        arguments: input.invocation.arguments,
-        _meta: {
-          source: 'sciforge-explicit-runtime-tool-invocation',
-          parentCommandId: this.options.parentCommandId,
-          parentAttemptId: this.options.parentAttemptId,
-        },
-      });
-      const resultRecord = isRecord(result) ? result : {};
-      const structuredContent = recordAt(resultRecord, 'structuredContent') ?? recordAt(resultRecord, 'structured_content');
-      const outputText = explicitSubagentResultMessage(structuredContent);
-      this.queue.push({
-        method: 'item/completed',
-        params: {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          item: {
-            ...baseItem,
-            status: resultRecord.isError === true ? 'failed' : 'completed',
-            success: resultRecord.isError !== true,
-            contentItems: resultRecord.content ?? [{ type: 'text', text: JSON.stringify(result) }],
-          },
-        },
-      });
-      this.queue.push({
-        method: 'item/agentMessage/delta',
-        params: {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          itemId: `${input.turnId}-message`,
-          delta: outputText,
-        },
-      });
-      this.queue.push({
-        method: 'turn/completed',
-        params: { threadId: input.threadId, turn: { id: input.turnId, status: 'completed' } },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.queue.push({
-        method: 'item/completed',
-        params: {
-          threadId: input.threadId,
-          turnId: input.turnId,
-          item: {
-            ...baseItem,
-            status: 'failed',
-            success: false,
-            contentItems: [{ type: 'text', text: JSON.stringify({ ok: false, error: message }) }],
-          },
-        },
-      });
-      this.queue.push({
-        method: 'error',
-        params: { threadId: input.threadId, turnId: input.turnId, error: { message }, willRetry: false },
-      });
-    }
-  }
-
   private fail(error: Error) {
     this.closed = true;
     for (const pending of this.pending.values()) pending.reject(error);
@@ -662,8 +561,9 @@ class CodexAppServerJsonRpcSession {
   }
 }
 
-interface ExplicitSubagentToolInvocation {
-  arguments: Record<string, unknown>;
+function isSubagentSpawnToolName(value: string): boolean {
+  return value === SUBAGENT_SPAWN_AGENT_TOOL_NAME
+    || value === providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
 }
 
 class AsyncEventQueue<T> implements AsyncIterable<T> {
@@ -719,9 +619,140 @@ async function* cleanupAsyncIterable<T>(iterable: AsyncIterable<T>, cleanup: () 
   }
 }
 
+async function* publicNativeRouteEvents(iterable: AsyncIterable<unknown>): AsyncIterable<unknown> {
+  for await (const value of iterable) yield publicNativeRouteEvent(value);
+}
+
+function publicNativeRouteEvent(value: unknown): unknown {
+  if (!isRecord(value)) return value;
+  const privateKeys = new Set(['provider', 'model', 'profile', 'workspace', 'workspacePath', 'raw']);
+  const privateTokens = collectNativeRoutePrivateTokens(value, privateKeys);
+  return publicNativeRouteValue(value, privateKeys, privateTokens);
+}
+
+function publicNativeRouteValue(
+  value: unknown,
+  privateKeys: Set<string>,
+  privateTokens: string[],
+): unknown {
+  if (typeof value === 'string') return sanitizeNativeRoutePublicString(value, privateTokens);
+  if (Array.isArray(value)) return value.map((entry) => publicNativeRouteValue(entry, privateKeys, privateTokens));
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => !privateKeys.has(key))
+      .map(([key, entry]) => [key, publicNativeRouteValue(entry, privateKeys, privateTokens)]),
+  );
+}
+
+function collectNativeRoutePrivateTokens(value: Record<string, unknown>, privateKeys: Set<string>): string[] {
+  const tokens: string[] = [];
+  for (const [key, entry] of Object.entries(value)) {
+    if (!privateKeys.has(key)) continue;
+    collectStringLeaves(entry, tokens);
+  }
+  return Array.from(new Set(tokens.filter((token) => token.length >= 4).sort((a, b) => b.length - a.length)));
+}
+
+function collectStringLeaves(value: unknown, out: string[]): void {
+  if (typeof value === 'string' && value.trim()) {
+    out.push(value.trim());
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) collectStringLeaves(entry, out);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const entry of Object.values(value)) collectStringLeaves(entry, out);
+}
+
+function sanitizeNativeRoutePublicString(value: string, privateTokens: string[]): string {
+  let text = value;
+  for (const token of privateTokens) {
+    text = text.replace(new RegExp(escapeRegExp(token), 'g'), '[redacted]');
+  }
+  return text
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, 'Bearer [redacted-secret]')
+    .replace(/\b(?:sk|rk|pk|ghp|github_pat)[_-][A-Za-z0-9._-]{8,}\b/gi, '[redacted-secret]')
+    .replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|authorization|credential|client[_-]?secret)\b\s*[:=]?\s*["']?([^"'\s,;)}\]]{4,})?/gi, '$1=[redacted-secret]')
+    .replace(/\bhttps?:\/\/[^\s"'<>\\)]+/gi, '[redacted-url]')
+    .replace(/(^|[\s([{:=])((?:~\/|\/(?:Applications|Users|workspace|tmp|var|private|Volumes|home|opt|etc|mnt|srv|Library)\b)[^\s"',;)}\]]*)/gi, (_match, prefix: string) => `${prefix}[redacted-path]`)
+    .replace(/(^|[\s([{:=])((?:[A-Za-z]:[\\/]|\\\\)[^\s"',;)}\]]*)/g, (_match, prefix: string) => `${prefix}[redacted-path]`)
+    .replace(/\b(?:stdout|stderr|raw[_ -]?jsonl?|jsonl|raw[_ -]?transcript|raw[_ -]?provider[_ -]?(?:body|payload|output)|provider[_ -]?raw[_ -]?(?:body|payload|output))\b/gi, 'runtime audit');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function isHostOwnedComputerUseRuntimeIntent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value.schemaVersion === 'sciforge.runtime-codex.host-intent.v1'
+    && value.kind === 'computer-use-native-route'
+    && value.source === 'host-owned';
+}
+
+function runtimeDeveloperInstructions(declaredIntents?: CodexAppServerStartTurnRequest['declaredIntents']): string {
+  const mode = declaredIntents?.mode;
+  const multitaskDeclared = mode?.modeIntentId === 'multitask'
+    || mode?.publicLabel?.toLowerCase() === 'multitask';
+  const subagentToolAlias = providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME);
+  const lines = [
+    'SciForge Agent Host delegation protocol:',
+    '- Treat GUI composer choices as public declared intents only; keep the user turn input as the source of task content.',
+    `- When the user asks for delegation, or when Multitask mode is declared and the work can be split into independent subtasks, call the ${SUBAGENT_SPAWN_AGENT_TOOL_NAME} tool to create child agents.`,
+    `- If the provider exposes the child-agent tool as ${subagentToolAlias}, call that function directly; do not search for it through resource-listing tools.`,
+    '- Do not replace available child-agent delegation with ad hoc shell-only parallelism. If the child-agent tool is truly unavailable or a call fails, report that blocker explicitly.',
+    '- Use background and resume arguments only for independent long-running child work with safe refs. Do not resume a child agent without an explicit resume candidate or ref.',
+    '- Present only bounded public child-agent state: title, agent type, status, duration, completion summary, result refs, and transcript refs. Do not expose provider routes, credentials, local paths, raw tool payloads, or full transcripts.',
+  ];
+  if (multitaskDeclared) {
+    lines.splice(1, 0, `- Current GUI-declared mode: ${mode?.publicLabel ?? 'Multitask'}${mode?.summaryGuidance ? ` (${mode.summaryGuidance})` : ''}. Prefer parallel child-agent delegation when the task naturally decomposes.`);
+  }
+  return lines.join('\n');
+}
+
+function providerSafeDynamicToolAlias(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
+}
+
 function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
   const anyObjectSchema = {
     type: 'object',
+    additionalProperties: true,
+  };
+  const spawnAgentInputSchema = {
+    type: 'object',
+    properties: {
+      prompt: { type: 'string' },
+      message: { type: 'string' },
+      task: { type: 'string' },
+      instructions: { type: 'string' },
+      agentType: { type: 'string' },
+      agent_type: { type: 'string' },
+      runInBackground: { type: 'boolean' },
+      run_in_background: { type: 'boolean' },
+      background: {
+        anyOf: [{ type: 'boolean' }, { type: 'string' }],
+      },
+      resumeRef: { type: 'string' },
+      resume_ref: { type: 'string' },
+      resumeCandidateRef: { type: 'string' },
+      resume_candidate_ref: { type: 'string' },
+      resumeAgentId: { type: 'string' },
+      resume_agent_id: { type: 'string' },
+      refs: { type: 'array', items: { type: 'string' } },
+      contextRefs: { type: 'array', items: { type: 'string' } },
+      context_refs: { type: 'array', items: { type: 'string' } },
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: true,
+        },
+      },
+    },
     additionalProperties: true,
   };
   return [
@@ -760,74 +791,14 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
       namespace: 'multi_agent_v1',
       name: 'spawn_agent',
       description: 'Spawn a local SciForge Runtime Codex delegated worker and return safe transcript/result refs.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string' },
-          message: { type: 'string' },
-          task: { type: 'string' },
-          instructions: { type: 'string' },
-          agentType: { type: 'string' },
-          agent_type: { type: 'string' },
-          refs: { type: 'array', items: { type: 'string' } },
-          contextRefs: { type: 'array', items: { type: 'string' } },
-          context_refs: { type: 'array', items: { type: 'string' } },
-          items: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: true,
-            },
-          },
-        },
-        additionalProperties: true,
-      },
+      inputSchema: spawnAgentInputSchema,
+    },
+    {
+      name: providerSafeDynamicToolAlias(SUBAGENT_SPAWN_AGENT_TOOL_NAME),
+      description: `Provider-safe alias for ${SUBAGENT_SPAWN_AGENT_TOOL_NAME}; spawn a local SciForge Runtime Codex delegated worker and return safe transcript/result refs.`,
+      inputSchema: spawnAgentInputSchema,
     },
   ];
-}
-
-function explicitSubagentToolInvocationFromText(text: string): ExplicitSubagentToolInvocation | undefined {
-  const normalized = text.trim();
-  if (!normalized) return undefined;
-  if (!/\bmulti_agent_v1\.spawn_agent\b/.test(normalized)) return undefined;
-  if (!/\b(?:call|use|invoke|run|execute|spawn|start|must|please)\b|调用|使用|启动/.test(normalized)) return undefined;
-  const refs = explicitWorkspaceRefsFromText(normalized);
-  return {
-    arguments: {
-      message: normalized,
-      agent_type: /\b(?:read-only|readonly|inspect|audit|检查|审计)\b/i.test(normalized) ? 'explorer' : 'worker',
-      refs,
-      items: refs.map((ref) => ({ type: 'text', path: ref.replace(/^file:/, '') })),
-    },
-  };
-}
-
-function explicitWorkspaceRefsFromText(text: string): string[] {
-  const refs = Array.from(text.matchAll(/\b((?:[\w.-]+\/)*[\w.-]+\.[A-Za-z0-9][\w.-]*)\b/g))
-    .map((match) => match[1])
-    .filter((value): value is string => Boolean(value))
-    .filter((value) => !value.includes('multi_agent_v1.spawn_agent'))
-    .map((value) => `file:${value.replace(/^\.\//, '')}`);
-  if (/\bPROJECT\.md\b/.test(text) && !refs.includes('file:PROJECT.md')) refs.unshift('file:PROJECT.md');
-  return Array.from(new Set(refs));
-}
-
-function explicitSubagentResultMessage(value: unknown): string {
-  const result = isRecord(value) ? value : {};
-  const agentId = stringAt(result, 'agentId') ?? stringAt(result, 'agent_id') ?? 'unknown-agent';
-  const transcriptRef = stringAt(result, 'transcriptRef') ?? stringAt(result, 'transcript_ref') ?? 'missing-transcript-ref';
-  const resultRef = stringAt(result, 'resultRef') ?? stringAt(result, 'result_ref') ?? stringAt(result, 'ref') ?? 'missing-result-ref';
-  return [
-    `agentId: ${agentId}`,
-    `transcriptRef: ${transcriptRef}`,
-    `resultRef: ${resultRef}`,
-  ].join('\n');
-}
-
-function safeRuntimeId(value: string | undefined): string | undefined {
-  const text = value?.trim();
-  if (!text) return undefined;
-  return text.replace(/[^A-Za-z0-9_.:-]+/g, '-').slice(0, 96) || undefined;
 }
 
 function approvalPolicyFromEnv(env: NodeJS.ProcessEnv): CodexAppServerApprovalPolicy | undefined {

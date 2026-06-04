@@ -119,7 +119,9 @@ export async function executePackageBridgePort(
       },
     };
   }
-  if (!config.dryRun && !hasExecutableIndependentInputAdapter(config)) {
+  const packageOwnedVirtualSessionIntent = hasExecutableIndependentInputAdapter(config)
+    && Boolean(computerUseArtifactIntentText(requestArg));
+  if (!config.dryRun && !packageOwnedVirtualSessionIntent) {
     const schedulerDecision = validateComputerUseScopedAction({
       action,
       targetResolution: state.targetResolution,

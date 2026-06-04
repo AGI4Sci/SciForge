@@ -103,6 +103,140 @@ test('promotes safe sub-agent lifecycle refs without exposing transcript bodies'
   assert.deepEqual(toolEvent?.refs, ['artifact:subagent-result']);
   assert.match(toolEvent?.resultSummary ?? '', /Read-only diff audit/);
   assert.doesNotMatch(JSON.stringify(toolEvent), /RAW TRANSCRIPT BODY|trace:unsafe-ref|input-placeholder/);
+  assert.doesNotMatch(JSON.stringify(events), /RAW TRANSCRIPT BODY|trace:unsafe-ref|input-placeholder/);
+});
+
+test('promotes expanded safe sub-agent lifecycle metadata for process projection', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'subagent-call-expanded',
+      type: 'function_call',
+      name: 'multi_agent_v1.spawn_agent',
+      result: JSON.stringify({
+        ok: true,
+        agentId: 'review-worker-abc123',
+        parentAgentId: 'parent-command-1',
+        agentType: 'review-worker',
+        status: 'completed',
+        resultSummary: 'Safe sub-agent lifecycle summary.',
+        resultRef: 'artifact:subagent-result-abc123',
+        transcriptRef: 'artifact:subagent-transcript-abc123',
+        refs: [
+          'artifact:subagent-result-abc123',
+          'artifact:subagent-transcript-abc123',
+          'subagent:review-worker-abc123',
+          'trace:unsafe-ref',
+        ],
+        durationMs: 42,
+        background: {
+          runInBackground: true,
+          stateRef: 'subagent:review-worker-abc123',
+          providerUrl: 'https://provider.example/v1',
+        },
+        resume: {
+          resumeRequested: true,
+          resumeRef: 'subagent:resume-candidate',
+          resumeBoundary: 'explicit',
+          apiKey: 'sk-secret-123456789',
+        },
+        rawTranscript: 'RAW TRANSCRIPT BODY SHOULD STAY RAW-ONLY',
+      }),
+      status: 'completed',
+    },
+  }, metadata);
+
+  const toolEvent = events.at(-1);
+  assert.equal(toolEvent?.type, 'tool_completed');
+  assert.equal(toolEvent?.agentId, 'review-worker-abc123');
+  assert.equal(toolEvent?.parentAgentId, 'parent-command-1');
+  assert.equal(toolEvent?.agentType, 'review-worker');
+  assert.equal(toolEvent?.status, 'completed');
+  assert.equal(toolEvent?.resultRef, 'artifact:subagent-result-abc123');
+  assert.equal(toolEvent?.transcriptRef, 'artifact:subagent-transcript-abc123');
+  assert.equal(toolEvent?.durationMs, 42);
+  assert.deepEqual(toolEvent?.background, {
+    runInBackground: true,
+    stateRef: 'subagent:review-worker-abc123',
+  });
+  assert.deepEqual(toolEvent?.resume, {
+    resumeRequested: true,
+    resumeRef: 'subagent:resume-candidate',
+    resumeBoundary: 'explicit',
+  });
+  assert.deepEqual(toolEvent?.refs, [
+    'artifact:subagent-result-abc123',
+    'artifact:subagent-transcript-abc123',
+    'subagent:review-worker-abc123',
+  ]);
+  assert.doesNotMatch(JSON.stringify(toolEvent), /RAW TRANSCRIPT BODY|trace:unsafe-ref|provider\.example|sk-secret|apiKey/i);
+});
+
+test('normalizes MCP structuredContent sub-agent output into safe lifecycle refs', () => {
+  const events = normalizeCodexJsonlEvent({
+    type: 'item.completed',
+    item: {
+      id: 'subagent-call-mcp-wrapper',
+      type: 'function_call',
+      name: 'multi_agent_v1.spawn_agent',
+      output: {
+        structuredContent: {
+          agentId: '019e7649-worker',
+          parentAgentId: 'root-agent',
+          agentType: 'review-worker',
+          status: 'completed',
+          resultSummary: 'MCP structured sub-agent completed.',
+          resultRef: 'artifact:subagent-result-mcp',
+          transcriptRef: 'transcript:worker-mcp',
+          refs: [
+            'artifact:subagent-result-mcp',
+            'transcript:worker-mcp',
+            'trace:unsafe-ref',
+          ],
+          background: {
+            runInBackground: true,
+            stateRef: 'subagent:019e7649-worker',
+            providerUrl: 'https://provider.example/v1',
+          },
+          resume: {
+            resumeRequested: true,
+            resumeRef: 'subagent:resume-mcp',
+            resumeBoundary: 'explicit',
+            apiKey: 'sk-secret-123456789',
+          },
+          rawTranscript: 'RAW TRANSCRIPT BODY SHOULD STAY RAW-ONLY',
+        },
+      },
+      status: 'completed',
+    },
+  }, metadata);
+
+  const toolEvent = events.at(-1);
+  assert.equal(toolEvent?.type, 'tool_completed');
+  assert.equal(toolEvent?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(toolEvent?.agentId, '019e7649-worker');
+  assert.equal(toolEvent?.parentAgentId, 'root-agent');
+  assert.equal(toolEvent?.agentType, 'review-worker');
+  assert.equal(toolEvent?.status, 'completed');
+  assert.equal(toolEvent?.ref, 'artifact:subagent-result-mcp');
+  assert.equal(toolEvent?.resultRef, 'artifact:subagent-result-mcp');
+  assert.equal(toolEvent?.transcriptRef, 'transcript:worker-mcp');
+  assert.deepEqual(toolEvent?.refs, [
+    'artifact:subagent-result-mcp',
+    'transcript:worker-mcp',
+  ]);
+  assert.deepEqual(toolEvent?.background, {
+    runInBackground: true,
+    stateRef: 'subagent:019e7649-worker',
+  });
+  assert.deepEqual(toolEvent?.resume, {
+    resumeRequested: true,
+    resumeRef: 'subagent:resume-mcp',
+    resumeBoundary: 'explicit',
+  });
+  assert.match(toolEvent?.resultSummary ?? '', /MCP structured sub-agent/);
+  assert.doesNotMatch(JSON.stringify(toolEvent), /RAW TRANSCRIPT BODY|trace:unsafe-ref|provider\.example|sk-secret|apiKey/i);
+  assert.doesNotMatch(JSON.stringify(events), /RAW TRANSCRIPT BODY|trace:unsafe-ref|provider\.example|sk-secret|apiKey/i);
 });
 
 test('drops unsafe sub-agent transcript refs', () => {
@@ -406,8 +540,9 @@ test('maps completed gui.ask_user tool calls into explicit confirmation events',
   assert.equal(events[0]?.type, 'audit');
   assert.equal(events[1]?.type, 'gui_ask_user');
   assert.equal(events[1]?.status, 'needs-confirmation');
-  assert.match(events[1]?.text ?? '', /Computer Use confirmation required/);
-  assert.match(events[1]?.text ?? '', /approval-1/);
+  assert.match(events[1]?.text ?? '', /Confirmation required/);
+  assert.match(events[1]?.text ?? '', /Risk: High/);
+  assert.doesNotMatch(events[1]?.text ?? '', /Computer Use|approval-1/);
   assert.equal((events[1]?.raw as { boundary?: string }).boundary, 'gui-ask-user-confirmation');
   const askUser = (events[1]?.raw as { askUser?: { source?: string; relatedRefs?: string[]; choices?: Array<{ commandText?: string }> } }).askUser;
   assert.equal(askUser?.source, 'gui.ask_user:codex-test');

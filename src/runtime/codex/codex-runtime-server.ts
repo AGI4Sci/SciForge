@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
-import type { AgentCliAdapter } from './agent-cli-adapter.js';
+import type { AgentCliAdapter, AgentCliStartTurnInput } from './agent-cli-adapter.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import {
   CODEX_RUNTIME_STREAM_PATH,
@@ -197,6 +197,7 @@ async function runCodexRuntimeTurn(
       profile: stringField(body.profile),
       codexSessionId: realtimeSession.codexSessionId ?? stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,
+      runtimeIntent: runtimeHostIntent(body.runtimeIntent),
       guiExtension: isRecord(body.guiExtension)
         ? {
           enabled: body.guiExtension.enabled !== false,
@@ -205,6 +206,7 @@ async function runCodexRuntimeTurn(
         : undefined,
       humanApproval: isRecord(body.humanApproval) ? body.humanApproval : undefined,
       uiState: isRecord(body.uiState) ? body.uiState : undefined,
+      declaredIntents: declaredIntentsFromAuditMetadata(body.auditMetadata),
       abortSignal,
     });
     hooks.onTurnStarted?.({
@@ -420,6 +422,7 @@ const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
   'codexSessionId',
   'nativeSessionId',
   'allowOpenAiRuntime',
+  'runtimeIntent',
   'guiExtension',
   'humanApproval',
   'uiState',
@@ -444,6 +447,12 @@ const CODEX_RUNTIME_APPROVAL_UI_STATE_ALLOWED_KEYS = new Set([
 const CODEX_RUNTIME_GUI_EXTENSION_ALLOWED_KEYS = new Set([
   'enabled',
   'statePath',
+]);
+
+const CODEX_RUNTIME_HOST_INTENT_ALLOWED_KEYS = new Set([
+  'schemaVersion',
+  'kind',
+  'source',
 ]);
 
 function normalizeRealtimeSessionEnvelope(
@@ -498,6 +507,9 @@ function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Recor
       throw new Error(`Runtime Codex guiExtension contains non-adapter fields: ${extraGuiKeys.join(', ')}`);
     }
   }
+  if (body.runtimeIntent !== undefined && !runtimeHostIntent(body.runtimeIntent)) {
+    throw new Error('Runtime Codex runtimeIntent must be a host-owned Computer Use native route intent.');
+  }
   if (isRecord(body.humanApproval) || isRecord(body.uiState)) {
     assertCodexRuntimeApprovalMetadata(body);
   }
@@ -507,6 +519,73 @@ function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Recor
       throw new Error(`Runtime Codex auditMetadata contains non-adapter fields: ${forbiddenAuditKeys.slice(0, 8).join(', ')}`);
     }
   }
+}
+
+function runtimeHostIntent(value: unknown): AgentCliStartTurnInput['runtimeIntent'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const extra = Object.keys(value).filter((key) => !CODEX_RUNTIME_HOST_INTENT_ALLOWED_KEYS.has(key));
+  if (extra.length) return undefined;
+  if (value.schemaVersion !== 'sciforge.runtime-codex.host-intent.v1') return undefined;
+  if (value.kind !== 'computer-use-native-route') return undefined;
+  if (value.source !== 'host-owned') return undefined;
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+  };
+}
+
+function declaredIntentsFromAuditMetadata(value: unknown): AgentCliStartTurnInput['declaredIntents'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const projection = isRecord(value.guiLocalProjection) ? value.guiLocalProjection : undefined;
+  const declaredIntents = isRecord(projection?.composerDeclaredIntents) ? projection.composerDeclaredIntents : undefined;
+  if (!declaredIntents) return undefined;
+  const model = declaredModelIntent(declaredIntents.model);
+  const mode = declaredModeIntent(declaredIntents.mode);
+  if (!model && !mode) return undefined;
+  return {
+    ...(model ? { model } : {}),
+    ...(mode ? { mode } : {}),
+  };
+}
+
+function declaredModelIntent(value: unknown): NonNullable<AgentCliStartTurnInput['declaredIntents']>['model'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const modelIntentId = safeDeclaredIntentText(value.modelIntentId, 80);
+  const publicLabel = safeDeclaredIntentText(value.publicLabel, 80);
+  if (!modelIntentId && !publicLabel) return undefined;
+  return {
+    ...(modelIntentId ? { modelIntentId } : {}),
+    ...(publicLabel ? { publicLabel } : {}),
+    ...(safeDeclaredIntentText(value.mode, 60) ? { mode: safeDeclaredIntentText(value.mode, 60) } : {}),
+    ...(safeDeclaredIntentText(value.capabilityTier, 60) ? { capabilityTier: safeDeclaredIntentText(value.capabilityTier, 60) } : {}),
+    ...(safeDeclaredIntentText(value.actionId, 120) ? { actionId: safeDeclaredIntentText(value.actionId, 120) } : {}),
+    ...(safeDeclaredIntentText(value.declaredAt, 80) ? { declaredAt: safeDeclaredIntentText(value.declaredAt, 80) } : {}),
+  };
+}
+
+function declaredModeIntent(value: unknown): NonNullable<AgentCliStartTurnInput['declaredIntents']>['mode'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const modeIntentId = safeDeclaredIntentText(value.modeIntentId, 80);
+  const publicLabel = safeDeclaredIntentText(value.publicLabel, 80);
+  if (!modeIntentId && !publicLabel) return undefined;
+  return {
+    ...(modeIntentId ? { modeIntentId } : {}),
+    ...(publicLabel ? { publicLabel } : {}),
+    ...(safeDeclaredIntentText(value.summaryGuidance, 180) ? { summaryGuidance: safeDeclaredIntentText(value.summaryGuidance, 180) } : {}),
+    ...(safeDeclaredIntentText(value.actionId, 120) ? { actionId: safeDeclaredIntentText(value.actionId, 120) } : {}),
+    ...(safeDeclaredIntentText(value.declaredAt, 80) ? { declaredAt: safeDeclaredIntentText(value.declaredAt, 80) } : {}),
+  };
+}
+
+function safeDeclaredIntentText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > maxLength) return undefined;
+  if (/(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|https?:\/\/|(?:^|[\s([{:=])(?:~\/|\/(?:Applications|Users|workspace|tmp|var|private|Volumes|home|opt|etc|mnt|srv|Library)\b))/i.test(text)) {
+    return undefined;
+  }
+  return text;
 }
 
 function assertCodexRuntimeApprovalMetadata(body: Record<string, unknown>) {

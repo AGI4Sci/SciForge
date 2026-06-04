@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { focusModeForRightPaneTab } from './rightPaneTabController';
+import { focusResultPaneRouteForObjectReference } from './resultPaneContract';
 
 test('right pane tab controller owns ResultsRenderer tab wiring extraction', () => {
   const controllerSource = readFileSync(new URL('./rightPaneTabController.ts', import.meta.url), 'utf8');
@@ -31,4 +32,24 @@ test('right pane tab controller derives focus mode from active tab kind', () => 
   assert.equal(focusModeForRightPaneTab('browser', 'execution'), 'all');
   assert.equal(focusModeForRightPaneTab('files', 'visual'), 'visual');
   assert.equal(focusModeForRightPaneTab(undefined, 'evidence'), 'all');
+});
+
+test('right pane tab controller focus dispatch follows object ref routes without composer insertion', () => {
+  const source = readFileSync(new URL('./rightPaneTabController.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /focusResultPaneRouteForObjectReference/);
+  assert.doesNotMatch(source, /composer/i);
+
+  for (const [ref, pane] of [
+    ['trace:audit-1', 'evidence'],
+    ['browser:session-1', 'browser'],
+    ['crop:figure-1', 'image'],
+    ['terminal:session-1', 'terminal'],
+    ['file:PROJECT_workbench.md', 'files'],
+  ] as const) {
+    const route = focusResultPaneRouteForObjectReference({ kind: 'artifact', ref });
+    assert.equal(route.pane, pane, ref);
+    assert.equal(route.purpose, 'focus', ref);
+    assert.equal(route.composerInsertion, false, ref);
+  }
 });

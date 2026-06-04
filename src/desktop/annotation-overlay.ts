@@ -13,6 +13,11 @@ export type DesktopAnnotationBounds = {
   height: number;
 };
 
+export type DesktopAnnotationPoint = {
+  x: number;
+  y: number;
+};
+
 export type DesktopAnnotationSourceKind = 'window' | 'screen-region' | 'browser' | 'image';
 export type DesktopAnnotationCoordinateSpace =
   | 'window-local'
@@ -23,8 +28,11 @@ export type DesktopAnnotationWindowBindingStatus = 'auto-bound' | 'manual-bound'
 
 export type DesktopAnnotationDisplayMetadata = {
   id?: number | string;
+  displayId?: string;
+  screenId?: string;
   bounds: DesktopAnnotationBounds;
   scaleFactor?: number;
+  scale?: number;
 };
 
 export type DesktopAnnotationOverlayBrowserWindowOptions = {
@@ -37,6 +45,7 @@ export type DesktopAnnotationOverlayBrowserWindowOptions = {
   movable: false;
   show: false;
   bounds: DesktopAnnotationBounds;
+  enableLargerThanScreen: true;
   hasShadow: false;
   webPreferences: {
     preload?: string;
@@ -49,6 +58,9 @@ export type DesktopAnnotationOverlayBrowserWindowOptions = {
 export type DesktopAnnotationOverlayWindow = {
   show(): void;
   hide(): void;
+  close?(): void;
+  destroy?(): void;
+  focus?(): void;
   loadURL?(url: string): Promise<void> | void;
   loadFile?(filePath: string): Promise<void> | void;
   isVisible?(): boolean;
@@ -57,11 +69,15 @@ export type DesktopAnnotationOverlayWindow = {
   setIgnoreMouseEvents?(ignore: boolean, options?: { forward?: boolean }): void;
   webContents?: {
     loadURL?(url: string): Promise<void> | void;
+    send?(channel: string, value: unknown): void;
+    focus?(): void;
   };
 };
 
 export type DesktopAnnotationOverlayScreen = {
   getPrimaryDisplay(): DesktopAnnotationDisplayMetadata;
+  getAllDisplays?(): DesktopAnnotationDisplayMetadata[];
+  getCursorScreenPoint?(): DesktopAnnotationPoint;
 };
 
 export type DesktopAnnotationCaptureProviderInput = {
@@ -218,16 +234,32 @@ export type DesktopAnnotationOverlayController = {
   show(): DesktopAnnotationOverlayControllerState;
   setClickThrough(enabled: boolean): DesktopAnnotationOverlayControllerState;
   beginSelection(input: DesktopAnnotationBeginSelectionInput): DesktopAnnotationOverlayControllerState;
-  updateSelection(input: { bounds: DesktopAnnotationBounds }): DesktopAnnotationSelection;
+  updateSelection(input: { bounds: DesktopAnnotationBounds; display?: DesktopAnnotationDisplayMetadata }): DesktopAnnotationSelection;
   submitComment(input: {
     comment: string;
     threadId?: string;
     messageDraftId?: string;
   }): DesktopAnnotationSubmittedComment;
+  setActiveDisplay(input: { display?: DesktopAnnotationDisplayMetadata }): DesktopAnnotationOverlayControllerState;
+  setDragState(input: {
+    active: boolean;
+    display?: DesktopAnnotationDisplayMetadata;
+  }): DesktopAnnotationOverlayControllerState;
   cancel(): { status: 'cancelled'; workspaceId?: string; sessionId?: string; windowRef?: string; targetRef?: string };
   captureSelectionToRefs(): Promise<DesktopAnnotationCaptureOutput>;
   getState(): DesktopAnnotationOverlayControllerState;
 };
+
+type OverlayWindowEntry = {
+  window: DesktopAnnotationOverlayWindow;
+  bounds: DesktopAnnotationBounds;
+  display: DesktopAnnotationDisplayMetadata;
+  displayId: string;
+};
+
+const DESKTOP_ANNOTATION_OVERLAY_ACTIVE_DISPLAY_CHANNEL =
+  'desktop:annotation-overlay:active-display' as const;
+const DESKTOP_ANNOTATION_OVERLAY_CURSOR_TRACKING_INTERVAL_MS = 50;
 
 type SelectionContext = {
   workspaceId: string;
@@ -252,20 +284,40 @@ export function createDesktopAnnotationOverlayController(
   deps: DesktopAnnotationOverlayDeps,
   options: DesktopAnnotationOverlayControllerOptions = {},
 ): DesktopAnnotationOverlayController {
-  let overlayWindow: DesktopAnnotationOverlayWindow | undefined;
+  let overlayWindows: OverlayWindowEntry[] = [];
   let clickThrough = options.defaultClickThrough ?? true;
   let selectionContext: SelectionContext | undefined;
   let selection: DesktopAnnotationSelection | undefined;
   let submitted: DesktopAnnotationSubmittedComment | undefined;
   let captureCounter = 0;
+  let overlayDisplaySignatureValue: string | undefined;
+  let activeDisplay: DesktopAnnotationDisplayMetadata | undefined;
+  let overlayDisplaySwitchLocked = false;
+  let overlayCursorTrackingTimer: ReturnType<typeof setInterval> | undefined;
 
   function create(): DesktopAnnotationOverlayControllerState {
-    if (!overlayWindow) {
+    ensureOverlayWindows();
+    return getState();
+  }
+
+  function ensureOverlayWindows(): void {
+    const displays = overlayDisplays();
+    const signature = overlayDisplaySignature(displays);
+    if (overlayWindows.length > 0 && overlayDisplaySignatureValue === signature) {
+      return;
+    }
+
+    disposeOverlayWindows();
+    overlayDisplaySignatureValue = signature;
+    activeDisplay = activeDisplayForTopology(activeDisplay, displays);
+
+    overlayWindows = displays.map((display, index) => {
       const bounds = normalizePositiveBounds(
-        options.overlayBounds ?? deps.screen.getPrimaryDisplay().bounds,
+        options.overlayBounds ?? display.bounds,
         'overlay bounds',
       );
-      overlayWindow = deps.createBrowserWindow({
+      const displayId = rendererDisplayMetadata(display, index).id;
+      const overlayWindow = deps.createBrowserWindow({
         transparent: true,
         frame: false,
         alwaysOnTop: true,
@@ -275,6 +327,7 @@ export function createDesktopAnnotationOverlayController(
         movable: false,
         show: false,
         bounds,
+        enableLargerThanScreen: true,
         hasShadow: false,
         webPreferences: {
           ...(options.overlayPreloadPath ? { preload: options.overlayPreloadPath } : {}),
@@ -283,25 +336,34 @@ export function createDesktopAnnotationOverlayController(
           sandbox: true,
         },
       });
-      overlayWindow.setBounds?.(bounds);
       overlayWindow.setAlwaysOnTop?.(true, options.alwaysOnTopLevel ?? 'screen-saver');
-      applyClickThrough(clickThrough);
+      overlayWindow.setIgnoreMouseEvents?.(clickThrough, clickThrough ? { forward: true } : undefined);
+      const entry = { window: overlayWindow, bounds, display, displayId };
+      applyOverlayBounds(entry);
       if (options.overlayPreloadPath || options.overlayRendererUrl || options.overlayRendererHtml) {
-        loadOverlayRenderer(bounds);
+        loadOverlayRenderer(entry, displays);
       }
-    }
-    return getState();
+      return entry;
+    });
   }
 
   function show(): DesktopAnnotationOverlayControllerState {
-    create();
-    overlayWindow?.show();
+    ensureOverlayWindows();
+    applyOverlayBounds();
+    updateActiveDisplayFromCursor();
+    syncVisibleOverlayWindow(true);
+    startOverlayCursorTracking();
+    scheduleActiveOverlayFocus();
     return getState();
   }
 
   function setClickThrough(enabled: boolean): DesktopAnnotationOverlayControllerState {
     clickThrough = enabled;
     applyClickThrough(enabled);
+    if (!enabled) {
+      updateActiveDisplayFromCursor();
+      syncVisibleOverlayWindow();
+    }
     return getState();
   }
 
@@ -343,25 +405,37 @@ export function createDesktopAnnotationOverlayController(
     selection = undefined;
     submitted = undefined;
     setClickThrough(false);
+    focusActiveOverlayWindow();
+    scheduleActiveOverlayFocus();
     return getState();
   }
 
-  function updateSelection(input: { bounds: DesktopAnnotationBounds }): DesktopAnnotationSelection {
+  function updateSelection(input: { bounds: DesktopAnnotationBounds; display?: DesktopAnnotationDisplayMetadata }): DesktopAnnotationSelection {
     if (!selectionContext) {
       throw new Error('Cannot update desktop annotation selection before beginSelection.');
     }
+    let effectiveContext = selectionContext;
+    if (!selectionContext.windowBounds && input.display) {
+      const display = normalizedDisplayMetadata(input.display);
+      effectiveContext = {
+        ...selectionContext,
+        display,
+        selectionBounds: display.bounds,
+      };
+      selectionContext = effectiveContext;
+    }
     const normalizedScreenBounds = normalizeAnyDragBounds(input.bounds, 'selection bounds');
-    const clippedScreenBounds = intersectBounds(normalizedScreenBounds, selectionContext.selectionBounds);
+    const clippedScreenBounds = intersectBounds(normalizedScreenBounds, effectiveContext.selectionBounds);
     if (!clippedScreenBounds || clippedScreenBounds.width <= 0 || clippedScreenBounds.height <= 0) {
       throw new Error('Desktop annotation selection bounds must overlap the selected target area.');
     }
-    const bounds = selectionContext.windowBounds ? {
-      x: roundNumber(clippedScreenBounds.x - selectionContext.windowBounds.x),
-      y: roundNumber(clippedScreenBounds.y - selectionContext.windowBounds.y),
+    const bounds = effectiveContext.windowBounds ? {
+      x: roundNumber(clippedScreenBounds.x - effectiveContext.windowBounds.x),
+      y: roundNumber(clippedScreenBounds.y - effectiveContext.windowBounds.y),
       width: roundNumber(clippedScreenBounds.width),
       height: roundNumber(clippedScreenBounds.height),
     } : { ...clippedScreenBounds };
-    const basisBounds = selectionContext.selectionBounds;
+    const basisBounds = effectiveContext.selectionBounds;
     const basisLocalBounds = {
       x: roundNumber(clippedScreenBounds.x - basisBounds.x),
       y: roundNumber(clippedScreenBounds.y - basisBounds.y),
@@ -374,13 +448,13 @@ export function createDesktopAnnotationOverlayController(
       width: roundNumber(basisLocalBounds.width / basisBounds.width),
       height: roundNumber(basisLocalBounds.height / basisBounds.height),
     };
-    const { selectionBounds: _selectionBounds, ...publicContext } = selectionContext;
+    const { selectionBounds: _selectionBounds, ...publicContext } = effectiveContext;
     selection = {
       status: 'selecting',
       ...publicContext,
       screenBounds: clippedScreenBounds,
       bounds,
-      ...(selectionContext.windowBounds ? { windowLocalBounds: bounds } : {}),
+      ...(effectiveContext.windowBounds ? { windowLocalBounds: bounds } : {}),
       normalizedBounds,
     };
     submitted = undefined;
@@ -417,7 +491,9 @@ export function createDesktopAnnotationOverlayController(
     selectionContext = undefined;
     selection = undefined;
     submitted = undefined;
+    overlayDisplaySwitchLocked = false;
     setClickThrough(true);
+    hideOverlayWindows();
     return cancelled;
   }
 
@@ -426,16 +502,11 @@ export function createDesktopAnnotationOverlayController(
       throw new Error('Cannot capture desktop annotation refs before submitComment.');
     }
     const captureId = nextCaptureId();
-    const wasVisible = isOverlayVisible();
-    const wasClickThrough = clickThrough;
-
-    if (overlayWindow) {
-      overlayWindow.hide();
-      setClickThrough(true);
-    }
+    hideOverlayWindows();
+    setClickThrough(true);
 
     try {
-      const displayMetadata = primaryDisplayEvidenceMetadata();
+      const displayMetadata = displayEvidenceMetadata(submitted.display);
       const providerResult = await deps.captureProvider.captureSelection({
         schemaVersion: DESKTOP_ANNOTATION_OVERLAY_CAPTURE_SCHEMA,
         captureId,
@@ -514,19 +585,19 @@ export function createDesktopAnnotationOverlayController(
       assertRefsOnlyObject(output);
       return output;
     } finally {
-      if (overlayWindow) {
-        setClickThrough(wasClickThrough);
-        if (wasVisible) {
-          overlayWindow.show();
-        }
-      }
+      selectionContext = undefined;
+      selection = undefined;
+      submitted = undefined;
+      overlayDisplaySwitchLocked = false;
+      setClickThrough(true);
+      hideOverlayWindows();
     }
   }
 
   function getState(): DesktopAnnotationOverlayControllerState {
     const status = submitted ? 'submitted' : selection || selectionContext ? 'selecting' : 'idle';
     return {
-      overlayCreated: Boolean(overlayWindow),
+      overlayCreated: overlayWindows.length > 0,
       visible: isOverlayVisible(),
       clickThrough,
       status,
@@ -536,25 +607,233 @@ export function createDesktopAnnotationOverlayController(
   }
 
   function applyClickThrough(enabled: boolean): void {
-    overlayWindow?.setIgnoreMouseEvents?.(enabled, enabled ? { forward: true } : undefined);
+    for (const entry of overlayWindows) {
+      entry.window.setIgnoreMouseEvents?.(enabled, enabled ? { forward: true } : undefined);
+    }
   }
 
   function isOverlayVisible(): boolean {
-    return overlayWindow?.isVisible?.() ?? false;
+    return overlayWindows.some((entry) => entry.window.isVisible?.() ?? false);
   }
 
-  function loadOverlayRenderer(bounds: DesktopAnnotationBounds): void {
-    if (!overlayWindow) return;
+  function loadOverlayRenderer(entry: OverlayWindowEntry, displays: DesktopAnnotationDisplayMetadata[]): void {
     const rendererUrl = options.overlayRendererUrl ?? desktopAnnotationOverlayRendererDataUrl(
-      options.overlayRendererHtml ?? desktopAnnotationOverlayRendererHtml(bounds),
+      options.overlayRendererHtml ?? desktopAnnotationOverlayRendererHtml(entry.bounds, displays, {
+        windowDisplayId: entry.displayId,
+        initialActiveDisplayId: activeDisplay ? displayIdForDisplay(activeDisplay, displays) : entry.displayId,
+      }),
     );
-    if (overlayWindow.loadURL) {
-      void Promise.resolve(overlayWindow.loadURL(rendererUrl)).catch(() => undefined);
+    if (entry.window.loadURL) {
+      void Promise.resolve(entry.window.loadURL(rendererUrl))
+        .then(() => scheduleOverlayBoundsCorrection(entry))
+        .catch(() => undefined);
       return;
     }
-    if (overlayWindow.webContents?.loadURL) {
-      void Promise.resolve(overlayWindow.webContents.loadURL(rendererUrl)).catch(() => undefined);
+    if (entry.window.webContents?.loadURL) {
+      void Promise.resolve(entry.window.webContents.loadURL(rendererUrl))
+        .then(() => scheduleOverlayBoundsCorrection(entry))
+        .catch(() => undefined);
     }
+  }
+
+  function applyOverlayBounds(entry?: OverlayWindowEntry): void {
+    if (entry) {
+      entry.window.setBounds?.(entry.bounds);
+      return;
+    }
+    for (const overlayEntry of overlayWindows) {
+      overlayEntry.window.setBounds?.(overlayEntry.bounds);
+    }
+  }
+
+  function scheduleOverlayBoundsCorrection(entry: OverlayWindowEntry): void {
+    for (const delayMs of [0, 150, 350]) {
+      const timer = setTimeout(() => {
+        if (!(entry.window.isVisible?.() ?? false)) applyOverlayBounds(entry);
+      }, delayMs);
+      if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    }
+  }
+
+  function hideOverlayWindows(): void {
+    stopOverlayCursorTracking();
+    for (const entry of overlayWindows) {
+      entry.window.hide();
+    }
+  }
+
+  function disposeOverlayWindows(): void {
+    stopOverlayCursorTracking();
+    for (const entry of overlayWindows) {
+      try {
+        entry.window.hide();
+      } catch {
+        // Best-effort cleanup for stale overlay windows.
+      }
+      try {
+        if (entry.window.destroy) {
+          entry.window.destroy();
+        } else {
+          entry.window.close?.();
+        }
+      } catch {
+        // Best-effort cleanup for display-topology changes.
+      }
+    }
+    overlayWindows = [];
+  }
+
+  function setActiveDisplay(input: { display?: DesktopAnnotationDisplayMetadata }): DesktopAnnotationOverlayControllerState {
+    if (!input.display) return getState();
+    const display = canonicalDisplayForTopology(input.display);
+    activeDisplay = display;
+    syncVisibleOverlayWindow();
+    return getState();
+  }
+
+  function setDragState(input: {
+    active: boolean;
+    display?: DesktopAnnotationDisplayMetadata;
+  }): DesktopAnnotationOverlayControllerState {
+    overlayDisplaySwitchLocked = input.active;
+    if (input.active && input.display) {
+      activeDisplay = canonicalDisplayForTopology(input.display);
+      syncVisibleOverlayWindow();
+      return getState();
+    }
+    if (!input.active) {
+      updateActiveDisplayFromCursor();
+      syncVisibleOverlayWindow();
+    }
+    return getState();
+  }
+
+  function broadcastActiveDisplay(display: DesktopAnnotationDisplayMetadata): void {
+    const payload = rendererDisplayMetadataForTopology(display);
+    for (const entry of overlayWindows) {
+      entry.window.webContents?.send?.(DESKTOP_ANNOTATION_OVERLAY_ACTIVE_DISPLAY_CHANNEL, payload);
+    }
+  }
+
+  function focusActiveOverlayWindow(): void {
+    const activeEntry = activeOverlayEntry();
+    focusOverlayWindow(activeEntry);
+  }
+
+  function focusOverlayWindow(entry: OverlayWindowEntry | undefined): void {
+    if (entry?.window.isVisible && !entry.window.isVisible()) return;
+    entry?.window.focus?.();
+    entry?.window.webContents?.focus?.();
+  }
+
+  function scheduleActiveOverlayFocus(): void {
+    for (const delayMs of [0, 50, 150]) {
+      const timer = setTimeout(() => {
+        focusActiveOverlayWindow();
+      }, delayMs);
+      if (typeof timer === 'object' && timer && 'unref' in timer && typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    }
+  }
+
+  function syncVisibleOverlayWindow(forceShow = false): void {
+    const activeEntry = activeOverlayEntry();
+    if (!activeEntry) return;
+    const shouldShowActive = forceShow || isOverlayVisible();
+    for (const entry of overlayWindows) {
+      if (entry === activeEntry) {
+        if (shouldShowActive) {
+          entry.window.show();
+        }
+      } else if (entry.window.isVisible?.() ?? false) {
+        entry.window.hide();
+      }
+    }
+    broadcastActiveDisplay(activeEntry.display);
+    focusOverlayWindow(activeEntry);
+    scheduleActiveOverlayFocus();
+  }
+
+  function activeOverlayEntry(): OverlayWindowEntry | undefined {
+    if (!activeDisplay) return overlayWindows[0];
+    const activeId = displayIdForDisplay(activeDisplay, overlayWindows.map((entry) => entry.display));
+    return overlayWindows.find((entry) => entry.displayId === activeId)
+      ?? overlayWindows.find((entry) => sameDisplayBounds(entry.display.bounds, activeDisplay?.bounds ?? entry.display.bounds))
+      ?? overlayWindows[0];
+  }
+
+  function updateActiveDisplayFromCursor(): void {
+    if (overlayDisplaySwitchLocked) return;
+    const point = cursorScreenPoint();
+    if (!point) return;
+    const entry = overlayWindows.find((candidate) => containsScreenPoint(candidate.display.bounds, point));
+    if (!entry) return;
+    const previous = activeOverlayEntry();
+    activeDisplay = entry.display;
+    if (previous !== entry || !isOverlayVisible()) {
+      syncVisibleOverlayWindow(isOverlayVisible());
+    }
+  }
+
+  function cursorScreenPoint(): DesktopAnnotationPoint | undefined {
+    try {
+      const point = deps.screen.getCursorScreenPoint?.();
+      if (!point) return undefined;
+      const x = requireFiniteNumber(point.x, 'cursor.x');
+      const y = requireFiniteNumber(point.y, 'cursor.y');
+      return { x: roundNumber(x), y: roundNumber(y) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  function startOverlayCursorTracking(): void {
+    if (overlayCursorTrackingTimer) return;
+    overlayCursorTrackingTimer = setInterval(() => {
+      if (!isOverlayVisible()) {
+        stopOverlayCursorTracking();
+        return;
+      }
+      updateActiveDisplayFromCursor();
+    }, DESKTOP_ANNOTATION_OVERLAY_CURSOR_TRACKING_INTERVAL_MS);
+    if (typeof overlayCursorTrackingTimer === 'object'
+      && overlayCursorTrackingTimer
+      && 'unref' in overlayCursorTrackingTimer
+      && typeof overlayCursorTrackingTimer.unref === 'function') {
+      overlayCursorTrackingTimer.unref();
+    }
+  }
+
+  function stopOverlayCursorTracking(): void {
+    if (!overlayCursorTrackingTimer) return;
+    clearInterval(overlayCursorTrackingTimer);
+    overlayCursorTrackingTimer = undefined;
+  }
+
+  function canonicalDisplayForTopology(display: DesktopAnnotationDisplayMetadata): DesktopAnnotationDisplayMetadata {
+    const normalized = normalizedDisplayMetadata(display);
+    const identity = displayIdentityMetadata(normalized);
+    const byDisplayId = identity.displayId
+      ? overlayWindows.find((entry) => entry.displayId === identity.displayId)
+      : undefined;
+    const byScreenId = identity.screenId && identity.screenId !== identity.displayId
+      ? overlayWindows.find((entry) => entry.displayId === identity.screenId)
+      : undefined;
+    const byBounds = overlayWindows.find((entry) => sameDisplayBounds(entry.display.bounds, normalized.bounds));
+    return (byDisplayId ?? byScreenId ?? byBounds)?.display ?? normalized;
+  }
+
+  function rendererDisplayMetadataForTopology(display: DesktopAnnotationDisplayMetadata): {
+    id: string;
+    bounds: DesktopAnnotationBounds;
+    scaleFactor?: number;
+  } {
+    const canonical = canonicalDisplayForTopology(display);
+    const index = overlayWindows.findIndex((entry) => sameDisplayBounds(entry.display.bounds, canonical.bounds));
+    return rendererDisplayMetadata(canonical, index >= 0 ? index : 0);
   }
 
   function nextCaptureId(): string {
@@ -570,13 +849,56 @@ export function createDesktopAnnotationOverlayController(
     return options.now?.() ?? new Date().toISOString();
   }
 
-  function primaryDisplayEvidenceMetadata(): { displayId?: string; screenId?: string; scale?: number } {
-    const display = normalizedDisplayMetadata(deps.screen.getPrimaryDisplay());
-    const displayId = display.id === undefined ? undefined : String(display.id);
-    return {
-      ...(displayId ? { displayId, screenId: displayId } : {}),
-      ...(display.scaleFactor ? { scale: display.scaleFactor } : {}),
-    };
+  function displayEvidenceMetadata(display?: DesktopAnnotationDisplayMetadata): { displayId?: string; screenId?: string; scale?: number } {
+    const normalized = display ? normalizedDisplayMetadata(display) : normalizedDisplayMetadata(deps.screen.getPrimaryDisplay());
+    return displayIdentityMetadata(normalized);
+  }
+
+  function overlayDisplays(): DesktopAnnotationDisplayMetadata[] {
+    const allDisplays = deps.screen.getAllDisplays?.();
+    const displays = Array.isArray(allDisplays) ? allDisplays : undefined;
+    const candidates = displays?.length ? displays : [deps.screen.getPrimaryDisplay()];
+    const normalized = candidates
+      .map((display) => {
+        try {
+          return normalizedDisplayMetadata(display);
+        } catch {
+          return undefined;
+        }
+      })
+      .filter((display): display is DesktopAnnotationDisplayMetadata => Boolean(display));
+    return normalized.length ? normalized : [normalizedDisplayMetadata(deps.screen.getPrimaryDisplay())];
+  }
+
+  function overlayDisplaySignature(displays: DesktopAnnotationDisplayMetadata[]): string {
+    return JSON.stringify(displays.map((display, index) => ({
+      id: rendererDisplayMetadata(display, index).id,
+      bounds: display.bounds,
+      scaleFactor: display.scaleFactor,
+      scale: display.scale,
+    })));
+  }
+
+  function activeDisplayForTopology(
+    current: DesktopAnnotationDisplayMetadata | undefined,
+    displays: DesktopAnnotationDisplayMetadata[],
+  ): DesktopAnnotationDisplayMetadata | undefined {
+    if (!displays.length) return undefined;
+    if (!current) return displays[0];
+    const currentId = displayIdForDisplay(current, displays);
+    return displays.find((display, index) => rendererDisplayMetadata(display, index).id === currentId)
+      ?? displays[0];
+  }
+
+  function displayIdForDisplay(
+    display: DesktopAnnotationDisplayMetadata,
+    displays: DesktopAnnotationDisplayMetadata[],
+  ): string {
+    const normalized = normalizedDisplayMetadata(display);
+    const identity = displayIdentityMetadata(normalized);
+    if (identity.displayId) return identity.displayId;
+    const matchIndex = displays.findIndex((candidate) => sameDisplayBounds(candidate.bounds, normalized.bounds));
+    return `display-${matchIndex >= 0 ? matchIndex + 1 : 1}`;
   }
 
   return {
@@ -586,6 +908,8 @@ export function createDesktopAnnotationOverlayController(
     beginSelection,
     updateSelection,
     submitComment,
+    setActiveDisplay,
+    setDragState,
     cancel,
     captureSelectionToRefs,
     getState,
@@ -596,10 +920,23 @@ export function desktopAnnotationOverlayRendererDataUrl(html: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 }
 
-export function desktopAnnotationOverlayRendererHtml(bounds: DesktopAnnotationBounds): string {
+export function desktopAnnotationOverlayRendererHtml(
+  bounds: DesktopAnnotationBounds,
+  displays: DesktopAnnotationDisplayMetadata[] = [{ bounds, scaleFactor: 1 }],
+  rendererOptions: {
+    windowDisplayId?: string;
+    initialActiveDisplayId?: string;
+  } = {},
+): string {
   const origin = {
     x: roundNumber(bounds.x),
     y: roundNumber(bounds.y),
+  };
+  const rendererConfig = {
+    origin,
+    displays: displays.map(rendererDisplayMetadata),
+    ...(rendererOptions.windowDisplayId ? { windowDisplayId: rendererOptions.windowDisplayId } : {}),
+    ...(rendererOptions.initialActiveDisplayId ? { initialActiveDisplayId: rendererOptions.initialActiveDisplayId } : {}),
   };
   return `<!doctype html>
 <html>
@@ -620,13 +957,22 @@ export function desktopAnnotationOverlayRendererHtml(bounds: DesktopAnnotationBo
     body.selecting {
       cursor: crosshair;
     }
+    #active-display {
+      position: fixed;
+      box-sizing: border-box;
+      display: none;
+      border: 1px solid rgba(125, 211, 252, 0.74);
+      background: rgba(14, 165, 233, 0.06);
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.18);
+      pointer-events: none;
+    }
     #selection {
       position: fixed;
       box-sizing: border-box;
       display: none;
       border: 2px solid #38bdf8;
       background: rgba(56, 189, 248, 0.15);
-      box-shadow: 0 0 0 9999px rgba(2, 6, 23, 0.22);
+      box-shadow: 0 0 0 1px rgba(2, 6, 23, 0.34);
       pointer-events: none;
     }
     #panel {
@@ -680,6 +1026,7 @@ export function desktopAnnotationOverlayRendererHtml(bounds: DesktopAnnotationBo
   </style>
 </head>
 <body class="selecting">
+  <div id="active-display"></div>
   <div id="selection"></div>
   <div id="panel">
     <textarea id="comment" placeholder="Comment"></textarea>
@@ -688,16 +1035,37 @@ export function desktopAnnotationOverlayRendererHtml(bounds: DesktopAnnotationBo
   </div>
   <script>
     (() => {
-      const api = window.sciforgeAnnotationOverlay;
-      const origin = ${JSON.stringify(origin)};
-      const body = document.body;
-      const box = document.getElementById('selection');
-      const panel = document.getElementById('panel');
-      const comment = document.getElementById('comment');
-      const save = document.getElementById('save');
-      const cancel = document.getElementById('cancel');
-      let drag = null;
-      let selectedBounds = null;
+	      const api = window.sciforgeAnnotationOverlay;
+	      const config = ${JSON.stringify(rendererConfig)};
+	      const origin = config.origin;
+	      const windowDisplayId = config.windowDisplayId ? String(config.windowDisplayId) : null;
+	      const initialActiveDisplayId = config.initialActiveDisplayId ? String(config.initialActiveDisplayId) : windowDisplayId;
+	      const displays = config.displays.map((display, index) => {
+	        const bounds = display.bounds;
+	        return {
+	          id: String(display.id ?? 'display-' + (index + 1)),
+	          bounds,
+	          localBounds: {
+	            x: Math.round(bounds.x - origin.x),
+	            y: Math.round(bounds.y - origin.y),
+	            width: Math.round(bounds.width),
+	            height: Math.round(bounds.height),
+	          },
+	          scaleFactor: Number.isFinite(display.scaleFactor) ? display.scaleFactor : undefined,
+	        };
+	      });
+	      const body = document.body;
+	      const box = document.getElementById('selection');
+	      const activeBox = document.getElementById('active-display');
+	      const panel = document.getElementById('panel');
+	      const comment = document.getElementById('comment');
+	      const save = document.getElementById('save');
+	      const cancel = document.getElementById('cancel');
+	      let drag = null;
+	      let activeDisplay = null;
+	      let lockedDisplay = null;
+	      let selectedDisplay = null;
+	      let selectedBounds = null;
 
       function isControl(target) {
         return target === panel || panel.contains(target);
@@ -711,83 +1079,285 @@ export function desktopAnnotationOverlayRendererHtml(bounds: DesktopAnnotationBo
         return { x, y, width, height };
       }
 
-      function screenRect(rect) {
-        return {
-          x: Math.round(origin.x + rect.x),
+	      function screenRect(rect) {
+	        return {
+	          x: Math.round(origin.x + rect.x),
           y: Math.round(origin.y + rect.y),
           width: Math.round(rect.width),
           height: Math.round(rect.height),
-        };
-      }
+	        };
+	      }
 
-      function renderRect(rect) {
-        box.style.display = 'block';
-        box.style.left = rect.x + 'px';
-        box.style.top = rect.y + 'px';
-        box.style.width = rect.width + 'px';
-        box.style.height = rect.height + 'px';
-      }
+	      function displayPayload(display) {
+	        if (!display) return undefined;
+	        return {
+	          id: display.id,
+	          bounds: { ...display.bounds },
+	          ...(display.scaleFactor !== undefined ? { scaleFactor: display.scaleFactor } : {}),
+	        };
+	      }
 
-      function resetSelection() {
-        selectedBounds = null;
-        save.disabled = true;
-        box.style.display = 'none';
-      }
+	      function sameDisplay(left, right) {
+	        return Boolean(left && right && left.id === right.id);
+	      }
 
-      window.addEventListener('pointerdown', (event) => {
-        if (event.button !== 0 || isControl(event.target)) return;
-        drag = { x: event.clientX, y: event.clientY };
-        resetSelection();
-        body.classList.add('selecting');
-        window.getSelection()?.removeAllRanges();
-        event.preventDefault();
-      });
+	      function isWindowDisplay(display) {
+	        return Boolean(display) && (!windowDisplayId || display.id === windowDisplayId);
+	      }
 
-      window.addEventListener('pointermove', (event) => {
-        if (!drag) return;
-        const rect = localRect(drag, { x: event.clientX, y: event.clientY });
-        renderRect(rect);
-        event.preventDefault();
-      });
+	      function displayFromPayload(payload) {
+	        if (!payload) return null;
+	        const payloadId = payload.id === undefined ? null : String(payload.id);
+	        if (payloadId) {
+	          const byId = displays.find((display) => display.id === payloadId);
+	          if (byId) return byId;
+	        }
+	        const bounds = payload.bounds;
+	        if (!bounds) return null;
+	        return displays.find((display) => display.bounds.x === bounds.x
+	          && display.bounds.y === bounds.y
+	          && display.bounds.width === bounds.width
+	          && display.bounds.height === bounds.height) ?? null;
+	      }
 
-      window.addEventListener('pointerup', (event) => {
-        if (!drag) return;
-        const rect = localRect(drag, { x: event.clientX, y: event.clientY });
-        drag = null;
-        if (rect.width >= 4 && rect.height >= 4) {
-          renderRect(rect);
-          selectedBounds = screenRect(rect);
-          save.disabled = false;
-          comment.focus();
-        } else {
-          resetSelection();
+	      function containsPoint(bounds, point) {
+	        return point.x >= bounds.x
+	          && point.y >= bounds.y
+	          && point.x < bounds.x + bounds.width
+	          && point.y < bounds.y + bounds.height;
+	      }
+
+	      function intersectLocalRect(rect, display) {
+	        const bounds = display.localBounds;
+	        const left = Math.max(rect.x, bounds.x);
+	        const top = Math.max(rect.y, bounds.y);
+	        const right = Math.min(rect.x + rect.width, bounds.x + bounds.width);
+	        const bottom = Math.min(rect.y + rect.height, bounds.y + bounds.height);
+	        if (right <= left || bottom <= top) return null;
+	        return {
+	          x: Math.round(left),
+	          y: Math.round(top),
+	          width: Math.round(right - left),
+	          height: Math.round(bottom - top),
+	        };
+	      }
+
+	      function screenPoint(event) {
+	        return {
+	          x: Math.round(origin.x + event.clientX),
+	          y: Math.round(origin.y + event.clientY),
+	        };
+	      }
+
+	      function displayAtEvent(event) {
+	        const point = screenPoint(event);
+	        return displays.find((display) => containsPoint(display.bounds, point)) ?? null;
+	      }
+
+	      function renderActiveDisplay() {
+	        if (!isWindowDisplay(activeDisplay)) {
+	          activeBox.style.display = 'none';
+	          delete activeBox.dataset.displayId;
+	          renderPanel();
+	          return;
+	        }
+	        const bounds = activeDisplay.localBounds;
+	        activeBox.dataset.displayId = activeDisplay.id;
+	        activeBox.style.display = 'block';
+	        activeBox.style.left = bounds.x + 'px';
+	        activeBox.style.top = bounds.y + 'px';
+	        activeBox.style.width = bounds.width + 'px';
+	        activeBox.style.height = bounds.height + 'px';
+	        renderPanel();
+	      }
+
+	      function focusComment() {
+	        try {
+	          comment.focus({ preventScroll: true });
+	        } catch {
+	          comment.focus();
+	        }
+	      }
+
+	      function positionPanel(display) {
+	        if (!display) return;
+	        const bounds = display.localBounds;
+	        const margin = 22;
+	        const panelHeight = 56;
+	        const availableWidth = Math.max(120, bounds.width - 32);
+	        const width = Math.round(Math.min(620, availableWidth));
+	        const top = Math.round(Math.max(bounds.y + 12, bounds.y + bounds.height - panelHeight - margin));
+	        panel.style.left = Math.round(bounds.x + bounds.width / 2) + 'px';
+	        panel.style.top = top + 'px';
+	        panel.style.bottom = '';
+	        panel.style.width = width + 'px';
+	      }
+
+	      function panelDisplay() {
+	        return selectedDisplay ?? activeDisplay;
+	      }
+
+	      function renderPanel() {
+	        const display = panelDisplay();
+	        if (!isWindowDisplay(display)) {
+	          panel.style.display = 'none';
+	          return;
+	        }
+	        panel.style.display = 'flex';
+	        positionPanel(display);
+	      }
+
+	      function updateActiveDisplay(event) {
+	        const display = displayAtEvent(event);
+	        if (display) {
+	          activeDisplay = display;
+	          api?.setActiveDisplay?.(displayPayload(display));
+	        }
+	        renderActiveDisplay();
+	        if (display) focusComment();
+	        return display ?? activeDisplay;
+	      }
+
+	      function clampPointToDisplay(point, display) {
+	        const bounds = display.localBounds;
+	        return {
+	          x: Math.min(Math.max(point.x, bounds.x), bounds.x + bounds.width),
+	          y: Math.min(Math.max(point.y, bounds.y), bounds.y + bounds.height),
+	        };
+	      }
+
+	      function renderRect(rect, display) {
+	        const clipped = display ? intersectLocalRect(rect, display) : rect;
+	        if (!clipped) {
+	          box.style.display = 'none';
+	          return null;
+	        }
+	        box.style.display = 'block';
+	        box.style.left = clipped.x + 'px';
+	        box.style.top = clipped.y + 'px';
+	        box.style.width = clipped.width + 'px';
+	        box.style.height = clipped.height + 'px';
+	        return clipped;
+	      }
+
+	      function updateSaveState() {
+	        save.disabled = !selectedBounds || comment.value.trim().length === 0;
+	      }
+
+	      function resetSelection() {
+	        selectedBounds = null;
+	        selectedDisplay = null;
+	        save.disabled = true;
+	        box.style.display = 'none';
+	        renderPanel();
+	      }
+
+	      function submitSelected() {
+	        if (!selectedBounds) return;
+	        if (comment.value.trim().length === 0) {
+	          comment.focus();
+	          updateSaveState();
+	          return;
+	        }
+	        api?.submitSelection?.({
+	          bounds: selectedBounds,
+	          comment: comment.value,
+	          display: displayPayload(selectedDisplay),
+	        });
+	      }
+
+	      if (displays.length > 0) {
+	        activeDisplay = displays.find((display) => display.id === initialActiveDisplayId)
+	          ?? displays.find((display) => display.id === windowDisplayId)
+	          ?? displays[0];
+	        renderActiveDisplay();
+	      }
+
+	      window.addEventListener('pointerdown', (event) => {
+	        if (event.button !== 0 || isControl(event.target)) return;
+	        const display = updateActiveDisplay(event);
+	        if (!display) return;
+	        lockedDisplay = display;
+	        drag = clampPointToDisplay({ x: event.clientX, y: event.clientY }, display);
+	        api?.setDragState?.({ active: true, display: displayPayload(display) });
+	        resetSelection();
+	        body.classList.add('selecting');
+	        window.getSelection()?.removeAllRanges();
+	        try {
+	          body.setPointerCapture?.(event.pointerId);
+	        } catch {}
+	        event.preventDefault();
+	      });
+
+	      window.addEventListener('pointermove', (event) => {
+	        if (!drag) {
+	          updateActiveDisplay(event);
+	          return;
+	        }
+	        const rect = localRect(drag, { x: event.clientX, y: event.clientY });
+	        renderRect(rect, lockedDisplay);
+	        event.preventDefault();
+	      });
+
+	      window.addEventListener('pointerup', (event) => {
+	        if (!drag) return;
+	        const rect = localRect(drag, { x: event.clientX, y: event.clientY });
+	        const display = lockedDisplay;
+	        drag = null;
+	        lockedDisplay = null;
+	        try {
+	          body.releasePointerCapture?.(event.pointerId);
+	        } catch {}
+	        const clipped = display ? renderRect(rect, display) : renderRect(rect, null);
+	        if (clipped && clipped.width >= 4 && clipped.height >= 4) {
+	          selectedBounds = screenRect(clipped);
+	          selectedDisplay = display;
+	          updateSaveState();
+	          renderPanel();
+	          focusComment();
+	        } else {
+	          resetSelection();
         }
+        api?.setDragState?.({ active: false, display: displayPayload(selectedDisplay ?? display) });
         event.preventDefault();
-      });
+	      });
 
-      cancel.addEventListener('click', () => {
-        api?.cancelSelection?.();
-      });
+	      window.addEventListener('pointercancel', () => {
+	        drag = null;
+	        lockedDisplay = null;
+	        api?.setDragState?.({ active: false, display: displayPayload(selectedDisplay ?? activeDisplay) });
+	      });
 
-      save.addEventListener('click', () => {
-        if (!selectedBounds) return;
-        api?.submitSelection?.({
-          bounds: selectedBounds,
-          comment: comment.value,
-        });
-      });
+	      api?.onActiveDisplayChanged?.((payload) => {
+	        const display = displayFromPayload(payload);
+	        if (!display) return;
+	        activeDisplay = display;
+	        renderActiveDisplay();
+	        if (!selectedDisplay && isWindowDisplay(display)) focusComment();
+	      });
 
-      window.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          api?.cancelSelection?.();
-        }
-        if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && selectedBounds) {
-          api?.submitSelection?.({
-            bounds: selectedBounds,
-            comment: comment.value,
-          });
-        }
-      });
+	      comment.addEventListener('input', updateSaveState);
+
+	      cancel.addEventListener('click', () => {
+	        api?.cancelSelection?.();
+	      });
+
+	      save.addEventListener('click', () => {
+	        submitSelected();
+	      });
+
+	      window.addEventListener('keydown', (event) => {
+	        if (event.key === 'Escape') {
+	          event.preventDefault();
+	          api?.cancelSelection?.();
+	          return;
+	        }
+	        if (event.key === 'Enter') {
+	          if (event.shiftKey && event.target === comment) return;
+	          event.preventDefault();
+	          if (selectedBounds) submitSelected();
+	        }
+	      });
     })();
   </script>
 </body>
@@ -825,14 +1395,21 @@ function genericEvidenceMetadata(
     ...(displayId ? { displayId } : {}),
     ...(screenId ? { screenId } : {}),
     ...(scale !== undefined ? { scale } : {}),
-    ...(providerMetadata.windowBinding ? {} : { windowBinding: fallbackWindowBinding(submitted, providerResult.status ?? 'captured') }),
+    windowListPayloadReturned: false,
+    screenshotPayloadReturned: false,
+    providerPayloadReturned: false,
+    ...(providerMetadata.windowBinding ? {} : {
+      windowBinding: fallbackWindowBinding(submitted, providerResult.status ?? 'captured', displayMetadata),
+    }),
   };
 }
 
 function fallbackWindowBinding(
   submitted: DesktopAnnotationSubmittedComment,
   status: 'captured' | 'blocked',
+  displayMetadata: { displayId?: string; screenId?: string; scale?: number },
 ): Record<string, unknown> {
+  const displayBindingMetadata = submitted.windowRef ? {} : displayMetadata;
   if (status === 'blocked') {
     return {
       status: 'blocked',
@@ -845,6 +1422,7 @@ function fallbackWindowBinding(
         ? { windowBounds: { ...submitted.windowBounds }, windowLocalBounds: { ...(submitted.windowLocalBounds ?? submitted.bounds) } }
         : {}),
       ...(!submitted.windowRef ? { screenBounds: { ...submitted.screenBounds } } : {}),
+      ...displayBindingMetadata,
     };
   }
   if (submitted.sourceKind === 'window' && submitted.windowRef) {
@@ -866,14 +1444,85 @@ function fallbackWindowBinding(
     sourceKind: submitted.sourceKind,
     coordinateSpace: submitted.coordinateSpace,
     screenBounds: { ...submitted.screenBounds },
+    ...displayBindingMetadata,
   };
 }
 
 function normalizedDisplayMetadata(display: DesktopAnnotationDisplayMetadata): DesktopAnnotationDisplayMetadata {
+  const displayId = boundedMetadataText(display.displayId);
+  const screenId = boundedMetadataText(display.screenId);
+  const scale = display.scale === undefined ? undefined : requireFiniteNumber(display.scale, 'display.scale');
   return {
     ...(display.id === undefined ? {} : { id: display.id }),
+    ...(displayId ? { displayId } : {}),
+    ...(screenId ? { screenId } : {}),
     bounds: normalizePositiveBounds(display.bounds, 'display.bounds'),
     ...(display.scaleFactor === undefined ? {} : { scaleFactor: requireFiniteNumber(display.scaleFactor, 'display.scaleFactor') }),
+    ...(scale === undefined ? {} : { scale }),
+  };
+}
+
+function unionBounds(displays: DesktopAnnotationDisplayMetadata[]): DesktopAnnotationBounds {
+  const normalized = displays.map((display) => normalizedDisplayMetadata(display));
+  const first = normalized[0];
+  if (!first) {
+    throw new Error('Desktop annotation overlay requires at least one display.');
+  }
+  let left = first.bounds.x;
+  let top = first.bounds.y;
+  let right = first.bounds.x + first.bounds.width;
+  let bottom = first.bounds.y + first.bounds.height;
+  for (const display of normalized.slice(1)) {
+    left = Math.min(left, display.bounds.x);
+    top = Math.min(top, display.bounds.y);
+    right = Math.max(right, display.bounds.x + display.bounds.width);
+    bottom = Math.max(bottom, display.bounds.y + display.bounds.height);
+  }
+  return {
+    x: roundNumber(left),
+    y: roundNumber(top),
+    width: roundNumber(right - left),
+    height: roundNumber(bottom - top),
+  };
+}
+
+function sameDisplayBounds(left: DesktopAnnotationBounds, right: DesktopAnnotationBounds): boolean {
+  return roundNumber(left.x) === roundNumber(right.x)
+    && roundNumber(left.y) === roundNumber(right.y)
+    && roundNumber(left.width) === roundNumber(right.width)
+    && roundNumber(left.height) === roundNumber(right.height);
+}
+
+function containsScreenPoint(bounds: DesktopAnnotationBounds, point: DesktopAnnotationPoint): boolean {
+  return point.x >= bounds.x
+    && point.y >= bounds.y
+    && point.x < bounds.x + bounds.width
+    && point.y < bounds.y + bounds.height;
+}
+
+function displayIdentityMetadata(display: DesktopAnnotationDisplayMetadata): { displayId?: string; screenId?: string; scale?: number } {
+  const displayId = boundedMetadataText(display.displayId)
+    ?? boundedMetadataText(display.id === undefined ? undefined : String(display.id));
+  const screenId = boundedMetadataText(display.screenId) ?? displayId;
+  const scale = display.scale ?? display.scaleFactor;
+  return {
+    ...(displayId ? { displayId } : {}),
+    ...(screenId ? { screenId } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+  };
+}
+
+function rendererDisplayMetadata(
+  display: DesktopAnnotationDisplayMetadata,
+  index: number,
+): { id: string; bounds: DesktopAnnotationBounds; scaleFactor?: number } {
+  const normalized = normalizedDisplayMetadata(display);
+  const identity = displayIdentityMetadata(normalized);
+  return {
+    id: identity.displayId ?? identity.screenId ?? `display-${index + 1}`,
+    bounds: { ...normalized.bounds },
+    ...(normalized.scaleFactor !== undefined ? { scaleFactor: normalized.scaleFactor } : {}),
+    ...(normalized.scaleFactor === undefined && normalized.scale !== undefined ? { scaleFactor: normalized.scale } : {}),
   };
 }
 

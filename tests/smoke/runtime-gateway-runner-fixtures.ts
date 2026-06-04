@@ -2,7 +2,7 @@ import type { GeneratedTaskRunnerDeps } from '../../src/runtime/gateway/generate
 import { coerceAgentServerToolPayload, coerceWorkspaceTaskPayload, ensureDirectAnswerReportArtifact, normalizeToolPayloadShape } from '../../src/runtime/gateway/direct-answer-payload.js';
 import { repairNeededPayload, validateAndNormalizePayload } from '../../src/runtime/gateway/payload-validation.js';
 import { schemaErrors as toolPayloadSchemaErrors } from '../../src/runtime/gateway/tool-payload-contract.js';
-import type { GatewayRequest, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
+import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, ToolPayload } from '../../src/runtime/runtime-types.js';
 
 const REQUIRED_TOOL_PAYLOAD_KEYS = ['message', 'claims', 'uiManifest', 'executionUnits', 'artifacts'] as const;
 
@@ -25,19 +25,19 @@ async function smokeValidateAndNormalizePayload(
   };
 }
 
-export function runtimeGatewaySkill(): SkillAvailability {
+export function runtimeGatewaySkill(skillDomain: SciForgeSkillDomain = 'literature'): SkillAvailability {
   return {
-    id: 'agentserver.generation.literature',
+    id: `agentserver.generation.${skillDomain}`,
     kind: 'installed',
     available: true,
     reason: 'smoke',
     checkedAt: new Date().toISOString(),
     manifestPath: 'agentserver',
     manifest: {
-      id: 'agentserver.generation.literature',
+      id: `agentserver.generation.${skillDomain}`,
       kind: 'installed',
       description: 'smoke',
-      skillDomains: ['literature'],
+      skillDomains: [skillDomain],
       inputContract: {},
       outputArtifactSchema: {},
       entrypoint: { type: 'agentserver-generation' },

@@ -185,6 +185,207 @@ test('sidebar thread detail folds raw webpage dumps before previewing latest ans
   assert.doesNotMatch(items[0]?.detail ?? '', /<title|Quick links|--- Paper|metadata abstract search result/i);
 });
 
+test('parent thread items expose public child agent status without adding child thread rows', () => {
+  const parent = session({
+    scenarioId: 'literature-evidence-review',
+    sessionId: 'parent-worker-thread',
+    title: 'Literature synthesis',
+    messages: [{ id: 'user-1', role: 'user', content: 'Start worker review', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [{
+      id: 'run-parent-worker',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'provider token raw prompt /Applications/private/trace.jsonl',
+      response: 'Worker queued.',
+      createdAt: '2026-05-21T00:01:00.000Z',
+      objectReferences: [{
+        id: 'obj-active-worker',
+        kind: 'run',
+        ref: 'subagent:worker-active',
+        title: 'Worker evidence review',
+        summary: 'Active child agent checking public refs',
+        status: 'available',
+      }],
+      raw: {
+        providerUrl: 'https://provider.example/v1?token=secret',
+        backgroundCompletion: {
+          contract: 'sciforge.background-completion.v1',
+          type: 'background-stage-update',
+          runId: 'run-parent-worker',
+          status: 'running',
+          message: 'raw stdout stderr provider token /Applications/private',
+          refs: [{
+            ref: 'run:worker-background',
+            kind: 'run',
+            runId: 'worker-background',
+            title: 'Worker background validation',
+          }],
+          objectReferences: [{
+            id: 'obj-resume-worker',
+            kind: 'run',
+            ref: 'run:worker-resume-candidate',
+            title: 'Worker resume candidate',
+            summary: 'Resume worker from public checkpoint',
+            status: 'available',
+          }],
+        },
+      },
+    }],
+    materializedConversationProjection: {
+      schemaVersion: 'sciforge.conversation-projection.v1',
+      conversationId: 'conversation-worker',
+      visibleAnswer: {
+        status: 'background-running',
+        text: 'Background worker is still validating refs.',
+        artifactRefs: [],
+      },
+      activeRun: { id: 'run-parent-worker', status: 'background-running' },
+      artifacts: [],
+      executionProcess: [],
+      recoverActions: ['resume worker after checkpoint'],
+      backgroundState: {
+        status: 'running',
+        checkpointRefs: ['checkpoint:worker-public'],
+        revisionPlan: 'Resume worker validation from the public checkpoint.',
+      },
+      auditRefs: ['trace:/Applications/private/raw.jsonl'],
+      diagnostics: [],
+    },
+  } as Partial<SciForgeSession>);
+
+  const items = buildSidebarThreadItems({ 'literature-evidence-review': parent }, { limit: 10 });
+  const groups = buildSidebarProjectThreadGroups({ ...defaultSciForgeConfig, workspacePath: '/tmp/private-sciforge' }, {
+    'literature-evidence-review': parent,
+  });
+  const projection = buildSidebarCursorAgentProjectionForShell(
+    { ...defaultSciForgeConfig, workspacePath: '/tmp/private-sciforge' },
+    groups,
+  );
+  const serialized = JSON.stringify({ items, projection });
+
+  assert.deepEqual(items.map((item) => item.sessionId), ['parent-worker-thread']);
+  assert.equal(items.some((item) => item.sessionId.includes('worker-background') || item.sessionId.includes('subagent')), false);
+  assert.ok(items[0]?.badges?.includes('Child active'));
+  assert.ok(items[0]?.badges?.includes('Background child'));
+  assert.ok(items[0]?.badges?.includes('Resume ready'));
+  assert.match(items[0]?.detail ?? '', /Worker evidence review|Worker background validation|Worker resume candidate/);
+  assert.ok(projection.groups[0]?.threads[0]?.badges.includes('Child active'));
+  assert.ok(projection.groups[0]?.threads[0]?.badges.includes('Background child'));
+  assert.doesNotMatch(serialized, /provider|token|stdout|stderr|raw|https?:\/\/|\/Applications|trace\.jsonl/i);
+});
+
+test('sidebar scopes multitask drafts background children and resume candidates to their project', () => {
+  const mainPath = '/workspace/sciforge-main';
+  const peerPath = '/workspace/sciforge-peer';
+  const mainParent = session({
+    scenarioId: 'literature-evidence-review',
+    sessionId: 'main-parent',
+    title: 'Main parent',
+    messages: [{ id: 'user-main', role: 'user', content: 'Run main worker', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [{
+      id: 'run-main-parent',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'main worker prompt',
+      response: 'main worker queued',
+      createdAt: '2026-05-21T00:01:00.000Z',
+      objectReferences: [{
+        id: 'obj-main-worker',
+        kind: 'run',
+        ref: 'subagent:main-worker-result',
+        title: 'Main worker result',
+        summary: 'Main child agent result is ready.',
+        status: 'available',
+      }],
+    }],
+  });
+  const mainDraft = session({
+    scenarioId: 'structure-exploration',
+    sessionId: 'main-multitask-draft',
+    title: 'New chat',
+    messages: [],
+    updatedAt: '2026-05-21T00:02:00.000Z',
+  });
+  const peerParent = session({
+    scenarioId: 'paper-qa',
+    sessionId: 'peer-parent',
+    title: 'Peer parent',
+    messages: [{ id: 'user-peer', role: 'user', content: 'Run peer review', createdAt: '2026-05-21T00:03:00.000Z' }],
+    runs: [{
+      id: 'run-peer-parent',
+      scenarioId: 'paper-qa',
+      status: 'running',
+      prompt: 'peer worker prompt',
+      response: '',
+      createdAt: '2026-05-21T00:04:00.000Z',
+      raw: {
+        backgroundCompletion: {
+          status: 'running',
+          refs: [{
+            ref: 'run:peer-background-worker',
+            kind: 'run',
+            title: 'Peer background worker',
+          }],
+          objectReferences: [{
+            id: 'obj-peer-resume',
+            kind: 'run',
+            ref: 'checkpoint:peer-resume-ready',
+            title: 'Peer resume checkpoint',
+            summary: 'Resume peer worker from checkpoint.',
+            status: 'available',
+          }],
+        },
+      },
+    }],
+  } as Partial<SciForgeSession>);
+  const mainSessions = {
+    [mainParent.scenarioId]: mainParent,
+    [mainDraft.scenarioId]: mainDraft,
+  } as Record<ScenarioInstanceId, SciForgeSession>;
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: mainPath,
+    peerInstances: [{
+      name: 'Peer',
+      appUrl: 'http://127.0.0.1:5174',
+      workspaceWriterUrl: 'http://127.0.0.1:6174',
+      workspacePath: peerPath,
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }],
+  };
+  const groups = buildSidebarProjectThreadGroups(config, mainSessions, [], {
+    activeWorkspacePath: mainPath,
+    activeSessionId: 'main-multitask-draft',
+    projectSessionsByPath: {
+      [mainPath]: { sessionsByScenario: mainSessions, archivedSessions: [] },
+      [peerPath]: { sessionsByScenario: { [peerParent.scenarioId]: peerParent }, archivedSessions: [] },
+    },
+  });
+
+  const mainGroup = groups.find((group) => group.id === mainPath);
+  const peerGroup = groups.find((group) => group.id === peerPath);
+  assert.deepEqual(mainGroup?.draftThreads?.map((thread) => thread.sessionId), ['main-multitask-draft']);
+  assert.deepEqual(peerGroup?.draftThreads ?? [], []);
+  assert.deepEqual(mainGroup?.threads.flatMap((thread) => thread.agentCandidates ?? []).map((candidate) => candidate.label), ['Main worker result']);
+  assert.deepEqual(peerGroup?.threads.flatMap((thread) => thread.agentCandidates ?? []).map((candidate) => candidate.label), [
+    'Peer background worker',
+    'Peer resume checkpoint',
+  ]);
+
+  const mainCandidate = buildSidebarSearchMatches('main worker', mainSessions, { groups, config })
+    .find((match) => match.kind === 'agent-result' && match.candidateKind === 'subagent-result');
+  const peerResume = buildSidebarSearchMatches('peer resume', mainSessions, { groups, config })
+    .find((match) => match.kind === 'agent-result' && match.candidateKind === 'resume-candidate');
+
+  assert.ok(mainCandidate?.projectId);
+  assert.equal(findSidebarThreadSearchTarget(groups, mainCandidate)?.project.id, mainPath);
+  assert.ok(peerResume?.projectId);
+  assert.equal(findSidebarThreadSearchTarget(groups, peerResume)?.project.id, peerPath);
+  assert.doesNotMatch(JSON.stringify({ groups, mainCandidate, peerResume }), /provider|token|stdout|stderr|raw|https?:\/\/|\/Applications|trace\.jsonl/i);
+});
+
 test('sidebar project groups show current project, peer projects, and top-k threads', () => {
   const sessions = Object.fromEntries(Array.from({ length: 6 }, (_, index) => {
     const n = index + 1;
@@ -1019,6 +1220,150 @@ test('sidebar search includes projects and archived threads without exposing loc
   assert.doesNotMatch(JSON.stringify(matches), /\/tmp\/protein-project/);
 });
 
+test('sidebar search discovers public sub-agent background and resume candidates', () => {
+  const parent = session({
+    scenarioId: 'literature-evidence-review',
+    sessionId: 'search-parent-thread',
+    title: 'Parent worker thread',
+    messages: [{ id: 'user-1', role: 'user', content: 'Review worker results', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [{
+      id: 'run-search-parent',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: 'internal prompt',
+      response: 'internal response',
+      createdAt: '2026-05-21T00:01:00.000Z',
+      objectReferences: [{
+        id: 'obj-worker-result',
+        kind: 'artifact',
+        ref: 'subagent:worker-result',
+        title: 'Worker public result',
+        summary: 'Summarized public trial refs',
+        status: 'available',
+      }, {
+        id: 'obj-secret-worker',
+        kind: 'run',
+        ref: 'subagent:worker-secret',
+        title: 'provider token worker',
+        summary: 'stdout stderr /Applications/private/raw.jsonl',
+        status: 'available',
+      }],
+      raw: {
+        backgroundCompletion: {
+          contract: 'sciforge.background-completion.v1',
+          type: 'background-stage-update',
+          runId: 'run-search-parent',
+          status: 'running',
+          refs: [{
+            ref: 'run:worker-background-task',
+            kind: 'run',
+            runId: 'worker-background-task',
+            title: 'Worker background task',
+          }],
+          objectReferences: [{
+            id: 'obj-worker-resume',
+            kind: 'run',
+            ref: 'run:worker-resume-candidate',
+            title: 'Worker resume candidate',
+            summary: 'Continue from checkpoint refs',
+            status: 'available',
+          }],
+        },
+      },
+    }],
+  });
+  const matches = buildSidebarSearchMatches('worker', {
+    'literature-evidence-review': parent,
+  });
+  const candidates = matches.filter((match) => match.kind === 'agent-result');
+  const serialized = JSON.stringify(candidates);
+
+  assert.equal(candidates.length, 3);
+  assert.deepEqual(candidates.map((match) => match.label).sort(), [
+    'Worker background task',
+    'Worker public result',
+    'Worker resume candidate',
+  ]);
+  assert.ok(candidates.every((match) => match.sessionId === 'search-parent-thread'));
+  assert.ok(candidates.every((match) => match.page === 'workbench'));
+  assert.ok(candidates.some((match) => /Sub-agent result/.test(match.detail)));
+  assert.ok(candidates.some((match) => /Background task/.test(match.detail)));
+  assert.ok(candidates.some((match) => /Resume candidate/.test(match.detail)));
+  assert.doesNotMatch(serialized, /provider|token|stdout|stderr|raw|https?:\/\/|\/Applications|secret|trace/i);
+});
+
+test('sidebar search and projection keep child and resume candidates scoped by project path', () => {
+  const current = session({
+    scenarioId: 'current-scenario' as ScenarioInstanceId,
+    sessionId: 'current-parent-thread',
+    title: 'Current parent',
+    messages: [{ id: 'user-current', role: 'user', content: 'current worker', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [runWithPublicCandidate('run-current-parent', 'Current worker result', 'subagent:current-worker')],
+  });
+  const peer = session({
+    scenarioId: 'peer-scenario' as ScenarioInstanceId,
+    sessionId: 'peer-parent-thread',
+    title: 'Peer parent',
+    messages: [{ id: 'user-peer', role: 'user', content: 'peer worker', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [runWithPublicCandidate('run-peer-parent', 'Peer worker resume candidate', 'run:peer-worker-resume-candidate')],
+  });
+  const home = session({
+    scenarioId: 'home-scenario' as ScenarioInstanceId,
+    sessionId: 'home-parent-thread',
+    title: 'Home parent',
+    messages: [{ id: 'user-home', role: 'user', content: 'home worker', createdAt: '2026-05-21T00:00:00.000Z' }],
+    runs: [runWithPublicCandidate('run-home-parent', 'Home worker result', 'subagent:home-worker')],
+  });
+  const config = {
+    ...defaultSciForgeConfig,
+    workspacePath: '/workspace/current',
+    peerInstances: [{
+      name: 'Peer',
+      appUrl: '',
+      workspaceWriterUrl: '',
+      workspacePath: '/workspace/peer',
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }, {
+      name: 'Home',
+      appUrl: '',
+      workspaceWriterUrl: '',
+      workspacePath: '',
+      role: 'peer' as const,
+      trustLevel: 'readonly' as const,
+      enabled: true,
+    }],
+  };
+  const groups = buildSidebarProjectThreadGroups(config, {
+    [current.scenarioId]: current,
+  }, [], {
+    activeWorkspacePath: config.workspacePath,
+    projectSessionsByPath: {
+      '/workspace/current': { sessionsByScenario: { [current.scenarioId]: current }, archivedSessions: [] },
+      '/workspace/peer': { sessionsByScenario: { [peer.scenarioId]: peer }, archivedSessions: [] },
+      Home: { sessionsByScenario: { [home.scenarioId]: home }, archivedSessions: [] },
+    },
+  });
+  const peerMatches = buildSidebarSearchMatches('peer worker', {
+    [current.scenarioId]: current,
+  }, { groups }).filter((match) => match.kind === 'agent-result');
+  const currentProjection = buildSidebarCursorAgentProjectionForShell(config, groups, {
+    activeProjectId: groups.find((group) => group.label === 'current')?.id,
+  });
+  const peerProjection = buildSidebarCursorAgentProjectionForShell(config, groups, {
+    activeProjectId: groups.find((group) => group.label === 'Peer')?.id,
+  });
+
+  assert.deepEqual(peerMatches.map((match) => match.sessionId), ['peer-parent-thread']);
+  assert.equal(peerMatches[0]?.projectId, sidebarProjectTarget(groups, 'Peer'));
+  assert.doesNotMatch(JSON.stringify(peerMatches), /current-parent-thread|home-parent-thread|Current worker|Home worker|\/workspace/i);
+  assert.equal(currentProjection.groups.find((group) => group.label === 'current')?.threads[0]?.badges.includes('Child active'), true);
+  assert.equal(currentProjection.groups.find((group) => group.label === 'Peer')?.threads[0]?.badges.includes('Resume ready'), true);
+  assert.equal(peerProjection.groups.find((group) => group.label === 'Peer')?.selected, true);
+  assert.doesNotMatch(JSON.stringify({ currentProjection, peerProjection }), /\/workspace\/current|\/workspace\/peer|\/Applications|provider|token|stdout|stderr|raw/i);
+});
+
 function session(patch: Partial<SciForgeSession> = {}): SciForgeSession {
   const scenarioId = patch.scenarioId ?? 'literature-evidence-review';
   return {
@@ -1043,4 +1388,28 @@ function session(patch: Partial<SciForgeSession> = {}): SciForgeSession {
 
 function sessionMap(record: Record<string, SciForgeSession>): Record<ScenarioInstanceId, SciForgeSession> {
   return record as unknown as Record<ScenarioInstanceId, SciForgeSession>;
+}
+
+function runWithPublicCandidate(id: string, title: string, ref: string): SciForgeSession['runs'][number] {
+  return {
+    id,
+    scenarioId: 'literature-evidence-review' as ScenarioInstanceId,
+    status: 'completed',
+    prompt: 'worker prompt',
+    response: 'worker response',
+    createdAt: '2026-05-21T00:01:00.000Z',
+    objectReferences: [{
+      id: `${id}-object`,
+      kind: 'run',
+      ref,
+      title,
+      summary: `${title} summary`,
+      status: 'available',
+    }],
+  };
+}
+
+function sidebarProjectTarget(groups: ReturnType<typeof buildSidebarProjectThreadGroups>, label: string) {
+  const match = buildSidebarSearchMatches(label, {}, { groups }).find((item) => item.kind === 'project' && item.label === label);
+  return match?.projectId;
 }

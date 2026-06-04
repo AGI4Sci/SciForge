@@ -22,6 +22,7 @@ const PERSISTED_STREAM_PROCESS_EVENT_LIMIT = 48;
 const PERSISTED_STREAM_PROCESS_JSON_LIMIT = 80_000;
 const PERSISTED_STREAM_TEXT_FIELD_LIMIT = 1_200;
 const PERSISTED_STREAM_DIFF_LIMIT = 4_000;
+const STREAM_RESULT_REF_ENVELOPE_KEYS = ['result', 'output', 'payload', 'structuredContent', 'structured_content'] as const;
 
 interface PersistedStreamProcessRecord {
   eventCount: number;
@@ -141,7 +142,7 @@ function nativeStreamEventRecord(event: AgentStreamEvent) {
     agentId: safeIdentifierField(sourceField('agentId', 'agent_id')),
     parentAgentId: safeIdentifierField(sourceField('parentAgentId', 'parent_agent_id')),
     resultSummary: safeActionSummaryField(sourceField('resultSummary', 'result_summary', 'summary'), 1_000),
-    resultRefs: safeRefListField(sourceField('resultRefs', 'result_refs')),
+    resultRefs: safeStreamResultRefs(sourceRecords),
     refs: safeRefListField(sourceField('refs')),
     workEvidence: safeWorkEvidenceRecords(event.workEvidence ?? sourceField('workEvidence', 'work_evidence')),
     itemId: safeIdentifierField(sourceField('itemId')),
@@ -268,6 +269,65 @@ function safeRefListField(value: unknown): string[] | undefined {
     .filter((entry): entry is string => Boolean(entry));
   const unique = Array.from(new Set(refs));
   return unique.length ? unique : undefined;
+}
+
+function safeStreamResultRefs(records: Array<Record<string, unknown>>): string[] | undefined {
+  const refs = streamResultRefRecords(records).flatMap(({ record, nested }) => [
+    safeResultRefField(record.resultRef ?? record.result_ref),
+    safeArtifactResultRefField(record.artifactRef ?? record.artifact_ref),
+    safeResultRefField(record.outputRef ?? record.output_ref),
+    ...safeResultRefListField(record.resultRefs ?? record.result_refs),
+    ...safeArtifactResultRefListField(record.artifactRefs ?? record.artifact_refs),
+    ...safeResultRefListField(record.outputRefs ?? record.output_refs),
+    ...safeResultRefListField(record.evidenceRefs ?? record.evidence_refs),
+    ...safeResultRefListField(record.downloadRefs ?? record.download_refs),
+    ...safeResultRefListField(record.pdfRefs ?? record.pdf_refs),
+    ...safeResultRefListField(record.sourceRefs ?? record.source_refs),
+    nested ? safeOpaqueRefField(record.transcriptRef ?? record.transcript_ref) : undefined,
+    ...(nested ? safeResultRefListField(record.refs) : []),
+  ].filter((ref): ref is string => Boolean(ref)));
+  const unique = Array.from(new Set(refs));
+  return unique.length ? unique : undefined;
+}
+
+function streamResultRefRecords(records: Array<Record<string, unknown>>) {
+  const output: Array<{ record: Record<string, unknown>; nested: boolean }> = [];
+  const visit = (record: Record<string, unknown>, depth: number) => {
+    output.push({ record, nested: depth > 0 });
+    if (depth >= 3) return;
+    for (const key of STREAM_RESULT_REF_ENVELOPE_KEYS) {
+      const nested = record[key];
+      if (isRecord(nested)) visit(nested, depth + 1);
+    }
+  };
+  for (const record of records) visit(record, 0);
+  return output;
+}
+
+function safeResultRefListField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(safeResultRefField)
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function safeArtifactResultRefListField(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(safeArtifactResultRefField)
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function safeResultRefField(value: unknown): string | undefined {
+  return safeExplicitPreviewRefField(value) ?? safeFileRefField(value) ?? safeOpaqueRefField(value);
+}
+
+function safeArtifactResultRefField(value: unknown): string | undefined {
+  const text = stringField(value);
+  if (!text) return undefined;
+  if (text.startsWith('file:')) return safeExplicitPreviewRefField(text);
+  if (text.startsWith('artifact:')) return safeArtifactRefField(text.slice('artifact:'.length));
+  return safeArtifactRefField(text);
 }
 
 function safeTextField(value: unknown, limit = 4000): string | undefined {

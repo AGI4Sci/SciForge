@@ -3,12 +3,10 @@ import {
   BROWSER_HOST_WRITER_PREFLIGHT_TIMEOUT_MS,
   preflightBrowserHostSessionWriter,
   readBrowserHostSessionState,
-  sendBrowserHostComputerUseAction,
   sendBrowserHostSessionAction,
   startBrowserHostSession,
   startRuntimeServices,
   BROWSER_HOST_NATIVE_SURFACE_CAPABILITY,
-  type BrowserHostComputerUseAction,
   type BrowserHostSessionWriterPreflightResult,
   type BrowserHostSessionState,
 } from '../../api/workspaceClient';
@@ -19,6 +17,7 @@ import {
   type BrowserWorkbenchCommand,
 } from '../../../../../packages/presentation/components';
 import type { BrowserWorkbenchAnnotationRequest } from '../../../../../packages/presentation/components/browser-workbench/render';
+import { sanitizePublicTextRequired } from '../../publicProjectionSanitizer';
 import {
   browserAddressForFocusedObjectReference,
   browserAnnotationComposerReferenceForHostSession,
@@ -31,22 +30,6 @@ import {
 } from './browserPaneModel';
 import { resultText, type ResultLocale } from './resultLocale';
 
-type RightPaneBrowserHostAction = {
-  action: 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor';
-  x?: number;
-  y?: number;
-  button?: 'left' | 'right' | 'middle';
-  path?: Array<{ x: number; y: number }>;
-  text?: string;
-  key?: string;
-  deltaX?: number;
-  deltaY?: number;
-  actionId?: string;
-  uiEventReceivedAt?: string;
-};
-
-const BROWSER_HOST_ACTION_FLUSH_MS = 50;
-const BROWSER_HOST_CURSOR_FLUSH_MS = 80;
 const rightPaneBrowserHostSessionCache = new Map<string, BrowserHostSessionState>();
 
 export function RightPaneBrowserTool({
@@ -89,22 +72,10 @@ export function RightPaneBrowserTool({
   const [writerDiagnostic, setWriterDiagnostic] = useState<BrowserHostSessionWriterPreflightResult | undefined>(undefined);
   const [nativeSurfaceBridgeDiagnostic, setNativeSurfaceBridgeDiagnostic] = useState<RightPaneBrowserNativeSurfaceBridgeState | undefined>(undefined);
   const [busy, setBusy] = useState(false);
-  const [hostCursor, setHostCursor] = useState('default');
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef({ width: 1365, height: 900 });
   const hostSessionRef = useRef<BrowserHostSessionState | undefined>(undefined);
   const configRef = useRef(config);
-  const bufferedTextRef = useRef('');
-  const bufferedTextReceivedAtRef = useRef<string | undefined>(undefined);
-  const bufferedScrollRef = useRef<{ deltaX: number; deltaY: number; x?: number; y?: number }>({ deltaX: 0, deltaY: 0 });
-  const bufferedScrollReceivedAtRef = useRef<string | undefined>(undefined);
-  const actionFlushTimerRef = useRef<number | undefined>(undefined);
-  const cursorFlushTimerRef = useRef<number | undefined>(undefined);
-  const pendingCursorRef = useRef<RightPaneBrowserHostAction | undefined>(undefined);
-  const cursorRequestInFlightRef = useRef(false);
-  const pendingMouseMoveRef = useRef<RightPaneBrowserHostAction | undefined>(undefined);
-  const mouseMoveRequestInFlightRef = useRef(false);
-  const actionChainRef = useRef<Promise<void>>(Promise.resolve());
   const nativeSurfaceSessionRef = useRef<string | undefined>(undefined);
   const pendingHostOpenUrlRef = useRef<string | undefined>(undefined);
   const [browserViewport, setBrowserViewport] = useState(viewportRef.current);
@@ -136,12 +107,6 @@ export function RightPaneBrowserTool({
   }, [initialHostSession?.id, initialHostSession?.updatedAt, normalizedUrl]);
 
   useEffect(() => () => {
-    if (actionFlushTimerRef.current !== undefined && typeof window !== 'undefined') {
-      window.clearTimeout(actionFlushTimerRef.current);
-    }
-    if (cursorFlushTimerRef.current !== undefined && typeof window !== 'undefined') {
-      window.clearTimeout(cursorFlushTimerRef.current);
-    }
     detachNativeBrowserSurface();
   }, []);
 
@@ -225,7 +190,7 @@ export function RightPaneBrowserTool({
       })
       .catch((error) => {
         if (cancelled) return;
-        setHostError(error instanceof Error ? error.message : String(error));
+        setHostError(publicBrowserHostDiagnosticText(error));
         void refreshWriterDiagnostic();
       })
       .finally(() => {
@@ -266,10 +231,8 @@ export function RightPaneBrowserTool({
     };
   }, [hostError, hostSession?.id, hostSession?.liveSurfaceRef, hostSession?.liveSurfaceTransport, hostSession?.secondTruthSource, hostSession?.singleInteractiveTruth, hostSession?.status, needsBrowserHost]);
 
-  const projectedHostSession = hostSession ? {
-    ...hostSession,
-    nativeSurfaceBridge: nativeSurfaceBridgeDiagnostic,
-  } : undefined;
+  const projectedHostSession = publicBrowserHostSessionProjection(hostSession, nativeSurfaceBridgeDiagnostic);
+  const publicWriterDiagnostic = publicBrowserHostWriterDiagnostic(writerDiagnostic);
   const hostSurfaceError = needsBrowserHost
     && projectedHostSession
     && projectedHostSession.status !== 'starting'
@@ -303,7 +266,6 @@ export function RightPaneBrowserTool({
       return;
     }
     if (hostSession && (command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop')) {
-      flushBufferedHostActions();
       const commandShowsLoading = command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop';
       if (commandShowsLoading) setBusy(true);
       if (command.id === 'stop') {
@@ -340,7 +302,7 @@ export function RightPaneBrowserTool({
       })
         .then(setHostSession)
         .catch((error) => {
-          setHostError(error instanceof Error ? error.message : String(error));
+          setHostError(publicBrowserHostDiagnosticText(error));
           void refreshWriterDiagnostic();
         })
         .finally(() => {
@@ -351,10 +313,8 @@ export function RightPaneBrowserTool({
   }
 
   async function requestBrowserAnnotationReference(selection?: BrowserWorkbenchAnnotationRequest): Promise<void> {
-    flushBufferedHostActions();
     setBusy(true);
     try {
-      await actionChainRef.current;
       const freshSession = await captureFreshBrowserAnnotationSession();
       const reference = browserAnnotationComposerReferenceForHostSession(freshSession, {
         bounds: browserAnnotationSelectionBounds(selection, viewportRef.current),
@@ -367,7 +327,7 @@ export function RightPaneBrowserTool({
       }
       setHostError('Browser annotation needs current target, crop, and fresh screenshot refs. Try again after the page finishes loading.');
     } catch (error) {
-      setHostError(`Browser annotation capture failed: ${error instanceof Error ? error.message : String(error)}`);
+      setHostError(`Browser annotation capture failed: ${publicBrowserHostDiagnosticText(error)}`);
       void refreshWriterDiagnostic();
     } finally {
       setBusy(false);
@@ -438,7 +398,6 @@ export function RightPaneBrowserTool({
   }
 
   async function openAddress(value: string) {
-    flushBufferedHostActions();
     const nextUrl = normalizeRightPaneBrowserUrl(value);
     onAddressDraftChange(nextUrl);
     setCommittedUrl(nextUrl);
@@ -460,7 +419,7 @@ export function RightPaneBrowserTool({
         await refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, nextSession));
         updateEffectiveWriterConfig(nextSession.workspaceWriterBaseUrl);
       } catch (error) {
-        setHostError(error instanceof Error ? error.message : String(error));
+        setHostError(publicBrowserHostDiagnosticText(error));
         await refreshWriterDiagnostic();
       } finally {
         if (rightPaneBrowserUrlsEquivalent(pendingHostOpenUrlRef.current, nextUrl)) pendingHostOpenUrlRef.current = undefined;
@@ -472,183 +431,6 @@ export function RightPaneBrowserTool({
       setHostError('');
       setWriterDiagnostic(undefined);
       setNativeSurfaceBridgeDiagnostic(undefined);
-    }
-  }
-
-  function requestHostAction(action: RightPaneBrowserHostAction) {
-    const timedAction = browserHostActionWithUiTiming(action);
-    if (timedAction.action === 'cursor') {
-      requestHostCursor(timedAction);
-      return;
-    }
-    if (timedAction.action === 'mouse-move') {
-      requestHostMouseMove(timedAction);
-      return;
-    }
-    if (timedAction.action === 'type' && timedAction.text) {
-      bufferedTextRef.current += timedAction.text;
-      bufferedTextReceivedAtRef.current = bufferedTextReceivedAtRef.current ?? timedAction.uiEventReceivedAt;
-      scheduleBufferedHostActionFlush();
-      return;
-    }
-    if (timedAction.action === 'scroll') {
-      bufferedScrollRef.current.deltaX += timedAction.deltaX ?? 0;
-      bufferedScrollRef.current.deltaY += timedAction.deltaY ?? 0;
-      if (Number.isFinite(timedAction.x) && Number.isFinite(timedAction.y)) {
-        bufferedScrollRef.current.x = timedAction.x;
-        bufferedScrollRef.current.y = timedAction.y;
-      }
-      bufferedScrollReceivedAtRef.current = bufferedScrollReceivedAtRef.current ?? timedAction.uiEventReceivedAt;
-      scheduleBufferedHostActionFlush();
-      return;
-    }
-    if (timedAction.action === 'press') {
-      flushBufferedHostActions();
-      dispatchHostAction(timedAction, 'none');
-      return;
-    }
-    flushBufferedHostActions();
-    dispatchHostAction(timedAction, 'none');
-  }
-
-  function scheduleBufferedHostActionFlush() {
-    if (typeof window === 'undefined') {
-      flushBufferedHostActions();
-      return;
-    }
-    if (actionFlushTimerRef.current !== undefined) window.clearTimeout(actionFlushTimerRef.current);
-    actionFlushTimerRef.current = window.setTimeout(() => {
-      actionFlushTimerRef.current = undefined;
-      flushBufferedHostActions();
-    }, BROWSER_HOST_ACTION_FLUSH_MS);
-  }
-
-  function flushBufferedHostActions() {
-    if (actionFlushTimerRef.current !== undefined && typeof window !== 'undefined') {
-      window.clearTimeout(actionFlushTimerRef.current);
-      actionFlushTimerRef.current = undefined;
-    }
-    const text = bufferedTextRef.current;
-    bufferedTextRef.current = '';
-    const textReceivedAt = bufferedTextReceivedAtRef.current;
-    bufferedTextReceivedAtRef.current = undefined;
-    if (text) dispatchHostAction(browserHostActionWithUiTiming({ action: 'type', text, uiEventReceivedAt: textReceivedAt }), 'none');
-    const scroll = bufferedScrollRef.current;
-    bufferedScrollRef.current = { deltaX: 0, deltaY: 0 };
-    const scrollReceivedAt = bufferedScrollReceivedAtRef.current;
-    bufferedScrollReceivedAtRef.current = undefined;
-    if (scroll.deltaX || scroll.deltaY) {
-      dispatchHostAction(browserHostActionWithUiTiming({ action: 'scroll', x: scroll.x, y: scroll.y, deltaX: scroll.deltaX, deltaY: scroll.deltaY, uiEventReceivedAt: scrollReceivedAt }), 'none');
-    }
-  }
-
-  function dispatchHostAction(
-    action: RightPaneBrowserHostAction,
-    capture: 'frame' | 'none' = 'frame',
-  ) {
-    if (!hostSessionRef.current) return;
-    actionChainRef.current = actionChainRef.current.then(() => sendHostAction(action, capture)).catch((error) => {
-      setHostError(error instanceof Error ? error.message : String(error));
-      void refreshWriterDiagnostic();
-    });
-  }
-
-  function requestHostMouseMove(action: RightPaneBrowserHostAction) {
-    pendingMouseMoveRef.current = action;
-    if (mouseMoveRequestInFlightRef.current) return;
-    void flushPendingHostMouseMove();
-  }
-
-  async function flushPendingHostMouseMove(): Promise<void> {
-    if (mouseMoveRequestInFlightRef.current) return;
-    const action = pendingMouseMoveRef.current;
-    pendingMouseMoveRef.current = undefined;
-    if (!action || !hostSessionRef.current) return;
-    mouseMoveRequestInFlightRef.current = true;
-    try {
-      await sendHostAction(action, 'none');
-    } catch (error) {
-      setHostError(error instanceof Error ? error.message : String(error));
-      void refreshWriterDiagnostic();
-    } finally {
-      mouseMoveRequestInFlightRef.current = false;
-      if (pendingMouseMoveRef.current) void flushPendingHostMouseMove();
-    }
-  }
-
-  async function sendHostAction(
-    action: RightPaneBrowserHostAction,
-    capture: 'frame' | 'none',
-  ): Promise<void> {
-    const currentSession = hostSessionRef.current;
-    if (!currentSession) return;
-    const adapterSentAt = new Date().toISOString();
-    const computerUseAction = browserHostComputerUseActionFromHostAction(action);
-    const nextSession = computerUseAction
-      ? (await sendBrowserHostComputerUseAction(browserHostSessionConfig(configRef.current, currentSession), currentSession.id, {
-          action: computerUseAction,
-          capture,
-          actionId: action.actionId,
-          uiEventReceivedAt: action.uiEventReceivedAt,
-          adapterSentAt,
-          workspaceWriterBaseUrl: currentSession.workspaceWriterBaseUrl,
-        })).session
-      : await sendBrowserHostSessionAction(browserHostSessionConfig(configRef.current, currentSession), currentSession.id, {
-          ...action,
-          capture,
-          adapterSentAt,
-          workspaceWriterBaseUrl: currentSession.workspaceWriterBaseUrl,
-        });
-    hostSessionRef.current = nextSession;
-    if (capture !== 'none') setHostSession(nextSession);
-    setHostError('');
-  }
-
-  function requestHostCursor(action: RightPaneBrowserHostAction) {
-    if (!hostSessionRef.current) {
-      setHostCursor('default');
-      return;
-    }
-    if ((action.x ?? 0) < 0 || (action.y ?? 0) < 0) {
-      pendingCursorRef.current = undefined;
-      setHostCursor('default');
-      return;
-    }
-    pendingCursorRef.current = action;
-    if (cursorFlushTimerRef.current !== undefined || typeof window === 'undefined') {
-      if (typeof window === 'undefined') void flushHostCursor();
-      return;
-    }
-    cursorFlushTimerRef.current = window.setTimeout(() => {
-      cursorFlushTimerRef.current = undefined;
-      void flushHostCursor();
-    }, BROWSER_HOST_CURSOR_FLUSH_MS);
-  }
-
-  async function flushHostCursor() {
-    if (cursorRequestInFlightRef.current) return;
-    const action = pendingCursorRef.current;
-    pendingCursorRef.current = undefined;
-    const currentSession = hostSessionRef.current;
-    if (!currentSession || !action) return;
-    cursorRequestInFlightRef.current = true;
-    try {
-      const adapterSentAt = new Date().toISOString();
-      const result = await sendBrowserHostComputerUseAction(browserHostSessionConfig(configRef.current, currentSession), currentSession.id, {
-        action: { type: 'cursor', x: action.x, y: action.y },
-        capture: 'none',
-        actionId: action.actionId,
-        uiEventReceivedAt: action.uiEventReceivedAt,
-        adapterSentAt,
-        workspaceWriterBaseUrl: currentSession.workspaceWriterBaseUrl,
-      });
-      const nextSession = result.session;
-      setHostCursor(normalizeRightPaneHostCursor(nextSession.cursor));
-    } catch {
-      setHostCursor('default');
-    } finally {
-      cursorRequestInFlightRef.current = false;
-      if (pendingCursorRef.current) void flushHostCursor();
     }
   }
 
@@ -683,7 +465,7 @@ export function RightPaneBrowserTool({
       setWriterDiagnostic(undefined);
       await openAddress(normalizedUrl);
     } catch (error) {
-      setHostError(error instanceof Error ? error.message : String(error));
+      setHostError(publicBrowserHostDiagnosticText(error));
     } finally {
       setBusy(false);
     }
@@ -730,7 +512,10 @@ export function RightPaneBrowserTool({
       });
       if (nativeBrowserHostSurfaceResultFailed(result)) {
         detachNativeBrowserSurface(sessionState.id);
-        setHostError(nativeBrowserHostSurfaceReason(result) ?? 'Native embedded BrowserHostSession surface attach blocked; retry the same session or hand off externally.');
+        setHostError(publicBrowserHostDiagnosticText(
+          nativeBrowserHostSurfaceReason(result),
+          'Native embedded BrowserHostSession surface attach blocked; retry the same session or hand off externally.',
+        ));
         void refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, sessionState));
       } else {
         nativeSurfaceSessionRef.current = sessionState.id;
@@ -738,7 +523,7 @@ export function RightPaneBrowserTool({
       }
     } catch (error) {
       detachNativeBrowserSurface(sessionState.id);
-      setHostError(error instanceof Error ? error.message : String(error));
+      setHostError(publicBrowserHostDiagnosticText(error));
       void refreshNativeSurfaceBridgeDiagnostic(browserHostSessionConfig(config, sessionState));
     }
   }
@@ -763,26 +548,26 @@ export function RightPaneBrowserTool({
           className="right-pane-browser-writer-diagnostic"
           role="status"
           data-browser-writer-diagnostic={writerDiagnostic.status}
-          data-browser-writer-configured-url={writerDiagnostic.configuredDisplayUrl}
-          data-browser-writer-recommended-url={writerDiagnostic.recommendedDisplayUrl}
+          data-browser-writer-configured={writerDiagnostic.configuredBaseUrl ? 'masked' : 'missing'}
+          data-browser-writer-recommended={writerDiagnostic.recommendedBaseUrl ? 'masked' : undefined}
         >
           <div>
             <strong>{resultText(locale, { 'zh-CN': 'BrowserHostSession 需要 Workspace Writer', 'en-US': 'BrowserHostSession needs Workspace Writer' })}</strong>
-            <span>{writerDiagnostic.message}</span>
+            <span>{publicWriterDiagnostic?.message ?? 'Workspace Writer diagnostic recorded.'}</span>
           </div>
           <dl>
             <div>
               <dt>{resultText(locale, { 'zh-CN': '当前 URL', 'en-US': 'Current URL' })}</dt>
-              <dd>{writerDiagnostic.configuredDisplayUrl || 'unknown'}</dd>
+              <dd>{writerDiagnostic.configuredBaseUrl ? 'configured (masked)' : 'unknown'}</dd>
             </div>
             <div>
               <dt>{resultText(locale, { 'zh-CN': '问题', 'en-US': 'Issue' })}</dt>
-              <dd>{writerDiagnostic.status}</dd>
+              <dd>{publicWriterDiagnostic?.status ?? 'diagnostic'}</dd>
             </div>
             {writerDiagnostic.recommendedDisplayUrl ? (
               <div>
                 <dt>{resultText(locale, { 'zh-CN': '推荐', 'en-US': 'Recommended' })}</dt>
-                <dd>{writerDiagnostic.recommendedDisplayUrl}</dd>
+                <dd>available (masked)</dd>
               </div>
             ) : null}
           </dl>
@@ -799,9 +584,12 @@ export function RightPaneBrowserTool({
                 type="button"
                 onClick={() => useWorkspaceWriterCandidate(candidate.baseUrl)}
                 disabled={busy || !onConfigChange}
-                title={candidate.displayUrl}
+                title={sanitizePublicTextRequired(candidate.label, 'Workspace Writer')}
               >
-                {resultText(locale, { 'zh-CN': `使用 ${candidate.label}`, 'en-US': `Use ${candidate.label}` })}
+                {resultText(locale, {
+                  'zh-CN': `使用 ${sanitizePublicTextRequired(candidate.label, 'Workspace Writer')}`,
+                  'en-US': `Use ${sanitizePublicTextRequired(candidate.label, 'Workspace Writer')}`,
+                })}
               </button>
             ))}
             <button type="button" onClick={() => onOpenSettings?.('workspace')} disabled={!onOpenSettings}>
@@ -834,28 +622,12 @@ export function RightPaneBrowserTool({
             frameTransport: browserHostSessionHasUsableLiveSurface(hostSession) ? 'native-embedded' : undefined,
             previewSandbox: browserState.previewSandbox,
             externalUrl: browserState.externalUrl,
-            hostSession: projectedHostSession ? { ...projectedHostSession, cursor: hostCursor } : undefined,
-            writerDiagnostic: writerDiagnostic ? {
-              status: writerDiagnostic.status,
-              configuredBaseUrl: writerDiagnostic.configuredBaseUrl,
-              configuredDisplayUrl: writerDiagnostic.configuredDisplayUrl,
-              effectiveBaseUrl: writerDiagnostic.effectiveBaseUrl,
-              effectiveDisplayUrl: writerDiagnostic.effectiveDisplayUrl,
-              recommendedBaseUrl: writerDiagnostic.recommendedBaseUrl,
-              recommendedDisplayUrl: writerDiagnostic.recommendedDisplayUrl,
-              diagnosticRef: writerDiagnostic.diagnosticRef,
-              message: writerDiagnostic.message,
-              health: writerDiagnostic.health ? {
-                ok: writerDiagnostic.health.ok,
-                service: writerDiagnostic.health.service,
-                capabilities: writerDiagnostic.health.capabilities,
-              } : undefined,
-            } : undefined,
+            hostSession: projectedHostSession,
+            writerDiagnostic: publicWriterDiagnostic,
             commands,
             onAddressChange: onAddressDraftChange,
             onAddressSubmit: openAddress,
             onCommandRequest: requestCommand,
-            onHostActionRequest: requestHostAction,
             onAnnotationRequest: (selection: BrowserWorkbenchAnnotationRequest) => {
               void requestBrowserAnnotationReference(selection);
             },
@@ -883,7 +655,7 @@ export function RightPaneBrowserTool({
                 status: browserState.tabStatus,
               }],
             },
-            hostSession: projectedHostSession ? { ...projectedHostSession, cursor: hostCursor } : undefined,
+            hostSession: projectedHostSession,
             snapshot: projectedHostSession ? {
               schemaVersion: 'sciforge.browser-runtime.snapshot.v1',
               url: projectedHostSession.url,
@@ -935,7 +707,7 @@ function browserHostSessionHasUsableLiveSurface(session: BrowserHostSessionState
 }
 
 function rightPaneBrowserHostSessionCacheKey(config: SciForgeConfig, tabId: string, normalizedUrl: string) {
-  return `${config.workspacePath}::${tabId}::${normalizedUrl}`;
+  return `workspace:${browserHostSessionIdHash(config.workspacePath || 'default')}::${tabId}::${normalizedUrl}`;
 }
 
 function cachedRightPaneBrowserHostSession(key: string, normalizedUrl: string) {
@@ -958,24 +730,46 @@ function browserHostSessionConfig(config: SciForgeConfig, session: BrowserHostSe
     : config;
 }
 
-function browserHostComputerUseActionFromHostAction(action: RightPaneBrowserHostAction): BrowserHostComputerUseAction | undefined {
-  if (action.action === 'click') return { type: 'click', x: action.x, y: action.y };
-  if (action.action === 'double-click') return { type: 'double_click', x: action.x, y: action.y };
-  if (action.action === 'mouse-down') return { type: 'mouse_down', x: action.x, y: action.y, button: action.button };
-  if (action.action === 'mouse-move') return { type: 'mouse_move', x: action.x, y: action.y };
-  if (action.action === 'mouse-up') return { type: 'mouse_up', x: action.x, y: action.y, button: action.button };
-  if (action.action === 'type') return { type: 'type_text', text: action.text ?? '' };
-  if (action.action === 'press') return browserHostComputerUseKeyAction(action.key);
-  if (action.action === 'scroll') return { type: 'wheel', x: action.x, y: action.y, deltaX: action.deltaX, deltaY: action.deltaY };
-  if (action.action === 'cursor') return { type: 'cursor', x: action.x, y: action.y };
-  return undefined;
+function publicBrowserHostSessionProjection(
+  session: BrowserHostSessionState | undefined,
+  nativeSurfaceBridgeDiagnostic: RightPaneBrowserNativeSurfaceBridgeState | undefined,
+): BrowserHostSessionState | undefined {
+  if (!session) return undefined;
+  const {
+    workspaceWriterBaseUrl: _workspaceWriterBaseUrl,
+    nativeAdapterUrl: _nativeAdapterUrl,
+    ...publicSession
+  } = session as BrowserHostSessionState & { nativeAdapterUrl?: string };
+  return {
+    ...publicSession,
+    diagnostics: Array.isArray(session.diagnostics)
+      ? session.diagnostics.map((diagnostic) => publicBrowserHostDiagnosticText(diagnostic)).filter(Boolean)
+      : undefined,
+    reason: publicBrowserHostDiagnosticText(session.reason, ''),
+    nativeSurfaceBridge: nativeSurfaceBridgeDiagnostic,
+  } as BrowserHostSessionState;
 }
 
-function browserHostComputerUseKeyAction(key: string | undefined): BrowserHostComputerUseAction {
-  const normalized = key?.trim() ?? '';
-  if (!normalized) return { type: 'press_key', key: 'Enter' };
-  const keys = normalized.split('+').map((part) => part.trim()).filter(Boolean);
-  return keys.length > 1 ? { type: 'hotkey', keys } : { type: 'press_key', key: normalized };
+function publicBrowserHostWriterDiagnostic(diagnostic: BrowserHostSessionWriterPreflightResult | undefined) {
+  if (!diagnostic) return undefined;
+  return {
+    status: sanitizePublicTextRequired(diagnostic.status, 'workspace-writer-diagnostic'),
+    diagnosticRef: diagnostic.diagnosticRef,
+    message: publicBrowserHostDiagnosticText(diagnostic.message, 'Workspace Writer diagnostic recorded.'),
+    health: diagnostic.health ? {
+      ok: diagnostic.health.ok,
+      service: sanitizePublicTextRequired(diagnostic.health.service, 'Workspace Writer'),
+      capabilities: Array.isArray(diagnostic.health.capabilities)
+        ? diagnostic.health.capabilities
+          .map((capability) => sanitizePublicTextRequired(capability, 'capability'))
+          .filter(Boolean)
+        : undefined,
+    } : undefined,
+  };
+}
+
+function publicBrowserHostDiagnosticText(value: unknown, fallback = 'BrowserHostSession diagnostic recorded.') {
+  return sanitizePublicTextRequired(value instanceof Error ? value.message : value, fallback);
 }
 
 function browserHostSessionUsesNativeSurface(session: BrowserHostSessionState | undefined) {
@@ -1218,15 +1012,6 @@ function numberRecordField(record: Record<string, unknown> | undefined, key: str
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-function browserHostActionWithUiTiming(action: RightPaneBrowserHostAction): RightPaneBrowserHostAction {
-  const receivedAt = action.uiEventReceivedAt ?? new Date().toISOString();
-  return {
-    ...action,
-    actionId: action.actionId ?? `ui-${receivedAt.replace(/[^0-9TZ]/g, '')}-${Math.random().toString(36).slice(2, 8)}`,
-    uiEventReceivedAt: receivedAt,
-  };
-}
-
 type DesktopBrowserHostSurfaceBridge = {
   attachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
   detachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
@@ -1268,9 +1053,9 @@ function nativeBrowserHostSurfaceReason(value: unknown) {
 
 function browserRuntimeServicesError(runtime: { error?: string; services: Array<Record<string, unknown>> }) {
   const failed = runtime.services.find((service) => service.ok === false) ?? runtime.services[0];
-  const label = stringRecordField(failed, 'label') ?? stringRecordField(failed, 'id') ?? 'Runtime services';
-  const status = stringRecordField(failed, 'status');
-  const detail = stringRecordField(failed, 'detail') ?? runtime.error;
+  const label = sanitizePublicTextRequired(stringRecordField(failed, 'label') ?? stringRecordField(failed, 'id'), 'Runtime services');
+  const status = sanitizePublicTextRequired(stringRecordField(failed, 'status'), '');
+  const detail = sanitizePublicTextRequired(stringRecordField(failed, 'detail') ?? runtime.error, '');
   return [
     `${label}${status ? ` ${status}` : ''}`,
     detail,

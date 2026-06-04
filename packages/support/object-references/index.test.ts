@@ -179,6 +179,83 @@ assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'execu
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'execution-unit:EU-report')?.presentationRole, 'audit');
 assert.equal(normalizedResponseRefs.find((reference) => reference.ref === 'artifact:missing-report')?.status, 'missing');
 
+const normalizedSubagentRefs = normalizeResponseObjectReferences({
+  objectReferences: [{
+    ref: 'subagent:worker-1',
+    title: 'Worker review',
+    summary: 'bounded review summary',
+    actions: ['focus-right-pane', 'inspect', 'pin'],
+  }, {
+    ref: 'artifact:subagent-result-worker-1',
+    title: 'Worker result',
+  }, {
+    ref: 'artifact:subagent-transcript-worker-1',
+    title: 'Worker transcript',
+  }, {
+    ref: 'transcript:worker-1',
+    title: 'Worker transcript ref',
+  }, {
+    ref: 'file:/Users/alice/private/provider.txt',
+    title: 'Unsafe absolute path',
+  }, {
+    ref: 'file:.sciforge/raw/provider.json',
+    title: 'Unsafe raw payload',
+  }, {
+    ref: 'artifact:provider/debug-payload',
+    title: 'Unsafe provider payload',
+  }],
+  artifacts: [],
+  runId: 'run-subagent-normalized',
+  relatedRefs: [
+    'subagent:worker-2',
+    'artifact:subagent-result-worker-2',
+    'artifact:subagent-transcript-worker-2',
+    'transcript:worker-2',
+    '/Applications/workspace/private.txt',
+    'file:.sciforge/raw/provider.json',
+  ],
+});
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'subagent:worker-1')?.kind, 'run');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'subagent:worker-1')?.preferredView, 'subagent-result');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'subagent:worker-1')?.presentationRole, 'audit');
+assert.deepEqual(normalizedSubagentRefs.find((reference) => reference.ref === 'subagent:worker-1')?.actions, ['focus-right-pane', 'inspect', 'pin']);
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'artifact:subagent-result-worker-1')?.preferredView, 'subagent-result');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'artifact:subagent-transcript-worker-1')?.preferredView, 'subagent-transcript');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'transcript:worker-1')?.kind, 'run');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'transcript:worker-1')?.preferredView, 'subagent-transcript');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'subagent:worker-2')?.kind, 'run');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'artifact:subagent-result-worker-2')?.status, 'available');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'artifact:subagent-transcript-worker-2')?.status, 'available');
+assert.equal(normalizedSubagentRefs.find((reference) => reference.ref === 'transcript:worker-2')?.status, 'available');
+assert.equal(normalizedSubagentRefs.some((reference) => /\/Users|\/Applications|\.sciforge\/raw|provider\/debug/i.test(reference.ref)), false);
+assert.equal(normalizedSubagentRefs.some((reference) => reference.actions?.some((action) => action === 'resume' as never)), false);
+
+const normalizedUnsafePublicSubagentRefs = normalizeResponseObjectReferences({
+  objectReferences: [{
+    ref: 'subagent:worker-safe',
+    title: 'Provider https://provider.example/v1 sk-secret-123',
+    summary: 'raw stdout stderr JSON from /Applications/private/.sciforge/raw/run.json',
+    provenance: {
+      producer: 'provider debug raw stdout',
+      version: 'SCIFORGE_RUNTIME_API_KEY=secret',
+      hash: 'sk-secret-123',
+      dataRef: '.sciforge/raw/run.json',
+      path: '/Applications/private/run.json',
+    },
+  }],
+  artifacts: [],
+  runId: 'run-unsafe-public-subagent-normalized',
+});
+const unsafePublicSubagentRef = normalizedUnsafePublicSubagentRefs.find((reference) => reference.ref === 'subagent:worker-safe');
+assert.equal(unsafePublicSubagentRef?.title, 'worker-safe');
+assert.equal(unsafePublicSubagentRef?.summary, 'Sub-agent result reference');
+assert.equal(unsafePublicSubagentRef?.provenance?.producer, undefined);
+assert.equal(unsafePublicSubagentRef?.provenance?.version, undefined);
+assert.equal(unsafePublicSubagentRef?.provenance?.hash, undefined);
+assert.equal(unsafePublicSubagentRef?.provenance?.dataRef, undefined);
+assert.equal(unsafePublicSubagentRef?.provenance?.path, undefined);
+assert.doesNotMatch(JSON.stringify(normalizedUnsafePublicSubagentRefs), /provider\.example|sk-secret|SCIFORGE_RUNTIME_API_KEY|\/Applications|\.sciforge\/raw|stdout|stderr|\braw\b|JSON/i);
+
 const converted = referenceForObjectReference({ ...artifactRef, artifactType: 'volcano-plot' });
 assert.equal(converted.kind, 'chart');
 

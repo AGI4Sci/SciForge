@@ -33,6 +33,8 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   let spawnCall: Parameters<SpawnCodexAppServerProcess> | undefined;
   const client = createCodexAppServerClient({
     env,
+    approvalPolicy: 'on-request',
+    sandbox: 'read-only',
     spawnProcess(command, args, options) {
       spawnCall = [command, args, options];
       return appServer.process;
@@ -59,23 +61,63 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   assertMcpEntrypointArg(argv, SUBAGENT_MCP_SERVER_NAME, 'subagent-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.sandbox}="read-only"`));
+  assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.SCIFORGE_SUBAGENT_APPROVAL_POLICY="on-request"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentCommandId}="app-server-client-command"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentAttemptId}="attempt-1"`));
+  assert.equal(appServer.threadStartParams.approvalPolicy, 'on-request');
+  assert.equal(appServer.threadStartParams.sandbox, 'read-only');
 
   const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'module' && tool.name === 'invoke'));
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
+  const spawnTool = dynamicTools.find((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent');
+  const spawnAliasTool = dynamicTools.find((tool) => tool.name === 'multi_agent_v1_spawn_agent');
+  const spawnSchema = spawnTool?.inputSchema as { properties?: Record<string, unknown> } | undefined;
+  assert.ok(spawnSchema?.properties?.run_in_background);
+  assert.ok(spawnSchema.properties.resume_ref);
+  assert.ok(spawnSchema.properties.resume_agent_id);
+  assert.ok(spawnAliasTool, 'provider-safe sub-agent alias should be registered as a dynamic tool');
+  assert.equal(spawnAliasTool?.namespace, undefined);
+  assert.doesNotMatch(JSON.stringify(spawnTool), /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr/i);
   assert.equal(appServer.toolCallResponse?.success, true);
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /artifact:subagent-result-[a-f0-9]{12}/);
   assert.match(text, /artifact:subagent-transcript-[a-f0-9]{12}/);
 });
 
-test('Codex app-server client routes explicit sub-agent tool requests through app-server MCP', async () => {
+test('Codex app-server client serves provider-safe sub-agent dynamic tool aliases', async () => {
   const workspace = await tempWorkspace();
   await writeFile(join(workspace, 'PROJECT.md'), '- [ ] sub-agent live parity\n', 'utf8');
   const env = await tempRuntimeEnv();
-  const appServer = fakeAppServer();
+  const appServer = fakeAppServer({ toolCall: { tool: 'multi_agent_v1_spawn_agent' } });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Call the provider-safe sub-agent alias once.',
+    workspacePath: workspace,
+    commandId: 'provider-safe-subagent-alias-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(appServer.toolCallResponse?.success, true);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /artifact:subagent-result-[a-f0-9]{12}/);
+  assert.match(text, /artifact:subagent-transcript-[a-f0-9]{12}/);
+});
+
+test('Codex app-server client treats GUI spawn_agent text as ordinary app-server input', async () => {
+  const workspace = await tempWorkspace();
+  await writeFile(join(workspace, 'PROJECT.md'), '- [ ] sub-agent live parity\n', 'utf8');
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
   const client = createCodexAppServerClient({
     env,
     spawnProcess() {
@@ -86,28 +128,60 @@ test('Codex app-server client routes explicit sub-agent tool requests through ap
   const stream = await client.startTurn({
     commandText: 'Please call multi_agent_v1.spawn_agent exactly once to inspect PROJECT.md.',
     workspacePath: workspace,
-    commandId: 'explicit-subagent-command',
+    commandId: 'gui-spawn-agent-text-command',
     attemptId: 'attempt-1',
-    guiExtension: { enabled: false },
+    guiExtension: { enabled: true },
   });
   const events = await collect(stream.events) as Array<Record<string, unknown>>;
 
-  assert.equal(appServer.mcpToolCallParams?.server, SUBAGENT_MCP_SERVER_NAME);
-  assert.equal(appServer.mcpToolCallParams?.tool, 'multi_agent_v1.spawn_agent');
-  assert.match(JSON.stringify(appServer.mcpToolCallParams?.arguments), /PROJECT\.md/);
-  assert.deepEqual(events.map((event) => event.method), [
-    'turn/started',
-    'item/started',
-    'item/completed',
-    'item/agentMessage/delta',
-    'turn/completed',
-  ]);
-  const completed = events.find((event) => event.method === 'item/completed');
-  assert.match(JSON.stringify(completed), /artifact:subagent-result-explicit/);
-  const message = events.find((event) => event.method === 'item/agentMessage/delta');
-  assert.match(JSON.stringify(message), /agentId: worker-explicit/);
-  assert.match(JSON.stringify(message), /transcriptRef: artifact:subagent-transcript-explicit/);
-  assert.match(JSON.stringify(message), /resultRef: artifact:subagent-result-explicit/);
+  assert.equal(appServer.mcpToolCallParams, undefined);
+  assert.equal(stream.turnId, 'turn-1');
+  assert.deepEqual(appServer.turnStartParams.input, [{
+    type: 'text',
+    text: 'Please call multi_agent_v1.spawn_agent exactly once to inspect PROJECT.md.',
+    text_elements: [],
+  }]);
+  assert.deepEqual(events.map((event) => event.method), ['turn/completed']);
+});
+
+test('Codex app-server client projects Multitask declared intent into app-server instructions without changing turn text', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Compare the runtime and UI paths, then summarize the blockers.',
+    workspacePath: workspace,
+    commandId: 'multitask-declared-intent-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    declaredIntents: {
+      mode: {
+        modeIntentId: 'multitask',
+        publicLabel: 'Multitask',
+        summaryGuidance: 'Coordinate parallel tasks.',
+      },
+    },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(appServer.turnStartParams.input, [{
+    type: 'text',
+    text: 'Compare the runtime and UI paths, then summarize the blockers.',
+    text_elements: [],
+  }]);
+  const developerInstructions = String(appServer.threadStartParams.developerInstructions ?? '');
+  assert.match(developerInstructions, /Multitask/);
+  assert.match(developerInstructions, /multi_agent_v1\.spawn_agent/);
+  assert.match(developerInstructions, /multi_agent_v1_spawn_agent/);
+  assert.doesNotMatch(appServer.turnStartParams.input[0]?.text as string, /\/multitask|multi_agent_v1\.spawn_agent/i);
+  assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
 });
 
 test('Codex app-server client treats slash terminal turn events as stream completion', async () => {
@@ -161,7 +235,66 @@ test('Codex app-server client preserves runtime dynamic tools when resuming a th
   assert.ok(dynamicTools.some((tool) => tool.namespace === 'multi_agent_v1' && tool.name === 'spawn_agent'));
 });
 
-test('Codex app-server client routes /computer-use through native package bridge before spawning app-server', async () => {
+test('Codex app-server client treats GUI /computer-use text as ordinary app-server input', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let spawnCalled = false;
+  let runnerCalled = false;
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const commandText = '/computer-use click the guarded Submit button';
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      spawnCalled = true;
+      return appServer.process;
+    },
+    computerUseNativeRouteRunner(input) {
+      runnerCalled = true;
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'computer-use.tui-host-actions',
+            timestamp: new Date().toISOString(),
+            commandId: input.request.commandId,
+            attemptId: input.request.attemptId,
+            detail: JSON.stringify({ actions: [] }),
+          },
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            timestamp: new Date().toISOString(),
+            commandId: input.request.commandId,
+            attemptId: input.request.attemptId,
+            status: 'done',
+          },
+        ]),
+      };
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText,
+    workspacePath: workspace,
+    commandId: 'gui-native-cu-text-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+  });
+  const events = await collect(stream.events);
+
+  assert.equal(runnerCalled, false);
+  assert.equal(spawnCalled, true);
+  assert.equal(stream.turnId, 'turn-1');
+  assert.deepEqual(appServer.turnStartParams.input, [{ type: 'text', text: commandText, text_elements: [] }]);
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).method), ['turn/completed']);
+});
+
+test('Codex app-server client routes host-owned Computer Use runtime intents through native package bridge', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
   let spawnCalled = false;
@@ -171,7 +304,7 @@ test('Codex app-server client routes /computer-use through native package bridge
     env,
     spawnProcess() {
       spawnCalled = true;
-      throw new Error('app-server should not spawn for native Computer Use route');
+      throw new Error('app-server should not spawn for host-owned native Computer Use route');
     },
     computerUseNativeRouteRunner(input) {
       runnerCommandText = input.request.commandText;
@@ -209,7 +342,8 @@ test('Codex app-server client routes /computer-use through native package bridge
     workspacePath: workspace,
     commandId: 'native-cu-command',
     attemptId: 'attempt-1',
-    guiExtension: { enabled: false },
+    guiExtension: { enabled: true },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
   });
   const events = await collect(stream.events);
 
@@ -221,6 +355,76 @@ test('Codex app-server client routes /computer-use through native package bridge
     'computer-use.tui-host-actions',
     'done',
   ]);
+});
+
+test('Computer Use native route strips private runtime fields from public events', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const client = createCodexAppServerClient({
+    env,
+    computerUseNativeRouteRunner(input) {
+      return {
+        turnId: input.request.commandId,
+        provider: input.provider,
+        model: input.model,
+        profile: input.profile,
+        workspacePath: input.workspace,
+        events: asyncGenerator([
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'operation_progress',
+            timestamp: new Date().toISOString(),
+            provider: 'private-provider',
+            model: 'private-model',
+            profile: 'private-profile',
+            workspace,
+            workspacePath: workspace,
+            raw: {
+              provider: 'private-provider',
+              model: 'private-model',
+              profile: 'private-profile',
+              workspacePath: workspace,
+            },
+            message: `Computer Use native route selected provider https://provider.internal/v1 with token sk-native-secret-123 from ${workspace}/raw.json.`,
+            detail: 'stdout raw JSON contained provider private-provider and model private-model.',
+          },
+          {
+            schemaVersion: 'sciforge.codex.normalized-event.v1',
+            type: 'done',
+            timestamp: new Date().toISOString(),
+            provider: 'private-provider',
+            model: 'private-model',
+            profile: 'private-profile',
+            workspace,
+            raw: { workspacePath: workspace },
+            status: 'done',
+            message: `Done from ${workspace}/trace.json using private-profile.`,
+          },
+        ]),
+      };
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '/computer-use click the guarded Submit button',
+    workspacePath: workspace,
+    commandId: 'native-cu-public-stream-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  for (const event of events) {
+    assert.equal('provider' in event, false);
+    assert.equal('model' in event, false);
+    assert.equal('profile' in event, false);
+    assert.equal('workspace' in event, false);
+    assert.equal('workspacePath' in event, false);
+    assert.equal('raw' in event, false);
+  }
+  assert.doesNotMatch(JSON.stringify(events), /private-provider|private-model|private-profile|provider\.internal|sk-native-secret|stdout|raw JSON/i);
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(escapeRegExp(workspace)));
 });
 
 test('Computer Use native route is not blocked by unsupported assistant profile', async () => {
@@ -258,7 +462,8 @@ test('Computer Use native route is not blocked by unsupported assistant profile'
     commandId: 'native-cu-profile-command',
     attemptId: 'attempt-1',
     profile: 'assistant-fast',
-    guiExtension: { enabled: false },
+    guiExtension: { enabled: true },
+    runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
   });
   const events = await collect(stream.events);
 
@@ -307,7 +512,8 @@ test('Computer Use native route accepts UI-generated right pane screen attach co
       commandId: 'native-cu-ui-screen-attach-command',
       attemptId: 'attempt-1',
       profile: 'assistant-fast',
-      guiExtension: { enabled: false },
+      guiExtension: { enabled: true },
+      runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
     });
     const events = await collect(stream.events) as Array<Record<string, unknown>>;
     const done = events.at(-1) as Record<string, unknown> | undefined;
@@ -351,7 +557,8 @@ test('Computer Use native route still requires Runtime Codex local configuration
       commandId: 'native-cu-config-guard-command',
       attemptId: 'attempt-1',
       profile: 'assistant-fast',
-      guiExtension: { enabled: false },
+      guiExtension: { enabled: true },
+      runtimeIntent: hostOwnedComputerUseRuntimeIntent(),
     }),
     /Missing SCIFORGE_RUNTIME_API_KEY/,
   );
@@ -421,6 +628,18 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 
 async function* asyncGenerator(values: unknown[]) {
   for (const value of values) yield value;
+}
+
+function hostOwnedComputerUseRuntimeIntent() {
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+  } as const;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointName: string): void {
@@ -526,7 +745,12 @@ function codexNativeRouteMinimalEvidenceReplayRefs() {
   ];
 }
 
-function fakeAppServer(options: { terminalEvent?: string; terminalStatus?: string } = {}) {
+function fakeAppServer(options: {
+  terminalEvent?: string;
+  terminalStatus?: string;
+  autoToolCall?: boolean;
+  toolCall?: { namespace?: string; tool: string };
+} = {}) {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
@@ -534,11 +758,13 @@ function fakeAppServer(options: { terminalEvent?: string; terminalStatus?: strin
   const state: {
     threadStartParams: Record<string, unknown>;
     threadResumeParams: Record<string, unknown>;
+    turnStartParams: Record<string, unknown>;
     toolCallResponse?: Record<string, unknown>;
     mcpToolCallParams?: Record<string, unknown>;
   } = {
     threadStartParams: {},
     threadResumeParams: {},
+    turnStartParams: {},
   };
   let killed = false;
   let buffer = '';
@@ -591,23 +817,37 @@ function fakeAppServer(options: { terminalEvent?: string; terminalStatus?: strin
     }
     if (message.method === 'turn/start') {
       const params = message.params as Record<string, unknown>;
+      state.turnStartParams = params;
       const threadId = typeof params.threadId === 'string' ? params.threadId : 'thread-1';
       write({ id: message.id, result: { turn: { id: 'turn-1' } } });
-      setTimeout(() => write({
-        id: 'server-tool-call-1',
-        method: 'item/tool/call',
-        params: {
-          threadId,
-          turnId: 'turn-1',
-          callId: 'subagent-call-1',
-          namespace: 'multi_agent_v1',
-          tool: 'spawn_agent',
-          arguments: {
-            message: 'Inspect PROJECT.md for open sub-agent tasks.',
-            items: [{ path: 'PROJECT.md' }],
+      if (options.autoToolCall !== false) {
+        const toolCall = options.toolCall ?? { namespace: 'multi_agent_v1', tool: 'spawn_agent' };
+        setTimeout(() => write({
+          id: 'server-tool-call-1',
+          method: 'item/tool/call',
+          params: {
+            threadId,
+            turnId: 'turn-1',
+            callId: 'subagent-call-1',
+            ...(toolCall.namespace ? { namespace: toolCall.namespace } : {}),
+            tool: toolCall.tool,
+            arguments: {
+              message: 'Inspect PROJECT.md for open sub-agent tasks.',
+              items: [{ path: 'PROJECT.md' }],
+            },
           },
-        },
-      }), 0);
+        }), 0);
+      } else {
+        setTimeout(() => write({
+          method: options.terminalEvent ?? 'turn/completed',
+          params: {
+            threadId,
+            turnId: 'turn-1',
+            status: options.terminalStatus,
+            turn: { id: 'turn-1', status: options.terminalStatus ?? 'completed' },
+          },
+        }), 0);
+      }
       return;
     }
     if (message.method === 'mcpServer/tool/call') {
@@ -671,6 +911,9 @@ function fakeAppServer(options: { terminalEvent?: string; terminalStatus?: strin
     },
     get threadResumeParams() {
       return state.threadResumeParams;
+    },
+    get turnStartParams() {
+      return state.turnStartParams;
     },
     get toolCallResponse() {
       return state.toolCallResponse;

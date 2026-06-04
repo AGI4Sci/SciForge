@@ -21,7 +21,21 @@ test('workspace explorer status panel renders onboarding, notice, and error stat
   assert.match(html, /Create workspace/);
   assert.match(html, /role="status"/);
   assert.match(html, /Checking project/);
-  assert.match(html, /ENOENT workspace-state\.json/);
+  assert.match(html, /Project folder was not found|Workspace diagnostic/);
+  assert.doesNotMatch(html, /\/tmp\/missing-project/);
+});
+
+test('workspace explorer status panel sanitizes upstream notice and error text', () => {
+  const html = renderToStaticMarkup(React.createElement(WorkspaceExplorerStatusPanel, {
+    workspacePath: '/Applications/workspace/private-project',
+    workspaceError: 'writer stderr token sk-workspace-secret from /Users/alice/private-project; raw JSON {"url":"https://provider.internal/v1"}',
+    workspaceStatus: 'failed',
+    workspaceNotice: 'checking http://127.0.0.1:6174/health?token=writer-secret for /Applications/workspace/private-project',
+    onInitializeWorkspacePath: () => undefined,
+  }));
+
+  assert.match(html, /role="status"/);
+  assert.doesNotMatch(html, /sk-workspace-secret|writer-secret|provider\.internal|127\.0\.0\.1:6174|Applications\/workspace|Users\/alice|raw JSON/i);
 });
 
 test('workspace explorer onboarding reason stays concise and user-facing', () => {

@@ -5,12 +5,13 @@ import { test } from 'node:test';
 const settingsPageSource = readFileSync(new URL('./SettingsPage.tsx', import.meta.url), 'utf8');
 const catalogSource = readFileSync(new URL('./settingsModelCatalog.ts', import.meta.url), 'utf8');
 
-test('settings API key defaults to masked stars and can be revealed explicitly', () => {
-  assert.match(settingsPageSource, /maskedSecretValue\(config\.apiKey\)/);
-  assert.match(settingsPageSource, /const \[apiKeyVisible, setApiKeyVisible\] = useState\(false\)/);
-  assert.match(settingsPageSource, /type=\{apiKeyVisible \? 'text' : 'password'\}/);
-  assert.match(settingsPageSource, /readOnly=\{apiKeyConfigured && !apiKeyVisible\}/);
-  assert.match(settingsPageSource, /aria-label=\{apiKeyVisible \? t\(\{ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' \}\)/);
+test('settings API key is write-only and cannot be revealed in the GUI', () => {
+  assert.doesNotMatch(settingsPageSource, /apiKeyVisible/);
+  assert.doesNotMatch(settingsPageSource, /Show API key|显示 API key|Hide API key|隐藏 API key/);
+  assert.doesNotMatch(settingsPageSource, /maskedSecretValue\(config\.apiKey\)/);
+  assert.match(settingsPageSource, /type="password"/);
+  assert.match(settingsPageSource, /defaultValue=""/);
+  assert.match(settingsPageSource, /secretPresenceLabel\(config\.apiKey, 'API key'/);
 });
 
 test('settings copy states main chat and repair share the same LLM provider config', () => {

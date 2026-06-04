@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Eye, EyeOff, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import { ArrowLeft, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { validatePeerInstances } from '../../config';
 import type { PeerInstance, SciForgeConfig } from '../../domain';
 import { RuntimeHealthPanel, useRuntimeHealth } from '../runtimeHealthPanel';
@@ -22,12 +22,16 @@ import {
   type SupportedLocale,
 } from '../../i18n';
 import {
-  maskedSecretValue,
   secretInputPlaceholder,
   secretPresenceLabel,
   settingsSaveStateText,
   type ConfigSaveState,
 } from './settingsModels';
+import {
+  publicConfigInputPlaceholder,
+  publicConfigPresenceLabel,
+  sanitizePublicTextRequired,
+} from '../../publicProjectionSanitizer';
 import {
   settingsSectionLabel,
   settingsSectionNavItemsForLocale,
@@ -69,10 +73,7 @@ export function SettingsPage({
   const healthItems = useRuntimeHealth(config);
   const peerInstances = config.peerInstances ?? [];
   const peerValidationErrors = validatePeerInstances(peerInstances);
-  const [apiKeyVisible, setApiKeyVisible] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<ModelCatalogState>({ status: 'idle', models: [] });
-  const apiKeyConfigured = Boolean(config.apiKey.trim());
-  const apiKeyInputValue = apiKeyVisible || !apiKeyConfigured ? config.apiKey : maskedSecretValue(config.apiKey);
 
   useEffect(() => {
     setActiveSection(initialSection);
@@ -195,11 +196,23 @@ export function SettingsPage({
             <div className="settings-grid">
               <label>
                 <span>Workspace Writer URL</span>
-                <input value={config.workspaceWriterBaseUrl} onChange={(event) => onChange({ workspaceWriterBaseUrl: event.target.value })} />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ workspaceWriterBaseUrl: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.workspaceWriterBaseUrl, 'Enter Workspace Writer URL')}
+                  aria-describedby="settings-workspace-writer-status"
+                />
+                <small id="settings-workspace-writer-status">{publicConfigPresenceLabel(config.workspaceWriterBaseUrl, 'Workspace Writer URL')}</small>
               </label>
               <label className="wide">
                 <span>Workspace Path</span>
-                <input value={config.workspacePath} onChange={(event) => onChange({ workspacePath: event.target.value })} />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ workspacePath: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.workspacePath, 'Choose or enter a workspace path')}
+                  aria-describedby="settings-workspace-path-status"
+                />
+                <small id="settings-workspace-path-status">{publicConfigPresenceLabel(config.workspacePath, 'Workspace path')}</small>
               </label>
               <div className="wide settings-peer-section">
                 <div className="settings-peer-section-head">
@@ -242,15 +255,30 @@ export function SettingsPage({
                         </label>
                         <label>
                           <span>App URL</span>
-                          <input value={peer.appUrl} onChange={(event) => updatePeerInstance(index, { appUrl: event.target.value })} placeholder="http://127.0.0.1:5173" />
+                          <input
+                            defaultValue=""
+                            onChange={(event) => updatePeerInstance(index, { appUrl: event.target.value })}
+                            placeholder={publicConfigInputPlaceholder(peer.appUrl, 'Enter peer app URL')}
+                            aria-label={`${peer.name || 'Peer'} app URL`}
+                          />
                         </label>
                         <label>
                           <span>Workspace Writer URL</span>
-                          <input value={peer.workspaceWriterUrl} onChange={(event) => updatePeerInstance(index, { workspaceWriterUrl: event.target.value })} placeholder="http://127.0.0.1:6174" />
+                          <input
+                            defaultValue=""
+                            onChange={(event) => updatePeerInstance(index, { workspaceWriterUrl: event.target.value })}
+                            placeholder={publicConfigInputPlaceholder(peer.workspaceWriterUrl, 'Enter peer writer URL')}
+                            aria-label={`${peer.name || 'Peer'} writer URL`}
+                          />
                         </label>
                         <label className="settings-peer-path">
                           <span>Workspace Path</span>
-                          <input value={peer.workspacePath} onChange={(event) => updatePeerInstance(index, { workspacePath: event.target.value })} />
+                          <input
+                            defaultValue=""
+                            onChange={(event) => updatePeerInstance(index, { workspacePath: event.target.value })}
+                            placeholder={publicConfigInputPlaceholder(peer.workspacePath, 'Enter peer workspace path')}
+                            aria-label={`${peer.name || 'Peer'} workspace path`}
+                          />
                         </label>
                         <ActionButton icon={Trash2} variant="secondary" onClick={() => removePeerInstance(index)}>
                           {t({ 'zh-CN': '删除', 'en-US': 'Delete' })}
@@ -298,7 +326,13 @@ export function SettingsPage({
               </label>
               <label>
                 <span>Runtime Profile</span>
-                <input value={config.runtimeProfile ?? ''} onChange={(event) => onChange({ runtimeProfile: event.target.value })} placeholder="sciforge-runtime-deepseek" />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ runtimeProfile: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.runtimeProfile, 'Enter runtime profile alias')}
+                  aria-describedby="settings-runtime-profile-status"
+                />
+                <small id="settings-runtime-profile-status">{publicConfigPresenceLabel(config.runtimeProfile, 'Runtime profile')}</small>
               </label>
               <label>
                 <span>Model Provider</span>
@@ -313,7 +347,13 @@ export function SettingsPage({
               </label>
               <label>
                 <span>Model</span>
-                <input value={config.modelName} onChange={(event) => onChange({ modelName: event.target.value })} placeholder="gpt-5.4 / local-model / ..." />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ modelName: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.modelName, 'Enter model alias')}
+                  aria-describedby="settings-model-status"
+                />
+                <small id="settings-model-status">{publicConfigPresenceLabel(config.modelName, 'Model')}</small>
               </label>
               <div className="wide settings-model-catalog">
                 <div className="settings-peer-section-head">
@@ -352,29 +392,25 @@ export function SettingsPage({
               </div>
               <label>
                 <span>Provider Base URL</span>
-                <input value={config.modelBaseUrl} onChange={(event) => onChange({ modelBaseUrl: event.target.value })} placeholder="https://.../v1" />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ modelBaseUrl: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.modelBaseUrl, 'Enter provider base URL')}
+                  aria-describedby="settings-provider-base-url-status"
+                />
+                <small id="settings-provider-base-url-status">{publicConfigPresenceLabel(config.modelBaseUrl, 'Provider Base URL')}</small>
               </label>
               <label>
                 <span>API Key</span>
                 <div className="settings-secret-input">
                   <input
-                    type={apiKeyVisible ? 'text' : 'password'}
+                    type="password"
                     autoComplete="off"
-                    value={apiKeyInputValue}
-                    readOnly={apiKeyConfigured && !apiKeyVisible}
+                    defaultValue=""
                     onChange={(event) => onChange({ apiKey: event.target.value })}
                     placeholder={secretInputPlaceholder(config.apiKey, t({ 'zh-CN': '存储在本地 config.json', 'en-US': 'stored in local config.json' }), locale)}
                     aria-describedby="settings-api-key-status"
                   />
-                  <button
-                    type="button"
-                    className="settings-secret-toggle"
-                    aria-label={apiKeyVisible ? t({ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' }) : t({ 'zh-CN': '显示 API key', 'en-US': 'Show API key' })}
-                    title={apiKeyVisible ? t({ 'zh-CN': '隐藏 API key', 'en-US': 'Hide API key' }) : t({ 'zh-CN': '显示 API key', 'en-US': 'Show API key' })}
-                    onClick={() => setApiKeyVisible((visible) => !visible)}
-                  >
-                    {apiKeyVisible ? <EyeOff size={14} aria-hidden /> : <Eye size={14} aria-hidden />}
-                  </button>
                 </div>
                 <small id="settings-api-key-status">{secretPresenceLabel(config.apiKey, 'API key', locale)}</small>
               </label>
@@ -392,7 +428,13 @@ export function SettingsPage({
             <div className="settings-grid">
               <label className="wide">
                 <span>Codex Runtime Connection URL</span>
-                <input value={config.agentServerBaseUrl} onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })} />
+                <input
+                  defaultValue=""
+                  onChange={(event) => onChange({ agentServerBaseUrl: event.target.value })}
+                  placeholder={publicConfigInputPlaceholder(config.agentServerBaseUrl, 'Enter Runtime connection URL')}
+                  aria-describedby="settings-runtime-url-status"
+                />
+                <small id="settings-runtime-url-status">{publicConfigPresenceLabel(config.agentServerBaseUrl, 'Runtime connection URL')}</small>
               </label>
               <div className="wide">
                 <RuntimeHealthPanel items={healthItems} />
@@ -483,9 +525,9 @@ export function SettingsPage({
             {' '}
             {t({ 'zh-CN': '下一次 Codex Runtime 请求会使用：', 'en-US': 'Next Codex Runtime request will use:' })}
             {' '}
-            <code>{config.runtimeProfile || 'sciforge-runtime-deepseek'}</code>
-            <strong>{config.modelProvider || 'native'}</strong>
-            {config.modelName.trim() ? <code>{config.modelName.trim()}</code> : <em>{t({ 'zh-CN': '用户模型未设置', 'en-US': 'user model not set' })}</em>}
+            <code>{config.runtimeProfile?.trim() ? t({ 'zh-CN': 'Runtime profile 已配置（已隐藏）', 'en-US': 'Runtime profile configured (masked)' }) : t({ 'zh-CN': 'Runtime profile 未配置', 'en-US': 'Runtime profile missing' })}</code>
+            <strong>{publicModelProviderLabel(config.modelProvider)}</strong>
+            {config.modelName.trim() ? <em>{t({ 'zh-CN': 'Model 已配置（已隐藏）', 'en-US': 'Model configured (masked)' })}</em> : <em>{t({ 'zh-CN': '用户模型未设置', 'en-US': 'user model not set' })}</em>}
           </span>
           <ActionButton icon={Save} variant="primary" onClick={onSave} disabled={saveState.status === 'saving' || peerValidationErrors.length > 0}>
             {saveState.status === 'saving' ? t({ 'zh-CN': '保存中', 'en-US': 'Saving' }) : t({ 'zh-CN': '保存', 'en-US': 'Save' })}
@@ -497,4 +539,15 @@ export function SettingsPage({
       </div>
     </div>
   );
+}
+
+function publicModelProviderLabel(value: string) {
+  const provider = sanitizePublicTextRequired(value || 'native', 'model provider');
+  if (provider === 'native') return 'native';
+  if (provider === 'openai-compatible') return 'openai-compatible';
+  if (provider === 'openrouter') return 'openrouter';
+  if (provider === 'qwen') return 'qwen';
+  if (provider === 'codex-chatgpt') return 'codex-chatgpt';
+  if (provider === 'gemini') return 'gemini';
+  return 'model provider configured (masked)';
 }

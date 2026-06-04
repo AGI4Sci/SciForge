@@ -6,7 +6,7 @@ import {
   objectReferenceForArtifactSummary,
 } from '../../../../../packages/support/object-references';
 import { isRecord } from './resultArtifactHelpers';
-import { rightPaneInlineLabel } from './previewSafety';
+import { rightPaneInlineLabel, rightPaneTextIsSensitive } from './previewSafety';
 import { artifactsForRun, auditExecutionUnitsForRun } from './executionUnitsForRun';
 import { terminalExecutionUnitFailed } from './terminalPaneModel';
 import {
@@ -65,18 +65,21 @@ export interface RightPaneReferencesTraceIndex {
 
 export function rightPaneObjectReferences(session: SciForgeSession, activeRun?: SciForgeRun): ObjectReference[] {
   const activeRunIds = activeRun ? new Set([activeRun.id]) : undefined;
+  const resolvedActiveRun = activeRun
+    ? session.runs.find((run) => run.id === activeRun.id) ?? activeRun
+    : undefined;
   const fromMessages = session.messages.flatMap((message) => message.objectReferences ?? [])
     .filter((reference) => !activeRunIds || !reference.runId || activeRunIds.has(reference.runId));
-  const runs = activeRun ? [activeRun] : session.runs;
+  const runs = resolvedActiveRun ? [resolvedActiveRun] : session.runs;
   const fromRuns = runs.flatMap((run) => run.objectReferences ?? []);
-  const fromArtifacts = (activeRun ? artifactsForRun(session, activeRun) : session.artifacts)
-    .map((artifact) => objectReferenceForArtifactSummary(artifact, activeRun?.id));
-  const fromExecutionUnits = auditExecutionUnitsForRun(session, activeRun).map((unit): ObjectReference => ({
+  const fromArtifacts = (resolvedActiveRun ? artifactsForRun(session, resolvedActiveRun) : session.artifacts)
+    .map((artifact) => objectReferenceForArtifactSummary(artifact, resolvedActiveRun?.id));
+  const fromExecutionUnits = auditExecutionUnitsForRun(session, resolvedActiveRun).map((unit): ObjectReference => ({
     id: `object-execution-unit-${unit.id}`,
     kind: 'execution-unit',
     title: unit.tool || unit.id,
     ref: `execution-unit:${unit.id}`,
-    runId: unit.runId ?? activeRun?.id,
+    runId: unit.runId ?? resolvedActiveRun?.id,
     executionUnitId: unit.id,
     status: terminalExecutionUnitFailed(unit) ? 'blocked' : 'available',
     summary: unit.outputRef || unit.stdoutRef || unit.stderrRef || unit.status,
@@ -111,15 +114,18 @@ export function buildRightPaneReferencesTraceIndex({
   const scopedRunIds = scopedRuns.length ? new Set(scopedRuns.map((run) => run.id)) : undefined;
 
   const addNode = (node: RightPaneReferenceTraceNode) => {
+    if (!rightPaneReferenceRefIsSafe(node.ref)) return;
     if (!node.ref || nodes.has(node.ref)) return;
-    nodes.set(node.ref, node);
+    nodes.set(node.ref, rightPanePublicTraceNode(node));
   };
   const addEdge = (edge: Omit<RightPaneReferenceTraceEdge, 'id'>) => {
+    if (!rightPaneReferenceRefIsSafe(edge.sourceRef) || !rightPaneReferenceRefIsSafe(edge.targetRef)) return;
     if (!edge.sourceRef || !edge.targetRef || edge.sourceRef === edge.targetRef) return;
     const id = `${edge.source}:${edge.relation}:${edge.sourceRef}->${edge.targetRef}`;
     if (!edges.has(id)) edges.set(id, { ...edge, id });
   };
   const addRefNode = (ref: string, fallbackKind: RightPaneReferenceTraceNodeKind, title?: string, summary?: string) => {
+    if (!rightPaneReferenceRefIsSafe(ref)) return;
     const kind = knownTraceKindForRef(ref) ?? fallbackKind;
     addNode({
       id: `${kind}-${safeTraceId(ref)}`,
@@ -144,7 +150,7 @@ export function buildRightPaneReferencesTraceIndex({
   for (const message of session.messages) {
     const messageRef = `message:${message.id}`;
     const messageReferences = (message.objectReferences ?? [])
-      .filter((reference) => !scopedRunIds || !reference.runId || scopedRunIds.has(reference.runId));
+      .filter((reference) => rightPaneObjectReferenceIsVisible(reference) && (!scopedRunIds || !reference.runId || scopedRunIds.has(reference.runId)));
     if (!messageReferences.length) continue;
     addNode({
       id: `message-${message.id}`,
@@ -170,6 +176,7 @@ export function buildRightPaneReferencesTraceIndex({
       status: run.status,
     });
     for (const reference of run.objectReferences ?? []) {
+      if (!rightPaneObjectReferenceIsVisible(reference)) continue;
       addRefNode(reference.ref, rightPaneReferenceKindIsKnown(reference) ? reference.kind : 'unsupported', reference.title, reference.summary);
       addEdge({ sourceRef: runRef, targetRef: reference.ref, relation: 'declares', source: 'run' });
     }
@@ -373,11 +380,92 @@ export function rightPaneCopyableReferenceText(ref: string) {
 function dedupeObjectReferences(references: readonly ObjectReference[]) {
   const byKey = new Map<string, ObjectReference>();
   for (const reference of references) {
-    if (!reference?.ref || !reference.kind) continue;
-    const key = `${reference.kind}:${reference.ref}`;
-    if (!byKey.has(key)) byKey.set(key, reference);
+    const visibleReference = rightPaneVisibleObjectReference(reference);
+    if (!visibleReference?.ref || !visibleReference.kind) continue;
+    const key = `${visibleReference.kind}:${visibleReference.ref}`;
+    if (!byKey.has(key)) byKey.set(key, visibleReference);
   }
   return Array.from(byKey.values()).slice(0, 60);
+}
+
+function rightPaneVisibleObjectReference(reference: ObjectReference): ObjectReference | undefined {
+  if (!reference?.kind) return undefined;
+  if (rightPaneObjectReferenceIsVisible(reference)) return rightPanePublicObjectReference(reference);
+  const fallbackRef = rightPaneUnsupportedReferenceFallbackRef(reference);
+  if (!fallbackRef) return undefined;
+  const { raw: _raw, provenance: _provenance, ...publicReference } = reference as ObjectReference & { raw?: unknown };
+  return rightPanePublicObjectReference({
+    ...publicReference,
+    ref: fallbackRef,
+    status: reference.status ?? 'blocked',
+    provenance: {
+      ...reference.provenance,
+      dataRef: fallbackRef,
+      path: undefined,
+      screenshotRef: undefined,
+    },
+  });
+}
+
+function rightPanePublicObjectReference(reference: ObjectReference): ObjectReference {
+  const { raw: _raw, ...publicReference } = reference as ObjectReference & { raw?: unknown };
+  const title = rightPanePublicOptionalText(publicReference.title);
+  const summary = rightPanePublicOptionalText(publicReference.summary);
+  return {
+    ...publicReference,
+    title: title ?? publicReference.ref,
+    summary,
+    provenance: rightPanePublicReferenceProvenance(publicReference.provenance),
+  };
+}
+
+function rightPanePublicReferenceProvenance(provenance: ObjectReference['provenance']): ObjectReference['provenance'] {
+  if (!provenance) return provenance;
+  return {
+    ...provenance,
+    producer: rightPanePublicOptionalText(provenance.producer),
+    version: rightPanePublicOptionalText(provenance.version),
+    hash: rightPanePublicOptionalText(provenance.hash),
+  };
+}
+
+function rightPanePublicTraceNode(node: RightPaneReferenceTraceNode): RightPaneReferenceTraceNode {
+  return {
+    ...node,
+    title: rightPanePublicOptionalText(node.title) ?? node.ref,
+    summary: rightPanePublicOptionalText(node.summary),
+  };
+}
+
+function rightPanePublicOptionalText(value: string | undefined) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return rightPaneInlineLabel(value, 180);
+}
+
+function rightPaneObjectReferenceIsVisible(reference: ObjectReference) {
+  return rightPaneReferenceRefIsSafe(reference.ref)
+    && rightPaneReferenceRefIsSafe(reference.provenance?.path)
+    && rightPaneReferenceRefIsSafe(reference.provenance?.dataRef)
+    && rightPaneReferenceRefIsSafe(reference.provenance?.screenshotRef);
+}
+
+function rightPaneUnsupportedReferenceFallbackRef(reference: ObjectReference) {
+  if (rightPaneReferenceKindIsKnown(reference)) return undefined;
+  const dataRef = typeof reference.provenance?.dataRef === 'string' ? reference.provenance.dataRef : undefined;
+  if (!dataRef || !rightPaneReferenceRefIsSafe(dataRef)) return undefined;
+  return dataRef;
+}
+
+function rightPaneReferenceRefIsSafe(value: string | undefined) {
+  const ref = value?.trim().replace(/\\/g, '/');
+  if (!ref) return true;
+  if (rightPaneTextIsSensitive(ref)) return false;
+  if (/^(?:\/|[A-Za-z]:\/|~\/|file:\/\/|file:(?:\/|[A-Za-z]:\/|~\/))/i.test(ref)) return false;
+  if (ref.includes('..')) return false;
+  if (/[\r\n\t<>|?*]/.test(ref)) return false;
+  if (/(?:^|[/:])\.sciforge\/(?:raw|logs?|audit|stdout|stderr)(?:\/|$)/i.test(ref)) return false;
+  if (/(?:^|[/:._-])(?:provider|debug|raw|stdout|stderr)(?:$|[/:._-])/i.test(ref)) return false;
+  return true;
 }
 
 function knownTraceKindForRef(ref: string): RightPaneReferenceTraceNodeKind | undefined {
@@ -385,6 +473,7 @@ function knownTraceKindForRef(ref: string): RightPaneReferenceTraceNodeKind | un
   if (/^file:/i.test(ref)) return 'file';
   if (/^folder:/i.test(ref) || /^workspace:/i.test(ref)) return 'folder';
   if (/^run:/i.test(ref)) return 'run';
+  if (/^(?:subagent|agent-result|agent-transcript|transcript):/i.test(ref)) return 'run';
   if (/^execution-unit:/i.test(ref)) return 'execution-unit';
   if (/^(?:url:)?https?:\/\//i.test(ref) || /^url:/i.test(ref)) return 'url';
   if (/^scenario-package:/i.test(ref)) return 'scenario-package';

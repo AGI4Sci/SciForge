@@ -54,7 +54,7 @@ import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
 import { composerAgentHostCatalogForSession } from './chat/composerAgentHostCatalog';
 import { composerDeclaredIntentsForSession } from './chat/composerDeclaredIntents';
-import type { ComposerModelSelectionIntent } from './chat/composerToolMenu';
+import type { ComposerModeSelectionIntent, ComposerModelSelectionIntent } from './chat/composerToolMenu';
 import type { SupportedLocale } from '../i18n';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import { createGuiProtocolController } from './guiProtocol';
@@ -296,6 +296,13 @@ export function ChatPanel({
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
   const composerAgentHostCatalog = useMemo(() => composerAgentHostCatalogForSession(session), [session]);
+  const selectedComposerMode = composerDeclaredIntentsForSession(session)?.mode;
+  const selectedComposerModeIntent = selectedComposerMode
+    ? {
+      id: selectedComposerMode.modeIntentId,
+      label: selectedComposerMode.publicLabel,
+    }
+    : undefined;
   const chatPanelActions = useMemo(() => buildChatPanelActions({
     locale,
     canFork: sessionActivityScoreForChatAction(session) > 0 && Boolean(onForkChat),
@@ -926,6 +933,34 @@ export function ChatPanel({
     }));
   }
 
+  function handleModeIntentSelect(intent: ComposerModeSelectionIntent) {
+    recordUIAction(createUpdateCapabilityPreferenceUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      preference: {
+        intent: 'composer-mode-selection',
+        source: 'composer-mode-chip',
+        modeIntentId: intent.id,
+        publicLabel: intent.label,
+      },
+    }));
+  }
+
+  function handleModeIntentClear() {
+    recordUIAction(createUpdateCapabilityPreferenceUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      preference: {
+        intent: 'composer-mode-selection',
+        source: 'composer-mode-chip',
+        modeIntentId: 'none',
+        publicLabel: 'None',
+      },
+    }));
+  }
+
   function recordUIAction(action: UIAction) {
     const nextSession = recordUIActionInSession(activeSessionRef.current, action);
     uiActionAuditLogRef.current = nextSession.uiActionAuditLog ?? [];
@@ -1374,6 +1409,7 @@ export function ChatPanel({
         }}
         toolProviderRoutes={config.toolProviderRoutes}
         agentHostCatalog={composerAgentHostCatalog}
+        selectedModeIntent={selectedComposerModeIntent}
         topAddon={(
           <TargetInstanceSelector
             peers={targetPeers}
@@ -1396,6 +1432,8 @@ export function ChatPanel({
         onSend={() => void handleSend()}
         onAbort={handleAbort}
         onModelIntentSelect={handleModelIntentSelect}
+        onModeIntentSelect={handleModeIntentSelect}
+        onClearModeIntent={handleModeIntentClear}
         onBeginResize={beginComposerResize}
       />
     </div>

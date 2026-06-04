@@ -12,6 +12,7 @@ import {
   TARGET_WORKTREE_PREPARING_EVENT_TYPE,
 } from '@sciforge-ui/runtime-contract';
 import {
+  buildAnnotationWindowActionHandoff,
   runPreflightContextCompaction,
   runPromptOrchestrator,
   shouldBlockOnPreflightContextCompaction,
@@ -169,6 +170,160 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal('turnMode' in runtimeRequests[0], false);
     assert.equal('conversationEnvelope' in runtimeRequests[0], false);
     assert.equal('conversationLaneId' in runtimeRequests[0], false);
+  });
+
+  it('promotes only sanitized bound annotation quick-action refs into the WindowActionSession handoff projection', async () => {
+    const runtimeRequests: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url === `http://127.0.0.1:5174${CODEX_RUNTIME_STREAM_PATH}`) {
+        runtimeRequests.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return streamResponse([{
+          result: {
+            message: 'Annotation quick action received window action handoff.',
+            executionUnits: [{ id: 'unit-window-action-handoff', status: 'done' }],
+            artifacts: [],
+          },
+        }]);
+      }
+      return jsonResponse({ ok: false, error: `unexpected ${url}` }, 404);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: 'Apply a small copy tweak to the selected desktop window',
+      references: [
+        desktopAnnotationRef('manual', {
+          annotationRef: 'desktop-annotation:workspace/a/session/b/annotation/manual',
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/manual',
+          sourceKind: 'window-capture',
+          windowBinding: {
+            status: 'manual-bound',
+            confidence: 1,
+            reason: 'User picked the app window.',
+            windowRef: 'desktop-window:app:paper-reader:window-42',
+            appName: 'Paper Reader',
+            bundleId: 'com.example.paper-reader',
+            pid: 4242,
+            title: 'Attention Is All You Need.pdf',
+            windowBounds: { x: 40, y: 80, width: 1024, height: 768 },
+            windowLocalBounds: { x: 120, y: 160, width: 320, height: 240 },
+            windowActionSessionRef: 'window-action-session:should-not-project',
+            actionRef: 'window-action-ref:should-not-project',
+            guiExecutable: true,
+          },
+          privateRoute: 'https://provider.example.test/private',
+        }),
+        desktopAnnotationRef('auto-high', {
+          annotationRef: 'desktop-annotation:workspace/a/session/b/annotation/auto-high',
+          screenshotRef: 'desktop-annotation:workspace/a/session/b/screenshot/auto-high',
+          sourceKind: 'screen-region',
+          windowBinding: {
+            status: 'auto-bound',
+            confidence: 0.94,
+            reason: 'Selected region overlapped the active window.',
+            windowRef: 'desktop-window:app:paper-reader:window-42',
+            appName: 'Paper Reader',
+            windowBounds: { x: 40, y: 80, width: 1024, height: 768 },
+            windowLocalBounds: { x: 140, y: 180, width: 240, height: 120 },
+          },
+        }),
+        desktopAnnotationRef('auto-low', {
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/auto-low',
+          sourceKind: 'screen-region',
+          windowBinding: {
+            status: 'auto-bound',
+            confidence: 0.61,
+            reason: 'Below action threshold.',
+            windowRef: 'desktop-window:app:paper-reader:window-low',
+          },
+        }),
+        desktopAnnotationRef('blocked', {
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/blocked',
+          sourceKind: 'window-capture',
+          windowBinding: {
+            status: 'blocked',
+            confidence: 1,
+            reason: 'Capture permission blocked.',
+            windowRef: 'desktop-window:should-not-promote',
+          },
+        }),
+        desktopAnnotationRef('image-only', {
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/image-only',
+          sourceKind: 'annotation-crop',
+        }),
+      ],
+      turnMode: 'annotation-quick-action',
+      conversationEnvelope: {
+        schemaVersion: 'sciforge.annotation-quick-action-envelope.v1',
+        kind: 'annotation-quick-action',
+        draftId: 'draft-window-action',
+      },
+      conversationLaneId: 'annotation:session-test:draft-window-action:quick-action',
+      runtimeResumePolicy: 'none',
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(runtimeRequests.length, 1);
+    const audit = runtimeRequests[0]?.auditMetadata as { guiLocalProjection?: { windowActionHandoff?: Record<string, unknown> } };
+    const handoff = audit.guiLocalProjection?.windowActionHandoff as {
+      schemaVersion?: string;
+      intent?: string;
+      mode?: string;
+      actionFlowRef?: string;
+      promotedRefs?: Array<Record<string, unknown>>;
+    } | undefined;
+    assert.equal(handoff?.schemaVersion, 'sciforge.window-action-handoff.v1');
+    assert.equal(handoff?.intent, 'annotation-quick-action');
+    assert.equal(handoff?.mode, 'enter-or-reuse-window-action-session');
+    assert.match(String(handoff?.actionFlowRef ?? ''), /^window-action-flow:annotation:session-test:draft-window-action:quick-action/);
+    assert.deepEqual(handoff?.promotedRefs?.map((ref) => ref.referenceId), ['ref-desktop-manual', 'ref-desktop-auto-high']);
+    assert.deepEqual(handoff?.promotedRefs?.map((ref) => (ref.windowBinding as Record<string, unknown>).status), ['manual-bound', 'auto-bound']);
+    assert.equal((handoff?.promotedRefs?.[1]?.windowBinding as Record<string, unknown>).confidence, 0.94);
+    assert.doesNotMatch(JSON.stringify(handoff), /auto-low|blocked|image-only|should-not-promote|window-low/);
+    assert.doesNotMatch(JSON.stringify(handoff), /window-action-session:should-not-project|window-action-ref:should-not-project|guiExecutable|privateRoute|provider\.example/);
+  });
+
+  it('builds bounded WindowActionSession handoff metadata from annotation quick-action refs', () => {
+    const handoff = buildAnnotationWindowActionHandoff({
+      references: [
+        desktopAnnotationRef('manual', {
+          annotationRef: 'desktop-annotation:workspace/a/session/b/annotation/manual',
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/manual',
+          sourceKind: 'window-capture',
+          windowBinding: {
+            status: 'manual-bound',
+            confidence: 1,
+            reason: 'User picked the app window.',
+            windowRef: 'desktop-window:app:paper-reader:window-42',
+            appName: 'Paper Reader',
+            bundleId: 'com.example.paper-reader',
+            pid: 4242,
+            windowBounds: { x: 40, y: 80, width: 1024, height: 768 },
+            windowLocalBounds: { x: 120, y: 160, width: 320, height: 240 },
+            guiExecutable: true,
+          },
+          privateRoute: 'https://provider.example.test/private',
+        }),
+        desktopAnnotationRef('auto-low', {
+          imageRef: 'desktop-annotation:workspace/a/session/b/screenshot/auto-low',
+          sourceKind: 'screen-region',
+          windowBinding: {
+            status: 'auto-bound',
+            confidence: 0.61,
+            windowRef: 'desktop-window:app:paper-reader:window-low',
+          },
+        }),
+      ],
+      turnMode: 'annotation-quick-action',
+      conversationLaneId: 'annotation:session-test:draft-window-action:quick-action',
+      currentTurnId: 'msg-current',
+    });
+
+    assert.equal(handoff?.schemaVersion, 'sciforge.window-action-handoff.v1');
+    assert.equal(handoff?.promotedRefs.length, 1);
+    assert.equal(handoff?.promotedRefs[0]?.referenceId, 'ref-desktop-manual');
+    assert.equal(handoff?.promotedRefs[0]?.sourceKind, 'window-capture');
+    assert.doesNotMatch(JSON.stringify(handoff), /auto-low|window-low|guiExecutable|privateRoute/);
   });
 
   it('does not dispatch AgentServer or repair current instance when target issue bundle lookup fails', async () => {
@@ -482,7 +637,8 @@ describe('runPromptOrchestrator target instance guard', () => {
 
     assert.equal(result.status, 'completed');
     assert.equal(requestBodies.length, 1);
-    assert.equal(requestBodies[0].commandText, prompt);
+    assert.match(String(requestBodies[0].commandText), /^Same-chat continuity context for relative references\./);
+    assert.match(String(requestBodies[0].commandText), new RegExp(`Current request:\\n\\n${prompt}$`));
     assert.equal('prompt' in requestBodies[0], false);
     assert.equal('uiState' in requestBodies[0], false);
     assert.equal('failureRecoveryPolicy' in requestBodies[0], false);
@@ -700,6 +856,19 @@ function event(partial: Partial<AgentStreamEvent>): AgentStreamEvent {
     label: partial.label ?? partial.type ?? 'event',
     createdAt: partial.createdAt ?? '2026-05-07T00:00:00.000Z',
     ...partial,
+  };
+}
+
+function desktopAnnotationRef(id: string, payload: Record<string, unknown>) {
+  return {
+    id: `ref-desktop-${id}`,
+    kind: 'ui' as const,
+    title: `Desktop ${id}`,
+    ref: `desktop-annotation:annotation/${id}`,
+    payload: {
+      source: 'desktop-global-annotation',
+      ...payload,
+    },
   };
 }
 

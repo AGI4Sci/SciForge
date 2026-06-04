@@ -36,8 +36,8 @@ describe('runtime health model status', () => {
     }));
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
-    assert.match(health.detail, /sciforge-model/);
-    assert.match(health.detail, /models\.example\.test/);
+    assert.match(health.detail, /Model provider configured|Assistant connection configured/i);
+    assert.doesNotMatch(health.detail, /sciforge-model|models\.example\.test|https?:\/\//);
   });
 
   it('keeps OpenAI-compatible providers not-configured until API key is present', () => {
@@ -107,7 +107,8 @@ describe('runtime health model status', () => {
     assert.equal(health.id, 'codex-runtime');
     assert.equal(health.label, 'Codex Runtime');
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
-    assert.match(health.detail, /Runtime Profile sciforge-runtime-deepseek/);
+    assert.match(health.detail, /Runtime profile configured/);
+    assert.doesNotMatch(health.detail, /sciforge-runtime-deepseek/);
   });
 
   it('diagnoses stale Workspace Writer port drift when the default writer is reachable', () => {
@@ -116,8 +117,8 @@ describe('runtime health model status', () => {
     }), false, true);
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.OFFLINE);
-    assert.equal(health.detail, 'http://127.0.0.1:21431');
-    assert.match(String(health.recoverAction), /默认 writer http:\/\/127\.0\.0\.1:5174 在线/);
+    assert.equal(health.detail, 'Workspace Writer configured (masked)');
+    assert.doesNotMatch(String(health.recoverAction), /http:\/\/127\.0\.0\.1:5174|http:\/\/127\.0\.0\.1:21431/);
     assert.match(String(health.recoverAction), /Settings/);
   });
 
@@ -138,7 +139,7 @@ describe('runtime health model status', () => {
     });
 
     assert.equal(health.status, RUNTIME_HEALTH_STATUS.OFFLINE);
-    assert.equal(health.detail, defaultSciForgeConfig.workspaceWriterBaseUrl);
+    assert.equal(health.detail, 'Workspace Writer configured (masked)');
     assert.match(String(health.recoverAction), /runtime-module-dispatcher/);
     assert.match(String(health.recoverAction), /workspace:server/);
   });

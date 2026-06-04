@@ -1803,9 +1803,14 @@ export function SciForgeApp() {
     })
     : !workspaceHydrated
       ? t({
-        'zh-CN': '正在恢复工作区状态...',
-        'en-US': 'Restoring workspace state...',
+        'zh-CN': '正在恢复 .sciforge/workspace-state.json...',
+        'en-US': 'Restoring .sciforge/workspace-state.json...',
       })
+      : workspaceLoadingVisible
+        ? t({
+          'zh-CN': '正在完成 workspace 状态刷新；反馈计数、筛选和操作范围已经恢复，将在片刻后切换为 loaded。',
+          'en-US': 'Finishing workspace state refresh; feedback counts, filters, and action scopes are restored and will switch to loaded shortly.',
+        })
       : workspaceStatus || t({
         'zh-CN': '工作区已就绪',
         'en-US': 'Workspace ready',

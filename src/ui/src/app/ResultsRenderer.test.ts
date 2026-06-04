@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { backendRepairStates, coerceReportPayload, contractValidationFailures, renderRegisteredWorkbenchSlot, requestOpenDebugAuditThroughUserActionApi, requestRecoverCommandTextAction, ResultsRenderer, runAuditRefs, runRecoverActions, shouldOpenRunAuditDetails } from './ResultsRenderer';
-import { addRightPaneTabLifecycleState, closeRightPaneTabLifecycleState } from './results/resultPaneLifecycle';
+import { addRightPaneTabLifecycleState, closeRightPaneTabLifecycleState, rightPaneStateStorageKey } from './results/resultPaneLifecycle';
 import type { WorkspaceFileEditorState } from './results/filesPaneModel';
 import { ArtifactInspectorDrawer } from './results-renderer-artifact-inspector';
 import { MarkdownBlock } from './results/reportContent';
@@ -949,7 +949,7 @@ test('ResultsRenderer Browser pane ignores legacy desktop webview ownership for 
 test('ResultsRenderer focused refs reopen their matching pane after all right-pane tabs were closed', () => {
   const previousWindow = globalThis.window;
   const storage = new MemoryStorage();
-  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+  storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
     tabs: [],
     activeTabId: '',
     browserTabAddresses: {},
@@ -985,7 +985,7 @@ test('ResultsRenderer focused refs reopen their matching pane after all right-pa
 test('ResultsRenderer restores right pane tabs and Browser address from localStorage', () => {
   const previousWindow = globalThis.window;
   const storage = new MemoryStorage();
-  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+  storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
     tabs: [
       { id: 'base:primary', kind: 'primary', label: 'Results', closable: true },
       { id: 'base:browser', kind: 'browser', label: 'Browser', closable: true },
@@ -1029,7 +1029,7 @@ test('ResultsRenderer restores right pane tabs and Browser address from localSto
 test('ResultsRenderer restores an explicitly empty right pane without recreating default tabs', () => {
   const previousWindow = globalThis.window;
   const storage = new MemoryStorage();
-  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+  storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
     tabs: [],
     activeTabId: '',
     browserTabAddresses: {
@@ -1071,7 +1071,7 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
   });
 
   try {
-    storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
       tabs: persistedTabs,
       activeTabId: 'custom:browser:second:2',
       browserTabAddresses: {
@@ -1087,7 +1087,7 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
     assert.doesNotMatch(secondHtml, /\/browser open-external &quot;https:\/\/example\.org\/second&quot; --approval required/);
     assert.doesNotMatch(secondHtml, /value="localhost:4173\/first"|src="http:\/\/localhost:4173\/first"/);
 
-    storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+    storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
       tabs: persistedTabs,
       activeTabId: 'custom:browser:first:1',
       browserTabAddresses: {
@@ -1115,7 +1115,7 @@ test('ResultsRenderer keeps Browser URLs independent per restored tab', () => {
 test('ResultsRenderer restores persisted New/Close state and Browser URL without closed pages', () => {
   const previousWindow = globalThis.window;
   const storage = new MemoryStorage();
-  storage.setItem('sciforge.right-pane-state.v1./tmp/sciforge', JSON.stringify({
+  storage.setItem(rightPaneStateStorageKey('/tmp/sciforge'), JSON.stringify({
     tabs: [
       { id: 'custom:browser:persisted:2', kind: 'browser', label: 'Browser 2', closable: true },
     ],

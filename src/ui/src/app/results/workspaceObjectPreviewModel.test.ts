@@ -69,6 +69,8 @@ test('workspace object preview model projects subagent refs without unsafe prove
   assert.ok(preview);
   assert.equal(preview.resultRef, 'artifact:subagent-result-new');
   assert.equal(preview.transcriptRef, 'artifact:subagent-transcript-new');
+  assert.equal(preview.agentType, 'review');
+  assert.equal(preview.durationMs, 1234);
   assert.equal(preview.createdAt, '2026-06-01T00:00:02.000Z');
   assert.deepEqual(subagentPreviewSafeRefs(preview), [
     'artifact:subagent-result-new',
@@ -138,6 +140,8 @@ function subagentRun(input: {
   transcriptRef?: string;
   resultSummary: string;
   refs?: string[];
+  agentType?: string;
+  durationMs?: number;
 }): SciForgeRun {
   return {
     id: `run-${input.createdAt}`,
@@ -157,6 +161,8 @@ function subagentRun(input: {
             status: 'completed',
             agentId: 'worker-hidden',
             parentAgentId: 'parent-hidden',
+            agentType: input.agentType ?? 'review',
+            durationMs: input.durationMs ?? 1234,
             ref: input.ref,
             transcriptRef: input.transcriptRef,
             resultSummary: input.resultSummary,

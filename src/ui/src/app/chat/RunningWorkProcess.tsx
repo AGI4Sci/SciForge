@@ -23,6 +23,7 @@ import { cx } from '../uiPrimitives';
 import {
   buildCursorAgentProcessModel,
   type CursorAgentAction,
+  type CursorChildAgentCard,
   type CursorAgentProcessGroup,
 } from './cursorAgentProcess';
 import { objectReferenceForCursorAction, objectReferenceForCursorRef } from './cursorProcessObjectReferences';
@@ -150,7 +151,7 @@ function CursorAgentProcessGroupView({
         <span className="native-event-title">{group.title}</span>
         {usage ? <span className="native-event-usage">{usage}</span> : null}
       </summary>
-      <div className="native-event-expanded cursor-agent-actions">
+      <div className={cx('native-event-expanded cursor-agent-actions', group.actions.some((action) => action.childAgentCard) && 'has-child-agent-cards')}>
         {group.actions.map((action) => (
           <CursorAgentActionRow key={action.id} action={action} mode={mode} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} />
         ))}
@@ -177,6 +178,34 @@ function CursorAgentActionRow({
   onGuiCommand?: (commandText: string) => void;
   locale?: SupportedLocale;
 }) {
+  const focusReference = objectReferenceForCursorAction(action);
+  const actionAriaLabel = cursorActionAriaLabel(action, locale);
+  const className = cx(
+    'native-event-row cursor-agent-action',
+    `cursor-agent-action-${action.kind}`,
+    `status-${action.status}`,
+    mode === 'live' && action.status === 'running' && 'active',
+    action.childAgentCard && 'has-child-agent-card',
+  );
+  if (action.kind === 'subagent' && action.childAgentCard) {
+    return (
+      <div
+        className={className}
+        data-action-kind={action.kind}
+        data-action-status={action.status}
+        role="group"
+        aria-label={actionAriaLabel}
+      >
+        <CursorChildAgentCardView
+          action={action}
+          card={action.childAgentCard}
+          focusReference={focusReference}
+          onObjectFocus={onObjectFocus}
+          locale={locale}
+        />
+      </div>
+    );
+  }
   const hasTranscript = action.kind === 'subagent' && Boolean(action.transcriptRef);
   const resultRefs = refsForResultDetail(action);
   const visibleRefs = refsForActionDetail(action);
@@ -190,13 +219,11 @@ function CursorAgentActionRow({
     || hasTranscript
     || hasResult,
   );
-  const focusReference = objectReferenceForCursorAction(action);
-  const className = cx('native-event-row cursor-agent-action', `cursor-agent-action-${action.kind}`, `status-${action.status}`, mode === 'live' && action.status === 'running' && 'active', !hasDetail && 'is-leaf');
-  const actionAriaLabel = cursorActionAriaLabel(action, locale);
+  const rowClassName = cx(className, !hasDetail && 'is-leaf');
   if (!hasDetail) {
     return (
       <div
-        className={className}
+        className={rowClassName}
         data-action-kind={action.kind}
         data-action-status={action.status}
         role="group"
@@ -208,7 +235,7 @@ function CursorAgentActionRow({
   }
   return (
     <details
-      className={className}
+      className={rowClassName}
       open={action.initiallyExpanded}
       data-action-kind={action.kind}
       data-action-status={action.status}
@@ -219,6 +246,64 @@ function CursorAgentActionRow({
         <CursorAgentActionDetail action={action} resultRefs={resultRefs} visibleRefs={visibleRefs} onObjectFocus={onObjectFocus} onGuiCommand={onGuiCommand} locale={locale} />
       </div>
     </details>
+  );
+}
+
+function CursorChildAgentCardView({
+  action,
+  card,
+  focusReference,
+  onObjectFocus,
+  locale,
+}: {
+  action: CursorAgentAction;
+  card: CursorChildAgentCard;
+  focusReference?: ObjectReference;
+  onObjectFocus?: (reference: ObjectReference) => void;
+  locale?: SupportedLocale;
+}) {
+  const statusLabel = childAgentStatusLabel(card.status, locale);
+  const statusText = card.durationLabel ? `${statusLabel} · ${card.durationLabel}` : statusLabel;
+  return (
+    <article
+      className={cx('child-agent-card', `status-${card.status}`)}
+      data-child-agent-card="true"
+      data-child-agent-status={card.status}
+      aria-label={childAgentCardAriaLabel(card, locale)}
+    >
+      <div className="child-agent-card-head">
+        <CursorActionIcon action={action} />
+        {focusReference && onObjectFocus ? (
+          <button
+            type="button"
+            className="child-agent-card-title cursor-agent-action-focus"
+            data-sciforge-run-id={publicRunIdForDom(focusReference)}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onObjectFocus(focusReference);
+            }}
+          >
+            {card.title}
+          </button>
+        ) : (
+          <span className="child-agent-card-title">{card.title}</span>
+        )}
+        <span className="child-agent-card-status">{statusText}</span>
+      </div>
+      {(card.publicAgentLane || card.publicModelLane) ? (
+        <div className="child-agent-card-lanes">
+          {card.publicAgentLane ? <span data-child-agent-lane="agent">{card.publicAgentLane}</span> : null}
+          {card.publicModelLane ? <span data-child-agent-lane="model">{card.publicModelLane}</span> : null}
+        </div>
+      ) : null}
+      {card.summary ? <div className="child-agent-card-summary">{card.summary}</div> : null}
+      {card.refs.length ? (
+        <div className="child-agent-card-refs">
+          <CursorAgentRefList refs={card.refs} label={chatText(locale, { 'zh-CN': 'ref', 'en-US': 'ref' })} onObjectFocus={onObjectFocus} locale={locale} />
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -545,6 +630,29 @@ function cursorActionStatusLabel(status: CursorAgentAction['status'], locale?: S
   if (status === 'failed') return chatText(locale, { 'zh-CN': '失败', 'en-US': 'failed' });
   if (status === 'cancelled') return chatText(locale, { 'zh-CN': '已取消', 'en-US': 'cancelled' });
   return '';
+}
+
+function childAgentStatusLabel(status: CursorChildAgentCard['status'], locale?: SupportedLocale) {
+  if (status === 'background-running') return chatText(locale, { 'zh-CN': '后台运行', 'en-US': 'background-running' });
+  if (status === 'resumed') return chatText(locale, { 'zh-CN': '已恢复', 'en-US': 'resumed' });
+  return cursorActionStatusLabel(status, locale) || chatText(locale, { 'zh-CN': '未知', 'en-US': 'unknown' });
+}
+
+function childAgentCardAriaLabel(card: CursorChildAgentCard, locale?: SupportedLocale) {
+  const status = childAgentStatusLabel(card.status, locale);
+  const lanes = [card.publicAgentLane, card.publicModelLane].filter(Boolean).join(', ');
+  const duration = card.durationLabel
+    ? chatText(locale, { 'zh-CN': `；耗时：${card.durationLabel}`, 'en-US': `; duration: ${card.durationLabel}` })
+    : '';
+  return lanes
+    ? chatText(locale, {
+      'zh-CN': `子代理：${card.title}；通道：${lanes}；状态：${status}${duration}`,
+      'en-US': `Child agent: ${card.title}; lanes: ${lanes}; status: ${status}${duration}`,
+    })
+    : chatText(locale, {
+      'zh-CN': `子代理：${card.title}；状态：${status}${duration}`,
+      'en-US': `Child agent: ${card.title}; status: ${status}${duration}`,
+    });
 }
 
 function cursorActionAriaLabel(action: CursorAgentAction, locale?: SupportedLocale) {

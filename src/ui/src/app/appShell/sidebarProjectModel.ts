@@ -60,7 +60,7 @@ export function sidebarProjectFromConfig(
   fallbackLabel?: string,
 ): SidebarProjectDescriptor {
   const normalizedPath = sidebarProjectPath(path);
-  const label = pathBasename(normalizedPath) || fallbackLabel || (current ? 'Home' : 'Untitled project');
+  const label = (!current && fallbackLabel) || pathBasename(normalizedPath) || fallbackLabel || (current ? 'Home' : 'Untitled project');
   return {
     id: normalizedPath ? sidebarProjectIdForPath(normalizedPath) : current ? SIDEBAR_HOME_PROJECT_ID : sidebarProjectIdForPath(fallbackLabel || ''),
     label,

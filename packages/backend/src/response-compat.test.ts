@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { test } from 'node:test';
 import type { AddressInfo } from 'node:net';
 import {
+  chatToolNameAliasesFromResponsesTools,
   chatCompletionToResponse,
   responsesToChatCompletions,
 } from './response-compat';
@@ -37,6 +38,65 @@ test('converts Responses input into Chat Completions messages and tools', () => 
   ]);
   assert.deepEqual(request.messages[2], { role: 'tool', tool_call_id: 'call_1', content: 'done' });
   assert.equal(Array.isArray(request.tools), true);
+});
+
+test('preserves app-server namespaced dynamic tools when lowering Responses tools', () => {
+  const request = responsesToChatCompletions({
+    model: 'bailian/deepseek-v4-flash',
+    input: 'delegate',
+    tools: [{
+      namespace: 'multi_agent_v1',
+      name: 'spawn_agent',
+      description: 'Spawn a delegated worker.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          message: { type: 'string' },
+        },
+      },
+      deferLoading: false,
+    }],
+  });
+
+  assert.deepEqual(
+    (request.tools as Array<{ function?: { name?: string; parameters?: unknown } }>).map((tool) => tool.function?.name),
+    ['multi_agent_v1_spawn_agent'],
+  );
+  const [tool] = request.tools as Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+  assert.ok(tool.function?.parameters?.properties?.message);
+  assert.deepEqual(chatToolNameAliasesFromResponsesTools([{
+    namespace: 'multi_agent_v1',
+    name: 'spawn_agent',
+    inputSchema: { type: 'object', properties: {} },
+  }]), {
+    multi_agent_v1_spawn_agent: 'multi_agent_v1.spawn_agent',
+  });
+});
+
+test('maps provider-safe dynamic tool aliases back to Responses function calls', () => {
+  const response = chatCompletionToResponse({
+    id: 'chatcmpl_tool_alias',
+    model: 'deepseek-v4-flash',
+    choices: [{
+      message: {
+        role: 'assistant',
+        tool_calls: [{
+          id: 'call_subagent',
+          type: 'function',
+          function: {
+            name: 'multi_agent_v1_spawn_agent',
+            arguments: '{"message":"inspect"}',
+          },
+        }],
+      },
+    }],
+  }, { model: 'deepseek-v4-flash' }, {
+    multi_agent_v1_spawn_agent: 'multi_agent_v1.spawn_agent',
+  });
+
+  const [item] = response.output as Array<{ type?: string; name?: string }>;
+  assert.equal(item.type, 'function_call');
+  assert.equal(item.name, 'multi_agent_v1.spawn_agent');
 });
 
 test('converts Chat Completions text into a Responses object', () => {
@@ -85,6 +145,53 @@ test('serves streaming Chat Completions as Responses SSE', async () => {
     assert.match(text, /response\.output_text\.delta/);
     assert.match(text, /response\.completed/);
     assert.match(text, /SCIFORGE/);
+  } finally {
+    await proxy.close();
+    await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));
+  }
+});
+
+test('streams provider-safe dynamic tool aliases back as Responses function calls', async () => {
+  let upstreamToolNames: string[] = [];
+  const upstream = createServer(async (request, response) => {
+    assert.equal(request.url, '/v1/chat/completions');
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as { tools?: Array<{ function?: { name?: string } }> };
+    upstreamToolNames = (body.tools ?? []).map((tool) => tool.function?.name ?? '');
+    response.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    response.write('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_subagent","type":"function","function":{"name":"multi_agent_v1_spawn_agent","arguments":"{\\\\\\"message\\\\\\":\\\\\\"inspect\\\\\\"}"}}]}}]}\n\n');
+    response.write('data: [DONE]\n\n');
+    response.end();
+  });
+  await new Promise<void>((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const upstreamPort = (upstream.address() as AddressInfo).port;
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: `http://127.0.0.1:${upstreamPort}/v1`,
+    port: 0,
+  });
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer test' },
+      body: JSON.stringify({
+        model: 'bailian/deepseek-v4-flash',
+        input: 'Delegate.',
+        stream: true,
+        tools: [{
+          namespace: 'multi_agent_v1',
+          name: 'spawn_agent',
+          description: 'Spawn delegated worker.',
+          inputSchema: { type: 'object', properties: { message: { type: 'string' } } },
+        }],
+      }),
+    });
+    const text = await response.text();
+    assert.equal(response.status, 200);
+    assert.deepEqual(upstreamToolNames, ['multi_agent_v1_spawn_agent']);
+    assert.match(text, /"name":"multi_agent_v1\.spawn_agent"/);
+    assert.doesNotMatch(text, /"name":"multi_agent_v1_spawn_agent"/);
   } finally {
     await proxy.close();
     await new Promise<void>((resolve, reject) => upstream.close((error) => (error ? reject(error) : resolve())));

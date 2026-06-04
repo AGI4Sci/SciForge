@@ -222,6 +222,94 @@ test('references pane model groups supported refs before typed unsupported objec
   assert.equal(rightPaneReferenceKindIsKnown(references[1]), true);
 });
 
+test('references pane model keeps unsupported objects with safe fallback refs', () => {
+  const activeRun = completedRun('run-unsupported-safe-fallback');
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{
+      ...activeRun,
+      objectReferences: [{
+        id: 'opaque',
+        kind: 'opaque-model-output' as ObjectReference['kind'],
+        title: 'Opaque object',
+        ref: 'mystery:sk-secret-do-not-show',
+        provenance: { dataRef: 'trace:opaque-safe-ref', path: '/Users/alice/private/raw.json' },
+        raw: { token: 'sk-secret-do-not-show' },
+      } as unknown as ObjectReference],
+    }],
+  };
+
+  const references = rightPaneObjectReferences(session, activeRun);
+
+  assert.deepEqual(references.map((reference) => reference.ref), ['trace:opaque-safe-ref']);
+  assert.equal(rightPaneReferenceKindIsKnown(references[0]!), false);
+  assert.doesNotMatch(JSON.stringify(references), /sk-secret|\/Users|raw\.json/i);
+});
+
+test('references pane model fails closed for unsafe visible refs and trace nodes', () => {
+  const activeRun = completedRun('run-unsafe-refs');
+  const safeRefs: ObjectReference[] = [
+    { id: 'subagent', kind: 'run', title: 'Worker', ref: 'subagent:worker-safe', preferredView: 'subagent-result' },
+    { id: 'result', kind: 'artifact', title: 'Worker result', ref: 'artifact:subagent-result-worker-safe', preferredView: 'subagent-result' },
+    { id: 'transcript', kind: 'artifact', title: 'Worker transcript', ref: 'artifact:subagent-transcript-worker-safe', preferredView: 'subagent-transcript' },
+  ];
+  const unsafeRefs: ObjectReference[] = [
+    { id: 'abs', kind: 'file', title: 'Absolute', ref: 'file:/Users/alice/private/provider.txt' },
+    { id: 'raw', kind: 'file', title: 'Raw', ref: 'file:.sciforge/raw/provider.json' },
+    { id: 'provider', kind: 'artifact', title: 'Provider', ref: 'artifact:provider/debug-payload' },
+  ];
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{ ...activeRun, objectReferences: [...safeRefs, ...unsafeRefs] }],
+    messages: [{
+      id: 'message-unsafe-refs',
+      role: 'scenario',
+      content: 'unsafe refs should not render',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      objectReferences: unsafeRefs,
+    }],
+  };
+
+  const activeRunWithRefs = session.runs[0];
+  const references = rightPaneObjectReferences(session, activeRunWithRefs);
+  const renderedRefs = references.map((reference) => reference.ref);
+  const index = buildRightPaneReferencesTraceIndex({ session, activeRun: activeRunWithRefs, references });
+  const traceText = JSON.stringify(index);
+
+  assert.deepEqual(renderedRefs, safeRefs.map((reference) => reference.ref));
+  assert.doesNotMatch(traceText, /\/Users|\.sciforge\/raw|provider\/debug/i);
+});
+
+test('references pane model sanitizes public reference titles and summaries', () => {
+  const activeRun = completedRun('run-sensitive-reference-text');
+  const sensitiveReference: ObjectReference = {
+    id: 'safe-ref-sensitive-label',
+    kind: 'artifact',
+    title: 'Provider token sk-1234567890 from /Users/alice/private/config.json',
+    ref: 'artifact:public-result',
+    summary: 'debug response used Authorization: Bearer secret-token-value',
+  };
+  const session: SciForgeSession = {
+    ...emptySession(),
+    runs: [{ ...activeRun, objectReferences: [sensitiveReference] }],
+    messages: [{
+      id: 'message-sensitive-reference-text',
+      role: 'scenario',
+      content: 'safe ref with unsafe label',
+      createdAt: '2026-06-01T00:00:00.000Z',
+      objectReferences: [sensitiveReference],
+    }],
+  };
+
+  const references = rightPaneObjectReferences(session, session.runs[0]);
+  const index = buildRightPaneReferencesTraceIndex({ session, activeRun: session.runs[0], references });
+  const publicText = JSON.stringify({ references, index });
+
+  assert.match(publicText, /artifact:public-result/);
+  assert.doesNotMatch(publicText, /sk-1234567890|\/Users\/alice|Bearer secret-token-value/i);
+  assert.match(publicText, /\[redacted-secret\]/);
+});
+
 test('references pane provenance rows are refs-first, bounded, and sanitized', () => {
   const reference: ObjectReference = {
     id: 'secret-ref',

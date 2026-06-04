@@ -35,6 +35,43 @@ SciForge 当前主线是 **Cursor-like Multi-agent / Sub-agent Workbench**。
   `packages/presentation/components/image-evidence-viewer/render.tsx` 与
   `src/desktop/annotation-window-capture-provider.ts` 需要先恢复 typecheck 后再做桌面 live parity。
 
+## 本轮实现证据
+
+- 2026-06-04 Runtime：`sciforge_subagents` 已注入 Codex app-server production path；
+  `multi_agent_v1.spawn_agent` 默认通过 Agent Host / Runtime Codex adapter 执行 child turn，
+  unit fixture 必须显式使用 read-only runner；`run_in_background` 先返回 running state ref，
+  后台完成后更新 runtime-owned store；显式 resume 必须命中 runtime store 中的 child agent/ref。
+  child turn 显式继承 parent `approvalPolicy` 和 sandbox boundary；默认 child id/result ref/transcript ref
+  对同 parent 下的同 prompt 并发 sibling 不碰撞，显式 resume 必须匹配 current parent 和 workspace scope。
+  验证命令：
+  `node --import tsx --test src/runtime/codex/subagent-runner.test.ts src/runtime/codex/subagent-mcp-tools.test.ts src/runtime/codex/subagent-extension-manifest.test.ts src/runtime/codex/subagent-runtime-store.test.ts src/runtime/codex/codex-app-server-client.test.ts src/runtime/codex/backend-event-normalization.test.ts src/runtime/codex/codex-event-normalizer.test.ts src/runtime/codex/codex-exec-json-adapter.test.ts`（95/95 pass）。
+- 2026-06-04 Composer：Browser live 验证 Web UI fresh chat 的 Add menu 选择 `Multitask`
+  后出现 chip，placeholder 为 `Coordinate parallel tasks...`，textarea 为空，Send 保持 disabled，
+  visible assistant message 计数不变。
+  验证命令：`node --import tsx --test src/ui/src/app/chat/ChatComposer.test.tsx src/ui/src/app/chat/composerToolMenu.test.ts src/ui/src/app/chat/composerDeclaredIntents.test.ts --test-name-pattern "composer"`；
+  `node --import tsx --test --test-name-pattern "composer (model|mode|Plan Ask Debug)" src/ui/src/api/sciforgeToolsClient.policy.test.ts`。
+- 2026-06-04 Process / References / Sidebar：子任务卡片、safe refs、References pane routing、
+  final-answer sub-agent result aggregation、public process-progress redaction、child status hint
+  和 search/resume candidates 均有 focused tests。验证命令：
+  `node --import tsx --test src/ui/src/app/chat/RunExecutionProcess.test.ts src/ui/src/app/chat/finalMessagePresentation.test.tsx src/ui/src/app/chat/ChatComposer.test.tsx src/ui/src/app/chat/composerToolMenu.test.ts src/ui/src/app/chat/composerDeclaredIntents.test.ts src/ui/src/streamEventPresentation.test.ts src/ui/src/processProgress.test.ts src/ui/src/api/sciforgeToolsClient.policy.test.ts`（195 pass / 13 skip）；
+  `node --import tsx --test packages/support/object-references/index.test.ts src/ui/src/app/results/resultPaneContract.test.ts src/ui/src/app/results/referencesPaneModel.test.ts src/ui/src/app/results/workspaceObjectPreviewModel.test.ts src/ui/src/app/results/workspaceObjectPreviewSubagentAdapter.test.tsx`（28/28 pass）；
+  `node --import tsx --test src/ui/src/app/appShell/sidebarCursorAgentModel.test.ts src/ui/src/app/appShell/ShellPanels.sidebarModel.test.ts src/ui/src/app/appShell/SidebarProjectChatSection.test.tsx src/ui/src/app/appShell/sidebarProjectModel.test.ts`（54/54 pass）。
+- 2026-06-04 Desktop：`npx tsc -p tsconfig.desktop.build.json --noEmit --pretty false` 和
+  `npm run desktop:dev:prepare` 均通过；`npm run desktop:dev` 达到 started vite / workspace-writer /
+  provider-proxy / runtime-codex / electron 的 live readiness line；5174 workspace-writer、
+  5176 runtime-codex 和 5175 provider-proxy upstream health 均通过。额外用完整 dev shell + Electron live
+  fresh-run 验证通过：在 SciForge desktop app 打开 composer menu、选择 `Multitask`、发送只读可并行拆分任务，
+  观察到 3 个 child-agent cards、7 个 safe ref buttons、`artifact:subagent-*` / `subagent:*` refs、
+  background/resume state ref，并展开 child process 后点击 safe ref 打开 References pane。证据文件：
+  `/var/folders/vf/mcq7fgls60376whd6km0r_mr0000gn/T/sciforge-desktop-multitask-live-JFnNLX/live-evidence.json`；
+  证据只记录稳定 UI 行为、公开 refs 和验证命令，不包含个人账号、私有会话正文、raw transcript、坐标或 API 配置。
+- 2026-06-04 全局：`npx tsc --noEmit --pretty false`、`git diff --check` 均通过。
+- 2026-06-04 Review remediation：独立 review 发现 duplicate sibling child identity/ref collision、
+  explicit resume 缺少 parent/workspace scope、public process progress 漏 `/workspace/...` 绝对路径、
+  native-route public event 只按 key 过滤未递归清洗 value；已补红灯测试并修复。验证命令包含在
+  Runtime 与 Process focused suites 中；`npx tsc --noEmit --pretty false` 和 `git diff --check`
+  已复跑通过。
+
 ## 不可变规则
 
 - 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
@@ -67,76 +104,76 @@ SciForge 当前主线是 **Cursor-like Multi-agent / Sub-agent Workbench**。
 
 ### P0：Agent Host sub-agent 执行闭环
 
-- [ ] Codex app-server production path 默认注入 `sciforge_subagents` MCP server，并公开
+- [x] 2026-06-04 Codex app-server production path 默认注入 `sciforge_subagents` MCP server，并公开
   `multi_agent_v1.spawn_agent` 为 Agent Host tool。
-- [ ] spawn result 必须包含 safe `agentId`、`parentAgentId`、`agentType`、`status`、
+- [x] 2026-06-04 spawn result 必须包含 safe `agentId`、`parentAgentId`、`agentType`、`status`、
   `resultSummary`、`resultRef`、`transcriptRef`、`refs`、duration 和 background/resume metadata。
-- [ ] 支持同一 turn 中并行启动多个 sub-agent，并记录 parent/child trace。
-- [ ] 支持 `run_in_background`：后台任务有可见状态、完成通知和失败/取消状态，不阻塞主 composer。
-- [ ] 支持显式 `resume`：用户或主 agent 必须指定可恢复 child agent / ref，不自动无边界续跑旧任务。
-- [ ] transcript/state 默认写入 runtime-owned subagent store，不进入 workspace raw payload；
+- [x] 2026-06-04 支持同一 turn 中并行启动多个 sub-agent，并记录 parent/child trace。
+- [x] 2026-06-04 支持 `run_in_background`：后台任务有可见状态、完成通知和失败/取消状态，不阻塞主 composer。
+- [x] 2026-06-04 支持显式 `resume`：用户或主 agent 必须指定可恢复 child agent / ref，不自动无边界续跑旧任务。
+- [x] 2026-06-04 transcript/state 默认写入 runtime-owned subagent store，不进入 workspace raw payload；
   GUI 只看到 refs 和 bounded summary。
-- [ ] 缺少 sub-agent tool、MCP server 启动失败、transcript 写入失败或 unsafe ref 时 fail closed，
+- [x] 2026-06-04 缺少 sub-agent tool、MCP server 启动失败、transcript 写入失败或 unsafe ref 时 fail closed，
   并给出用户可理解的 blocker summary。
 
 ### P0：Composer Multitask mode
 
-- [ ] `Add agents, context, tools` 菜单稳定展示 `Plan`、`Debug`、`Multitask`、`Ask`、
+- [x] 2026-06-04 `Add agents, context, tools` 菜单稳定展示 `Plan`、`Debug`、`Multitask`、`Ask`、
   `Image`、`Models`、`Skills`、`MCP Servers`。
-- [ ] 点击 `Multitask` 后显示 Cursor-like mode chip，placeholder 变为
+- [x] 2026-06-04 点击 `Multitask` 后显示 Cursor-like mode chip，placeholder 变为
   `Coordinate parallel tasks...`，不自动发送，不写入 `/multitask` 文本。
-- [ ] mode chip 可移除、可替换，并随 workspace/project/thread draft 隔离保存。
-- [ ] 发送时 GUI 只提交 declared intent / terminal-equivalent text，由 Agent Host 决定是否 spawn、
+- [x] 2026-06-04 mode chip 可移除、可替换，并随 workspace/project/thread draft 隔离保存。
+- [x] 2026-06-04 发送时 GUI 只提交 declared intent / terminal-equivalent text，由 Agent Host 决定是否 spawn、
   spawn 几个、agent type、background 和 resume。
-- [ ] `Plan`、`Ask`、`Debug`、`Multitask` 的选中态、互斥关系和 keyboard/accessibility 行为
+- [x] 2026-06-04 `Plan`、`Ask`、`Debug`、`Multitask` 的选中态、互斥关系和 keyboard/accessibility 行为
   与 Cursor Agent 一致。
 
 ### P0：Sub-agent process presentation
 
-- [ ] running chat 展示 `Thought for ...` / `Worked for ...` 聚合行，默认折叠内部 tool trace。
-- [ ] 每个 child agent 显示一张子任务卡片：标题、公开 agent/model lane、status、summary、refs。
-- [ ] 并行 child agents 必须在同一 assistant turn 中并列呈现，互不覆盖状态。
-- [ ] 完成后主回答默认合并为表格和分节结论，不把 child transcript 原样堆进最终回答。
-- [ ] failed / blocked / cancelled / background-running / resumed 子任务都有独立视觉状态和可点击 refs。
-- [ ] 过程行和卡片必须复用 Cursor-like process model，不新建调试日志栏或 provider 面板。
+- [x] 2026-06-04 running chat 展示 `Thought for ...` / `Worked for ...` 聚合行，默认折叠内部 tool trace。
+- [x] 2026-06-04 每个 child agent 显示一张子任务卡片：标题、公开 agent/model lane、status、summary、refs。
+- [x] 2026-06-04 并行 child agents 必须在同一 assistant turn 中并列呈现，互不覆盖状态。
+- [x] 2026-06-04 完成后主回答默认合并为表格和分节结论，不把 child transcript 原样堆进最终回答。
+- [x] 2026-06-04 failed / blocked / cancelled / background-running / resumed 子任务都有独立视觉状态和可点击 refs。
+- [x] 2026-06-04 过程行和卡片必须复用 Cursor-like process model，不新建调试日志栏或 provider 面板。
 
 ### P1：References / right pane refs
 
-- [ ] `subagent:*`、`artifact:subagent-result-*`、`artifact:subagent-transcript-*`、
+- [x] 2026-06-04 `subagent:*`、`artifact:subagent-result-*`、`artifact:subagent-transcript-*`、
   `transcript:*` refs 路由到 References pane。
-- [ ] References pane 默认显示 bounded result summary、inspected refs、agent type、status、
+- [x] 2026-06-04 References pane 默认显示 bounded result summary、inspected refs、agent type、status、
   parent/child relation 和 transcript ref；raw transcript 默认折叠。
-- [ ] result/transcript refs 可从子任务卡片、最终回答、process details 中点击打开。
-- [ ] unsafe refs、absolute paths、`.sciforge/raw`、provider/debug payload 不进入可见 ref list。
-- [ ] References pane 不执行 resume；resume 只能通过 Agent Host declared intent。
+- [x] 2026-06-04 result/transcript refs 可从子任务卡片、最终回答、process details 中点击打开。
+- [x] 2026-06-04 unsafe refs、absolute paths、`.sciforge/raw`、provider/debug payload 不进入可见 ref list。
+- [x] 2026-06-04 References pane 不执行 resume；resume 只能通过 Agent Host declared intent。
 
 ### P1：Sidebar / thread lifecycle
 
-- [ ] parent thread row 可展示有 active/background child agent 的状态 hint，但 child agent 不变成普通 thread。
-- [ ] Archive/Discard/Restore parent thread 时必须清楚表达对 background child agents 的影响。
-- [ ] Search / command palette 可发现 sub-agent results、running background tasks、resume candidates，
+- [x] 2026-06-04 parent thread row 可展示有 active/background child agent 的状态 hint，但 child agent 不变成普通 thread。
+- [x] 2026-06-04 Archive/Discard/Restore parent thread 时必须清楚表达对 background child agents 的影响。
+- [x] 2026-06-04 Search / command palette 可发现 sub-agent results、running background tasks、resume candidates，
   只展示公共标题/摘要和 refs。
-- [ ] 多 repository / Home / peer workspace 下，Multitask draft、background child state 和 resume candidate
+- [x] 2026-06-04 多 repository / Home / peer workspace 下，Multitask draft、background child state 和 resume candidate
   必须按 workspace/project 隔离。
 
 ### P1：Desktop live parity
 
-- [ ] 修复当前阻塞 desktop dev 启动的 typecheck 错误，并恢复 `npm run desktop:dev` 可打开真实 SciForge。
-- [ ] 每轮 sub-agent UI 改动前完成 Cursor Agent 只读 baseline：menu、mode chip、子任务卡片、
+- [x] 2026-06-04 修复当前阻塞 desktop dev 启动的 typecheck 错误，并恢复 `npm run desktop:dev` 可打开真实 SciForge。
+- [x] 2026-06-04 每轮 sub-agent UI 改动前完成 Cursor Agent 只读 baseline：menu、mode chip、子任务卡片、
   background/resume 或 References 中至少一个同类 workflow。
-- [ ] 每轮实现后在 SciForge desktop app 完成同类 workflow：打开 composer menu、选择 Multitask、
+- [x] 2026-06-04 每轮实现后在 SciForge desktop app 完成同类 workflow：打开 composer menu、选择 Multitask、
   发送可并行拆分任务、观察 child cards、打开 refs、验证 resume/background 状态。
-- [ ] live evidence 只记录稳定行为和 refs，不记录个人账号、私有会话正文、坐标或本地绝对路径。
+- [x] 2026-06-04 live evidence 只记录稳定行为和 refs，不记录个人账号、私有会话正文、坐标或本地绝对路径。
 
 ### P2：Capability / model / safety polish
 
-- [ ] agent type 公开为 `explore`、`worker`、`review`、`shell` 等用户可理解 alias，
+- [x] 2026-06-04 agent type 公开为 `explore`、`worker`、`review`、`shell` 等用户可理解 alias，
   不暴露 provider route 或 raw model slug。
-- [ ] 模型显示使用公开 alias 和速度标签，例如 `Composer Fast` / `Assistant Deep`，
+- [x] 2026-06-04 模型显示使用公开 alias 和速度标签，例如 `Composer Fast` / `Assistant Deep`，
   不展示 raw provider config。
-- [ ] 高风险 workspace 写入、外部发送、删除、安装、系统设置等仍走现有 confirmation policy；
+- [x] 2026-06-04 高风险 workspace 写入、外部发送、删除、安装、系统设置等仍走现有 confirmation policy；
   child agent 不能绕过 parent thread 的 approval boundary。
-- [ ] 子任务摘要需要清楚说明适用场景和不适用场景：并行调研、长命令、独立 verification 适合；
+- [x] 2026-06-04 子任务摘要需要清楚说明适用场景和不适用场景：并行调研、长命令、独立 verification 适合；
   强耦合同一文件 edits、需要完整聊天历史的任务默认由主 agent 做。
 
 ## 验收规则

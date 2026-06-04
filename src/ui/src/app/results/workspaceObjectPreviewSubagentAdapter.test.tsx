@@ -13,7 +13,9 @@ test('workspace object preview subagent adapter renders safe delegated refs with
     preview: {
       agentId: 'worker-abc123',
       parentAgentId: 'codex-command-private',
+      agentType: 'review',
       status: 'completed Authorization: Bearer sk-status-secret',
+      durationMs: 2468,
       createdAt: '2026-06-01T00:00:00.000Z',
       resultSummary: [
         'Read-only delegated worker completed.',
@@ -39,14 +41,19 @@ test('workspace object preview subagent adapter renders safe delegated refs with
   assert.match(html, /Subtask result/);
   assert.match(html, /workspace-object-preview/);
   assert.match(html, /data-sciforge-reference=/);
+  assert.match(html, /review/);
+  assert.match(html, /Child task/);
+  assert.match(html, /2\.5s/);
   assert.match(html, /artifact:subagent-result-abc123/);
   assert.match(html, /artifact:subagent-transcript-abc123/);
   assert.match(html, /file:PROJECT_right\.md/);
+  assert.match(html, /<details/);
+  assert.doesNotMatch(html, /<details[^>]*open/);
   assert.equal((html.match(/<button\b/g) ?? []).length, 3);
   assert.match(html, /Remaining live parity TODO/);
   assert.match(html, /redacted-secret/);
   assert.doesNotMatch(html, /worker-abc123|codex-command-private|Request summary|call multi_agent_v1|Do not use shell substitute/);
-  assert.doesNotMatch(html, /trace:unsafe-subagent|\.sciforge\/raw|sk-status-secret|sk-summary-secret/);
+  assert.doesNotMatch(html, /trace:unsafe-subagent|\.sciforge\/raw|sk-status-secret|sk-summary-secret|resume/i);
 });
 
 test('workspace object preview subagent adapter falls back to code refs without focus callbacks', () => {

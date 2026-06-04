@@ -218,6 +218,74 @@ test('preserves backend command lifecycle fields for native shell execution', ()
   assert.doesNotMatch(normalized.events[1]?.outputSummary ?? '', /provider\.example/);
 });
 
+test('preserves expanded safe sub-agent lifecycle metadata in backend events', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'tool.completed',
+      thread_id: 'thread-1',
+      turn_id: 'turn-1',
+      item: {
+        id: 'subagent-call-expanded',
+        name: 'multi_agent_v1.spawn_agent',
+        result: {
+          ok: true,
+          agentId: 'review-worker-abc123',
+          parentAgentId: 'parent-command-1',
+          agentType: 'review-worker',
+          status: 'completed',
+          resultSummary: 'Safe sub-agent lifecycle summary.',
+          resultRef: 'artifact:subagent-result-abc123',
+          transcriptRef: 'artifact:subagent-transcript-abc123',
+          refs: [
+            'artifact:subagent-result-abc123',
+            'artifact:subagent-transcript-abc123',
+            'subagent:review-worker-abc123',
+            'trace:unsafe-ref',
+          ],
+          durationMs: 42,
+          background: {
+            runInBackground: true,
+            stateRef: 'subagent:review-worker-abc123',
+            providerUrl: 'https://provider.example/v1',
+          },
+          resume: {
+            resumeRequested: true,
+            resumeRef: 'subagent:resume-candidate',
+            resumeBoundary: 'explicit',
+            apiKey: 'sk-secret-123456789',
+          },
+          rawTranscript: 'RAW TRANSCRIPT BODY SHOULD STAY RAW-ONLY',
+        },
+        status: 'completed',
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  const event = normalized.events.at(-1);
+  assert.equal(event?.type, 'tool_completed');
+  assert.equal(event?.agentId, 'review-worker-abc123');
+  assert.equal(event?.parentAgentId, 'parent-command-1');
+  assert.equal(event?.agentType, 'review-worker');
+  assert.equal(event?.resultRef, 'artifact:subagent-result-abc123');
+  assert.equal(event?.transcriptRef, 'artifact:subagent-transcript-abc123');
+  assert.equal(event?.durationMs, 42);
+  assert.deepEqual(event?.background, {
+    runInBackground: true,
+    stateRef: 'subagent:review-worker-abc123',
+  });
+  assert.deepEqual(event?.resume, {
+    resumeRequested: true,
+    resumeRef: 'subagent:resume-candidate',
+    resumeBoundary: 'explicit',
+  });
+  assert.deepEqual(event?.refs, [
+    'artifact:subagent-result-abc123',
+    'artifact:subagent-transcript-abc123',
+    'subagent:review-worker-abc123',
+  ]);
+  assert.doesNotMatch(JSON.stringify(event), /RAW TRANSCRIPT BODY|trace:unsafe-ref|provider\.example|sk-secret/i);
+});
+
 test('uses app-server call ids to merge command lifecycles and preserves full diff output over summaries', () => {
   const normalized = normalizeBackendEvents([
     {
@@ -398,6 +466,111 @@ test('normalizes Codex app-server slash-form rich client events and structured d
   assert.equal(subagent?.transcriptRef, 'transcript:worker-1');
   assert.deepEqual(subagent?.refs, ['artifact:subagent-result', 'transcript:worker-1']);
   assert.match(subagent?.resultSummary ?? '', /Sub-agent audit/);
+});
+
+test('normalizes provider-safe sub-agent function_call_output envelopes into lifecycle refs', () => {
+  const subagentResult = {
+    agentId: 'codex-worker-live',
+    parentAgentId: 'codex-parent-live',
+    agentType: 'codex',
+    ok: true,
+    status: 'completed',
+    resultSummary: 'Delegated worker completed.',
+    resultRef: 'artifact:subagent-result-live123',
+    transcriptRef: 'artifact:subagent-transcript-live123',
+    refs: [
+      'artifact:subagent-result-live123',
+      'artifact:subagent-transcript-live123',
+      'subagent:codex-worker-live',
+    ],
+    background: {
+      runInBackground: false,
+      stateRef: 'subagent:codex-worker-live',
+    },
+    resume: {
+      resumeRequested: false,
+      resumeBoundary: 'none',
+    },
+  };
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'multi_agent_v1_spawn_agent',
+        call_id: 'call-live-subagent',
+        arguments: JSON.stringify({ instructions: 'inspect PROJECT.md' }),
+      },
+    },
+    {
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call-live-subagent',
+        output: JSON.stringify({
+          content: [{ type: 'text', text: JSON.stringify(subagentResult) }],
+          structuredContent: subagentResult,
+        }),
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), ['tool_started', 'tool_completed']);
+  assert.equal(normalized.events[0]?.toolName, 'multi_agent_v1.spawn_agent');
+  const completed = normalized.events[1];
+  assert.equal(completed?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(completed?.agentId, 'codex-worker-live');
+  assert.equal(completed?.parentAgentId, 'codex-parent-live');
+  assert.equal(completed?.ref, 'artifact:subagent-result-live123');
+  assert.equal(completed?.resultRef, 'artifact:subagent-result-live123');
+  assert.equal(completed?.transcriptRef, 'artifact:subagent-transcript-live123');
+  assert.deepEqual(completed?.refs, [
+    'artifact:subagent-result-live123',
+    'artifact:subagent-transcript-live123',
+    'subagent:codex-worker-live',
+  ]);
+  assert.equal(completed?.background?.stateRef, 'subagent:codex-worker-live');
+});
+
+test('normalizes sub-agent refs from MCP content text envelopes without structuredContent', () => {
+  const subagentResult = {
+    agentId: 'codex-worker-content',
+    parentAgentId: 'codex-parent-content',
+    agentType: 'codex',
+    status: 'completed',
+    resultSummary: 'Delegated content worker completed.',
+    resultRef: 'artifact:subagent-result-content123',
+    transcriptRef: 'artifact:subagent-transcript-content123',
+    refs: [
+      'artifact:subagent-result-content123',
+      'artifact:subagent-transcript-content123',
+      'subagent:codex-worker-content',
+    ],
+  };
+  const normalized = normalizeBackendEvents([
+    {
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call-content-subagent',
+        output: JSON.stringify({
+          content: [{ type: 'text', text: JSON.stringify(subagentResult) }],
+        }),
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  const completed = normalized.events[0];
+  assert.equal(completed?.type, 'tool_completed');
+  assert.equal(completed?.toolName, 'multi_agent_v1.spawn_agent');
+  assert.equal(completed?.agentId, 'codex-worker-content');
+  assert.equal(completed?.resultRef, 'artifact:subagent-result-content123');
+  assert.equal(completed?.transcriptRef, 'artifact:subagent-transcript-content123');
+  assert.deepEqual(completed?.refs, [
+    'artifact:subagent-result-content123',
+    'artifact:subagent-transcript-content123',
+    'subagent:codex-worker-content',
+  ]);
 });
 
 test('promotes app-server GUI module completions into GUI events', () => {

@@ -665,3 +665,45 @@ test('inline session conflict diagnostics before the answer stay folded', () => 
   assert.equal(presentation.auditSections[0].evidenceType, 'execution-audit');
   assert.match(presentation.auditSections[0].text, /session-conflict/);
 });
+
+test('sub-agent result sections aggregate into a table and bounded notes without raw transcripts', () => {
+  const content = [
+    '# Result',
+    'Overall: combine the bounded child outcomes before closing the turn.',
+    '',
+    '## Sub-agent: Explorer check',
+    'Status: completed',
+    'Summary: Found the final answer aggregation gap.',
+    'Result ref: artifact:subagent-result-explorer',
+    'Transcript ref: agent-transcript:explorer-trace',
+    'Raw transcript:',
+    '```jsonl',
+    '{"type":"stdout","text":"RAW_TRANSCRIPT_SHOULD_NOT_RENDER","stdoutRef":".sciforge/raw/stdout.log"}',
+    '{"type":"debug","commandExecution":"COMMAND_EXECUTION_SHOULD_NOT_RENDER"}',
+    '```',
+    '',
+    '## Worker: Review check',
+    'Status: blocked',
+    'Result summary: Needs live desktop verification before closure.',
+    'Refs: artifact:subagent-result-review, agent-transcript:review-trace',
+    'provider.local https://provider.local/v1 token=sk-private /Users/alice/private should stay private.',
+    '',
+    '## Next step',
+    'Open artifact:subagent-result-review for the bounded blocker summary.',
+  ].join('\n');
+
+  const presentation = splitFinalMessagePresentation(content);
+
+  assert.match(presentation.primaryContent, /# Result/);
+  assert.match(presentation.primaryContent, /Overall: combine the bounded child outcomes/);
+  assert.match(presentation.primaryContent, /## sub-agent results/i);
+  assert.match(presentation.primaryContent, /\| Task \| Status \| Summary \| Refs \|/);
+  assert.match(presentation.primaryContent, /Explorer check \| completed \| Found the final answer aggregation gap\. \| artifact:subagent-result-explorer, agent-transcript:explorer-trace/);
+  assert.match(presentation.primaryContent, /Review check \| blocked \| Needs live desktop verification before closure\. \| artifact:subagent-result-review, agent-transcript:review-trace/);
+  assert.match(presentation.primaryContent, /## sub-agent notes/i);
+  assert.match(presentation.primaryContent, /### Explorer check/);
+  assert.match(presentation.primaryContent, /### Review check/);
+  assert.match(presentation.primaryContent, /## Next step/);
+  assert.doesNotMatch(presentation.primaryContent, /Raw transcript|RAW_TRANSCRIPT_SHOULD_NOT_RENDER|COMMAND_EXECUTION_SHOULD_NOT_RENDER|stdoutRef|provider\.local|sk-private|\/Users\/alice/i);
+  assert.doesNotMatch(presentation.auditSections.map((section) => section.text).join('\n'), /RAW_TRANSCRIPT_SHOULD_NOT_RENDER|COMMAND_EXECUTION_SHOULD_NOT_RENDER|provider\.local|sk-private|\/Users\/alice/i);
+});

@@ -33,6 +33,9 @@ import type {
   ComposerDeclaredIntentSnapshot,
   ConversationTurnMode,
   RuntimeResumePolicy,
+  AgentHostWindowActionHandoff,
+  AgentHostWindowActionHandoffBounds,
+  AgentHostWindowActionHandoffRef,
 } from '../../domain';
 import { makeId, nowIso } from '../../domain';
 import { buildTargetInstanceContextForPrompt, targetIssueLookupFailureMessage } from './targetInstance';
@@ -45,6 +48,8 @@ import {
 type AgentRequest = Parameters<typeof sendSciForgeToolMessage>[0];
 type TargetInstanceContext = Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>;
 type TargetRepairStageEventBuilder = typeof targetRepairModifyingEvent;
+
+const HIGH_CONFIDENCE_AUTO_BOUND_THRESHOLD = 0.9;
 
 function runtimeEventIdentity() {
   return { id: makeId('evt'), createdAt: nowIso() };
@@ -155,6 +160,13 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       conversationEnvelope: input.conversationEnvelope,
       conversationLaneId: input.conversationLaneId,
       runtimeResumePolicy: input.runtimeResumePolicy,
+      windowActionHandoff: buildAnnotationWindowActionHandoff({
+        references: input.references,
+        turnMode: input.turnMode,
+        conversationEnvelope: input.conversationEnvelope,
+        conversationLaneId: input.conversationLaneId,
+        currentTurnId: userMessage.id,
+      }),
     };
 
     const initialProgress = buildInitialResponseProgressEvent(latestResponsePlan(input.streamEvents), input.config.locale);
@@ -231,6 +243,189 @@ function isAnnotationPlanOnlyTurn(input: RunPromptOrchestratorInput) {
   }
   return input.turnMode === 'annotation-plan-only'
     || isAnnotationPlanOnlyEnvelope(input.conversationEnvelope);
+}
+
+export function buildAnnotationWindowActionHandoff(input: {
+  references: SciForgeReference[];
+  turnMode?: ConversationTurnMode;
+  conversationEnvelope?: unknown;
+  conversationLaneId?: string;
+  currentTurnId?: string;
+}): AgentHostWindowActionHandoff | undefined {
+  const intent = annotationWindowActionIntent(input);
+  if (!intent) return undefined;
+  const promotedRefs = input.references
+    .map(annotationWindowActionHandoffRef)
+    .filter((ref): ref is AgentHostWindowActionHandoffRef => Boolean(ref));
+  if (!promotedRefs.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.window-action-handoff.v1',
+    source: 'run-orchestrator',
+    mode: 'enter-or-reuse-window-action-session',
+    intent,
+    actionFlowRef: windowActionFlowRef(input),
+    highConfidenceThreshold: HIGH_CONFIDENCE_AUTO_BOUND_THRESHOLD,
+    promotedRefs,
+  };
+}
+
+function annotationWindowActionIntent(input: {
+  turnMode?: ConversationTurnMode;
+  conversationEnvelope?: unknown;
+}): AgentHostWindowActionHandoff['intent'] | undefined {
+  if (input.turnMode === 'annotation-quick-action') return 'annotation-quick-action';
+  const envelope = recordFromUnknown(input.conversationEnvelope);
+  if (
+    envelope?.windowActionHandoff === true
+    || envelope?.windowActionIntent === 'modify'
+    || envelope?.modificationIntent === true
+  ) return 'explicit-modification';
+  return undefined;
+}
+
+function windowActionFlowRef(input: { conversationLaneId?: string; currentTurnId?: string }) {
+  const flowId = safeRefPart(input.conversationLaneId ?? input.currentTurnId ?? 'annotation-quick-action');
+  return `window-action-flow:${flowId || 'annotation-quick-action'}`;
+}
+
+function annotationWindowActionHandoffRef(reference: SciForgeReference): AgentHostWindowActionHandoffRef | undefined {
+  const payload = recordFromUnknown(reference.payload);
+  if (!payload) return undefined;
+  const binding = promotedAnnotationWindowBinding(payload.windowBinding, payload);
+  if (!binding) return undefined;
+  const ref = safeHandoffRef(reference.ref);
+  const referenceId = boundedText(reference.id, 96);
+  const title = boundedText(reference.title, 120);
+  if (!ref || !referenceId || !title) return undefined;
+  const sourceKind = boundedText(stringFromUnknown(payload.sourceKind), 64);
+  const annotationRef = safeHandoffRef(payload.annotationRef);
+  const imageRef = safeHandoffRef(payload.imageRef);
+  const screenshotRef = safeHandoffRef(payload.screenshotRef);
+  const cropRef = safeHandoffRef(payload.cropRef);
+  const targetRef = safeHandoffRef(payload.targetRef);
+  const evidenceRefs = uniqueEvidenceRefs([
+    annotationRef ? { kind: 'annotation', ref: annotationRef } : undefined,
+    screenshotRef ? { kind: 'screenshot', ref: screenshotRef } : undefined,
+    cropRef ? { kind: 'crop', ref: cropRef } : undefined,
+    imageRef ? { kind: 'image', ref: imageRef } : undefined,
+    targetRef ? { kind: 'target', ref: targetRef } : undefined,
+  ]);
+  return {
+    referenceId,
+    ref,
+    title,
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(annotationRef ? { annotationRef } : {}),
+    ...(imageRef ? { imageRef } : {}),
+    ...(screenshotRef ? { screenshotRef } : {}),
+    ...(cropRef ? { cropRef } : {}),
+    ...(targetRef ? { targetRef } : {}),
+    evidenceRefs,
+    windowBinding: binding,
+  };
+}
+
+function promotedAnnotationWindowBinding(
+  value: unknown,
+  payload: Record<string, unknown>,
+): AgentHostWindowActionHandoffRef['windowBinding'] | undefined {
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const status = stringFromUnknown(record.status);
+  if (status !== 'manual-bound' && status !== 'auto-bound') return undefined;
+  const confidence = numberFromUnknown(record.confidence);
+  if (status === 'auto-bound' && (confidence === undefined || confidence < HIGH_CONFIDENCE_AUTO_BOUND_THRESHOLD)) return undefined;
+  const windowRef = safeHandoffRef(record.windowRef);
+  if (!windowRef) return undefined;
+  const appName = boundedText(stringFromUnknown(record.appName), 80);
+  const bundleId = boundedText(stringFromUnknown(record.bundleId), 120);
+  const title = boundedText(stringFromUnknown(record.title), 160);
+  const reason = boundedText(stringFromUnknown(record.reason), 160);
+  const screenId = boundedText(stringFromUnknown(record.screenId) ?? stringFromUnknown(payload.displayId), 80);
+  const scale = numberFromUnknown(record.scale) ?? numberFromUnknown(payload.scale);
+  const pid = integerFromUnknown(record.pid);
+  const windowBounds = boundsFromUnknown(record.windowBounds ?? payload.windowBounds);
+  const windowLocalBounds = boundsFromUnknown(record.windowLocalBounds ?? payload.windowLocalBounds);
+  return {
+    status,
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(reason ? { reason } : {}),
+    windowRef,
+    ...(appName ? { appName } : {}),
+    ...(bundleId ? { bundleId } : {}),
+    ...(pid !== undefined ? { pid } : {}),
+    ...(title ? { title } : {}),
+    ...(screenId ? { screenId } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+    ...(windowBounds ? { windowBounds } : {}),
+    ...(windowLocalBounds ? { windowLocalBounds } : {}),
+  };
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function stringFromUnknown(value: unknown) {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function numberFromUnknown(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? Number(value) : undefined;
+}
+
+function integerFromUnknown(value: unknown) {
+  const number = numberFromUnknown(value);
+  return number === undefined ? undefined : Math.trunc(number);
+}
+
+function boundsFromUnknown(value: unknown): AgentHostWindowActionHandoffBounds | undefined {
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const x = numberFromUnknown(record.x);
+  const y = numberFromUnknown(record.y);
+  const width = numberFromUnknown(record.width);
+  const height = numberFromUnknown(record.height);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return {
+    x,
+    y,
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+  };
+}
+
+function safeHandoffRef(value: unknown) {
+  const text = stringFromUnknown(value);
+  if (!text) return undefined;
+  if (!/^[a-z][a-z0-9+.-]*:[a-z0-9][a-z0-9._:/#?-]*$/i.test(text)) return undefined;
+  if (/^(?:data|https?):/i.test(text)) return undefined;
+  return text.slice(0, 240);
+}
+
+function safeRefPart(value: string) {
+  return value.trim().replace(/[^a-z0-9._:-]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 96).toLowerCase();
+}
+
+function boundedText(value: string | undefined, max: number) {
+  if (!value) return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  return text ? text.slice(0, max) : undefined;
+}
+
+function uniqueEvidenceRefs(values: Array<{ kind: string; ref: string } | undefined>) {
+  const seen = new Set<string>();
+  const output: Array<{ kind: string; ref: string }> = [];
+  for (const value of values) {
+    if (!value) continue;
+    const key = `${value.kind}\n${value.ref}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    output.push(value);
+  }
+  return output.slice(0, 8);
 }
 
 function buildAnnotationPlanOnlyOrchestratorResponse(input: RunPromptOrchestratorInput): NormalizedAgentResponse {

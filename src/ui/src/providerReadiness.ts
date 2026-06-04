@@ -50,8 +50,8 @@ export function providerReadinessNoticeFromManifest(
 }
 
 export function providerReadinessNoticeFromConfig(config: SciForgeConfig): ProviderReadinessNotice {
-  const provider = config.modelProvider.trim() || defaultSciForgeConfig.modelProvider;
-  const model = config.modelName.trim() || (provider === defaultSciForgeConfig.modelProvider ? defaultSciForgeConfig.modelName : '');
+  const provider = publicProviderAlias(config.modelProvider.trim() || defaultSciForgeConfig.modelProvider);
+  const model = config.modelName.trim();
   const baseUrl = config.modelBaseUrl.trim();
   const apiKeyConfigured = Boolean(config.apiKey.trim());
   if (provider === 'native') {
@@ -69,7 +69,7 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
       ready: true,
       state: 'ready',
       value: 'native',
-      detail: `native${model ? ` · ${model}` : ''}${baseUrl ? ` · ${baseUrl}` : ''}`,
+      detail: 'Model provider configured (masked)',
       source: 'settings',
     };
   }
@@ -88,7 +88,7 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
       ready: false,
       state: 'blocked',
       value: provider,
-      detail: `${provider}${model ? ` · ${model}` : ''}`,
+      detail: `${provider} provider requires an API key`,
       recoverAction: 'Set an API Key. SciForge will not switch providers automatically.',
       source: 'settings',
     };
@@ -97,7 +97,7 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
     ready: true,
     state: 'ready',
     value: provider,
-    detail: `${provider}${model ? ` · ${model}` : ''}`,
+    detail: 'Model provider configured (API key masked)',
     source: 'settings',
   };
 }
@@ -118,8 +118,23 @@ export function providerReadinessHealth(
 }
 
 function providerHealthDetail(notice: ProviderReadinessNotice): string {
-  if (notice.source !== 'runtime-provider-preflight') return notice.detail;
+  if (notice.source !== 'runtime-provider-preflight') {
+    return notice.ready
+      ? notice.detail
+      : notice.detail.replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted-url]').replace(/\/(?:Applications|Users|tmp)\/[^\s"',;)}\]]+/gi, '[redacted-path]');
+  }
   if (notice.ready) return 'Assistant connection preflight ready';
   if (notice.value === 'missing') return 'Assistant connection preflight unavailable';
   return `Assistant connection preflight needs attention (${notice.value})`;
+}
+
+function publicProviderAlias(provider: string) {
+  if (provider === 'native') return 'native';
+  if (provider === 'openai-compatible') return 'openai-compatible';
+  if (provider === 'openrouter') return 'openrouter';
+  if (provider === 'qwen') return 'qwen';
+  if (provider === 'codex-chatgpt') return 'codex-chatgpt';
+  if (provider === 'gemini') return 'gemini';
+  if (provider === defaultSciForgeConfig.modelProvider) return 'managed-runtime';
+  return 'custom-provider';
 }

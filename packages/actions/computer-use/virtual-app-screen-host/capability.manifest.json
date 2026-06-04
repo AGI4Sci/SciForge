@@ -2,8 +2,11 @@
   "schemaVersion": "sciforge.computer-use.native-virtual-app-screen-host.manifest.v1",
   "packageName": "packages/actions/computer-use/virtual-app-screen-host",
   "owner": "Computer Use Native Host",
-  "role": "native-surface-control-plane",
-  "productTruthOwner": true,
+  "role": "historical-compatibility-native-surface-control-plane",
+  "routeStatus": "historical-compatibility",
+  "currentProductRoute": false,
+  "productTruthOwner": false,
+  "compatibilityWording": "Historical compatibility manifest for legacy VirtualAppScreen host probes; not the current blocking Computer Use product route.",
   "publicApi": [
     "describe",
     "probe",

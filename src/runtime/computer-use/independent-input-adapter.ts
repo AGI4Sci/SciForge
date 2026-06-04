@@ -10,6 +10,7 @@ import type {
   ComputerUseActionProvenance,
   ComputerUseConfig,
   ComputerUseLeaseScope,
+  ComputerUseObserveBeforeMutateEvidence,
   ComputerUseVisibleEvidenceInvalidation,
   GenericVisionAction,
   WindowBounds,
@@ -17,6 +18,7 @@ import type {
 } from './types.js';
 import {
   acquireComputerUseSchedulerLease,
+  computerUseActionRequiresObserveBeforeMutate,
   computerUseSchedulerLockId,
   computerUseStaleEvidenceInvalidationForAction,
   deriveComputerUseActionProvenance,
@@ -173,10 +175,35 @@ export async function executeIndependentInputAdapterAction(
       independentInputAdapter: sharedSystemInputFailClosedDiagnostic(config, 'blocked-no-independent-adapter'),
     };
   }
-  const adapterTargetResolution = projectIndependentInputAdapterTargetResolution(config, action, targetResolution);
+  const adapterTargetResolution = independentInputAdapterTargetResolution(
+    projectIndependentInputAdapterTargetResolution(config, action, targetResolution),
+  );
+  const now = new Date().toISOString();
+  const statePath = join(options.runDir, 'independent-input-adapter.json');
+  const iconPath = join(options.runDir, 'independent-input-pointer.svg');
+  const actorCursorLogPath = join(options.runDir, 'actor-cursors.jsonl');
+  const executorProjectionPath = join(options.runDir, 'executor-projection.json');
+  const sessionPath = virtualRemoteSessionPath(options.runDir);
+  const stateRef = workspaceRel(options.workspace, statePath);
+  const iconRef = workspaceRel(options.workspace, iconPath);
+  const actorCursorLogRef = workspaceRel(options.workspace, actorCursorLogPath);
+  const executorProjectionRef = workspaceRel(options.workspace, executorProjectionPath);
+  const sessionRef = workspaceRel(options.workspace, sessionPath);
+  const observeBeforeMutate = action.observeBeforeMutate
+    ?? await synthesizeIndependentAdapterObserveBeforeMutateEvidence({
+      action,
+      config,
+      targetResolution: adapterTargetResolution,
+      workspace: options.workspace,
+      runDir: options.runDir,
+      stepIndex: options.stepIndex,
+      now,
+    });
   const scopedAction = validateComputerUseScopedAction({
     action,
     targetResolution: adapterTargetResolution,
+    observeBeforeMutate,
+    now: independentInputAdapterValidationNow(config, observeBeforeMutate, now),
   });
   if (!scopedAction.ok) {
     return {
@@ -215,17 +242,6 @@ export async function executeIndependentInputAdapterAction(
       },
     };
   }
-  const now = new Date().toISOString();
-  const statePath = join(options.runDir, 'independent-input-adapter.json');
-  const iconPath = join(options.runDir, 'independent-input-pointer.svg');
-  const actorCursorLogPath = join(options.runDir, 'actor-cursors.jsonl');
-  const executorProjectionPath = join(options.runDir, 'executor-projection.json');
-  const sessionPath = virtualRemoteSessionPath(options.runDir);
-  const stateRef = workspaceRel(options.workspace, statePath);
-  const iconRef = workspaceRel(options.workspace, iconPath);
-  const actorCursorLogRef = workspaceRel(options.workspace, actorCursorLogPath);
-  const executorProjectionRef = workspaceRel(options.workspace, executorProjectionPath);
-  const sessionRef = workspaceRel(options.workspace, sessionPath);
   await writeFile(iconPath, virtualPointerIconSvg(), 'utf8');
   let result: {
     exitCode: number;
@@ -405,6 +421,114 @@ function projectIndependentInputAdapterTargetResolution(
       'projected display fallback to package-owned simulated remote desktop window for scoped executor lease',
     ],
   };
+}
+
+function independentInputAdapterTargetResolution(
+  targetResolution: Extract<WindowTargetResolution, { ok: true }>,
+): Extract<WindowTargetResolution, { ok: true }> {
+  return {
+    ...targetResolution,
+    target: {
+      ...targetResolution.target,
+      inputIsolation: 'best-effort',
+    },
+    inputIsolation: 'best-effort',
+  };
+}
+
+async function synthesizeIndependentAdapterObserveBeforeMutateEvidence(options: {
+  action: GenericVisionAction;
+  config: ComputerUseConfig;
+  targetResolution: Extract<WindowTargetResolution, { ok: true }>;
+  workspace: string;
+  runDir: string;
+  stepIndex: number;
+  now: string;
+}): Promise<ComputerUseObserveBeforeMutateEvidence | undefined> {
+  if (!computerUseActionRequiresObserveBeforeMutate(options.action)) return undefined;
+  const existingSession = await readVirtualRemoteSessionState(options.runDir);
+  const session = existingSession
+    ?? initialVirtualRemoteSessionState({
+      config: options.config,
+      targetResolution: options.targetResolution,
+      now: options.now,
+    });
+  if (!existingSession) {
+    await writeVirtualRemoteSessionState(options.workspace, options.runDir, session);
+  }
+  const provenance = deriveComputerUseActionProvenance({
+    action: options.action,
+    targetResolution: options.targetResolution,
+  });
+  const evidencePath = join(options.runDir, `independent-input-before-${String(options.stepIndex).padStart(3, '0')}.json`);
+  const evidenceRef = workspaceRel(options.workspace, evidencePath);
+  const sessionRef = workspaceRel(options.workspace, virtualRemoteSessionPath(options.runDir));
+  await writeFile(evidencePath, `${JSON.stringify({
+    schemaVersion: 'sciforge.computer-use.independent-input-observe-before-mutate.v1',
+    provider: SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER,
+    appStateRef: sessionRef,
+    captureRef: evidenceRef,
+    accessibilitySnapshotRef: evidenceRef,
+    stateSnapshotRef: sessionRef,
+    groundingRef: evidenceRef,
+    sourceObservationRef: evidenceRef,
+    visibleTexts: collectVirtualRemoteSessionVisibleTexts(session),
+    virtualRemoteSessionRef: sessionRef,
+    targetSession: session.targetSession,
+    displayGroupId: provenance.displayGroupId,
+    screenId: provenance.screenId,
+    windowId: provenance.windowId,
+    observedAt: options.now,
+    capturedAt: options.now,
+    freshnessCheckedAt: options.now,
+    freshnessCheck: {
+      status: 'current',
+      observedAt: options.now,
+      checkedAt: options.now,
+      maxAgeMs: 300000,
+    },
+  }, null, 2)}\n`, 'utf8');
+  return {
+    appStateRef: sessionRef,
+    screenshotRef: evidenceRef,
+    captureRef: evidenceRef,
+    accessibilitySnapshotRef: evidenceRef,
+    stateSnapshotRef: sessionRef,
+    groundingRef: evidenceRef,
+    sourceObservationRef: evidenceRef,
+    displayGroupId: provenance.displayGroupId,
+    screenId: provenance.screenId,
+    windowId: provenance.windowId,
+    observedAt: options.now,
+    capturedAt: options.now,
+    freshnessCheckedAt: options.now,
+    freshnessCheck: {
+      status: 'current',
+      observedAt: options.now,
+      checkedAt: options.now,
+      maxAgeMs: 300000,
+    },
+  };
+}
+
+function independentInputAdapterValidationNow(
+  config: ComputerUseConfig,
+  evidence: ComputerUseObserveBeforeMutateEvidence | undefined,
+  fallback: string,
+) {
+  if (!config.testActionFixtureMode) return fallback;
+  return replayObservationTimestamp(evidence) ?? fallback;
+}
+
+function replayObservationTimestamp(evidence: ComputerUseObserveBeforeMutateEvidence | undefined) {
+  const candidates = [
+    evidence?.freshnessCheck?.checkedAt,
+    evidence?.freshnessCheckedAt,
+    evidence?.freshnessCheck?.observedAt,
+    evidence?.observedAt,
+    evidence?.capturedAt,
+  ];
+  return candidates.find((value) => typeof value === 'string' && Number.isFinite(Date.parse(value)));
 }
 
 async function readAdapterState(path: string): Promise<IndependentInputAdapterState | undefined> {

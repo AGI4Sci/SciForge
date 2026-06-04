@@ -5,6 +5,8 @@ import {
   applyComposerToolDirective,
   buildComposerCapabilityMenu,
   buildComposerToolMenu,
+  composerModeSelectionIntentForToolItem,
+  composerModeSelectionIntents,
   composerModelSelectionIntents,
   filterComposerCapabilityMenuItems,
   publicComposerModel,
@@ -26,13 +28,30 @@ test('composer add menu uses Cursor-like taxonomy and keeps SciForge context act
   ]);
   assert.equal(items.find((item) => item.id === 'skills')?.commandPrefix, '/skills ');
   assert.equal(items.find((item) => item.id === 'mcp-servers')?.commandPrefix, '/mcp ');
+  for (const modeId of ['plan', 'debug', 'multitask', 'ask']) {
+    assert.equal(items.find((item) => item.id === modeId)?.commandPrefix, undefined);
+  }
 });
 
-test('composer directives prefix user text without duplicating a selected mode', () => {
-  const plan = buildComposerToolMenu().find((item) => item.id === 'plan');
-  assert.ok(plan);
-  assert.equal(applyComposerToolDirective('summarize the paper', plan), '/plan summarize the paper');
-  assert.equal(applyComposerToolDirective('/plan summarize the paper', plan), '/plan summarize the paper');
+test('composer Plan, Ask, Debug, and Multitask are declared mode intents instead of slash text', () => {
+  const items = buildComposerToolMenu();
+  assert.deepEqual(composerModeSelectionIntents().map((intent) => intent.id), ['plan', 'debug', 'multitask', 'ask']);
+  for (const modeId of ['plan', 'debug', 'multitask', 'ask']) {
+    const item = items.find((candidate) => candidate.id === modeId);
+    assert.ok(item);
+    const intent = composerModeSelectionIntentForToolItem(item);
+    assert.equal(intent?.id, modeId);
+    assert.equal(applyComposerToolDirective('summarize the paper', item), 'summarize the paper');
+    assert.equal(applyComposerToolDirective('', item), '');
+  }
+});
+
+test('composer multitask is a declared mode intent instead of slash text', () => {
+  const multitask = buildComposerToolMenu().find((item) => item.id === 'multitask');
+  assert.ok(multitask);
+  assert.equal(multitask.commandPrefix, undefined);
+  assert.equal(applyComposerToolDirective('review cytokine papers', multitask), 'review cytokine papers');
+  assert.equal(applyComposerToolDirective('', multitask), '');
 });
 
 test('composer capability menu exposes public domain, pipeline, tool, and MCP entries', () => {
