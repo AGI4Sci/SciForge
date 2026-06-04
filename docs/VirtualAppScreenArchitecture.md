@@ -271,8 +271,5 @@ Image pane 是右侧结果栏的通用图片展示区。
 
 ## 任务入口
 
-- [`../PROJECT_annotation.md`](../PROJECT_annotation.md)
-- [`../PROJECT_image.md`](../PROJECT_image.md)
-- [`../PROJECT_window_action.md`](../PROJECT_window_action.md)
-- [`../PROJECT_desktop.md`](../PROJECT_desktop.md)
-- [`../PROJECT_CU.md`](../PROJECT_CU.md)
+- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)
+- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)

@@ -1,6 +1,6 @@
 # SciForge 文档
 
-最后更新：2026-06-03
+最后更新：2026-06-04
 
 ## 当前结论
 
@@ -8,10 +8,8 @@ SciForge GUI 是 Agent Host 的确定性体验扩展。Agent Host 拥有 plannin
 
 M1 当前主线：
 
-- Browser Pane：Desktop Electron native host 内的真实浏览器。
-- Global Annotation：像 Codex 一样把标注作为下一条用户消息的 pending context。
-- Image / Evidence Pane：右侧通用图片证据展示区，替代旧 Screen pane。
-- Window Action Session：agent 以 actorCursor 操作用户加入的真实窗口。
+- Workbench：left/middle/right、composer、process rows、Browser/Image/References pane。
+- Desktop / Action：Desktop native host、Annotation、Window Action、Computer Use adapter。
 
 旧的隔离 `VirtualAppScreen` 产品需求已废弃。
 
@@ -31,12 +29,9 @@ M1 当前主线：
 ## 活跃 PROJECT 入口
 
 - [`../PROJECT.md`](../PROJECT.md)：总协议。
-- [`../PROJECT_browser.md`](../PROJECT_browser.md)：Browser Pane。
-- [`../PROJECT_annotation.md`](../PROJECT_annotation.md)：统一 Annotation。
-- [`../PROJECT_image.md`](../PROJECT_image.md)：Image / Evidence Pane。
-- [`../PROJECT_window_action.md`](../PROJECT_window_action.md)：Window Action Session。
-- [`../PROJECT_desktop.md`](../PROJECT_desktop.md)：Desktop native host。
-- [`../PROJECT_CU.md`](../PROJECT_CU.md)：旧 Computer Use / VirtualAppScreen 兼容入口。
+- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)：Workbench UI、composer、process rows、object ref routing、Browser/Image/References pane。
+- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)：Desktop native host、Annotation、Window Action、Computer Use adapter。
+- 历史分散任务板：`docs/archive/project-tasks-2026-06-04/`。
 
 ## 核心规则
 

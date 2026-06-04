@@ -16,9 +16,9 @@ SciForge 当前主线是 **Cursor-like Multi-agent / Sub-agent Workbench**。
 - 最终回答合并多个 sub-agent 结果，默认不展开 raw transcript。
 - `subagent:*`、`artifact:subagent-*`、transcript/result refs 点击后打开右侧 References pane。
 
-旧 Browser Pane、Global Annotation、Image Evidence、Window Action 和 left/middle/right
-pane 任务不再作为 `PROJECT.md` 当前任务板。它们仍可作为相关模块任务板维护，但本入口只跟踪
-multi-agent / sub-agent 体验对齐。
+旧 left/middle/right/browser/image/desktop/annotation/window-action/computer-use 分散任务板已合并。
+`PROJECT.md` 只跟踪 multi-agent / sub-agent 体验对齐；Workbench 和 Desktop/Action 相关任务分别由
+`PROJECT_workbench.md` 与 `PROJECT_desktop_actions.md` 维护。
 
 ## 本轮双端观察基线
 
@@ -59,14 +59,9 @@ multi-agent / sub-agent 体验对齐。
 
 ## 相关任务板
 
-- [`PROJECT_left.md`](PROJECT_left.md)：Cursor-like Agents sidebar、Repositories、Threads、Search。
-- [`PROJECT_middle.md`](PROJECT_middle.md)：chat、process rows、composer、mode/model/tools。
-- [`PROJECT_right.md`](PROJECT_right.md)：References / Files / Browser / Image / Terminal pane 路由。
-- [`PROJECT_desktop.md`](PROJECT_desktop.md)：Desktop Electron native host 和 live parity。
-- [`PROJECT_browser.md`](PROJECT_browser.md)：Browser Pane 相关模块任务。
-- [`PROJECT_annotation.md`](PROJECT_annotation.md)：annotation pending context 和 refs。
-- [`PROJECT_image.md`](PROJECT_image.md)：Image / Evidence viewer。
-- [`PROJECT_window_action.md`](PROJECT_window_action.md)：Window Action Session 和 actorCursor。
+- [`PROJECT_workbench.md`](PROJECT_workbench.md)：left/middle/right、composer、process rows、Browser/Image/References pane。
+- [`PROJECT_desktop_actions.md`](PROJECT_desktop_actions.md)：Desktop native host、Annotation、Window Action、Computer Use adapter。
+- 历史分散任务板：`docs/archive/project-tasks-2026-06-04/`。
 
 ## 当前任务板：Cursor-like Sub-agent Parity
 

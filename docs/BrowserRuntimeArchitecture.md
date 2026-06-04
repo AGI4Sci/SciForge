@@ -137,6 +137,5 @@ Electron 注入 native Browser adapter
 
 ## 任务入口
 
-- [`../PROJECT_browser.md`](../PROJECT_browser.md)
-- [`../PROJECT_annotation.md`](../PROJECT_annotation.md)
-- [`../PROJECT_desktop.md`](../PROJECT_desktop.md)
+- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)
+- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)
