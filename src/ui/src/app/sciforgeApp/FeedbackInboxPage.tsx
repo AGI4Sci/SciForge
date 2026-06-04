@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { CheckCheck, CheckCircle2, ExternalLink, Loader2 } from 'lucide-react';
+import { CheckCheck, CheckCircle2, ExternalLink, Loader2, Pencil, Save, X } from 'lucide-react';
 import { defaultSciForgeConfig } from '../../config';
 import {
   confirmFeedbackRepairAction,
@@ -85,6 +85,7 @@ export function FeedbackInboxPage({
   repairActions,
   repairGuidance,
   onStatusChange,
+  onCommentEdit,
   onDelete,
   onRestore,
   onCreateRequest,
@@ -115,6 +116,7 @@ export function FeedbackInboxPage({
   repairActions: FeedbackRepairActionRecord[];
   repairGuidance: FeedbackRepairGuidanceRecord[];
   onStatusChange: (ids: string[], status: FeedbackCommentStatus) => void;
+  onCommentEdit: (id: string, comment: string) => void;
   onDelete: (ids: string[]) => void;
   onRestore: (ids: string[]) => void;
   onCreateRequest: (ids: string[], title: string) => void;
@@ -141,6 +143,8 @@ export function FeedbackInboxPage({
   const [statusFilter, setStatusFilter] = useState<FeedbackStatusFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [bulkStatus, setBulkStatus] = useState<FeedbackCommentStatus>('triaged');
+  const [editingCommentId, setEditingCommentId] = useState<string | undefined>();
+  const [editingCommentDraft, setEditingCommentDraft] = useState('');
   const [queueActionHint, setQueueActionHint] = useState('');
   const [githubActionHint, setGithubActionHint] = useState('');
   const [githubSubmitBusy, setGithubSubmitBusy] = useState(false);
@@ -1232,11 +1236,62 @@ export function FeedbackInboxPage({
                   const canUserCloseGithubIssue = Boolean(item.githubIssueNumber)
                     && item.githubIssueState !== 'closed'
                     && item.githubSyncStatus !== 'github-closed';
+                  const isEditingComment = editingCommentId === item.id;
                   return (
                     <>
                 <div className="feedback-card-head">
-                  <strong>{item.comment}</strong>
+                  {isEditingComment ? (
+                    <div className="feedback-comment-editor">
+                      <textarea
+                        aria-label={`反馈 ${item.id} 评论文本`}
+                        value={editingCommentDraft}
+                        onChange={(event) => setEditingCommentDraft(event.target.value)}
+                        rows={3}
+                      />
+                      <div className="feedback-comment-editor-actions">
+                        <button
+                          type="button"
+                          aria-label={`保存反馈 ${item.id}`}
+                          title="保存评论"
+                          onClick={() => {
+                            onCommentEdit(item.id, editingCommentDraft);
+                            setEditingCommentId(undefined);
+                            setEditingCommentDraft('');
+                          }}
+                        >
+                          <Save size={13} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          aria-label={`取消编辑反馈 ${item.id}`}
+                          title="取消编辑"
+                          onClick={() => {
+                            setEditingCommentId(undefined);
+                            setEditingCommentDraft('');
+                          }}
+                        >
+                          <X size={13} aria-hidden />
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <strong>{item.comment || <span className="feedback-card-empty-comment">空评论</span>}</strong>
+                  )}
                   <div className="feedback-card-head-actions">
+                    {!isEditingComment && item.status !== 'deleted' ? (
+                      <button
+                        type="button"
+                        className="feedback-comment-edit-button"
+                        aria-label={`编辑反馈 ${item.id}`}
+                        title="编辑评论"
+                        onClick={() => {
+                          setEditingCommentId(item.id);
+                          setEditingCommentDraft(item.comment);
+                        }}
+                      >
+                        <Pencil size={13} aria-hidden />
+                      </button>
+                    ) : null}
                     <Badge variant={feedbackStatusVariant(item.status)}>{feedbackStatusLabel(item.status)}</Badge>
                     <Badge variant={item.priority === 'urgent' || item.priority === 'high' ? 'warning' : 'muted'}>{item.priority}</Badge>
                     {annotationPlan ? <Badge variant="info">annotation-plan</Badge> : null}

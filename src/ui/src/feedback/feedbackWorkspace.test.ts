@@ -13,6 +13,7 @@ import {
   upsertFeedbackRepairActionInWorkspace,
   upsertFeedbackRepairResultInWorkspace,
   upsertFeedbackRepairRunInWorkspace,
+  updateFeedbackCommentText,
   updateFeedbackCommentStatus,
 } from './feedbackWorkspace';
 
@@ -112,6 +113,91 @@ test('status updates do not resurrect soft-deleted feedback without restore', ()
   assert.equal(marked.feedbackComments?.find((item) => item.id === 'a')?.deletedAt, '2026-05-07T01:10:00.000Z');
   assert.equal(marked.feedbackComments?.find((item) => item.id === 'b')?.status, 'fixed');
   assert.equal(restored.feedbackComments?.find((item) => item.id === 'a')?.status, 'triaged');
+});
+
+test('updates feedback comment text without replacing evidence or annotation metadata', () => {
+  const original = comment('feedback-1', 'open', {
+    comment: 'original annotation text',
+    screenshotRef: 'file:.sciforge/feedback/feedback-1/legacy.png',
+    rawScreenshotRef: 'file:.sciforge/feedback/feedback-1/raw.png',
+    annotatedScreenshotRef: 'file:.sciforge/feedback/feedback-1/annotated.png',
+    evidenceBundleRef: 'file:.sciforge/feedback/feedback-1/bundle.json',
+    evidenceAssets: [{
+      schemaVersion: 1,
+      id: 'feedback-1-raw-screenshot',
+      kind: 'raw-screenshot',
+      label: 'Raw screenshot',
+      ref: 'file:.sciforge/feedback/feedback-1/raw.png',
+      localOnly: true,
+      visibility: 'private',
+      mediaType: 'image/png',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      metadata: { owner: 'feedback-workspace' },
+    }],
+    evidenceStatus: {
+      status: 'complete',
+      rawScreenshot: true,
+      annotatedScreenshot: true,
+      targetSnapshot: true,
+      runtimeSnapshot: true,
+      scrubbed: true,
+      diagnostics: [],
+    },
+    screenshot: {
+      schemaVersion: 1,
+      dataUrl: 'data:image/png;base64,scrubbed',
+      rawDataUrl: 'data:image/png;base64,raw',
+      annotatedDataUrl: 'data:image/png;base64,annotated',
+      rawScreenshotRef: 'file:.sciforge/feedback/feedback-1/raw.png',
+      annotatedScreenshotRef: 'file:.sciforge/feedback/feedback-1/annotated.png',
+      mediaType: 'image/png',
+      width: 300,
+      height: 140,
+      targetRect: { x: 10, y: 20, width: 300, height: 140 },
+      capturedAt: '2026-05-07T00:00:00.000Z',
+    },
+    metadata: {
+      desktopAnnotation: {
+        display: { id: 'display-1', scaleFactor: 2 },
+        windowBinding: { windowRef: 'window:1', owner: 'desktop-capture' },
+        bounds: { x: 10, y: 20, width: 300, height: 140 },
+        refs: {
+          annotationRef: 'desktop-annotation:annotation:feedback-1',
+          windowRef: 'desktop-annotation:window:1',
+        },
+      },
+      providerPayloadOwner: 'feedback-evidence',
+    },
+    target: {
+      rect: { x: 10, y: 20, width: 300, height: 140 },
+      stableSelector: '[data-feedback-target="submit"]',
+    },
+    runtime: {
+      activeRunId: 'run-1',
+      artifactSummary: [{ id: 'artifact-1', type: 'screenshot', title: 'Desktop capture' }],
+      executionSummary: [{ id: 'execution-1', tool: 'desktop-capture', status: 'done' }],
+    },
+  });
+  const state = workspace([original, comment('feedback-2')]);
+
+  const next = updateFeedbackCommentText(state, 'feedback-1', '', '2026-06-04T12:00:00.000Z');
+  const edited = next.feedbackComments?.find((item) => item.id === 'feedback-1');
+  const untouched = next.feedbackComments?.find((item) => item.id === 'feedback-2');
+
+  assert.equal(edited?.comment, '');
+  assert.equal(edited?.updatedAt, '2026-06-04T12:00:00.000Z');
+  assert.deepEqual(edited?.target, original.target);
+  assert.deepEqual(edited?.viewport, original.viewport);
+  assert.deepEqual(edited?.runtime, original.runtime);
+  assert.deepEqual(edited?.screenshot, original.screenshot);
+  assert.deepEqual(edited?.metadata, original.metadata);
+  assert.deepEqual(edited?.evidenceAssets, original.evidenceAssets);
+  assert.deepEqual(edited?.evidenceStatus, original.evidenceStatus);
+  assert.equal(edited?.screenshotRef, original.screenshotRef);
+  assert.equal(edited?.rawScreenshotRef, original.rawScreenshotRef);
+  assert.equal(edited?.annotatedScreenshotRef, original.annotatedScreenshotRef);
+  assert.equal(edited?.evidenceBundleRef, original.evidenceBundleRef);
+  assert.equal(untouched?.comment, 'comment feedback-2');
 });
 
 test('soft deletes feedback without dropping request, audit, GitHub, or evidence refs', () => {

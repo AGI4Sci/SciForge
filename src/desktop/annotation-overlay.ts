@@ -469,7 +469,7 @@ export function createDesktopAnnotationOverlayController(
     if (!selection) {
       throw new Error('Cannot submit desktop annotation comment before a selection exists.');
     }
-    const comment = requireNonEmptyString(input.comment, 'comment');
+    const comment = requireString(input.comment, 'comment');
     submitted = {
       ...selection,
       status: 'submitted',
@@ -1241,7 +1241,7 @@ export function desktopAnnotationOverlayRendererHtml(
 	      }
 
 	      function updateSaveState() {
-	        save.disabled = !selectedBounds || comment.value.trim().length === 0;
+	        save.disabled = !selectedBounds;
 	      }
 
 	      function resetSelection() {
@@ -1254,11 +1254,6 @@ export function desktopAnnotationOverlayRendererHtml(
 
 	      function submitSelected() {
 	        if (!selectedBounds) return;
-	        if (comment.value.trim().length === 0) {
-	          comment.focus();
-	          updateSaveState();
-	          return;
-	        }
 	        api?.submitSelection?.({
 	          bounds: selectedBounds,
 	          comment: comment.value,
@@ -1797,6 +1792,13 @@ function requireNonEmptyString(value: unknown, label: string): string {
     throw new Error(`${label} must be a non-empty string.`);
   }
   return value.trim();
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`${label} must be a string.`);
+  }
+  return value;
 }
 
 function optionalNonEmptyString(value: unknown, label: string): string | undefined {

@@ -17,6 +17,7 @@ const feedbackRepairAuditPanelSource = readFileSync(new URL('../../feedback/Feed
 const githubFeedbackSource = readFileSync(new URL('../../feedback/githubFeedback.ts', import.meta.url), 'utf8');
 const feedbackScreenshotPreviewSource = readFileSync(new URL('../../feedback/FeedbackScreenshotPreview.tsx', import.meta.url), 'utf8');
 const sciForgeAppSource = readFileSync(new URL('../SciForgeApp.tsx', import.meta.url), 'utf8');
+const sciForgeAppFeedbackActionsSource = readFileSync(new URL('../SciForgeAppFeedbackActions.ts', import.meta.url), 'utf8');
 const workspaceServerSource = readFileSync(new URL('../../../../runtime/workspace-server.ts', import.meta.url), 'utf8');
 const workspaceServerFeedbackCodexTerminalSource = readFileSync(new URL('../../../../runtime/workspace-server-feedback-codex-terminal.ts', import.meta.url), 'utf8');
 
@@ -228,6 +229,18 @@ test('feedback inbox labels annotation records as intent-first inbox entries', (
   assert.match(feedbackInboxSource, /feedbackAnnotationPlanMetadata\(item\)/);
   assert.match(feedbackInboxSource, /<Badge variant="info">annotation-plan<\/Badge>/);
   assert.match(feedbackInboxSource, /inbox audit ready/);
+});
+
+test('feedback inbox exposes comment-only history editing without raw evidence payloads', () => {
+  const editPathSource = feedbackInboxSource.match(/editingCommentDraft[\s\S]*?FeedbackEvidenceReview/)?.[0] ?? feedbackInboxSource;
+
+  assert.match(feedbackInboxSource, /onCommentEdit/);
+  assert.match(feedbackInboxSource, /aria-label=\{`编辑反馈 \$\{item\.id\}`\}/);
+  assert.match(feedbackInboxSource, /textarea[\s\S]*value=\{editingCommentDraft\}/);
+  assert.match(feedbackInboxSource, /onCommentEdit\(item\.id, editingCommentDraft\)/);
+  assert.match(sciForgeAppFeedbackActionsSource, /updateFeedbackCommentText\(current, id, comment, nowIso\(\)\)/);
+  assert.match(sciForgeAppSource, /onCommentEdit=\{feedbackActions\.updateFeedbackCommentText\}/);
+  assert.doesNotMatch(editPathSource, /rawDataUrl|annotatedDataUrl|windowCandidates|providerPayload/);
 });
 
 test('feedback inbox defaults repair to system Terminal with optional Web Viewer', () => {

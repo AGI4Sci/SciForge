@@ -371,21 +371,30 @@ test('desktop annotation overlay renderer supports keyboard submit, cancel, focu
   renderer.dispatchPointer('pointermove', 260, 220);
   renderer.dispatchPointer('pointerup', 260, 220);
   assert.equal(renderer.document.activeElement, renderer.comment);
+  assert.equal(renderer.document.save.disabled, false);
 
   renderer.dispatchKey('Enter', renderer.comment);
-  assert.deepEqual(renderer.submittedSelections, []);
-  assert.equal(renderer.document.activeElement, renderer.comment);
+  assert.equal(renderer.submittedSelections.length, 1);
+  assert.deepEqual(renderer.submittedSelections[0], {
+    bounds: { x: 100, y: 100, width: 160, height: 120 },
+    comment: '',
+    display: {
+      id: 'display-main',
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      scaleFactor: 2,
+    },
+  });
 
   renderer.comment.value = 'First line';
   renderer.dispatchKey('Enter', renderer.comment, { shiftKey: true });
   if (!renderer.lastKeyEvent?.defaultPrevented) renderer.comment.value += '\n';
   renderer.comment.value += 'Second line';
   assert.equal(renderer.comment.value, 'First line\nSecond line');
-  assert.deepEqual(renderer.submittedSelections, []);
+  assert.equal(renderer.submittedSelections.length, 1);
 
   renderer.dispatchKey('Enter', renderer.comment);
-  assert.equal(renderer.submittedSelections.length, 1);
-  assert.deepEqual(renderer.submittedSelections[0], {
+  assert.equal(renderer.submittedSelections.length, 2);
+  assert.deepEqual(renderer.submittedSelections[1], {
     bounds: { x: 100, y: 100, width: 160, height: 120 },
     comment: 'First line\nSecond line',
     display: {
@@ -397,6 +406,54 @@ test('desktop annotation overlay renderer supports keyboard submit, cancel, focu
 
   renderer.dispatchKey('Escape', renderer.body);
   assert.equal(renderer.cancelledSelections, 1);
+});
+
+test('desktop annotation overlay renderer shares click and Enter submit for empty comments after selection', async () => {
+  const desktop = await import('../../src/desktop/index.js') as Record<string, unknown>;
+  const htmlFactory = desktop.desktopAnnotationOverlayRendererHtml as (
+    bounds: Bounds,
+    displays?: Array<Record<string, unknown>>,
+  ) => string;
+  const renderer = createRendererHarness(htmlFactory(
+    { x: 0, y: 0, width: 1440, height: 900 },
+    [{ id: 'display-main', bounds: { x: 0, y: 0, width: 1440, height: 900 }, scaleFactor: 2 }],
+  ));
+
+  renderer.dispatchKey('Enter', renderer.comment);
+  assert.deepEqual(renderer.submittedSelections, []);
+
+  renderer.dispatchPointer('pointerdown', 100, 100);
+  renderer.dispatchPointer('pointermove', 260, 220);
+  renderer.dispatchPointer('pointerup', 260, 220);
+  assert.equal(renderer.document.save.disabled, false);
+
+  renderer.comment.value = '';
+  const clickEvent = new FakeRendererEvent({ target: renderer.document.save });
+  clickEvent.type = 'click';
+  renderer.document.save.dispatchEvent(clickEvent);
+  assert.equal(renderer.submittedSelections.length, 1);
+  assert.deepEqual(renderer.submittedSelections[0], {
+    bounds: { x: 100, y: 100, width: 160, height: 120 },
+    comment: '',
+    display: {
+      id: 'display-main',
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      scaleFactor: 2,
+    },
+  });
+
+  renderer.comment.value = '';
+  renderer.dispatchKey('Enter', renderer.comment);
+  assert.equal(renderer.submittedSelections.length, 2);
+  assert.deepEqual(renderer.submittedSelections[1], {
+    bounds: { x: 100, y: 100, width: 160, height: 120 },
+    comment: '',
+    display: {
+      id: 'display-main',
+      bounds: { x: 0, y: 0, width: 1440, height: 900 },
+      scaleFactor: 2,
+    },
+  });
 });
 
 test('desktop annotation overlay renderer tracks active display, retains it in gaps, and clips locked selections', async () => {
@@ -542,7 +599,10 @@ test('desktop annotation overlay supports cancel, reselect, and non-empty commen
   controller.updateSelection({
     bounds: { x: 110, y: 80, width: 200, height: 120 },
   });
-  assert.throws(() => controller.submitComment({ comment: '   ' }), /comment/i);
+  assert.throws(() => controller.submitComment({ comment: undefined }), /comment/i);
+  const emptySubmitted = asRecord(controller.submitComment({ comment: '' }));
+  assert.equal(emptySubmitted.status, 'submitted');
+  assert.equal(emptySubmitted.comment, '');
   assert.deepEqual(asRecord(controller.cancel()).status, 'cancelled');
 
   controller.beginSelection({

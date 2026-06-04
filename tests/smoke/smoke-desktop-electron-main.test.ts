@@ -452,6 +452,15 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
     screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
     providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
   });
+  await api.submitSelection({
+    bounds: { x: 12, y: 34, width: 56, height: 78 },
+    comment: '',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  });
   await api.cancelSelection();
   const activeDisplayPayloads: unknown[] = [];
   const unsubscribe = await api.onActiveDisplayChanged((payload: unknown) => {
@@ -470,6 +479,7 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
   if (typeof unsubscribe === 'function') unsubscribe();
 
   assert.deepEqual(invoked.map((item) => item.channel), [
+    'desktop:annotation-overlay:internal-event',
     'desktop:annotation-overlay:internal-event',
     'desktop:annotation-overlay:internal-event',
     'desktop:annotation-overlay:internal-event',
@@ -508,6 +518,17 @@ test('P0-DESK annotation overlay preload exposes only trusted internal selection
     messageDraftId: 'draft-1',
   });
   assert.deepEqual(JSON.parse(JSON.stringify(invoked[3].payload)), {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-submitted',
+    bounds: { x: 12, y: 34, width: 56, height: 78 },
+    comment: '',
+    display: {
+      id: 'display-right',
+      bounds: { x: 0, y: 160, width: 1440, height: 900 },
+      scaleFactor: 1.25,
+    },
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(invoked[4].payload)), {
     schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
     event: 'screen-region-selection-cancelled',
   });
@@ -1154,6 +1175,122 @@ test('P0 desktop annotation screen-region start can complete through trusted int
   assertNoRawProviderPayload(eventResult);
 });
 
+test('P0 desktop annotation app-window start completes through trusted internal overlay events', async () => {
+  const captureInputs: Array<Record<string, any>> = [];
+  const selectedWindow = {
+    windowRef: 'desktop-window:paper-reader:window-42',
+    targetRef: 'desktop-window:paper-reader:window-42',
+    appName: 'Paper Reader',
+    bundleId: 'com.example.paper-reader',
+    pid: 4242,
+    title: 'Paper Reader - Figure 1',
+    windowBounds: { x: 80, y: 40, width: 900, height: 640 },
+  };
+  const handlers = registerDesktopAnnotationStartSmokeHandlers({
+    desktopAnnotationAppWindowSelection: {
+      async select() {
+        return {
+          schemaVersion: 'sciforge.desktop.annotation.app-window-selection-result.v1',
+          status: 'selected',
+          ...selectedWindow,
+        };
+      },
+    },
+    desktopAnnotationCaptureProvider: {
+      async captureSelection(input: Record<string, any>) {
+        captureInputs.push(input);
+        const prefix = `desktop-annotation:workspace/${input.workspaceId}/session/${input.sessionId}/`;
+        return {
+          status: 'captured',
+          screenshotRef: `${prefix}screenshot/app-window-internal-event`,
+          cropRef: `${prefix}crop/app-window-internal-event`,
+          imageRef: `${prefix}image/app-window-internal-event`,
+          hash: 'sha256:app-window-internal-event',
+          capturedAt: '2026-06-04T00:00:01.000Z',
+          metadata: {
+            refsOnly: true,
+            windowBinding: {
+              status: 'manual-bound',
+              reason: 'App window annotation was explicitly selected by the user.',
+              windowRef: input.windowRef,
+              targetRef: input.targetRef,
+              sourceKind: input.sourceKind,
+              coordinateSpace: input.coordinateSpace,
+              windowBounds: input.windowBounds,
+              windowLocalBounds: input.windowLocalBounds,
+            },
+          },
+        };
+      },
+    },
+    desktopAnnotationScreenRegionOverlayBridge: { trusted: true },
+  });
+  const start = handlers.get('desktop:annotation-overlay:start');
+  const internalEvent = handlers.get('desktop:annotation-overlay:internal-event');
+  const status = handlers.get('desktop:annotation-overlay:status');
+  assert.equal(typeof start, 'function');
+  assert.equal(typeof internalEvent, 'function');
+  assert.equal(typeof status, 'function');
+
+  const pendingResult = start?.({}, {
+    ...validOneClickDesktopAnnotationRequest(),
+    mode: 'app-window',
+    purpose: 'comment-explicit-app-window',
+  });
+  await Promise.resolve();
+  assert.equal(asRecord(await status?.({})).status, 'selecting');
+  assert.equal(asRecord(await status?.({})).visible, true);
+
+  const eventResult = asRecord(await internalEvent?.({}, {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-submitted',
+    bounds: { x: 120, y: 160, width: 240, height: 120 },
+    comment: '',
+    rawWindowList: [{ title: 'SECRET_WINDOW_LIST_SHOULD_NOT_LEAK' }],
+    screenshotBase64: 'RAW_SCREENSHOT_BASE64_SHOULD_NOT_LEAK',
+    providerPayload: { token: 'RAW_PROVIDER_TOKEN_SHOULD_NOT_LEAK' },
+  }));
+  const result = asRecord(await pendingResult);
+
+  assert.equal(eventResult.status, 'captured');
+  assert.equal(result.status, 'captured');
+  assert.equal(result.sourceKind, 'window');
+  assert.equal(result.coordinateSpace, 'window-local');
+  assert.equal(result.windowRef, selectedWindow.windowRef);
+  assert.equal(result.targetRef, selectedWindow.targetRef);
+  assert.equal(result.comment, '');
+  assert.deepEqual(result.windowBounds, selectedWindow.windowBounds);
+  assert.deepEqual(result.windowLocalBounds, { x: 40, y: 120, width: 240, height: 120 });
+  assert.equal(asRecord(await status?.({})).status, 'idle');
+  assert.equal(asRecord(await status?.({})).visible, false);
+  assert.equal(captureInputs.length, 1);
+  assert.equal(captureInputs[0].sourceKind, 'window');
+  assert.equal(captureInputs[0].coordinateSpace, 'window-local');
+  assert.equal(captureInputs[0].windowRef, selectedWindow.windowRef);
+  assert.deepEqual(captureInputs[0].windowLocalBounds, { x: 40, y: 120, width: 240, height: 120 });
+  assertNoRawImagePayload(result);
+  assertNoRawProviderPayload(result);
+  assertNoRawImagePayload(eventResult);
+  assertNoRawProviderPayload(eventResult);
+
+  const cancelPendingResult = start?.({}, {
+    ...validOneClickDesktopAnnotationRequest(),
+    mode: 'app-window',
+    purpose: 'comment-explicit-app-window',
+  });
+  await Promise.resolve();
+  assert.equal(asRecord(await status?.({})).status, 'selecting');
+  const cancelResult = asRecord(await internalEvent?.({}, {
+    schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event.v1',
+    event: 'screen-region-selection-cancelled',
+  }));
+  const cancelled = asRecord(await cancelPendingResult);
+  assert.equal(cancelResult.status, 'cancelled');
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(asRecord(await status?.({})).status, 'idle');
+  assert.equal(asRecord(await status?.({})).visible, false);
+});
+
 test('P0 desktop annotation blocked app-window start separates explicit selection diagnostics from screen capture unavailability', async () => {
   const handlers = registerDesktopAnnotationStartSmokeHandlers({
     desktopAnnotationWindowInventory: {
@@ -1394,6 +1531,85 @@ test('P0 desktop annotation app-window start uses injected explicit window metad
   assertNoRawProviderPayload(result);
   assertNoRawImagePayload(selection);
   assertNoRawProviderPayload(selection);
+});
+
+test('P0 desktop annotation app-window confirm saves empty comments and cancel exits overlay mode', async () => {
+  const selectedWindow = {
+    windowRef: 'desktop-window:paper-reader:window-42',
+    targetRef: 'desktop-window:paper-reader:window-42',
+    appName: 'Paper Reader',
+    bundleId: 'com.example.paper-reader',
+    pid: 4242,
+    title: 'Paper Reader - Figure 1',
+    windowBounds: { x: 80, y: 40, width: 900, height: 640 },
+  };
+  const handlers = registerDesktopAnnotationStartSmokeHandlers({
+    desktopAnnotationAppWindowSelection: {
+      async select() {
+        return {
+          schemaVersion: 'sciforge.desktop.annotation.app-window-selection-result.v1',
+          status: 'selected',
+          ...selectedWindow,
+        };
+      },
+    },
+    desktopAnnotationCaptureProvider: {
+      async captureSelection() {
+        const prefix = 'desktop-annotation:workspace/workspace-a/session/session-a/';
+        return {
+          status: 'captured',
+          screenshotRef: `${prefix}screenshot/app-window-empty-comment`,
+          cropRef: `${prefix}crop/app-window-empty-comment`,
+          imageRef: `${prefix}image/app-window-empty-comment`,
+          hash: 'sha256-app-window-empty-comment',
+          capturedAt: '2026-06-04T00:00:01.000Z',
+        };
+      },
+    },
+  });
+  const start = handlers.get('desktop:annotation-overlay:start');
+  const update = handlers.get('desktop:annotation-overlay:update');
+  const submit = handlers.get('desktop:annotation-overlay:submit');
+  const capture = handlers.get('desktop:annotation-overlay:capture');
+  const cancel = handlers.get('desktop:annotation-overlay:cancel');
+  const status = handlers.get('desktop:annotation-overlay:status');
+  assert.equal(typeof start, 'function');
+  assert.equal(typeof update, 'function');
+  assert.equal(typeof submit, 'function');
+  assert.equal(typeof capture, 'function');
+  assert.equal(typeof cancel, 'function');
+  assert.equal(typeof status, 'function');
+
+  const startResult = asRecord(await start?.({}, {
+    ...validOneClickDesktopAnnotationRequest(),
+    mode: 'app-window',
+    purpose: 'comment-explicit-app-window',
+  }));
+  assert.equal(startResult.status, 'selecting');
+  assert.equal(asRecord(await status?.({})).visible, true);
+
+  await update?.({}, { bounds: { x: 120, y: 160, width: 240, height: 120 } });
+  const submitted = asRecord(await submit?.({}, { comment: '' }));
+  assert.equal(submitted.status, 'submitted');
+  assert.equal(submitted.comment, '');
+  const captured = asRecord(await capture?.({}));
+  assert.equal(captured.status, 'captured');
+  assert.equal(captured.comment, '');
+  assert.equal(asRecord(await status?.({})).status, 'idle');
+  assert.equal(asRecord(await status?.({})).visible, false);
+  assertNoRawImagePayload(captured);
+  assertNoRawProviderPayload(captured);
+
+  await start?.({}, {
+    ...validOneClickDesktopAnnotationRequest(),
+    mode: 'app-window',
+    purpose: 'comment-explicit-app-window',
+  });
+  assert.equal(asRecord(await status?.({})).visible, true);
+  const cancelled = asRecord(await cancel?.({}));
+  assert.equal(cancelled.status, 'cancelled');
+  assert.equal(asRecord(await status?.({})).status, 'idle');
+  assert.equal(asRecord(await status?.({})).visible, false);
 });
 
 test('P0 desktop annotation begin accepts screen-region selections without window bounds', async () => {

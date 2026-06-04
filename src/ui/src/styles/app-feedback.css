@@ -537,6 +537,8 @@
 .feedback-queue-confirmation-actions button,
 .feedback-github-confirmation-actions button,
 .feedback-github-card-actions button,
+.feedback-comment-edit-button,
+.feedback-comment-editor-actions button,
 .feedback-repair-closure-actions button,
 .feedback-repair-action-row button,
 .feedback-codex-terminal-actions button,
@@ -586,6 +588,8 @@
 .feedback-queue-confirmation-actions button:hover:not(:disabled),
 .feedback-github-confirmation-actions button:hover:not(:disabled),
 .feedback-github-card-actions button:hover:not(:disabled),
+.feedback-comment-edit-button:hover:not(:disabled),
+.feedback-comment-editor-actions button:hover:not(:disabled),
 .feedback-repair-closure-actions button:hover:not(:disabled),
 .feedback-repair-action-row button:hover:not(:disabled),
 .feedback-codex-terminal-actions button:hover:not(:disabled),
@@ -676,6 +680,9 @@
 .feedback-card summary:focus-visible,
 .feedback-github-card-link:focus-visible,
 .feedback-github-card-actions button:focus-visible,
+.feedback-comment-edit-button:focus-visible,
+.feedback-comment-editor textarea:focus-visible,
+.feedback-comment-editor-actions button:focus-visible,
 .feedback-github-issue-link:focus-visible,
 .feedback-github-confirmation-actions button:focus-visible,
 .feedback-screenshot-image-button:focus-visible,
@@ -1787,6 +1794,44 @@
   justify-content: flex-end;
   gap: 7px;
   flex-wrap: wrap;
+}
+
+.feedback-comment-edit-button,
+.feedback-comment-editor-actions button {
+  width: 30px;
+  padding: 0;
+}
+
+.feedback-comment-editor {
+  display: grid;
+  flex: 1 1 320px;
+  gap: 8px;
+  min-width: min(320px, 100%);
+}
+
+.feedback-comment-editor textarea {
+  width: 100%;
+  min-height: 76px;
+  padding: 9px 10px;
+  color: var(--bio-50);
+  background: var(--surface-input);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  outline: none;
+  resize: vertical;
+  font: inherit;
+  line-height: 1.4;
+}
+
+.feedback-comment-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.feedback-card-empty-comment {
+  color: var(--bio-400);
+  font-style: italic;
 }
 
 .feedback-card p {

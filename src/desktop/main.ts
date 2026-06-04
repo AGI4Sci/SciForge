@@ -349,7 +349,7 @@ export function registerDesktopIpcHandlers(input: {
   }, {
     overlayPreloadPath: desktopAnnotationOverlayPreloadPath(input.runtimeConfig.appRoot),
   });
-  let activeScreenRegionOverlaySelection: {
+  let activeTrustedOverlaySelection: {
     request: DesktopAnnotationStartRequest;
     owner: { workspaceId: string; sessionId: string };
     targetRef: string;
@@ -413,18 +413,37 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:annotation-overlay:start', async (_event: unknown, value: unknown) => {
     const request = desktopAnnotationStartRequest(value);
     if (request.mode === 'app-window') {
+      const trustedOverlayBridge = input.desktopAnnotationScreenRegionOverlayBridge?.trusted === true;
+      if (trustedOverlayBridge && activeTrustedOverlaySelection) {
+        return blockedDesktopAnnotationStartResult(
+          request,
+          activeTrustedOverlayBlockedReason(request.mode),
+          annotationScreen,
+        );
+      }
       return startDesktopAnnotationAppWindowSelection(
         request,
         annotationOverlay,
         annotationAppWindowSelection,
         annotationScreen,
+        trustedOverlayBridge
+          ? ({ owner, targetRef }) => new Promise((resolveSelection, rejectSelection) => {
+            activeTrustedOverlaySelection = {
+              request,
+              owner,
+              targetRef,
+              resolve: resolveSelection,
+              reject: rejectSelection,
+            };
+          })
+          : undefined,
       );
     }
     if (request.mode === 'screen-region' && input.desktopAnnotationScreenRegionOverlayBridge?.trusted === true) {
-      if (activeScreenRegionOverlaySelection) {
+      if (activeTrustedOverlaySelection) {
         return blockedDesktopAnnotationStartResult(
           request,
-          activeScreenRegionOverlayBlockedReason(),
+          activeTrustedOverlayBlockedReason(request.mode),
           annotationScreen,
         );
       }
@@ -440,7 +459,7 @@ export function registerDesktopIpcHandlers(input: {
         coordinateSpace: 'screen-global',
       });
       return new Promise((resolveSelection, rejectSelection) => {
-        activeScreenRegionOverlaySelection = {
+        activeTrustedOverlaySelection = {
           request,
           owner,
           targetRef,
@@ -461,18 +480,18 @@ export function registerDesktopIpcHandlers(input: {
   });
   if (input.desktopAnnotationScreenRegionOverlayBridge?.trusted === true) {
     input.electron.ipcMain.handle('desktop:annotation-overlay:internal-event', async (_event: unknown, value: unknown) => {
-      if (!activeScreenRegionOverlaySelection) {
+      if (!activeTrustedOverlaySelection) {
         return {
           schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event-result.v1',
           ok: false,
           status: 'blocked',
-          reason: 'desktop.annotation.screen-region-selection-not-active',
+          reason: 'desktop.annotation.overlay-selection-not-active',
           refs: [],
           diagnostics: [{
-            code: 'desktop.annotation.screen-region-selection-not-active',
+            code: 'desktop.annotation.overlay-selection-not-active',
             level: 'warning',
             refsOnly: true,
-            message: 'No trusted screen-region annotation overlay selection is active.',
+            message: 'No trusted annotation overlay selection is active.',
           }],
           metadata: {
             refsOnly: true,
@@ -482,7 +501,7 @@ export function registerDesktopIpcHandlers(input: {
           },
         };
       }
-      const active = activeScreenRegionOverlaySelection;
+      const active = activeTrustedOverlaySelection;
       try {
         const internalEvent = desktopAnnotationOverlayInternalEvent(value);
         if (internalEvent.event === 'screen-region-active-display-changed') {
@@ -520,7 +539,7 @@ export function registerDesktopIpcHandlers(input: {
         }
         if (internalEvent.event === 'screen-region-selection-cancelled') {
           const cancelled = annotationOverlay.cancel();
-          activeScreenRegionOverlaySelection = undefined;
+          activeTrustedOverlaySelection = undefined;
           active.resolve(cancelled);
           return cancelled;
         }
@@ -531,11 +550,11 @@ export function registerDesktopIpcHandlers(input: {
           messageDraftId: internalEvent.messageDraftId,
         });
         const result = await captureDesktopAnnotationSelection(annotationOverlay);
-        activeScreenRegionOverlaySelection = undefined;
+        activeTrustedOverlaySelection = undefined;
         active.resolve(result);
         return result;
       } catch (error) {
-        activeScreenRegionOverlaySelection = undefined;
+        activeTrustedOverlaySelection = undefined;
         active.reject(error);
         throw error;
       }
@@ -554,7 +573,7 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:annotation-overlay:submit', (_event: unknown, value: unknown) => {
     const record = requireRecord(value, 'desktop:annotation-overlay:submit requires an object');
     return annotationOverlay.submitComment({
-      comment: requireString(record.comment, 'comment'),
+      comment: requireCommentString(record.comment, 'comment'),
       threadId: optionalString(record.threadId, 'threadId'),
       messageDraftId: optionalString(record.messageDraftId, 'messageDraftId'),
     });
@@ -564,8 +583,8 @@ export function registerDesktopIpcHandlers(input: {
   });
   input.electron.ipcMain.handle('desktop:annotation-overlay:cancel', () => {
     const cancelled = annotationOverlay.cancel();
-    activeScreenRegionOverlaySelection?.resolve(cancelled);
-    activeScreenRegionOverlaySelection = undefined;
+    activeTrustedOverlaySelection?.resolve(cancelled);
+    activeTrustedOverlaySelection = undefined;
     return cancelled;
   });
   input.electron.ipcMain.handle('desktop:annotation-overlay:status', () => annotationOverlay.getState());
@@ -631,6 +650,10 @@ async function startDesktopAnnotationAppWindowSelection(
   annotationOverlay: ReturnType<typeof createDesktopAnnotationOverlayController>,
   selectionProvider: { select(input: unknown): Promise<unknown> | unknown },
   screen: DesktopAnnotationOverlayScreen,
+  waitForTrustedOverlaySelection?: (input: {
+    owner: { workspaceId: string; sessionId: string };
+    targetRef: string;
+  }) => Promise<unknown>,
 ): Promise<unknown> {
   const owner = annotationOwnerFromContext(request.context);
   let providerResult: unknown;
@@ -664,6 +687,12 @@ async function startDesktopAnnotationAppWindowSelection(
     sourceKind: 'window',
     coordinateSpace: 'window-local',
   });
+  if (waitForTrustedOverlaySelection) {
+    return waitForTrustedOverlaySelection({
+      owner,
+      targetRef: selected.targetRef,
+    });
+  }
   return desktopAnnotationSelectedAppWindowStartResult(request, owner, selected, overlayState);
 }
 
@@ -1186,7 +1215,19 @@ function blockedReasonForDesktopAnnotationMode(mode: DesktopAnnotationMode): {
   };
 }
 
-function activeScreenRegionOverlayBlockedReason(): ReturnType<typeof blockedReasonForDesktopAnnotationMode> {
+function activeTrustedOverlayBlockedReason(mode: DesktopAnnotationMode): ReturnType<typeof blockedReasonForDesktopAnnotationMode> {
+  if (mode === 'app-window') {
+    return {
+      code: 'desktop.annotation.app-window-selection-active',
+      message: 'A trusted app-window annotation overlay selection is already active.',
+      nativeScreenCapture: true,
+      windowBindingStatus: 'blocked',
+      sourceKind: 'window',
+      coordinateSpace: 'window-local',
+      explicitSelectionRequired: true,
+      explicitAppWindowSelectionRequired: true,
+    };
+  }
   return {
     code: 'desktop.annotation.screen-region-selection-active',
     message: 'A trusted screen-region annotation overlay selection is already active.',
@@ -1388,7 +1429,7 @@ function desktopAnnotationOverlayInternalEvent(value: unknown): DesktopAnnotatio
     event: 'screen-region-selection-submitted',
     bounds: desktopAnnotationBounds(record.bounds, 'bounds'),
     display: desktopAnnotationOptionalDisplayMetadata(record.display),
-    comment: requireString(record.comment, 'comment'),
+    comment: requireCommentString(record.comment, 'comment'),
     threadId: optionalString(record.threadId, 'threadId'),
     messageDraftId: optionalString(record.messageDraftId, 'messageDraftId'),
   };
@@ -1517,6 +1558,13 @@ function requireString(value: unknown, field: string): string {
     throw new Error(`desktop:annotation-overlay requires non-empty ${field}`);
   }
   return value.trim();
+}
+
+function requireCommentString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`desktop:annotation-overlay requires string ${field}`);
+  }
+  return value.replace(/\r\n?/g, '\n').slice(0, 1000);
 }
 
 function optionalString(value: unknown, field: string): string | undefined {

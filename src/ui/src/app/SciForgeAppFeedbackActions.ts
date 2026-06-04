@@ -9,6 +9,7 @@ import {
   upsertFeedbackRepairGuidanceInWorkspace,
   upsertFeedbackRepairResultInWorkspace,
   upsertFeedbackRepairRunInWorkspace,
+  updateFeedbackCommentText,
   updateFeedbackCommentStatus,
 } from '../feedback/feedbackWorkspace';
 import {
@@ -81,6 +82,11 @@ export function createSciForgeFeedbackActions({
   function updateFeedbackStatus(ids: string[], status: FeedbackCommentStatus) {
     if (!ids.length) return;
     updateWorkspace((current) => updateFeedbackCommentStatus(current, ids, status, nowIso()));
+  }
+
+  function updateFeedbackCommentTextAction(id: string, comment: string) {
+    if (!id) return;
+    updateWorkspace((current) => updateFeedbackCommentText(current, id, comment, nowIso()));
   }
 
   function deleteFeedbackComments(ids: string[]) {
@@ -156,6 +162,7 @@ export function createSciForgeFeedbackActions({
   return {
     addFeedbackComment,
     updateFeedbackStatus,
+    updateFeedbackCommentText: updateFeedbackCommentTextAction,
     deleteFeedbackComments,
     restoreFeedbackComments,
     createFeedbackRequest,

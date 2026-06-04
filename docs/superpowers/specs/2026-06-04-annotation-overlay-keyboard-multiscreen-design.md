@@ -7,6 +7,7 @@ Full-screen annotation currently depends too much on mouse-only controls. In ove
 ## Goals
 
 - Let users complete or cancel annotation with the keyboard in full-screen overlay mode.
+- Make UI buttons and keyboard shortcuts share the same confirm/cancel semantics in full-screen and app-window annotation.
 - Support multiple displays with one annotation constrained to one real display.
 - Match WeChat-like screenshot behavior: cursor hover chooses the active display, and starting a drag locks the selection to that display.
 - Preserve refs-first output and existing screen-region/app-window metadata principles.
@@ -17,6 +18,7 @@ Full-screen annotation currently depends too much on mouse-only controls. In ove
 - Do not stitch screenshots across displays.
 - Do not expose raw screenshots, raw window lists, DOM payloads, or provider payloads.
 - Do not add app-specific adapters for annotation.
+- Do not let history editing mutate screenshot refs, crop refs, selected bounds, window binding, display metadata, or provider evidence.
 
 ## Keyboard Interaction
 
@@ -25,7 +27,7 @@ Full-screen annotation currently depends too much on mouse-only controls. In ove
 - `Enter` before a selection is a no-op.
 - `Shift+Enter` inserts a newline in the comment textarea.
 - After the user finishes a selection, focus moves to the comment textarea so they can type immediately.
-- If the comment is empty, submit stays blocked and focus remains in the textarea.
+- An empty comment is valid after a selection exists. Confirming saves the annotation evidence with an empty comment and exits annotation mode.
 
 ## Multiscreen Interaction
 
@@ -57,16 +59,34 @@ The renderer sends sanitized active-display and drag-state events through the tr
 
 The controller continues to output refs-first annotation data through the existing overlay/update/submit/capture path. Screen-region capture providers receive clipped bounds and locked display metadata, so downstream capture can use the existing region-capture path.
 
+## Confirm, Cancel, And Empty Comments Follow-Up
+
+This follow-up applies to both full-screen screen-region annotation and app-window annotation after the app window target has been selected. The app-window picker remains a separate target-selection step, but its cancel behavior must still end the pending app-window annotation request without leaving annotation mode active.
+
+`Cancel` button and `Esc` are the same action: cancel the active annotation flow, close every annotation overlay or picker window owned by that flow, restore normal click/focus behavior, and do not save a feedback reference.
+
+`Save`/`Confirm` button and `Enter` are the same action once a valid target selection exists: submit the annotation, save refs-first evidence, close every annotation overlay window owned by that flow, restore normal click/focus behavior, and exit annotation mode. A missing selection remains a no-op for `Enter` and a disabled confirm button in the UI.
+
+Comment text is optional at capture time. Empty comments are saved as empty strings, not replaced with hidden default copy, because the user may want to capture the visual evidence first and add words later. `Shift+Enter` inside the textarea continues to insert a newline and never submits.
+
+History editing should be narrow and evidence-preserving. Feedback Inbox or annotation history may allow editing the saved comment text for a previous annotation. That edit updates only the user-visible comment text and `updatedAt` metadata. It must not alter reference ids, screenshot/crop assets, selected bounds, app-window binding, display metadata, or raw evidence. If the user selected the wrong target or region, the correct action is creating a new annotation rather than editing evidence identity.
+
 ## Error Handling
 
 - If no displays are available, fall back to the primary display metadata already used by the overlay.
 - If a pointer event lands outside every display and no previous active display exists, ignore drag start.
 - If clipped selection bounds are empty, do not create a selection.
 - Existing blocked refs-only diagnostics remain the fallback when native capture providers are unavailable.
+- If an empty comment is submitted, preserve it as an empty string and continue through the normal refs-only capture path.
+- If history comment editing fails to persist, keep the existing saved comment unchanged and surface a non-raw diagnostic.
 
 ## Testing
 
-- Unit/smoke test keyboard behavior: `Esc` cancels, `Enter` submits after selection, `Enter` before selection is no-op, and `Shift+Enter` preserves multiline comment text.
+- Unit/smoke test keyboard behavior: `Esc` cancels, `Enter` submits after selection, `Enter` before selection is no-op, empty comments submit after a valid selection, and `Shift+Enter` preserves multiline comment text.
+- Test `Cancel` button and `Esc` share the same cancel path for full-screen and app-window annotation.
+- Test `Save`/`Confirm` button and `Enter` share the same submit path for full-screen and app-window annotation.
+- Test successful confirm exits annotation mode while saving refs-first evidence.
+- Test Feedback Inbox or annotation history editing updates only comment text and `updatedAt`, while preserving refs, bounds, display metadata, and evidence ownership.
 - Test overlay bounds use the union of multiple displays.
 - Test hover active display is retained across display-union gaps.
 - Test drag locks to the active display and clips bounds when crossing into another display.
@@ -83,7 +103,7 @@ The controller continues to output refs-first annotation data through the existi
   - The older single transparent union-window approach was removed for real display coverage because it drifted on the user's mixed macOS layout.
   - Hover active-display updates are refs-only and sanitized through the trusted overlay preload, then canonicalized against the current display topology before focus/broadcast.
   - Drag state is sanitized through the trusted overlay preload and locks visible-overlay switching to the mouse-down display until pointer up/cancel, preserving selection visual continuity and clipped single-display crop semantics.
-  - Keyboard behavior is implemented in the overlay renderer: `Esc` cancels, `Enter` submits only with a valid selection and non-empty comment, `Enter` before selection is a no-op, and `Shift+Enter` in the textarea inserts a newline.
+  - Keyboard behavior is implemented in the overlay renderer: `Esc` cancels, `Enter` submits only with a valid selection, empty comments are valid after selection, `Enter` before selection is a no-op, and `Shift+Enter` in the textarea inserts a newline.
   - Cancel and successful capture both hide every native overlay window and restore click-through, preventing stale overlay residue.
 - Added focused tests for keyboard cancel/submit/no-op/multiline behavior, textarea focus after selection, per-display native overlay bounds, only-current-cursor-display visibility, cursor display switching, drag-time display-switch lock, visible-window no-reassert behavior, hover active display, gap retention, display-bound clipping, canonical active-display metadata, sanitized drag-state IPC/preload flow, and locked display metadata in capture input/output.
 - Live SciForge desktop app evidence on the user's 3-display macOS layout:
@@ -99,8 +119,7 @@ The controller continues to output refs-first annotation data through the existi
   - Starting annotation with the cursor on display `2` showed exactly one visible overlay window on display `2`, focused.
   - Pressing `Enter` with no selection returned no result and kept the display `2` overlay visible.
   - Moving the real cursor to display `3` hid display `2` and showed exactly one visible focused overlay on display `3`; visual screenshots confirmed display `3` had the mask/panel and display `2` did not.
-  - Creating a selection on display `3` focused the comment textarea, kept `Save` disabled while the comment was empty, and rendered selection `{left:120px,top:120px,width:240px,height:160px}` inside display `3`.
-  - Pressing `Enter` with an empty comment returned no result, kept focus in `#comment`, and left submit disabled.
+  - Earlier live validation before the empty-comment follow-up confirmed selection focus and display clipping on display `3`; the later empty-comment follow-up supersedes the old disabled-save behavior.
   - Pressing `Shift+Enter` in the textarea inserted a newline: `First line\nSecond line`.
   - Pressing `Enter` with a valid selection and comment submitted refs-only output with `status:"captured"`, `refs:4`, clipped `screenBounds:{x:-1720,y:-1320,width:240,height:160}`, locked `display.id:"3"`, and no raw screenshot/window/provider payload flags.
   - Starting a fresh annotation on display `2` and pressing `Esc` returned `status:"cancelled"` and left no visible overlay windows; screenshots after submit and after Esc showed no overlay residue.
@@ -109,5 +128,21 @@ The controller continues to output refs-first annotation data through the existi
   - Live SciForge desktop app Playwright/Electron smoke against `dist-desktop/src/desktop/main.js` (pass, including only-current-display overlay visibility, cross-display cursor switching, selection, all requested keyboard shortcuts, submit, cancel, visual screenshot inspection, and no residual live app/sidecar process).
   - `node --import tsx --test tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-electron-main.test.ts` (42/42 pass).
   - `node --import tsx --test tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-electron-main.test.ts tests/smoke/smoke-desktop-window-capture.test.ts tests/smoke/smoke-desktop-screen-region-auto-binding.test.ts src/shared/annotation-reference-contract.test.ts src/ui/src/app/SciForgeApp.desktopAnnotation.test.ts` (76/76 pass).
+  - `npm run typecheck -- --pretty false` (pass).
+  - `git diff --check` (pass).
+
+## Confirm/Cancel Empty-Comment Follow-Up Completion
+
+- 2026-06-04 status: implemented and verified with focused TDD and full regression commands.
+- Evidence refs: `src/desktop/annotation-overlay.ts`, `src/desktop/annotation-overlay-preload.cjs`, `src/desktop/main.ts`, `tests/smoke/smoke-desktop-annotation-overlay.test.ts`, `tests/smoke/smoke-desktop-electron-main.test.ts`, `src/ui/src/feedback/feedbackWorkspace.ts`, `src/ui/src/feedback/feedbackWorkspace.test.ts`, `src/ui/src/app/SciForgeAppFeedbackActions.ts`, `src/ui/src/app/SciForgeApp.tsx`, `src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx`, `src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts`, `src/ui/src/styles/app-feedback.css`.
+- Final follow-up notes:
+  - `Cancel` button and `Esc` now share the same cancel path for trusted overlay annotation.
+  - `Save`/confirm and `Enter` now share the same submit path after a valid selection.
+  - Empty comments are preserved as empty strings through renderer, trusted preload, main IPC parsing, overlay controller submission, capture output, and app-window annotation.
+  - App-window annotation with the trusted overlay bridge now remains pending until the user submits or cancels from the overlay, so real button/keyboard events exit annotation mode instead of returning a premature `selecting` result.
+  - Feedback Inbox history editing is comment-only: it updates `comment` and `updatedAt` while preserving refs, evidence assets, screenshot metadata, target/runtime/viewport, annotation metadata, bounds, display/window binding, and provider ownership fields.
+- Verification:
+  - `node --import tsx --test tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-electron-main.test.ts tests/smoke/smoke-desktop-window-capture.test.ts tests/smoke/smoke-desktop-screen-region-auto-binding.test.ts src/shared/annotation-reference-contract.test.ts src/ui/src/app/SciForgeApp.desktopAnnotation.test.ts src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts` (116/116 pass).
+  - `node --import tsx --test src/ui/src/feedback/feedbackWorkspace.test.ts src/ui/src/app/sciforgeApp/FeedbackInboxPage.test.ts` (37/37 pass after fixture type correction).
   - `npm run typecheck -- --pretty false` (pass).
   - `git diff --check` (pass).

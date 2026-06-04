@@ -1936,6 +1936,7 @@ export function SciForgeApp() {
               repairActions={workspaceState.feedbackRepairActions ?? []}
               repairGuidance={workspaceState.feedbackRepairGuidance ?? []}
               onStatusChange={feedbackActions.updateFeedbackStatus}
+              onCommentEdit={feedbackActions.updateFeedbackCommentText}
               onDelete={feedbackActions.deleteFeedbackComments}
               onRestore={feedbackActions.restoreFeedbackComments}
               onCreateRequest={feedbackActions.createFeedbackRequest}

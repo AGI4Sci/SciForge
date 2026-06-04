@@ -143,6 +143,21 @@ export function updateFeedbackCommentStatus(
   };
 }
 
+export function updateFeedbackCommentText(
+  state: SciForgeWorkspaceState,
+  id: string,
+  comment: string,
+  updatedAt = nowIso(),
+): SciForgeWorkspaceState {
+  if (!id) return state;
+  return {
+    ...state,
+    feedbackComments: (state.feedbackComments ?? []).map((item) => item.id === id
+      ? { ...item, comment, updatedAt }
+      : item),
+  };
+}
+
 export function deleteFeedbackCommentsFromWorkspace(
   state: SciForgeWorkspaceState,
   ids: string[],

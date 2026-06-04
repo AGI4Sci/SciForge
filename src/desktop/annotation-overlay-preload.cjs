@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 const INTERNAL_EVENT_SCHEMA = 'sciforge.desktop.annotation-overlay.internal-event.v1';
-const DEFAULT_COMMENT = 'Desktop screen annotation';
 const ACTIVE_DISPLAY_CHANNEL = 'desktop:annotation-overlay:active-display';
 
 function record(value) {
@@ -43,6 +42,18 @@ function text(value, fallback) {
 
 function optionalText(value) {
   return text(value, undefined);
+}
+
+function commentText(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim().replace(/[ \t\f\v]+/g, ' '))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 1000);
 }
 
 function singleLineText(value) {
@@ -113,7 +124,7 @@ const api = {
       schemaVersion: INTERNAL_EVENT_SCHEMA,
       event: 'screen-region-selection-submitted',
       bounds: safeBounds,
-      comment: text(payload.comment, DEFAULT_COMMENT),
+      comment: commentText(payload.comment),
       ...(safeDisplay ? { display: safeDisplay } : {}),
       threadId: optionalText(payload.threadId),
       messageDraftId: optionalText(payload.messageDraftId),
