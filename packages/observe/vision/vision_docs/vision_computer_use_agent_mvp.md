@@ -10,7 +10,7 @@ The maintained action-provider contract lives at:
 ## Current Boundary
 
 - `packages/actions/computer-use` owns request/result schema, action loop, safety/approval policy, trace/result promotion, budget debit, host-port contract, executor adapter contract, target-bound evidence, artifact/file-list guards, and compact handoff.
-- `packages/observe/vision` is an optional sense/provider layer only. It may provide visual observation helpers, focus-region/crop helpers, KV-Ground/visual grounding support, verifier feedback compression, temporary file-ref-only visual memory, and vision trace validation. It does not execute desktop actions, decide completion, own safety gates, or claim user-level success.
+- `packages/observe/vision` is an optional sense/provider layer only. It may provide visual observation helpers, focus-region/crop helpers, `qwen3.7-plus` VLM/visual grounding support, verifier feedback compression, temporary file-ref-only visual memory, and vision trace validation. It does not execute desktop actions, decide completion, own safety gates, or claim user-level success.
 - `src/runtime`, GUI, CU-NEXT, browser acceptance, AgentServer, and release gates are later integration layers. They must not become the long-term owner of generic Computer Use policy.
 
 ## Non-Negotiable Current Rules

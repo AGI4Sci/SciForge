@@ -152,10 +152,10 @@ curl -fsS http://127.0.0.1:18080/health
 curl -fsS http://127.0.0.1:3891/healthz
 ```
 
-当前默认 Runtime Codex browser acceptance 拓扑需要这些本地服务同时在线：
+历史 Runtime Codex browser acceptance 拓扑曾要求 KV-Ground compatibility service 与下列本地服务同时在线；当前 Computer Use 设计默认 VLM/grounding 模型统一为 `qwen3.7-plus`：
 
 ```text
-KV-Ground:        http://127.0.0.1:18081/health
+Legacy Grounder: http://127.0.0.1:18081/health
 UI:               http://127.0.0.1:5173/
 Workspace writer: http://127.0.0.1:6173/health
 Runtime Codex:    http://127.0.0.1:18080/health
@@ -311,7 +311,7 @@ npm run smoke:stable-version-registry
 
 ## Computer Use
 
-当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、KV-Ground grounding 辅助和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、`qwen3.7-plus` VLM/grounding 辅助和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
 
 Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
@@ -341,7 +341,7 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 ```
 
-KV-Ground 默认本地 endpoint 是 `http://127.0.0.1:18081`。接入前先记录实际 endpoint，并至少做一次 health check：
+Computer Use 的默认 VLM/grounding 模型统一为 `qwen3.7-plus`。历史 KV-Ground-compatible endpoint 只作为兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
 
 ```bash
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
@@ -349,7 +349,7 @@ export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
 curl "$SCIFORGE_VISION_KV_GROUND_URL/health"
 ```
 
-`/predict/` smoke 要使用本机截图或测试图，确认返回包含 `coordinates`、`image_size` 和可解析坐标系。KV-Ground 服务读不到本机路径时保持 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`，由 SciForge 在请求里发送 `image_base64`；只有明确存在共享挂载和路径前缀映射时才传服务端可读 `image_path`。
+`/predict/` smoke 要使用本机截图或测试图，确认返回包含 `coordinates`、`image_size` 和可解析坐标系。兼容服务读不到本机路径时保持 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`，由 SciForge 在请求里发送 `image_base64`；只有明确存在共享挂载和路径前缀映射时才传服务端可读 `image_path`。
 
 真实输入优先使用目标 app/window 的独立 action adapter。Browser pane 的桌面高性能路径已经采用 `WebContentsView` native embedded adapter；普通窗口动作通过 WindowActionSession 路由到 app-native command、Accessibility/UI Automation/AT-SPI、BrowserHostSession/CDP/Playwright 或显式 `shared-system-input` evidence。截图投影只属于 Image / Evidence 查看器，不承担替代交互路径。
 

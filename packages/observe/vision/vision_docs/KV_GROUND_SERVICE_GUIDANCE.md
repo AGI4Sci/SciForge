@@ -1,12 +1,13 @@
-# KV-Ground API 服务启动与 SciForge 接入指南
+# 历史 KV-Ground API 兼容服务启动与 SciForge 接入指南
 
-本文说明如何启动、访问和维护 KV-Ground API 服务，并说明 SciForge `vision-sense` 如何接入该服务。KV-Ground 只负责 grounding：输入截图和文本目标，输出图像坐标。规划 GUI action 的生产默认路径由 Runtime Codex 文本 planner 完成，vision-sense 只提供 compact observation、visible text、focus region 和 verifier feedback。
+Computer Use 当前设计默认 VLM 和 grounding 模型统一为 `qwen3.7-plus`。本文只保留历史 KV-Ground API 服务的启动、访问、维护和兼容接入说明；旧服务名、endpoint 或 adapter 不能代表默认 grounding 模型。规划 GUI action 的生产默认路径由 Runtime Codex 文本 planner 完成，vision-sense 只提供 compact observation、visible text、focus region 和 verifier feedback。
 
 ## 职责划分
 
 ```text
 RuntimeCodexPlanner: Codex CLI / TUI 文本 agent，读取 compact observation、visible text、action history 和 verifier feedback，输出通用 GUI action
-KV-Ground: grounding 模型，读取 image + text_prompt，输出坐标
+qwen3.7-plus Grounding: 默认 grounding 模型，读取 image + text_prompt，输出坐标
+KV-Ground-compatible endpoint: 历史兼容服务路径，仅用于调试/迁移
 GuiExecutor: 根据坐标执行 click/scroll/type/press_key
 Verifier: 重新截图，检查窗口一致性和视觉变化
 ```
@@ -14,7 +15,7 @@ Verifier: 重新截图，检查窗口一致性和视觉变化
 推荐配置：
 
 - Planner：Runtime Codex 文本 agent
-- Grounder：自部署 KV-Ground API
+- Grounder：默认使用 `qwen3.7-plus`；自部署 KV-Ground API 仅作为兼容 provider 壳
 - 普通文本模型：可以继续给 Runtime Codex、AgentServer 或其他文本任务使用；截图理解应通过 sense provider 生成 compact observation，而不是让 Planner 直接读图。
 
 ## 机器与目录
@@ -245,9 +246,9 @@ curl -X POST http://127.0.0.1:18081/predict/ \
 说明：
 
 - Computer Use Planner 使用 Runtime Codex config；默认 profile 来自 SciForge Runtime Codex 配置，必要时用 `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE` 指定。
-- `visionSense.grounderBaseUrl` 指向 KV-Ground 服务。
+- `visionSense.grounderBaseUrl` 指向历史 KV-Ground-compatible 服务。
 - SciForge `vision-sense` 默认会在没有共享路径映射时发送 `image_base64`，适合远端服务读不到本机截图路径的常见场景。
-- KV-Ground 是 Computer Use 定位的唯一默认 Grounder；如果它不可用，运行应 fail closed 并记录 diagnostics。
+- Computer Use 定位的默认模型是 `qwen3.7-plus`；如果沿用历史 KV-Ground-compatible 路径，它只提供兼容 diagnostics，不代表默认 Grounder。
 
 等价环境变量：
 

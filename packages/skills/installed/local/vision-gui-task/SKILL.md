@@ -14,7 +14,7 @@ metadata:
 
 ## Agent 快速契约
 
-- 只用 `vision-sense` 获取截图/图像的文本观察、候选目标描述、KV-Ground 证据、verifier feedback 和 trace refs。
+- 只用 `vision-sense` 获取截图/图像的文本观察、候选目标描述、`qwen3.7-plus` grounding 证据、verifier feedback 和 trace refs。
 - 构造 `SensePluginRequest`，包含用户任务、截图/图像 modality refs、`targetUse="computer-use-observation"`、共享 trace output metadata 和低风险默认 policy。
 - 不构造或调用正向 GUI runner，不生成静态桌面命令，不注入 executor，也不声称动作已经执行。
 - 需要点击、输入、滚动、按键、审批或真实窗口锁时，把任务交给 `packages/actions/computer-use` action provider；Runtime Codex text planner 只在 action-provider 边界规划 generic action。

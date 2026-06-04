@@ -93,10 +93,10 @@ The wrapper fails closed if the isolated `CODEX_HOME` leaves `packages/backend/.
 
 ## Browser Acceptance Service Checklist
 
-The no-secret Runtime Codex browser acceptance path expects KV-Ground plus four SciForge services to be alive:
+The legacy no-secret Runtime Codex browser acceptance path expects a KV-Ground-compatible service plus four SciForge services to be alive. Current Computer Use design defaults both VLM and grounding to `qwen3.7-plus`.
 
 ```text
-KV-Ground:        http://127.0.0.1:18081/health
+Legacy Grounder: http://127.0.0.1:18081/health
 UI:               http://127.0.0.1:5173/
 Workspace writer: http://127.0.0.1:6173/health
 Runtime Codex:    http://127.0.0.1:18080/health

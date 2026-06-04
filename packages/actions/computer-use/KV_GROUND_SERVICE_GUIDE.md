@@ -1,4 +1,6 @@
-# KV-Ground API 服务启动与使用说明
+# 历史 KV-Ground API 兼容服务启动与使用说明
+
+Computer Use 当前设计默认 VLM 和 grounding 模型统一为 `qwen3.7-plus`。本文只保留历史 KV-Ground API 服务的运维和兼容接入信息；旧服务名、endpoint 或 adapter 不代表默认 grounding 模型。
 
 ## 机器与目录
 

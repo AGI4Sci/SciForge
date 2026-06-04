@@ -50,6 +50,8 @@ VLM 可以描述截图、比较变化、解释图表/表格/公式、识别视�
 
 VLM 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。VLM 结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
 
+Computer Use 的视觉模型统一使用 `qwen3.7-plus`。这包括截图/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧，以及需要模型参与的 grounding。旧的 KV-Ground 或其它 grounding 服务名只能作为兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的模型标识应统一记录为 `qwen3.7-plus`。
+
 ### 4. 改变界面的动作必须可追溯
 
 只读探索和改变状态的动作必须分开。

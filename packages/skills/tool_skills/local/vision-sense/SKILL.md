@@ -9,8 +9,8 @@ metadata:
   acceptedModalities: screenshot, image
   skillDomains: knowledge
   producesArtifactTypes: vision-trace
-  requiredConfig: shared-llm-config, kv-ground-base-url, trace-output-dir
-  tags: vision, modality:vision, grounding, text-output, computer-use-input, kv-ground
+  requiredConfig: shared-llm-config, qwen3.7-plus-vision-grounding, trace-output-dir
+  tags: vision, modality:vision, grounding, text-output, computer-use-input, qwen3.7-plus
 ---
 
 # vision-sense
@@ -20,7 +20,7 @@ metadata:
 - 类型：sense-plugin tool。输入是 `text + screenshot/image modalities`，输出只允许是文本和 refs。
 - 边界：skill 构造 `SensePluginRequest`；本包输出视觉观察、grounding 摘要、trace refs，以及可选的候选目标描述文本。真实 Computer Use 规划与执行属于独立 consumer/provider，不在本包内。
 - Runtime：Python package 位于 `packages/observe/vision`，import root 是 `sciforge_vision_sense`。
-- 适合：解释截图/图像、生成视觉目标描述、输出 KV-Ground 坐标证据、text-only observation 和 file-ref-only trace memory。
+- 适合：解释截图/图像、生成视觉目标描述、输出 `qwen3.7-plus` grounding 坐标证据、text-only observation 和 file-ref-only trace memory。
 - 避免：执行代码或桌面动作、持有鼠标/键盘状态、读取 DOM/accessibility tree、处理支付/删除/发送/授权等高风险操作，或在没有外部 Computer Use trace 的情况下声称 GUI action 已执行。
 
 ## 执行契约
@@ -47,4 +47,4 @@ Computer Use 模块化边界：
 
 ## 维护说明
 
-本包刻意采用 dependency injection，便于 fake-test。它提供 contract、manifest、prompt helpers、KV-Ground HTTP adapter、VLM helper、trace helpers 和 verifier-facing text outputs；真实桌面控制始终留在 package boundary 之外。
+本包刻意采用 dependency injection，便于 fake-test。它提供 contract、manifest、prompt helpers、`qwen3.7-plus` VLM/grounding helper、历史 KV-Ground-compatible adapter、trace helpers 和 verifier-facing text outputs；真实桌面控制始终留在 package boundary 之外。
