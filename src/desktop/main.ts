@@ -20,6 +20,37 @@ import {
 import {
   createDesktopVirtualAppScreenSurfacePresenter,
 } from './virtual-app-screen-surface.js';
+import {
+  createTrustedDesktopAnnotationScreenRegionOverlayBridge,
+  type DesktopAnnotationScreenRegionOverlayBridge,
+} from './annotation-screen-region-overlay-bridge.js';
+import {
+  createDesktopAnnotationOverlayController,
+  type DesktopAnnotationBeginSelectionInput,
+  type DesktopAnnotationBounds,
+  type DesktopAnnotationCaptureProvider,
+  type DesktopAnnotationCaptureProviderInput,
+  type DesktopAnnotationCoordinateSpace,
+  type DesktopAnnotationOverlayScreen,
+  type DesktopAnnotationOverlayWindow,
+  type DesktopAnnotationSourceKind,
+} from './annotation-overlay.js';
+import {
+  createDesktopAnnotationWindowCaptureProvider,
+} from './annotation-window-capture-provider.js';
+import {
+  createDesktopAnnotationMacosWindowInventoryProvider,
+  type DesktopAnnotationMacosWindowInventoryProvider,
+} from './macos-window-inventory.js';
+import {
+  createDesktopAnnotationAppWindowSelectionProvider,
+} from './app-window-selection-provider.js';
+import {
+  createDesktopAnnotationAppWindowChooser,
+} from './app-window-picker.js';
+import type {
+  DesktopWindowCaptureProvider,
+} from './window-capture.js';
 
 type ElectronAppLike = {
   whenReady(): Promise<void>;
@@ -86,6 +117,7 @@ export type ElectronDesktopModule = DesktopBrowserHostSurfaceElectron & {
   BrowserWindow: ElectronBrowserWindowConstructor;
   ipcMain: ElectronIpcMainLike;
   clipboard?: ElectronClipboardLike;
+  screen?: DesktopAnnotationOverlayScreen;
 };
 
 export type DesktopMainStartResult = {
@@ -233,6 +265,7 @@ export function createElectronDesktopMainController(
       runtimeConfig,
       platformService: options.platformService ?? new DesktopPlatformService(),
       browserHostSurface,
+      desktopAnnotationScreenRegionOverlayBridge: createTrustedDesktopAnnotationScreenRegionOverlayBridge(),
     });
     const window = new electron.BrowserWindow(createDesktopBrowserWindowOptions(plan));
     browserHostSurface?.setMainWindow(window);
@@ -270,15 +303,58 @@ export function createElectronDesktopMainController(
 }
 
 export function registerDesktopIpcHandlers(input: {
-  electron: Pick<ElectronDesktopModule, 'ipcMain' | 'BrowserWindow' | 'clipboard'>;
+  electron: Pick<ElectronDesktopModule, 'ipcMain' | 'BrowserWindow' | 'clipboard' | 'screen'>;
   launcher: Pick<ProductionRuntimeLauncher, 'health' | 'ready' | 'shutdown'>;
   launcherResult: RuntimeLauncherStartResult;
-  runtimeConfig: DesktopRuntimeConfig;
-  platformService: DesktopPlatformService;
-  browserHostSurface?: DesktopBrowserHostSurfaceController;
+	  runtimeConfig: DesktopRuntimeConfig;
+	  platformService: DesktopPlatformService;
+	  browserHostSurface?: DesktopBrowserHostSurfaceController;
+  desktopAnnotationInteractiveCapture?: {
+    capture(input: unknown): Promise<unknown> | unknown;
+  };
+  desktopAnnotationCaptureProvider?: DesktopAnnotationCaptureProvider;
+  desktopAnnotationWindowInventory?: DesktopAnnotationMacosWindowInventoryProvider;
+  desktopAnnotationWindowCaptureProviders?: DesktopWindowCaptureProvider[];
+  desktopAnnotationScreenRegionOverlayBridge?: DesktopAnnotationScreenRegionOverlayBridge;
+  desktopAnnotationAppWindowSelection?: {
+    select(input: unknown): Promise<unknown> | unknown;
+  };
 }): void {
   const nativeBrowser = createDesktopNativeBrowserController(input.electron);
   const virtualAppScreenSurface = createDesktopVirtualAppScreenSurfacePresenter();
+  const annotationScreen = input.electron.screen ?? fallbackDesktopAnnotationScreen();
+  const annotationWindowInventory = input.desktopAnnotationWindowInventory
+    ?? createDesktopAnnotationMacosWindowInventoryProvider();
+  const annotationCaptureProvider = input.desktopAnnotationCaptureProvider
+    ?? createDesktopAnnotationWindowCaptureProvider({
+      ...(input.desktopAnnotationWindowCaptureProviders ? { providers: input.desktopAnnotationWindowCaptureProviders } : {}),
+      screenRegionBindingWindows: annotationWindowInventory.screenRegionBindingWindows,
+      screenRegionBindingPermissionStatus: annotationWindowInventory.screenRegionBindingPermissionStatus,
+    });
+  const annotationAppWindowSelection = input.desktopAnnotationAppWindowSelection
+    ?? createDesktopAnnotationAppWindowSelectionProvider({
+      windowInventory: annotationWindowInventory,
+      chooseWindow: createDesktopAnnotationAppWindowChooser(input.electron, {
+        preloadPath: desktopAnnotationAppWindowPickerPreloadPath(input.runtimeConfig.appRoot),
+      }),
+    });
+  const annotationOverlay = createDesktopAnnotationOverlayController({
+    createBrowserWindow(options) {
+      const BrowserWindow = input.electron.BrowserWindow as unknown as new(options: unknown) => DesktopAnnotationOverlayWindow;
+      return new BrowserWindow(options);
+    },
+    screen: annotationScreen,
+    captureProvider: annotationCaptureProvider,
+  }, {
+    overlayPreloadPath: desktopAnnotationOverlayPreloadPath(input.runtimeConfig.appRoot),
+  });
+  let activeScreenRegionOverlaySelection: {
+    request: DesktopAnnotationStartRequest;
+    owner: { workspaceId: string; sessionId: string };
+    targetRef: string;
+    resolve(result: unknown): void;
+    reject(error: unknown): void;
+  } | undefined;
   input.electron.ipcMain.handle('runtime:health', () => input.launcher.health());
   input.electron.ipcMain.handle('runtime:ready', () => ({ ok: input.launcher.ready(), ready: input.launcher.ready() }));
   input.electron.ipcMain.handle('runtime:config', () => input.runtimeConfig);
@@ -326,6 +402,137 @@ export function registerDesktopIpcHandlers(input: {
   input.electron.ipcMain.handle('desktop:virtual-app-screen-surface:detach', async (_event: unknown, value: unknown) => {
     return virtualAppScreenSurface.detach(value);
   });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:create', () => annotationOverlay.create());
+  input.electron.ipcMain.handle('desktop:annotation-overlay:show', () => annotationOverlay.show());
+  input.electron.ipcMain.handle('desktop:annotation-overlay:begin', (_event: unknown, value: unknown) => {
+    annotationOverlay.create();
+    annotationOverlay.show();
+    return annotationOverlay.beginSelection(desktopAnnotationBeginSelectionRequest(value));
+  });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:start', async (_event: unknown, value: unknown) => {
+    const request = desktopAnnotationStartRequest(value);
+    if (request.mode === 'app-window') {
+      return startDesktopAnnotationAppWindowSelection(
+        request,
+        annotationOverlay,
+        annotationAppWindowSelection,
+        annotationScreen,
+      );
+    }
+    if (request.mode === 'screen-region' && input.desktopAnnotationScreenRegionOverlayBridge?.trusted === true) {
+      if (activeScreenRegionOverlaySelection) {
+        return blockedDesktopAnnotationStartResult(
+          request,
+          activeScreenRegionOverlayBlockedReason(),
+          annotationScreen,
+        );
+      }
+      const owner = annotationOwnerFromContext(request.context);
+      const targetRef = blockedDesktopAnnotationTargetRef(request, owner);
+      annotationOverlay.create();
+      annotationOverlay.show();
+      annotationOverlay.beginSelection({
+        workspaceId: owner.workspaceId,
+        sessionId: owner.sessionId,
+        targetRef,
+        sourceKind: 'screen-region',
+        coordinateSpace: 'screen-global',
+      });
+      return new Promise((resolveSelection, rejectSelection) => {
+        activeScreenRegionOverlaySelection = {
+          request,
+          owner,
+          targetRef,
+          resolve: resolveSelection,
+          reject: rejectSelection,
+        };
+      });
+    }
+    if (input.desktopAnnotationInteractiveCapture) {
+      const result = await input.desktopAnnotationInteractiveCapture.capture(request);
+      return sanitizedDesktopAnnotationStartDelegateResult(result, request, annotationScreen);
+    }
+    return blockedDesktopAnnotationStartResult(
+      request,
+      blockedReasonForDesktopAnnotationMode(request.mode),
+      annotationScreen,
+    );
+  });
+  if (input.desktopAnnotationScreenRegionOverlayBridge?.trusted === true) {
+    input.electron.ipcMain.handle('desktop:annotation-overlay:internal-event', async (_event: unknown, value: unknown) => {
+      if (!activeScreenRegionOverlaySelection) {
+        return {
+          schemaVersion: 'sciforge.desktop.annotation-overlay.internal-event-result.v1',
+          ok: false,
+          status: 'blocked',
+          reason: 'desktop.annotation.screen-region-selection-not-active',
+          refs: [],
+          diagnostics: [{
+            code: 'desktop.annotation.screen-region-selection-not-active',
+            level: 'warning',
+            refsOnly: true,
+            message: 'No trusted screen-region annotation overlay selection is active.',
+          }],
+          metadata: {
+            refsOnly: true,
+            windowListPayloadReturned: false,
+            screenshotPayloadReturned: false,
+            providerPayloadReturned: false,
+          },
+        };
+      }
+      const active = activeScreenRegionOverlaySelection;
+      try {
+        const internalEvent = desktopAnnotationOverlayInternalEvent(value);
+        if (internalEvent.event === 'screen-region-selection-cancelled') {
+          const cancelled = annotationOverlay.cancel();
+          activeScreenRegionOverlaySelection = undefined;
+          active.resolve(cancelled);
+          return cancelled;
+        }
+        annotationOverlay.updateSelection({ bounds: internalEvent.bounds });
+        annotationOverlay.submitComment({
+          comment: internalEvent.comment,
+          threadId: internalEvent.threadId,
+          messageDraftId: internalEvent.messageDraftId,
+        });
+        const result = await captureDesktopAnnotationSelection(annotationOverlay);
+        activeScreenRegionOverlaySelection = undefined;
+        active.resolve(result);
+        return result;
+      } catch (error) {
+        activeScreenRegionOverlaySelection = undefined;
+        active.reject(error);
+        throw error;
+      }
+    });
+  }
+  input.electron.ipcMain.handle('desktop:annotation-overlay:update', (_event: unknown, value: unknown) => {
+    return annotationOverlay.updateSelection({
+      bounds: desktopAnnotationBounds(
+        requireRecord(value, 'desktop:annotation-overlay:update requires an object').bounds,
+        'bounds',
+      ),
+    });
+  });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:submit', (_event: unknown, value: unknown) => {
+    const record = requireRecord(value, 'desktop:annotation-overlay:submit requires an object');
+    return annotationOverlay.submitComment({
+      comment: requireString(record.comment, 'comment'),
+      threadId: optionalString(record.threadId, 'threadId'),
+      messageDraftId: optionalString(record.messageDraftId, 'messageDraftId'),
+    });
+  });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:capture', () => {
+    return captureDesktopAnnotationSelection(annotationOverlay);
+  });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:cancel', () => {
+    const cancelled = annotationOverlay.cancel();
+    activeScreenRegionOverlaySelection?.resolve(cancelled);
+    activeScreenRegionOverlaySelection = undefined;
+    return cancelled;
+  });
+  input.electron.ipcMain.handle('desktop:annotation-overlay:status', () => annotationOverlay.getState());
   input.electron.ipcMain.handle('platform:reveal-path', async (_event: unknown, path: unknown) => {
     if (typeof path !== 'string') throw new Error('platform:reveal-path requires a path string');
     await input.platformService.revealInFolder(path);
@@ -351,6 +558,364 @@ export function registerDesktopIpcHandlers(input: {
     return { ok: true, path: result.filePaths[0] };
   });
 	}
+
+function sanitizedDesktopAnnotationStartDelegateResult(
+  result: unknown,
+  request: DesktopAnnotationStartRequest,
+  screen: DesktopAnnotationOverlayScreen,
+): unknown {
+  const sanitized = sanitizeDesktopAnnotationRendererPayload(result);
+  if (sanitized && typeof sanitized === 'object' && !Array.isArray(sanitized)) {
+    return sanitized;
+  }
+  return blockedDesktopAnnotationStartResult(request, {
+    code: 'desktop.annotation.interactive-capture-invalid-result',
+    message: 'Desktop annotation interactive capture returned an invalid refs-only result.',
+    nativeScreenCapture: request.mode !== 'sciforge-page',
+    windowBindingStatus: 'blocked',
+    sourceKind: request.mode === 'app-window' ? 'window' : request.mode === 'sciforge-page' ? 'browser' : 'screen-region',
+    coordinateSpace: request.mode === 'app-window' ? 'window-local' : request.mode === 'sciforge-page' ? 'browser-viewport' : 'screen-global',
+    explicitSelectionRequired: request.mode !== 'sciforge-page',
+    ...(request.mode === 'app-window' ? { explicitAppWindowSelectionRequired: true } : {}),
+  }, screen);
+}
+
+type DesktopAnnotationSelectedAppWindow = {
+  windowRef: string;
+  targetRef: string;
+  windowBounds: DesktopAnnotationBounds;
+  windowSummary?: DesktopAnnotationBeginSelectionInput['windowSummary'];
+  displayId?: string;
+  screenId?: string;
+  scale?: number;
+};
+
+async function startDesktopAnnotationAppWindowSelection(
+  request: DesktopAnnotationStartRequest,
+  annotationOverlay: ReturnType<typeof createDesktopAnnotationOverlayController>,
+  selectionProvider: { select(input: unknown): Promise<unknown> | unknown },
+  screen: DesktopAnnotationOverlayScreen,
+): Promise<unknown> {
+  const owner = annotationOwnerFromContext(request.context);
+  let providerResult: unknown;
+  try {
+    providerResult = await selectionProvider.select(desktopAnnotationAppWindowSelectionRequest(request, owner));
+  } catch (error) {
+    return blockedDesktopAnnotationStartResult(request, {
+      ...blockedReasonForDesktopAnnotationMode('app-window'),
+      code: 'desktop.annotation.app-window-selection-failed',
+      message: `App window selection failed before native annotation could start: ${diagnosticMessageFromError(error)}`,
+    }, screen);
+  }
+  const normalized = desktopAnnotationSelectedAppWindow(providerResult);
+  if (normalized.status === 'blocked') {
+    return blockedDesktopAnnotationStartResult(request, {
+      ...blockedReasonForDesktopAnnotationMode('app-window'),
+      code: normalized.code,
+      message: normalized.message,
+    }, screen);
+  }
+  const selected = normalized.window;
+  annotationOverlay.create();
+  annotationOverlay.show();
+  const overlayState = annotationOverlay.beginSelection({
+    workspaceId: owner.workspaceId,
+    sessionId: owner.sessionId,
+    windowRef: selected.windowRef,
+    targetRef: selected.targetRef,
+    windowBounds: selected.windowBounds,
+    windowSummary: selected.windowSummary,
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+  });
+  return desktopAnnotationSelectedAppWindowStartResult(request, owner, selected, overlayState);
+}
+
+function desktopAnnotationAppWindowSelectionRequest(
+  request: DesktopAnnotationStartRequest,
+  owner: { workspaceId: string; sessionId: string },
+): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.desktop.annotation.app-window-selection-request.v1',
+    mode: 'app-window',
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    owner,
+    refsOnly: true,
+    explicitSelectionRequired: true,
+    explicitAppWindowSelectionRequired: true,
+    ...(request.source ? { source: request.source } : {}),
+    ...(request.purpose ? { purpose: request.purpose } : {}),
+    ...(request.createdAt ? { createdAt: request.createdAt } : {}),
+    ...(request.locale !== undefined ? { locale: request.locale } : {}),
+  };
+}
+
+function desktopAnnotationSelectedAppWindow(value: unknown): {
+  status: 'selected';
+  window: DesktopAnnotationSelectedAppWindow;
+} | {
+  status: 'blocked';
+  code: string;
+  message: string;
+} {
+  const record = requireOptionalRecord(value);
+  if (!record) {
+    return {
+      status: 'blocked',
+      code: 'desktop.annotation.app-window-selection-invalid',
+      message: 'App window selection provider returned an invalid result.',
+    };
+  }
+  const status = desktopAnnotationSelectionStatus(record.status);
+  if (status === 'cancelled') {
+    return {
+      status: 'blocked',
+      code: 'desktop.annotation.app-window-selection-cancelled',
+      message: 'App window annotation was cancelled before a window was selected.',
+    };
+  }
+  if (status === 'blocked') {
+    return {
+      status: 'blocked',
+      code: desktopAnnotationSelectionText(record.code) ?? 'desktop.annotation.app-window-selection-blocked',
+      message: desktopAnnotationSelectionText(record.message ?? record.reason)
+        ?? 'App window selection was blocked before native annotation could start.',
+    };
+  }
+  const selection = requireOptionalRecord(record.window)
+    ?? requireOptionalRecord(record.selection)
+    ?? record;
+  const windowRef = desktopAnnotationSelectionRef(
+    selection.windowRef
+      ?? record.windowRef
+      ?? selection.ref
+      ?? selection.targetWindowRef,
+  );
+  const targetRef = desktopAnnotationSelectionRef(selection.targetRef ?? record.targetRef) ?? windowRef;
+  const boundsValue = selection.windowBounds ?? record.windowBounds ?? selection.bounds;
+  let windowBounds: DesktopAnnotationBounds | undefined;
+  try {
+    if (boundsValue !== undefined) windowBounds = desktopAnnotationBounds(boundsValue, 'windowBounds');
+  } catch {
+    windowBounds = undefined;
+  }
+  if (!windowRef || !targetRef || !windowBounds) {
+    return {
+      status: 'blocked',
+      code: 'desktop.annotation.app-window-selection-invalid',
+      message: 'App window selection requires a bounded windowRef, targetRef, and windowBounds.',
+    };
+  }
+  return {
+    status: 'selected',
+    window: {
+      windowRef,
+      targetRef,
+      windowBounds,
+      windowSummary: desktopAnnotationSelectedWindowSummary(selection, record),
+      displayId: desktopAnnotationSelectionText(selection.displayId ?? record.displayId),
+      screenId: desktopAnnotationSelectionText(selection.screenId ?? record.screenId ?? selection.displayId ?? record.displayId),
+      scale: positiveNumberOrUndefined(selection.scale ?? record.scale ?? selection.scaleFactor ?? record.scaleFactor),
+    },
+  };
+}
+
+function desktopAnnotationSelectionStatus(value: unknown): 'selected' | 'blocked' | 'cancelled' | undefined {
+  if (value === 'selected' || value === 'captured' || value === 'ok') return 'selected';
+  if (value === 'blocked') return 'blocked';
+  if (value === 'cancelled' || value === 'canceled') return 'cancelled';
+  return undefined;
+}
+
+function desktopAnnotationSelectedWindowSummary(
+  selection: Record<string, unknown>,
+  result: Record<string, unknown>,
+): DesktopAnnotationBeginSelectionInput['windowSummary'] | undefined {
+  const summary = requireOptionalRecord(selection.windowSummary)
+    ?? requireOptionalRecord(result.windowSummary)
+    ?? {};
+  const appName = desktopAnnotationSelectionText(selection.appName ?? result.appName ?? summary.appName);
+  const bundleId = desktopAnnotationSelectionText(
+    selection.bundleId
+      ?? result.bundleId
+      ?? selection.bundleID
+      ?? result.bundleID
+      ?? selection.bundleIdentifier
+      ?? result.bundleIdentifier
+      ?? summary.bundleId
+      ?? summary.bundleID
+      ?? summary.bundleIdentifier,
+  );
+  const pid = integerOrUndefined(selection.pid ?? result.pid ?? selection.processId ?? result.processId ?? summary.pid ?? summary.processId);
+  const title = desktopAnnotationSelectionText(
+    selection.title
+      ?? result.title
+      ?? selection.windowTitle
+      ?? result.windowTitle
+      ?? summary.title
+      ?? summary.windowTitle,
+  );
+  const output: NonNullable<DesktopAnnotationBeginSelectionInput['windowSummary']> = {};
+  if (appName) output.appName = appName;
+  if (bundleId) output.bundleId = bundleId;
+  if (pid !== undefined) output.pid = pid;
+  if (title) output.title = title;
+  return Object.keys(output).length ? output : undefined;
+}
+
+function desktopAnnotationSelectionRef(value: unknown): string | undefined {
+  const direct = desktopAnnotationSelectionText(value);
+  if (direct) return direct;
+  const record = requireOptionalRecord(value);
+  return desktopAnnotationSelectionText(record?.ref ?? record?.id);
+}
+
+function desktopAnnotationSelectionText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = sanitizeDiagnosticText(value.trim());
+  return text ? text : undefined;
+}
+
+function integerOrUndefined(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(number) ? Math.trunc(number) : undefined;
+}
+
+function positiveNumberOrUndefined(value: unknown): number | undefined {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function diagnosticMessageFromError(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return sanitizeDiagnosticText(error.message);
+  if (typeof error === 'string' && error.trim()) return sanitizeDiagnosticText(error);
+  return 'unknown error';
+}
+
+function desktopAnnotationSelectedAppWindowStartResult(
+  request: DesktopAnnotationStartRequest,
+  owner: { workspaceId: string; sessionId: string },
+  selected: DesktopAnnotationSelectedAppWindow,
+  overlayState: ReturnType<ReturnType<typeof createDesktopAnnotationOverlayController>['beginSelection']>,
+): Record<string, unknown> {
+  const windowBinding = {
+    status: 'manual-bound',
+    reason: 'desktop.annotation.app-window-explicit-selection-ready',
+    windowRef: selected.windowRef,
+    targetRef: selected.targetRef,
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    windowBounds: { ...selected.windowBounds },
+    ...selected.windowSummary,
+    ...(selected.displayId ? { displayId: selected.displayId } : {}),
+    ...(selected.screenId ? { screenId: selected.screenId } : {}),
+    ...(selected.scale !== undefined ? { scale: selected.scale } : {}),
+  };
+  return {
+    schemaVersion: 'sciforge.desktop.annotation.start-result.v1',
+    ok: true,
+    status: 'selecting',
+    mode: request.mode,
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    owner: {
+      ...owner,
+      windowRef: selected.windowRef,
+      targetRef: selected.targetRef,
+    },
+    windowRef: selected.windowRef,
+    targetRef: selected.targetRef,
+    refs: compactDesktopAnnotationRefs([selected.windowRef, selected.targetRef]),
+    bounds: null,
+    screenBounds: null,
+    windowBounds: { ...selected.windowBounds },
+    windowLocalBounds: null,
+    bindingStatus: 'manual-bound',
+    windowBinding,
+    overlay: {
+      created: overlayState.overlayCreated,
+      visible: overlayState.visible,
+      clickThrough: overlayState.clickThrough,
+    },
+    diagnostics: [{
+      code: 'desktop.annotation.app-window-explicit-selection-ready',
+      level: 'info',
+      message: 'App window annotation is ready for a user-selected region inside the selected window.',
+      refs: compactDesktopAnnotationRefs([selected.windowRef, selected.targetRef]),
+      refsOnly: true,
+      mode: request.mode,
+      sourceKind: 'window',
+      coordinateSpace: 'window-local',
+      explicitSelectionRequired: true,
+      explicitAppWindowSelectionRequired: true,
+      explicitAppWindowSelectionFulfilled: true,
+      captureProviderReady: true,
+    }],
+    metadata: {
+      refsOnly: true,
+      nativeScreenCapture: true,
+      captureProviderReady: true,
+      appWindowSelectionProviderReady: true,
+      explicitSelectionRequired: true,
+      explicitAppWindowSelectionRequired: true,
+      explicitAppWindowSelectionFulfilled: true,
+      interactiveSelectionAvailable: true,
+      sourceKind: 'window',
+      coordinateSpace: 'window-local',
+      windowRef: selected.windowRef,
+      targetRef: selected.targetRef,
+      windowBounds: { ...selected.windowBounds },
+      ...selected.windowSummary,
+      ...(selected.displayId ? { displayId: selected.displayId } : {}),
+      ...(selected.screenId ? { screenId: selected.screenId } : {}),
+      ...(selected.scale !== undefined ? { scale: selected.scale } : {}),
+      windowListPayloadReturned: false,
+      screenshotPayloadReturned: false,
+      providerPayloadReturned: false,
+    },
+  };
+}
+
+function compactDesktopAnnotationRefs(refs: Array<string | undefined>): string[] {
+  return Array.from(new Set(refs.filter((ref): ref is string => Boolean(ref))));
+}
+
+function sanitizeDesktopAnnotationRendererPayload(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    const sanitizedItems = value
+      .map(sanitizeDesktopAnnotationRendererPayload)
+      .filter((item) => item !== undefined);
+    return sanitizedItems;
+  }
+  if (typeof value === 'string') {
+    if (/^data:image\//i.test(value) || /;base64,/i.test(value)) return undefined;
+    return sanitizeDiagnosticText(value);
+  }
+  if (!value || typeof value !== 'object') return value;
+  const output: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (isRejectedDesktopAnnotationRendererPayloadKey(key)) continue;
+    const sanitized = sanitizeDesktopAnnotationRendererPayload(nested);
+    if (sanitized !== undefined) output[key] = sanitized;
+  }
+  return output;
+}
+
+function isRejectedDesktopAnnotationRendererPayloadKey(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return normalized.startsWith('raw')
+    || normalized === 'dataurl'
+    || normalized.includes('base64')
+    || normalized.includes('bytes')
+    || normalized.includes('buffer')
+    || normalized.includes('payload')
+    || normalized === 'windowactionsession'
+    || normalized === 'windowactionsessionref'
+    || normalized === 'actionref'
+    || normalized === 'guiexecutable'
+    || (normalized.includes('screenshot') && !normalized.endsWith('ref') && !normalized.endsWith('refs'));
+}
 
 export function createDesktopNativeBrowserWindowOptions(): ElectronBrowserWindowOptions {
   return {
@@ -485,6 +1050,404 @@ function browserHostSurfaceAttachRequest(value: unknown) {
   };
 }
 
+const DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE = 'desktop-annotation-capture-provider-unavailable';
+type DesktopAnnotationMode = 'sciforge-page' | 'screen-region' | 'app-window';
+type DesktopAnnotationStartRequest = {
+  schemaVersion?: string;
+  mode: DesktopAnnotationMode;
+  source?: string;
+  purpose?: string;
+  context?: unknown;
+  locale?: unknown;
+  createdAt?: string;
+};
+
+function fallbackDesktopAnnotationScreen(): DesktopAnnotationOverlayScreen {
+  return {
+    getPrimaryDisplay() {
+      return {
+        bounds: { x: 0, y: 0, width: 1, height: 1 },
+        scaleFactor: 1,
+      };
+    },
+  };
+}
+
+function unavailableDesktopAnnotationCaptureProvider() {
+  return {
+    async captureSelection(input: DesktopAnnotationCaptureProviderInput): Promise<never> {
+      void input;
+      const error = new Error(DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE) as Error & { code?: string };
+      error.code = DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE;
+      throw error;
+    },
+  };
+}
+
+function desktopAnnotationStartRequest(value: unknown): DesktopAnnotationStartRequest {
+  const record = requireRecord(value, 'desktop:annotation-overlay:start requires an object');
+  const mode = desktopAnnotationMode(record.mode);
+  const request: DesktopAnnotationStartRequest = { mode };
+  const schemaVersion = optionalString(record.schemaVersion, 'schemaVersion');
+  if (schemaVersion) request.schemaVersion = schemaVersion;
+  const source = optionalString(record.source, 'source');
+  if (source) request.source = source;
+  const purpose = optionalString(record.purpose, 'purpose');
+  if (purpose) request.purpose = purpose;
+  if (record.context !== undefined) request.context = boundedAnnotationContext(record.context);
+  if (record.locale !== undefined) request.locale = boundedPrimitive(record.locale);
+  const createdAt = optionalString(record.createdAt, 'createdAt');
+  if (createdAt) request.createdAt = createdAt;
+  return request;
+}
+
+function desktopAnnotationMode(value: unknown): DesktopAnnotationMode {
+  if (value === 'sciforge-page' || value === 'screen-region' || value === 'app-window') return value;
+  throw new Error('desktop:annotation-overlay:start requires mode sciforge-page, screen-region, or app-window');
+}
+
+function blockedReasonForDesktopAnnotationMode(mode: DesktopAnnotationMode): {
+  code: string;
+  message: string;
+  nativeScreenCapture: boolean;
+  windowBindingStatus: 'unbound' | 'blocked';
+  sourceKind: DesktopAnnotationSourceKind;
+  coordinateSpace: DesktopAnnotationCoordinateSpace;
+  explicitSelectionRequired: boolean;
+  explicitAppWindowSelectionRequired?: boolean;
+} {
+  if (mode === 'sciforge-page') {
+    return {
+      code: 'desktop.annotation.sciforge-page-dom-fallback',
+      message: 'SciForge page annotation stays in the renderer DOM path; native screen capture was not started.',
+      nativeScreenCapture: false,
+      windowBindingStatus: 'unbound',
+      sourceKind: 'browser',
+      coordinateSpace: 'browser-viewport',
+      explicitSelectionRequired: false,
+    };
+  }
+  if (mode === 'app-window') {
+    return {
+      code: 'desktop.annotation.app-window-selection-required',
+      message: 'App window annotation requires an explicit user-selected window before native capture can start.',
+      nativeScreenCapture: false,
+      windowBindingStatus: 'blocked',
+      sourceKind: 'window',
+      coordinateSpace: 'window-local',
+      explicitSelectionRequired: true,
+      explicitAppWindowSelectionRequired: true,
+    };
+  }
+  return {
+    code: 'desktop.annotation.screen-region-interactive-selection-unavailable',
+    message: 'Screen region annotation requires an explicit interactive screen selection before native capture can start.',
+    nativeScreenCapture: true,
+    windowBindingStatus: 'blocked',
+    sourceKind: 'screen-region',
+    coordinateSpace: 'screen-global',
+    explicitSelectionRequired: true,
+  };
+}
+
+function activeScreenRegionOverlayBlockedReason(): ReturnType<typeof blockedReasonForDesktopAnnotationMode> {
+  return {
+    code: 'desktop.annotation.screen-region-selection-active',
+    message: 'A trusted screen-region annotation overlay selection is already active.',
+    nativeScreenCapture: true,
+    windowBindingStatus: 'blocked',
+    sourceKind: 'screen-region',
+    coordinateSpace: 'screen-global',
+    explicitSelectionRequired: true,
+  };
+}
+
+function blockedDesktopAnnotationStartResult(
+  request: DesktopAnnotationStartRequest,
+  reason: ReturnType<typeof blockedReasonForDesktopAnnotationMode>,
+  screen: DesktopAnnotationOverlayScreen,
+) {
+  const owner = annotationOwnerFromContext(request.context);
+  const display = request.mode === 'screen-region'
+    ? desktopAnnotationStartDisplayMetadata(screen)
+    : undefined;
+  const targetRef = blockedDesktopAnnotationTargetRef(request, owner);
+  return {
+    schemaVersion: 'sciforge.desktop.annotation.start-result.v1',
+    ok: false,
+    status: 'blocked',
+    mode: request.mode,
+    sourceKind: reason.sourceKind,
+    coordinateSpace: reason.coordinateSpace,
+    targetRef,
+    refs: [],
+    owner,
+    bounds: null,
+    screenBounds: display?.bounds ?? null,
+    windowBounds: null,
+    bindingStatus: reason.windowBindingStatus,
+    windowBinding: {
+      status: reason.windowBindingStatus,
+      reason: reason.code,
+      targetRef,
+      sourceKind: reason.sourceKind,
+      coordinateSpace: reason.coordinateSpace,
+      ...(display ? { screenBounds: { ...display.bounds } } : {}),
+    },
+    diagnostics: [{
+      code: reason.code,
+      level: 'warning',
+      message: reason.message,
+      refs: [],
+      refsOnly: true,
+      mode: request.mode,
+      sourceKind: reason.sourceKind,
+      coordinateSpace: reason.coordinateSpace,
+      explicitSelectionRequired: reason.explicitSelectionRequired,
+      captureProviderReady: false,
+    }],
+    metadata: {
+      refsOnly: true,
+      nativeScreenCapture: reason.nativeScreenCapture,
+      captureProviderReady: false,
+      explicitSelectionRequired: reason.explicitSelectionRequired,
+      ...(reason.explicitAppWindowSelectionRequired ? { explicitAppWindowSelectionRequired: true } : {}),
+      interactiveSelectionAvailable: false,
+      sourceKind: reason.sourceKind,
+      coordinateSpace: reason.coordinateSpace,
+      targetRef,
+      ...(display ? {
+        displayId: display.displayId,
+        screenId: display.screenId,
+        ...(display.scale !== undefined ? { scale: display.scale } : {}),
+        screenBounds: { ...display.bounds },
+      } : {}),
+      windowListPayloadReturned: false,
+      screenshotPayloadReturned: false,
+      providerPayloadReturned: false,
+    },
+  };
+}
+
+function blockedDesktopAnnotationTargetRef(
+  request: DesktopAnnotationStartRequest,
+  owner: { workspaceId: string; sessionId: string },
+): string {
+  const suffix = sanitizeRefSegment(request.createdAt ?? `${request.mode}-${Date.now().toString(36)}`);
+  const workspaceId = sanitizeRefSegment(owner.workspaceId);
+  const sessionId = sanitizeRefSegment(owner.sessionId);
+  if (request.mode === 'app-window') return `desktop-window-selection:${workspaceId}:${sessionId}/${suffix}`;
+  if (request.mode === 'screen-region') return `desktop-screen-region:${workspaceId}:${sessionId}/${suffix}`;
+  return `sciforge-page-annotation:${workspaceId}:${sessionId}/${suffix}`;
+}
+
+function desktopAnnotationStartDisplayMetadata(screen: DesktopAnnotationOverlayScreen): {
+  displayId?: string;
+  screenId?: string;
+  scale?: number;
+  bounds: DesktopAnnotationBounds;
+} {
+  const display = screen.getPrimaryDisplay();
+  const bounds = desktopAnnotationDisplayBounds(display.bounds);
+  const displayId = display.id === undefined ? undefined : sanitizeDiagnosticText(String(display.id));
+  const scale = Number.isFinite(display.scaleFactor) && display.scaleFactor && display.scaleFactor > 0
+    ? display.scaleFactor
+    : undefined;
+  return {
+    ...(displayId ? { displayId, screenId: displayId } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+    bounds,
+  };
+}
+
+function desktopAnnotationDisplayBounds(bounds: DesktopAnnotationBounds): DesktopAnnotationBounds {
+  return {
+    x: Number.isFinite(bounds.x) ? bounds.x : 0,
+    y: Number.isFinite(bounds.y) ? bounds.y : 0,
+    width: Number.isFinite(bounds.width) && bounds.width > 0 ? bounds.width : 1,
+    height: Number.isFinite(bounds.height) && bounds.height > 0 ? bounds.height : 1,
+  };
+}
+
+function annotationOwnerFromContext(context: unknown): { workspaceId: string; sessionId: string } {
+  const record = requireOptionalRecord(context);
+  return {
+    workspaceId: textOrFallback(record?.workspaceId, 'unknown-workspace'),
+    sessionId: textOrFallback(record?.sessionId, 'unknown-session'),
+  };
+}
+
+function boundedAnnotationContext(value: unknown): unknown {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === 'string') return sanitizeDiagnosticText(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.slice(0, 8).map(boundedAnnotationContext).filter((item) => item !== undefined);
+  const record = requireOptionalRecord(value);
+  if (!record) return undefined;
+  const bounded: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record).slice(0, 16)) {
+    if (/(?:apiKey|token|secret|password|raw|base64|dataUrl|screenshot|dom|payload)/i.test(key)) continue;
+    const next = boundedAnnotationContext(entry);
+    if (next !== undefined) bounded[key] = next;
+  }
+  return Object.keys(bounded).length ? bounded : undefined;
+}
+
+function boundedPrimitive(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeDiagnosticText(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (typeof value === 'boolean') return value;
+  return undefined;
+}
+
+type DesktopAnnotationOverlayInternalEvent =
+  | {
+      event: 'screen-region-selection-submitted';
+      bounds: DesktopAnnotationBounds;
+      comment: string;
+      threadId?: string;
+      messageDraftId?: string;
+    }
+  | {
+      event: 'screen-region-selection-cancelled';
+    };
+
+function desktopAnnotationOverlayInternalEvent(value: unknown): DesktopAnnotationOverlayInternalEvent {
+  const record = requireRecord(value, 'desktop:annotation-overlay:internal-event requires an object');
+  const schemaVersion = optionalString(record.schemaVersion, 'schemaVersion');
+  if (schemaVersion && schemaVersion !== 'sciforge.desktop.annotation-overlay.internal-event.v1') {
+    throw new Error('desktop:annotation-overlay:internal-event requires schemaVersion sciforge.desktop.annotation-overlay.internal-event.v1');
+  }
+  if (record.event === 'screen-region-selection-cancelled') {
+    return { event: 'screen-region-selection-cancelled' };
+  }
+  if (record.event !== 'screen-region-selection-submitted') {
+    throw new Error('desktop:annotation-overlay:internal-event requires a supported event');
+  }
+  return {
+    event: 'screen-region-selection-submitted',
+    bounds: desktopAnnotationBounds(record.bounds, 'bounds'),
+    comment: requireString(record.comment, 'comment'),
+    threadId: optionalString(record.threadId, 'threadId'),
+    messageDraftId: optionalString(record.messageDraftId, 'messageDraftId'),
+  };
+}
+
+function requireOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function textOrFallback(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function sanitizeDiagnosticText(value: string): string {
+  return value.replace(/\s+/g, ' ').replace(/data:image\/[^,\s]+,?[A-Za-z0-9+/=]*/gi, '[redacted-image]').slice(0, 240);
+}
+
+function sanitizeRefSegment(value: string): string {
+  return value.trim().replace(/[^A-Za-z0-9_.:-]+/g, '-').replace(/^-+|-+$/g, '') || 'ref';
+}
+
+async function captureDesktopAnnotationSelection(
+  annotationOverlay: ReturnType<typeof createDesktopAnnotationOverlayController>,
+): Promise<unknown> {
+  try {
+    return await annotationOverlay.captureSelectionToRefs();
+  } catch (error) {
+    if (!isDesktopAnnotationCaptureProviderUnavailable(error)) throw error;
+    return {
+      schemaVersion: 'sciforge.desktop.annotation-overlay.capture-blocked.v1',
+      ok: false,
+      status: 'blocked',
+      reason: DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE,
+      diagnostic: {
+        code: DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE,
+        level: 'warning',
+        refsOnly: true,
+        captureProviderReady: false,
+        message: 'Desktop annotation capture provider is not configured; no image payload was returned.',
+      },
+    };
+  }
+}
+
+function isDesktopAnnotationCaptureProviderUnavailable(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const record = error as { code?: unknown; message?: unknown };
+  return record.code === DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE
+    || record.message === DESKTOP_ANNOTATION_CAPTURE_PROVIDER_UNAVAILABLE;
+}
+
+function desktopAnnotationBeginSelectionRequest(value: unknown): DesktopAnnotationBeginSelectionInput {
+  const record = requireRecord(value, 'desktop:annotation-overlay:begin requires an object');
+  const request: DesktopAnnotationBeginSelectionInput = {
+    workspaceId: requireString(record.workspaceId, 'workspaceId'),
+    sessionId: requireString(record.sessionId, 'sessionId'),
+  };
+  if (record.windowBounds !== undefined) request.windowBounds = desktopAnnotationBounds(record.windowBounds, 'windowBounds');
+  const windowRef = optionalString(record.windowRef, 'windowRef');
+  if (windowRef) request.windowRef = windowRef;
+  const targetRef = optionalString(record.targetRef, 'targetRef');
+  if (targetRef) request.targetRef = targetRef;
+  const windowSummary = desktopAnnotationSelectedWindowSummary(record, record);
+  if (windowSummary) request.windowSummary = windowSummary;
+  const sourceKind = optionalDesktopAnnotationSourceKind(record.sourceKind);
+  if (sourceKind) request.sourceKind = sourceKind;
+  const coordinateSpace = optionalDesktopAnnotationCoordinateSpace(record.coordinateSpace);
+  if (coordinateSpace) request.coordinateSpace = coordinateSpace;
+  return request;
+}
+
+function desktopAnnotationBounds(value: unknown, label: string): DesktopAnnotationBounds {
+  const record = requireRecord(value, `desktop:annotation-overlay requires ${label}`);
+  return {
+    x: annotationNumberField(record.x, `${label}.x`),
+    y: annotationNumberField(record.y, `${label}.y`),
+    width: annotationNumberField(record.width, `${label}.width`),
+    height: annotationNumberField(record.height, `${label}.height`),
+  };
+}
+
+function optionalDesktopAnnotationSourceKind(value: unknown): DesktopAnnotationSourceKind | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === 'window' || value === 'screen-region' || value === 'browser' || value === 'image') return value;
+  throw new Error('desktop:annotation-overlay:begin requires valid sourceKind');
+}
+
+function optionalDesktopAnnotationCoordinateSpace(value: unknown): DesktopAnnotationCoordinateSpace | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (value === 'window-local' || value === 'screen-global' || value === 'browser-viewport' || value === 'image-local') {
+    return value;
+  }
+  throw new Error('desktop:annotation-overlay:begin requires valid coordinateSpace');
+}
+
+function requireRecord(value: unknown, message: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object') throw new Error(message);
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`desktop:annotation-overlay requires non-empty ${field}`);
+  }
+  return value.trim();
+}
+
+function optionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  return requireString(value, field);
+}
+
+function annotationNumberField(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`desktop:annotation-overlay requires numeric ${field}`);
+  }
+  return value;
+}
+
 function numberField(value: unknown, field: string): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`desktop:browser-host-surface:attach requires numeric ${field}`);
   return value;
@@ -597,6 +1560,14 @@ function desktopRendererUrlFromOption(value: string | undefined): string | undef
   } catch {
     return undefined;
   }
+}
+
+function desktopAnnotationOverlayPreloadPath(appRoot: string): string {
+  return join(resolve(appRoot), 'dist-desktop', 'src', 'desktop', 'annotation-overlay-preload.cjs');
+}
+
+function desktopAnnotationAppWindowPickerPreloadPath(appRoot: string): string {
+  return join(resolve(appRoot), 'dist-desktop', 'src', 'desktop', 'app-window-picker-preload.cjs');
 }
 
 function inferDesktopAppRoot(appPath: string | undefined): string | undefined {

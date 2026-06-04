@@ -1,4 +1,9 @@
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { mkdtemp, readFile as readNodeFile, rm, unlink as unlinkNodeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
 import {
   createWindowActionSession,
   type WindowActionAppInfo,
@@ -9,6 +14,10 @@ import {
 export const DESKTOP_WINDOW_CAPTURE_SCHEMA = 'sciforge.desktop.window-capture.v1' as const;
 export const MACOS_SCREENCAPTUREKIT_PROVIDER_ID = 'macos-screencapturekit-window-region' as const;
 export const MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID = 'macos-screencapture-window-region-fallback' as const;
+
+const execFileAsync = promisify(execFile);
+const MAX_MACOS_SCREENCAPTURE_COORDINATE = 1_000_000;
+const MAX_MACOS_WINDOW_ID = 0xffffffff;
 
 export type DesktopWindowCaptureBounds = {
   x: number;
@@ -84,6 +93,29 @@ export type DesktopWindowCaptureProviderAdapter = {
   captureSelectedTarget?(input: DesktopWindowCaptureProviderRequest): Promise<DesktopWindowCaptureProviderResult>;
 };
 
+export type MacOSScreencaptureFallbackCommandRunner = {
+  execFile(
+    command: string,
+    args: string[],
+    options?: { timeout?: number },
+  ): Promise<{ stdout?: string | Buffer; stderr?: string | Buffer }>;
+};
+
+export type MacOSScreencaptureFallbackTempFile = {
+  path: string;
+  cleanup?: () => void | Promise<void>;
+};
+
+export type MacOSScreencaptureFallbackDesktopWindowCaptureProviderOptions = {
+  adapter?: DesktopWindowCaptureProviderAdapter;
+  commandExists?: (command: string) => boolean | Promise<boolean>;
+  runner?: MacOSScreencaptureFallbackCommandRunner;
+  createTempFile?: () => MacOSScreencaptureFallbackTempFile | Promise<MacOSScreencaptureFallbackTempFile>;
+  readFile?: (path: string) => ArrayBuffer | ArrayBufferView | Promise<ArrayBuffer | ArrayBufferView>;
+  unlink?: (path: string) => void | Promise<void>;
+  timeoutMs?: number;
+};
+
 export type DesktopWindowCapturePrivacy = {
   refsOnly: true;
   explicitSelectionRequired: true;
@@ -124,6 +156,7 @@ export type CaptureSelectedDesktopWindowTargetOptions = {
   platform?: string;
   providers?: DesktopWindowCaptureProvider[];
   now?: () => string;
+  createWindowActionSession?: boolean;
 };
 
 export async function selectDesktopWindowCaptureProvider(
@@ -185,16 +218,12 @@ export async function captureSelectedDesktopWindowTarget(
       requestedAt,
     });
   } catch (error) {
+    const diagnostic = providerCaptureFailureDiagnostic(error, provider.providerId);
     return blockedDesktopWindowCaptureResult({
       request,
       selection: normalized.selection,
       providerId: provider.providerId,
-      diagnostics: [{
-        code: 'desktop.window-capture.provider-capture-failed',
-        level: 'error',
-        message: error instanceof Error ? error.message : 'Desktop window capture provider failed.',
-        providerId: provider.providerId,
-      }],
+      diagnostics: [diagnostic],
     });
   }
 
@@ -218,11 +247,13 @@ export async function captureSelectedDesktopWindowTarget(
   const captureRef = boundedProviderResultRef(providerResult.captureRef, provider.providerId, normalized.selection.kind, 'capture')
     ?? defaultCaptureRef(normalized.workspaceId, normalized.sessionId, target.targetRef, hash);
   const imageRef = boundedProviderResultRef(providerResult.imageRef, provider.providerId, normalized.selection.kind, 'image') ?? `${captureRef}:image`;
-  const windowActionSession = windowActionSessionForCapturedSelection(normalized.selection, {
-    captureRef,
-    imageRef,
-    capturedAt,
-  });
+  const windowActionSession = options.createWindowActionSession === false
+    ? null
+    : windowActionSessionForCapturedSelection(normalized.selection, {
+      captureRef,
+      imageRef,
+      capturedAt,
+    });
 
   return {
     schemaVersion: DESKTOP_WINDOW_CAPTURE_SCHEMA,
@@ -277,13 +308,86 @@ export function createMacOSScreenCaptureKitDesktopWindowCaptureProvider(
 }
 
 export function createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(
-  adapter: DesktopWindowCaptureProviderAdapter = {},
+  options: DesktopWindowCaptureProviderAdapter | MacOSScreencaptureFallbackDesktopWindowCaptureProviderOptions = {},
 ): DesktopWindowCaptureProvider {
+  if (isDesktopWindowCaptureProviderAdapter(options)) {
+    return createAdapterBackedDesktopWindowCaptureProvider({
+      providerId: MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
+      priority: 10,
+      supportedPlatforms: ['darwin'],
+      adapter: options,
+    });
+  }
+
+  if (options.adapter) {
+    return createAdapterBackedDesktopWindowCaptureProvider({
+      providerId: MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
+      priority: 10,
+      supportedPlatforms: ['darwin'],
+      adapter: options.adapter,
+    });
+  }
+
+  return createMacOSScreencaptureFallbackProvider(options);
+}
+
+function createMacOSScreencaptureFallbackProvider(
+  options: MacOSScreencaptureFallbackDesktopWindowCaptureProviderOptions,
+): DesktopWindowCaptureProvider {
+  const runner = options.runner ?? defaultMacOSScreencaptureFallbackCommandRunner;
+  const commandExists = options.commandExists ?? ((command: string) => defaultCommandExists(command, runner));
+  const createTempFile = options.createTempFile ?? createDefaultMacOSScreencaptureTempFile;
+  const readFile = options.readFile ?? ((path: string) => readNodeFile(path));
+  const unlink = options.unlink ?? ((path: string) => unlinkNodeFile(path));
+  const timeoutMs = options.timeoutMs ?? 15000;
+
   return createAdapterBackedDesktopWindowCaptureProvider({
     providerId: MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
     priority: 10,
     supportedPlatforms: ['darwin'],
-    adapter,
+    adapter: {
+      async isAvailable(context) {
+        if (context.platform !== 'darwin') return false;
+        try {
+          return await commandExists('screencapture');
+        } catch {
+          return false;
+        }
+      },
+      async captureSelectedTarget(input) {
+        const args = macOSScreencaptureArgsForSelection(input.selection);
+        const tempFile = await createTempFile();
+        try {
+          await runner.execFile('screencapture', [...args, tempFile.path], { timeout: timeoutMs });
+          const bytes = await readFile(tempFile.path);
+          if (byteLengthForHashableBytes(bytes) <= 0) {
+            throw new DesktopWindowCaptureProviderDiagnosticError({
+              code: 'desktop.window-capture.output-empty',
+              message: 'macOS screencapture fallback produced an empty output file.',
+            });
+          }
+          const hash = hashProviderBytes(bytes);
+          if (!hash) {
+            throw new DesktopWindowCaptureProviderDiagnosticError({
+              code: 'desktop.window-capture.output-hash-failed',
+              message: 'macOS screencapture fallback could not hash the output file.',
+            });
+          }
+          return {
+            captureRef: defaultProviderResultRef(MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID, input.selection.kind, 'capture'),
+            imageRef: defaultProviderResultRef(MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID, input.selection.kind, 'image'),
+            capturedAt: input.requestedAt,
+            hash,
+          };
+        } finally {
+          if (tempFile.cleanup) {
+            await tempFile.cleanup();
+          } else {
+            await cleanupMacOSScreencaptureTempFile(tempFile.path, unlink);
+          }
+        }
+      },
+    },
   });
 }
 
@@ -304,9 +408,176 @@ function createAdapterBackedDesktopWindowCaptureProvider(options: {
       if (!options.adapter.captureSelectedTarget) {
         throw new Error(`${options.providerId} capture adapter is not configured`);
       }
-      return options.adapter.captureSelectedTarget(input);
+      return await options.adapter.captureSelectedTarget(input);
     },
   };
+}
+
+function isDesktopWindowCaptureProviderAdapter(
+  options: DesktopWindowCaptureProviderAdapter | MacOSScreencaptureFallbackDesktopWindowCaptureProviderOptions,
+): options is DesktopWindowCaptureProviderAdapter {
+  const adapter = options as DesktopWindowCaptureProviderAdapter;
+  return typeof adapter.isAvailable === 'function' || typeof adapter.captureSelectedTarget === 'function';
+}
+
+const defaultMacOSScreencaptureFallbackCommandRunner: MacOSScreencaptureFallbackCommandRunner = {
+  async execFile(command, args, options) {
+    const result = await execFileAsync(command, args, options);
+    return { stdout: result.stdout, stderr: result.stderr };
+  },
+};
+
+async function defaultCommandExists(
+  command: string,
+  runner: MacOSScreencaptureFallbackCommandRunner,
+): Promise<boolean> {
+  try {
+    await runner.execFile('which', [command], { timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function createDefaultMacOSScreencaptureTempFile(): Promise<MacOSScreencaptureFallbackTempFile> {
+  const directory = await mkdtemp(join(tmpdir(), 'sciforge-window-capture-'));
+  return {
+    path: join(directory, 'capture.png'),
+    cleanup: () => rm(directory, { force: true, recursive: true }),
+  };
+}
+
+async function cleanupMacOSScreencaptureTempFile(
+  path: string,
+  unlink: (path: string) => void | Promise<void>,
+) {
+  try {
+    await unlink(path);
+  } catch {
+    // Best-effort temp-file cleanup must not mask the capture result.
+  }
+}
+
+function macOSScreencaptureArgsForSelection(selection: DesktopWindowCaptureSelection): string[] {
+  if (selection.kind === 'region') {
+    return ['-x', '-R', macOSScreencaptureRegionArgument(selection.bounds)];
+  }
+
+  const windowId = explicitMacOSWindowIdForSelection(selection);
+  if (!windowId.id) {
+    throw new DesktopWindowCaptureProviderDiagnosticError({
+      code: windowId.reason === 'invalid'
+        ? 'desktop.window-capture.window-id-invalid'
+        : 'desktop.window-capture.window-id-required',
+      message: windowId.reason === 'invalid'
+        ? 'macOS screencapture fallback requires a positive bounded numeric window id.'
+        : 'macOS screencapture fallback requires an explicit bounded numeric window id in selection metadata.',
+    });
+  }
+  return ['-x', '-l', windowId.id];
+}
+
+function macOSScreencaptureRegionArgument(bounds: DesktopWindowCaptureBounds): string {
+  const x = boundedRoundedCoordinate(bounds.x, 'x');
+  const y = boundedRoundedCoordinate(bounds.y, 'y');
+  const width = boundedRoundedCoordinate(bounds.width, 'width');
+  const height = boundedRoundedCoordinate(bounds.height, 'height');
+  if (width <= 0 || height <= 0) {
+    throw new DesktopWindowCaptureProviderDiagnosticError({
+      code: 'desktop.window-capture.region-bounds-invalid',
+      message: 'macOS screencapture fallback requires rounded positive region width and height.',
+    });
+  }
+  return `${x},${y},${width},${height}`;
+}
+
+function boundedRoundedCoordinate(value: number, name: string): number {
+  const rounded = Math.round(value);
+  if (!Number.isFinite(rounded) || Math.abs(rounded) > MAX_MACOS_SCREENCAPTURE_COORDINATE) {
+    throw new DesktopWindowCaptureProviderDiagnosticError({
+      code: 'desktop.window-capture.region-bounds-invalid',
+      message: `macOS screencapture fallback received an out-of-range ${name} coordinate.`,
+    });
+  }
+  return rounded;
+}
+
+function explicitMacOSWindowIdForSelection(selection: Extract<DesktopWindowCaptureSelection, { kind: 'window' }>): {
+  id: string | null;
+  reason?: 'missing' | 'invalid';
+} {
+  const rawSelection = selection as unknown as Record<string, unknown>;
+  const candidates = [
+    rawSelection.macosWindowId,
+    rawSelection.cgWindowId,
+    rawSelection.windowId,
+    rawSelection.windowNumber,
+    ...explicitMacOSWindowIdMetadataCandidates(rawSelection.metadata),
+    ...explicitMacOSWindowIdMetadataCandidates(rawSelection.windowRefMetadata),
+    ...explicitMacOSWindowIdMetadataCandidates(rawSelection.window),
+    explicitMacOSWindowIdFromWindowRef(selection.windowRef),
+  ];
+  let sawExplicitCandidate = false;
+
+  for (const candidate of candidates) {
+    if (candidate === undefined || candidate === null || candidate === '') continue;
+    sawExplicitCandidate = true;
+    const id = safeMacOSWindowId(candidate);
+    if (id) return { id };
+  }
+
+  return {
+    id: null,
+    reason: sawExplicitCandidate ? 'invalid' : 'missing',
+  };
+}
+
+function explicitMacOSWindowIdMetadataCandidates(value: unknown): unknown[] {
+  const metadata = recordOrNull(value);
+  if (!metadata) return [];
+  return [
+    metadata.macosWindowId,
+    metadata.cgWindowId,
+    metadata.windowId,
+    metadata.windowNumber,
+  ];
+}
+
+function explicitMacOSWindowIdFromWindowRef(windowRef: string): string | undefined {
+  const match = windowRef.match(/(?:^|:)(?:macos-window-id|macos-cg-window-id|cg-window-id|screencapture-window-id):([^:]+)(?:$|:)/iu);
+  return match?.[1];
+}
+
+function safeMacOSWindowId(value: unknown): string | null {
+  const numeric = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/u.test(value.trim())
+      ? Number(value.trim())
+      : Number.NaN;
+  if (!Number.isInteger(numeric) || numeric <= 0 || numeric > MAX_MACOS_WINDOW_ID) return null;
+  return String(numeric);
+}
+
+function byteLengthForHashableBytes(bytes: ArrayBuffer | ArrayBufferView): number {
+  return bytes instanceof ArrayBuffer ? bytes.byteLength : bytes.byteLength;
+}
+
+class DesktopWindowCaptureProviderDiagnosticError extends Error {
+  readonly code: string;
+
+  readonly diagnostic: DesktopWindowCaptureDiagnostic;
+
+  constructor(diagnostic: Pick<DesktopWindowCaptureDiagnostic, 'code' | 'message'>) {
+    super(diagnostic.message);
+    this.name = 'DesktopWindowCaptureProviderDiagnosticError';
+    Object.setPrototypeOf(this, DesktopWindowCaptureProviderDiagnosticError.prototype);
+    this.code = diagnostic.code;
+    this.diagnostic = {
+      code: diagnostic.code,
+      level: 'error',
+      message: diagnostic.message,
+    };
+  }
 }
 
 function normalizeDesktopWindowCaptureRequest(request: DesktopWindowCaptureRequest):
@@ -534,8 +805,53 @@ function normalizeHash(hash: string | undefined): string | null {
   return value.startsWith('sha256:') ? value : `sha256:${value}`;
 }
 
+function providerCaptureFailureDiagnostic(
+  error: unknown,
+  providerId: string,
+): DesktopWindowCaptureDiagnostic {
+  const errorRecord = recordOrNull(error);
+  const providerDiagnostic = error instanceof DesktopWindowCaptureProviderDiagnosticError
+    ? error.diagnostic
+    : errorRecord?.diagnostic;
+  if (isDesktopWindowCaptureDiagnostic(providerDiagnostic)) {
+    return boundedDiagnostics([providerDiagnostic], providerId)[0];
+  }
+  const providerCode = textOrNull(errorRecord?.code);
+  const providerMessage = textOrNull(errorRecord?.message);
+  if (providerCode && providerMessage) {
+    return boundedDiagnostics([{
+      code: providerCode,
+      level: 'error',
+      message: providerMessage,
+      providerId,
+    }], providerId)[0];
+  }
+  return boundedDiagnostics([{
+    code: 'desktop.window-capture.provider-capture-failed',
+    level: 'error',
+    message: error instanceof Error ? error.message : 'Desktop window capture provider failed.',
+    providerId,
+  }], providerId)[0];
+}
+
 function textOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function isDesktopWindowCaptureDiagnostic(value: unknown): value is DesktopWindowCaptureDiagnostic {
+  const diagnostic = recordOrNull(value);
+  return Boolean(
+    diagnostic
+      && typeof diagnostic.code === 'string'
+      && (diagnostic.level === 'info' || diagnostic.level === 'warning' || diagnostic.level === 'error')
+      && typeof diagnostic.message === 'string',
+  );
 }
 
 function defaultCaptureRef(workspaceId: string, sessionId: string, targetRef: string, hash: string): string {

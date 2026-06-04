@@ -27,6 +27,35 @@ export interface ImageEvidenceBounds {
   height: number;
 }
 
+export interface ImageEvidenceDomTarget {
+  selector?: string;
+  stableSelector?: string;
+  domPath?: string;
+  role?: string;
+  label?: string;
+  textSnippet?: string;
+  rect?: ImageEvidenceBounds;
+}
+
+export type ImageEvidenceWindowBindingStatus = 'auto-bound' | 'manual-bound' | 'unbound' | 'blocked';
+
+export interface ImageEvidenceWindowBindingCandidate {
+  windowRef?: string;
+  appName?: string;
+  bundleId?: string;
+  pid?: number;
+  title?: string;
+  confidence?: number;
+  reason?: string;
+  windowBounds?: ImageEvidenceBounds;
+  windowLocalBounds?: ImageEvidenceBounds;
+}
+
+export interface ImageEvidenceWindowBinding extends ImageEvidenceWindowBindingCandidate {
+  status: ImageEvidenceWindowBindingStatus;
+  candidates?: ImageEvidenceWindowBindingCandidate[];
+}
+
 export interface ImageEvidencePayload {
   sourceKind: ImageEvidenceSourceKind;
   imageRef: string;
@@ -45,8 +74,18 @@ export interface ImageEvidencePayload {
   redactionRef?: string;
   bounds?: ImageEvidenceBounds;
   cropBounds?: ImageEvidenceBounds;
+  domTarget?: ImageEvidenceDomTarget;
+  selector?: string;
+  domPath?: string;
+  selectedText?: string;
+  screenBounds?: ImageEvidenceBounds;
+  windowBounds?: ImageEvidenceBounds;
+  windowLocalBounds?: ImageEvidenceBounds;
+  displayId?: string;
+  scale?: number;
   status?: ImageEvidenceStatus;
   provenanceRefs?: string[];
+  windowBinding?: ImageEvidenceWindowBinding;
 }
 
 export function rightPaneImageEvidencePayload(
@@ -64,15 +103,16 @@ export function rightPaneImageEvidencePayload(
 
 export function imageEvidencePayloadFromObjectReference(reference: ObjectReference | undefined): ImageEvidencePayload | undefined {
   if (!reference) return undefined;
+  const focusedScreenshotRef = focusedObjectScreenshotRef(reference.provenance?.screenshotRef);
   return normalizeImageEvidencePayload({
-    ref: reference.ref,
-    imageRef: reference.ref,
+    ref: focusedScreenshotRef ?? reference.ref,
+    imageRef: focusedScreenshotRef ?? reference.ref,
     title: reference.title,
     artifactType: reference.artifactType,
     preferredView: reference.preferredView,
     status: reference.status,
     artifactRef: reference.kind === 'artifact' ? reference.ref : undefined,
-    targetRef: reference.provenance?.screenshotRef,
+    targetRef: focusedScreenshotRef ? reference.ref : reference.provenance?.screenshotRef,
     provenanceRef: reference.provenance?.dataRef,
     sha256: reference.provenance?.hash,
   });
@@ -102,6 +142,7 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
   const frameDimensions = isRecord(frameRecord?.dimensions) ? frameRecord.dimensions : {};
   const screenDimensions = isRecord(record.screen) ? record.screen : {};
   const dimensions = isRecord(record.dimensions) ? record.dimensions : {};
+  const displayRecord = isRecord(record.display) ? record.display : {};
   const imageRef = firstNonEmptyString(
     safeRef(asString(record.imageRef)),
     safeRef(asString(record.ref)),
@@ -149,6 +190,16 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
     safeRef(asString(record.windowRef)),
     safeRef(asString(record.targetWindowRef)),
   );
+  const windowBinding = imageWindowBinding(record.windowBinding);
+  const boundWindowRef = windowBinding && isBoundWindowBindingStatus(windowBinding.status)
+    ? windowBinding.windowRef
+    : undefined;
+  const boundWindowBounds = windowBinding && isBoundWindowBindingStatus(windowBinding.status)
+    ? windowBinding.windowBounds
+    : undefined;
+  const boundWindowLocalBounds = windowBinding && isBoundWindowBindingStatus(windowBinding.status)
+    ? windowBinding.windowLocalBounds
+    : undefined;
   const artifactRef = firstNonEmptyString(
     safeRef(asString(record.artifactRef)),
     safeRef(asString(record.artifactPreviewRef)),
@@ -160,7 +211,7 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
     mime: firstNonEmptyString(asString(record.mime), asString(record.mimeType), asString(record.contentType)),
     width: asNumber(record.width) ?? asNumber(dimensions.width) ?? asNumber(frameRecord?.width) ?? asNumber(frameDimensions.width) ?? asNumber(screenDimensions.width),
     height: asNumber(record.height) ?? asNumber(dimensions.height) ?? asNumber(frameRecord?.height) ?? asNumber(frameDimensions.height) ?? asNumber(screenDimensions.height),
-    sha256: normalizedSha256(record.sha256),
+    sha256: normalizedSha256(firstNonEmptyString(asString(record.sha256), asString(record.hash))),
     createdAt: firstNonEmptyString(asString(record.createdAt), asString(record.capturedAt), asString(record.timestamp)),
     provenanceRef: evidenceLedgerRef ?? provenanceRefs[0],
     annotationRefs: refList(
@@ -171,16 +222,31 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
     targetRef: firstNonEmptyString(
       safeRef(asString(record.targetRef)),
       windowRef,
+      boundWindowRef,
       safeRef(asString(record.targetAppRef)),
     ),
-    windowRef,
+    windowRef: windowRef ?? boundWindowRef,
     browserSessionRef,
     artifactRef,
     redactionRef: safeRef(asString(record.redactionRef)),
     bounds: imageBounds(record.bounds),
     cropBounds: imageBounds(record.cropBounds) ?? imageBounds(record.crop),
+    domTarget: imageDomTarget(record.domTarget),
+    selector: boundedString(record.selector),
+    domPath: boundedString(record.domPath),
+    selectedText: boundedString(record.selectedText),
+    screenBounds: imageBounds(record.screenBounds),
+    windowBounds: imageBounds(record.windowBounds) ?? boundWindowBounds,
+    windowLocalBounds: imageBounds(record.windowLocalBounds) ?? boundWindowLocalBounds,
+    displayId: firstNonEmptyString(
+      asString(record.displayId),
+      asString(record.screenId),
+      asString(displayRecord.id),
+    ),
+    scale: asNumber(record.scale) ?? asNumber(record.displayScale) ?? asNumber(record.devicePixelRatio),
     status: asString(record.status),
     provenanceRefs,
+    windowBinding,
   };
   return compactImageEvidencePayload(payload);
 }
@@ -222,6 +288,15 @@ function compactImageEvidencePayload(payload: ImageEvidencePayload): ImageEviden
     'redactionRef',
     'bounds',
     'cropBounds',
+    'domTarget',
+    'selector',
+    'domPath',
+    'selectedText',
+    'screenBounds',
+    'windowBounds',
+    'windowLocalBounds',
+    'displayId',
+    'scale',
     'status',
   ] as const) {
     const value = payload[key];
@@ -229,6 +304,7 @@ function compactImageEvidencePayload(payload: ImageEvidencePayload): ImageEviden
   }
   if (payload.annotationRefs?.length) compacted.annotationRefs = payload.annotationRefs;
   if (payload.provenanceRefs?.length) compacted.provenanceRefs = payload.provenanceRefs;
+  if (payload.windowBinding) compacted.windowBinding = payload.windowBinding;
   return compacted;
 }
 
@@ -266,9 +342,107 @@ function imageBounds(value: unknown): ImageEvidenceBounds | undefined {
   return { x, y, width, height };
 }
 
+function imageDomTarget(value: unknown): ImageEvidenceDomTarget | undefined {
+  if (!isRecord(value)) return undefined;
+  const target: ImageEvidenceDomTarget = {};
+  for (const key of ['selector', 'stableSelector', 'domPath', 'role', 'label', 'textSnippet'] as const) {
+    const text = boundedString(value[key]);
+    if (text !== undefined) Object.assign(target, { [key]: text });
+  }
+  const rect = imageBounds(value.rect);
+  if (rect) target.rect = rect;
+  return Object.keys(target).length ? target : undefined;
+}
+
+function imageWindowBinding(value: unknown): ImageEvidenceWindowBinding | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = asString(value.status);
+  if (!status || !isWindowBindingStatus(status)) return undefined;
+  const binding = imageWindowBindingSummary(value, { includeWindowRef: isBoundWindowBindingStatus(status) });
+  const candidates = boundedWindowBindingCandidates(value.candidates);
+  return compactWindowBinding({
+    status,
+    ...binding,
+    ...(candidates.length ? { candidates } : {}),
+  });
+}
+
+function boundedWindowBindingCandidates(value: unknown): ImageEvidenceWindowBindingCandidate[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(0, 5)
+    .map((candidate) => imageWindowBindingSummary(candidate, { includeWindowRef: true }))
+    .filter((candidate): candidate is ImageEvidenceWindowBindingCandidate => Boolean(candidate));
+}
+
+function imageWindowBindingSummary(
+  value: unknown,
+  options: { includeWindowRef: boolean },
+): ImageEvidenceWindowBindingCandidate | undefined {
+  if (!isRecord(value)) return undefined;
+  const summary = compactWindowBindingCandidate({
+    windowRef: options.includeWindowRef ? safeRef(asString(value.windowRef)) : undefined,
+    appName: firstNonEmptyString(asString(value.appName), asString(value.name)),
+    bundleId: asString(value.bundleId),
+    pid: asNumber(value.pid),
+    title: asString(value.title),
+    confidence: asNumber(value.confidence),
+    reason: asString(value.reason),
+    windowBounds: imageBounds(value.windowBounds),
+    windowLocalBounds: imageBounds(value.windowLocalBounds),
+  });
+  return Object.keys(summary).length ? summary : undefined;
+}
+
+function compactWindowBinding(binding: ImageEvidenceWindowBinding): ImageEvidenceWindowBinding {
+  return compactWindowBindingCandidate(binding) as ImageEvidenceWindowBinding;
+}
+
+function compactWindowBindingCandidate(
+  candidate: ImageEvidenceWindowBindingCandidate | ImageEvidenceWindowBinding,
+): ImageEvidenceWindowBindingCandidate | ImageEvidenceWindowBinding {
+  const compacted: ImageEvidenceWindowBindingCandidate | ImageEvidenceWindowBinding =
+    'status' in candidate ? { status: candidate.status } : {};
+  for (const key of [
+    'windowRef',
+    'appName',
+    'bundleId',
+    'pid',
+    'title',
+    'confidence',
+    'reason',
+    'windowBounds',
+    'windowLocalBounds',
+  ] as const) {
+    const value = candidate[key];
+    if (value !== undefined) Object.assign(compacted, { [key]: value });
+  }
+  if ('candidates' in candidate && candidate.candidates?.length) {
+    Object.assign(compacted, { candidates: candidate.candidates });
+  }
+  return compacted;
+}
+
+const WINDOW_BINDING_STATUSES = ['auto-bound', 'manual-bound', 'unbound', 'blocked'] as const;
+
+function isWindowBindingStatus(value: string): value is ImageEvidenceWindowBindingStatus {
+  return (WINDOW_BINDING_STATUSES as readonly string[]).includes(value);
+}
+
+function isBoundWindowBindingStatus(value: ImageEvidenceWindowBindingStatus) {
+  return value === 'auto-bound' || value === 'manual-bound';
+}
+
 function normalizedSha256(value: unknown) {
-  const text = asString(value);
-  return text && /^[a-f0-9]{64}$/i.test(text) ? text : undefined;
+  const text = asString(value)?.trim();
+  const hash = text?.replace(/^sha256:/i, '');
+  return hash && /^[a-f0-9]{64}$/i.test(hash) ? hash.toLowerCase() : undefined;
+}
+
+function boundedString(value: unknown, maxLength = 500) {
+  const text = asString(value)?.trim();
+  if (!text) return undefined;
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
 }
 
 function safeRef(value: string | undefined) {
@@ -279,6 +453,14 @@ function safeRef(value: string | undefined) {
   if (/^https?:\/\//i.test(ref)) return undefined;
   if (/^\/api\/.*(?:preview|provider|executor|route)/i.test(ref)) return undefined;
   return ref;
+}
+
+function focusedObjectScreenshotRef(value: string | undefined) {
+  const ref = safeRef(value);
+  if (!ref) return undefined;
+  if (/^feedback-bundle:[^#?]+\/screenshots\/[^#?]+\.(?:png|jpe?g|webp)$/i.test(ref)) return ref;
+  if (/^desktop-annotation:workspace\/[^#?]+\/session\/[^#?]+\/(?:screenshot|image|crop)\/[^#?]+$/i.test(ref)) return ref;
+  return undefined;
 }
 
 function refList(...values: Array<string | undefined | Array<string | undefined>>): string[] {

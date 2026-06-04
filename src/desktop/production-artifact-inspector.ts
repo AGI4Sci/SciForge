@@ -502,7 +502,7 @@ function preloadLooksIsolated(value: string): boolean {
 }
 
 function rendererLooksBuilt(value: string): boolean {
-  return /<script\b[^>]*type="module"[^>]*src="\/assets\/[^"]+\.js"/.test(value) &&
+  return /<script\b[^>]*type="module"[^>]*src="(?:\.\/|\/)?assets\/[^"]+\.js"/.test(value) &&
     !value.includes('/src/') &&
     !value.includes('@vite/client');
 }

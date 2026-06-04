@@ -2245,6 +2245,12 @@
   gap: 10px;
 }
 
+.topbar-annotation-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
 .topbar-annotation-button {
   display: inline-flex;
   align-items: center;
@@ -2274,6 +2280,45 @@
 .topbar-annotation-button:focus-visible {
   outline: 2px solid rgba(0, 229, 160, 0.72);
   outline-offset: 2px;
+}
+
+.topbar-annotation-menu-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  min-width: 180px;
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-strong);
+}
+
+.topbar-annotation-menu-popover button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--bio-100);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.topbar-annotation-menu-popover button:hover,
+.topbar-annotation-menu-popover button:focus-visible {
+  color: var(--accent);
+  background: var(--accent-soft);
+  outline: 0;
 }
 
 .content-shell {

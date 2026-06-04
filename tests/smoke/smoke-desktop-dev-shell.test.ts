@@ -74,6 +74,12 @@ test('P1-DESK dev shell plans Vite, workspace/runtime sidecars, Electron, and sa
   }
   assert.equal(electron.env.SCIFORGE_DESKTOP_RENDERER_URL, 'http://127.0.0.1:5173');
   assert.equal(electron.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:61337');
+  assert.equal(workspace.env.SCIFORGE_WORKSPACE_PORT, '5174');
+  assert.equal(runtimeCodex.env.SCIFORGE_RUNTIME_CODEX_HOST, '127.0.0.1');
+  assert.equal(runtimeCodex.env.SCIFORGE_RUNTIME_CODEX_PORT, '5176');
+  assert.deepEqual(runtimeCodex.args, ['run', 'backend:codex-runtime:server']);
+  assert.ok(electron.args.some((arg) => /dist-desktop\/src\/desktop\/main\.js$/.test(arg)));
+  assert.ok(!electron.args.some((arg) => /src\/desktop\/main\.ts$/.test(arg)));
 
   const diagnosticsText = JSON.stringify(plan.diagnostics);
   assert.doesNotMatch(diagnosticsText, /env-secret-wins|sk-local-config-secret|sk-native-secret|apiKey/);

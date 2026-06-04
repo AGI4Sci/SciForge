@@ -18,6 +18,7 @@ import {
   renderBrowserWorkbench,
   type BrowserWorkbenchCommand,
 } from '../../../../../packages/presentation/components';
+import type { BrowserWorkbenchAnnotationRequest } from '../../../../../packages/presentation/components/browser-workbench/render';
 import {
   browserAddressForFocusedObjectReference,
   browserAnnotationComposerReferenceForHostSession,
@@ -298,14 +299,7 @@ export function RightPaneBrowserTool({
       return;
     }
     if (command.id === 'annotate') {
-      const reference = browserAnnotationComposerReferenceForHostSession(hostSessionRef.current, {
-        bounds: browserAnnotationViewportBounds(viewportRef.current),
-      });
-      if (reference) {
-        onAnnotationReferenceRequest?.(reference);
-        return;
-      }
-      setHostError('Browser annotation needs current target, crop, and screenshot refs. Capture a snapshot, then annotate again.');
+      void requestBrowserAnnotationReference();
       return;
     }
     if (hostSession && (command.id === 'back' || command.id === 'forward' || command.id === 'reload' || command.id === 'stop')) {
@@ -354,6 +348,43 @@ export function RightPaneBrowserTool({
         });
       return;
     }
+  }
+
+  async function requestBrowserAnnotationReference(selection?: BrowserWorkbenchAnnotationRequest): Promise<void> {
+    flushBufferedHostActions();
+    setBusy(true);
+    try {
+      await actionChainRef.current;
+      const freshSession = await captureFreshBrowserAnnotationSession();
+      const reference = browserAnnotationComposerReferenceForHostSession(freshSession, {
+        bounds: browserAnnotationSelectionBounds(selection, viewportRef.current),
+        comment: selection?.comment,
+      });
+      if (reference) {
+        onAnnotationReferenceRequest?.(reference);
+        setHostError('');
+        return;
+      }
+      setHostError('Browser annotation needs current target, crop, and fresh screenshot refs. Try again after the page finishes loading.');
+    } catch (error) {
+      setHostError(`Browser annotation capture failed: ${error instanceof Error ? error.message : String(error)}`);
+      void refreshWriterDiagnostic();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function captureFreshBrowserAnnotationSession(): Promise<BrowserHostSessionState | undefined> {
+    const currentSession = hostSessionRef.current;
+    if (!currentSession) return undefined;
+    const nextSession = await sendBrowserHostSessionAction(browserHostSessionConfig(configRef.current, currentSession), currentSession.id, {
+      action: 'state',
+      capture: 'full',
+      workspaceWriterBaseUrl: currentSession.workspaceWriterBaseUrl,
+    });
+    hostSessionRef.current = nextSession;
+    setHostSession(nextSession);
+    return nextSession;
   }
 
   async function browserHostPendingWriterConfig(): Promise<SciForgeConfig> {
@@ -825,6 +856,9 @@ export function RightPaneBrowserTool({
             onAddressSubmit: openAddress,
             onCommandRequest: requestCommand,
             onHostActionRequest: requestHostAction,
+            onAnnotationRequest: (selection: BrowserWorkbenchAnnotationRequest) => {
+              void requestBrowserAnnotationReference(selection);
+            },
             onCopyRefRequest: (ref: { ref: string }) => {
               if (typeof navigator !== 'undefined') void navigator.clipboard?.writeText(ref.ref);
             },
@@ -1250,13 +1284,22 @@ function rightPaneBrowserHostViewport(width: number, height: number) {
   };
 }
 
-function browserAnnotationViewportBounds(viewport: { width: number; height: number }) {
-  return {
+function browserAnnotationSelectionBounds(
+  selection: BrowserWorkbenchAnnotationRequest | undefined,
+  viewport: { width: number; height: number },
+) {
+  const viewportBounds = {
     x: 0,
     y: 0,
     width: clampBrowserHostViewport(Math.round(viewport.width || 1365), 1, 2400),
     height: clampBrowserHostViewport(Math.round(viewport.height || 900), 1, 1800),
   };
+  if (!selection) return viewportBounds;
+  const x = clampBrowserHostViewport(Math.round(selection.bounds.x), 0, viewportBounds.width - 1);
+  const y = clampBrowserHostViewport(Math.round(selection.bounds.y), 0, viewportBounds.height - 1);
+  const width = clampBrowserHostViewport(Math.round(selection.bounds.width), 1, viewportBounds.width - x);
+  const height = clampBrowserHostViewport(Math.round(selection.bounds.height), 1, viewportBounds.height - y);
+  return { x, y, width, height };
 }
 
 function normalizeRightPaneHostCursor(value: unknown) {

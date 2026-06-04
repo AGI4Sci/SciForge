@@ -13,6 +13,7 @@ export type RuntimeGuiExtensionMode = 'mcp-stdio';
 export interface RuntimeGuiExtensionOptions {
   enabled?: boolean;
   statePath?: string;
+  runtimeDir?: string;
 }
 
 export interface RuntimeGuiExtensionInjection {
@@ -53,19 +54,28 @@ export const GUI_NATIVE_RESOURCE_URIS = [
 export async function prepareRuntimeGuiExtensionInjection(options: RuntimeGuiExtensionOptions = {}): Promise<RuntimeGuiExtensionInjection | undefined> {
   if (options.enabled === false) return undefined;
   const statePath = resolve(options.statePath ?? defaultGuiExtensionStatePath());
-  const sourceDir = dirname(fileURLToPath(import.meta.url));
+  const configuredSourceDir = resolve(options.runtimeDir ?? dirname(fileURLToPath(import.meta.url)));
+  const sourceDir = await resolveRuntimeEntrypointSourceDir(configuredSourceDir);
   const projectRoot = resolve(sourceDir, '../../..');
-  const serverPath = resolve(sourceDir, 'gui-mcp-server.ts');
-  const shimTargetPath = resolve(sourceDir, 'gui-present-cli.ts');
   const tsxLoaderPath = resolve(projectRoot, 'node_modules/tsx/dist/loader.mjs');
-  const missing = await missingFiles([serverPath, shimTargetPath, tsxLoaderPath]);
+  const serverEntry = await runtimeEntrypoint({
+    sourceDir,
+    basename: 'gui-mcp-server',
+    tsxLoaderPath,
+  });
+  const shimEntry = await runtimeEntrypoint({
+    sourceDir,
+    basename: 'gui-present-cli',
+    tsxLoaderPath,
+  });
+  const missing = [...serverEntry.missing, ...shimEntry.missing];
   if (missing.length) {
     throw new Error(`Runtime GUI extension injection unavailable; missing ${missing.join(', ')}`);
   }
   await ensureGuiExtensionState(statePath);
-  const { binDir, shimPath } = await writeGuiPresentShim({ statePath, shimTargetPath, tsxLoaderPath });
+  const { binDir, shimPath } = await writeGuiPresentShim({ statePath, shimEntry });
   const command = 'node';
-  const args = ['--import', tsxLoaderPath, serverPath];
+  const args = serverEntry.args;
   return {
     mode: 'mcp-stdio',
     serverName: GUI_MCP_SERVER_NAME,
@@ -115,8 +125,7 @@ export function defaultGuiExtensionStatePath(scope?: { commandId?: string; attem
 
 async function writeGuiPresentShim(input: {
   statePath: string;
-  shimTargetPath: string;
-  tsxLoaderPath: string;
+  shimEntry: RuntimeEntrypoint;
 }): Promise<{ binDir: string; shimPath: string }> {
   const binDir = join(getRuntimeHomePaths().runtimeRoot, 'gui-extension', 'bin');
   const shimPath = join(binDir, 'gui.present');
@@ -128,7 +137,7 @@ async function writeGuiPresentShim(input: {
     `  ${GUI_EXTENSION_STATE_ENV}=${shellQuote(input.statePath)}`,
     'fi',
     `export ${GUI_EXTENSION_STATE_ENV}`,
-    `exec node --import ${shellQuote(input.tsxLoaderPath)} ${shellQuote(input.shimTargetPath)} "$@"`,
+    `exec node ${input.shimEntry.args.map(shellQuote).join(' ')} "$@"`,
     '',
   ].join('\n'), 'utf8');
   await writeFile(commandShimPath, [
@@ -161,6 +170,44 @@ async function missingFiles(paths: string[]): Promise<string[]> {
     return await access(path).then(() => undefined, () => path);
   }));
   return results.filter((path): path is string => Boolean(path));
+}
+
+interface RuntimeEntrypoint {
+  args: string[];
+  missing: string[];
+}
+
+async function resolveRuntimeEntrypointSourceDir(sourceDir: string): Promise<string> {
+  if (await hasCompiledRuntimeEntrypoints(sourceDir)) return sourceDir;
+  const codexDir = resolve(sourceDir, 'codex');
+  if (await hasCompiledRuntimeEntrypoints(codexDir)) return codexDir;
+  return sourceDir;
+}
+
+async function hasCompiledRuntimeEntrypoints(sourceDir: string): Promise<boolean> {
+  const missing = await missingFiles([
+    resolve(sourceDir, 'gui-mcp-server.js'),
+    resolve(sourceDir, 'gui-present-cli.js'),
+  ]);
+  return missing.length === 0;
+}
+
+async function runtimeEntrypoint(input: {
+  sourceDir: string;
+  basename: string;
+  tsxLoaderPath: string;
+}): Promise<RuntimeEntrypoint> {
+  const jsPath = resolve(input.sourceDir, `${input.basename}.js`);
+  if ((await missingFiles([jsPath])).length === 0) {
+    return { args: [jsPath], missing: [] };
+  }
+
+  const tsPath = resolve(input.sourceDir, `${input.basename}.ts`);
+  const missing = await missingFiles([tsPath, input.tsxLoaderPath]);
+  return {
+    args: ['--import', input.tsxLoaderPath, tsPath],
+    missing,
+  };
 }
 
 function tomlString(value: string): string {

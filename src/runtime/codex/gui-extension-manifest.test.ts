@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -75,7 +75,7 @@ test('Runtime GUI MCP resources expose presentation catalog without task ranking
   assert.ok(search.value.some((item) => item.path === '/gui/renderers/report-viewer.json'));
   assert.equal(stat.readonly, true);
   assert.equal(stat.kind, 'file');
-  assert.doesNotMatch(combined, /provider route|task ranking|algorithm recommendation|React component internals/i);
+  assert.doesNotMatch(combined, /"providerRoute"\s*:\s*true|"algorithmRecommendation"\s*:\s*true|"importsReactComponent"\s*:\s*true|task ranking/i);
 });
 
 test('Runtime GUI extension also exposes gui present wrapper for shell-style probes', async () => {
@@ -107,6 +107,51 @@ test('Runtime GUI extension also exposes gui present wrapper for shell-style pro
   assert.equal(intentLog.at(-1)?.tool, 'gui.present');
   assert.equal(intentLog.at(-1)?.applied, true);
   assert.equal(regions.at(-1)?.visibleRefs?.at(-1), 'artifact:wrapper-result');
+});
+
+test('Runtime GUI extension prefers compiled JS entrypoints without tsx loader', async () => {
+  const workspace = await tempWorkspace();
+  const statePath = join(workspace, 'gui-state.json');
+  const runtimeDir = join(workspace, 'dist-desktop', 'src', 'runtime', 'codex');
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(runtimeDir, 'gui-mcp-server.js'), 'export {};\n', 'utf8');
+  await writeFile(join(runtimeDir, 'gui-mcp-server.ts'), 'export {};\n', 'utf8');
+  await writeFile(join(runtimeDir, 'gui-present-cli.js'), 'export {};\n', 'utf8');
+  await writeFile(join(runtimeDir, 'gui-present-cli.ts'), 'export {};\n', 'utf8');
+
+  const injection = await prepareRuntimeGuiExtensionInjection({ statePath, runtimeDir });
+  assert.ok(injection);
+
+  const argsConfig = injection.configArgs.find((arg) => arg.startsWith('mcp_servers.sciforge_gui.args='));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, /gui-mcp-server\.js/);
+  assert.doesNotMatch(argsConfig, /--import|tsx|gui-mcp-server\.ts/);
+
+  const shim = await readFile(injection.shimPath, 'utf8');
+  assert.match(shim, /exec node .*gui-present-cli\.js/);
+  assert.doesNotMatch(shim, /--import|tsx|gui-present-cli\.ts/);
+});
+
+test('Runtime GUI extension resolves bundled codex entrypoints from a parent runtime directory', async () => {
+  const workspace = await tempWorkspace();
+  const statePath = join(workspace, 'gui-state.json');
+  const runtimeDir = join(workspace, 'dist-desktop', 'src', 'runtime');
+  const codexDir = join(runtimeDir, 'codex');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(join(codexDir, 'gui-mcp-server.js'), 'export {};\n', 'utf8');
+  await writeFile(join(codexDir, 'gui-present-cli.js'), 'export {};\n', 'utf8');
+
+  const injection = await prepareRuntimeGuiExtensionInjection({ statePath, runtimeDir });
+  assert.ok(injection);
+
+  const argsConfig = injection.configArgs.find((arg) => arg.startsWith('mcp_servers.sciforge_gui.args='));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, /codex.*gui-mcp-server\.js/);
+  assert.doesNotMatch(argsConfig, /gui-mcp-server\.ts|tsx/);
+
+  const shim = await readFile(injection.shimPath, 'utf8');
+  assert.match(shim, /codex.*gui-present-cli\.js/);
+  assert.doesNotMatch(shim, /gui-present-cli\.ts|tsx/);
 });
 
 test('Runtime GUI MCP tools read semantic resources and negotiate presentation preconditions', () => {

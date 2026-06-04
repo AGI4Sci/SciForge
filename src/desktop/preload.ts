@@ -25,6 +25,10 @@ export type SciForgeDesktopPreloadApi = {
   attachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
   presentVirtualAppScreenSurface(input: unknown): Promise<unknown>;
   detachVirtualAppScreenSurface(input: unknown): Promise<unknown>;
+  startAnnotation(input: unknown): Promise<unknown>;
+  startDesktopAnnotation(input: unknown): Promise<unknown>;
+  getAnnotationState(): Promise<unknown>;
+  cancelAnnotation(): Promise<unknown>;
   revealPath(path: string): Promise<unknown>;
   pickDirectory(defaultPath?: string): Promise<{ ok: boolean; path?: string }>;
 };
@@ -51,6 +55,10 @@ export function createSciForgeDesktopPreloadApi(ipcRenderer: DesktopIpcRenderer)
     attachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:attach', input),
     presentVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:present', input),
     detachVirtualAppScreenSurface: (input: unknown) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:detach', input),
+    startAnnotation: (input: unknown) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
+    startDesktopAnnotation: (input: unknown) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
+    getAnnotationState: () => ipcRenderer.invoke('desktop:annotation-overlay:status'),
+    cancelAnnotation: () => ipcRenderer.invoke('desktop:annotation-overlay:cancel'),
     revealPath: (path: string) => ipcRenderer.invoke('platform:reveal-path', path),
     pickDirectory: async (defaultPath?: string) => normalizePickDirectoryResult(
       await ipcRenderer.invoke('platform:pick-directory', defaultPath),

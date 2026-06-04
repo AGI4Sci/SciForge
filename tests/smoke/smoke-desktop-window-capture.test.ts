@@ -7,9 +7,10 @@ import {
   MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
   MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
   captureSelectedDesktopWindowTarget,
+  createMacOSScreencaptureFallbackDesktopWindowCaptureProvider,
   selectDesktopWindowCaptureProvider,
   type DesktopWindowCaptureProvider,
-} from '../../src/desktop/index.js';
+} from '../../src/desktop/window-capture.js';
 
 const selectedWindow = {
   kind: 'window' as const,
@@ -103,6 +104,153 @@ test('Desktop Window Capture falls back when ScreenCaptureKit is unavailable', a
   });
 
   assert.equal(selected?.providerId, MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID);
+});
+
+test('macOS screencapture fallback captures explicit regions with execFile argv only', async () => {
+  const bytes = new TextEncoder().encode('fake-screencapture-region-png');
+  const fake = fakeMacOSScreencaptureFallback({ bytes });
+  const provider = createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(fake.dependencies);
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-region-fallback',
+    selection: {
+      kind: 'region',
+      selectionSource: 'user',
+      regionRef: 'desktop-region:user-selected:region-8',
+      screenId: 'screen:built-in',
+      bounds: { x: 10.4, y: 20.5, width: 30.6, height: 40.1 },
+      scale: 2,
+    },
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+    now: () => '2026-06-03T00:03:00.000Z',
+  });
+
+  assert.equal(result.status, 'captured');
+  assert.equal(result.providerId, MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID);
+  assert.equal(result.hash, hashFor(bytes));
+  assert.equal(result.captureRef, 'capture:macos-screencapture:region');
+  assert.equal(result.imageRef, 'image:macos-screencapture:region');
+  assert.equal(Object.hasOwn(result, 'bytes'), false);
+  assert.deepEqual(fake.commandExistsCalls, ['screencapture']);
+  assert.deepEqual(fake.execFileCalls, [{
+    command: 'screencapture',
+    args: ['-x', '-R', '10,21,31,40', fake.outputPath],
+  }]);
+});
+
+test('macOS screencapture fallback preserves rounded negative region coordinates', async () => {
+  const fake = fakeMacOSScreencaptureFallback({
+    bytes: new TextEncoder().encode('fake-negative-region-png'),
+    outputPath: '/tmp/sciforge-window-capture-negative-region.png',
+  });
+  const provider = createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(fake.dependencies);
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-negative-region-fallback',
+    selection: {
+      kind: 'region',
+      selectionSource: 'user',
+      regionRef: 'desktop-region:user-selected:negative-region',
+      screenId: 'screen:left-of-primary',
+      bounds: { x: -25.6, y: -7.2, width: 100.49, height: 80.51 },
+      scale: 1,
+    },
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+
+  assert.equal(result.status, 'captured');
+  assert.deepEqual(fake.execFileCalls, [{
+    command: 'screencapture',
+    args: ['-x', '-R', '-26,-7,100,81', fake.outputPath],
+  }]);
+});
+
+test('macOS screencapture fallback is unavailable when screencapture is missing', async () => {
+  const fake = fakeMacOSScreencaptureFallback({ commandAvailable: false });
+  const provider = createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(fake.dependencies);
+
+  const selected = await selectDesktopWindowCaptureProvider({
+    platform: 'darwin',
+    providers: [provider],
+  });
+
+  assert.equal(selected, null);
+  assert.deepEqual(fake.commandExistsCalls, ['screencapture']);
+  assert.deepEqual(fake.execFileCalls, []);
+});
+
+test('macOS screencapture fallback blocks window capture without a safe explicit window id', async () => {
+  const fake = fakeMacOSScreencaptureFallback();
+  const provider = createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(fake.dependencies);
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-window-fallback-unsafe',
+    selection: selectedWindow,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.providerId, MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID);
+  assert.deepEqual(fake.execFileCalls, []);
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === 'desktop.window-capture.window-id-required'));
+});
+
+test('macOS screencapture fallback uses -l only for a safe explicit window id', async () => {
+  const bytes = new TextEncoder().encode('fake-window-id-png');
+  const fake = fakeMacOSScreencaptureFallback({ bytes });
+  const provider = createMacOSScreencaptureFallbackDesktopWindowCaptureProvider(fake.dependencies);
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-window-fallback-safe',
+    selection: {
+      ...selectedWindow,
+      metadata: { macosWindowId: 92817 },
+    } as never,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+    now: () => '2026-06-03T00:04:00.000Z',
+  });
+
+  assert.equal(result.status, 'captured');
+  assert.equal(result.hash, hashFor(bytes));
+  assert.deepEqual(fake.execFileCalls, [{
+    command: 'screencapture',
+    args: ['-x', '-l', '92817', fake.outputPath],
+  }]);
+});
+
+test('Desktop Window Capture can suppress action session creation for annotation-only capture', async () => {
+  const provider = fakeCaptureProvider({
+    providerId: MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
+    priority: 100,
+  });
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-window-capture',
+    selection: selectedWindow,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+    now: () => '2026-06-03T00:00:00.000Z',
+    createWindowActionSession: false,
+  });
+
+  assert.equal(result.status, 'captured');
+  assert.equal(result.windowRef, selectedWindow.windowRef);
+  assert.equal(result.windowActionSessionRef, null);
+  assert.equal(result.windowActionSession, null);
 });
 
 test('Desktop Window Capture fails closed without an explicit selection', async () => {
@@ -261,6 +409,48 @@ function fakeCaptureProvider(options: {
   };
 }
 
-function hashFor(value: string) {
-  return `sha256:${createHash('sha256').update(new TextEncoder().encode(value)).digest('hex')}`;
+function fakeMacOSScreencaptureFallback(options: {
+  bytes?: Uint8Array;
+  commandAvailable?: boolean;
+  outputPath?: string;
+} = {}) {
+  const outputPath = options.outputPath ?? '/tmp/sciforge-window-capture-fallback.png';
+  const bytesByPath = new Map<string, Uint8Array>();
+  const commandExistsCalls: string[] = [];
+  const execFileCalls: { command: string; args: string[] }[] = [];
+  const bytes = options.bytes ?? new TextEncoder().encode('fake-screencapture-png');
+
+  return {
+    outputPath,
+    commandExistsCalls,
+    execFileCalls,
+    dependencies: {
+      commandExists(command: string) {
+        commandExistsCalls.push(command);
+        return options.commandAvailable ?? command === 'screencapture';
+      },
+      createTempFile() {
+        return { path: outputPath };
+      },
+      async readFile(path: string) {
+        const output = bytesByPath.get(path);
+        if (!output) throw new Error(`missing fake screencapture output for ${path}`);
+        return output;
+      },
+      async unlink() {},
+      runner: {
+        async execFile(command: string, args: string[]) {
+          execFileCalls.push({ command, args: [...args] });
+          const path = args.at(-1);
+          if (typeof path === 'string') bytesByPath.set(path, bytes);
+          return { stdout: '', stderr: '' };
+        },
+      },
+    },
+  };
+}
+
+function hashFor(value: string | Uint8Array) {
+  const bytes = typeof value === 'string' ? new TextEncoder().encode(value) : value;
+  return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }

@@ -1,6 +1,5 @@
 import { type ScenarioId } from './data';
 import { scenarios } from './data';
-import { messagesByScenario } from './demoData';
 import {
   ALIGNMENT_CONTRACT_ARTIFACT_TYPE,
   ALIGNMENT_CONTRACT_SCHEMA_VERSION,
@@ -109,21 +108,7 @@ function isScenarioId(value: unknown): value is ScenarioId {
   return scenarioIds.includes(value as ScenarioId);
 }
 
-function seedMessages(scenarioId: ScenarioId): SciForgeMessage[] {
-  return messagesByScenario[scenarioId].map((message) => ({
-    id: makeId('seed'),
-    role: message.role,
-    content: message.content,
-    confidence: message.confidence,
-    evidence: message.evidence,
-    claimType: message.claimType,
-    expandable: message.expandable,
-    createdAt: nowIso(),
-    status: 'completed',
-  }));
-}
-
-export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天', options: { seed?: boolean } = {}): SciForgeSession {
+export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天', _options: { seed?: boolean } = {}): SciForgeSession {
   const now = nowIso();
   return withSessionWriteGuard({
     schemaVersion: 2,
@@ -131,7 +116,7 @@ export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天
     scenarioId,
     title,
     createdAt: now,
-    messages: options.seed && isScenarioId(scenarioId) ? seedMessages(scenarioId) : [],
+    messages: [],
     runs: [],
     uiManifest: [],
     claims: [],
@@ -147,17 +132,17 @@ export function createSession(scenarioId: ScenarioInstanceId, title = '新聊天
 }
 
 function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForgeSession {
-  if (isSessionV2(value, scenarioId)) return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics(value));
+  if (isSessionV2(value, scenarioId)) return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics(scrubSeedDemoMessages(value)));
   if (typeof value === 'object' && value !== null && (value as { scenarioId?: unknown }).scenarioId === scenarioId) {
     const raw = value as Partial<SciForgeSession> & { schemaVersion?: number };
     const now = nowIso();
-    return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics({
+    return withSessionWriteGuard(withRuntimeCompatibilityDiagnostics(scrubSeedDemoMessages({
       schemaVersion: 2,
       sessionId: typeof raw.sessionId === 'string' ? raw.sessionId : makeId(`session-${scenarioId}`),
       scenarioId,
       title: typeof raw.title === 'string' ? raw.title : '迁移聊天',
       createdAt: typeof raw.createdAt === 'string' ? raw.createdAt : now,
-      messages: Array.isArray(raw.messages) ? raw.messages : isScenarioId(scenarioId) ? seedMessages(scenarioId) : [],
+      messages: Array.isArray(raw.messages) ? raw.messages : [],
       runs: Array.isArray(raw.runs) ? raw.runs : [],
       uiManifest: Array.isArray(raw.uiManifest) ? raw.uiManifest : [],
       claims: Array.isArray(raw.claims) ? raw.claims : [],
@@ -171,9 +156,45 @@ function migrateSession(value: unknown, scenarioId: ScenarioInstanceId): SciForg
         ? raw.hiddenResultSlotIds.filter((id): id is string => typeof id === 'string')
         : [],
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
-    }));
+    })));
   }
   return createSession(scenarioId);
+}
+
+function scrubSeedDemoMessages(session: SciForgeSession): SciForgeSession {
+  const messages = session.messages.filter((message) => !isPersistedSeedDemoMessage(message));
+  const versions = session.versions.map((version) => {
+    const snapshot = version.snapshot;
+    if (!snapshot || !Array.isArray(snapshot.messages)) return version;
+    const snapshotMessages = snapshot.messages.filter((message) => !isPersistedSeedDemoMessage(message));
+    if (snapshotMessages.length === snapshot.messages.length) return version;
+    return {
+      ...version,
+      snapshot: {
+        ...snapshot,
+        messages: snapshotMessages,
+      },
+    };
+  });
+  const changed = messages.length !== session.messages.length
+    || versions.some((version, index) => version !== session.versions[index]);
+  return changed ? { ...session, messages, versions } : session;
+}
+
+function isPersistedSeedDemoMessage(message: SciForgeMessage): boolean {
+  const id = message.id.toLowerCase();
+  const provenance = message.provenance;
+  const provenanceKind = String(provenance?.kind ?? '').toLowerCase();
+  const provenanceSource = typeof provenance?.source === 'string'
+    ? provenance.source
+    : typeof provenance?.source === 'object' && provenance.source !== null
+      ? JSON.stringify(provenance.source)
+      : '';
+  const provenanceMarker = `${provenanceKind} ${provenanceSource}`.toLowerCase();
+  return /^seed(?:-|$)|^seed-demo/.test(id)
+    || provenanceKind === 'seed-demo'
+    || provenanceKind === 'fixture'
+    || /scenariodemodata|seed-demo|fixture/.test(provenanceMarker);
 }
 
 function isSessionV2(value: unknown, scenarioId: ScenarioInstanceId): value is SciForgeSession {
@@ -191,7 +212,7 @@ export function createInitialWorkspaceState(): SciForgeWorkspaceState {
     schemaVersion: 2,
     workspacePath: '',
     sessionsByScenario: scenarioIds.reduce((acc, scenarioId) => {
-      acc[scenarioId] = createSession(scenarioId, `${scenarioLabel(scenarioId)} 默认聊天`, { seed: true });
+      acc[scenarioId] = createSession(scenarioId, `${scenarioLabel(scenarioId)} 默认聊天`);
       return acc;
     }, {} as Record<ScenarioInstanceId, SciForgeSession>),
     archivedSessions: [],

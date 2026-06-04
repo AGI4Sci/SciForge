@@ -201,16 +201,8 @@ async function expandComposer(page: Page) {
   }
 }
 
-async function openWorkbenchChrome(page: Page) {
-  const textarea = page.locator('.chat-panel .composer textarea');
-  const collapsed = page.locator('.chat-panel .composer-collapsed').first();
-  if (await textarea.isVisible({ timeout: 1_000 }).catch(() => false) || await collapsed.isVisible({ timeout: 1_000 }).catch(() => false)) {
-    return;
-  }
-  const toggle = page.locator('.workbench-chrome-toggle-main');
-  if (await toggle.isVisible({ timeout: 5_000 }).catch(() => false) && (await toggle.getAttribute('aria-expanded')) === 'false') {
-    await toggle.click();
-  }
+async function openWorkbenchChrome(_page: Page) {
+  // Scenario Builder is always visible on desktop after removing workbench-chrome-toggle.
 }
 
 async function readMeterUsedTokens(page: Page) {

@@ -1,6 +1,6 @@
 # Screen Annotation / Image Evidence / Window Action 架构
 
-最后更新：2026-06-03
+最后更新：2026-06-04
 
 ## 结论
 
@@ -10,10 +10,10 @@
 
 ```text
 真实应用窗口正常打开
-  -> 用户用全局 Annotate 在原始窗口或屏幕区域上评论
-  -> SciForge 生成 annotation/image/window refs
+  -> 用户选择 Annotate 模式：SciForge page / Screen region / App window
+  -> SciForge 生成 annotation/image/target refs
   -> refs 作为 pending context 随下一条用户消息提交
-  -> agent 用自己的 actorCursor 操作目标窗口或 Browser Pane
+  -> agent 读取 refs；需要执行时再进入 Browser Pane 或 WindowActionSession
   -> 右侧 Image / Evidence Pane 展示图片证据和注释
 ```
 
@@ -27,11 +27,23 @@
 | Image / Evidence Pane | 展示截图、crop、Browser evidence、artifact preview 和 annotation overlay | 不执行鼠标键盘、不拥有 session、不判定完成 |
 | Window Action Session | 让 agent 以 actorCursor 操作用户加入的真实窗口 | 不承诺隔离虚拟显示器、不伪装多只 OS 鼠标 |
 
+## Annotation Modes
+
+顶部 `Annotate` 入口必须显式提供三种模式。`Global vision` 只表示全局视觉/截图证据感知开关，不是评论入口。
+
+| 模式 | 目标 | 坐标系 | 窗口绑定 | M1 要求 |
+| --- | --- | --- | --- | --- |
+| SciForge page | 评论 SciForge 自身 DOM、聊天、右侧 pane、内置浏览器 UI | `browser-viewport` / DOM rect | 不绑定真实 OS 窗口 | 保留 selector、DOM path、selected text、页内截图 |
+| Screen region | 评论用户屏幕任意可见区域 | `screen-global` | 高置信度自动绑定；低置信度默认不绑定 | 透明全屏 overlay 框选，保存 `screenBounds` 和 refs |
+| App window | 评论某个真实应用窗口内区域 | `window-local` + `screen-global` | 用户先显式选窗口，必有 `windowRef` | 记录 app/window/process metadata 和 `windowLocalBounds` |
+
+App window 评论不意味着为每个 app 写专用评论代码。评论取证阶段使用平台级窗口枚举、bounds、pid、title、bundle id 和截图能力。每个 app 的专用适配只属于后续 Action Adapter；评论本身必须是通用能力。
+
 ## Annotation Flow
 
 ```text
 User starts Annotate
-  -> choose window-bound region or screen region
+  -> choose SciForge page, Screen region, or App window
   -> draw/comment
   -> desktop host captures crop and metadata
   -> create annotationRef + imageRef + targetRef
@@ -44,10 +56,24 @@ User starts Annotate
 
 ## Target Binding
 
-M1 实现顺序：
+目标绑定是给屏幕选区附加“它属于哪个窗口”的解释信息，不是另一套截图方式。
 
-1. 窗口绑定评论：使用 window-local 坐标，窗口移动/缩放后仍可解释。
-2. 屏幕区域评论：使用 screen-global 坐标，用于无法识别窗口或用户主动选择整屏区域。
+### 自动绑定
+
+`Screen region` 完成后自动尝试窗口绑定，不弹窗打断用户。
+
+自动绑定只在高置信度时成立：
+
+- 选区中心点落在候选窗口内。
+- 候选窗口与选区重叠面积达到阈值，建议 M1 使用 `>= 70%`。
+- 第一候选明显强于第二候选，建议重叠面积差 `>= 20%`。
+- 排除 SciForge 主窗口、overlay、菜单栏、Dock、不可见窗口、极小窗口和透明/辅助窗口。
+
+若低置信度、多窗口冲突、选区落在桌面或无法枚举窗口，默认不绑定，仍保存纯 `screen-region` 证据。候选窗口可以作为 diagnostics/provenance 保存，但不进入 active binding。
+
+### 手动绑定
+
+`App window` 是显式手动绑定：用户先选窗口，再在该窗口内框选区域。该模式必须产出 `windowRef`、`windowBounds`、`windowLocalBounds`、app/process/title metadata。它适合后续 WindowActionSession，但不要求当前评论阶段已经能操作该 app。
 
 两者共用 annotation schema：
 
@@ -60,8 +86,27 @@ screenshotRef
 comment
 sourceKind
 coordinateSpace
-bounds
+screenBounds
+windowBounds?
+windowLocalBounds?
+windowBinding?
 createdAt
+```
+
+`windowBinding` 最小状态：
+
+```text
+status: auto-bound | unbound | manual-bound | blocked
+confidence?
+reason?
+windowRef?
+appName?
+bundleId?
+pid?
+title?
+windowBounds?
+windowLocalBounds?
+candidates?
 ```
 
 ## Desktop Overlay
@@ -72,11 +117,13 @@ Desktop host 使用透明、置顶 overlay 进入全局评论模式。
 
 - overlay 可进入/退出评论模式。
 - 支持框选、取消、重选、提交。
+- `Screen region` 使用 overlay 捕获准确 `screenBounds`，再用 ScreenCaptureKit 或 `screencapture -R` 捕获区域。
+- `App window` 使用 overlay 或平台窗口选择器先绑定窗口，再限制选区在窗口内。
 - 捕获 crop 时避免把 overlay 自己截进图片。
 - 默认只捕获用户选择的窗口或区域。
 - 输出 refs、hash、尺寸、bounds、source，不输出 raw base64 到主 payload。
 
-macOS M1 优先使用 ScreenCaptureKit 做窗口/屏幕捕获；Windows/Linux 后续通过 platform adapter 接入。
+macOS M1 优先使用 ScreenCaptureKit 做窗口/屏幕捕获；`screencapture -R` 可以作为选区截图 fallback。`screencapture -i` 不适合作为主路径，因为它通常不可靠返回用户选区的 `screenBounds`，无法支撑自动窗口绑定。
 
 ## Image / Evidence Pane
 
@@ -109,7 +156,7 @@ Image pane 是右侧结果栏的通用图片展示区。
 
 ## Window Action Session
 
-用户可以把真实应用窗口加入 SciForge。agent 可以用自己的 actorCursor 操作该窗口。
+用户可以把真实应用窗口加入 SciForge。agent 可以用自己的 actorCursor 操作该窗口。WindowActionSession 可以消费 `App window` 评论或高置信度自动绑定产生的 `windowRef`，但不会从纯 `screen-region` 自动推断可操作目标。
 
 `actorCursor` 以 agent 为单位设计：
 
@@ -172,6 +219,9 @@ M1 暂不做复杂权限系统；但必须提供 pause、stop current session、
 ## 验收
 
 - Global Annotate 能在真实 Desktop app 窗口上产生 annotation/image refs。
+- `Screen region` 能在任意可见屏幕区域上产生 annotation/image refs，并在高置信度时自动绑定窗口。
+- 低置信度自动绑定默认不绑定窗口，不弹窗打断用户。
+- `App window` 能显式选择窗口并产生 `windowRef` + `windowLocalBounds`。
 - annotation 作为 pending context 随下一条用户消息提交。
 - Image pane 能打开 annotation crop 并显示 provenance。
 - agent actorCursor 能以 agent 身份投影到 Browser Pane 或 WindowActionSession。

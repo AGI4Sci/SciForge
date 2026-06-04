@@ -254,6 +254,7 @@ export interface RightPaneBrowserAnnotationReferenceOptions {
   cropRef?: string;
   screenshotRef?: string;
   bounds?: SciForgeAnnotationBounds;
+  comment?: string;
   threadId?: string;
   messageDraftId?: string;
   createdAt?: string;
@@ -328,6 +329,7 @@ export function browserAnnotationComposerReferenceForHostSession(
   const cropRef = stringField(options.cropRef)
     ?? `browser-host-session:${hostSession.id}/annotations/${safeBrowserRefPathPart(annotationRef)}/crop.json`;
   const bounds = browserAnnotationBounds(options.bounds);
+  const comment = browserAnnotationComment(options.comment);
   const refs = uniqueStrings([
     annotationRef,
     browserSessionRef,
@@ -359,6 +361,7 @@ export function browserAnnotationComposerReferenceForHostSession(
       sourceKind: 'browser',
       coordinateSpace: 'browser-viewport',
       bounds,
+      comment,
       refs,
       urlDigest: boundedUrlDigest(hostSession.url),
       title: hostSession.title,
@@ -442,6 +445,11 @@ function browserAnnotationBounds(value: SciForgeAnnotationBounds | undefined): S
   return x === undefined || y === undefined || width === undefined || height === undefined
     ? undefined
     : { x, y, width, height };
+}
+
+function browserAnnotationComment(value: unknown) {
+  const comment = stringField(value)?.replace(/\s+/g, ' ').trim();
+  return comment ? comment.slice(0, 2000) : undefined;
 }
 
 function finiteNonNegativeNumber(value: unknown): number | undefined {

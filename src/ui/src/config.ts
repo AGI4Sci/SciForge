@@ -32,11 +32,27 @@ type DesktopRuntimeConfigRecord = {
   ports?: unknown;
 };
 
+export type DesktopAnnotationMode = 'sciforge-page' | 'screen-region' | 'app-window';
+
+export type DesktopAnnotationStartInput = {
+  schemaVersion?: string;
+  source?: string;
+  purpose?: string;
+  mode: DesktopAnnotationMode;
+  context?: unknown;
+  locale?: unknown;
+  createdAt?: string;
+};
+
 type SciForgeDesktopBridge = {
   getRuntimeConfig?: () => Promise<unknown>;
   attachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
   detachBrowserHostSessionSurface?: (input: unknown) => Promise<unknown>;
   getBrowserHostSessionSurfaceState?: (input: unknown) => Promise<unknown>;
+  startAnnotation?: (input?: DesktopAnnotationStartInput) => Promise<unknown>;
+  startDesktopAnnotation?: (input?: DesktopAnnotationStartInput) => Promise<unknown>;
+  cancelAnnotation?: (input?: unknown) => Promise<unknown>;
+  getAnnotationState?: (input?: unknown) => Promise<unknown>;
   pickDirectory?: (defaultPath?: string) => Promise<{ ok?: boolean; path?: string }>;
 };
 

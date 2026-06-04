@@ -163,6 +163,7 @@ export type DesktopBrowserHostSurfaceViewLike = {
 
 export type DesktopBrowserHostSurfaceWebContentsLike = {
   loadURL?(url: string, options?: unknown): Promise<void>;
+  setWindowOpenHandler?(handler: (details: { url?: string }) => { action: 'allow' | 'deny' }): void;
   getURL?(): string;
   getTitle?(): string;
   canGoBack?(): boolean;
@@ -596,6 +597,7 @@ export function createDesktopBrowserHostSurfaceController(
       historyIndex: 0,
       profilePartition,
     };
+    installWebContentsWindowOpenPolicy(session);
     installWebContentsStateListeners(session);
     sessions.set(safeId, session);
     return session;
@@ -857,6 +859,58 @@ function installWebContentsStateListeners(session: DesktopBrowserHostSurfaceSess
     pushDiagnostic(session, `native embedded load failed: ${description} (${code ?? 'unknown'})`);
     touchSession(session);
   });
+}
+
+function installWebContentsWindowOpenPolicy(session: DesktopBrowserHostSurfaceSession): void {
+  if (session.webContents.setWindowOpenHandler) {
+    session.webContents.setWindowOpenHandler((details) => {
+      navigateWindowOpenInPlace(session, details.url);
+      return { action: 'deny' };
+    });
+    pushDiagnostic(session, 'native embedded window open policy installed');
+  }
+
+  const on = session.webContents.on?.bind(session.webContents);
+  if (!on) return;
+  on('did-create-window', (...args) => {
+    closeCreatedWindow(args);
+    navigateWindowOpenInPlace(session, windowOpenUrlFromDidCreateWindowArgs(args));
+  });
+}
+
+function navigateWindowOpenInPlace(session: DesktopBrowserHostSurfaceSession, rawUrl: unknown): void {
+  const targetUrl = normalizeDesktopBrowserHostSurfaceUrl(typeof rawUrl === 'string' ? rawUrl : 'about:blank');
+  session.url = targetUrl;
+  session.loading = true;
+  touchSession(session);
+  pushDiagnostic(session, 'native embedded window open denied and redirected in-place');
+  const loaded = session.webContents.loadURL?.(targetUrl);
+  if (loaded && typeof loaded.catch === 'function') {
+    loaded.catch((error) => {
+      session.loading = false;
+      pushDiagnostic(session, `native embedded window open redirect failed: ${surfaceErrorMessage(error)}`);
+      touchSession(session);
+    });
+  }
+}
+
+function windowOpenUrlFromDidCreateWindowArgs(args: unknown[]): string | undefined {
+  for (const arg of args) {
+    if (arg && typeof arg === 'object' && 'url' in arg) {
+      const url = (arg as { url?: unknown }).url;
+      if (typeof url === 'string' && url.length > 0) return url;
+    }
+  }
+  return firstString(args);
+}
+
+function closeCreatedWindow(args: unknown[]): void {
+  for (const arg of args) {
+    if (arg && typeof arg === 'object' && 'close' in arg && typeof (arg as { close?: unknown }).close === 'function') {
+      (arg as { close(): void }).close();
+      return;
+    }
+  }
 }
 
 function recordCommittedNavigation(session: DesktopBrowserHostSurfaceSession, url: string): void {

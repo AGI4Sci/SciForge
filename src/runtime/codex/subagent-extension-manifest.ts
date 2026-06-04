@@ -31,6 +31,7 @@ export interface RuntimeSubagentInjectionOptions {
   profile: string;
   sandbox: string;
   codexHome: string;
+  runtimeDir?: string;
   codexCommand?: string;
   parentCommandId?: string;
   parentAttemptId?: string;
@@ -47,18 +48,23 @@ export interface RuntimeSubagentInjection {
 }
 
 export async function prepareRuntimeSubagentInjection(options: RuntimeSubagentInjectionOptions): Promise<RuntimeSubagentInjection> {
-  const sourceDir = dirname(fileURLToPath(import.meta.url));
+  const configuredSourceDir = resolve(options.runtimeDir ?? dirname(fileURLToPath(import.meta.url)));
+  const sourceDir = await resolveRuntimeEntrypointSourceDir(configuredSourceDir);
   const projectRoot = resolve(sourceDir, '../../..');
-  const serverPath = resolve(sourceDir, 'subagent-mcp-server.ts');
   const tsxLoaderPath = resolve(projectRoot, 'node_modules/tsx/dist/loader.mjs');
-  const missing = await missingFiles([serverPath, tsxLoaderPath]);
+  const serverEntry = await runtimeEntrypoint({
+    sourceDir,
+    basename: 'subagent-mcp-server',
+    tsxLoaderPath,
+  });
+  const missing = serverEntry.missing;
   if (missing.length) {
     throw new Error(`Runtime sub-agent injection unavailable; missing ${missing.join(', ')}`);
   }
 
   const transcriptRoot = resolve(options.transcriptRoot ?? defaultSubagentTranscriptRoot());
   const command = 'node';
-  const args = ['--import', tsxLoaderPath, serverPath];
+  const args = serverEntry.args;
   const envEntries = [
     [SUBAGENT_MCP_ENV.workspace, resolve(options.workspace)],
     [SUBAGENT_MCP_ENV.profile, options.profile],
@@ -150,6 +156,35 @@ async function missingFiles(paths: string[]): Promise<string[]> {
     return await access(path).then(() => undefined, () => path);
   }));
   return results.filter((path): path is string => Boolean(path));
+}
+
+async function resolveRuntimeEntrypointSourceDir(sourceDir: string): Promise<string> {
+  if (await hasCompiledRuntimeEntrypoint(sourceDir)) return sourceDir;
+  const codexDir = resolve(sourceDir, 'codex');
+  if (await hasCompiledRuntimeEntrypoint(codexDir)) return codexDir;
+  return sourceDir;
+}
+
+async function hasCompiledRuntimeEntrypoint(sourceDir: string): Promise<boolean> {
+  const missing = await missingFiles([resolve(sourceDir, 'subagent-mcp-server.js')]);
+  return missing.length === 0;
+}
+
+async function runtimeEntrypoint(input: {
+  sourceDir: string;
+  basename: string;
+  tsxLoaderPath: string;
+}): Promise<{ args: string[]; missing: string[] }> {
+  const jsPath = resolve(input.sourceDir, `${input.basename}.js`);
+  if ((await missingFiles([jsPath])).length === 0) {
+    return { args: [jsPath], missing: [] };
+  }
+
+  const tsPath = resolve(input.sourceDir, `${input.basename}.ts`);
+  return {
+    args: ['--import', input.tsxLoaderPath, tsPath],
+    missing: await missingFiles([tsPath, input.tsxLoaderPath]),
+  };
 }
 
 function tomlString(value: string): string {

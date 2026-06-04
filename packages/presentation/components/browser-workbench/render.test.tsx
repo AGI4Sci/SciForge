@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 import { basicBrowserWorkbenchFixture } from './fixtures/basic';
@@ -93,6 +94,30 @@ function nativeSurfaceStabilityKey(html: string) {
   return match[1];
 }
 
+type TestReactElement = React.ReactElement<Record<string, unknown> & { children?: React.ReactNode }>;
+
+function findReactElement(node: React.ReactNode, predicate: (element: TestReactElement) => boolean): TestReactElement | undefined {
+  if (Array.isArray(node)) {
+    for (const child of node) {
+      const match = findReactElement(child, predicate);
+      if (match) return match;
+    }
+    return undefined;
+  }
+  if (!React.isValidElement(node)) return undefined;
+  const element = node as TestReactElement;
+  if (predicate(element)) return element;
+  const children = element.props.children;
+  if (children === undefined || children === null) return undefined;
+  return findReactElement(React.Children.toArray(children), predicate);
+}
+
+function requiredReactElement(node: React.ReactNode, predicate: (element: TestReactElement) => boolean): TestReactElement {
+  const element = findReactElement(node, predicate);
+  assert.ok(element, 'expected matching React element');
+  return element;
+}
+
 test('browser-workbench package exposes manifest and renders browser_runtime refs', () => {
   assert.equal(manifest.componentId, 'browser-workbench');
   const html = htmlFor();
@@ -106,8 +131,11 @@ test('browser-workbench package exposes manifest and renders browser_runtime ref
   assert.match(html, /blob:\/\/browser\/demo-dom\.json/);
   assert.match(html, /data-event="browser-command-request"/);
   assert.match(html, /data-browser-command-id="open"/);
-  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
-  assert.doesNotMatch(html, /\/browser (?:snapshot|annotate|state|takeover|copy-url|open-external)\b/);
+  assert.match(html, /data-browser-command-id="annotate"/);
+  assert.match(html, /data-browser-command-kind="composer-reference"/);
+  assert.match(html, /\/browser annotate --url &quot;http:\/\/localhost:5173\/&quot; --coordinate-space browser-viewport --target viewport/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|state|takeover|copy-url|open-external)"/);
+  assert.doesNotMatch(html, /\/browser (?:snapshot|state|takeover|copy-url|open-external)\b/);
   assertNoProductFallbackSurface(html);
 });
 
@@ -128,22 +156,25 @@ test('browser-workbench keeps host-declared previews as typed state while filter
   assert.match(html, /data-browser-object-type="browser-state"/);
   assert.match(html, /http:\/\/localhost:5173\//);
   assert.match(html, /Visible takeover requires TUI-host approval/);
-  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
+  assert.match(html, /data-browser-command-id="annotate"/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|state|takeover|copy-url|open-external)"/);
   assertNoProductFallbackSurface(html);
 });
 
-test('browser-workbench default commands are terminal-equivalent text', () => {
+test('browser-workbench default commands expose annotate as a composer-reference command', () => {
   assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org').map((item) => item.command), [
     '/browser open "https://example.org" --surface workbench',
     '/browser back --url "https://example.org"',
     '/browser forward --url "https://example.org"',
     '/browser reload --url "https://example.org"',
+    '/browser annotate --url "https://example.org" --coordinate-space browser-viewport --target viewport',
   ]);
   assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org').map((item) => item.id), [
     'open',
     'back',
     'forward',
     'reload',
+    'annotate',
   ]);
   assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org', { status: 'loading' })[3], {
     id: 'stop',
@@ -152,6 +183,14 @@ test('browser-workbench default commands are terminal-equivalent text', () => {
     disabled: false,
     risk: 'allowed',
     kind: 'terminal-equivalent',
+  });
+  assert.deepEqual(browserWorkbenchDefaultCommands('https://example.org', { canAnnotate: false })[4], {
+    id: 'annotate',
+    label: 'Annotate',
+    command: '/browser annotate --url "https://example.org" --coordinate-space browser-viewport --target viewport',
+    disabled: true,
+    risk: 'allowed',
+    kind: 'composer-reference',
   });
 });
 
@@ -249,6 +288,147 @@ test('browser-workbench renders native embedded BrowserHostSession mount without
   assert.match(html, /data-browser-second-truth-source="false"/);
   assert.match(html, /browser-host-session:native-session-1\/live-surface/);
   assert.doesNotMatch(html, /<img|<iframe|<canvas|<webview|data-browser-frame-stream-ref=/);
+});
+
+test('browser-workbench wires native host pointer events in browser viewport coordinates', () => {
+  const actions: unknown[] = [];
+  const element = renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        frameTransport: 'native-embedded',
+        hostSession: nativeHostSession(),
+        onHostActionRequest: (action: unknown) => actions.push(action),
+      },
+    },
+  });
+  const hostFrame = requiredReactElement(element, (candidate) => {
+    const className = typeof candidate.props.className === 'string' ? candidate.props.className : '';
+    return className.includes('browser-workbench-host-frame-native');
+  });
+  const target = {
+    getBoundingClientRect: () => ({ left: 100.4, top: 50.4, width: 500, height: 300 }),
+    focus: () => undefined,
+  };
+  const pointerEvent = {
+    currentTarget: target,
+    clientX: 150.6,
+    clientY: 75.4,
+    button: 0,
+    buttons: 1,
+    preventDefault: () => undefined,
+  };
+
+  assert.equal(typeof hostFrame.props.onPointerDown, 'function');
+  assert.equal(typeof hostFrame.props.onPointerMove, 'function');
+  assert.equal(typeof hostFrame.props.onPointerUp, 'function');
+  assert.equal(typeof hostFrame.props.onDoubleClick, 'function');
+  assert.equal(typeof hostFrame.props.onWheel, 'function');
+
+  (hostFrame.props.onPointerDown as (event: typeof pointerEvent) => void)(pointerEvent);
+  (hostFrame.props.onPointerMove as (event: typeof pointerEvent) => void)({ ...pointerEvent, clientX: 160.2, clientY: 90.9 });
+  (hostFrame.props.onPointerUp as (event: typeof pointerEvent) => void)({ ...pointerEvent, button: 0, buttons: 0 });
+  (hostFrame.props.onDoubleClick as (event: typeof pointerEvent) => void)({ ...pointerEvent, button: 0, buttons: 0 });
+  (hostFrame.props.onWheel as (event: typeof pointerEvent & { deltaX: number; deltaY: number }) => void)({
+    ...pointerEvent,
+    buttons: 0,
+    deltaX: 4,
+    deltaY: 32,
+  });
+
+  assert.deepEqual(actions, [
+    { action: 'mouse-down', x: 50, y: 25, button: 'left' },
+    { action: 'mouse-move', x: 60, y: 41, button: 'left' },
+    { action: 'mouse-up', x: 50, y: 25, button: 'left' },
+    { action: 'double-click', x: 50, y: 25, button: 'left' },
+    { action: 'scroll', x: 50, y: 25, deltaX: 4, deltaY: 32 },
+  ]);
+});
+
+test('browser-workbench captures point and box annotations with comments in browser viewport coordinates', () => {
+  const actions: unknown[] = [];
+  const annotations: unknown[] = [];
+  const element = renderBrowserWorkbench({
+    ...emptyBrowserWorkbenchFixture,
+    slot: {
+      ...emptyBrowserWorkbenchFixture.slot,
+      props: {
+        externalUrl: 'https://external.example/native',
+        frameTransport: 'native-embedded',
+        hostSession: nativeHostSession(),
+        onHostActionRequest: (action: unknown) => actions.push(action),
+        onAnnotationRequest: (annotation: unknown) => annotations.push(annotation),
+      },
+    },
+  });
+  const annotateButton = requiredReactElement(element, (candidate) => {
+    return candidate.props['data-browser-command-id'] === 'annotate';
+  });
+  const hostFrame = requiredReactElement(element, (candidate) => {
+    const className = typeof candidate.props.className === 'string' ? candidate.props.className : '';
+    return className.includes('browser-workbench-host-frame-native');
+  });
+  const annotationForm = requiredReactElement(element, (candidate) => {
+    return candidate.props['data-browser-annotation-editor'] === 'true';
+  });
+  const target = {
+    getBoundingClientRect: () => ({ left: 100, top: 50, width: 500, height: 300 }),
+    focus: () => undefined,
+  };
+  const eventAt = (clientX: number, clientY: number, buttons = 1) => ({
+    currentTarget: target,
+    clientX,
+    clientY,
+    button: 0,
+    buttons,
+    preventDefault: () => undefined,
+  });
+  const submitComment = (comment: string) => ({
+    preventDefault: () => undefined,
+    currentTarget: {
+      elements: {
+        namedItem: (name: string) => name === 'browser-annotation-comment' ? { value: comment } : null,
+      },
+    },
+  });
+
+  (annotateButton.props.onClick as () => void)();
+  (hostFrame.props.onPointerDown as (event: ReturnType<typeof eventAt>) => void)(eventAt(160, 90));
+  (hostFrame.props.onPointerUp as (event: ReturnType<typeof eventAt>) => void)(eventAt(160, 90, 0));
+  (annotationForm.props.onSubmit as (event: ReturnType<typeof submitComment>) => void)(submitComment('Point note'));
+
+  (annotateButton.props.onClick as () => void)();
+  (hostFrame.props.onPointerDown as (event: ReturnType<typeof eventAt>) => void)(eventAt(400, 250));
+  (hostFrame.props.onPointerMove as (event: ReturnType<typeof eventAt>) => void)(eventAt(220, 140));
+  (hostFrame.props.onPointerUp as (event: ReturnType<typeof eventAt>) => void)(eventAt(220, 140, 0));
+  (annotationForm.props.onSubmit as (event: ReturnType<typeof submitComment>) => void)(submitComment('Box note'));
+
+  assert.deepEqual(actions, []);
+  assert.deepEqual(annotations, [
+    {
+      schemaVersion: 'sciforge.browser-workbench.annotation-request.v1',
+      source: 'browser-workbench',
+      sourceKind: 'browser',
+      coordinateSpace: 'browser-viewport',
+      selectionKind: 'point',
+      point: { x: 60, y: 40 },
+      bounds: { x: 60, y: 40, width: 1, height: 1 },
+      comment: 'Point note',
+    },
+    {
+      schemaVersion: 'sciforge.browser-workbench.annotation-request.v1',
+      source: 'browser-workbench',
+      sourceKind: 'browser',
+      coordinateSpace: 'browser-viewport',
+      selectionKind: 'box',
+      point: { x: 210, y: 145 },
+      bounds: { x: 120, y: 90, width: 180, height: 110 },
+      comment: 'Box note',
+    },
+  ]);
+  assert.doesNotMatch(JSON.stringify(annotations), /rawDom|rawScreenshot|data:image|base64|<html/i);
 });
 
 test('browser-workbench rejects native embedded sessions without explicit no-second-truth proof', () => {
@@ -552,7 +732,8 @@ test('browser-workbench renders reachable native-surface route with unavailable 
   assert.match(html, /healthCapability<\/dt><dd>browser-host-session:ready,browser-host-native-surface:missing,browser-host-search:missing/);
   assert.match(html, /data-browser-state-action="retry"/);
   assert.doesNotMatch(html, /data-browser-state-action="handoff"|\/browser open-external/);
-  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|annotate|state|takeover|copy-url|open-external)"/);
+  assert.match(html, /data-browser-command-id="annotate"/);
+  assert.doesNotMatch(html, /data-browser-command-id="(?:snapshot|state|takeover|copy-url|open-external)"/);
   assert.doesNotMatch(html, /data-browser-native-surface="true"|data-browser-live-surface-ref=|data-browser-frame-transport="native-embedded"/);
   assertNoProductFallbackSurface(html);
 });
@@ -913,8 +1094,12 @@ test('browser-workbench source has no product live fallback DOM/input transport'
 
   assert.doesNotMatch(source, /<iframe|<webview|<canvas|<img/);
   assert.doesNotMatch(source, /BrowserWorkbenchFrameRenderer|BrowserWorkbenchLiveTransportHandoff|frameRenderer|liveTransportHandoff/);
-  assert.doesNotMatch(source, /browser-workbench-host-keyboard-input|browserWorkbenchFramePoint|setPointerCapture|onPointerDown|onPointerMove|onPointerUp/);
+  assert.doesNotMatch(source, /browser-workbench-host-keyboard-input|setPointerCapture/);
   assert.doesNotMatch(source, /canvas-binary|webrtc-data-channel|websocket-binary|host-stream/);
+  assert.match(source, /function browserWorkbenchFramePoint/);
+  assert.match(source, /onPointerDown/);
+  assert.match(source, /onPointerMove/);
+  assert.match(source, /onPointerUp/);
   assert.match(source, /browser-workbench-host-frame-native/);
   assert.match(source, /data-browser-native-surface/);
   assert.match(source, /data-browser-native-surface-stability-key/);

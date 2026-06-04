@@ -145,7 +145,7 @@ Present   interactive views：科学 artifact 的可读、可点选、可评论�
 - Codex app-server 用于 agent-backed task execution；CLI JSON bridge 仅保留为 legacy/test-only 兼容和历史证据
 - DeepSeek `deepseek-v4-flash` 或 provider proxy，用于默认低成本 model provider
 
-安装并启动完整本地应用：
+安装并启动 Web 开发工作台：
 
 ```bash
 npm install
@@ -168,6 +168,38 @@ npm run dev:ui
 
 ```bash
 npm run workspace:server
+```
+
+启动 Desktop Electron app 开发服务：
+
+```bash
+npm run desktop:dev
+```
+
+`desktop:dev` 会启动一组本地进程：
+
+```text
+Vite renderer:    http://127.0.0.1:5173
+Workspace writer: http://127.0.0.1:5174
+Provider proxy:   http://127.0.0.1:5175
+Runtime Codex:    http://127.0.0.1:5176
+Electron shell:   加载 Vite renderer，并注入 Desktop native host 能力
+```
+
+开发内置浏览器、全局评论、窗口操作等 Desktop native 能力时，必须使用 `npm run desktop:dev` 打开的 Electron 窗口验证；`http://localhost:5173/` 只等价于调试 React renderer、状态和诊断，不等价于真实 Desktop app。
+
+`desktop:dev` 默认读取被 Git 忽略的 `config.local.json` 或进程环境变量来配置 provider/proxy/model。常用覆盖：
+
+```bash
+SCIFORGE_CONFIG_PATH=/path/to/config.local.json npm run desktop:dev
+SCIFORGE_WORKSPACE_PATH=/path/to/workspace npm run desktop:dev
+```
+
+生产构建和启动：
+
+```bash
+npm run desktop:build
+npm run desktop:start:prod
 ```
 
 在 Settings 中配置：

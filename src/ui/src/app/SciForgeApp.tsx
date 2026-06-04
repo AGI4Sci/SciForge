@@ -16,6 +16,7 @@ import {
   buildFeedbackTargetSnapshot,
   captureFeedbackScreenshotEvidence,
   feedbackEvidenceRefs,
+  scrubSciForgeReference,
 } from '../feedback/captureModel';
 import {
   addAnnotationReferenceToDraft,
@@ -72,7 +73,7 @@ import {
   startNewChat,
 } from '../workspace/sessionWorkspace';
 import { markReusableRunInWorkspace } from '../workspace/reusableTaskWorkspace';
-import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeWorkspaceRootPath, saveSciForgeConfig, applyWorkspaceProjectSwitch, updateConfig } from '../config';
+import { loadDesktopRuntimeConfigDefaults, loadSciForgeConfig, normalizeFeedbackGithubRepo, normalizeWorkspaceRootPath, saveSciForgeConfig, applyWorkspaceProjectSwitch, updateConfig, type DesktopAnnotationMode } from '../config';
 import {
   loadFileBackedSciForgeConfig,
   loadSciForgeInstanceManifest,
@@ -142,8 +143,376 @@ type AnnotationRunToken = {
   scenarioId: ScenarioInstanceId;
 };
 
+type AppAnnotationMode = DesktopAnnotationMode;
+
 function currentBrowserUrl() {
   return typeof window === 'undefined' ? 'about:blank' : window.location.href;
+}
+
+function desktopAnnotationPurposeForMode(mode: Exclude<AppAnnotationMode, 'sciforge-page'>) {
+  return mode === 'app-window' ? 'comment-explicit-app-window' : 'comment-screen-region';
+}
+
+const desktopAnnotationReferenceKeys = [
+  ['annotationRef', 'annotation'],
+  ['imageRef', 'image'],
+  ['windowRef', 'window'],
+  ['targetRef', 'target'],
+  ['cropRef', 'crop'],
+  ['screenshotRef', 'screenshot'],
+] as const;
+
+const validSciForgeReferenceKinds = new Set<SciForgeReference['kind']>([
+  'file',
+  'file-region',
+  'message',
+  'task-result',
+  'chart',
+  'table',
+  'table-range',
+  'structure-selection',
+  'ui',
+]);
+
+type DesktopAnnotationSourceKind = typeof desktopAnnotationReferenceKeys[number][1];
+
+export function desktopAnnotationReferenceInputsFromResult(result: unknown): AnnotationReferenceInput[] {
+  const inputs: AnnotationReferenceInput[] = [];
+  const seen = new Set<string>();
+  const root = recordFromUnknown(result);
+  if (root && (root.ok === false || root.status === 'blocked')) return inputs;
+
+  function pushReference(candidate: unknown, sourceKind: DesktopAnnotationSourceKind, targetCandidate: unknown = root ?? candidate, selectedText?: unknown) {
+    const reference = desktopAnnotationReferenceFromCandidate(candidate, sourceKind, root);
+    if (!reference || seen.has(reference.id)) return;
+    seen.add(reference.id);
+    inputs.push({
+      reference,
+      target: desktopAnnotationTargetFromCandidate(targetCandidate, sourceKind, reference),
+      selectedText: desktopAnnotationString(selectedText) || undefined,
+    });
+  }
+
+  if (root?.reference) {
+    pushReference(root.reference, 'annotation', root, root.comment);
+  }
+
+  const references = root && Array.isArray(root.references) ? root.references : [];
+  for (const item of references) {
+    const record = recordFromUnknown(item);
+    if (record?.reference) {
+      pushReference(record.reference, 'annotation', record.target ?? record, record.selectedText ?? record.comment ?? root?.comment);
+    } else {
+      pushReference(item, 'annotation', root, root?.comment);
+    }
+  }
+
+  const refsRecord = recordFromUnknown(root?.refs);
+  for (const [key, sourceKind] of desktopAnnotationReferenceKeys) {
+    if (root && key in root) pushReference(root[key], sourceKind, root, root.comment);
+    if (refsRecord && key in refsRecord) pushReference(refsRecord[key], sourceKind, root, root?.comment);
+  }
+
+  return inputs;
+}
+
+function desktopAnnotationReferenceFromCandidate(
+  candidate: unknown,
+  sourceKind: DesktopAnnotationSourceKind,
+  root?: Record<string, unknown>,
+): SciForgeReference | undefined {
+  const record = recordFromUnknown(candidate);
+  const rawRef = record
+    ? desktopAnnotationString(record.ref)
+      || desktopAnnotationString(record.url)
+      || desktopAnnotationString(record.localRef)
+      || desktopAnnotationString(record.id)
+    : desktopAnnotationString(candidate);
+  if (!rawRef) return undefined;
+  const id = record
+    ? desktopAnnotationString(record.id) || `ref-desktop-${sourceKind}-${desktopAnnotationHash(rawRef)}`
+    : `ref-desktop-${sourceKind}-${desktopAnnotationHash(rawRef)}`;
+  const originalKind = record?.kind;
+  const reference: SciForgeReference = {
+    id,
+    kind: validSciForgeReferenceKinds.has(originalKind as SciForgeReference['kind'])
+      ? originalKind as SciForgeReference['kind']
+      : 'ui',
+    title: desktopAnnotationString(record?.title) || desktopAnnotationTitle(sourceKind),
+    ref: rawRef.startsWith('desktop-annotation:')
+      ? rawRef
+      : `desktop-annotation:${sourceKind}:${rawRef}`,
+    summary: desktopAnnotationString(record?.summary)
+      || desktopAnnotationString(record?.comment)
+      || desktopAnnotationString(root?.comment)
+      || undefined,
+    locator: {
+      region: desktopAnnotationLocatorRegion(root ?? record),
+    },
+    payload: desktopAnnotationReferencePayload(root ?? record, sourceKind, originalKind),
+  };
+  return scrubSciForgeReference(reference);
+}
+
+function desktopAnnotationTargetFromCandidate(
+  candidate: unknown,
+  sourceKind: DesktopAnnotationSourceKind,
+  reference: SciForgeReference,
+): AnnotationReferenceInput['target'] {
+  const record = recordFromUnknown(candidate);
+  const targetRecord = recordFromUnknown(record?.target) ?? recordFromUnknown(record?.targetRef);
+  const bounds = desktopAnnotationBounds(targetRecord?.bounds)
+    ?? desktopAnnotationBounds(targetRecord?.rect)
+    ?? desktopAnnotationBounds(record?.bounds)
+    ?? desktopAnnotationBounds(record?.rect)
+    ?? { x: 0, y: 0, width: 1, height: 1 };
+  const title = desktopAnnotationString(targetRecord?.title)
+    || desktopAnnotationString(record?.targetTitle)
+    || desktopAnnotationString(record?.windowTitle)
+    || reference.title
+    || desktopAnnotationTitle(sourceKind);
+  const selector = `desktop-annotation:${sourceKind}:${reference.id}`;
+  return {
+    selector,
+    stableSelector: selector,
+    path: selector,
+    domPath: selector,
+    text: title,
+    textSnippet: title,
+    tagName: 'DESKTOP-ANNOTATION',
+    role: 'region',
+    label: title,
+    ariaLabel: title,
+    rect: bounds,
+    commentPoint: {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y + bounds.height / 2,
+    },
+  };
+}
+
+function desktopAnnotationReferencePayload(record: Record<string, unknown> | undefined, sourceKind: DesktopAnnotationSourceKind, originalKind: unknown) {
+  if (!record) return { source: 'desktop-global-annotation', sourceKind };
+  const metadata = recordFromUnknown(record.metadata);
+  const actionMetadata = desktopAnnotationActionMetadata(record, metadata);
+  const bounds = desktopAnnotationBounds(actionMetadata.bounds) ?? desktopAnnotationBounds(actionMetadata.rect);
+  return {
+    source: 'desktop-global-annotation',
+    sourceKind,
+    annotationSourceKind: desktopAnnotationString(actionMetadata.sourceKind) || undefined,
+    bridgeReferenceKind: typeof originalKind === 'string' ? originalKind : undefined,
+    coordinateSpace: desktopAnnotationString(actionMetadata.coordinateSpace) || undefined,
+    bounds,
+    screenBounds: desktopAnnotationBounds(actionMetadata.screenBounds),
+    windowBounds: desktopAnnotationBounds(actionMetadata.windowBounds),
+    windowLocalBounds: desktopAnnotationBounds(actionMetadata.windowLocalBounds),
+    displayId: desktopAnnotationDisplayId(actionMetadata, metadata),
+    scale: desktopAnnotationScale(actionMetadata, metadata),
+    annotationRef: desktopAnnotationRefString(actionMetadata.annotationRef) || undefined,
+    imageRef: desktopAnnotationRefString(actionMetadata.imageRef) || undefined,
+    windowRef: desktopAnnotationRefString(actionMetadata.windowRef) || undefined,
+    cropRef: desktopAnnotationRefString(actionMetadata.cropRef) || undefined,
+    screenshotRef: desktopAnnotationRefString(actionMetadata.screenshotRef) || undefined,
+    targetRef: desktopAnnotationRefString(actionMetadata.targetRef) || undefined,
+    hash: desktopAnnotationString(actionMetadata.hash) || undefined,
+    provenanceRefs: desktopAnnotationStringList(actionMetadata.provenanceRefs),
+    windowBinding: desktopAnnotationWindowBinding(actionMetadata.windowBinding, actionMetadata),
+    app: desktopAnnotationBoundedMetadata(actionMetadata.app ?? actionMetadata.application),
+    process: desktopAnnotationBoundedMetadata(actionMetadata.process ?? actionMetadata.processInfo),
+    candidates: desktopAnnotationBoundedMetadata(actionMetadata.candidates ?? actionMetadata.windowCandidates),
+    createdAt: desktopAnnotationString(actionMetadata.createdAt) || undefined,
+  };
+}
+
+function desktopAnnotationActionMetadata(record: Record<string, unknown>, metadata?: Record<string, unknown>) {
+  const refs = recordFromUnknown(record.refs);
+  const merged: Record<string, unknown> = {};
+  for (const source of [metadata, record, refs]) {
+    if (!source) continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function desktopAnnotationLocatorRegion(record: Record<string, unknown> | undefined) {
+  const coordinateSpace = desktopAnnotationString(record?.coordinateSpace) || 'screen';
+  const bounds = desktopAnnotationBounds(record?.bounds) ?? desktopAnnotationBounds(record?.rect);
+  if (!bounds) return `desktop:${coordinateSpace}`;
+  return `desktop:${coordinateSpace}:${Math.round(bounds.x)},${Math.round(bounds.y)},${Math.round(bounds.width)}x${Math.round(bounds.height)}`;
+}
+
+function desktopAnnotationBounds(value: unknown): { x: number; y: number; width: number; height: number } | undefined {
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const x = desktopAnnotationNumber(record.x ?? record.left);
+  const y = desktopAnnotationNumber(record.y ?? record.top);
+  const width = desktopAnnotationNumber(record.width ?? record.w);
+  const height = desktopAnnotationNumber(record.height ?? record.h);
+  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
+  return {
+    x,
+    y,
+    width: Math.max(1, width),
+    height: Math.max(1, height),
+  };
+}
+
+function desktopAnnotationNumber(value: unknown) {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function desktopAnnotationDisplayId(record: Record<string, unknown>, metadata?: Record<string, unknown>) {
+  const display = recordFromUnknown(record.display) ?? recordFromUnknown(metadata?.display);
+  return desktopAnnotationString(record.displayId)
+    || desktopAnnotationString(record.screenId)
+    || desktopAnnotationString(metadata?.displayId)
+    || desktopAnnotationString(metadata?.screenId)
+    || desktopAnnotationString(display?.id)
+    || undefined;
+}
+
+function desktopAnnotationScale(record: Record<string, unknown>, metadata?: Record<string, unknown>) {
+  return desktopAnnotationNumber(record.scale)
+    ?? desktopAnnotationNumber(record.displayScale)
+    ?? desktopAnnotationNumber(record.devicePixelRatio)
+    ?? desktopAnnotationNumber(metadata?.scale)
+    ?? desktopAnnotationNumber(metadata?.displayScale)
+    ?? desktopAnnotationNumber(metadata?.devicePixelRatio);
+}
+
+function desktopAnnotationStringList(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const values = Array.from(new Set(value.map(desktopAnnotationString).filter(Boolean)));
+  return values.length ? values.slice(0, 20) : undefined;
+}
+
+function desktopAnnotationWindowBinding(value: unknown, root: Record<string, unknown>) {
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const status = desktopAnnotationString(record.status);
+  if (!status) return undefined;
+  const isBound = status === 'auto-bound' || status === 'manual-bound';
+  const binding: Record<string, unknown> = {
+    status,
+    confidence: desktopAnnotationNumber(record.confidence),
+    reason: desktopAnnotationString(record.reason) || undefined,
+    windowRef: isBound ? desktopAnnotationRefString(record.windowRef) || undefined : undefined,
+    appName: desktopAnnotationString(record.appName ?? record.app) || undefined,
+    bundleId: desktopAnnotationString(record.bundleId) || undefined,
+    pid: desktopAnnotationNumber(record.pid),
+    title: desktopAnnotationString(record.title ?? record.windowTitle) || undefined,
+    windowBounds: desktopAnnotationBounds(record.windowBounds) ?? desktopAnnotationBounds(root.windowBounds),
+    windowLocalBounds: desktopAnnotationBounds(record.windowLocalBounds) ?? desktopAnnotationBounds(root.windowLocalBounds),
+    candidates: desktopAnnotationWindowBindingCandidates(record.candidates),
+  };
+  return Object.fromEntries(Object.entries(binding).filter(([, entry]) => entry !== undefined));
+}
+
+function desktopAnnotationWindowBindingCandidates(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const candidates = value
+    .map((item) => {
+      const record = recordFromUnknown(item);
+      if (!record) return undefined;
+      const candidate = {
+        windowRef: desktopAnnotationRefString(record.windowRef) || undefined,
+        appName: desktopAnnotationString(record.appName ?? record.app) || undefined,
+        bundleId: desktopAnnotationString(record.bundleId) || undefined,
+        pid: desktopAnnotationNumber(record.pid),
+        title: desktopAnnotationString(record.title ?? record.windowTitle) || undefined,
+        confidence: desktopAnnotationNumber(record.confidence),
+        reason: desktopAnnotationString(record.reason) || undefined,
+        windowBounds: desktopAnnotationBounds(record.windowBounds),
+        windowLocalBounds: desktopAnnotationBounds(record.windowLocalBounds),
+      };
+      return Object.fromEntries(Object.entries(candidate).filter(([, entry]) => entry !== undefined));
+    })
+    .filter((item) => Boolean(item && Object.keys(item).length)) as Array<Record<string, unknown>>;
+  return candidates.length ? candidates.slice(0, 5) : undefined;
+}
+
+function desktopAnnotationTitle(sourceKind: DesktopAnnotationSourceKind) {
+  if (sourceKind === 'image') return 'Desktop annotation image';
+  if (sourceKind === 'window') return 'Desktop target window';
+  if (sourceKind === 'crop') return 'Desktop annotation crop';
+  if (sourceKind === 'screenshot') return 'Desktop annotation screenshot';
+  if (sourceKind === 'target') return 'Desktop annotation target';
+  return 'Desktop annotation';
+}
+
+function desktopAnnotationString(value: unknown) {
+  if (typeof value !== 'string') return '';
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || /^data:image\//i.test(text) || /;base64,/i.test(text)) return '';
+  return text.slice(0, 512);
+}
+
+function desktopAnnotationRefString(value: unknown) {
+  const record = recordFromUnknown(value);
+  return record
+    ? desktopAnnotationString(record.ref)
+      || desktopAnnotationString(record.url)
+      || desktopAnnotationString(record.localRef)
+      || desktopAnnotationString(record.id)
+    : desktopAnnotationString(value);
+}
+
+function desktopAnnotationBoundedMetadata(value: unknown, depth = 0): unknown {
+  if (value === undefined || value === null || depth > 3) return undefined;
+  if (typeof value === 'string') return desktopAnnotationString(value) || undefined;
+  if (typeof value === 'number') return desktopAnnotationNumber(value);
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, 10)
+      .map((item) => desktopAnnotationBoundedMetadata(item, depth + 1))
+      .filter((item) => item !== undefined);
+    return items.length ? items : undefined;
+  }
+  const record = recordFromUnknown(value);
+  if (!record) return undefined;
+  const bounded: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(record).slice(0, 24)) {
+    if (!desktopAnnotationSafeMetadataKey(key)) continue;
+    const normalized = desktopAnnotationBounds(entry) ?? desktopAnnotationBoundedMetadata(entry, depth + 1);
+    if (normalized !== undefined) bounded[key] = normalized;
+  }
+  return Object.keys(bounded).length ? bounded : undefined;
+}
+
+function desktopAnnotationSafeMetadataKey(key: string) {
+  return !/(?:action|session|executable|command|handler|route|token|secret|password|raw|base64|dataUrl)/i.test(key);
+}
+
+function desktopAnnotationDiagnosticMessage(value: unknown) {
+  const record = recordFromUnknown(value);
+  if (!record) return '';
+  const diagnostic = recordFromUnknown(record.diagnostic)
+    ?? recordFromUnknown(record.metadata)
+    ?? recordFromUnknown(record.diagnostics);
+  const message = desktopAnnotationString(record.message)
+    || desktopAnnotationString(record.reason)
+    || desktopAnnotationString(diagnostic?.message)
+    || desktopAnnotationString(diagnostic?.reason)
+    || desktopAnnotationString(diagnostic?.code);
+  return message.slice(0, 240);
+}
+
+function desktopAnnotationHash(value: string) {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(31, hash) + value.charCodeAt(index) | 0;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+function recordFromUnknown(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 export function SciForgeApp() {
@@ -168,6 +537,7 @@ export function SciForgeApp() {
   const [componentWorkbenchMode, setComponentWorkbenchMode] = useState<ComponentWorkbenchMode>('marketplace');
   const [feedbackAuthor, setFeedbackAuthor] = useState(() => loadFeedbackAuthor());
   const [feedbackAnnotationModeActive, setFeedbackAnnotationModeActive] = useState(false);
+  const [desktopAnnotationModeActive, setDesktopAnnotationModeActive] = useState(false);
   const [annotationSidebarOpen, setAnnotationSidebarOpen] = useState(false);
   const [annotationDraft, setAnnotationDraft] = useState<AnnotationPlanDraft | null>(() => {
     const draft = loadPersistedAnnotationPlanDraft();
@@ -570,29 +940,119 @@ export function SciForgeApp() {
     return createAnnotationPlanDraft(context);
   }
 
-  function toggleAnnotationSelectionMode() {
+  function prepareAnnotationDraft() {
     setAnnotationSidebarOpen(true);
     setAnnotationDraft((current) => {
       const next = ensureAnnotationDraft(current);
       annotationDraftRef.current = next;
       return next;
     });
+  }
+
+  function startWebAnnotationSelectionMode() {
+    prepareAnnotationDraft();
     setFeedbackAnnotationModeActive((current) => !current);
+  }
+
+  async function toggleAnnotationSelectionMode() {
+    if (feedbackAnnotationModeActive) {
+      setFeedbackAnnotationModeActive(false);
+      return;
+    }
+    if (desktopAnnotationModeActive) {
+      setDesktopAnnotationModeActive(false);
+      setFeedbackAnnotationModeActive(false);
+      return;
+    }
+    await selectAnnotationMode('screen-region');
+  }
+
+  async function selectAnnotationMode(mode: AppAnnotationMode) {
+    if (feedbackAnnotationModeActive || desktopAnnotationModeActive) {
+      setFeedbackAnnotationModeActive(false);
+      setDesktopAnnotationModeActive(false);
+      return;
+    }
+    if (mode === 'sciforge-page') {
+      startWebAnnotationSelectionMode();
+      return;
+    }
+    await startDesktopAnnotationMode(mode);
+  }
+
+  async function startDesktopAnnotationMode(mode: Exclude<AppAnnotationMode, 'sciforge-page'>) {
+    const bridge = typeof window === 'undefined' ? undefined : window.sciforgeDesktop;
+    if (!bridge) {
+      setWorkspaceStatus(t({
+        'zh-CN': `Desktop global annotation bridge is unavailable for ${mode}; blocked until desktop permissions or preload bridge are available. SciForge page annotation can still use DOM comments.`,
+        'en-US': `Desktop global annotation bridge is unavailable for ${mode}; blocked until desktop permissions or preload bridge are available. SciForge page annotation can still use DOM comments.`,
+      }));
+      return;
+    }
+    const startAnnotation = bridge.startAnnotation ?? bridge.startDesktopAnnotation;
+    if (!startAnnotation) {
+      setWorkspaceStatus(t({
+        'zh-CN': `Desktop global annotation bridge is missing startAnnotation; Desktop global annotation bridge is unavailable for ${mode}. SciForge page annotation can still use DOM comments.`,
+        'en-US': `Desktop global annotation bridge is missing startAnnotation; Desktop global annotation bridge is unavailable for ${mode}. SciForge page annotation can still use DOM comments.`,
+      }));
+      return;
+    }
+
+    prepareAnnotationDraft();
+    setFeedbackAnnotationModeActive(false);
+    setDesktopAnnotationModeActive(true);
+    try {
+      const result = await startAnnotation({
+        schemaVersion: 'sciforge.desktop.annotation.start.v1',
+        source: 'sciforge-topbar',
+        purpose: desktopAnnotationPurposeForMode(mode),
+        mode,
+        locale,
+        context: annotationDraftContext(),
+        createdAt: nowIso(),
+      });
+      const added = handleDesktopAnnotationResult(result);
+      if (!added) {
+        setWorkspaceStatus(desktopAnnotationDiagnosticMessage(result)
+          || `Desktop global annotation returned no refs for ${mode}.`);
+      }
+    } catch (error) {
+      setWorkspaceStatus(t({
+        'zh-CN': `Desktop global annotation bridge is unavailable for ${mode}; blocked: ${error instanceof Error ? error.message : String(error)}`,
+        'en-US': `Desktop global annotation bridge is unavailable for ${mode}; blocked: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+    } finally {
+      setDesktopAnnotationModeActive(false);
+    }
   }
 
   function closeAnnotationSidebar() {
     setAnnotationSidebarOpen(false);
     setFeedbackAnnotationModeActive(false);
+    setDesktopAnnotationModeActive(false);
   }
 
-  function handleAnnotationReference(input: AnnotationReferenceInput) {
+  function addAnnotationReferenceToCurrentDraft(input: AnnotationReferenceInput, options: { webSelectionActive: boolean }) {
     setAnnotationSidebarOpen(true);
-    setFeedbackAnnotationModeActive(true);
+    setFeedbackAnnotationModeActive(options.webSelectionActive);
     setAnnotationDraft((current) => {
       const next = addAnnotationReferenceToDraft(ensureAnnotationDraft(current), input);
       annotationDraftRef.current = next;
       return next;
     });
+  }
+
+  function handleAnnotationReference(input: AnnotationReferenceInput) {
+    addAnnotationReferenceToCurrentDraft(input, { webSelectionActive: true });
+  }
+
+  function handleDesktopAnnotationResult(result: unknown) {
+    let added = false;
+    for (const input of desktopAnnotationReferenceInputsFromResult(result)) {
+      addAnnotationReferenceToCurrentDraft(input, { webSelectionActive: false });
+      added = true;
+    }
+    return added;
   }
 
   function handleAnnotationDescriptionChange(description: string) {
@@ -1409,8 +1869,9 @@ export function SciForgeApp() {
           theme={config.theme}
           onThemeToggle={() => updateRuntimeConfig({ theme: (config.theme ?? 'dark') === 'dark' ? 'light' : 'dark' })}
           healthItems={appHealthItems}
-          annotationModeActive={feedbackAnnotationModeActive}
+          annotationModeActive={feedbackAnnotationModeActive || desktopAnnotationModeActive}
           onAnnotationModeToggle={toggleAnnotationSelectionMode}
+          onAnnotationModeSelect={selectAnnotationMode}
         />
         <div className="content-shell">
           {page === 'workbench' ? (
@@ -1500,7 +1961,7 @@ export function SciForgeApp() {
       <AnnotationSidebar
         open={annotationSidebarOpen}
         draft={annotationDraft}
-        selectionActive={feedbackAnnotationModeActive}
+        selectionActive={feedbackAnnotationModeActive || desktopAnnotationModeActive}
         saving={annotationSaving}
         page={page}
         onClose={closeAnnotationSidebar}

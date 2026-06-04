@@ -110,6 +110,36 @@ export interface BrowserWorkbenchHostAction {
   deltaY?: number;
 }
 
+export type BrowserWorkbenchAnnotationSelectionKind = 'point' | 'box';
+
+export interface BrowserWorkbenchAnnotationBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface BrowserWorkbenchAnnotationPoint {
+  x: number;
+  y: number;
+}
+
+export interface BrowserWorkbenchAnnotationSelection {
+  start: BrowserWorkbenchAnnotationPoint;
+  end: BrowserWorkbenchAnnotationPoint;
+}
+
+export interface BrowserWorkbenchAnnotationRequest {
+  schemaVersion: 'sciforge.browser-workbench.annotation-request.v1';
+  source: 'browser-workbench';
+  sourceKind: 'browser';
+  coordinateSpace: 'browser-viewport';
+  selectionKind: BrowserWorkbenchAnnotationSelectionKind;
+  point: BrowserWorkbenchAnnotationPoint;
+  bounds: BrowserWorkbenchAnnotationBounds;
+  comment?: string;
+}
+
 const BROWSER_WORKBENCH_DIAGNOSTIC_TEXT_MAX = 240;
 const BROWSER_WORKBENCH_HEALTH_CAPABILITIES = ['browser-host-session', 'browser-host-native-surface', 'browser-host-search'] as const;
 
@@ -147,6 +177,7 @@ export interface BrowserWorkbenchPayload {
   onAddressSubmit?: (value: string) => void;
   onCommandRequest?: (command: BrowserWorkbenchCommand) => void;
   onHostActionRequest?: (action: BrowserWorkbenchHostAction) => void;
+  onAnnotationRequest?: (request: BrowserWorkbenchAnnotationRequest) => void;
   onCopyRefRequest?: (ref: BrowserRuntimeTraceRef) => void;
   onFocusTabRequest?: (tab: BrowserRuntimeTab) => void;
 }
@@ -317,11 +348,20 @@ export function browserWorkbenchDefaultCommands(url: string, options: BrowserWor
         risk: 'allowed',
         kind: 'terminal-equivalent',
       };
+  const annotate: BrowserWorkbenchCommand = {
+    id: 'annotate',
+    label: 'Annotate',
+    command: `/browser annotate --url ${quotedUrl} --coordinate-space browser-viewport --target viewport`,
+    disabled: options.canAnnotate === false,
+    risk: 'allowed',
+    kind: 'composer-reference',
+  };
   return [
     { id: 'open', label: 'Open', command: `/browser open ${quotedUrl} --surface workbench`, risk: 'allowed', kind: 'terminal-equivalent' },
     { id: 'back', label: 'Back', command: `/browser back --url ${quotedUrl}`, disabled: options.canGoBack === false, risk: 'allowed', kind: 'terminal-equivalent' },
     { id: 'forward', label: 'Forward', command: `/browser forward --url ${quotedUrl}`, disabled: options.canGoForward === false, risk: 'allowed', kind: 'terminal-equivalent' },
     reloadOrStop,
+    annotate,
   ];
 }
 
@@ -341,7 +381,8 @@ function browserWorkbenchToolbarCommand(command: BrowserWorkbenchCommand) {
     || command.id === 'back'
     || command.id === 'forward'
     || command.id === 'reload'
-    || command.id === 'stop';
+    || command.id === 'stop'
+    || command.id === 'annotate';
 }
 
 function normalizeStateStatus(value: unknown): BrowserWorkbenchStateStatus | undefined {
@@ -511,7 +552,11 @@ export function browserWorkbenchStateFromPayload(
   };
 }
 
-function renderCommandButton(command: BrowserWorkbenchCommand, onCommandRequest?: (command: BrowserWorkbenchCommand) => void) {
+function renderCommandButton(
+  command: BrowserWorkbenchCommand,
+  onCommandRequest?: (command: BrowserWorkbenchCommand) => void,
+  onAnnotateStart?: () => void,
+) {
   return (
     <button
       key={`${command.id ?? command.label}:${command.command}`}
@@ -526,7 +571,12 @@ function renderCommandButton(command: BrowserWorkbenchCommand, onCommandRequest?
       disabled={command.disabled}
       title={command.label}
       onClick={() => {
-        if (!command.disabled) onCommandRequest?.(command);
+        if (command.disabled) return;
+        if (command.id === 'annotate' && onAnnotateStart) {
+          onAnnotateStart();
+          return;
+        }
+        onCommandRequest?.(command);
       }}
     >
       {command.label}
@@ -542,6 +592,207 @@ function browserWorkbenchCommandShortLabel(command: BrowserWorkbenchCommand) {
   if (command.id === 'stop') return 'X';
   if (command.id === 'annotate') return 'Note';
   return command.label.slice(0, 6);
+}
+
+function browserWorkbenchFramePoint(event: Pick<React.MouseEvent<HTMLElement>, 'clientX' | 'clientY' | 'currentTarget'>) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const width = Math.max(0, Math.round(rect.width || 0));
+  const height = Math.max(0, Math.round(rect.height || 0));
+  return {
+    x: Math.max(0, Math.min(width, Math.round(event.clientX - rect.left))),
+    y: Math.max(0, Math.min(height, Math.round(event.clientY - rect.top))),
+  };
+}
+
+function browserWorkbenchMouseButton(button: number | undefined): BrowserWorkbenchMouseButton {
+  if (button === 1) return 'middle';
+  if (button === 2) return 'right';
+  return 'left';
+}
+
+function requestBrowserWorkbenchHostPointerAction(
+  event: React.PointerEvent<HTMLDivElement> | React.MouseEvent<HTMLDivElement>,
+  action: Extract<BrowserWorkbenchHostAction['action'], 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up'>,
+  onHostActionRequest?: (action: BrowserWorkbenchHostAction) => void,
+) {
+  if (!onHostActionRequest) return;
+  event.preventDefault();
+  onHostActionRequest({
+    action,
+    ...browserWorkbenchFramePoint(event),
+    button: browserWorkbenchMouseButton(event.button),
+  });
+}
+
+function requestBrowserWorkbenchHostPointerMove(
+  event: React.PointerEvent<HTMLDivElement>,
+  onHostActionRequest?: (action: BrowserWorkbenchHostAction) => void,
+) {
+  if (!onHostActionRequest) return;
+  const point = browserWorkbenchFramePoint(event);
+  if (event.buttons) {
+    event.preventDefault();
+    onHostActionRequest({
+      action: 'mouse-move',
+      ...point,
+      button: browserWorkbenchMouseButton(event.button),
+    });
+    return;
+  }
+  onHostActionRequest({
+    action: 'cursor',
+    ...point,
+  });
+}
+
+function requestBrowserWorkbenchHostWheel(
+  event: React.WheelEvent<HTMLDivElement>,
+  onHostActionRequest?: (action: BrowserWorkbenchHostAction) => void,
+) {
+  if (!onHostActionRequest) return;
+  event.preventDefault();
+  onHostActionRequest({
+    action: 'scroll',
+    ...browserWorkbenchFramePoint(event),
+    deltaX: event.deltaX,
+    deltaY: event.deltaY,
+  });
+}
+
+interface BrowserWorkbenchAnnotationController {
+  enabled: boolean;
+  dragging?: BrowserWorkbenchAnnotationPoint;
+  selection?: BrowserWorkbenchAnnotationSelection;
+}
+
+function startBrowserWorkbenchAnnotation(controller: BrowserWorkbenchAnnotationController) {
+  controller.enabled = true;
+  controller.dragging = undefined;
+  controller.selection = undefined;
+}
+
+function requestBrowserWorkbenchAnnotationPointerDown(
+  event: React.PointerEvent<HTMLDivElement>,
+  controller: BrowserWorkbenchAnnotationController,
+) {
+  if (!controller.enabled) return false;
+  event.preventDefault();
+  event.currentTarget.focus();
+  const point = browserWorkbenchFramePoint(event);
+  controller.dragging = point;
+  controller.selection = { start: point, end: point };
+  return true;
+}
+
+function requestBrowserWorkbenchAnnotationPointerMove(
+  event: React.PointerEvent<HTMLDivElement>,
+  controller: BrowserWorkbenchAnnotationController,
+) {
+  if (!controller.enabled) return false;
+  if (!controller.dragging || !event.buttons) return true;
+  event.preventDefault();
+  controller.selection = {
+    start: controller.dragging,
+    end: browserWorkbenchFramePoint(event),
+  };
+  return true;
+}
+
+function requestBrowserWorkbenchAnnotationPointerUp(
+  event: React.PointerEvent<HTMLDivElement>,
+  controller: BrowserWorkbenchAnnotationController,
+) {
+  if (!controller.enabled) return false;
+  event.preventDefault();
+  const start = controller.dragging ?? browserWorkbenchFramePoint(event);
+  controller.selection = {
+    start,
+    end: browserWorkbenchFramePoint(event),
+  };
+  controller.dragging = undefined;
+  return true;
+}
+
+function browserWorkbenchAnnotationSelectionKind(selection: BrowserWorkbenchAnnotationSelection): BrowserWorkbenchAnnotationSelectionKind {
+  const bounds = browserWorkbenchAnnotationBounds(selection);
+  return bounds.width > 1 || bounds.height > 1 ? 'box' : 'point';
+}
+
+function browserWorkbenchAnnotationBounds(selection: BrowserWorkbenchAnnotationSelection): BrowserWorkbenchAnnotationBounds {
+  const x = Math.min(selection.start.x, selection.end.x);
+  const y = Math.min(selection.start.y, selection.end.y);
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.abs(selection.end.x - selection.start.x)),
+    height: Math.max(1, Math.abs(selection.end.y - selection.start.y)),
+  };
+}
+
+function browserWorkbenchAnnotationPoint(selection: BrowserWorkbenchAnnotationSelection): BrowserWorkbenchAnnotationPoint {
+  const bounds = browserWorkbenchAnnotationBounds(selection);
+  if (browserWorkbenchAnnotationSelectionKind(selection) === 'point') return selection.end;
+  return {
+    x: Math.round(bounds.x + bounds.width / 2),
+    y: Math.round(bounds.y + bounds.height / 2),
+  };
+}
+
+function browserWorkbenchAnnotationCommentFromForm(form: unknown) {
+  const elements = isRecord(form) ? form.elements : undefined;
+  const namedItem = isRecord(elements) && typeof elements.namedItem === 'function'
+    ? elements.namedItem.bind(elements) as (name: string) => unknown
+    : undefined;
+  const commentControl = namedItem?.('browser-annotation-comment');
+  const value = isRecord(commentControl) ? commentControl.value : undefined;
+  const comment = asString(value);
+  return comment ? comment.slice(0, 2000) : undefined;
+}
+
+function browserWorkbenchAnnotationRequest(
+  selection: BrowserWorkbenchAnnotationSelection,
+  comment: string | undefined,
+): BrowserWorkbenchAnnotationRequest {
+  return {
+    schemaVersion: 'sciforge.browser-workbench.annotation-request.v1',
+    source: 'browser-workbench',
+    sourceKind: 'browser',
+    coordinateSpace: 'browser-viewport',
+    selectionKind: browserWorkbenchAnnotationSelectionKind(selection),
+    point: browserWorkbenchAnnotationPoint(selection),
+    bounds: browserWorkbenchAnnotationBounds(selection),
+    comment,
+  };
+}
+
+function renderBrowserWorkbenchAnnotationEditor(
+  payload: BrowserWorkbenchPayload,
+  controller: BrowserWorkbenchAnnotationController,
+) {
+  if (!payload.onAnnotationRequest) return null;
+  return (
+    <form
+      className="browser-workbench-annotation-editor"
+      data-browser-annotation-editor="true"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!controller.selection) return;
+        payload.onAnnotationRequest?.(browserWorkbenchAnnotationRequest(
+          controller.selection,
+          browserWorkbenchAnnotationCommentFromForm(event.currentTarget),
+        ));
+        controller.enabled = false;
+        controller.dragging = undefined;
+        controller.selection = undefined;
+      }}
+    >
+      <label>
+        <span>Comment</span>
+        <textarea name="browser-annotation-comment" rows={2} />
+      </label>
+      <button type="submit">Add note</button>
+    </form>
+  );
 }
 
 function renderRef(ref: BrowserRuntimeTraceRef, onCopyRefRequest?: (ref: BrowserRuntimeTraceRef) => void) {
@@ -1089,6 +1340,9 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
   const renderHostBrowser = canRenderHostBrowser(state, hostSession);
   const hostFrameTransport = renderHostBrowser ? 'native-embedded' : undefined;
   const nativeSurfaceStabilityKey = renderHostBrowser && hostSession ? browserWorkbenchNativeSurfaceStabilityKey(hostSession) : undefined;
+  const annotationController: BrowserWorkbenchAnnotationController = {
+    enabled: false,
+  };
 
   return (
     <div
@@ -1134,7 +1388,11 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
           <button type="submit">Open</button>
         </form>
         <div className="browser-workbench-viewer-actions" aria-label="Browser runtime commands">
-          {commands.map((command) => renderCommandButton(command, payload.onCommandRequest))}
+          {commands.map((command) => renderCommandButton(
+            command,
+            payload.onCommandRequest,
+            () => startBrowserWorkbenchAnnotation(annotationController),
+          ))}
         </div>
       </div>
       {session?.tabs.length ? (
@@ -1177,12 +1435,31 @@ export function renderBrowserWorkbench(props: UIComponentRendererProps) {
             data-browser-frame-transport={hostFrameTransport}
             role="application"
             aria-label="Browser page"
+            tabIndex={0}
+            onPointerDown={(event) => {
+              event.currentTarget.focus();
+              if (requestBrowserWorkbenchAnnotationPointerDown(event, annotationController)) return;
+              requestBrowserWorkbenchHostPointerAction(event, 'mouse-down', payload.onHostActionRequest);
+            }}
+            onPointerMove={(event) => {
+              if (requestBrowserWorkbenchAnnotationPointerMove(event, annotationController)) return;
+              requestBrowserWorkbenchHostPointerMove(event, payload.onHostActionRequest);
+            }}
+            onPointerUp={(event) => {
+              if (requestBrowserWorkbenchAnnotationPointerUp(event, annotationController)) return;
+              requestBrowserWorkbenchHostPointerAction(event, 'mouse-up', payload.onHostActionRequest);
+            }}
+            onDoubleClick={(event) => requestBrowserWorkbenchHostPointerAction(event, 'double-click', payload.onHostActionRequest)}
+            onWheel={(event) => requestBrowserWorkbenchHostWheel(event, payload.onHostActionRequest)}
+            onPointerLeave={() => payload.onHostActionRequest?.({ action: 'cursor', x: -1, y: -1 })}
+            onContextMenu={(event) => event.preventDefault()}
           >
             {renderBrowserWorkbenchActorCursors(hostSession)}
           </div>
         ) : (
           renderBrowserState(state, refs, payload, commands)
         )}
+        {renderHostBrowser ? renderBrowserWorkbenchAnnotationEditor(payload, annotationController) : null}
       </section>
       {snapshot?.textPreview ? (
         <section className="browser-workbench-viewer-refs" aria-label="Browser text preview">

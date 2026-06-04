@@ -7,6 +7,8 @@ import {
 } from './domain';
 import {
   compactWorkspaceStateForStorage,
+  createInitialWorkspaceState,
+  createSession,
   currentRuntimeCompatibilityFingerprint,
   parseWorkspaceState,
   runtimeCompatibilityDiagnosticsForSession,
@@ -14,6 +16,66 @@ import {
   sessionWriteConflictsForState,
   shouldUsePersistedWorkspaceState,
 } from './sessionStore';
+
+test('new workspace sessions do not inject scenario seed demo messages', () => {
+  const state = createInitialWorkspaceState();
+
+  for (const session of Object.values(state.sessionsByScenario)) {
+    assert.equal(session.messages.length, 0, `${session.scenarioId} should start empty`);
+  }
+
+  const explicitSeedRequest = createSession('literature-evidence-review', 'Literature', { seed: true });
+  assert.equal(explicitSeedRequest.messages.length, 0);
+  assert.doesNotMatch(JSON.stringify(state), /KRAS G12C|已形成可审计文献证据矩阵|seed-demo/i);
+});
+
+test('parseWorkspaceState removes persisted seed demo messages', () => {
+  const state = parseWorkspaceState({
+    schemaVersion: 2,
+    workspacePath: '/tmp/sciforge-workspace',
+    sessionsByScenario: {
+      'literature-evidence-review': {
+        schemaVersion: 2,
+        sessionId: 'session-with-seed',
+        scenarioId: 'literature-evidence-review',
+        title: 'Seeded literature',
+        createdAt: '2026-04-25T00:00:00.000Z',
+        messages: [
+          { id: 'seed-old-user', role: 'user', content: 'legacy seed should disappear', createdAt: '2026-04-25T00:00:00.000Z' },
+          {
+            id: 'assistant-live',
+            role: 'scenario',
+            content: 'live result stays',
+            createdAt: '2026-04-25T00:01:00.000Z',
+            provenance: { kind: 'live-runtime-codex', liveAcceptanceEligible: true },
+          },
+          {
+            id: 'fixture-old',
+            role: 'scenario',
+            content: 'fixture should disappear',
+            createdAt: '2026-04-25T00:02:00.000Z',
+            provenance: { kind: 'fixture' },
+          },
+        ],
+        runs: [],
+        uiManifest: [],
+        claims: [],
+        executionUnits: [],
+        artifacts: [],
+        notebook: [],
+        versions: [],
+        updatedAt: '2026-04-25T00:00:00.000Z',
+      },
+    },
+    archivedSessions: [],
+    updatedAt: '2026-04-25T00:00:00.000Z',
+  });
+
+  assert.deepEqual(
+    state.sessionsByScenario['literature-evidence-review'].messages.map((message) => message.id),
+    ['assistant-live'],
+  );
+});
 
 test('parseWorkspaceState preserves built-in and workspace scenario sessions', () => {
   const state = parseWorkspaceState({

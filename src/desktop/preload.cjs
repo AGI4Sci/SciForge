@@ -19,6 +19,10 @@ const api = {
   attachVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:attach', input),
   presentVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:present', input),
   detachVirtualAppScreenSurface: (input) => ipcRenderer.invoke('desktop:virtual-app-screen-surface:detach', input),
+  startAnnotation: (input) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
+  startDesktopAnnotation: (input) => ipcRenderer.invoke('desktop:annotation-overlay:start', input),
+  getAnnotationState: () => ipcRenderer.invoke('desktop:annotation-overlay:status'),
+  cancelAnnotation: () => ipcRenderer.invoke('desktop:annotation-overlay:cancel'),
   revealPath: (path) => ipcRenderer.invoke('platform:reveal-path', path),
   pickDirectory: (defaultPath) => ipcRenderer.invoke('platform:pick-directory', defaultPath),
 };

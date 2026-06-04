@@ -56,7 +56,7 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
   assert.equal(argv.includes('exec'), false);
   assert.equal(argv.includes('--json'), false);
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
-  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
+  assertMcpEntrypointArg(argv, SUBAGENT_MCP_SERVER_NAME, 'subagent-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.parentCommandId}="app-server-client-command"`));
@@ -421,6 +421,12 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 
 async function* asyncGenerator(values: unknown[]) {
   for (const value of values) yield value;
+}
+
+function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointName: string): void {
+  const argsConfig = argv.find((arg) => arg.startsWith(`mcp_servers.${serverName}.args=`));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, new RegExp(`${entrypointName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(ts|js)`));
 }
 
 function codexNativeRouteVirtualAppScreenAttachResult(

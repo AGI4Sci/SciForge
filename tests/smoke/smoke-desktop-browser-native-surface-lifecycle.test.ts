@@ -65,6 +65,56 @@ test('desktop BrowserHostSession native surface uses workspace profile partition
   await controller.stopServer();
 });
 
+test('desktop BrowserHostSession native surface keeps window-open navigations in the current embedded tab', async () => {
+  type WindowOpenHandler = (details: { url?: string }) => { action: 'allow' | 'deny' };
+  const events: string[] = [];
+  let windowOpenHandler: WindowOpenHandler | undefined;
+
+  class FakeWebContentsView implements DesktopBrowserHostSurfaceViewLike {
+    currentUrl = 'about:blank';
+    webContents: DesktopBrowserHostSurfaceWebContentsLike & {
+      setWindowOpenHandler(handler: WindowOpenHandler): void;
+    } = {
+      setWindowOpenHandler: (handler) => {
+        windowOpenHandler = handler;
+        events.push('setWindowOpenHandler');
+      },
+      loadURL: async (url) => {
+        this.currentUrl = url;
+        events.push(`loadURL:${url}`);
+      },
+      getURL: () => this.currentUrl,
+    };
+  }
+
+  const controller = createDesktopBrowserHostSurfaceController({
+    WebContentsView: FakeWebContentsView,
+  });
+
+  const started = controller.startSession({ sessionId: 'native-window-open-policy' });
+  assertNativeContractState(started, { embeddedPassClaim: false });
+  assert.equal(typeof windowOpenHandler, 'function');
+  assert.deepEqual(events, ['setWindowOpenHandler']);
+
+  await controller.navigate('native-window-open-policy', { url: 'https://example.com/base' });
+  assert.equal(events.filter((event) => event === 'setWindowOpenHandler').length, 1);
+
+  const result = windowOpenHandler?.({ url: 'https://example.com/new' });
+  assert.deepEqual(result, { action: 'deny' });
+  assert.deepEqual(events, [
+    'setWindowOpenHandler',
+    'loadURL:https://example.com/base',
+    'loadURL:https://example.com/new',
+  ]);
+
+  const state = controller.state('native-window-open-policy');
+  assert.equal(state.url, 'https://example.com/new');
+  assert.equal(state.loading, true);
+  assert.ok(state.diagnostics?.includes('native embedded window open denied and redirected in-place'));
+
+  await controller.stopServer();
+});
+
 test('desktop BrowserHostSession native surface lifecycle contract covers resize detach reattach focus and cleanup', async () => {
   const events: string[] = [];
   const fakeViews: FakeWebContentsView[] = [];

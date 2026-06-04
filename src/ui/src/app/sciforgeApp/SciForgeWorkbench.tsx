@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { scenarioDefaultElementSelectionForRuntimeOverride } from '@sciforge/scenario-core';
 import { compileScenarioIRFromSelection } from '@sciforge/scenario-core/scenario-element-compiler';
 import { builtInScenarioIdForRuntimeInput, scenarioRuntimeOverrideForBuiltInScenario } from '@sciforge/scenario-core/scenario-routing-policy';
-import { scenarios, type ScenarioId } from '../../data';
+import type { ScenarioId } from '../../data';
 import { makeId, nowIso, type ObjectReference, type PreviewDescriptor, type RuntimeArtifact, type ScenarioInstanceId, type ScenarioRuntimeOverride, type SciForgeConfig, type SciForgeReference, type SciForgeSession, type TimelineEventRecord } from '../../domain';
 import { listWorkspace, type WorkspaceEntry } from '../../api/workspaceClient';
 import {
@@ -20,7 +20,6 @@ import { runPresentationState } from '../results-renderer-execution-model';
 import { recordUIActionInSession, type CommandTextUIAction, type OpenDebugAuditUIAction, type UIAction } from '../uiActionBoundary';
 import type { HandoffAutoRunRequest } from '../results/viewPlanResolver';
 import { scopedResultSlotId } from '../results/viewPlanResolver';
-import { defaultElementSelectionForScenario, ScenarioBuilderPanel } from '../ScenarioBuilderPanel';
 import { useRuntimeHealth } from '../runtimeHealthPanel';
 import { cx } from '../uiPrimitives';
 import { createWorkbenchObjectFocusUIAction } from './workbenchObjectFocus';
@@ -69,7 +68,6 @@ export function Workbench({
   autoRunRequest,
   onAutoRunConsumed,
   scenarioOverride,
-  onScenarioOverrideChange,
   onConfigChange,
   onOpenSettings,
   onTimelineEvent,
@@ -81,7 +79,6 @@ export function Workbench({
   onExternalReferenceRequest,
   onExternalReferenceConsumed,
   availableComponentIds,
-  onAvailableComponentIdsChange,
 }: {
   scenarioId: ScenarioInstanceId;
   config: SciForgeConfig;
@@ -121,20 +118,10 @@ export function Workbench({
   onAvailableComponentIdsChange: (ids: string[]) => void;
 }) {
   const baseScenarioId = builtInScenarioIdForRuntimeInput({ scenarioId, scenarioOverride });
-  const scenarioView = scenarios.find((item) => item.id === baseScenarioId) ?? scenarios[0];
-  const visionSenseToolId = 'local.vision-sense';
   const baseRuntimeScenario: ScenarioRuntimeOverride = scenarioOverride ?? scenarioRuntimeOverrideForBuiltInScenario(baseScenarioId);
-  const [visionSenseDefaultDisabled, setVisionSenseDefaultDisabled] = useState(false);
-  const runtimeScenario: ScenarioRuntimeOverride = {
-    ...baseRuntimeScenario,
-    selectedToolIds: visionSenseDefaultDisabled
-      ? (baseRuntimeScenario.selectedToolIds ?? []).filter((id) => id !== visionSenseToolId)
-      : Array.from(new Set([...(baseRuntimeScenario.selectedToolIds ?? []), visionSenseToolId])),
-  };
   const [resultsCollapsed, setResultsCollapsed] = useState(false);
-  const [workbenchChromeExpanded, setWorkbenchChromeExpanded] = useState(false);
   const [mobileWorkbenchLayout, setMobileWorkbenchLayout] = useState(false);
-  const [mobilePane, setMobilePane] = useState<'builder' | 'chat' | 'results'>('chat');
+  const [mobilePane, setMobilePane] = useState<'chat' | 'results'>('chat');
   const [activeRunId, setActiveRunId] = useState<string | undefined>();
   const [focusedObjectReference, setFocusedObjectReference] = useState<ObjectReference | undefined>();
   const [workspaceObjectReferences, setWorkspaceObjectReferences] = useState<ObjectReference[]>([]);
@@ -143,10 +130,9 @@ export function Workbench({
   const autoFocusedRunKeyRef = useRef<string | undefined>(undefined);
   const autoCollapsedEmptyRunKeyRef = useRef<string | undefined>(undefined);
   const runtimeHealth = useRuntimeHealth(config);
-  const visionSenseActive = (runtimeScenario.selectedToolIds ?? [visionSenseToolId]).includes(visionSenseToolId);
   const defaultResultSlots = useMemo(
-    () => compileScenarioIRFromSelection(defaultElementSelectionForScenario(baseScenarioId, runtimeScenario)).uiPlan.slots,
-    [baseScenarioId, runtimeScenario],
+    () => compileScenarioIRFromSelection(scenarioDefaultElementSelectionForRuntimeOverride(baseScenarioId, baseRuntimeScenario)).uiPlan.slots,
+    [baseScenarioId, baseRuntimeScenario],
   );
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 760px)');
@@ -155,11 +141,6 @@ export function Workbench({
     mq.addEventListener('change', sync);
     return () => mq.removeEventListener('change', sync);
   }, []);
-
-  useEffect(() => {
-    if (!mobileWorkbenchLayout || mobilePane !== 'builder') return;
-    setWorkbenchChromeExpanded(true);
-  }, [mobileWorkbenchLayout, mobilePane]);
 
   useEffect(() => {
     const workspaceRoot = normalizeWorkspacePath(config.workspacePath || '');
@@ -180,7 +161,6 @@ export function Workbench({
     };
   }, [config.workspacePath, config.workspaceWriterBaseUrl, session.updatedAt]);
 
-  const showWorkbenchChromeBody = workbenchChromeExpanded;
   const recoveryFocus = recoverableRunFocusForSession(session);
   const recoveryRunKey = recoveryFocus ? `${recoveryFocus.sessionId}:${recoveryFocus.activeRunId}` : undefined;
   const activeResultRun = activeRunId ? session.runs.find((run) => run.id === activeRunId) : session.runs.at(-1);
@@ -286,18 +266,6 @@ export function Workbench({
     setMobilePane('results');
   }
 
-  function toggleVisionSense() {
-    const currentToolIds = runtimeScenario.selectedToolIds ?? [];
-    setVisionSenseDefaultDisabled(currentToolIds.includes(visionSenseToolId));
-    const selectedToolIds = currentToolIds.includes(visionSenseToolId)
-      ? currentToolIds.filter((id) => id !== visionSenseToolId)
-      : [...currentToolIds, visionSenseToolId];
-    onScenarioOverrideChange(scenarioId, {
-      ...runtimeScenario,
-      selectedToolIds,
-    });
-  }
-
   function beginWorkbenchResize(event: React.MouseEvent<HTMLDivElement>) {
     const grid = event.currentTarget.parentElement;
     if (!grid) return;
@@ -324,54 +292,8 @@ export function Workbench({
 
   return (
     <main className="workbench workbench-canvas-shell codex-quiet-shell">
-      <div className="workbench-chrome">
-        <div className="workbench-chrome-toggle">
-          <button
-            type="button"
-            className="workbench-chrome-toggle-main"
-            onClick={() => setWorkbenchChromeExpanded((value) => !value)}
-            aria-expanded={showWorkbenchChromeBody}
-          >
-            <div className="scenario-large-icon workbench-chrome-icon" style={{ color: scenarioView.color, background: `${scenarioView.color}18` }}>
-              <scenarioView.icon size={22} />
-            </div>
-            <span className="workbench-chrome-title">SciForge Workspace</span>
-            {workbenchChromeExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-          </button>
-          <div className="workbench-sense-actions" aria-label="Senses">
-            <button
-              type="button"
-              className={cx('sense-toggle', visionSenseActive && 'active')}
-              aria-pressed={visionSenseActive}
-              onClick={toggleVisionSense}
-              title={visionSenseActive ? 'Disable vision-sense' : 'Enable vision-sense'}
-            >
-              <Eye size={14} />
-              <span>vision-sense</span>
-              <small>{visionSenseActive ? 'on' : 'off'}</small>
-            </button>
-          </div>
-        </div>
-        {showWorkbenchChromeBody ? (
-          <div className="workbench-chrome-body">
-            <ScenarioBuilderPanel
-              scenarioId={baseScenarioId}
-              scenario={runtimeScenario}
-              config={config}
-              runtimeHealth={runtimeHealth}
-              expanded
-              onToggle={() => {}}
-              chromeEmbedded
-              onChange={(override) => onScenarioOverrideChange(scenarioId, override)}
-              agentRuntimeComponentIds={availableComponentIds}
-              onAgentRuntimeComponentIdsChange={onAvailableComponentIdsChange}
-            />
-          </div>
-        ) : null}
-      </div>
       <div className="mobile-workbench-tabs" aria-label="移动端工作区视图">
         {[
-          ['builder', 'Builder'],
           ['chat', 'Chat'],
           ['results', 'Results'],
         ].map(([id, label]) => (
@@ -408,7 +330,7 @@ export function Workbench({
             archivedCount={archivedCount}
             autoRunRequest={autoRunRequest}
             onAutoRunConsumed={onAutoRunConsumed}
-            scenarioOverride={runtimeScenario}
+            scenarioOverride={baseRuntimeScenario}
             onConfigChange={onConfigChange}
             onTimelineEvent={onTimelineEvent}
             activeRunId={activeRunId}

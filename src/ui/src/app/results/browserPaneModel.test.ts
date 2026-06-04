@@ -34,6 +34,7 @@ test('browser pane model builds refs-first annotation composer references from B
   }, {
     cropRef: 'browser-host-session:browser-host-annotation-1/crops/selection.json',
     bounds: { x: 12, y: 24, width: 320, height: 180 },
+    comment: 'Explain why this paragraph matters.',
     threadId: 'thread-browser-annotation',
     messageDraftId: 'draft-browser-annotation',
     createdAt: '2026-06-03T00:00:00.000Z',
@@ -52,6 +53,7 @@ test('browser pane model builds refs-first annotation composer references from B
   assert.equal(payload.coordinateSpace, 'browser-viewport');
   assert.equal(payload.browserSessionRef, 'browser-host-session:browser-host-annotation-1/session.json');
   assert.deepEqual(payload.bounds, { x: 12, y: 24, width: 320, height: 180 });
+  assert.equal(payload.comment, 'Explain why this paragraph matters.');
   assert.equal(payload.threadId, 'thread-browser-annotation');
   assert.equal(payload.messageDraftId, 'draft-browser-annotation');
   assert.equal(payload.createdAt, '2026-06-03T00:00:00.000Z');

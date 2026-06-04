@@ -48,10 +48,15 @@ export type DesktopPreloadApiMethod =
   | 'captureNativeBrowserScreenshot'
   | 'attachBrowserHostSessionSurface'
   | 'detachBrowserHostSessionSurface'
+  | 'resizeBrowserHostSessionSurface'
   | 'getBrowserHostSessionSurfaceState'
   | 'attachVirtualAppScreenSurface'
   | 'presentVirtualAppScreenSurface'
   | 'detachVirtualAppScreenSurface'
+  | 'startAnnotation'
+  | 'startDesktopAnnotation'
+  | 'getAnnotationState'
+  | 'cancelAnnotation'
   | 'revealPath'
   | 'pickDirectory';
 
@@ -74,10 +79,14 @@ export type DesktopPreloadContract = {
     | 'desktop:native-browser:screenshot'
     | 'desktop:browser-host-surface:attach'
     | 'desktop:browser-host-surface:detach'
+    | 'desktop:browser-host-surface:resize'
     | 'desktop:browser-host-surface:state'
     | 'desktop:virtual-app-screen-surface:attach'
     | 'desktop:virtual-app-screen-surface:present'
     | 'desktop:virtual-app-screen-surface:detach'
+    | 'desktop:annotation-overlay:start'
+    | 'desktop:annotation-overlay:status'
+    | 'desktop:annotation-overlay:cancel'
     | 'platform:open-external'
     | 'platform:reveal-path'
     | 'platform:pick-directory'
@@ -386,10 +395,15 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'captureNativeBrowserScreenshot',
         'attachBrowserHostSessionSurface',
         'detachBrowserHostSessionSurface',
+        'resizeBrowserHostSessionSurface',
         'getBrowserHostSessionSurfaceState',
         'attachVirtualAppScreenSurface',
         'presentVirtualAppScreenSurface',
         'detachVirtualAppScreenSurface',
+        'startAnnotation',
+        'startDesktopAnnotation',
+        'getAnnotationState',
+        'cancelAnnotation',
         'revealPath',
         'pickDirectory',
       ],
@@ -406,10 +420,14 @@ export function createDesktopProductionShellPlan(options: DesktopProductionShell
         'desktop:native-browser:screenshot',
         'desktop:browser-host-surface:attach',
         'desktop:browser-host-surface:detach',
+        'desktop:browser-host-surface:resize',
         'desktop:browser-host-surface:state',
         'desktop:virtual-app-screen-surface:attach',
         'desktop:virtual-app-screen-surface:present',
         'desktop:virtual-app-screen-surface:detach',
+        'desktop:annotation-overlay:start',
+        'desktop:annotation-overlay:status',
+        'desktop:annotation-overlay:cancel',
         'platform:open-external',
         'platform:reveal-path',
         'platform:pick-directory',

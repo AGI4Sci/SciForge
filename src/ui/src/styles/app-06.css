@@ -218,7 +218,7 @@
     flex: 0 0 auto;
   }
 
-  .topbar-actions > :not(.topbar-annotation-button) {
+  .topbar-actions > :not(.topbar-annotation-menu) {
     display: none;
   }
 

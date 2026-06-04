@@ -168,7 +168,7 @@ export function SettingsPage({
                   checked={config.visionAllowSharedSystemInput}
                   onChange={(event) => onChange({ visionAllowSharedSystemInput: event.target.checked })}
                 />
-                <span>{t({ 'zh-CN': '默认允许 vision-sense 使用共享系统鼠标/键盘', 'en-US': 'Allow vision-sense to use shared system mouse and keyboard by default' })}</span>
+                <span>{t({ 'zh-CN': '默认允许全局视觉/截图取证使用共享系统鼠标/键盘', 'en-US': 'Allow global vision screenshot evidence to use shared system mouse and keyboard by default' })}</span>
               </label>
             </div>
           ) : null}

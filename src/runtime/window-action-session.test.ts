@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createActorCursor,
   createWindowActionSession,
+  createWindowActionSessionFromAnnotationMetadata,
   dispatchWindowAction,
   enterWindowActionSession,
   leaveWindowActionSession,
@@ -12,6 +13,7 @@ import {
   removeWindowActionSession,
   routeWindowAction,
   stopWindowActionSession,
+  windowActionCandidateFromAnnotationMetadata,
 } from './window-action-session.js';
 
 const now = '2026-06-03T00:00:00.000Z';
@@ -250,5 +252,215 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
   assert.deepEqual(systemInput.session.events.at(-1)?.evidenceRefs, [
     { kind: 'shared-system-input', ref: 'shared-system-input:legacy.canvas:click' },
     { kind: 'screenshot', ref: 'window-action-ref:system-input-after' },
+  ]);
+});
+
+test('annotation manual-bound metadata becomes a candidate but needs explicit action flow to create a session', () => {
+  const metadata = {
+    annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed',
+    screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/capture-fixed',
+    cropRef: 'desktop-annotation:workspace/workspace-a/session/session-a/crop/capture-fixed',
+    imageRef: 'desktop-annotation:workspace/workspace-a/session/session-a/image/capture-fixed',
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    windowBinding: {
+      status: 'manual-bound',
+      windowRef: 'desktop-window:app:paper-reader:window-42',
+      appName: 'Paper Reader',
+      bundleId: 'org.sciforge.paper-reader',
+      pid: 4242,
+      title: 'Paper Reader - Figure 1',
+      appKind: 'ordinary-app',
+      windowBounds: { x: 44, y: 80, width: 900, height: 640 },
+      windowLocalBounds: { x: 120, y: 80, width: 200, height: 120 },
+    },
+  };
+
+  const candidate = windowActionCandidateFromAnnotationMetadata(metadata);
+  assert.equal(candidate.status, 'candidate');
+  assert.equal(candidate.bindingStatus, 'manual-bound');
+  assert.equal(candidate.target?.windowRef, 'desktop-window:app:paper-reader:window-42');
+  assert.deepEqual(candidate.target?.windowLocalBounds, { x: 120, y: 80, width: 200, height: 120 });
+  assert.equal(candidate.routeTarget?.app?.id, 'org.sciforge.paper-reader');
+  assert.equal(candidate.routeTarget?.app?.kind, 'ordinary-app');
+  assert.equal(candidate.requiresExplicitActionFlow, true);
+
+  const withoutFlow = createWindowActionSessionFromAnnotationMetadata(metadata, { timestamp: now });
+  assert.equal(withoutFlow.status, 'requires-explicit-action-flow');
+  assert.equal(withoutFlow.session, undefined);
+
+  const created = createWindowActionSessionFromAnnotationMetadata(metadata, {
+    explicitActionFlowRef: 'window-action-flow:thread-1/enter-window',
+    timestamp: now,
+  });
+  assert.equal(created.status, 'created');
+  assert.equal(created.session?.windowRef, 'desktop-window:app:paper-reader:window-42');
+  assert.equal(created.session?.process.pid, 4242);
+  assert.equal(created.session?.app.id, 'org.sciforge.paper-reader');
+  assert.equal(created.session?.app.name, 'Paper Reader');
+  assert.equal(created.session?.app.kind, 'ordinary-app');
+  assert.deepEqual(created.session?.bounds, { x: 44, y: 80, width: 900, height: 640 });
+  assert.deepEqual(created.session?.evidenceRefs, [
+    { kind: 'annotation', ref: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed' },
+    { kind: 'screenshot', ref: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/capture-fixed' },
+    { kind: 'crop', ref: 'desktop-annotation:workspace/workspace-a/session/session-a/crop/capture-fixed' },
+    { kind: 'image', ref: 'desktop-annotation:workspace/workspace-a/session/session-a/image/capture-fixed' },
+    { kind: 'action-flow', ref: 'window-action-flow:thread-1/enter-window' },
+  ]);
+});
+
+test('annotation auto-bound metadata is explanatory until explicit action flow consumes high confidence binding', () => {
+  const metadata = {
+    annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/screen-region-1',
+    screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/screen-region-1',
+    sourceKind: 'screen-region',
+    coordinateSpace: 'screen-global',
+    windowBinding: {
+      status: 'auto-bound',
+      confidence: 0.94,
+      reason: 'single containing window matched the selected region',
+      windowRef: 'desktop-window:app:plotter:window-7',
+      appName: 'Plotter',
+      bundleId: 'org.sciforge.plotter',
+      appKind: 'ordinary-app',
+      windowBounds: { x: 20, y: 30, width: 1000, height: 700 },
+      windowLocalBounds: { x: 240, y: 160, width: 260, height: 180 },
+      candidates: [{
+        windowRef: 'desktop-window:app:plotter:window-7',
+        confidence: 0.94,
+        reason: 'contains-region',
+      }],
+    },
+  };
+
+  const candidate = windowActionCandidateFromAnnotationMetadata(metadata);
+  assert.equal(candidate.status, 'explanatory-target');
+  assert.equal(candidate.bindingStatus, 'auto-bound');
+  assert.equal(candidate.requiresExplicitActionFlow, true);
+  assert.equal(candidate.target?.windowRef, 'desktop-window:app:plotter:window-7');
+
+  const withoutFlow = createWindowActionSessionFromAnnotationMetadata(metadata, { timestamp: now });
+  assert.equal(withoutFlow.status, 'requires-explicit-action-flow');
+  assert.equal(withoutFlow.session, undefined);
+
+  const created = createWindowActionSessionFromAnnotationMetadata(metadata, {
+    explicitActionFlowRef: 'window-action-flow:thread-1/enter-auto-bound-window',
+    timestamp: now,
+  });
+  assert.equal(created.status, 'created');
+  assert.equal(created.session?.windowRef, 'desktop-window:app:plotter:window-7');
+  assert.deepEqual(created.session?.bounds, { x: 20, y: 30, width: 1000, height: 700 });
+});
+
+test('annotation low-confidence, unbound, blocked, and screenshot-only metadata never become operation targets', () => {
+  const rejectedInputs = [
+    {
+      annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/low-confidence',
+      screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/low-confidence',
+      sourceKind: 'screen-region',
+      coordinateSpace: 'screen-global',
+      windowBinding: {
+        status: 'auto-bound',
+        confidence: 0.61,
+        windowRef: 'desktop-window:app:wrong:window-1',
+        candidates: [{ windowRef: 'desktop-window:app:wrong:window-1', confidence: 0.61 }],
+      },
+    },
+    {
+      annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/unbound',
+      screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/unbound',
+      sourceKind: 'screen-region',
+      coordinateSpace: 'screen-global',
+      windowBinding: {
+        status: 'unbound',
+        reason: 'low-confidence',
+        candidates: [{ windowRef: 'desktop-window:app:candidate:window-1', confidence: 0.55 }],
+      },
+    },
+    {
+      annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/blocked',
+      screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/blocked',
+      sourceKind: 'screen-region',
+      coordinateSpace: 'screen-global',
+      windowBinding: {
+        status: 'blocked',
+        reason: 'window-enumeration-blocked',
+      },
+    },
+    {
+      screenshotRef: 'desktop-annotation:workspace/workspace-a/session/session-a/screenshot/screenshot-only',
+      sourceKind: 'screenshot',
+    },
+  ];
+
+  for (const input of rejectedInputs) {
+    const candidate = windowActionCandidateFromAnnotationMetadata(input);
+    assert.equal(candidate.status, 'blocked');
+    assert.equal(candidate.target, undefined);
+
+    const created = createWindowActionSessionFromAnnotationMetadata(input, {
+      explicitActionFlowRef: 'window-action-flow:thread-1/enter-rejected',
+      timestamp: now,
+    });
+    assert.equal(created.status, 'blocked');
+    assert.equal(created.session, undefined);
+  }
+});
+
+test('annotation window metadata feeds generic adapter routing with accessibility and shared-system fallback evidence', () => {
+  const candidate = windowActionCandidateFromAnnotationMetadata({
+    annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed',
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    windowBinding: {
+      status: 'manual-bound',
+      windowRef: 'desktop-window:app:legacy-canvas:main',
+      appName: 'Legacy Canvas',
+      bundleId: 'legacy.canvas',
+      appKind: 'ordinary-app',
+      windowBounds: { x: 0, y: 0, width: 800, height: 600 },
+    },
+  }, {
+    capabilities: { accessibility: true, systemInput: true },
+  });
+
+  assert.equal(candidate.status, 'candidate');
+  assert.deepEqual(candidate.routeTarget, {
+    app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+    capabilities: { accessibility: true, systemInput: true },
+  });
+  const accessibilityRoute = routeWindowAction({ target: candidate.routeTarget!, action: 'click' });
+  assert.equal(accessibilityRoute.adapter, 'accessibility-ui-automation');
+  assert.deepEqual(accessibilityRoute.evidenceRefs, [
+    { kind: 'accessibility-ui-automation', ref: 'accessibility-ui-automation:legacy.canvas:click' },
+  ]);
+
+  const fallback = windowActionCandidateFromAnnotationMetadata({
+    annotationRef: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed',
+    sourceKind: 'window',
+    coordinateSpace: 'window-local',
+    windowBinding: {
+      status: 'manual-bound',
+      windowRef: 'desktop-window:app:legacy-canvas:main',
+      appName: 'Legacy Canvas',
+      bundleId: 'legacy.canvas',
+      appKind: 'ordinary-app',
+      windowBounds: { x: 0, y: 0, width: 800, height: 600 },
+    },
+  }, {
+    capabilities: { systemInput: true },
+  });
+
+  const route = routeWindowAction({
+    target: fallback.routeTarget!,
+    action: 'click',
+    evidenceRefs: fallback.evidenceRefs,
+  });
+  assert.equal(route.adapter, 'system-input');
+  assert.equal(route.owner, 'agent-host-adapter');
+  assert.equal(route.guiExecutable, false);
+  assert.deepEqual(route.evidenceRefs, [
+    { kind: 'shared-system-input', ref: 'shared-system-input:legacy.canvas:click' },
+    { kind: 'annotation', ref: 'desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed' },
   ]);
 });

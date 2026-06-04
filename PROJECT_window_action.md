@@ -1,6 +1,6 @@
 # SciForge Window Action 项目协议
 
-最后更新：2026-06-03
+最后更新：2026-06-04
 
 ## 当前目标
 
@@ -17,10 +17,18 @@ agent 拥有 actorCursor
 
 `actorCursor` 以 agent 为单位设计，不以窗口为单位设计。窗口只是 target。
 
+2026-06-04 设计修正：Annotation 的窗口绑定不是执行授权。
+
+- `Screen region` 高置信度自动绑定可以产生 `windowRef` 和 `windowLocalBounds`，但不会自动创建可操作 WindowActionSession。
+- `Screen region` 低置信度默认不绑定窗口，也不能把最高候选当成 action target。
+- `App window` 评论是显式窗口绑定，可作为后续 WindowActionSession 的候选 target，但仍需要用户或 agent flow 显式进入执行阶段。
+- 评论取证不需要每个 app 单独适配；app 专用 adapter 只属于 Action Adapter 层。
+
 ## 不可变规则
 
 - 一个 agent 拥有一个 actorCursor；颜色、名字和状态随 agent 身份移动。
 - WindowActionSession 只管理目标窗口、坐标转换、当前 actor、动作状态和 evidence refs。
+- WindowActionSession 可消费 `manual-bound` 或高置信度 `auto-bound` 的 annotation metadata，但不得消费 `unbound` / low-confidence candidates 作为操作目标。
 - 底层操作方式不限，但必须通过 action adapter：Browser/CDP/Playwright、app-native command、Accessibility/UI Automation/AT-SPI、system input。
 - M1 不把权限系统作为核心阻塞；但必须提供 pause、stop 和 remove window 的产品刹车。
 - GUI 不直接执行 provider action；它只显示 cursor、状态、refs 和用户显式操作入口。
@@ -77,11 +85,25 @@ agent 拥有 actorCursor
 - 验证命令：`node --import tsx --test src/runtime/window-action-session.test.ts`；`node --import tsx --test src/runtime/browser-host-session.test.ts --test-name-pattern "visible action"`。
 - 最终状态：passed，`dispatchWindowAction` 将 route 交给 Agent Host adapter handler，action owner 固定为 Agent Host / adapter，GUI 标记为 `guiExecutable: false`；system input evidence 明确为 `shared-system-input` 且受 bounded refs 限制。
 
+### P1：Annotation Window Binding 消费
+
+- [x] 接收 `App window` 的 `manual-bound` annotation metadata 作为可创建 WindowActionSession 的候选 target。
+- [x] 接收 `Screen region` 的高置信度 `auto-bound` metadata 时，只作为解释性 target；进入操作前仍需显式 action flow。
+- [x] 拒绝把 `unbound`、`blocked`、low-confidence candidates 或纯 screenshot ref 升级为可操作窗口。
+- [x] Action Router 根据 window/app metadata 选择 adapter；没有 app 专用 adapter 时走 Accessibility/UI Automation 或 shared-system-input fallback，并明确标记 evidence。
+
+完成记录（2026-06-04）：
+
+- evidence refs：`desktop-annotation:workspace/workspace-a/session/session-a/annotation/capture-fixed`、`desktop-annotation:workspace/workspace-a/session/session-a/crop/capture-fixed`、`desktop-window:app:paper-reader:window-42`、`window-action-session:annotation-manual-window`、`accessibility-ui-automation:org.sciforge.paper-reader:click`、`shared-system-input:legacy.canvas:click`。
+- 验证命令：`node --import tsx --test src/runtime/window-action-session.test.ts src/shared/annotation-reference-contract.test.ts tests/smoke/smoke-desktop-window-capture.test.ts tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-screen-region-auto-binding.test.ts src/ui/src/app/results/imagePaneModel.test.ts src/ui/src/app/SciForgeApp.desktopAnnotation.test.ts packages/presentation/components/image-evidence-viewer/render.test.tsx`；`node --import tsx --test tests/smoke/smoke-desktop-electron-main.test.ts --test-name-pattern "annotation|preload"`；`node --import tsx --test src/runtime/browser-host-session.test.ts --test-name-pattern "visible action"`；`npm run typecheck --silent`。
+- 最终状态：passed，annotation metadata 只作为 refs-first 候选/解释性 target 保存；创建 WindowActionSession 必须带显式 action flow；`unbound`、`blocked`、low-confidence candidate 和 image-only refs 均 fail closed；router fallback evidence 明确标记为 Accessibility/UI Automation 或 `shared-system-input`。
+
 ## 验收规则
 
 - 文档改动：`git diff --check`。
 - actorCursor 改动：运行 Browser/Window projection focused tests。
 - action router 改动：验证 GUI 不直接执行 action，action owner 在 Agent Host / adapter。
+- annotation window binding 改动：验证 `unbound` 不会创建 WindowActionSession。
 - system input 改动：必须有 pause/stop/remove window 和 bounded evidence。
 
 验收记录（2026-06-03）：
@@ -95,6 +117,15 @@ agent 拥有 actorCursor
 - `npm run typecheck`
 - `git diff --check`
 - 最终状态：passed，focused tests、typecheck 和 diff whitespace check 均已通过。
+
+验收记录（2026-06-04）：
+
+- `node --import tsx --test src/runtime/window-action-session.test.ts src/shared/annotation-reference-contract.test.ts tests/smoke/smoke-desktop-window-capture.test.ts tests/smoke/smoke-desktop-annotation-overlay.test.ts tests/smoke/smoke-desktop-screen-region-auto-binding.test.ts src/ui/src/app/results/imagePaneModel.test.ts src/ui/src/app/SciForgeApp.desktopAnnotation.test.ts packages/presentation/components/image-evidence-viewer/render.test.tsx`
+- `node --import tsx --test tests/smoke/smoke-desktop-electron-main.test.ts --test-name-pattern "annotation|preload"`
+- `node --import tsx --test src/runtime/browser-host-session.test.ts --test-name-pattern "visible action"`
+- `npm run typecheck --silent`
+- `git diff --check`
+- 最终状态：passed，P1 Annotation Window Binding 消费完成并通过 focused tests、typecheck 和 diff whitespace check。
 
 ## 相关文档
 

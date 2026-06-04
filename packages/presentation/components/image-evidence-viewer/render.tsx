@@ -24,6 +24,35 @@ export interface ImageEvidenceBounds {
   height: number;
 }
 
+export interface ImageEvidenceDomTarget {
+  selector?: string;
+  stableSelector?: string;
+  domPath?: string;
+  role?: string;
+  label?: string;
+  textSnippet?: string;
+  rect?: ImageEvidenceBounds;
+}
+
+export type ImageEvidenceWindowBindingStatus = 'auto-bound' | 'manual-bound' | 'unbound' | 'blocked' | string;
+
+export interface ImageEvidenceWindowBindingCandidate {
+  windowRef?: string;
+  appName?: string;
+  bundleId?: string;
+  pid?: number;
+  title?: string;
+  confidence?: number;
+  reason?: string;
+  windowBounds?: ImageEvidenceBounds;
+  windowLocalBounds?: ImageEvidenceBounds;
+}
+
+export interface ImageEvidenceWindowBinding extends ImageEvidenceWindowBindingCandidate {
+  status: ImageEvidenceWindowBindingStatus;
+  candidates?: ImageEvidenceWindowBindingCandidate[];
+}
+
 export interface ImageEvidencePayload {
   sourceKind: ImageEvidenceSourceKind;
   imageRef?: string;
@@ -43,6 +72,16 @@ export interface ImageEvidencePayload {
   redactionRef?: string;
   bounds?: ImageEvidenceBounds;
   cropBounds?: ImageEvidenceBounds;
+  domTarget?: ImageEvidenceDomTarget;
+  selector?: string;
+  domPath?: string;
+  selectedText?: string;
+  screenBounds?: ImageEvidenceBounds;
+  windowBounds?: ImageEvidenceBounds;
+  windowLocalBounds?: ImageEvidenceBounds;
+  displayId?: string | number;
+  scale?: number;
+  windowBinding?: ImageEvidenceWindowBinding;
   status?: ImageEvidenceStatus;
 }
 
@@ -56,6 +95,12 @@ function stringValue(value: unknown) {
 
 function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function scalarValue(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  return undefined;
 }
 
 function stringList(value: unknown) {
@@ -78,8 +123,60 @@ function boundsValue(value: unknown): ImageEvidenceBounds | undefined {
   return { x, y, width, height };
 }
 
+function domTargetValue(value: unknown): ImageEvidenceDomTarget | undefined {
+  if (!isRecord(value)) return undefined;
+  const target: ImageEvidenceDomTarget = {
+    selector: stringValue(value.selector),
+    stableSelector: stringValue(value.stableSelector),
+    domPath: stringValue(value.domPath),
+    role: stringValue(value.role),
+    label: stringValue(value.label),
+    textSnippet: stringValue(value.textSnippet),
+    rect: boundsValue(value.rect),
+  };
+  return Object.values(target).some((entry) => entry !== undefined) ? target : undefined;
+}
+
+function windowBindingCandidateValue(value: unknown): ImageEvidenceWindowBindingCandidate | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    windowRef: stringValue(value.windowRef),
+    appName: stringValue(value.appName),
+    bundleId: stringValue(value.bundleId),
+    pid: numberValue(value.pid),
+    title: stringValue(value.title),
+    confidence: numberValue(value.confidence),
+    reason: stringValue(value.reason),
+    windowBounds: boundsValue(value.windowBounds),
+    windowLocalBounds: boundsValue(value.windowLocalBounds),
+  };
+}
+
+function windowBindingValue(value: unknown): ImageEvidenceWindowBinding | undefined {
+  if (!isRecord(value)) return undefined;
+  const status = stringValue(value.status);
+  if (!status) return undefined;
+  const candidate = windowBindingCandidateValue(value) ?? {};
+  return {
+    ...candidate,
+    status,
+    candidates: Array.isArray(value.candidates)
+      ? value.candidates
+        .map(windowBindingCandidateValue)
+        .filter((item): item is ImageEvidenceWindowBindingCandidate => Boolean(item))
+        .slice(0, 3)
+      : undefined,
+  };
+}
+
 function boundsAttribute(bounds?: ImageEvidenceBounds) {
   return bounds ? `${bounds.x},${bounds.y},${bounds.width},${bounds.height}` : undefined;
+}
+
+function isBoundWindowBinding(
+  binding?: ImageEvidenceWindowBinding,
+): binding is ImageEvidenceWindowBinding & { status: 'auto-bound' | 'manual-bound' } {
+  return binding?.status === 'auto-bound' || binding?.status === 'manual-bound';
 }
 
 function previewUrlForRef(ref?: string) {
@@ -107,6 +204,16 @@ function payloadFromProps(props: UIComponentRendererProps): ImageEvidencePayload
     redactionRef: stringValue(payload.redactionRef),
     bounds: boundsValue(payload.bounds),
     cropBounds: boundsValue(payload.cropBounds),
+    domTarget: domTargetValue(payload.domTarget),
+    selector: stringValue(payload.selector),
+    domPath: stringValue(payload.domPath),
+    selectedText: stringValue(payload.selectedText),
+    screenBounds: boundsValue(payload.screenBounds),
+    windowBounds: boundsValue(payload.windowBounds),
+    windowLocalBounds: boundsValue(payload.windowLocalBounds),
+    displayId: scalarValue(payload.displayId),
+    scale: numberValue(payload.scale),
+    windowBinding: windowBindingValue(payload.windowBinding),
     status: stringValue(payload.status) ?? 'ready',
   };
 }
@@ -141,6 +248,19 @@ function ControlButton(props: { id: string; label: string; event: string; imageR
   );
 }
 
+function MetadataRow(props: { label: string; value?: string | number; dataName?: string }) {
+  if (props.value === undefined || props.value === '') return null;
+  return (
+    <span
+      className="image-evidence-metadata-row"
+      {...(props.dataName ? { [props.dataName]: props.value } : {})}
+    >
+      <span>{props.label}</span>
+      <code>{props.value}</code>
+    </span>
+  );
+}
+
 function cropOverlayStyle(bounds?: ImageEvidenceBounds, cropBounds?: ImageEvidenceBounds): React.CSSProperties | undefined {
   if (!bounds || !cropBounds || bounds.width <= 0 || bounds.height <= 0) return undefined;
   return {
@@ -158,6 +278,15 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
   const title = props.slot.title ?? 'Image evidence';
   const status = imageRef ? payload.status ?? 'ready' : 'missing-ref';
   const cropStyle = cropOverlayStyle(payload.bounds, payload.cropBounds);
+  const windowBinding = payload.windowBinding;
+  const boundWindowRef = isBoundWindowBinding(windowBinding)
+    ? windowBinding.windowRef ?? payload.windowRef
+    : windowBinding
+      ? undefined
+      : payload.windowRef;
+  const windowBounds = windowBinding?.windowBounds ?? payload.windowBounds;
+  const windowLocalBounds = windowBinding?.windowLocalBounds ?? payload.windowLocalBounds;
+  const windowBindingCandidateCount = windowBinding?.candidates?.length;
 
   return (
     <section
@@ -174,12 +303,32 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
       data-created-at={payload.createdAt}
       data-provenance-ref={payload.provenanceRef}
       data-target-ref={payload.targetRef}
-      data-window-ref={payload.windowRef}
+      data-window-ref={boundWindowRef}
       data-browser-session-ref={payload.browserSessionRef}
       data-artifact-ref={payload.artifactRef}
       data-redact-ref={payload.redactionRef}
       data-bounds={boundsAttribute(payload.bounds)}
       data-crop-bounds={boundsAttribute(payload.cropBounds)}
+      data-dom-target={payload.domTarget?.selector}
+      data-selector={payload.selector}
+      data-dom-path={payload.domPath}
+      data-selected-text={payload.selectedText}
+      data-screen-bounds={boundsAttribute(payload.screenBounds)}
+      data-window-bounds={boundsAttribute(windowBounds)}
+      data-window-local-bounds={boundsAttribute(windowLocalBounds)}
+      data-display-id={payload.displayId}
+      data-scale={payload.scale}
+      data-window-binding-status={windowBinding?.status}
+      data-window-binding-confidence={windowBinding?.confidence}
+      data-window-binding-ref={isBoundWindowBinding(windowBinding) ? windowBinding.windowRef : undefined}
+      data-window-binding-candidate-count={windowBindingCandidateCount}
+      data-dom-target-selector={payload.domTarget?.selector}
+      data-dom-target-stable-selector={payload.domTarget?.stableSelector}
+      data-dom-target-path={payload.domTarget?.domPath}
+      data-dom-target-role={payload.domTarget?.role}
+      data-dom-target-label={payload.domTarget?.label}
+      data-dom-target-text={payload.domTarget?.textSnippet}
+      data-dom-target-rect={boundsAttribute(payload.domTarget?.rect)}
     >
       <header className="image-evidence-header">
         <div>
@@ -249,7 +398,7 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
           )
         ))}
         <RefChip label="Target" refValue={payload.targetRef} />
-        <RefChip label="Window" refValue={payload.windowRef} />
+        <RefChip label="Window" refValue={boundWindowRef} />
         <RefChip label="Browser session" refValue={payload.browserSessionRef} />
         <RefChip label="Artifact" refValue={payload.artifactRef} />
         <RefChip label="Redact mask" refValue={payload.redactionRef} />
@@ -260,6 +409,55 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
             refValue={annotationRef}
             dataName="data-annotation-overlay-ref"
           />
+        ))}
+        <MetadataRow label="DOM target" value={payload.domTarget?.selector} dataName="data-dom-target-selector" />
+        <MetadataRow label="DOM stable selector" value={payload.domTarget?.stableSelector} dataName="data-dom-target-stable-selector" />
+        <MetadataRow label="DOM target path" value={payload.domTarget?.domPath} dataName="data-dom-target-path" />
+        <MetadataRow label="DOM target role" value={payload.domTarget?.role} dataName="data-dom-target-role" />
+        <MetadataRow label="DOM target label" value={payload.domTarget?.label} dataName="data-dom-target-label" />
+        <MetadataRow label="DOM target text" value={payload.domTarget?.textSnippet} dataName="data-dom-target-text" />
+        <MetadataRow label="DOM target rect" value={boundsAttribute(payload.domTarget?.rect)} dataName="data-dom-target-rect" />
+        <MetadataRow label="Selector" value={payload.selector} dataName="data-selector" />
+        <MetadataRow label="DOM path" value={payload.domPath} dataName="data-dom-path" />
+        <MetadataRow label="Selected text" value={payload.selectedText} dataName="data-selected-text" />
+        <MetadataRow label="Screen bounds" value={boundsAttribute(payload.screenBounds)} dataName="data-screen-bounds" />
+        <MetadataRow label="Window bounds" value={boundsAttribute(windowBounds)} dataName="data-window-bounds" />
+        <MetadataRow label="Window-local bounds" value={boundsAttribute(windowLocalBounds)} dataName="data-window-local-bounds" />
+        <MetadataRow label="Display" value={payload.displayId} dataName="data-display-id" />
+        <MetadataRow label="Scale" value={payload.scale} dataName="data-scale" />
+        <MetadataRow label="Window binding" value={payload.windowBinding?.status} dataName="data-window-binding-status" />
+        <MetadataRow label="Binding confidence" value={payload.windowBinding?.confidence} dataName="data-window-binding-confidence" />
+        <MetadataRow label="Binding reason" value={payload.windowBinding?.reason} />
+        <MetadataRow label="App" value={payload.windowBinding?.appName} />
+        <MetadataRow label="Bundle" value={payload.windowBinding?.bundleId} />
+        <MetadataRow label="PID" value={payload.windowBinding?.pid} />
+        <MetadataRow label="Title" value={payload.windowBinding?.title} />
+        {isBoundWindowBinding(payload.windowBinding) ? (
+          <RefChip
+            label="Binding window"
+            refValue={payload.windowBinding?.windowRef}
+            dataName="data-window-binding-ref"
+          />
+        ) : null}
+        {payload.windowBinding?.candidates?.map((candidate, index) => (
+          <span
+            key={`${candidate.windowRef ?? candidate.title ?? 'candidate'}-${index}`}
+            className="image-evidence-ref-chip image-evidence-candidate-chip"
+            data-window-binding-candidate-ref={candidate.windowRef}
+            data-window-binding-candidate-confidence={candidate.confidence}
+          >
+            <span>Candidate</span>
+            <code>
+              {[
+                candidate.appName,
+                candidate.title,
+                candidate.confidence === undefined ? undefined : `confidence ${candidate.confidence}`,
+                candidate.reason,
+                candidate.windowBounds ? `window ${boundsAttribute(candidate.windowBounds)}` : undefined,
+                candidate.windowLocalBounds ? `local ${boundsAttribute(candidate.windowLocalBounds)}` : undefined,
+              ].filter(Boolean).join(' | ')}
+            </code>
+          </span>
         ))}
       </footer>
     </section>

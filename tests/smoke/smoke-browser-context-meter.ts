@@ -125,12 +125,8 @@ try {
   await rm(workspace, { recursive: true, force: true });
 }
 
-async function expandWorkbenchChrome(page: Page) {
-  const toggle = page.locator('.workbench-chrome-toggle-main');
-  await toggle.waitFor({ state: 'visible', timeout: 15_000 });
-  if ((await toggle.getAttribute('aria-expanded')) === 'false') {
-    await toggle.click();
-  }
+async function expandWorkbenchChrome(_page: Page) {
+  // Scenario Builder is always visible on desktop after removing workbench-chrome-toggle.
 }
 
 async function newContextMeterPage(browser: Browser) {

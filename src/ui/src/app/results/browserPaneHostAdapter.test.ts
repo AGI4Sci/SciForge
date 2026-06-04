@@ -96,7 +96,11 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
   assert.match(browserWorkbenchSource, /data-browser-last-action-timing/);
   assert.match(browserWorkbenchSource, /data-browser-last-blocked-reason/);
   assert.doesNotMatch(browserWorkbenchSource, /<iframe|<webview|<canvas|<img/);
-  assert.doesNotMatch(browserWorkbenchSource, /browser-workbench-host-keyboard-input|data-browser-host-keyboard-path|browserWorkbenchFramePoint|setPointerCapture/);
+  assert.doesNotMatch(browserWorkbenchSource, /browser-workbench-host-keyboard-input|data-browser-host-keyboard-path|setPointerCapture/);
+  assert.match(browserWorkbenchSource, /function browserWorkbenchFramePoint/);
+  assert.match(browserWorkbenchSource, /onPointerDown/);
+  assert.match(browserWorkbenchSource, /onPointerMove/);
+  assert.match(browserWorkbenchSource, /onPointerUp/);
   assert.doesNotMatch(browserWorkbenchSource, /BrowserWorkbenchLiveTransportHandoff|BrowserWorkbenchFrameRenderer|frameRenderer|liveTransportHandoff/);
   assert.doesNotMatch(browserWorkbenchSource, /canvas-binary|webrtc-data-channel|websocket-binary|host-stream/);
 
@@ -141,11 +145,20 @@ test('browser host adapter promotes Browser annotations as pending composer refs
 
   assert.match(browserWorkbenchSource, /'annotate'/);
   assert.match(browserWorkbenchSource, /canAnnotate\?: boolean/);
-  assert.doesNotMatch(browserWorkbenchSource, /id: 'annotate'|label: 'Annotate'/);
+  assert.match(browserWorkbenchSource, /onAnnotationRequest\?: \(request: BrowserWorkbenchAnnotationRequest\) => void/);
+  assert.match(browserWorkbenchSource, /id: 'annotate'[\s\S]*label: 'Annotate'[\s\S]*kind: 'composer-reference'/);
+  assert.match(browserWorkbenchSource, /data-browser-annotation-editor="true"/);
+  assert.match(browserWorkbenchSource, /selectionKind: browserWorkbenchAnnotationSelectionKind\(selection\)/);
+  assert.match(browserWorkbenchSource, /coordinateSpace: 'browser-viewport'/);
   assert.match(adapterSource, /browserAnnotationComposerReferenceForHostSession/);
   assert.match(adapterSource, /onAnnotationReferenceRequest\?: \(reference: SciForgeReference\) => void/);
-  assert.match(adapterSource, /if \(command\.id === 'annotate'\) \{[\s\S]*browserAnnotationComposerReferenceForHostSession\(hostSessionRef\.current/);
-  assert.match(adapterSource, /bounds: browserAnnotationViewportBounds\(viewportRef\.current\)/);
+  assert.match(adapterSource, /import type \{ BrowserWorkbenchAnnotationRequest \}/);
+  assert.match(adapterSource, /function requestCommand\(command: BrowserWorkbenchCommand\) \{[\s\S]*if \(command\.id === 'annotate'\) \{[\s\S]*return;[\s\S]*\}/);
+  assert.match(adapterSource, /async function requestBrowserAnnotationReference\(selection\?: BrowserWorkbenchAnnotationRequest\): Promise<void> \{[\s\S]*flushBufferedHostActions\(\);[\s\S]*await actionChainRef\.current;[\s\S]*const freshSession = await captureFreshBrowserAnnotationSession\(\);[\s\S]*browserAnnotationComposerReferenceForHostSession\(freshSession/);
+  assert.match(adapterSource, /async function captureFreshBrowserAnnotationSession\(\): Promise<BrowserHostSessionState \| undefined> \{[\s\S]*sendBrowserHostSessionAction\([\s\S]*action: 'state',[\s\S]*capture: 'full',[\s\S]*workspaceWriterBaseUrl: currentSession\.workspaceWriterBaseUrl[\s\S]*\);[\s\S]*hostSessionRef\.current = nextSession;[\s\S]*setHostSession\(nextSession\);[\s\S]*return nextSession;[\s\S]*\}/);
+  assert.match(adapterSource, /bounds: browserAnnotationSelectionBounds\(selection, viewportRef\.current\)/);
+  assert.match(adapterSource, /comment: selection\?\.comment/);
+  assert.match(adapterSource, /onAnnotationRequest: \(selection: BrowserWorkbenchAnnotationRequest\) => \{[\s\S]*void requestBrowserAnnotationReference\(selection\);[\s\S]*\}/);
   assert.match(adapterSource, /onAnnotationReferenceRequest\?\.\(reference\)/);
   assert.match(surfaceSource, /onAnnotationReferenceRequest=\{onExternalReferenceRequest\}/);
   assert.match(rendererSource, /onExternalReferenceRequest\?: \(reference: SciForgeReference\) => void/);

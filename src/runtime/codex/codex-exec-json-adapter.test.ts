@@ -55,10 +55,10 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.equal(argv[(argv.indexOf('--ask-for-approval') ?? -2) + 1], 'never');
   await assert.rejects(access(join(workspace, '.git')));
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.command="node"`));
-  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${GUI_MCP_SERVER_NAME}.args=`) && arg.includes('gui-mcp-server.ts')));
+  assertMcpEntrypointArg(argv, GUI_MCP_SERVER_NAME, 'gui-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${GUI_MCP_SERVER_NAME}.env.${GUI_EXTENSION_STATE_ENV}="${guiStatePath}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
-  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
+  assertMcpEntrypointArg(argv, SUBAGENT_MCP_SERVER_NAME, 'subagent-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.sandbox}="workspace-write"`));
@@ -98,7 +98,7 @@ test('adapter injects local sub-agent MCP server by default when GUI extension i
 
   const argv = spawnCall?.[1] ?? [];
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.command="node"`));
-  assert.ok(argv.some((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`) && arg.includes('subagent-mcp-server.ts')));
+  assertMcpEntrypointArg(argv, SUBAGENT_MCP_SERVER_NAME, 'subagent-mcp-server');
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.workspace}="${workspace}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.profile}="${RUNTIME_PROFILE}"`));
   assert.ok(argv.includes(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.env.${SUBAGENT_MCP_ENV.codexHome}="${spawnCall?.[2].env.CODEX_HOME}"`));
@@ -817,6 +817,12 @@ function booleanField(record: Record<string, unknown>, key: string): boolean {
 
 function assertConfigPair(argv: string[], pair: readonly [string, string]): void {
   assert.ok(argv.some((arg, index) => arg === pair[0] && argv[index + 1] === pair[1]));
+}
+
+function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointName: string): void {
+  const argsConfig = argv.find((arg) => arg.startsWith(`mcp_servers.${serverName}.args=`));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, new RegExp(`${entrypointName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(ts|js)`));
 }
 
 function fakeChild() {

@@ -14,3 +14,15 @@ test('result object focus opens the right pane without implicit composer inserti
   assert.doesNotMatch(source, /composerReferenceForObjectReference/);
   assert.doesNotMatch(source, /resultReferenceRequest|setResultReferenceRequest/);
 });
+
+test('workbench inherits runtime skills and tools without embedded scenario builder overrides', () => {
+  const source = readFileSync(new URL('./SciForgeWorkbench.tsx', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /<ScenarioBuilderPanel\b/);
+  assert.doesNotMatch(source, /from ['"]\.\.\/ScenarioBuilderPanel['"]/);
+  assert.doesNotMatch(source, /workbench-chrome/);
+  assert.doesNotMatch(source, /\['builder', 'Builder'\]/);
+  assert.doesNotMatch(source, /local\.vision-sense|visionSenseToolId/);
+  assert.doesNotMatch(source, /selectedToolIds:\s*Array\.from/);
+  assert.match(source, /scenarioOverride=\{baseRuntimeScenario\}/);
+});

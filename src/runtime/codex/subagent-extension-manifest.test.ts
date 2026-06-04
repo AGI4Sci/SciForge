@@ -38,6 +38,48 @@ test('Runtime sub-agent extension manifest exposes a local delegated-worker MCP 
   assert.equal(JSON.stringify(manifest).includes(workspace), false);
 });
 
+test('Runtime sub-agent extension prefers compiled JS entrypoint without tsx loader', async () => {
+  const workspace = await tempWorkspace();
+  const runtimeDir = join(workspace, 'dist-desktop', 'src', 'runtime', 'codex');
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(runtimeDir, 'subagent-mcp-server.js'), 'export {};\n', 'utf8');
+  await writeFile(join(runtimeDir, 'subagent-mcp-server.ts'), 'export {};\n', 'utf8');
+
+  const injection = await prepareRuntimeSubagentInjection({
+    workspace,
+    profile: 'sciforge-runtime-deepseek',
+    sandbox: 'workspace-write',
+    codexHome: join(workspace, 'codex-home'),
+    runtimeDir,
+  });
+
+  const argsConfig = injection.configArgs.find((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, /subagent-mcp-server\.js/);
+  assert.doesNotMatch(argsConfig, /--import|tsx|subagent-mcp-server\.ts/);
+});
+
+test('Runtime sub-agent extension resolves bundled codex entrypoint from a parent runtime directory', async () => {
+  const workspace = await tempWorkspace();
+  const runtimeDir = join(workspace, 'dist-desktop', 'src', 'runtime');
+  const codexDir = join(runtimeDir, 'codex');
+  await mkdir(codexDir, { recursive: true });
+  await writeFile(join(codexDir, 'subagent-mcp-server.js'), 'export {};\n', 'utf8');
+
+  const injection = await prepareRuntimeSubagentInjection({
+    workspace,
+    profile: 'sciforge-runtime-deepseek',
+    sandbox: 'workspace-write',
+    codexHome: join(workspace, 'codex-home'),
+    runtimeDir,
+  });
+
+  const argsConfig = injection.configArgs.find((arg) => arg.startsWith(`mcp_servers.${SUBAGENT_MCP_SERVER_NAME}.args=`));
+  assert.ok(argsConfig);
+  assert.match(argsConfig, /codex.*subagent-mcp-server\.js/);
+  assert.doesNotMatch(argsConfig, /subagent-mcp-server\.ts|tsx/);
+});
+
 test('Runtime sub-agent tool returns safe refs and bounded PROJECT TODO summary', async () => {
   const workspace = await tempWorkspace();
   const transcriptRoot = join(workspace, 'subagent-transcripts');

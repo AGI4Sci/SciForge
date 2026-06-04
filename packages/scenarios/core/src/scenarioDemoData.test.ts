@@ -4,7 +4,9 @@ import { describe, it } from 'node:test';
 import {
   builtInScenarioDisplayData,
   claimTypeDisplay,
+  demoExecutionUnits,
   demoMessagesByScenario,
+  demoPaperCards,
   demoTimeline,
   evidenceLevelDisplay,
   overviewStats,
@@ -36,13 +38,13 @@ describe('scenario demo data policy', () => {
     }
   });
 
-  it('provides demo messages and timeline items for every built-in scenario', () => {
+  it('does not provide default seed demo messages or timeline items', () => {
     for (const scenarioId of builtInScenarioIds) {
-      assert.ok(demoMessagesByScenario[scenarioId].length > 0, `${scenarioId} needs seeded chat messages`);
-      assert.ok(demoTimeline.some((item) => item.scenario === scenarioId), `${scenarioId} needs a demo timeline item`);
+      assert.deepEqual(demoMessagesByScenario[scenarioId], [], `${scenarioId} should not ship seeded chat messages`);
     }
-    assert.ok(demoTimeline.some((item) => item.action === 'run.running' && /Partial first result/i.test(item.title)));
-    assert.ok(demoTimeline.some((item) => item.action === 'background.finalized' && /Background continuation/i.test(item.title)));
+    assert.deepEqual(demoTimeline, []);
+    assert.deepEqual(demoPaperCards, []);
+    assert.deepEqual(demoExecutionUnits, []);
   });
 
   it('derives overview count from the display scenario list', () => {

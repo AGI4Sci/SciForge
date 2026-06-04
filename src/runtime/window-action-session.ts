@@ -179,7 +179,54 @@ export interface WindowActionDispatchResult {
   session: WindowActionSession;
 }
 
+export type WindowActionAnnotationBindingStatus = 'manual-bound' | 'auto-bound' | 'unbound' | 'blocked';
+export type WindowActionAnnotationCandidateStatus = 'candidate' | 'explanatory-target' | 'blocked';
+
+export interface WindowActionAnnotationCandidateTarget {
+  windowRef: string;
+  windowLocalBounds?: WindowActionBounds;
+  windowBounds?: WindowActionBounds;
+  screenId?: string;
+  scale?: number;
+  app?: WindowActionAppInfo;
+  process?: WindowActionProcessInfo;
+}
+
+export interface WindowActionAnnotationCandidateDecision {
+  status: WindowActionAnnotationCandidateStatus;
+  bindingStatus?: WindowActionAnnotationBindingStatus;
+  reason?: string;
+  requiresExplicitActionFlow: boolean;
+  target?: WindowActionAnnotationCandidateTarget;
+  routeTarget?: WindowActionRouteInput['target'];
+  evidenceRefs: WindowActionEvidenceRef[];
+}
+
+export interface WindowActionAnnotationCandidateOptions {
+  capabilities?: WindowActionRouteInput['target']['capabilities'];
+  highConfidenceThreshold?: number;
+}
+
+export interface WindowActionSessionFromAnnotationOptions extends WindowActionAnnotationCandidateOptions {
+  explicitActionFlowRef?: string;
+  timestamp?: string;
+}
+
+export type WindowActionSessionFromAnnotationResult =
+  | {
+    status: 'created';
+    session: WindowActionSession;
+    candidate: WindowActionAnnotationCandidateDecision;
+  }
+  | {
+    status: 'requires-explicit-action-flow' | 'blocked';
+    reason?: string;
+    candidate: WindowActionAnnotationCandidateDecision;
+    session?: undefined;
+  };
+
 const MAX_WINDOW_ACTION_EVIDENCE_REFS = 8;
+const HIGH_CONFIDENCE_AUTO_BOUND_THRESHOLD = 0.9;
 
 export function createActorCursor(input: {
   agentId: string;
@@ -342,7 +389,20 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
     return route(2, 'app-native-command');
   }
   if (capabilities.accessibility || capabilities.uiAutomation || capabilities.atSpi) {
-    return route(3, 'accessibility-ui-automation');
+    const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
+    return {
+      priority: 3,
+      adapter: 'accessibility-ui-automation',
+      owner: 'agent-host-adapter',
+      guiExecutable: false,
+      evidenceRefs: [
+        { kind: 'accessibility-ui-automation', ref: `accessibility-ui-automation:${appId}:${input.action}` },
+        ...boundedEvidenceRefs(input.evidenceRefs),
+      ].slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+      evidence: {
+        bounded: true,
+      },
+    };
   }
   if (capabilities.systemInput) {
     const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
@@ -397,6 +457,134 @@ export async function dispatchWindowAction(
       status: adapterResult.status ?? input.status,
       evidenceRefs,
     }),
+  };
+}
+
+export function windowActionCandidateFromAnnotationMetadata(
+  metadata: unknown,
+  options: WindowActionAnnotationCandidateOptions = {},
+): WindowActionAnnotationCandidateDecision {
+  const record = recordOrUndefined(metadata);
+  if (!record) return blockedAnnotationCandidate('annotation metadata is missing', []);
+
+  const binding = recordOrUndefined(record.windowBinding);
+  const evidenceRefs = annotationEvidenceRefs(record);
+  if (!binding) return blockedAnnotationCandidate('annotation windowBinding metadata is missing', evidenceRefs);
+
+  const bindingStatus = annotationBindingStatus(binding.status);
+  if (!bindingStatus) return blockedAnnotationCandidate('annotation windowBinding status is unsupported', evidenceRefs);
+
+  if (bindingStatus === 'unbound' || bindingStatus === 'blocked') {
+    return {
+      status: 'blocked',
+      bindingStatus,
+      reason: boundedText(textOrUndefined(binding.reason) ?? `annotation windowBinding is ${bindingStatus}`, 160),
+      requiresExplicitActionFlow: false,
+      evidenceRefs,
+    };
+  }
+
+  const windowRef = boundedRef(binding.windowRef);
+  if (!windowRef) {
+    return {
+      status: 'blocked',
+      bindingStatus,
+      reason: 'annotation windowBinding does not include a valid windowRef',
+      requiresExplicitActionFlow: false,
+      evidenceRefs,
+    };
+  }
+
+  const confidence = numberOrUndefined(binding.confidence);
+  if (
+    bindingStatus === 'auto-bound'
+    && (confidence === undefined || confidence < (options.highConfidenceThreshold ?? HIGH_CONFIDENCE_AUTO_BOUND_THRESHOLD))
+  ) {
+    return {
+      status: 'blocked',
+      bindingStatus,
+      reason: 'annotation auto-bound windowBinding confidence is below the action threshold',
+      requiresExplicitActionFlow: false,
+      evidenceRefs,
+    };
+  }
+
+  const app = appInfo({
+    id: textOrUndefined(binding.bundleId) ?? textOrUndefined(binding.appId),
+    name: textOrUndefined(binding.appName) ?? textOrUndefined(binding.name),
+    kind: appKind(textOrUndefined(binding.appKind) ?? textOrUndefined(binding.kind)),
+  });
+  const process = processInfo({
+    pid: numberOrUndefined(binding.pid),
+    name: textOrUndefined(binding.processName),
+    executablePath: textOrUndefined(binding.executablePath),
+  });
+  const windowBounds = annotationBounds(binding.windowBounds);
+  const windowLocalBounds = annotationBounds(binding.windowLocalBounds);
+  const screenId = textOrUndefined(binding.screenId);
+  const scale = numberOrUndefined(binding.scale);
+  const target: WindowActionAnnotationCandidateTarget = {
+    windowRef,
+    ...(Object.keys(app).length ? { app } : {}),
+    ...(Object.keys(process).length ? { process } : {}),
+    ...(windowBounds ? { windowBounds } : {}),
+    ...(windowLocalBounds ? { windowLocalBounds } : {}),
+    ...(screenId ? { screenId: safeIdentifier(screenId, 'screen') } : {}),
+    ...(scale !== undefined ? { scale } : {}),
+  };
+  const routeTarget = {
+    ...(target.app ? { app: target.app } : {}),
+    ...(options.capabilities ? { capabilities: options.capabilities } : {}),
+  };
+
+  return {
+    status: bindingStatus === 'manual-bound' ? 'candidate' : 'explanatory-target',
+    bindingStatus,
+    reason: boundedText(textOrUndefined(binding.reason) ?? '', 160) || undefined,
+    requiresExplicitActionFlow: true,
+    target,
+    routeTarget,
+    evidenceRefs,
+  };
+}
+
+export function createWindowActionSessionFromAnnotationMetadata(
+  metadata: unknown,
+  options: WindowActionSessionFromAnnotationOptions = {},
+): WindowActionSessionFromAnnotationResult {
+  const candidate = windowActionCandidateFromAnnotationMetadata(metadata, options);
+  if (!candidate.target) {
+    return {
+      status: 'blocked',
+      reason: candidate.reason,
+      candidate,
+    };
+  }
+  if (!boundedRef(options.explicitActionFlowRef)) {
+    return {
+      status: 'requires-explicit-action-flow',
+      reason: 'annotation window binding requires an explicit WindowActionSession action flow',
+      candidate,
+    };
+  }
+
+  const session = createWindowActionSession({
+    windowRef: candidate.target.windowRef,
+    process: candidate.target.process,
+    app: candidate.target.app,
+    bounds: candidate.target.windowBounds,
+    scale: candidate.target.scale,
+    screenId: candidate.target.screenId,
+    evidenceRefs: [
+      ...candidate.evidenceRefs,
+      { kind: 'action-flow', ref: options.explicitActionFlowRef },
+    ],
+    timestamp: options.timestamp,
+  });
+  return {
+    status: 'created',
+    session,
+    candidate,
   };
 }
 
@@ -525,6 +713,48 @@ function boundedEvidenceRefs(value: unknown[] | undefined): WindowActionEvidence
   })).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS);
 }
 
+function annotationEvidenceRefs(record: Record<string, unknown>): WindowActionEvidenceRef[] {
+  return boundedEvidenceRefs([
+    { kind: 'annotation', ref: record.annotationRef },
+    { kind: 'screenshot', ref: record.screenshotRef },
+    { kind: 'crop', ref: record.cropRef },
+    { kind: 'image', ref: record.imageRef },
+    ...(Array.isArray(record.evidenceRefs) ? record.evidenceRefs : []),
+  ]);
+}
+
+function blockedAnnotationCandidate(
+  reason: string,
+  evidenceRefs: WindowActionEvidenceRef[],
+): WindowActionAnnotationCandidateDecision {
+  return {
+    status: 'blocked',
+    reason,
+    requiresExplicitActionFlow: false,
+    evidenceRefs,
+  };
+}
+
+function annotationBindingStatus(value: unknown): WindowActionAnnotationBindingStatus | undefined {
+  return value === 'manual-bound'
+    || value === 'auto-bound'
+    || value === 'unbound'
+    || value === 'blocked'
+    ? value
+    : undefined;
+}
+
+function annotationBounds(value: unknown): WindowActionBounds | undefined {
+  const record = recordOrUndefined(value);
+  if (!record) return undefined;
+  return bounds({
+    x: numberOrUndefined(record.x) ?? 0,
+    y: numberOrUndefined(record.y) ?? 0,
+    width: numberOrUndefined(record.width) ?? 0,
+    height: numberOrUndefined(record.height) ?? 0,
+  });
+}
+
 function uniqueEvidenceRefs(values: Array<WindowActionEvidenceRef | undefined>): WindowActionEvidenceRef[] {
   const seen = new Set<string>();
   const output: WindowActionEvidenceRef[] = [];
@@ -536,6 +766,21 @@ function uniqueEvidenceRefs(values: Array<WindowActionEvidenceRef | undefined>):
     output.push(value);
   }
   return output;
+}
+
+function recordOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function textOrUndefined(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function numberOrUndefined(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Number(value);
 }
 
 function boundedRef(value: unknown) {
