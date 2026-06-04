@@ -1,4 +1,4 @@
-# Screen Annotation / Image Evidence / Window Action 架构
+# Screen Annotation / Image Evidence / Visible Window Action 架构
 
 最后更新：2026-06-04
 
@@ -13,19 +13,24 @@
   -> 用户选择 Annotate 模式：SciForge page / Screen region / App window
   -> SciForge 生成 annotation/image/target refs
   -> refs 作为 pending context 随下一条用户消息提交
-  -> agent 读取 refs；需要执行时再进入 Browser Pane 或 WindowActionSession
-  -> 右侧 Image / Evidence Pane 展示图片证据和注释
+  -> Agent Host 读取 refs 和用户意图
+  -> 如果是回答/解释：直接使用 refs 作为上下文
+  -> 如果是“把这里改成 X”：自动进入或复用 WindowActionSession
+  -> actorCursor 可见地操作真实窗口
+  -> 右侧 Image / Evidence Pane 展示图片证据、注释和 before/after evidence
 ```
 
-右侧旧 `Screen` pane 升级为通用 Image / Evidence Pane。它只展示图片、crop、annotation 和 provenance，不再表示远程桌面、虚拟屏幕或 live control surface。
+右侧旧 `Screen` pane 升级为通用 Image / Evidence Pane。它只展示图片、crop、annotation、provenance 和 action evidence，不再表示远程桌面、虚拟屏幕或 live control surface。
 
 ## 三个产品模块
 
 | 模块 | 目标 | 不做 |
 | --- | --- | --- |
-| Global Annotation | 在真实窗口/屏幕上框选、点选、评论，生成 pending context | 不自动触发 agent、不生成任务队列 |
-| Image / Evidence Pane | 展示截图、crop、Browser evidence、artifact preview 和 annotation overlay | 不执行鼠标键盘、不拥有 session、不判定完成 |
-| Window Action Session | 让 agent 以 actorCursor 操作用户加入的真实窗口 | 不承诺隔离虚拟显示器、不伪装多只 OS 鼠标 |
+| Annotation | 在真实窗口/屏幕上框选、点选、评论，生成 pending context 和 target binding | 不执行 action、不拥有输入 adapter、不判定完成 |
+| Image / Evidence Pane | 展示截图、crop、Browser evidence、artifact preview、annotation overlay 和 before/after evidence | 不执行鼠标键盘、不拥有 session、不判定完成 |
+| Window Action Session | 让 agent 以 actorCursor 和 scoped input adapter 操作真实窗口 | 不承诺隔离虚拟显示器、不伪装多只 OS 鼠标 |
+
+Annotation 和 Computer Use 必须分开写。Annotation 只负责上下文和绑定；Computer Use 只作为 Window Action 的 action/input adapter 来源之一。自动进入 Window Action 由 Agent Host 决定，不由 Annotation 自己执行。
 
 ## Annotation Modes
 
@@ -49,14 +54,14 @@ User starts Annotate
   -> create annotationRef + imageRef + targetRef
   -> attach pending context to composer
   -> user sends message
-  -> agent reads refs and acts
+  -> Agent Host reads refs and intent
 ```
 
-采用 Codex 策略：标注是下一条用户消息的上下文，不是自动任务。
+采用 Codex 策略：标注是下一条用户消息的上下文，不是自动任务队列。区别在于：如果下一条用户消息表达了明确修改意图，Agent Host 可以自动进入 Window Action，不再需要先问“是否允许 agent 操作这个窗口”。
 
 ## Target Binding
 
-目标绑定是给屏幕选区附加“它属于哪个窗口”的解释信息，不是另一套截图方式。
+目标绑定是给屏幕选区附加“它属于哪个窗口”的解释信息，不是另一套截图方式，也不是 Annotation 自己的执行授权。
 
 ### 自动绑定
 
@@ -69,11 +74,11 @@ User starts Annotate
 - 第一候选明显强于第二候选，建议重叠面积差 `>= 20%`。
 - 排除 SciForge 主窗口、overlay、菜单栏、Dock、不可见窗口、极小窗口和透明/辅助窗口。
 
-若低置信度、多窗口冲突、选区落在桌面或无法枚举窗口，默认不绑定，仍保存纯 `screen-region` 证据。候选窗口可以作为 diagnostics/provenance 保存，但不进入 active binding。
+若低置信度、多窗口冲突、选区落在桌面或无法枚举窗口，默认不绑定，仍保存纯 `screen-region` 证据。候选窗口可以作为 diagnostics/provenance 保存，但不进入 active binding，也不能自动创建 WindowActionSession。
 
 ### 手动绑定
 
-`App window` 是显式手动绑定：用户先选窗口，再在该窗口内框选区域。该模式必须产出 `windowRef`、`windowBounds`、`windowLocalBounds`、app/process/title metadata。它适合后续 WindowActionSession，但不要求当前评论阶段已经能操作该 app。
+`App window` 是显式手动绑定：用户先选窗口，再在该窗口内框选区域。该模式必须产出 `windowRef`、`windowBounds`、`windowLocalBounds`、app/process/title metadata。它适合后续 WindowActionSession；当下一条用户消息是修改意图时，Agent Host 可以自动创建或复用对应 WindowActionSession。
 
 两者共用 annotation schema：
 
@@ -109,21 +114,82 @@ windowLocalBounds?
 candidates?
 ```
 
-## Desktop Overlay
+## Automatic Window Action
 
-Desktop host 使用透明、置顶 overlay 进入全局评论模式。
+当用户把 annotation refs 带入下一条消息，并表达修改意图时，Agent Host 自动进入 Window Action：
 
-要求：
+```text
+annotationRef + user mutating intent
+  -> resolve targetBinding
+  -> if manual-bound or high-confidence auto-bound:
+       create/reuse WindowActionSession(windowRef)
+       assign actorCursor(agentSessionId)
+       attach ScopedInputAdapter(agentSessionId)
+       dispatch action through Action Adapter
+       write before/after evidence and action timeline
+  -> if unbound/blocked/low-confidence:
+       use annotation as context only, or ask for a target window when needed
+```
 
-- overlay 可进入/退出评论模式。
-- 支持框选、取消、重选、提交。
-- `Screen region` 使用 overlay 捕获准确 `screenBounds`，再用 ScreenCaptureKit 或 `screencapture -R` 捕获区域。
-- `App window` 使用 overlay 或平台窗口选择器先绑定窗口，再限制选区在窗口内。
-- 捕获 crop 时避免把 overlay 自己截进图片。
-- 默认只捕获用户选择的窗口或区域。
-- 输出 refs、hash、尺寸、bounds、source，不输出 raw base64 到主 payload。
+这条规则只取消“进入 Window Action 前的确认”。当前 M1 不做权限系统或高风险审批；agent 可以自由操作目标窗口。产品必须保留用户可见的 pause、stop current session、remove window，以及 action timeline/evidence，作为第一阶段的控制面。
 
-macOS M1 优先使用 ScreenCaptureKit 做窗口/屏幕捕获；`screencapture -R` 可以作为选区截图 fallback。`screencapture -i` 不适合作为主路径，因为它通常不可靠返回用户选区的 `screenBounds`，无法支撑自动窗口绑定。
+## Window Action Session
+
+用户可以把真实应用窗口加入 SciForge，或者由 bound annotation + 修改意图自动创建 WindowActionSession。agent 可以用自己的 actorCursor 操作该窗口。
+
+`actorCursor` 以 agent 为单位设计：
+
+```text
+agentSession
+  -> actorCursor(color, label, status)
+  -> ScopedInputAdapter(session-local input queue and lease)
+  -> enters target window
+  -> performs action through adapter
+  -> leaves or switches target
+```
+
+WindowActionSession 管理：
+
+- `windowRef`
+- app/process metadata
+- bounds / scale / screen id
+- active actor cursors
+- scoped input adapter refs
+- action events
+- focus lease events
+- pause / stop / remove window
+- before/after evidence refs
+
+## Scoped Input Adapter
+
+每个 agent 会话都有自己的 `ScopedInputAdapter`。它是逻辑输入通道，不承诺每个 agent 都有一套真实 OS 级独立鼠标键盘。
+
+推荐字段：
+
+```text
+scopedInputAdapterRef
+agentSessionId
+actorCursorRef
+targetWindowRef
+inputQueueRef
+inputLeaseRef
+focusLeaseRef?
+adapterKind
+controlMode
+lastActionRef
+```
+
+底层能力按优先级选择：
+
+```text
+1. Browser/CDP/Playwright/WebContentsView action
+2. App-native command 或 extension command
+3. Terminal / PTY command
+4. Accessibility/UI Automation/AT-SPI
+5. focused system input
+```
+
+非抢焦点 adapter 可以并行。凡是需要真实窗口置前、系统键盘、系统 pointer、菜单栏或 IME 的动作，进入全局 `FocusLease`，串行执行。窗口可以弹出在显示器上，也可以放到后层；当动作需要焦点时允许短暂置前或接管焦点，UI 必须显示当前 agent、目标窗口和动作状态。
 
 ## Image / Evidence Pane
 
@@ -138,6 +204,7 @@ Image pane 是右侧结果栏的通用图片展示区。
 - screen region capture
 - artifact preview image
 - replay/history image
+- WindowActionSession before/after evidence
 
 它提供：
 
@@ -146,6 +213,7 @@ Image pane 是右侧结果栏的通用图片展示区。
 - crop bounds 高亮
 - provenance
 - copy ref / open original / download
+- action timeline evidence link
 
 它不提供：
 
@@ -153,45 +221,6 @@ Image pane 是右侧结果栏的通用图片展示区。
 - provider action execution
 - completion 判断
 - 隔离性声明
-
-## Window Action Session
-
-用户可以把真实应用窗口加入 SciForge。agent 可以用自己的 actorCursor 操作该窗口。WindowActionSession 可以消费 `App window` 评论或高置信度自动绑定产生的 `windowRef`，但不会从纯 `screen-region` 自动推断可操作目标。
-
-`actorCursor` 以 agent 为单位设计：
-
-```text
-agent
-  -> actorCursor(color, label, status)
-  -> enters target window
-  -> performs action through adapter
-  -> leaves or switches target
-```
-
-WindowActionSession 管理：
-
-- `windowRef`
-- app/process metadata
-- bounds / scale / screen id
-- active actor cursors
-- action events
-- pause / stop / remove window
-- evidence refs
-
-## Action Adapter
-
-底层执行方式按能力选择：
-
-```text
-1. Browser/CDP/Playwright/WebContentsView action
-2. App-native command 或 extension command
-3. Accessibility/UI Automation/AT-SPI
-4. 受控 system input
-```
-
-产品不承诺每个窗口真的有独立 OS 鼠标键盘。产品承诺是：用户看到哪个 agent 正在哪个窗口上执行什么。
-
-M1 暂不做复杂权限系统；但必须提供 pause、stop current session、remove window。
 
 ## Evidence 规则
 
@@ -206,6 +235,7 @@ M1 暂不做复杂权限系统；但必须提供 pause、stop current session、
 - target summary
 - createdAt
 - bounded diagnostics
+- action status summary
 
 禁止进入主 payload：
 
@@ -216,15 +246,27 @@ M1 暂不做复杂权限系统；但必须提供 pause、stop current session、
 - 无关窗口内容
 - 未经用户选择的全屏敏感内容
 
+每次 mutating action 至少产生：
+
+- target window/session refs
+- actor cursor ref
+- scoped input adapter ref
+- action event ref
+- before/after evidence refs
+- focus lease ref when focus takeover is used
+- result/evidence timeline refs
+
 ## 验收
 
 - Global Annotate 能在真实 Desktop app 窗口上产生 annotation/image refs。
 - `Screen region` 能在任意可见屏幕区域上产生 annotation/image refs，并在高置信度时自动绑定窗口。
-- 低置信度自动绑定默认不绑定窗口，不弹窗打断用户。
+- 低置信度自动绑定默认不绑定窗口，不弹窗。
 - `App window` 能显式选择窗口并产生 `windowRef` + `windowLocalBounds`。
 - annotation 作为 pending context 随下一条用户消息提交。
-- Image pane 能打开 annotation crop 并显示 provenance。
-- agent actorCursor 能以 agent 身份投影到 Browser Pane 或 WindowActionSession。
+- 用户说“把这里改成 X”时，manual-bound 或高置信度 auto-bound annotation 自动进入或复用 WindowActionSession。
+- 每个 agent session 有独立 actorCursor 和 ScopedInputAdapter。
+- focus-required action 通过全局 FocusLease 串行执行，并在 UI/evidence 中可见。
+- Image pane 能打开 annotation crop、before/after evidence 并显示 provenance。
 - 旧隔离虚拟屏幕路线不再出现在 active PROJECT 任务中。
 
 ## 任务入口

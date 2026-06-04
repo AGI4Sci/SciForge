@@ -13,9 +13,10 @@ Annotation 是 Browser Pane 和 Global Annotate 共用的标注系统。它采�
   -> 用户发送消息
   -> annotation refs 随本轮 user message 进入 thread
   -> agent 基于这些 refs 回答、改代码或继续操作
+  -> 如果是“把这里改成 X”，Agent Host 自动进入 WindowActionSession
 ```
 
-标注不自动生成任务，不自动触发 agent，不维护独立 TODO 队列。
+标注不自动生成任务，不维护独立 TODO 队列，也不自己执行 action。它只产生 refs-first context 和 target binding。自动进入 WindowActionSession 由 Agent Host 在读取下一条用户消息时触发。
 
 2026-06-04 设计修正：顶部 `Annotate` 必须明确区分三种评论模式：
 
@@ -31,6 +32,7 @@ Annotation 是 Browser Pane 和 Global Annotate 共用的标注系统。它采�
 - annotation 大对象必须 refs-first；不得把 raw screenshot/base64/DOM/provider payload 放入主消息。
 - 标注目标可以是 Browser page、真实 app window、屏幕区域或 image evidence。
 - 评论取证不需要为每个 app 写专用适配；app 专用逻辑只属于后续 Action Adapter。
+- `manual-bound` 或高置信度 `auto-bound` annotation + 修改意图可以自动进入 WindowActionSession；Annotation 本身不拥有 input adapter，也不执行 provider action。
 - `Screen region` 的窗口绑定是增强 metadata，不是成功前提；低置信度默认不绑定。
 - `App window` 是显式窗口绑定模式，不能混同为对 screen-region 的低置信度猜测。
 - `screencapture -i` 不适合作为主路径，因为缺少可靠 `screenBounds`；M1 主路径应由 SciForge overlay 获取坐标，再使用 ScreenCaptureKit 或 `screencapture -R` 取图。
