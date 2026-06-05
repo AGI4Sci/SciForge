@@ -77,6 +77,74 @@ test('right pane surface adapter routes Image Evidence presentation without live
   assert.doesNotMatch(html, /virtual-app-screen|VirtualAppScreen|live-surface|input-intent|attachVirtualAppScreen|data:image|base64|providerRoute|executorLease/);
 });
 
+test('right pane image evidence host supports contained preview and image-click original opening', () => {
+  const adapterSource = readFileSync(new URL('./imagePaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');
+  const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
+    ...baseProps(),
+    resultTab: 'image' as never,
+    imageEvidencePayload: {
+      status: 'ready',
+      sourceKind: 'artifact',
+      imageRef: '.sciforge/uploads/session-a/oversized-photo.png',
+      width: 3022,
+      height: 1954,
+    },
+  } as RightPaneActiveSurfaceProps & Record<string, unknown>));
+
+  assert.match(html, /class="image-evidence-stage"[^>]*data-image-fit="contain"/);
+  assert.match(html, /class="image-evidence-preview-button"[^>]*data-view-control="open-original"/);
+  assert.match(adapterSource, /closest<HTMLElement>\('\[data-view-control\]'\)/);
+  assert.match(adapterSource, /setOriginalImagePreview/);
+  assert.match(adapterSource, /role="dialog"/);
+  assert.match(adapterSource, /Close image preview/);
+  assert.match(adapterSource, /window\.sciforgeDesktop\?\.openExternal/);
+  assert.match(styles, /\.image-evidence-image\s*\{[\s\S]*max-width:\s*100%;[\s\S]*max-height:/);
+  assert.match(styles, /\.image-evidence-modal\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.image-evidence-preview-button\s*\{[\s\S]*cursor:\s*zoom-in;/);
+});
+
+test('right pane image evidence toolbar implements viewer controls and polished icon styling', () => {
+  const adapterSource = readFileSync(new URL('./imagePaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const renderSource = readFileSync(new URL('../../../../../packages/presentation/components/image-evidence-viewer/render.tsx', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');
+  const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
+    ...baseProps(),
+    resultTab: 'image' as never,
+    imageEvidencePayload: {
+      status: 'ready',
+      sourceKind: 'artifact',
+      imageRef: '.sciforge/uploads/session-a/oversized-photo.png',
+      provenanceRef: '.sciforge/uploads/session-a/provenance.json',
+      width: 3022,
+      height: 1954,
+    },
+  } as RightPaneActiveSurfaceProps & Record<string, unknown>));
+
+  assert.match(html, /data-image-view-mode="fit"/);
+  assert.match(html, /style="--image-evidence-scale:1;--image-evidence-pan-x:0px;--image-evidence-pan-y:0px"/);
+  assert.match(html, /class="image-evidence-footer"[^>]*data-image-provenance-panel/);
+  assert.match(adapterSource, /setImageProvenanceOpen/);
+  assert.match(adapterSource, /scrollIntoView\(\{ block: 'nearest'/);
+  assert.match(adapterSource, /function nextImageEvidenceViewState/);
+  assert.match(adapterSource, /case 'zoom-in'/);
+  assert.match(adapterSource, /case 'zoom-out'/);
+  assert.match(adapterSource, /case 'fit'/);
+  assert.match(adapterSource, /case 'actual-size'/);
+  assert.match(adapterSource, /case 'pan'/);
+  assert.match(adapterSource, /onPointerDown=\{handleImageEvidencePointerDown\}/);
+  assert.match(adapterSource, /onPointerMove=\{handleImageEvidencePointerMove\}/);
+  assert.match(renderSource, /data-control-style="icon-button"/);
+  assert.match(renderSource, /const Icon = props\.icon/);
+  assert.match(renderSource, /<Icon size=\{14\} aria-hidden/);
+  assert.match(styles, /\.image-evidence-toolbar\s*\{[\s\S]*border-radius:\s*7px;[\s\S]*background:/);
+  assert.match(styles, /\.image-evidence-control\s*\{[\s\S]*display:\s*inline-flex;[\s\S]*border-radius:\s*6px;/);
+  assert.match(styles, /\.image-evidence-control svg\s*\{/);
+  assert.match(styles, /\.right-pane-image-evidence-surface\[data-image-view-mode='pan'\]\s+\.image-evidence-preview-button/);
+  assert.match(styles, /\.image-evidence-footer\s*\{[\s\S]*max-height:/);
+  assert.match(styles, /\.right-pane-image-evidence-surface\[data-image-provenance-expanded='true'\]\s+\.image-evidence-control\[data-view-control='provenance'\]/);
+});
+
 test('right pane surface adapter routes Browser presentation while preserving command boundary props', () => {
   const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
     ...baseProps(),
@@ -238,7 +306,7 @@ test('right pane empty workspace can be rendered independently by locale', () =>
   const html = renderToStaticMarkup(createElement(RightPaneEmptyWorkspace, { locale: 'zh-CN' }));
 
   assert.match(html, /没有打开的页面/);
-  assert.match(html, /Results、Browser、Image \/ Evidence、Terminal、Files/);
+  assert.match(html, /Results、Browser、Image、Terminal、Files/);
 });
 
 function baseProps(): RightPaneActiveSurfaceProps {

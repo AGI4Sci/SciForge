@@ -260,6 +260,44 @@ test('textual ask refs route through vision translator before text reasoner', as
   }
 });
 
+test('textual ask refs route through vision translator when prefixed by continuation guidance', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-prefixed-textual-ref-'));
+  await mkdir(join(workspaceRoot, '.sciforge/uploads/session-a'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.sciforge/uploads/session-a/panel.png'), Buffer.from('image-bytes'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the prefixed image shows a macOS desktop.'),
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The prefixed image is visible.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [
+          'Continue the active Runtime Codex session. Interpret relative references against the previous turn.\n\nask --ref ".sciforge/uploads/session-a/panel.png" "Describe it."',
+        ],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, 'The prefixed image is visible.');
+    assert.equal(calls[0]?.body.model, 'vision-model');
+    assert.equal(calls[1]?.body.model, 'text-model');
+  } finally {
+    await server.close();
+  }
+});
+
 test('unsafe textual refs are not routed or leaked upstream', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-unsafe-textual-ref-'));
   const calls: CapturedFetch[] = [];
@@ -511,6 +549,21 @@ test('streaming vision responses expose only the final answer events', async () 
     const body = await response.text();
     assert.match(body, /Only the final answer/);
     assert.doesNotMatch(body, /private internal observation|data:image|base64/i);
+    const events = parseSseEvents(body);
+    const eventTypes = events.map((event) => event.type);
+    assert.deepEqual(eventTypes, [
+      'response.created',
+      'response.output_item.added',
+      'response.content_part.added',
+      'response.output_text.delta',
+      'response.output_text.done',
+      'response.content_part.done',
+      'response.output_item.done',
+      'response.completed',
+    ]);
+    const messageItemId = events.find((event) => event.type === 'response.output_item.added')?.item?.id;
+    assert.equal(events.find((event) => event.type === 'response.output_text.delta')?.item_id, messageItemId);
+    assert.equal(events.find((event) => event.type === 'response.content_part.added')?.item_id, messageItemId);
   } finally {
     await server.close();
   }
@@ -749,6 +802,14 @@ function captureFetch(calls: CapturedFetch[], responses: Response[]): typeof fet
     assert.ok(response, `Unexpected fetch call to ${url}`);
     return response;
   };
+}
+
+function parseSseEvents(body: string): Array<Record<string, any>> {
+  return body
+    .split(/\n\n+/)
+    .map((chunk) => chunk.split(/\n/).find((line) => line.startsWith('data: '))?.slice('data: '.length))
+    .filter((payload): payload is string => Boolean(payload) && payload !== '[DONE]')
+    .map((payload) => JSON.parse(payload) as Record<string, any>);
 }
 
 function chatCompletion(id: string, content: string) {

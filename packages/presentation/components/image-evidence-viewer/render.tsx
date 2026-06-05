@@ -1,4 +1,5 @@
 import React from 'react';
+import { Copy, Download, ExternalLink, Info, Maximize2, Move, Scan, ZoomIn, ZoomOut, type LucideIcon } from 'lucide-react';
 import type { UIComponentRendererProps } from '@sciforge-ui/runtime-contract';
 import {
   IMAGE_EVIDENCE_VIEWER_COMPONENT_ID,
@@ -179,8 +180,16 @@ function isBoundWindowBinding(
   return binding?.status === 'auto-bound' || binding?.status === 'manual-bound';
 }
 
-function previewUrlForRef(ref?: string) {
-  return ref ? `/api/sciforge/preview/raw?ref=${encodeURIComponent(ref)}` : undefined;
+function previewUrlForRef(ref?: string, config?: unknown) {
+  if (!ref) return undefined;
+  const params = new URLSearchParams();
+  params.set('ref', ref);
+  const previewConfig = isRecord(config) ? config : {};
+  const workspacePath = stringValue(previewConfig.workspacePath)?.trim();
+  if (workspacePath) params.set('workspacePath', workspacePath);
+  const workspaceWriterBaseUrl = stringValue(previewConfig.workspaceWriterBaseUrl)?.trim().replace(/\/+$/, '');
+  const path = `/api/sciforge/preview/raw?${params.toString()}`;
+  return workspaceWriterBaseUrl ? `${workspaceWriterBaseUrl}${path}` : path;
 }
 
 function payloadFromProps(props: UIComponentRendererProps): ImageEvidencePayload {
@@ -231,19 +240,24 @@ function RefChip(props: { label: string; refValue?: string; className?: string; 
   );
 }
 
-function ControlButton(props: { id: string; label: string; event: string; imageRef?: string; imageUrl?: string; disabled?: boolean }) {
+function ControlButton(props: { id: string; label: string; event: string; icon: LucideIcon; imageRef?: string; imageUrl?: string; disabled?: boolean }) {
+  const Icon = props.icon;
   return (
     <button
       type="button"
       className="image-evidence-control"
+      title={props.label}
+      aria-label={props.label}
       data-view-control={props.id}
       data-event={props.event}
       data-control-execution="host-policy"
+      data-control-style="icon-button"
       data-image-ref={props.imageRef}
       data-image-url={props.imageUrl}
       disabled={props.disabled}
     >
-      {props.label}
+      <Icon size={14} aria-hidden />
+      <span>{props.label}</span>
     </button>
   );
 }
@@ -274,7 +288,8 @@ function cropOverlayStyle(bounds?: ImageEvidenceBounds, cropBounds?: ImageEviden
 export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
   const payload = payloadFromProps(props);
   const imageRef = payload.imageRef ?? payload.ref;
-  const imageUrl = previewUrlForRef(imageRef);
+  const imageUrl = previewUrlForRef(imageRef, props.config);
+  const imageFit = 'contain';
   const title = props.slot.title ?? 'Image evidence';
   const status = imageRef ? payload.status ?? 'ready' : 'missing-ref';
   const cropStyle = cropOverlayStyle(payload.bounds, payload.cropBounds);
@@ -339,29 +354,41 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
       </header>
 
       <nav className="image-evidence-toolbar" aria-label="Image evidence controls">
-        <ControlButton id="zoom-in" label="Zoom in" event="image-view-control" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="zoom-out" label="Zoom out" event="image-view-control" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="pan" label="Pan" event="image-view-control" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="fit" label="Fit" event="image-view-control" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="actual-size" label="Actual size" event="image-view-control" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="copy-ref" label="Copy ref" event="copy-ref-request" imageRef={imageRef} disabled={!imageRef} />
-        <ControlButton id="open-original" label="Open original" event="open-original-request" imageRef={imageRef} imageUrl={imageUrl} disabled={!imageRef} />
-        <ControlButton id="download-image" label="Download image" event="download-image-request" imageRef={imageRef} imageUrl={imageUrl} disabled={!imageRef} />
-        <ControlButton id="provenance" label="Provenance" event="show-provenance-request" imageRef={imageRef} disabled={!payload.provenanceRef && !payload.provenanceRefs?.length} />
+        <ControlButton id="zoom-in" label="Zoom in" event="image-view-control" icon={ZoomIn} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="zoom-out" label="Zoom out" event="image-view-control" icon={ZoomOut} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="pan" label="Pan" event="image-view-control" icon={Move} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="fit" label="Fit" event="image-view-control" icon={Scan} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="actual-size" label="Actual size" event="image-view-control" icon={Maximize2} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="copy-ref" label="Copy ref" event="copy-ref-request" icon={Copy} imageRef={imageRef} disabled={!imageRef} />
+        <ControlButton id="open-original" label="Open original" event="open-original-request" icon={ExternalLink} imageRef={imageRef} imageUrl={imageUrl} disabled={!imageRef} />
+        <ControlButton id="download-image" label="Download image" event="download-image-request" icon={Download} imageRef={imageRef} imageUrl={imageUrl} disabled={!imageRef} />
+        <ControlButton id="provenance" label="Provenance" event="show-provenance-request" icon={Info} imageRef={imageRef} disabled={!payload.provenanceRef && !payload.provenanceRefs?.length} />
       </nav>
 
-      <div className="image-evidence-stage">
+      <div className="image-evidence-stage" data-image-fit={imageFit}>
         {imageUrl ? (
-          <figure className="image-evidence-frame">
-            <img
-              className="image-evidence-image"
-              src={imageUrl}
-              alt="Image evidence preview"
-              width={payload.width}
-              height={payload.height}
+          <figure className="image-evidence-frame" data-image-fit={imageFit}>
+            <button
+              type="button"
+              className="image-evidence-preview-button"
+              data-view-control="open-original"
+              data-event="open-original-request"
+              data-control-execution="host-policy"
               data-image-ref={imageRef}
-              data-source-kind={payload.sourceKind}
-            />
+              data-image-url={imageUrl}
+              aria-label="Open original image"
+            >
+              <img
+                className="image-evidence-image"
+                src={imageUrl}
+                alt="Image evidence preview"
+                width={payload.width}
+                height={payload.height}
+                data-image-ref={imageRef}
+                data-source-kind={payload.sourceKind}
+                data-image-fit={imageFit}
+              />
+            </button>
             {payload.annotationRefs?.map((annotationRef) => (
               <span
                 key={annotationRef}
@@ -384,7 +411,7 @@ export function renderImageEvidenceViewer(props: UIComponentRendererProps) {
         )}
       </div>
 
-      <footer className="image-evidence-footer">
+      <footer className="image-evidence-footer" data-image-provenance-panel>
         <RefChip label="Image" refValue={imageRef} />
         <RefChip label="Provenance" refValue={payload.provenanceRef} />
         {payload.provenanceRefs?.map((provenanceRef) => (

@@ -170,19 +170,30 @@ export type DesktopAppPaths = {
 
 export function createDefaultDesktopManagedServices(
   appRoot: string,
-  options: { sidecarCwd?: string; command?: string; electronRunAsNode?: boolean; env?: Record<string, string> } = {},
+  options: {
+    sidecarCwd?: string;
+    workspacePath?: string;
+    command?: string;
+    electronRunAsNode?: boolean;
+    env?: Record<string, string>;
+  } = {},
 ): ManagedRuntimeServiceSpec[] {
   const root = resolve(appRoot);
   const sidecarCwd = resolve(options.sidecarCwd ?? directoryCwdForAppRoot(root));
+  const workspacePath = options.workspacePath ? resolve(options.workspacePath) : undefined;
   const command = options.command ?? process.execPath;
   const baseEnv = {
     ...(options.electronRunAsNode ? { ELECTRON_RUN_AS_NODE: '1' } : {}),
     ...(options.env ?? {}),
   };
   const env = Object.keys(baseEnv).length ? baseEnv : undefined;
+  const modelRouterArgs = [
+    '--quiet',
+    ...(workspacePath ? ['--workspace-root', workspacePath] : []),
+  ];
   return [
     compiledJsService('workspace-server', 'workspace-writer', join(root, 'dist-desktop', 'src', 'runtime', 'workspace-server.js'), sidecarCwd, command, [], env),
-    compiledJsService('provider-proxy', 'provider-proxy', join(root, 'dist-desktop', 'packages', 'backend', 'src', 'cli.js'), sidecarCwd, command, ['--quiet'], env),
+    compiledJsService('provider-proxy', 'provider-proxy', join(root, 'dist-desktop', 'packages', 'workers', 'model-router', 'src', 'cli.js'), sidecarCwd, command, modelRouterArgs, env),
     compiledJsService('runtime-codex', 'runtime-codex', join(root, 'dist-desktop', 'src', 'runtime', 'codex', 'codex-runtime-standalone-server.js'), sidecarCwd, command, [], env),
   ];
 }
@@ -239,6 +250,7 @@ export function createElectronDesktopMainController(
       requestedRuntimeCodexPort: 0,
       services: createDefaultDesktopManagedServices(appPaths.appRoot, {
         sidecarCwd: appPaths.sidecarCwd,
+        workspacePath,
         electronRunAsNode: isElectronRuntimeProcess(),
         env: browserHostSurfaceStart?.url
           ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: browserHostSurfaceStart.url }

@@ -43,6 +43,7 @@ import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstan
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
 import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference, withCurrentObjectReferencePayload } from './chat/composerReferences';
+import { imageObjectReferenceForReferenceFocus } from './chat/referenceFocusRouting';
 import { highlightSciForgeReference } from './chat/referenceFocus';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
@@ -586,6 +587,11 @@ export function ChatPanel({
   }
 
   function focusPendingReference(reference: SciForgeReference) {
+    const imageReference = imageObjectReferenceForReferenceFocus(reference);
+    if (imageReference) {
+      handleObjectReferenceClick(imageReference);
+      return;
+    }
     highlightSciForgeReference(reference);
   }
 
@@ -1307,8 +1313,16 @@ export function ChatPanel({
                         content={message.content}
                         references={inlineObjectReferencesForMessage(message, session)}
                         onObjectFocus={handleObjectReferenceClick}
+                        previewConfig={config}
                       />
                     </>
+                  ) : message.role === 'system' ? (
+                    <MessageContent
+                      content={message.content}
+                      references={inlineObjectReferencesForMessage(message, session)}
+                      onObjectFocus={handleObjectReferenceClick}
+                      previewConfig={config}
+                    />
                   ) : (
                     <>
                       {messageRunId ? (
@@ -1328,6 +1342,7 @@ export function ChatPanel({
                         runtimeGui={runtimeGuiForRun(session, messageRunId)}
                         onGuiCommand={handleGuiCommand}
                         onObjectFocus={handleObjectReferenceClick}
+                        previewConfig={config}
                       />
                       {messageRunId && runKeyInfoHasContent(session, messageRunId) ? (
                         <details className="message-fold depth-2 codex-result-clues-fold">
@@ -1339,6 +1354,7 @@ export function ChatPanel({
                             session={session}
                             onObjectFocus={handleObjectReferenceClick}
                             locale={locale}
+                            previewConfig={config}
                           />
                         </details>
                       ) : null}

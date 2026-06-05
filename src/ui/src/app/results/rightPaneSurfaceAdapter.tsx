@@ -335,7 +335,7 @@ export function RightPaneEmptyWorkspace({ locale }: { locale?: ResultLocale }) {
   return (
     <div className="right-pane-empty-workspace" data-testid="right-pane-empty-workspace">
       <strong>{resultText(locale, { 'zh-CN': '没有打开的页面', 'en-US': 'No pages open' })}</strong>
-      <span>{resultText(locale, { 'zh-CN': '使用顶部 New 打开 Results、Browser、Image / Evidence、Terminal、Files 或 References。', 'en-US': 'Use New above to open Results, Browser, Image / Evidence, Terminal, Files, or References.' })}</span>
+      <span>{resultText(locale, { 'zh-CN': '使用顶部 New 打开 Results、Browser、Image、Terminal、Files 或 References。', 'en-US': 'Use New above to open Results, Browser, Image, Terminal, Files, or References.' })}</span>
     </div>
   );
 }

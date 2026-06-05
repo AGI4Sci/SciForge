@@ -1,6 +1,6 @@
 import type { AgentStreamEvent, ObjectReference, SciForgeRun, SciForgeSession } from '../../domain';
 import type { SupportedLocale } from '../../i18n';
-import { MessageContent } from './MessageContent';
+import { MessageContent, type WorkspacePreviewConfig } from './MessageContent';
 import { InlineObjectReferences } from './InlineObjectReferences';
 import { NativeEventStream } from './RunningWorkProcess';
 import { buildCursorAgentProcessModel } from './cursorAgentProcess';
@@ -123,11 +123,13 @@ export function RunKeyInfo({
   session,
   onObjectFocus,
   locale,
+  previewConfig,
 }: {
   runId: string;
   session: SciForgeSession;
   onObjectFocus?: (reference: ObjectReference) => void;
   locale?: SupportedLocale;
+  previewConfig?: WorkspacePreviewConfig;
 }) {
   const keyInfo = runKeyInfoModel(session, runId);
   if (!keyInfo) return null;
@@ -150,7 +152,12 @@ export function RunKeyInfo({
         })}</span>
       </div>
       <div className="message-key-prose">
-        <MessageContent content={keyProse} references={deliverableReferences} onObjectFocus={onObjectFocus ?? (() => undefined)} />
+        <MessageContent
+          content={keyProse}
+          references={deliverableReferences}
+          onObjectFocus={onObjectFocus ?? (() => undefined)}
+          previewConfig={previewConfig}
+        />
       </div>
       {claims.length ? (
         <div className="message-key-list">

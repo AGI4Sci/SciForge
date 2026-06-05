@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -212,4 +216,63 @@ test('workspace Computer Use env from local config includes safe VirtualAppScree
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
+});
+
+test('workspace runtime config uses public Model Router alias while preserving raw role env', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-local-config-'));
+  const runtimeRoot = join(root, 'runtime-codex');
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const router = createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, service: 'sciforge.model-router' }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  await new Promise<void>((resolve) => router.listen(0, '127.0.0.1', resolve));
+  const address = router.address();
+  assert.equal(typeof address, 'object');
+  const routerUrl = `http://127.0.0.1:${address && typeof address === 'object' ? address.port : 0}`;
+  const service = createWorkspaceLocalConfigService({
+    configLocalPath: join(root, 'config.local.json'),
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: join(root, 'workspace'),
+    defaultProxyBaseUrl: routerUrl,
+    env: {
+      HOME: join(root, 'home'),
+      SCIFORGE_RUNTIME_ROOT: runtimeRoot,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      SCIFORGE_PROXY_BASE_URL: routerUrl,
+    } as NodeJS.ProcessEnv,
+  });
+
+  try {
+    const env = await service.prepareRuntimeCodexEnvFromLocalConfig({
+      codexProxy: {
+        provider: 'native',
+        upstreamBaseUrl: 'http://provider.example/v1',
+        apiKey: 'local-secret',
+        defaultModel: 'bailian/deepseek-v4-flash',
+      },
+    });
+
+    assert.equal(env.SCIFORGE_RUNTIME_PROVIDER, 'sciforge-model-router');
+    assert.equal(env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
+    assert.equal(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, 'sciforge-router');
+    assert.equal(env.SCIFORGE_TEXT_BASE_URL, 'http://provider.example/v1');
+    assert.equal(env.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+    assert.equal(env.SCIFORGE_TEXT_API_KEY, 'local-secret');
+    assert.equal(env.SCIFORGE_VISION_API_KEY, 'local-secret');
+
+    const config = await readFile(join(codexHome, 'config.toml'), 'utf8');
+    assert.match(config, /model = "sciforge-router"/);
+    assert.match(config, /model_provider = "sciforge-model-router"/);
+    assert.match(config, new RegExp(`base_url = "${routerUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\/v1"`));
+    assert.doesNotMatch(config, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:3891/);
+  } finally {
+    await new Promise<void>((resolve, reject) => router.close((error) => error ? reject(error) : resolve()));
+  }
 });

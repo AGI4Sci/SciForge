@@ -166,7 +166,7 @@ function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?:
       : kind === 'browser'
         ? '浏览器'
         : kind === 'image' || kind === 'screen'
-          ? '图片 / 证据'
+          ? '图片'
           : kind === 'terminal'
             ? '终端'
             : kind === 'files'
@@ -177,7 +177,7 @@ function resultPaneTabInstanceLabel(kind: ResultPaneTab, index: number, locale?:
       : kind === 'browser'
         ? 'Browser'
         : kind === 'image' || kind === 'screen'
-          ? 'Image / Evidence'
+          ? 'Image'
           : kind === 'terminal'
             ? 'Terminal'
             : kind === 'files'
@@ -247,6 +247,10 @@ function legacyScreenLabel(label: string, locale?: ResultLocale) {
   const legacy = /^(?:Screen|Virtual Screen|屏幕|虚拟屏幕)(?:\s+(\d+))?$/.exec(label);
   if (legacy) {
     return resultPaneTabInstanceLabel('image', Number(legacy[1] ?? 1), locale);
+  }
+  const legacyImageEvidence = /^(?:Image\s*\/\s*Evidence|图片\s*\/\s*证据)(?:\s+(\d+))?$/.exec(label);
+  if (legacyImageEvidence) {
+    return resultPaneTabInstanceLabel('image', Number(legacyImageEvidence[1] ?? 1), locale);
   }
   return label;
 }

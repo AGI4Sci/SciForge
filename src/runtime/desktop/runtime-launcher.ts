@@ -6,7 +6,11 @@ import { existsSync } from 'node:fs';
 import { mkdir, appendFile, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
-import { ensureRuntimeHome } from '../../../packages/backend/src/runtime-home.js';
+import {
+  ensureRuntimeHome,
+  RUNTIME_MODEL,
+  RUNTIME_PROFILE,
+} from '../../../packages/backend/src/runtime-home.js';
 import { buildDesktopAppDataLayout, type DesktopAppDataLayout } from './app-data-layout.js';
 
 export type RuntimeLauncherPortBinding = {
@@ -421,15 +425,28 @@ type NonSecretProxyConfig = {
 
 type LocalRuntimeConfig = NonSecretProxyConfig & {
   apiKey?: string;
+  visionBaseUrl?: string;
+  visionModel?: string;
 };
 
 function localRuntimeEnvFromConfig(config: LocalRuntimeConfig, env: NodeJS.ProcessEnv): Record<string, string> {
   const output: Record<string, string> = {};
   const upstreamBaseUrl = config.upstreamBaseUrl ?? config.baseUrl;
+  const visionBaseUrl = config.visionBaseUrl ?? upstreamBaseUrl;
   const defaultModel = config.defaultModel ?? config.model;
+  const visionModel = config.visionModel ?? defaultModel;
+  const apiKey = env.SCIFORGE_RUNTIME_API_KEY ?? config.apiKey;
   if (!env.SCIFORGE_RUNTIME_API_KEY && config.apiKey) output.SCIFORGE_RUNTIME_API_KEY = config.apiKey;
+  if (!env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS) output.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = RUNTIME_MODEL;
+  if (!env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE) output.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE = RUNTIME_PROFILE;
+  if (!env.SCIFORGE_RUNTIME_MODEL) output.SCIFORGE_RUNTIME_MODEL = RUNTIME_MODEL;
   if (!env.SCIFORGE_PROXY_UPSTREAM_BASE_URL && upstreamBaseUrl) output.SCIFORGE_PROXY_UPSTREAM_BASE_URL = upstreamBaseUrl;
-  if (!env.SCIFORGE_RUNTIME_MODEL && defaultModel) output.SCIFORGE_RUNTIME_MODEL = defaultModel;
+  if (!env.SCIFORGE_TEXT_BASE_URL && upstreamBaseUrl) output.SCIFORGE_TEXT_BASE_URL = upstreamBaseUrl;
+  if (!env.SCIFORGE_VISION_BASE_URL && visionBaseUrl) output.SCIFORGE_VISION_BASE_URL = visionBaseUrl;
+  if (!env.SCIFORGE_TEXT_MODEL && defaultModel) output.SCIFORGE_TEXT_MODEL = defaultModel;
+  if (!env.SCIFORGE_VISION_MODEL && visionModel) output.SCIFORGE_VISION_MODEL = visionModel;
+  if (!env.SCIFORGE_TEXT_API_KEY && apiKey) output.SCIFORGE_TEXT_API_KEY = apiKey;
+  if (!env.SCIFORGE_VISION_API_KEY && apiKey) output.SCIFORGE_VISION_API_KEY = apiKey;
   if (!env.SCIFORGE_PROXY_DEFAULT_MODEL && defaultModel) output.SCIFORGE_PROXY_DEFAULT_MODEL = defaultModel;
   return output;
 }
@@ -459,6 +476,7 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const llm = isRecord(parsed.llm) ? parsed.llm : {};
     const textLLM = isRecord(parsed.textLLM) ? parsed.textLLM : {};
     const textLLMEnv = isRecord(textLLM.env) ? textLLM.env : {};
+    const visionSense = isRecord(parsed.visionSense) ? parsed.visionSense : {};
     const upstreamBaseUrl = stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
       ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
       ?? stringValue(textLLM.baseUrl)
@@ -484,12 +502,21 @@ async function readLocalRuntimeConfig(path: string | undefined): Promise<LocalRu
     const apiKey = stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
       ?? stringValue(textLLM.apiKey)
       ?? stringValue(llm.apiKey)
+      ?? stringValue(codexProxy.apiKey)
       ?? stringValue(parsed.apiKey);
-    if (!upstreamBaseUrl && !defaultModel && !apiKey) return undefined;
+    const visionBaseUrl = stringValue(visionSense.vlmBaseUrl)
+      ?? stringValue(visionSense.baseUrl)
+      ?? stringValue(visionSense.modelBaseUrl);
+    const visionModel = stringValue(visionSense.vlmModel)
+      ?? stringValue(visionSense.model)
+      ?? stringValue(visionSense.modelName);
+    if (!upstreamBaseUrl && !defaultModel && !apiKey && !visionBaseUrl && !visionModel) return undefined;
     return {
       ...(upstreamBaseUrl ? { upstreamBaseUrl } : {}),
       ...(defaultModel ? { defaultModel } : {}),
       ...(apiKey ? { apiKey } : {}),
+      ...(visionBaseUrl ? { visionBaseUrl } : {}),
+      ...(visionModel ? { visionModel } : {}),
     };
   } catch {
     return undefined;

@@ -1,6 +1,7 @@
 import { access, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
+  ensureRuntimeHome,
   getRuntimeHomePaths,
   readRuntimeConfig,
   RUNTIME_KEY_ENV,
@@ -48,6 +49,13 @@ export async function assertCodexRuntimeConfig(options: RuntimeConfigGuardOption
   const workspaceStat = await stat(workspace).catch(() => undefined);
   if (!workspaceStat?.isDirectory()) {
     throw new Error(`Runtime Codex workspace does not exist or is not a directory: ${workspace}`);
+  }
+
+  if (options.configText === undefined) {
+    await ensureRuntimeHome({
+      proxyBaseUrl: runtimeProviderBaseUrlForEnv(env),
+      paths: { env },
+    });
   }
 
   await access(paths.codexHome).catch(() => {
@@ -109,6 +117,13 @@ export function codexRuntimeEnv(baseEnv: NodeJS.ProcessEnv, codexHome: string): 
     if (key.startsWith('SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_')) delete env[key];
   }
   return env;
+}
+
+function runtimeProviderBaseUrlForEnv(env: NodeJS.ProcessEnv): string | undefined {
+  const value = typeof env.SCIFORGE_PROXY_BASE_URL === 'string' ? env.SCIFORGE_PROXY_BASE_URL.trim() : '';
+  if (!value) return undefined;
+  const trimmed = value.replace(/\/+$/, '');
+  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`;
 }
 
 function profileBlock(config: string, profile: string): string {

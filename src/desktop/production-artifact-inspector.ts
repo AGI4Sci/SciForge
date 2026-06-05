@@ -105,7 +105,7 @@ const DEFAULT_PRELOAD_PATH = 'dist-desktop/src/desktop/preload.cjs';
 const DEFAULT_RENDERER_PATH = 'dist-ui/index.html';
 const DEFAULT_SIDECAR_PATHS = [
   'dist-desktop/src/runtime/workspace-server.js',
-  'dist-desktop/packages/backend/src/cli.js',
+  'dist-desktop/packages/workers/model-router/src/cli.js',
   'dist-desktop/src/runtime/codex/codex-runtime-standalone-server.js',
 ] as const;
 
@@ -453,7 +453,7 @@ function mainLooksProduction(value: string): boolean {
     '--import',
     'tsx',
     'src/runtime/workspace-server.ts',
-    'packages/backend/src/cli.ts',
+    'packages/workers/model-router/src/cli.ts',
     'codex-runtime-standalone-server.ts',
   ];
   const loadUrlOnlyForNativeBrowser = !value.includes('loadURL') || value.includes('desktop:native-browser:open');

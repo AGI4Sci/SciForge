@@ -17,7 +17,7 @@ export interface ResultPaneTabInstance {
 const RESULT_TABS: Array<{ id: ResultPaneTab; label: string }> = [
   { id: 'primary', label: 'Results' },
   { id: 'browser', label: 'Browser' },
-  { id: 'image', label: 'Image / Evidence' },
+  { id: 'image', label: 'Image' },
   { id: 'terminal', label: 'Terminal' },
   { id: 'files', label: 'Files' },
   { id: 'evidence', label: 'References' },
@@ -306,7 +306,7 @@ export function ResultShell({
 
 function resultTabLabel(tabId: ResultPaneTab, locale?: ResultLocale) {
   if (tabId === 'browser') return resultText(locale, { 'zh-CN': '浏览器', 'en-US': 'Browser' });
-  if (tabId === 'image' || tabId === 'screen') return resultText(locale, { 'zh-CN': '图片 / 证据', 'en-US': 'Image / Evidence' });
+  if (tabId === 'image' || tabId === 'screen') return resultText(locale, { 'zh-CN': '图片', 'en-US': 'Image' });
   if (tabId === 'terminal') return resultText(locale, { 'zh-CN': '终端', 'en-US': 'Terminal' });
   if (tabId === 'files') return resultText(locale, { 'zh-CN': '文件', 'en-US': 'Files' });
   if (tabId === 'evidence') return resultText(locale, { 'zh-CN': '引用', 'en-US': 'References' });

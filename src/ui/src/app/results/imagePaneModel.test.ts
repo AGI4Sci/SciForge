@@ -203,6 +203,51 @@ test('right pane image evidence payload promotes desktop annotation screenshot p
   assert.equal(payload.provenanceRef, 'desktop-annotation:workspace/workspace-a/session/session-a/window-capture/blocked/capture-fixed/diagnostics');
 });
 
+test('right pane generic image payload uses focused upload workspace path instead of artifact id', () => {
+  const session: SciForgeSession = {
+    schemaVersion: 2,
+    sessionId: 'session-uploaded-image',
+    scenarioId: 'literature-evidence-review',
+    title: 'Uploaded image',
+    createdAt: '2026-06-05T00:00:00.000Z',
+    updatedAt: '2026-06-05T00:00:00.000Z',
+    messages: [],
+    runs: [],
+    artifacts: [],
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    notebook: [],
+    versions: [],
+  };
+  const focusedReference: ObjectReference = {
+    id: 'obj-upload-image-1',
+    kind: 'artifact',
+    title: 'microscopy.png',
+    ref: 'artifact:upload-image-1',
+    artifactType: 'uploaded-image',
+    preferredView: 'preview',
+    presentationRole: 'supporting-evidence',
+    status: 'available',
+    provenance: {
+      path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      producer: 'user-upload',
+      size: 2048,
+    },
+  };
+
+  const payload = rightPaneImageEvidencePayload(session, undefined, focusedReference);
+
+  assert.ok(payload);
+  assert.equal(payload.sourceKind, 'artifact');
+  assert.equal(payload.imageRef, '.sciforge/uploads/session-1/upload-image-1-microscopy.png');
+  assert.equal(payload.ref, '.sciforge/uploads/session-1/upload-image-1-microscopy.png');
+  assert.equal(payload.artifactRef, 'artifact:upload-image-1');
+  assert.equal(payload.provenanceRef, '.sciforge/uploads/session-1/upload-image-1-microscopy.png');
+  assert.equal(payload.status, 'available');
+});
+
 test('image pane model ignores non-image text and report artifacts that only expose data or delivery refs', () => {
   const textArtifact: RuntimeArtifact = {
     id: 'analysis-note',

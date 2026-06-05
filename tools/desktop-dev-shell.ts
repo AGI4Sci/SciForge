@@ -5,6 +5,8 @@ import type { Readable } from 'node:stream';
 import { buildDesktopNativeReadiness, type DesktopNativeReadiness } from '../src/desktop/native-readiness.js';
 
 export type DesktopDevShellProcessId = 'vite' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex' | 'electron';
+const MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router';
+const MODEL_ROUTER_DEFAULT_PROFILE = 'sciforge-runtime-default';
 
 export type DesktopDevShellProcessPlan = {
   id: DesktopDevShellProcessId;
@@ -85,11 +87,34 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
   const providerProxyUrl = sanitizeLoopbackHttpUrl(options.providerProxyUrl ?? 'http://127.0.0.1:5175') ?? 'http://127.0.0.1:5175';
   const runtimeCodexUrl = sanitizeLoopbackHttpUrl(options.runtimeCodexUrl ?? 'http://127.0.0.1:5176') ?? 'http://127.0.0.1:5176';
   const nativeAdapterUrl = sanitizeLoopbackHttpUrl(options.nativeAdapterUrl ?? env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL);
-  const apiKey = stringValue(env.SCIFORGE_RUNTIME_API_KEY) ?? config.apiKey;
-  const upstreamBaseUrl = stringValue(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL) ?? config.upstreamBaseUrl;
-  const model = stringValue(env.SCIFORGE_RUNTIME_MODEL)
+  const apiKey = stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+    ?? stringValue(env.SCIFORGE_TEXT_API_KEY)
+    ?? stringValue(env.SCIFORGE_VISION_API_KEY)
+    ?? config.apiKey;
+  const upstreamBaseUrl = stringValue(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
+    ?? stringValue(env.SCIFORGE_RUNTIME_BASE_URL)
+    ?? stringValue(env.SCIFORGE_TEXT_BASE_URL)
+    ?? config.upstreamBaseUrl;
+  const legacyRuntimeModel = stringValue(env.SCIFORGE_RUNTIME_MODEL);
+  const providerModel = stringValue(env.SCIFORGE_TEXT_MODEL)
     ?? stringValue(env.SCIFORGE_PROXY_DEFAULT_MODEL)
+    ?? (legacyRuntimeModel && legacyRuntimeModel !== MODEL_ROUTER_PUBLIC_MODEL_ALIAS ? legacyRuntimeModel : undefined)
     ?? config.model;
+  const routerPublicModelAlias = stringValue(env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS)
+    ?? MODEL_ROUTER_PUBLIC_MODEL_ALIAS;
+  const routerProfile = stringValue(env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE)
+    ?? MODEL_ROUTER_DEFAULT_PROFILE;
+  const textBaseUrl = stringValue(env.SCIFORGE_TEXT_BASE_URL) ?? upstreamBaseUrl;
+  const visionBaseUrl = stringValue(env.SCIFORGE_VISION_BASE_URL) ?? config.visionBaseUrl ?? upstreamBaseUrl;
+  const textModel = stringValue(env.SCIFORGE_TEXT_MODEL) ?? providerModel;
+  const visionModel = stringValue(env.SCIFORGE_VISION_MODEL) ?? config.visionModel ?? providerModel;
+  const textApiKey = stringValue(env.SCIFORGE_TEXT_API_KEY) ?? apiKey;
+  const visionApiKey = stringValue(env.SCIFORGE_VISION_API_KEY) ?? apiKey;
+  const credentialFromEnv = Boolean(
+    stringValue(env.SCIFORGE_RUNTIME_API_KEY)
+    || stringValue(env.SCIFORGE_TEXT_API_KEY)
+    || stringValue(env.SCIFORGE_VISION_API_KEY),
+  );
 
   const sidecarEnv: NodeJS.ProcessEnv = compactEnv({
     SCIFORGE_DESKTOP_DEV: '1',
@@ -104,9 +129,22 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
     ...(nativeAdapterUrl ? { SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: nativeAdapterUrl } : {}),
     ...(apiKey ? { SCIFORGE_RUNTIME_API_KEY: apiKey } : {}),
     ...(upstreamBaseUrl ? { SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl } : {}),
-    ...(model ? {
-      SCIFORGE_RUNTIME_MODEL: model,
-      SCIFORGE_PROXY_DEFAULT_MODEL: model,
+    SCIFORGE_RUNTIME_MODEL: routerPublicModelAlias,
+    SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: routerPublicModelAlias,
+    SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE: routerProfile,
+    ...(textBaseUrl ? { SCIFORGE_TEXT_BASE_URL: textBaseUrl } : {}),
+    ...(visionBaseUrl ? { SCIFORGE_VISION_BASE_URL: visionBaseUrl } : {}),
+    ...(textModel ? {
+      SCIFORGE_TEXT_MODEL: textModel,
+    } : {}),
+    ...(visionModel ? {
+      SCIFORGE_VISION_MODEL: visionModel,
+    } : {}),
+    ...(textApiKey ? {
+      SCIFORGE_TEXT_API_KEY: textApiKey,
+    } : {}),
+    ...(visionApiKey ? {
+      SCIFORGE_VISION_API_KEY: visionApiKey,
     } : {}),
   });
   const rendererEnv: NodeJS.ProcessEnv = compactEnv({
@@ -140,7 +178,18 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
     {
       id: 'provider-proxy',
       command: 'npm',
-      args: ['run', 'backend:codex-proxy', '--', '--quiet', '--host', '127.0.0.1', '--port', portFromUrl(providerProxyUrl)],
+      args: [
+        'run',
+        'backend:model-router',
+        '--',
+        '--quiet',
+        '--host',
+        '127.0.0.1',
+        '--port',
+        portFromUrl(providerProxyUrl),
+        '--workspace-root',
+        workspacePath,
+      ],
       cwd: projectRoot,
       env: sidecarEnv,
     },
@@ -192,9 +241,9 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
       }),
       config: {
         source: config.source,
-        credentialSource: stringValue(env.SCIFORGE_RUNTIME_API_KEY) ? 'env' : config.apiKey ? 'config' : 'missing',
+        credentialSource: credentialFromEnv ? 'env' : config.apiKey ? 'config' : 'missing',
         upstreamBaseUrlConfigured: Boolean(upstreamBaseUrl),
-        modelConfigured: Boolean(model),
+        modelConfigured: Boolean(providerModel),
       },
     },
   };
@@ -244,6 +293,8 @@ type DesktopDevShellConfig = {
   apiKey?: string;
   upstreamBaseUrl?: string;
   model?: string;
+  visionBaseUrl?: string;
+  visionModel?: string;
 };
 
 function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
@@ -255,6 +306,7 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
     const textLLM = recordField(parsed, 'textLLM');
     const textLLMEnv = recordField(textLLM, 'env');
     const codexProxy = recordField(parsed, 'codexProxy');
+    const visionSense = recordField(parsed, 'visionSense');
     return {
       source: path,
       apiKey: stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
@@ -263,6 +315,7 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
         ?? stringValue(parsed.apiKey),
       upstreamBaseUrl: stringValue(textLLMEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL)
         ?? stringValue(textLLMEnv.SCIFORGE_MODEL_BASE_URL)
+        ?? stringValue(textLLM.baseUrl)
         ?? stringValue(textLLM.modelBaseUrl)
         ?? stringValue(llm.baseUrl)
         ?? stringValue(llm.modelBaseUrl)
@@ -279,6 +332,12 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
         ?? stringValue(codexProxy.model)
         ?? stringValue(parsed.modelName)
         ?? stringValue(parsed.model),
+      visionBaseUrl: stringValue(visionSense.vlmBaseUrl)
+        ?? stringValue(visionSense.baseUrl)
+        ?? stringValue(visionSense.modelBaseUrl),
+      visionModel: stringValue(visionSense.vlmModel)
+        ?? stringValue(visionSense.model)
+        ?? stringValue(visionSense.modelName),
     };
   } catch {
     return { source: path };

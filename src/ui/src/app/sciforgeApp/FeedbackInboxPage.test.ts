@@ -355,11 +355,11 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
   assert.match(githubFeedbackSource, /export function markFeedbackGithubIssueClosed/);
 });
 
-test('PROJECT.md records the current active task board and archives the annotation sidebar protocol', () => {
-  assert.match(projectSource, /当前任务板：Cursor-like Sub-agent Parity/);
-  assert.match(projectSource, /Cursor-like Multi-agent \/ Sub-agent Workbench/);
-  assert.match(projectSource, /Codex app-server \/ Agent Host 是 sub-agent 创建、调度、provider route、workspace 写入/);
-  assert.match(projectSource, /旧 left\/middle\/right\/browser\/image\/desktop\/annotation\/window-action\/computer-use 分散任务板已合并/);
+test('PROJECT.md records the current active task board and keeps annotation entrypoints routed through app host', () => {
+  assert.match(projectSource, /当前任务板：Model Router MVP/);
+  assert.match(projectSource, /docs\/ModelRouterArchitecture\.md/);
+  assert.match(projectSource, /Model Router `\/v1\/responses` 服务/);
+  assert.match(projectSource, /Streaming 默认只流最终答案/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);
   assert.match(sciForgeAppSource, /runPromptOrchestrator/);

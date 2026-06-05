@@ -382,7 +382,7 @@ export function rightPaneScopedSmokeEvidenceHasDefaultTabs(evidence: Pick<RightP
   const labels = new Set(evidence.tabLabels.map((label) => label.toLowerCase()));
   return evidence.tablistCount > 0
     && evidence.tabCount >= RIGHT_PANE_SCOPED_SMOKE_DEFAULT_TABS.length
-    && ['results', 'browser', 'image / evidence', 'terminal', 'files', 'references'].every((label) => labels.has(label));
+    && ['results', 'browser', 'image', 'terminal', 'files', 'references'].every((label) => labels.has(label));
 }
 
 function cleanStorageKeySegment(value: unknown) {

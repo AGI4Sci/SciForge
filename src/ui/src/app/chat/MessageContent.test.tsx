@@ -103,6 +103,66 @@ test('message content renders uploaded image object refs as clickable ref-first 
   assert.doesNotMatch(markup, /data:image|base64|iVBORw0KGgo/i);
 });
 
+test('message image thumbnails resolve through configured workspace writer and workspace path', () => {
+  const uploadedImage: ObjectReference = {
+    id: 'obj-upload-image-writer-preview',
+    kind: 'artifact',
+    title: 'microscopy.png',
+    ref: 'artifact:upload-image-writer-preview',
+    artifactType: 'uploaded-image',
+    preferredView: 'preview',
+    presentationRole: 'supporting-evidence',
+    status: 'available',
+    provenance: {
+      path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      producer: 'user-upload',
+    },
+  };
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="What does this show?"
+      references={[uploadedImage]}
+      previewConfig={{
+        workspaceWriterBaseUrl: 'http://127.0.0.1:6173/',
+        workspacePath: '/tmp/sciforge workspace',
+      }}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /src="http:\/\/127\.0\.0\.1:6173\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-1%2Fupload-image-1-microscopy\.png&amp;workspacePath=%2Ftmp%2Fsciforge\+workspace"/);
+});
+
+test('message markdown turns auto-linked uploaded image filenames into object ref buttons', () => {
+  const uploadedImage: ObjectReference = {
+    id: 'obj-upload-image-autolink',
+    kind: 'artifact',
+    title: 'WX20260605-091908@2x.png',
+    ref: 'artifact:upload-image-autolink',
+    artifactType: 'uploaded-image',
+    preferredView: 'preview',
+    presentationRole: 'supporting-evidence',
+    status: 'available',
+    provenance: {
+      path: '.sciforge/uploads/session-1/upload-image-WX20260605-091908@2x.png',
+      dataRef: '.sciforge/uploads/session-1/upload-image-WX20260605-091908@2x.png',
+      producer: 'user-upload',
+    },
+  };
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="已上传 1 个文件作为引用：WX20260605-091908@2x.png"
+      references={[uploadedImage]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /markdown-object-ref message-object-link/);
+  assert.match(markup, /data-sciforge-reference=/);
+  assert.doesNotMatch(markup, /mailto:WX20260605-091908@2x\.png/);
+});
+
 test('message markdown renderer supports complete assistant markdown without raw html', () => {
   const markup = renderToStaticMarkup(
     <MessageContent
@@ -368,6 +428,41 @@ test('user messages keep explicitly selected composer references', () => {
 
   assert.equal(references.length, 1);
   assert.equal(references[0]?.ref, 'file:papers/methods.md');
+});
+
+test('system upload messages expose selected image refs for inline filename focus', () => {
+  const message: SciForgeMessage = {
+    id: 'msg-system-upload-image',
+    role: 'system',
+    content: '已上传 1 个文件作为引用：WX20260605-091908@2x.png',
+    createdAt: '2026-06-05T00:00:00.000Z',
+    references: [{
+      id: 'ref-system-upload-image',
+      kind: 'file',
+      title: 'WX20260605-091908@2x.png',
+      ref: '.sciforge/uploads/session-1/upload-image-WX20260605-091908@2x.png',
+      summary: '用户上传文件 · uploaded-image',
+      sourceId: 'upload-image-system',
+      payload: {
+        artifactId: 'upload-image-system',
+        type: 'uploaded-image',
+      },
+    }],
+  };
+  const references = inlineObjectReferencesForMessage(message, sessionWithObjects());
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content={message.content}
+      references={references}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.equal(references.length, 1);
+  assert.equal(references[0]?.kind, 'artifact');
+  assert.equal(references[0]?.artifactType, 'image');
+  assert.match(markup, /markdown-object-ref message-object-link/);
+  assert.doesNotMatch(markup, /mailto:WX20260605-091908@2x\.png/);
 });
 
 test('scenario message refs do not become visible from presentation-role filename heuristics', () => {

@@ -183,6 +183,37 @@ test('result pane route helper maps preferred view, ref prefix, and object kind 
   assert.equal(openRoute.composerInsertion, false);
 });
 
+test('generic image references open Image even when declared as preview artifacts or workspace files', () => {
+  const cases: Array<[string, Partial<ObjectReference>, string]> = [
+    ['uploaded image preview artifact', {
+      kind: 'artifact',
+      ref: 'artifact:upload-image-1',
+      artifactType: 'uploaded-image',
+      preferredView: 'preview',
+      provenance: { path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png' },
+    }, 'artifact-type'],
+    ['workspace image file', {
+      kind: 'file',
+      ref: 'file:figures/microscopy.png',
+      preferredView: 'workspace-file-viewer',
+    }, 'image-ref'],
+    ['artifact preview file path', {
+      kind: 'artifact',
+      ref: 'artifact:figure-preview',
+      artifactType: 'artifact-preview',
+      preferredView: 'preview',
+      provenance: { dataRef: '.sciforge/artifacts/figure-preview.webp' },
+    }, 'artifact-type'],
+  ];
+
+  for (const [name, reference, reason] of cases) {
+    const route = resolveResultPaneRoute(reference);
+    assert.equal(route.pane, 'image', name);
+    assert.equal(route.reason, reason, name);
+    assert.equal(route.composerInsertion, false, name);
+  }
+});
+
 test('object ref route matrix sends typed and raw refs to the owning right pane without composer insertion', () => {
   const cases: Array<[string, unknown, string, string]> = [
     ['subagent ref opens References', { kind: 'run', ref: 'subagent:reviewer-1' }, 'evidence', 'ref-prefix'],
@@ -197,10 +228,10 @@ test('object ref route matrix sends typed and raw refs to the owning right pane 
     ['https ref opens Browser', { kind: 'url', ref: 'https://example.test/paper' }, 'browser', 'ref-prefix'],
     ['raw https string opens Browser', 'https://example.test/raw-url', 'browser', 'ref-prefix'],
     ['raw http string opens Browser', 'http://example.test/raw-url', 'browser', 'ref-prefix'],
-    ['annotation ref opens Image / Evidence', { kind: 'artifact', ref: 'annotation:mark-1' }, 'image', 'ref-prefix'],
-    ['image ref opens Image / Evidence', { kind: 'artifact', ref: 'image:figure-1.png' }, 'image', 'ref-prefix'],
-    ['crop ref opens Image / Evidence', { kind: 'artifact', ref: 'crop:figure-1#xywh' }, 'image', 'ref-prefix'],
-    ['screenshot ref opens Image / Evidence', { kind: 'artifact', ref: 'screenshot:browser-before' }, 'image', 'ref-prefix'],
+    ['annotation ref opens Image', { kind: 'artifact', ref: 'annotation:mark-1' }, 'image', 'ref-prefix'],
+    ['image ref opens Image', { kind: 'artifact', ref: 'image:figure-1.png' }, 'image', 'ref-prefix'],
+    ['crop ref opens Image', { kind: 'artifact', ref: 'crop:figure-1#xywh' }, 'image', 'ref-prefix'],
+    ['screenshot ref opens Image', { kind: 'artifact', ref: 'screenshot:browser-before' }, 'image', 'ref-prefix'],
     ['terminal ref opens Terminal', { kind: 'execution-unit', ref: 'terminal:session-1' }, 'terminal', 'ref-prefix'],
     ['file ref opens Files', { kind: 'file', ref: 'file:src/ui/src/app/ResultsRenderer.tsx' }, 'files', 'ref-prefix'],
   ];

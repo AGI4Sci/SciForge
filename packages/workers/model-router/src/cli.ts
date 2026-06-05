@@ -2,8 +2,9 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { startModelRouterServer, type ModelRouterConfig } from './router';
+import { resolveModelRouterCliOptions } from './cli-options';
 
-const options = parseArgs(process.argv.slice(2));
+const options = resolveModelRouterCliOptions(process.argv.slice(2), process.env);
 const config = loadModelRouterConfig(options.configPath);
 
 const server = await startModelRouterServer({
@@ -27,27 +28,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   });
 }
 
-function parseArgs(args: string[]) {
-  const parsed: {
-    host?: string;
-    port?: number;
-    configPath?: string;
-    workspaceRoot?: string;
-    quiet?: boolean;
-  } = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === '--host') parsed.host = args[++index];
-    else if (arg === '--port') parsed.port = Number(args[++index]);
-    else if (arg === '--config') parsed.configPath = args[++index];
-    else if (arg === '--workspace-root') parsed.workspaceRoot = args[++index];
-    else if (arg === '--quiet') parsed.quiet = true;
-  }
-  return parsed;
-}
-
 function loadModelRouterConfig(configPath: string | undefined): ModelRouterConfig {
-  const resolved = configPath ?? process.env.SCIFORGE_MODEL_ROUTER_CONFIG;
+  const resolved = configPath;
   if (resolved) {
     const path = resolve(resolved);
     if (!existsSync(path)) throw new Error(`Model Router config file not found: ${path}`);

@@ -1,12 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join } from 'node:path';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import {
   assertPathInside,
   assertRuntimeReady,
   DEFAULT_PROXY_BASE_URL,
+  ensureRuntimeHome,
   getRuntimeHomePaths,
   resolveRuntimeWorkspace,
   RUNTIME_KEY_ENV,
@@ -44,6 +45,38 @@ test('runtime config falls back to public Model Router defaults when no user mod
   assert.match(config, new RegExp(`model = "${RUNTIME_MODEL}"`));
   assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
   assert.doesNotMatch(config, new RegExp(['deep' + 'seek', 'q' + 'wen', 'bai' + 'lian'].join('|'), 'i'));
+});
+
+test('ensureRuntimeHome rewrites stale non-router config to the managed Model Router target', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-stale-config-'));
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const paths = getRuntimeHomePaths({
+    runtimeRoot,
+    codexHome,
+    env: {},
+  });
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(paths.configPath, runtimeConfigToml({
+    provider: 'native',
+    model: 'bailian/deepseek-v4-flash',
+    proxyBaseUrl: 'http://127.0.0.1:5175/v1',
+  }), 'utf8');
+
+  await ensureRuntimeHome({
+    proxyBaseUrl: DEFAULT_PROXY_BASE_URL,
+    paths: {
+      runtimeRoot,
+      codexHome,
+      env: {},
+    },
+  });
+
+  const config = await readFile(paths.configPath, 'utf8');
+  assert.match(config, /model = "sciforge-router"/);
+  assert.match(config, /model_provider = "sciforge-model-router"/);
+  assert.match(config, /\[model_providers\.sciforge-model-router\]/);
+  assert.match(config, /base_url = "http:\/\/127\.0\.0\.1:3892\/v1"/);
+  assert.doesNotMatch(config, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:5175/);
 });
 
 test('runtime provider env ignores legacy user-facing native provider id', () => {

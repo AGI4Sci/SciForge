@@ -4,6 +4,8 @@ import { normalizeWorkspaceRootPath } from './workspace-paths.js';
 import {
   DEFAULT_PROXY_BASE_URL,
   ensureRuntimeHome,
+  RUNTIME_MODEL,
+  RUNTIME_PROVIDER,
 } from '../../packages/backend/src/runtime-home.js';
 import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js';
 import {
@@ -274,19 +276,31 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
   async function syncRuntimeCodexHomeFromLocalConfig(runtimeEnv: NodeJS.ProcessEnv = env, proxyBaseUrl = runtimeCodexProxyBaseUrl(runtimeEnv)) {
     await ensureRuntimeHome({
       proxyBaseUrl,
-      provider: runtimeEnv.SCIFORGE_RUNTIME_PROVIDER,
-      model: runtimeEnv.SCIFORGE_RUNTIME_MODEL,
+      provider: RUNTIME_PROVIDER,
+      model: RUNTIME_MODEL,
       overwrite: true,
+      paths: { env: runtimeEnv },
     });
   }
 
   async function runtimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
     const localConfig = configuredLocalConfig ?? await readConfigLocalJson();
     const settings = localProviderSettings(localConfig);
+    const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
+    const upstreamBaseUrl = localEnv.SCIFORGE_RUNTIME_BASE_URL ?? localEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
+    const upstreamModel = localEnv.SCIFORGE_RUNTIME_MODEL;
+    const upstreamApiKey = localEnv.SCIFORGE_RUNTIME_API_KEY;
     return {
       ...env,
       SCIFORGE_CONFIG_PATH: options.configLocalPath,
-      ...computerUseWorkspaceEnvFromLocalSettings(settings),
+      ...localEnv,
+      ...(upstreamBaseUrl && !env.SCIFORGE_TEXT_BASE_URL ? { SCIFORGE_TEXT_BASE_URL: upstreamBaseUrl } : {}),
+      ...(upstreamModel && !env.SCIFORGE_TEXT_MODEL ? { SCIFORGE_TEXT_MODEL: upstreamModel } : {}),
+      ...(upstreamApiKey && !env.SCIFORGE_TEXT_API_KEY ? { SCIFORGE_TEXT_API_KEY: upstreamApiKey } : {}),
+      ...(upstreamApiKey && !env.SCIFORGE_VISION_API_KEY ? { SCIFORGE_VISION_API_KEY: upstreamApiKey } : {}),
+      SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
+      SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
+      SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
     };
   }
 
@@ -341,9 +355,16 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
 
   async function runtimeProviderProxyLocalReady(baseUrl: string): Promise<boolean> {
     try {
-      const response = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
-      const parsed = await response.json().catch(() => ({}));
-      return response.ok && isRecord(parsed) && typeof parsed.upstreamBaseUrl === 'string';
+      const legacy = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(900) });
+      const parsed = await legacy.json().catch(() => ({}));
+      if (legacy.ok && isRecord(parsed) && typeof parsed.upstreamBaseUrl === 'string') return true;
+    } catch {
+      // Try the Model Router health endpoint below.
+    }
+    try {
+      const router = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(900) });
+      const parsed = await router.json().catch(() => ({}));
+      return router.ok && isRecord(parsed) && parsed.service === 'sciforge.model-router';
     } catch {
       return false;
     }

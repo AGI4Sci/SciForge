@@ -1,11 +1,11 @@
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_PROXY_BASE_URL,
-  ensureRuntimeHome,
+  getRuntimeHomePaths,
   RUNTIME_KEY_ENV,
   RUNTIME_MODEL,
   RUNTIME_PROFILE,
@@ -104,6 +104,37 @@ test('runtime config guard reads CODEX_HOME from the supplied runtime env', asyn
   assert.equal(config.model, RUNTIME_MODEL);
 });
 
+test('runtime config guard heals stale on-disk provider config before app-server launch', async () => {
+  const workspace = await tempWorkspace();
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-heal-root-'));
+  const codexHome = join(root, 'codex-home');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), runtimeConfig({
+    provider: 'native',
+    model: 'bailian/deepseek-v4-flash',
+    proxyBaseUrl: 'http://127.0.0.1:3891/v1',
+  }), 'utf8');
+
+  const config = await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: {
+      SCIFORGE_RUNTIME_ROOT: root,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:5175',
+      [RUNTIME_KEY_ENV]: 'test-key',
+    },
+  });
+
+  assert.equal(config.provider, RUNTIME_PROVIDER);
+  assert.equal(config.model, RUNTIME_MODEL);
+  const healedConfig = await readFile(join(codexHome, 'config.toml'), 'utf8');
+  assert.match(healedConfig, /\[model_providers\.sciforge-model-router\]/);
+  assert.match(healedConfig, /model_provider = "sciforge-model-router"/);
+  assert.match(healedConfig, /model = "sciforge-router"/);
+  assert.match(healedConfig, /base_url = "http:\/\/127\.0\.0\.1:5175\/v1"/);
+  assert.doesNotMatch(healedConfig, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:3891/);
+});
+
 test('runtime config guard fails closed when workspace is missing', async () => {
   await assert.rejects(
     () => assertCodexRuntimeConfig({
@@ -194,7 +225,7 @@ test('runtime environment forces isolated CODEX_HOME over inherited values', () 
 });
 
 async function tempWorkspace() {
-  await ensureRuntimeHome();
+  await mkdir(getRuntimeHomePaths().codexHome, { recursive: true });
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-codex-runtime-'));
   await mkdir(dir, { recursive: true });
   return dir;

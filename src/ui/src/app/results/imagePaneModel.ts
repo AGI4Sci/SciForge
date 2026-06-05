@@ -104,16 +104,21 @@ export function rightPaneImageEvidencePayload(
 export function imageEvidencePayloadFromObjectReference(reference: ObjectReference | undefined): ImageEvidencePayload | undefined {
   if (!reference) return undefined;
   const focusedScreenshotRef = focusedObjectScreenshotRef(reference.provenance?.screenshotRef);
+  const focusedImageRef = focusedScreenshotRef
+    ?? genericImagePreviewRefForObjectReference(reference)
+    ?? imageEvidenceRefForObjectReference(reference.ref)
+    ?? imageArtifactRefFallback(reference);
+  if (!focusedImageRef) return undefined;
   return normalizeImageEvidencePayload({
-    ref: focusedScreenshotRef ?? reference.ref,
-    imageRef: focusedScreenshotRef ?? reference.ref,
+    ref: focusedImageRef,
+    imageRef: focusedImageRef,
     title: reference.title,
     artifactType: reference.artifactType,
     preferredView: reference.preferredView,
     status: reference.status,
     artifactRef: reference.kind === 'artifact' ? reference.ref : undefined,
     targetRef: focusedScreenshotRef ? reference.ref : reference.provenance?.screenshotRef,
-    provenanceRef: reference.provenance?.dataRef,
+    provenanceRef: reference.provenance?.dataRef ?? reference.provenance?.path,
     sha256: reference.provenance?.hash,
   });
 }
@@ -453,6 +458,52 @@ function safeRef(value: string | undefined) {
   if (/^https?:\/\//i.test(ref)) return undefined;
   if (/^\/api\/.*(?:preview|provider|executor|route)/i.test(ref)) return undefined;
   return ref;
+}
+
+function genericImagePreviewRefForObjectReference(reference: ObjectReference) {
+  return [
+    reference.provenance?.path,
+    reference.provenance?.dataRef,
+    reference.ref,
+    reference.title,
+  ]
+    .map(safeRef)
+    .find(isImageFileRef);
+}
+
+function imageEvidenceRefForObjectReference(value: string | undefined) {
+  const ref = safeRef(value);
+  if (!ref) return undefined;
+  return /^(?:image|image-evidence|screenshot|annotation|crop|browser-evidence|window-capture|screen-region|screen|virtual-app-screen):/i.test(ref)
+    || /^computer-use:frames?/i.test(ref)
+    ? ref
+    : undefined;
+}
+
+function imageArtifactRefFallback(reference: ObjectReference) {
+  const ref = safeRef(reference.ref);
+  if (!ref || !isImageLikeObjectReference(reference)) return undefined;
+  return ref;
+}
+
+function isImageLikeObjectReference(reference: ObjectReference) {
+  const haystack = [
+    reference.artifactType,
+    reference.preferredView,
+    reference.title,
+    reference.summary,
+    reference.ref,
+  ].filter(Boolean).join(' ');
+  return /\b(?:uploaded-image|image|image-evidence|screenshot|annotation|crop|browser-evidence|window-capture|screen-region|artifact-preview|replay-frame)\b/i.test(haystack)
+    || isImageFileRef(reference.provenance?.path)
+    || isImageFileRef(reference.provenance?.dataRef)
+    || isImageFileRef(reference.ref);
+}
+
+function isImageFileRef(value: string | undefined) {
+  if (!value) return false;
+  const text = value.replace(/^file::?/i, '').trim();
+  return /\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(text);
 }
 
 function focusedObjectScreenshotRef(value: string | undefined) {

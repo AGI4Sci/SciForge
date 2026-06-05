@@ -165,7 +165,7 @@ function RightPaneToolDock({
     },
     {
       tab: 'image',
-      label: resultText(locale, { 'zh-CN': '图片 / 证据', 'en-US': 'Image / Evidence' }),
+      label: resultText(locale, { 'zh-CN': '图片', 'en-US': 'Image' }),
       detail: resultText(locale, { 'zh-CN': '图片、标注、裁剪和来源', 'en-US': 'Images, annotations, crops, and source details' }),
       Icon: ImageIcon,
     },

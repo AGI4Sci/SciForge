@@ -1,4 +1,4 @@
-import type { ObjectReference, SciForgeMessage, SciForgeSession } from '../../domain';
+import type { ObjectReference, SciForgeConfig, SciForgeMessage, SciForgeSession } from '../../domain';
 import {
   artifactForObjectReference,
   artifactHasUserFacingDelivery,
@@ -20,16 +20,20 @@ export interface InlineObjectReferenceOptions {
   workspaceObjectReferences?: ObjectReference[];
 }
 
+export type WorkspacePreviewConfig = Pick<SciForgeConfig, 'workspaceWriterBaseUrl' | 'workspacePath'>;
+
 export function MessageContent({
   content,
   references,
   onObjectFocus,
   className,
+  previewConfig,
 }: {
   content: string;
   references: ObjectReference[];
   onObjectFocus: (reference: ObjectReference) => void;
   className?: string;
+  previewConfig?: WorkspacePreviewConfig;
 }) {
   const imageReferences = references.filter(isImageObjectReferenceWithWorkspacePreview);
   const nonImageReferences = references.filter((reference) => !imageReferences.includes(reference));
@@ -41,7 +45,11 @@ export function MessageContent({
         objectReferences={references}
         onObjectReferenceFocus={onObjectFocus}
       />
-      <MessageImageAttachments references={imageReferences.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
+      <MessageImageAttachments
+        references={imageReferences.filter((reference) => !objectReferenceMentionedInText(content, reference))}
+        previewConfig={previewConfig}
+        onObjectFocus={onObjectFocus}
+      />
       <InlineObjectReferences references={nonImageReferences.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
     </div>
   );
@@ -49,9 +57,11 @@ export function MessageContent({
 
 function MessageImageAttachments({
   references,
+  previewConfig,
   onObjectFocus,
 }: {
   references: ObjectReference[];
+  previewConfig?: WorkspacePreviewConfig;
   onObjectFocus: (reference: ObjectReference) => void;
 }) {
   if (!references.length) return null;
@@ -69,7 +79,7 @@ function MessageImageAttachments({
             title={reference.summary || reference.title || previewRef}
             data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}
           >
-            <img src={workspacePreviewRawUrl(previewRef)} alt={reference.title || 'Uploaded image'} loading="lazy" />
+            <img src={workspacePreviewRawUrl(previewRef, previewConfig)} alt={reference.title || 'Uploaded image'} loading="lazy" />
             <span>{reference.title || workspacePathBasename(previewRef)}</span>
           </button>
         );
@@ -84,12 +94,12 @@ export function inlineObjectReferencesForMessage(
   runId?: string,
   options: InlineObjectReferenceOptions = {},
 ) {
+  const userSelectedReferences = selectedMessageObjectReferences(message, session);
   if (message.role === 'user') {
-    const userReferences = (message.references ?? [])
-      .map((reference) => currentObjectReferenceFromComposerReference(withInferredCurrentObjectReference(reference)))
-      .filter((reference): reference is ObjectReference => Boolean(reference))
-      .filter((reference) => isVisibleMessageObjectReference(reference, session, { userSelected: true }));
-    return mergeObjectReferences(userReferences, [], 40);
+    return mergeObjectReferences(userSelectedReferences, [], 40);
+  }
+  if (message.role === 'system' && userSelectedReferences.length) {
+    return mergeObjectReferences(userSelectedReferences, [], 40);
   }
   const run = runId ? session.runs.find((item) => item.id === runId) : undefined;
   const runArtifactRefs = new Set((run?.objectReferences ?? [])
@@ -121,9 +131,17 @@ export function unmentionedObjectReferencesForMessage(message: SciForgeMessage, 
   return inlineObjectReferencesForMessage(message, session, runId);
 }
 
+function selectedMessageObjectReferences(message: SciForgeMessage, session: SciForgeSession) {
+  return (message.references ?? [])
+    .map((reference) => currentObjectReferenceFromComposerReference(withInferredCurrentObjectReference(reference)))
+    .filter((reference): reference is ObjectReference => Boolean(reference))
+    .filter((reference) => isVisibleMessageObjectReference(reference, session, { userSelected: true }));
+}
+
 function isVisibleMessageObjectReference(reference: ObjectReference, session: SciForgeSession, options: { userSelected?: boolean } = {}) {
   const hasExplicitUserFacingRole = hasExplicitUserFacingObjectReferenceRole(reference);
   const role = objectReferencePresentationRole(reference);
+  if (options.userSelected && isImageObjectReferenceWithWorkspacePreview(reference)) return true;
   if (reference.kind === 'artifact') {
     const artifact = artifactForObjectReference(reference, session);
     return artifactHasUserFacingDelivery(artifact)
@@ -188,9 +206,14 @@ function isSafeWorkspacePreviewRef(ref: string) {
     && !trimmed.includes('..');
 }
 
-function workspacePreviewRawUrl(ref: string) {
-  const params = new URLSearchParams({ ref });
-  return `/api/sciforge/preview/raw?${params.toString()}`;
+function workspacePreviewRawUrl(ref: string, config?: WorkspacePreviewConfig) {
+  const params = new URLSearchParams();
+  params.set('ref', ref);
+  const workspacePath = config?.workspacePath?.trim();
+  if (workspacePath) params.set('workspacePath', workspacePath);
+  const workspaceWriterBaseUrl = config?.workspaceWriterBaseUrl?.trim().replace(/\/+$/, '');
+  const path = `/api/sciforge/preview/raw?${params.toString()}`;
+  return workspaceWriterBaseUrl ? `${workspaceWriterBaseUrl}${path}` : path;
 }
 
 function fileReferencesForMentionedObjects(

@@ -26,6 +26,19 @@ export function MarkdownRenderer({
 }) {
   const components: Components = {
     a({ href, children }) {
+      const inlineReference = inlineReferenceForLinkLabel(children, objectReferences);
+      if (inlineReference && onObjectReferenceFocus) {
+        return (
+          <button
+            type="button"
+            className="markdown-object-ref message-object-link"
+            onClick={() => onObjectReferenceFocus(inlineReference)}
+            data-sciforge-reference={sciForgeReferenceAttribute(referenceWithObjectPayload(inlineReference))}
+          >
+            {children}
+          </button>
+        );
+      }
       const autolinkBoundary = splitAutolinkLiteralBoundary(children);
       if (autolinkBoundary) {
         const safeHref = safeMarkdownHref(autolinkBoundary.href);
@@ -93,6 +106,11 @@ export function MarkdownRenderer({
       </ReactMarkdown>
     </div>
   );
+}
+
+function inlineReferenceForLinkLabel(children: ReactNode, objectReferences: ObjectReference[]) {
+  const label = textFromReactNode(children).trim();
+  return label ? resolveInlineObjectReferenceToken(label, objectReferences) : undefined;
 }
 
 function safeMarkdownHref(value: string | undefined): string | undefined {

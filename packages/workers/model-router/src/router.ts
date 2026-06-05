@@ -534,26 +534,38 @@ function extractTextualModalityRefs(userText: string, startOrdinal: number): { u
 }
 
 function extractAskCommandRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
-  const tokens = tokenizeCommandLikeText(userText);
-  if (tokens[0] !== 'ask' || !tokens.includes('--ref')) return { userText, modalities: [] };
-
+  const lines = userText.split(/\r?\n/);
+  const retainedLines: string[] = [];
   const retained: string[] = [];
   const modalities: ModalityRef[] = [];
   let ordinal = startOrdinal;
-  for (let index = 1; index < tokens.length; index += 1) {
-    if (tokens[index] === '--ref') {
-      const candidate = tokens[index + 1];
-      if (candidate && isAllowedTextualModalityRef(candidate)) {
-        modalities.push(modalityRefFromTextualRef(candidate, ordinal));
-        ordinal += 1;
-      }
-      if (candidate) index += 1;
+  let foundAskRefLine = false;
+
+  for (const line of lines) {
+    const tokens = tokenizeCommandLikeText(line);
+    if (tokens[0] !== 'ask' || !tokens.includes('--ref')) {
+      retainedLines.push(line);
       continue;
     }
-    retained.push(tokens[index]);
+    foundAskRefLine = true;
+    retained.length = 0;
+    for (let index = 1; index < tokens.length; index += 1) {
+      if (tokens[index] === '--ref') {
+        const candidate = tokens[index + 1];
+        if (candidate && isAllowedTextualModalityRef(candidate)) {
+          modalities.push(modalityRefFromTextualRef(candidate, ordinal));
+          ordinal += 1;
+        }
+        if (candidate) index += 1;
+        continue;
+      }
+      retained.push(tokens[index]!);
+    }
+    if (retained.length) retainedLines.push(retained.join(' '));
   }
+  if (!foundAskRefLine) return { userText, modalities: [] };
   return {
-    userText: retained.join(' ').trim(),
+    userText: retainedLines.join('\n').trim(),
     modalities,
   };
 }
@@ -807,14 +819,14 @@ function parseTextControl(content: string): TextControl | undefined {
   return undefined;
 }
 
-function responseObject(result: RoutedResponse): JsonObject {
+function responseObject(result: RoutedResponse, messageItemId?: string): JsonObject {
   return {
     id: result.responseId,
     object: 'response',
     created_at: Math.floor(Date.now() / 1000),
     model: result.model,
     status: 'completed',
-    output: [messageOutputItem(result.outputText)],
+    output: [messageOutputItem(result.outputText, messageItemId)],
     output_text: result.outputText,
     metadata: {
       traceRef: result.traceRef,
@@ -823,14 +835,61 @@ function responseObject(result: RoutedResponse): JsonObject {
 }
 
 function sendResponseStream(response: ServerResponse, result: RoutedResponse) {
+  const outputIndex = 0;
+  const contentIndex = 0;
+  const messageItemId = makeId('msg');
+  const completedMessage = messageOutputItem(result.outputText, messageItemId);
   response.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
   writeSse(response, 'response.created', { type: 'response.created', response: { id: result.responseId, model: result.model, status: 'in_progress' } });
-  writeSse(response, 'response.output_text.delta', { type: 'response.output_text.delta', delta: result.outputText });
-  writeSse(response, 'response.completed', { type: 'response.completed', response: responseObject(result) });
+  writeSse(response, 'response.output_item.added', {
+    type: 'response.output_item.added',
+    output_index: outputIndex,
+    item: {
+      id: messageItemId,
+      type: 'message',
+      status: 'in_progress',
+      role: 'assistant',
+      content: [],
+    },
+  });
+  writeSse(response, 'response.content_part.added', {
+    type: 'response.content_part.added',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    part: { type: 'output_text', text: '', annotations: [] },
+  });
+  writeSse(response, 'response.output_text.delta', {
+    type: 'response.output_text.delta',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    delta: result.outputText,
+  });
+  writeSse(response, 'response.output_text.done', {
+    type: 'response.output_text.done',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    text: result.outputText,
+  });
+  writeSse(response, 'response.content_part.done', {
+    type: 'response.content_part.done',
+    item_id: messageItemId,
+    output_index: outputIndex,
+    content_index: contentIndex,
+    part: { type: 'output_text', text: result.outputText, annotations: [] },
+  });
+  writeSse(response, 'response.output_item.done', {
+    type: 'response.output_item.done',
+    output_index: outputIndex,
+    item: completedMessage,
+  });
+  writeSse(response, 'response.completed', { type: 'response.completed', response: responseObject(result, messageItemId) });
   response.write('data: [DONE]\n\n');
   response.end();
 }

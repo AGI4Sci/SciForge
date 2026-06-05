@@ -35,7 +35,7 @@ test('right pane lifecycle creates localized default tabs and restores missing p
   assert.equal(defaults[0]?.id, 'base:primary');
   assert.equal(defaults[0]?.label, '结果');
   assert.equal(defaults[2]?.id, 'base:image');
-  assert.equal(defaults[2]?.label, '图片 / 证据');
+  assert.equal(defaults[2]?.label, '图片');
   assert.equal(defaults.at(-1)?.label, '引用');
 
   const existing = [{ id: 'custom:browser:1:1', kind: 'browser' as const, label: 'Browser', closable: true }];
@@ -170,10 +170,25 @@ test('right pane lifecycle storage preserves explicit empty state and prunes sta
     }));
     const legacyScreen = loadStoredRightPaneState(legacyScreenKey, 'en-US', 'screen');
     assert.deepEqual(legacyScreen.tabs.map((tab) => [tab.id, tab.kind, tab.label]), [
-      ['base:image', 'image', 'Image / Evidence'],
-      ['custom:image:42:2', 'image', 'Image / Evidence 2'],
+      ['base:image', 'image', 'Image'],
+      ['custom:image:42:2', 'image', 'Image 2'],
     ]);
     assert.equal(legacyScreen.activeTabId, 'base:image');
+
+    const legacyImageEvidenceKey = rightPaneStateStorageKey('/workspace/legacy-image-evidence');
+    storage.setItem(legacyImageEvidenceKey, JSON.stringify({
+      tabs: [
+        { id: 'base:image', kind: 'image', label: 'Image / Evidence' },
+        { id: 'custom:image:42:2', kind: 'image', label: 'Image / Evidence 2' },
+      ],
+      activeTabId: 'base:image',
+      browserTabAddresses: {},
+    }));
+    const legacyImageEvidence = loadStoredRightPaneState(legacyImageEvidenceKey, 'en-US', 'image');
+    assert.deepEqual(legacyImageEvidence.tabs.map((tab) => [tab.id, tab.kind, tab.label]), [
+      ['base:image', 'image', 'Image'],
+      ['custom:image:42:2', 'image', 'Image 2'],
+    ]);
 
     storage.failWrites = true;
     assert.doesNotThrow(() => saveStoredRightPaneState(rightPaneStateStorageKey('/workspace/write-fail'), {

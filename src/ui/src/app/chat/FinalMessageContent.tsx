@@ -1,6 +1,6 @@
 import type { ObjectReference } from '../../domain';
 import { isUserFacingObjectReference, mergeObjectReferences, normalizeObjectReferencePresentationRole } from '../../../../../packages/support/object-references';
-import { MessageContent } from './MessageContent';
+import { MessageContent, type WorkspacePreviewConfig } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 import { sanitizeUserProjectionText } from '../conversation-projection-view-model';
 import { hasRuntimeGuiSurface, RuntimeGuiPanel, type RuntimeGuiSurface } from './RuntimeGuiPanel';
@@ -13,6 +13,7 @@ export function FinalMessageContent({
   runtimeGui,
   onGuiCommand,
   onObjectFocus,
+  previewConfig,
 }: {
   content: string;
   references: ObjectReference[];
@@ -20,6 +21,7 @@ export function FinalMessageContent({
   runtimeGui?: RuntimeGuiSurface;
   onGuiCommand?: (commandText: string) => void;
   onObjectFocus: (reference: ObjectReference) => void;
+  previewConfig?: WorkspacePreviewConfig;
 }) {
   const presentation = splitFinalMessagePresentation(content, resultPresentation);
   const effectiveReferences = mergeResultPresentationReferences(references, resultPresentation);
@@ -35,6 +37,7 @@ export function FinalMessageContent({
           references={effectiveReferences}
           onObjectFocus={onObjectFocus}
           className="final-answer-prose"
+          previewConfig={previewConfig}
         />
       ) : null}
       {showRuntimeGui ? (
@@ -46,7 +49,12 @@ export function FinalMessageContent({
           <div className="execution-process-body">
             {presentation.auditSections.map((section, index) => (
               <div className="final-message-audit-section" key={`${section.evidenceType}-${index}`}>
-                <MessageContent content={sanitizeUserProjectionText(section.text) ?? section.text} references={effectiveReferences} onObjectFocus={onObjectFocus} />
+                <MessageContent
+                  content={sanitizeUserProjectionText(section.text) ?? section.text}
+                  references={effectiveReferences}
+                  onObjectFocus={onObjectFocus}
+                  previewConfig={previewConfig}
+                />
               </div>
             ))}
           </div>

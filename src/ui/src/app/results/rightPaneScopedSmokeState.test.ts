@@ -46,7 +46,7 @@ test('right pane scoped smoke seed creates scoped sanitized storage entries', ()
   assert.deepEqual(seed.rightPaneState.tabs.map((tab) => tab.label), [
     'Results',
     'Browser',
-    'Image / Evidence',
+    'Image',
     'Terminal',
     'Files',
     'References',
@@ -84,7 +84,7 @@ test('right pane scoped smoke evidence is bounded and redacts payload-like label
     tabLabels: [
       'Results',
       'Browser',
-      'Image / Evidence',
+      'Image',
       'Terminal',
       'Files',
       'References',
@@ -130,7 +130,7 @@ test('right pane scoped smoke evidence is bounded and redacts payload-like label
   assert.deepEqual(evidence.tabLabels, [
     'Results',
     'Browser',
-    'Image / Evidence',
+    'Image',
     'Terminal',
     'Files',
     'References',
@@ -157,7 +157,7 @@ test('right pane scoped smoke signal collector returns bounded selector facts on
     [selectors.tabs]: [
       fakeElement('Results'),
       selectedTab,
-      fakeElement('Image / Evidence'),
+      fakeElement('Image'),
       fakeElement('Terminal'),
       fakeElement('Files'),
       fakeElement('References'),
@@ -189,7 +189,7 @@ test('right pane scoped smoke signal collector returns bounded selector facts on
   assert.equal(evidence.shellCount, 1);
   assert.equal(evidence.tablistCount, 1);
   assert.equal(evidence.tabCount, 6);
-  assert.deepEqual(evidence.tabLabels, ['Results', 'Browser', 'Image / Evidence', 'Terminal', 'Files', 'References']);
+  assert.deepEqual(evidence.tabLabels, ['Results', 'Browser', 'Image', 'Terminal', 'Files', 'References']);
   assert.equal(evidence.selectedTabLabel, 'Browser');
   assert.equal(evidence.selectedPanelLabelledBySelectedTab, true);
   assert.equal(evidence.fixedNewActionCount, 1);
@@ -238,7 +238,7 @@ test('right pane scoped smoke default-tab evidence fails closed when tabstrip is
   const evidence = createRightPaneScopedSmokeEvidence({
     tablistCount: 0,
     tabCount: 6,
-    tabLabels: ['Results', 'Browser', 'Image / Evidence', 'Terminal', 'Files', 'References'],
+    tabLabels: ['Results', 'Browser', 'Image', 'Terminal', 'Files', 'References'],
   });
 
   assert.equal(rightPaneScopedSmokeEvidenceHasDefaultTabs(evidence), false);

@@ -1,4 +1,4 @@
-import { stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { build } from 'esbuild';
 
@@ -9,6 +9,9 @@ type DesktopSidecarBundle = {
 };
 
 const projectRoot = process.cwd();
+const staleSidecarOutfiles = [
+  'dist-desktop/packages/backend/src/cli.js',
+];
 const sidecars: DesktopSidecarBundle[] = [
   {
     label: 'workspace-server',
@@ -16,9 +19,9 @@ const sidecars: DesktopSidecarBundle[] = [
     outfile: 'dist-desktop/src/runtime/workspace-server.js',
   },
   {
-    label: 'provider-proxy',
-    entryPoint: 'packages/backend/src/cli.ts',
-    outfile: 'dist-desktop/packages/backend/src/cli.js',
+    label: 'model-router',
+    entryPoint: 'packages/workers/model-router/src/cli.ts',
+    outfile: 'dist-desktop/packages/workers/model-router/src/cli.js',
   },
   {
     label: 'runtime-codex',
@@ -26,6 +29,8 @@ const sidecars: DesktopSidecarBundle[] = [
     outfile: 'dist-desktop/src/runtime/codex/codex-runtime-standalone-server.js',
   },
 ];
+
+await Promise.all(staleSidecarOutfiles.map((outfile) => rm(resolve(projectRoot, outfile), { force: true })));
 
 for (const sidecar of sidecars) {
   const outfile = resolve(projectRoot, sidecar.outfile);

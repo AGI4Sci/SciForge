@@ -11,6 +11,7 @@ import {
   type ManagedRuntimeServiceSpec,
   type SpawnManagedProcess,
 } from './runtime-launcher.js';
+import { RUNTIME_MODEL } from '../../../packages/backend/src/runtime-home.js';
 
 test('production launcher exposes ready and health over dynamic loopback control port', async () => {
   const root = await tempRoot();
@@ -214,6 +215,78 @@ test('production launcher projects only non-secret proxy config into app-data co
       delete process.env.SCIFORGE_CONFIG_PATH;
     } else {
       process.env.SCIFORGE_CONFIG_PATH = previousConfigPath;
+    }
+    await launcher.shutdown();
+  }
+});
+
+test('production launcher maps local provider config into Model Router role env and public runtime alias', async () => {
+  const root = await tempRoot();
+  const sourceConfig = join(root, 'source-config.local.json');
+  await writeFile(sourceConfig, JSON.stringify({
+    codexProxy: {
+      upstreamBaseUrl: 'https://provider.example.test/openai-compatible',
+      defaultModel: 'bailian/deepseek-v4-flash',
+      apiKey: 'sk-local-dev-secret',
+    },
+    visionSense: {
+      vlmModel: 'qwen3.7-plus',
+    },
+  }), 'utf8');
+  const envKeys = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE',
+    'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+  ];
+  const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  process.env.SCIFORGE_CONFIG_PATH = sourceConfig;
+
+  const child = new FakeChild(1204);
+  const capturedEnv: NodeJS.ProcessEnv[] = [];
+  const launcher = new ProductionRuntimeLauncher({
+    workspacePath: join(root, 'workspace'),
+    appDataRoot: join(root, 'app-data'),
+    requestedControlPort: 0,
+    requestedProviderProxyPort: 0,
+    services: [service('provider-proxy')],
+    spawnProcess: ((_command, _args, options) => {
+      capturedEnv.push(options.env);
+      return child;
+    }) as SpawnManagedProcess,
+  });
+
+  try {
+    const started = await launcher.start();
+    const providerBinding = started.ports.find((port) => port.name === 'provider-proxy');
+    assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_MODEL, RUNTIME_MODEL);
+    assert.equal(capturedEnv[0]?.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS, RUNTIME_MODEL);
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_BASE_URL, 'https://provider.example.test/openai-compatible');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_BASE_URL, 'https://provider.example.test/openai-compatible');
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_MODEL, 'bailian/deepseek-v4-flash');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_MODEL, 'qwen3.7-plus');
+    assert.equal(capturedEnv[0]?.SCIFORGE_TEXT_API_KEY, 'sk-local-dev-secret');
+    assert.equal(capturedEnv[0]?.SCIFORGE_VISION_API_KEY, 'sk-local-dev-secret');
+    assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, providerBinding?.url);
+
+    const runtimeConfig = await readFile(join(root, 'app-data', 'runtime-codex', 'codex-home', 'config.toml'), 'utf8');
+    assert.match(runtimeConfig, /model = "sciforge-router"/);
+    assert.match(runtimeConfig, /base_url = "http:\/\/127\.0\.0\.1:\d+\/v1"/);
+    assert.doesNotMatch(runtimeConfig, /bailian\/deepseek-v4-flash|provider\.example\.test|sk-local-dev-secret/);
+  } finally {
+    for (const [key, value] of previousEnv) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
     }
     await launcher.shutdown();
   }

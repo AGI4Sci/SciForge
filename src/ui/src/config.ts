@@ -53,6 +53,7 @@ type SciForgeDesktopBridge = {
   startDesktopAnnotation?: (input?: DesktopAnnotationStartInput) => Promise<unknown>;
   cancelAnnotation?: (input?: unknown) => Promise<unknown>;
   getAnnotationState?: (input?: unknown) => Promise<unknown>;
+  openExternal?: (url: string) => Promise<unknown>;
   pickDirectory?: (defaultPath?: string) => Promise<{ ok?: boolean; path?: string }>;
 };
 

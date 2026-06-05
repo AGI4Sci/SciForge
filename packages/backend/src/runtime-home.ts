@@ -85,7 +85,7 @@ export async function ensureRuntimeHome(options: RuntimeHomeOptions = {}): Promi
     providerName: options.providerName,
     model: options.model ?? runtimeModelForEnv(options.paths?.env),
   });
-  if (options.overwrite || !(await fileExists(paths.configPath))) {
+  if (options.overwrite || await shouldWriteRuntimeConfig(paths.configPath, config)) {
     await writeFile(paths.configPath, config, 'utf8');
   }
   return paths;
@@ -196,13 +196,39 @@ export function assertPathInside(child: string, parent: string, label: string): 
   throw new Error(`${label} must stay inside ${resolvedParent}: ${resolvedChild}`);
 }
 
-async function fileExists(path: string): Promise<boolean> {
+async function shouldWriteRuntimeConfig(path: string, desiredConfig: string): Promise<boolean> {
   try {
-    await readFile(path);
-    return true;
+    const currentConfig = await readFile(path, 'utf8');
+    return !managedRuntimeConfigMatches(currentConfig, desiredConfig);
   } catch {
-    return false;
+    return true;
   }
+}
+
+function managedRuntimeConfigMatches(currentConfig: string, desiredConfig: string): boolean {
+  const current = runtimeConfigSignature(currentConfig);
+  const desired = runtimeConfigSignature(desiredConfig);
+  return current.profile === desired.profile
+    && current.model === desired.model
+    && current.provider === desired.provider
+    && current.providerBaseUrl === desired.providerBaseUrl
+    && current.providerEnvKey === desired.providerEnvKey
+    && current.providerWireApi === desired.providerWireApi;
+}
+
+function runtimeConfigSignature(config: string) {
+  const profile = valueForKey(config, 'profile');
+  const profileConfig = profile ? tableBlock(config, `profiles.${profile}`) : '';
+  const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
+  const providerConfig = provider ? tableBlock(config, `model_providers.${provider}`) : '';
+  return {
+    profile,
+    model: valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model'),
+    provider,
+    providerBaseUrl: valueForKey(providerConfig, 'base_url'),
+    providerEnvKey: valueForKey(providerConfig, 'env_key'),
+    providerWireApi: valueForKey(providerConfig, 'wire_api'),
+  };
 }
 
 function tableBlock(config: string, table: string): string {

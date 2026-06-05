@@ -22,7 +22,7 @@ export const RESULT_PANE_LIFECYCLE_STATES = [
 export type ResultPaneLifecycleState = typeof RESULT_PANE_LIFECYCLE_STATES[number];
 export type ResultPaneObjectStateKind = ResultPaneLifecycleState | 'unsupported';
 export type ResultPaneRoutePurpose = 'focus' | 'open';
-export type ResultPaneRouteReason = 'preferred-view' | 'ref-prefix' | 'artifact-type' | 'object-kind' | 'fallback' | 'unsupported';
+export type ResultPaneRouteReason = 'preferred-view' | 'ref-prefix' | 'artifact-type' | 'image-ref' | 'object-kind' | 'fallback' | 'unsupported';
 
 export type ResultPaneRedactionHint =
   | 'refs-first'
@@ -435,6 +435,34 @@ export function resolveResultPaneRoute(reference: unknown, options: { purpose?: 
   const routeRef = objectRef ?? rawStringRef;
   const artifactType = cleanInlineString(record?.artifactType);
   const preferredView = cleanInlineString(record?.preferredView);
+  const imageArtifactTypeRoute = objectKind === 'artifact' ? paneForArtifactType(artifactType) : undefined;
+  if (imageArtifactTypeRoute?.pane === 'image') {
+    return {
+      pane: 'image',
+      purpose,
+      reason: 'artifact-type',
+      composerInsertion: false,
+      matched: imageArtifactTypeRoute.label,
+      objectKind,
+      objectRef,
+      artifactType,
+      preferredView,
+    };
+  }
+  const imageRefRoute = paneForGenericImageRef(record, routeRef);
+  if (imageRefRoute) {
+    return {
+      pane: 'image',
+      purpose,
+      reason: 'image-ref',
+      composerInsertion: false,
+      matched: imageRefRoute.label,
+      objectKind,
+      objectRef: routeRef,
+      artifactType,
+      preferredView,
+    };
+  }
   const preferredRoute = paneForPreferredView(preferredView);
   if (preferredRoute) {
     return {
@@ -603,6 +631,21 @@ function paneForArtifactType(artifactType: string | undefined): { pane: ResultPa
   return match ? { pane: match.pane, label: match.label } : undefined;
 }
 
+function paneForGenericImageRef(record: Record<string, unknown> | undefined, ref: string | undefined): { pane: ResultPaneTab; label: string } | undefined {
+  const provenance = isRecord(record?.provenance) ? record.provenance : undefined;
+  const candidates = [
+    ref,
+    cleanInlineString(record?.title),
+    cleanInlineString(record?.summary),
+    cleanInlineString(provenance?.path),
+    cleanInlineString(provenance?.dataRef),
+    cleanInlineString(provenance?.screenshotRef),
+  ];
+  return candidates.some(isGenericImageRefText)
+    ? { pane: 'image', label: 'image-ref' }
+    : undefined;
+}
+
 function paneForRefPrefix(ref: string | undefined): { pane: ResultPaneTab; prefix: string } | undefined {
   if (!ref) return undefined;
   let best: { pane: ResultPaneTab; prefix: string } | undefined;
@@ -696,6 +739,17 @@ function refPrefixFor(ref: string | undefined): string | undefined {
 function refStartsWithPrefix(ref: string, prefix: string): boolean {
   if (prefix === 'EU-') return ref.startsWith(prefix);
   return ref.toLowerCase().startsWith(prefix.toLowerCase());
+}
+
+function isGenericImageRefText(value: string | undefined) {
+  if (!value) return false;
+  const raw = value.trim();
+  if (/^(?:image|image-evidence|screenshot|annotation|crop|browser-evidence|window-capture|screen-region|screen|virtual-app-screen):/i.test(raw)
+    || /^computer-use:frames?/i.test(raw)) {
+    return false;
+  }
+  const text = raw.replace(/^file::?/i, '').trim();
+  return /\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(text);
 }
 
 function isObjectReferenceKind(value: unknown): value is ObjectReferenceKind {

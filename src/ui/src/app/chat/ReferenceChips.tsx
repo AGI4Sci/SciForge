@@ -79,6 +79,7 @@ export function SciForgeReferenceChips({
             className="sciforge-reference-chip"
             title={reference.summary || reference.ref}
             onClick={() => onFocus?.(reference)}
+            data-sciforge-reference={sciForgeReferenceAttribute(reference)}
           >
             <span>{referenceComposerMarker(reference)}</span>
             <strong>{reference.title}</strong>

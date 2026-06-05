@@ -328,7 +328,7 @@ test('R-PKG packaged app artifact inspection reads app.asar main, preload, and r
 	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/src/desktop/main.js'));
 	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/src/desktop/preload.cjs'));
 	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/src/runtime/workspace-server.js'));
-	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/packages/backend/src/cli.js'));
+	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/packages/workers/model-router/src/cli.js'));
 	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-desktop/src/runtime/codex/codex-runtime-standalone-server.js'));
 	  assert.ok(inspection.evidence.extractedFiles.some((file) => file.path === 'dist-ui/index.html'));
   assert.equal(inspection.liveAcceptanceSummary?.credentialsRequired, false);
@@ -435,7 +435,7 @@ async function createPackagedAppFixture(
   await mkdir(macOsPath, { recursive: true });
 	  await mkdir(join(asarSourcePath, 'dist-desktop', 'src', 'desktop'), { recursive: true });
 	  await mkdir(join(asarSourcePath, 'dist-desktop', 'src', 'runtime', 'codex'), { recursive: true });
-	  await mkdir(join(asarSourcePath, 'dist-desktop', 'packages', 'backend', 'src'), { recursive: true });
+	  await mkdir(join(asarSourcePath, 'dist-desktop', 'packages', 'workers', 'model-router', 'src'), { recursive: true });
 	  await mkdir(join(asarSourcePath, 'dist-ui'), { recursive: true });
   await writeFile(join(appPath, 'Contents', 'Info.plist'), infoPlistFixture(), 'utf8');
   await writeFile(join(macOsPath, 'SciForge'), '#!/bin/sh\nexit 0\n', 'utf8');
@@ -454,8 +454,8 @@ async function createPackagedAppFixture(
 	    join(asarSourcePath, 'dist-desktop', 'src', 'runtime', 'workspace-server.js'),
 	  );
 	  await copyFile(
-	    join(process.cwd(), 'dist-desktop', 'packages', 'backend', 'src', 'cli.js'),
-	    join(asarSourcePath, 'dist-desktop', 'packages', 'backend', 'src', 'cli.js'),
+	    join(process.cwd(), 'dist-desktop', 'packages', 'workers', 'model-router', 'src', 'cli.js'),
+	    join(asarSourcePath, 'dist-desktop', 'packages', 'workers', 'model-router', 'src', 'cli.js'),
 	  );
 	  await copyFile(
 	    join(process.cwd(), 'dist-desktop', 'src', 'runtime', 'codex', 'codex-runtime-standalone-server.js'),

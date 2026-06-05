@@ -24,6 +24,23 @@ function htmlFor(payload: Partial<ImageEvidencePayload> = {}) {
   }));
 }
 
+function htmlForWorkspacePreview(payload: Partial<ImageEvidencePayload> = {}) {
+  return renderToStaticMarkup(renderImageEvidenceViewer({
+    ...basicImageEvidenceViewerFixture,
+    config: {
+      workspaceWriterBaseUrl: 'http://127.0.0.1:6173/',
+      workspacePath: '/tmp/sciforge workspace',
+    },
+    artifact: {
+      ...basicImageEvidenceViewerFixture.artifact,
+      data: {
+        ...(basicImageEvidenceViewerFixture.artifact?.data as ImageEvidencePayload),
+        ...payload,
+      },
+    },
+  }));
+}
+
 test('image-evidence-viewer exposes a generic refs-first image evidence manifest', () => {
   assert.equal(manifest.componentId, 'image-evidence-viewer');
   assert.deepEqual(IMAGE_EVIDENCE_SOURCE_KINDS, [
@@ -83,6 +100,31 @@ test('image-evidence-viewer renders refs-first image preview controls and eviden
   assert.match(html, /data-bounds="0,0,1440,900"/);
 
   assert.doesNotMatch(html, /data:image|base64|live|input-intent|provider|rebind|WindowActionSession|window-operation/);
+});
+
+test('image-evidence-viewer resolves preview and original URLs through the configured workspace writer', () => {
+  const html = htmlForWorkspacePreview({
+    imageRef: '.sciforge/uploads/session-a/microscopy.png',
+    ref: '.sciforge/uploads/session-a/microscopy.png',
+  });
+
+  assert.match(html, /src="http:\/\/127\.0\.0\.1:6173\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-a%2Fmicroscopy\.png&amp;workspacePath=%2Ftmp%2Fsciforge\+workspace"/);
+  assert.match(html, /data-image-url="http:\/\/127\.0\.0\.1:6173\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-a%2Fmicroscopy\.png&amp;workspacePath=%2Ftmp%2Fsciforge\+workspace"/);
+});
+
+test('image-evidence-viewer defaults to contained preview and lets the image open the original', () => {
+  const html = htmlForWorkspacePreview({
+    imageRef: '.sciforge/uploads/session-a/oversized-photo.png',
+    ref: '.sciforge/uploads/session-a/oversized-photo.png',
+    width: 3022,
+    height: 1954,
+  });
+
+  assert.match(html, /class="image-evidence-stage"[^>]*data-image-fit="contain"/);
+  assert.match(html, /class="image-evidence-frame"[^>]*data-image-fit="contain"/);
+  assert.match(html, /class="image-evidence-preview-button"[^>]*data-view-control="open-original"/);
+  assert.match(html, /class="image-evidence-preview-button"[^>]*data-image-url="http:\/\/127\.0\.0\.1:6173\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-a%2Foversized-photo\.png&amp;workspacePath=%2Ftmp%2Fsciforge\+workspace"/);
+  assert.match(html, /class="image-evidence-image"[^>]*data-image-fit="contain"/);
 });
 
 test('image-evidence-viewer supports every declared sourceKind without inline bytes', () => {

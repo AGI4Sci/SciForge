@@ -282,7 +282,7 @@ test('ResultsRenderer empty right pane exposes Cursor-like browser image termina
   assert.match(html, /data-right-pane-tool="terminal"/);
   assert.match(html, /data-right-pane-tool="files"/);
   assert.match(html, />Browser</);
-  assert.match(html, /Image \/ Evidence|图片 \/ 证据/);
+  assert.match(html, /Image|图片/);
   assert.match(html, />Terminal</);
   assert.match(html, />Files</);
   assert.match(html, /Nothing to preview yet/);
@@ -513,7 +513,7 @@ test('ResultsRenderer Image Evidence pane renders active Computer Use frame sour
   assert.match(html, /data-source-kind="replay"/);
   assert.match(html, /data-status="blocked"/);
   assert.match(html, /class="image-evidence-image"/);
-  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png"/);
+  assert.match(html, /src="[^"]*\/api\/sciforge\/preview\/raw\?ref=computer-use%3Asession%2Frun-screen%2Fframes%2Fafter\.png[^"]*workspacePath=%2Ftmp%2Fsciforge"/);
   assert.match(html, /data-image-ref="computer-use:session\/run-screen\/frames\/after\.png"/);
   assert.match(html, /computer-use:session\/run-screen\/replay\.json/);
   assert.doesNotMatch(html, /right-pane-virtual-screen-tool|virtual-screen-viewer|VirtualAppScreen|Permission gate|data-attach-state|input-intent|stop-session|permission-handoff|permission-recheck/);
@@ -750,7 +750,7 @@ test('ResultsRenderer Image Evidence tab derives Computer Use frame and replay r
   assert.match(html, /.sciforge\/computer-use\/run-cu-screen\/latest\.png/);
   assert.match(html, /computer-use:replay\/run-cu-screen\/replay\.json/);
   assert.match(html, /class="image-evidence-image"/);
-  assert.match(html, /src="\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png"/);
+  assert.match(html, /src="[^"]*\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fcomputer-use%2Frun-cu-screen%2Flatest\.png[^"]*workspacePath=%2Ftmp%2Fsciforge"/);
   assert.doesNotMatch(html, /right-pane-virtual-screen-tool|virtual-screen-viewer|data-attach-state|data-screen-surface-mode|\/computer-use observe/);
   assert.doesNotMatch(html, /computer-use:cursor\/run-cu-screen\/agent\.json|virtual-desktop-session-manifest\.json|providerRoute|executorLease|desktopBridge|rawScreenshot|base64/);
 });

@@ -10,6 +10,8 @@ APP_PATTERNS=(
   "dist-desktop/src/desktop/main.js"
   "dist-desktop/src/runtime/workspace-server.js"
   "dist-desktop/packages/backend/src/cli.js"
+  "dist-desktop/packages/workers/model-router/src/cli.js"
+  "packages/workers/model-router/src/cli.ts"
   "dist-desktop/src/runtime/codex/codex-runtime-standalone-server.js"
   "node_modules/.bin/vite"
 )
@@ -36,7 +38,11 @@ collect_app_pids() {
 }
 
 stop_existing_app() {
-  mapfile -t pids < <(collect_app_pids)
+  local pids=()
+  local pid
+  while IFS= read -r pid; do
+    [[ -n "$pid" ]] && pids+=("$pid")
+  done < <(collect_app_pids)
   if ((${#pids[@]} == 0)); then
     echo "[restart-app] no existing SciForge app processes found"
     return
