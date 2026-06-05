@@ -38,6 +38,11 @@ test('composer shows Codex-style context hints without provider, model, profile,
   assert.match(html, /data-local-environment="true"/);
   assert.match(html, /Assistant connected/);
   assert.match(html, /Writable/);
+  assert.match(html, /Autonomy/);
+  assert.match(html, /High Autonomy/);
+  for (const id of ['assisted-autonomy', 'high-autonomy', 'research-sandbox-max']) {
+    assert.match(html, new RegExp(`data-autonomy-option="${id}"`));
+  }
   assert.match(html, /Context/);
   assert.match(html, /Add agents, context, tools/);
   assert.match(html, /MCP Servers/);

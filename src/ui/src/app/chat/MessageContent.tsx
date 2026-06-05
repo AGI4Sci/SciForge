@@ -8,13 +8,12 @@ import {
   objectReferenceMentionedInText,
   objectReferencePresentationRole,
   objectReferenceForArtifactSummary,
-  referenceForObjectReference,
   sciForgeReferenceAttribute,
   workspacePathBasename,
 } from '../../../../../packages/support/object-references';
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer';
 import { InlineObjectReferences } from './InlineObjectReferences';
-import { currentObjectReferenceFromComposerReference, withInferredCurrentObjectReference } from './composerReferences';
+import { composerReferenceForObjectReference, currentObjectReferenceFromComposerReference, withInferredCurrentObjectReference } from './composerReferences';
 
 export interface InlineObjectReferenceOptions {
   workspaceObjectReferences?: ObjectReference[];
@@ -77,7 +76,7 @@ function MessageImageAttachments({
             className="message-image-attachment"
             onClick={() => onObjectFocus(reference)}
             title={reference.summary || reference.title || previewRef}
-            data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}
+            data-sciforge-reference={sciForgeReferenceAttribute(composerReferenceForObjectReference(reference))}
           >
             <img src={workspacePreviewRawUrl(previewRef, previewConfig)} alt={reference.title || 'Uploaded image'} loading="lazy" />
             <span>{reference.title || workspacePathBasename(previewRef)}</span>

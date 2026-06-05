@@ -55,7 +55,7 @@ import { waitForNextPaint } from './chat/nextPaint';
 import { fileToUploadedArtifact, objectReferenceForUploadedArtifact, referenceForUploadedArtifact } from './chat/uploadedArtifact';
 import { composerAgentHostCatalogForSession } from './chat/composerAgentHostCatalog';
 import { composerDeclaredIntentsForSession } from './chat/composerDeclaredIntents';
-import type { ComposerModeSelectionIntent, ComposerModelSelectionIntent } from './chat/composerToolMenu';
+import type { ComposerAutonomySelectionIntent, ComposerModeSelectionIntent, ComposerModelSelectionIntent } from './chat/composerToolMenu';
 import type { SupportedLocale } from '../i18n';
 import type { RuntimeHealthItem } from './runtimeHealthPanel';
 import { createGuiProtocolController } from './guiProtocol';
@@ -297,11 +297,19 @@ export function ChatPanel({
   const targetPeers = useMemo(() => enabledPeerInstances(config), [config.peerInstances]);
   const targetPeer = useMemo(() => selectedPeerInstance(config, targetInstanceName), [config.peerInstances, targetInstanceName]);
   const composerAgentHostCatalog = useMemo(() => composerAgentHostCatalogForSession(session), [session]);
-  const selectedComposerMode = composerDeclaredIntentsForSession(session)?.mode;
+  const composerDeclaredIntents = composerDeclaredIntentsForSession(session);
+  const selectedComposerMode = composerDeclaredIntents?.mode;
   const selectedComposerModeIntent = selectedComposerMode
     ? {
       id: selectedComposerMode.modeIntentId,
       label: selectedComposerMode.publicLabel,
+    }
+    : undefined;
+  const selectedComposerAutonomy = composerDeclaredIntents?.authorization;
+  const selectedComposerAutonomyIntent = selectedComposerAutonomy
+    ? {
+      id: selectedComposerAutonomy.profileId,
+      label: selectedComposerAutonomy.publicLabel,
     }
     : undefined;
   const chatPanelActions = useMemo(() => buildChatPanelActions({
@@ -957,6 +965,20 @@ export function ChatPanel({
     }));
   }
 
+  function handleAutonomyIntentSelect(intent: ComposerAutonomySelectionIntent) {
+    recordUIAction(createUpdateCapabilityPreferenceUIAction({
+      id: makeId('ui-action'),
+      session: activeSessionRef.current,
+      createdAt: nowIso(),
+      preference: {
+        intent: 'composer-autonomy-profile',
+        source: 'composer-autonomy-menu',
+        profileId: intent.id,
+        publicLabel: intent.label,
+      },
+    }));
+  }
+
   function handleModeIntentClear() {
     recordUIAction(createUpdateCapabilityPreferenceUIAction({
       id: makeId('ui-action'),
@@ -1430,6 +1452,7 @@ export function ChatPanel({
         toolProviderRoutes={config.toolProviderRoutes}
         agentHostCatalog={composerAgentHostCatalog}
         selectedModeIntent={selectedComposerModeIntent}
+        selectedAutonomyIntent={selectedComposerAutonomyIntent}
         topAddon={(
           <TargetInstanceSelector
             peers={targetPeers}
@@ -1453,6 +1476,7 @@ export function ChatPanel({
         onAbort={handleAbort}
         onModelIntentSelect={handleModelIntentSelect}
         onModeIntentSelect={handleModeIntentSelect}
+        onAutonomyIntentSelect={handleAutonomyIntentSelect}
         onClearModeIntent={handleModeIntentClear}
         onBeginResize={beginComposerResize}
       />

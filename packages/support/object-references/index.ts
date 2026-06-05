@@ -5,6 +5,9 @@ import type {
   SciForgeReferenceKind,
 } from '@sciforge-ui/runtime-contract/references';
 import {
+  objectActions,
+} from '@sciforge-ui/runtime-contract/references';
+import {
   artifactHasUserFacingDelivery as runtimeArtifactHasUserFacingDelivery,
   type RuntimeArtifact,
 } from '@sciforge-ui/runtime-contract/artifacts';
@@ -744,6 +747,7 @@ function safeReferenceAttribute(reference: SciForgeReference): SciForgeReference
     title: safeReferenceText(reference.title, '引用对象'),
     ref: safeReferenceRef(reference),
     sourceId: safeOptionalText(reference.sourceId),
+    runId: safeOptionalText(reference.runId),
     summary: safeOptionalText(reference.summary),
     locator: safeReferenceLocator(reference.locator),
     payload,
@@ -775,10 +779,22 @@ function safeObjectReference(value: unknown): ObjectReference | undefined {
     kind: kind as ObjectReference['kind'],
     title: safeReferenceText(title, '对象'),
     ref: safePublicRef(ref, kind),
+    artifactType: safeOptionalText(asString(value.artifactType)),
+    runId: safeOptionalText(asString(value.runId)),
+    executionUnitId: safeOptionalText(asString(value.executionUnitId)),
+    preferredView: safeOptionalText(asString(value.preferredView)),
+    presentationRole: normalizeObjectReferencePresentationRole(asString(value.presentationRole)),
+    actions: safeObjectActions(value.actions),
     status: normalizeObjectReferenceStatus(asString(value.status)),
     summary: safeOptionalText(asString(value.summary)),
     provenance: safeObjectReferenceProvenance(value.provenance),
   };
+}
+
+function safeObjectActions(value: unknown): ObjectAction[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const actions = value.filter((action): action is ObjectAction => (objectActions as readonly string[]).includes(String(action)));
+  return actions.length ? Array.from(new Set(actions)) : undefined;
 }
 
 function normalizeObjectReferenceStatus(value: string | undefined): ObjectReference['status'] | undefined {
@@ -789,13 +805,13 @@ function normalizeObjectReferenceStatus(value: string | undefined): ObjectRefere
 function safeObjectReferenceProvenance(value: unknown): ObjectReference['provenance'] | undefined {
   if (!isRecord(value)) return undefined;
   const provenance = {
-    dataRef: safeOptionalText(asString(value.dataRef)),
-    path: safeOptionalText(asString(value.path)),
+    dataRef: safeOptionalReferenceRef(asString(value.dataRef)),
+    path: safeOptionalReferenceRef(asString(value.path)),
     producer: safeOptionalText(asString(value.producer)),
     version: safeOptionalText(asString(value.version)),
     hash: safeOptionalText(asString(value.hash)),
     size: typeof value.size === 'number' && Number.isFinite(value.size) ? value.size : undefined,
-    screenshotRef: safeOptionalText(asString(value.screenshotRef)),
+    screenshotRef: safeOptionalReferenceRef(asString(value.screenshotRef)),
   };
   return Object.values(provenance).some((entry) => entry !== undefined) ? provenance : undefined;
 }
@@ -840,6 +856,21 @@ function safeOptionalText(value: string | undefined) {
   if (!compact) return undefined;
   if (unsafeReferenceText(compact)) return undefined;
   return compact.slice(0, 160);
+}
+
+function safeOptionalReferenceRef(value: string | undefined) {
+  if (!value) return undefined;
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (!compact) return undefined;
+  if (safeWorkspacePreviewRef(compact)) return compact.slice(0, 240);
+  if (unsafeReferenceText(compact)) return undefined;
+  return compact.slice(0, 240);
+}
+
+function safeWorkspacePreviewRef(value: string) {
+  const normalized = value.replace(/\\/g, '/');
+  return /^\.(?:\/)?sciforge\/(?:uploads|artifacts|previews|screenshots|image-annotations|vision-runs)\//i.test(normalized)
+    && !/(?:raw[-_\s]?jsonl|stdout|stderr|provider|token|secret|api[-_\s]?key|codex-runtime|agentserver:\/\/)/i.test(normalized);
 }
 
 function unsafeReferenceText(value: string) {

@@ -52,6 +52,13 @@ export interface ComposerModeSelectionIntent {
   label: string;
 }
 
+export type ComposerAutonomyProfileId = 'assisted-autonomy' | 'high-autonomy' | 'research-sandbox-max';
+
+export interface ComposerAutonomySelectionIntent {
+  id: ComposerAutonomyProfileId;
+  label: string;
+}
+
 export interface ComposerDraftStorageScope {
   workspaceId?: string;
   workspacePath?: string;
@@ -260,6 +267,14 @@ export function composerModeSelectionIntents(locale?: SupportedLocale): Composer
     { id: 'debug', label: chatText(locale, { 'zh-CN': 'Debug', 'en-US': 'Debug' }) },
     { id: 'multitask', label: chatText(locale, { 'zh-CN': 'Multitask', 'en-US': 'Multitask' }) },
     { id: 'ask', label: chatText(locale, { 'zh-CN': 'Ask', 'en-US': 'Ask' }) },
+  ];
+}
+
+export function composerAutonomySelectionIntents(locale?: SupportedLocale): ComposerAutonomySelectionIntent[] {
+  return [
+    { id: 'assisted-autonomy', label: chatText(locale, { 'zh-CN': 'Assisted Autonomy', 'en-US': 'Assisted Autonomy' }) },
+    { id: 'high-autonomy', label: chatText(locale, { 'zh-CN': 'High Autonomy', 'en-US': 'High Autonomy' }) },
+    { id: 'research-sandbox-max', label: chatText(locale, { 'zh-CN': 'Research Sandbox Max', 'en-US': 'Research Sandbox Max' }) },
   ];
 }
 

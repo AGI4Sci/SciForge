@@ -10,9 +10,10 @@ import test from 'node:test';
 import {
 	  GATEWAY_PIPELINE_STAGE_ORDER,
 	  GATEWAY_PIPELINE_STAGES,
-	  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
-	  STAGE_AGENTSERVER_GENERATION,
+  STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS,
+  STAGE_AGENTSERVER_GENERATION,
   STAGE_ARTIFACT_MUTATION_FAST_PATH,
+  STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
   STAGE_BROWSER_HOST_SEARCH_RUNTIME,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
   STAGE_CODEX_RUNTIME_BRIDGE,
@@ -283,6 +284,148 @@ test('Computer Use vision runtime bypasses prompt-derived browser provider prefl
   }
 });
 
+test('runtime gateway answers Computer Use capability questions from grounded readiness without fixed denial text', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-capability-answer-'));
+  const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  const events: any[] = [];
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'knowledge',
+      prompt: '你有 computer use 能力么？',
+      workspacePath: workspace,
+      artifacts: [],
+      references: [],
+      uiState: {
+        runtimeReadiness: {
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'blocked',
+            nativeSurface: 'blocked',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          refs: ['runtime-health:computer-use'],
+        },
+      },
+    }, {
+      onEvent(event) {
+        events.push(event);
+      },
+    });
+
+    assert.match(payload.message, /Computer Use product capability is supported/i);
+    assert.match(payload.message, /native-bridge-unavailable/);
+    assert.doesNotMatch(payload.message, /没有直接|no direct computer use/i);
+    assert.equal(payload.artifacts[0]?.type, 'runtime-capability-answer');
+    const stageAudits = events.filter((event) => event.type === 'gateway-pipeline-stage-audit');
+    assert.ok(stageAudits.some((event) => event.raw.stage === STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH && event.raw.shortCircuit === true));
+    assert.equal(stageAudits.some((event) => event.raw.stage === STAGE_AGENTSERVER_GENERATION), false);
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('runtime gateway sends GUI operation intent to Computer Use preflight and fails closed on missing native readiness', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-default-cu-preflight-'));
+  const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'knowledge',
+      prompt: 'Click the visible export button in the current window.',
+      workspacePath: workspace,
+      artifacts: [],
+      references: [],
+      uiState: {
+        runtimeReadiness: {
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'blocked',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+        },
+        computerUseTarget: {
+          bound: true,
+          summary: 'Current app window',
+          refs: ['window-action-session:current'],
+        },
+        freshObservation: {
+          fresh: true,
+          refs: ['computer-use:observation/current-frame.png'],
+        },
+        computerUsePermissions: {
+          refs: ['permission:turn/gui-action'],
+          stopCancelPath: true,
+        },
+      },
+    });
+
+    assert.match(payload.message, /Computer Use preflight blocked/i);
+    assert.match(payload.message, /native-surface-unavailable/);
+    assert.equal(payload.artifacts[0]?.type, 'computer-use-preflight');
+    assert.equal((payload.artifacts[0]?.data as any).status, 'blocked');
+    assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+    assert.doesNotMatch(JSON.stringify(payload), /agentserver\.generation|vision-sense-observation/);
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('runtime gateway pauses GUI submission intent for hard confirmation with refs-first projection', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-default-cu-hard-confirm-'));
+  const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
+  process.env.SCIFORGE_CONVERSATION_POLICY_MODE = 'off';
+  try {
+    const payload = await runWorkspaceRuntimeGateway({
+      skillDomain: 'knowledge',
+      prompt: 'Submit the registration form in the current browser window.',
+      workspacePath: workspace,
+      artifacts: [],
+      references: [],
+      uiState: {
+        runtimeReadiness: {
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+        },
+        computerUseTarget: {
+          bound: true,
+          summary: 'Registration form',
+          refs: ['browser-host-session:form'],
+        },
+        freshObservation: {
+          fresh: true,
+          refs: ['browser-host-session:form/frame.png'],
+        },
+        computerUsePermissions: {
+          refs: ['permission:turn/form-draft'],
+          stopCancelPath: true,
+        },
+      },
+    });
+
+    assert.match(payload.message, /requires hard confirmation/i);
+    assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+    const preflight = payload.artifacts[0]?.data as any;
+    assert.equal(preflight.status, 'needs-confirmation');
+    assert.equal(preflight.confirmation.action, 'Submit the registration form in the current browser window.');
+    assert.equal(preflight.confirmation.authorizationProfile.id, 'high-autonomy');
+    assert.deepEqual(preflight.confirmation.evidenceRefs, ['browser-host-session:form/frame.png', 'permission:turn/form-draft']);
+  } finally {
+    restoreEnv('SCIFORGE_CONVERSATION_POLICY_MODE', original);
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('gateway pipeline audit records stage sequence and replayable registry order', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-gateway-pipeline-audit-'));
   const original = process.env.SCIFORGE_CONVERSATION_POLICY_MODE;
@@ -334,6 +477,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
       [
         STAGE_CONVERSATION_POLICY,
         STAGE_REQUEST_ENRICHMENT,
+        STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
         STAGE_BROWSER_HOST_SEARCH_RUNTIME,
         STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
         STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME,
@@ -352,7 +496,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
     );
     assert.deepEqual(
       stageAudits.map((event) => event.raw.shortCircuit),
-      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
     );
     const dispatchAudit = stageAudits.at(-1);
     assert.equal(dispatchAudit.raw.stage, STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS);

@@ -17,7 +17,7 @@ import {
 import {
   SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
   type SciForgeAnnotationBounds,
-} from '../../../../shared/annotation-reference-contract';
+} from '../../../../../packages/contracts/runtime';
 
 export type RightPaneBrowserProjectionStatus = BrowserWorkbenchStateStatus;
 export type RightPaneBrowserProjectionTabStatus = 'new' | 'loading' | 'ready' | 'failed' | 'closed';

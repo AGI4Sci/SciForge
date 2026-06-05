@@ -4,6 +4,85 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RuntimeGuiPanel } from './RuntimeGuiPanel';
 
+test('runtime gui hard-confirm renders required public fields and controls without raw commands', () => {
+  const html = renderToStaticMarkup(createElement(RuntimeGuiPanel, {
+    surface: {
+      guiAskUser: {
+        kind: 'hard-confirm',
+        title: 'External form submission requires confirmation',
+        message: 'Please confirm the external submission.',
+        publicProjection: {
+          action: 'submit application form',
+          target: 'Example Jobs application form',
+          impact: 'Submits the prepared application to the external site.',
+          evidenceRefs: [
+            'browser-runtime:job-application/review-state',
+            'artifact:application-preview',
+            '.sciforge/raw/private-trace.json',
+            'stdout:.sciforge/stdout.log',
+          ],
+          authorizationProfile: 'High Autonomy',
+        },
+        approvalRequest: {
+          commandText: '/browser click --selector "#submit" --token sk-secret',
+          rawPayload: { token: 'sk-secret' },
+        },
+        choices: [
+          { label: 'Approve', commandText: '/computer-use approve --approval-ref approval-1', style: 'primary' },
+          { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1' },
+        ],
+      },
+    },
+    onCommand: () => undefined,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /data-gui-surface="confirmation"/);
+  assert.match(html, /Action<\/dt><dd>submit application form<\/dd>/);
+  assert.match(html, /Target<\/dt><dd>Example Jobs application form<\/dd>/);
+  assert.match(html, /Impact<\/dt><dd>Submits the prepared application to the external site\.<\/dd>/);
+  assert.match(html, /Authorization profile<\/dt><dd>High Autonomy<\/dd>/);
+  assert.match(html, /Evidence refs<\/dt>/);
+  assert.match(html, />review-state<\/button>/);
+  assert.match(html, />application-preview<\/button>/);
+  assert.match(html, />Confirm<\/span>/);
+  assert.match(html, />Cancel<\/span>/);
+  assert.doesNotMatch(html, /Approve|\/computer-use|\/browser|#submit|sk-secret|\.sciforge|stdout|rawPayload|private-trace/);
+});
+
+test('runtime gui blocked projection renders the same public fields without action execution chrome', () => {
+  const html = renderToStaticMarkup(createElement(RuntimeGuiPanel, {
+    surface: {
+      guiAskUser: {
+        kind: 'blocked',
+        title: 'Policy blocked',
+        message: 'The requested action is blocked by policy.',
+        publicProjection: {
+          action: 'bypass access control',
+          target: 'Account security challenge',
+          impact: 'Access-control bypasses are blocked.',
+          evidenceRefs: ['browser-runtime:account/security-challenge'],
+          authorizationProfile: 'High Autonomy',
+        },
+        choices: [
+          { label: 'Cancel', commandText: '/computer-use reject --approval-ref blocked-1' },
+        ],
+      },
+    },
+    onCommand: () => undefined,
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /data-gui-surface="confirmation"/);
+  assert.match(html, /Action<\/dt><dd>bypass access control<\/dd>/);
+  assert.match(html, /Target<\/dt><dd>Account security challenge<\/dd>/);
+  assert.match(html, /Impact<\/dt><dd>Access-control bypasses are blocked\.<\/dd>/);
+  assert.match(html, /Authorization profile<\/dt><dd>High Autonomy<\/dd>/);
+  assert.match(html, />security-challenge<\/button>/);
+  assert.match(html, />Cancel<\/span>/);
+  assert.doesNotMatch(html, />Confirm<\/span>|\/computer-use|blocked-1/);
+});
+
 test('runtime gui confirmation renders safe refs as focus buttons without command chrome', () => {
   const html = renderToStaticMarkup(createElement(RuntimeGuiPanel, {
     surface: {
@@ -33,9 +112,9 @@ test('runtime gui confirmation renders safe refs as focus buttons without comman
   assert.match(html, /data-object-kind="file"/);
   assert.match(html, />repair-evidence<\/button>/);
   assert.match(html, />repair\.md<\/button>/);
-  assert.match(html, />Approve<\/span>/);
+  assert.match(html, />Confirm<\/span>/);
   assert.match(html, />Cancel<\/span>/);
-  assert.doesNotMatch(html, /\.sciforge|stdout|deleteFile|Unsafe legacy|approval-1|\/computer-use approve|\/computer-use reject|Computer Use/);
+  assert.doesNotMatch(html, /\.sciforge|stdout|deleteFile|Unsafe legacy|approval-1|\/computer-use approve|\/computer-use reject|Computer Use|Approve/);
 });
 
 test('runtime gui presentation sanitizes provider diagnostics and raw payload text', () => {

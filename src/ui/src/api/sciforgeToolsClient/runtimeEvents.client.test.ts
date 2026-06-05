@@ -570,6 +570,119 @@ test('Runtime Codex foreground final message can use native assistant message pr
   }
 });
 
+test('Runtime Codex foreground tool-call protocol text fails closed instead of completing', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: 'I will inspect an internal tool.\\n\\n<｜DSML｜tool_call><｜DSML｜parameter name="path" string="true">/tmp/private-skill.md</｜DSML｜parameter></｜DSML｜tool_call>',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex 运行未完成/);
+    assert.doesNotMatch(response.message.content, /DSML|tool_call|private-skill/);
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    assert.equal(failure.failureKind, 'missing-gui-present');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex command text resolves relative modality requests from recent visible refs', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"schemaVersion":"sciforge.codex.normalized-event.v1","type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '解释上面的图片',
+      references: [],
+      messages: [{
+        id: 'msg-upload-image',
+        role: 'system',
+        content: '已上传 1 个文件作为引用：microscopy.png',
+        createdAt: '2026-05-19T00:00:00.000Z',
+        status: 'completed',
+        references: [{
+          id: 'ref-upload-image',
+          kind: 'file',
+          title: 'microscopy.png',
+          ref: 'artifact:upload-image-1',
+          summary: '用户上传文件 · uploaded-image',
+          payload: {
+            currentReference: {
+              id: 'obj-upload-image-1',
+              kind: 'artifact',
+              title: 'microscopy.png',
+              ref: 'artifact:upload-image-1',
+              artifactType: 'uploaded-image',
+              provenance: {
+                path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+                dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+              },
+            },
+          },
+        }],
+        objectReferences: [{
+          id: 'obj-upload-image-1',
+          kind: 'artifact',
+          title: 'microscopy.png',
+          ref: 'artifact:upload-image-1',
+          artifactType: 'uploaded-image',
+          provenance: {
+            path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+            dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+          },
+        }],
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const commandText = String(bodies[0]?.commandText ?? '');
+  assert.match(commandText, /--ref "?\.sciforge\/uploads\/session-1\/upload-image-1-microscopy\.png"?/);
+  assert.match(commandText, /解释上面的图片/);
+  assert.doesNotMatch(commandText, /data:image|base64|iVBORw0KGgo/i);
+});
+
 test('Runtime Codex foreground final message uses gui.present provenance', async () => {
   const originalFetch = globalThis.fetch;
   const commandIdPattern = /^codex-command-/;
@@ -1858,6 +1971,38 @@ test('Runtime Codex provider gateway failures surface a retryable upstream reaso
     assert.equal(failure.ownerLayer, 'provider-upstream');
     assert.equal(failure.retryable, true);
     assert.doesNotMatch(response.message.content, /127\.0\.0\.1:3891/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex provider retry summaries are promoted before generic failed exits', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = String(body.attemptId);
+      const retrySummary = 'Reconnecting... 1/5 (unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses)';
+      return new Response([
+        'event: provider-retry\n',
+        `data: ${JSON.stringify({ type: 'provider-retry', status: 'retrying', summary: retrySummary, provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
+        'event: failed\n',
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, exitCode: 1 })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    const recoverState = failure.recoverState as Record<string, unknown>;
+    const publicReason = 'Runtime Codex provider gateway returned 502 Bad Gateway. Treat this as an upstream/transient provider failure and retry with preserved audit refs.';
+
+    assert.equal(failure.publicFailureReason, publicReason);
+    assert.equal(recoverState.publicFailureReason, publicReason);
+    assert.equal(failure.failureKind, 'provider-gateway');
+    assert.equal(failure.ownerLayer, 'provider-upstream');
+    assert.doesNotMatch(JSON.stringify(response.run), /127\.0\.0\.1:3891/);
   } finally {
     globalThis.fetch = originalFetch;
   }

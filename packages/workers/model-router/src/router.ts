@@ -48,16 +48,18 @@ export interface StartedModelRouterServer {
   close(): Promise<void>;
 }
 
+type ModalityKind = 'vision.image' | 'audio' | 'video' | 'table' | 'document';
+
 type ModalityRef = {
   id: string;
-  kind: 'vision.image';
+  kind: ModalityKind;
   source: 'inline' | 'url' | 'ref';
   mime?: string;
   sha256: string;
   byteLength?: number;
   safeRef?: string;
   urlSha256?: string;
-  transientProviderPart: JsonObject;
+  transientProviderPart?: JsonObject;
 };
 
 type ProviderCallRecord = {
@@ -191,34 +193,51 @@ async function routeResponsesRequest(
   const traceRedactionSecrets = [textSecret, visionSecret]
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
 
+  const visionModalities = extracted.modalities.filter(isVisionImageModality);
+  const unsupportedModalities = extracted.modalities.filter((item) => !isVisionImageModality(item));
+
   if (extracted.modalities.length > 0) {
-    if (!profile.translators.vision || !visionSecret) {
-      throw routerError(400, 'missing_vision_translator', `Model Router profile "${profileId}" does not have a usable vision translator.`);
-    }
     await writeTraceJson(trace, 'input-modalities.json', {
       schemaVersion: 'sciforge.model-router.input-modalities.v1',
       modalities: extracted.modalities.map(publicModalityRef),
     });
+  }
+
+  if (unsupportedModalities.length > 0) {
+    degraded = true;
+    observations.push(...unsupportedModalities.map((item) => [
+      `modality_input=${item.id}`,
+      `kind=${item.kind}`,
+      'status=unsupported',
+      'reason=Model Router has no registered translator role for this modality kind in the active profile.',
+      'instruction=Answer from text-only context and explicitly state that the referenced modality could not be inspected.',
+    ].join('\n')));
+  }
+
+  if (visionModalities.length > 0) {
+    if (!profile.translators.vision || !visionSecret) {
+      throw routerError(400, 'missing_vision_translator', `Model Router profile "${profileId}" does not have a usable vision translator.`);
+    }
     const initial = await callVisionTranslator({
       profile,
       secret: visionSecret,
       fetchImpl: context.fetchImpl,
       instruction: extracted.userText || 'Describe the provided visual input.',
-      modalities: extracted.modalities,
+      modalities: visionModalities,
       phase: 'vision-initial',
       calls,
     }).catch((error: unknown) => {
       degraded = true;
       const summary = error instanceof Error ? error.message : String(error);
       calls.push(failedCallRecord(profile.translators.vision!, 'visionTranslator', 'vision-initial', summary, traceRedactionSecrets));
-      return `visual_input=${extracted.modalities.map((item) => item.id).join(',')}\nstatus=unavailable\nreason=${summary}\ninstruction=Answer from text-only context and explicitly state that the image could not be inspected.`;
+      return `visual_input=${visionModalities.map((item) => item.id).join(',')}\nstatus=unavailable\nreason=${summary}\ninstruction=Answer from text-only context and explicitly state that the image could not be inspected.`;
     });
     observations.push(initial);
-    await writeTraceJson(trace, `vision-initial-${extracted.modalities[0]?.id ?? 'image'}.json`, {
+    await writeTraceJson(trace, `vision-initial-${visionModalities[0]?.id ?? 'image'}.json`, {
       schemaVersion: 'sciforge.model-router.vision-observation.v1',
       phase: 'initial',
       status: degraded ? 'failed' : 'ok',
-      targetIds: extracted.modalities.map((item) => item.id),
+      targetIds: visionModalities.map((item) => item.id),
       observationSummary: boundedTraceText(initial, profile, publicModelAlias, traceRedactionSecrets),
     });
   }
@@ -251,9 +270,9 @@ async function routeResponsesRequest(
         controlError = `Supplement round budget exceeded for target ${control.target}.`;
         continue;
       }
-      const target = extracted.modalities.find((item) => item.id === control.target);
+      const target = visionModalities.find((item) => item.id === control.target);
       if (!target) {
-        controlError = `Supplement target ${control.target} is not in the normalized modality refs.`;
+        controlError = `Supplement target ${control.target} is not an available vision modality ref.`;
         continue;
       }
       if (!profile.translators.vision || !visionSecret) {
@@ -309,11 +328,11 @@ async function routeResponsesRequest(
 
   if (!outputText) {
     outputText = degraded
-      ? 'I could not inspect the image. Based on the text-only context, I cannot provide visual details from it.'
+      ? `${degradedUnavailablePrefix(extracted.modalities)} Based on the text-only context, I cannot provide details from it.`
       : 'The request could not be completed because the internal visual supplement protocol did not produce a final answer.';
   }
-  if (degraded && !mentionsVisualUnavailable(outputText)) {
-    outputText = `I could not inspect the image. ${outputText}`;
+  if (degraded && !mentionsModalityUnavailable(outputText)) {
+    outputText = `${degradedUnavailablePrefix(extracted.modalities)} ${outputText}`;
   }
 
   await writeRoutingTrace({
@@ -407,8 +426,10 @@ function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) 
     if (text) texts.push(text);
     return;
   }
-  if (type === 'input_image' || type === 'image' || value.image_url !== undefined || value.ref !== undefined) {
-    const ref = normalizeImagePart(value, modalities.length + 1);
+  const explicitKind = modalityKindFromType(type);
+  const inferredKind = explicitKind ?? modalityKindFromRecord(value);
+  if (explicitKind || value.image_url !== undefined || (value.ref !== undefined && inferredKind)) {
+    const ref = normalizeModalityPart(value, modalities.length + 1, inferredKind);
     if (ref) modalities.push(ref);
     return;
   }
@@ -417,8 +438,10 @@ function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) 
   if (value.input !== undefined) visitInput(value.input, texts, modalities);
 }
 
-function normalizeImagePart(value: Record<string, unknown>, ordinal: number): ModalityRef | undefined {
-  const id = `image_${ordinal}`;
+function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, explicitKind?: ModalityKind): ModalityRef | undefined {
+  const kind = explicitKind ?? modalityKindFromRecord(value);
+  if (!kind) return undefined;
+  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
   const mime = stringField(value.mime_type) ?? stringField(value.mimeType);
   const rawImageUrl = value.image_url;
   const imageUrl = typeof rawImageUrl === 'string'
@@ -455,12 +478,12 @@ function normalizeImagePart(value: Record<string, unknown>, ordinal: number): Mo
     const providerRef = safeTraceRef(ref);
     return {
       id,
-      kind: 'vision.image',
+      kind,
       source: 'ref',
       mime,
       sha256: hashForTrace(ref),
       safeRef: providerRef,
-      transientProviderPart: { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` },
+      transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
     };
   }
   return undefined;
@@ -468,7 +491,7 @@ function normalizeImagePart(value: Record<string, unknown>, ordinal: number): Mo
 
 async function materializeWorkspaceImageRefs(modalities: ModalityRef[], workspaceRoot: string): Promise<ModalityRef[]> {
   return await Promise.all(modalities.map(async (item) => {
-    if (item.source !== 'ref' || !item.safeRef) return item;
+    if (item.kind !== 'vision.image' || item.source !== 'ref' || !item.safeRef) return item;
     const materialized = await transientWorkspaceImagePart(item.safeRef, workspaceRoot, item.mime);
     return materialized
       ? { ...item, mime: materialized.mime, byteLength: materialized.byteLength, transientProviderPart: materialized.part }
@@ -552,8 +575,9 @@ function extractAskCommandRefs(userText: string, startOrdinal: number): { userTe
     for (let index = 1; index < tokens.length; index += 1) {
       if (tokens[index] === '--ref') {
         const candidate = tokens[index + 1];
-        if (candidate && isAllowedTextualModalityRef(candidate)) {
-          modalities.push(modalityRefFromTextualRef(candidate, ordinal));
+        const kind = candidate ? modalityKindFromTextualRef(candidate) : undefined;
+        if (candidate && kind && isAllowedTextualModalityRef(candidate, kind)) {
+          modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind));
           ordinal += 1;
         }
         if (candidate) index += 1;
@@ -574,10 +598,11 @@ function extractExplicitSciForgeRefs(userText: string, startOrdinal: number): { 
   const modalities: ModalityRef[] = [];
   let ordinal = startOrdinal;
   const sanitized = userText.replace(
-    /\bSciForge\s+(?:image|object|visual)\s+refs?\s*(?::|=|\bis\b)?\s*([A-Za-z0-9._:@/-]+)/gi,
-    (matched: string, candidate: string) => {
-      if (!isAllowedTextualModalityRef(candidate)) return 'SciForge ref redacted';
-      modalities.push(modalityRefFromTextualRef(candidate, ordinal));
+    /\bSciForge\s+(image|object|visual|audio|video|table|document|file|modality)\s+refs?\s*(?::|=|\bis\b)?\s*([A-Za-z0-9._:@/-]+)/gi,
+    (matched: string, label: string, candidate: string) => {
+      const kind = modalityKindFromLabel(label) ?? modalityKindFromTextualRef(candidate);
+      if (!kind || !isAllowedTextualModalityRef(candidate, kind)) return 'SciForge ref redacted';
+      modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind));
       ordinal += 1;
       return 'SciForge ref attached';
     },
@@ -585,16 +610,16 @@ function extractExplicitSciForgeRefs(userText: string, startOrdinal: number): { 
   return { userText: sanitized.trim(), modalities };
 }
 
-function modalityRefFromTextualRef(ref: string, ordinal: number): ModalityRef {
-  const id = `image_${ordinal}`;
+function modalityRefFromTextualRef(ref: string, ordinal: number, kind: ModalityKind): ModalityRef {
+  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
   const providerRef = safeTraceRef(ref);
   return {
     id,
-    kind: 'vision.image',
+    kind,
     source: 'ref',
     sha256: hashForTrace(ref),
     safeRef: providerRef,
-    transientProviderPart: { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` },
+    transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
   };
 }
 
@@ -640,9 +665,12 @@ async function callVisionTranslator(options: {
 }) {
   const translator = options.profile.translators.vision;
   if (!translator) throw new Error('Vision translator is not configured.');
+  const providerParts = options.modalities
+    .map((item) => item.transientProviderPart)
+    .filter((part): part is JsonObject => Boolean(part));
   const content: JsonObject[] = [
     { type: 'text', text: options.instruction },
-    ...options.modalities.map((item) => item.transientProviderPart),
+    ...providerParts,
   ];
   return await callChatProvider({
     provider: translator,
@@ -677,9 +705,9 @@ async function callTextReasoner(options: {
   const controlInstruction = options.observations.length
     ? [
       'You are the text reasoner for SciForge Model Router.',
-      'Use the supplied visual observations as text-only context.',
+      'Use the supplied modality observations as text-only context.',
       'For internal control, return strict JSON only: {"type":"final_answer","content":"..."} or {"type":"need_more_visual_info","target":"image_1","question":"...","reason":"..."}.',
-      'If visual_input is unavailable, the final answer must explicitly state that the image could not be inspected.',
+      'If any modality_input or visual_input is unavailable, the final answer must explicitly state that the referenced modality could not be inspected.',
     ].join(' ')
     : undefined;
   const messages: JsonObject[] = [
@@ -691,7 +719,7 @@ async function callTextReasoner(options: {
         'Visual observations:',
         ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
         options.controlError ? `Router control error:\n${options.controlError}` : '',
-        options.visualFailure ? 'Router degradation: at least one image could not be inspected.' : '',
+        options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
       ].filter(Boolean).join('\n\n'),
     }] : [{ role: 'user', content: options.userText }]),
   ];
@@ -1099,14 +1127,76 @@ function isPrivateLikeTraceRef(ref: string) {
     || /^(?:artifact|ref|run):(?:\/|https?:\/\/|file:|~)/i.test(trimmed);
 }
 
-function isAllowedTextualModalityRef(ref: string) {
+function modalityKindFromType(type: string | undefined): ModalityKind | undefined {
+  const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'input-image' || normalized === 'image') return 'vision.image';
+  if (normalized === 'input-audio' || normalized === 'audio') return 'audio';
+  if (normalized === 'input-video' || normalized === 'video') return 'video';
+  if (normalized === 'input-table' || normalized === 'table' || normalized === 'spreadsheet') return 'table';
+  if (normalized === 'input-file' || normalized === 'file' || normalized === 'document') return 'document';
+  return undefined;
+}
+
+function modalityKindFromRecord(value: Record<string, unknown>): ModalityKind | undefined {
+  return modalityKindFromType(stringField(value.type))
+    ?? modalityKindFromMime(stringField(value.mime_type) ?? stringField(value.mimeType))
+    ?? modalityKindFromTextualRef(stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? '');
+}
+
+function modalityKindFromLabel(label: string): ModalityKind | undefined {
+  if (/^(?:image|visual|object)$/i.test(label)) return 'vision.image';
+  if (/^audio$/i.test(label)) return 'audio';
+  if (/^video$/i.test(label)) return 'video';
+  if (/^table$/i.test(label)) return 'table';
+  if (/^(?:document|file|modality)$/i.test(label)) return undefined;
+  return undefined;
+}
+
+function modalityKindFromMime(mime: string | undefined): ModalityKind | undefined {
+  if (!mime) return undefined;
+  if (/^image\//i.test(mime)) return 'vision.image';
+  if (/^audio\//i.test(mime)) return 'audio';
+  if (/^video\//i.test(mime)) return 'video';
+  if (/^(?:text\/csv|text\/tab-separated-values|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/vnd\.ms-excel)/i.test(mime)) return 'table';
+  if (/^(?:application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation)/i.test(mime)) return 'document';
+  return undefined;
+}
+
+function modalityKindFromTextualRef(ref: string): ModalityKind | undefined {
+  if (!ref) return undefined;
+  const path = traceRefPath(ref);
+  if (!path || !isSafeTraceRef(ref)) return undefined;
+  if (/\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|svg)(?:$|[?#])/i.test(path)) return 'vision.image';
+  if (/\.(?:mp3|wav|m4a|flac|ogg)(?:$|[?#])/i.test(path)) return 'audio';
+  if (/\.(?:mp4|mov|webm|m4v|avi)(?:$|[?#])/i.test(path)) return 'video';
+  if (/\.(?:csv|tsv|xlsx?|ods)(?:$|[?#])/i.test(path)) return 'table';
+  if (/\.(?:pdf|docx?|pptx?|txt|md|markdown)(?:$|[?#])/i.test(path)) return 'document';
+  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:upload|image|figure|fig|chart|plot|panel|microscopy|screenshot|photo|picture|visual|diagram)\b/i.test(path)) return 'vision.image';
+  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:audio|sound|speech|voice|recording)\b/i.test(path)) return 'audio';
+  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:video|movie|clip|screen-recording)\b/i.test(path)) return 'video';
+  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:table|spreadsheet|csv|tsv|matrix|worksheet)\b/i.test(path)) return 'table';
+  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:document|doc|pdf|paper|report|slides|presentation|markdown|text)\b/i.test(path)) return 'document';
+  return undefined;
+}
+
+function modalityIdPrefix(kind: ModalityKind) {
+  if (kind === 'vision.image') return 'image';
+  return kind;
+}
+
+function isVisionImageModality(item: ModalityRef): item is ModalityRef & { kind: 'vision.image' } {
+  return item.kind === 'vision.image';
+}
+
+function isAllowedTextualModalityRef(ref: string, kind: ModalityKind) {
   if (!isSafeTraceRef(ref)) return false;
   const path = traceRefPath(ref);
   if (!path) return false;
-  if (path.startsWith('.sciforge/uploads/')) return true;
+  if (kind === 'vision.image' && path.startsWith('.sciforge/uploads/')) return true;
   if (/^(?:workspace|bundle|bundles|artifact|artifacts|upload|uploads|images|objects|files|runs)\//i.test(path)) return true;
-  if (/^[A-Za-z0-9._@-]+\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic)$/i.test(path)) return true;
-  return /^(?:artifact|ref|run):/i.test(ref);
+  if (/^[A-Za-z0-9._@/-]+\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|svg|mp3|wav|m4a|flac|ogg|mp4|mov|webm|m4v|avi|csv|tsv|xlsx?|ods|pdf|docx?|pptx?|txt|md|markdown)$/i.test(path)) return true;
+  return /^(?:artifact|ref|run):/i.test(ref) && modalityKindFromTextualRef(ref) === kind;
 }
 
 function traceRefPath(ref: string) {
@@ -1203,8 +1293,14 @@ function providerTraceRedactionValues(provider: ModelRouterProviderConfig) {
   ];
 }
 
-function mentionsVisualUnavailable(value: string) {
-  return /could not inspect (?:the )?image|image (?:could not be|was not) inspected|visual input.*unavailable|无法(?:检查|查看|读取).*图|不能(?:检查|查看|读取).*图/i.test(value);
+function mentionsModalityUnavailable(value: string) {
+  return /could not inspect (?:the )?(?:image|referenced (?:\w+\s+)?modality|modality)|(?:image|referenced (?:\w+\s+)?modality|modality) (?:could not be|was not) inspected|(?:visual|modality) input.*unavailable|无法(?:检查|查看|读取).*(?:图|模态|引用)|不能(?:检查|查看|读取).*(?:图|模态|引用)/i.test(value);
+}
+
+function degradedUnavailablePrefix(modalities: ModalityRef[]) {
+  return modalities.length > 0 && modalities.every((item) => item.kind === 'vision.image')
+    ? 'I could not inspect the image.'
+    : 'I could not inspect the referenced modality.';
 }
 
 function compactObject(value: Record<string, JsonValue | undefined>): JsonObject {

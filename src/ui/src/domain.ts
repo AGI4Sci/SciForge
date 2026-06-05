@@ -829,6 +829,7 @@ export type ComposerDeclaredModelIntentId =
 export type ComposerDeclaredModelMode = 'auto' | 'max' | 'assistant';
 export type ComposerDeclaredCapabilityTier = 'auto' | 'max' | 'fast' | 'balanced' | 'deep';
 export type ComposerDeclaredModeIntentId = 'plan' | 'debug' | 'multitask' | 'ask';
+export type ComposerDeclaredAuthorizationProfileId = 'assisted-autonomy' | 'high-autonomy' | 'research-sandbox-max';
 
 export interface ComposerDeclaredModelIntentProjection {
   modelIntentId: ComposerDeclaredModelIntentId;
@@ -847,11 +848,26 @@ export interface ComposerDeclaredModeIntentProjection {
   declaredAt: string;
 }
 
+export interface ComposerDeclaredAuthorizationProjection {
+  profileId: ComposerDeclaredAuthorizationProfileId;
+  publicLabel: string;
+  scope: {
+    user: 'current-user';
+    workspace: 'current-workspace';
+  };
+  source: 'composer-autonomy-default' | 'composer-autonomy-menu';
+  singleTurnOverride: boolean;
+  actionId?: string;
+  declaredAt?: string;
+  hardConfirmCategories: string[];
+}
+
 export interface ComposerDeclaredIntentSnapshot {
   schemaVersion: 'sciforge.composer-declared-intents.v1';
   source: 'ui-action-audit-log';
   model?: ComposerDeclaredModelIntentProjection;
   mode?: ComposerDeclaredModeIntentProjection;
+  authorization?: ComposerDeclaredAuthorizationProjection;
 }
 
 export interface AgentHostWindowActionHandoffBounds {

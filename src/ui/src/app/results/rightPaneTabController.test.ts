@@ -45,7 +45,7 @@ test('right pane tab controller focus dispatch follows object ref routes without
     ['browser:session-1', 'browser'],
     ['crop:figure-1', 'image'],
     ['terminal:session-1', 'terminal'],
-    ['file:PROJECT_workbench.md', 'files'],
+    ['file:PROJECT.md', 'files'],
   ] as const) {
     const route = focusResultPaneRouteForObjectReference({ kind: 'artifact', ref });
     assert.equal(route.pane, pane, ref);

@@ -1,15 +1,16 @@
 # SciForge 文档
 
-最后更新：2026-06-04
+最后更新：2026-06-05
 
 ## 当前结论
 
 SciForge GUI 是 Agent Host 的确定性体验扩展。Agent Host 拥有 planning、provider routing、action、verification 和 trace；GUI 负责 presentation、annotation、focus、confirmation 和 refs projection。
 
-M1 当前主线：
+当前主线：
 
-- Workbench：left/middle/right、composer、process rows、Browser/Image/References pane。
-- Desktop / Action：Desktop native host、Annotation、Window Action、Computer Use adapter。
+- 默认 Browser Search：需要外部、实时、网页、引用或当前事实时，Agent Host 默认使用内置 Browser 搜索与网页证据。
+- 默认 Computer Use 预检：用户表达 GUI 操作意图时，SciForge 直接进入 Computer Use preflight。
+- 输入栏授权档位：只保留 `Assisted Autonomy`、`High Autonomy`、`Research Sandbox Max`，默认 `High Autonomy`。
 
 旧的隔离 `VirtualAppScreen` 产品需求已废弃。
 
@@ -28,9 +29,7 @@ M1 当前主线：
 
 ## 活跃 PROJECT 入口
 
-- [`../PROJECT.md`](../PROJECT.md)：总协议。
-- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)：Workbench UI、composer、process rows、object ref routing、Browser/Image/References pane。
-- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)：Desktop native host、Annotation、Window Action、Computer Use adapter。
+- [`../PROJECT.md`](../PROJECT.md)：唯一活动任务板和总协议。
 - 历史分散任务板：`docs/archive/project-tasks-2026-06-04/`。
 
 ## 核心规则

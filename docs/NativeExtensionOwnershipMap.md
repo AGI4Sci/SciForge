@@ -1,10 +1,12 @@
 # Native Extension 归属图
 
-最后更新：2026-06-03
+最后更新：2026-06-05
 
 本文是 [`native-extension-ownership-map.json`](native-extension-ownership-map.json) 的可读版摘要。JSON 文件是可验证清单；本文说明每类能力最终归谁拥有、通过什么 surface 暴露，以及 GUI/runtime 的边界在哪里。
 
 运行 `npm run smoke:native-extension-ownership` 可以校验 manifest、`/capabilities` 命令动词和可读策略形状。
+
+默认 Browser Search / Computer Use 能力必须继续遵守本文归属：Browser search/read evidence 归 BrowserHostSession / observe capability；Computer Use action 归 TUI action provider / WindowActionSession / host adapter；GUI 只展示 `Autonomy` 授权档位、preflight、confirmation、blocked recovery 和 refs。任何授权档位都不能让 GUI、第三方网页内容、模型输出或 tool result 扩大权限。
 
 
 | 领域                                 | 归属                                         | 目标 surface                                                                                                                      | GUI/runtime 边界                                                                                 |
@@ -44,7 +46,7 @@ Computer Use / Window Action 的内部拆分必须保持单一执行 owner，但
 
 Computer Use 的 L0/L1/L2 放置必须显式登记。L2 是 Codex app-server 生产路径或 Codex CLI/native plugin 调试路径；它负责选择模块、串联 browser/file/verifier/gui、approval、repair、completion 和 pipeline trace。L1 是 Computer Use resource/session adapter，只管理 display group、screen、actor cursor、lease、evidence、replay refs、adapter readiness、backend lifecycle 和 L0 handler routing；它不得做跨模块 planning、capability ranking、prompt route 或用户级 completion。L0 是单动作 handler，例如 capture、crop、ground、execute、verify、writeTrace、emitEvent；L0 不直接调用 GUI、renderer registry、Workbench、AnnotationSidebar 或其它任务模块。历史 AgentServer、runtime gateway、`codex exec --json` 和 GUI `/computer-use` special route 只能作为 legacy/test-only/diagnostic adapter，不得成为新增 public API。
 
-Computer Use 当前仍处于 `migrating`，剩余拆分不再用笼统 partial 记录，而是登记在 `docs/native-extension-ownership-map.json` 的 `computer-use.remainingMigrationSubtasks`。新增 active backlog 以 `PROJECT_desktop_actions.md` 为准：WindowActionSession action router、真实 window capture/action、actorCursor、Global Annotation、Image/Evidence projection、Codex app-server production path、legacy/test-only gateway/exec 降级、Docker/container/noVNC/RDP backend packaging 降级和 import boundary guard。JSON manifest 中保留的 M6/multi-screen/VirtualAppScreen 条目是 historical compatibility 或 regression 登记；不得让这些旧条目阻塞当前路线或替代 Browser/Window/Image/Annotation 验收。
+Computer Use 当前仍处于 `migrating`，剩余拆分不再用笼统 partial 记录，而是登记在 `docs/native-extension-ownership-map.json` 的 `computer-use.remainingMigrationSubtasks`。当前 active backlog 只以 `PROJECT.md` 为准：默认 Browser search、Computer Use preflight、输入栏授权档位、hard-confirm / blocked policy、refs-first evidence 和 Desktop native 验收。JSON manifest 中保留的 M6/multi-screen/VirtualAppScreen 条目是 historical compatibility 或 regression 登记；不得让这些旧条目阻塞当前路线或替代 Browser/Window/Image/Annotation 验收。
 
 ### Computer Use 文件责任表
 

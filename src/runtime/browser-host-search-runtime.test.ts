@@ -127,6 +127,44 @@ test('browser_host_search_runtime only claims explicit browser search intents', 
   });
 });
 
+test('browser_host_search_runtime defaults current external and citation requests to BrowserHostSession search', () => {
+  assert.deepEqual(browserHostSearchInputFromRequest({
+    ...browserSearchRequest(),
+    prompt: 'Find the latest OpenAI API model guidance and cite source URLs.',
+    selectedToolIds: [],
+  }), {
+    query: 'Find the latest OpenAI API model guidance and cite source URLs.',
+    limit: 5,
+    engine: 'bing',
+    timeoutMs: 45_000,
+  });
+
+  assert.deepEqual(browserHostSearchInputFromRequest({
+    ...browserSearchRequest(),
+    prompt: 'Open https://example.com/ and summarize the current page with sources.',
+    selectedToolIds: [],
+  }), {
+    query: 'https://example.com/',
+    limit: 5,
+    engine: 'bing',
+    timeoutMs: 45_000,
+  });
+});
+
+test('browser_host_search_runtime respects local-only and no-network constraints', () => {
+  assert.equal(browserHostSearchInputFromRequest({
+    ...browserSearchRequest(),
+    prompt: 'Use only local context. Find the latest browser architecture note and cite sources.',
+    selectedToolIds: [],
+  }), undefined);
+
+  assert.equal(browserHostSearchInputFromRequest({
+    ...browserSearchRequest(),
+    prompt: 'Do not browse the web; summarize https://example.com/ only from provided refs.',
+    selectedToolIds: ['browser_search'],
+  }), undefined);
+});
+
 test('browser_host_search_runtime reuses browser-specific current session refs from request context', () => {
   assert.deepEqual(browserHostSearchInputFromRequest({
     ...browserSearchRequest(),

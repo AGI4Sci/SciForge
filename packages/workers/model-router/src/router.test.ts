@@ -260,6 +260,80 @@ test('textual ask refs route through vision translator before text reasoner', as
   }
 });
 
+test('textual ask refs do not route non-visual artifacts through the vision translator', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-nonvisual-artifact-ref-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-reasoner-answer', 'The report ref needs a document-capable translator.'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'ask --ref artifact:research-report "Summarize the report."',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /vision-model|SciForge visual ref/i);
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.doesNotMatch(traceText, /"kind":\s*"vision\.image"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('unsupported explicit modality refs degrade without using the vision translator', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-unsupported-modality-ref-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'I could not inspect the referenced audio modality.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'SciForge audio ref: artifacts/interview.wav\nTranscribe it.',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.equal(body.output_text, 'I could not inspect the referenced audio modality.');
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.match(JSON.stringify(calls[0]?.body), /status=unsupported/);
+    assert.match(JSON.stringify(calls[0]?.body), /kind=audio/);
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"kind":\s*"audio"/);
+    assert.match(traceText, /"degraded":\s*true/);
+    assert.doesNotMatch(traceText, /text-secret|vision-secret|text-provider|vision-provider|text-model|vision-model/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test('textual ask refs route through vision translator when prefixed by continuation guidance', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-prefixed-textual-ref-'));
   await mkdir(join(workspaceRoot, '.sciforge/uploads/session-a'), { recursive: true });

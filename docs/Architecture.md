@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-06-02
+最后更新：2026-06-05
 
 ## 北极星
 
@@ -9,6 +9,8 @@ SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 > **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 `module.*` GUI extension 暴露给 TUI；`gui.*` 只作为迁移 shim。**
 
 Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；默认运行期 provider 指向 SciForge Model Router 的公开 alias/profile，由 router profile 选择 text reasoner 与 modality translators，而不是把某个具体上游模型写成产品事实。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
+
+当前产品默认能力见 [`superpowers/specs/2026-06-05-default-browser-computer-use-design.md`](superpowers/specs/2026-06-05-default-browser-computer-use-design.md)：外部/实时/网页/引用请求默认可以进入 Browser search/read evidence；GUI 操作意图默认进入 Computer Use preflight。能力声明必须来自 runtime health、BrowserHostSession、native surface、target binding、authorization profile 和 evidence refs，而不是模型固定自述。默认 `High Autonomy` 不等于无审批；发送、提交、上传、删除、支付、账号/安全、法律合规和外部系统执行等动作仍必须 hard-confirm。
 
 ## 最终分层
 

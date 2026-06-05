@@ -7,6 +7,7 @@ import { MessageContent, inlineObjectReferencesForMessage } from './MessageConte
 import { composerReferenceForObjectReference } from './composerReferences';
 import { ObjectReferenceChips } from './ReferenceChips';
 import { currentObjectReferenceFromComposerReference } from './composerReferences';
+import { imageObjectReferenceForReferenceFocus } from './referenceFocusRouting';
 
 const pickedFile: ObjectReference = {
   id: 'obj-picked-file',
@@ -101,6 +102,13 @@ test('message content renders uploaded image object refs as clickable ref-first 
   assert.match(markup, /src="\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-1%2Fupload-image-1-microscopy\.png"/);
   assert.match(markup, /data-sciforge-reference=/);
   assert.doesNotMatch(markup, /data:image|base64|iVBORw0KGgo/i);
+  const renderedReference = firstRenderedReference(markup);
+  const currentReference = currentObjectReferenceFromComposerReference(renderedReference);
+  assert.equal(currentReference?.ref, 'artifact:upload-image-1');
+  assert.equal(currentReference?.artifactType, 'uploaded-image');
+  assert.equal(currentReference?.preferredView, 'preview');
+  assert.equal(currentReference?.provenance?.path, '.sciforge/uploads/session-1/upload-image-1-microscopy.png');
+  assert.equal(imageObjectReferenceForReferenceFocus(renderedReference)?.ref, 'artifact:upload-image-1');
 });
 
 test('message image thumbnails resolve through configured workspace writer and workspace path', () => {

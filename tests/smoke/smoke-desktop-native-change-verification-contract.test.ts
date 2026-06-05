@@ -7,7 +7,7 @@ const packageJson = JSON.parse(readFileSync(`${projectRoot}/package.json`, 'utf8
   scripts?: Record<string, string>;
 };
 const scripts = packageJson.scripts ?? {};
-const projectBoard = readFileSync(`${projectRoot}/PROJECT_desktop_actions.md`, 'utf8');
+const projectBoard = readFileSync(`${projectRoot}/PROJECT.md`, 'utf8');
 const contractDoc = readFileSync(`${projectRoot}/docs/DesktopNativeChangeVerificationContract.md`, 'utf8');
 
 test('desktop native change verification contract is wired into package scripts and fast verification', () => {
@@ -58,11 +58,11 @@ test('desktop native pass claims reject web screenshots and legacy browser subst
 
   assert.match(
     projectBoard,
-    /Desktop native 改动：运行 desktop focused smoke；真实 Browser\/overlay\/capture 不能用 Web dev 截图冒充。/,
+    /Vite\/Web dev 下 Browser \/ Computer Use live action 只能显示 blocked\/diagnostic，不能冒充 Desktop native product pass。/,
   );
   assert.match(
     projectBoard,
-    /smoke:desktop-native-change-verification-contract/,
+    /Desktop smoke 使用 Electron native host 验证 BrowserHostSession、native surface、Computer Use preflight 和 hard-confirm surface；Vite 只作为 diagnostic。/,
   );
 });
 

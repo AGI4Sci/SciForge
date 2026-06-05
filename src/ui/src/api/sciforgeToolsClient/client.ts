@@ -844,10 +844,12 @@ function buildCodexRuntimeCommandText(
   options: { resumeRequested?: boolean } = {},
 ) {
   const prompt = input.input.prompt.trim();
-  const refs = uniqueRuntimeStringList(input.referenceSummary.flatMap((reference) => {
+  const readableRefs = uniqueRuntimeStringList(input.referenceSummary.flatMap((reference) => {
     const readableRefs = [reference.dataRef, reference.path, reference.ref].filter((value): value is string => Boolean(asString(value)));
     return readableRefs.length ? readableRefs : [reference.id];
-  })).slice(0, 12);
+  }));
+  const modalityRefs = routerModalityRefsForRuntimeCommand(input.input, input.referenceSummary);
+  const refs = uniqueRuntimeStringList([...modalityRefs, ...readableRefs]).slice(0, 12);
   const computerUseCommand = /^\/(?:computer-use|computer\s+use)\b/i.test(prompt);
   const exactComputerUseCommand = computerUseCommandRequiresExactTerminalText(prompt);
   if (exactComputerUseCommand) return prompt;
@@ -882,6 +884,98 @@ function buildCodexRuntimeCommandText(
     selectedMessageContext,
     taskText,
   ].filter(Boolean).join('\n\n');
+}
+
+function routerModalityRefsForRuntimeCommand(
+  input: SendAgentMessageInput,
+  referenceSummary: Array<Record<string, unknown>>,
+) {
+  const explicit = routerModalityRefsFromReferenceLikeRecords(referenceSummary);
+  const relative = promptMentionsRelativeModality(input.prompt)
+    ? recentVisibleRouterModalityRefs(input)
+    : [];
+  return uniqueRuntimeStringList([...explicit, ...relative]).slice(0, 8);
+}
+
+function promptMentionsRelativeModality(prompt: string) {
+  return /\b(?:above|previous|prior|last|earlier|attached|attachment|this|that|current|selected)\b.*\b(?:image|picture|photo|screenshot|figure|chart|plot|diagram|file|attachment|audio|video|table|document|pdf)\b/i.test(prompt)
+    || /\b(?:image|picture|photo|screenshot|figure|chart|plot|diagram|file|attachment|audio|video|table|document|pdf)\b.*\b(?:above|previous|prior|last|earlier|attached|attachment|this|that|current|selected)\b/i.test(prompt)
+    || /(?:上面|前面|刚才|上一[个张份]|这个|这张|该|当前|选中|附件|上传).{0,16}(?:图片|图像|截图|图|照片|文件|附件|音频|视频|表格|文档|PDF)/i.test(prompt)
+    || /(?:图片|图像|截图|图|照片|文件|附件|音频|视频|表格|文档|PDF).{0,16}(?:上面|前面|刚才|上一[个张份]|这个|这张|该|当前|选中|附件|上传)/i.test(prompt);
+}
+
+function recentVisibleRouterModalityRefs(input: SendAgentMessageInput) {
+  const refs: string[] = [];
+  for (const message of [...(input.messages ?? [])].reverse()) {
+    if (isSeedDemoOrFixtureMessage(message)) continue;
+    refs.push(...routerModalityRefsFromReferenceLikeRecords(message.references ?? []));
+    refs.push(...routerModalityRefsFromObjectReferences(message.objectReferences ?? []));
+    if (refs.length >= 8) break;
+  }
+  return uniqueRuntimeStringList(refs).slice(0, 8);
+}
+
+function routerModalityRefsFromReferenceLikeRecords(records: unknown[]) {
+  return uniqueRuntimeStringList(records.flatMap((record) => {
+    if (!isRecord(record)) return [];
+    const payload = isRecord(record.payload) ? record.payload : {};
+    const metadata = isRecord(payload.metadata) ? payload.metadata : {};
+    const provenance = isRecord(payload.provenance) ? payload.provenance : {};
+    const currentReference = isRecord(payload.currentReference) ? payload.currentReference : {};
+    const objectReference = isRecord(payload.objectReference) ? payload.objectReference : {};
+    return [
+      routerModalityRefCandidate(record, metadata),
+      routerModalityRefCandidate(record, provenance),
+      routerModalityRefCandidate(currentReference, isRecord(currentReference.provenance) ? currentReference.provenance : {}),
+      routerModalityRefCandidate(objectReference, isRecord(objectReference.provenance) ? objectReference.provenance : {}),
+    ];
+  }));
+}
+
+function routerModalityRefsFromObjectReferences(records: unknown[]) {
+  return uniqueRuntimeStringList(records.flatMap((record) => {
+    if (!isRecord(record)) return [];
+    return [routerModalityRefCandidate(record, isRecord(record.provenance) ? record.provenance : {})];
+  }));
+}
+
+function routerModalityRefCandidate(record: Record<string, unknown>, auxiliary: Record<string, unknown> = {}) {
+  const ref = asString(auxiliary.path)
+    ?? asString(auxiliary.dataRef)
+    ?? asString(auxiliary.workspacePath)
+    ?? asString(record.path)
+    ?? asString(record.dataRef)
+    ?? asString(record.workspacePath)
+    ?? asString(record.ref);
+  if (!ref || !routerModalityRefLooksSupported(ref, record, auxiliary)) return undefined;
+  return ref;
+}
+
+function routerModalityRefLooksSupported(ref: string, record: Record<string, unknown>, auxiliary: Record<string, unknown>) {
+  if (!safeRouterModalityRef(ref)) return false;
+  const descriptor = [
+    ref,
+    asString(record.kind),
+    asString(record.title),
+    asString(record.summary),
+    asString(record.artifactType),
+    asString(record.type),
+    asString(auxiliary.mimeType),
+    asString(auxiliary.mime_type),
+    asString(record.mimeType),
+    asString(record.mime_type),
+  ].filter(Boolean).join(' ');
+  return /(?:^|\b)(?:image|uploaded-image|screenshot|figure|fig|chart|plot|diagram|photo|picture|audio|video|table|spreadsheet|csv|tsv|xlsx?|document|pdf|docx?|pptx?)(?:\b|$)|\.(?:png|jpe?g|webp|gif|tiff?|bmp|heic|mp3|wav|m4a|flac|mp4|mov|webm|csv|tsv|xlsx?|pdf|docx?|pptx?)(?:$|[?#])/i.test(descriptor);
+}
+
+function safeRouterModalityRef(ref: string) {
+  if (ref.length > 600) return false;
+  if (/^(?:data|https?|blob|javascript|file):/i.test(ref)) return false;
+  return /^[A-Za-z0-9._:@/-]+$/.test(ref)
+    && !ref.startsWith('/')
+    && !ref.startsWith('~')
+    && !ref.includes('\\')
+    && !ref.includes('//');
 }
 
 function computerUseCommandRequiresExactTerminalText(prompt: string) {
@@ -1776,8 +1870,18 @@ function summarizeRuntimeFailureMessages(events: AgentStreamEvent[]) {
       event.detail,
       (event as { message?: unknown }).message,
       asString(raw.message),
+      asString(raw.summary),
+      asString(raw.detail),
+      asString(raw.reason),
+      asString(raw.error),
       asString(nested.message),
+      asString(nested.summary),
+      asString(nested.detail),
+      asString(nested.reason),
+      asString(nested.error),
       asString(error.message),
+      asString(error.summary),
+      asString(error.detail),
     ];
   }).filter((value): value is string => Boolean(value)).join(' ').replace(/\s+/g, ' ').trim();
   if (!compact) return undefined;

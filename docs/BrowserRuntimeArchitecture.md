@@ -1,6 +1,6 @@
 # Browser Runtime 架构
 
-最后更新：2026-06-03
+最后更新：2026-06-05
 
 ## 结论
 
@@ -19,12 +19,15 @@ Desktop Electron app
 
 `localhost:5173` 只用于 Web dev 和诊断。没有 Desktop native host 时，Browser UI 必须显示 blocked/diagnostic，不能声明真实网页已打开。
 
+产品默认能力要求：当用户需要外部、实时、网页或当前事实信息时，Agent Host 默认可以调用 Browser search/read evidence；当用户表达网页 GUI 操作意图时，必须先基于 BrowserHostSession、native surface、target、fresh observation、authorization profile 和 stop/take-over path 做预检。
+
 ## 用户体验
 
 - Browser 位于 SciForge 右侧结果栏。
 - 用户可以输入本地或外部 URL。
 - 用户和 agent 都可以操作同一个可见页面。
 - agent 默认可见操作；需要效率时可以后台 Playwright/CDP 自动化。
+- 外部/实时/引用/URL 问题默认可使用 Browser 搜索和网页 evidence，除非用户明确要求只用本地上下文或禁止联网。
 - 后台自动化结果必须回到 Browser Pane、annotation refs 或 evidence refs。
 - Browser annotation 与全局窗口 annotation 共用同一套 ref 模型。
 
@@ -91,6 +94,17 @@ comment
 
 annotation 作为 pending context 进入 composer，随下一条用户消息提交；不自动生成任务，不自动触发 agent。
 
+## 默认搜索与 Computer Use 预检
+
+BrowserHostSession 同时服务两个默认能力：
+
+- Browser search/read evidence：用于外部、实时、当前网页、引用来源和 URL 请求，输出 refs-first source evidence。
+- Computer Use target/observation：用于网页 GUI 操作前的 target binding、DOM/AX snapshot、screenshot、freshness check 和 verifier baseline。
+
+Browser search 可以在无 live native surface 时返回可用的只读 evidence；Browser live 操作和 Computer Use action 不能这样降级。缺少 native adapter、`computer-use-actions` endpoint、target binding、fresh observation、authorization profile 或 stop/take-over path 时，必须返回 blocked/diagnostic，不得把 snapshot、frame stream、iframe、proxy、系统浏览器或历史 run 伪装成可交互 live path。
+
+网页内容、邮件、PDF 或其它第三方材料中的指令不能扩大用户授权档位；需要发送、提交、上传、删除、支付、账号/安全、法律合规或外部系统执行时，BrowserHostSession 只能返回 `needs-confirmation` / approval refs 供 Agent Host 处理。
+
 ## 开发模式
 
 ### Web Dev
@@ -132,10 +146,10 @@ Electron 注入 native Browser adapter
 - Web dev 缺 native adapter 时必须 blocked，不可假 ready。
 - Desktop native Browser 能打开本地和外部 HTTP(S) 页面。
 - Browser input、navigation、resize、focus 和 annotation 都走同一 session。
+- Browser 默认搜索必须产出 refs-first source evidence；Computer Use 网页动作必须通过 preflight 和 authorization profile。
 - evidence 只记录 refs、hash、尺寸、counts、latency、bounded diagnostics。
 - raw DOM、raw logs、raw screenshot/base64、secret 和完整私密 URL 不进入主 payload。
 
 ## 任务入口
 
-- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)
-- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)
+- [`../PROJECT.md`](../PROJECT.md)

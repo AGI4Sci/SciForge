@@ -17,6 +17,13 @@ export function runtimeNativeMessageLiveAcceptanceEligible(message: string, resu
   return true;
 }
 
+export function runtimeNativeMessageSafeForVisibleAnswer(message: string) {
+  const text = message.trim();
+  if (!text) return false;
+  if (looksInternalToolProtocolNativeMessage(text)) return false;
+  return true;
+}
+
 function runtimeNativeMessageStatus(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
   return asString(value.status)
@@ -36,4 +43,14 @@ function looksDiagnosticOnlyNativeMessage(text: string) {
   if (/^(?:traceback \(most recent call last\)|failureReason\s*[:=]|stderrRef\s*[:=]|stdoutRef\s*[:=]|raw_jsonl\b)/i.test(compact)) return true;
   return /(?:Runtime Codex WebSocket error|Assistant connection needs setup|generation request failed)/i.test(compact)
     && /(?:stderr|stdout|trace|recover|retry|connection|setup)/i.test(compact);
+}
+
+function looksInternalToolProtocolNativeMessage(text: string) {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return true;
+  return /<\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_call\b/i.test(compact)
+    || /<\/\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_call\s*>/i.test(compact)
+    || /<\s*(?:tool_call|function_call|assistant_tool_call)\b/i.test(compact)
+    || /\btool_calls?\s*[:=]\s*\[\s*\{/i.test(compact)
+    || /\b(?:recipient_name|tool_call_id)\s*[:=]\s*["'][\w.-]+["']/i.test(compact);
 }

@@ -98,6 +98,14 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
           schemaVersion: 'sciforge.codex-runtime-stream-audit.v1',
           guiLocalProjection: {
             composerDeclaredIntents: {
+              authorization: {
+                profileId: 'high-autonomy',
+                publicLabel: 'High Autonomy',
+                source: 'composer-autonomy-default',
+                singleTurnOverride: false,
+                hardConfirmCategories: ['payments-transfers-purchases'],
+                provider: 'private-provider-should-drop',
+              },
               mode: {
                 modeIntentId: 'multitask',
                 publicLabel: 'Multitask',
@@ -116,6 +124,13 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
     assert.match(text, /event: done/);
     assert.equal(adapter.lastInput?.commandText, 'Compare the runtime and UI paths, then summarize the blockers.');
     assert.deepEqual(adapter.lastInput?.declaredIntents, {
+      authorization: {
+        profileId: 'high-autonomy',
+        publicLabel: 'High Autonomy',
+        source: 'composer-autonomy-default',
+        singleTurnOverride: false,
+        hardConfirmCategories: ['payments-transfers-purchases'],
+      },
       mode: {
         modeIntentId: 'multitask',
         publicLabel: 'Multitask',

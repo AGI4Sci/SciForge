@@ -2,6 +2,38 @@ import type { ReactNode } from 'react';
 import type { ArtifactDelivery } from './artifacts';
 
 export {
+  SCIFORGE_ANNOTATION_COORDINATE_SPACES,
+  SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
+  SCIFORGE_ANNOTATION_SOURCE_KINDS,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_CONTRACT,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_HIGH_CONFIDENCE_THRESHOLD,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_MAX_CANDIDATES,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_MAX_DIAGNOSTICS,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_STATUSES,
+  SCIFORGE_ANNOTATION_WINDOW_BINDING_TEXT_MAX_LENGTH,
+  annotationCoordinateSpaceForSourceKind,
+  boundedAnnotationWindowBindingCandidates,
+  boundedAnnotationWindowBindingDiagnostics,
+  compactAnnotationReferenceMetadata,
+  compactAnnotationWindowBinding,
+  isAnnotationReferenceWindowOperationTarget,
+  isAnnotationWindowBindingOperationTarget,
+  isSciForgeAnnotationCoordinateSpace,
+  isSciForgeAnnotationSourceKind,
+} from './annotation-reference-contract';
+export type {
+  SciForgeAnnotationBounds,
+  SciForgeAnnotationCoordinateSpace,
+  SciForgeAnnotationMinimumRefs,
+  SciForgeAnnotationReferenceMetadata,
+  SciForgeAnnotationSourceKind,
+  SciForgeAnnotationWindowBinding,
+  SciForgeAnnotationWindowBindingCandidate,
+  SciForgeAnnotationWindowBindingDiagnostic,
+  SciForgeAnnotationWindowBindingStatus,
+} from './annotation-reference-contract';
+
+export {
   CHANNEL_DELIVERY_SCHEMA_VERSION,
   CHANNEL_LEDGER_EVENT_SCHEMA_VERSION,
   CHANNEL_MESSAGE_SCHEMA_VERSION,

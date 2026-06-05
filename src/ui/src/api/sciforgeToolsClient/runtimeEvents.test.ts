@@ -262,6 +262,48 @@ test('SSE reader promotes native Runtime Codex assistant messages when gui.prese
   assert.equal(result.displayIntent?.conversationProjection?.verificationState?.liveAcceptanceEligible, true);
 });
 
+test('SSE reader fails closed when native Runtime Codex message is an internal tool-call protocol', async () => {
+  const commandId = 'codex-command-native-tool-protocol';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: 'I will inspect an internal tool.\\n\\n<｜DSML｜tool_call><｜DSML｜parameter name="path" string="true">/tmp/private-skill.md</｜DSML｜parameter></｜DSML｜tool_call>',
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|private-skill|tool_call/);
+});
+
 test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
   const commandId = 'codex-command-native-cjk-message';
   const body = [
@@ -606,6 +648,94 @@ test('SSE reader promotes gui.ask_user into a visible confirmation result', asyn
   assert.equal(result.displayIntent?.conversationProjection?.visibleAnswer?.liveAcceptanceEligible, true);
   assert.deepEqual(result.displayIntent?.conversationProjection?.artifacts?.map((artifact) => artifact.ref), ['.sciforge/vision-runs/run-1/vision-trace.json']);
   assert.deepEqual(result.displayIntent?.conversationProjection?.recoverActions, []);
+});
+
+test('SSE reader exposes generic public hard-confirm fields without leaking commands or private refs', async () => {
+  const commandId = 'codex-command-public-hard-confirm';
+  const body = [
+    'event: gui_ask_user',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_ask_user',
+      provider: 'https://provider.example.test/v1',
+      model: 'private-model-token-sk-secret',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      raw: {
+        source: `gui.ask_user:${commandId}`,
+        askUser: {
+          kind: 'hard-confirm',
+          title: 'External form submission requires confirmation',
+          message: 'Please confirm the external submission.',
+          approvalRequest: {
+            id: 'approval:browser:submit-application',
+            action: 'submit application form',
+            actionKind: 'submit-form',
+            target: 'Example Jobs application form',
+            impact: 'Submits the prepared application to the external site.',
+            evidenceRefs: [
+              'browser-runtime:job-application/review-state',
+              'artifact:application-preview',
+              '.sciforge/raw/private-trace.json',
+              'stdout:.sciforge/stdout.log',
+            ],
+            authorizationProfile: {
+              label: 'High Autonomy',
+              scope: 'current-turn',
+              privatePolicyRef: '.sciforge/private/policy.json',
+            },
+            commandText: '/browser click --selector "#submit" --token sk-secret',
+            rawPayload: { token: 'sk-secret', url: 'https://private.example.test/?token=sk-secret' },
+          },
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, () => undefined);
+  const result = stream.result as {
+    message?: string;
+    guiAskUser?: {
+      publicProjection?: {
+        action?: string;
+        target?: string;
+        impact?: string;
+        evidenceRefs?: string[];
+        authorizationProfile?: string;
+      };
+      choices?: Array<{ label?: string; commandText?: string }>;
+      approvalRequest?: Record<string, unknown>;
+    };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.deepEqual(result.guiAskUser?.publicProjection, {
+    action: 'submit application form',
+    target: 'Example Jobs application form',
+    impact: 'Submits the prepared application to the external site.',
+    evidenceRefs: ['browser-runtime:job-application/review-state', 'artifact:application-preview'],
+    authorizationProfile: 'High Autonomy',
+  });
+  assert.equal(result.guiAskUser?.choices?.[0]?.label, 'Confirm');
+  assert.equal(result.guiAskUser?.choices?.[1]?.label, 'Cancel');
+  assert.match(result.guiAskUser?.choices?.[0]?.commandText ?? '', /^\/computer-use approve --approval-ref /);
+  assert.match(result.message ?? '', /Action: submit application form/);
+  assert.match(result.message ?? '', /Target: Example Jobs application form/);
+  assert.match(result.message ?? '', /Impact: Submits the prepared application/);
+  assert.match(result.message ?? '', /Authorization profile: High Autonomy/);
+  assert.doesNotMatch(JSON.stringify(result), /provider\.example|sk-secret|private\.example|private-trace|stdout\.log|rawPayload|commandText.*#submit/);
 });
 
 test('SSE reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {

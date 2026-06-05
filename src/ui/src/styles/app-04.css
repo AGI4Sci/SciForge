@@ -4609,7 +4609,7 @@
 .image-evidence-modal {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: 220;
   display: grid;
   place-items: center;
   padding: 24px;
@@ -4694,6 +4694,364 @@
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.image-edit-history {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 7px;
+  background: rgba(8, 18, 31, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.image-edit-saved-notice {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid rgba(125, 211, 252, 0.24);
+  border-radius: 7px;
+  background: rgba(8, 18, 31, 0.78);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.image-edit-history-header,
+.image-edit-history-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.image-edit-history-header > svg,
+.image-edit-history-meta > svg {
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.image-edit-history-header strong,
+.image-edit-history-meta strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bio-50);
+  font-size: 12px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-edit-history-list {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.image-edit-history-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid rgba(100, 116, 139, 0.28);
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.image-edit-history-meta > div {
+  min-width: 0;
+}
+
+.image-edit-history-meta span {
+  display: block;
+  color: var(--bio-400);
+  font-size: 10px;
+  line-height: 1.25;
+}
+
+.image-edit-history-meta code,
+.image-edit-saved-notice code {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--bio-300);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-edit-history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.image-edit-history-actions button {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-height: 26px;
+  padding: 4px 7px;
+  color: var(--bio-200);
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  border: 1px solid rgba(100, 116, 139, 0.36);
+  border-radius: 6px;
+  background: rgba(2, 6, 23, 0.54);
+  cursor: pointer;
+}
+
+.image-edit-history-actions button:hover {
+  color: var(--bio-50);
+  border-color: rgba(0, 229, 160, 0.44);
+  background: rgba(0, 229, 160, 0.1);
+}
+
+.image-edit-saved-notice {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.image-annotation-editor {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  min-height: 0;
+}
+
+.image-annotation-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid rgba(100, 116, 139, 0.34);
+  border-radius: 7px;
+  background: rgba(8, 18, 31, 0.9);
+}
+
+.image-annotation-tool,
+.image-annotation-action {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 8px;
+  color: var(--bio-200);
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1;
+  border: 1px solid rgba(100, 116, 139, 0.38);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.88);
+  cursor: pointer;
+}
+
+.image-annotation-tool span,
+.image-annotation-action span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-annotation-tool svg,
+.image-annotation-action svg {
+  flex: 0 0 auto;
+  color: var(--bio-300);
+  stroke-width: 2.25;
+}
+
+.image-annotation-tool:hover:not(:disabled),
+.image-annotation-action:hover:not(:disabled) {
+  color: var(--bio-50);
+  border-color: rgba(0, 229, 160, 0.42);
+  background: rgba(0, 229, 160, 0.1);
+}
+
+.image-annotation-color-controls {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  padding: 3px 5px;
+  border: 1px solid rgba(100, 116, 139, 0.32);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.66);
+}
+
+.image-annotation-color-swatch {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid rgba(226, 232, 240, 0.54);
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgba(2, 6, 23, 0.32);
+  cursor: pointer;
+}
+
+.image-annotation-color-swatch[data-active='true'] {
+  border-color: rgba(0, 229, 160, 0.92);
+  box-shadow: 0 0 0 2px rgba(0, 229, 160, 0.24), inset 0 0 0 1px rgba(2, 6, 23, 0.32);
+}
+
+.image-annotation-color-controls input[type='color'] {
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(100, 116, 139, 0.42);
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.image-annotation-tool[data-active='true'] {
+  color: var(--bio-50);
+  border-color: rgba(0, 229, 160, 0.62);
+  background: rgba(0, 229, 160, 0.16);
+}
+
+.image-annotation-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.image-annotation-editor-spacer {
+  flex: 1 1 auto;
+  min-width: 10px;
+}
+
+.image-annotation-save:not(:disabled) {
+  border-color: rgba(0, 229, 160, 0.58);
+}
+
+.image-annotation-editor-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(100, 116, 139, 0.28);
+  border-radius: 7px;
+  background: rgba(2, 6, 23, 0.7);
+}
+
+.image-annotation-editor-stage[data-editor-pointer-role='open-original'] {
+  cursor: zoom-in;
+}
+
+.image-annotation-editor-stage[data-editor-pointer-role='draw'] {
+  cursor: crosshair;
+}
+
+.image-annotation-editor-stage[data-editor-pointer-role='select'] {
+  cursor: default;
+}
+
+.image-annotation-editor-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  max-width: 100%;
+  max-height: calc(92vh - 176px);
+}
+
+.image-annotation-editor-image {
+  grid-area: 1 / 1;
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: calc(92vh - 176px);
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.image-annotation-editor-overlay {
+  grid-area: 1 / 1;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: auto;
+}
+
+.image-annotation-crop-box {
+  fill: rgba(0, 229, 160, 0.08);
+  stroke: rgba(0, 229, 160, 0.9);
+  stroke-width: 3px;
+  stroke-dasharray: 10 7;
+}
+
+.image-annotation-shape {
+  vector-effect: non-scaling-stroke;
+  pointer-events: auto;
+  cursor: move;
+  outline: none;
+}
+
+.image-annotation-shape[data-selected='true'] {
+  filter: drop-shadow(0 0 7px rgba(0, 229, 160, 0.72));
+}
+
+.image-annotation-highlight {
+  mix-blend-mode: screen;
+}
+
+.image-annotation-blur rect {
+  vector-effect: non-scaling-stroke;
+}
+
+.image-annotation-redact {
+  rx: 3px;
+}
+
+.image-annotation-text-input {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 220px);
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  color: var(--bio-300);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.image-annotation-text-input input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--bio-100);
+  border: 1px solid rgba(100, 116, 139, 0.38);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.image-annotation-text-input input:disabled {
+  color: var(--bio-400);
+  cursor: not-allowed;
+  opacity: 0.64;
+}
+
+.image-annotation-text-input[data-label-disabled='true'] {
+  opacity: 0.72;
+}
+
+.image-annotation-error {
+  margin: 0;
+  color: #fca5a5;
+  font-size: 11px;
 }
 
 .right-pane-browser-surface,

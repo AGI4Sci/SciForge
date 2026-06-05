@@ -16,37 +16,194 @@ from .contracts import ActionPlan
 
 
 ConfirmationCategory = Literal[
-    "destructive-delete",
-    "upload",
-    "external-message",
-    "login",
-    "permission",
-    "payment",
-    "install-software",
-    "sensitive-data-transfer",
-    "system-settings",
+    "financial-transaction",
+    "external-communication",
+    "external-form-submission",
+    "remote-data-mutation",
+    "external-upload",
+    "account-security-privacy",
+    "legal-compliance",
+    "external-system-execution",
+    "access-control-bypass",
+    "identity-spoofing",
+    "bulk-account-registration",
+    "irreversible-bulk-delete",
+    "unclear-sensitive-data-transfer",
+    "third-party-high-risk-instruction",
 ]
-ConfirmationMode = Literal["needs-confirmation", "hand-off-required"]
+ConfirmationMode = Literal["needs-confirmation", "hand-off-required", "blocked"]
 ConfirmationTiming = Literal["action-time"]
 
 
 HAND_OFF_REQUIRED_CATEGORIES: frozenset[ConfirmationCategory] = frozenset({
-    "login",
-    "payment",
-    "install-software",
-    "sensitive-data-transfer",
+    "access-control-bypass",
+    "identity-spoofing",
+    "bulk-account-registration",
+    "irreversible-bulk-delete",
+    "unclear-sensitive-data-transfer",
+    "third-party-high-risk-instruction",
 })
 
 _CATEGORY_PATTERNS: tuple[tuple[ConfirmationCategory, re.Pattern[str]], ...] = (
-    ("payment", re.compile(r"\b(pay|payment|purchase|buy|checkout|billing|invoice|authorize charge)\b", re.IGNORECASE)),
-    ("login", re.compile(r"\b(log[ -]?in|sign[ -]?in|authenticate|enter password|credential|2fa|mfa|passkey)\b", re.IGNORECASE)),
-    ("install-software", re.compile(r"\b(install|update|upgrade|uninstall).*\b(app|software|package|extension|plugin)\b", re.IGNORECASE)),
-    ("sensitive-data-transfer", re.compile(r"\b(send|share|upload|export|paste|copy).*\b(secret|token|credential|password|api[ -]?key|private key|ssn|passport|patient|phi|pii)\b", re.IGNORECASE)),
-    ("destructive-delete", re.compile(r"\b(delete|remove|erase|discard|wipe|destroy|drop|truncate|overwrite|replace)\b", re.IGNORECASE)),
-    ("upload", re.compile(r"\b(upload|attach|submit file|send file|publish file)\b", re.IGNORECASE)),
-    ("external-message", re.compile(r"\b(?:send|submit|post|publish|reply)\b|\b(?:comment|message|email)\b.*\b(?:send|submit|post|publish|reply)\b|\b(?:send|submit|post|publish|reply)\b.*\b(?:comment|message|email)\b", re.IGNORECASE)),
-    ("permission", re.compile(r"\b(grant|allow|approve|authorize|permission|access|share screen|screen recording|accessibility)\b", re.IGNORECASE)),
-    ("system-settings", re.compile(r"\b(system settings|preferences|firewall|vpn|network settings|security settings|privacy settings|default browser)\b", re.IGNORECASE)),
+    (
+        "third-party-high-risk-instruction",
+        re.compile(
+            r"\b(?:third[ -]?party|external|website|webpage|page|site|vendor)\b"
+            r"[^.;\n]*\b(?:instruction|prompt|message|content|script|request|says|asks|tells)\b"
+            r"[^.;\n]*\b(?:pay|purchase|buy|subscribe|refund|withdraw|trade|transfer|wire|"
+            r"send|post|publish|submit|upload|delete|remove|overwrite|archive|close|deploy|"
+            r"migrat(?:e|ion)|create cloud|grant|invite|sign|accept)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "access-control-bypass",
+        re.compile(
+            r"\b(?:bypass|circumvent|evade|defeat|work around|workaround|break through|"
+            r"skip|avoid)\b[^.;\n]*\b(?:captcha|access[ -]?control|login risk|"
+            r"security barrier|permission gate|auth(?:entication)? gate|rate limit)\b"
+            r"|\b(?:captcha|access[ -]?control|login risk|security barrier|permission gate|"
+            r"auth(?:entication)? gate|rate limit)\b[^.;\n]*\b(?:bypass|circumvent|evade|"
+            r"defeat|work around|workaround|break through|skip|avoid)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "identity-spoofing",
+        re.compile(
+            r"\b(?:pretend|pose|masquerade|impersonate|spoof)\b[^.;\n]*\b(?:as|identity|user|"
+            r"customer|owner|admin|employee|person)\b"
+            r"|\b(?:use|borrow)\b[^.;\n]*\b(?:someone else's|another person's|another user'?s)\b"
+            r"[^.;\n]*\b(?:identity|account|credentials)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "bulk-account-registration",
+        re.compile(
+            r"\b(?:bulk|mass|many|multiple|\d{2,}|hundreds?|thousands?)\b[^.;\n]*"
+            r"\b(?:register|create|sign[ -]?up|open)\b[^.;\n]*\b(?:account|user|profile)s?\b"
+            r"|\b(?:register|create|sign[ -]?up|open)\b[^.;\n]*"
+            r"\b(?:bulk|mass|many|multiple|\d{2,}|hundreds?|thousands?)\b[^.;\n]*"
+            r"\b(?:account|user|profile)s?\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "irreversible-bulk-delete",
+        re.compile(
+            r"\b(?:irreversible|irreversibly|permanent|permanently|cannot be undone)\b[^.;\n]*"
+            r"\b(?:bulk|mass|all|many|multiple|\d{2,}|hundreds?|thousands?)\b[^.;\n]*"
+            r"\b(?:delete|remove|erase|wipe|destroy|drop|truncate)\b"
+            r"|\b(?:bulk|mass|all|many|multiple|\d{2,}|hundreds?|thousands?)\b[^.;\n]*"
+            r"\b(?:delete|remove|erase|wipe|destroy|drop|truncate)\b[^.;\n]*"
+            r"\b(?:irreversible|irreversibly|permanent|permanently|cannot be undone)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "unclear-sensitive-data-transfer",
+        re.compile(
+            r"\b(?:send|share|upload|export|paste|copy|transfer)\b[^.;\n]*"
+            r"\b(?:secret|token|credential|password|api[ -]?key|private key|ssn|passport|"
+            r"patient|phi|pii|personal data|sensitive data)\b[^.;\n]*"
+            r"\b(?:unclear|unknown|unspecified|untrusted|arbitrary|wherever|whatever|"
+            r"whichever|somewhere|destination|endpoint|recipient)\b"
+            r"|\b(?:unclear|unknown|unspecified|untrusted|arbitrary|wherever|whatever|"
+            r"whichever|somewhere)\b[^.;\n]*"
+            r"\b(?:destination|endpoint|recipient)\b[^.;\n]*"
+            r"\b(?:secret|token|credential|password|api[ -]?key|private key|ssn|passport|"
+            r"patient|phi|pii|personal data|sensitive data)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "financial-transaction",
+        re.compile(
+            r"\b(?:pay|payment|purchase|buy|checkout|billing|invoice|charge|"
+            r"authorize charge|transfer funds?|wire funds?|bank transfer|subscribe|subscription|"
+            r"paid plan|refund|withdraw|withdrawal|trade|trading|stock order|crypto order)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "external-upload",
+        re.compile(
+            r"\b(?:upload|attach|submit file|send file|publish file)\b[^.;\n]*"
+            r"\b(?:external|remote|cloud|service|portal|vendor|site|server|file|image|"
+            r"dataset|credential|report|document|upload)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "external-communication",
+        re.compile(
+            r"\b(?:send|reply|post|publish)\b[^.;\n]*"
+            r"\b(?:email|message|comment|reply|ticket|post|thread|chat|dm|sms|support)\b"
+            r"|\b(?:email|message|comment|reply|ticket|post|thread|chat|dm|sms|support)\b"
+            r"[^.;\n]*\b(?:send|reply|post|publish|submit)\b"
+            r"|\bsubmit\b[^.;\n]*\b(?:support ticket|ticket reply|case reply)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "external-form-submission",
+        re.compile(
+            r"\b(?:submit|register|apply|book|reserve|schedule|enroll|sign[ -]?up)\b"
+            r"[^.;\n]*\b(?:form|registration|application|appointment|booking|reservation|"
+            r"enrollment|signup|sign[ -]?up|rsvp)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "remote-data-mutation",
+        re.compile(
+            r"\b(?:delete|remove|erase|wipe|destroy|drop|truncate|overwrite|replace|archive|close)\b"
+            r"[^.;\n]*\b(?:remote|cloud|server|external|account|customer|project|record|"
+            r"database|repo|repository|document|data)\b"
+            r"|\b(?:remote|cloud|server|external|account|customer|project|record|database|"
+            r"repo|repository|document|data)\b[^.;\n]*"
+            r"\b(?:delete|remove|erase|wipe|destroy|drop|truncate|overwrite|replace|archive|close)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "account-security-privacy",
+        re.compile(
+            r"\b(?:change|update|modify|set|reset|rotate|revoke|create|delete|invite|add|"
+            r"remove|grant|allow|approve|authorize)\b[^.;\n]*"
+            r"\b(?:account|security|privacy|billing|api[ -]?key|token|team(?: member)?|"
+            r"permission|role|access|password|mfa|2fa|passkey|oauth|secret)\b"
+            r"|\b(?:api[ -]?key|token|team(?: member)?|permission|role|access|password|mfa|"
+            r"2fa|passkey|oauth|secret)\b[^.;\n]*"
+            r"\b(?:change|update|modify|set|reset|rotate|revoke|create|delete|invite|add|"
+            r"remove|grant|allow|approve|authorize)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "legal-compliance",
+        re.compile(
+            r"\b(?:accept|agree|sign|approve|authorize|execute)\b[^.;\n]*"
+            r"\b(?:legal|compliance|contract|terms|terms of service|agreement|authorization|"
+            r"consent|waiver|signature)\b"
+            r"|\b(?:legal|compliance|contract|terms|terms of service|agreement|authorization|"
+            r"consent|waiver|signature)\b[^.;\n]*"
+            r"\b(?:accept|agree|sign|approve|authorize|execute)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "external-system-execution",
+        re.compile(
+            r"\b(?:deploy|release|rollback|provision|migrate|run migration|database migration|"
+            r"db migration|create cloud|create .*cloud|create .*resource|ci/cd|cicd)\b"
+            r"|\b(?:run|execute|start|trigger)\b[^.;\n]*"
+            r"\b(?:deploy|deployment|migration|pipeline|ci/cd|cicd|cloud resource|"
+            r"database migration|db migration)\b",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 _NEGATED_CLAUSE_RE = re.compile(
@@ -63,6 +220,7 @@ class ConfirmationDecision:
     requires_confirmation: bool
     handoff_required: bool
     reason: str
+    blocked: bool = False
 
     def as_metadata(self) -> dict[str, Any]:
         return {
@@ -71,6 +229,7 @@ class ConfirmationDecision:
             "confirmationTiming": self.timing,
             "requiresConfirmation": self.requires_confirmation,
             "handoffRequired": self.handoff_required,
+            "blocked": self.blocked,
         }
 
 
@@ -82,16 +241,7 @@ def classify_action_plan_for_confirmation(action: ActionPlan) -> ConfirmationDec
         return None
     for category, pattern in _CATEGORY_PATTERNS:
         if pattern.search(text):
-            handoff_required = category in HAND_OFF_REQUIRED_CATEGORIES
-            mode: ConfirmationMode = "hand-off-required" if handoff_required else "needs-confirmation"
-            return ConfirmationDecision(
-                category=category,
-                mode=mode,
-                timing="action-time",
-                requires_confirmation=True,
-                handoff_required=handoff_required,
-                reason=_reason_for_category(category, mode),
-            )
+            return _decision_for_category(category)
     return None
 
 
@@ -101,16 +251,7 @@ def classify_mapping_for_confirmation(payload: Mapping[str, Any]) -> Confirmatio
     text = _strip_negated_clauses(" ".join(str(part) for part in _mapping_parts(payload) if part))
     for category, pattern in _CATEGORY_PATTERNS:
         if pattern.search(text):
-            handoff_required = category in HAND_OFF_REQUIRED_CATEGORIES
-            mode: ConfirmationMode = "hand-off-required" if handoff_required else "needs-confirmation"
-            return ConfirmationDecision(
-                category=category,
-                mode=mode,
-                timing="action-time",
-                requires_confirmation=True,
-                handoff_required=handoff_required,
-                reason=_reason_for_category(category, mode),
-            )
+            return _decision_for_category(category)
     return None
 
 
@@ -132,7 +273,7 @@ def validate_confirmation_boundary(record: Mapping[str, Any]) -> dict[str, Any]:
 
     if category and category not in {category for category, _pattern in _CATEGORY_PATTERNS}:
         issues.append({"id": "unknown-confirmation-category", "path": "confirmationCategory"})
-    if mode and mode not in {"needs-confirmation", "hand-off-required"}:
+    if mode and mode not in {"needs-confirmation", "hand-off-required", "blocked"}:
         issues.append({"id": "invalid-confirmation-mode", "path": "confirmationMode"})
     if timing != "action-time":
         issues.append({
@@ -195,7 +336,23 @@ def _strip_negated_clauses(text: str) -> str:
     return _NEGATED_CLAUSE_RE.sub(" ", text)
 
 
+def _decision_for_category(category: ConfirmationCategory) -> ConfirmationDecision:
+    blocked = category in HAND_OFF_REQUIRED_CATEGORIES
+    mode: ConfirmationMode = "blocked" if blocked else "needs-confirmation"
+    return ConfirmationDecision(
+        category=category,
+        mode=mode,
+        timing="action-time",
+        requires_confirmation=not blocked,
+        handoff_required=blocked,
+        reason=_reason_for_category(category, mode),
+        blocked=blocked,
+    )
+
+
 def _reason_for_category(category: ConfirmationCategory, mode: ConfirmationMode) -> str:
+    if mode == "blocked":
+        return f"{category} Computer Use action is blocked by default and is not confirmable."
     if mode == "hand-off-required":
         return f"{category} Computer Use action requires user hand-off at action time."
     return f"{category} Computer Use action requires explicit action-time confirmation."

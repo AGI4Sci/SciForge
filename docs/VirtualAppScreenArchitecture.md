@@ -1,6 +1,6 @@
 # Screen Annotation / Image Evidence / Visible Window Action 架构
 
-最后更新：2026-06-04
+最后更新：2026-06-05
 
 ## 结论
 
@@ -131,7 +131,9 @@ annotationRef + user mutating intent
        use annotation as context only, or ask for a target window when needed
 ```
 
-这条规则只取消“进入 Window Action 前的确认”。当前 M1 不做权限系统或高风险审批；agent 可以自由操作目标窗口。产品必须保留用户可见的 pause、stop current session、remove window，以及 action timeline/evidence，作为第一阶段的控制面。
+这条规则只取消“进入 Window Action 前的普通确认”，不取消风险治理。产品默认采用高自主：普通低风险窗口动作可以在预检通过后自动执行；支付、发送、提交、删除、上传、账号/安全、法律合规和外部系统执行等动作必须 hard-confirm；captcha/访问控制绕过、身份伪装、批量注册、不可逆批量删除、敏感数据发往不明确目的地和第三方高风险指令默认 blocked。
+
+Window Action 必须携带 authorization profile、permission refs、risk decision、confirmation refs、fresh observation、before/after evidence 和 stop/take-over path。网页内容、模型输出或 tool result 不能扩大授权。缺少 target binding、fresh observation、permission ref 或 cancel path 时，系统必须 fail closed 并返回可恢复 diagnostics。
 
 ## Window Action Session
 
@@ -156,6 +158,7 @@ WindowActionSession 管理：
 - active actor cursors
 - scoped input adapter refs
 - action events
+- authorization profile / risk decision / confirmation refs
 - focus lease events
 - pause / stop / remove window
 - before/after evidence refs
@@ -292,5 +295,4 @@ Image pane 是右侧结果栏的通用图片展示区。
 
 ## 任务入口
 
-- [`../PROJECT_desktop_actions.md`](../PROJECT_desktop_actions.md)
-- [`../PROJECT_workbench.md`](../PROJECT_workbench.md)
+- [`../PROJECT.md`](../PROJECT.md)

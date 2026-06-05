@@ -4,6 +4,15 @@ export type AgentCliApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'un
 export type AgentCliSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
 
 export interface RuntimeDeclaredIntentSnapshot {
+  authorization?: {
+    profileId?: string;
+    publicLabel?: string;
+    source?: string;
+    singleTurnOverride?: boolean;
+    hardConfirmCategories?: string[];
+    actionId?: string;
+    declaredAt?: string;
+  };
   model?: {
     modelIntentId?: string;
     publicLabel?: string;

@@ -5,6 +5,7 @@ import type { SciForgeConfig, SciForgeReference } from '../../domain';
 import { useI18n } from '../../i18nContext';
 import {
   applyComposerToolDirective,
+  composerAutonomySelectionIntents,
   buildComposerCapabilityMenu,
   buildComposerToolMenu,
   composerModeSelectionIntentForToolItem,
@@ -13,6 +14,7 @@ import {
   filterComposerToolMenuItems,
   publicComposerModel,
   type ComposerAgentHostCatalogItem,
+  type ComposerAutonomySelectionIntent,
   type ComposerCapabilityMenuItem,
   type ComposerModeSelectionIntent,
   type ComposerModelSelectionIntent,
@@ -44,10 +46,12 @@ export function ChatComposer({
   onAbort,
   onModelIntentSelect,
   onModeIntentSelect,
+  onAutonomyIntentSelect,
   onClearModeIntent,
   onBeginResize,
   copy,
   selectedModeIntent,
+  selectedAutonomyIntent,
   disabled = false,
   showReferencePicker = true,
   showFileUpload = true,
@@ -83,9 +87,11 @@ export function ChatComposer({
   onAbort: () => void;
   onModelIntentSelect?: (intent: ComposerModelSelectionIntent) => void;
   onModeIntentSelect?: (intent: ComposerModeSelectionIntent) => void;
+  onAutonomyIntentSelect?: (intent: ComposerAutonomySelectionIntent) => void;
   onClearModeIntent?: () => void;
   onBeginResize: (event: React.MouseEvent<HTMLDivElement>) => void;
   selectedModeIntent?: ComposerModeSelectionIntent | null;
+  selectedAutonomyIntent?: ComposerAutonomySelectionIntent | null;
   copy?: {
     collapsedText?: string;
     referenceHint?: string;
@@ -119,6 +125,8 @@ export function ChatComposer({
   const model = publicComposerModel(runtimeContext, locale);
   const addMenuRef = useRef<HTMLDetailsElement | null>(null);
   const modelMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const autonomyMenuRef = useRef<HTMLDetailsElement | null>(null);
+  const autonomyIntent = selectedAutonomyIntent ?? composerAutonomySelectionIntents(locale).find((item) => item.id === 'high-autonomy')!;
   if (!expanded) {
     return (
       <button
@@ -252,6 +260,26 @@ export function ChatComposer({
             <ShieldCheck size={13} />
             {permissionLabel(runtimeContext.permissionMode, t)}
           </span>
+          <details ref={autonomyMenuRef} className="composer-autonomy-menu">
+            <summary title={t({ 'zh-CN': 'Autonomy', 'en-US': 'Autonomy' })}>
+              <ShieldCheck size={13} aria-hidden />
+              <span>{t({ 'zh-CN': 'Autonomy', 'en-US': 'Autonomy' })}</span>
+              <em>{autonomyIntent.label}</em>
+            </summary>
+            <div className="composer-autonomy-menu-panel">
+              {composerAutonomySelectionIntents(locale).map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  data-autonomy-option={option.id}
+                  aria-pressed={autonomyIntent.id === option.id}
+                  onClick={() => handleAutonomyIntent(option)}
+                >
+                  <span>{option.label}</span>
+                </button>
+              ))}
+            </div>
+          </details>
         </div>
       ) : null}
       {selectedModeIntent ? (
@@ -369,6 +397,11 @@ export function ChatComposer({
   function handleModelIntent(intent: ComposerModelSelectionIntent) {
     modelMenuRef.current?.removeAttribute('open');
     onModelIntentSelect?.(intent);
+  }
+
+  function handleAutonomyIntent(intent: ComposerAutonomySelectionIntent) {
+    autonomyMenuRef.current?.removeAttribute('open');
+    onAutonomyIntentSelect?.(intent);
   }
 }
 

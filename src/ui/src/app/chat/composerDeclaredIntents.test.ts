@@ -23,6 +23,27 @@ const baseSession: SciForgeSession = {
   hiddenResultSlotIds: [],
 };
 
+const defaultAuthorization = {
+  profileId: 'high-autonomy',
+  publicLabel: 'High Autonomy',
+  scope: {
+    user: 'current-user',
+    workspace: 'current-workspace',
+  },
+  source: 'composer-autonomy-default',
+  singleTurnOverride: false,
+  hardConfirmCategories: [
+    'payments-transfers-purchases',
+    'external-communications',
+    'external-system-submission',
+    'remote-delete-overwrite-archive',
+    'external-upload',
+    'account-security-privacy-billing',
+    'legal-compliance-contracts',
+    'external-system-execution',
+  ],
+};
+
 test('composer declared intents extract the latest public model picker choice', () => {
   const first = createUpdateCapabilityPreferenceUIAction({
     id: 'ui-action-model-fast',
@@ -63,6 +84,7 @@ test('composer declared intents extract the latest public model picker choice', 
       actionId: 'ui-action-model-deep',
       declaredAt: '2026-06-01T00:00:02.000Z',
     },
+    authorization: defaultAuthorization,
   });
 });
 
@@ -94,6 +116,7 @@ test('composer declared intents extract public multitask mode choice from the se
       actionId: 'ui-action-mode-multitask',
       declaredAt: '2026-06-01T00:00:05.000Z',
     },
+    authorization: defaultAuthorization,
   });
   assert.doesNotMatch(
     JSON.stringify(composerDeclaredIntentsForSession(session)),
@@ -149,6 +172,7 @@ test('composer declared mode intents are mutually exclusive and include Cursor-l
       actionId: 'ui-action-mode-ask',
       declaredAt: '2026-06-01T00:00:07.000Z',
     },
+    authorization: defaultAuthorization,
   });
   assert.doesNotMatch(JSON.stringify(composerDeclaredIntentsForSession(session)), /private-provider|private\/model-name/i);
 });
@@ -179,7 +203,11 @@ test('composer declared mode removal clears the selected mode without local stor
   const session = [selectedAction, clearAction]
     .reduce((current, action) => recordUIActionInSession(current, action), baseSession);
 
-  assert.equal(composerDeclaredIntentsForSession(session), undefined);
+  assert.deepEqual(composerDeclaredIntentsForSession(session), {
+    schemaVersion: 'sciforge.composer-declared-intents.v1',
+    source: 'ui-action-audit-log',
+    authorization: defaultAuthorization,
+  });
   assert.doesNotMatch(JSON.stringify(session), /localStorage|composer-mode-local-storage/i);
 });
 
@@ -218,5 +246,57 @@ test('composer declared intents fail closed for private or malformed picker data
     },
   });
 
-  assert.equal(composerDeclaredIntentsForSession(recordUIActionInSession(baseSession, malformedAction)), undefined);
+  assert.equal(composerDeclaredIntentsForSession(recordUIActionInSession(baseSession, malformedAction))?.model, undefined);
+});
+
+test('composer declared intents include the latest Autonomy profile as request authorization metadata', () => {
+  const assisted = createUpdateCapabilityPreferenceUIAction({
+    id: 'ui-action-autonomy-assisted',
+    session: baseSession,
+    createdAt: '2026-06-01T00:00:08.000Z',
+    preference: {
+      intent: 'composer-autonomy-profile',
+      source: 'composer-autonomy-menu',
+      profileId: 'assisted-autonomy',
+      publicLabel: 'Assisted Autonomy',
+      provider: 'private-provider',
+      token: 'sk-private',
+    },
+  });
+  const research = createUpdateCapabilityPreferenceUIAction({
+    id: 'ui-action-autonomy-research',
+    session: baseSession,
+    createdAt: '2026-06-01T00:00:09.000Z',
+    preference: {
+      intent: 'composer-autonomy-profile',
+      source: 'composer-autonomy-menu',
+      profileId: 'research-sandbox-max',
+      publicLabel: 'Research Sandbox Max',
+    },
+  });
+  const session = [assisted, research].reduce((current, action) => recordUIActionInSession(current, action), baseSession);
+
+  assert.deepEqual(composerDeclaredIntentsForSession(session)?.authorization, {
+    profileId: 'research-sandbox-max',
+    publicLabel: 'Research Sandbox Max',
+    scope: {
+      user: 'current-user',
+      workspace: 'current-workspace',
+    },
+    source: 'composer-autonomy-menu',
+    singleTurnOverride: true,
+    actionId: 'ui-action-autonomy-research',
+    declaredAt: '2026-06-01T00:00:09.000Z',
+    hardConfirmCategories: [
+      'payments-transfers-purchases',
+      'external-communications',
+      'external-system-submission',
+      'remote-delete-overwrite-archive',
+      'external-upload',
+      'account-security-privacy-billing',
+      'legal-compliance-contracts',
+      'external-system-execution',
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(composerDeclaredIntentsForSession(session)), /private-provider|sk-private|token/i);
 });

@@ -503,7 +503,7 @@ function isUIAction(value: unknown): value is UIAction {
 }
 
 function scrubPreference(preference: Record<string, unknown>): Record<string, unknown> {
-  const privatePreferenceKey = /(?:secret|token|api.?key|authorization|password|^provider$|providerUrl|providerRoute|providerId|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|invokeUrl|url|workspacePath|profile)/i;
+  const privatePreferenceKey = /(?:secret|token|api.?key|authorization|password|^provider$|providerUrl|providerRoute|providerId|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|invokeUrl|url|workspacePath|^profile$|profileUrl|profileRoute)/i;
   return Object.fromEntries(Object.entries(preference).filter(([key]) => !privatePreferenceKey.test(key)));
 }
 

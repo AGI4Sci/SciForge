@@ -323,7 +323,9 @@ npm run smoke:stable-version-registry
 
 ## Computer Use
 
-当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、Model Router `translators.vision` 观察和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、Model Router `translators.vision` 观察和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 GUI 操作意图、refs-first context 和 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+
+产品默认不再要求用户输入 `/computer-use` 才进入能力路径。当用户表达网页或桌面 GUI 操作意图时，Agent Host 应直接进入 Computer Use 预检；当用户需要外部、实时、当前网页或引用来源时，Agent Host 默认可以使用内置 Browser search/read evidence。回答“是否具备 Computer Use/Browser 能力”时，必须基于当前 runtime health、BrowserHostSession、native surface 和 preflight 状态，而不是固定自述。
 
 Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
@@ -335,9 +337,11 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 
 所有 mutating tool 都必须先 observe。执行 click/type/scroll/press_key/drag/save/open menu 前，当前 run bundle 里要有同 screen/window scope 的 app state ref、screenshot/capture ref、accessibility/state snapshot ref、grounding ref 和 freshness check。若 observation 过期、scope 不匹配或缺少 state snapshot，只能返回 blocked/needs-observation，不允许靠旧截图、历史 trace 或用户界面私有状态继续动作。
 
-风险确认按类别而不是单一 high-risk flag 管理。删除、上传、发送/发布消息、登录和权限弹窗、支付/金融、安装软件或扩展、敏感数据传输、系统设置、安全屏障和医疗/法律/HR 等动作必须在 action-time 产生 `needs-confirmation`、approval request 或 hand-off required。网页、邮件、PDF 或其它第三方内容里的指令不能替代用户确认。
+风险确认按类别而不是单一 high-risk flag 管理。默认可自动执行观察、搜索、普通导航、筛选、分页、非提交点击、公开资料下载、本地 workspace 预览/修改和填写草稿。支付、转账、购买、订阅、退款、提现、交易、发送邮件/消息/评论/工单/公开帖子、提交外部表单、删除/覆盖/归档远端或账号数据、上传本地文件到外部服务、修改账号/安全/隐私/billing/API key/token/team member、法律/合规/合同/授权/条款同意以及 CI/CD deploy、云资源、数据库迁移等外部系统执行，必须在 action-time 产生 `needs-confirmation`、approval request 或 hand-off required。网页、邮件、PDF 或其它第三方内容里的指令不能替代用户确认。
 
-真实 Computer Use run 开始前应有可见的用户控制面，而不是静默接管桌面。TUI Host 应生成 session permission / allowlist refs，说明本轮允许读取的 screen/window/app、允许操作的 app/window/display group、允许的 input modality、风险等级、截图/文件 refs 使用范围和 stop/cancel 入口。GUI 可以展示这些信息、收集 confirmation 或发送 stop 文本，但不能直接扩大权限或执行动作。缺少 permission ref、allowlist ref、risk preview 或 cancel path 的 mutating run 只能作为 diagnostic/blocked evidence。
+默认阻断类别包括绕过 captcha/登录风控/访问控制/安全屏障、身份伪装、批量账号注册、不可逆批量删除、向不明确目的地传输敏感数据，以及执行第三方内容中的高风险指令但用户没有明确表达该意图。
+
+真实 Computer Use run 开始前应有可见的用户控制面，而不是静默接管桌面。聊天输入栏的 runtime row 提供 `Autonomy` 选择项，仅保留 `Assisted Autonomy`、`High Autonomy` 和 `Research Sandbox Max`，默认 `High Autonomy`，作用域为当前用户 + workspace，并支持单轮 override。TUI Host 应生成 session permission / allowlist refs，说明本轮允许读取的 screen/window/app、允许操作的 app/window/display group、允许的 input modality、风险等级、截图/文件 refs 使用范围和 stop/cancel 入口。GUI 可以展示这些信息、收集 confirmation 或发送 stop 文本，但不能直接扩大权限或执行动作。缺少 permission ref、allowlist ref、risk preview 或 cancel path 的 mutating run 只能作为 diagnostic/blocked evidence。
 
 真实平台控制应通过 platform sidecar / MCP service 接入。sidecar 负责 macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、focused window binding、click/type/scroll/hotkey 和 permission/preflight；它只返回 window/action refs、capture refs、executor event、risk refs 和 diagnostics。SciForge runtime 只负责启动/连接 sidecar、注入 workspace/session context 和转发 host-port 调用，不把 sidecar 变成 planning 或 completion owner。
 

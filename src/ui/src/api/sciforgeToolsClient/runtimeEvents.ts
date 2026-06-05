@@ -27,7 +27,7 @@ import {
   normalizeComputerUseControlPlanePayload,
   type ComputerUseControlPlanePayload,
 } from '../../../../../packages/presentation/components';
-import { runtimeNativeMessageLiveAcceptanceEligible } from './runtimeNativeMessage';
+import { runtimeNativeMessageLiveAcceptanceEligible, runtimeNativeMessageSafeForVisibleAnswer } from './runtimeNativeMessage';
 
 const COMPUTER_USE_VIRTUAL_SCREEN_ARTIFACT_TYPE = 'computer-use-virtual-screen';
 const COMPUTER_USE_VIRTUAL_SCREEN_COMPONENT_ID = 'virtual-screen-viewer';
@@ -64,6 +64,13 @@ type AssistantStreamTextFragment = {
   text: string;
   exact: boolean;
 };
+interface RuntimeActionPublicProjection {
+  action?: string;
+  target?: string;
+  impact?: string;
+  evidenceRefs?: string[];
+  authorizationProfile?: string;
+}
 
 const unsafeRuntimeMetadataPattern = /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}\b|https?:\/\/|^(?:data|blob|file|javascript):/i;
 const localWorkspacePathPattern = /^(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/;
@@ -282,6 +289,12 @@ async function readWorkspaceToolSse(
       }
       const nativeMessage = joinAssistantStreamText(genericMessages);
       if (nativeMessage) {
+        if (!runtimeNativeMessageSafeForVisibleAnswer(nativeMessage)) {
+          const failed = runtimeCodexMissingGuiPresentFailure(data);
+          onEvent(failed);
+          error = failed.message;
+          return;
+        }
         result = withAssistantMessageRuntimeResult(data, nativeMessage);
         return;
       }
@@ -344,7 +357,10 @@ function joinAssistantStreamText(fragments: AssistantStreamTextFragment[]): stri
 
 function withAssistantMessageRuntimeResult(result: unknown, message: string): unknown {
   if (!message.trim() || !isRecord(result)) return result;
-  if (isRuntimeCodexDoneEvent(result)) return withNativeCodexMessageRuntimeResult(result, message);
+  if (isRuntimeCodexDoneEvent(result)) {
+    if (!runtimeNativeMessageSafeForVisibleAnswer(message)) return runtimeCodexMissingGuiPresentFailure(result);
+    return withNativeCodexMessageRuntimeResult(result, message);
+  }
   return withVisibleRuntimeMessage(result, message);
 }
 
@@ -735,9 +751,20 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
   const raw = isRecord(event.raw) ? event.raw : {};
   const nested = isRecord(raw.askUser) ? raw.askUser : {};
   const approvalRequest = isRecord(nested.approvalRequest) ? nested.approvalRequest : undefined;
-  const relatedRefs = uniqueStrings([
+  const explicitRelatedRefs = uniqueStrings([
     ...(asStringArray(nested.relatedRefs) ?? []),
     ...(asStringArray(nested.displayedRefs) ?? []),
+  ]);
+  const publicProjection = runtimeActionPublicProjectionFrom([
+    nested.publicProjection,
+    nested.public_projection,
+    nested.projection,
+    nested,
+    approvalRequest,
+  ]);
+  const relatedRefs = uniqueStrings([
+    ...explicitRelatedRefs,
+    ...(publicProjection?.evidenceRefs ?? []),
   ]);
   const title = asString(nested.title)
     ?? asString(approvalRequest?.title)
@@ -748,8 +775,10 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     ?? asString(approvalRequest?.confirmationText)
     ?? asString(approvalRequest?.confirmation_text)
     ?? asString(approvalRequest?.reason);
-  const choices = guiChoicesFromValue(nested.choices);
-  const text = formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices });
+  const approvalRef = approvalRefFromRequest(approvalRequest);
+  const choices = guiChoicesFromValue(nested.choices) ?? confirmationChoicesForApprovalRef(approvalRef);
+  const publicApprovalRequest = publicApprovalRequestFrom(approvalRequest, publicProjection);
+  const text = formatGuiAskUserText({ title, message, approvalRequest: publicApprovalRequest, relatedRefs, choices, publicProjection });
   const commandId = asString(event.commandId) ?? asString(result.commandId);
   return {
     schemaVersion: 'sciforge.runtime-codex-gui-ask-user.v1',
@@ -758,9 +787,9 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     title,
     message,
     text,
-    submitCommandTemplate: asString(nested.submitCommandTemplate),
     choices,
-    approvalRequest,
+    approvalRequest: publicApprovalRequest,
+    publicProjection,
     relatedRefs,
     displayedRefs: relatedRefs,
     placement: isRecord(nested.placement) ? nested.placement : undefined,
@@ -1477,7 +1506,7 @@ function computerUseAskUserFromAction(payload: Record<string, unknown>) {
   const approvalId = approvalRefFromRequest(approvalRequest);
   const controlPlane = computerUseControlPlaneFromActionPayload(payload, approvalRequest);
   const choices = approvalId ? [
-    { label: 'Approve', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalId)}`, style: 'primary' },
+    { label: 'Confirm', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalId)}`, style: 'primary' },
     { label: 'Cancel', commandText: `/computer-use reject --approval-ref ${quoteCommandArg(approvalId)}`, style: 'secondary' },
   ] : undefined;
   const title = 'Computer Use confirmation required';
@@ -1487,17 +1516,177 @@ function computerUseAskUserFromAction(payload: Record<string, unknown>) {
     ?? asString(approvalRequest.confirmation_text)
     ?? asString(approvalRequest.reason)
     ?? 'Computer Use requested confirmation before executing a guarded action.';
+  const publicProjection = runtimeActionPublicProjectionFrom([
+    payload.publicProjection,
+    payload.public_projection,
+    payload.projection,
+    payload,
+    approvalRequest,
+  ]);
+  const publicApprovalRequest = publicApprovalRequestFrom(approvalRequest, publicProjection);
   return {
     kind: 'confirmation',
     title,
     message,
-    text: formatGuiAskUserText({ title, message, approvalRequest, relatedRefs, choices }),
+    text: formatGuiAskUserText({ title, message, approvalRequest: publicApprovalRequest, relatedRefs, choices, publicProjection }),
     choices,
-    approvalRequest,
+    approvalRequest: publicApprovalRequest,
+    publicProjection,
     relatedRefs,
     displayedRefs: relatedRefs,
     controlPlane,
   };
+}
+
+function runtimeActionPublicProjectionFrom(values: unknown[]): RuntimeActionPublicProjection | undefined {
+  const records = values.filter(isRecord);
+  if (!records.length) return undefined;
+  const action = firstPublicTextField(records, [
+    'action',
+    'actionText',
+    'action_text',
+    'actionKind',
+    'action_kind',
+    'actionType',
+    'action_type',
+    'operation',
+    'verb',
+  ]);
+  const target = firstPublicTextField(records, [
+    'target',
+    'targetSummary',
+    'target_summary',
+    'targetObject',
+    'target_object',
+    'targetService',
+    'target_service',
+    'destination',
+    'service',
+    'site',
+  ]);
+  const impact = firstPublicTextField(records, [
+    'impact',
+    'impactSummary',
+    'impact_summary',
+    'effect',
+    'effectSummary',
+    'effect_summary',
+    'outcome',
+    'riskImpact',
+    'risk_impact',
+  ]);
+  const authorizationProfile = records
+    .map((record) => publicAuthorizationProfile(
+      record.authorizationProfile
+        ?? record.authorization_profile
+        ?? record.autonomyProfile
+        ?? record.autonomy_profile
+        ?? record.authorization,
+    ))
+    .find((value): value is string => Boolean(value));
+  const evidenceRefs = uniqueStrings(records.flatMap(publicEvidenceRefsFromRecord));
+  const projection = compactRecord({
+    action,
+    target,
+    impact,
+    evidenceRefs,
+    authorizationProfile,
+  }) as RuntimeActionPublicProjection;
+  return Object.keys(projection).length ? projection : undefined;
+}
+
+function publicApprovalRequestFrom(
+  approvalRequest: Record<string, unknown> | undefined,
+  publicProjection: RuntimeActionPublicProjection | undefined,
+): Record<string, unknown> | undefined {
+  if (!approvalRequest && !publicProjection) return undefined;
+  const source = approvalRequest ?? {};
+  const approvalRef = safeApprovalRef(source.approvalRef);
+  const approval_ref = safeApprovalRef(source.approval_ref);
+  const id = safeApprovalRef(source.id);
+  const request = compactRecord({
+    id,
+    approvalRef,
+    approval_ref,
+    title: publicProjectionText(source.title),
+    prompt: publicProjectionText(source.prompt),
+    message: publicProjectionText(source.message),
+    confirmationText: publicProjectionText(source.confirmationText),
+    confirmation_text: publicProjectionText(source.confirmation_text),
+    reason: publicProjectionText(source.reason),
+    riskLevel: publicProjectionText(source.riskLevel) ?? publicProjectionText(source.risk_level) ?? publicProjectionText(source.risk),
+    actionRef: publicEvidenceRef(source.actionRef) ?? publicEvidenceRef(source.action_ref),
+    actionKind: publicProjectionText(source.actionKind) ?? publicProjectionText(source.action_kind),
+    riskActionHash: publicProjectionText(source.riskActionHash) ?? publicProjectionText(source.risk_action_hash),
+    publicProjection,
+  });
+  return Object.keys(request).length ? request : undefined;
+}
+
+function firstPublicTextField(records: Record<string, unknown>[], keys: string[]) {
+  for (const record of records) {
+    for (const key of keys) {
+      const text = publicProjectionText(record[key]);
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+function publicAuthorizationProfile(value: unknown): string | undefined {
+  const direct = publicProjectionText(value);
+  if (direct) return direct;
+  if (!isRecord(value)) return undefined;
+  return publicProjectionText(value.label)
+    ?? publicProjectionText(value.name)
+    ?? publicProjectionText(value.profile)
+    ?? publicProjectionText(value.id)
+    ?? publicProjectionText(value.tier);
+}
+
+function publicEvidenceRefsFromRecord(record: Record<string, unknown>) {
+  return [
+    ...publicEvidenceRefList(record.evidenceRefs),
+    ...publicEvidenceRefList(record.evidence_refs),
+    ...publicEvidenceRefList(record.displayedRefs),
+    ...publicEvidenceRefList(record.displayed_refs),
+    ...publicEvidenceRefList(record.relatedRefs),
+    ...publicEvidenceRefList(record.related_refs),
+    ...publicEvidenceRefList(record.refs),
+  ];
+}
+
+function publicEvidenceRefList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(publicEvidenceRef).filter((ref): ref is string => Boolean(ref));
+  const ref = publicEvidenceRef(value);
+  return ref ? [ref] : [];
+}
+
+function publicEvidenceRef(value: unknown): string | undefined {
+  const ref = safeRef(value);
+  if (
+    !ref
+    || ref.length > 180
+    || /^(?:audit|raw|stdout|stderr|provider):/i.test(ref)
+    || /(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge|raw|stdout|stderr|provider)(?:[/:]|$)/i.test(ref)
+    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
+  ) return undefined;
+  return ref;
+}
+
+function publicProjectionText(value: unknown): string | undefined {
+  const text = asString(value)?.replace(/\s+/g, ' ').trim();
+  if (
+    !text
+    || /^\s*[\[{]/.test(text)
+    || /(?:commandText|command_text|rawPayload|raw[_ -]?jsonl?|ToolPayload|provider\s+payload|stdoutRef|stderrRef|rawRef|runtimeEventsRef)/i.test(text)
+    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b\s*[:=]/i.test(text)
+    || /\b(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}\b/i.test(text)
+    || /\bhttps?:\/\/|^(?:data|blob|file|javascript):/i.test(text)
+    || /(^|[\s="'(:])(?:\/|~\/|[A-Za-z]:[\\/]|\\\\)/.test(text)
+    || /(?:^|[\\/])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:[\\/]|$)/i.test(text)
+  ) return undefined;
+  return text.length > 240 ? `${text.slice(0, 237).trim()}...` : text;
 }
 
 function formatGuiAskUserText(input: {
@@ -1506,6 +1695,7 @@ function formatGuiAskUserText(input: {
   approvalRequest?: Record<string, unknown>;
   relatedRefs?: string[];
   choices?: Array<{ label: string; commandText: string; style?: string }>;
+  publicProjection?: RuntimeActionPublicProjection;
 }) {
   const risk = asString(input.approvalRequest?.riskLevel)
     ?? asString(input.approvalRequest?.risk_level)
@@ -1513,6 +1703,10 @@ function formatGuiAskUserText(input: {
   const lines = [
     `## ${humanGuiAskUserTitle(input.title)}`,
     humanGuiAskUserMessage(input.message),
+    input.publicProjection?.action ? `Action: ${input.publicProjection.action}` : undefined,
+    input.publicProjection?.target ? `Target: ${input.publicProjection.target}` : undefined,
+    input.publicProjection?.impact ? `Impact: ${input.publicProjection.impact}` : undefined,
+    input.publicProjection?.authorizationProfile ? `Authorization profile: ${input.publicProjection.authorizationProfile}` : undefined,
     risk ? `Risk: ${humanGuiRiskLabel(risk)}` : undefined,
     input.relatedRefs?.length ? `${input.relatedRefs.length} related item${input.relatedRefs.length === 1 ? '' : 's'} available.` : undefined,
   ].filter(Boolean);
@@ -1545,9 +1739,29 @@ function humanGuiRiskLabel(value: string) {
 }
 
 function approvalRefFromRequest(approvalRequest?: Record<string, unknown>) {
-  return asString(approvalRequest?.approvalRef)
+  const ref = asString(approvalRequest?.approvalRef)
     ?? asString(approvalRequest?.approval_ref)
     ?? asString(approvalRequest?.id);
+  return safeApprovalRef(ref);
+}
+
+function safeApprovalRef(value: unknown): string | undefined {
+  const ref = safeRef(value);
+  if (
+    !ref
+    || ref.length > 180
+    || /^(?:audit|raw|stdout|stderr|provider):/i.test(ref)
+    || /(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge|raw|stdout|stderr|provider)(?:[/:]|$)/i.test(ref)
+    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
+  ) return undefined;
+  return ref;
+}
+
+function confirmationChoicesForApprovalRef(approvalRef: string | undefined) {
+  return approvalRef ? [
+    { label: 'Confirm', commandText: `/computer-use approve --approval-ref ${quoteCommandArg(approvalRef)}`, style: 'primary' },
+    { label: 'Cancel', commandText: `/computer-use reject --approval-ref ${quoteCommandArg(approvalRef)}`, style: 'secondary' },
+  ] : undefined;
 }
 
 function recoverActionsForGuiPresentation(presentation: { source?: string; status?: string; displayedRefs?: string[] }) {

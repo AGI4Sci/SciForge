@@ -137,7 +137,7 @@ test('browser host adapter promotes Browser annotations as pending composer refs
   assert.match(browserWorkbenchSource, /coordinateSpace: 'browser-viewport'/);
   assert.match(adapterSource, /browserAnnotationComposerReferenceForHostSession/);
   assert.match(adapterSource, /onAnnotationReferenceRequest\?: \(reference: SciForgeReference\) => void/);
-  assert.match(adapterSource, /import type \{ BrowserWorkbenchAnnotationRequest \}/);
+  assert.match(adapterSource, /type BrowserWorkbenchAnnotationRequest,[\s\S]*from '..\/..\/..\/..\/..\/packages\/presentation\/components'/);
   assert.match(adapterSource, /function requestCommand\(command: BrowserWorkbenchCommand\) \{[\s\S]*if \(command\.id === 'annotate'\) \{[\s\S]*return;[\s\S]*\}/);
   assert.match(adapterSource, /async function requestBrowserAnnotationReference\(selection\?: BrowserWorkbenchAnnotationRequest\): Promise<void> \{[\s\S]*setBusy\(true\);[\s\S]*const freshSession = await captureFreshBrowserAnnotationSession\(\);[\s\S]*browserAnnotationComposerReferenceForHostSession\(freshSession/);
   assert.doesNotMatch(adapterSource, /flushBufferedHostActions|actionChainRef/);

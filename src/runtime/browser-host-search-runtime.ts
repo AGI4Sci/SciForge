@@ -1,10 +1,10 @@
 import {
   BROWSER_HOST_SESSION_PROVIDER_ID,
-  BROWSER_RUNTIME_CAPABILITY_ID,
   browserRuntimeProjection,
   browserRuntimeSnapshotFromRefs,
   browserRuntimeTraceForCommand,
 } from '../../packages/observe/web/browser-runtime.js';
+import { browserSearchEngineFromPrompt, browserSearchLimitFromPrompt, evaluateBrowserEvidenceNeed } from '../../packages/contracts/runtime/default-browser-computer-use-policy.js';
 import { BROWSER_HOST_SEARCH_SCHEMA, browserHostSearchSummary, defaultBrowserHostSessionManager, type BrowserHostSearchInput, type BrowserHostSearchOutput, type BrowserHostSessionManager } from './browser-host-session.js';
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from './runtime-types.js';
 import { sha1 } from './workspace-task-runner.js';
@@ -53,14 +53,18 @@ export async function tryRunBrowserHostSearchRuntime(
 }
 
 export function browserHostSearchInputFromRequest(request: GatewayRequest): BrowserHostSearchInput | undefined {
-  if (!looksLikeBrowserHostSearchRequest(request)) return undefined;
-  const query = browserSearchQueryFromPrompt(request.prompt);
-  if (!query) return undefined;
+  const decision = evaluateBrowserEvidenceNeed({
+    prompt: request.prompt,
+    selectedToolIds: request.selectedToolIds,
+    selectedSkillIds: request.selectedSkillIds,
+    availableSkills: request.availableSkills,
+  });
+  if (decision.decision !== 'search') return undefined;
   const sessionId = browserHostSessionIdFromRequest(request);
   return {
-    query,
+    query: decision.query,
     limit: browserSearchLimitFromPrompt(request.prompt),
-    engine: /duckduckgo|ddg/i.test(request.prompt) ? 'duckduckgo' : 'bing',
+    engine: browserSearchEngineFromPrompt(request.prompt),
     timeoutMs: 45_000,
     ...(sessionId ? { sessionId } : {}),
   };
@@ -207,7 +211,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
       artifactType: 'browser-runtime-projection',
       preferredView: 'browser-workbench',
       status: output.session.status === 'ready' ? 'available' : 'partial',
-      summary: `Session ${output.session.id}; screenshot/DOM/AX/console/network refs available when captured.`,
+      summary: `Session ${output.session.id}; screenshot, DOM, AX, console, and network refs available when captured.`,
       provenance: {
         producer: BROWSER_HOST_SESSION_PROVIDER_ID,
         dataRef: `browser-host-session:${output.session.id}`,
@@ -276,42 +280,6 @@ function browserHostSearchSupportingRefs(output: BrowserHostSearchOutput) {
     output.consoleLogRef,
     output.networkLogRef,
   ].filter((value): value is string => Boolean(value));
-}
-
-function looksLikeBrowserHostSearchRequest(request: GatewayRequest) {
-  const selected = [
-    ...(request.selectedToolIds ?? []),
-    ...(request.selectedSkillIds ?? []),
-    ...(request.availableSkills ?? []),
-  ].join(' ');
-  const text = `${request.prompt}\n${selected}`;
-  return /\bbrowser_search\b/i.test(text)
-    || /\/browser\s+search\b/i.test(text)
-    || (/\b(?:browser|rendered|浏览器)\b/i.test(text) && /\b(?:search|query|检索|搜索)\b/i.test(text))
-    || selected.includes(TOOL_ID)
-    || selected.includes(BROWSER_RUNTIME_CAPABILITY_ID);
-}
-
-function browserSearchQueryFromPrompt(prompt: string) {
-  const patterns = [
-    /browser_search\s*\(\s*(?:query\s*[:=]\s*)?["“']([^"”']+)["”']\s*\)/i,
-    /\/browser\s+search\s+["“']([^"”']+)["”']/i,
-    /(?:browser\s+search|search|query|搜索|检索)\s*[:：]\s*["“']?([^"”'\n。；;]+)/i,
-  ];
-  for (const pattern of patterns) {
-    const match = pattern.exec(prompt);
-    const value = match?.[1]?.trim();
-    if (value) return value.replace(/\s+/g, ' ');
-  }
-  if (/\bbrowser_search\b/i.test(prompt)) return prompt.replace(/\bbrowser_search\b/ig, '').replace(/["“”']/g, ' ').replace(/\s+/g, ' ').trim();
-  return undefined;
-}
-
-function browserSearchLimitFromPrompt(prompt: string) {
-  const match = /(?:limit|maxResults|max results|前)\s*[:=]?\s*(\d{1,2})/i.exec(prompt);
-  if (!match) return 5;
-  const value = Number(match[1]);
-  return Number.isFinite(value) ? Math.max(1, Math.min(10, value)) : 5;
 }
 
 function browserHostSessionIdFromRequest(request: GatewayRequest) {

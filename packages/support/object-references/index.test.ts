@@ -17,6 +17,7 @@ import {
   objectReferencePresentationRole,
   objectReferencesFromInlineTokens,
   pathForObjectReference,
+  parseSciForgeReferenceAttribute,
   referenceForArtifact,
   referenceForObjectReference,
   referenceForTextSelection,
@@ -26,6 +27,7 @@ import {
   removeReferenceMarkerFromInput,
   referenceToPreviewTarget,
   resolveInlineObjectReferenceToken,
+  sciForgeReferenceAttribute,
   syntheticArtifactForObjectReference,
   toWorkspaceRelativePath,
   withComposerMarker,
@@ -258,6 +260,29 @@ assert.doesNotMatch(JSON.stringify(normalizedUnsafePublicSubagentRefs), /provide
 
 const converted = referenceForObjectReference({ ...artifactRef, artifactType: 'volcano-plot' });
 assert.equal(converted.kind, 'chart');
+
+const uploadedImageRef = objectReferenceForUploadedArtifact({
+  ...artifact,
+  id: 'upload-image-1',
+  type: 'uploaded-image',
+  path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+  dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+  metadata: { title: 'microscopy.png', size: 2048 },
+});
+const serializedUploadedImage = parseSciForgeReferenceAttribute(sciForgeReferenceAttribute({
+  ...referenceForObjectReference(uploadedImageRef),
+  payload: {
+    currentReference: uploadedImageRef,
+    objectReference: uploadedImageRef,
+  },
+}));
+const serializedCurrentReference = (serializedUploadedImage?.payload as { currentReference?: ObjectReference } | undefined)?.currentReference;
+assert.equal(serializedCurrentReference?.ref, 'artifact:upload-image-1');
+assert.equal(serializedCurrentReference?.artifactType, 'uploaded-image');
+assert.equal(serializedCurrentReference?.preferredView, 'preview');
+assert.equal(serializedCurrentReference?.presentationRole, 'supporting-evidence');
+assert.deepEqual(serializedCurrentReference?.actions, ['focus-right-pane', 'inspect', 'open-external', 'reveal-in-folder', 'copy-path', 'pin']);
+assert.equal(serializedCurrentReference?.provenance?.path, '.sciforge/uploads/session-1/upload-image-1-microscopy.png');
 
 const source = referenceForObjectReference(fileRef);
 const selection = referenceForTextSelection({ sourceReference: source, selectedText: 'TP53 is significant' });

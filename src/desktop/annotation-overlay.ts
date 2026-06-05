@@ -1,7 +1,7 @@
 import {
   SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
   SCIFORGE_ANNOTATION_WINDOW_BINDING_MAX_CANDIDATES,
-} from '../shared/annotation-reference-contract.js';
+} from '../../packages/contracts/runtime/annotation-reference-contract.js';
 
 export const DESKTOP_ANNOTATION_OVERLAY_CAPTURE_SCHEMA =
   'sciforge.desktop.annotation-overlay.capture.v1' as const;

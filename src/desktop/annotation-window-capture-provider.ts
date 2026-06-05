@@ -20,7 +20,7 @@ import {
 import {
   SCIFORGE_ANNOTATION_WINDOW_BINDING_MAX_CANDIDATES,
   SCIFORGE_ANNOTATION_WINDOW_BINDING_MAX_DIAGNOSTICS,
-} from '../shared/annotation-reference-contract.js';
+} from '../../packages/contracts/runtime/annotation-reference-contract.js';
 
 const DEFAULT_SCREEN_REGION_BINDING_MIN_OVERLAP_RATIO = 0.7;
 

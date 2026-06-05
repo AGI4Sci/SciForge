@@ -355,11 +355,14 @@ test('RT-06 repair result closure asks only solved or remaining problem feedback
   assert.match(githubFeedbackSource, /export function markFeedbackGithubIssueClosed/);
 });
 
-test('PROJECT.md records the current active task board and keeps annotation entrypoints routed through app host', () => {
-  assert.match(projectSource, /当前任务板：Model Router MVP/);
-  assert.match(projectSource, /docs\/ModelRouterArchitecture\.md/);
-  assert.match(projectSource, /Model Router `\/v1\/responses` 服务/);
-  assert.match(projectSource, /Streaming 默认只流最终答案/);
+test('PROJECT.md records the current Browser and Computer Use task board with GUI-host boundaries', () => {
+  assert.match(projectSource, /当前任务板：默认 Browser Search \/ Computer Use/);
+  assert.match(projectSource, /docs\/superpowers\/specs\/2026-06-05-default-browser-computer-use-design\.md/);
+  assert.match(projectSource, /默认 Browser search 或 Computer Use preflight/);
+  assert.match(projectSource, /默认档位是 `High Autonomy`/);
+  assert.match(projectSource, /hard-confirm UI 必须展示 action、target、impact、evidence refs、authorization profile、Confirm \/ Cancel/);
+  assert.match(projectSource, /GUI 只展示状态、收集授权/);
+  assert.doesNotMatch(projectSource, /当前任务板：Model Router MVP/);
   assert.match(sciForgeAppSource, /runAnnotationPlanOnlyTurn/);
   assert.match(sciForgeAppSource, /runAnnotationQuickAction/);
   assert.match(sciForgeAppSource, /runPromptOrchestrator/);

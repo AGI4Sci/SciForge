@@ -1006,7 +1006,7 @@ test('default chat renders Computer Use confirmation panels without protocol com
   assert.match(html, /data-testid="runtime-gui-ask-user"/);
   assert.match(html, /data-gui-surface="confirmation"/);
   assert.match(html, /Confirmation/);
-  assert.match(html, /Approve/);
+  assert.match(html, /Confirm/);
   assert.match(html, /Cancel/);
   assert.doesNotMatch(html, /Computer Use|gui\.present|gui\.ask_user|approval-1|ref:planned-action:submit/);
   assert.doesNotMatch(html, /\/computer-use approve|\/computer-use reject|deleteFile|RAW_PROVIDER_MESSAGE|stdout|stderr/);

@@ -540,12 +540,36 @@ function declaredIntentsFromAuditMetadata(value: unknown): AgentCliStartTurnInpu
   const projection = isRecord(value.guiLocalProjection) ? value.guiLocalProjection : undefined;
   const declaredIntents = isRecord(projection?.composerDeclaredIntents) ? projection.composerDeclaredIntents : undefined;
   if (!declaredIntents) return undefined;
+  const authorization = declaredAuthorizationIntent(declaredIntents.authorization);
   const model = declaredModelIntent(declaredIntents.model);
   const mode = declaredModeIntent(declaredIntents.mode);
-  if (!model && !mode) return undefined;
+  if (!authorization && !model && !mode) return undefined;
   return {
+    ...(authorization ? { authorization } : {}),
     ...(model ? { model } : {}),
     ...(mode ? { mode } : {}),
+  };
+}
+
+function declaredAuthorizationIntent(value: unknown): NonNullable<AgentCliStartTurnInput['declaredIntents']>['authorization'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const profileId = safeDeclaredIntentText(value.profileId, 80);
+  const publicLabel = safeDeclaredIntentText(value.publicLabel, 80);
+  if (!profileId && !publicLabel) return undefined;
+  const hardConfirmCategories = Array.isArray(value.hardConfirmCategories)
+    ? value.hardConfirmCategories
+      .map((item) => safeDeclaredIntentText(item, 80))
+      .filter((item): item is string => Boolean(item))
+      .slice(0, 16)
+    : undefined;
+  return {
+    ...(profileId ? { profileId } : {}),
+    ...(publicLabel ? { publicLabel } : {}),
+    ...(safeDeclaredIntentText(value.source, 80) ? { source: safeDeclaredIntentText(value.source, 80) } : {}),
+    ...(typeof value.singleTurnOverride === 'boolean' ? { singleTurnOverride: value.singleTurnOverride } : {}),
+    ...(hardConfirmCategories?.length ? { hardConfirmCategories } : {}),
+    ...(safeDeclaredIntentText(value.actionId, 120) ? { actionId: safeDeclaredIntentText(value.actionId, 120) } : {}),
+    ...(safeDeclaredIntentText(value.declaredAt, 80) ? { declaredAt: safeDeclaredIntentText(value.declaredAt, 80) } : {}),
   };
 }
 

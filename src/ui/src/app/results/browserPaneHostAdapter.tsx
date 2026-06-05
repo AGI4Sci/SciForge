@@ -15,8 +15,8 @@ import {
   browserWorkbenchDefaultCommands,
   renderBrowserWorkbench,
   type BrowserWorkbenchCommand,
+  type BrowserWorkbenchAnnotationRequest,
 } from '../../../../../packages/presentation/components';
-import type { BrowserWorkbenchAnnotationRequest } from '../../../../../packages/presentation/components/browser-workbench/render';
 import { sanitizePublicTextRequired } from '../../publicProjectionSanitizer';
 import {
   browserAddressForFocusedObjectReference,

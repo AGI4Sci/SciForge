@@ -4,32 +4,38 @@
 
 ## 当前目标
 
-SciForge 当前主线是实现 [`docs/ModelRouterArchitecture.md`](docs/ModelRouterArchitecture.md)：
-提供一个 Codex provider-compatible 的 Model Router `/v1/responses` 服务，让外部调用者看到一个统一的多模态 LLM API。
-
-MVP 只支持视觉模态。Router 是薄的确定性 orchestrator，不是新的 agent host：
+SciForge 当前只围绕这次确认过的产品需求推进：
 
 ```text
-SciForge / Codex app-server / Computer Use
-  -> Model Router /v1/responses
-  -> text reasoner
-  -> vision translator
-  -> refs-first trace bundle
+用户意图 + refs-first context + Autonomy profile
+  -> Agent Host / runtime capability policy
+  -> 默认 Browser search 或 Computer Use preflight
+  -> auto action / hard-confirm / blocked recovery
+  -> GUI 只展示状态和收集授权
 ```
 
-主文本模型负责推理；视觉模型只把 `instruction + image/ref` 转成文本观察。模型按 workspace/profile 配置，不在算法里区分或写死 DeepSeek/Qwen。
+目标不是做一轮泛化 Workbench / Desktop 改造，而是让 SciForge 面向未来所有用户默认具备两类能力：
 
-## 不可变规则
+- 需要外部、实时、网页、引用或当前事实时，Agent Host 默认可以使用内置 Browser 搜索与网页证据。
+- 用户表达 GUI 操作意图时，SciForge 直接进入 Computer Use 预检，不再固定回答“没有 computer use 能力”。
+
+产品默认授权档位是 `High Autonomy`。这只表示普通低风险动作可以自动推进；支付、发送、提交、上传、删除、账号/安全、法律合规和外部系统执行等动作仍必须 hard-confirm。
+
+设计依据见 [`docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md`](docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md)。该 spec 是需求方向，不等同于端到端实现已完成。
+
+## 不可变原则
 
 - 旧逻辑代码和最终目标冲突的时候，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
 - 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
-- 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
-- 已完成 TODO 必须打勾，并补充日期、evidence refs、验证命令和最终状态。
-- GUI 不是 agent host；任务推理、模型选择、tool/capability 编排和 completion 判断归 Agent Host 或 provider/runtime owner。
+- GUI 不是 agent host；任务推理、模型选择、tool/capability 编排、provider route 和 completion 判断归 Agent Host 或 runtime owner。
+- GUI 只展示状态、收集授权、提交 terminal-equivalent intent 和 refs-first context；不得直接执行 Browser / Computer Use action。
+- Browser live surface 必须由 BrowserHostSession + Desktop native host 提供；Vite/Web dev 只能显示 UI/diagnostic，不得假装 product-ready。
+- Computer Use action 必须走 Agent Host / WindowActionSession / host adapter；Image/Evidence pane、截图 replay、frame stream、PDF、proxy render 不能成为第二个可交互目标。
 - 大对象必须 refs-first；截图、图片、provider payload、trace、日志和 artifact 不得作为 raw/base64 长期进入聊天正文或主上下文。
 - 不得静默 fallback 到未注册 provider/model/profile；缺配置必须 fail closed 或显式降级说明。
+- 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
 - 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
-- 最终需要实现用户级别验收、持续优化用户体验；发现新任务的时候可以更新在本文档
+- LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
 
 ## 长文件拆分登记
 
@@ -41,76 +47,135 @@ SciForge / Codex app-server / Computer Use
 | `src/ui/src/app/appShell/ShellPanels.tsx` | registered-watch | 拆分 sidebar shell、project/thread rows、background agent projection、panel layout owner。 |
 | `tools/computer-use-next/live-acceptance-validator.ts` | registered-watch | 拆分 schema validation、refs-first evidence checks、platform-specific live checks、report writer。 |
 | `src/ui/src/app/chat/cursorAgentProcess.ts` | registered-watch | 拆分 sanitizer、row projection、folding model、object-ref route。 |
-| `tools/computer-use-next/virtual-app-screen-vscode-smoke.ts` | registered-watch | 拆分 preflight, launch/session attach, input workflow, verifier/report sections。 |
+| `src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts` | touched-this-round-registered | 拆分 runtime event schema、public metadata sanitizer、GUI event projection、failure classification。 |
+| `tools/computer-use-next/virtual-app-screen-vscode-smoke.ts` | registered-watch | 拆分 preflight、launch/session attach、input workflow、verifier/report sections。 |
 | `packages/presentation/components/virtual-screen-viewer/render.tsx` | registered-watch | 拆分 viewer shell、frame renderer、controls、diagnostic overlays。 |
 | `src/ui/src/api/workspaceClient.ts` | registered-watch | 拆分 file API、task/session API、artifact refs、diagnostics clients。 |
-| `src/runtime/workspace-server.ts` | registered-watch | 拆分 route groups、workspace file service、task lifecycle, evidence endpoints。 |
-| `src/ui/src/api/sciforgeToolsClient/runtimeEvents.ts` | touched-this-round-registered | 拆分 runtime event schema, public metadata sanitizer, GUI event projection, failure classification。 |
+| `src/runtime/workspace-server.ts` | registered-watch | 拆分 route groups、workspace file service、task lifecycle、evidence endpoints。 |
 | `tools/computer-use-next/product-smoke-matrix.ts` | registered-watch | 拆分 case registry、manifest builder、gate validation、CLI/report output。 |
 | `src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx` | registered-watch | 拆分 list model、detail view、diagnostics panel、repair action controls。 |
-| `src/ui/src/api/sciforgeToolsClient/client.ts` | crossed-threshold-this-round-registered | 先把 runtime failure metadata、public metadata scrubber、request builders 抽成独立 modules。 |
+| `src/ui/src/api/sciforgeToolsClient/client.ts` | registered-watch | 拆分 runtime failure metadata、public metadata scrubber、request builders。 |
 | `src/ui/src/app/SciForgeApp.tsx` | registered-watch | 拆分 shell composition、runtime wiring、workspace/session providers、modal orchestration。 |
-| `src/ui/src/styles/app-04.css` | css-touched-this-round-registered | 按 chat/composer/image-preview/workbench surface 迁出样式段。 |
-| `src/ui/src/styles/app-01.css` | css-registered-watch | 按 sidebar shell/actions/projects/threads/footer 拆分样式段。 |
-| `src/ui/src/styles/app-feedback.css` | css-registered-watch | 按 feedback list/detail/diagnostic/action states 拆分样式段。 |
-| `packages/actions/computer-use/sciforge_computer_use/contracts.py` | python-registered-watch | 拆分 protocol schema、host adapter contracts、evidence/result models。 |
 
-## 当前任务板：Model Router MVP
+## T122 源码语义迁移登记
 
-状态原则：`[x]` 只表示自动化或契约证据已经覆盖的范围；需要 live secret、真实 provider、Desktop Electron native host 或长任务端到端环境的验收必须保持 `[ ]`，并以 `live-opt-in blocker pending` 登记到 [`docs/runbooks/model-router-mvp-acceptance-boundary.md`](docs/runbooks/model-router-mvp-acceptance-boundary.md)。
+`docs/native-extension-src-semantics-baseline.json` 是当前活跃 T122 基线：它只登记既有 `src/**` 中尚未迁移到 package-owned manifest/policy 的 capability semantics。新增或增加这些语义必须优先迁入 package-owned policy；只有明确登记迁移债时才允许更新该基线。
 
-### P0：Provider-compatible Model Router
+## 当前任务板：默认 Browser Search / Computer Use
 
-- [x] 新增独立 `model-router` backend 服务，对外暴露 `/v1/responses`，不把现有 `codex-responses-proxy` 扩成多模态编排器。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts`、`packages/workers/model-router/src/cli.ts`、`packages/workers/model-router/README.md`、`package.json` script `backend:model-router`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`、`npm run typecheck`）
-- [x] 支持纯文本请求直通 text reasoner，行为等价于当前文本 provider proxy。（2026-06-05 status: done for router facade；evidence: `packages/workers/model-router/src/router.ts`、`packages/workers/model-router/src/router.test.ts` test `pure text responses are routed only to the configured text reasoner`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 支持视觉请求：解析 inline image、image URL 和 SciForge ref，内部统一成 `ModalityRef`。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` modality normalization and `router.test.ts` vision inline/ref/url cases；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 按 workspace/profile 解析 `textReasoner` 与 `translators.vision`；请求可携带 profile，缺省使用服务默认 profile。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts`、`packages/workers/model-router/src/manifest.ts`、`docs/runbooks/model-router-runtime-codex-runbook.md`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 未知 profile、未注册模型、缺少 secret 或非法 provider 配置必须 fail closed。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` fail-closed resolver and `router.test.ts` `profile and provider configuration failures fail closed before upstream calls`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 主文本模型可通过严格 JSON 协议请求 `need_more_visual_info`；Router 只校验 schema、target 和 round budget。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` control parser and `router.test.ts` supplement-budget case；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 补问次数由 profile 配置，默认 `maxSupplementRounds=2`。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` default profile handling and `router.test.ts` configured budget case；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] Streaming 默认只流最终答案；视觉转译、补问和内部控制轮只写 trace。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` SSE response path and `router.test.ts` `streaming vision responses expose only the final answer events`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
-- [x] 每次请求写 `.sciforge/model-router-traces/**` refs-first bundle，记录 profile/model/ref/hash/round/error summary，不写 API key、完整 raw provider payload 或长期 base64。（2026-06-05 status: done for automated trace writer contract；evidence: `packages/workers/model-router/src/router.ts` trace writer and public `/manifest`/`/v1/models`, `packages/workers/model-router/src/trace-redaction.ts` trace-only sanitizer, `packages/workers/model-router/src/trace-audit.ts` scanner, `router.test.ts`、`trace-audit.test.ts` and `router-trace-audit.integration.test.ts` secret/base64/url/provider-echo/public-surface redaction assertions, including JSON/JSONL/SSE data JSON raw-provider alias scanning, `Authorization:`/`Authorization=`/`Authorization Bearer` text variants, unsafe JSON key path redaction, unsafe public trace fileRef hashing, unknown trace-audit CLI arg redaction, and symlink/unscannable trace entry fail-closed coverage；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts packages/workers/model-router/src/trace-audit.test.ts packages/workers/model-router/src/router-trace-audit.integration.test.ts`、`npm run smoke:model-router-trace-audit`；boundary: real provider error-body redaction remains live-opt-in pending below）
-- [x] 使用真实 provider / staging secret 复扫 trace 脱敏：success、auth failure、vision failure、supplement failure、streaming 都不得保存 API key、Authorization、secret、长期 base64、raw provider payload、raw private URL 或本地路径。（2026-06-05 status: done with qwen3.7-plus live redaction evidence；evidence: `.sciforge/model-router-traces-real-provider-redaction-1780632999251` contains success, text auth failure, vision failure, supplement failure, and streaming traces; `docs/test-artifacts/model-router-live-trace-audit/real-provider-redaction-report.json` has `status=pass`, `findings=[]`, `scannedFiles=20`, `scannedBytes=15641`, and `policy.knownSecretsChecked=3`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts packages/workers/model-router/src/trace-audit.test.ts packages/workers/model-router/src/router-trace-audit.integration.test.ts`, and `node --import tsx tools/model-router-trace-audit.ts --trace-root .sciforge/model-router-traces-real-provider-redaction-1780632999251 --require-non-empty --known-secret-env SCIFORGE_TEXT_API_KEY --known-secret-env SCIFORGE_BAD_API_KEY --known-secret-env SCIFORGE_TEXT_CONTROL_PROXY_SECRET --out docs/test-artifacts/model-router-live-trace-audit/real-provider-redaction-report.json`; automated coverage also includes missing trace root, empty trace root, missing explicit secret env, positive/expected known-corpus check count, JSON/JSONL/SSE data JSON sensitive header and raw provider payload key aliases, `Authorization:`/`Authorization=`/`Authorization Bearer` text variants, unsafe JSON key path redaction, unsafe public trace fileRef hashing, unknown trace-audit CLI arg redaction, invalid scan budget, raw binary trace, and symlink/unscannable trace entry fail-closed coverage）
-- [x] 视觉转译失败时降级回答：最终答案必须明确说明图像无法检查，不能假装看过图。（2026-06-05 status: done；evidence: `packages/workers/model-router/src/router.ts` degraded answer path and `router.test.ts` `vision translator failures force an explicit image unavailable final answer`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts`）
+状态原则：
 
-### P0：主聊天图片理解
+- `[x]` 只能表示当前活动产品聊天链路或明确的文档调查项已经验证。
+- `[ ]` 表示尚未实现、尚未接入活动聊天链路、只有局部测试通过，或还需要和用户确认取舍。
+- 本文档是唯一活动任务板，不再新增 `PROJECT_*.md`。
 
-- [x] 主聊天 composer 支持上传图片作为当前 turn 上下文，并通过 Model Router 进入视觉理解流程。（2026-06-05 status: done for refs-first Runtime Codex handoff；evidence: `src/ui/src/app/ChatPanel.tsx`、`src/ui/src/app/chat/runOrchestrator.ts`、`src/ui/src/app/chat/sessionTransforms.ts`、`src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts` uploaded-image ref test；commands: `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/ChatPanel.test.ts src/ui/src/app/chat/runOrchestrator.targetInstance.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts`）
-- [x] 主聊天消息流支持展示图像数据，不依赖右侧结果栏。（2026-06-05 status: done；evidence: `src/ui/src/app/chat/MessageContent.tsx`、`src/ui/src/app/chat/MessageContent.test.tsx`、`src/ui/src/styles/app-04.css`；commands: `node --import tsx --test src/ui/src/app/chat/MessageContent.test.tsx`）
-- [x] 图片默认显示缩略图；点击后在主聊天内查看原图。（2026-06-05 status: done；evidence: `src/ui/src/app/chat/MessageContent.tsx` thumbnail/raw preview link and `MessageContent.test.tsx` `message content renders uploaded image object refs as clickable ref-first thumbnails`；commands: `node --import tsx --test src/ui/src/app/chat/MessageContent.test.tsx`）
-- [x] 图片消息只引用 workspace file/ref/raw preview URL，不把 base64 长期保存到 session 或 trace。（2026-06-05 status: done；evidence: `src/ui/src/app/chat/sessionTransforms.ts`、`src/ui/src/app/chat/MessageContent.tsx`、`src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts` no-inline assertions；commands: `node --import tsx --test src/ui/src/app/chat/sessionTransforms.test.ts src/ui/src/app/chat/MessageContent.test.tsx src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts`）
-- [x] 图片理解验收场景需要 diverse 且复杂：科研图表、显微/实验图像、UI 截图、包含小字/图例/坐标轴的图像问答；如果缺乏相关材料, SciForge需要用computer use能力上网下载检索相关图片作为数据材料。（2026-06-05 status: done with qwen materialized-ref live evidence；evidence: `packages/workers/model-router/src/router.ts` materializes safe workspace image refs into transient provider-only image payloads while keeping trace refs-first, `packages/workers/model-router/src/router.test.ts` `workspace image refs are materialized only as transient provider image payloads`, `tools/main-chat-image-understanding-live-matrix-cases.ts` fixed diverse case registry, `tools/main-chat-image-understanding-live-matrix.ts` opt-in gate, `docs/test-artifacts/main-chat-image-understanding-live-matrix/qwen37-materialized-manifest.json`, and `docs/test-artifacts/model-router-live-trace-audit/qwen37-materialized-report.json`；commands: `node --import tsx --test packages/workers/model-router/src/router.test.ts packages/workers/model-router/src/trace-audit.test.ts packages/workers/model-router/src/router-trace-audit.integration.test.ts`, `npm run smoke:main-chat-image-understanding-live-matrix --silent`, `SCIFORGE_REQUIRE_MAIN_CHAT_IMAGE_MATRIX=1 node --import tsx tools/main-chat-image-understanding-live-matrix.ts --router-url http://127.0.0.1:3894 --trace-root .sciforge/model-router-traces-qwen37-materialized-20260605-live --trace-audit-out docs/test-artifacts/model-router-live-trace-audit/qwen37-materialized-report.json --known-secret-env SCIFORGE_TEXT_API_KEY --out docs/test-artifacts/main-chat-image-understanding-live-matrix/qwen37-materialized-manifest.json --strict`；live result: qwen3.7-plus passed all four required cases, no degraded responses, every answer rubric 4/4, post-run trace audit `status=pass`, `findings=[]`, `policy.knownSecretsChecked=1`, and manifest stores only answer digests/length/rubric counts plus refs-first trace evidence）
+### 0. 已确认事实
 
-### P0：Computer Use 统一模型入口
+- [x] 根目录只保留一个 [`PROJECT.md`](PROJECT.md)；`PROJECT_workbench.md` 和 `PROJECT_desktop_actions.md` 已删除，旧任务只保留在 archive 中。
+- [x] 需求 spec 已存在，但 spec 明确写着“当前文档更新不代表代码已经完成”。
+- [x] Composer 已出现 `Autonomy` 选择项，且只保留 `Assisted Autonomy`、`High Autonomy`、`Research Sandbox Max` 三档；默认展示为 `High Autonomy`。
+- [x] `generation-gateway` 已有局部 capability truth / Browser search / Computer Use preflight policy 与测试，但这不能证明正常聊天路径已经接入。
+- [x] Desktop native Browser surface readiness 已有 Electron / Workspace Writer / UI 三层定义；Vite/Web dev 不应声明 product-ready。
+- [x] 当前误答“我没有直接 computer use 能力”的最可能原因不是前端硬编码，而是正常 composer chat 绕过了 grounded capability truth，直接进入 Runtime Codex 生成。
 
-- [x] Computer Use 算法不再区分文本推理模型和 VLM 模型；只依赖统一 Model Router provider。（2026-06-05 status: done；evidence: `packages/actions/computer-use/provider-policy.ts`、`packages/observe/vision/computer-use-runtime-policy.ts`、`src/runtime/computer-use/host-adapter.ts` capability ids；commands: `node --import tsx --test packages/actions/computer-use/provider-policy.test.ts packages/observe/vision/computer-use-runtime-policy.test.ts packages/actions/computer-use/host-adapter-contract.test.ts`）
-- [x] Computer Use 的 screenshot/crop/grounding/verifier prompt 均通过 Router 的 vision translator role 转译为文本观察。（2026-06-05 status: done at capability/contract layer；evidence: `packages/actions/computer-use/provider-policy.ts` routerRoles, `packages/observe/vision/computer-use-runtime-policy.ts` modelRouterCapabilities, `src/runtime/vision-sense/computer-use-grounding.ts` grounding translator ids；commands: `node --import tsx --test packages/actions/computer-use/provider-policy.test.ts packages/observe/vision/computer-use-runtime-policy.test.ts src/runtime/vision-sense/computer-use-grounding.test.ts`）
-- [x] Computer Use trace 记录 router trace refs、window screenshot refs、hash、尺寸、target、round/error summary。（2026-06-05 status: done for trace contract and handoff policy；evidence: `packages/actions/computer-use/provider-policy.ts` `computerUseTraceHandoffContract`、`packages/observe/vision/computer-use-runtime-policy.ts` trace policy、`packages/observe/vision/README.md` trace contract docs；commands: `node --import tsx --test packages/actions/computer-use/provider-policy.test.ts packages/observe/vision/computer-use-runtime-policy.test.ts`）
-- [ ] 复杂软件操作验收必须覆盖 diverse 场景：浏览器科研检索、文档/表格编辑、文件管理、IDE/终端、跨窗口恢复与 verifier 复查。（2026-06-05 status: live-opt-in blocker pending；evidence boundary: `docs/runbooks/model-router-mvp-acceptance-boundary.md` Computer Use live matrix；automated evidence so far: unified capability/policy/host contract tests plus `tools/model-router-computer-use-live-acceptance-cases.ts` five-case registry, `tools/model-router-computer-use-live-acceptance-preflight.ts` current-env diagnostic preflight that probes public Model Router `/health`/`/manifest`/`/v1/models`, hashes runner/model/config diagnostics without printing auth/provider/model/path values, `tools/model-router-computer-use-live-acceptance-runner.ts` external-runner adapter that requires live opt-in, collects exactly five structured refs-first case results into matrix input, and refuses malformed/mismatched/unsafe child output without leaking command/provider/auth/path details, `tools/model-router-computer-use-live-acceptance-materializer.ts` fail-closed current-run evidence materializer that converts already-existing live workspace refs into `current-run.json`, executor/session/native/app-window sidecars, `gui.present` and verifier envelopes, blocks fixture/dry-run/shared-input/non-mutating/diagnostic-only attestations, keeps logical `computer-use:*` refs only as provenance inside envelopes, and never grants release acceptance, `tools/model-router-computer-use-live-acceptance-release-harness.ts` fail-closed release harness that requires preflight ready plus strict matrix CLI `releaseAcceptance=live-current-run` before declaring completion, and `tools/model-router-computer-use-live-acceptance-matrix.ts` refs-first manifest gate, including missing/unsafe manifest, duplicate result case ids, duplicate normalized routerTraceRefs, missing source ref, embedded traceAudit self-certification, stale external trace audit report, stale current-run marker/evidence replay, current-run semantic evidence binding for `gui.present` and verifier refs, symlink-backed or outside-workspace evidence refs, fabricated or non-file evidence schemes, traversal refs, cross-run evidence refs, passed cases without workspace-file `gui.present`, native executor without native/session binding, empty/identity-mismatched router `trace.json`, missing `visionTranslator`/`textReasoner` ok trace calls, malformed/inconsistent trace audit report, non-positive/too-low known-corpus check count, non-positive `scannedBytes`, and routerTraceRefs not covered by exact audit `trace.json` scannedFileRefs fail-closed coverage；commands: `node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-preflight.test.ts`、`node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-runner.test.ts`、`node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-materializer.test.ts`、`node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-release-harness.test.ts`、`node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-matrix.test.ts`；unblocks when: Desktop Electron native host, CU-NEXT real runner, or equivalent app-window executor completes all five gate cases with bounded refs-first current-run evidence files, valid `current-run.json` started/completed windows enclosing scoped evidence files, `gui.present` and verifier JSON envelopes bound to the same runId/caseId, distinct routerTraceRefs whose `trace.json` files use `sciforge.model-router.trace.v1`, match public alias/profile, and contain ok `visionTranslator`/`textReasoner` calls, a post-run `tools/model-router-trace-audit.ts --require-non-empty` report newer than the matrix input/manifest covers every routerTraceRef's exact `trace.json`, and `node --import tsx tools/model-router-computer-use-live-acceptance-matrix.ts --input docs/test-artifacts/model-router-computer-use-live-matrix/input.json --trace-audit-report docs/test-artifacts/model-router-live-trace-audit/report.json --expected-known-secrets-checked 2 --strict` passes）
-  - 2026-06-05 additional automated evidence: `tools/model-router-computer-use-live-acceptance-cu-bundle-adapter.ts` fail-closed CU bundle adapter validates already-existing CU-NEXT/current chat Computer Use refs-first acceptance bundles, projects only explicitly mapped five-case source refs into Model Router materializer input, rejects missing/duplicate/unknown cases, unsafe/cross-workspace refs, forbidden provider/auth/path/raw-model payloads, fixture/dry-run/diagnostic-only/non-mutating/shared-system-input attestations, task/scenario mismatch, and unreadable trace/manifest/completion sidecars, keeps CU task ids only as provenance, writes no materializer input when blocked, and never grants release acceptance；command: `node --import tsx --test tests/smoke/model-router-computer-use-live-acceptance-cu-bundle-adapter.test.ts`。
-- [x] 失败时保留 refs-first diagnosis，不把截图 base64、raw provider payload 或 GUI 私有状态写入主结果。（2026-06-05 status: done；evidence: `packages/actions/computer-use/provider-policy.ts` forbiddenInlinePayloads, `packages/observe/vision/computer-use-runtime-policy.ts` file-ref-only policy, `src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts` public metadata redaction；commands: `node --import tsx --test packages/actions/computer-use/provider-policy.test.ts packages/observe/vision/computer-use-runtime-policy.test.ts src/ui/src/api/sciforgeToolsClient/runtimeEvents.client.test.ts`）
+### 1. P0：统一普通聊天的能力事实入口
 
-### P1：配置与产品入口
+- [ ] 正常 composer chat 必须先进入一个统一 turn router / Agent Host policy stage，再由该 router 决定 Browser search、Computer Use preflight、Runtime Codex 或其它能力。
+- [ ] 用户问“你有 computer use 能力么 / 你能操作浏览器么”时，正常聊天路径必须命中 capability truth，而不是让模型自由生成自我能力判断。
+- [ ] capability truth 必须读取当前 workspace writer、BrowserHostSession、native surface、WindowActionSession、Computer Use adapter、target binding、fresh observation、permission refs 和 stop/cancel path；不能只依赖手工塞进 `uiState` 的测试数据。
+- [ ] Web dev/Vite 下回答必须说明 `native-bridge-unavailable` 或对应 blocker；Desktop native ready 时必须说明可进入 Browser search 或 Computer Use preflight。
+- [ ] 新增端到端测试：从 UI normal composer request 或等价 transport request 发送“你有 computer use 能力么”，断言不出现固定否认文案，且返回 product capability + current readiness + next action。
+- [ ] 新增回归测试：历史消息不会被改写，但新 turn 必须使用新的 capability truth。
 
-- [x] Runtime Codex 默认 provider 指向 Model Router，而不是直接指向 DeepSeek proxy。（2026-06-05 status: done；evidence: `packages/backend/src/runtime-home.ts`、`src/ui/src/config.ts`、`packages/backend/runtime-config/config.toml.example`、`src/ui/src/providerReadiness.ts` default managed-router readiness；commands: `node --import tsx --test packages/backend/src/runtime-home.test.ts src/ui/src/runtimeHealth.test.ts`）
-- [x] Settings / runtime audit 只展示公开 alias 和统一 router profile，不暴露 provider URL、API key 或 raw model slug。（2026-06-05 status: done；evidence: `src/runtime/codex/codex-runtime-config.ts`、`src/runtime/codex/codex-runtime-audit-bundle.ts`, including private raw slugs hidden behind public-prefix-looking aliases normalized to `RUNTIME_PROVIDER`/`RUNTIME_MODEL`；commands: `node --import tsx --test src/runtime/codex/codex-runtime-config.test.ts src/runtime/codex/codex-runtime-audit-bundle.test.ts`）
-- [x] `docs/Architecture.md`、`docs/NativeExtensionOwnershipMap.md` 和 Computer Use 相关文档同步移除“文本模型/VLM 分开配置”的产品假设。（2026-06-05 status: done；evidence: role-based Model Router textReasoner/translators.vision wording in `docs/Architecture.md` and `docs/NativeExtensionOwnershipMap.md`；commands: `rg -n "DeepSeek|Qwen|deepseek|qwen|VLM|text model|text-model|文本模型|视觉模型|sciforge-runtime-deepseek|sciforge-deepseek-proxy|bailian" docs/Architecture.md docs/NativeExtensionOwnershipMap.md packages/backend/README.md packages/backend/runtime-config/config.toml.example docs/runbooks/model-router-runtime-codex-runbook.md src/ui/src/config.ts packages/backend/src/runtime-home.ts src/runtime/codex/codex-runtime-config.ts src/runtime/codex/codex-runtime-audit-bundle.ts`)
-- [x] 增加 release/runbook：如何配置默认 profile、workspace/profile override、trace root、text reasoner 和 vision translator。（2026-06-05 status: done；evidence: `docs/runbooks/model-router-runtime-codex-runbook.md`；commands: `git diff --check -- packages/backend/runtime-config/config.toml.example docs packages/backend/README.md`)
+### 2. P0：默认内置 Browser 搜索接入活动聊天链路
 
-## 验收标准
+- [ ] 外部、实时、网页、引用、当前事实、URL 和 Browser refs 请求，在正常聊天链路中默认进入 Browser search/read evidence。
+- [ ] 用户明确禁止联网、要求只用本地上下文，或搜索会触发登录、付费、敏感数据传输、第三方动作时，默认不搜索。
+- [ ] Browser search 输出必须包含 source URL、时间、bounded summary 和 evidence refs；raw DOM、raw logs、cookie、token、完整私密 URL、截图 base64 不进入主 payload。
+- [ ] 新增端到端测试：普通聊天请求触发 Browser search runtime，而不是只在直接调用 `runWorkspaceRuntimeGateway` 的单元测试中通过。
+- [ ] 确认并记录 Browser pane direct actions 与聊天 Browser search 的边界：Browser pane 可以操作当前 BrowserHostSession，但聊天的事实搜索仍归 Agent Host policy。
 
-1. 主聊天栏支持图片理解任务：用户可上传图片，图片在主聊天中以缩略图展示，点击查看原图；同一 turn 能围绕图片进行准确问答。验收场景至少覆盖科研图表、实验/显微图像、UI 截图和复杂标注/图例图片。
-2. Computer Use 通过统一 Model Router 服务完成软件操作：算法内部不再区分 text reasoner 与 VLM；复杂场景至少覆盖浏览器检索、文档/表格编辑、文件管理、IDE/终端和跨窗口恢复。
-3. 对外 provider 面保持 `/v1/responses` compatible：纯文本请求可直通，视觉请求内部转译，最终只返回 answer/stream。
-4. Router 补问循环受 profile 限制，默认最多 2 次；非法 JSON、未知 target、超限或视觉失败不会触发未授权调用。
-5. `.sciforge/model-router-traces/**` 生成可审计 trace；不得包含 API key、Authorization、secret、长期 base64、完整 raw provider payload、raw screenshot 或未脱敏私密 URL/本地路径。
-6. `git diff --check`、focused backend tests、focused chat UI tests、focused Computer Use policy tests 和 `npm run typecheck` 通过；不能运行的 live/opt-in 验收必须登记 blocker 与替代证据边界。
-7. 最终需要实现用户级别验收, 也就是使用SciForge桌面app执行任务, codex(你)通过观察桌面图片、证据进行验收
+### 3. P0：Computer Use 默认预检接入活动聊天链路
 
-## 必读文档
+- [ ] 用户表达 GUI 操作意图时，正常聊天链路必须直接进入 Computer Use preflight，不要求用户输入 `/computer-use`。
+- [ ] Preflight 必须 fail closed：缺 native host、native surface、target binding、fresh observation、permission ref、Computer Use adapter 或 cancel path 时返回 blocker 与恢复建议。
+- [ ] 可自动执行、needs-confirmation、blocked 三类风险必须由 Host/runtime policy 判定；GUI、网页内容、模型输出或 tool result 不能扩大授权。
+- [ ] hard-confirm UI 必须展示 action、target、impact、evidence refs、authorization profile、Confirm / Cancel；确认只覆盖当前 action、action type 或当前 turn 的明确范围。
+- [ ] 新增端到端测试：普通聊天“帮我打开网页并点击...”进入 preflight；ready 时进入 action path，blocked 时给出具体 blocker。
+- [ ] 新增端到端测试：支付、发送、提交、上传、删除、账号/安全、法律合规和外部系统执行必须 hard-confirm，不因 `High Autonomy` 绕过。
 
-- [`docs/ModelRouterArchitecture.md`](docs/ModelRouterArchitecture.md)：当前实现目标。
+### 4. P0：Runtime readiness feed
+
+- [ ] 建立 Browser / Computer Use readiness projection owner：可以由 Workspace Writer 主动 probe，也可以由 UI 提交 bounded refs，但最终由 Agent Host/runtime 解释，不由模型猜测。
+- [ ] 正常 Runtime Codex 请求不得只把 Autonomy 和 readiness 放进 audit-only 文本；需要有受边界保护的结构化 public metadata 或先经过 gateway。
+- [ ] 如果保留 Runtime Codex 作为下游生成器，必须在它启动前注入 grounded capability facts，避免下游模型回答“我没有直接能力”。
+- [ ] Desktop product path 必须优先使用 Electron dynamic workspace writer；Web dev source writer 只能作为 diagnostic，不得覆盖 Desktop native ready 状态。
+- [ ] Health/preflight evidence refs 必须 refs-first、bounded、脱敏，并能在聊天回答和 run audit 中追溯。
+
+### 5. P1：聊天链路梳理与合并决策
+
+当前调查到的链路至少如下：
+
+| 编号 | 链路 | 当前角色 | 问题 |
+| --- | --- | --- | --- |
+| C1 | Composer normal chat -> `runPromptOrchestrator` -> `sendSciForgeToolMessage` -> Runtime Codex WS/SSE -> Codex app-server | 当前默认普通聊天 | 没有结构化 Browser/CU readiness；会绕过 gateway capability truth。 |
+| C2 | `/api/sciforge/tools/run/stream` -> `runWorkspaceRuntimeGateway` -> `generation-gateway` | 局部 policy / legacy diagnostic / 直接 API | 有 capability truth 与 Browser search policy，但不是普通聊天默认入口。 |
+| C3 | `generation-gateway` 内部 `codex-runtime-bridge` | gateway 内的 Codex 下游桥 | 和 C1 形成重复入口，需要决定是否保留。 |
+| C4 | `/computer-use ...` commandText -> Runtime Codex host-owned native route | slash/approval 专用 Computer Use 路径 | 仍依赖 slash command，不满足“GUI 意图默认预检”。 |
+| C5 | Runtime GUI approval / guidance / cancel realtime controls | 活动 run 控制通道 | 不是新聊天生成入口，但必须和 hard-confirm 兼容。 |
+| C6 | Browser pane direct actions/search -> BrowserHostSession routes | 右侧 Browser surface 直接控制 | 不是聊天入口，不能成为第二个 Agent Host。 |
+| C7 | annotation-plan-only / demo-local response | 本地特殊分支 | 不能影响默认能力判断。 |
+
+待讨论的合并方向：
+
+- [ ] 推荐方向：保留一个默认聊天入口 `Composer -> Turn Router / Agent Host Gateway -> policy stages -> downstream runtime`；Runtime Codex 只作为下游执行/生成能力，不再作为绕过 policy 的默认入口。
+- [ ] Browser pane direct actions 保留为 BrowserHostSession 的 projection/action adapter，但其结果以 refs 进入 Agent Host，不直接决定聊天回答。
+- [ ] `/computer-use` slash path 降级为调试/专家入口；普通 GUI 意图由 preflight 自动路由。
+- [ ] legacy `/tools/run/stream` diagnostic shim 在默认入口迁移完成后删除或封存为测试 harness。
+- [ ] 决定 C1 与 C3 是否合并：若 gateway 成为唯一入口，C1 应改为调用 gateway；若 Runtime Codex 保留直连，则必须在 C1 前增加同等 policy gate。
+
+### 6. P1：Composer Autonomy 成为真实授权输入
+
+- [x] 输入栏显示三档授权模式，默认 `High Autonomy`。
+- [ ] `Autonomy` 不能只作为 audit/guiLocalProjection；必须成为 Agent Host risk classifier 和 Computer Use preflight 的结构化输入。
+- [ ] 授权档位作用域为当前用户 + 当前 workspace，并支持单轮 override；需要端到端验证而不是只验证 UI action log。
+- [ ] runtime 不能静默升级档位；第三方内容、模型输出或 tool result 不能修改档位。
+- [ ] Team/admin 最大授权档位可作为未来扩展，但本轮不实现。
+
+### 7. P1：验收与测试口径重置
+
+- [ ] 移除“局部测试 passed 即任务完成”的验收口径；端到端默认聊天链路未覆盖时不能标 `[x]`。
+- [ ] Capability answer tests 覆盖 ready、blocked、Web dev、native surface unavailable，并通过正常聊天 transport。
+- [ ] Browser default tests 覆盖 fresh/external/current/URL/search-needed 和 no-network/local-only 场景，并证明从 composer 进入 Browser search。
+- [ ] Computer Use preflight tests 覆盖 target、surface、observation、permission、cancel path 缺失的 fail-closed，并证明普通 GUI 意图会触发。
+- [ ] Desktop smoke 使用 Electron native host 验证 BrowserHostSession、native surface、Computer Use preflight 和 hard-confirm surface；Vite 只作为 diagnostic。
+- [ ] 文档改动至少运行 `git diff --check`；实现改动必须补充 focused tests 和 Desktop native product smoke。
+
+## 非目标
+
+- 不做泛化 Workbench / Desktop 投影任务。
+- 不新增或保留 `PROJECT_*.md` 活动任务板。
+- 不把 GUI 升级为 Agent Host。
+- 不用 iframe、proxy、screenshot replay、frame stream、PDF、document projection 或系统浏览器冒充 Browser live surface。
+- 不做和本需求无关的 Model Router、图片理解、sidebar、右侧 pane、文件 viewer 或通用桌面重构。
+- 不移除 hard-confirm，也不允许任何默认档位绕过真实外部影响确认。
+
+## 当前验收标准
+
+1. 用户问“你有 computer use 能力么”时，新的普通聊天 turn 必须说明产品能力、当前 runtime readiness 和下一步动作；blocked 时给出具体原因。
+2. 需要当前网页事实或引用来源的任务默认使用内置 Browser search，并产出 refs-first evidence。
+3. 用户表达 GUI 操作意图时，SciForge 直接进入 Computer Use preflight。
+4. 输入栏只展示三个授权档位，默认 `High Autonomy`，并能随本轮 request 进入 Agent Host risk policy。
+5. `High Autonomy` 不绕过 hard-confirm 或 blocked policy。
+6. 缺 native host / native surface / target binding / fresh observation / permission refs / cancel path 时 fail closed。
+7. GUI 始终是 projection 和授权收集层，不拥有 Agent Host、provider route、Computer Use executor 或 completion 判断。
+8. 旧历史消息不需要改写；新消息必须走新的 grounded capability path。
+
+## 相关文档
+
+- [`docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md`](docs/superpowers/specs/2026-06-05-default-browser-computer-use-design.md)：默认能力设计。
 - [`docs/Architecture.md`](docs/Architecture.md)：Agent Host Semantic Pipeline 和 GUI-as-extension。
+- [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)：BrowserHostSession single truth 与 Desktop native Browser。
+- [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)：Annotation / Image Evidence / Window Action 边界。
 - [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)：native / runtime / GUI ownership。
-- [`packages/backend/README.md`](packages/backend/README.md)：provider proxy 和 Runtime Codex provider 边界。
-- [`packages/observe/vision/README.md`](packages/observe/vision/README.md)：视觉转文本与 refs-first trace 原则。
+- [`docs/Usage.md`](docs/Usage.md)：Computer Use 使用、权限和验证说明。

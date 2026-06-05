@@ -19,9 +19,19 @@ interface NormalizedGuiPresentation {
 interface NormalizedGuiAskUser {
   title: string;
   message?: string;
+  kind?: string;
   risk?: string;
+  publicProjection?: NormalizedGuiPublicProjection;
   relatedRefs: string[];
   choices: RuntimeGuiChoice[];
+}
+
+interface NormalizedGuiPublicProjection {
+  action?: string;
+  target?: string;
+  impact?: string;
+  evidenceRefs: string[];
+  authorizationProfile?: string;
 }
 
 export function hasRuntimeGuiSurface(surface: RuntimeGuiSurface | undefined) {
@@ -66,31 +76,72 @@ export function RuntimeGuiPanel({
           aria-label="Confirmation request"
         >
           <div className="runtime-gui-card-head">
-            <span>Needs confirmation</span>
+            <span>{askUser.kind === 'blocked' ? 'Blocked' : 'Needs confirmation'}</span>
             <strong>{humanGuiTitle(askUser.title) ?? 'Confirm before continuing'}</strong>
             {askUser.risk ? <small>{humanRiskLabel(askUser.risk)}</small> : null}
           </div>
           {askUser.message ? <p>{humanGuiMessage(askUser.message)}</p> : null}
-          <RuntimeGuiRefList refs={askUser.relatedRefs} onObjectFocus={onObjectFocus} />
+          <RuntimeGuiPublicProjectionFields projection={askUser.publicProjection} onObjectFocus={onObjectFocus} />
+          <RuntimeGuiRefList refs={runtimeGuiRelatedRefsOutsidePublicProjection(askUser)} onObjectFocus={onObjectFocus} />
           {askUser.choices.length ? (
             <div className="runtime-gui-choice-row">
-              {askUser.choices.map((choice) => (
-                <button
-                  type="button"
-                  key={`${choice.label}-${choice.commandText}`}
-                  className={`runtime-gui-choice ${choice.style === 'danger' ? 'danger' : choice.style === 'primary' ? 'primary' : ''}`}
-                  onClick={() => onCommand?.(choice.commandText)}
-                  title={choice.label}
-                >
-                  <span>{choice.label}</span>
-                </button>
-              ))}
+              {askUser.choices.map((choice) => {
+                const label = runtimeGuiChoiceDisplayLabel(choice.label);
+                return (
+                  <button
+                    type="button"
+                    key={`${choice.label}-${choice.commandText}`}
+                    className={`runtime-gui-choice ${choice.style === 'danger' ? 'danger' : choice.style === 'primary' ? 'primary' : ''}`}
+                    onClick={() => onCommand?.(choice.commandText)}
+                    title={label}
+                  >
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
             </div>
           ) : null}
         </section>
       ) : null}
     </div>
   );
+}
+
+function RuntimeGuiPublicProjectionFields({
+  projection,
+  onObjectFocus,
+}: {
+  projection?: NormalizedGuiPublicProjection;
+  onObjectFocus?: (reference: ObjectReference) => void;
+}) {
+  if (!projection) return null;
+  const rows: Array<[string, string]> = [];
+  if (projection.action) rows.push(['Action', projection.action]);
+  if (projection.target) rows.push(['Target', projection.target]);
+  if (projection.impact) rows.push(['Impact', projection.impact]);
+  if (projection.authorizationProfile) rows.push(['Authorization profile', projection.authorizationProfile]);
+  if (!rows.length && !projection.evidenceRefs.length) return null;
+  return (
+    <dl className="runtime-gui-public-projection" aria-label="Authorization request details">
+      {rows.map(([label, value]) => (
+        <div className="runtime-gui-public-projection-row" key={label}>
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+      {projection.evidenceRefs.length ? (
+        <div className="runtime-gui-public-projection-row">
+          <dt>Evidence refs</dt>
+          <dd><RuntimeGuiRefList refs={projection.evidenceRefs} onObjectFocus={onObjectFocus} /></dd>
+        </div>
+      ) : null}
+    </dl>
+  );
+}
+
+function runtimeGuiRelatedRefsOutsidePublicProjection(askUser: NormalizedGuiAskUser) {
+  const publicRefs = new Set(askUser.publicProjection?.evidenceRefs ?? []);
+  return publicRefs.size ? askUser.relatedRefs.filter((ref) => !publicRefs.has(ref)) : askUser.relatedRefs;
 }
 
 function RuntimeGuiRefList({ refs, onObjectFocus }: { refs: string[]; onObjectFocus?: (reference: ObjectReference) => void }) {
@@ -148,6 +199,15 @@ function normalizeGuiPresentation(value: unknown): NormalizedGuiPresentation | u
 function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
   if (!isRecord(value)) return undefined;
   const approvalRequest = isRecord(value.approvalRequest) ? value.approvalRequest : {};
+  const publicProjection = normalizeGuiPublicProjection([
+    value.publicProjection,
+    value.public_projection,
+    value.projection,
+    approvalRequest.publicProjection,
+    approvalRequest.public_projection,
+    value,
+    approvalRequest,
+  ]);
   const choices = runtimeGuiChoicesFromEventPayload(value);
   const title = sanitizeRuntimeGuiText(stringField(value.title) ?? stringField(approvalRequest.title)) ?? 'Confirm before continuing';
   const message = sanitizeRuntimeGuiText(stringField(value.message)
@@ -160,15 +220,69 @@ function normalizeGuiAskUser(value: unknown): NormalizedGuiAskUser | undefined {
     ...stringList(value.relatedRefs),
     ...stringList(value.displayedRefs),
     ...stringList(approvalRequest.refs),
+    ...(publicProjection?.evidenceRefs ?? []),
   ]);
-  if (!message && !relatedRefs.length && !choices.length) return undefined;
+  if (!message && !relatedRefs.length && !choices.length && !publicProjection) return undefined;
   return {
     title,
+    kind: stringField(value.kind),
     message,
     risk: stringField(approvalRequest.riskLevel) ?? stringField(approvalRequest.risk_level) ?? stringField(approvalRequest.risk),
+    publicProjection,
     relatedRefs,
     choices,
   };
+}
+
+function normalizeGuiPublicProjection(values: unknown[]): NormalizedGuiPublicProjection | undefined {
+  const records = values.filter(isRecord);
+  if (!records.length) return undefined;
+  const projection = {
+    action: firstSanitizedGuiField(records, ['action', 'actionText', 'action_text', 'actionKind', 'action_kind', 'actionType', 'action_type', 'operation', 'verb']),
+    target: firstSanitizedGuiField(records, ['target', 'targetSummary', 'target_summary', 'targetObject', 'target_object', 'targetService', 'target_service', 'destination', 'service', 'site']),
+    impact: firstSanitizedGuiField(records, ['impact', 'impactSummary', 'impact_summary', 'effect', 'effectSummary', 'effect_summary', 'outcome', 'riskImpact', 'risk_impact']),
+    evidenceRefs: uniqueStrings(records.flatMap(guiPublicEvidenceRefsFromRecord)),
+    authorizationProfile: records
+      .map((record) => guiAuthorizationProfileLabel(
+        record.authorizationProfile
+          ?? record.authorization_profile
+          ?? record.autonomyProfile
+          ?? record.autonomy_profile
+          ?? record.authorization,
+      ))
+      .find((label): label is string => Boolean(label)),
+  };
+  if (!projection.action && !projection.target && !projection.impact && !projection.evidenceRefs.length && !projection.authorizationProfile) return undefined;
+  return projection;
+}
+
+function firstSanitizedGuiField(records: Record<string, unknown>[], keys: string[]) {
+  for (const record of records) {
+    for (const key of keys) {
+      const text = sanitizeRuntimeGuiText(stringField(record[key]));
+      if (text) return compactText(text, 140);
+    }
+  }
+  return undefined;
+}
+
+function guiAuthorizationProfileLabel(value: unknown): string | undefined {
+  const direct = sanitizeRuntimeGuiText(stringField(value));
+  if (direct) return compactText(direct, 80);
+  if (!isRecord(value)) return undefined;
+  return firstSanitizedGuiField([value], ['label', 'name', 'profile', 'id', 'tier']);
+}
+
+function guiPublicEvidenceRefsFromRecord(record: Record<string, unknown>) {
+  return [
+    ...stringList(record.evidenceRefs),
+    ...stringList(record.evidence_refs),
+    ...stringList(record.displayedRefs),
+    ...stringList(record.displayed_refs),
+    ...stringList(record.relatedRefs),
+    ...stringList(record.related_refs),
+    ...stringList(record.refs),
+  ];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -259,6 +373,13 @@ function humanRiskLabel(value: string) {
   if (risk === 'medium') return 'Medium risk';
   if (risk === 'low') return 'Low risk';
   return compactText(value, 40);
+}
+
+function runtimeGuiChoiceDisplayLabel(value: string) {
+  const label = value.trim();
+  if (/^(?:approve|approved|allow|allowed|yes)$/i.test(label)) return 'Confirm';
+  if (/^(?:reject|rejected|deny|denied|no)$/i.test(label)) return 'Cancel';
+  return compactText(sanitizeRuntimeGuiText(label) ?? 'Continue', 40);
 }
 
 function runtimeGuiObjectReference(ref: string): RuntimeGuiObjectReference | undefined {

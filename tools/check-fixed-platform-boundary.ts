@@ -17,7 +17,7 @@ type Rule = {
 };
 
 const root = process.cwd();
-const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage', '__pycache__']);
+const ignoredDirs = new Set(['.git', 'node_modules', 'dist', 'dist-ui', 'build', 'coverage', '__pycache__', '.codex-runtime', '.sciforge', '.tmp']);
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.py']);
 
 const packageRuntimeOwnershipRules: Rule[] = [

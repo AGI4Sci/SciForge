@@ -25,6 +25,7 @@ export {
   normalizeBrowserWorkbenchUrl,
 } from './browser-workbench/render';
 export type {
+  BrowserWorkbenchAnnotationRequest,
   BrowserWorkbenchCommand,
   BrowserWorkbenchDefaultCommandOptions,
   BrowserWorkbenchEmbedPolicy,

@@ -100,7 +100,7 @@ test('right pane image evidence host supports contained preview and image-click 
   assert.match(adapterSource, /Close image preview/);
   assert.match(adapterSource, /window\.sciforgeDesktop\?\.openExternal/);
   assert.match(styles, /\.image-evidence-image\s*\{[\s\S]*max-width:\s*100%;[\s\S]*max-height:/);
-  assert.match(styles, /\.image-evidence-modal\s*\{[\s\S]*position:\s*fixed;/);
+  assert.match(styles, /\.image-evidence-modal\s*\{[\s\S]*position:\s*fixed;[\s\S]*z-index:\s*220;/);
   assert.match(styles, /\.image-evidence-preview-button\s*\{[\s\S]*cursor:\s*zoom-in;/);
 });
 
@@ -143,6 +143,61 @@ test('right pane image evidence toolbar implements viewer controls and polished 
   assert.match(styles, /\.right-pane-image-evidence-surface\[data-image-view-mode='pan'\]\s+\.image-evidence-preview-button/);
   assert.match(styles, /\.image-evidence-footer\s*\{[\s\S]*max-height:/);
   assert.match(styles, /\.right-pane-image-evidence-surface\[data-image-provenance-expanded='true'\]\s+\.image-evidence-control\[data-view-control='provenance'\]/);
+});
+
+test('right pane image modal hosts lightweight editor and focuses saved image artifact locally', () => {
+  const adapterSource = readFileSync(new URL('./imagePaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');
+
+  assert.match(adapterSource, /from '.\/ImageAnnotationEditor'/);
+  assert.match(adapterSource, /from '.\/imageAnnotationSaveAdapter'/);
+  assert.match(adapterSource, /ImageAnnotationEditor/);
+  assert.match(adapterSource, /data-image-editor-state/);
+  assert.match(adapterSource, /setFocusedImagePayload/);
+  assert.match(adapterSource, /saveImageAnnotationArtifact/);
+  assert.match(adapterSource, /sourceNaturalSize/);
+  assert.match(adapterSource, /onEdit=\{/);
+  assert.match(adapterSource, /onSave=\{/);
+  assert.match(adapterSource, /workspace-backed image editor save/i);
+  assert.doesNotMatch(adapterSource, /composer/i);
+  assert.doesNotMatch(adapterSource, /messages:\s*\[/);
+  assert.doesNotMatch(adapterSource, /setSession|updateSession/);
+
+  assert.match(styles, /\.image-annotation-editor\s*\{/);
+  assert.match(styles, /\.image-annotation-editor-toolbar\s*\{/);
+  assert.match(styles, /\.image-annotation-editor-overlay\s*\{/);
+  assert.match(styles, /\.image-annotation-tool\[data-active='true'\]/);
+});
+
+test('right pane image editor auto-saves on exit and exposes re-editable saved history', () => {
+  const adapterSource = readFileSync(new URL('./imagePaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const editorSource = readFileSync(new URL('./ImageAnnotationEditor.tsx', import.meta.url), 'utf8');
+  const styles = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');
+
+  assert.match(adapterSource, /interface SavedImageEditRecord/);
+  assert.match(adapterSource, /savedImageEdits/);
+  assert.match(adapterSource, /data-image-edit-history/);
+  assert.match(adapterSource, /data-image-edit-history-item/);
+  assert.match(adapterSource, /data-image-edit-action="view-saved"/);
+  assert.match(adapterSource, /data-image-edit-action="re-edit"/);
+  assert.match(adapterSource, /data-image-edit-action="copy-saved-ref"/);
+  assert.match(adapterSource, /savedPayload\?: ImageEvidencePayload/);
+  assert.match(adapterSource, /sourceImageUrl: string/);
+  assert.match(adapterSource, /sourceImageRef\?: string/);
+  assert.match(adapterSource, /saveOriginalImageEditorState/);
+  assert.match(adapterSource, /closeOriginalImagePreview/);
+  assert.match(adapterSource, /closeModal: true/);
+  assert.match(adapterSource, /editorMode: 'readonly'/);
+  assert.match(adapterSource, /rememberSavedImageEdit/);
+  assert.match(adapterSource, /imageUrl: state\.sourceImageUrl/);
+  assert.match(adapterSource, /sourceRef: state\.sourceImageRef/);
+  assert.match(adapterSource, /setFocusedImagePayload\(record\.payload\)/);
+  assert.match(editorSource, />Done</);
+
+  assert.match(styles, /\.image-edit-history\s*\{/);
+  assert.match(styles, /\.image-edit-history-item\s*\{/);
+  assert.match(styles, /\.image-edit-history-actions\s*\{/);
+  assert.match(styles, /\.image-edit-saved-notice\s*\{/);
 });
 
 test('right pane surface adapter routes Browser presentation while preserving command boundary props', () => {

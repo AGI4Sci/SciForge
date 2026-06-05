@@ -144,6 +144,7 @@ import {
 import { hasRecoverableRecentAttempt } from './gateway/recoverable-attempts.js';
 import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { tryRunPlaywrightEdgeBrowserRuntime } from './playwright-edge-browser-runtime.js';
+import { tryRunBrowserComputerUseCapabilityRuntime } from './browser-computer-use-capability-runtime.js';
 import { tryRunBrowserHostSearchRuntime } from './browser-host-search-runtime.js';
 import { tryRunLocalDataSensitivityRuntime } from './local-data-sensitivity-runtime.js';
 import { tryRunLocalTabularAnalysisRuntime } from './local-tabular-analysis-runtime.js';
@@ -188,6 +189,7 @@ configurePayloadValidationContext(attemptPlanRefs);
 
 export const STAGE_CONVERSATION_POLICY = 'conversation-policy';
 export const STAGE_REQUEST_ENRICHMENT = 'request-enrichment';
+export const STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH = 'browser-computer-use-capability-truth';
 export const STAGE_CAPABILITY_PROVIDER_PREFLIGHT = 'capability-provider-preflight';
 export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
 export const STAGE_ARTIFACT_MUTATION_FAST_PATH = 'artifact-mutation-fast-path';
@@ -207,6 +209,7 @@ export const STAGE_AGENTSERVER_GENERATION = 'agentserver-generation';
 export type GatewayPipelineStageName =
   | typeof STAGE_CONVERSATION_POLICY
   | typeof STAGE_REQUEST_ENRICHMENT
+  | typeof STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH
   | typeof STAGE_CAPABILITY_PROVIDER_PREFLIGHT
   | typeof STAGE_DIRECT_CONTEXT_FAST_PATH
   | typeof STAGE_ARTIFACT_MUTATION_FAST_PATH
@@ -243,6 +246,7 @@ export interface GatewayPipelineStage {
 export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_CONVERSATION_POLICY,
   STAGE_REQUEST_ENRICHMENT,
+  STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
   STAGE_BROWSER_HOST_SEARCH_RUNTIME,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
   STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME,
@@ -287,6 +291,13 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
           await requestWithAgentHarnessShadow(context.request, context.telemetry.callbacks, context.policyApplication),
         ),
       };
+    },
+  },
+  {
+    name: STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
+    async execute(context) {
+      const payload = tryRunBrowserComputerUseCapabilityRuntime(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },
   {

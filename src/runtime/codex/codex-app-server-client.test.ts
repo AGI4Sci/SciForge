@@ -162,6 +162,13 @@ test('Codex app-server client projects Multitask declared intent into app-server
     attemptId: 'attempt-1',
     guiExtension: { enabled: true },
     declaredIntents: {
+      authorization: {
+        profileId: 'high-autonomy',
+        publicLabel: 'High Autonomy',
+        source: 'composer-autonomy-default',
+        singleTurnOverride: false,
+        hardConfirmCategories: ['payments-transfers-purchases', 'external-communications'],
+      },
       mode: {
         modeIntentId: 'multitask',
         publicLabel: 'Multitask',
@@ -178,6 +185,8 @@ test('Codex app-server client projects Multitask declared intent into app-server
   }]);
   const developerInstructions = String(appServer.threadStartParams.developerInstructions ?? '');
   assert.match(developerInstructions, /Multitask/);
+  assert.match(developerInstructions, /High Autonomy/);
+  assert.match(developerInstructions, /hard confirmation/i);
   assert.match(developerInstructions, /multi_agent_v1\.spawn_agent/);
   assert.match(developerInstructions, /multi_agent_v1_spawn_agent/);
   assert.doesNotMatch(appServer.turnStartParams.input[0]?.text as string, /\/multitask|multi_agent_v1\.spawn_agent/i);

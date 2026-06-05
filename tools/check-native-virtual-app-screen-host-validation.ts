@@ -37,7 +37,10 @@ type HostManifest = {
   packageName?: string;
   owner?: string;
   role?: string;
+  routeStatus?: string;
+  currentProductRoute?: boolean;
   productTruthOwner?: boolean;
+  compatibilityWording?: string;
   publicApi?: string[];
   refsFirst?: boolean;
   failClosed?: boolean;
@@ -155,7 +158,13 @@ async function assertNativeHostManifestAndApi(): Promise<void> {
 
   assert.equal(manifest.schemaVersion, 'sciforge.computer-use.native-virtual-app-screen-host.manifest.v1');
   assert.equal(manifest.packageName, 'packages/actions/computer-use/virtual-app-screen-host');
-  assert.equal(manifest.productTruthOwner, true);
+  assert.equal(manifest.routeStatus, 'historical-compatibility');
+  assert.equal(manifest.currentProductRoute, false);
+  assert.equal(manifest.productTruthOwner, false);
+  assert.match(
+    String(manifest.compatibilityWording),
+    /historical compatibility.*not.*current.*product route/i,
+  );
   assert.equal(manifest.refsFirst, true);
   assert.equal(manifest.failClosed, true);
   assert.ok(Array.isArray(manifest.publicApi), 'manifest publicApi must be an array');
