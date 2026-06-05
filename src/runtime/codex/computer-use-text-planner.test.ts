@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { test } from 'node:test';
 
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from './agent-cli-adapter.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
-import { buildComputerUseTextPlannerCommand, runComputerUseCodexTextPlanner } from './computer-use-text-planner.js';
+import {
+  buildComputerUseTextPlannerCommand,
+  runComputerUseCodexTextPlanner,
+  runComputerUseDirectChatTextPlannerFallback,
+} from './computer-use-text-planner.js';
 
 test('computer use text planner command is strict JSON-only and text-only', () => {
   const command = buildComputerUseTextPlannerCommand({
@@ -170,149 +173,77 @@ test('computer use text planner marks observed aborts from cancelled terminal ev
   assert.deepEqual(result.ok ? {} : result.raw.diagnostics.terminalEventCounts, { cancelled: 1 });
 });
 
-test('computer use text planner falls back to direct chat completions after Codex transport failure', async () => {
+test('computer use text planner fails closed after Codex transport failure instead of direct chat fallback', async () => {
   const adapter = new FakePlannerAdapter([
     { type: 'audit', status: 'raw-jsonl', raw: { type: 'thread.started' } },
     { type: 'audit', status: 'raw-jsonl', raw: { type: 'turn.started' } },
     { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
   ]);
-  const fetchCalls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
+  let fetchCalled = false;
   const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
     workspace: '/tmp',
     adapter,
-    commandId: 'codex-computer-use-plan-fallback-test',
+    commandId: 'codex-computer-use-plan-fail-closed-test',
     env: {
       SCIFORGE_RUNTIME_API_KEY: 'test-key',
       SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1/',
-      SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
+      SCIFORGE_RUNTIME_MODEL: 'private-upstream-model',
     },
-    fetchImpl: async (url, init) => {
-      fetchCalls.push({
-        url: String(url),
-        headers: init?.headers as Record<string, string>,
-        body: JSON.parse(String(init?.body)) as Record<string, unknown>,
-      });
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: '{"done":false,"reason":"fallback action","actions":[{"type":"press_key","key":"Tab"}]}' } }],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    fetchImpl: async () => {
+      fetchCalled = true;
+      throw new Error('fetch must not be called after Runtime Codex transport failure');
     },
-  });
-
-  assert.equal(result.ok, true);
-  assert.match(result.ok ? result.text : '', /"press_key"/);
-  assert.equal(fetchCalls[0]?.url, 'http://provider.example/v1/chat/completions');
-  assert.equal(fetchCalls[0]?.headers.accept, 'application/json');
-  assert.equal(fetchCalls[0]?.headers['accept-encoding'], 'identity');
-  assert.equal(fetchCalls[0]?.body.model, 'bailian/deepseek-v4-flash');
-  assert.equal(fetchCalls[0]?.body.stream, false);
-  assert.equal(fetchCalls[0]?.body.max_tokens, 768);
-  assert.deepEqual(fetchCalls[0]?.body.metadata, { source: 'computer-use-direct-text-planner-fallback' });
-  assert.equal((fetchCalls[0]?.body.messages as Array<Record<string, unknown>>)?.[0]?.role, 'user');
-  assert.match(String((fetchCalls[0]?.body.messages as Array<Record<string, unknown>>)?.[0]?.content), /Return exactly one JSON object/);
-  assert.match(result.ok ? result.raw.diagnosticSummary : '', /directChatFallback=used/);
-  assert.ok(result.ok && result.raw.events.some((event) => event.status === 'direct-chat-fallback-started'));
-});
-
-test('computer use text planner raw identity retry handles mislabeled compressed fallback response', async () => {
-  const adapter = new FakePlannerAdapter([
-    { type: 'failed', status: 'failed', message: 'Runtime Codex text planner transport timeout', exitCode: 1, signal: null },
-  ]);
-  const requests: Array<{ acceptEncoding: string | undefined }> = [];
-  const server = createServer((request, response) => {
-    requests.push({ acceptEncoding: request.headers['accept-encoding'] });
-    request.resume();
-    response.statusCode = 200;
-    response.setHeader('content-type', 'application/json');
-    response.setHeader('content-encoding', 'gzip');
-    response.end(JSON.stringify({
-      choices: [{ message: { content: '{"done":false,"reason":"raw fallback action","actions":[{"type":"press_key","key":"Tab"}]}' } }],
-    }));
-  });
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  try {
-    const address = server.address();
-    assert.ok(address && typeof address === 'object');
-    const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
-      workspace: '/tmp',
-      adapter,
-      commandId: 'codex-computer-use-plan-raw-fallback-test',
-      env: {
-        SCIFORGE_RUNTIME_API_KEY: 'test-key',
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: `http://127.0.0.1:${address.port}/v1`,
-        SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
-        SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES: '1',
-      },
-    });
-
-    assert.equal(result.ok, true);
-    assert.match(result.ok ? result.text : '', /"press_key"/);
-    assert.match(result.ok ? result.raw.diagnosticSummary : '', /directChatAttempts=2\/2/);
-    assert.deepEqual(requests.map((request) => request.acceptEncoding), ['identity', 'identity']);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
-  }
-});
-
-test('computer use text planner redacts direct chat fallback provider errors', async () => {
-  const adapter = new FakePlannerAdapter([
-    { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
-  ]);
-  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
-    workspace: '/tmp',
-    adapter,
-    commandId: 'codex-computer-use-plan-fallback-redaction-test',
-    env: {
-      SCIFORGE_RUNTIME_API_KEY: 'sk-test-secret-should-not-appear',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1?token=upstream-secret-token',
-      SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
-    },
-    fetchImpl: async () => new Response(JSON.stringify({
-      error: {
-        message: 'Bearer abcdefghijklmnop failed for api_key=sk-provider-body-secret at https://provider.example/v1/chat/completions?token=query-secret',
-      },
-    }), { status: 401, headers: { 'content-type': 'application/json' } }),
   });
 
   assert.equal(result.ok, false);
-  const reason = result.ok ? '' : result.reason;
-  assert.match(reason, /HTTP 401/);
-  assert.doesNotMatch(reason, /sk-test-secret|sk-provider-body-secret|abcdefghijklmnop|query-secret|upstream-secret-token/);
-  assert.match(reason, /\[redacted-secret:/);
-  assert.match(reason, /\[redacted-url:/);
+  assert.match(result.ok ? '' : result.reason, /unexpected status 502 Bad Gateway/);
+  assert.match(result.ok ? '' : result.reason, /terminalEventCounts=failed:1/);
+  assert.doesNotMatch(result.ok ? '' : result.reason, /Direct chat planner fallback/);
+  assert.doesNotMatch(result.ok ? '' : result.raw.diagnosticSummary, /directChat/);
+  assert.equal(fetchCalled, false);
 });
 
-test('computer use text planner retries direct chat fallback after transient fetch failure', async () => {
-  const adapter = new FakePlannerAdapter([
-    { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
-  ]);
-  let attempts = 0;
-
-  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+test('computer use legacy direct chat fallback API is disabled even with provider config', async () => {
+  let fetchCalled = false;
+  const result = await runComputerUseDirectChatTextPlannerFallback(basePlannerInput(), {
     workspace: '/tmp',
-    adapter,
-    commandId: 'codex-computer-use-plan-fallback-retry-test',
+    commandId: 'codex-computer-use-plan-disabled-fallback-test',
+    attemptId: 'attempt-disabled-fallback',
     env: {
       SCIFORGE_RUNTIME_API_KEY: 'test-key',
       SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1',
-      SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
-      SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES: '1',
+      SCIFORGE_RUNTIME_MODEL: 'private-upstream-model',
+      SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES: '3',
     },
     fetchImpl: async () => {
-      attempts += 1;
-      if (attempts === 1) throw new Error('fetch failed', { cause: new Error('ECONNRESET') });
-      return new Response(JSON.stringify({
-        choices: [{ message: { content: '{"done":false,"reason":"retry action","actions":[{"type":"press_key","key":"Escape"}]}' } }],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+      fetchCalled = true;
+      throw new Error('fetch must not be called by disabled direct fallback');
     },
-  });
+  }, 'Runtime Codex text planner transport timed out before returning a terminal event.');
 
-  assert.equal(result.ok, true);
-  assert.equal(attempts, 2);
-  assert.match(result.ok ? result.text : '', /"Escape"/);
-  assert.match(result.ok ? result.raw.diagnosticSummary : '', /directChatAttempts=2\/2/);
-  assert.ok(result.ok && result.raw.events.some((event) => event.status === 'direct-chat-fallback-retried'));
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.reason, /requires the registered Model Router provider\/capability path/);
+  assert.match(result.ok ? '' : result.reason, /Direct OpenAI-compatible chat fallback is disabled/);
+  assert.match(result.ok ? '' : result.reason, /Runtime Codex text planner transport timed out/);
+  assert.equal(result.ok ? undefined : result.raw.commandId, 'codex-computer-use-plan-disabled-fallback-test');
+  assert.equal(result.ok ? undefined : result.raw.attemptId, 'attempt-disabled-fallback');
+  assert.equal(result.ok ? undefined : result.raw.events[0]?.status, 'model-router-planner-required');
+  assert.match(result.ok ? '' : result.raw.diagnosticSummary, /terminalEventCounts=failed:1/);
+  assert.equal(fetchCalled, false);
+});
+
+test('computer use legacy direct chat fallback API records the trigger as diagnostic context only', async () => {
+  const result = await runComputerUseDirectChatTextPlannerFallback(basePlannerInput(), {
+    workspace: '/tmp',
+    commandId: 'codex-computer-use-plan-disabled-fallback-trigger-test',
+  }, 'Runtime Codex adapter emitted no terminal event.');
+
+  assert.equal(result.ok, false);
+  assert.match(result.ok ? '' : result.reason, /Runtime Codex adapter emitted no terminal event/);
+  assert.equal(result.ok ? undefined : result.raw.events[0]?.type, 'failed');
+  assert.equal(result.ok ? undefined : result.raw.events[0]?.status, 'model-router-planner-required');
+  assert.equal(result.ok ? undefined : result.raw.events[0]?.message, 'Runtime Codex adapter emitted no terminal event.');
+  assert.deepEqual(result.ok ? {} : result.raw.diagnostics.terminalEventCounts, { failed: 1 });
 });
 
 test('computer use text planner keeps Codex failure when direct fallback config is absent', async () => {
@@ -334,9 +265,8 @@ test('computer use text planner keeps Codex failure when direct fallback config 
 
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.reason, /unexpected status 502 Bad Gateway/);
-  assert.match(result.ok ? '' : result.reason, /Missing env: SCIFORGE_RUNTIME_API_KEY/);
-  assert.match(result.ok ? '' : result.reason, /SCIFORGE_PROXY_UPSTREAM_BASE_URL/);
-  assert.match(result.ok ? '' : result.reason, /SCIFORGE_RUNTIME_MODEL/);
+  assert.doesNotMatch(result.ok ? '' : result.reason, /Missing env:/);
+  assert.doesNotMatch(result.ok ? '' : result.raw.diagnosticSummary, /directChat/);
   assert.equal(fetchCalled, false);
 });
 

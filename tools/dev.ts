@@ -22,7 +22,7 @@ applyInstanceDefaults();
 const WORKSPACE_PORT = Number(process.env.SCIFORGE_WORKSPACE_PORT || 5174);
 const UI_PORT = Number(process.env.SCIFORGE_UI_PORT || 5173);
 const AGENT_SERVER_PORT = Number(process.env.SCIFORGE_AGENT_SERVER_PORT || 18080);
-const CODEX_PROXY_PORT = Number(process.env.SCIFORGE_PROXY_PORT || 3891);
+const MODEL_ROUTER_PORT = Number(process.env.SCIFORGE_MODEL_ROUTER_PORT || process.env.SCIFORGE_PROXY_PORT || 3892);
 const AGENT_SERVER_ROOT = resolve(process.env.SCIFORGE_AGENT_SERVER_ROOT || '../AgentServer');
 const CONFIG_LOCAL_PATH = resolve(process.env.SCIFORGE_CONFIG_PATH || 'config.local.json');
 const children: ChildProcess[] = [];
@@ -47,12 +47,35 @@ function agentServerModelEnvFromLocalConfig() {
   return agentServerEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
+function computerUseWorkspaceEnvFromLocalConfig() {
+  return computerUseWorkspaceEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
+}
+
 function runtimeCodexEnvFromLocalConfig() {
   return runtimeCodexEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
 }
 
-function computerUseWorkspaceEnvFromLocalConfig() {
-  return computerUseWorkspaceEnvFromLocalSettings(readLocalProviderSettings(CONFIG_LOCAL_PATH));
+function modelRouterEnvFromLocalConfig() {
+  const settings = readLocalProviderSettings(CONFIG_LOCAL_PATH);
+  return {
+    ...runtimeCodexEnvFromLocalSettings(settings),
+    ...(settings.provider ? {
+      SCIFORGE_TEXT_PROVIDER: settings.provider,
+      SCIFORGE_VISION_PROVIDER: settings.provider,
+    } : {}),
+    ...(settings.baseUrl ? {
+      SCIFORGE_TEXT_BASE_URL: settings.baseUrl,
+      SCIFORGE_VISION_BASE_URL: settings.baseUrl,
+    } : {}),
+    ...(settings.model ? {
+      SCIFORGE_TEXT_MODEL: settings.model,
+      SCIFORGE_VISION_MODEL: settings.model,
+    } : {}),
+    ...(settings.apiKey ? {
+      SCIFORGE_TEXT_API_KEY: settings.apiKey,
+      SCIFORGE_VISION_API_KEY: settings.apiKey,
+    } : {}),
+  };
 }
 
 function stringValue(value: unknown) {
@@ -64,14 +87,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 const workspaceHealth = await readHealth(WORKSPACE_PORT);
-if (await isListening(CODEX_PROXY_PORT)) {
-  console.log(`SciForge Codex proxy already running: http://127.0.0.1:${CODEX_PROXY_PORT}/v1`);
+if (await isListening(MODEL_ROUTER_PORT)) {
+  console.log(`SciForge Model Router already running: http://127.0.0.1:${MODEL_ROUTER_PORT}/v1`);
 } else {
-  children.push(start('codex-proxy', ['run', 'backend:codex-proxy'], process.cwd(), {
-    ...runtimeCodexEnvFromLocalConfig(),
+  children.push(start('model-router', ['run', 'backend:model-router', '--', '--host', '127.0.0.1', '--port', String(MODEL_ROUTER_PORT)], process.cwd(), {
+    ...modelRouterEnvFromLocalConfig(),
     SCIFORGE_CONFIG_PATH: CONFIG_LOCAL_PATH,
-    SCIFORGE_PROXY_PORT: String(CODEX_PROXY_PORT),
-    SCIFORGE_PROXY_QUIET: '1',
   }));
 }
 

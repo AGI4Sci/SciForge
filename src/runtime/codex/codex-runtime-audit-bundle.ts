@@ -2,9 +2,14 @@ import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { CodexRuntimeMetadata, NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { RUNTIME_MODEL, RUNTIME_PROVIDER } from '../../../packages/backend/src/runtime-home.js';
 
 const AUDIT_BUNDLE_SCHEMA = 'sciforge.runtime-codex.audit-bundle.v1';
 const MAX_AUDIT_FILE_BYTES = 256 * 1024;
+
+interface RuntimeCodexAuditScrubOptions {
+  readonly workspace?: string;
+}
 
 export interface RuntimeCodexAuditBundle {
   readonly bundleDir: string;
@@ -30,37 +35,46 @@ export function createRuntimeCodexAuditBundle(metadata: CodexRuntimeMetadata): R
   return new RuntimeCodexAuditBundleWriter(metadata, bundleDir, bundleRel);
 }
 
-export function scrubRuntimeCodexAuditText(text: string): string {
+export function scrubRuntimeCodexAuditText(text: string, options: RuntimeCodexAuditScrubOptions = {}): string {
   return text
     .replace(/(?:<!doctype\s+html[^>]*>\s*)?<html\b[\s\S]*?(?:<\/html>|$)/gi, (html) => htmlDigest(html))
-    .replace(/\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi, (_match, secret: string) => `Bearer ${secretDigest(secret)}`)
     .replace(
       /\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\b\s*[:=]\s*["']?([^"'\s,;)}\]]{8,})/gi,
       (_match, label: string, secret: string) => `${label}=${secretDigest(secret)}`,
     )
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi, (_match, secret: string) => `Bearer ${secretDigest(secret)}`)
     .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, (secret) => secretDigest(secret))
-    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, (url) => urlDigest(url));
+    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, (url) => urlDigest(url))
+    .replace(workspacePathPattern(options.workspace), () => publicWorkspaceRef(options.workspace))
+    .replace(localPathPattern(), (path) => localPathDigest(path));
 }
 
-export function scrubRuntimeCodexAuditValue(value: unknown): unknown {
-  if (typeof value === 'string') return scrubRuntimeCodexAuditText(value);
-  if (Array.isArray(value)) return value.map((entry) => scrubRuntimeCodexAuditValue(entry));
+export function scrubRuntimeCodexAuditValue(value: unknown, options: RuntimeCodexAuditScrubOptions = {}): unknown {
+  if (typeof value === 'string') return scrubRuntimeCodexAuditText(value, options);
+  if (Array.isArray(value)) return value.map((entry) => scrubRuntimeCodexAuditValue(entry, options));
   if (!isRecord(value)) return value;
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => {
-    if (isSensitiveKey(key) && typeof entry === 'string') return [key, secretDigest(entry)];
-    if (isUrlKey(key) && typeof entry === 'string') return [key, scrubRuntimeCodexAuditText(entry)];
-    return [key, scrubRuntimeCodexAuditValue(entry)];
+    if (isSecretNameKey(key) && typeof entry === 'string') return ['redactedSecretRef', secretDigest(entry)];
+    if (isSensitiveKey(key) && typeof entry === 'string') return ['redactedSecret', secretDigest(entry)];
+    if (isPrivateProviderMetadataKey(key) && typeof entry === 'string') return [key, publicProviderMetadataValue(key, entry)];
+    if (isWorkspaceKey(key) && typeof entry === 'string') return [key, publicWorkspaceRef(entry)];
+    if (isUrlKey(key) && typeof entry === 'string') return [key, scrubRuntimeCodexAuditText(entry, options)];
+    return [key, scrubRuntimeCodexAuditValue(entry, options)];
   }));
 }
 
-export function scrubRuntimeCodexEventForAudit(event: NormalizedAgentEvent): NormalizedAgentEvent {
+export function scrubRuntimeCodexEventForAudit(
+  event: NormalizedAgentEvent,
+  options: RuntimeCodexAuditScrubOptions = {},
+): NormalizedAgentEvent {
   if (event.type === 'message' || event.type === 'message_delta' || event.type === 'gui_present' || event.type === 'gui_ask_user') {
     return {
       ...event,
-      raw: event.raw === undefined ? undefined : scrubRuntimeCodexAuditValue(event.raw),
+      workspace: publicWorkspaceRef(event.workspace),
+      raw: event.raw === undefined ? undefined : scrubRuntimeCodexAuditValue(event.raw, options),
     };
   }
-  return scrubRuntimeCodexAuditValue(event) as NormalizedAgentEvent;
+  return scrubRuntimeCodexAuditValue(event, options) as NormalizedAgentEvent;
 }
 
 class RuntimeCodexAuditBundleWriter implements RuntimeCodexAuditBundle {
@@ -94,23 +108,25 @@ class RuntimeCodexAuditBundleWriter implements RuntimeCodexAuditBundle {
     if (!trimmed) return;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      this.rawJsonl.append(trimmed, `${safeJsonStringify(scrubRuntimeCodexAuditValue(parsed))}\n`);
+      this.rawJsonl.append(trimmed, `${safeJsonStringify(scrubRuntimeCodexAuditValue(parsed, { workspace: this.metadata.workspace }))}\n`);
     } catch (error) {
       this.rawJsonl.append(trimmed, `${safeJsonStringify({
-        invalidJsonlLine: scrubRuntimeCodexAuditText(trimmed),
+        invalidJsonlLine: scrubRuntimeCodexAuditText(trimmed, { workspace: this.metadata.workspace }),
         rawLineSha256: sha256(trimmed),
-        parseError: error instanceof Error ? scrubRuntimeCodexAuditText(error.message) : scrubRuntimeCodexAuditText(String(error)),
+        parseError: error instanceof Error
+          ? scrubRuntimeCodexAuditText(error.message, { workspace: this.metadata.workspace })
+          : scrubRuntimeCodexAuditText(String(error), { workspace: this.metadata.workspace }),
       })}\n`);
     }
   }
 
   appendStderr(chunk: string): void {
-    this.stderr.append(chunk, scrubRuntimeCodexAuditText(chunk));
+    this.stderr.append(chunk, scrubRuntimeCodexAuditText(chunk, { workspace: this.metadata.workspace }));
   }
 
   appendNormalizedEvent(event: NormalizedAgentEvent): void {
     const raw = safeJsonStringify(event);
-    const scrubbed = safeJsonStringify(scrubRuntimeCodexEventForAudit(event));
+    const scrubbed = safeJsonStringify(publicRuntimeCodexEventForAudit(scrubRuntimeCodexEventForAudit(event, { workspace: this.metadata.workspace })));
     this.normalizedEvents.append(raw, `${scrubbed}\n`);
   }
 
@@ -132,10 +148,15 @@ class RuntimeCodexAuditBundleWriter implements RuntimeCodexAuditBundle {
       status: result.status,
       exitCode: result.exitCode,
       signal: result.signal,
-      provider: this.metadata.provider,
-      model: this.metadata.model,
-      profile: this.metadata.profile,
-      workspace: this.metadata.workspace,
+      routerProfile: this.metadata.profile,
+      routerAlias: publicRouterAlias(this.metadata.model),
+      capabilities: ['text', 'vision'],
+      roleCoverage: {
+        textReasoner: 'configured',
+        visionTranslator: 'configured',
+      },
+      readiness: 'configured',
+      workspace: publicWorkspaceRef(this.metadata.workspace),
       runId: this.metadata.commandId,
       commandId: this.metadata.commandId,
       attemptId: this.metadata.attemptId,
@@ -155,6 +176,7 @@ class RuntimeCodexAuditBundleWriter implements RuntimeCodexAuditBundle {
         maxBytesPerFile: MAX_AUDIT_FILE_BYTES,
         urlPolicy: 'replace with sha256 digest',
         secretPolicy: 'replace with sha256 digest',
+        localPathPolicy: 'workspace paths use stable workspace digest; other local paths use sha256 digest',
       },
     };
     await writeFile(join(this.bundleDir, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -278,8 +300,20 @@ function isSensitiveKey(key: string): boolean {
   return /(?:authorization|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential)/i.test(key);
 }
 
+function isSecretNameKey(key: string): boolean {
+  return /^(?:env[_-]?key|api[_-]?key[_-]?env)$/i.test(key);
+}
+
 function isUrlKey(key: string): boolean {
   return /(?:url|uri|endpoint|base[_-]?url|invoke[_-]?url)/i.test(key);
+}
+
+function isWorkspaceKey(key: string): boolean {
+  return /^(?:workspace|workspace[_-]?path|workspace[_-]?root|cwd|root[_-]?dir|project[_-]?dir)$/i.test(key);
+}
+
+function isPrivateProviderMetadataKey(key: string): boolean {
+  return /^(?:provider|model|model[_-]?provider|model[_-]?slug|raw[_-]?model)$/i.test(key);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -296,6 +330,49 @@ function htmlDigest(value: string): string {
 
 function secretDigest(value: string): string {
   return `[redacted-secret:sha256:${sha256(value).slice('sha256:'.length, 'sha256:'.length + 16)}]`;
+}
+
+function localPathDigest(value: string): string {
+  return `[redacted-local-path:sha256:${sha256(value).slice('sha256:'.length, 'sha256:'.length + 16)}]`;
+}
+
+function publicWorkspaceRef(value: string | undefined): string {
+  return value?.trim()
+    ? `[workspace:sha256:${sha256(value).slice('sha256:'.length, 'sha256:'.length + 16)}]`
+    : '[workspace:unknown]';
+}
+
+function workspacePathPattern(workspace: string | undefined): RegExp {
+  const clean = workspace?.trim();
+  if (!clean) return /a^/g;
+  const suffix = String.raw`(?:[/\\][^\s"'<>),;\]}]+)*`;
+  return new RegExp(`${escapeRegExp(clean)}${suffix}`, 'g');
+}
+
+function localPathPattern(): RegExp {
+  return /(?:\/(?:Users|Applications|tmp|var|private|Volumes|home|opt|workspace)(?:\/[^\s"'<>),;\]}]+)+|[A-Za-z]:\\[^\s"'<>),;\]}]+)/g;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function publicRouterAlias(value: string): string {
+  return value === RUNTIME_MODEL ? value : RUNTIME_MODEL;
+}
+
+function publicProviderMetadataValue(key: string, value: string): string {
+  if (/provider/i.test(key)) return value === RUNTIME_PROVIDER ? value : RUNTIME_PROVIDER;
+  if (/model/i.test(key)) return publicRouterAlias(value);
+  return secretDigest(value);
+}
+
+function publicRuntimeCodexEventForAudit(event: NormalizedAgentEvent): NormalizedAgentEvent {
+  return {
+    ...event,
+    provider: RUNTIME_PROVIDER,
+    model: publicRouterAlias(event.model),
+  };
 }
 
 function sha256(value: string): string {

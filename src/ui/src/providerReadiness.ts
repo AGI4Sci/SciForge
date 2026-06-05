@@ -54,6 +54,15 @@ export function providerReadinessNoticeFromConfig(config: SciForgeConfig): Provi
   const model = config.modelName.trim();
   const baseUrl = config.modelBaseUrl.trim();
   const apiKeyConfigured = Boolean(config.apiKey.trim());
+  if (provider === 'managed-runtime') {
+    return {
+      ready: true,
+      state: 'ready',
+      value: provider,
+      detail: 'Managed Model Router configured',
+      source: 'settings',
+    };
+  }
   if (provider === 'native') {
     if (!model && !baseUrl && !apiKeyConfigured) {
       return {
@@ -132,7 +141,6 @@ function publicProviderAlias(provider: string) {
   if (provider === 'native') return 'native';
   if (provider === 'openai-compatible') return 'openai-compatible';
   if (provider === 'openrouter') return 'openrouter';
-  if (provider === 'qwen') return 'qwen';
   if (provider === 'codex-chatgpt') return 'codex-chatgpt';
   if (provider === 'gemini') return 'gemini';
   if (provider === defaultSciForgeConfig.modelProvider) return 'managed-runtime';

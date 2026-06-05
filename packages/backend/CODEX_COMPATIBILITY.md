@@ -11,7 +11,8 @@ SciForge runtime bridge
 -> codex app-server --listen stdio://
 -> thread/start or thread/resume + turn/start
 -> packages/backend local Responses proxy
--> DeepSeek-compatible Chat Completions upstream
+-> SciForge Model Router public alias/profile
+-> role-based textReasoner / translators.vision providers
 ```
 
 `codex exec --json` is retained only for legacy/test-only compatibility and historical evidence. Do not vendor or fork Codex CLI into `packages/backend` by default. The current integration problem is provider compatibility and app-server event integration, not a confirmed need to change Codex CLI agent logic.
@@ -46,9 +47,9 @@ Developer Codex
 Runtime Codex
   CODEX_HOME: packages/backend/.codex-runtime/codex-home
   purpose: serve SciForge user tasks
-  profile: sciforge-runtime-deepseek
-  model: bailian/deepseek-v4-flash
-  provider: sciforge-deepseek-proxy
+  profile: sciforge-runtime-default
+  model alias: textReasoner
+  provider: SciForge Model Router
 ```
 
 Runtime config, memories, sessions, logs, and the default scratch workspace stay under:
@@ -72,9 +73,9 @@ SciForge runtime may use that native app-server path for multi-turn continuity w
 
 Legacy `codex exec resume --json` remains test-only compatibility evidence. It must not be used to satisfy product runtime, release acceptance, or app-server parity requirements.
 
-## Known DeepSeek Compatibility Fix
+## Historical DeepSeek Compatibility Fix
 
-DeepSeek Chat Completions streaming tool-call chunks may send empty string fields in later deltas:
+Historical DeepSeek-compatible Chat Completions streaming tool-call chunks could send empty string fields in later deltas:
 
 ```json
 {
@@ -91,7 +92,7 @@ DeepSeek Chat Completions streaming tool-call chunks may send empty string field
 }
 ```
 
-Earlier chunks can contain the real tool call id and function name. The proxy must not let later empty fields overwrite non-empty values.
+Earlier chunks can contain the real tool call id and function name. Provider-specific compatibility code must not let later empty fields overwrite non-empty values.
 
 Failure symptom before the fix:
 
@@ -154,20 +155,19 @@ Generate or refresh the isolated Runtime Codex home:
 npm run backend:codex-runtime:setup -- --overwrite
 ```
 
-Start the local Responses proxy:
+Start the local Responses-compatible router/proxy with a service-managed upstream:
 
 ```bash
 SCIFORGE_RUNTIME_API_KEY="..." \
-SCIFORGE_PROXY_UPSTREAM_BASE_URL="http://35.220.164.252:3888/v1" \
 npm run backend:codex-proxy
 ```
 
-Smoke the legacy exec JSON path only when auditing compatibility fixtures:
+Smoke the legacy exec JSON path only when auditing historical provider compatibility fixtures:
 
 ```bash
 SCIFORGE_RUNTIME_API_KEY="..." \
 npm run backend:codex-runtime:exec -- \
-  --prompt "Reply with exactly: SCIFORGE_DEEPSEEK_OK"
+  --prompt "Reply with exactly: SCIFORGE_RUNTIME_OK"
 ```
 
 Product runtime acceptance should use Codex app-server and verify all of the following:
@@ -204,7 +204,7 @@ When upgrading Codex CLI:
 ### 2026-05-19
 
 - Added isolated Runtime Codex home under `packages/backend/.codex-runtime`.
-- Added `sciforge-runtime-deepseek` profile template and setup wrapper.
+- Added historical `sciforge-runtime-deepseek` profile template and setup wrapper.
 - Added `backend:codex-runtime:exec` wrapper that forces isolated `CODEX_HOME`.
 - Fixed DeepSeek streaming tool-call delta handling so empty later deltas do not clear `call_id` or `name`.
-- Verified DeepSeek can complete a real tool-use task through upstream Codex CLI without forking Codex.
+- Verified the historical DeepSeek-compatible provider path could complete a real tool-use task through upstream Codex CLI without forking Codex.

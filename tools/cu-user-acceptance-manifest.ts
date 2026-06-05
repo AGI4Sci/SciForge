@@ -77,6 +77,12 @@ export interface CuExecutorLeaseRecord {
   ref?: string;
   owner?: string;
   acquiredAt?: string;
+  screenId?: string;
+  windowId?: string;
+  actorId?: string;
+  cursorId?: string;
+  leaseScope?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
 }
 
 export interface CuVerifierVerdictRecord {
@@ -140,6 +146,65 @@ export interface CuUserAcceptanceInput {
   evidenceMarkers?: Array<Record<string, unknown>>;
   completionEvidence?: Record<string, unknown>;
   completionEvidenceRef?: string;
+  cuNextTaskId?: string;
+  cuNextTask?: Record<string, unknown>;
+  productPathClassification?: Record<string, unknown>;
+  productPath?: Record<string, unknown>;
+  acceptancePathClassification?: Record<string, unknown>;
+  userControlPlane?: Record<string, unknown>;
+  userControl?: Record<string, unknown>;
+  sessionPermission?: Record<string, unknown>;
+  platformSidecarIsolationReport?: Record<string, unknown>;
+  platformSidecarIsolation?: Record<string, unknown>;
+  platformSidecar?: Record<string, unknown>;
+  displayGroupId?: string;
+  currentRunBundleRef?: string;
+  currentBundleRef?: string;
+  screenId?: string;
+  screenIds?: string[];
+  screens?: Array<Record<string, unknown>>;
+  virtualScreens?: Array<Record<string, unknown>>;
+  visibleScreenRefs?: string[];
+  actorId?: string;
+  actorIds?: string[];
+  cursorId?: string;
+  cursorIds?: string[];
+  virtualDisplayGroup?: Record<string, unknown>;
+  virtualDesktopSession?: Record<string, unknown>;
+  actorCursorProvenance?: Array<Record<string, unknown>>;
+  actorCursors?: Array<Record<string, unknown>>;
+  visibleCursorRefs?: Array<string | Record<string, unknown>>;
+  cursorEvents?: Array<Record<string, unknown>>;
+  actorCursorEvents?: Array<Record<string, unknown>>;
+  observeBeforeMutate?: Record<string, unknown>;
+  observationFreshness?: Record<string, unknown>;
+  browserRuntimeDomAxObservation?: Record<string, unknown> | Array<Record<string, unknown>>;
+  browserRuntimeDomAxObservations?: Array<Record<string, unknown>>;
+  browserRuntimeObservation?: Record<string, unknown>;
+  browserRuntimeObservationHint?: Record<string, unknown>;
+  browserRuntimeObservationHints?: Array<Record<string, unknown>>;
+  domAxObservation?: Record<string, unknown>;
+  domAxObservationHints?: Array<Record<string, unknown>>;
+  actionProposals?: Array<Record<string, unknown>>;
+  proposals?: Array<Record<string, unknown>>;
+  executorQueue?: Array<Record<string, unknown>>;
+  leaseQueue?: Array<Record<string, unknown>>;
+  schedulerQueue?: Array<Record<string, unknown>>;
+  executorLeases?: Array<Record<string, unknown>>;
+  leases?: Array<Record<string, unknown>>;
+  mutatingActions?: Array<Record<string, unknown>>;
+  actionCausality?: Array<Record<string, unknown>>;
+  executorEvents?: Array<Record<string, unknown>>;
+  inputEvents?: Array<Record<string, unknown>>;
+  evidenceLedgerActions?: Array<Record<string, unknown>>;
+  evidenceLedger?: Record<string, unknown>;
+  replayBundle?: Record<string, unknown>;
+  replayManifest?: Record<string, unknown>;
+  visibleReplay?: Record<string, unknown>;
+  replayRef?: string;
+  automationSubstituteUsed?: boolean;
+  blockedReason?: string;
+  trace?: Record<string, unknown>;
 }
 
 export interface CuUserAcceptanceManifest {
@@ -185,6 +250,65 @@ export interface CuUserAcceptanceManifest {
   evidenceMarkers?: Array<Record<string, unknown>>;
   completionEvidence?: Record<string, unknown>;
   completionEvidenceRef?: string;
+  cuNextTaskId?: string;
+  cuNextTask?: Record<string, unknown>;
+  productPathClassification?: Record<string, unknown>;
+  productPath?: Record<string, unknown>;
+  acceptancePathClassification?: Record<string, unknown>;
+  userControlPlane?: Record<string, unknown>;
+  userControl?: Record<string, unknown>;
+  sessionPermission?: Record<string, unknown>;
+  platformSidecarIsolationReport?: Record<string, unknown>;
+  platformSidecarIsolation?: Record<string, unknown>;
+  platformSidecar?: Record<string, unknown>;
+  displayGroupId?: string;
+  currentRunBundleRef?: string;
+  currentBundleRef?: string;
+  screenId?: string;
+  screenIds?: string[];
+  screens?: Array<Record<string, unknown>>;
+  virtualScreens?: Array<Record<string, unknown>>;
+  visibleScreenRefs?: string[];
+  actorId?: string;
+  actorIds?: string[];
+  cursorId?: string;
+  cursorIds?: string[];
+  virtualDisplayGroup?: Record<string, unknown>;
+  virtualDesktopSession?: Record<string, unknown>;
+  actorCursorProvenance?: Array<Record<string, unknown>>;
+  actorCursors?: Array<Record<string, unknown>>;
+  visibleCursorRefs?: Array<string | Record<string, unknown>>;
+  cursorEvents?: Array<Record<string, unknown>>;
+  actorCursorEvents?: Array<Record<string, unknown>>;
+  observeBeforeMutate?: Record<string, unknown>;
+  observationFreshness?: Record<string, unknown>;
+  browserRuntimeDomAxObservation?: Record<string, unknown> | Array<Record<string, unknown>>;
+  browserRuntimeDomAxObservations?: Array<Record<string, unknown>>;
+  browserRuntimeObservation?: Record<string, unknown>;
+  browserRuntimeObservationHint?: Record<string, unknown>;
+  browserRuntimeObservationHints?: Array<Record<string, unknown>>;
+  domAxObservation?: Record<string, unknown>;
+  domAxObservationHints?: Array<Record<string, unknown>>;
+  actionProposals?: Array<Record<string, unknown>>;
+  proposals?: Array<Record<string, unknown>>;
+  executorQueue?: Array<Record<string, unknown>>;
+  leaseQueue?: Array<Record<string, unknown>>;
+  schedulerQueue?: Array<Record<string, unknown>>;
+  executorLeases?: Array<Record<string, unknown>>;
+  leases?: Array<Record<string, unknown>>;
+  mutatingActions?: Array<Record<string, unknown>>;
+  actionCausality?: Array<Record<string, unknown>>;
+  executorEvents?: Array<Record<string, unknown>>;
+  inputEvents?: Array<Record<string, unknown>>;
+  evidenceLedgerActions?: Array<Record<string, unknown>>;
+  evidenceLedger?: Record<string, unknown>;
+  replayBundle?: Record<string, unknown>;
+  replayManifest?: Record<string, unknown>;
+  visibleReplay?: Record<string, unknown>;
+  replayRef?: string;
+  automationSubstituteUsed?: boolean;
+  blockedReason?: string;
+  trace?: Record<string, unknown>;
 }
 
 const rejectedShortcutKinds = new Set<CuEvidenceClaimKind>([
@@ -193,6 +317,60 @@ const rejectedShortcutKinds = new Set<CuEvidenceClaimKind>([
   'accessibility',
   'generated-file-only',
 ]);
+
+const cuUserAcceptancePassthroughKeys = [
+  'cuNextTaskId',
+  'productPath',
+  'acceptancePathClassification',
+  'userControl',
+  'sessionPermission',
+  'platformSidecarIsolation',
+  'platformSidecar',
+  'displayGroupId',
+  'currentRunBundleRef',
+  'currentBundleRef',
+  'screenId',
+  'screenIds',
+  'screens',
+  'virtualScreens',
+  'visibleScreenRefs',
+  'actorId',
+  'actorIds',
+  'cursorId',
+  'cursorIds',
+  'virtualDesktopSession',
+  'actorCursors',
+  'visibleCursorRefs',
+  'actorCursorEvents',
+  'observationFreshness',
+  'browserRuntimeDomAxObservations',
+  'browserRuntimeObservation',
+  'browserRuntimeObservationHint',
+  'browserRuntimeObservationHints',
+  'domAxObservation',
+  'domAxObservationHints',
+  'proposals',
+  'leaseQueue',
+  'schedulerQueue',
+  'executorLeases',
+  'leases',
+  'actionCausality',
+  'executorEvents',
+  'inputEvents',
+  'evidenceLedgerActions',
+  'evidenceLedger',
+  'replayManifest',
+  'visibleReplay',
+  'replayRef',
+  'automationSubstituteUsed',
+  'blockedReason',
+  'trace',
+] as const;
+
+const sensitiveFieldNamePattern =
+  /(?:authorization|cookie|api[-_\s]?key|apikey|secret|password|passwd|credential|token|bearer|private[-_\s]?key|client[-_\s]?secret|provider[-_\s]?url|base[-_\s]?url|endpoint|raw[-_\s]?url|requested[-_\s]?url|current[-_\s]?url|final[-_\s]?url|private[-_\s]?url|workspace[-_\s]?path|local[-_\s]?absolute[-_\s]?path|absolute[-_\s]?path)/i;
+
+const opaqueRefSchemePattern = /^(?:approval|computer-use-session|codex-thread|gui\.present):/i;
 
 export function evaluateCuUserAcceptanceAntiShortcutGuard(
   evidenceClaims: CuEvidenceClaim[] = [],
@@ -233,7 +411,15 @@ function isAllowedDomAxObservationHintClaim(claim: CuEvidenceClaim): boolean {
 }
 
 function isBundleLocalRef(ref: string): boolean {
-  return ref.startsWith('.sciforge/vision-runs/') && !ref.includes('..') && !/^[a-z]+:/i.test(ref);
+  const trimmed = ref.trim();
+  if (!trimmed) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return false;
+  if (trimmed.startsWith('/') || trimmed.startsWith('~')) return false;
+  const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+  const parts = normalized.split('/');
+  if (!parts.every((part) => part !== '' && part !== '.' && part !== '..')) return false;
+  const fileName = parts.at(-1) ?? '';
+  return /\.[a-z0-9][a-z0-9-]{0,15}$/i.test(fileName);
 }
 
 export function hasRequiredCuTuiHostChain(tuiHostChain: CuTuiHostChainLink[]): boolean {
@@ -304,6 +490,76 @@ function stringRefs(refs: string[] | undefined): string[] {
   return (refs ?? []).filter((ref) => ref.trim().length > 0);
 }
 
+function controlledPassthroughFields(input: CuUserAcceptanceInput): Record<string, unknown> {
+  const source = input as unknown as Record<string, unknown>;
+  const passthrough: Record<string, unknown> = {};
+  for (const key of cuUserAcceptancePassthroughKeys) {
+    if (source[key] !== undefined) passthrough[key] = source[key];
+  }
+  return passthrough;
+}
+
+function scrubCuManifest<T extends Record<string, unknown>>(manifest: T): T {
+  return scrubCuManifestValue(manifest) as T;
+}
+
+function scrubCuManifestValue(value: unknown, key?: string): unknown {
+  if (key && sensitiveFieldNamePattern.test(key)) return undefined;
+  if (typeof value === 'string') return scrubCuManifestString(value);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => scrubCuManifestValue(item))
+      .filter((item) => item !== undefined);
+  }
+  if (value && typeof value === 'object') {
+    const scrubbed: Record<string, unknown> = {};
+    for (const [childKey, childValue] of Object.entries(value)) {
+      const child = scrubCuManifestValue(childValue, childKey);
+      if (child !== undefined) scrubbed[childKey] = child;
+    }
+    return scrubbed;
+  }
+  return value;
+}
+
+function scrubCuManifestString(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || opaqueRefSchemePattern.test(trimmed)) return value;
+  if (isLocalAbsolutePathLike(trimmed)) return '[redacted-local-path]';
+
+  let scrubbed = value
+    .replace(/data:image\/[^,\s]+,?[A-Za-z0-9+/=_-]*/gi, '[redacted-inline-data]')
+    .replace(/;base64,[A-Za-z0-9+/=_-]+/gi, ';[redacted-inline-data]')
+    .replace(/\bhttps?:\/\/[^\s"'<>),\]]+/gi, '[redacted-url]')
+    .replace(/\bwss?:\/\/[^\s"'<>),\]]+/gi, '[redacted-url]')
+    .replace(/\bAuthorization\s*:\s*(?:Bearer|Basic)?\s*[^\s,;]+/gi, '[redacted-sensitive]')
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, '[redacted-sensitive]')
+    .replace(/\b(?:api[_\-\s]?key|token|secret|password|credential)\s*[:=]\s*("[^"]*"|'[^']*'|[^\s,;&]+)/gi, '[redacted-sensitive]')
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, '[redacted-sensitive]')
+    .replace(/\b[A-Za-z0-9._-]*(?:secret|token)[A-Za-z0-9._-]{4,}\b/gi, '[redacted-sensitive]');
+
+  scrubbed = scrubEmbeddedLocalAbsolutePaths(scrubbed);
+  return scrubbed;
+}
+
+function isLocalAbsolutePathLike(value: string): boolean {
+  return value.startsWith('file:')
+    || value.startsWith('/')
+    || value.startsWith('~')
+    || /^[A-Za-z]:[\\/]/.test(value)
+    || /^\\\\/.test(value);
+}
+
+function scrubEmbeddedLocalAbsolutePaths(value: string): string {
+  return value
+    .replace(
+      /(^|[\s"'([])(\/(?:Applications|Users|Volumes|private|tmp|var|home|opt|etc)\/[^\s"'<>),\]]+)/g,
+      '$1[redacted-local-path]',
+    )
+    .replace(/\b[A-Za-z]:\\[^\s"'<>),\]]+/g, '[redacted-local-path]')
+    .replace(/\\\\[^\s"'<>),\]]+/g, '[redacted-local-path]');
+}
+
 function evidenceClaimRecordRefs(claim: CuEvidenceClaim): string[] {
   return [
     claim.ref,
@@ -334,6 +590,12 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     ref: input.executorLease?.ref,
     owner: input.executorLease?.owner,
     acquiredAt: input.executorLease?.acquiredAt,
+    screenId: input.executorLease?.screenId,
+    windowId: input.executorLease?.windowId,
+    actorId: input.executorLease?.actorId,
+    cursorId: input.executorLease?.cursorId,
+    leaseScope: input.executorLease?.leaseScope,
+    scope: input.executorLease?.scope,
   };
   const hasExecutorLease = executorLease.status === 'present' && Boolean(executorLease.ref);
   const hasFinalArtifact = Boolean(input.finalArtifactRef);
@@ -448,7 +710,7 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     level: input.level,
   });
 
-  return {
+  const manifest: CuUserAcceptanceManifest = {
     schemaVersion: CU_USER_ACCEPTANCE_SCHEMA_VERSION,
     runId: input.runId,
     taskId: input.taskId,
@@ -493,7 +755,25 @@ export function buildCuUserAcceptanceManifest(input: CuUserAcceptanceInput): CuU
     evidenceMarkers: input.evidenceMarkers,
     completionEvidence: input.completionEvidence,
     completionEvidenceRef: input.completionEvidenceRef,
+    cuNextTask: input.cuNextTask,
+    productPathClassification: input.productPathClassification,
+    userControlPlane: input.userControlPlane,
+    platformSidecarIsolationReport: input.platformSidecarIsolationReport,
+    virtualDisplayGroup: input.virtualDisplayGroup,
+    actorCursorProvenance: input.actorCursorProvenance,
+    cursorEvents: input.cursorEvents,
+    observeBeforeMutate: input.observeBeforeMutate,
+    browserRuntimeDomAxObservation: input.browserRuntimeDomAxObservation,
+    actionProposals: input.actionProposals,
+    executorQueue: input.executorQueue,
+    mutatingActions: input.mutatingActions,
+    replayBundle: input.replayBundle,
   };
+
+  return scrubCuManifest({
+    ...manifest,
+    ...controlledPassthroughFields(input),
+  }) as CuUserAcceptanceManifest;
 }
 
 export async function writeCuUserAcceptanceManifest(

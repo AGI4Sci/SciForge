@@ -10,6 +10,7 @@ import {
   visionSenseCrossDisplayWindowDragPolicy,
   visionSenseFocusRegionGroundingId,
   visionSenseGroundingIds,
+  visionSenseModelRouterCapabilities,
   visionSensePlannerOnlyEvidencePolicy,
   visionSensePlannerPromptPolicy,
   visionSenseRuntimeEventTypes,
@@ -27,14 +28,30 @@ test('vision-sense package owns runtime trace and grounding ids', () => {
   assert.equal(visionSenseRuntimeEventTypes.genericAction, 'vision-sense-generic-action');
   assert.equal(visionSenseCompletionPolicyModes.oneSuccessfulNonWaitAction, 'one-successful-non-wait-action');
   assert.equal(visionSenseGroundingIds.coarseToFine, 'coarse-to-fine');
-  assert.equal(visionSenseGroundingIds.kvGround, 'kv-ground');
-  assert.equal(visionSenseFocusRegionGroundingId('kv-ground'), 'kv-ground-focus-region');
+  assert.equal(visionSenseGroundingIds.modelRouterGrounding, visionSenseModelRouterCapabilities.groundingTranslator);
+  assert.equal(visionSenseGroundingIds.legacyKvGroundCompatibleAdapter, 'legacy-kv-ground-compatible-adapter');
+  assert.equal(
+    visionSenseFocusRegionGroundingId(visionSenseModelRouterCapabilities.groundingTranslator),
+    'model-router-capability-computer-use-grounding-translator-focus-region',
+  );
   assert.equal(visionSenseTraceContractPolicy.imageMemory.policy, 'file-ref-only');
+  assert.deepEqual(visionSenseTraceContractPolicy.imageMemory.forbiddenInlinePayloads, [
+    'rawScreenshot',
+    'rawProviderPayload',
+    'providerRequestBody',
+    'providerResponseBody',
+    'base64',
+    'data:image',
+    'image_base64',
+    'inlineImageBytes',
+  ]);
   assert.equal(visionSenseTraceContractPolicy.visualFocus.strategy, 'coarse-to-fine-focus-region');
   assert.deepEqual(visionSenseTraceContractPolicy.appSpecificShortcuts, []);
   assert.equal(visionSenseSafetyVerifierContract.senseBoundary, 'text-signal-only');
   assert.equal(visionSensePlannerOnlyEvidencePolicy.plannerId, 'vision-sense-policy-planner');
-  assert.equal(visionSenseTraceOutputPolicy.requiredInputs[1], 'RuntimeCodexPlanner');
+  assert.equal(visionSenseTraceOutputPolicy.requiredInputs[1], 'ModelRouterPlannerCapability');
+  assert.deepEqual(visionSenseTraceContractPolicy.modelRouterCapabilities, visionSenseModelRouterCapabilities);
+  assert.doesNotMatch(JSON.stringify(visionSenseTraceContractPolicy.requires), /runtimecodex|kv-ground|qwen|vlm/i);
 });
 
 test('vision-sense package owns planner domain prompt policy', () => {
@@ -52,7 +69,8 @@ test('vision-sense package owns planner domain prompt policy', () => {
     platformRecoveryGuidance: visionSensePlannerPromptPolicy.platformRecoveryGuidance('darwin'),
   });
   assert.ok(systemPrompt.includes('Allowed action types: open_app, click'));
-  assert.ok(systemPrompt.includes('Coordinates are produced by the Grounder'));
+  assert.ok(systemPrompt.includes('Coordinates are produced by the Model Router grounding translator'));
+  assert.doesNotMatch(systemPrompt, /Runtime Codex text planner|KV-Ground|qwen|VLM/i);
   assert.ok(visionSensePlannerPromptPolicy.buildUserPrompt('Click Save').includes('Stop before final high-risk actions'));
   assert.ok(visionSensePlannerPromptPolicy.buildPlannerRetryInstruction({
     issue: 'unsupported-action',

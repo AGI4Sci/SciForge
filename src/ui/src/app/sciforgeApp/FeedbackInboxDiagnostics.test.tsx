@@ -30,7 +30,7 @@ test('feedback inbox diagnostics renders repair readiness and page state control
   );
 
   assert.match(html, /aria-label="Repair readiness"/);
-  assert.match(html, /DeepSeek repair readiness/);
+  assert.match(html, /Runtime repair readiness/);
   assert.match(html, /workspace writer/);
   assert.match(html, /repair peers/);
   assert.match(html, /Provider 设置/);

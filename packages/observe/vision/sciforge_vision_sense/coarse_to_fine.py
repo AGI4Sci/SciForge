@@ -2,7 +2,7 @@
 
 The runtime owns screenshot capture and OS-specific cropping. This module owns
 the visual algorithm contract: selecting a focus region from grounding evidence
-and compacting verifier feedback for later VLM/LLM planning.
+and compacting verifier feedback for later Model Router planning.
 """
 
 from __future__ import annotations

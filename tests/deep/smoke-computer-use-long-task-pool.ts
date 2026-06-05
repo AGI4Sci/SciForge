@@ -574,7 +574,7 @@ const trace = {
     },
     grounding: {
       status: 'ok',
-      provider: 'kv-ground',
+      provider: 'model-router.capability.computer-use.grounding-translator',
       targetDescription: 'generic target',
       coordinateSpace: 'window-local',
       localX: 1,
@@ -721,7 +721,7 @@ const plannerOnlyTrace = {
     beforeScreenshotRefs: [plannerWindowRef],
     verifier: { status: 'checked', reason: 'planner-only evidence summary' },
     execution: {
-      planner: 'runtime-codex-tui-text-planner',
+      planner: 'model-router.capability.computer-use.planner',
       status: 'done',
       rawResponse: {
         choices: [{

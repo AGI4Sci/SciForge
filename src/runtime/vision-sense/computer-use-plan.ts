@@ -9,7 +9,6 @@ import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { AgentCliAdapter } from '../codex/agent-cli-adapter.js';
 import {
   runComputerUseCodexTextPlanner,
-  runComputerUseDirectChatTextPlannerFallback,
 } from '../codex/computer-use-text-planner.js';
 import type {
   ComputerUseConfig as VisionSenseConfig,
@@ -20,7 +19,10 @@ import type {
   TraceWindowTarget,
 } from '../computer-use/types.js';
 import { extractJsonObjectWithRecovery, platformLabel, sanitizeId } from '../computer-use/utils.js';
-import { visionSensePlannerPromptPolicy } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import {
+  visionSenseModelRouterCapabilities,
+  visionSensePlannerPromptPolicy,
+} from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import { computerUseVisibleArtifactGapReason } from '../../../packages/actions/computer-use/runtime-policy.js';
 import {
   actionLedgerCompletionPolicy,
@@ -29,7 +31,7 @@ import {
 
 const TEXT_PLANNER_RAW_SCHEMA = 'sciforge.computer-use.text-planner-result.v1';
 const TEXT_PLANNER_RETRY_RAW_SCHEMA = 'sciforge.computer-use.text-planner-retry-result.v1';
-const TEXT_PLANNER_TIMEOUT_FALLBACK_RAW_SCHEMA = 'sciforge.computer-use.text-planner-timeout-fallback-result.v1';
+const TEXT_PLANNER_TIMEOUT_BLOCKED_RAW_SCHEMA = 'sciforge.computer-use.model-router-planner-timeout-blocked.v1';
 
 type PlannerActionSuccess = {
   ok: true;
@@ -76,31 +78,6 @@ export async function appendPlannerStep(params: {
   } else {
     params.abortSignal?.addEventListener('abort', forwardAbort, { once: true });
   }
-  const directFallbackForPlannerTimeout = async (reason: string, timedOutRawResponse?: unknown): Promise<PlannerActionResult> => {
-    const fallback = await planGenericActionsFromDirectChatText({
-      task: params.task,
-      observation: params.observation,
-      plannerAcceptanceContract: params.plannerAcceptanceContract,
-      screenshotRefs: params.screenshotRefs,
-      config: params.config,
-      steps: params.steps,
-      workspace: params.workspace,
-      abortSignal: params.abortSignal,
-      triggerReason: reason,
-    });
-    if (fallback.ok) return fallback;
-    return {
-      ok: false,
-      actions: [],
-      done: false,
-      reason: `${reason}; ${fallback.reason}`,
-      rawResponse: {
-        schemaVersion: TEXT_PLANNER_TIMEOUT_FALLBACK_RAW_SCHEMA,
-        timedOutPlanner: timedOutRawResponse,
-        fallback: fallback.rawResponse,
-      },
-    };
-  };
   let plannerResult = await withHardTimeout(
     planGenericActionsFromCodexText({
       task: params.task,
@@ -121,9 +98,7 @@ export async function appendPlannerStep(params: {
     },
   ).catch(async (error) => {
     const reason = error instanceof Error ? error.message : String(error);
-    if (isRuntimePlannerStepTimeout(reason) && !params.abortSignal?.aborted) {
-      return await directFallbackForPlannerTimeout(reason);
-    }
+    if (isRuntimePlannerStepTimeout(reason) && !params.abortSignal?.aborted) return plannerTimeoutBlockedResult(reason);
     return {
       ok: false as const,
       actions: [] as [],
@@ -135,7 +110,7 @@ export async function appendPlannerStep(params: {
     params.abortSignal?.removeEventListener('abort', forwardAbort);
   });
   if (plannerStepTimedOut && !params.abortSignal?.aborted && !plannerResult.ok) {
-    plannerResult = await directFallbackForPlannerTimeout(plannerStepTimeoutReason, plannerResult.rawResponse);
+    plannerResult = plannerTimeoutBlockedResult(plannerStepTimeoutReason, plannerResult.rawResponse);
   }
   const hasActions = plannerResult.ok && plannerResult.actions.length === 1;
   params.steps.push({
@@ -154,7 +129,7 @@ export async function appendPlannerStep(params: {
         : plannerResult.reason,
     },
     execution: {
-      planner: 'runtime-codex-tui-text-planner',
+      planner: visionSenseModelRouterCapabilities.computerUsePlanner,
       status: plannerResult.ok && (hasActions || plannerResult.done) ? 'done' : 'blocked',
       rawResponse: plannerResult.rawResponse,
     },
@@ -227,37 +202,27 @@ async function planGenericActionsFromCodexText(params: {
   });
 }
 
-async function planGenericActionsFromDirectChatText(params: {
-  task: string;
-  observation?: Record<string, unknown>;
-  plannerAcceptanceContract?: Record<string, unknown>;
-  screenshotRefs: ScreenshotRef[];
-  config: VisionSenseConfig;
-  steps: LoopStep[];
-  workspace: string;
-  abortSignal?: AbortSignal;
-  triggerReason: string;
-}): Promise<PlannerActionResult> {
-  if (!params.screenshotRefs.length && !params.observation) {
-    return { ok: false, actions: [], done: false, reason: 'Direct chat text planner fallback could not run because no compact observation was captured.' };
-  }
-  const observation = compactComputerUsePlannerObservation(params.observation, params.screenshotRefs, params.config);
-  return await requestGenericPlannerActionsDirectFallback({
-    task: params.task,
-    observation,
-    plannerAcceptanceContract: params.plannerAcceptanceContract,
-    recentActions: plannerRunHistory(params.steps),
-    verifierFeedback: plannerVerifierFeedback(params.steps),
-    steps: params.steps,
-    config: params.config,
-    workspace: params.workspace,
-    abortSignal: params.abortSignal,
-    triggerReason: params.triggerReason,
-  });
-}
-
 function isRuntimePlannerStepTimeout(reason: string) {
   return /^Runtime Codex text planner step timed out after \d+ms$/.test(reason);
+}
+
+function plannerTimeoutBlockedResult(reason: string, timedOutRawResponse?: unknown): PlannerActionFailure {
+  return {
+    ok: false,
+    actions: [],
+    done: false,
+    reason: [
+      reason,
+      'Computer Use planner requires the registered Model Router provider/capability path.',
+      'Direct OpenAI-compatible chat fallback is disabled so Computer Use cannot silently bypass the Model Router profile.',
+    ].join(' '),
+    rawResponse: {
+      schemaVersion: TEXT_PLANNER_TIMEOUT_BLOCKED_RAW_SCHEMA,
+      planner: visionSenseModelRouterCapabilities.computerUsePlanner,
+      timedOutPlanner: timedOutRawResponse,
+      blockedReason: 'model-router-planner-required',
+    },
+  };
 }
 
 function plannerRetryFailureResult(
@@ -605,49 +570,6 @@ async function requestGenericPlannerActions(params: {
       actions: [],
       done: false,
       reason: `Runtime Codex text planner failed: ${response.reason}`,
-      rawResponse: response.raw,
-    };
-  }
-  return textPlannerActionResultFromResponse(response, params);
-}
-
-async function requestGenericPlannerActionsDirectFallback(params: {
-  task: string;
-  observation: Record<string, unknown>;
-  plannerAcceptanceContract?: Record<string, unknown>;
-  recentActions: string;
-  verifierFeedback: string;
-  steps?: LoopStep[];
-  config: VisionSenseConfig;
-  workspace: string;
-  abortSignal?: AbortSignal;
-  triggerReason: string;
-}): Promise<PlannerActionResult> {
-  const response = await runComputerUseDirectChatTextPlannerFallback({
-    task: params.task,
-    observation: params.observation,
-    plannerAcceptanceContract: params.plannerAcceptanceContract,
-    recentActions: params.recentActions,
-    verifierFeedback: params.verifierFeedback,
-    desktopPlatform: params.config.desktopPlatform,
-    maxStepsRemaining: maxStepsRemaining(params.config, params.steps),
-    extraInstruction: [
-      `Runtime Codex CLI/TUI text planner transport timed out before returning a terminal event: ${params.triggerReason}.`,
-      'Use the same strict generic Computer Use JSON action contract.',
-    ].join(' '),
-  }, {
-    workspace: params.workspace,
-    commandId: `codex-computer-use-plan-direct-chat-${sanitizeId(params.config.runId || 'run')}`,
-    profile: params.config.planner.profile,
-    abortSignal: params.abortSignal,
-    allowOpenAiRuntime: params.config.planner.allowOpenAiRuntime,
-  }, params.triggerReason);
-  if (!response.ok) {
-    return {
-      ok: false,
-      actions: [],
-      done: false,
-      reason: `Runtime Codex direct chat text planner fallback failed: ${response.reason}`,
       rawResponse: response.raw,
     };
   }

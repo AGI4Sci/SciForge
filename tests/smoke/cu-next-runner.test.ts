@@ -56,7 +56,7 @@ const cuNextRuntimeEnvKeys = [
   'SCIFORGE_VISION_KV_GROUND_URL',
   'SCIFORGE_VISION_INPUT_ADAPTER',
   'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
-  'SCIFORGE_VISION_VLM_MODEL',
+  'SCIFORGE_VISION_TRANSLATOR_MODEL',
 ] as const;
 
 function cuNextRuntimeEnv(overrides: NodeJS.ProcessEnv = {}) {
@@ -444,7 +444,7 @@ test('CU-NEXT preflight hydrates runtime env from explicit local config without 
           grounderBaseUrl,
           inputAdapter: 'remote-desktop',
           independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
-          vlmModel: 'qwen3.6-plus',
+          vlmModel: 'sciforge-router',
         },
       }, null, 2)}\n`);
 
@@ -468,7 +468,7 @@ test('CU-NEXT preflight hydrates runtime env from explicit local config without 
       });
 
       assert.match(result.stdout, /\[ok\] CU-NEXT-04 preflight -> CU-LONG-005/);
-      assert.match(await readFile(reportPath, 'utf8'), /grounder\/grounder: KV-Ground health check passed/);
+      assert.match(await readFile(reportPath, 'utf8'), /grounder\/grounder: Legacy KV-Ground health check passed/);
       assert.doesNotMatch(result.stdout, /sk-test-cu-next-local-config-secret/);
       assert.doesNotMatch(result.stderr, /sk-test-cu-next-local-config-secret/);
     });
@@ -501,8 +501,8 @@ test('CU-NEXT real preflight fails closed when configured KV-Ground health is un
     });
 
     assert.match(result.stdout, /\[repair-needed\] CU-NEXT-07 preflight -> CU-LONG-004/);
-    assert.match(result.stdout, /grounder: KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/health/);
-    assert.match(result.stdout, /Start KV-Ground or its SSH tunnel/);
+    assert.match(result.stdout, /grounder: Legacy KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/health/);
+    assert.match(result.stdout, /default Model Router grounding translator/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

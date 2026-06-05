@@ -277,17 +277,18 @@ test('terminal and references contracts separate terminal sessions from provenan
   assert.equal(terminal.refPrefixes.includes('log:'), false);
 
   const references = resultPaneContractForTab('evidence');
-  for (const kind of ['file', 'folder', 'execution-unit'] as const) {
-    assert.ok(references.objectKinds.includes(kind), `References inspector accepts ${kind}`);
-  }
-  assert.ok(references.refPrefixes.includes('file:'));
-  assert.ok(references.refPrefixes.includes('execution-unit:'));
   assert.ok(references.refPrefixes.includes('subagent:'));
   assert.ok(references.refPrefixes.includes('artifact:subagent-result-'));
   assert.ok(references.refPrefixes.includes('artifact:subagent-transcript-'));
   assert.ok(references.refPrefixes.includes('transcript:'));
   assert.ok(references.refPrefixes.includes('trace:'));
   assert.ok(references.refPrefixes.includes('agent-result:'));
+  for (const refPrefix of ['file:', 'folder:', 'workspace:', 'terminal:', 'terminal-session:', 'terminal-transcript:', 'pty-transcript:', 'execution-unit:', 'url:', 'http://', 'https://']) {
+    assert.equal(references.refPrefixes.includes(refPrefix), false, `References does not claim ${refPrefix}`);
+  }
+  for (const kind of ['file', 'folder', 'execution-unit', 'url'] as const) {
+    assert.equal(references.objectKinds.includes(kind), false, `References does not claim ${kind}`);
+  }
 });
 
 test('evidence tab keeps the existing tab kind while naming its contract as References', () => {

@@ -26,7 +26,7 @@ import {
 import { enrichRepairRaw } from './sessionRepairRaw';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
-import { parseSciForgeReferenceAttribute, referenceForMessage, sciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
+import { objectReferenceForUploadedArtifact, parseSciForgeReferenceAttribute, referenceForMessage, referenceForUploadedArtifact, sciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
 
 const goalSnapshot: UserGoalSnapshot = {
   turnId: 'turn-1',
@@ -87,6 +87,51 @@ test('creates optimistic user turns and only derives a title for the first real 
   assert.equal(first.session.title, 'compare papers about BRCA1 evidence');
   assert.equal(first.userMessage.role, 'user');
   assert.equal(followup.session.title, first.session.title);
+});
+
+test('optimistic user turn attaches uploaded images as same-turn refs without base64 payloads', () => {
+  const uploadedImage: RuntimeArtifact = {
+    id: 'upload-image-1',
+    type: 'uploaded-image',
+    producerScenario: 'literature-evidence-review',
+    schemaVersion: '1',
+    path: '.sciforge/uploads/session-1/upload-image-1-figure.png',
+    dataRef: '.sciforge/uploads/session-1/upload-image-1-figure.png',
+    metadata: {
+      title: 'figure.png',
+      fileName: 'figure.png',
+      mimeType: 'image/png',
+      size: 1024,
+      storage: 'workspace-file',
+      workspacePath: '.sciforge/uploads/session-1/upload-image-1-figure.png',
+    },
+    previewDescriptor: {
+      kind: 'image',
+      source: 'path',
+      ref: '.sciforge/uploads/session-1/upload-image-1-figure.png',
+      mimeType: 'image/png',
+      inlinePolicy: 'stream',
+      actions: ['open-inline', 'make-thumbnail'],
+    },
+  };
+  const reference = referenceForUploadedArtifact(uploadedImage);
+  const objectReference = objectReferenceForUploadedArtifact(uploadedImage);
+  const { session: nextSession, userMessage } = createOptimisticUserTurnSession({
+    baseSession: session({ artifacts: [uploadedImage] }),
+    prompt: 'What is in this image?',
+    references: [reference],
+    objectReferences: [objectReference],
+  });
+  const payload = requestPayloadForTurn(nextSession, userMessage, [reference]);
+  const currentMessage = payload.messages.find((item) => item.id === userMessage.id);
+  const serialized = JSON.stringify({ session: nextSession, payload });
+
+  assert.equal(userMessage.references?.[0]?.ref, '.sciforge/uploads/session-1/upload-image-1-figure.png');
+  assert.equal(userMessage.objectReferences?.[0]?.ref, 'artifact:upload-image-1');
+  assert.equal(userMessage.objectReferences?.[0]?.provenance?.path, '.sciforge/uploads/session-1/upload-image-1-figure.png');
+  assert.equal(currentMessage?.objectReferences?.[0]?.artifactType, 'uploaded-image');
+  assert.equal(payload.artifacts[0]?.previewDescriptor?.ref, '.sciforge/uploads/session-1/upload-image-1-figure.png');
+  assert.doesNotMatch(serialized, /data:image|base64,[A-Za-z0-9+/=]+|iVBORw0KGgo/i);
 });
 
 test('chat title derivation is generic, bounded, and leak-safe', () => {

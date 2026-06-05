@@ -13,6 +13,13 @@ import {
 } from './runtimeHealth';
 
 describe('runtime health model status', () => {
+  it('treats the default managed Model Router as configured without requiring a Base URL', () => {
+    const health = modelHealth(defaultSciForgeConfig);
+
+    assert.notEqual(health.status, RUNTIME_HEALTH_STATUS.NOT_CONFIGURED);
+    assert.doesNotMatch(String(health.recoverAction), /Set the Base URL/i);
+  });
+
   it('marks empty native model configuration as setup instead of online', () => {
     const health = modelHealth(updateConfig(defaultSciForgeConfig, {
       modelProvider: 'native',

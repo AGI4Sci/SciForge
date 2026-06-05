@@ -101,6 +101,7 @@ function cursorRefSpec(ref: string): CursorRefSpec | undefined {
   }
   if (lower.startsWith('scenario-package:')) return { kind: 'scenario-package', preferredView: 'scenario-package-inspector', actions: INSPECT_ACTIONS };
   if (lower.startsWith('run:') || ref.startsWith('run-')) return { kind: 'run', preferredView: 'evidence-inspector', actions: EVIDENCE_ACTIONS };
+  if (lower.startsWith('trace:')) return { kind: 'run', preferredView: 'subagent-transcript', actions: EVIDENCE_ACTIONS };
   if (isTerminalRef(ref)) return { kind: 'execution-unit', preferredView: 'terminal-session-viewer', actions: TERMINAL_ACTIONS };
   if (isBrowserRef(ref)) return { kind: 'url', preferredView: 'browser-object', actions: EXTERNAL_ACTIONS };
   if (isImageEvidenceRef(ref)) return IMAGE_EVIDENCE_SPEC;
@@ -179,7 +180,7 @@ function isTrustedCursorObjectRef(ref: string) {
   if (/\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(ref)) return false;
   if (/[\r\n\t<>|?*]/.test(ref)) return false;
   if (/^(?:\/|[A-Za-z]:[\\/]|file:\/\/)/.test(ref)) return false;
-  if (/^(?:audit|trace|raw|stdout|stderr|provider):/i.test(ref)) return false;
+  if (/^(?:audit|raw|stdout|stderr|provider):/i.test(ref)) return false;
   if (/(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge)(?:[/:]|$)/i.test(ref)) return false;
   if (/(?:^|[/:])(?:raw|stdout|stderr|provider)(?:[/:]|$)/i.test(ref)) return false;
   if (ref.includes('..') || ref.startsWith('~')) return false;
@@ -187,6 +188,7 @@ function isTrustedCursorObjectRef(ref: string) {
   if (ref.toLowerCase().startsWith('folder:')) return isSafeCursorRelativePath(ref.slice('folder:'.length));
   if (ref.toLowerCase().startsWith('workspace:')) return isSafeCursorRelativePath(ref.slice('workspace:'.length));
   if (ref.toLowerCase().startsWith('artifact:')) return isSafeCursorOpaquePayload(artifactPayload(ref));
+  if (ref.toLowerCase().startsWith('trace:')) return isSafeCursorOpaquePayload(ref.slice('trace:'.length));
   return /^[A-Za-z][A-Za-z0-9_.:/-]{1,180}$/.test(ref) || /^EU-[A-Za-z0-9_.:-]{1,128}$/.test(ref);
 }
 

@@ -36,7 +36,11 @@ class VisionSenseContractTest(unittest.TestCase):
         manifest = DEFAULT_MANIFEST
 
         self.assertEqual(manifest.modality, "vision")
-        self.assertEqual(manifest.configSchema["vlm"]["defaultModel"], "qwen3.6-plus")
+        self.assertEqual(manifest.configSchema["vlm"]["defaultModel"], "sciforge-router")
+        self.assertEqual(
+            manifest.configSchema["grounder"]["kind"],
+            "model-router.capability.computer-use.grounding-translator",
+        )
         self.assertEqual(manifest.configSchema["grounder"]["baseUrlConfig"]["env"], KV_GROUND_URL_ENV)
         self.assertEqual(
             manifest.configSchema["grounder"]["remotePathPrefixesConfig"]["env"],

@@ -216,7 +216,7 @@ export interface VisionGrounderConfig {
   localPathPrefix?: string;
   remotePathPrefix?: string;
   upload?: {
-    strategy?: 'scp' | 'inline';
+    strategy?: 'scp' | 'inline' | 'file-ref';
     host?: string;
     user?: string;
     port?: number;

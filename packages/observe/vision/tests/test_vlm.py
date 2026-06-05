@@ -22,10 +22,10 @@ from sciforge_vision_sense.vlm import (  # noqa: E402
 )
 
 
-def test_vlm_config_defaults_to_qwen_plus_model():
+def test_vlm_config_defaults_to_router_public_model():
     config = VisionVlmConfig(base_url="https://example.test/v1", api_key="secret")
 
-    assert config.model == "qwen3.6-plus"
+    assert config.model == "sciforge-router"
 
 
 def test_vlm_client_uses_configured_chat_completions_endpoint_and_model():

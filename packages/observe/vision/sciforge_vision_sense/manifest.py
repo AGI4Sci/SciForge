@@ -5,7 +5,7 @@ from __future__ import annotations
 from .types import SenseManifest
 
 
-DEFAULT_VLM_MODEL = "qwen3.6-plus"
+DEFAULT_VISION_MODEL = "sciforge-router"
 KV_GROUND_URL_ENV = "SCIFORGE_VISION_KV_GROUND_URL"
 KV_GROUND_REMOTE_PATH_PREFIXES_ENV = "SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIXES"
 
@@ -64,13 +64,13 @@ def build_default_manifest() -> SenseManifest:
         },
         configSchema={
             "vlm": {
-                "defaultModel": DEFAULT_VLM_MODEL,
+                "defaultModel": DEFAULT_VISION_MODEL,
                 "usesSharedLlmConfig": True,
                 "requiredSharedFields": ["baseUrl", "apiKey"],
                 "optionalSharedFields": ["headers", "timeoutSeconds", "retry"],
             },
             "grounder": {
-                "kind": "kv-ground",
+                "kind": "model-router.capability.computer-use.grounding-translator",
                 "baseUrlConfig": {
                     "field": "grounderConfig.baseUrl",
                     "env": KV_GROUND_URL_ENV,

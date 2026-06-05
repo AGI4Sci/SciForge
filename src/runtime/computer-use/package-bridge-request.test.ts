@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import type { GatewayRequest } from '../runtime-types.js';
 import type { ComputerUseConfig } from './types.js';
+import { visionSenseModelRouterCapabilities } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import {
   PACKAGE_BRIDGE_RUN_TASK_BOUNDARY,
   materializePackageBridgeActionProviderRequest,
@@ -85,7 +86,7 @@ test('package bridge materializes normalized action provider request for package
   assert.equal(actionProviderRequest.riskPolicy, 'fail-closed');
   assert.equal(actionProviderRequest.approvalRef, undefined);
   assert.equal(actionProviderRequest.providers.action, 'action.sciforge.computer-use');
-  assert.equal(actionProviderRequest.providers.grounder, 'kv-ground');
+  assert.equal(actionProviderRequest.providers.grounder, visionSenseModelRouterCapabilities.groundingTranslator);
   assert.equal(actionProviderRequest.metadata.ignoredApprovalRef, 'approval:vision-sense-dry-run-smoke');
   assert.equal((actionProviderRequest.metadata.chatOrigin as Record<string, unknown>).entrypoint, 'sciforge-chat');
   assert.deepEqual(actionProviderRequest.metadata.completionEvidencePolicy, {
@@ -127,7 +128,7 @@ test('package bridge materializes runTask invocation request and host ports toge
     runId: 'cu-package-bridge-request-helper',
     testActionFixtureMode: false,
     testOnlyPlannedActions: 0,
-    planner: 'runtime-codex-tui-text-planner',
+    planner: visionSenseModelRouterCapabilities.computerUsePlanner,
   });
 
   assert.equal(invocation.boundary, PACKAGE_BRIDGE_RUN_TASK_BOUNDARY);

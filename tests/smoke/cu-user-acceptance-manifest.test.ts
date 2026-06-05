@@ -285,7 +285,7 @@ test('CU-05 anti-shortcut guard allows DOM, Playwright, and accessibility refs o
       id: 'dom-visible',
       kind: 'dom',
       observationUse: 'observe-before-mutate-hint',
-      refs: ['.sciforge/vision-runs/cu-05/browser-visible-dom.json'],
+      refs: ['browser-dom-ax-observation.json', 'browser-visible-dom.json'],
       executorLeaseSubstitute: false,
       guiActionSubstitute: false,
       artifactCausalitySubstitute: false,
@@ -309,6 +309,121 @@ test('CU-05 anti-shortcut guard allows DOM, Playwright, and accessibility refs o
 
   assert.equal(guard.status, 'passed');
   assert.deepEqual(guard.rejectedClaims, []);
+
+  const unsafe = evaluateCuUserAcceptanceAntiShortcutGuard([
+    {
+      id: 'dom-parent-ref',
+      kind: 'dom',
+      observationUse: 'observe-before-mutate-hint',
+      refs: ['../browser-visible-dom.json'],
+    },
+    {
+      id: 'playwright-scheme-ref',
+      kind: 'playwright',
+      use: 'grounding-hint',
+      refs: ['https://private.example.test/browser-playwright-evaluate.json'],
+    },
+    {
+      id: 'ax-absolute-ref',
+      kind: 'accessibility',
+      evidenceUse: 'grounding-hint',
+      refs: ['/Users/alice/private/browser-accessibility.json'],
+    },
+  ]);
+  assert.equal(unsafe.status, 'failed');
+  assert.deepEqual(
+    unsafe.rejectedClaims.map((claim) => claim.id),
+    ['dom-parent-ref', 'playwright-scheme-ref', 'ax-absolute-ref'],
+  );
+});
+
+test('CU-05 preserves validator alias passthrough fields while scrubbing unsafe payloads', () => {
+  const manifest = buildCuUserAcceptanceManifest({
+    ...validMultiAppPassInput('cu-05-passthrough-scrub'),
+    cuNextTaskId: 'CU-NEXT-07',
+    productPath: {
+      tier: 'product-smoke',
+      currentBundleOnly: true,
+      currentBundleRef: '.',
+      appServerRunRef: 'codex-app-server-run.json',
+      nativePluginInvocationRef: 'native-plugin-invocation.json',
+      sciforgeComputerUseRunTaskRef: 'tui-host-run-task-chain.json',
+      platformSidecarIsolationReportRef: 'platform-sidecar-isolation-report.json',
+      hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
+      privateUrl: 'https://private.example.test/v1?api_key=super-secret-token',
+      headers: { Authorization: 'Bearer super-secret-token' },
+    },
+    userControl: {
+      sessionPermissionRef: 'session-permission.json',
+      allowedAppRefs: ['allowed-apps.json'],
+      allowedWindowRefs: ['allowed-windows.json'],
+      forbiddenAppRefs: ['forbidden-apps.json'],
+      inputModalityPolicyRef: 'input-modality-policy.json',
+      riskPreviewRef: 'risk-preview.json',
+      dataVisibilityRef: 'data-visibility.json',
+      stopRef: 'stop-cancel-lease.json',
+      approvalMode: 'bounded-low-risk',
+      apiKey: 'super-secret-token',
+    },
+    platformSidecar: {
+      status: 'passed',
+      backendKind: 'native-multi-screen-sidecar',
+      reportRef: 'platform-sidecar-isolation-report.json',
+      captureRef: 'sidecar-capture.json',
+      stateRef: 'sidecar-state.json',
+      preflightRef: 'sidecar-preflight.json',
+      executorAdapterRef: 'sidecar-executor-adapter.json',
+      isolationFlags: {
+        sharedSystemInputUsed: false,
+        systemPointerMoved: false,
+        systemKeyboardEventsSent: false,
+        sidecarDoesPlanning: false,
+        sidecarDoesCompletion: false,
+      },
+      localAbsolutePath: '/Applications/private/sidecar-state.json',
+    },
+    browserRuntimeDomAxObservations: [
+      {
+        schemaVersion: 'sciforge.computer-use.browser-runtime-dom-ax-observation.v1',
+        observationRef: 'browser-dom-ax-observation.json',
+        visibleDomRef: 'browser-visible-dom.json',
+        accessibilitySnapshotRef: 'browser-accessibility.json',
+        inlineImage: 'data:image/png;base64,SHOULD_NOT_SURVIVE',
+      },
+    ],
+    browserRuntimeObservationHint: {
+      observationRef: 'browser-dom-ax-observation.json',
+      pageQueryRef: 'browser-page-query.json',
+    },
+    replayManifest: {
+      ref: 'replay-bundle.json',
+      frames: [
+        {
+          screenId: 'screen-main',
+          screenshotRef: 'before.png',
+          cursorOverlayRefs: ['cursor-overlay-before.json'],
+          debugPath: '/Users/alice/private/before.png',
+        },
+      ],
+    },
+    currentRunBundleRef: '.',
+  } as Parameters<typeof buildCuUserAcceptanceManifest>[0] & Record<string, unknown>);
+
+  assert.equal(manifest.cuNextTaskId, 'CU-NEXT-07');
+  assert.equal(manifest.productPath?.appServerRunRef, 'codex-app-server-run.json');
+  assert.equal(manifest.userControl?.sessionPermissionRef, 'session-permission.json');
+  assert.equal(manifest.platformSidecar?.reportRef, 'platform-sidecar-isolation-report.json');
+  assert.equal(
+    manifest.browserRuntimeDomAxObservations?.[0]?.observationRef,
+    'browser-dom-ax-observation.json',
+  );
+  assert.equal(manifest.replayManifest?.ref, 'replay-bundle.json');
+
+  const serialized = JSON.stringify(manifest);
+  assert.doesNotMatch(serialized, /data:image|SHOULD_NOT_SURVIVE|super-secret-token|Bearer|Authorization|api_key|apiKey/i);
+  assert.doesNotMatch(serialized, /https:\/\/private\.example\.test|\/Applications\/private|\/Users\/alice\/private/i);
+  assert.match(serialized, /browser-dom-ax-observation\.json/);
+  assert.match(serialized, /replay-bundle\.json/);
 });
 
 test('CU-05 CLI writes the evaluated manifest from JSON input', async () => {

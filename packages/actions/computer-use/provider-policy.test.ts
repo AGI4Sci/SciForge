@@ -12,6 +12,7 @@ import {
   computerUseHostPortProviderIds,
   computerUseHostPortsContractIds,
   computerUseHostPortsPolicySummary,
+  computerUseModelRouterCapabilityIds,
   computerUseTraceHandoffContract,
   computerUseWindowCaptureProvider,
 } from './provider-policy.js';
@@ -86,13 +87,34 @@ test('computer use host port policy names thin host adapter providers', () => {
   });
   assert.equal(policy.providers.capture, computerUseHostPortProviderIds.targetWindowCapture);
   assert.equal(policy.providers.crop, computerUseHostPortProviderIds.focusRegionCrop);
-  assert.equal(policy.providers.plan, computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner);
-  assert.equal(policy.providers.locate, computerUseHostPortProviderIds.kvGround);
-  assert.equal(policy.providers.verify, computerUseHostPortProviderIds.layeredVerifier);
+  assert.equal(policy.providers.plan, computerUseModelRouterCapabilityIds.computerUsePlanner);
+  assert.equal(policy.providers.query, computerUseModelRouterCapabilityIds.screenshotTranslator);
+  assert.equal(policy.providers.locate, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(policy.providers.verify, computerUseModelRouterCapabilityIds.verifierTranslator);
   assert.equal(policy.providers.writeTrace, computerUseHostPortProviderIds.writeTrace);
+  assert.deepEqual(policy.routerRoles, {
+    screenshot: computerUseModelRouterCapabilityIds.screenshotTranslator,
+    crop: computerUseModelRouterCapabilityIds.cropTranslator,
+    grounding: computerUseModelRouterCapabilityIds.groundingTranslator,
+    verifier: computerUseModelRouterCapabilityIds.verifierTranslator,
+  });
+  assert.deepEqual(policy.legacyAdapters, {
+    locate: computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter,
+  });
   assert.equal(policy.traceHandoff.presentationTarget, computerUseTraceHandoffContract.presentationTarget);
-  assert.deepEqual(policy.traceHandoff.forbiddenInlinePayloads, ['rawScreenshot', 'base64', 'data:image']);
+  assert.deepEqual(policy.traceHandoff.forbiddenInlinePayloads, [
+    'rawScreenshot',
+    'rawProviderPayload',
+    'providerRequestBody',
+    'providerResponseBody',
+    'base64',
+    'data:image',
+    'image_base64',
+    'inlineImageBytes',
+  ]);
+  assert.doesNotMatch(JSON.stringify(policy.providers), /runtime-codex|kv-ground|qwen|vlm/i);
 
   const fallbackPolicy = computerUseHostPortsPolicySummary({ desktopPlatform: 'darwin' });
-  assert.equal(fallbackPolicy.providers.locate, computerUseHostPortProviderIds.focusRegionCrop);
+  assert.equal(fallbackPolicy.providers.locate, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(fallbackPolicy.legacyAdapters, undefined);
 });

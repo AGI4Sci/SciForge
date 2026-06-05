@@ -20,9 +20,15 @@ export const computerUseHostPortProviderIds = {
   focusRegionCrop: 'host-focus-region-crop',
   writeTrace: 'workspace-file-ref-trace-writer',
   emitEvent: 'workspace-runtime-events',
-  runtimeCodexTuiTextPlanner: 'runtime-codex-tui-text-planner',
-  layeredVerifier: 'layered-vision-verifier',
-  kvGround: 'kv-ground',
+  legacyKvGroundCompatibleAdapter: 'legacy-kv-ground-compatible-adapter',
+} as const;
+
+export const computerUseModelRouterCapabilityIds = {
+  computerUsePlanner: 'model-router.capability.computer-use.planner',
+  screenshotTranslator: 'model-router.capability.computer-use.screenshot-translator',
+  cropTranslator: 'model-router.capability.computer-use.crop-translator',
+  groundingTranslator: 'model-router.capability.computer-use.grounding-translator',
+  verifierTranslator: 'model-router.capability.computer-use.verifier-translator',
 } as const;
 
 export const computerUseHostPortLists = {
@@ -37,7 +43,16 @@ export const computerUseTraceHandoffContract = {
   approvalTarget: 'computer-use.approval-request',
   storagePolicy: 'refs-first',
   payloadPolicy: 'refs-and-compact-summary-only',
-  forbiddenInlinePayloads: ['rawScreenshot', 'base64', 'data:image'],
+  forbiddenInlinePayloads: [
+    'rawScreenshot',
+    'rawProviderPayload',
+    'providerRequestBody',
+    'providerResponseBody',
+    'base64',
+    'data:image',
+    'image_base64',
+    'inlineImageBytes',
+  ],
 } as const;
 
 export const computerUseCaptureProviderIds = {
@@ -142,15 +157,23 @@ export function computerUseHostPortsPolicySummary(options: {
       actionRequestExecutor: computerUseActionRequestExecutorProvider(options),
       capture: computerUseCaptureHostPortProvider(options.windowTarget ?? {}),
       crop: computerUseHostPortProviderIds.focusRegionCrop,
-      plan: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner,
-      locate: options.grounder?.baseUrl
-        ? computerUseHostPortProviderIds.kvGround
-        : computerUseHostPortProviderIds.focusRegionCrop,
+      query: computerUseModelRouterCapabilityIds.screenshotTranslator,
+      plan: computerUseModelRouterCapabilityIds.computerUsePlanner,
+      locate: computerUseModelRouterCapabilityIds.groundingTranslator,
       execute: computerUseExecuteHostPortProvider(options),
-      verify: computerUseHostPortProviderIds.layeredVerifier,
+      verify: computerUseModelRouterCapabilityIds.verifierTranslator,
       writeTrace: computerUseHostPortProviderIds.writeTrace,
       emitEvent: computerUseHostPortProviderIds.emitEvent,
     },
+    routerRoles: {
+      screenshot: computerUseModelRouterCapabilityIds.screenshotTranslator,
+      crop: computerUseModelRouterCapabilityIds.cropTranslator,
+      grounding: computerUseModelRouterCapabilityIds.groundingTranslator,
+      verifier: computerUseModelRouterCapabilityIds.verifierTranslator,
+    },
+    legacyAdapters: options.grounder?.baseUrl
+      ? { locate: computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter }
+      : undefined,
     traceHandoff: computerUseTraceHandoffContract,
   };
 }

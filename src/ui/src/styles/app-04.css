@@ -965,6 +965,48 @@
   margin-left: 0.35rem;
 }
 
+.message-image-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.message-image-attachment {
+  display: grid;
+  gap: 5px;
+  width: 132px;
+  padding: 6px;
+  color: var(--bio-100);
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.message-image-attachment:hover {
+  border-color: rgba(0, 229, 160, 0.5);
+  background: rgba(0, 229, 160, 0.08);
+}
+
+.message-image-attachment img {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: rgba(148, 163, 184, 0.12);
+  border-radius: 5px;
+}
+
+.message-image-attachment span {
+  overflow: hidden;
+  color: var(--bio-200);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-fold {
   margin-top: 6px;
   border: 0;

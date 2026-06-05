@@ -1,6 +1,6 @@
 # 历史 KV-Ground API 兼容服务启动与使用说明
 
-Computer Use 当前设计默认 VLM 和 grounding 模型统一为 `qwen3.7-plus`。本文只保留历史 KV-Ground API 服务的运维和兼容接入信息；旧服务名、endpoint 或 adapter 不代表默认 grounding 模型。
+Computer Use 当前产品路径通过 SciForge Model Router provider/capability surface 获取视觉观察、grounding 和 verifier feedback。本文只保留历史 KV-Ground API 服务的运维和兼容接入信息；旧服务名、endpoint、模型名或 adapter 不代表默认 grounding 模型或公共 provider 选择。
 
 ## 机器与目录
 
@@ -221,7 +221,7 @@ $SUP -c /mlplatform/supervisord/supervisord.conf restart kv-ground
 
 - 确认图片已经上传到服务器。
 - 确认请求中的 `image_path` 是服务器路径，不是本地路径。
-- 如果图片只在本机，改用 `image_base64` 或配置 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`。
+- 如果图片只在本机，优先建立共享路径映射；只有 legacy adapter 调试场景才短期改用 `image_base64` 或配置 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`。
 
 查看 GPU：
 

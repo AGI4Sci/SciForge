@@ -74,7 +74,7 @@ test('right pane lifecycle controller treats unknown tabs as no-op before side e
   ]);
 });
 
-test('right pane lifecycle controller runs Terminal stop before Files cleanup on allowed close', () => {
+test('right pane lifecycle controller runs Terminal stop only on terminal close', () => {
   const events: string[] = [];
 
   closeRightPaneResultTab('base:terminal', {
@@ -96,10 +96,37 @@ test('right pane lifecycle controller runs Terminal stop before Files cleanup on
 
   assert.deepEqual(events, [
     'request:base:terminal',
-    'files:can-close',
     'can:true',
     'terminal:close:base:terminal',
-    'files:cleanup:base:terminal',
+    'transition',
+  ]);
+});
+
+test('right pane lifecycle controller keeps Terminal stop and Files cleanup pane-scoped', () => {
+  const events: string[] = [];
+
+  closeRightPaneResultTab('base:files', {
+    closeRightPaneTab: (tabId, options = {}) => {
+      events.push(`request:${tabId}`);
+      const canClose = options.canCloseTab?.(tabId, filesTab()) ?? true;
+      events.push(`can:${canClose}`);
+      if (!canClose) return;
+      options.onClosingTab?.(tabId, filesTab());
+      events.push('transition');
+    },
+    canCloseWorkspaceFileTab: () => {
+      events.push('files:can-close');
+      return true;
+    },
+    closeTerminalTab: (tabId) => events.push(`terminal:close:${tabId}`),
+    cleanupClosedWorkspaceFileTab: (tabId) => events.push(`files:cleanup:${tabId}`),
+  });
+
+  assert.deepEqual(events, [
+    'request:base:files',
+    'files:can-close',
+    'can:true',
+    'files:cleanup:base:files',
     'transition',
   ]);
 });

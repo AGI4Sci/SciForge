@@ -8,6 +8,8 @@ import {
 
 export const DESKTOP_LIVE_ACCEPTANCE_SCHEMA = 'sciforge.desktop.live-acceptance-evidence.v1';
 export const DESKTOP_LIVE_ACCEPTANCE_PLAN_SCHEMA = 'sciforge.desktop.live-acceptance-plan.v1';
+export const DESKTOP_LIVE_MODEL_ROUTER_PROFILE = 'sciforge-runtime-default';
+export const DESKTOP_LIVE_MODEL_ROUTER_PROVIDER = 'sciforge-model-router';
 
 export type DesktopLiveLaunchMode = 'production-electron' | 'packaged-app';
 export type DesktopRejectedLaunchMode =
@@ -40,8 +42,8 @@ export type DesktopLiveSidecarEvidence = {
 export type DesktopLiveRuntimeTaskEvidence = {
   runtime: 'Runtime Codex';
   taskKind: 'real-user-task';
-  profile: 'sciforge-runtime-deepseek';
-  provider: 'sciforge-deepseek-proxy';
+  profile: string;
+  provider: string;
   model: string;
   workspacePath: string;
   commandId: string;
@@ -224,8 +226,7 @@ export function validateDesktopLiveAcceptanceEvidence(
       'runtime-codex-real-task',
       evidence.runtimeTask.runtime === 'Runtime Codex' &&
         evidence.runtimeTask.taskKind === 'real-user-task' &&
-        evidence.runtimeTask.profile === 'sciforge-runtime-deepseek' &&
-        evidence.runtimeTask.provider === 'sciforge-deepseek-proxy' &&
+        runtimeTaskUsesModelRouter(evidence.runtimeTask) &&
         evidence.runtimeTask.model.trim().length > 0 &&
         isNonEmptyAbsolutePath(evidence.runtimeTask.workspacePath) &&
         /^codex-command-[a-z0-9-]+$/i.test(evidence.runtimeTask.commandId) &&
@@ -235,7 +236,7 @@ export function validateDesktopLiveAcceptanceEvidence(
         evidence.runtimeTask.rawPreflightOnly === false &&
         evidence.runtimeTask.taskId.trim().length > 0 &&
         nonEmptyRefs(evidence.runtimeTask.auditRefs),
-      'Live acceptance requires a visible Runtime Codex real task with provider/profile/model/workspace/command id and audit refs, not a raw preflight or contract-only proof.',
+      'Live acceptance requires a visible Runtime Codex real task with Model Router provider/profile/model/workspace/command id and audit refs, not a raw preflight or contract-only proof.',
     ),
     check(
       'audit-ref-lineage-and-scope',
@@ -335,6 +336,18 @@ export function validateDesktopLiveAcceptanceEvidence(
     checks,
     blockReasons,
   };
+}
+
+function runtimeTaskUsesModelRouter(task: DesktopLiveRuntimeTaskEvidence): boolean {
+  return task.profile.trim().length > 0 &&
+    task.provider === DESKTOP_LIVE_MODEL_ROUTER_PROVIDER &&
+    !containsLegacyProviderBinding(task.profile) &&
+    !containsLegacyProviderBinding(task.provider) &&
+    !containsLegacyProviderBinding(task.model);
+}
+
+function containsLegacyProviderBinding(value: string): boolean {
+  return /\b(?:deepseek|qwen|bailian)\b|sciforge-runtime-deepseek|sciforge-deepseek-proxy/i.test(value);
 }
 
 export function assertDesktopLiveAcceptanceCanClaimPass(

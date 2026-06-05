@@ -12,6 +12,10 @@ import {
   CU_NEXT_TASK_MAPPINGS,
 } from '../../tools/cu-next-readiness-manifest.js';
 import { buildCuUserAcceptanceManifest } from '../../tools/cu-user-acceptance-manifest.js';
+import {
+  isolatedL3CompletionEvidence as baseIsolatedL3CompletionEvidence,
+  passedBundleLocalCuNext07AcceptanceManifest,
+} from './helpers/cu-next-runner-fixtures.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -226,7 +230,7 @@ test('readiness manifest distinguishes evidence-ready from fully passed PROJECT 
       projectText: cuNextProjectFixture(),
     });
     const uncheckedTask = unchecked.tasks.find((task) => task.id === 'CU-NEXT-07');
-    assert.equal(uncheckedTask?.status, 'evidence-ready');
+    assert.equal(uncheckedTask?.status, 'evidence-ready', JSON.stringify(uncheckedTask, null, 2));
     assert.equal(uncheckedTask?.acceptedEvidenceStatus, 'multi-app-workflow-passed');
     assert.ok(uncheckedTask?.blockedItems.some((item) => item.id === 'project-checklist-unchecked'));
     assert.equal(unchecked.completionEligible, false);
@@ -413,7 +417,7 @@ test('readiness manifest only promotes completion-grade isolated-L3 evidence', a
       ],
     });
     const readyTask = isolatedL3.tasks.find((task) => task.id === 'CU-NEXT-07');
-    assert.equal(readyTask?.status, 'passed');
+    assert.equal(readyTask?.status, 'passed', JSON.stringify(readyTask, null, 2));
     assert.equal(readyTask?.acceptedEvidenceRef, acceptanceRef);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -574,7 +578,7 @@ test('CU-NEXT readiness accepts real cu-user-acceptance builder output with exac
     });
 
     const task = manifest.tasks.find((candidate) => candidate.id === 'CU-NEXT-07');
-    assert.equal(task?.status, 'passed');
+    assert.equal(task?.status, 'passed', JSON.stringify(task, null, 2));
     assert.equal(task?.acceptedEvidenceStatus, 'multi-app-workflow-passed');
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -628,7 +632,7 @@ async function writeEvidenceBundle(
     ? data.completionEvidenceRef
     : undefined;
   const refs = collectLocalEvidenceRefs(data).filter((ref) => ref !== completionEvidenceRef && !skipRefs.has(ref));
-  await Promise.all(refs.map((ref) => writeFixtureFile(root, ref)));
+  await Promise.all(refs.map((ref) => writeFixtureFile(root, manifestDir, ref)));
   if (completionEvidenceRef && !skipRefs.has(completionEvidenceRef)) {
     const completionEvidence = isRecord(data) && isRecord(data.completionEvidence)
       ? data.completionEvidence
@@ -646,8 +650,8 @@ async function writeJsonRef(root: string, ref: string, data: unknown): Promise<v
   await writeFile(path, JSON.stringify(data, null, 2));
 }
 
-async function writeFixtureFile(root: string, ref: string): Promise<void> {
-  const path = resolveLocalFixtureRef(root, ref);
+async function writeFixtureFile(root: string, manifestDir: string, ref: string): Promise<void> {
+  const path = resolveEvidenceFixtureRef(root, manifestDir, ref);
   await mkdir(dirname(path), { recursive: true });
   if (/rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/.test(ref)) {
     await writeFile(path, JSON.stringify(denseGroundingRejectedTargetFixture(ref), null, 2));
@@ -683,7 +687,10 @@ function collectLocalEvidenceRefs(value: unknown, seen = new Set<unknown>()): st
 
 function isLocalFixtureRef(ref: string): boolean {
   const filePath = ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
-  return filePath.startsWith('.sciforge/');
+  if (!filePath || filePath.startsWith('/') || filePath.startsWith('~')) return false;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(filePath)) return false;
+  if (filePath.split(/[\\/]+/).some((part) => part === '..' || part === '.')) return false;
+  return /\.[a-z0-9][a-z0-9-]{0,15}$/i.test(filePath.split('/').at(-1) ?? '');
 }
 
 async function materializeCompletionEvidenceRefs(bundleDir: string, completionEvidence: Record<string, unknown>) {
@@ -724,6 +731,11 @@ function completionEvidenceFixtureFileRef(ref: string): string | undefined {
 function resolveLocalFixtureRef(root: string, ref: string): string {
   const filePath = ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
   return resolve(root, filePath);
+}
+
+function resolveEvidenceFixtureRef(root: string, manifestDir: string, ref: string): string {
+  const filePath = ref.startsWith('file:') ? ref.slice('file:'.length) : ref;
+  return filePath.startsWith('.sciforge/') ? resolve(root, filePath) : resolve(manifestDir, filePath);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -788,18 +800,6 @@ function passedKvGroundManifest(): Record<string, unknown> {
   };
 }
 
-function sciForgeChatOrigin(runId: string): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.computer-use.chat-origin.v1',
-    handoffSource: 'ui-chat',
-    entrypoint: 'sciforge-chat',
-    terminalEquivalentText: true,
-    selectedActionProvider: 'action.sciforge.computer-use',
-    selectedToolIds: ['local.vision-sense'],
-    sessionRefs: [`computer-use-session:${runId}`],
-  };
-}
-
 function passedCuNextAcceptanceManifest(
   taskId: string,
   options: {
@@ -811,134 +811,38 @@ function passedCuNextAcceptanceManifest(
     completionEvidence?: Record<string, unknown>;
   } = {},
 ): Record<string, unknown> {
-  const runId = `${taskId.toLowerCase()}-dense-grounding`;
-  const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
-  const chatOrigin = sciForgeChatOrigin(runId);
-  return {
-    schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
-    runId,
-    taskId,
-    scenarioId: 'CU-LONG-004',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    status: 'multi-app-workflow-passed',
-    taskText: `${taskId} visual-grounding-pressure-test with coarse fine focus crop rejected excluded targets`,
-    level: 'L3',
-    appWorkflow: {
-      kind: 'multi-app-workflow',
-      apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: [`.sciforge/vision-runs/${runId}/window-switch-trace.json`],
-    },
-    antiShortcutGuard: {
-      status: options.antiShortcutRejectedClaims?.length ? 'failed' : 'passed',
-      rejectedClaims: options.antiShortcutRejectedClaims ?? [],
-    },
-    tuiHostChain: [
-      {
-        id: 'chat-origin',
-        kind: 'sciForge-chat-origin',
-        status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        origin: chatOrigin,
-      },
-      {
-        id: 'tui-host-runTask',
-        kind: 'tui-host-runTask',
-        status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        hostPortsRef: `.sciforge/vision-runs/${runId}/host-ports.json`,
-      },
-      {
-        id: 'computer-use-action-provider',
-        kind: 'computer-use-action-provider',
-        status: 'present',
-        toolPayloadRef: `.sciforge/vision-runs/${runId}/tool-payload.json`,
-      },
-      {
-        id: 'gui-present',
-        kind: 'gui.present',
-        status: 'present',
-        recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      },
-    ],
-    screenshotRefs: {
-      before: [`.sciforge/vision-runs/${runId}/before.png`],
-      after: [`.sciforge/vision-runs/${runId}/after.png`],
-    },
-    focusCropRefs: [`.sciforge/vision-runs/${runId}/focus-crop.png`],
-    groundingDiagnosticsRefs: [`.sciforge/vision-runs/${runId}/grounding-diagnostics.json`],
-    executorLease: {
-      status: 'present',
-      ref: `.sciforge/vision-runs/${runId}/executor-lease.json`,
-    },
-    finalArtifactRef,
-    finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
-    verifierVerdict: {
-      status: 'passed',
-      verdict: 'multi-app-workflow-passed',
-      ref: `.sciforge/vision-runs/${runId}/verifier-verdict.json`,
-    },
-    guiPresent: {
-      status: 'present',
-      recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [finalArtifactRef],
-    },
-    evidenceClaims: [
-      {
-        id: 'chat-origin',
-        kind: 'sciForge-chat-origin',
-        status: 'present',
-        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
-        origin: chatOrigin,
-        sessionRefs: [`computer-use-session:${runId}`],
-      },
-      {
-        id: 'real-computer-use-trace',
-        kind: 'real-computer-use',
-        ref: `.sciforge/vision-runs/${runId}/vision-trace.json`,
-      },
-      {
-        id: 'independent-input-adapter',
-        kind: 'independent-input-adapter',
-        refs: [`.sciforge/vision-runs/${runId}/virtual-pointer-events.json`],
-        sessionRefs: [`computer-use-session:${runId}`],
-      },
-      {
-        id: 'dense-grounding-rejections',
-        kind: 'grounding-diagnostics-ref',
-        refs: [`.sciforge/vision-runs/${runId}/coarse-fine-rejected-targets.json`],
-      },
-      ...(options.omitGuiPresentClaim
-        ? []
-        : [
-            {
-              id: 'gui-present-record',
-              kind: 'gui-present-record',
-              ref: `.sciforge/vision-runs/${runId}/gui-present.json`,
-              refs: [`.sciforge/vision-runs/${runId}/gui-present.json`],
-              artifactRefs: [finalArtifactRef],
-            },
-          ]),
-    ],
-    evidenceMarkers: [denseGroundingMarker(runId)],
-    completionEvidence: options.completionEvidence ?? isolatedL3CompletionEvidence(finalArtifactRef),
-    completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
-    trace: {
-      testActionFixtureMode: options.fixture ? true : false,
-      dryRun: options.dryRun ? true : false,
-      allowSharedSystemInput: options.sharedSystemInput ? true : false,
-      pointerKeyboardOwnership: options.sharedSystemInput
-        ? 'shared-system-pointer-keyboard'
-        : 'independent-simulated-input-adapter',
-    },
+  const manifest = passedBundleLocalCuNext07AcceptanceManifest();
+  manifest.taskId = taskId;
+  manifest.taskText = `${taskId} visual-grounding-pressure-test with coarse fine focus crop rejected excluded targets`;
+  manifest.antiShortcutGuard = {
+    status: options.antiShortcutRejectedClaims?.length ? 'failed' : 'passed',
+    rejectedClaims: options.antiShortcutRejectedClaims ?? [],
   };
+  manifest.evidenceClaims = Array.isArray(manifest.evidenceClaims)
+    ? manifest.evidenceClaims.filter((claim) => (
+        !options.omitGuiPresentClaim
+        || !isRecord(claim)
+        || claim.kind !== 'gui-present-record'
+      ))
+    : [];
+  manifest.completionEvidence = options.completionEvidence ?? isolatedL3CompletionEvidence(String(manifest.finalArtifactRef ?? 'dense-grounding-export.csv'));
+  manifest.completionEvidenceRef = 'isolated-desktop-l3-workflow-evidence.json';
+  manifest.trace = {
+    testActionFixtureMode: options.fixture ? true : false,
+    dryRun: options.dryRun ? true : false,
+    allowSharedSystemInput: options.sharedSystemInput ? true : false,
+    pointerKeyboardOwnership: options.sharedSystemInput
+      ? 'shared-system-pointer-keyboard'
+      : 'independent-simulated-input-adapter',
+  };
+  return manifest;
 }
 
 function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUserAcceptanceManifest>[0] {
   const runId = `${taskId.toLowerCase()}-real-builder`;
-  const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
-  const chatOrigin = sciForgeChatOrigin(runId);
+  const base = passedBundleLocalCuNext07AcceptanceManifest() as Record<string, any>;
+  const mapping = CU_NEXT_TASK_MAPPINGS.find((candidate) => candidate.taskId === taskId);
+  const finalArtifactRef = String(base.finalArtifactRef ?? 'dense-grounding-export.csv');
   return {
     runId,
     taskId,
@@ -946,248 +850,45 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
     createdAt: '2026-05-25T00:00:00.000Z',
     taskText: `${taskId} visual-grounding-pressure-test with coarse fine focus crop rejected excluded targets`,
     level: 'L3',
-    appWorkflow: {
-      kind: 'multi-app-workflow',
-      apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: [`.sciforge/vision-runs/${runId}/window-switch-trace.json`],
-    },
-    tuiHostChain: [
-      {
-        id: 'chat-origin',
-        kind: 'sciForge-chat-origin',
-        status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        origin: chatOrigin,
-      },
-      {
-        id: 'tui-host-runTask',
-        kind: 'tui-host-runTask',
-        status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        hostPortsRef: `.sciforge/vision-runs/${runId}/host-ports.json`,
-      },
-      {
-        id: 'computer-use-action-provider',
-        kind: 'computer-use-action-provider',
-        status: 'present',
-        toolPayloadRef: `.sciforge/vision-runs/${runId}/tool-payload.json`,
-      },
-      {
-        id: 'gui-present',
-        kind: 'gui.present',
-        status: 'present',
-        recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      },
-    ],
-    evidenceClaims: [
-      {
-        id: 'chat-origin',
-        kind: 'sciForge-chat-origin',
-        status: 'present',
-        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
-        origin: chatOrigin,
-        sessionRefs: [`computer-use-session:${runId}`],
-      },
-      {
-        id: 'real-computer-use-trace',
-        kind: 'real-computer-use',
-        ref: `.sciforge/vision-runs/${runId}/vision-trace.json`,
-      },
-      {
-        id: 'independent-input-adapter',
-        kind: 'independent-input-adapter',
-        refs: [`.sciforge/vision-runs/${runId}/virtual-pointer-events.json`],
-        sessionRefs: [`computer-use-session:${runId}`],
-      },
-      {
-        id: 'gui-present-record',
-        kind: 'gui-present-record',
-        ref: `.sciforge/vision-runs/${runId}/gui-present.json`,
-        refs: [`.sciforge/vision-runs/${runId}/gui-present.json`],
-        artifactRefs: [`.sciforge/vision-runs/${runId}/dense-grounding-export.csv`],
-      },
-    ],
-    screenshotRefs: {
-      before: [`.sciforge/vision-runs/${runId}/before.png`],
-      after: [`.sciforge/vision-runs/${runId}/after.png`],
-    },
-    focusCropRefs: [`.sciforge/vision-runs/${runId}/focus-crop.png`],
-    groundingDiagnosticsRefs: [`.sciforge/vision-runs/${runId}/coarse-fine-rejected-targets.json`],
-    executorLease: {
-      status: 'present',
-      ref: `.sciforge/vision-runs/${runId}/executor-lease.json`,
-    },
+    appWorkflow: base.appWorkflow,
+    tuiHostChain: base.tuiHostChain,
+    evidenceClaims: base.evidenceClaims,
+    screenshotRefs: base.screenshotRefs,
+    focusCropRefs: base.focusCropRefs,
+    groundingDiagnosticsRefs: base.groundingDiagnosticsRefs,
+    executorLease: base.executorLease,
     finalArtifactRef,
-    finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
+    finalVisibleScreenshotRef: base.finalVisibleScreenshotRef,
     verifierVerdict: {
       status: 'passed',
       verdict: 'multi-app-workflow-passed',
-      ref: `.sciforge/vision-runs/${runId}/verifier-verdict.json`,
+      ref: String(base.verifierVerdict?.ref ?? 'verifier-verdict.json'),
       reason: `${taskId} coarse fine focus crop rejected excluded targets passed.`,
     },
-    guiPresent: {
-      status: 'present',
-      recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [finalArtifactRef],
-    },
-    evidenceMarkers: [denseGroundingMarker(runId)],
+    guiPresent: base.guiPresent,
+    evidenceMarkers: base.evidenceMarkers,
     completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
     completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+    cuNextTask: {
+      taskId,
+      primaryScenarioId: mapping?.primaryScenarioId ?? 'CU-LONG-004',
+      longScenarioIds: mapping?.longScenarioIds ?? ['CU-LONG-004'],
+    },
+    productPathClassification: base.productPathClassification,
+    userControlPlane: base.userControlPlane,
+    platformSidecarIsolationReport: base.platformSidecarIsolationReport,
+    virtualDisplayGroup: base.virtualDisplayGroup,
+    actorCursorProvenance: base.actorCursorProvenance,
+    cursorEvents: base.cursorEvents,
+    observeBeforeMutate: base.observeBeforeMutate,
+    browserRuntimeDomAxObservation: base.browserRuntimeDomAxObservation,
+    actionProposals: base.actionProposals,
+    executorQueue: base.executorQueue,
+    mutatingActions: base.mutatingActions,
+    replayBundle: base.replayBundle,
   };
 }
 
 function isolatedL3CompletionEvidence(taskFinalArtifactRef?: string): Record<string, unknown> {
-  const sessionManifestRef = 'evidence/l3/isolated-l3-session/session-manifest.json';
-  const sourceFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor.png';
-  const sourceLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor-final.png';
-  const writerFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-editor.png';
-  const writerLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-saved.png';
-  const previewFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview-open.png';
-  const previewLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview.png';
-  const sourceFactRefs = [
-    'evidence/l3/source-facts/recovery.json',
-    'evidence/l3/source-facts/cohorts.json',
-  ];
-  return {
-    schemaVersion: 'sciforge.computer-use.isolated-desktop-l3-workflow-evidence.v1',
-    evidenceKind: 'isolated-L3',
-    status: 'completed',
-    targetEnvironmentKind: 'linux-isolated-desktop-session',
-    acceptanceTier: 'l3-multi-app-workflow',
-    realWindowEvidence: true,
-    userAcceptanceEligible: true,
-    diagnosticOnly: false,
-    errors: [],
-    resultRef: 'evidence/l3/computer-use-result.json',
-    inputEventLogRef: 'evidence/l3/isolated-l3-session/l3-input-events.json',
-    pointerEventLogRef: 'evidence/l3/isolated-l3-session/l3-pointer-events.json',
-    keyboardEventLogRef: 'evidence/l3/isolated-l3-session/l3-keyboard-events.json',
-    executorCommandEventLogRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json',
-    backendReadinessProofRef: 'evidence/l3/isolated-l3-session/backend-readiness-proof.json',
-    processRef: 'evidence/l3/isolated-l3-session/backend-processes.json',
-    resourceAllocationRef: 'evidence/l3/isolated-runtime-resource-allocation.json',
-    targetWindowRef: 'evidence/l3/isolated-l3-session/l3-target-window.json',
-    windowBoundPointerProofRef: 'evidence/l3/isolated-l3-session/l3-window-bound-pointer-proof.json',
-    sessionManifestRef,
-    taskFinalArtifactRefs: taskFinalArtifactRef ? [taskFinalArtifactRef] : [],
-    taskArtifactBinding: taskFinalArtifactRef ? {
-      finalArtifactRef: taskFinalArtifactRef,
-      finalArtifactRefs: [taskFinalArtifactRef],
-      source: 'task-final-artifact-binding',
-    } : undefined,
-    finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
-    artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
-    fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
-    fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
-    guiPresentRef: 'evidence/l3/gui-present.json',
-    viewerManifestRef: 'evidence/l3/visible-run-viewer-manifest.json',
-    evidenceLogRef: 'evidence/l3/evidence/evidence-log.jsonl',
-    evidenceSnapshotRef: 'evidence/l3/evidence/evidence-snapshot.json',
-    evidenceIndexRef: 'evidence/l3/evidence/evidence-index.json',
-    screenshotRefs: [
-      sourceFirstScreenshotRef,
-      writerLastScreenshotRef,
-      previewLastScreenshotRef,
-    ],
-    traceRefs: ['evidence/l3/vision-trace.json'],
-    l3Workflow: {
-      status: 'completed',
-      completed: true,
-      sameSession: true,
-      sameVirtualSession: true,
-      sourceToWriterToPreviewCausality: true,
-    },
-    workflowRequirements: {
-      minimumAppCount: 3,
-      minimumActionCount: 6,
-      requiredInputModalities: ['pointer', 'keyboard'],
-      requiresCurrentStepScreenshots: true,
-      forbidPriorRoundCompletionEvidence: true,
-      requiresDirectoryEvidence: true,
-      requiresArtifactPreview: true,
-      requiresWindowBoundPointerProof: true,
-    },
-    applicationEvidence: [
-      {
-        appKind: 'source-reader',
-        sessionManifestRef,
-        firstScreenshotRef: sourceFirstScreenshotRef,
-        lastScreenshotRef: sourceLastScreenshotRef,
-        windowEvidenceRefs: [sourceFirstScreenshotRef, sourceLastScreenshotRef],
-      },
-      {
-        appKind: 'word-document-writer',
-        sessionManifestRef,
-        firstScreenshotRef: writerFirstScreenshotRef,
-        lastScreenshotRef: writerLastScreenshotRef,
-        windowEvidenceRefs: [writerFirstScreenshotRef, writerLastScreenshotRef],
-      },
-      {
-        appKind: 'file-manager-preview',
-        sessionManifestRef,
-        firstScreenshotRef: previewFirstScreenshotRef,
-        lastScreenshotRef: previewLastScreenshotRef,
-        windowEvidenceRefs: [previewFirstScreenshotRef, previewLastScreenshotRef],
-      },
-    ],
-    crossAppTransitions: [
-      {
-        fromAppKind: 'source-reader',
-        toAppKind: 'word-document-writer',
-        sessionManifestRef,
-        screenshotRef: writerFirstScreenshotRef,
-      },
-      {
-        fromAppKind: 'word-document-writer',
-        toAppKind: 'file-manager-preview',
-        sessionManifestRef,
-        screenshotRef: previewFirstScreenshotRef,
-      },
-    ],
-    sourceEvidence: {
-      sourceObservationRefs: [sourceLastScreenshotRef],
-      sourceFactRefs,
-    },
-    derivedContentEvidence: {
-      supportedFactRefs: sourceFactRefs,
-    },
-    artifactCausality: {
-      savedByActionIndex: 3,
-      savedByInputModality: 'keyboard',
-      savedByCommandEventRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json#events/l3-command-003',
-      finalArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx',
-      artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
-      savedThroughGui: true,
-      shellDirectArtifactWrite: false,
-    },
-    directoryEvidence: {
-      fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
-      fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
-      previewObservationRef: previewLastScreenshotRef,
-      directoryObservationAfterSaveRef: previewFirstScreenshotRef,
-      previewedByActionIndex: 5,
-      previewedByInputModality: 'pointer',
-      previewedThroughGui: true,
-      shellDirectoryListingOnly: false,
-    },
-    presentationEvidence: {
-      guiPresentRef: 'evidence/l3/gui-present.json',
-    },
-  };
-}
-
-function denseGroundingMarker(runId: string): Record<string, unknown> {
-  return {
-    kind: 'dense-grounding',
-    targetDescription: 'Export button in the toolbar, excluding Save, AutoSave, and Share.',
-    coarseWindowScreenshotRef: `.sciforge/vision-runs/${runId}/coarse-window.png`,
-    focusCropRef: `.sciforge/vision-runs/${runId}/focus-crop.png`,
-    fineGroundingDiagnosticRef: `.sciforge/vision-runs/${runId}/fine-grounding-diagnostic.json`,
-    rejectedTargetRefs: [
-      `.sciforge/vision-runs/${runId}/rejected-save-target.json`,
-      `.sciforge/vision-runs/${runId}/rejected-share-target.json`,
-    ],
-  };
+  return baseIsolatedL3CompletionEvidence(taskFinalArtifactRef ? [taskFinalArtifactRef] : []);
 }

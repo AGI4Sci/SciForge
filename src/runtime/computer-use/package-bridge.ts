@@ -50,6 +50,7 @@ import { planPackageBridgePort } from './package-bridge-plan-port.js';
 import { emitPackageBridgeEventPort } from './package-bridge-trace-port.js';
 import { writePackageBridgeTracePort } from './package-bridge-write-trace-port.js';
 import {
+  visionSenseModelRouterCapabilities,
   visionSenseRuntimeEventTypes,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 import {
@@ -144,7 +145,7 @@ export async function runComputerUsePackageBridge(
       runId,
       testActionFixtureMode: config.testActionFixtureMode,
       testOnlyPlannedActions: fixtureActions.length,
-      planner: state.dynamicPlannerEnabled ? 'runtime-codex-tui-text-planner' : 'test-only-fixture-actions',
+      planner: state.dynamicPlannerEnabled ? visionSenseModelRouterCapabilities.computerUsePlanner : 'test-only-fixture-actions',
     })),
   });
 

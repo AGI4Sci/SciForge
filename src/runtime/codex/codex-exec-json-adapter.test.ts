@@ -745,7 +745,7 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 async function tempWorkspace() {
-  await ensureRuntimeHome();
+  await ensureRuntimeHome({ overwrite: true });
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-codex-adapter-'));
   await mkdir(dir, { recursive: true });
   return dir;

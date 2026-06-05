@@ -512,7 +512,7 @@ def build_target_bound_input_adapter_manifest(
         "blockedInputModes": sorted(_BLOCKED_INPUT_MODES),
         "claimLimit": (
             "Declares a target-bound independent input adapter for desktop preflight only; "
-            "it is not B/C/VLM completion evidence without a real run trace."
+            "it is not B/C/verifier completion evidence without a real run trace."
         ),
         "metadata": _safe_metadata(metadata or {}),
     }

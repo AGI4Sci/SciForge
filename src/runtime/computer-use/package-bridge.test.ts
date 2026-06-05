@@ -21,6 +21,7 @@ import {
   isolatedL3CompletionEvidence,
   materializeCuNextAcceptanceRefs,
 } from '../../../tests/smoke/helpers/cu-next-runner-fixtures.js';
+import { visionSenseModelRouterCapabilities } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 
 function baseConfig(runId: string, actions: ComputerUseConfig['testOnlyPlannedActions']): ComputerUseConfig {
   return {
@@ -1508,35 +1509,35 @@ test('package bridge defaults to Runtime Codex text planner when no test fixture
   try {
     const config = baseConfig('cu-package-bridge-codex-planner', []);
     config.testActionFixtureMode = false;
-	    const payload = await runComputerUsePackageBridge({
-	      skillDomain: 'knowledge',
-	      prompt: '/computer-use run type low risk local smoke text using the default planner',
-	      workspacePath: workspace,
-	      selectedToolIds: ['local.vision-sense'],
-	      uiState: {
-	        computerUseLong: {
-	          taskId: 'T084',
-	          scenarioId: 'CU-LONG-999',
-	          cuNextTaskId: 'CU-NEXT-99',
-	          round: 1,
-	          expectedTrace: ['Runtime Codex planner command receives acceptance contract'],
-	          acceptance: ['one generic action then done'],
-	          requiredEvidence: ['vision-trace.json'],
-	        },
-	      },
-	      artifacts: [],
-	    }, workspace, config, {}, {
-	      codexPlannerAdapter: planner,
-	    });
+    const payload = await runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run type low risk local smoke text using the default planner',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      uiState: {
+        computerUseLong: {
+          taskId: 'T084',
+          scenarioId: 'CU-LONG-999',
+          cuNextTaskId: 'CU-NEXT-99',
+          round: 1,
+          expectedTrace: ['Runtime Codex planner command receives acceptance contract'],
+          acceptance: ['one generic action then done'],
+          requiredEvidence: ['vision-trace.json'],
+        },
+      },
+      artifacts: [],
+    }, workspace, config, {}, {
+      codexPlannerAdapter: planner,
+    });
 
     assert.equal(payload.executionUnits[0]?.status, 'done');
-	    assert.ok(planner.commandTexts.length >= 1);
-	    assert.match(planner.commandTexts[0] ?? '', /Compact observation JSON/);
-	    assert.match(planner.commandTexts[0] ?? '', /Planner acceptance contract JSON/);
-	    assert.match(planner.commandTexts[0] ?? '', /Runtime Codex planner command receives acceptance contract/);
-	    assert.doesNotMatch(planner.commandTexts[0] ?? '', /image_url|data:image|accessibilityTree|DOMSnapshot/);
+    assert.ok(planner.commandTexts.length >= 1);
+    assert.match(planner.commandTexts[0] ?? '', /Compact observation JSON/);
+    assert.match(planner.commandTexts[0] ?? '', /Planner acceptance contract JSON/);
+    assert.match(planner.commandTexts[0] ?? '', /Runtime Codex planner command receives acceptance contract/);
+    assert.doesNotMatch(planner.commandTexts[0] ?? '', /image_url|data:image|accessibilityTree|DOMSnapshot/);
     const traceText = await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-codex-planner/vision-trace.json'), 'utf8');
-    assert.match(traceText, /runtime-codex-tui-text-planner/);
+    assert.match(traceText, new RegExp(visionSenseModelRouterCapabilities.computerUsePlanner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(traceText, /openai-compatible-vision-planner|fallbackActions|computer-use-action-loop/);
   } finally {
     await rm(workspace, { recursive: true, force: true });

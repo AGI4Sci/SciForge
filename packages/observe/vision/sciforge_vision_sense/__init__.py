@@ -46,7 +46,7 @@ from .kv_ground import (
 )
 from .manifest import (
     DEFAULT_MANIFEST,
-    DEFAULT_VLM_MODEL,
+    DEFAULT_VISION_MODEL,
     KV_GROUND_REMOTE_PATH_PREFIXES_ENV as MANIFEST_KV_GROUND_REMOTE_PATH_PREFIXES_ENV,
     KV_GROUND_URL_ENV as MANIFEST_KV_GROUND_URL_ENV,
     build_default_manifest,
@@ -130,7 +130,7 @@ __all__ = [
     "CoordinatePoint",
     "DEFAULT_MANIFEST",
     "DEFAULT_REMOTE_PATH_PREFIXES",
-    "DEFAULT_VLM_MODEL",
+    "DEFAULT_VISION_MODEL",
     "FocusRegion",
     "GrounderRequest",
     "GrounderResult",

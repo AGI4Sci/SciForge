@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import type { ObjectReference, SciForgeReference } from '../../domain';
 import {
   addComposerReferenceWithMarker,
+  addPendingComposerReference,
   composerReferenceForObjectReference,
+  composerPendingContextItems,
   currentObjectReferenceFromComposerReference,
   promptForComposerSend,
   referenceComposerMarker,
@@ -75,5 +77,76 @@ const inferredCurrentReference = currentObjectReferenceFromComposerReference(leg
 assert.equal(inferredCurrentReference?.kind, 'file');
 assert.equal(inferredCurrentReference?.ref, 'file:papers/picked.md');
 assert.equal(inferredCurrentReference?.provenance?.path, 'papers/picked.md');
+
+const annotationReference: SciForgeReference = {
+  id: 'ref-annotation-browser-1',
+  kind: 'ui',
+  title: 'Browser annotation',
+  ref: 'annotation:browser-host-1',
+  summary: 'Annotation pending composer context.',
+  payload: {
+    screenshotRef: 'screenshot:browser-host-1/frame.png',
+    cropRef: 'crop:browser-host-1/selection.json',
+    sourceKind: 'browser',
+  },
+};
+const imageReference: SciForgeReference = {
+  id: 'ref-image-1',
+  kind: 'file-region',
+  title: 'Uploaded figure',
+  ref: 'image:uploads/session-1/figure.png',
+  summary: 'Image pending composer context.',
+  payload: {
+    path: '.sciforge/uploads/session-1/figure.png',
+    dataRef: '.sciforge/uploads/session-1/figure.png',
+    mimeType: 'image/png',
+  },
+};
+const annotationAdded = addComposerReferenceWithMarker({
+  input: 'Compare these',
+  pendingReferences: [],
+  reference: annotationReference,
+});
+const imageAdded = addComposerReferenceWithMarker({
+  input: annotationAdded.input,
+  pendingReferences: annotationAdded.pendingReferences,
+  reference: imageReference,
+});
+const duplicateAnnotation = addPendingComposerReference(imageAdded.pendingReferences, {
+  ...annotationAdded.reference,
+  id: 'ref-annotation-browser-duplicate',
+});
+const annotationObject = currentObjectReferenceFromComposerReference(annotationAdded.reference);
+const imageObject = currentObjectReferenceFromComposerReference(imageAdded.reference);
+const pendingContext = composerPendingContextItems(imageAdded.pendingReferences);
+
+assert.equal(duplicateAnnotation.length, 2);
+assert.equal(annotationObject?.kind, 'artifact');
+assert.equal(annotationObject?.artifactType, 'annotation');
+assert.equal(annotationObject?.preferredView, 'image-evidence');
+assert.equal(annotationObject?.provenance?.screenshotRef, 'screenshot:browser-host-1/frame.png');
+assert.equal(imageObject?.kind, 'artifact');
+assert.equal(imageObject?.artifactType, 'image');
+assert.equal(imageObject?.preferredView, 'preview');
+assert.equal(imageObject?.provenance?.path, '.sciforge/uploads/session-1/figure.png');
+assert.deepEqual(pendingContext.map((item) => ({
+  kind: item.kind,
+  marker: item.marker,
+  previewRef: item.previewRef,
+  objectRef: item.objectReference?.ref,
+})), [
+  {
+    kind: 'annotation',
+    marker: '※1',
+    previewRef: 'screenshot:browser-host-1/frame.png',
+    objectRef: 'annotation:browser-host-1',
+  },
+  {
+    kind: 'image',
+    marker: '※2',
+    previewRef: '.sciforge/uploads/session-1/figure.png',
+    objectRef: 'image:uploads/session-1/figure.png',
+  },
+]);
 
 console.log('[ok] UI composer references preserve selected ObjectReference payloads and package-owned marker policy');

@@ -44,6 +44,7 @@ import {
   createOptimisticUserTurnSession,
   requestPayloadForTurn,
 } from './sessionTransforms';
+import { currentObjectReferenceFromComposerReference, withInferredCurrentObjectReference } from './composerReferences';
 
 type AgentRequest = Parameters<typeof sendSciForgeToolMessage>[0];
 type TargetInstanceContext = Awaited<ReturnType<typeof buildTargetInstanceContextForPrompt>>;
@@ -103,6 +104,9 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     baseSession: input.baseSession,
     prompt: input.prompt,
     references: input.references,
+    objectReferences: input.references
+      .map((reference) => currentObjectReferenceFromComposerReference(withInferredCurrentObjectReference(reference)))
+      .filter((reference): reference is NonNullable<SciForgeMessage['objectReferences']>[number] => Boolean(reference)),
     targetInstanceLabel: input.targetPeer ? `${input.targetPeer.name} workspace` : undefined,
   });
   input.onOptimisticSession?.(optimisticSession);

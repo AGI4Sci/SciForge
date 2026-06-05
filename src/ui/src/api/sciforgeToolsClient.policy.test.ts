@@ -200,7 +200,18 @@ test('聊天流式请求连接到 Codex Runtime bridge，但 public run event �
   }) as typeof fetch;
 
   const events: AgentStreamEvent[] = [];
-  const response = await sendSciForgeToolMessage(messageInput(), {
+  const input = messageInput();
+  const response = await sendSciForgeToolMessage({
+    ...input,
+    config: {
+      ...input.config,
+      runtimeProfile: 'sciforge-runtime-default',
+      modelProvider: 'sciforge-model-router',
+      modelBaseUrl: 'https://provider.local/v1',
+      modelName: 'sciforge-router',
+      apiKey: 'sk-private-router-key',
+    },
+  }, {
     onEvent: (event) => events.push(event),
   });
 
@@ -208,18 +219,21 @@ test('聊天流式请求连接到 Codex Runtime bridge，但 public run event �
   assert.match(urls[0] ?? '', /\/api\/sciforge\/runtime\/codex\/stream$/);
   const body = bodies[0]!;
   assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
-  assert.equal(body.profile, 'sciforge-runtime-deepseek');
+  assert.equal(body.profile, 'sciforge-runtime-default');
   assert.equal(body.allowOpenAiRuntime, false);
   assert.equal(body.workspacePath, '/tmp/current');
   assert.match(String(body.commandId), /^codex-command-/);
   const auditMetadata = body.auditMetadata as Record<string, unknown>;
   const runtime = auditMetadata.runtime as Record<string, unknown>;
-  assert.equal(runtime.provider, 'sciforge-deepseek-proxy');
+  assert.equal(runtime.provider, 'sciforge-model-router');
+  assert.equal(runtime.model, 'sciforge-router');
+  assert.equal(runtime.apiKeyConfigured, true);
   assert.equal(runtime.allowOpenAiRuntime, false);
   assert.equal(body.commandText, 'Summarize current context');
   assert.equal(body.codexSessionId, undefined);
   assert.equal('turnMode' in body, false);
   assert.equal('conversationEnvelope' in body, false);
+  assert.doesNotMatch(JSON.stringify(body), /provider\.local|sk-private-router-key|bailian\/deepseek-v4-flash/i);
   const metadataEvent = events.find((event) => event.type === 'codex-runtime-run');
   assert.ok(metadataEvent);
   assert.match(metadataEvent.detail ?? '', /Runtime Codex run started/);
@@ -231,7 +245,7 @@ test('聊天流式请求连接到 Codex Runtime bridge，但 public run event �
   assert.equal('workspacePath' in publicRunRaw, false);
   assert.equal(publicRunRaw.runtimeLane, 'codex');
   assert.equal(publicRunRaw.status, 'started');
-  assert.doesNotMatch(JSON.stringify(metadataEvent), /sciforge-deepseek-proxy|bailian\/deepseek-v4-flash|sciforge-runtime-deepseek|\/tmp\/current/);
+  assert.doesNotMatch(JSON.stringify(metadataEvent), /provider\.local|sk-private-router-key|bailian\/deepseek-v4-flash|\/tmp\/current/i);
 });
 
 test('composer model picker declared intent rides as read-only gui projection metadata', async () => {
@@ -705,7 +719,7 @@ test('聊天流式请求从 failed Runtime Codex recover state 恢复 native ses
 test('Codex Runtime SSE stream 会归一化展示且 raw JSONL 不进入主事件文本', async () => {
   globalThis.fetch = (async () => new Response([
     'event: run_started\n',
-    'data: {"type":"run_started","provider":"sciforge-deepseek-proxy","model":"bailian/deepseek-v4-flash","profile":"sciforge-runtime-deepseek","workspace":"/tmp/current","commandId":"cmd-sse","message":"started"}\n\n',
+    'data: {"type":"run_started","provider":"sciforge-model-router","model":"sciforge-router","profile":"sciforge-runtime-default","workspace":"/tmp/current","commandId":"cmd-sse","message":"started"}\n\n',
     'event: raw_jsonl\n',
     'data: {"type":"raw_jsonl","rawJsonl":"{\\"secret\\":\\"RAW_JSONL_SHOULD_STAY_AUDIT\\"}","presentationRole":"audit"}\n\n',
     'event: message\n',

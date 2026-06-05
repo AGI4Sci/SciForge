@@ -19,10 +19,14 @@ export function rightPaneCloseResultTabOptions({
   cleanupClosedWorkspaceFileTab,
 }: Pick<RightPaneLifecyclePorts, 'canCloseWorkspaceFileTab' | 'closeTerminalTab' | 'cleanupClosedWorkspaceFileTab'>): CloseRightPaneTabOptions {
   return {
-    canCloseTab: (tabId, tab) => Boolean(tab) && canCloseWorkspaceFileTab(tabId, tab),
-    onClosingTab: (tabId) => {
-      closeTerminalTab(tabId);
-      cleanupClosedWorkspaceFileTab(tabId);
+    canCloseTab: (tabId, tab) => {
+      if (!tab) return false;
+      if (tab.kind !== 'files') return true;
+      return canCloseWorkspaceFileTab(tabId, tab);
+    },
+    onClosingTab: (tabId, tab) => {
+      if (tab?.kind === 'terminal') closeTerminalTab(tabId);
+      if (tab?.kind === 'files') cleanupClosedWorkspaceFileTab(tabId);
     },
   };
 }

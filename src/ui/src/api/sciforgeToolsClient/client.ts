@@ -39,8 +39,9 @@ import { attachRuntimeGuiPresentationToResponse } from './runtimeGuiPresentation
 import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
 
 const CODEX_RUNTIME_REQUEST_SCHEMA_VERSION = 'sciforge.codex-runtime-stream-request.v1';
-const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
-const DEFAULT_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
+const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-default';
+const DEFAULT_RUNTIME_PROVIDER = 'sciforge-model-router';
+const DEFAULT_RUNTIME_MODEL_ALIAS = 'sciforge-router';
 const UNCONFIGURED_RUNTIME_MODEL = 'unconfigured';
 
 const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
@@ -421,7 +422,7 @@ function buildCodexRuntimeStreamRequest(input: {
   const config = input.input.config;
   const profile = config.runtimeProfile?.trim() || DEFAULT_RUNTIME_PROFILE;
   const provider = runtimeProviderForVisibleMetadata(config.modelProvider);
-  const model = config.modelName.trim() || UNCONFIGURED_RUNTIME_MODEL;
+  const model = runtimeModelForVisibleMetadata(config.modelName);
   const codexSessionId = codexSessionIdForRuntimeResume(input.input);
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
@@ -474,8 +475,14 @@ function buildCodexRuntimeStreamRequest(input: {
 
 function runtimeProviderForVisibleMetadata(value: string) {
   const provider = value.trim();
-  if (!provider || provider === 'native') return DEFAULT_RUNTIME_PROVIDER;
-  return provider;
+  if (!provider || provider === 'native' || provider === DEFAULT_RUNTIME_PROVIDER) return DEFAULT_RUNTIME_PROVIDER;
+  return DEFAULT_RUNTIME_PROVIDER;
+}
+
+function runtimeModelForVisibleMetadata(value: string) {
+  const model = value.trim();
+  if (!model || model === UNCONFIGURED_RUNTIME_MODEL) return UNCONFIGURED_RUNTIME_MODEL;
+  return model === DEFAULT_RUNTIME_MODEL_ALIAS ? DEFAULT_RUNTIME_MODEL_ALIAS : DEFAULT_RUNTIME_MODEL_ALIAS;
 }
 
 function codexSessionIdForRuntimeResume(input: SendAgentMessageInput): string | undefined {
@@ -1606,17 +1613,25 @@ function runtimeFailureMetadata(
     `audit:codex-runtime:${request.commandId}:${asString(raw.attemptId) ?? request.attemptId ?? `${request.commandId}:attempt`}:stderr`,
   ]);
   const exitCode = asFiniteNumber(raw.exitCode) ?? asFiniteNumber(rawNested.exitCode);
-  const stderrSummary = asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events);
+  const rawWorkspace = asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath;
+  const workspace = publicRuntimeWorkspaceRef(rawWorkspace);
+  const profile = publicRuntimeProfile(asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile);
+  const provider = publicRuntimeProvider(asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider));
+  const model = publicRuntimeModel(asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model));
+  const rawStderrSummary = asString(rawNested.stderrSummary) ?? summarizeRuntimeStderr(events);
+  const stderrSummary = scrubRuntimeCodexFailureText(rawStderrSummary, {
+    workspace: rawWorkspace,
+  });
   const boundary = asString(raw.boundary) ?? asString(rawNested.boundary);
   const boundaryReason = boundary === 'gui-present-required'
     ? 'Runtime Codex completed without gui.present; SciForge withheld raw provider text from the primary result.'
     : undefined;
   const failureSignal = boundaryReason
     ?? actionableRuntimeStderrSummary([
-      stderrSummary,
+      rawStderrSummary,
       summarizeRuntimeFailureMessages(events),
     ].filter(Boolean).join(' '))
-    ?? stderrSummary;
+    ?? rawStderrSummary;
   const classification = classifyRuntimeFailure(failureSignal, exitCode);
   const codexSessionId = asString(raw.codexSessionId) ?? asString(rawNested.codexSessionId) ?? request.codexSessionId;
   return {
@@ -1627,10 +1642,10 @@ function runtimeFailureMetadata(
     nativeResumeSupported: Boolean(codexSessionId),
     commandId: asString(raw.commandId) ?? request.commandId,
     attemptId: asString(raw.attemptId) ?? request.attemptId,
-    workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
-    profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
-    provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
-    model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
+    workspace,
+    profile,
+    provider,
+    model,
     codexSessionId,
     exitCode,
     stderrSummary,
@@ -1645,10 +1660,10 @@ function runtimeFailureMetadata(
       resumeStrategy: codexSessionId ? 'native-session-resume' : 'audit-only-retry',
       commandId: asString(raw.commandId) ?? request.commandId,
       attemptId: asString(raw.attemptId) ?? request.attemptId,
-      workspace: asString(raw.workspace) ?? asString(rawNested.workspace) ?? request.workspacePath,
-      profile: asString(raw.profile) ?? asString(rawNested.profile) ?? request.profile,
-      provider: asString(raw.provider) ?? asString(rawNested.provider) ?? asString(runtime.provider) ?? 'unknown',
-      model: asString(raw.model) ?? asString(rawNested.model) ?? asString(runtime.model) ?? 'unknown',
+      workspace,
+      profile,
+      provider,
+      model,
       codexSessionId,
       stderrSummary,
       publicFailureReason: classification.publicFailureReason,
@@ -1661,6 +1676,80 @@ function runtimeFailureMetadata(
       ],
     },
   };
+}
+
+function scrubRuntimeCodexFailureText(
+  text: string | undefined,
+  options: { workspace?: string | undefined } = {},
+): string | undefined {
+  if (!text) return undefined;
+  return text
+    .replace(/(?:<!doctype\s+html[^>]*>\s*)?<html\b[\s\S]*?(?:<\/html>|$)/gi, (html) => publicRedactedDigest('html', html))
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\b\s*[:=]\s*["']?([^"'\s,;)}\]]{8,})/gi,
+      (_match, label: string, secret: string) => `${label}=${publicRedactedDigest('secret', secret)}`,
+    )
+    .replace(/\bBearer\s+([A-Za-z0-9._~+/=-]{8,})/gi, (_match, secret: string) => `Bearer ${publicRedactedDigest('secret', secret)}`)
+    .replace(/\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b/g, (secret) => publicRedactedDigest('secret', secret))
+    .replace(/https?:\/\/[^\s"'<>\\)]+/gi, (url) => publicRedactedDigest('url', url))
+    .replace(runtimeWorkspacePathPattern(options.workspace), () => publicRuntimeWorkspaceRef(options.workspace))
+    .replace(runtimeLocalPathPattern(), (path) => publicRedactedDigest('local-path', path));
+}
+
+function publicRuntimeWorkspaceRef(value: string | undefined): string {
+  return value?.trim()
+    ? `[workspace:hash:${stableRuntimePublicHash(value)}]`
+    : '[workspace:unknown]';
+}
+
+function publicRuntimeProvider(value: string | undefined): string {
+  const provider = value?.trim();
+  if (!provider || provider === 'native' || provider === DEFAULT_RUNTIME_PROVIDER) return DEFAULT_RUNTIME_PROVIDER;
+  return DEFAULT_RUNTIME_PROVIDER;
+}
+
+function publicRuntimeModel(value: string | undefined): string {
+  const model = value?.trim();
+  if (!model || model === UNCONFIGURED_RUNTIME_MODEL) return UNCONFIGURED_RUNTIME_MODEL;
+  return model === DEFAULT_RUNTIME_MODEL_ALIAS ? DEFAULT_RUNTIME_MODEL_ALIAS : DEFAULT_RUNTIME_MODEL_ALIAS;
+}
+
+function publicRuntimeProfile(value: string | undefined): string {
+  const profile = value?.trim();
+  if (!profile || isPrivateRuntimeMetadataText(profile) || !/^[A-Za-z0-9._:-]{1,80}$/.test(profile)) return DEFAULT_RUNTIME_PROFILE;
+  return profile;
+}
+
+function isPrivateRuntimeMetadataText(value: string): boolean {
+  return /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|\/var\/|\/private\/|sk-)/i.test(value);
+}
+
+function publicRedactedDigest(kind: 'html' | 'secret' | 'url' | 'local-path', value: string): string {
+  return `[redacted-${kind}:hash:${stableRuntimePublicHash(value)}]`;
+}
+
+function runtimeWorkspacePathPattern(workspace: string | undefined): RegExp {
+  const clean = workspace?.trim();
+  if (!clean) return /a^/g;
+  const suffix = String.raw`(?:[/\\][^\s"'<>),;\]}]+)*`;
+  return new RegExp(`${escapeRuntimeRegExp(clean)}${suffix}`, 'g');
+}
+
+function runtimeLocalPathPattern(): RegExp {
+  return /(?:\/(?:Users|Applications|tmp|var|private|Volumes|home|opt|workspace)(?:\/[^\s"'<>),;\]}]+)+|[A-Za-z]:\\[^\s"'<>),;\]}]+)/g;
+}
+
+function stableRuntimePublicHash(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+function escapeRuntimeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function summarizeRuntimeStderr(events: AgentStreamEvent[]) {

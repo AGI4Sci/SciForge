@@ -2,32 +2,34 @@
 
 Small backend utilities for connecting CLI agent runtimes to provider endpoints used by SciForge.
 
-See [`CODEX_COMPATIBILITY.md`](CODEX_COMPATIBILITY.md) for the Codex CLI integration boundary, DeepSeek compatibility notes, and the upgrade checklist.
+See [`CODEX_COMPATIBILITY.md`](CODEX_COMPATIBILITY.md) for the Codex CLI integration boundary, provider compatibility notes, and the upgrade checklist.
 
 ## Codex Responses Proxy
 
 `codex-responses-proxy` exposes an OpenAI-compatible `/v1/responses` endpoint for Codex CLI and forwards requests to an upstream `/v1/chat/completions` provider. It is intended for providers that support Chat Completions but do not yet implement the Responses API shape expected by recent Codex CLI releases.
 
+Runtime Codex defaults to the SciForge Model Router public alias/profile. The compatibility proxy can still be used behind the router or for local diagnostics, but product UI and runtime audit surfaces should show only the router alias/profile, capabilities, role coverage, and readiness.
+
 The proxy keeps API keys out of repository files. Provide the key through an environment variable and point Codex at the local proxy:
 
 ```bash
 export SCIFORGE_RUNTIME_API_KEY="..."
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="http://35.220.164.252:3888/v1"
+export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://provider-compatible-endpoint.example/v1"
 npm run backend:codex-proxy
 ```
 
 Codex profile example:
 
 ```toml
-[profiles.sciforge-runtime-deepseek]
-model = "bailian/deepseek-v4-flash"
-model_provider = "sciforge-deepseek-proxy"
+[profiles.sciforge-runtime-default]
+model = "sciforge-router"
+model_provider = "sciforge-model-router"
 model_reasoning_effort = "low"
 model_reasoning_summary = "none"
 
-[model_providers.sciforge-deepseek-proxy]
-name = "SciForge DeepSeek Proxy"
-base_url = "http://127.0.0.1:3891/v1"
+[model_providers.sciforge-model-router]
+name = "SciForge Model Router"
+base_url = "http://127.0.0.1:3892/v1"
 env_key = "SCIFORGE_RUNTIME_API_KEY"
 wire_api = "responses"
 ```
@@ -38,7 +40,7 @@ Useful options:
 npm run backend:codex-proxy -- \
   --host 127.0.0.1 \
   --port 3891 \
-  --upstream-base-url http://35.220.164.252:3888/v1 \
+  --upstream-base-url https://provider-compatible-endpoint.example/v1 \
   --api-key-env SCIFORGE_RUNTIME_API_KEY
 ```
 
@@ -49,7 +51,7 @@ For Runtime Codex browser acceptance, the key source is stricter than local prox
 SciForge uses two Codex instances with separate responsibilities:
 
 - Developer Codex uses the normal user `CODEX_HOME` and edits the SciForge repository.
-- Runtime Codex uses `packages/backend/.codex-runtime/codex-home`, the `sciforge-runtime-deepseek` profile, and a task workspace.
+- Runtime Codex uses `packages/backend/.codex-runtime/codex-home`, the `sciforge-runtime-default` profile, and a task workspace.
 
 Generate or refresh the local runtime home:
 
@@ -89,18 +91,17 @@ npm run backend:codex-runtime:exec -- \
   --prompt "$SCIFORGE_USER_TEXT_COMMAND"
 ```
 
-The wrapper fails closed if the isolated `CODEX_HOME` leaves `packages/backend/.codex-runtime`, if the DeepSeek profile/provider/model is missing, or if `SCIFORGE_RUNTIME_API_KEY` is absent. Secrets stay in the process environment, not in repository files.
+The wrapper fails closed if the isolated `CODEX_HOME` leaves `packages/backend/.codex-runtime`, if the Model Router profile/provider/alias is missing, or if the configured runtime provider key is absent. Secrets stay in the process environment, not in repository files.
 
 ## Browser Acceptance Service Checklist
 
-The legacy no-secret Runtime Codex browser acceptance path expects a KV-Ground-compatible service plus four SciForge services to be alive. Current Computer Use design defaults both VLM and grounding to `qwen3.7-plus`.
+Runtime Codex browser acceptance expects the Model Router-compatible provider facade plus the SciForge services below to be alive. Concrete upstream text reasoner and vision translator choices live in private router config, not in UI defaults or audit output.
 
 ```text
-Legacy Grounder: http://127.0.0.1:18081/health
 UI:               http://127.0.0.1:5173/
 Workspace writer: http://127.0.0.1:6173/health
 Runtime Codex:    http://127.0.0.1:18080/health
-Provider proxy:   http://127.0.0.1:3891/healthz
+Model Router:     http://127.0.0.1:3892/health
 ```
 
 No-secret service launch skeleton:
@@ -109,13 +110,18 @@ No-secret service launch skeleton:
 export SCIFORGE_UI_PORT=5173
 export SCIFORGE_WORKSPACE_PORT=6173
 export SCIFORGE_RUNTIME_CODEX_PORT=18080
-export SCIFORGE_PROXY_PORT=3891
+export SCIFORGE_MODEL_ROUTER_PORT=3892
 export SCIFORGE_WORKSPACE_PATH="$PWD/workspace/parallel/p1"
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
 export SCIFORGE_RUNTIME_API_KEY="<set-in-service-env-only>"
+export SCIFORGE_TEXT_BASE_URL="https://text-provider-compatible-endpoint.example/v1"
+export SCIFORGE_TEXT_MODEL="<private-text-reasoner-model>"
+export SCIFORGE_TEXT_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
+export SCIFORGE_VISION_BASE_URL="https://vision-provider-compatible-endpoint.example/v1"
+export SCIFORGE_VISION_MODEL="<private-vision-translator-model>"
+export SCIFORGE_VISION_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
 
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
-npm run backend:codex-proxy
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3892/v1
+npm run backend:model-router -- --host 127.0.0.1 --port 3892
 SCIFORGE_WORKSPACE_PORT=6173 npm run workspace:server
 SCIFORGE_RUNTIME_CODEX_PORT=18080 node --import tsx src/runtime/codex/codex-runtime-standalone-server.ts
 npm run dev:ui -- --host 127.0.0.1 --port 5173 --strictPort

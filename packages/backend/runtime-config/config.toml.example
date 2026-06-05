@@ -1,18 +1,21 @@
-model = "bailian/deepseek-v4-flash"
-profile = "sciforge-runtime-deepseek"
+model = "sciforge-router"
+profile = "sciforge-runtime-default"
 
-[profiles.sciforge-runtime-deepseek]
-model = "bailian/deepseek-v4-flash"
-model_provider = "sciforge-deepseek-proxy"
+[profiles.sciforge-runtime-default]
+model = "sciforge-router"
+model_provider = "sciforge-model-router"
 model_reasoning_effort = "low"
 model_reasoning_summary = "none"
 
-[model_providers.sciforge-deepseek-proxy]
-name = "SciForge DeepSeek Proxy"
-base_url = "http://127.0.0.1:3891/v1"
+[model_providers.sciforge-model-router]
+name = "SciForge Model Router"
+base_url = "http://127.0.0.1:3892/v1"
 env_key = "SCIFORGE_RUNTIME_API_KEY"
 wire_api = "responses"
 
 [features]
 memories = true
 prevent_idle_sleep = true
+
+[sandbox_workspace_write]
+network_access = true

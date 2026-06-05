@@ -17,16 +17,25 @@ export const visionSenseCompletionPolicyModes = {
   oneSuccessfulNonWaitAction: 'one-successful-non-wait-action',
 } as const;
 
+export const visionSenseModelRouterCapabilities = {
+  computerUsePlanner: 'model-router.capability.computer-use.planner',
+  screenshotTranslator: 'model-router.capability.computer-use.screenshot-translator',
+  cropTranslator: 'model-router.capability.computer-use.crop-translator',
+  groundingTranslator: 'model-router.capability.computer-use.grounding-translator',
+  verifierTranslator: 'model-router.capability.computer-use.verifier-translator',
+} as const;
+
 export const visionSenseGroundingIds = {
   windowCrossDisplayDrag: 'window-cross-display-drag',
   targetDescriptionWindowCenter: 'target-description-window-center',
   coarseToFine: 'coarse-to-fine',
   coarseToFineFocusRegion: 'coarse-to-fine-focus-region',
-  kvGround: 'kv-ground',
+  modelRouterGrounding: visionSenseModelRouterCapabilities.groundingTranslator,
+  legacyKvGroundCompatibleAdapter: 'legacy-kv-ground-compatible-adapter',
 } as const;
 
 export function visionSenseFocusRegionGroundingId(base: unknown) {
-  return `${String(base || 'grounder')}-focus-region`;
+  return `${String(base || 'grounding-translator').replace(/[^a-z0-9]+/gi, '-')}-focus-region`;
 }
 
 export const visionSenseSafetyVerifierContract = {
@@ -40,6 +49,16 @@ export const visionSenseTraceContractPolicy = {
   imageMemory: {
     policy: 'file-ref-only',
     reason: 'Multi-turn memory keeps screenshot paths, hashes, dimensions, and display ids; it never stores inline image payloads.',
+    forbiddenInlinePayloads: [
+      'rawScreenshot',
+      'rawProviderPayload',
+      'providerRequestBody',
+      'providerResponseBody',
+      'base64',
+      'data:image',
+      'image_base64',
+      'inlineImageBytes',
+    ],
   },
   genericActionSchema: ['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait'],
   appSpecificShortcuts: [] as string[],
@@ -57,7 +76,8 @@ export const visionSenseTraceContractPolicy = {
     beforeAfterWindowConsistency: 'required-or-structured-window-lifecycle-diagnostics',
     completionEvidence: 'window-local screenshots plus pixel diff, no DOM/accessibility',
   },
-  requires: ['WindowTargetProvider', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier'],
+  requires: ['WindowTargetProvider', 'ModelRouterPlannerCapability', 'ModelRouterGroundingTranslator', 'GuiExecutor', 'ModelRouterVerifierTranslator'],
+  modelRouterCapabilities: visionSenseModelRouterCapabilities,
   visualFocus: {
     strategy: visionSenseGroundingIds.coarseToFineFocusRegion,
     algorithmProvider: 'sciforge_vision_sense.coarse_to_fine',
@@ -73,18 +93,18 @@ export const visionSensePlannerOnlyEvidencePolicy = {
 export const visionSenseTraceOutputPolicy = {
   successClaim: 'SciForge executed Computer Use action provider steps and wrote file-ref-only visual memory.',
   selectedRuntimeReason: 'Computer Use action provider was selected through the local.vision-sense host adapter and package-backed TUI extension path.',
-  genericActionSchemaReason: 'The action provider uses Runtime Codex text planning, app-agnostic screenshot refs, and generic mouse/keyboard action schema.',
+  genericActionSchemaReason: 'The action provider uses Model Router planning and vision translator capabilities, app-agnostic screenshot refs, and generic mouse/keyboard action schema.',
   noAppSpecificShortcutReason: 'No app-specific shortcut or AgentServer repository scan was used.',
   requiredInputs: visionSenseTraceContractPolicy.requires,
   recoverActions: [
-    'Provide a Runtime Codex text planner that emits the action schema recorded in the trace.',
-    'Configure KV-Ground or another Grounder so target descriptions become target-window coordinates.',
+    'Provide a Model Router planner capability that emits the action schema recorded in the trace.',
+    'Provide a Model Router grounding translator capability so target descriptions become target-window coordinates.',
     'Keep app-specific APIs out of the primary path; only mouse/keyboard executor actions should be required.',
   ],
   bridgeRecoverActions: [
     'Enable the generic desktop bridge with SCIFORGE_VISION_DESKTOP_BRIDGE=1 or .sciforge/config.json visionSense.desktopBridgeEnabled=true.',
     'Configure capture displays with SCIFORGE_VISION_CAPTURE_DISPLAYS=1,2 or visionSense.captureDisplays.',
-    'Provide Runtime Codex planner/Grounder wiring that emits app-agnostic mouse and keyboard actions.',
+    'Provide Model Router planner and vision translator wiring that emits app-agnostic mouse and keyboard actions.',
   ],
 } as const;
 
@@ -100,7 +120,7 @@ export const visionSensePlannerPromptPolicy = {
     extraInstruction?: string;
   }) {
     return [
-      'You are SciForge Runtime Codex text planner for the Computer Use action provider.',
+      'You are SciForge Model Router planner capability for the Computer Use action provider.',
       'Return only JSON. Do not read DOM or accessibility. Do not output application-private APIs, scripts, selectors, files, or shortcuts that depend on one app.',
       `Execution environment: ${options.environmentDescription}.`,
       `Window target contract: ${options.windowTargetDescription}.`,
@@ -117,9 +137,9 @@ export const visionSensePlannerPromptPolicy = {
       'If an unrelated browser extension, permission, save, login, or external-service dialog appears, use Escape or a visible Cancel/Close button once, then return to the target application content. Do not click Retry, Enable, Authorize, Save, Submit, Send, Delete, or Login in unrelated dialogs.',
       'If the supplied screenshot is a transient menu, popover, palette, gallery, or dropdown window, interact only with visible items inside that transient window. If the next needed target is in the underlying document/app window and is not visible in the captured target, use press_key Escape or a visible close/cancel control to dismiss the transient window first.',
       'If the screenshot shows a document/template/gallery chooser and a template or item is already visibly selected, do not click the selected thumbnail again. Use the visible Create/New/Open/OK button, or use Cancel/Escape only when the task needs to leave the chooser.',
-      'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Grounder in the target-window screenshot coordinate system.',
-      'Planner screenshots may be budget-scaled for model latency. Do not infer exact pixel coordinates from them; describe visual targets semantically and let the Grounder use the original window screenshot.',
-      'For dense UI, small icons, table rows, menus, dialogs, or ambiguous regions, include targetRegionDescription to name the larger visual region to inspect first; the runtime will crop that region and run a second fine Grounder inside it before execution.',
+      'For visual targets, output targetDescription text only; never output x/y/fromX/fromY/toX/toY coordinates. Coordinates are produced by the Model Router grounding translator in the target-window screenshot coordinate system.',
+      'Planner screenshots may be budget-scaled for model latency. Do not infer exact pixel coordinates from them; describe visual targets semantically and let the Model Router grounding translator use the original window screenshot.',
+      'For dense UI, small icons, table rows, menus, dialogs, or ambiguous regions, include targetRegionDescription to name the larger visual region to inspect first; the runtime will crop that region and run a second fine grounding translator pass inside it before execution.',
       'You may output wait with targetRegionDescription when the next step should be local observation only; the runtime will record focusRegion evidence and replan from the updated run history.',
       'Do not put pixel boxes in focusRegion unless it was copied from prior run history; prefer targetRegionDescription text so vision-sense can choose and clip the focus region.',
       `Allowed action types: ${visionSenseTraceContractPolicy.genericActionSchema.join(', ')}.`,
@@ -153,7 +173,7 @@ export const visionSensePlannerPromptPolicy = {
     ].join(' ');
   },
   noEffectRepeatFailureReason(repeatedRoute: string) {
-    return `Runtime Codex text planner repeated a no-visible-effect action route after retry (${repeatedRoute}). The generic planner must choose a different visible route or query a different region before more GUI execution.`;
+    return `Model Router planner capability repeated a no-visible-effect action route after retry (${repeatedRoute}). The generic planner must choose a different visible route or query a different region before more GUI execution.`;
   },
   highRiskFallbackAction() {
     return {
@@ -185,7 +205,7 @@ export const visionSensePlannerPromptPolicy = {
         'For file rename/move tasks, first select visible files with click/double_click, use visible fields/buttons or generic press_key/type_text when the focused UI supports text entry, and drag only between visible locations.',
       ].join(' ');
     }
-    return 'Your previous JSON violated the planner contract by including screen coordinates. Rewrite the plan without x/y/fromX/fromY/toX/toY. Use targetDescription, fromTargetDescription, and toTargetDescription so the Grounder can produce coordinates.';
+    return 'Your previous JSON violated the planner contract by including screen coordinates. Rewrite the plan without x/y/fromX/fromY/toX/toY. Use targetDescription, fromTargetDescription, and toTargetDescription so the Model Router grounding translator can produce coordinates.';
   },
   platformRecoveryGuidance(desktopPlatform: string) {
     if (/darwin/i.test(desktopPlatform)) {
@@ -238,7 +258,7 @@ export function visionSenseCrossDisplayWindowDragPolicy(params: {
   const wantsRight = /right|右/i.test(description) && !/left|左/i.test(description);
   return {
     provider: visionSenseGroundingIds.windowCrossDisplayDrag,
-    reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the Grounder to hallucinate an off-window point.',
+    reason: 'Target display is outside the current window screenshot; computed title-bar drag endpoints in window-local coordinates instead of asking the grounding translator to hallucinate an off-window point.',
     fromX,
     fromY,
     toX: wantsRight ? Math.round(width * 1.35) : Math.round(width * -0.35),

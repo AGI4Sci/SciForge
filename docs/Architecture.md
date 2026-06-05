@@ -8,7 +8,7 @@ SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 
 > **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 `module.*` GUI extension 暴露给 TUI；`gui.*` 只作为迁移 shim。**
 
-Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；DeepSeek `deepseek-v4-flash` 是默认 model provider，而不是另一个 backend。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
+Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；默认运行期 provider 指向 SciForge Model Router 的公开 alias/profile，由 router profile 选择 text reasoner 与 modality translators，而不是把某个具体上游模型写成产品事实。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
 
 ## 最终分层
 
@@ -198,7 +198,7 @@ External message / webhook / chat command
 
 Computer Use / Window Action 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 必须包含真实用户产物、当前 WindowActionSession evidence、action causality、artifact/verifier refs、`gui.present` refs 和 bounded before/after evidence。目标打通需要覆盖多 app/window/session 工作流，例如 Browser/资料页、notebook/terminal 实验、editor/report artifact 和 SciForge Image/Evidence 展示。GUI 在这些验收中仍只发送终端等价文本、展示 refs 和收集确认，不直接执行桌面操作；`gui.present` 只能证明用户可见展示，不能替代 executor、validator 或 action/evidence 证据。
 
-Computer Use action provider 可以消费 `packages/observe/vision` 的 observation、focus-region、grounding 和 verifier feedback，但执行所有桌面/远程/dry-run action 的 owner 仍是 `packages/actions/computer-use` 以及 TUI Host 注入的 host ports。当前终局不是隔离 VirtualAppScreen，而是 **Host-owned real window/app action**：用户和 agent 面对正常系统窗口；SciForge 用 WindowActionSession、windowRef、actorCursor、adapter route 和 before/after evidence 解释动作。底层优先使用 BrowserHostSession/CDP/Playwright、app-native command、editor extension、terminal PTY、Accessibility/UI Automation/AT-SPI、vision-grounded adapter 或显式 shared-system-input evidence。`vision-sense` 不拥有 executor、scheduler、desktop bridge、MCP 会话或用户级完成判断；它只产生 refs-first 的视觉信号。Computer Use 的 VLM 与 grounding 统一使用 `qwen3.7-plus`；旧 KV-Ground 名称只能作为兼容 provider 壳或服务路径，不再代表默认模型。截图、crop、replay、PDF 或 document export 只能作为 evidence/artifact，不作为第二个可交互屏幕，也不是交互 fallback。Computer Use trace 只记录 surface/window refs、截图 refs、focus crop refs、sha256、尺寸、坐标、target description、provider metadata、diagnostics 和 approval/audit refs，不内联截图 payload、base64 或大日志。真实系统鼠标键盘属于 shared system input 风险面；若没有独立 app/window-scoped adapter，只能作为 diagnostic、blocked、explicit handoff 或 `shared-system-input` evidence，不能伪装成隔离验收。
+Computer Use action provider 可以消费 `packages/observe/vision` 的 observation、focus-region、grounding 和 verifier feedback，但执行所有桌面/远程/dry-run action 的 owner 仍是 `packages/actions/computer-use` 以及 TUI Host 注入的 host ports。当前终局不是隔离 VirtualAppScreen，而是 **Host-owned real window/app action**：用户和 agent 面对正常系统窗口；SciForge 用 WindowActionSession、windowRef、actorCursor、adapter route 和 before/after evidence 解释动作。底层优先使用 BrowserHostSession/CDP/Playwright、app-native command、editor extension、terminal PTY、Accessibility/UI Automation/AT-SPI、Model Router vision translator 生成的 grounding/observation，或显式 shared-system-input evidence。`vision-sense` 不拥有 executor、scheduler、desktop bridge、MCP 会话或用户级完成判断；它只产生 refs-first 的视觉信号。Computer Use 不按具体上游模型类型做产品级分叉；router profile 的 `textReasoner` 是 reasoning owner，`translators.vision` 只把截图、crop 或 ref 转译成文本观察。截图、crop、replay、PDF 或 document export 只能作为 evidence/artifact，不作为第二个可交互屏幕，也不是交互 fallback。Computer Use trace 只记录 surface/window refs、截图 refs、focus crop refs、sha256、尺寸、坐标、target description、公开 router profile/alias、diagnostics 和 approval/audit refs，不内联截图 payload、base64、私有 provider URL、API key 或大日志。真实系统鼠标键盘属于 shared system input 风险面；若没有独立 app/window-scoped adapter，只能作为 diagnostic、blocked、explicit handoff 或 `shared-system-input` evidence，不能伪装成隔离验收。
 
 Computer Use 的生产形态应吸收 Codex bundled Computer Use 的七条产品化经验，但不能破坏 SciForge 的 refs-first 和 L0/L1/L2 边界。
 
@@ -226,7 +226,7 @@ Computer Use 文件责任按生产路径拆成下表，任何新增代码都应�
 | Codex CLI/native plugin | L2 debug host | 本地调试和 smoke，复用同一 Computer Use native surface。 | 成为 rich-client production runtime。 |
 | `packages/actions/computer-use` | L1/L0 owner | request/result schema、session/display group/screen/cursor/lease/replay contract、domain-local action loop、scheduler、executor adapter contract、safety、trace、L0 handler routing。 | 直接调用 GUI、browser、file、verifier 或决定用户级 completion。 |
 | `packages/actions/computer-use/virtual-app-screen-host` | deprecated compatibility | 历史 VirtualAppScreen trace / fixture / regression 的兼容读取和迁移辅助。 | planning、completion、GUI import、scheduler policy、workspace write policy、把第三方虚拟屏幕 UI 当 product truth，或作为当前 active product gate。 |
-| `packages/observe/vision` | L0 sense provider | capture/crop/OCR、`qwen3.7-plus` VLM/grounding helper、verifier feedback 和 file-ref-only visual memory。 | 执行 click/type/drag/scroll/hotkey/save，或拥有 scheduler/lease。 |
+| `packages/observe/vision` | L0 sense provider | capture/crop/OCR、Model Router vision translator/grounding 输出、verifier feedback 和 file-ref-only visual memory。 | 执行 click/type/drag/scroll/hotkey/save，或拥有 scheduler/lease。 |
 | `src/runtime/computer-use` | host adapter | 注入 workspace/session context、platform host ports、runtime event projection 和 legacy diagnostic shim。 | 保存 generic Computer Use policy，暴露新增 public API，或绕过 package contract。 |
 | Platform adapter / MCP service | L0 platform backend | Host 背后的 OS-specific capture、accessibility/state snapshot、focused-window binding、executor command、permission/preflight 和 isolation report。 | planning、completion、GUI presentation、workspace write policy、provider ranking、mint host grant 或绕过 scheduler/approval。 |
 | User control surface | GUI/TUI presentation + L2 policy | 展示 session permission、app/window allowlist、risk preview、stop/cancel、confirmation 和 data visibility refs。 | 直接执行动作、私自扩大 permission、把 allowlist 当 completion evidence。 |
@@ -435,10 +435,10 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 
 - Codex CLI plugin / skill / tool / MCP。
 - 第三方软件连接器，例如飞书 CLI、飞书 API、微信/企业微信 bridge，也属于 TUI 侧 tool / MCP / worker / connector。
-- Codex custom model provider / `model_providers.<id>.base_url`。
+- Codex custom model provider / `model_providers.<id>.base_url`；默认指向 SciForge Model Router 的 `/v1/responses` facade。
 - 必要时的本地 Codex provider proxy。
 
-默认生产集成目标是上游 Codex app-server + custom model provider，优先通过配置接入 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider endpoint。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为 legacy/test-only 兼容和历史证据；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
+默认生产集成目标是上游 Codex app-server + custom model provider，默认 provider 指向 SciForge Model Router；router profile 再解析 text reasoner、vision translator、trace root 和补问预算。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为 legacy/test-only 兼容和历史证据；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
 
 迁移目标应收敛为 `CodexAppServerAdapter` 生产默认、`CodexExecJsonAdapter` legacy/test-only、`ClaudeStreamJsonAdapter` 可选。现有 `AgentCliAdapter` 继续隔离进程和事件细节，但不能把 `codex exec --json` 视为产品 fallback。细节见 [`CodexRuntimeMigration.md`](../packages/backend/CodexRuntimeMigration.md)。
 
@@ -539,7 +539,7 @@ React/UI 也不直接执行 Computer Use、连接器 CLI、外部 API 或桌面 
 - 同一任务在纯 TUI 中可完成。
 - 接入 SciForge GUI 后只增加展示和交互能力，不增加算法能力。
 - 不需要独立 AgentServer；默认直接连接 Codex backend。
-- 默认运行期不得消耗 OpenAI token，除非用户显式 opt in；生产默认应让 Codex backend 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy。
+- 默认运行期不得消耗 OpenAI token，除非用户显式 opt in；生产默认应让 Codex backend 走 SciForge Model Router 的公开 alias/profile，由私有 router config 选择具体上游 provider。
 - GUI 没有 provider 分支、repair 策略、capability ranking、prompt route。
 - 所有 GUI 按钮最终只发送文本。
 - 全局注释侧栏是连续反馈入口：澄清/预览/保存反馈使用无副作用 lane，低风险小改动使用 quick action，复杂执行进入收件箱。

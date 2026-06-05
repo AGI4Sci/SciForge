@@ -2,13 +2,13 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
-export const RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
-export const RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
+export const RUNTIME_PROFILE = 'sciforge-runtime-default';
+export const RUNTIME_PROVIDER = 'sciforge-model-router';
+export const RUNTIME_MODEL = 'sciforge-router';
 export const RUNTIME_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY';
 export const RUNTIME_CODEX_SANDBOX_ENV = 'SCIFORGE_RUNTIME_CODEX_SANDBOX';
 export const DEFAULT_RUNTIME_CODEX_SANDBOX = 'workspace-write';
-export const DEFAULT_PROXY_BASE_URL = 'http://127.0.0.1:3891/v1';
+export const DEFAULT_PROXY_BASE_URL = 'http://127.0.0.1:3892/v1';
 export type RuntimeCodexSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
 export const RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS = [
   '--config',
@@ -106,7 +106,7 @@ export function runtimeConfigToml(input: string | {
   const proxyBaseUrl = options.proxyBaseUrl ?? DEFAULT_PROXY_BASE_URL;
   const provider = tomlBareKey(options.provider ?? runtimeProviderForEnv(options.env));
   const model = options.model?.trim() || runtimeModelForEnv(options.env);
-  const providerName = options.providerName?.trim() || 'SciForge Runtime Provider';
+  const providerName = options.providerName?.trim() || 'SciForge Model Router';
   return `model = "${tomlString(model)}"
 profile = "${RUNTIME_PROFILE}"
 

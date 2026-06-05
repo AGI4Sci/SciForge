@@ -19,16 +19,16 @@ import {
   runtimeConfigToml,
 } from './runtime-home';
 
-test('runtime config writes the selected provider/model to the local Responses proxy profile', () => {
+test('runtime config writes the selected router alias/profile to the local Model Router provider', () => {
   const config = runtimeConfigToml({
-    provider: 'native',
-    model: 'kimi/kimi-k2.6',
+    provider: 'sciforge-model-router',
+    model: 'sciforge-router',
     proxyBaseUrl: DEFAULT_PROXY_BASE_URL,
   });
   assert.match(config, new RegExp(`profile = "${RUNTIME_PROFILE}"`));
-  assert.match(config, /model = "kimi\/kimi-k2\.6"/);
-  assert.match(config, /model_provider = "native"/);
-  assert.match(config, /\[model_providers\.native\]/);
+  assert.match(config, /model = "sciforge-router"/);
+  assert.match(config, /model_provider = "sciforge-model-router"/);
+  assert.match(config, /\[model_providers\.sciforge-model-router\]/);
   assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
   assert.match(config, /wire_api = "responses"/);
   assert.match(config, /\[sandbox_workspace_write\]\s+network_access = true/);
@@ -39,10 +39,11 @@ test('runtime config writes the selected provider/model to the local Responses p
   assert.match(config, new RegExp(DEFAULT_PROXY_BASE_URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
-test('runtime config falls back to the compatibility defaults when no user model is configured', () => {
+test('runtime config falls back to public Model Router defaults when no user model is configured', () => {
   const config = runtimeConfigToml();
   assert.match(config, new RegExp(`model = "${RUNTIME_MODEL}"`));
   assert.match(config, new RegExp(`model_provider = "${RUNTIME_PROVIDER}"`));
+  assert.doesNotMatch(config, new RegExp(['deep' + 'seek', 'q' + 'wen', 'bai' + 'lian'].join('|'), 'i'));
 });
 
 test('runtime provider env ignores legacy user-facing native provider id', () => {

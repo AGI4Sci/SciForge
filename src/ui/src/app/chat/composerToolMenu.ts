@@ -52,6 +52,17 @@ export interface ComposerModeSelectionIntent {
   label: string;
 }
 
+export interface ComposerDraftStorageScope {
+  workspaceId?: string;
+  workspacePath?: string;
+  projectId?: string;
+  scenarioId?: string;
+  threadId?: string;
+  sessionId?: string;
+  modeIntentId?: ComposerModeIntentId | 'normal';
+  [key: string]: unknown;
+}
+
 export type ComposerCapabilityKind = 'domain-skill' | 'pipeline-skill' | 'tool-skill' | 'app-skill' | 'mcp-server' | 'connector';
 
 export interface ComposerAgentHostCatalogItem {
@@ -256,6 +267,14 @@ export function composerModeSelectionIntentForToolItem(item: Pick<ComposerToolMe
   return composerModeSelectionIntents(locale).find((intent) => intent.id === item.id);
 }
 
+export function composerDraftStorageKey(scope: ComposerDraftStorageScope) {
+  const workspace = hashedScopeSegment(scope.workspaceId ?? scope.workspacePath, 'workspace');
+  const project = hashedScopeSegment(scope.projectId ?? scope.scenarioId, 'project');
+  const thread = hashedScopeSegment(scope.threadId ?? scope.sessionId, 'thread');
+  const mode = publicModeScopeSegment(scope.modeIntentId);
+  return `sciforge.composer-draft.v1:${workspace}:${project}:${thread}:${mode}`;
+}
+
 function modelIntent(id: ComposerModelIntentId, model: ComposerPublicModel | undefined, tier: ComposerModelSelectionIntent['capabilityTier']): ComposerModelSelectionIntent {
   return {
     id,
@@ -417,4 +436,15 @@ function stablePublicId(raw: string) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function hashedScopeSegment(value: unknown, fallback: string) {
+  const normalized = typeof value === 'string' && value.trim() ? value.replace(/\s+/g, ' ').trim().toLocaleLowerCase() : fallback;
+  return `${fallback}:${stablePublicId(normalized)}`;
+}
+
+function publicModeScopeSegment(value: unknown) {
+  return value === 'plan' || value === 'debug' || value === 'multitask' || value === 'ask'
+    ? `mode:${value}`
+    : 'mode:normal';
 }

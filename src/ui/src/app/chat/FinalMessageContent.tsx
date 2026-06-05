@@ -4,6 +4,7 @@ import { MessageContent } from './MessageContent';
 import { splitFinalMessagePresentation } from './finalMessagePresentation';
 import { sanitizeUserProjectionText } from '../conversation-projection-view-model';
 import { hasRuntimeGuiSurface, RuntimeGuiPanel, type RuntimeGuiSurface } from './RuntimeGuiPanel';
+import { objectReferenceForCursorRef } from './cursorProcessObjectReferences';
 
 export function FinalMessageContent({
   content,
@@ -61,8 +62,9 @@ function mergeResultPresentationReferences(references: ObjectReference[], result
 }
 
 function isVisibleFinalMessageReference(reference: ObjectReference) {
-  return isUserFacingObjectReference(reference)
-    && !isInternalFinalMessageRefText(reference.ref)
+  if (!isUserFacingObjectReference(reference)) return false;
+  if (isFinalMessageProcessReference(reference)) return isSafeFinalMessageProcessReference(reference);
+  return !isInternalFinalMessageRefText(reference.ref)
     && !isInternalFinalMessageRefText(reference.title)
     && !isInternalFinalMessageRefText(reference.summary)
     && !isInternalFinalMessageRefText(reference.provenance?.path)
@@ -70,11 +72,11 @@ function isVisibleFinalMessageReference(reference: ObjectReference) {
 }
 
 function isInternalFinalMessageRefText(value: string | undefined) {
-  return typeof value === 'string' && (
-    /(?:^|[/#:])\.sciforge(?:[/#:]|$)/i.test(value)
-    || /(?:^|[/#:])(?:stdout|stderr|raw|trace|diagnostic|diagnostics|audit|execution-unit|execution_unit)(?:[/#:]|$)/i.test(value)
-    || /^run:/i.test(value)
-  );
+  return containsPrivateFinalMessageText(value)
+    || (typeof value === 'string' && (
+      /(?:^|[/#:])(?:trace|diagnostic|diagnostics|audit|execution-unit|execution_unit)(?:[/#:]|$)/i.test(value)
+      || /^run:/i.test(value)
+    ));
 }
 
 function resultPresentationReferences(resultPresentation: unknown): ObjectReference[] {
@@ -112,6 +114,8 @@ function objectReferenceFromPresentationRef(input: {
 }): ObjectReference | undefined {
   if (!input.ref) return undefined;
   const ref = displayObjectRef(input.ref, input.kind);
+  const processReference = processObjectReferenceFromPresentationRef(input, ref);
+  if (processReference || isProcessPresentationRef(ref, input.kind)) return processReference;
   const kind = objectReferenceKind(input.kind, ref);
   return {
     id: input.id ?? `presentation-${kind}-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72)}`,
@@ -130,7 +134,33 @@ function objectReferenceFromPresentationRef(input: {
   };
 }
 
+function processObjectReferenceFromPresentationRef(input: {
+  id?: string;
+  label?: string;
+  ref?: string;
+  kind?: string;
+  summary?: string;
+  status?: string;
+  presentationRole?: string;
+}, ref: string): ObjectReference | undefined {
+  if (!isProcessPresentationRef(ref, input.kind)) return undefined;
+  const reference = objectReferenceForCursorRef(ref);
+  if (!reference) return undefined;
+  const role = normalizeObjectReferencePresentationRole(input.presentationRole) ?? reference.presentationRole;
+  return {
+    ...reference,
+    id: input.id ?? `presentation-${reference.kind}-${ref.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 72)}`,
+    title: input.label ?? reference.title,
+    presentationRole: role,
+    status: input.status === 'failed' ? 'blocked' : input.status === 'external' ? 'external' : reference.status,
+    summary: input.summary ?? reference.summary,
+  };
+}
+
 function displayObjectRef(ref: string, kind?: string) {
+  if (/^(?:subagent|agent-result|trace|run|agent-transcript|transcript)::?/i.test(ref)) {
+    return ref.replace(/^([a-z][a-z0-9-]*)::?/i, '$1:');
+  }
   if (/^artifact::?/i.test(ref)) return ref.replace(/^artifact::?/i, 'artifact::');
   if (/^file::?/i.test(ref)) return ref.replace(/^file::?/i, 'file::');
   if (/^folder::?/i.test(ref)) return ref.replace(/^folder::?/i, 'folder::');
@@ -141,12 +171,47 @@ function displayObjectRef(ref: string, kind?: string) {
 }
 
 function objectReferenceKind(kind: string | undefined, ref: string): ObjectReference['kind'] {
+  if (/^(?:subagent|agent-result|trace|run|agent-transcript|transcript):/i.test(ref) || kind === 'run') return 'run';
   if (/^artifact::/i.test(ref) || kind === 'artifact') return 'artifact';
   if (/^file::/i.test(ref) || kind === 'file') return 'file';
   if (/^folder::/i.test(ref) || kind === 'folder') return 'folder';
   if (/^https?:\/\//i.test(ref) || kind === 'url') return 'url';
   if (/^execution-unit::/i.test(ref) || kind === 'execution-unit') return 'execution-unit';
   return 'artifact';
+}
+
+function isFinalMessageProcessReference(reference: ObjectReference) {
+  return reference.kind === 'run' && isProcessPresentationRef(reference.ref);
+}
+
+function isProcessPresentationRef(ref: string, kind?: string) {
+  return kind === 'run' || /^(?:subagent|agent-result|trace|run|agent-transcript|transcript):/i.test(ref);
+}
+
+function isSafeFinalMessageProcessReference(reference: ObjectReference) {
+  return isSafeFinalMessageProcessRef(reference.ref)
+    && !containsPrivateFinalMessageText(reference.title)
+    && !containsPrivateFinalMessageText(reference.summary)
+    && !containsPrivateFinalMessageText(reference.provenance?.path)
+    && !containsPrivateFinalMessageText(reference.provenance?.dataRef);
+}
+
+function isSafeFinalMessageProcessRef(ref: string) {
+  const text = ref.trim();
+  if (!/^(?:subagent|agent-result|trace|run|agent-transcript|transcript):[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/i.test(text)) return false;
+  if (text.includes('..') || text.startsWith('~')) return false;
+  return !containsPrivateFinalMessageText(text);
+}
+
+function containsPrivateFinalMessageText(value: string | undefined) {
+  return typeof value === 'string' && (
+    /(?:^|[/#:])\.sciforge(?:[/#:]|$)/i.test(value)
+    || /(?:^|[/#:])(?:stdout|stderr|raw|provider|debug|diagnostic|diagnostics|audit|execution-unit|execution_unit)(?:[/#:]|$)/i.test(value)
+    || /(?:^|[_.:/#-])(?:stdout|stderr|raw|provider|secret|token|credential|password|private|Users|Applications|Volumes|var|tmp|\.sciforge)(?:$|[_.:/#-])/i.test(value)
+    || /\b(?:Authorization|api[-_ ]?key|token|secret|password|credential)\b|sk-[A-Za-z0-9._-]+/i.test(value)
+    || /https?:\/\/[^\s`"'<>),;]+/i.test(value)
+    || /\/(?:Applications|Users|Volumes|private|var|tmp)\//i.test(value)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

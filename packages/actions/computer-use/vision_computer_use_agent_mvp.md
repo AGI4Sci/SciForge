@@ -13,7 +13,7 @@ Computer Use 插件负责把“当前环境证据 + 用户任务 + Host 能力�
 
 ### 1. 视觉优先，但不只依赖视觉
 
-默认以当前截图、crop、OCR、VLM 描述、屏幕变化和 before/after 对比理解 GUI，因为这些信号最通用，能跨 Browser、Office、文件管理器、Jupyter、仪器 GUI 和自研应用复用。
+默认以当前截图、crop、OCR、Model Router vision translator observations、屏幕变化和 before/after 对比理解 GUI，因为这些信号最通用，能跨 Browser、Office、文件管理器、Jupyter、仪器 GUI 和自研应用复用。
 
 但视觉不是唯一信号。只要 Host 提供 refs-first、可审计、当前有效的证据，Computer Use 可以使用：
 
@@ -44,13 +44,13 @@ Planner 应输出类似：
 
 这样算法不会把偶然像素当稳定接口，也便于替换不同 Host adapter。
 
-### 3. VLM 是感知工具，不是执行者
+### 3. Vision Translator 是感知工具，不是执行者
 
-VLM 可以描述截图、比较变化、解释图表/表格/公式、识别视觉对象和说明不确定性。
+Model Router vision translator 可以描述截图、比较变化、解释图表/表格/公式、识别视觉对象和说明不确定性。
 
-VLM 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。VLM 结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
+Vision translator 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。视觉结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
 
-Computer Use 的视觉模型统一使用 `qwen3.7-plus`。这包括截图/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧，以及需要模型参与的 grounding。旧的 KV-Ground 或其它 grounding 服务名只能作为兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的模型标识应统一记录为 `qwen3.7-plus`。
+Computer Use 的视觉入口统一使用 Model Router capability surface。这包括 screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧，以及需要模型参与的 grounding。旧的 KV-Ground 或其它 grounding 服务名只能作为兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的具体 provider/model 只能作为 router 决议结果或 legacy adapter metadata。
 
 ### 4. 改变界面的动作必须可追溯
 
@@ -62,7 +62,7 @@ Computer Use 的视觉模型统一使用 `qwen3.7-plus`。这包括截图/crop �
 - wait until stable
 - crop
 - OCR
-- VLM describe / compare
+- Model Router vision describe / compare
 - region / table / image inspection
 
 会改变可见状态的操作必须进入 action loop：
@@ -164,13 +164,13 @@ Uncertainty 是一等证据。常见阻塞包括：
 
 - 找不到目标。
 - 同名目标太多。
-- OCR 或 VLM 置信度低。
+- OCR 或视觉 verifier 置信度低。
 - 证据已过期。
 - 目标被遮挡或离屏。
 - action 执行失败。
 - artifact 或 validator 证据缺失。
 
-blocking uncertainty 必须阻止 completion。只有新观察、新 crop、新 OCR/VLM、Host adapter evidence、文件证据或验证结果解决它后，completion guard 才能放行。
+blocking uncertainty 必须阻止 completion。只有新观察、新 crop、新 OCR/vision translator observation、Host adapter evidence、文件证据或验证结果解决它后，completion guard 才能放行。
 
 ## 验收边界
 

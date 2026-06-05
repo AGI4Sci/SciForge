@@ -21,8 +21,8 @@ SciForge 长期只支持 Codex backend。生产 runtime 的默认入口必须是
 优先级：
 
 1. 使用已安装的上游 Codex CLI。
-2. 使用 Codex custom model provider 配置接入 DeepSeek。
-3. 如果 DeepSeek API 与 Codex provider wire API 不兼容，新增 SciForge 自己维护的 `codex-provider-proxy`。
+2. 使用 Codex custom model provider 配置接入 SciForge Model Router public alias/profile。
+3. 如果某个 provider API 与 Codex provider wire API 不兼容，在 SciForge 维护 provider-specific compatibility adapter。
 4. 只有配置和 proxy 都无法满足时，才 fork Codex。
 
 如果必须 fork，必须新增 `docs/CodexUpstreamPatchLog.md`，记录：
@@ -48,31 +48,31 @@ Dev Codex
 
 Runtime Codex
   purpose: serve SciForge user tasks
-  model provider: DeepSeek/proxy bailian/deepseek-v4-flash by default
+  model provider: SciForge Model Router profile by default
   cwd: user workspace, not the SciForge repo unless explicitly debugging SciForge
-  config/profile: sciforge-runtime-deepseek
-  audit: provider/model/run id visible in SciForge UI
+  config/profile: sciforge-runtime-default
+  audit: model-router profile, role aliases, workspace, and command id visible in SciForge UI
 ```
 
 The runtime instance must never silently inherit the developer Codex profile.
 
 ## Profile 隔离
 
-推荐维护一个 runtime profile，例如 `sciforge-runtime-deepseek`。当前 release smoke gate 以 provider proxy 路径为准：
+推荐维护一个 runtime profile，例如 `sciforge-runtime-default`。当前 release smoke gate 以 Model Router public alias/profile 路径为准；文档只描述公开 alias 和 role，不把 provider URL、API key 或 raw model slug 写成产品默认值：
 
 ```toml
-model = "bailian/deepseek-v4-flash"
-profile = "sciforge-runtime-deepseek"
+model = "textReasoner"
+profile = "sciforge-runtime-default"
 
-[profiles.sciforge-runtime-deepseek]
-model = "bailian/deepseek-v4-flash"
-model_provider = "sciforge-deepseek-proxy"
+[profiles.sciforge-runtime-default]
+model = "textReasoner"
+model_provider = "sciforge-model-router"
 model_reasoning_effort = "low"
 model_reasoning_summary = "none"
 
-[model_providers.sciforge-deepseek-proxy]
-name = "SciForge DeepSeek Proxy"
-base_url = "http://127.0.0.1:3891/v1"
+[model_providers.sciforge-model-router]
+name = "SciForge Model Router"
+base_url = "<service-managed-model-router-responses-url>"
 env_key = "SCIFORGE_RUNTIME_API_KEY"
 wire_api = "responses"
 ```
@@ -80,7 +80,7 @@ wire_api = "responses"
 这个文件由本地 setup 命令生成或刷新：
 
 ```bash
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url <model-router-responses-url>
 ```
 
 用于 browser/release acceptance 的 `SCIFORGE_RUNTIME_API_KEY` 不写入 `config.toml`、`config.local.json` 或仓库文件。只在启动 Runtime Codex / provider proxy 的 service 环境里设置；ignored local config 中的 key 只能作为本机 provider proxy 调试 fallback，不能满足 acceptance：
@@ -107,16 +107,16 @@ codex --model gpt-5.5 -C /path/to/SciForge
 
 SciForge runtime bridge 必须做成本保护：
 
-- 默认 profile 必须是 DeepSeek / proxy。
-- 缺少 `SCIFORGE_RUNTIME_API_KEY`、provider proxy upstream base URL、runtime profile 或 runtime provider table 时 fail closed。
-- 当前 smoke gate 要求 provider `sciforge-deepseek-proxy`、model `bailian/deepseek-v4-flash`、`env_key = "SCIFORGE_RUNTIME_API_KEY"` 和 `wire_api = "responses"`。
+- 默认 profile 必须是 SciForge Model Router public alias/profile。
+- 缺少 `SCIFORGE_RUNTIME_API_KEY`、Model Router service route、runtime profile 或 runtime provider table 时 fail closed。
+- 当前 smoke gate 要求 provider `sciforge-model-router`、model alias `textReasoner`、`env_key = "SCIFORGE_RUNTIME_API_KEY"` 和 `wire_api = "responses"`。
 - 不允许自动 fallback 到 OpenAI provider。
 - 只有用户显式设置 `allowOpenAiRuntime=true` 时才允许 OpenAI provider。
 - 每个 run 的 provider、model、profile、workspace、command id 必须写入 audit event，并在 GUI 可见。
 
 ## Provider Proxy Upstream
 
-`packages/backend` 的 provider proxy 对外暴露 OpenAI-compatible `/v1/responses`，并把请求转发到 upstream `/v1/chat/completions`。Runtime Codex profile 的 `base_url` 指向本地 proxy，upstream URL 由 proxy 自己解析。
+`packages/backend` 的 provider proxy / Model Router 对外暴露 OpenAI-compatible `/v1/responses`。Runtime Codex profile 的 `base_url` 指向 service-managed router endpoint；provider URL 和 raw model slug 由 router profile 解析，不作为产品默认公开契约。
 
 解析顺序：
 
@@ -139,7 +139,7 @@ npm run backend:codex-proxy
 {
   "codexProxy": {
     "upstreamBaseUrl": "https://your-openai-compatible-endpoint.example/v1",
-    "defaultModel": "bailian/deepseek-v4-flash"
+    "defaultModel": "textReasoner"
   }
 }
 ```
@@ -214,7 +214,7 @@ Adapter 只抽象 runtime host 细节，不扩展 backend 范围：
 - artifact 可打开、可追问；
 - debug/audit 默认折叠；
 - 没有隐藏 OpenAI 请求；
-- run audit 能证明使用的是 DeepSeek/profile/proxy。
+- run audit 能证明使用的是 SciForge Model Router profile 和 role aliases。
 
 当前 package smoke gate 中，`npm run verify:single-agent-final` 包含 `npm run smoke:runtime-provider-preflight`、`npm run smoke:runtime-codex-browser-acceptance`、`npm run smoke:fixed-platform-boundary` 和 `npm run smoke:single-agent-final-gate`。preflight 只用于在 browser acceptance 前分诊 provider/upstream 状态；默认浏览器 acceptance smoke 允许写出 blocked evidence 来证明 fail-closed。`npm run verify:single-agent-release` 额外先执行 `npm run desktop:package:dir`，再进入 strict browser acceptance，保证 release 前 packaged/production Electron lifecycle 也被验证。release rerun 必须使用 strict gate：
 

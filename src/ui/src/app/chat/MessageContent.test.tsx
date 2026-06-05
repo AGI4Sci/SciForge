@@ -70,6 +70,39 @@ test('message markdown renderer supports GFM tables while structured object refs
   assert.match(markup, /Picked methods file/);
 });
 
+test('message content renders uploaded image object refs as clickable ref-first thumbnails', () => {
+  const uploadedImage: ObjectReference = {
+    id: 'obj-upload-image-1',
+    kind: 'artifact',
+    title: 'microscopy.png',
+    ref: 'artifact:upload-image-1',
+    artifactType: 'uploaded-image',
+    preferredView: 'preview',
+    presentationRole: 'supporting-evidence',
+    status: 'available',
+    summary: 'Uploaded image',
+    provenance: {
+      path: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      dataRef: '.sciforge/uploads/session-1/upload-image-1-microscopy.png',
+      producer: 'user-upload',
+      size: 2048,
+    },
+  };
+  const markup = renderToStaticMarkup(
+    <MessageContent
+      content="What does this show?"
+      references={[uploadedImage]}
+      onObjectFocus={() => undefined}
+    />,
+  );
+
+  assert.match(markup, /message-image-attachments/);
+  assert.match(markup, /<img/);
+  assert.match(markup, /src="\/api\/sciforge\/preview\/raw\?ref=\.sciforge%2Fuploads%2Fsession-1%2Fupload-image-1-microscopy\.png"/);
+  assert.match(markup, /data-sciforge-reference=/);
+  assert.doesNotMatch(markup, /data:image|base64|iVBORw0KGgo/i);
+});
+
 test('message markdown renderer supports complete assistant markdown without raw html', () => {
   const markup = renderToStaticMarkup(
     <MessageContent

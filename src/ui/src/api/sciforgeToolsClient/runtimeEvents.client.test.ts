@@ -59,9 +59,9 @@ test('Runtime Codex foreground Computer Use host actions preserve gui.present an
           type: 'done',
           status: 'done',
           message: 'Runtime Codex completed successfully.',
-          provider: 'sciforge-deepseek-proxy',
-          model: 'bailian/deepseek-v4-flash',
-          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
           workspace: '/tmp/current',
           commandId,
           attemptId,
@@ -533,9 +533,9 @@ test('Runtime Codex foreground final message can use native assistant message pr
           schemaVersion: 'sciforge.codex.normalized-event.v1',
           type: 'message',
           text: 'VISIBLE_FOREGROUND_NATIVE_MESSAGE',
-          provider: 'sciforge-deepseek-proxy',
-          model: 'bailian/deepseek-v4-flash',
-          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
           workspace: '/tmp/current',
           commandId,
           attemptId: `${commandId}-attempt-1`,
@@ -546,9 +546,9 @@ test('Runtime Codex foreground final message can use native assistant message pr
           type: 'done',
           status: 'done',
           message: 'Runtime Codex completed successfully.',
-          provider: 'sciforge-deepseek-proxy',
-          model: 'bailian/deepseek-v4-flash',
-          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
           workspace: '/tmp/current',
           commandId,
           attemptId: `${commandId}-attempt-1`,
@@ -586,9 +586,9 @@ test('Runtime Codex foreground final message uses gui.present provenance', async
           schemaVersion: 'sciforge.codex.normalized-event.v1',
           type: 'gui_present',
           text: 'VISIBLE_FOREGROUND_GUI_PRESENT',
-          provider: 'sciforge-deepseek-proxy',
-          model: 'bailian/deepseek-v4-flash',
-          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
           workspace: '/tmp/current',
           commandId,
           attemptId: `${commandId}-attempt-1`,
@@ -609,9 +609,9 @@ test('Runtime Codex foreground final message uses gui.present provenance', async
           type: 'done',
           status: 'done',
           message: 'Runtime Codex completed successfully.',
-          provider: 'sciforge-deepseek-proxy',
-          model: 'bailian/deepseek-v4-flash',
-          profile: 'sciforge-runtime-deepseek',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
           workspace: '/tmp/current',
           commandId,
           attemptId: `${commandId}-attempt-1`,
@@ -648,9 +648,9 @@ test('Runtime Codex gui.present preserves explicit file and run references inste
             schemaVersion: 'sciforge.codex.normalized-event.v1',
             type: 'gui_present',
             text: `PRESENTED ${ref}`,
-            provider: 'sciforge-deepseek-proxy',
-            model: 'bailian/deepseek-v4-flash',
-            profile: 'sciforge-runtime-deepseek',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
             workspace: '/tmp/current',
             commandId,
             attemptId: `${commandId}-attempt-1`,
@@ -670,9 +670,9 @@ test('Runtime Codex gui.present preserves explicit file and run references inste
             type: 'done',
             status: 'done',
             message: 'Runtime Codex completed successfully.',
-            provider: 'sciforge-deepseek-proxy',
-            model: 'bailian/deepseek-v4-flash',
-            profile: 'sciforge-runtime-deepseek',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
             workspace: '/tmp/current',
             commandId,
             attemptId: `${commandId}-attempt-1`,
@@ -706,9 +706,9 @@ test('Runtime Codex gui.present stores event session lineage for selected artifa
             schemaVersion: 'sciforge.codex.normalized-event.v1',
             type: 'gui_present',
             text: 'VISIBLE_EVENT_SESSION_ARTIFACT',
-            provider: 'sciforge-deepseek-proxy',
-            model: 'bailian/deepseek-v4-flash',
-            profile: 'sciforge-runtime-deepseek',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
             workspace: '/tmp/current',
             commandId,
             attemptId: `${commandId}-attempt-1`,
@@ -730,9 +730,9 @@ test('Runtime Codex gui.present stores event session lineage for selected artifa
             type: 'done',
             status: 'done',
             message: 'Runtime Codex completed successfully.',
-            provider: 'sciforge-deepseek-proxy',
-            model: 'bailian/deepseek-v4-flash',
-            profile: 'sciforge-runtime-deepseek',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
             workspace: '/tmp/current',
             commandId,
             attemptId: `${commandId}-attempt-1`,
@@ -809,9 +809,9 @@ test('Runtime Codex app-server threadId is fixed to the same chat lane on follow
             schemaVersion: 'sciforge.codex.normalized-event.v1',
             type: 'gui_present',
             text: 'FIRST_NATIVE_THREAD_RESPONSE',
-            provider: 'sciforge-deepseek-proxy',
-            model: 'bailian/deepseek-v4-flash',
-            profile: 'sciforge-runtime-deepseek',
+            provider: 'sciforge-model-router',
+            model: 'sciforge-router',
+            profile: 'sciforge-runtime-default',
             workspace: '/tmp/current',
             commandId,
             attemptId: `${commandId}-attempt-1`,
@@ -982,7 +982,7 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   ].sort());
   assert.equal(body.commandText, 'ask --ref "artifact:report-1" "Summarize current context"');
   assert.equal(body.workspacePath, '/tmp/current');
-  assert.equal(body.profile, 'sciforge-runtime-deepseek');
+  assert.equal(body.profile, 'sciforge-runtime-default');
   const realtimeSession = body.realtimeSession as Record<string, unknown>;
   assert.equal(realtimeSession.schemaVersion, 'sciforge.codex-realtime-session.v1');
   assert.equal(realtimeSession.bridge, 'codex-native-realtime-session');
@@ -1033,6 +1033,76 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   assert.doesNotMatch(JSON.stringify(body), /legacy\.skill|127\.0\.0\.1:7777|preserve-context/);
   assert.deepEqual(recursiveForbiddenKeys(body, ['pty', 'rawBytes', 'rawTerminalBytes', 'rawTerminalPayload']), []);
   assert.doesNotMatch(JSON.stringify(body), /raw-terminal|raw-bytes/);
+});
+
+test('Runtime Codex stream request carries uploaded image refs for Model Router vision without inline bytes', async () => {
+  const originalFetch = globalThis.fetch;
+  const bodies: Array<Record<string, unknown>> = [];
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+      return new Response([
+        'event: done\n',
+        'data: {"type":"done","status":"done","message":"ok"}\n\n',
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: 'What does this microscopy image show?',
+      references: [{
+        id: 'ref-upload-image-1',
+        kind: 'task-result',
+        title: 'microscopy.png',
+        ref: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+        payload: {
+          currentReference: {
+            id: 'upload-image-1',
+            kind: 'artifact',
+            title: 'microscopy.png',
+            ref: 'artifact:upload-image-1',
+            artifactType: 'uploaded-image',
+            preferredView: 'preview',
+            provenance: {
+              path: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+              dataRef: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+            },
+          },
+        },
+      }],
+      artifacts: [{
+        id: 'upload-image-1',
+        type: 'uploaded-image',
+        producerScenario: 'literature-evidence-review',
+        schemaVersion: '1',
+        path: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+        dataRef: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+        metadata: {
+          mimeType: 'image/png',
+          storage: 'workspace-file',
+        },
+        previewDescriptor: {
+          kind: 'image',
+          source: 'path',
+          ref: '.sciforge/uploads/session-test/upload-image-1-microscopy.png',
+          mimeType: 'image/png',
+          inlinePolicy: 'stream',
+          actions: ['open-inline', 'make-thumbnail'],
+        },
+      }],
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const body = bodies[0]!;
+  const commandText = String(body.commandText ?? '');
+  const serialized = JSON.stringify(body);
+  assert.match(commandText, /ask --ref "\.sciforge\/uploads\/session-test\/upload-image-1-microscopy\.png"/);
+  assert.match(commandText, /What does this microscopy image show\?/);
+  assert.match(serialized, /sciforge-runtime-default|sciforge-model-router|sciforge-router/);
+  assert.doesNotMatch(serialized, /data:image|base64|iVBORw0KGgo|rawProviderPayload/i);
+  assert.deepEqual(recursiveForbiddenKeys(body, ['artifacts', 'references', 'messages', 'uiState']), []);
 });
 
 test('Runtime Codex commandText carries explicit selected message content as bounded terminal-equivalent context', async () => {
@@ -1642,13 +1712,20 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
       const commandId = String(body.commandId);
       const attemptId = String(body.attemptId);
       const stderrRef = `audit:codex-runtime:${commandId}:${attemptId}:stderr`;
+      const workspace = '/Users/alice/private/SciForge';
+      const rawStderr = [
+        'Runtime Codex exited with code 7.',
+        'Authorization: Bearer sk-runtime-secret-1234567890',
+        'url: https://private.provider.example/v1/responses?api_key=sk-provider-secret-1234567890',
+        `config: ${workspace}/config.local.json`,
+      ].join(' ');
       return new Response([
       'event: run_started\n',
-      `data: ${JSON.stringify({ type: 'run_started', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
+      `data: ${JSON.stringify({ type: 'run_started', provider: 'https://private.provider.example/v1', model: 'provider/raw-private-model-slug', profile: 'sciforge-runtime-default', workspace, commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
       'event: audit\n',
-      `data: ${JSON.stringify({ type: 'audit', status: 'stderr', message: 'RAW_STDERR_SHOULD_NOT_RENDER', raw: { stream: 'stderr', chunk: 'RAW_STDERR_SHOULD_NOT_RENDER' }, commandId, attemptId })}\n\n`,
+      `data: ${JSON.stringify({ type: 'audit', status: 'stderr', message: 'RAW_STDERR_SHOULD_NOT_RENDER', raw: { stream: 'stderr', chunk: rawStderr }, commandId, attemptId })}\n\n`,
       'event: failed\n',
-      `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 7.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 7, raw: { stderrSummary: 'RAW_STDERR_SHOULD_NOT_RENDER', evidenceRefs: [stderrRef] } })}\n\n`,
+      `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawStderr, provider: 'https://private.provider.example/v1', model: 'provider/raw-private-model-slug', profile: 'sciforge-runtime-default', workspace, commandId, attemptId, exitCode: 7, raw: { stderrSummary: rawStderr, workspace, provider: 'https://private.provider.example/v1', model: 'provider/raw-private-model-slug', evidenceRefs: [stderrRef] } })}\n\n`,
     ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
 
@@ -1662,12 +1739,12 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
     assert.equal(failure.schemaVersion, 'sciforge.runtime-codex-failed-run.v1');
     assert.equal(failure.commandId, response.run.id);
     assert.equal(failure.attemptId, `${response.run.id}-attempt-1`);
-    assert.equal(failure.workspace, '/tmp/current');
-    assert.equal(failure.profile, 'sciforge-runtime-deepseek');
-    assert.equal(failure.provider, 'sciforge-deepseek-proxy');
-    assert.equal(failure.model, 'bailian/deepseek-v4-flash');
+    assert.match(String(failure.workspace), /^\[workspace:hash:fnv1a-[a-f0-9]{8}\]$/);
+    assert.equal(failure.profile, 'sciforge-runtime-default');
+    assert.equal(failure.provider, 'sciforge-model-router');
+    assert.equal(failure.model, 'sciforge-router');
     assert.equal(failure.exitCode, 7);
-    assert.equal(failure.stderrSummary, 'RAW_STDERR_SHOULD_NOT_RENDER');
+    assert.match(String(failure.stderrSummary), /\[redacted-(?:url|secret|local-path):hash:fnv1a-[a-f0-9]{8}\]/);
     assert.equal(failure.failureKind, 'runtime-exit');
     assert.equal(failure.ownerLayer, 'runtime-codex');
     assert.equal(failure.retryable, true);
@@ -1682,11 +1759,11 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
     assert.equal(recoverState.resumeStrategy, 'audit-only-retry');
     assert.equal(recoverState.commandId, response.run.id);
     assert.equal(recoverState.attemptId, `${response.run.id}-attempt-1`);
-    assert.equal(recoverState.workspace, '/tmp/current');
-    assert.equal(recoverState.profile, 'sciforge-runtime-deepseek');
-    assert.equal(recoverState.provider, 'sciforge-deepseek-proxy');
-    assert.equal(recoverState.model, 'bailian/deepseek-v4-flash');
-    assert.equal(recoverState.stderrSummary, 'RAW_STDERR_SHOULD_NOT_RENDER');
+    assert.equal(recoverState.workspace, failure.workspace);
+    assert.equal(recoverState.profile, 'sciforge-runtime-default');
+    assert.equal(recoverState.provider, 'sciforge-model-router');
+    assert.equal(recoverState.model, 'sciforge-router');
+    assert.equal(recoverState.stderrSummary, failure.stderrSummary);
     assert.ok((recoverState.evidenceRefs as string[]).includes(`audit:codex-runtime:${response.run.id}:${response.run.id}-attempt-1:stderr`));
     assert.equal(audit.foldedByDefault, true);
     assert.doesNotMatch(response.message.content, /RAW_STDERR_SHOULD_NOT_RENDER/);
@@ -1697,20 +1774,21 @@ test('Runtime Codex failed SSE returns a persistable failed run with folded audi
     assert.equal(reloadedRun.status, 'failed');
     assert.equal(reloadedFailure.commandId, response.run.id);
     assert.equal(reloadedFailure.attemptId, `${response.run.id}-attempt-1`);
-    assert.equal(reloadedFailure.workspace, '/tmp/current');
-    assert.equal(reloadedFailure.profile, 'sciforge-runtime-deepseek');
-    assert.equal(reloadedFailure.provider, 'sciforge-deepseek-proxy');
-    assert.equal(reloadedFailure.model, 'bailian/deepseek-v4-flash');
-    assert.equal(reloadedFailure.stderrSummary, 'RAW_STDERR_SHOULD_NOT_RENDER');
+    assert.equal(reloadedFailure.workspace, failure.workspace);
+    assert.equal(reloadedFailure.profile, 'sciforge-runtime-default');
+    assert.equal(reloadedFailure.provider, 'sciforge-model-router');
+    assert.equal(reloadedFailure.model, 'sciforge-router');
+    assert.equal(reloadedFailure.stderrSummary, failure.stderrSummary);
     const reloadedRecoverState = reloadedFailure.recoverState as Record<string, unknown>;
     assert.equal(reloadedRecoverState.status, 'repair-needed');
     assert.equal(reloadedRecoverState.commandId, response.run.id);
-    assert.equal(reloadedRecoverState.workspace, '/tmp/current');
-    assert.equal(reloadedRecoverState.profile, 'sciforge-runtime-deepseek');
-    assert.equal(reloadedRecoverState.provider, 'sciforge-deepseek-proxy');
-    assert.equal(reloadedRecoverState.model, 'bailian/deepseek-v4-flash');
-    assert.equal(reloadedRecoverState.stderrSummary, 'RAW_STDERR_SHOULD_NOT_RENDER');
+    assert.equal(reloadedRecoverState.workspace, failure.workspace);
+    assert.equal(reloadedRecoverState.profile, 'sciforge-runtime-default');
+    assert.equal(reloadedRecoverState.provider, 'sciforge-model-router');
+    assert.equal(reloadedRecoverState.model, 'sciforge-router');
+    assert.equal(reloadedRecoverState.stderrSummary, failure.stderrSummary);
     assert.ok((reloadedFailure.evidenceRefs as string[]).includes(`audit:codex-runtime:${response.run.id}:${response.run.id}-attempt-1:stderr`));
+    assert.doesNotMatch(JSON.stringify(response.run), /\/Users\/alice|private\.provider|raw-private-model-slug|sk-runtime-secret|sk-provider-secret|Authorization: Bearer sk|api_key/i);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1727,11 +1805,11 @@ test('Runtime Codex provider auth failures surface a sanitized recoverable reaso
       const rawStderr = 'unexpected status 401 Unauthorized: Invalid token (request id: req-secret-123), url: http://127.0.0.1:3891/v1/responses';
       return new Response([
         'event: run_started\n',
-        `data: ${JSON.stringify({ type: 'run_started', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
+        `data: ${JSON.stringify({ type: 'run_started', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, evidenceRefs: [stderrRef] })}\n\n`,
         'event: failed\n',
-        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawStderr, provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawStderr, provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
         'event: failed\n',
-        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: 'startup warning before provider failure', evidenceRefs: [stderrRef] } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: 'startup warning before provider failure', evidenceRefs: [stderrRef] } })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
 
@@ -1762,9 +1840,9 @@ test('Runtime Codex provider gateway failures surface a retryable upstream reaso
       const rawGateway = 'unexpected status 502 Bad Gateway: Unknown error, url: http://127.0.0.1:3891/v1/responses';
       return new Response([
         'event: failed\n',
-        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawGateway, provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: rawGateway, provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId })}\n\n`,
         'event: failed\n',
-        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 1 })}\n\n`,
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, exitCode: 1 })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
 
@@ -1798,7 +1876,7 @@ test('Runtime Codex DNS failures are classified as retryable external-network wi
         'event: audit\n',
         `data: ${JSON.stringify({ type: 'audit', status: 'stderr', raw: { stream: 'stderr', chunk: rawDnsFailure }, commandId, attemptId })}\n\n`,
         'event: failed\n',
-        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-deepseek-proxy', model: 'bailian/deepseek-v4-flash', profile: 'sciforge-runtime-deepseek', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: rawDnsFailure, evidenceRefs: [stderrRef] } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'failed', status: 'failed', message: 'Runtime Codex exited with code 1.', provider: 'sciforge-model-router', model: 'sciforge-router', profile: 'sciforge-runtime-default', workspace: '/tmp/current', commandId, attemptId, exitCode: 1, raw: { stderrSummary: rawDnsFailure, evidenceRefs: [stderrRef] } })}\n\n`,
       ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
     }) as typeof fetch;
 

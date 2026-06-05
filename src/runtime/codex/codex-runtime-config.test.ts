@@ -13,7 +13,7 @@ import {
 } from '../../../packages/backend/src/runtime-home.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
 
-test('runtime config guard accepts isolated DeepSeek proxy profile', async () => {
+test('runtime config guard accepts isolated Model Router profile without exposing private endpoint settings', async () => {
   const workspace = await tempWorkspace();
   const config = await assertCodexRuntimeConfig({
     workspacePath: workspace,
@@ -24,25 +24,63 @@ test('runtime config guard accepts isolated DeepSeek proxy profile', async () =>
   assert.equal(config.profile, RUNTIME_PROFILE);
   assert.equal(config.provider, RUNTIME_PROVIDER);
   assert.equal(config.model, RUNTIME_MODEL);
-  assert.equal(config.proxyBaseUrl, DEFAULT_PROXY_BASE_URL);
+  assert.equal('proxyBaseUrl' in config, false);
+  assert.equal('runtimeKeyEnv' in config, false);
+  assert.deepEqual(config.capabilities, ['text', 'vision']);
+  assert.deepEqual(config.roleCoverage, {
+    textReasoner: 'configured',
+    visionTranslator: 'configured',
+  });
   assert.match(config.codexHome, /packages\/backend\/\.codex-runtime\/codex-home$/);
 });
 
-test('runtime config guard accepts the currently selected user model', async () => {
+test('runtime config guard normalizes private raw provider and model slugs out of runtime metadata', async () => {
   const workspace = await tempWorkspace();
   const config = await assertCodexRuntimeConfig({
     workspacePath: workspace,
     env: { [RUNTIME_KEY_ENV]: 'test-key' },
     configText: runtimeConfig({
-      provider: 'native',
-      model: 'kimi/kimi-k2.6',
+      provider: 'sciforge-deepseek-proxy',
+      model: 'deepseek-chat',
+    }),
+  });
+
+  assert.equal(config.provider, RUNTIME_PROVIDER);
+  assert.equal(config.model, RUNTIME_MODEL);
+  assert.doesNotMatch(JSON.stringify(config), /sciforge-deepseek-proxy|deepseek-chat/);
+});
+
+test('runtime config guard normalizes private raw slugs hidden behind public router prefixes', async () => {
+  const workspace = await tempWorkspace();
+  const config = await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    configText: runtimeConfig({
+      provider: 'sciforge-model-router-deepseek-proxy',
+      model: 'sciforge-router-deepseek-chat',
+    }),
+  });
+
+  assert.equal(config.provider, RUNTIME_PROVIDER);
+  assert.equal(config.model, RUNTIME_MODEL);
+  assert.doesNotMatch(JSON.stringify(config), /deepseek|proxy|chat/);
+});
+
+test('runtime config guard accepts a public router alias override without returning raw provider settings', async () => {
+  const workspace = await tempWorkspace();
+  const config = await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: { [RUNTIME_KEY_ENV]: 'test-key' },
+    configText: runtimeConfig({
+      provider: 'sciforge-model-router-preview',
+      model: 'sciforge-router-preview',
       proxyBaseUrl: 'http://127.0.0.1:3891/v1',
     }),
   });
 
-  assert.equal(config.provider, 'native');
-  assert.equal(config.model, 'kimi/kimi-k2.6');
-  assert.equal(config.proxyBaseUrl, 'http://127.0.0.1:3891/v1');
+  assert.equal(config.provider, 'sciforge-model-router-preview');
+  assert.equal(config.model, 'sciforge-router-preview');
+  assert.equal('proxyBaseUrl' in config, false);
 });
 
 test('runtime config guard reads CODEX_HOME from the supplied runtime env', async () => {
@@ -62,7 +100,8 @@ test('runtime config guard reads CODEX_HOME from the supplied runtime env', asyn
   });
 
   assert.equal(config.codexHome, codexHome);
-  assert.equal(config.proxyBaseUrl, 'http://127.0.0.1:3892/v1');
+  assert.equal(config.provider, RUNTIME_PROVIDER);
+  assert.equal(config.model, RUNTIME_MODEL);
 });
 
 test('runtime config guard fails closed when workspace is missing', async () => {
@@ -76,7 +115,7 @@ test('runtime config guard fails closed when workspace is missing', async () => 
   );
 });
 
-test('runtime config guard fails closed when DeepSeek proxy key is missing', async () => {
+test('runtime config guard fails closed when Model Router provider key is missing', async () => {
   const workspace = await tempWorkspace();
   await assert.rejects(
     () => assertCodexRuntimeConfig({
@@ -143,7 +182,8 @@ test('OpenAI-looking runtime endpoint is blocked unless explicitly opted in', as
     configText,
     allowOpenAiRuntime: true,
   });
-  assert.equal(config.proxyBaseUrl, 'https://api.openai.com/v1');
+  assert.equal(config.provider, RUNTIME_PROVIDER);
+  assert.equal(config.model, RUNTIME_MODEL);
 });
 
 test('runtime environment forces isolated CODEX_HOME over inherited values', () => {

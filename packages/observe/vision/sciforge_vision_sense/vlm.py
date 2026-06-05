@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 class VisionVlmConfig:
     base_url: str
     api_key: str
-    model: str = "qwen3.6-plus"
+    model: str = "sciforge-router"
     timeout_seconds: float = 60.0
     max_retries: int = 2
     headers: Mapping[str, str] = field(default_factory=dict)
@@ -69,7 +69,7 @@ class VisionVlmClient:
         try:
             return response["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise VisionVlmError("VLM response did not contain choices[0].message.content") from exc
+            raise VisionVlmError("vision verifier response did not contain choices[0].message.content") from exc
 
     def chat_completions(
         self,
@@ -109,7 +109,7 @@ class VisionVlmClient:
                     break
                 time.sleep(min(0.25 * (2**attempt), 2.0))
 
-        raise VisionVlmError(f"VLM chat completion request failed: {last_error}") from last_error
+        raise VisionVlmError(f"vision verifier chat completion request failed: {last_error}") from last_error
 
     def user_message_with_image(
         self,
@@ -258,7 +258,7 @@ COORDINATE_PATTERNS = [
 
 def _extract_json_object(text: str) -> Mapping[str, Any]:
     if not text or not text.strip():
-        raise VisionVlmError("VLM response is empty")
+        raise VisionVlmError("vision verifier response is empty")
 
     candidates = _json_candidates(text)
     errors: list[str] = []
@@ -269,10 +269,10 @@ def _extract_json_object(text: str) -> Mapping[str, Any]:
             errors.append(str(exc))
             continue
         if not isinstance(value, dict):
-            raise VisionVlmError("VLM JSON must be an object")
+            raise VisionVlmError("vision verifier JSON must be an object")
         return value
 
-    raise VisionVlmError(f"No valid JSON object found in VLM response: {errors[:2]}")
+    raise VisionVlmError(f"No valid JSON object found in verifier response: {errors[:2]}")
 
 
 def _json_candidates(text: str) -> list[str]:

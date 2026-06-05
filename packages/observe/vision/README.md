@@ -11,7 +11,7 @@
 Vision/Computer Use 的模块级设计文档位于 `vision_docs/`：
 
 - [`vision_docs/vision_computer_use_agent_mvp.md`](vision_docs/vision_computer_use_agent_mvp.md)：Vision + Computer Use 最小闭环。
-- [`vision_docs/KV_GROUND_SERVICE_GUIDANCE.md`](vision_docs/KV_GROUND_SERVICE_GUIDANCE.md)：历史 KV-Ground 兼容服务部署、路径映射和排障；当前默认 grounding 模型仍是 `qwen3.7-plus`。
+- [`vision_docs/KV_GROUND_SERVICE_GUIDANCE.md`](vision_docs/KV_GROUND_SERVICE_GUIDANCE.md)：历史 grounding 兼容服务部署、路径映射和排障；它只描述 legacy adapter，不代表默认模型或公共 provider 选择。
 
 Computer Use action provider 消费本包输出时的目标链路：
 
@@ -19,7 +19,7 @@ Computer Use action provider 消费本包输出时的目标链路：
 TUI Host
   -> packages/actions/computer-use.runTask(request, hostPorts)
   -> optional packages/observe/vision observation / focus-region / verifier feedback
-  -> optional qwen3.7-plus grounding coordinates
+  -> optional Model Router grounding translator coordinates
   -> Computer Use generic action validation
   -> hostPorts executor
   -> refs-first trace/result
@@ -30,7 +30,7 @@ TUI Host
 当 agent、skill 或 Computer Use action provider 需要纯视觉 GUI 信号时使用这个包。输入是任务文本和截图引用，输出仍然是文本。输出文本可以包括：
 
 - 可供 Computer Use planner 校验的候选目标描述或 generic action suggestion；最终 action schema、审批和执行归 `packages/actions/computer-use`。
-- `qwen3.7-plus` grounding 返回的像素坐标。
+- Model Router grounding translator 返回的像素坐标。
 - 可读的失败原因、证据摘要和下一步建议。
 - 代码片段或控制信号，但必须保持可审计、可序列化。
 
@@ -78,16 +78,19 @@ assert plan.mode == "parallel-analysis"
 - `build_verifier_planning_feedback`：把 pixel diff、window consistency、grounding、focus bbox 和失败原因压缩成下一轮 Planner 可读反馈。
 - `build_region_semantic_verifier`：基于 action、focus crop diff、整窗 diff 和 focus bbox 输出 `regionSemantic` verdict、confidence、summary 和 nextPlannerHint。
 
-Computer Use action provider 的 host ports 负责截图、裁剪、执行、坐标映射和写 trace；二次 crop grounding 的策略边界由本包定义，host adapter 只把 focus crop 交给 `qwen3.7-plus` grounding helper，并把 crop-local 坐标映射回 window-local。历史 KV-Ground adapter 只能作为兼容路径保留。
+Computer Use action provider 的 host ports 负责截图、裁剪、执行、坐标映射和写 trace；二次 crop grounding 的策略边界由本包定义，host adapter 把 screenshot/crop/grounding/verifier prompt 交给 Model Router vision translator roles，并把 crop-local 坐标映射回 window-local。历史 grounding adapter 只能作为兼容路径保留。
 
-## 模型分工
+## 模型路由契约
 
-SciForge 将“任务规划”、“视觉观察”和“视觉定位”分开配置：
+Computer Use 不在 policy 中区分公开的 reasoning、vision 或具体 grounding 上游模型。公共契约只依赖 Model Router provider/capability surface：
 
-- **Planner 默认属于 Codex CLI / TUI 文本 agent 或 Computer Use action provider**：它消费 compact observation、visible text、action history 和 verifier feedback，输出一个 generic action 或 `done=true`，不输出坐标。
-- **Vision helper 使用 `qwen3.7-plus`**：当 Planner 需要看图时，本包读取任务文本和截图，输出 observation summary、候选目标描述、局部区域信息或 verifier feedback。
-- **Grounder 也使用 `qwen3.7-plus`**：需要模型参与的 grounding 和 VLM 观察使用同一个默认模型。历史 KV-Ground 服务名、endpoint 或 adapter 只代表兼容 provider 壳，不代表默认 grounding 模型。
-- **普通文本模型不能作为 VLM**：例如 `deepseek-v4` / `deepseek-v4-flash` 不能处理截图输入，不应配置为视觉 helper。
+- `model-router.capability.computer-use.planner`：消费 compact observation、visible text、action history 和 verifier feedback，输出一个 generic action 或 `done=true`，不输出坐标。
+- `model-router.capability.computer-use.screenshot-translator`：把 screenshot ref 和当前 instruction 转成可审计 observation summary。
+- `model-router.capability.computer-use.crop-translator`：处理 focus-region/crop prompt，输出局部区域摘要或候选目标描述。
+- `model-router.capability.computer-use.grounding-translator`：把 screenshot/crop ref 加 target description 转成原图像素坐标。
+- `model-router.capability.computer-use.verifier-translator`：压缩 before/after screenshot refs、pixel diff 和 verifier feedback。
+
+Router 后面可以选择任意合规 provider/model，但这些选择不写入 Computer Use policy 默认值。历史 grounding endpoint、服务名或 adapter 只代表 `legacy-kv-ground-compatible-adapter` 兼容壳，不代表默认 grounding 模型。
 
 ## 配置项
 
@@ -95,13 +98,14 @@ SciForge 将“任务规划”、“视觉观察”和“视觉定位”分开�
 
 ```json
 {
-  "modelBaseUrl": "http://your-openai-compatible-endpoint/v1",
-  "apiKey": "your-api-key",
-  "modelName": "bailian/deepseek-v4-flash",
+  "runtimeProfile": "sciforge-runtime-default",
+  "modelProvider": "sciforge-model-router",
+  "modelName": "sciforge-router",
   "visionSense": {
     "desktopBridgeEnabled": true,
+    "routerProfile": "sciforge-runtime-default",
     "grounderBaseUrl": "http://127.0.0.1:18081",
-    "grounderUploadStrategy": "inline",
+    "grounderUploadStrategy": "file-ref",
     "grounderRemotePathPrefix": "/remote/shared/path/",
     "grounderLocalPathPrefix": "/local/shared/path/",
     "showVisualCursor": true
@@ -111,11 +115,11 @@ SciForge 将“任务规划”、“视觉观察”和“视觉定位”分开�
 
 含义：
 
-- `modelName`：普通文本 backend，可继续使用 deepseek 等文本模型。
-- `SCIFORGE_RUNTIME_API_KEY` / Runtime Codex config：Computer Use 默认 Planner 是 Codex CLI / TUI 文本 agent，消费 compact observation、visible text、action history 和 verifier feedback。
-- Computer Use / Vision Sense 的设计默认 VLM 和 grounding 模型都是 `qwen3.7-plus`；进入 evidence 的模型标识应统一记录为 `qwen3.7-plus`。
-- `visionSense.grounderBaseUrl`：历史 KV-Ground-compatible 服务地址；只在 host adapter 仍沿用兼容路径时使用，不代表默认模型。
-- `visionSense.grounderUploadStrategy`：默认 `inline`，表示本机截图以内联 `image_base64` 发送给 `/predict/`。只有明确共享路径映射时才改用服务端可读路径。
+- `modelProvider` / `modelName` / `runtimeProfile`：公开 Runtime Codex router alias/profile；Computer Use policy 不把它解释为具体上游文本、视觉或 grounding 模型。
+- `SCIFORGE_RUNTIME_API_KEY` / Runtime config：供 Model Router 或运行时 provider 取用；Computer Use policy 只要求 router capability，不要求某个文本 planner slug。
+- Computer Use / Vision Sense 的设计默认是统一 Model Router capability surface；进入 evidence 的 provider/model metadata 只能作为 router 决议结果或 legacy adapter metadata 记录，不能成为 policy 默认值。
+- `visionSense.grounderBaseUrl`：历史 grounding-compatible 服务地址；只在 host adapter 仍沿用兼容路径时使用，不代表默认模型。
+- `visionSense.grounderUploadStrategy`：默认应使用 `file-ref` / shared path refs。只有明确启用 legacy adapter 且共享路径不可用时，才允许短期 `inline` 上传到兼容 `/predict/`，并且该 payload 不得进入长期 trace、聊天正文或主上下文。
 - `visionSense.grounderRemotePathPrefix` / `grounderLocalPathPrefix`：当 KV-Ground 服务和 SciForge 共享挂载目录时，用于把本地截图路径映射为服务端可读路径。
 - `visionSense.showVisualCursor`：shared-system 诊断时显示 SciForge 专属视觉指针，便于区分用户鼠标和 agent 操作；最终无用户影响路径应优先使用独立 input adapter，例如 `SCIFORGE_VISION_INPUT_ADAPTER=remote-desktop` 搭配 `SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER=sciforge-simulated-remote-desktop`，由 adapter 维护虚拟 pointer/keyboard state refs。
 
@@ -123,12 +127,11 @@ SciForge 将“任务规划”、“视觉观察”和“视觉定位”分开�
 
 ```bash
 export SCIFORGE_RUNTIME_API_KEY="your-runtime-provider-key"
-# Optional: only set this when using a non-default Runtime Codex planner profile.
-export SCIFORGE_COMPUTER_USE_PLANNER_PROFILE="sciforge-runtime-deepseek"
+export SCIFORGE_MODEL_ROUTER_PROFILE="sciforge-runtime-default"
 
 # Legacy compatibility path only.
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
-export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
+export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="file-ref"
 export SCIFORGE_VISION_KV_GROUND_LOCAL_PATH_PREFIX="/local/shared/path/"
 export SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIX="/remote/shared/path/"
 
@@ -171,7 +174,7 @@ text_result = SensePluginTextResult(
 assert text_result.format == "application/json"
 ```
 
-## 历史 KV-Ground 兼容调用示例
+## 历史 Grounding 兼容调用示例
 
 ```python
 import os
@@ -199,7 +202,7 @@ assert fine_result.crop_local_coordinates is not None
 assert fine_result.window_local_coordinates is not None
 ```
 
-默认 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline` 时，本地图片会作为 `image_base64` 随 `/predict/` 上传；只有 `remote_path_prefixes` 确认服务端可读时，才传 `image_path`。
+默认路径应使用 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=file-ref` 或共享路径 ref；只有明确启用 legacy adapter 且没有共享路径时，才允许短期把本地图片作为 `image_base64` 随 `/predict/` 上传。该请求 payload 不得写入长期 trace、聊天正文或主上下文。
 
 ## 失败处理
 
@@ -207,7 +210,7 @@ assert fine_result.window_local_coordinates is not None
 
 - 截图 ref、哈希、尺寸和窗口元数据。
 - Vision helper 原始 JSON 或解析失败原因。
-- `qwen3.7-plus` grounding provider metadata；如果使用历史 KV-Ground-compatible 路径，再记录 endpoint、`/health` 摘要、`/predict/` 请求摘要、返回摘要、上传策略和坐标解析状态。
+- Model Router capability metadata；如果使用历史 grounding-compatible 路径，再记录 endpoint、`/health` 摘要、`/predict/` 请求摘要、返回摘要、上传策略和坐标解析状态。
 - Computer Use action provider 写入的执行状态 ref、输入通道、窗口锁/executor lease 和失败原因；真实执行细节不在本包生成。
 - Verifier 的 before/after 截图和 pixel diff。
 
@@ -219,7 +222,7 @@ Trace 输出必须保持 file-ref-only：保存 before/after screenshot refs、f
 
 - 纯视觉：不读 DOM，不读 accessibility tree。
 - Planner 不输出坐标，只输出目标描述。
-- `qwen3.7-plus` grounding 负责把 screenshot ref 或 inline upload 后的 image payload 加目标描述变成原图像素坐标；历史 KV-Ground-compatible adapter 只能作为调试/迁移路径。
+- Model Router grounding translator 负责把 screenshot/crop ref 加目标描述变成原图像素坐标；历史 grounding-compatible adapter 只能作为调试/迁移路径。
 - Executor 属于 Computer Use action provider/host ports；本包只定义视觉文本、grounding 和 verifier 辅助协议。
 - Pixel diff 只证明视觉状态变化，语义完成仍需下一步检查。
 

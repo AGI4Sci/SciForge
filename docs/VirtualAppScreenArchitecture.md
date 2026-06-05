@@ -160,6 +160,27 @@ WindowActionSession 管理：
 - pause / stop / remove window
 - before/after evidence refs
 
+## Surface Transport
+
+Surface Transport 只描述 WindowActionSession / host-owned surface 如何把真实窗口或宿主拥有的 live presentation 投到 SciForge UI。它不是旧隔离 `VirtualAppScreen` 的回归，也不把 Image / Evidence Pane 升级成第二套可交互控制面。
+
+候选 transport 必须作为能力评估对象，而不是产品承诺：
+
+| 候选 | 适用边界 |
+| --- | --- |
+| `native-presented-surface` | 宿主进程直接提供可呈现 surface 或 OS/window capture handle，适合首选 live path。 |
+| `webrtc` | 适合跨进程或远端 host 的低延迟 stream；signaling、metrics 和 media refs 必须保持 bounded。 |
+| `webcodecs` | 适合本地 encode/decode 或 worker pipeline；仍由 host/session owner 决定输入与焦点。 |
+| `mjpeg-png-delta` | 只作为诊断和兜底帧序列，用于 evidence、debug 或弱实时预览。 |
+
+选择策略必须保持平台中立：不把选择硬编码到 macOS/Linux/Windows，而是读取 shell/provider/runtime capability refs，结合窗口可捕获性、编码能力、输入 adapter、焦点租约、延迟、功耗和可观测 metrics 选择 transport。平台差异只能进入 capability refs 和 diagnostics，不能进入产品级分支。
+
+live path 必须是 refs-first。UI 只接收 `liveSurfaceRef`、`frameStreamRef`、`transportTelemetryRef`、尺寸、scale、bounds、session owner 和 bounded diagnostics；原始帧、SDP、provider URL、token、raw screenshot/base64 不进入主 payload。WindowActionSession / host owner 保持 single interactive truth：用户看到的 live surface、actorCursor、ScopedInputAdapter 和 action evidence 必须指向同一个 owner/session，不能让 replay、Image pane artifact 或 fallback stream 成为第二个可操作目标。
+
+如果没有任何候选满足实时交互、输入归属、focus lease 和 bounded evidence 要求，系统必须 fail-closed。有效输出是 `blocked/handoff/retry`、明确 block reason、可重试 capability probe、或 `fallbackRequired=true` 的非通过 evidence；不能把弱预览伪装成可交互 live pass。
+
+`mjpeg-png-delta` 明确是 diagnostic/fallback only。它可以帮助记录 before/after、低频截图、transport 对比和 provider debug，但不能作为 user-level live pass，也不能改变 WindowActionSession 对输入、焦点和完成判断的所有权。
+
 ## Scoped Input Adapter
 
 每个 agent 会话都有自己的 `ScopedInputAdapter`。它是逻辑输入通道，不承诺每个 agent 都有一套真实 OS 级独立鼠标键盘。

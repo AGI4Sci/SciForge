@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -146,8 +146,9 @@ export async function materializeCuNextAcceptanceRefs(acceptanceDir: string, acc
     refs.push(ref);
   }
   await Promise.all(refs.filter((ref) => ref !== completionEvidenceRef).map(async (ref) => {
-    const target = join(acceptanceDir, ref);
+    const target = materializedFixtureRefPath(acceptanceDir, ref);
     await mkdir(dirname(target), { recursive: true });
+    if (await fileExists(target)) return;
     if (/\.(png|jpg|jpeg|webp)$/i.test(ref)) {
       await writeFile(target, fixturePng);
     } else if (/dense-grounding-rejections\.json$|rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/.test(ref)) {
@@ -166,9 +167,18 @@ export async function materializeCuNextAcceptanceRefs(acceptanceDir: string, acc
   }
 }
 
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function materializeCompletionEvidenceRefs(acceptanceDir: string, completionEvidence: Record<string, unknown>) {
   await Promise.all(collectCompletionEvidenceFileRefs(completionEvidence).map(async (ref) => {
-    const target = join(acceptanceDir, ref);
+    const target = materializedFixtureRefPath(acceptanceDir, ref);
     await mkdir(dirname(target), { recursive: true });
     if (/\.(png|jpg|jpeg|webp)$/i.test(ref)) {
       await writeFile(target, fixturePng);
@@ -176,6 +186,17 @@ async function materializeCompletionEvidenceRefs(acceptanceDir: string, completi
       await writeFile(target, `${JSON.stringify({ ref, fixture: 'materialized-completion-evidence-ref' }, null, 2)}\n`);
     }
   }));
+}
+
+function materializedFixtureRefPath(acceptanceDir: string, ref: string) {
+  const normalizedRef = ref.replace(/\\/g, '/');
+  if (normalizedRef.startsWith('.sciforge/')) {
+    const normalizedDir = acceptanceDir.replace(/\\/g, '/');
+    const marker = '/.sciforge/';
+    const markerIndex = normalizedDir.indexOf(marker);
+    if (markerIndex > 0) return join(normalizedDir.slice(0, markerIndex), normalizedRef);
+  }
+  return join(acceptanceDir, ref);
 }
 
 function collectCompletionEvidenceFileRefs(value: unknown, key = ''): string[] {
@@ -252,6 +273,10 @@ export function stringList(value: unknown): string[] {
 
 export function uniqueStringList(values: Array<string | undefined>): string[] {
   return [...new Set(values.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))];
+}
+
+function prefixedRef(prefix: string, name: string): string {
+  return `${prefix.replace(/\/?$/, '/')}${name}`;
 }
 
 export function looksLikeFixtureFileRef(key: string, value: string) {
@@ -415,18 +440,20 @@ export async function writeBundleLocalCuNext07Acceptance(workspace: string): Pro
     'gui-present.json',
     'vision-trace.json',
     'virtual-pointer-events.json',
-    'coarse-fine-rejected-targets.json',
     'fine-grounding-diagnostic.json',
-    'rejected-save-target.json',
-    'rejected-share-target.json',
     'executor-lease.json',
     'verifier-verdict.json',
     'gui-present-payload.json',
     'isolated-desktop-l3-workflow-evidence.json',
   ].map((name) => writeFile(join(bundleDir, name), JSON.stringify({ runId, name }, null, 2))));
+  await Promise.all([
+    'coarse-fine-rejected-targets.json',
+    'rejected-save-target.json',
+    'rejected-share-target.json',
+  ].map((name) => writeFile(join(bundleDir, name), JSON.stringify(denseGroundingRejectedTargetFixture(`${runDirRef}/${name}`), null, 2))));
   await writeFile(
     join(bundleDir, 'isolated-desktop-l3-workflow-evidence.json'),
-    JSON.stringify(isolatedL3CompletionEvidence([String(acceptance.finalArtifactRef)]), null, 2),
+    JSON.stringify(acceptance.completionEvidence ?? {}, null, 2),
   );
   await materializeCuNextAcceptanceRefs(bundleDir, acceptance);
   await writeFile(join(bundleDir, 'coarse-window.png'), fixturePng);
@@ -477,10 +504,14 @@ export async function writeBundleLocalCuNext07Acceptance(workspace: string): Pro
 }
 
 export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, unknown> {
-  const finalArtifactRef = 'dense-grounding-export.csv';
+  const runId = 'cu-next-07-wrapper';
+  const ref = (name: string) => name;
+  const sessionRef = `computer-use-session:${runId}`;
+  const finalArtifactRef = ref('dense-grounding-export.csv');
+  const replayFrameRef = ref('before.png');
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
-    runId: 'cu-next-07-wrapper',
+    runId,
     taskId: 'CU-NEXT-07',
     scenarioId: 'CU-LONG-004',
     createdAt: '2026-05-25T00:00:00.000Z',
@@ -490,7 +521,7 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
     appWorkflow: {
       kind: 'multi-app-workflow',
       apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: ['window-switch-trace.json'],
+      windowSwitchTraceRefs: [ref('window-switch-trace.json')],
     },
     antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
     tuiHostChain: [
@@ -498,60 +529,61 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
         id: 'chat-origin',
         kind: 'sciForge-chat-origin',
         status: 'present',
-        requestRef: 'computer-use-request.json',
-        origin: sciForgeChatOrigin('cu-next-07-wrapper'),
+        requestRef: ref('computer-use-request.json'),
+        origin: sciForgeChatOrigin(runId),
       },
-      { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: 'computer-use-request.json', hostPortsRef: 'host-ports.json' },
-      { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: 'tool-payload.json' },
-      { id: 'gui-present', kind: 'gui.present', status: 'present', recordRef: 'gui-present.json' },
+      { id: 'tui-host-runTask', kind: 'tui-host-runTask', status: 'present', requestRef: ref('computer-use-request.json'), hostPortsRef: ref('host-ports.json') },
+      { id: 'computer-use-action-provider', kind: 'computer-use-action-provider', status: 'present', toolPayloadRef: ref('tool-payload.json') },
+      { id: 'gui-present', kind: 'gui.present', status: 'present', recordRef: ref('gui-present.json') },
     ],
     evidenceClaims: [
       {
         id: 'chat-origin',
         kind: 'sciForge-chat-origin',
         status: 'present',
-        ref: 'computer-use-request.json',
-        refs: ['computer-use-request.json'],
-        origin: sciForgeChatOrigin('cu-next-07-wrapper'),
-        sessionRefs: ['computer-use-session:cu-next-07-wrapper'],
+        ref: ref('computer-use-request.json'),
+        refs: [ref('computer-use-request.json')],
+        origin: sciForgeChatOrigin(runId),
+        sessionRefs: [sessionRef],
       },
-      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: 'vision-trace.json' },
+      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: ref('vision-trace.json') },
       {
         id: 'independent-input-adapter',
         kind: 'independent-input-adapter',
-        refs: ['virtual-pointer-events.json'],
-        sessionRefs: ['computer-use-session:cu-next-07-wrapper'],
+        refs: [ref('virtual-pointer-events.json')],
+        sessionRefs: [sessionRef],
       },
       {
         id: 'gui-present-record',
         kind: 'gui-present-record',
-        ref: 'gui-present.json',
-        refs: ['gui-present.json'],
+        ref: ref('gui-present.json'),
+        refs: [ref('gui-present.json')],
         artifactRefs: [finalArtifactRef],
       },
     ],
     screenshotRefs: {
-      before: ['before.png'],
-      after: ['after.png'],
+      before: [replayFrameRef],
+      after: [ref('after.png')],
     },
-    focusCropRefs: ['focus-crop.png'],
-    groundingDiagnosticsRefs: ['coarse-fine-rejected-targets.json'],
-    executorLease: { status: 'present', ref: 'executor-lease.json' },
+    focusCropRefs: [ref('focus-crop.png')],
+    groundingDiagnosticsRefs: [ref('coarse-fine-rejected-targets.json')],
+    executorLease: { status: 'present', ref: ref('executor-lease.json') },
     finalArtifactRef,
-    finalVisibleScreenshotRef: 'final-visible.png',
+    finalVisibleScreenshotRef: ref('final-visible.png'),
     verifierVerdict: {
       status: 'passed',
       verdict: 'multi-app-workflow-passed',
-      ref: 'verifier-verdict.json',
+      ref: ref('verifier-verdict.json'),
     },
     guiPresent: {
       status: 'present',
-      recordRef: 'gui-present.json',
-      payloadRef: 'gui-present-payload.json',
-      displayedRefs: [finalArtifactRef],
+      recordRef: ref('gui-present.json'),
+      payloadRef: ref('gui-present-payload.json'),
+      displayedRefs: [finalArtifactRef, replayFrameRef],
       artifactRefs: [finalArtifactRef],
+      sessionRefs: [sessionRef],
     },
-    ...cuNext07AcceptanceProductRefs('cu-next-07-wrapper', ''),
+    ...cuNext07AcceptanceProductRefs(runId, ''),
     evidenceMarkers: [cuNext07DenseGroundingMarker()],
     completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
     completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
@@ -669,7 +701,10 @@ export function passedKvGroundManifest(): Record<string, unknown> {
 
 export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
   const runId = 'cu-next-07-wrapper';
-  const finalArtifactRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
+  const ref = (name: string) => name;
+  const sessionRef = `computer-use-session:${runId}`;
+  const finalArtifactRef = ref('dense-grounding-export.csv');
+  const replayFrameRef = ref('before.png');
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
     runId,
@@ -682,7 +717,7 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
     appWorkflow: {
       kind: 'multi-app-workflow',
       apps: ['Browser', 'Dense Toolbar App', 'Finder'],
-      windowSwitchTraceRefs: [`.sciforge/vision-runs/${runId}/window-switch-trace.json`],
+      windowSwitchTraceRefs: [ref('window-switch-trace.json')],
     },
     antiShortcutGuard: { status: 'passed', rejectedClaims: [] },
     tuiHostChain: [
@@ -690,27 +725,27 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
         id: 'chat-origin',
         kind: 'sciForge-chat-origin',
         status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
+        requestRef: ref('computer-use-request.json'),
         origin: sciForgeChatOrigin(runId),
       },
       {
         id: 'tui-host-runTask',
         kind: 'tui-host-runTask',
         status: 'present',
-        requestRef: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        hostPortsRef: `.sciforge/vision-runs/${runId}/host-ports.json`,
+        requestRef: ref('computer-use-request.json'),
+        hostPortsRef: ref('host-ports.json'),
       },
       {
         id: 'computer-use-action-provider',
         kind: 'computer-use-action-provider',
         status: 'present',
-        toolPayloadRef: `.sciforge/vision-runs/${runId}/tool-payload.json`,
+        toolPayloadRef: ref('tool-payload.json'),
       },
       {
         id: 'gui-present',
         kind: 'gui.present',
         status: 'present',
-        recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
+        recordRef: ref('gui-present.json'),
       },
     ],
     evidenceClaims: [
@@ -718,57 +753,58 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
         id: 'chat-origin',
         kind: 'sciForge-chat-origin',
         status: 'present',
-        ref: `.sciforge/vision-runs/${runId}/computer-use-request.json`,
-        refs: [`.sciforge/vision-runs/${runId}/computer-use-request.json`],
+        ref: ref('computer-use-request.json'),
+        refs: [ref('computer-use-request.json')],
         origin: sciForgeChatOrigin(runId),
-        sessionRefs: [`computer-use-session:${runId}`],
+        sessionRefs: [sessionRef],
       },
-      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: `.sciforge/vision-runs/${runId}/vision-trace.json` },
+      { id: 'real-computer-use-trace', kind: 'real-computer-use', ref: ref('vision-trace.json') },
       {
         id: 'independent-input-adapter',
         kind: 'independent-input-adapter',
-        refs: [`.sciforge/vision-runs/${runId}/virtual-pointer-events.json`],
-        sessionRefs: [`computer-use-session:${runId}`],
+        refs: [ref('virtual-pointer-events.json')],
+        sessionRefs: [sessionRef],
       },
       {
         id: 'gui-present-record',
         kind: 'gui-present-record',
-        ref: `.sciforge/vision-runs/${runId}/gui-present.json`,
-        refs: [`.sciforge/vision-runs/${runId}/gui-present.json`],
+        ref: ref('gui-present.json'),
+        refs: [ref('gui-present.json')],
         artifactRefs: [finalArtifactRef],
       },
     ],
     screenshotRefs: {
-      before: [`.sciforge/vision-runs/${runId}/before.png`],
-      after: [`.sciforge/vision-runs/${runId}/after.png`],
+      before: [replayFrameRef],
+      after: [ref('after.png')],
     },
-    focusCropRefs: [`.sciforge/vision-runs/${runId}/focus-crop.png`],
-    groundingDiagnosticsRefs: [`.sciforge/vision-runs/${runId}/coarse-fine-rejected-targets.json`],
-    executorLease: { status: 'present', ref: `.sciforge/vision-runs/${runId}/executor-lease.json` },
+    focusCropRefs: [ref('focus-crop.png')],
+    groundingDiagnosticsRefs: [ref('coarse-fine-rejected-targets.json')],
+    executorLease: { status: 'present', ref: ref('executor-lease.json') },
     finalArtifactRef,
-    finalVisibleScreenshotRef: `.sciforge/vision-runs/${runId}/final-visible.png`,
+    finalVisibleScreenshotRef: ref('final-visible.png'),
     verifierVerdict: {
       status: 'passed',
       verdict: 'multi-app-workflow-passed',
-      ref: `.sciforge/vision-runs/${runId}/verifier-verdict.json`,
+      ref: ref('verifier-verdict.json'),
     },
     guiPresent: {
       status: 'present',
-      recordRef: `.sciforge/vision-runs/${runId}/gui-present.json`,
-      payloadRef: `.sciforge/vision-runs/${runId}/gui-present-payload.json`,
-      displayedRefs: [finalArtifactRef],
+      recordRef: ref('gui-present.json'),
+      payloadRef: ref('gui-present-payload.json'),
+      displayedRefs: [finalArtifactRef, replayFrameRef],
       artifactRefs: [finalArtifactRef],
+      sessionRefs: [sessionRef],
     },
-    ...cuNext07AcceptanceProductRefs(runId, `.sciforge/vision-runs/${runId}/`),
-    evidenceMarkers: [cuNext07DenseGroundingMarker(runId)],
+    ...cuNext07AcceptanceProductRefs(runId, ''),
+    evidenceMarkers: [cuNext07DenseGroundingMarker()],
     completionEvidence: isolatedL3CompletionEvidence(finalArtifactRef),
-    completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+    completionEvidenceRef: ref('isolated-desktop-l3-workflow-evidence.json'),
   };
 }
 
 function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<string, unknown> {
-  const ref = (name: string) => `${prefix}${name}`;
-  const bundleRef = prefix.endsWith('/') ? prefix.slice(0, -1) : (prefix || 'current-run-bundle');
+  const ref = (name: string) => prefix ? prefixedRef(prefix, name) : name;
+  const bundleRef = prefix ? prefix.replace(/\/+$/, '') : '.';
   const screenId = `${runId}-screen-main`;
   const previewScreenId = `${runId}-screen-preview`;
   const windowId = `${runId}-window-main`;
@@ -997,6 +1033,10 @@ function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<st
         },
         beforeEvidenceRefs: [ref('before.png')],
         afterEvidenceRefs: [ref('after.png')],
+        beforeFrameRefs: [ref('before.png')],
+        afterFrameRefs: [ref('after.png')],
+        inputIntentRef: ref('input-intents/click-export.json'),
+        providerAdapterRef: ref('sidecar-executor-adapter.json'),
         currentAppStateRef: ref('current-app-state.json'),
         currentScreenshotRef: ref('before.png'),
         stateSnapshotRef: ref('state-snapshot.json'),
@@ -1004,6 +1044,7 @@ function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<st
         groundingRefs: [ref('coarse-fine-rejected-targets.json'), ref('browser-grounding-hints.json')],
         executorEventRef: ref('executor-event.json'),
         verificationRefs: [ref('verifier-verdict.json')],
+        artifactRefs: [ref('dense-grounding-export.csv')],
       },
     ],
     replayBundle: {
@@ -1062,26 +1103,28 @@ export function cuNext07DenseGroundingMarker(runId?: string): Record<string, unk
   };
 }
 
-export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | string[] = []): Record<string, unknown> {
+export function isolatedL3CompletionEvidence(
+  taskFinalArtifactRefs: string | string[] = [],
+  options: { refPrefix?: string; additionalTaskFinalArtifactRefs?: string[] } = {},
+): Record<string, unknown> {
+  const ref = (name: string) => options.refPrefix ? prefixedRef(options.refPrefix, name) : name;
   const passedTaskFinalArtifactRefs = Array.isArray(taskFinalArtifactRefs) ? taskFinalArtifactRefs : [taskFinalArtifactRefs];
-  const l3FinalArtifactRef = 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx';
+  const l3FinalArtifactRef = ref('evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx');
   const boundTaskFinalArtifactRefs = uniqueStringList([
     ...passedTaskFinalArtifactRefs,
-    'dense-grounding-export.csv',
-    `.sciforge/vision-runs/cu-next-07-dense-grounding/dense-grounding-export.csv`,
-    `.sciforge/vision-runs/cu-next-07-real-builder/dense-grounding-export.csv`,
+    ...(options.additionalTaskFinalArtifactRefs ?? []),
   ]);
   const currentTaskFinalArtifactRef = boundTaskFinalArtifactRefs[0];
-  const sessionManifestRef = 'evidence/l3/isolated-l3-session/session-manifest.json';
-  const sourceFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor.png';
-  const sourceLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/source-editor-final.png';
-  const writerFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-editor.png';
-  const writerLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/writer-saved.png';
-  const previewFirstScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview-open.png';
-  const previewLastScreenshotRef = 'evidence/l3/isolated-l3-session/screenshots/file-preview.png';
+  const sessionManifestRef = ref('evidence/l3/isolated-l3-session/session-manifest.json');
+  const sourceFirstScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/source-editor.png');
+  const sourceLastScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/source-editor-final.png');
+  const writerFirstScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/writer-editor.png');
+  const writerLastScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/writer-saved.png');
+  const previewFirstScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/file-preview-open.png');
+  const previewLastScreenshotRef = ref('evidence/l3/isolated-l3-session/screenshots/file-preview.png');
   const sourceFactRefs = [
-    'evidence/l3/source-facts/recovery.json',
-    'evidence/l3/source-facts/cohorts.json',
+    ref('evidence/l3/source-facts/recovery.json'),
+    ref('evidence/l3/source-facts/cohorts.json'),
   ];
   return {
     schemaVersion: 'sciforge.computer-use.isolated-desktop-l3-workflow-evidence.v1',
@@ -1093,16 +1136,16 @@ export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | str
     userAcceptanceEligible: true,
     diagnosticOnly: false,
     errors: [],
-    resultRef: 'evidence/l3/computer-use-result.json',
-    inputEventLogRef: 'evidence/l3/isolated-l3-session/l3-input-events.json',
-    pointerEventLogRef: 'evidence/l3/isolated-l3-session/l3-pointer-events.json',
-    keyboardEventLogRef: 'evidence/l3/isolated-l3-session/l3-keyboard-events.json',
-    executorCommandEventLogRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json',
-    backendReadinessProofRef: 'evidence/l3/isolated-l3-session/backend-readiness-proof.json',
-    processRef: 'evidence/l3/isolated-l3-session/backend-processes.json',
-    resourceAllocationRef: 'evidence/l3/isolated-runtime-resource-allocation.json',
-    targetWindowRef: 'evidence/l3/isolated-l3-session/l3-target-window.json',
-    windowBoundPointerProofRef: 'evidence/l3/isolated-l3-session/l3-window-bound-pointer-proof.json',
+    resultRef: ref('evidence/l3/computer-use-result.json'),
+    inputEventLogRef: ref('evidence/l3/isolated-l3-session/l3-input-events.json'),
+    pointerEventLogRef: ref('evidence/l3/isolated-l3-session/l3-pointer-events.json'),
+    keyboardEventLogRef: ref('evidence/l3/isolated-l3-session/l3-keyboard-events.json'),
+    executorCommandEventLogRef: ref('evidence/l3/isolated-l3-session/l3-executor-command-events.json'),
+    backendReadinessProofRef: ref('evidence/l3/isolated-l3-session/backend-readiness-proof.json'),
+    processRef: ref('evidence/l3/isolated-l3-session/backend-processes.json'),
+    resourceAllocationRef: ref('evidence/l3/isolated-runtime-resource-allocation.json'),
+    targetWindowRef: ref('evidence/l3/isolated-l3-session/l3-target-window.json'),
+    windowBoundPointerProofRef: ref('evidence/l3/isolated-l3-session/l3-window-bound-pointer-proof.json'),
     sessionManifestRef,
     taskFinalArtifactRefs: boundTaskFinalArtifactRefs,
     taskArtifactBinding: {
@@ -1112,20 +1155,20 @@ export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | str
       source: 'task-final-artifact-binding',
     },
     finalArtifactRef: l3FinalArtifactRef,
-    artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
-    fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
-    fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
-    guiPresentRef: 'evidence/l3/gui-present.json',
-    viewerManifestRef: 'evidence/l3/visible-run-viewer-manifest.json',
-    evidenceLogRef: 'evidence/l3/evidence/evidence-log.jsonl',
-    evidenceSnapshotRef: 'evidence/l3/evidence/evidence-snapshot.json',
-    evidenceIndexRef: 'evidence/l3/evidence/evidence-index.json',
+    artifactValidationRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json'),
+    fileListArtifactRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json'),
+    fileListDataRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json'),
+    guiPresentRef: ref('evidence/l3/gui-present.json'),
+    viewerManifestRef: ref('evidence/l3/visible-run-viewer-manifest.json'),
+    evidenceLogRef: ref('evidence/l3/evidence/evidence-log.jsonl'),
+    evidenceSnapshotRef: ref('evidence/l3/evidence/evidence-snapshot.json'),
+    evidenceIndexRef: ref('evidence/l3/evidence/evidence-index.json'),
     screenshotRefs: [
       sourceFirstScreenshotRef,
       writerLastScreenshotRef,
       previewLastScreenshotRef,
     ],
-    traceRefs: ['evidence/l3/vision-trace.json'],
+    traceRefs: [ref('evidence/l3/vision-trace.json')],
     l3Workflow: {
       status: 'completed',
       completed: true,
@@ -1190,15 +1233,15 @@ export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | str
     artifactCausality: {
       savedByActionIndex: 3,
       savedByInputModality: 'keyboard',
-      savedByCommandEventRef: 'evidence/l3/isolated-l3-session/l3-executor-command-events.json#events/l3-command-003',
+      savedByCommandEventRef: `${ref('evidence/l3/isolated-l3-session/l3-executor-command-events.json')}#events/l3-command-003`,
       finalArtifactRef: l3FinalArtifactRef,
-      artifactValidationRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json',
+      artifactValidationRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json'),
       savedThroughGui: true,
       shellDirectArtifactWrite: false,
     },
     directoryEvidence: {
-      fileListArtifactRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json',
-      fileListDataRef: 'evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json',
+      fileListArtifactRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/file-list.json'),
+      fileListDataRef: ref('evidence/l3/isolated-l3-session/filesystem-root/out/file-list-data.json'),
       previewObservationRef: previewLastScreenshotRef,
       directoryObservationAfterSaveRef: previewFirstScreenshotRef,
       previewedByActionIndex: 5,
@@ -1207,7 +1250,7 @@ export function isolatedL3CompletionEvidence(taskFinalArtifactRefs: string | str
       shellDirectoryListingOnly: false,
     },
     presentationEvidence: {
-      guiPresentRef: 'evidence/l3/gui-present.json',
+      guiPresentRef: ref('evidence/l3/gui-present.json'),
       artifactRefs: boundTaskFinalArtifactRefs,
     },
   };

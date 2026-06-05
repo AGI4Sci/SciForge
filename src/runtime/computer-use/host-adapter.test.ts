@@ -14,6 +14,10 @@ import {
   gatewayRequestToComputerUseRequest,
 } from './host-adapter.js';
 import type { ComputerUseConfig } from './types.js';
+import {
+  computerUseHostPortProviderIds,
+  computerUseModelRouterCapabilityIds,
+} from '../../../packages/actions/computer-use/provider-policy.js';
 
 const baseConfig: ComputerUseConfig = {
   desktopBridgeEnabled: true,
@@ -57,7 +61,8 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
   assert.equal(request.schemaVersion, COMPUTER_USE_REQUEST_SCHEMA);
   assert.equal(request.providers.action, COMPUTER_USE_ACTION_PROVIDER_ID);
   assert.equal(request.providers.sense, 'local.vision-sense');
-  assert.equal(request.providers.grounder, 'kv-ground');
+  assert.equal(request.providers.grounder, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(request.providers.verifier, computerUseModelRouterCapabilityIds.verifierTranslator);
   assert.equal(request.riskPolicy, 'allow-confirmed');
   assert.equal(request.approvalRef, 'approval:cu-ok');
   assert.equal(request.windowTarget.mode, 'app-window');
@@ -417,24 +422,28 @@ test('gateway adapter hydrates bounded Computer Use continuation sidecar context
   }
 });
 
-test('gateway adapter does not advertise visual grounder fallback when KV-Ground is absent', () => {
-  const request = gatewayRequestToComputerUseRequest({
-    skillDomain: 'knowledge',
-    prompt: '/computer-use run click visible search box',
-    workspacePath: '/tmp/workspace',
-    selectedToolIds: ['local.vision-sense'],
-    artifacts: [],
-  }, {
+test('gateway adapter does not advertise legacy KV-Ground adapter when grounder baseUrl is absent', () => {
+  const configWithoutGrounderBaseUrl: ComputerUseConfig = {
     ...baseConfig,
     grounder: {
       timeoutMs: 30000,
       allowServiceLocalPaths: false,
       upload: { strategy: 'inline' },
     },
-  }, '/tmp/workspace');
+  };
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use run click visible search box',
+    workspacePath: '/tmp/workspace',
+    selectedToolIds: ['local.vision-sense'],
+    artifacts: [],
+  }, configWithoutGrounderBaseUrl, '/tmp/workspace');
+  const contract = computerUseHostPortsContract(configWithoutGrounderBaseUrl);
 
-  assert.equal(request.providers.grounder, undefined);
-  assert.doesNotMatch(JSON.stringify(request), /openai-compatible-vision-grounder|SCIFORGE_VISION_GROUNDER_LLM|visualGrounder/i);
+  assert.equal(request.providers.grounder, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(contract.ports.locate.provider, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(contract.ports.locate.legacyAdapter, undefined);
+  assert.doesNotMatch(JSON.stringify(contract), /legacy-kv-ground-compatible-adapter|openai-compatible-vision-grounder|SCIFORGE_VISION_GROUNDER_LLM|visualGrounder/i);
 });
 
 test('host ports contract exposes platform ports and forbids direct GUI calls', () => {
@@ -444,12 +453,13 @@ test('host ports contract exposes platform ports and forbids direct GUI calls', 
   assert.equal(contract.hostAdapterSchemaVersion, 'sciforge.computer-use.host-adapter.v1');
   assert.equal(contract.actionProvider, COMPUTER_USE_ACTION_PROVIDER_ID);
   assert.equal(contract.ports.capture.provider, 'target-window-capture');
-  assert.equal(contract.ports.plan.provider, 'runtime-codex-tui-text-planner');
+  assert.equal(contract.ports.plan.provider, computerUseModelRouterCapabilityIds.computerUsePlanner);
   assert.equal(contract.ports.crop.provider, 'host-focus-region-crop');
   assert.equal(contract.ports.query.optional, true);
-  assert.equal(contract.ports.locate.provider, 'kv-ground');
+  assert.equal(contract.ports.locate.provider, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(contract.ports.locate.legacyAdapter, computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter);
   assert.equal(contract.ports.execute.inputAdapter, 'shared-system-input-acknowledged');
-  assert.equal(contract.ports.verify.provider, 'layered-vision-verifier');
+  assert.equal(contract.ports.verify.provider, computerUseModelRouterCapabilityIds.verifierTranslator);
   assert.deepEqual(contract.requiredPorts, ['capture', 'plan', 'locate', 'execute', 'verify']);
   assert.deepEqual(contract.optionalPorts, ['crop', 'query', 'writeTrace', 'emitEvent']);
   assert.deepEqual(contract.forbiddenPorts, ['requestApproval', 'gui.present', 'gui.ask_user']);

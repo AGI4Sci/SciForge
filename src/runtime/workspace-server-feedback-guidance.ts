@@ -2,6 +2,7 @@ import { relative, resolve, sep } from 'node:path';
 import { appendRepairTerminalMirrorEntry } from './repair-handoff-runner.js';
 import { isRecord, safeName } from './server/http.js';
 import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
+import { RUNTIME_PROFILE } from '../../packages/backend/src/runtime-home.js';
 import {
   appendStateRecord,
   findFeedbackComment,
@@ -122,7 +123,7 @@ export async function runFeedbackRepairGuidance(input: RunFeedbackRepairGuidance
       workspacePath: worktreePath,
       commandId: `repair-guidance-${repairRunId}-${Date.now()}`,
       attemptId: `repair-guidance-${repairRunId}-attempt-${Date.now()}`,
-      profile: firstNonEmptyString(stringField(resultMetadata?.runtimeProfile), stringField(runMetadata?.runtimeProfile)) || 'sciforge-runtime-deepseek',
+      profile: firstNonEmptyString(stringField(resultMetadata?.runtimeProfile), stringField(runMetadata?.runtimeProfile)) || RUNTIME_PROFILE,
       codexSessionId,
       allowOpenAiRuntime: false,
       guiExtension: { enabled: false },

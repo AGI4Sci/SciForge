@@ -42,7 +42,7 @@ import { chatText } from './chat/chatI18n';
 import { CURRENT_TARGET_INSTANCE_VALUE, enabledPeerInstances, selectedPeerInstance } from './chat/targetInstance';
 import { MessageContent, inlineObjectReferencesForMessage } from './chat/MessageContent';
 import { sanitizeUserProjectionText } from './conversation-projection-view-model';
-import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference } from './chat/composerReferences';
+import { addComposerReferenceWithMarker, addPendingComposerReference, promptForComposerSend, removeComposerReference, withCurrentObjectReferencePayload } from './chat/composerReferences';
 import { highlightSciForgeReference } from './chat/referenceFocus';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
@@ -525,12 +525,16 @@ export function ChatPanel({
     if (!selectedFiles.length) return;
     try {
       const uploaded = await Promise.all(selectedFiles.map((file) => fileToUploadedArtifact(file, scenarioId, config, activeSessionRef.current.sessionId)));
-      const references = uploaded.map((artifact) => referenceForUploadedArtifact(artifact));
+      const objectReferences = uploaded.map((artifact) => objectReferenceForUploadedArtifact(artifact));
+      const references = uploaded.map((artifact, index) => withCurrentObjectReferencePayload(
+        referenceForUploadedArtifact(artifact),
+        objectReferences[index],
+      ));
       const nextSession = appendUploadMessageToSession({
         session: activeSessionRef.current,
         uploaded,
         references,
-        objectReferences: uploaded.map((artifact) => objectReferenceForUploadedArtifact(artifact)),
+        objectReferences,
       });
       activeSessionRef.current = nextSession;
       onSessionChange(nextSession);

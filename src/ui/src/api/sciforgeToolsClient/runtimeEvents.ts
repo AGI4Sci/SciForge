@@ -1848,7 +1848,7 @@ function isRuntimeCodexDoneEvent(value: unknown) {
 function isRuntimeCodexEventRecord(value: Record<string, unknown>) {
   return value.schemaVersion === 'sciforge.codex.normalized-event.v1'
     || Boolean(asString(value.commandId)?.startsWith('codex-command-'))
-    || asString(value.profile) === 'sciforge-runtime-deepseek'
+    || asString(value.profile) === 'sciforge-runtime-default'
     || /Runtime Codex/i.test(asString(value.message) ?? '');
 }
 

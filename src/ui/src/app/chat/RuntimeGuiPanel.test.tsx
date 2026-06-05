@@ -86,3 +86,26 @@ test('runtime gui refs focus browser screen terminal and subagent objects fail c
   assert.match(html, /data-preferred-view="subagent-result"/);
   assert.doesNotMatch(html, /provider:private|Applications\/workspace|stdout|private\.log/);
 });
+
+test('runtime gui refs can focus safe folded trace summaries without raw trace refs', () => {
+  const html = renderToStaticMarkup(createElement(RuntimeGuiPanel, {
+    surface: {
+      guiPresentation: {
+        title: 'Process refs ready',
+        text: 'Open the folded process summary.',
+        displayedRefs: [
+          'trace:explorer-summary',
+          'trace:raw-stream',
+          'trace:provider-route',
+          'trace:worker-secret-token',
+        ],
+      },
+    },
+    onObjectFocus: () => undefined,
+  }));
+
+  assert.match(html, /data-object-kind="run"/);
+  assert.match(html, /data-preferred-view="subagent-transcript"/);
+  assert.match(html, />explorer-summary<\/button>/);
+  assert.doesNotMatch(html, /raw-stream|provider-route|worker-secret-token/);
+});

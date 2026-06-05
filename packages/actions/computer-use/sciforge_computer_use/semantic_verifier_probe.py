@@ -1,6 +1,6 @@
-"""Package-local semantic/VLM verifier probe.
+"""Package-local semantic vision verifier probe.
 
-The Computer Use loop treats VLM output as optional host-provided verifier
+The Computer Use loop treats verifier output as optional host-provided verifier
 metadata. This probe exercises that boundary with an OpenAI-compatible vision
 chat endpoint and writes only refs-first summaries into package-local evidence.
 """
@@ -35,8 +35,8 @@ SUMMARY_NAME = "semantic-verifier-summary.json"
 TRACE_NAME = "semantic-verifier-trace.json"
 PROMPT_NAME = "semantic-verifier-prompt.txt"
 DIAGNOSTIC_BODY_READ_LIMIT = 64 * 1024
-PROJECT_VLM_MODEL_ID = "qwen3.6-plus"
-PROJECT_VLM_MODEL_IDS = ("qwen3.6-plus", "qwen3.6-plus-2026-04-02", "kimi-k2.6")
+PROJECT_VERIFIER_MODEL_ID = "sciforge-router"
+PROJECT_VERIFIER_MODEL_IDS = ("sciforge-router", "model-router.capability.computer-use.verifier-translator", "sciforge-router-no-temperature")
 
 DEFAULT_PROMPT = (
     "Verify this Computer Use screenshot evidence. Return only JSON with keys "
@@ -252,7 +252,7 @@ def run_semantic_verifier_probe(
     trace_ref = (output_dir / TRACE_NAME).resolve()
     semantic_metadata = normalize_verifier_metadata({
         "semanticVerifier": {
-            "providerId": "qwen-semantic-verifier",
+            "providerId": "model-router-semantic-verifier",
             "modelId": config.model,
             "verdict": provider_verdict,
             "confidence": _coerce_confidence(parsed.get("confidence")),
@@ -269,7 +269,7 @@ def run_semantic_verifier_probe(
             "schemaVersion": SUMMARY_SCHEMA,
             "semanticVerifier": semantic_summary,
             "modelId": config.model,
-            "expectedProjectModelId": PROJECT_VLM_MODEL_ID,
+            "expectedProjectModelId": PROJECT_VERIFIER_MODEL_ID,
             "responseModelId": response_model_id,
             "baseUrlOrigin": _safe_url_origin(config.base_url),
             "evidenceRefs": [str(image_path), str(prompt_ref)],
@@ -282,9 +282,9 @@ def run_semantic_verifier_probe(
         {
             "schemaVersion": PROBE_TRACE_SCHEMA,
             "status": "completed",
-            "providerId": "qwen-semantic-verifier",
+            "providerId": "model-router-semantic-verifier",
             "modelId": config.model,
-            "expectedProjectModelId": PROJECT_VLM_MODEL_ID,
+            "expectedProjectModelId": PROJECT_VERIFIER_MODEL_ID,
             "responseModelId": response_model_id,
             "baseUrlOrigin": _safe_url_origin(config.base_url),
             "promptRef": str(prompt_ref),
@@ -304,9 +304,9 @@ def run_semantic_verifier_probe(
         "configSource": str(config.source.resolve()),
         "baseUrlOrigin": _safe_url_origin(config.base_url),
         "modelId": config.model,
-        "expectedProjectModelId": PROJECT_VLM_MODEL_ID,
+        "expectedProjectModelId": PROJECT_VERIFIER_MODEL_ID,
         "responseModelId": response_model_id,
-        "providerId": "qwen-semantic-verifier",
+        "providerId": "model-router-semantic-verifier",
         "promptRef": str(prompt_ref),
         "imageRef": str(image_path),
         "summaryRef": str(summary_ref),
@@ -320,7 +320,7 @@ def run_semantic_verifier_probe(
         **vlm_evidence,
         "rawPayloadWritten": False,
         "inlineImageWritten": False,
-        "note": "This probe verifies the package metadata boundary; VLM output remains optional evidence and does not own execution, coordinates, or completion.",
+        "note": "This probe verifies the package metadata boundary; verifier output remains optional evidence and does not own execution, coordinates, or completion.",
     }
     _write_json(output_dir / MANIFEST_NAME, manifest)
     return manifest
@@ -347,9 +347,9 @@ def _config_from_mapping(parsed: Mapping[str, Any], source: Path) -> VisionConfi
     if isinstance(vision, Mapping):
         env = vision.get("env") if isinstance(vision.get("env"), Mapping) else {}
         return VisionConfig(
-            base_url=str(_first_present(vision, env, keys=("baseUrl", "base_url", "SCIFORGE_VISION_VLM_BASE_URL")) or ""),
-            api_key=str(_first_present(vision, env, keys=("apiKey", "api_key", "SCIFORGE_VISION_VLM_API_KEY")) or ""),
-            model=str(_first_present(vision, env, keys=("model", "modelId", "SCIFORGE_VISION_VLM_MODEL")) or ""),
+            base_url=str(_first_present(vision, env, keys=("baseUrl", "base_url", "SCIFORGE_VISION_TRANSLATOR_BASE_URL")) or ""),
+            api_key=str(_first_present(vision, env, keys=("apiKey", "api_key", "SCIFORGE_VISION_TRANSLATOR_API_KEY")) or ""),
+            model=str(_first_present(vision, env, keys=("model", "modelId", "SCIFORGE_VISION_TRANSLATOR_MODEL")) or ""),
             source=source,
         )
 
@@ -1247,7 +1247,7 @@ def _project_vlm_evidence_summary(
     response_model_id: str | None,
     provider_diagnostics: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    configured_matches_project = config.model in PROJECT_VLM_MODEL_IDS
+    configured_matches_project = config.model in PROJECT_VERIFIER_MODEL_IDS
     response_model_matches_configured = response_model_id in (None, config.model)
     model_presence_verified = None
     models_get = _mapping_or_empty((provider_diagnostics or {}).get("modelsGet"))
@@ -1256,16 +1256,16 @@ def _project_vlm_evidence_summary(
     eligible = bool(configured_matches_project and response_model_matches_configured and model_presence_verified is True)
     blockers: list[str] = []
     if not configured_matches_project:
-        blockers.append("configured model is not an accepted PROJECT VLM model")
+        blockers.append("configured model is not an accepted PROJECT verifier model")
     if not response_model_matches_configured:
         blockers.append("provider response model does not match configured model")
     if model_presence_verified is not True:
         blockers.append("/models did not verify the configured model")
     return {
-        "projectVlmEvidenceEligible": eligible,
-        "projectVlmEvidenceBlockers": blockers,
-        "expectedProjectModelId": PROJECT_VLM_MODEL_ID,
-        "expectedProjectModelIds": list(PROJECT_VLM_MODEL_IDS),
+        "projectVerifierEvidenceEligible": eligible,
+        "projectVerifierEvidenceBlockers": blockers,
+        "expectedProjectModelId": PROJECT_VERIFIER_MODEL_ID,
+        "expectedProjectModelIds": list(PROJECT_VERIFIER_MODEL_IDS),
         "configuredModelMatchesProject": configured_matches_project,
         "responseModelMatchesConfigured": response_model_matches_configured,
         "modelPresenceVerified": model_presence_verified,

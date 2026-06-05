@@ -12,9 +12,9 @@ const LEGACY_DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/ap
 const DEFAULT_WORKSPACE_PATH = '/Applications/workspace/ailab/research/app/SciForge/workspace/parallel/p1';
 const LEGACY_DEFAULT_CODEX_RUNTIME_BASE_URL = 'http://127.0.0.1:4765/v1';
 export const INTERNAL_CODEX_RESPONSES_PROXY_BASE_URL = 'http://127.0.0.1:3891/v1';
-export const DEFAULT_CODEX_RUNTIME_PROFILE = 'sciforge-runtime-deepseek';
-export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-deepseek-proxy';
-export const DEFAULT_CODEX_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
+export const DEFAULT_CODEX_RUNTIME_PROFILE = 'sciforge-runtime-default';
+export const DEFAULT_CODEX_RUNTIME_PROVIDER = 'sciforge-model-router';
+export const DEFAULT_CODEX_RUNTIME_MODEL = 'sciforge-router';
 export const DEFAULT_CODEX_RUNTIME_BASE_URL = '';
 
 type DesktopRuntimePortBinding = {

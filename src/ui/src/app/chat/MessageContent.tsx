@@ -8,6 +8,8 @@ import {
   objectReferenceMentionedInText,
   objectReferencePresentationRole,
   objectReferenceForArtifactSummary,
+  referenceForObjectReference,
+  sciForgeReferenceAttribute,
   workspacePathBasename,
 } from '../../../../../packages/support/object-references';
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer';
@@ -29,6 +31,8 @@ export function MessageContent({
   onObjectFocus: (reference: ObjectReference) => void;
   className?: string;
 }) {
+  const imageReferences = references.filter(isImageObjectReferenceWithWorkspacePreview);
+  const nonImageReferences = references.filter((reference) => !imageReferences.includes(reference));
   return (
     <div className={['message-content', className].filter(Boolean).join(' ')}>
       <MarkdownRenderer
@@ -37,7 +41,39 @@ export function MessageContent({
         objectReferences={references}
         onObjectReferenceFocus={onObjectFocus}
       />
-      <InlineObjectReferences references={references.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
+      <MessageImageAttachments references={imageReferences.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
+      <InlineObjectReferences references={nonImageReferences.filter((reference) => !objectReferenceMentionedInText(content, reference))} onObjectFocus={onObjectFocus} />
+    </div>
+  );
+}
+
+function MessageImageAttachments({
+  references,
+  onObjectFocus,
+}: {
+  references: ObjectReference[];
+  onObjectFocus: (reference: ObjectReference) => void;
+}) {
+  if (!references.length) return null;
+  return (
+    <div className="message-image-attachments" aria-label="Image attachments">
+      {references.map((reference) => {
+        const previewRef = workspacePreviewRefForImageReference(reference);
+        if (!previewRef) return null;
+        return (
+          <button
+            key={`${reference.id}:${previewRef}`}
+            type="button"
+            className="message-image-attachment"
+            onClick={() => onObjectFocus(reference)}
+            title={reference.summary || reference.title || previewRef}
+            data-sciforge-reference={sciForgeReferenceAttribute(referenceForObjectReference(reference))}
+          >
+            <img src={workspacePreviewRawUrl(previewRef)} alt={reference.title || 'Uploaded image'} loading="lazy" />
+            <span>{reference.title || workspacePathBasename(previewRef)}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -118,6 +154,43 @@ function isPrivateRefText(value: string | undefined) {
     || /^agentserver:\/\//i.test(value)
     || /\b(?:stdoutRef|stderrRef|rawRef)\b/i.test(value)
   );
+}
+
+function isImageObjectReferenceWithWorkspacePreview(reference: ObjectReference) {
+  return Boolean(workspacePreviewRefForImageReference(reference));
+}
+
+function workspacePreviewRefForImageReference(reference: ObjectReference) {
+  if (!isImageObjectReference(reference)) return undefined;
+  const ref = reference.provenance?.path ?? reference.provenance?.dataRef ?? workspacePathFromRef(reference.ref);
+  if (!ref || !isSafeWorkspacePreviewRef(ref)) return undefined;
+  return ref;
+}
+
+function isImageObjectReference(reference: ObjectReference) {
+  const type = `${reference.artifactType ?? ''} ${reference.preferredView ?? ''} ${reference.title ?? ''} ${reference.ref ?? ''}`;
+  return /(?:^|\b)(?:uploaded-image|image)(?:\b|$)|\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(type)
+    || /\.(?:png|jpe?g|gif|webp|svg)(?:$|[?#])/i.test(reference.provenance?.path ?? reference.provenance?.dataRef ?? '');
+}
+
+function workspacePathFromRef(ref: string) {
+  if (/^file::?/i.test(ref)) return ref.replace(/^file::?/i, '');
+  return undefined;
+}
+
+function isSafeWorkspacePreviewRef(ref: string) {
+  const trimmed = ref.trim();
+  return Boolean(trimmed)
+    && !/^(?:data|javascript|https?):/i.test(trimmed)
+    && !trimmed.startsWith('//')
+    && !trimmed.includes('\0')
+    && !trimmed.startsWith('/')
+    && !trimmed.includes('..');
+}
+
+function workspacePreviewRawUrl(ref: string) {
+  const params = new URLSearchParams({ ref });
+  return `/api/sciforge/preview/raw?${params.toString()}`;
 }
 
 function fileReferencesForMentionedObjects(

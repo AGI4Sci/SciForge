@@ -1,6 +1,6 @@
 """Verifier metadata boundary helpers.
 
-The action loop remains deterministic: host-provided semantic or VLM verifier
+The action loop remains deterministic: host-provided semantic or verifier verifier
 signals are optional evidence metadata, not a second decision path.
 """
 
@@ -53,7 +53,7 @@ def normalize_verifier_metadata(metadata: Mapping[str, Any] | None) -> dict[str,
     """Return safe verifier metadata suitable for result and trace payloads.
 
     The helper keeps compact scalar context and durable refs, summarizes optional
-    semantic/VLM verifier data under ``semanticVerifier``, drops raw response
+    semantic vision verifier data under ``semanticVerifier``, drops raw response
     payload fields, and rejects inline image/base64 content.
     """
 

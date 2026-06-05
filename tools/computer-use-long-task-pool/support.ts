@@ -210,8 +210,11 @@ export function renderMatrixReportMarkdown(
       lines.push('- issues: none');
     } else {
       const repairDiagnostics = isRecord(result.repairDiagnostics) ? result.repairDiagnostics : undefined;
-      const nextRepairFocus = Array.isArray(repairDiagnostics?.nextRepairFocus)
-        ? repairDiagnostics.nextRepairFocus.map(String)
+      const explicitNextRepairFocus = Array.isArray(repairDiagnostics?.nextRepairFocus)
+        ? repairDiagnostics.nextRepairFocus.map(String).filter(Boolean)
+        : [];
+      const nextRepairFocus = explicitNextRepairFocus.length
+        ? explicitNextRepairFocus
         : repairActionsForIssues(issues);
       lines.push('- issues:');
       for (const issue of issues) lines.push(`  - [${categorizeComputerUseIssue(issue)}] ${issue}`);

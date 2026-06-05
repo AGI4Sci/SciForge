@@ -21,7 +21,7 @@ SciForge / Codex app-server
 ## 设计原则
 
 - Router 是薄 orchestrator，不做任务推理、planning、completion 判断或 capability ranking。
-- 主文本模型是 reasoning owner。
+- `textReasoner` 是 reasoning owner。
 - 模态模型只负责 `instruction + modality -> text observation`。
 - 所有模型按 workspace/profile 配置，不在代码里写死。
 - 默认对外透明，只返回最终答案；内部过程写 refs-first trace。
@@ -44,7 +44,7 @@ SciForge / Codex app-server
 | 组件 | 职责 | 禁止 |
 | --- | --- | --- |
 | Model Router HTTP service | `/v1/responses` facade、profile 解析、模态归一化、补问循环、stream 转发、trace 写入 | 推理答案、替 agent 规划、静默 fallback 到未注册模型 |
-| Text Reasoner Client | 调用当前 profile 的文本模型 | 直接读取图片或依赖未审计模态 payload |
+| Text Reasoner Client | 调用当前 profile 的 `textReasoner` role | 直接读取图片或依赖未审计模态 payload |
 | Vision Translator Client | 调用当前 profile 的视觉转译模型，返回文本观察 | 执行桌面动作、判断任务完成、长期保存 base64 |
 | Profile Resolver | 按 request/workspace/default 选择已注册 profile | 允许任意请求指定 provider/base URL/API key |
 | Trace Writer | 写 `.sciforge/model-router-traces/**` refs-first bundle | 写 API key、完整 raw provider payload、长期 base64 |
@@ -62,20 +62,18 @@ profiles:
   sciforge-runtime-default:
     traceRoot: .sciforge/model-router-traces
     textReasoner:
-      provider: deepseek
-      baseUrl: ${SCIFORGE_TEXT_BASE_URL}
-      apiKeyEnv: SCIFORGE_TEXT_API_KEY
-      model: deepseek-v4-flash
+      alias: textReasoner
+      providerBinding: service-managed
+      apiKeyEnv: SCIFORGE_TEXT_REASONER_API_KEY
     translators:
       vision:
-        provider: qwen
-        baseUrl: ${SCIFORGE_VISION_BASE_URL}
-        apiKeyEnv: SCIFORGE_VISION_API_KEY
-        model: qwen3.7-plus
+        alias: translators.vision
+        providerBinding: service-managed
+        apiKeyEnv: SCIFORGE_VISION_TRANSLATOR_API_KEY
         maxSupplementRounds: 2
 ```
 
-DeepSeek 和 Qwen 只是默认 profile 示例。稳定语义是 role：
+公开配置只承诺 alias/profile 和 role。具体 provider、endpoint、API key 和 raw model slug 由 service-managed binding 解析，不写成产品默认值。稳定语义是 role：
 
 ```text
 textReasoner
@@ -144,7 +142,7 @@ Text reasoner 在内部控制轮只能返回两类严格 JSON。
 }
 ```
 
-Router 只校验 schema、target 和 round budget。非法 JSON、未知 target 或超过 `maxSupplementRounds` 时，不再调用视觉模型；Router 把控制错误摘要交给 text reasoner 生成最终答案。
+Router 只校验 schema、target 和 round budget。非法 JSON、未知 target 或超过 `maxSupplementRounds` 时，不再调用 `translators.vision`；Router 把控制错误摘要交给 text reasoner 生成最终答案。
 
 ## Streaming
 
@@ -193,7 +191,7 @@ reason=vision translator timeout
 instruction=Answer from text-only context and explicitly state that the image could not be inspected.
 ```
 
-补问失败时保留已有视觉观察，并把失败摘要交给 text reasoner。文本模型失败时整个 `/v1/responses` 请求失败，因为没有 reasoning owner 可以兜底。
+补问失败时保留已有视觉观察，并把失败摘要交给 text reasoner。`textReasoner` 失败时整个 `/v1/responses` 请求失败，因为没有 reasoning owner 可以兜底。
 
 ## Single Truth
 
@@ -218,7 +216,7 @@ instruction=Answer from text-only context and explicitly state that the image co
 - Router 自己推理最终答案
 - Router 自己规划多步任务
 - 未注册 provider/model 的请求级任意 override
-- 视觉失败后让文本模型假装看过图
+- 视觉失败后让 `textReasoner` 假装看过图
 - 把 raw image/base64 长期写入 trace
 - 把内部视觉阶段作为默认 provider stream 暴露
 - 把 protein/audio/table 等未来模态硬编码进 vision path

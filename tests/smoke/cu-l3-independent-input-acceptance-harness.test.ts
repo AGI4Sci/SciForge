@@ -24,7 +24,7 @@ test('CU L3 independent-input harness projects a non-dry-run package-bridge trac
     await writeFile(join(workspace, 'request.json'), JSON.stringify({ task: 'Create a multi-app acceptance artifact from visible source facts.' }));
     await writeFile(tracePath, JSON.stringify(validTrace({
       runId: 'cu-l3-independent-fixture',
-      runRef: workspace,
+      runRef: '',
     }), null, 2));
     await writeFile(adapterPath, JSON.stringify(validAdapter('cu-l3-independent-fixture'), null, 2));
 
@@ -41,11 +41,12 @@ test('CU L3 independent-input harness projects a non-dry-run package-bridge trac
     assert.equal(result.manifest.level, 'L3');
     assert.deepEqual(result.manifest.appWorkflow.apps, ['Browser', 'Slide Editor', 'File Manager']);
     assert.deepEqual(result.manifest.appWorkflow.windowSwitchTraceRefs, ['vision-trace.json']);
-    assert.ok(result.manifest.screenshotRefs.before.includes(`${workspace}/step-001-before.png`));
-    assert.ok(result.manifest.screenshotRefs.before.includes(`${workspace}/step-003-before.png`));
-    assert.ok(result.manifest.screenshotRefs.after.includes(`${workspace}/step-001-after.png`));
-    assert.ok(result.manifest.screenshotRefs.after.includes(`${workspace}/step-003-after.png`));
-    assert.deepEqual(result.manifest.focusCropRefs, [`${workspace}/step-001-before-focus.png`]);
+    assert.ok(result.manifest.screenshotRefs.before.includes('step-001-before.png'));
+    assert.ok(result.manifest.screenshotRefs.before.includes('step-003-before.png'));
+    assert.ok(result.manifest.screenshotRefs.after.includes('step-001-after.png'));
+    assert.ok(result.manifest.screenshotRefs.after.includes('step-003-after.png'));
+    assert.deepEqual(result.manifest.focusCropRefs, ['step-001-before-focus.png']);
+    assert.doesNotMatch(JSON.stringify(result.manifest), new RegExp(workspace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.deepEqual(result.manifest.groundingDiagnosticsRefs, ['vision-trace.json']);
     const independentClaim = result.manifest.evidenceClaims.find((claim) => claim.kind === 'independent-input-adapter');
     assert.ok(independentClaim);
@@ -655,7 +656,7 @@ function validTrace(options: { runId: string; runRef: string }) {
         userDeviceImpact: 'none',
       },
     },
-    finalVisibleScreenshotRef: `${options.runRef}/step-003-after.png`,
+    finalVisibleScreenshotRef: traceFixtureRef(options.runRef, 'step-003-after.png'),
     guiPresent: {
       recordRef: '.sciforge/vision-runs/generic/gui-present-record.json',
       payloadRef: '.sciforge/vision-runs/generic/tool-payload.json',
@@ -669,13 +670,13 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-001-before.png`,
+            path: traceFixtureRef(options.runRef, 'step-001-before.png'),
             windowTarget: { appName: 'Browser' },
           },
           {
             type: 'screenshot',
             captureScope: 'focus-region',
-            path: `${options.runRef}/step-001-before-focus.png`,
+            path: traceFixtureRef(options.runRef, 'step-001-before-focus.png'),
             windowTarget: { appName: 'Browser' },
           },
         ],
@@ -683,7 +684,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-001-after.png`,
+            path: traceFixtureRef(options.runRef, 'step-001-after.png'),
             windowTarget: { appName: 'Browser' },
           },
         ],
@@ -698,7 +699,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-002-before.png`,
+            path: traceFixtureRef(options.runRef, 'step-002-before.png'),
             windowTarget: { appName: 'Slide Editor' },
           },
         ],
@@ -706,7 +707,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-002-after.png`,
+            path: traceFixtureRef(options.runRef, 'step-002-after.png'),
             windowTarget: { appName: 'Slide Editor' },
           },
         ],
@@ -720,7 +721,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-003-before.png`,
+            path: traceFixtureRef(options.runRef, 'step-003-before.png'),
             windowTarget: { appName: 'File Manager' },
           },
         ],
@@ -728,7 +729,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           {
             type: 'screenshot',
             captureScope: 'window',
-            path: `${options.runRef}/step-003-after.png`,
+            path: traceFixtureRef(options.runRef, 'step-003-after.png'),
             windowTarget: { appName: 'File Manager' },
           },
         ],
@@ -736,6 +737,11 @@ function validTrace(options: { runId: string; runRef: string }) {
       },
     ],
   };
+}
+
+function traceFixtureRef(runRef: string, fileRef: string) {
+  const prefix = runRef.replace(/\/+$/, '');
+  return prefix ? `${prefix}/${fileRef}` : fileRef;
 }
 
 function validAdapter(runId: string) {

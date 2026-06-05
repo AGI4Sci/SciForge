@@ -1,12 +1,12 @@
 # 历史 KV-Ground API 兼容服务启动与 SciForge 接入指南
 
-Computer Use 当前设计默认 VLM 和 grounding 模型统一为 `qwen3.7-plus`。本文只保留历史 KV-Ground API 服务的启动、访问、维护和兼容接入说明；旧服务名、endpoint 或 adapter 不能代表默认 grounding 模型。规划 GUI action 的生产默认路径由 Runtime Codex 文本 planner 完成，vision-sense 只提供 compact observation、visible text、focus region 和 verifier feedback。
+Computer Use 当前产品路径通过 SciForge Model Router provider/capability surface 获取视觉观察、grounding 和 verifier feedback。本文只保留历史 KV-Ground API 服务的启动、访问、维护和兼容接入说明；旧服务名、endpoint、模型名或 adapter 不能代表默认 grounding 模型或公共 provider 选择。
 
 ## 职责划分
 
 ```text
-RuntimeCodexPlanner: Codex CLI / TUI 文本 agent，读取 compact observation、visible text、action history 和 verifier feedback，输出通用 GUI action
-qwen3.7-plus Grounding: 默认 grounding 模型，读取 image + text_prompt，输出坐标
+ModelRouter Computer Use planner capability: 读取 compact observation、visible text、action history 和 verifier feedback，输出通用 GUI action
+ModelRouter grounding translator capability: 读取 screenshot/crop ref + target description，输出坐标观察
 KV-Ground-compatible endpoint: 历史兼容服务路径，仅用于调试/迁移
 GuiExecutor: 根据坐标执行 click/scroll/type/press_key
 Verifier: 重新截图，检查窗口一致性和视觉变化
@@ -14,9 +14,9 @@ Verifier: 重新截图，检查窗口一致性和视觉变化
 
 推荐配置：
 
-- Planner：Runtime Codex 文本 agent
-- Grounder：默认使用 `qwen3.7-plus`；自部署 KV-Ground API 仅作为兼容 provider 壳
-- 普通文本模型：可以继续给 Runtime Codex、AgentServer 或其他文本任务使用；截图理解应通过 sense provider 生成 compact observation，而不是让 Planner 直接读图。
+- Planner：Model Router 的 Computer Use planner capability 或 Runtime Host 暴露的等价 capability。
+- Grounder：Model Router 的 grounding translator capability；自部署 KV-Ground API 仅作为 legacy adapter 壳。
+- 上游 provider/model：由 router profile 解析，本文不把任何 raw model slug 写成产品默认值。
 
 ## 机器与目录
 
@@ -233,11 +233,12 @@ curl -X POST http://127.0.0.1:18081/predict/ \
 
 ```json
 {
-  "modelBaseUrl": "http://your-openai-compatible-endpoint/v1",
-  "apiKey": "your-api-key",
-  "modelName": "bailian/deepseek-v4-flash",
+  "runtimeProfile": "sciforge-runtime-default",
+  "modelProvider": "sciforge-model-router",
+  "modelName": "sciforge-router",
   "visionSense": {
     "grounderBaseUrl": "http://127.0.0.1:18081",
+    "grounderUploadStrategy": "file-ref",
     "showVisualCursor": true
   }
 }
@@ -245,38 +246,39 @@ curl -X POST http://127.0.0.1:18081/predict/ \
 
 说明：
 
-- Computer Use Planner 使用 Runtime Codex config；默认 profile 来自 SciForge Runtime Codex 配置，必要时用 `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE` 指定。
-- `visionSense.grounderBaseUrl` 指向历史 KV-Ground-compatible 服务。
-- SciForge `vision-sense` 默认会在没有共享路径映射时发送 `image_base64`，适合远端服务读不到本机截图路径的常见场景。
-- Computer Use 定位的默认模型是 `qwen3.7-plus`；如果沿用历史 KV-Ground-compatible 路径，它只提供兼容 diagnostics，不代表默认 Grounder。
+- Computer Use Planner 使用 Model Router capability/config；默认 profile 来自 SciForge Runtime Codex 配置。
+- `visionSense.grounderBaseUrl` 指向历史 KV-Ground-compatible 服务，只在 legacy adapter 调试时使用。
+- SciForge `vision-sense` 默认使用 file-ref / shared path refs；只有明确启用 legacy adapter 且共享路径不可用时，才允许短期发送 `image_base64`。
+- Computer Use 定位的默认入口是 Model Router grounding translator capability；如果沿用历史 KV-Ground-compatible 路径，它只提供兼容 diagnostics，不代表默认 Grounder。
 
 等价环境变量：
 
 ```bash
 export SCIFORGE_RUNTIME_API_KEY="your-runtime-provider-key"
-# Optional: only set this when using a non-default Runtime Codex planner profile.
-export SCIFORGE_COMPUTER_USE_PLANNER_PROFILE="sciforge-runtime-deepseek"
+export SCIFORGE_MODEL_ROUTER_PROFILE="sciforge-runtime-default"
 
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
+export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="file-ref"
 ```
 
 ## 图片传输策略
 
 KV-Ground 运行在服务端；如果只传 `image_path`，它必须是服务端可读路径。可选方案：
 
-1. **JSON 内联上传，默认策略**
+1. **JSON 内联上传，legacy fallback**
 
-   SciForge 读取本地截图并随 `/predict/` 请求发送 `image_base64`，KV-Ground 在服务端写入临时文件后推理，请求结束后自动清理。
+   只有明确启用 legacy adapter 且共享路径不可用时，SciForge 才读取本地截图并随 `/predict/` 请求发送 `image_base64`。KV-Ground 在服务端写入临时文件后推理，请求结束后自动清理；该 payload 不得进入长期 trace、聊天正文或主上下文。
 
    ```json
    {
      "visionSense": {
-       "grounderBaseUrl": "http://127.0.0.1:18081"
+       "grounderBaseUrl": "http://127.0.0.1:18081",
+       "grounderUploadStrategy": "inline"
      }
    }
    ```
 
-   也可以显式指定，和默认行为等价：
+   等价环境变量：
 
    ```bash
    export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
@@ -341,7 +343,7 @@ $SUP -c /mlplatform/supervisord/supervisord.conf restart kv-ground
 返回 `image_path not found`：
 
 - 确认请求中的 `image_path` 是服务器路径，不是本地路径。
-- 如果图片只在本机，改用 `image_base64`，或让 SciForge 默认发送 `image_base64`。
+- 如果图片只在本机，优先建立共享路径映射；只有 legacy adapter 调试场景才短期改用 `image_base64`。
 - 如果使用路径映射，检查 `grounderLocalPathPrefix` 和 `grounderRemotePathPrefix` 是否能正确替换。
 
 坐标明显偏移：
@@ -352,6 +354,6 @@ $SUP -c /mlplatform/supervisord/supervisord.conf restart kv-ground
 
 Runtime Codex planner 无法选择下一步：
 
-- 检查 Runtime Codex config、`SCIFORGE_RUNTIME_API_KEY` 和可选 `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`。
+- 检查 Runtime Codex config、`SCIFORGE_RUNTIME_API_KEY` 和 Model Router profile/capability readiness。
 - 检查 sense provider 是否提供 compact observation、visible text、recent actions 和 verifier feedback。
 - Planner 仍不得直接读截图、DOM、accessibility tree 或输出坐标；需要视觉细节时应由 sense provider 追加 observation/region detail。

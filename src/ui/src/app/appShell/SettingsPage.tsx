@@ -340,7 +340,6 @@ export function SettingsPage({
                   <option value="native">native user endpoint</option>
                   <option value="openai-compatible">openai-compatible</option>
                   <option value="openrouter">openrouter</option>
-                  <option value="qwen">qwen</option>
                   <option value="codex-chatgpt">codex-chatgpt</option>
                   <option value="gemini">gemini</option>
                 </select>
@@ -546,7 +545,6 @@ function publicModelProviderLabel(value: string) {
   if (provider === 'native') return 'native';
   if (provider === 'openai-compatible') return 'openai-compatible';
   if (provider === 'openrouter') return 'openrouter';
-  if (provider === 'qwen') return 'qwen';
   if (provider === 'codex-chatgpt') return 'codex-chatgpt';
   if (provider === 'gemini') return 'gemini';
   return 'model provider configured (masked)';

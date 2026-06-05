@@ -213,10 +213,11 @@ function parseVisionAppAliases(): Record<string, string> {
   return parseVisionSenseAppAliases(process.env.SCIFORGE_VISION_APP_ALIASES_JSON);
 }
 
-function normalizeGrounderUploadStrategy(value: string | undefined): 'scp' | 'inline' | undefined {
+function normalizeGrounderUploadStrategy(value: string | undefined): 'scp' | 'inline' | 'file-ref' | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === 'scp') return 'scp';
   if (normalized === 'inline' || normalized === 'base64') return 'inline';
+  if (normalized === 'file-ref' || normalized === 'ref' || normalized === 'shared-path') return 'file-ref';
   return undefined;
 }
 

@@ -16,7 +16,7 @@ import { withHardTimeout } from './computer-use-plan.js';
 import { inferExecutorCoordinateScale } from './computer-use-window-session.js';
 
 type KvGroundHttpDiagnostic = {
-  schemaVersion: 'sciforge.vision-sense.kv-ground-http-diagnostic.v1';
+  schemaVersion: 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1';
   provider: string;
   stage: 'health' | 'predict';
   method: 'GET' | 'POST';
@@ -27,7 +27,7 @@ type KvGroundHttpDiagnostic = {
   latencyMs: number;
   error?: string;
   errorEvidence?: Record<string, unknown>;
-  responseBody?: Record<string, unknown>;
+  responseSummary?: Record<string, unknown>;
   responseTextSnippet?: string;
 };
 export async function resolveActionGrounding(
@@ -561,8 +561,8 @@ async function groundTargetDescription(
   if (!config.grounder.baseUrl) {
     return {
       ok: false,
-      reason: 'No KV-Ground provider is configured. Set SCIFORGE_VISION_KV_GROUND_URL before running screenshot-grounded Computer Use.',
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.kvGround, reason: 'missing KV-Ground provider' },
+      reason: 'No legacy grounding adapter endpoint is configured. Route grounding through the Model Router capability surface, or set the legacy compatibility endpoint only for adapter migration.',
+      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.modelRouterGrounding, reason: 'missing grounding translator capability or legacy adapter endpoint' },
     };
   }
   const startedAt = Date.now();
@@ -579,12 +579,12 @@ async function groundTargetDescription(
   if (!health.ok) {
     return {
       ok: false,
-      reason: `KV Grounder health preflight failed at ${healthUrl}: ${health.error}.`,
+      reason: `Legacy grounding adapter health preflight failed at ${healthUrl}: ${health.error}.`,
       grounding: {
         status: 'failed',
         targetDescription,
         screenshotRef: screenshot.path,
-        provider: visionSenseGroundingIds.kvGround,
+        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
         healthUrl,
         grounderUrl,
         error: health.error,
@@ -603,10 +603,10 @@ async function groundTargetDescription(
         targetDescription,
         screenshotRef: screenshot.path,
         reason: imagePath.reason,
-        provider: visionSenseGroundingIds.kvGround,
+        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
         healthUrl,
         grounderUrl,
-        health: health.body,
+        health: summarizeGrounderHealth(health.body),
         diagnostics,
       },
     };
@@ -637,16 +637,16 @@ async function groundTargetDescription(
   if (!response.ok) {
     return {
       ok: false,
-      reason: `KV Grounder request failed at ${grounderUrl}: ${response.error}.`,
+      reason: `Legacy grounding adapter request failed at ${grounderUrl}: ${response.error}.`,
       grounding: {
         status: 'failed',
         targetDescription,
         screenshotRef: screenshot.path,
         imagePath: imagePath.path,
-        provider: visionSenseGroundingIds.kvGround,
+        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
         healthUrl,
         grounderUrl,
-        health: health.body,
+        health: summarizeGrounderHealth(health.body),
         error: response.error,
         diagnostics,
       },
@@ -656,17 +656,17 @@ async function groundTargetDescription(
   if (!coordinates) {
     return {
       ok: false,
-      reason: 'KV Grounder response did not include usable coordinates.',
+      reason: 'Legacy grounding adapter response did not include usable coordinates.',
       grounding: {
         status: 'failed',
         targetDescription,
         screenshotRef: screenshot.path,
         imagePath: imagePath.path,
-        provider: visionSenseGroundingIds.kvGround,
+        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
         healthUrl,
         grounderUrl,
-        health: health.body,
-        rawResponse: response.body,
+        health: summarizeGrounderHealth(health.body),
+        responseSummary: summarizeGrounderResponse(response.body),
         diagnostics,
       },
     };
@@ -677,14 +677,14 @@ async function groundTargetDescription(
     y: coordinates.y,
     grounding: {
       status: 'ok',
-      provider: visionSenseGroundingIds.kvGround,
+      provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
       targetDescription,
       screenshotRef: screenshot.path,
       imagePath: imagePath.path,
       imageUploaded: imagePath.uploaded === true,
       healthUrl,
       grounderUrl,
-      health: health.body,
+      health: summarizeGrounderHealth(health.body),
       coordinateSpace,
       x: coordinates.x,
       y: coordinates.y,
@@ -692,7 +692,7 @@ async function groundTargetDescription(
       rawText: typeof response.body.raw_text === 'string' ? response.body.raw_text : undefined,
       imageSize: response.body.image_size,
       latencyMs: Date.now() - startedAt,
-      rawResponse: response.body,
+      responseSummary: summarizeGrounderResponse(response.body),
       diagnostics,
     },
   };
@@ -705,7 +705,7 @@ async function resolveGrounderImagePath(ref: ScreenshotRef, config: VisionSenseC
   if (localPrefix && remotePrefix && ref.absPath.startsWith(localPrefix)) {
     return { ok: true, path: `${remotePrefix.replace(/\/+$/, '')}/${ref.absPath.slice(localPrefix.length).replace(/^\/+/, '')}` };
   }
-  const uploadStrategy = config.grounder.upload?.strategy ?? 'inline';
+  const uploadStrategy = config.grounder.upload?.strategy ?? 'file-ref';
   if (uploadStrategy === 'inline') {
     return {
       ok: true,
@@ -713,6 +713,17 @@ async function resolveGrounderImagePath(ref: ScreenshotRef, config: VisionSenseC
       uploaded: true,
       imageBase64: (await readFile(ref.absPath)).toString('base64'),
       imageMimeType: 'image/png',
+    };
+  }
+  if (uploadStrategy === 'file-ref') {
+    return {
+      ok: false,
+      reason: [
+        'Grounder image path is file-ref-only by default and no service-readable mapping is configured.',
+        'Configure SCIFORGE_VISION_KV_GROUND_LOCAL_PATH_PREFIX and SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIX,',
+        'set SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS=1 only when the service shares the same filesystem,',
+        'or explicitly opt into a legacy upload strategy such as scp or inline for adapter migration.',
+      ].join(' '),
     };
   }
   const uploaded = await uploadGrounderImage(ref, config);
@@ -735,7 +746,7 @@ async function uploadGrounderImage(ref: ScreenshotRef, config: VisionSenseConfig
   if (!upload.host || !upload.remoteDir) {
     return {
       ok: false,
-      reason: 'KV-Ground SCP upload is configured but missing host or remoteDir. Set SCIFORGE_VISION_KV_GROUND_UPLOAD_HOST and SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_DIR.',
+      reason: 'Legacy grounding adapter SCP upload is configured but missing host or remoteDir. Set SCIFORGE_VISION_KV_GROUND_UPLOAD_HOST and SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_DIR.',
     };
   }
   const remoteName = `${sanitizeId(config.runId || 'vision-run')}-${sanitizeId(ref.id || basename(ref.absPath)) || 'screenshot'}.png`;
@@ -754,7 +765,7 @@ async function uploadGrounderImage(ref: ScreenshotRef, config: VisionSenseConfig
   if (result.exitCode !== 0) {
     return {
       ok: false,
-      reason: `KV-Ground SCP upload failed before grounding: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`,
+      reason: `Legacy grounding adapter SCP upload failed before grounding: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`,
     };
   }
   return {
@@ -774,8 +785,8 @@ async function requestJsonWithTimeout(params: {
   const controller = new AbortController();
   const startedAt = Date.now();
   const baseDiagnostic = (): Omit<KvGroundHttpDiagnostic, 'status' | 'latencyMs'> => ({
-    schemaVersion: 'sciforge.vision-sense.kv-ground-http-diagnostic.v1',
-    provider: visionSenseGroundingIds.kvGround,
+    schemaVersion: 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1',
+    provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
     stage: params.stage,
     method: params.method,
     url: params.url,
@@ -801,7 +812,7 @@ async function requestJsonWithTimeout(params: {
       blocked: !response.ok,
       httpStatus: response.status,
       latencyMs: Date.now() - startedAt,
-      ...(params.stage === 'health' ? { responseBody: body } : {}),
+      ...(params.stage === 'health' ? { responseSummary: summarizeGrounderHealth(body) } : {}),
       ...(!response.ok ? { responseTextSnippet: text.slice(0, 500) } : {}),
     };
     if (!response.ok) {
@@ -814,7 +825,7 @@ async function requestJsonWithTimeout(params: {
       };
     }
     if (params.stage === 'health' && body.ok === false) {
-      const error = 'KV-Ground health returned ok=false';
+      const error = 'Legacy grounding adapter health returned ok=false';
       return {
         ok: false as const,
         error,
@@ -885,6 +896,33 @@ function stringValue(value: unknown) {
 
 function compactRecord(record: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+}
+
+function summarizeGrounderHealth(body: Record<string, unknown>) {
+  return compactRecord({
+    ok: typeof body.ok === 'boolean' ? body.ok : undefined,
+    cudaAvailable: typeof body.cuda_available === 'boolean' ? body.cuda_available : undefined,
+    gpuCount: typeof body.gpu_count === 'number' ? body.gpu_count : undefined,
+    inlineImageSupported: typeof body.inline_image_supported === 'boolean' ? body.inline_image_supported : undefined,
+    maxInlineImageBytes: typeof body.max_inline_image_bytes === 'number' ? body.max_inline_image_bytes : undefined,
+  });
+}
+
+function summarizeGrounderResponse(body: Record<string, unknown>) {
+  const coordinates = parseGrounderCoordinates(body);
+  const imageSize = isRecord(body.image_size)
+    ? compactRecord({
+      width: numberConfig(body.image_size.width),
+      height: numberConfig(body.image_size.height),
+    })
+    : undefined;
+  return compactRecord({
+    coordinateCount: Array.isArray(body.coordinates) ? body.coordinates.length : undefined,
+    hasCoordinates: coordinates !== undefined,
+    confidence: numberConfig(body.confidence),
+    hasRawText: typeof body.raw_text === 'string' && body.raw_text.length > 0,
+    imageSize: imageSize && Object.keys(imageSize).length ? imageSize : undefined,
+  });
 }
 
 function parseGrounderCoordinates(value: unknown): { x: number; y: number } | undefined {

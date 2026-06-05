@@ -470,17 +470,16 @@ export async function preflightComputerUseLong(options: {
   if (!kvGrounderUrl) {
     checks.push({
       id: 'grounder',
-      status: hasTestActionFixtures ? 'warn' : 'fail',
+      status: hasTestActionFixtures ? 'warn' : 'pass',
       category: 'grounder',
-      message: 'No KV-Ground config was found.',
-      repairAction: 'Set SCIFORGE_VISION_KV_GROUND_URL.',
+      message: 'Model Router grounding translator capability is the default; no legacy KV-Ground config is required.',
     });
   } else if (dryRun || hasTestActionFixtures) {
     checks.push({
       id: 'grounder',
       status: hasTestActionFixtures ? 'warn' : 'pass',
       category: 'grounder',
-      message: 'KV-Ground-compatible endpoint is configured; live health is not required for dry-run or fixture actions.',
+      message: 'Legacy KV-Ground-compatible endpoint is configured; live health is not required for dry-run or fixture actions.',
     });
   } else {
     const health = await checkKvGroundHealth(kvGrounderUrl);
@@ -488,13 +487,13 @@ export async function preflightComputerUseLong(options: {
       id: 'grounder',
       status: 'pass',
       category: 'grounder',
-      message: `KV-Ground health check passed at ${health.healthUrl}.`,
+      message: `Legacy KV-Ground health check passed at ${health.healthUrl}.`,
     } : {
       id: 'grounder',
       status: 'fail',
       category: 'grounder',
-      message: `KV-Ground health check failed at ${health.healthUrl}: ${health.reason}.`,
-      repairAction: 'Start KV-Ground or its SSH tunnel, then verify curl $SCIFORGE_VISION_KV_GROUND_URL/health before running real CU-LONG/CU-NEXT tasks.',
+      message: `Legacy KV-Ground health check failed at ${health.healthUrl}: ${health.reason}.`,
+      repairAction: 'Unset SCIFORGE_VISION_KV_GROUND_URL to use the default Model Router grounding translator, or start the explicit legacy KV-Ground endpoint and verify its /health route.',
     });
   }
 

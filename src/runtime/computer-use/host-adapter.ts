@@ -17,6 +17,7 @@ import {
   computerUseCaptureHostPortProvider,
   computerUseExecuteHostPortProvider,
   computerUseHostPortProviderIds,
+  computerUseModelRouterCapabilityIds,
   computerUseTraceHandoffContract,
 } from '../../../packages/actions/computer-use/provider-policy.js';
 import {
@@ -129,9 +130,9 @@ export function gatewayRequestToComputerUseRequest(
     providers: {
       action: COMPUTER_USE_ACTION_PROVIDER_ID,
       sense: computerUseSenseProviderId(request),
-      grounder: config.grounder.baseUrl ? computerUseHostPortProviderIds.kvGround : undefined,
+      grounder: computerUseModelRouterCapabilityIds.groundingTranslator,
       executor: independentInputAdapterExecutionBoundary(config) ?? computerUseActionRequestExecutorProvider(config),
-      verifier: computerUseHostPortProviderIds.layeredVerifier,
+      verifier: computerUseModelRouterCapabilityIds.verifierTranslator,
     },
     windowTarget: windowTargetTraceConfig(config.windowTarget),
     metadata: {
@@ -235,7 +236,7 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
         returns: 'Observation with screenshot/file refs',
       },
       plan: {
-        provider: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner,
+        provider: computerUseModelRouterCapabilityIds.computerUsePlanner,
         returns: 'Exactly one generic GUI action or done=true',
       },
       crop: {
@@ -244,8 +245,9 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
         optional: true,
       },
       locate: {
-        provider: config.grounder.baseUrl ? computerUseHostPortProviderIds.kvGround : computerUseHostPortProviderIds.focusRegionCrop,
+        provider: computerUseModelRouterCapabilityIds.groundingTranslator,
         returns: 'Grounding with target-window or crop-local coordinates and diagnostics',
+        legacyAdapter: config.grounder.baseUrl ? computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter : undefined,
       },
       execute: {
         provider: independentInputAdapterExecutionBoundary(config) ?? computerUseExecuteHostPortProvider(config),
@@ -254,7 +256,7 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
         sharedSystemInputExplicitlyAllowed: Boolean(config.allowSharedSystemInput),
       },
       verify: {
-        provider: computerUseHostPortProviderIds.layeredVerifier,
+        provider: computerUseModelRouterCapabilityIds.verifierTranslator,
         returns: 'Verifier verdict with screenshot-diff, window consistency, and repair feedback',
       },
       writeTrace: {

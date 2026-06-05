@@ -68,12 +68,14 @@ export function createOptimisticUserTurnSession({
   baseSession,
   prompt,
   references,
+  objectReferences,
   goalSnapshot,
   targetInstanceLabel,
 }: {
   baseSession: SciForgeSession;
   prompt: string;
   references: SciForgeReference[];
+  objectReferences?: NonNullable<SciForgeMessage['objectReferences']>;
   goalSnapshot?: UserGoalSnapshot;
   targetInstanceLabel?: string;
 }) {
@@ -85,6 +87,7 @@ export function createOptimisticUserTurnSession({
     createdAt: now,
     status: 'completed',
     references,
+    objectReferences,
     goalSnapshot,
   };
   const shouldRetitle = shouldDeriveTitleForFirstUserTurn(baseSession);

@@ -788,8 +788,18 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert manifest["entrypoint"]["virtualDesktopProbe"].startswith(
         "python -m sciforge_computer_use.virtual_desktop_probe"
     )
-    assert manifest["hostPortsContract"]["providerIdPolicy"]["plan"] == "runtime-codex-tui-text-planner"
-    assert manifest["hostPortsContract"]["providerIdPolicy"]["verify"] == "layered-vision-verifier"
+    assert (
+        manifest["hostPortsContract"]["providerIdPolicy"]["plan"]
+        == "model-router.capability.computer-use.planner"
+    )
+    assert (
+        manifest["hostPortsContract"]["providerIdPolicy"]["locate"]
+        == "model-router.capability.computer-use.grounding-translator"
+    )
+    assert (
+        manifest["hostPortsContract"]["providerIdPolicy"]["verify"]
+        == "model-router.capability.computer-use.verifier-translator"
+    )
     assert manifest["hostPortsContract"]["executorAdapterContract"]["requiredStatus"] == "independent-simulated-input-adapter"
     assert manifest["hostPortsContract"]["executorAdapterContract"]["targetBindingRequiredForRealDesktopEvidence"] is True
     assert manifest["hostPortsContract"]["executorAdapterContract"]["bindingHelper"].endswith(
@@ -1087,7 +1097,7 @@ def test_public_api_manifest_and_camel_case_aliases_are_stable():
     assert "chat-image-url-object-no-temperature" in manifest["semanticVerifierProbeContract"]["multimodalVariants"]
     assert "configuredModelPresent" in manifest["semanticVerifierProbeContract"]["diagnosticRecordFields"]
     assert "expectedProjectModelIds" in manifest["semanticVerifierProbeContract"]["projectEvidenceEligibilityFields"]
-    assert "qwen3.6-plus-2026-04-02" in manifest["semanticVerifierProbeContract"]["projectEvidenceModels"]
+    assert "model-router.capability.computer-use.verifier-translator" in manifest["semanticVerifierProbeContract"]["projectEvidenceModels"]
     assert "raw HTTP/1.1" in manifest["semanticVerifierProbeContract"]["transportFallback"]
     assert "verdict=pass" in manifest["semanticVerifierProbeContract"]["completionVerdictPolicy"]
     assert "raw model ids" in manifest["semanticVerifierProbeContract"]["modelsDiagnosticPolicy"]

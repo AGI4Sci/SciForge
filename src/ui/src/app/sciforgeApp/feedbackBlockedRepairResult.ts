@@ -46,7 +46,7 @@ export function buildBlockedRepairHandoffResultInput(input: {
     }],
     humanVerification: {
       status: 'not-run',
-      conclusion: 'Live DeepSeek repair did not start; resolve readiness blockers and rerun from the feedback inbox.',
+      conclusion: 'Live Runtime repair did not start; resolve readiness blockers and rerun from the feedback inbox.',
       evidenceRefs: [
         'docs/test-artifacts/runtime-provider-preflight/manifest.json',
         'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',

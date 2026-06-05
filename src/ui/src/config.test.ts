@@ -68,7 +68,7 @@ describe('SciForge config persistence', () => {
     assert.equal(updateConfig(defaultSciForgeConfig, { locale: 'en-US' }).locale, 'en-US');
   });
 
-  it('默认 Runtime Codex 使用 DeepSeek profile 且不允许 OpenAI 自动回退', () => {
+  it('默认 Runtime Codex 使用 Model Router profile 且不允许 OpenAI 自动回退', () => {
     assert.equal(defaultSciForgeConfig.runtimeProfile, DEFAULT_CODEX_RUNTIME_PROFILE);
     assert.equal(defaultSciForgeConfig.modelProvider, DEFAULT_CODEX_RUNTIME_PROVIDER);
     assert.equal(defaultSciForgeConfig.modelName, DEFAULT_CODEX_RUNTIME_MODEL);
@@ -83,16 +83,16 @@ describe('SciForge config persistence', () => {
     assert.equal(normalizeConfig({ allowOpenAiRuntime: 'true' }).allowOpenAiRuntime, false);
   });
 
-  it('round-trips qwen/openrouter style model settings through localStorage', () => {
+  it('round-trips custom model settings through localStorage', () => {
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       value: { localStorage: new MemoryStorage() },
     });
 
     const saved = updateConfig(defaultSciForgeConfig, {
-      modelProvider: 'openrouter',
-      modelBaseUrl: 'https://openrouter.ai/api/v1/',
-      modelName: 'qwen/qwen3.6-plus:free',
+      modelProvider: 'custom-provider',
+      modelBaseUrl: 'https://provider.example/api/v1/',
+      modelName: 'custom/model-alias',
       apiKey: 'test-key',
       maxContextWindowTokens: 128000,
     });
@@ -100,9 +100,9 @@ describe('SciForge config persistence', () => {
     saveSciForgeConfig(saved);
     const loaded = loadSciForgeConfig();
 
-    assert.equal(loaded.modelProvider, 'openrouter');
-    assert.equal(loaded.modelBaseUrl, 'https://openrouter.ai/api/v1');
-    assert.equal(loaded.modelName, 'qwen/qwen3.6-plus:free');
+    assert.equal(loaded.modelProvider, 'custom-provider');
+    assert.equal(loaded.modelBaseUrl, 'https://provider.example/api/v1');
+    assert.equal(loaded.modelName, 'custom/model-alias');
     assert.equal(loaded.apiKey, 'test-key');
     assert.equal(loaded.maxContextWindowTokens, 128000);
   });

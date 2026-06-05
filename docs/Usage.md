@@ -4,7 +4,7 @@
 
 本文描述当前代码已经落地的用法，以及当前目标架构要求的操作边界。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
-架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server，生产默认让 Codex 使用 DeepSeek/proxy `bailian/deepseek-v4-flash` 或用户配置的低成本 provider/proxy，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
+架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server，生产默认让 Codex 使用 SciForge Model Router public alias/profile，由 `textReasoner` 和 `translators.vision` 等 role 解析实际 provider，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -13,7 +13,7 @@
 - Node.js 20+
 - npm
 - 一个本地 workspace 目录
-- 目标架构下的 Codex app-server，以及 DeepSeek provider/proxy 配置；Runtime Codex browser/release acceptance secret 只放进进程环境变量，ignored local config key 只可作为本机 proxy 调试 fallback
+- 目标架构下的 Codex app-server，以及 SciForge Model Router public alias/profile 配置；Runtime Codex browser/release acceptance secret 只放进进程环境变量，ignored local config key 只可作为本机 router/proxy 调试 fallback
 
 安装依赖并启动完整本地工作台：
 
@@ -57,7 +57,7 @@ UI 配置存于浏览器 `localStorage`，workspace writer 的本地配置可通
 - `workspaceWriterBaseUrl`：workspace writer，默认 `http://127.0.0.1:5174`。
 - `workspacePath`：当前工作区根目录。代码会把传入的 `/.sciforge` 子路径归一回 workspace 根。
 - `agentBackend`：当前允许值为 `codex`、`openteam_agent`、`claude-code`、`hermes-agent`、`openclaw`、`gemini`。
-- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终应成为 Codex custom provider / provider proxy 配置；默认 provider 应为 DeepSeek/proxy，当前 Runtime Codex smoke gate 要求 `bailian/deepseek-v4-flash`，不得静默 fallback 到 OpenAI。不要把 Runtime Codex secret 写入这些字段；使用 `SCIFORGE_RUNTIME_API_KEY`。
+- `modelProvider`、`modelBaseUrl`、`modelName`、`apiKey`：迁移期兼容字段。最终应成为 Codex custom provider / Model Router 配置；默认 provider 应为 SciForge Model Router public alias/profile，当前 Runtime Codex smoke gate 要求 `textReasoner` role alias，不得静默 fallback 到 OpenAI。不要把 Runtime Codex secret 写入这些字段；使用 `SCIFORGE_RUNTIME_API_KEY`。
 - `requestTimeoutMs`：UI 等待 workspace stream 的超时，默认 900000ms。
 - `maxContextWindowTokens`：上下文预算，默认 200000。
 - `peerInstances`：双实例互修目标，字段见 [`../src/ui/src/domain.ts`](../src/ui/src/domain.ts) 的 `PeerInstance`。
@@ -74,8 +74,9 @@ Dev Codex
   purpose: 修改 SciForge 代码
 
 Runtime Codex
-  profile: sciforge-runtime-deepseek
-  model provider: DeepSeek/proxy bailian/deepseek-v4-flash
+  profile: sciforge-runtime-default
+  model provider: SciForge Model Router
+  model alias: textReasoner
   cwd: 用户 workspace
   purpose: 服务 SciForge 用户任务
 ```
@@ -90,36 +91,41 @@ codex --model gpt-5.5 -C /path/to/SciForge
 codex app-server --listen stdio://
 ```
 
-Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 provider proxy upstream 时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](../packages/backend/CodexRuntimeMigration.md)。
+Runtime Codex 不能静默继承开发者 profile；缺少 `SCIFORGE_RUNTIME_API_KEY`、runtime profile 或 Model Router profile/role 配置时必须 fail closed。完整迁移教程见 [`CodexRuntimeMigration.md`](../packages/backend/CodexRuntimeMigration.md)。
 需要文献、PDF、PubMed、动态网页等外部检索时，Runtime Codex 仍使用 `workspace-write`，但必须显式启用 `sandbox_workspace_write.network_access=true`；SciForge 的 runtime home 和 runtime adapter 会自动写入并传递该配置。
 
 ## Runtime Codex no-secret 配置
 
-当前 smoke gate 要求 Runtime Codex 使用隔离 profile：
+当前 smoke gate 要求 Runtime Codex 使用隔离 profile，并只公开 Model Router alias/role：
 
 ```text
-profile: sciforge-runtime-deepseek
-provider: sciforge-deepseek-proxy
-model: bailian/deepseek-v4-flash
+profile: sciforge-runtime-default
+provider: sciforge-model-router
+model alias: textReasoner
 env_key: SCIFORGE_RUNTIME_API_KEY
 wire_api: responses
-proxy base_url: http://127.0.0.1:3891/v1
+router base_url: <service-managed-model-router-responses-url>
 ```
 
-Browser/release acceptance 使用的 Runtime Codex 密钥只进入启动 Runtime Codex / provider proxy 的 service 环境，不写入 git、`config.local.json`、manifest 或 acceptance notes：
+Browser/release acceptance 使用的 Runtime Codex 密钥只进入启动 Runtime Codex / Model Router 的 service 环境，不写入 git、`config.local.json`、manifest 或 acceptance notes：
 
 ```bash
 export SCIFORGE_RUNTIME_API_KEY="<provider-api-key>"
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
+export SCIFORGE_TEXT_BASE_URL="https://your-text-provider-compatible-endpoint.example/v1"
+export SCIFORGE_TEXT_MODEL="<private-text-reasoner-model>"
+export SCIFORGE_TEXT_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
+export SCIFORGE_VISION_BASE_URL="https://your-vision-provider-compatible-endpoint.example/v1"
+export SCIFORGE_VISION_MODEL="<private-vision-translator-model>"
+export SCIFORGE_VISION_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
 ```
 
-如果不想把 upstream URL 放进 shell 环境，可以只把非 secret 的 upstream/model 写进被 `.gitignore` 忽略的 `config.local.json`。不要把这里的 `apiKey` 当成验收或 release secret：
+如果不想把 upstream URL 放进 shell 环境，可以只把非 secret 的 upstream/model alias 写进被 `.gitignore` 忽略的 `config.local.json`。不要把这里的 `apiKey` 当成验收或 release secret：
 
 ```json
 {
   "codexProxy": {
     "upstreamBaseUrl": "https://your-openai-compatible-endpoint.example/v1",
-    "defaultModel": "bailian/deepseek-v4-flash"
+    "defaultModel": "textReasoner"
   }
 }
 ```
@@ -129,13 +135,13 @@ Browser/release acceptance 会把 `config.local.json` 或 `.sciforge/**/config.l
 生成或刷新隔离的 Runtime Codex home：
 
 ```bash
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url <model-router-responses-url>
 ```
 
-启动本地 provider proxy：
+启动本地 Model Router：
 
 ```bash
-npm run backend:codex-proxy
+npm run backend:model-router -- --host 127.0.0.1 --port 3892
 ```
 
 ### Runtime Codex service-env/browser acceptance 复测路径
@@ -149,17 +155,17 @@ curl -fsS http://127.0.0.1:18081/health
 curl -fsS http://127.0.0.1:5173/ >/dev/null
 curl -fsS http://127.0.0.1:6173/health
 curl -fsS http://127.0.0.1:18080/health
-curl -fsS http://127.0.0.1:3891/healthz
+curl -fsS http://127.0.0.1:3892/health
 ```
 
-历史 Runtime Codex browser acceptance 拓扑曾要求 KV-Ground compatibility service 与下列本地服务同时在线；当前 Computer Use 设计默认 VLM/grounding 模型统一为 `qwen3.7-plus`：
+历史 Runtime Codex browser acceptance 拓扑曾要求 KV-Ground compatibility service 与下列本地服务同时在线；当前 Computer Use 设计通过 Model Router 的 `translators.vision` role 获取视觉观察，不把固定视觉 provider 或 raw model slug 写成产品默认值：
 
 ```text
 Legacy Grounder: http://127.0.0.1:18081/health
 UI:               http://127.0.0.1:5173/
 Workspace writer: http://127.0.0.1:6173/health
 Runtime Codex:    http://127.0.0.1:18080/health
-Provider proxy:   http://127.0.0.1:3891/healthz
+Model Router:     http://127.0.0.1:3892/health
 ```
 
 no-secret 启动顺序示例：
@@ -168,19 +174,24 @@ no-secret 启动顺序示例：
 export SCIFORGE_UI_PORT=5173
 export SCIFORGE_WORKSPACE_PORT=6173
 export SCIFORGE_RUNTIME_CODEX_PORT=18080
-export SCIFORGE_PROXY_PORT=3891
+export SCIFORGE_MODEL_ROUTER_PORT=3892
 export SCIFORGE_WORKSPACE_PATH="$PWD/workspace/parallel/p1"
-export SCIFORGE_PROXY_UPSTREAM_BASE_URL="https://your-openai-compatible-endpoint.example/v1"
 export SCIFORGE_RUNTIME_API_KEY="<set-in-service-env-only>"
+export SCIFORGE_TEXT_BASE_URL="https://text-provider-compatible-endpoint.example/v1"
+export SCIFORGE_TEXT_MODEL="<private-text-reasoner-model>"
+export SCIFORGE_TEXT_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
+export SCIFORGE_VISION_BASE_URL="https://vision-provider-compatible-endpoint.example/v1"
+export SCIFORGE_VISION_MODEL="<private-vision-translator-model>"
+export SCIFORGE_VISION_API_KEY="$SCIFORGE_RUNTIME_API_KEY"
 
-npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3891/v1
-npm run backend:codex-proxy
+npm run backend:codex-runtime:setup -- --overwrite --proxy-base-url http://127.0.0.1:3892/v1
+npm run backend:model-router -- --host 127.0.0.1 --port 3892
 SCIFORGE_WORKSPACE_PORT=6173 npm run workspace:server
 SCIFORGE_RUNTIME_CODEX_PORT=18080 node --import tsx src/runtime/codex/codex-runtime-standalone-server.ts
 npm run dev:ui -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-`SCIFORGE_RUNTIME_API_KEY` 的真实值必须由启动 Runtime Codex / provider proxy 的 service manager、shell 或 CI secret store 注入；不要把真实值写进本文件、manifest、blocked note、`config.local.json` 或 `.sciforge/**/config.local.json`。
+`SCIFORGE_RUNTIME_API_KEY` 的真实值必须由启动 Runtime Codex / Model Router 的 service manager、shell 或 CI secret store 注入；不要把真实值写进本文件、manifest、blocked note、`config.local.json` 或 `.sciforge/**/config.local.json`。
 
 复测顺序：
 
@@ -192,7 +203,7 @@ SCIFORGE_REQUIRE_LIVE_BROWSER_ACCEPTANCE=1 npm run smoke:runtime-codex-browser-a
 
 provider preflight 和 config fallback 只能说明 upstream/secret-source 分诊状态；Codex in-app browser 的默认聊天入口只能作为 Web UI / Runtime Codex smoke。涉及真实 Browser Pane 的 product acceptance，必须使用 Desktop Electron native host 的 `WebContentsView` live acceptance。
 
-`npm run smoke:runtime-codex-browser-acceptance` 是当前 `npm run verify:single-agent-final` 的一部分。默认模式会验证 fail-closed evidence；如果缺少 `SCIFORGE_RUNTIME_API_KEY` 或 provider proxy upstream base URL，会写出 blocked manifest/notes，而不是假装通过。
+`npm run smoke:runtime-codex-browser-acceptance` 是当前 `npm run verify:single-agent-final` 的一部分。默认模式会验证 fail-closed evidence；如果缺少 `SCIFORGE_RUNTIME_API_KEY` 或 Model Router role 配置，会写出 blocked manifest/notes，而不是假装通过。
 
 `npm run smoke:runtime-provider-preflight` / `GET /healthz?check=upstream` 只做 live default-chat 前的 provider upstream 分诊（`config-missing`、`provider-auth`、`rate-limited`、`upstream-outage`、`repo-bug`）。`verify:single-agent-final` 和 `verify:single-agent-release` 会在 browser acceptance 前运行它，但它的结果仍是 `releaseAcceptance: not-evaluated`，不等同于 browser/release acceptance passed。
 
@@ -239,7 +250,8 @@ GUI event
   -> terminal-equivalent text
   -> Codex app-server
   -> Codex custom model provider
-  -> DeepSeek/proxy bailian/deepseek-v4-flash / configured provider proxy by default
+  -> SciForge Model Router public alias/profile
+  -> textReasoner / translators.vision roles
   -> native plugins / skills / tools / MCP
   -> read-only GUI resources for shell/hot-region/region-detail state
   -> intent-based gui.* tool calls for presentation
@@ -311,7 +323,7 @@ npm run smoke:stable-version-registry
 
 ## Computer Use
 
-当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、`qwen3.7-plus` VLM/grounding 辅助和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、Model Router `translators.vision` 观察和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 `/computer-use ...` 这类 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
 
 Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
@@ -341,7 +353,7 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 ```
 
-Computer Use 的默认 VLM/grounding 模型统一为 `qwen3.7-plus`。历史 KV-Ground-compatible endpoint 只作为兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
+Computer Use 的视觉观察默认通过 Model Router `translators.vision` role 完成。历史 KV-Ground-compatible endpoint 只作为兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
 
 ```bash
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
@@ -371,11 +383,9 @@ export SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1
 - `SCIFORGE_VISION_CAPTURE_DISPLAYS`
 - `SCIFORGE_RUNTIME_API_KEY`
 - `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`
-- `SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER=0`：关闭 Runtime Codex text planner 的 direct chat fallback。
-- `SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL` / `SCIFORGE_PROXY_UPSTREAM_BASE_URL` / `SCIFORGE_RUNTIME_BASE_URL`：direct chat fallback 的 OpenAI-compatible base URL 来源。
-- `SCIFORGE_COMPUTER_USE_TEXT_PLANNER_MODEL` / `SCIFORGE_RUNTIME_MODEL` / `SCIFORGE_PROXY_DEFAULT_MODEL`：direct chat fallback 的模型来源。
-- `SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS`、`SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_MAX_TOKENS`
-- `SCIFORGE_VISION_KV_GROUND_URL`
+- `SCIFORGE_RUNTIME_BASE_URL` / `SCIFORGE_PROXY_UPSTREAM_BASE_URL`：Model Router provider-compatible `/v1/responses` endpoint。
+- `SCIFORGE_RUNTIME_PROVIDER` / `SCIFORGE_RUNTIME_MODEL`：公开 provider alias 和 public model alias，默认分别为 `sciforge-model-router` 与 `sciforge-router`；带 raw provider/model 词的值即使伪装成公开前缀，也只能归一为默认公开 alias，不能进入 UI、metadata 或 audit 输出。
+- `SCIFORGE_VISION_KV_GROUND_URL`：仅用于显式 legacy KV-Ground-compatible adapter 诊断；默认 Computer Use capability 仍通过 Model Router 注册能力。
 
 详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)。
 

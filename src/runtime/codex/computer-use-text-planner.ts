@@ -1,16 +1,6 @@
-import { request as httpRequest } from 'node:http';
-import { request as httpsRequest } from 'node:https';
-import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
-
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { createCodexAppServerRuntimeAdapter } from './codex-runtime-adapter.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
-import {
-  chatCompletionToResponse,
-  responsesToChatCompletions,
-  type ResponsesRequest,
-} from '../../../packages/backend/src/response-compat.js';
-import { scrubRuntimeCodexAuditText } from './codex-runtime-audit-bundle.js';
 
 export const COMPUTER_USE_TEXT_PLANNER_SCHEMA = 'sciforge.computer-use.codex-text-planner.v1';
 
@@ -132,12 +122,10 @@ export async function runComputerUseCodexTextPlanner(
   const diagnosticSummary = formatPlannerDiagnosticSummary(diagnostics);
 
   if (failed) {
-    const fallback = await runDirectChatPlannerFallback(commandText, options, diagnostics, events);
-    if (fallback.ok) return fallback;
     return {
       ok: false,
       reason: withPlannerDiagnosticSummary(
-        [failed.message || `Runtime Codex planner ${failed.type}.`, fallback.reason].filter(Boolean).join(' '),
+        failed.message || `Runtime Codex planner ${failed.type}.`,
         diagnosticSummary,
       ),
       raw: {
@@ -153,12 +141,10 @@ export async function runComputerUseCodexTextPlanner(
   }
 
   if (!text) {
-    const fallback = await runDirectChatPlannerFallback(commandText, options, diagnostics, events);
-    if (fallback.ok) return fallback;
     return {
       ok: false,
       reason: withPlannerDiagnosticSummary(
-        ['Runtime Codex text planner completed without final JSON text.', fallback.reason].filter(Boolean).join(' '),
+        'Runtime Codex text planner completed without final JSON text.',
         diagnosticSummary,
       ),
       raw: {
@@ -193,10 +179,9 @@ export async function runComputerUseDirectChatTextPlannerFallback(
   options: ComputerUseTextPlannerOptions,
   triggerMessage = 'Runtime Codex text planner transport timed out before returning a terminal event.',
 ): Promise<ComputerUseTextPlannerRun> {
-  const commandText = buildComputerUseTextPlannerCommand(input);
   const triggerEvent: PlannerEventSummary = {
     type: 'failed',
-    status: 'direct-chat-fallback-trigger',
+    status: 'model-router-planner-required',
     message: triggerMessage,
     exitCode: null,
     signal: null,
@@ -207,12 +192,14 @@ export async function runComputerUseDirectChatTextPlannerFallback(
     abortSignalAborted: options.abortSignal?.aborted ?? false,
   });
   const diagnosticSummary = formatPlannerDiagnosticSummary(diagnostics);
-  const fallback = await runDirectChatPlannerFallback(commandText, options, diagnostics, events, { force: true });
-  if (fallback.ok) return fallback;
   return {
     ok: false,
     reason: withPlannerDiagnosticSummary(
-      ['Direct chat planner fallback failed after Runtime Codex planner transport timeout.', fallback.reason].filter(Boolean).join(' '),
+      [
+        'Computer Use planner requires the registered Model Router provider/capability path.',
+        'Direct OpenAI-compatible chat fallback is disabled so Computer Use cannot silently bypass the Model Router profile.',
+        triggerMessage,
+      ].join(' '),
       diagnosticSummary,
     ),
     raw: {
@@ -224,365 +211,6 @@ export async function runComputerUseDirectChatTextPlannerFallback(
       events,
     },
   };
-}
-
-type DirectChatFallbackResult =
-  | Extract<ComputerUseTextPlannerRun, { ok: true }>
-  | { ok: false; reason?: string };
-
-async function runDirectChatPlannerFallback(
-  commandText: string,
-  options: ComputerUseTextPlannerOptions,
-  codexDiagnostics: PlannerRunDiagnostics,
-  codexEvents: PlannerEventSummary[],
-  fallbackOptions: { force?: boolean } = {},
-): Promise<DirectChatFallbackResult> {
-  const env = options.env ?? process.env;
-  if (env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER === '0') return { ok: false };
-  if (!fallbackOptions.force && !shouldUseDirectChatPlannerFallback(codexEvents)) return { ok: false };
-  if (options.abortSignal?.aborted) return { ok: false, reason: 'Direct chat fallback skipped because the planner was aborted.' };
-  const config = directChatPlannerConfig(env);
-  if (!config.ok) {
-    return {
-      ok: false,
-      reason: `Direct chat planner fallback skipped because config is incomplete. Missing env: ${config.missing.join('; ')}.`,
-    };
-  }
-
-  const timeoutMs = positiveInteger(env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS) ?? 90000;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const abort = () => controller.abort();
-  options.abortSignal?.addEventListener('abort', abort, { once: true });
-  const startedEvent: PlannerEventSummary = {
-    type: 'audit',
-    status: 'direct-chat-fallback-started',
-    message: `Direct OpenAI-compatible text planner fallback started with model ${config.value.model}.`,
-  };
-  const events = [...codexEvents, startedEvent];
-  try {
-    const maxAttempts = Math.min(5, 1 + (positiveInteger(env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES) ?? 2));
-    let lastFailure: string | undefined;
-    let useRawIdentityTransport = false;
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      let bodyText = '';
-      try {
-        const url = `${config.value.baseUrl}/chat/completions`;
-        const requestBody = JSON.stringify(directChatPlannerRequest(commandText, config.value, env));
-        const requestHeaders = directChatPlannerRequestHeaders(config.value.apiKey);
-        const response = useRawIdentityTransport && !options.fetchImpl
-          ? await directChatPlannerRawHttpRequest(url, requestHeaders, requestBody, controller.signal)
-          : await directChatPlannerFetchRequest(options.fetchImpl ?? fetch, url, requestHeaders, requestBody, controller.signal);
-        bodyText = response.bodyText;
-        if (!response.ok) {
-          lastFailure = `HTTP ${response.status}: ${scrubDirectChatText(bodyText)}`;
-          if (attempt < maxAttempts && shouldRetryDirectChatFallbackStatus(response.status)) {
-            await sleep(directChatPlannerRetryDelayMs(attempt), controller.signal);
-            continue;
-          }
-          return {
-            ok: false,
-            reason: `Direct chat planner fallback failed after ${attempt}/${maxAttempts} attempt(s): ${lastFailure}.`,
-          };
-        }
-      } catch (error) {
-        if (error instanceof Error && error.name === 'AbortError') throw error;
-        lastFailure = directChatPlannerErrorMessage(error);
-        if (!options.fetchImpl && !useRawIdentityTransport && isContentEncodingDecodeFailure(error) && attempt < maxAttempts) {
-          useRawIdentityTransport = true;
-          lastFailure = `${lastFailure}; retrying with raw identity transport`;
-          await sleep(directChatPlannerRetryDelayMs(attempt), controller.signal);
-          continue;
-        }
-        if (attempt < maxAttempts) {
-          await sleep(directChatPlannerRetryDelayMs(attempt), controller.signal);
-          continue;
-        }
-        return {
-          ok: false,
-          reason: `Direct chat planner fallback failed after ${attempt}/${maxAttempts} attempt(s): ${lastFailure}.`,
-        };
-      }
-      const content = directChatPlannerResponseText(bodyText, config.value.model);
-      if (!content) {
-        return {
-          ok: false,
-          reason: 'Direct chat planner fallback returned no Responses output_text.',
-        };
-      }
-      const fallbackEvents = [
-        ...events,
-        ...(attempt > 1 ? [{
-          type: 'audit' as const,
-          status: 'direct-chat-fallback-retried',
-          message: `Direct OpenAI-compatible text planner fallback completed after ${attempt}/${maxAttempts} attempts.`,
-        }] : []),
-        {
-          type: 'message' as const,
-          status: 'direct-chat-fallback',
-          text: boundText(content, 320),
-        },
-        {
-          type: 'done' as const,
-          status: 'direct-chat-fallback',
-          message: 'Direct OpenAI-compatible text planner fallback completed.',
-          exitCode: 0,
-          signal: null,
-        },
-      ];
-      const diagnostics = buildPlannerRunDiagnostics(fallbackEvents, {
-        finalText: content,
-        abortSignalAborted: options.abortSignal?.aborted ?? false,
-      });
-      return {
-        ok: true,
-        text: content.trim(),
-        raw: {
-          schemaVersion: COMPUTER_USE_TEXT_PLANNER_SCHEMA,
-          commandId: options.commandId ?? 'codex-computer-use-plan-direct-chat-fallback',
-          attemptId: options.attemptId ?? 'codex-computer-use-plan-direct-chat-fallback-attempt',
-          diagnosticSummary: [
-            'directChatFallback=used',
-            `directChatAttempts=${attempt}/${maxAttempts}`,
-            `codexDiagnostics=${formatPlannerDiagnosticSummary(codexDiagnostics)}`,
-            formatPlannerDiagnosticSummary(diagnostics),
-          ].join('; '),
-          diagnostics,
-          events: fallbackEvents,
-        },
-      };
-    }
-    return { ok: false, reason: `Direct chat planner fallback did not run. ${lastFailure ?? ''}`.trim() };
-  } catch (error) {
-    const reason = error instanceof Error && error.name === 'AbortError'
-      ? 'Direct chat planner fallback timed out or was aborted.'
-      : `Direct chat planner fallback failed: ${error instanceof Error ? error.message : String(error)}.`;
-    return { ok: false, reason };
-  } finally {
-    clearTimeout(timeout);
-    options.abortSignal?.removeEventListener('abort', abort);
-  }
-}
-
-type DirectChatHttpResponse = {
-  ok: boolean;
-  status: number;
-  bodyText: string;
-};
-
-function directChatPlannerRequestHeaders(apiKey: string): Record<string, string> {
-  return {
-    accept: 'application/json',
-    'accept-encoding': 'identity',
-    'content-type': 'application/json',
-    authorization: `Bearer ${apiKey}`,
-  };
-}
-
-async function directChatPlannerFetchRequest(
-  fetchImpl: typeof fetch,
-  url: string,
-  headers: Record<string, string>,
-  body: string,
-  signal: AbortSignal,
-): Promise<DirectChatHttpResponse> {
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers,
-    body,
-    signal,
-  });
-  return {
-    ok: response.ok,
-    status: response.status,
-    bodyText: await response.text(),
-  };
-}
-
-async function directChatPlannerRawHttpRequest(
-  urlText: string,
-  headers: Record<string, string>,
-  body: string,
-  signal: AbortSignal,
-): Promise<DirectChatHttpResponse> {
-  const url = new URL(urlText);
-  const requestImpl = url.protocol === 'http:' ? httpRequest : url.protocol === 'https:' ? httpsRequest : undefined;
-  if (!requestImpl) throw new Error(`Unsupported direct chat planner fallback URL protocol: ${url.protocol}`);
-
-  return await new Promise<DirectChatHttpResponse>((resolve, reject) => {
-    const request = requestImpl(url, {
-      method: 'POST',
-      headers: {
-        ...headers,
-        'content-length': String(Buffer.byteLength(body)),
-      },
-    }, (response) => {
-      const chunks: Buffer[] = [];
-      response.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
-      response.on('end', () => {
-        try {
-          const buffer = Buffer.concat(chunks);
-          resolve({
-            ok: response.statusCode !== undefined && response.statusCode >= 200 && response.statusCode < 300,
-            status: response.statusCode ?? 0,
-            bodyText: decodeDirectChatRawBody(buffer, response.headers['content-encoding']),
-          });
-        } catch (error) {
-          reject(error);
-        }
-      });
-    });
-    const abort = () => request.destroy(new DOMException('Aborted', 'AbortError'));
-    request.on('error', reject);
-    request.on('close', () => signal.removeEventListener('abort', abort));
-    if (signal.aborted) {
-      abort();
-      return;
-    }
-    signal.addEventListener('abort', abort, { once: true });
-    request.end(body);
-  });
-}
-
-function decodeDirectChatRawBody(buffer: Buffer, contentEncoding: string | string[] | undefined) {
-  const encoding = Array.isArray(contentEncoding) ? contentEncoding[0] : contentEncoding;
-  const normalized = encoding?.split(';')[0]?.trim().toLowerCase();
-  if (!normalized || normalized === 'identity') return buffer.toString('utf8');
-  try {
-    if (normalized === 'gzip' || normalized === 'x-gzip') return gunzipSync(buffer).toString('utf8');
-    if (normalized === 'deflate') return inflateSync(buffer).toString('utf8');
-    if (normalized === 'br') return brotliDecompressSync(buffer).toString('utf8');
-  } catch (error) {
-    const rawText = buffer.toString('utf8').trimStart();
-    if (rawText.startsWith('{') || rawText.startsWith('[')) return buffer.toString('utf8');
-    throw error;
-  }
-  return buffer.toString('utf8');
-}
-
-function isContentEncodingDecodeFailure(error: unknown) {
-  const message = (directChatPlannerErrorMessage(error) ?? '').toLowerCase();
-  return /incorrect header check|invalid distance|invalid block|invalid stored block lengths|unexpected end of file|decompress|content-encoding|terminated/.test(message);
-}
-
-function shouldRetryDirectChatFallbackStatus(status: number) {
-  return status === 408 || status === 409 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
-}
-
-function directChatPlannerRetryDelayMs(attempt: number) {
-  return Math.min(2000, 250 * 2 ** Math.max(0, attempt - 1));
-}
-
-async function sleep(ms: number, signal: AbortSignal) {
-  if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(resolve, ms);
-    const abort = () => {
-      clearTimeout(timeout);
-      reject(new DOMException('Aborted', 'AbortError'));
-    };
-    signal.addEventListener('abort', abort, { once: true });
-  });
-}
-
-type DirectChatPlannerConfig =
-  | {
-      ok: true;
-      value: {
-        apiKey: string;
-        baseUrl: string;
-        model: string;
-      };
-    }
-  | {
-      ok: false;
-      missing: string[];
-    };
-
-function directChatPlannerConfig(env: NodeJS.ProcessEnv): DirectChatPlannerConfig {
-  const apiKey = firstNonEmpty(env.SCIFORGE_RUNTIME_API_KEY);
-  const baseUrl = stripTrailingSlash(firstNonEmpty(
-    env.SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL,
-    env.SCIFORGE_PROXY_UPSTREAM_BASE_URL,
-    env.SCIFORGE_RUNTIME_BASE_URL,
-  ));
-  const model = firstNonEmpty(
-    env.SCIFORGE_COMPUTER_USE_TEXT_PLANNER_MODEL,
-    env.SCIFORGE_RUNTIME_MODEL,
-    env.SCIFORGE_PROXY_DEFAULT_MODEL,
-  );
-  const missing = [
-    !apiKey ? 'SCIFORGE_RUNTIME_API_KEY' : undefined,
-    !baseUrl ? 'one of SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL, SCIFORGE_PROXY_UPSTREAM_BASE_URL, SCIFORGE_RUNTIME_BASE_URL' : undefined,
-    !model ? 'one of SCIFORGE_COMPUTER_USE_TEXT_PLANNER_MODEL, SCIFORGE_RUNTIME_MODEL, SCIFORGE_PROXY_DEFAULT_MODEL' : undefined,
-  ].filter((value): value is string => Boolean(value));
-  if (!apiKey || !baseUrl || !model) return { ok: false, missing };
-  return { ok: true, value: { apiKey, baseUrl, model } };
-}
-
-function directChatPlannerRequest(
-  commandText: string,
-  config: Extract<DirectChatPlannerConfig, { ok: true }>['value'],
-  env: NodeJS.ProcessEnv,
-) {
-  const responsesRequest: ResponsesRequest = {
-    model: config.model,
-    input: commandText,
-    stream: false,
-    temperature: 0,
-    max_output_tokens: positiveInteger(env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_MAX_TOKENS) ?? 768,
-    metadata: { source: 'computer-use-direct-text-planner-fallback' },
-  };
-  const chatRequest = responsesToChatCompletions(responsesRequest, { defaultModel: config.model });
-  chatRequest.stream = false;
-  return chatRequest;
-}
-
-function directChatPlannerResponseText(bodyText: string, model: string) {
-  try {
-    const parsed = JSON.parse(bodyText) as unknown;
-    const response = chatCompletionToResponse(parsed, { model });
-    return stringField(response.output_text)?.trim();
-  } catch {
-    return undefined;
-  }
-}
-
-function shouldUseDirectChatPlannerFallback(events: PlannerEventSummary[]) {
-  const text = events.map((event) => [
-    event.status,
-    event.message,
-    event.text,
-    event.rawEventType,
-    event.rawPayloadType,
-    event.rawItemType,
-    event.rawStatus,
-    event.exitCode === 1 ? 'exit-code-1' : undefined,
-  ].filter(Boolean).join(' ')).join(' ').toLowerCase();
-  return /(?:502|503|504|bad gateway|gateway timeout|service unavailable|timeout|timed out|econnreset|econnrefused|enotfound|fetch failed|socket hang up|connection reset|network error|transport|proxy|upstream|tls|ssl|certificate)/i.test(text);
-}
-
-function scrubDirectChatText(value: string) {
-  return boundText(scrubRuntimeCodexAuditText(value), 320);
-}
-
-function directChatPlannerErrorMessage(error: unknown) {
-  if (!(error instanceof Error)) return scrubDirectChatText(String(error));
-  const cause = error.cause instanceof Error ? `; cause=${error.cause.message}` : '';
-  return scrubDirectChatText(`${error.message}${cause}`);
-}
-
-function firstNonEmpty(...values: Array<string | undefined>) {
-  return values.find((value): value is string => Boolean(value?.trim()))?.trim();
-}
-
-function stripTrailingSlash(value: string | undefined) {
-  return value?.replace(/\/+$/, '');
-}
-
-function positiveInteger(value: string | undefined) {
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function buildComputerUseTextPlannerCommand(input: ComputerUseTextPlannerInput) {

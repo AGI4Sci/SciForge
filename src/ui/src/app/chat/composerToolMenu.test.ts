@@ -5,6 +5,7 @@ import {
   applyComposerToolDirective,
   buildComposerCapabilityMenu,
   buildComposerToolMenu,
+  composerDraftStorageKey,
   composerModeSelectionIntentForToolItem,
   composerModeSelectionIntents,
   composerModelSelectionIntents,
@@ -149,4 +150,48 @@ test('composer model menu exposes public declared intents only', () => {
   for (const term of ['provider', 'apiKey', 'token', 'secret', 'baseUrl', '/Users/', '/Applications/workspace']) {
     assert.doesNotMatch(publicText, new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
   }
+});
+
+test('composer draft storage key isolates multitask mode by workspace, project, and thread without private config', () => {
+  const base = composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge',
+    projectId: 'literature-evidence-review',
+    threadId: 'thread-a',
+    modeIntentId: 'multitask',
+    provider: 'private-provider',
+    modelName: 'bailian/private-model',
+    apiKey: 'sk-secret',
+  });
+
+  assert.equal(base, composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge',
+    projectId: 'literature-evidence-review',
+    threadId: 'thread-a',
+    modeIntentId: 'multitask',
+  }));
+  assert.notEqual(base, composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge-peer',
+    projectId: 'literature-evidence-review',
+    threadId: 'thread-a',
+    modeIntentId: 'multitask',
+  }));
+  assert.notEqual(base, composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge',
+    projectId: 'omics-analysis',
+    threadId: 'thread-a',
+    modeIntentId: 'multitask',
+  }));
+  assert.notEqual(base, composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge',
+    projectId: 'literature-evidence-review',
+    threadId: 'thread-b',
+    modeIntentId: 'multitask',
+  }));
+  assert.notEqual(base, composerDraftStorageKey({
+    workspacePath: '/Applications/workspace/private/sciforge',
+    projectId: 'literature-evidence-review',
+    threadId: 'thread-a',
+    modeIntentId: 'ask',
+  }));
+  assert.doesNotMatch(base, /Applications|private-provider|bailian|sk-secret|apiKey|provider|modelName/i);
 });

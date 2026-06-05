@@ -91,7 +91,7 @@ test('window screenshot coordinate mapping accounts for asymmetric macOS window 
   assert.ok(mapped.y > 80 && mapped.y < 86);
 });
 
-test('KV-Ground grounding records /health preflight diagnostics alongside /predict/ attempts', async (t) => {
+test('legacy grounding adapter records sanitized /health diagnostics alongside /predict/ attempts', async (t) => {
   const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-grounding-diagnostics-'));
   const screenshotPath = join(tempDir, 'before.png');
   await writeFile(
@@ -107,7 +107,7 @@ test('KV-Ground grounding records /health preflight diagnostics alongside /predi
     if (url.endsWith('/health')) {
       return new Response(JSON.stringify({
         ok: true,
-        model_dir: '/models/kv-ground',
+        model_dir: '/models/legacy-grounding-adapter',
         cuda_available: true,
         gpu_count: 1,
         inline_image_supported: true,
@@ -147,8 +147,9 @@ test('KV-Ground grounding records /health preflight diagnostics alongside /predi
   assert.equal(diagnostics[0]?.stage, 'health');
   assert.equal(diagnostics[0]?.method, 'GET');
   assert.equal(diagnostics[0]?.status, 'ok');
-  assert.equal((diagnostics[0]?.responseBody as Record<string, unknown>).ok, true);
-  assert.equal((diagnostics[0]?.responseBody as Record<string, unknown>).inline_image_supported, true);
+  assert.equal(diagnostics[0]?.schemaVersion, 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1');
+  assert.equal((diagnostics[0]?.responseSummary as Record<string, unknown>).ok, true);
+  assert.equal((diagnostics[0]?.responseSummary as Record<string, unknown>).inlineImageSupported, true);
   assert.equal(diagnostics[1]?.stage, 'predict');
   assert.equal(diagnostics[1]?.method, 'POST');
   assert.equal(diagnostics[1]?.status, 'ok');
@@ -157,9 +158,11 @@ test('KV-Ground grounding records /health preflight diagnostics alongside /predi
   assert.deepEqual([result.grounding?.x, result.grounding?.y], [481.18, 1060.88]);
   assert.equal(result.grounding?.rawText, "click(start_box='[326, 943]')");
   assert.deepEqual(result.grounding?.imageSize, { width: 1476, height: 1125 });
+  assert.equal((result.grounding?.responseSummary as Record<string, unknown>).hasCoordinates, true);
+  assert.doesNotMatch(JSON.stringify(result.grounding), /rawResponse|responseBody|providerRequestBody|providerResponseBody|image_base64|data:image|base64/i);
 });
 
-test('KV-Ground health connection refused is recorded as blocked diagnostic evidence without live service', async (t) => {
+test('legacy grounding adapter health connection refused is recorded as blocked diagnostic evidence without live service', async (t) => {
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', fetchStub(async (url) => {
     calls.push(url);

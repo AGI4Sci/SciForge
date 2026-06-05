@@ -8,7 +8,7 @@
 - `CodexExecJsonAdapter` / `codex exec --json` 只保留为 legacy/test-only 兼容和历史证据，不作为产品自动 fallback。
 - 多轮只允许通过上游 Codex app-server thread 语义恢复；GUI 不拼接历史 transcript。
 - Runtime Codex 强制使用 `packages/backend/.codex-runtime/codex-home` 作为 `CODEX_HOME`。
-- 缺 workspace、runtime profile、DeepSeek proxy key 或 proxy 配置时 fail closed。
+- 缺 workspace、runtime profile、Runtime Codex key 或 Model Router profile/role 配置时 fail closed。
 - `allowOpenAiRuntime` 未显式开启时，不允许 OpenAI-looking runtime endpoint。
 - stderr 和 raw app-server/legacy JSONL 只作为 audit/debug 事件，不进入主回复文本。
 - GUI 不得把历史 transcript 拼进 `commandText`；无选中 ref 时 command text 必须是用户原文，有选中 ref 时只能是终端等价 `ask --ref ... "<prompt>"`。

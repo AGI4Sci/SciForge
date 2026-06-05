@@ -138,7 +138,6 @@ export function localProviderSettings(
     candidate(root, ['llm', 'upstreamBaseUrl'], prefix),
     candidate(root, ['textLLM', 'baseUrl'], prefix),
     candidate(root, ['textLLM', 'upstreamBaseUrl'], prefix),
-    candidate(root, ['textLLM', 'env', 'SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL'], prefix),
     candidate(root, ['textLLM', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'], prefix),
     candidate(root, ['textLLM', 'env', 'SCIFORGE_RUNTIME_BASE_URL'], prefix),
     candidate(root, ['codexProxy', 'upstreamBaseUrl'], prefix),

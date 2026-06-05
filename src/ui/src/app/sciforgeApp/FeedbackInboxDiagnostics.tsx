@@ -44,7 +44,7 @@ export function FeedbackInboxDiagnostics({
       <section className={cx('feedback-repair-readiness', repairReadiness.status)} aria-label="Repair readiness">
         <div className="feedback-repair-readiness-head">
           <div>
-            <strong>DeepSeek repair readiness</strong>
+            <strong>Runtime repair readiness</strong>
             <span>{repairReadiness.summary}</span>
           </div>
           <Badge variant={repairReadiness.status === 'ready' ? 'success' : repairReadiness.status === 'partial' ? 'warning' : 'danger'}>

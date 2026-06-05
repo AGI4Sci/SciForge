@@ -133,11 +133,11 @@
     "providerIdPolicy": {
       "capture": ["display-capture", "target-window-capture", "virtual-display-frame-capture"],
       "crop": "host-focus-region-crop",
-      "plan": "runtime-codex-tui-text-planner",
-      "locate": ["kv-ground", "host-focus-region-crop"],
+      "plan": "model-router.capability.computer-use.planner",
+      "locate": "model-router.capability.computer-use.grounding-translator",
       "actionRequestExecutor": ["dry-run-generic-gui-executor", "package-target-bound-window-executor", "<desktopPlatform>-host-port-executor"],
       "execute": ["dry-run-generic-gui-executor", "virtual-input-state-executor", "virtual-display-scoped-input-provider", "package-target-bound-window-executor", "<desktopPlatform>-generic-gui-executor"],
-      "verify": "layered-vision-verifier",
+      "verify": "model-router.capability.computer-use.verifier-translator",
       "writeTrace": "workspace-file-ref-trace-writer",
       "emitEvent": "workspace-runtime-events"
     },
@@ -159,7 +159,7 @@
       "bindingValidator": "sciforge_computer_use.virtual_input_adapter.validate_input_adapter_target_binding_manifest",
       "bindingValidationSchema": "sciforge.computer-use.input-adapter-target-binding-validation.v1",
       "bindingRequiredRefs": ["adapterManifestRef", "targetWindowRef", "evidenceRefs"],
-      "bindingClaimLimit": "Target binding validation is required for real desktop preflight readiness, but is not B/C/VLM completion evidence.",
+      "bindingClaimLimit": "Target binding validation is required for real desktop preflight readiness, but is not B/C/verifier completion evidence.",
       "targetBindingRequiredForRealDesktopEvidence": true,
       "readyInputChannels": ["isolated-window", "target-bound-simulated-input", "independent-simulated-input-adapter", "remote-desktop-isolated-session"],
       "diagnosticExecutorProvidersBlockedForReady": ["native-stdio-fail-closed-executor", "fail-closed-executor", "diagnostic-fail-closed-executor", "virtual-input-state-executor"],
@@ -483,7 +483,7 @@
     "validationOptions": {
       "requireExistingRefs": "optional boolean; when true source failure, replay result, and replay trace refs must point to existing local files"
     },
-    "claimLimit": "Package-local repair replay evidence can validate disambiguation replay plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to VLM completion."
+    "claimLimit": "Package-local repair replay evidence can validate disambiguation replay plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to verifier completion."
   },
   "viewportRecoveryContract": {
     "evidenceSchemaRef": "sciforge.computer-use.viewport-recovery-evidence.v1",
@@ -494,7 +494,7 @@
     "validationOptions": {
       "requireExistingRefs": "optional boolean; when true source failure, replay result, replay trace, and scroll state refs must point to existing local files"
     },
-    "claimLimit": "Package-local viewport recovery evidence can validate offscreen scroll recovery plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to VLM completion."
+    "claimLimit": "Package-local viewport recovery evidence can validate offscreen scroll recovery plumbing only; realWindowEvidence=false cannot close PROJECT C or B and is unrelated to verifier completion."
   },
   "targetBoundRealWindowProbeContract": {
     "evidenceSchemaRef": "sciforge.computer-use.target-bound-real-window-probe-evidence.v1",
@@ -768,9 +768,9 @@
     "completionVerdictPolicy": "Provider output must parse to JSON with verdict=pass before the probe status can become completed; fail, unknown, or non-JSON output writes a blocked manifest.",
     "diagnosticRecordFields": ["method", "path", "elapsedMs", "retryable", "errorCategory", "diagnosticTimeoutSeconds", "bodyKind", "bytesRead", "bodyTruncated", "modelCount", "configuredModelPresent"],
     "modelsDiagnosticPolicy": "The /models diagnostic may summarize body kind, bytes read, model count, and whether the configured model is present; it must not persist raw model ids or raw response bodies.",
-    "projectEvidenceEligibilityFields": ["expectedProjectModelId", "expectedProjectModelIds", "responseModelId", "configuredModelMatchesProject", "responseModelMatchesConfigured", "modelPresenceVerified", "projectVlmEvidenceEligible", "projectVlmEvidenceBlockers"],
-    "projectEvidenceModels": ["qwen3.6-plus", "qwen3.6-plus-2026-04-02", "kimi-k2.6"],
-    "projectEvidenceEligibilityPolicy": "A completed semantic verifier probe is a PROJECT VLM eligible evidence candidate only when the configured model is in projectEvidenceModels, the provider response model does not contradict it, and /models diagnostics verify configuredModelPresent=true.",
+    "projectEvidenceEligibilityFields": ["expectedProjectModelId", "expectedProjectModelIds", "responseModelId", "configuredModelMatchesProject", "responseModelMatchesConfigured", "modelPresenceVerified", "projectVerifierEvidenceEligible", "projectVerifierEvidenceBlockers"],
+    "projectEvidenceModels": ["sciforge-router", "model-router.capability.computer-use.verifier-translator", "sciforge-router-no-temperature"],
+    "projectEvidenceEligibilityPolicy": "A completed semantic verifier probe is a PROJECT verifier eligible evidence candidate only when the configured model is in projectEvidenceModels, the provider response model does not contradict it, and /models diagnostics verify configuredModelPresent=true.",
     "transportFallback": "Uses a package-local raw HTTP/1.1 non-streaming transport for Chat/Responses candidates and diagnostics, with urllib retained as fallback for retryable raw transport failures.",
     "responseCompatibilityHelper": "sciforge_computer_use.response_compat.extract_provider_text",
     "responseCompatibilityHelpers": {
@@ -779,7 +779,7 @@
       "chatCompletionsToResponses": "sciforge_computer_use.response_compat.chat_completions_to_responses"
     },
     "forbiddenInlinePayloads": ["apiKey", "rawProviderPayload", "requestBody", "data:image", "base64", "inlineImage"],
-    "claimLimit": "Package-local fake HTTP provider tests and provider diagnostics validate wire-shape and refs-first metadata; PROJECT VLM evidence is eligible only after a real projectEvidenceModels provider call returns a completed refs-first semantic verifier summary with model presence verified."
+    "claimLimit": "Package-local fake HTTP provider tests and provider diagnostics validate wire-shape and refs-first metadata; PROJECT verifier evidence is eligible only after a real projectEvidenceModels provider call returns a completed refs-first semantic verifier summary with model presence verified."
   },
   "verifierContract": {
     "required": true,
@@ -842,7 +842,7 @@
       "code": "semantic-provider-unavailable",
       "stage": "verification/provider-diagnostic",
       "recoverable": true,
-      "description": "可选 semantic/VLM provider 不可用、超时、认证失败或 endpoint 诊断被阻断。",
+      "description": "可选 semantic vision provider 不可用、超时、认证失败或 endpoint 诊断被阻断。",
       "repairHints": ["检查 ignored local visionLLM config", "查看 provider diagnostics 的 method/path/errorCategory", "保持 deterministic verifier 结果为主"]
     }
   ]

@@ -2,9 +2,24 @@ import { scenarios, type PageId } from '../../data';
 import type { ScenarioInstanceId, SciForgeConfig } from '../../domain';
 import { localeText, type SupportedLocale } from '../../i18n';
 import { uiModuleRegistry } from '../../uiModuleRegistry';
-import type { SidebarSearchAction, SidebarSearchKind, SidebarSearchMatch } from './ShellPanels';
+import type {
+  SidebarPublicAgentCandidate,
+  SidebarPublicAgentCandidateKind,
+  SidebarSearchAction,
+  SidebarSearchKind,
+  SidebarSearchMatch,
+} from './ShellPanels';
+import type { SidebarCursorAgentThreadState } from './sidebarCursorAgentModel';
 
 const DEFAULT_LOCALE: SupportedLocale = 'en-US';
+
+export interface SidebarCommandPaletteAgentCandidateInput {
+  projectId?: string;
+  sessionId?: string;
+  scenarioId?: ScenarioInstanceId;
+  threadState?: SidebarCursorAgentThreadState;
+  candidate: SidebarPublicAgentCandidate;
+}
 
 function text(locale: SupportedLocale | undefined, copy: Record<SupportedLocale, string>) {
   return localeText(locale ?? DEFAULT_LOCALE, copy);
@@ -15,6 +30,7 @@ export function buildSidebarCommandPaletteMatches(
   options: {
     locale?: SupportedLocale;
     config?: SciForgeConfig;
+    agentCandidates?: SidebarCommandPaletteAgentCandidateInput[];
   } = {},
 ): SidebarSearchMatch[] {
   const locale = options.locale;
@@ -22,6 +38,7 @@ export function buildSidebarCommandPaletteMatches(
     ...sidebarActionSearchMatches(needle, locale),
     ...sidebarStaticModeSearchMatches(needle, locale),
     ...sidebarModelSearchMatches(needle, locale),
+    ...sidebarAgentCandidateSearchMatches(needle, options.agentCandidates ?? [], locale),
     ...sidebarSkillSearchMatches(needle, locale),
     ...sidebarMcpSearchMatches(needle, options.config, locale),
   ];
@@ -262,6 +279,72 @@ function sidebarMcpSearchMatches(
     kind: 'mcp',
     action: 'open-mcp-settings',
   }));
+}
+
+function sidebarAgentCandidateSearchMatches(
+  needle: string,
+  candidates: SidebarCommandPaletteAgentCandidateInput[],
+  locale?: SupportedLocale,
+): SidebarSearchMatch[] {
+  return candidates
+    .map((input) => sidebarPublicAgentCandidateMatchInput(input, locale))
+    .filter((input): input is NonNullable<typeof input> => Boolean(input))
+    .filter((input) => containsNeedle(`${input.label} ${input.detail} ${input.refs.join(' ')} ${input.candidate.kind} ${input.scenarioId ?? ''}`, needle))
+    .map((input) => ({
+      id: `agent-result:${commandPaletteMatchId('agent', `${input.projectId ?? ''}:${input.sessionId ?? ''}:${input.candidate.kind}:${input.refs.join('|')}:${input.label}`)}`,
+      label: input.label,
+      detail: `${sidebarPublicAgentCandidateKindLabel(input.candidate.kind, locale)} · ${input.detail}`,
+      page: 'workbench' as const,
+      kind: 'agent-result' as const,
+      scenarioId: input.scenarioId,
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+      threadState: input.threadState,
+      candidateKind: input.candidate.kind,
+      candidateRef: input.refs[0],
+    }));
+}
+
+function sidebarPublicAgentCandidateMatchInput(input: SidebarCommandPaletteAgentCandidateInput, locale?: SupportedLocale) {
+  const candidate = input.candidate;
+  if (publicCandidateValueIsUnsafe(candidate.label) || publicCandidateValueIsUnsafe(candidate.detail)) return undefined;
+  const refs = candidate.refs.map(publicCandidateRef).filter(Boolean).slice(0, 2);
+  if (!refs.length) return undefined;
+  const label = publicSearchLine(candidate.label, publicCandidateLabelFromRef(refs[0] ?? '') || 'Agent result', 56);
+  if (!label) return undefined;
+  const refDetail = `${text(locale, { 'zh-CN': '引用', 'en-US': 'Refs' })}: ${refs.join(', ')}`;
+  const detail = publicSearchLine(candidate.detail, refDetail, 96);
+  if (!detail) return undefined;
+  return {
+    ...input,
+    label,
+    detail,
+    refs,
+  };
+}
+
+function sidebarPublicAgentCandidateKindLabel(kind: SidebarPublicAgentCandidateKind, locale?: SupportedLocale): string {
+  if (kind === 'background-task') return text(locale, { 'zh-CN': '后台任务', 'en-US': 'Background task' });
+  if (kind === 'resume-candidate') return text(locale, { 'zh-CN': '恢复候选', 'en-US': 'Resume candidate' });
+  return text(locale, { 'zh-CN': '子智能体结果', 'en-US': 'Sub-agent result' });
+}
+
+function publicCandidateRef(value: string | undefined) {
+  const ref = (value ?? '').trim();
+  if (!ref || containsInternalTerm(ref)) return '';
+  if (!/^(?:subagent|run|artifact|checkpoint|message|execution-unit):[A-Za-z0-9][A-Za-z0-9._:-]*$/i.test(ref)) return '';
+  return ref;
+}
+
+function publicCandidateLabelFromRef(ref: string) {
+  return publicSearchLine(ref.replace(/^[a-z-]+:/i, '').replace(/[-_.]+/g, ' '), 'Agent result', 56);
+}
+
+function publicCandidateValueIsUnsafe(value: string | undefined) {
+  const compact = compactLine(value, 160);
+  if (!compact) return false;
+  return containsInternalTerm(compact)
+    || /\b(?:raw|provider|stdout|stderr|token|secret|authorization|credential|password)\b/i.test(compact);
 }
 
 function publicSearchLine(value: string | undefined, fallback: string, maxLength: number) {

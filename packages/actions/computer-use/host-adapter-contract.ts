@@ -48,6 +48,7 @@ export type ComputerUseHostPortDescription = {
   provider: string;
   returns?: string;
   optional?: boolean;
+  legacyAdapter?: string;
   inputAdapter?: string;
   independentInputAdapterProvider?: string;
   sharedSystemInputExplicitlyAllowed?: boolean;

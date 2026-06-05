@@ -15,6 +15,7 @@ import {
 import {
   computerUseHostPortLists,
   computerUseHostPortProviderIds,
+  computerUseModelRouterCapabilityIds,
 } from './provider-policy.js';
 
 test('Computer Use host output projects to WindowActionEvidenceRef-style refs', () => {
@@ -99,10 +100,10 @@ test('ComputerUseHostAdapter contract is reusable and GUI-free at the package bo
     owner: 'codex-cli-plugin-test-host',
     ports: {
       capture: { provider: computerUseHostPortProviderIds.displayCapture },
-      plan: { provider: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner },
+      plan: { provider: computerUseModelRouterCapabilityIds.computerUsePlanner },
       locate: { provider: computerUseHostPortProviderIds.focusRegionCrop },
       execute: { provider: 'test-window-scoped-executor' },
-      verify: { provider: computerUseHostPortProviderIds.layeredVerifier },
+      verify: { provider: computerUseModelRouterCapabilityIds.verifierTranslator },
     },
   });
 
@@ -135,10 +136,10 @@ test('ComputerUseHostAdapter contract fail-closes forbidden GUI and approval hos
     owner: 'sciforge-runtime-test-host',
     ports: {
       capture: { provider: computerUseHostPortProviderIds.displayCapture },
-      plan: { provider: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner },
+      plan: { provider: computerUseModelRouterCapabilityIds.computerUsePlanner },
       locate: { provider: computerUseHostPortProviderIds.focusRegionCrop },
       execute: { provider: 'test-window-scoped-executor' },
-      verify: { provider: computerUseHostPortProviderIds.layeredVerifier },
+      verify: { provider: computerUseModelRouterCapabilityIds.verifierTranslator },
     },
   });
 
@@ -168,10 +169,10 @@ test('high-risk policy only crosses the package boundary as approval refs and si
     owner: 'codex-cli-plugin-test-host',
     ports: {
       capture: { provider: computerUseHostPortProviderIds.displayCapture },
-      plan: { provider: computerUseHostPortProviderIds.runtimeCodexTuiTextPlanner },
+      plan: { provider: computerUseModelRouterCapabilityIds.computerUsePlanner },
       locate: { provider: computerUseHostPortProviderIds.focusRegionCrop },
       execute: { provider: 'test-window-scoped-executor' },
-      verify: { provider: computerUseHostPortProviderIds.layeredVerifier },
+      verify: { provider: computerUseModelRouterCapabilityIds.verifierTranslator },
     },
   });
 

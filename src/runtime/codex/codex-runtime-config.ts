@@ -4,7 +4,9 @@ import {
   getRuntimeHomePaths,
   readRuntimeConfig,
   RUNTIME_KEY_ENV,
+  RUNTIME_MODEL,
   RUNTIME_PROFILE,
+  RUNTIME_PROVIDER,
 } from '../../../packages/backend/src/runtime-home.js';
 
 export interface CodexRuntimeConfig {
@@ -14,9 +16,13 @@ export interface CodexRuntimeConfig {
   model: string;
   profile: string;
   workspace: string;
-  runtimeKeyEnv: string;
-  proxyBaseUrl: string;
   allowOpenAiRuntime: boolean;
+  capabilities: string[];
+  roleCoverage: {
+    textReasoner: 'configured';
+    visionTranslator: 'configured';
+  };
+  readiness: 'configured';
 }
 
 export interface RuntimeConfigGuardOptions {
@@ -81,13 +87,17 @@ export async function assertCodexRuntimeConfig(options: RuntimeConfigGuardOption
   return {
     codexHome: paths.codexHome,
     configPath: paths.configPath,
-    provider,
-    model,
+    provider: publicRuntimeProvider(provider),
+    model: publicRuntimeModel(model),
     profile,
     workspace,
-    runtimeKeyEnv: RUNTIME_KEY_ENV,
-    proxyBaseUrl,
     allowOpenAiRuntime,
+    capabilities: ['text', 'vision'],
+    roleCoverage: {
+      textReasoner: 'configured',
+      visionTranslator: 'configured',
+    },
+    readiness: 'configured',
   };
 }
 
@@ -107,6 +117,28 @@ function profileBlock(config: string, profile: string): string {
 
 function providerBlock(config: string, provider: string): string {
   return tableBlock(config, `model_providers.${provider}`);
+}
+
+function publicRuntimeProvider(provider: string): string {
+  return isSafePublicRuntimeAlias(provider, RUNTIME_PROVIDER)
+    ? provider
+    : RUNTIME_PROVIDER;
+}
+
+function publicRuntimeModel(model: string): string {
+  return isSafePublicRuntimeAlias(model, RUNTIME_MODEL)
+    ? model
+    : RUNTIME_MODEL;
+}
+
+const privateRuntimeAliasTokenPattern = /\b(?:deepseek|qwen|bailian|dashscope|openai|gpt|claude|gemini|proxy|provider|model|chat)\b/i;
+
+function isSafePublicRuntimeAlias(value: string, baseAlias: string) {
+  if (value === baseAlias) return true;
+  const prefix = `${baseAlias}-`;
+  if (!value.startsWith(prefix)) return false;
+  const suffix = value.slice(prefix.length);
+  return /^[a-z0-9-]{1,64}$/i.test(suffix) && !privateRuntimeAliasTokenPattern.test(suffix);
 }
 
 function tableBlock(config: string, table: string): string {

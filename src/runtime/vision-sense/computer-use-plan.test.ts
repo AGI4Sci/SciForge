@@ -5,6 +5,7 @@ import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from '../c
 import type { NormalizedAgentEvent } from '../codex/codex-event-normalizer.js';
 import type { ComputerUseConfig, LoopStep, ScreenshotRef } from '../computer-use/types.js';
 import { appendPlannerStep, compactComputerUsePlannerObservation } from './computer-use-plan.js';
+import { visionSenseModelRouterCapabilities } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
 
 function baseConfig(): ComputerUseConfig {
   return {
@@ -80,7 +81,7 @@ test('text planner consumes compact observation without DOM/accessibility/privat
   assert.match(adapter.commandTexts[0] ?? '', /Compact observation JSON/);
   assert.match(adapter.commandTexts[0] ?? '', /"visibleTexts": \[/);
   assert.doesNotMatch(adapter.commandTexts[0] ?? '', /DOM_SHOULD_NOT_LEAK|AX_SHOULD_NOT_LEAK|secret-absolute-before/);
-  assert.equal(steps[0]?.execution?.planner, 'runtime-codex-tui-text-planner');
+  assert.equal(steps[0]?.execution?.planner, visionSenseModelRouterCapabilities.computerUsePlanner);
 });
 
 test('text planner receives structured acceptance contract without private GUI sources', async () => {
@@ -980,30 +981,17 @@ test('text planner accepts done when required visible marker is present in windo
   assert.equal(adapter.commandTexts.length, 1);
 });
 
-test('text planner uses direct chat fallback when Codex TUI planner times out before terminal event', async () => {
+test('text planner timeout fails closed instead of using a direct chat fallback', async () => {
   const originalFetch = globalThis.fetch;
-  const envKeys = [
-    'SCIFORGE_RUNTIME_API_KEY',
-    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
-    'SCIFORGE_RUNTIME_MODEL',
-    'SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS',
-  ] as const;
-  const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
-  const fetchCalls: Array<{ url: string; body: Record<string, unknown> }> = [];
+  const fetchCalls: Array<{ url: string; body: unknown }> = [];
   globalThis.fetch = (async (url, init) => {
     fetchCalls.push({
       url: String(url),
-      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      body: init?.body,
     });
-    return new Response(JSON.stringify({
-      choices: [{ message: { content: '{"done":false,"reason":"fallback after timeout","actions":[{"type":"press_key","key":"Tab"}]}' } }],
-    }), { status: 200, headers: { 'content-type': 'application/json' } });
+    return new Response('{}', { status: 200 });
   }) as typeof fetch;
   try {
-    process.env.SCIFORGE_RUNTIME_API_KEY = 'test-key';
-    process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://provider.example/v1/';
-    process.env.SCIFORGE_RUNTIME_MODEL = 'bailian/deepseek-v4-flash';
-    process.env.SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_TIMEOUT_MS = '1000';
     const config = baseConfig();
     config.planner.timeoutMs = -9_995;
     const steps: LoopStep[] = [];
@@ -1019,20 +1007,14 @@ test('text planner uses direct chat fallback when Codex TUI planner times out be
       codexPlannerAdapter: new HangingPlannerAdapter(),
     });
 
-    assert.equal(result.ok, true, result.ok ? '' : result.reason);
-    assert.equal(result.actions[0]?.type, 'press_key');
-    assert.equal(fetchCalls[0]?.url, 'http://provider.example/v1/chat/completions');
-    assert.equal(fetchCalls[0]?.body.stream, false);
-    assert.equal(fetchCalls[0]?.body.max_tokens, 768);
-    assert.match(String((fetchCalls[0]?.body.messages as Array<Record<string, unknown>>)?.[0]?.content), /Runtime Codex CLI\/TUI text planner transport timed out/);
-    assert.match(JSON.stringify(steps[0]?.execution?.rawResponse), /directChatFallback=used/);
+    assert.equal(result.ok, false);
+    if (result.ok) assert.fail('planner timeout should fail closed without direct chat fallback');
+    assert.match(result.reason, /Model Router provider\/capability path|Direct OpenAI-compatible chat fallback is disabled/);
+    assert.equal(fetchCalls.length, 0);
+    assert.equal(steps[0]?.execution?.planner, visionSenseModelRouterCapabilities.computerUsePlanner);
+    assert.match(JSON.stringify(steps[0]?.execution?.rawResponse), /model-router-planner-required/);
   } finally {
     globalThis.fetch = originalFetch;
-    for (const key of envKeys) {
-      const value = originalEnv[key];
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
   }
 });
 

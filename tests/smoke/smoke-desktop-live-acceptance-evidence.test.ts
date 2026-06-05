@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import {
+  DESKTOP_LIVE_MODEL_ROUTER_PROFILE,
+  DESKTOP_LIVE_MODEL_ROUTER_PROVIDER,
   type DesktopLiveAcceptanceEvidence,
   assertDesktopLiveAcceptanceCanClaimPass,
   createDesktopLiveAcceptancePlan,
@@ -160,9 +162,9 @@ test('desktop live pass requires Runtime Codex provider metadata, command id, an
     runtimeTask: {
       runtime: 'Runtime Codex',
       taskKind: 'real-user-task',
-      profile: 'sciforge-runtime-deepseek',
-      provider: 'sciforge-deepseek-proxy',
-      model: 'bailian/deepseek-v4-flash',
+      profile: DESKTOP_LIVE_MODEL_ROUTER_PROFILE,
+      provider: DESKTOP_LIVE_MODEL_ROUTER_PROVIDER,
+      model: 'sciforge-router',
       workspacePath: '/Users/test/Library/Application Support/SciForge/workspace',
       commandId: 'not-a-runtime-command-id',
       providerProxyUsed: true,
@@ -175,7 +177,7 @@ test('desktop live pass requires Runtime Codex provider metadata, command id, an
   }));
 
   assert.equal(validation.canClaimPass, false);
-  assert.match(validation.blockReasons.join('\n'), /provider\/profile\/model\/workspace\/command id and audit refs/);
+  assert.match(validation.blockReasons.join('\n'), /Model Router provider\/profile\/model\/workspace\/command id and audit refs/);
 });
 
 test('desktop live pass requires scoped Runtime Codex audit lineage refs', () => {
@@ -286,9 +288,9 @@ function validEvidence(
     runtimeTask: {
       runtime: 'Runtime Codex',
       taskKind: 'real-user-task',
-      profile: 'sciforge-runtime-deepseek',
-      provider: 'sciforge-deepseek-proxy',
-      model: 'bailian/deepseek-v4-flash',
+      profile: DESKTOP_LIVE_MODEL_ROUTER_PROFILE,
+      provider: DESKTOP_LIVE_MODEL_ROUTER_PROVIDER,
+      model: 'sciforge-router',
       workspacePath,
       commandId: runtimeCommandId,
       providerProxyUsed: true,

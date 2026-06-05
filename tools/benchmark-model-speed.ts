@@ -25,12 +25,7 @@ type BenchmarkResult = {
 };
 
 const DEFAULT_MODELS = [
-  'kimi-k2.6',
-  'glm-5.1',
-  'qwen/qwen3.6-plus:free',
-  'qwen3.6-plus',
-  'deepseek-v4-pro',
-  'xiaomi/mimo-v2-pro',
+  'sciforge-router',
 ];
 
 const DEFAULT_PROMPT = [

@@ -38,6 +38,7 @@ import {
 } from './cu-next-readiness-manifest.js';
 import { cuNextCompletionGradeEvidenceIssues } from './computer-use-next/completion-grade.js';
 import { runCuL3IndependentInputAcceptanceHarness } from './cu-l3-independent-input-acceptance-harness.js';
+import { RUNTIME_PROVIDER } from '../packages/backend/src/runtime-home.js';
 
 type CuNextCommand =
   | 'list'
@@ -467,6 +468,10 @@ function collectLiveAcceptanceFileRefs(manifest: Record<string, unknown>) {
     stringValue(guiPresent.payloadRef),
     stringValue(manifest.completionEvidenceRef),
     ...stringArray(guiPresent.displayedRefs),
+    ...records(manifest.mutatingActions).flatMap(actionFileRefs),
+    ...records(manifest.actionCausality).flatMap(actionFileRefs),
+    ...records(manifest.evidenceLedgerActions).flatMap(actionFileRefs),
+    ...records(recordValue(manifest.evidenceLedger).actions).flatMap(actionFileRefs),
     ...records(manifest.tuiHostChain).flatMap((link) => [
       stringValue(link.requestRef),
       stringValue(link.hostPortsRef),
@@ -483,6 +488,46 @@ function collectLiveAcceptanceFileRefs(manifest: Record<string, unknown>) {
     ...records(manifest.evidenceMarkers).flatMap(markerFileRefs),
   ];
   return [...new Set(refs.filter((ref): ref is string => Boolean(ref)))];
+}
+
+function actionFileRefs(action: Record<string, unknown>) {
+  return [
+    stringValue(action.inputIntentRef),
+    stringValue(action.intentRef),
+    stringValue(action.providerAdapterRef),
+    stringValue(action.adapterRef),
+    stringValue(action.executorAdapterRef),
+    stringValue(action.actionAdapterRef),
+    stringValue(action.executorEventRef),
+    stringValue(action.beforeFrameRef),
+    stringValue(action.afterFrameRef),
+    stringValue(action.beforeAfterFrameRef),
+    stringValue(action.beforeScreenshotRef),
+    stringValue(action.afterScreenshotRef),
+    stringValue(action.currentScreenshotRef),
+    stringValue(action.currentAppStateRef),
+    stringValue(action.stateSnapshotRef),
+    stringValue(action.freshnessCheckRef),
+    stringValue(action.verifierRef),
+    stringValue(action.verificationRef),
+    stringValue(action.verifierVerdictRef),
+    stringValue(action.artifactRef),
+    stringValue(action.finalArtifactRef),
+    stringValue(action.blockedReasonRef),
+    stringValue(action.permissionHandoffRef),
+    stringValue(action.observeOnlyRef),
+    stringValue(action.guiPresentRef),
+    ...stringArray(action.beforeFrameRefs),
+    ...stringArray(action.afterFrameRefs),
+    ...stringArray(action.beforeEvidenceRefs),
+    ...stringArray(action.afterEvidenceRefs),
+    ...stringArray(action.groundingRefs),
+    ...stringArray(action.verificationRefs),
+    ...stringArray(action.artifactRefs),
+    ...stringArray(action.outputArtifactRefs),
+    ...stringArray(action.blockedReasonRefs),
+    ...stringArray(action.blockedEvidenceRefs),
+  ].filter((ref): ref is string => typeof ref === 'string' && isLocalFileEvidenceRef(ref));
 }
 
 async function readAndValidateApprovalChainSidecars(
@@ -884,7 +929,7 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
     ['codexProxy', 'provider'],
     ['runtimeCodexProxy', 'runtimeProvider'],
     ['runtimeCodexProxy', 'provider'],
-  ]) ?? (upstreamBaseUrl ? 'sciforge-deepseek-proxy' : undefined);
+  ]) ?? (upstreamBaseUrl ? RUNTIME_PROVIDER : undefined);
   const plannerProfile = firstConfigString(configs, [
     ['computerUse', 'plannerProfile'],
     ['visionSense', 'plannerProfile'],
@@ -922,7 +967,7 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
   setEnvIfMissing('SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY', grounderUploadStrategy);
   setEnvIfMissing('SCIFORGE_VISION_INPUT_ADAPTER', inputAdapter);
   setEnvIfMissing('SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER', inputAdapterProvider);
-  setEnvIfMissing('SCIFORGE_VISION_VLM_MODEL', visionVlmModel);
+  setEnvIfMissing('SCIFORGE_VISION_TRANSLATOR_MODEL', visionVlmModel);
 }
 
 async function readOptionalLocalJson(path: string): Promise<unknown> {

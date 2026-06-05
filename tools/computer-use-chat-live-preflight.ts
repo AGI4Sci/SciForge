@@ -114,7 +114,6 @@ const requiredEnvGroups = [
   ['SCIFORGE_VISION_DESKTOP_BRIDGE'],
   ['SCIFORGE_VISION_INPUT_ADAPTER'],
   ['SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER'],
-  ['SCIFORGE_VISION_KV_GROUND_URL'],
 ] as const;
 
 export async function buildComputerUseChatLivePreflightManifest(
@@ -213,15 +212,6 @@ export async function buildComputerUseChatLivePreflightManifest(
       id: 'provider-proxy',
       label: 'Provider proxy',
       url: effectiveEnv.SCIFORGE_PROXY_URL || loopbackUrl(effectiveEnv.SCIFORGE_PROXY_PORT, 3891, '/healthz'),
-      fetchImpl,
-      timeoutMs,
-    }),
-    checkService({
-      id: 'kv-ground',
-      label: 'KV-Ground',
-      url: effectiveEnv.SCIFORGE_VISION_KV_GROUND_URL
-        ? appendPath(effectiveEnv.SCIFORGE_VISION_KV_GROUND_URL, '/health')
-        : loopbackUrl(effectiveEnv.SCIFORGE_VISION_KV_GROUND_PORT, 18081, '/health'),
       fetchImpl,
       timeoutMs,
     }),
@@ -395,7 +385,7 @@ function nextActions(input: {
   if (failed.length > 0) {
     actions.push({
       label: `Start or repair local services: ${failed.map((check) => check.id).join(', ')}.`,
-      command: 'Start UI, workspace writer, Runtime Codex sidecar, provider proxy, and KV-Ground; then rerun this preflight.',
+      command: 'Start UI, workspace writer, Runtime Codex sidecar, and provider proxy; then rerun this preflight.',
       writesRepo: false,
     });
   }
@@ -602,7 +592,6 @@ function configPathsForEnv(name: string): string[][] {
       ['llm', 'upstreamBaseUrl'],
       ['textLLM', 'baseUrl'],
       ['textLLM', 'upstreamBaseUrl'],
-      ['textLLM', 'env', 'SCIFORGE_COMPUTER_USE_TEXT_PLANNER_BASE_URL'],
       ['textLLM', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'],
       ['textLLM', 'env', 'SCIFORGE_RUNTIME_BASE_URL'],
       ['codexProxy', 'upstreamBaseUrl'],

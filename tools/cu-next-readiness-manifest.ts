@@ -259,7 +259,7 @@ export function buildCuNextReadinessManifestFromData(input: CuNextReadinessBuild
     if (!projectTask) {
       return missingProjectTask(mapping);
     }
-    return evaluateTask(mapping, projectTask, input.userAcceptanceManifests ?? [], runtimeBrowser, kvGround, root);
+    return evaluateTask(mapping, projectTask, input.userAcceptanceManifests ?? [], runtimeBrowser, root);
   });
   const blockedItems = collectBlockedItems(tasks, runtimeBrowser, kvGround, projectTasks, taskMappings);
   const completionEligible = blockedItems.length === 0 && tasks.every((task) => task.status === 'passed');
@@ -356,7 +356,6 @@ function evaluateTask(
   projectTask: CuNextProjectTask,
   userAcceptanceManifests: CuNextEvidenceFile[],
   runtimeBrowser: CuNextReadinessManifest['globalEvidence']['runtimeBrowser'],
-  kvGround: CuNextReadinessManifest['globalEvidence']['kvGround'],
   root: string,
 ): CuNextReadinessTask {
   const matchingAcceptance = userAcceptanceManifests.filter((file) => userAcceptanceMatchesTask(file.data, mapping));
@@ -389,13 +388,6 @@ function evaluateTask(
       reason: runtimeBrowser.reason ?? 'Runtime Codex in-app browser acceptance is not passed.',
     });
   }
-  if (kvGround.status !== 'passed') {
-    blockedItems.push({
-      id: 'missing-kv-ground-health-predict-evidence',
-      reason: kvGround.reason ?? 'KV-Ground evidence must include /health ok and a /predict coordinate result.',
-    });
-  }
-
   const uncheckedItems = projectTask.checklist.filter((item) => !item.checked);
   if (uncheckedItems.length > 0) {
     blockedItems.push({
@@ -414,8 +406,7 @@ function evaluateTask(
   const projectChecked = projectTask.checklist.length > 0
     && uncheckedItems.length === 0
     && checkedWithoutEvidence.length === 0;
-  const taskGlobalReady = (!requiresBrowser(mapping) || runtimeBrowser.status === 'passed')
-    && kvGround.status === 'passed';
+  const taskGlobalReady = !requiresBrowser(mapping) || runtimeBrowser.status === 'passed';
   const status: CuNextTaskStatus = !strongAcceptance || !taskGlobalReady
     ? 'blocked'
     : projectChecked
@@ -759,7 +750,7 @@ function evaluateKvGround(files: CuNextEvidenceFile[]): CuNextReadinessManifest[
   if (files.length === 0) {
     return {
       status: 'missing',
-      reason: 'KV-Ground smoke manifest was not found.',
+      reason: 'Legacy KV-Ground smoke manifest was not found; this is optional for the Model Router grounding translator gate.',
     };
   }
   const sorted = [...files].sort((a, b) => evidenceTimestamp(a).localeCompare(evidenceTimestamp(b)) || a.path.localeCompare(b.path));
@@ -767,7 +758,7 @@ function evaluateKvGround(files: CuNextEvidenceFile[]): CuNextReadinessManifest[
   if (!latest) {
     return {
       status: 'missing',
-      reason: 'KV-Ground smoke manifest was not found.',
+      reason: 'Legacy KV-Ground smoke manifest was not found; this is optional for the Model Router grounding translator gate.',
     };
   }
   const data = latest.data as KvGroundSmokeManifest;
@@ -786,14 +777,14 @@ function evaluateKvGround(files: CuNextEvidenceFile[]): CuNextReadinessManifest[
   return {
     status: 'blocked',
     ref: latest.path,
-    reason: 'Latest KV-Ground smoke evidence does not contain both /health ok and /predict coordinates.',
+    reason: 'Latest legacy KV-Ground smoke evidence does not contain both /health ok and /predict coordinates.',
   };
 }
 
 function collectBlockedItems(
   tasks: CuNextReadinessTask[],
   runtimeBrowser: CuNextReadinessManifest['globalEvidence']['runtimeBrowser'],
-  kvGround: CuNextReadinessManifest['globalEvidence']['kvGround'],
+  _legacyKvGround: CuNextReadinessManifest['globalEvidence']['kvGround'],
   projectTasks: Map<CuNextTaskId, CuNextProjectTask>,
   taskMappings: CuNextTaskMapping[],
 ): CuNextReadinessManifest['blockedItems'] {
@@ -811,12 +802,6 @@ function collectBlockedItems(
     blocked.push({
       id: 'runtime-codex-browser-acceptance-not-passed',
       reason: runtimeBrowser.reason ?? 'Runtime Codex browser acceptance is not passed.',
-    });
-  }
-  if (kvGround.status !== 'passed') {
-    blocked.push({
-      id: 'kv-ground-smoke-not-passed',
-      reason: kvGround.reason ?? 'KV-Ground smoke evidence is not passed.',
     });
   }
   for (const task of tasks) {

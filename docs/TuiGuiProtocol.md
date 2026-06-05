@@ -753,7 +753,7 @@ TUI 调用 connector 后，应优先返回 refs-first 结果：`feishu:*`、`wec
 | Codex CLI / `codex exec --json` | Legacy/test-only 兼容和历史证据。不得作为产品默认 fallback；legacy host 需要时由 adapter shim 额外暴露 `gui.*` alias，并消费 JSONL event stream。 |
 | `AgentCliAdapter` | 迁移抽象层。隔离 Codex 进程启动、profile、workspace、JSONL parsing、stderr audit 和 exit code handling。 |
 | Claude Code stream-json | 可选兼容后端。通过 MCP 暴露 `module.*`，stdout NDJSON 映射为 SciForge event/trace，`control_request/control_response` 映射为 approval/input。 |
-| Codex custom provider / proxy | 默认成本路径。Codex backend 使用 DeepSeek `deepseek-v4-flash` 或本地 provider proxy；SciForge 不直接维护第二个 agent backend。 |
+| Codex custom provider / Model Router | 默认成本路径。Codex backend 使用 SciForge Model Router public alias/profile；`textReasoner`、`translators.vision` 等 role 解析实际 provider，SciForge 不直接维护第二个 agent backend。 |
 
 AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adapter，它只是迁移期兼容层，目标是被 Codex app-server 取代；CLI bridge、exec-MCP 和 `codex exec --json` 只能作为 legacy/test-only adapter、fixture 或历史 evidence。新增协议和 adapter 不得继续扩展 AgentServer public surface。
 
@@ -763,7 +763,7 @@ AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adap
 2. GUI 内部建立 semantic event bus 和 hot-region projector。
 3. 把 shell、hot-region、region detail 和 debug material 暴露为只读 GUI resource tree。
 4. 通过目标 TUI 的原生方式注入 `module.describe/query/read/invoke`；迁移期 legacy host 可通过 adapter shim 同时注入 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status`、`gui.apply_batch`、`gui.get_context` 和只读 `gui.list/read/search/stat/watch` alias。
-5. GUI 直接连接 Codex backend；Codex 默认 model provider 走 DeepSeek `deepseek-v4-flash` 或用户配置的低成本 provider/proxy，OpenAI provider 仅在显式选择时使用。
+5. GUI 直接连接 Codex backend；Codex 默认 model provider 走 SciForge Model Router public alias/profile，OpenAI provider 仅在显式选择时使用。
 6. TUI agent 先读 GUI resources/context，再调 `module.invoke({ moduleId: 'gui', intent })` 表达视图意图；legacy `gui.*` 调用由 shim 转发。
 7. GUI 基于 revision、interaction mode、lastChangeOrigin 和 precondition 执行、延迟、拒绝或建议替代方案。
 8. 算法、capability discovery、harness、provider 都留在 TUI 原生扩展生态。

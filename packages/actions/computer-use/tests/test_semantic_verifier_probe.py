@@ -30,7 +30,7 @@ def test_semantic_verifier_probe_writes_refs_first_summary_from_provider(tmp_pat
             "visionLLM": {
                 "baseUrl": "https://example.test/v1",
                 "apiKey": "secret-token",
-                "model": "qwen3.6-plus",
+                "model": "sciforge-router",
             }
         }),
         encoding="utf8",
@@ -65,15 +65,15 @@ def test_semantic_verifier_probe_writes_refs_first_summary_from_provider(tmp_pat
 
     assert manifest["status"] == "completed"
     assert manifest["baseUrlOrigin"] == "https://example.test"
-    assert manifest["modelId"] == "qwen3.6-plus"
-    assert manifest["expectedProjectModelId"] == "qwen3.6-plus"
-    assert manifest["projectVlmEvidenceEligible"] is False
+    assert manifest["modelId"] == "sciforge-router"
+    assert manifest["expectedProjectModelId"] == "sciforge-router"
+    assert manifest["projectVerifierEvidenceEligible"] is False
     assert manifest["modelPresenceVerified"] is None
-    assert "/models did not verify the configured model" in manifest["projectVlmEvidenceBlockers"]
+    assert "/models did not verify the configured model" in manifest["projectVerifierEvidenceBlockers"]
     assert manifest["semanticVerifier"] == {
         "schemaVersion": "sciforge.computer-use.semantic-verifier.v1",
-        "providerIds": ["qwen-semantic-verifier"],
-        "modelIds": ["qwen3.6-plus"],
+        "providerIds": ["model-router-semantic-verifier"],
+        "modelIds": ["sciforge-router"],
         "verdict": "pass",
         "reason": "image evidence is inspectable",
         "confidence": 0.91,
@@ -96,14 +96,14 @@ def test_semantic_verifier_probe_writes_refs_first_summary_from_provider(tmp_pat
 def test_semantic_verifier_probe_marks_project_vlm_eligible_only_with_model_presence(tmp_path):
     config = write_config(tmp_path)
 
-    def qwen_transport(url, payload, headers, timeout):
+    def router_transport(url, payload, headers, timeout):
         if payload.get("messages") and len(payload["messages"]) == 1:
             return {
-                "model": "qwen3.6-plus",
+                "model": "sciforge-router",
                 "choices": [{"message": {"content": "{\"verdict\":\"pass\",\"confidence\":1,\"reason\":\"text\"}"}}],
             }
         return {
-            "model": "qwen3.6-plus",
+            "model": "sciforge-router",
             "choices": [{"message": {"content": "{\"verdict\":\"pass\",\"confidence\":0.93,\"reason\":\"image\"}"}}],
         }
 
@@ -123,18 +123,18 @@ def test_semantic_verifier_probe_marks_project_vlm_eligible_only_with_model_pres
     manifest = run_semantic_verifier_probe(
         output_dir=tmp_path / "probe",
         config_file=config,
-        transport=qwen_transport,
+        transport=router_transport,
         diagnose_provider=True,
         diagnostic_transport=diagnostic_transport,
     )
 
     assert manifest["status"] == "completed"
-    assert manifest["responseModelId"] == "qwen3.6-plus"
+    assert manifest["responseModelId"] == "sciforge-router"
     assert manifest["configuredModelMatchesProject"] is True
     assert manifest["responseModelMatchesConfigured"] is True
     assert manifest["modelPresenceVerified"] is True
-    assert manifest["projectVlmEvidenceEligible"] is True
-    assert manifest["projectVlmEvidenceBlockers"] == []
+    assert manifest["projectVerifierEvidenceEligible"] is True
+    assert manifest["projectVerifierEvidenceBlockers"] == []
 
 
 def test_semantic_verifier_probe_completed_but_not_project_eligible_for_wrong_model(tmp_path):
@@ -143,7 +143,7 @@ def test_semantic_verifier_probe_completed_but_not_project_eligible_for_wrong_mo
     def wrong_model_transport(url, payload, headers, timeout):
         if payload.get("messages") and len(payload["messages"]) == 1:
             return {
-                "model": "qwen3.6-plus",
+                "model": "sciforge-router",
                 "choices": [{"message": {"content": "{\"verdict\":\"pass\",\"confidence\":1,\"reason\":\"text\"}"}}],
             }
         return {
@@ -160,8 +160,8 @@ def test_semantic_verifier_probe_completed_but_not_project_eligible_for_wrong_mo
     assert manifest["status"] == "completed"
     assert manifest["responseModelId"] == "other-vlm"
     assert manifest["responseModelMatchesConfigured"] is False
-    assert manifest["projectVlmEvidenceEligible"] is False
-    assert "provider response model does not match configured model" in manifest["projectVlmEvidenceBlockers"]
+    assert manifest["projectVerifierEvidenceEligible"] is False
+    assert "provider response model does not match configured model" in manifest["projectVerifierEvidenceBlockers"]
 
 
 def test_semantic_verifier_probe_ignores_legacy_text_llm_config_as_vlm_config(tmp_path):
@@ -476,7 +476,7 @@ def test_semantic_verifier_probe_uses_real_http_path_with_fake_provider(tmp_path
         def do_GET(self):
             requests.append(("GET", self.path, None, dict(self.headers)))
             if self.path == "/v1/models":
-                self._send_json({"data": [{"id": "qwen3.6-plus"}]})
+                self._send_json({"data": [{"id": "sciforge-router"}]})
                 return
             self._send_json({"error": "not found"}, status=404)
 
@@ -559,7 +559,7 @@ def test_semantic_verifier_probe_falls_back_to_raw_http_after_urllib_timeout(tmp
         def do_GET(self):
             requests.append(("GET", self.path, None, dict(self.headers)))
             if self.path == "/v1/models":
-                self._send_json({"data": [{"id": "qwen3.6-plus-2026-04-02"}]})
+                self._send_json({"data": [{"id": "model-router.capability.computer-use.verifier-translator"}]})
                 return
             self._send_json({"ok": True})
 
@@ -569,7 +569,7 @@ def test_semantic_verifier_probe_falls_back_to_raw_http_after_urllib_timeout(tmp
             requests.append(("POST", self.path, payload, dict(self.headers)))
             if self.path == "/v1/chat/completions":
                 self._send_json({
-                    "model": "qwen3.6-plus-2026-04-02",
+                    "model": "model-router.capability.computer-use.verifier-translator",
                     "choices": [
                         {"message": {"content": "{\"verdict\":\"pass\",\"confidence\":1,\"reason\":\"raw fallback\"}"}}
                     ],
@@ -590,7 +590,7 @@ def test_semantic_verifier_probe_falls_back_to_raw_http_after_urllib_timeout(tmp
 
     monkeypatch.setattr(semantic_verifier_probe.urllib.request, "urlopen", timeout_urlopen)
     with run_fake_provider(RawFallbackProvider) as base_url:
-        config = write_config(tmp_path, base_url=base_url, model="qwen3.6-plus-2026-04-02")
+        config = write_config(tmp_path, base_url=base_url, model="model-router.capability.computer-use.verifier-translator")
         manifest = run_semantic_verifier_probe(
             output_dir=tmp_path / "probe",
             config_file=config,
@@ -600,9 +600,9 @@ def test_semantic_verifier_probe_falls_back_to_raw_http_after_urllib_timeout(tmp
         )
 
     assert manifest["status"] == "completed"
-    assert manifest["responseModelId"] == "qwen3.6-plus-2026-04-02"
+    assert manifest["responseModelId"] == "model-router.capability.computer-use.verifier-translator"
     assert manifest["configuredModelMatchesProject"] is True
-    assert manifest["projectVlmEvidenceEligible"] is True
+    assert manifest["projectVerifierEvidenceEligible"] is True
     assert manifest["providerDiagnostics"]["modelsGet"]["ok"] is True
     assert manifest["providerDiagnostics"]["modelsGet"]["configuredModelPresent"] is True
     assert any(request[0] == "GET" and request[1] == "/v1/models" for request in requests)
@@ -614,16 +614,16 @@ def test_semantic_verifier_probe_falls_back_to_raw_http_after_urllib_timeout(tmp
     assert "base64" not in serialized.lower()
 
 
-def test_semantic_verifier_probe_retries_without_temperature_for_kimi_like_shape_rejection(tmp_path):
+def test_semantic_verifier_probe_retries_without_temperature_for_no_temperature_shape_rejection(tmp_path):
     payloads = []
 
-    def kimi_transport(url, payload, headers, timeout):
+    def no_temperature_transport(url, payload, headers, timeout):
         payloads.append(payload)
         if payload.get("temperature") == 0:
             raise semantic_verifier_probe.urllib.error.HTTPError(url, 400, "invalid temperature: only 1 is allowed for this model", {}, None)
         return {
-            "model": "kimi-k2.6",
-            "choices": [{"message": {"content": "{\"verdict\":\"pass\",\"confidence\":1,\"reason\":\"kimi compatible\"}"}}],
+            "model": "sciforge-router-no-temperature",
+            "choices": [{"message": {"content": "{\"verdict\":\"pass\",\"confidence\":1,\"reason\":\"no-temperature compatible\"}"}}],
         }
 
     def diagnostic_transport(label, url, payload, headers, timeout):
@@ -639,19 +639,19 @@ def test_semantic_verifier_probe_retries_without_temperature_for_kimi_like_shape
             }
         return {"ok": True, "status": 200}
 
-    config = write_config(tmp_path, model="kimi-k2.6")
+    config = write_config(tmp_path, model="sciforge-router-no-temperature")
     manifest = run_semantic_verifier_probe(
         output_dir=tmp_path / "probe",
         config_file=config,
-        transport=kimi_transport,
+        transport=no_temperature_transport,
         diagnose_provider=True,
         diagnostic_transport=diagnostic_transport,
     )
 
     assert manifest["status"] == "completed"
-    assert manifest["modelId"] == "kimi-k2.6"
+    assert manifest["modelId"] == "sciforge-router-no-temperature"
     assert manifest["configuredModelMatchesProject"] is True
-    assert manifest["projectVlmEvidenceEligible"] is True
+    assert manifest["projectVerifierEvidenceEligible"] is True
     assert any("temperature" not in payload for payload in payloads)
 
 
@@ -665,7 +665,7 @@ def test_semantic_verifier_probe_real_diagnostics_use_models_path_from_chat_endp
         def do_GET(self):
             requests.append(("GET", self.path))
             if self.path == "/v1/models":
-                self._send_json({"data": [{"id": "qwen3.6-plus"}, {"id": "hidden-other-model"}]})
+                self._send_json({"data": [{"id": "sciforge-router"}, {"id": "hidden-other-model"}]})
                 return
             self._send_json({"error": "not found"}, status=404)
 
@@ -857,7 +857,7 @@ class run_fake_provider:
         self.thread.join(timeout=2)
 
 
-def write_config(tmp_path, *, base_url="https://example.test/v1", model="qwen3.6-plus"):
+def write_config(tmp_path, *, base_url="https://example.test/v1", model="sciforge-router"):
     config = tmp_path / "config.computer-use.local.json"
     config.write_text(
         json.dumps({
