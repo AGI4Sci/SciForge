@@ -328,6 +328,7 @@ export interface BrowserHostSearchOutput {
   schemaVersion: typeof BROWSER_HOST_SEARCH_SCHEMA;
   query: string;
   engine: BrowserHostSearchEngine;
+  searchedAt: string;
   searchUrl: string;
   finalUrl: string;
   results: BrowserHostSearchResult[];

@@ -4,9 +4,23 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
-APP_PORTS=(5173 5174 5175 5176)
+APP_PORTS=(
+  3891 # managed Codex Responses proxy from npm run dev
+  3892 # model-router / goose proxy residue used by chat runtime
+  5173 # Vite renderer
+  5174 # workspace writer
+  5175 # desktop provider proxy
+  5176 # desktop Runtime Codex
+  6173 # alternate workspace writer from tools/dev.ts
+  18080 # legacy AgentServer / OpenTeam Studio
+)
 APP_PATTERNS=(
+  "tools/dev.ts"
+  "tools/dev-dual.ts"
   "tools/desktop-dev-shell"
+  "tools/desktop-dev-shell.ts"
+  "server/index.ts"
+  "sciforge-goose-proxy.mjs"
   "dist-desktop/src/desktop/main.js"
   "dist-desktop/src/runtime/workspace-server.js"
   "dist-desktop/packages/backend/src/cli.js"

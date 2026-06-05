@@ -10,13 +10,17 @@ const workspace = await createRepairWorkspace('sciforge-workspace-http-repair-')
 
 const brokenGeneratedTask = [
   'import json, sys',
+  'input_path = sys.argv[1]',
+  'output_path = sys.argv[2]',
+  'request = json.load(open(input_path))',
   'matrix_ref = ""',
   'metadata_ref = ""',
   'if not matrix_ref or not metadata_ref:',
   '    sys.stderr.write("missing matrix/metadata refs\\n")',
   '    raise SystemExit(2)',
   'payload = {"message":"omics repaired ok","confidence":0.82,"claimType":"evidence-summary","evidenceLevel":"workspace-task","reasoningTrace":"generated omics task reran after repair","claims":[],"uiManifest":[{"componentId":"point-set-viewer","artifactRef":"omics-differential-expression","priority":1}],"executionUnits":[{"id":"omics-generated-repaired","tool":"agentserver.generated.python","status":"done"}],"artifacts":[{"id":"omics-differential-expression","type":"omics-differential-expression","producerScenario":"omics","schemaVersion":"1","metadata":{"matrixRef":matrix_ref,"metadataRef":metadata_ref},"data":{"rows":[{"gene":"IL6","log2FoldChange":2.4,"pValue":0.01}]}}]}',
-  'json.dump(payload, open(sys.argv[2], "w"))',
+  'payload["requestIntent"] = request.get("intent") or request.get("prompt") or ""',
+  'json.dump(payload, open(output_path, "w"))',
 ].join('\n');
 
 const agentServer = createServer(async (req, res) => {
@@ -106,6 +110,10 @@ try {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      schemaVersion: 'sciforge.legacy-tools-run-repair-harness.v1',
+      kind: 'legacy-agentserver-repair-harness',
+      repairHarnessOnly: true,
+      handoffSource: 'test',
       skillDomain: 'omics',
       prompt: 'Run omics differential expression; repair smoke intentionally omits refs',
       workspacePath: workspace,
@@ -127,29 +135,28 @@ try {
 
   const configuredWorkspace = await createRepairWorkspace('sciforge-workspace-http-repair-config-');
   await mkdir(join(configuredWorkspace, '.sciforge'), { recursive: true });
-  await writeFile(join(configuredWorkspace, '.sciforge', 'config.json'), JSON.stringify({ agentServerBaseUrl }, null, 2));
+  await writeFile(join(configuredWorkspace, '.sciforge', 'config.json'), JSON.stringify({ agentServerBaseUrl: 'https://agentserver.example.invalid' }, null, 2));
   const configuredResponse = await fetch(`http://127.0.0.1:${workspacePort}/api/sciforge/tools/run`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      schemaVersion: 'sciforge.legacy-tools-run-repair-harness.v1',
+      kind: 'legacy-agentserver-repair-harness',
+      repairHarnessOnly: true,
+      handoffSource: 'test',
       skillDomain: 'omics',
       prompt: 'Run omics differential expression; repair smoke reads AgentServer URL from workspace config',
       workspacePath: configuredWorkspace,
     }),
   });
-  assert.equal(configuredResponse.status, 200);
+  assert.equal(configuredResponse.status, 410);
   const configuredJson = await configuredResponse.json() as unknown;
   assert.ok(isRecord(configuredJson));
-  assert.equal(configuredJson.ok, true);
-  const configuredResult = isRecord(configuredJson.result) ? configuredJson.result : {};
-  const configuredUnits = Array.isArray(configuredResult.executionUnits) ? configuredResult.executionUnits : [];
-  assert.equal(configuredUnits.length, 1);
-  assert.equal(isRecord(configuredUnits[0]) ? configuredUnits[0].status : undefined, 'self-healed');
-  assert.equal(isRecord(configuredUnits[0]) ? configuredUnits[0].attempt : undefined, 2);
-  assert.ok(hasArtifact(configuredResult, 'omics-differential-expression'));
-  await assertSelfHealedAttemptHistory(configuredWorkspace);
+  assert.equal(configuredJson.ok, false);
+  assert.match(String(configuredJson.error), /explicit loopback agentServerBaseUrl/);
+  assert.equal(configuredJson.replacementPath, '/api/sciforge/runtime/codex/stream');
 
-  console.log('[ok] workspace server HTTP repair smoke patches task code via request body URL and workspace config fallback');
+  console.log('[ok] workspace server HTTP repair smoke patches task code via explicit loopback URL and rejects config fallback');
 } finally {
   child.kill('SIGTERM');
   await new Promise<void>((resolve) => agentServer.close(() => resolve()));

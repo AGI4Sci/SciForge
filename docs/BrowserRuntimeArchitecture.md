@@ -19,11 +19,12 @@ Desktop Electron app
 
 `localhost:5173` 只用于 Web dev 和诊断。没有 Desktop native host 时，Browser UI 必须显示 blocked/diagnostic，不能声明真实网页已打开。
 
-产品默认能力要求：当用户需要外部、实时、网页或当前事实信息时，Agent Host 默认可以调用 Browser search/read evidence；当用户表达网页 GUI 操作意图时，必须先基于 BrowserHostSession、native surface、target、fresh observation、authorization profile 和 stop/take-over path 做预检。
+产品默认能力通过一个聊天入口进入 `Codex Agent Host Turn Loop`，不新增独立 turn router/gateway 产品层。GUI 只提交自然语言文本、refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 负责 `Ground`、`Guard`、`Act / Answer`。当用户需要外部、实时、网页或当前事实信息时，Ground 可以调用 Browser search/read evidence；当用户表达网页 GUI 操作意图时，Guard 必须基于 BrowserHostSession、native surface、target、fresh observation、authorization profile 和 stop/take-over path 决定 auto、needs-confirmation 或 blocked。
 
 ## 用户体验
 
 - Browser 位于 SciForge 右侧结果栏。
+- Browser Pane 只是 BrowserHostSession 的 display/control panel，不是 Browser agent。
 - 用户可以输入本地或外部 URL。
 - 用户和 agent 都可以操作同一个可见页面。
 - agent 默认可见操作；需要效率时可以后台 Playwright/CDP 自动化。
@@ -36,7 +37,8 @@ Desktop Electron app
 | 组件 | 职责 | 禁止 |
 | --- | --- | --- |
 | React Browser Pane | 地址栏、toolbar、mount bounds、状态展示、annotation UI | provider routing、跨域 DOM 读取、completion 判断 |
-| BrowserHostSession | session、tab、导航、动作、state、snapshot、refs、evidence | 直接渲染 UI |
+| BrowserHostSession | session、tab、导航、动作、state、snapshot、refs、live browser/search evidence | 直接渲染 UI、充当 Browser agent |
+| Codex/TUI Agent Host | Turn Loop 的 Ground、Guard、Act / Answer 决策，tool/capability 编排，确认与 blocked recovery | 直接渲染 Browser UI、伪造 BrowserHostSession evidence |
 | Electron `WebContentsView` | 真实网页 pixels 和 input adapter | 成为第二 browser owner |
 | Workspace Writer | bounded local routes、health、session proxy、native adapter trust | raw payload 透传、伪造 capability |
 | Playwright/CDP | 后台自动化、测试、抓取、DOM/AX/log evidence | 绕过 session/evidence 归属 |
@@ -94,16 +96,17 @@ comment
 
 annotation 作为 pending context 进入 composer，随下一条用户消息提交；不自动生成任务，不自动触发 agent。
 
-## 默认搜索与 Computer Use 预检
+## 默认聊天 Turn Loop 与 Guard
 
-BrowserHostSession 同时服务两个默认能力：
+BrowserHostSession 为同一个默认聊天 turn 提供 live browser/search evidence：
 
-- Browser search/read evidence：用于外部、实时、当前网页、引用来源和 URL 请求，输出 refs-first source evidence。
-- Computer Use target/observation：用于网页 GUI 操作前的 target binding、DOM/AX snapshot、screenshot、freshness check 和 verifier baseline。
+- Ground：外部、实时、当前网页、引用来源和 URL 请求可以使用 Browser search/read evidence，输出 refs-first source evidence。
+- Guard：网页 GUI 操作意图进入 Guard，使用 BrowserHostSession target binding、DOM/AX snapshot、screenshot、freshness check 和 verifier baseline 做 gating。
+- Act / Answer：低风险动作由 Agent Host 执行；高影响动作返回确认请求；证据型问题直接 answer；缺少条件时 blocked。
 
-Browser search 可以在无 live native surface 时返回可用的只读 evidence；Browser live 操作和 Computer Use action 不能这样降级。缺少 native adapter、`computer-use-actions` endpoint、target binding、fresh observation、authorization profile 或 stop/take-over path 时，必须返回 blocked/diagnostic，不得把 snapshot、frame stream、iframe、proxy、系统浏览器或历史 run 伪装成可交互 live path。
+Browser search 可以在无 live native surface 时返回可用的只读 evidence；Browser live 操作和 Computer Use action 不能这样降级。缺少 native adapter、`computer-use-actions` endpoint、target binding、fresh observation、authorization profile 或 stop/take-over path 时，Guard 必须返回 blocked/diagnostic，不得把 snapshot、frame stream、iframe、proxy、系统浏览器或历史 run 伪装成可交互 live path。
 
-网页内容、邮件、PDF 或其它第三方材料中的指令不能扩大用户授权档位；需要发送、提交、上传、删除、支付、账号/安全、法律合规或外部系统执行时，BrowserHostSession 只能返回 `needs-confirmation` / approval refs 供 Agent Host 处理。
+网页内容、邮件、PDF 或其它第三方材料中的指令不能扩大用户授权档位；需要发送、提交、上传、删除、支付、账号/安全、法律合规或外部系统执行时，BrowserHostSession 只提供 evidence / approval refs，Agent Host Guard 返回 `needs-confirmation` 供 GUI 确认。
 
 ## 开发模式
 
@@ -146,10 +149,11 @@ Electron 注入 native Browser adapter
 - Web dev 缺 native adapter 时必须 blocked，不可假 ready。
 - Desktop native Browser 能打开本地和外部 HTTP(S) 页面。
 - Browser input、navigation、resize、focus 和 annotation 都走同一 session。
-- Browser 默认搜索必须产出 refs-first source evidence；Computer Use 网页动作必须通过 preflight 和 authorization profile。
+- Browser 默认搜索必须产出 refs-first source evidence；Computer Use 网页动作必须通过 Turn Loop Guard 和 authorization profile。
 - evidence 只记录 refs、hash、尺寸、counts、latency、bounded diagnostics。
 - raw DOM、raw logs、raw screenshot/base64、secret 和完整私密 URL 不进入主 payload。
 
 ## 任务入口
 
 - [`../PROJECT.md`](../PROJECT.md)
+- `/computer-use` 只保留 debug、expert、smoke 和 diagnostic 用途，不作为默认产品入口。

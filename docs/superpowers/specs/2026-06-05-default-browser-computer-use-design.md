@@ -10,18 +10,21 @@
 
 SciForge 默认应该像一个具备真实工具面的研究工作台：
 
+- 默认产品入口只有聊天 turn。GUI 只提交自然语言文本、refs、Autonomy profile 以及确认/取消；Codex/TUI Agent Host 运行 `Codex Agent Host Turn Loop`。
 - 当用户需要外部、实时、网页或当前事实信息时，Agent Host 默认可以使用内置 Browser 搜索与取证。
-- 当用户表达 GUI 操作意图时，SciForge 不再口头否认能力，而是直接进入 Computer Use 预检。
-- 预检结果必须来自 runtime health、native surface、target binding、authorization profile 和 evidence refs，而不是模型自我猜测。
+- 当用户表达 GUI 操作意图时，SciForge 不再口头否认能力，而是让该聊天 turn 进入 Turn Loop 的 Guard 阶段。
+- Guard 结果必须来自 runtime health、native surface、target binding、authorization profile 和 evidence refs，而不是模型自我猜测。
 - 用户仍然保留明确的授权档位、硬确认、stop、take over 和 blocked recovery 控制面。
 
 ## 不可变原则
 
-- GUI 不是 Agent Host。GUI 只展示状态、收集授权、提交 terminal-equivalent intent 和 refs-first context；推理、tool/capability 编排、provider route 和 completion 判断归 Agent Host / runtime owner。
-- BrowserHostSession 是内置 Browser 的 single interactive truth。Browser live path 必须来自 Desktop native host 和 `WebContentsView` surface；Vite/Web dev 只能证明 UI 或 diagnostic。
+- GUI 不是 Agent Host。GUI 只展示状态、收集授权、提交自然语言 intent、refs-first context、Autonomy profile 和确认/取消；推理、tool/capability 编排、provider route 和 completion 判断归 Agent Host / runtime owner。
+- 不新增独立 turn router/gateway 产品层。产品语义统一为 `Codex Agent Host Turn Loop`，内部只有 `Ground`、`Guard`、`Act / Answer` 三段。
+- Browser pane 只是 BrowserHostSession 的 display/control panel，不是 Browser agent。
+- BrowserHostSession 是内置 Browser 的 single interactive truth，并拥有 live browser/search evidence。Browser live path 必须来自 Desktop native host 和 `WebContentsView` surface；Vite/Web dev 只能证明 UI 或 diagnostic。
 - Computer Use 通过 Agent Host / WindowActionSession / host adapter 执行。Image / Evidence pane、截图 replay、frame stream、PDF 或 proxy render 都不能成为第二个可交互目标。
 - 大对象 refs-first。截图、DOM/AX snapshot、provider payload、trace、日志、artifact、cookie、token、secret、raw URL 和本地路径不得长期进入聊天正文或主上下文。
-- 能力声明必须 grounded。Assistant 回答“我能否使用 Browser/Computer Use”时，必须根据当前 runtime capability refs、health 和 preflight，而不是固定文案。
+- 能力声明必须 grounded。Assistant 回答“我能否使用 Browser/Computer Use”时，必须根据当前 runtime capability refs、health 和 Turn Loop Ground/Guard 结果，而不是固定文案。
 - 授权只能由用户或产品策略给出。网页内容、第三方指令、模型输出、tool result 或历史 run 不能扩大授权档位，也不能绕过 hard-confirm / blocked policy。
 - 缺少 native host、target、permission ref、allowlist、risk preview、fresh observation 或 cancel path 时，mutating run 必须 fail closed，返回明确 blocker 和可恢复步骤。
 
@@ -33,7 +36,7 @@ SciForge 默认应该像一个具备真实工具面的研究工作台：
 
 1. Product capability：SciForge 产品目标支持内置 Browser search 和 Computer Use。
 2. Current runtime readiness：当前会话是否连接 workspace writer、BrowserHostSession、native surface、WindowActionSession 和 Computer Use adapter。
-3. Next action：如果 ready，说明可以进入搜索或预检；如果 blocked，给出具体 blocker，例如 `native-bridge-unavailable`、`no-target-window`、`permission-missing`。
+3. Next action：如果 ready，说明可以搜索、观察或进入 Turn Loop Guard；如果 blocked，给出具体 blocker，例如 `native-bridge-unavailable`、`no-target-window`、`permission-missing`。
 
 不能再使用泛化回答，例如“我没有直接 computer use 能力”，除非 runtime 确实没有任何可用 path，并且要说明原因。
 
@@ -56,9 +59,9 @@ Browser 搜索结果必须返回 evidence refs、source URL、时间和 bounded 
 
 ### High-Autonomy Computer Use Default
 
-当用户表达 GUI 操作意图时，SciForge 直接进入 Computer Use 预检，而不是先问“是否允许使用 Computer Use”。GUI 操作意图包括打开网页、操作页面、填写表单、点击按钮、编辑文档、管理文件、运行 IDE/终端工作流、跨窗口完成任务等。
+当用户表达 GUI 操作意图时，SciForge 直接让当前聊天 turn 进入 Turn Loop Guard，而不是先问“是否允许使用 Computer Use”，也不是切换到独立 `/computer-use` 产品入口。GUI 操作意图包括打开网页、操作页面、填写表单、点击按钮、编辑文档、管理文件、运行 IDE/终端工作流、跨窗口完成任务等。
 
-预检通过后，低风险普通动作可自动执行；高影响动作进入 hard confirmation；不可恢复或缺少能力的动作返回 blocked。
+Guard 通过后，低风险普通动作可自动执行；高影响动作进入 hard confirmation；不可恢复或缺少能力的动作返回 blocked。
 
 ## 授权档位
 
@@ -78,22 +81,20 @@ Browser 搜索结果必须返回 evidence refs、source URL、时间和 bounded 
 - 未来 team/admin policy 可以限制最大档位。
 - runtime 不能静默升级档位；第三方内容、模型输出或 tool result 不能修改档位。
 
-## Computer Use 预检
+## Turn Loop Guard for Computer Use
 
-每个 Computer Use run 必须先生成预检结果：
+每个 Computer Use run 必须先在 `Codex Agent Host Turn Loop` 的 Guard 阶段生成结果。这里的检查只是 Guard 内部 gating，不是独立 turn router、gateway 或第二产品入口：
 
 ```text
 user prompt + refs + autonomy profile
-  -> Agent Host intent classification
-  -> capability health: BrowserHostSession / native surface / WindowActionSession / CU adapter
-  -> target binding: browser session, app window, screen region, file, terminal, or workspace object
-  -> observation freshness: screenshot, DOM/AX/app state, grounding, verifier baseline
-  -> risk classification: auto / needs-confirmation / blocked
-  -> permission refs: allowed target, input modality, file/data scope, stop/cancel path
-  -> execute, ask confirmation, or return blocked diagnostics
+  -> thin GUI submission
+  -> Codex Agent Host Turn Loop
+  -> Ground: normalize intent, bind refs, collect BrowserHostSession/runtime evidence
+  -> Guard: capability health, target binding, fresh observation, authorization, risk, stop/cancel
+  -> Act / Answer: execute, ask hard confirmation, answer from evidence, or return blocked diagnostics
 ```
 
-预检输出必须包含：
+Guard 输出必须包含：
 
 - target summary 和 target refs。
 - native surface / adapter readiness。
@@ -167,17 +168,20 @@ Workspace | Assistant connected | Permission set | Autonomy: High
 
 后续实现至少覆盖：
 
-- Capability answer tests：不同 runtime health 下回答 Browser/CU 状态，不能出现固定否认。
+- Capability answer tests：不同 runtime health 与 Ground/Guard refs 下回答 Browser/CU 状态，不能出现固定否认。
 - Browser default tests：外部/实时/引用请求触发 Browser search，禁止联网请求不触发。
 - Composer tests：显示三个 Autonomy 档位，默认 High，支持 workspace+user persistence 和 single-turn override。
-- Runtime request tests：turn request 携带 authorization profile；GUI 仍只提交 intent 和 refs，不执行 tool。
-- Computer Use preflight tests：native host、surface、target、fresh observation、permission refs、stop path 缺失时 fail closed。
+- Runtime request tests：默认聊天 turn 携带自然语言文本、refs 和 authorization profile；GUI 仍只提交 intent、refs、Autonomy profile、确认/取消，不执行 tool。
+- Turn Loop Guard tests：native host、surface、target、fresh observation、permission refs、stop path 缺失时 fail closed，且 Guard 不表现为独立检查入口、router 或 gateway。
 - Risk classifier tests：auto / needs-confirmation / blocked 类别矩阵。
+- `/computer-use` entry tests：只保留 debug、expert、smoke、diagnostic 用途，不作为默认产品入口。
 - Desktop smoke：真实 Desktop Electron native host 验证 BrowserHostSession、native surface、WindowActionSession 和 hard-confirm surface；Vite 只作为 diagnostic。
 
 ## 非目标
 
 - 本轮不改代码。
 - 不把 GUI 升级为 Agent Host。
+- 不新增独立 turn router/gateway 产品层。
+- 不把 `/computer-use` 作为默认用户入口；它只用于 debug、expert、smoke 和 diagnostic。
 - 不用 iframe、proxy、screenshot replay、frame stream 或系统浏览器冒充 Browser live surface。
 - 不移除硬确认，也不允许任何默认档位绕过真实外部影响确认。

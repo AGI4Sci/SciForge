@@ -101,8 +101,12 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
               authorization: {
                 profileId: 'high-autonomy',
                 publicLabel: 'High Autonomy',
-                source: 'composer-autonomy-default',
-                singleTurnOverride: false,
+                source: 'composer-autonomy-menu',
+                scope: {
+                  user: 'current-user',
+                  workspace: 'current-workspace',
+                },
+                singleTurnOverride: true,
                 hardConfirmCategories: ['payments-transfers-purchases'],
                 provider: 'private-provider-should-drop',
               },
@@ -117,6 +121,39 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
             },
           },
         },
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Compare the runtime and UI paths, then summarize the blockers.',
+          authorizationProfileId: 'high-autonomy',
+          authorizationProfileSource: 'composer-autonomy-menu',
+          authorizationScope: {
+            user: 'current-user',
+            workspace: 'current-workspace',
+          },
+          singleTurnOverride: true,
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          target: {
+            bound: true,
+            summary: 'Current app window',
+            refs: ['window-action-session:current'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['computer-use:observation/current-frame.png'],
+          },
+          permissions: {
+            refs: ['permission:turn/gui-action'],
+            stopCancelPath: true,
+          },
+        },
       }),
     });
     const text = await response.text();
@@ -127,8 +164,12 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
       authorization: {
         profileId: 'high-autonomy',
         publicLabel: 'High Autonomy',
-        source: 'composer-autonomy-default',
-        singleTurnOverride: false,
+        source: 'composer-autonomy-menu',
+        scope: {
+          user: 'current-user',
+          workspace: 'current-workspace',
+        },
+        singleTurnOverride: true,
         hardConfirmCategories: ['payments-transfers-purchases'],
       },
       mode: {
@@ -139,7 +180,773 @@ test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metad
         declaredAt: '2026-06-04T00:00:00.000Z',
       },
     });
+    assert.deepEqual(adapter.lastInput?.agentHostGrounding?.authorizationProfile, {
+      id: 'high-autonomy',
+      publicLabel: 'High Autonomy',
+      scope: {
+        user: 'current-user',
+        workspace: 'current-workspace',
+      },
+    });
+    assert.equal(adapter.lastInput?.agentHostGrounding?.singleTurnOverride, true);
     assert.doesNotMatch(JSON.stringify(adapter.lastInput?.declaredIntents), /private-provider/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint forwards bounded Agent Host grounding to downstream Runtime Codex turns', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Summarize the local plan from provided refs only.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-grounding',
+        attemptId: 'codex-command-agent-host-grounding-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Summarize the local plan from provided refs only.',
+          authorizationProfileId: 'high-autonomy',
+          refs: ['runtime-health:workspace'],
+          readiness: {
+            items: [{
+              id: 'workspace',
+              status: 'online',
+              capabilities: ['browser-host-session', 'browser-host-native-surface'],
+            }],
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: turn/);
+    assert.equal(adapter.lastInput?.commandText, 'Summarize the local plan from provided refs only.');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.schemaVersion, 'sciforge.agent-host.grounding-snapshot.v1');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.productCapabilities.computerUse, 'supported');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.runtimeReadiness.browser, 'ready');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.runtimeReadiness.computerUse, 'blocked');
+    assert.ok(adapter.lastInput?.agentHostGrounding?.blockers.includes('window-action-session-unavailable'));
+    assert.deepEqual(adapter.lastInput?.agentHostGrounding?.authorizationProfile?.scope, {
+      user: 'current-user',
+      workspace: 'current-workspace',
+    });
+    assert.deepEqual(adapter.lastInput?.agentHostGrounding?.refs, ['runtime-health:workspace']);
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput?.agentHostGrounding), /base64|raw|sk-private|provider\.local/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint routes Computer Use capability questions through Agent Host Turn Loop before adapter', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '你有 computer use 能力么？',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-capability',
+        attemptId: 'codex-command-agent-host-capability-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '你有 computer use 能力么？',
+          authorizationProfileId: 'high-autonomy',
+          authorizationProfileSource: 'composer-autonomy-default',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            schemaVersion: 'sciforge.agent-host-runtime-readiness-projection.v1',
+            source: 'ui-runtime-health-projection',
+            items: [{
+              id: 'workspace',
+              status: 'online',
+              capabilities: ['runtime-module-dispatcher', 'browser-host-session', 'browser-host-native-surface'],
+            }],
+            refs: ['runtime-health:workspace'],
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /event: done/);
+    assert.match(text, /Computer Use product capability is supported/i);
+    assert.match(text, /runtime-capability-answer/);
+    assert.doesNotMatch(text, /browser-host-session-unavailable|native-bridge-unavailable|native-surface-unavailable/);
+    assert.match(text, /window-action-session-unavailable|computer-use-adapter-unavailable/);
+    assert.doesNotMatch(text, /没有直接|no direct computer use/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint routes GUI operation intent through Computer Use Guard before adapter', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Click the visible export button in the current window.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-guard',
+        attemptId: 'codex-command-agent-host-guard-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Click the visible export button in the current window.',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'blocked',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          target: {
+            bound: true,
+            summary: 'Current app window',
+            refs: ['window-action-session:current'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['computer-use:observation/current-frame.png'],
+          },
+          permissions: {
+            refs: ['permission:turn/gui-action'],
+            stopCancelPath: true,
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /Computer Use Guard blocked/i);
+    assert.match(text, /native-surface-unavailable/);
+    assert.match(text, /computer-use-preflight/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint keeps High Autonomy behind hard confirmation for submit intents', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Submit the registration form in the current browser window.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-confirm',
+        attemptId: 'codex-command-agent-host-confirm-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Submit the registration form in the current browser window.',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          target: {
+            bound: true,
+            summary: 'Registration form',
+            refs: ['browser-host-session:form'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['browser-host-session:form/frame.png'],
+          },
+          permissions: {
+            refs: ['permission:turn/form-draft'],
+            stopCancelPath: true,
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /requires hard confirmation/i);
+    assert.match(text, /needs-confirmation/);
+    assert.match(text, /"controls":\["Confirm","Cancel"\]/);
+    assert.match(text, /"authorizationProfile":\{"schemaVersion":"sciforge\.authorization-profile\.v1","id":"high-autonomy"/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint treats ready Computer Use preflight as Act-waiting, not executed work', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Scroll the current browser page to inspect visible results.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-ready-for-act',
+        attemptId: 'codex-command-agent-host-ready-for-act-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Scroll the current browser page to inspect visible results.',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          target: {
+            bound: true,
+            summary: 'Current browser page',
+            refs: ['browser-host-session:visible'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['browser-host-session:visible/frame.png'],
+          },
+          permissions: {
+            refs: ['permission:turn/low-risk-navigation'],
+            stopCancelPath: true,
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /ready-for-act/);
+    assert.match(text, /Act is waiting for a refs-first action runner\/materializer/);
+    assert.match(text, /"protocolStatus":"protocol-paused"/);
+    assert.match(text, /"taskOutcome":"needs-work"/);
+    assert.doesNotMatch(text, /"status":"done","params":"\{\\?"authorizationProfile/);
+    assert.doesNotMatch(text, /"taskOutcome":"satisfied"/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint can route ready Computer Use Guard into injected Act materializer', async () => {
+  const adapter = new FakeAdapter();
+  let materializerCalled = false;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, {
+      computerUseActMaterializer: async ({ preflight, abortSignal }) => {
+        materializerCalled = true;
+        assert.equal(preflight.status, 'ready');
+        assert.ok(abortSignal instanceof AbortSignal);
+        assert.equal(abortSignal.aborted, false);
+        return {
+          status: 'completed',
+          message: 'Computer Use action executed by injected runtime materializer.',
+          evidenceRefs: ['browser-host-session:visible/action-state/scroll-1'],
+          executionUnits: [{
+            id: 'EU-injected-computer-use-act',
+            tool: 'browser-host-session.computer-use-action',
+            status: 'done',
+            outputRef: 'browser-host-session:visible/action-state/scroll-1',
+          }],
+        };
+      },
+    });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Scroll the current browser page to inspect visible results.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-act-materializer',
+        attemptId: 'codex-command-agent-host-act-materializer-attempt-1',
+        agentHostInput: readyAgentHostInput('Scroll the current browser page to inspect visible results.'),
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(materializerCalled, true);
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /Computer Use action executed by injected runtime materializer/);
+    assert.match(text, /browser-host-session\.computer-use-action/);
+    assert.doesNotMatch(text, /ready-for-act/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint keeps High Autonomy behind every hard-confirm category', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  const actions = [
+    'Pay the invoice in the current browser window.',
+    'Send this email to the external collaborator.',
+    'Submit the registration form in the current browser window.',
+    'Delete the remote project file.',
+    'Upload this report to the external portal.',
+    'Change the account security token.',
+    'Sign the legal contract.',
+    'Deploy this release to production.',
+  ];
+
+  try {
+    for (const [index, action] of actions.entries()) {
+      const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          commandText: action,
+          workspacePath: '/tmp/workspace',
+          commandId: `codex-command-agent-host-hard-confirm-${index}`,
+          attemptId: `codex-command-agent-host-hard-confirm-${index}-attempt-1`,
+          agentHostInput: readyAgentHostInput(action),
+        }),
+      });
+      const text = await response.text();
+
+      assert.match(text, /requires hard confirmation/i);
+      assert.match(text, /needs-confirmation/);
+      assert.match(text, /"controls":\["Confirm","Cancel"\]/);
+    }
+    assert.equal(adapter.lastInput, undefined);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint reports Web dev blockers and desktop-ready capability readiness from Agent Host truth', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const webResponse = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '你有 computer use 能力么？',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-webdev-blocked',
+        attemptId: 'codex-command-agent-host-webdev-blocked-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '你有 computer use 能力么？',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            schemaVersion: 'sciforge.agent-host-runtime-readiness-projection.v1',
+            source: 'ui-runtime-health-projection',
+            items: [{ id: 'workspace', status: 'offline', capabilities: [] }],
+            refs: ['runtime-health:workspace'],
+          },
+        },
+      }),
+    });
+    const webText = await webResponse.text();
+    assert.match(webText, /native-bridge-unavailable/);
+    assert.match(webText, /native-surface-unavailable/);
+
+    const readyResponse = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '你有 computer use 能力么？',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-ready',
+        attemptId: 'codex-command-agent-host-ready-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '你有 computer use 能力么？',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+        },
+      }),
+    });
+    const readyText = await readyResponse.text();
+    assert.match(readyText, /current runtime readiness is ready/i);
+    assert.doesNotMatch(readyText, /unavailable/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint lets runtime truth override UI readiness hints before capability answers', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, {
+      agentHostRuntimeTruthResolver: async () => ({
+        schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+        source: 'test-runtime-truth-resolver',
+        readiness: {
+          browserHostSession: 'blocked',
+          nativeBridge: 'blocked',
+          nativeSurface: 'blocked',
+          windowActionSession: 'blocked',
+          computerUseAdapter: 'blocked',
+        },
+        refs: ['runtime-truth:test-blocked'],
+      }),
+    });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '你有 computer use 能力么？',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-runtime-truth-blocked',
+        attemptId: 'codex-command-agent-host-runtime-truth-blocked-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '你有 computer use 能力么？',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /current runtime readiness is blocked/i);
+    assert.match(text, /browser-host-session-unavailable/);
+    assert.match(text, /runtime-truth:test-blocked/);
+    assert.doesNotMatch(text, /current runtime readiness is ready/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint injects runtime truth into downstream grounding for non-intercepted turns', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, {
+      agentHostRuntimeTruthResolver: async () => ({
+        schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+        source: 'test-runtime-truth-resolver',
+        readiness: {
+          browserHostSession: 'blocked',
+          nativeBridge: 'blocked',
+          nativeSurface: 'blocked',
+          windowActionSession: 'blocked',
+          computerUseAdapter: 'blocked',
+        },
+        target: {
+          bound: false,
+          summary: 'Runtime truth found no bound target',
+          refs: ['runtime-truth:target-unbound'],
+        },
+        observation: {
+          fresh: false,
+          refs: ['runtime-truth:observation-missing'],
+        },
+        permissions: {
+          refs: [],
+          stopCancelPath: false,
+        },
+        refs: ['runtime-truth:test-grounding'],
+      }),
+    });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Summarize the local plan from provided refs only.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-runtime-grounding',
+        attemptId: 'codex-command-agent-host-runtime-grounding-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Summarize the local plan from provided refs only.',
+          authorizationProfileId: 'high-autonomy',
+          readiness: {
+            browserHostSession: 'ready',
+            nativeBridge: 'ready',
+            nativeSurface: 'ready',
+            windowActionSession: 'ready',
+            computerUseAdapter: 'ready',
+          },
+          target: {
+            bound: true,
+            summary: 'UI-projected target',
+            refs: ['ui:target-ready'],
+          },
+          observation: {
+            fresh: true,
+            refs: ['ui:observation-ready'],
+          },
+          permissions: {
+            refs: ['ui:permission-ready'],
+            stopCancelPath: true,
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: turn/);
+    assert.equal(adapter.lastInput?.agentHostGrounding?.runtimeReadiness.browser, 'blocked');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.runtimeReadiness.computerUse, 'blocked');
+    assert.equal(adapter.lastInput?.agentHostGrounding?.actionContext.targetBound, false);
+    assert.equal(adapter.lastInput?.agentHostGrounding?.actionContext.freshObservation, false);
+    assert.equal(adapter.lastInput?.agentHostGrounding?.actionContext.permissionRefsPresent, false);
+    assert.equal(adapter.lastInput?.agentHostGrounding?.actionContext.stopCancelPath, false);
+    assert.ok(adapter.lastInput?.agentHostGrounding?.refs.includes('runtime-truth:test-grounding'));
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput?.agentHostGrounding), /ui:target-ready|ui:observation-ready|ui:permission-ready/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint blocks invalid explicit Autonomy profile before adapter', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Click the visible button.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-invalid-profile',
+        attemptId: 'codex-command-agent-host-invalid-profile-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Click the visible button.',
+          authorizationProfileId: 'private-provider-max',
+          policyOwner: 'codex-agent-host-runtime',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /Invalid Autonomy profile/i);
+    assert.match(text, /declared-invalid-profile/);
+    assert.match(text, /did not silently fall back/i);
+    assert.match(text, /"status":"blocked"/);
+    assert.doesNotMatch(text, /event: turn/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+function readyAgentHostInput(intentText: string) {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ui-normal-composer-transport',
+    intentText,
+    authorizationProfileId: 'high-autonomy',
+    policyOwner: 'codex-agent-host-runtime',
+    readiness: {
+      browserHostSession: 'ready',
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      bound: true,
+      summary: 'Current browser window',
+      refs: ['browser-host-session:current'],
+    },
+    observation: {
+      fresh: true,
+      refs: ['browser-host-session:current/frame.png'],
+    },
+    permissions: {
+      refs: ['permission:turn/gui-action'],
+      stopCancelPath: true,
+    },
+  };
+}
+
+test('HTTP/SSE endpoint routes current external fact requests to BrowserHostSession search runtime', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'What is the current Python release? cite source URLs.',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser',
+        attemptId: 'codex-command-agent-host-browser-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'What is the current Python release? cite source URLs.',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /browser-host-search-runtime/);
+    assert.match(text, /BrowserHostSession browser_search failed|BrowserHostSession search returned/i);
+    assert.doesNotMatch(text, /raw DOM|base64|data:image/i);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -166,6 +973,23 @@ test('product Runtime Codex factory stays on Codex app-server and does not impor
     }
     assert.doesNotMatch(source, /codex-exec-json-adapter|CodexExecJsonAdapter|codex exec --json/i, label);
   }
+});
+
+test('product Runtime Codex entries wire default composite Computer Use Act materializer', async () => {
+  const productSources = [
+    ['standalone server', './codex-runtime-standalone-server.ts'],
+    ['workspace server', '../workspace-server.ts'],
+  ] as const;
+
+  for (const [label, file] of productSources) {
+    const source = await readFile(new URL(file, import.meta.url), 'utf8');
+    assert.match(source, /createDefaultComputerUseActMaterializer/, label);
+    assert.match(source, /computerUseActMaterializer/, label);
+  }
+
+  const compositeSource = await readFile(new URL('./agent-host-computer-use-act-materializer.ts', import.meta.url), 'utf8');
+  assert.match(compositeSource, /createDefaultBrowserHostComputerUseActMaterializer/);
+  assert.match(compositeSource, /createDefaultVirtualAppScreenComputerUseActMaterializer/);
 });
 
 test('HTTP/SSE endpoint fails closed when the Codex app-server adapter is unavailable', async () => {

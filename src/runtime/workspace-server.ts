@@ -18,7 +18,6 @@ import type { RepairConfirmationPolicy, RepairHandoffRunnerContract } from './re
 import { buildStableVersionSyncPlan, promoteStableVersion, readStableVersion, stableVersionRegistryPath } from './stable-version-registry.js';
 import { normalizeWorkspaceRootPath, resolveWorkspacePreviewRef } from './workspace-paths.js';
 import { isRecord, readJson, readOptionalJson, safeName, writeJson } from './server/http.js';
-import { createDetachedStreamResponse } from './server/detached-stream.js';
 import {
   previewDerivativeForRef,
   previewDescriptorForRef,
@@ -31,7 +30,7 @@ import { handleScenarioLibraryRoutes } from './server/scenario-library-routes.js
 import { handleWorkspaceFileApiRoutes, readLastWorkspacePath } from './server/workspace-file-api.js';
 import { buildWorkspaceWriterHealth } from './workspace-server-health.js';
 import { gitOutput, gitStrict } from './workspace-server-git.js';
-import { handleWorkspaceCors, workspaceRequestUrl } from './workspace-server-http.js';
+import { handleLegacyToolsRunStreamRoute, handleWorkspaceCors, legacyToolsRunSyncDecision, workspaceRequestUrl } from './workspace-server-http.js';
 import {
   buildWorkspaceInstanceManifest,
   buildWorkspaceStableVersionEnvironment,
@@ -115,6 +114,8 @@ import {
 } from './workspace-server-local-config.js';
 import { CODEX_RUNTIME_STREAM_PATH as CODEX_RUNTIME_SERVER_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
 import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
+import { createDefaultCodexAgentHostRuntimeTruthResolver } from './codex/agent-host-runtime-truth-resolver.js';
+import { createDefaultComputerUseActMaterializer } from './codex/agent-host-computer-use-act-materializer.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
 import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatibility-gate.js';
@@ -194,6 +195,7 @@ const activeFeedbackCodexTerminalSessions = new Map<string, ActiveFeedbackCodexT
 const feedbackCodexPtyWss = new WebSocketServer({ noServer: true });
 const activeWorkspaceTerminalSessions = new Map<string, ActiveWorkspaceTerminalSession>();
 const workspaceTerminalWss = new WebSocketServer({ noServer: true });
+const agentHostRuntimeTruthResolver = createDefaultCodexAgentHostRuntimeTruthResolver({ env: process.env });
 
 const workspaceServer = createServer(async (req, res) => {
   if (handleWorkspaceCors(req, res)) return;
@@ -274,7 +276,10 @@ const workspaceServer = createServer(async (req, res) => {
   }
   if (url.pathname === CODEX_RUNTIME_STREAM_PATH) {
     const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-    if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }))) return;
+    if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
+      agentHostRuntimeTruthResolver,
+      computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
+    })) return;
   }
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
     try {
@@ -623,6 +628,15 @@ const workspaceServer = createServer(async (req, res) => {
   if (url.pathname === '/api/sciforge/tools/run' && req.method === 'POST') {
     try {
       const body = await readJson(req);
+      const legacyDecision = legacyToolsRunSyncDecision(body);
+      if (!legacyDecision.allowed) {
+        writeJson(res, legacyDecision.statusCode, {
+          ok: false,
+          error: legacyDecision.reason,
+          replacementPath: '/api/sciforge/runtime/codex/stream',
+        });
+        return;
+      }
       const result = await runSciForgeTool(body);
       writeJson(res, 200, { ok: true, result });
     } catch (err) {
@@ -631,26 +645,7 @@ const workspaceServer = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === '/api/sciforge/tools/run/stream' && req.method === 'POST') {
-    const stream = createDetachedStreamResponse(res);
-    res.writeHead(200, {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
-    });
-    try {
-      const body = await readJson(req);
-      const result = await runSciForgeTool(body, {
-        signal: stream.signal,
-        onEvent(event) {
-          stream.write({ event });
-        },
-      });
-      stream.write({ result });
-    } catch (err) {
-      stream.write({ error: err instanceof Error ? err.message : String(err) });
-    } finally {
-      stream.end();
-    }
+    await handleLegacyToolsRunStreamRoute(req, res, runSciForgeTool);
     return;
   }
   writeJson(res, 404, { ok: false, error: 'not found' });
@@ -667,7 +662,10 @@ function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buff
   if (url.pathname === CODEX_RUNTIME_WEBSOCKET_PATH) {
     void (async () => {
       const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-      if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }))) socket.destroy();
+      if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
+        agentHostRuntimeTruthResolver,
+        computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
+      })) socket.destroy();
     })().catch(() => socket.destroy());
     return;
   }

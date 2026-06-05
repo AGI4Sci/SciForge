@@ -76,9 +76,11 @@ export function validateComputerUseChatLiveE2EResponse(input: {
   const actualStatus = manifestStatusFromVisibleStatus(visibleStatus, input.response.run.status);
   const allRefs = uniqueStrings([...displayedRefs, ...artifactRefs, ...auditRefs]);
   const approvalEvidence = input.approvalEvidence ?? approvalEvidenceFromRefs(allRefs);
-  const approvalRequestSummary = approvalRequestSummaryFromGuiAskUser(guiAskUser)
-    ?? approvalRequestSummaryFromSidecar(approvalEvidence.approvalRequestSidecar)
-    ?? approvalRequestSummaryFromSidecar(approvalEvidence.riskAuditSidecar);
+  const approvalRequestSummary = mergeApprovalRequestSummaries([
+    approvalRequestSummaryFromGuiAskUser(guiAskUser),
+    approvalRequestSummaryFromSidecar(approvalEvidence.approvalRequestSidecar),
+    approvalRequestSummaryFromSidecar(approvalEvidence.riskAuditSidecar),
+  ]);
   const deniedExecutionProof = deniedExecutionProofFromEvidence({ actualStatus, guiAskUser, approvalEvidence });
   const confirmedApproval = confirmedApprovalSummaryFromEvidence(approvalEvidence);
   const finalArtifactRef = artifactRefs[0];
@@ -366,6 +368,19 @@ function approvalRequestSummaryFromRecord(record: Record<string, unknown> | unde
     approvalRequestId: stringAt(record, 'approvalRequestId') ?? stringAt(record, 'approval_request_id') ?? stringAt(record, 'id'),
     riskLevel: stringAt(record, 'riskLevel') ?? stringAt(record, 'risk_level') ?? stringAt(record, 'risk'),
     actionKind: stringAt(record, 'actionKind') ?? stringAt(record, 'action_kind') ?? stringAt(record, 'actionRef') ?? stringAt(record, 'action_ref'),
+  };
+}
+
+function mergeApprovalRequestSummaries(
+  summaries: Array<ComputerUseChatLiveE2EManifest['approvalRequest'] | undefined>,
+): ComputerUseChatLiveE2EManifest['approvalRequest'] | undefined {
+  const records = summaries.filter((summary): summary is NonNullable<ComputerUseChatLiveE2EManifest['approvalRequest']> => Boolean(summary));
+  if (!records.length) return undefined;
+  return {
+    approvalRef: records.find((summary) => summary.approvalRef)?.approvalRef,
+    approvalRequestId: records.find((summary) => summary.approvalRequestId)?.approvalRequestId,
+    riskLevel: records.find((summary) => summary.riskLevel)?.riskLevel,
+    actionKind: records.find((summary) => summary.actionKind)?.actionKind,
   };
 }
 

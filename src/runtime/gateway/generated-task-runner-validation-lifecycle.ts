@@ -283,10 +283,11 @@ export function assessGeneratedTaskValidationLifecycle(
     ?? firstRepairOrFailurePayloadReason(payload)
     ?? normalizedFailureReason;
   const payloadFailureStatus = payloadHasFailureStatus(payload) || payloadHasRepairOrFailureStatus(payload) || normalizedFailureStatus;
+  const runnerCheckpointFailureReason = generatedTaskRunnerFailureCheckpointRepairReason(normalized ?? payload, run);
   const evidenceFailureReason = !payloadFailureStatus ? guardFinding?.finding.reason : undefined;
-  const failureReason = payloadFailureReason ?? evidenceFailureReason;
+  const failureReason = payloadFailureReason ?? runnerCheckpointFailureReason ?? evidenceFailureReason;
   const shouldRepairExecutionFailure = schemaErrors.length === 0 && Boolean(failureReason)
-    && (Boolean(evidenceFailureReason) || normalizedRepairNeeded || (run.exitCode !== 0 && !payloadFailureStatus));
+    && (Boolean(evidenceFailureReason) || Boolean(runnerCheckpointFailureReason) || normalizedRepairNeeded || (run.exitCode !== 0 && !payloadFailureStatus));
   const attemptStatus = schemaErrors.length
     ? 'repair-needed'
     : shouldRepairExecutionFailure
@@ -301,7 +302,7 @@ export function assessGeneratedTaskValidationLifecycle(
     : shouldRepairExecutionFailure
       ? normalizedRepairNeeded
         ? String(failureReason)
-        : evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`
+        : runnerCheckpointFailureReason ?? evidenceFailureReason ?? `AgentServer generated task exited ${run.exitCode} with failed payload: ${failureReason}`
       : undefined;
 
   return {
@@ -819,6 +820,53 @@ export function payloadHasRepairOrFailureStatus(payload: ToolPayload) {
   return payloadHasRepairNeededStatus(payload)
     || (Array.isArray(payload.executionUnits) ? payload.executionUnits : [])
       .some((unit) => isRecord(unit) && /failed|error|needs-human/i.test(String(unit.status || '')));
+}
+
+function generatedTaskRunnerFailureCheckpointRepairReason(payload: ToolPayload, run: WorkspaceTaskRunResult) {
+  if (run.exitCode === 0) return undefined;
+  const units = toRecordList(payload.executionUnits);
+  const runnerFailureUnits = units.filter((unit) => {
+    const tool = String(unit.tool || '');
+    const status = String(unit.status || '');
+    return tool === 'workspace-task-runner'
+      && /failed|error/i.test(status)
+      && toStringList(unit.recoverActions).includes('resume-or-repair-generated-task');
+  });
+  if (!runnerFailureUnits.length) return undefined;
+  const hasRunnerFailureArtifact = toRecordList(payload.artifacts).some((artifact) => {
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    const data = isRecord(artifact.data) ? artifact.data : {};
+    const payloadRecord = payload as unknown as Record<string, unknown>;
+    const payloadStatus = String(payloadRecord.status || payload.claimType || '');
+    const schemaVersion = String(artifact.schemaVersion || metadata.checkpointContract || '');
+    const source = String(metadata.source || '');
+    const status = String(data.status || metadata.status || payloadStatus);
+    const partialFiles = Array.isArray(data.partialFiles) ? data.partialFiles : [];
+    const runnerCheckpointArtifact = schemaVersion === 'sciforge.partial-checkpoint.v1'
+      || (artifact.id === 'runtime-failure' && artifact.type === 'runtime-diagnostic');
+    return source === 'workspace-task-runner'
+      && runnerCheckpointArtifact
+      && /failed-with-reason/i.test(status)
+      && partialFiles.length === 0;
+  });
+  if (!hasRunnerFailureArtifact) return undefined;
+  if (generatedTaskRunnerCheckpointPartialRefs(payload).length) return undefined;
+  return firstRepairOrFailurePayloadReason(payload)
+    ?? run.stderr
+    ?? `AgentServer generated task exited ${run.exitCode} before writing a final ToolPayload.`;
+}
+
+function generatedTaskRunnerCheckpointPartialRefs(payload: ToolPayload) {
+  const unitRefs = toRecordList(payload.executionUnits).flatMap((unit) => toStringList(unit.partialRefs));
+  const evidenceRefs = toRecordList(payload.workEvidence)
+    .filter((item) => item.provider === 'workspace-task-runner')
+    .flatMap((item) => toStringList(item.evidenceRefs));
+  const artifactRefs = toRecordList(payload.artifacts).flatMap((artifact) => {
+    const data = isRecord(artifact.data) ? artifact.data : {};
+    const partialFiles = Array.isArray(data.partialFiles) ? data.partialFiles : [];
+    return partialFiles.flatMap((file) => isRecord(file) ? toStringList(file.ref) : []);
+  });
+  return uniqueStrings([...unitRefs, ...evidenceRefs, ...artifactRefs]);
 }
 
 function generatedTaskSchemaFailureReason(schemaErrors: string[]) {

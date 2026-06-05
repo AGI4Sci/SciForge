@@ -7,15 +7,19 @@
 
 本文只描述 `packages/actions/computer-use` 插件本身的算法原则和需求边界。它不描述 Annotation、Image / Evidence Pane、WindowActionSession、Desktop shell 或具体 UI。
 
-Computer Use 插件负责把“当前环境证据 + 用户任务 + Host 能力”转成一串可审计的 GUI 行动，并给出局部完成或阻塞判断。外层 Agent Host 负责理解用户意图、选择产品会话、管理窗口和判断用户级任务完成。
+Computer Use 插件是 Agent Host 的 GUI I/O augmentation layer：增强 Host 对 GUI 的观察输入和操作输出。它接收 Host 给定的局部 GUI 目标 / generic intent、当前 evidence 和 host ports，输出可审计的局部 GUI 行动、局部目标达成信号、blocked signal 或 approval request。外层 Agent Host 负责理解用户意图、选择产品会话、管理窗口、跨模块规划、approval 决策、repair 和用户级任务完成判断。
+
+因此，Computer Use 不重新解释完整用户任务，不选择 Browser/file/verifier/connector 等跨模块下一步，也不把局部完成信号升级成用户级 completion。
 
 ## 核心原则
 
-### 1. 视觉优先，但不只依赖视觉
+### 1. 可见状态关键，但证据获取 cheap-first
 
-默认以当前截图、crop、OCR、Model Router vision translator observations、屏幕变化和 before/after 对比理解 GUI，因为这些信号最通用，能跨 Browser、Office、文件管理器、Jupyter、仪器 GUI 和自研应用复用。
+可见像素、当前截图、crop、OCR、Model Router vision translator observations、屏幕变化和 before/after 对比，是判断 GUI 当前可见状态、遮挡、布局、点击命中、人类可见结果和视觉内容的重要证据，因为这些信号最通用，能跨 Browser、Office、文件管理器、Jupyter、仪器 GUI 和自研应用复用。
 
-但视觉不是唯一信号。只要 Host 提供 refs-first、可审计、当前有效的证据，Computer Use 可以使用：
+但这不表示每一步都先调视觉模型。Computer Use 应先使用已有 fresh observation、window/app metadata、session/target refs 和结构化精确信号；当目标不唯一、画面过期、结构化信号与可见像素冲突、或动作风险/验证要求升高时，再升级到 crop、OCR、Model Router vision translator 或 verifier explanation。
+
+只要 Host 提供 refs-first、可审计、当前有效的证据，Computer Use 可以使用：
 
 - window / app metadata
 - accessibility tree 或 UI Automation hints
@@ -26,11 +30,19 @@ Computer Use 插件负责把“当前环境证据 + 用户任务 + Host 能力�
 - adapter readiness
 - prior action timeline
 
-这些信号必须进入统一 evidence ledger。它们可以帮助定位、验证和补全视觉理解，但不能绕过 action loop、before/after evidence 和 completion guard。
+这些信号必须进入统一 evidence ledger。它们可以帮助定位、验证和补全视觉理解，但不能绕过 action loop、before/after evidence 和 Host completion guard。prior action timeline 只解释因果链，不能单独证明当前完成。
+
+证据组合不是固定链路，而是按用途选择：
+
+- 文本、label、value、role、selected/disabled 状态优先使用 DOM/AX/UIA/PTY/file 等结构化精确证据。
+- 可见存在、遮挡、焦点、布局、点击可达性和人类可见结果优先使用 fresh screenshot / target crop。
+- 可执行坐标和 binding 必须来自 Host adapter / grounder；模型输出只能作为候选描述或消歧 evidence。
+- 保存、导出和产物内容必须由 artifact refs、hash/metadata 和 validator 支持。
+- 证据冲突时遵循 freshness > confidence，并重新 observe、裁剪检查或 blocked。
 
 ### 2. Planner 不直接控制坐标
 
-Planner 只决定下一步意图，不手写裸坐标。坐标、命中目标和可执行 binding 属于 grounder / Host adapter。
+Computer Use 内部的 planner 只是局部 next-action selector：基于当前 observation snapshot 和 Host 给定的局部目标，决定下一步通用 GUI 意图，不手写裸坐标。坐标、命中目标和可执行 binding 属于 grounder / Host adapter。
 
 Planner 应输出类似：
 
@@ -50,7 +62,7 @@ Model Router vision translator 可以描述截图、比较变化、解释图表/
 
 Vision translator 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。视觉结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
 
-Computer Use 的视觉入口统一使用 Model Router capability surface。这包括 screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧，以及需要模型参与的 grounding。旧的 KV-Ground 或其它 grounding 服务名只能作为兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的具体 provider/model 只能作为 router 决议结果或 legacy adapter metadata。
+Computer Use 的所有模型参与点统一使用 Model Router `/v1/responses` capability surface，并通过 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。这包括局部 next-action selector、screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧、需要模型参与的 grounding translator 和 verifier explanation。插件不得接触 provider URL、API key、raw model slug 或未注册 provider/model/profile。旧的 KV-Ground 或其它 grounding 服务名只能作为显式 opt-in 兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的具体 provider/model 只能作为 router 决议结果或 legacy adapter metadata。
 
 ### 4. 改变界面的动作必须可追溯
 
@@ -102,7 +114,7 @@ Computer Use 不靠临时 prompt 记忆判断当前状态。所有关键事实�
 
 完成不是一句 LLM 断言。若证据不足，Computer Use 应继续探索或返回 blocked。
 
-完成至少需要：
+Computer Use 只产出局部目标达成信号或 candidate completion refs；用户级 completion 仍由 Agent Host 判定。局部达成至少需要：
 
 - 当前 observation 或 artifact evidence。
 - 结果来自本轮 action 的因果链。
@@ -110,18 +122,38 @@ Computer Use 不靠临时 prompt 记忆判断当前状态。所有关键事实�
 - 没有 blocking uncertainty。
 - 文件产物任务要有文件 refs、hash/metadata 和格式 validator。
 
+### 8. 效率与证据预算
+
+可靠完成、安全和证据可信度是硬约束，效率是约束内优化。Computer Use 应减少不必要 GUI 操作、全屏观察、视觉模型调用和重复验证。
+
+建议证据成本分层：
+
+```text
+T0 session/window/action metadata
+T1 DOM/AX/UIA/PTY/file structured state
+T2 target crop / OCR
+T3 fresh window screenshot
+T4 Model Router vision translator
+T5 before/after vision compare or verifier explanation
+```
+
+默认使用 target-bound 的最小足够证据：已有 windowRef/targetRef 时优先 window-local capture 或 crop；只有 target 丢失、遮挡、多窗口冲突、用户选择 screen region 或 verifier 需要时才升级到全屏或更重模型。
+
+同一 target、同一 lease、同一低风险局部目标内，可以批量执行短序列动作，例如连续输入字段、Tab 导航、轻量滚动或普通导航；每个 mutating action 仍必须写 action ledger。导航、提交、保存/导出、上传/删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint，并 stale 相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate。
+
 ## 标准循环
 
 ```text
-observe current state
--> enrich evidence when needed
--> build compact planner brief
--> plan generic intent
+observe/enrich current target-bound state
+-> write evidence ledger
+-> build observation snapshot
+-> build compact local controller brief
+-> select generic next-action intent or blocked
 -> ground target through Host adapter
 -> execute action through Host adapter
--> verify after state
+-> verify after state with tiered evidence
 -> update evidence freshness
--> complete or continue or blocked
+-> local-goal-reached or continue or blocked
 ```
 
 这个循环可以多轮运行。算法应该先补足证据，再行动；行动后再补证据，而不是每次观察后立刻点击。
@@ -132,7 +164,7 @@ Computer Use 通过窄 Host ports 接触外部环境：
 
 - capture：获取当前观察证据。
 - crop：补充局部证据。
-- plan：生成通用下一步意图。
+- plan：基于 Host 给定局部目标和 observation snapshot 生成通用下一步意图。
 - locate：把目标描述绑定到可执行目标。
 - execute：执行通用 GUI 动作。
 - verify：验证动作后的状态。
@@ -192,12 +224,12 @@ Computer Use 插件的核心是：
 
 ```text
 refs-first evidence
--> visual-first but multi-signal understanding
--> generic intent planning
+-> cheap-first, multi-signal input enhancement
+-> local generic intent selection
 -> grounded action through Host adapter
 -> after-action verification
 -> stale evidence invalidation
--> fail-closed completion guard
+-> fail-closed local result / blocked handoff
 ```
 
-Agent 读完本文应理解：实现时不要把产品 UI、窗口生命周期或特定应用写进插件；要围绕证据、通用动作、Host adapter、验证和 fail-closed 完成判断来写代码。
+Agent 读完本文应理解：实现时不要把产品 UI、窗口生命周期、跨模块规划、provider route 或用户级 completion 写进插件；要围绕证据、通用动作、Host adapter、验证、stale 规则和 fail-closed handoff 来写代码。

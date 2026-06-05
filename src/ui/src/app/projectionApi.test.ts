@@ -267,9 +267,11 @@ test('completion-candidate salvage creates recoverable projection without promot
         stdoutRef: '.sciforge/logs/stdout.log',
         stderrRef: '.sciforge/logs/stderr.log',
         completionCandidate: {
+          status: 'verified',
           summary: '{"rawPayload":"SHOULD_NOT_RENDER"}',
           artifactRefs: ['artifact:salvaged-report'],
           auditRefs: ['raw:tool-payload-json'],
+          verificationState: { status: 'verified' },
         },
       },
     }],
@@ -283,6 +285,8 @@ test('completion-candidate salvage creates recoverable projection without promot
   assert.equal(projection?.visibleAnswer?.status, 'repair-needed');
   assert.equal(projection?.visibleAnswer?.text, '发现可用结果，待导入、验证或人工确认后才能作为最终答案。');
   assert.deepEqual(projection?.visibleAnswer?.artifactRefs, ['artifact:salvaged-report']);
+  assert.equal(projection?.activeRun?.status, 'repair-needed');
+  assert.equal(projection?.verificationState?.status, 'unverified');
   assert.equal(state.kind, 'recoverable');
   assert.match(state.nextSteps.join('\n'), /导入并验证候选结果/);
   assert.equal(browserState.rawLeak, false);

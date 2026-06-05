@@ -558,6 +558,7 @@ export class BrowserHostSessionManager {
         });
     const active = this.sessions.get(session.id);
     let results: BrowserHostSearchResult[] = [];
+    const searchedAt = new Date().toISOString();
     if (active?.driver?.searchResults) {
       results = boundedSearchResults(await active.driver.searchResults(limit), limit);
     }
@@ -568,6 +569,7 @@ export class BrowserHostSessionManager {
       schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
       query,
       engine,
+      searchedAt,
       searchUrl,
       finalUrl: active?.url || session.url,
       results,
@@ -598,6 +600,7 @@ export class BrowserHostSessionManager {
       schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
       query,
       engine,
+      searchedAt,
       searchUrl,
       finalUrl: state.url,
       results,

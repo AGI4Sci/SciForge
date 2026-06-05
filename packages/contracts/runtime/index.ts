@@ -2,6 +2,15 @@ import type { ReactNode } from 'react';
 import type { ArtifactDelivery } from './artifacts';
 
 export {
+  agentHostGroundingDeveloperInstructionLines,
+  type AgentHostGroundingInstructionSnapshot,
+} from './agent-host-grounding-instructions';
+export {
+  composerComputerUseCommandRequiresExactTerminalText,
+  composerPromptIsComputerUseSlashCommand,
+  composerPromptMentionsRelativeModality,
+} from './ui-composer-intent-policy';
+export {
   SCIFORGE_ANNOTATION_COORDINATE_SPACES,
   SCIFORGE_ANNOTATION_REFERENCE_DISPLAY_MODEL,
   SCIFORGE_ANNOTATION_SOURCE_KINDS,

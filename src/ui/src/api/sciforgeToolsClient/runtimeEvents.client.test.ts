@@ -1063,7 +1063,7 @@ test('Runtime Codex annotation quick action starts a fresh native thread even wi
   assert.equal('conversationLaneId' in body, false);
 });
 
-test('Runtime Codex stream request carries command text and adapter metadata only', async () => {
+test('Runtime Codex stream request carries command text, Agent Host input, and adapter metadata only', async () => {
   const originalFetch = globalThis.fetch;
   const bodies: Array<Record<string, unknown>> = [];
   try {
@@ -1082,6 +1082,7 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
 
   const body = bodies[0]!;
   assert.deepEqual(Object.keys(body).sort(), [
+    'agentHostInput',
     'allowOpenAiRuntime',
     'attemptId',
     'auditMetadata',
@@ -1096,6 +1097,11 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
   assert.equal(body.commandText, 'ask --ref "artifact:report-1" "Summarize current context"');
   assert.equal(body.workspacePath, '/tmp/current');
   assert.equal(body.profile, 'sciforge-runtime-default');
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.equal(agentHostInput.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+  assert.equal(agentHostInput.intentText, 'Summarize current context');
+  assert.equal(agentHostInput.authorizationProfileId, 'high-autonomy');
+  assert.deepEqual(agentHostInput.refs, ['artifact:report-1', 'ref-report']);
   const realtimeSession = body.realtimeSession as Record<string, unknown>;
   assert.equal(realtimeSession.schemaVersion, 'sciforge.codex-realtime-session.v1');
   assert.equal(realtimeSession.bridge, 'codex-native-realtime-session');
@@ -1142,6 +1148,16 @@ test('Runtime Codex stream request carries command text and adapter metadata onl
     'runtimeResumePolicy',
   ];
   assert.deepEqual(recursiveForbiddenKeys(body, forbiddenKeys), []);
+  assert.deepEqual(recursiveForbiddenKeys(agentHostInput, [
+    'selectedActionIds',
+    'selectedToolIds',
+    'selectedSenseIds',
+    'providerRoute',
+    'toolRoute',
+    'executorLease',
+    'schedulerParams',
+    'uiState',
+  ]), []);
   assert.doesNotMatch(JSON.stringify(body), /SEED_MESSAGE_SHOULD_NOT_LEAK|ARTIFACT_BODY_SHOULD_NOT_LEAK|CLAIM_BODY_SHOULD_NOT_LEAK/);
   assert.doesNotMatch(JSON.stringify(body), /legacy\.skill|127\.0\.0\.1:7777|preserve-context/);
   assert.deepEqual(recursiveForbiddenKeys(body, ['pty', 'rawBytes', 'rawTerminalBytes', 'rawTerminalPayload']), []);

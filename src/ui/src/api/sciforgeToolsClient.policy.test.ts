@@ -248,6 +248,152 @@ test('聊天流式请求连接到 Codex Runtime bridge，但 public run event �
   assert.doesNotMatch(JSON.stringify(metadataEvent), /provider\.local|sk-private-router-key|bailian\/deepseek-v4-flash|\/tmp\/current/i);
 });
 
+test('normal composer requests carry bounded Agent Host input contract into Codex Runtime', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-agent-host-turn-loop', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: '你有 computer use 能力么？',
+    runtimeHealth: [{
+      id: 'workspace',
+      status: 'online',
+      capabilities: ['runtime-module-dispatcher', 'browser-host-session', 'browser-host-native-surface'],
+    }],
+  }));
+
+  const body = bodies[0]!;
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.equal(agentHostInput.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+  assert.equal(agentHostInput.source, 'ui-normal-composer-transport');
+  assert.equal(agentHostInput.intentText, '你有 computer use 能力么？');
+  assert.equal(agentHostInput.authorizationProfileId, 'high-autonomy');
+  assert.deepEqual(agentHostInput.authorizationScope, {
+    user: 'current-user',
+    workspace: 'current-workspace',
+  });
+  assert.equal(agentHostInput.singleTurnOverride, false);
+  assert.equal(agentHostInput.policyOwner, 'codex-agent-host-runtime');
+  const readiness = agentHostInput.readiness as Record<string, unknown>;
+  assert.equal(readiness.schemaVersion, 'sciforge.agent-host-runtime-readiness-projection.v1');
+  assert.equal(readiness.source, 'ui-runtime-health-projection');
+  const readinessItems = readiness.items as Array<Record<string, unknown>>;
+  assert.deepEqual(readinessItems, [{
+    id: 'workspace',
+    status: 'online',
+    capabilities: ['runtime-module-dispatcher', 'browser-host-session', 'browser-host-native-surface'],
+  }]);
+  assert.deepEqual(readiness.refs, ['runtime-health:workspace']);
+  assert.equal('ground' in agentHostInput, false);
+  assert.equal('guard' in agentHostInput, false);
+  assert.equal('actAnswer' in agentHostInput, false);
+  const auditMetadata = body.auditMetadata as Record<string, unknown>;
+  const projection = auditMetadata.guiLocalProjection as Record<string, unknown>;
+  const declaredIntents = projection.composerDeclaredIntents as Record<string, any>;
+  assert.equal(declaredIntents.authorization.profileId, 'high-autonomy');
+  assert.equal(declaredIntents.authorization.publicLabel, 'High Autonomy');
+  assert.match(String(auditMetadata.declaredPreferenceBoundary), /Agent Host/);
+  assert.doesNotMatch(JSON.stringify(agentHostInput), /provider\.local|sk-private|raw|base64|sessionMessages|selectedToolIds/i);
+});
+
+test('normal composer requests carry explicit Autonomy scope and single-turn override into Agent Host input', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-agent-host-autonomy-override', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Run this low-risk workspace cleanup for this turn only.',
+    composerDeclaredIntents: {
+      schemaVersion: 'sciforge.composer-declared-intents.v1',
+      source: 'ui-action-audit-log',
+      authorization: {
+        profileId: 'research-sandbox-max',
+        publicLabel: 'Research Sandbox Max',
+        source: 'composer-autonomy-menu',
+        scope: {
+          user: 'malicious-user-should-not-travel',
+          workspace: 'other-workspace-should-not-travel',
+        },
+        singleTurnOverride: true,
+        actionId: 'ui-action-autonomy-research-sandbox-max',
+        declaredAt: '2026-06-06T00:00:00.000Z',
+        hardConfirmCategories: ['malicious-category-should-not-travel'],
+      } as unknown as NonNullable<SendAgentMessageInput['composerDeclaredIntents']>['authorization'] & Record<string, unknown>,
+    },
+  }));
+
+  const body = bodies[0]!;
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.equal(agentHostInput.authorizationProfileId, 'research-sandbox-max');
+  assert.equal(agentHostInput.authorizationProfileSource, 'composer-autonomy-menu');
+  assert.deepEqual(agentHostInput.authorizationScope, {
+    user: 'current-user',
+    workspace: 'current-workspace',
+  });
+  assert.equal(agentHostInput.singleTurnOverride, true);
+
+  const auditMetadata = body.auditMetadata as Record<string, unknown>;
+  const projection = auditMetadata.guiLocalProjection as Record<string, unknown>;
+  const declaredIntents = projection.composerDeclaredIntents as Record<string, any>;
+  assert.deepEqual(declaredIntents.authorization.scope, {
+    user: 'current-user',
+    workspace: 'current-workspace',
+  });
+  assert.equal(declaredIntents.authorization.singleTurnOverride, true);
+  assert.deepEqual(declaredIntents.authorization.hardConfirmCategories, [
+    'payments-transfers-purchases',
+    'external-communications',
+    'external-system-submission',
+    'remote-delete-overwrite-archive',
+    'external-upload',
+    'account-security-privacy-billing',
+    'legal-compliance-contracts',
+    'external-system-execution',
+  ]);
+  assert.doesNotMatch(JSON.stringify(body), /malicious-user-should-not-travel|other-workspace-should-not-travel|malicious-category-should-not-travel/i);
+});
+
+test('normal composer transport does not rewrite historical messages while adding new capability truth', async () => {
+  globalThis.fetch = (async () => streamResponse([{
+    result: {
+      message: 'Codex Runtime result ready.',
+      executionUnits: [{ id: 'unit-history', status: 'done' }],
+      artifacts: [],
+    },
+  }])) as typeof fetch;
+  const messages: SendAgentMessageInput['messages'] = [{
+    id: 'message-prior-assistant',
+    role: 'scenario',
+    content: '旧回答：我没有直接 computer use 能力。',
+    createdAt: '2026-06-04T00:00:00.000Z',
+  }];
+  const before = JSON.stringify(messages);
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: '你有 computer use 能力么？',
+    messages,
+  }));
+
+  assert.equal(JSON.stringify(messages), before);
+  assert.match(before, /没有直接 computer use 能力/);
+});
+
 test('composer model picker declared intent rides as read-only gui projection metadata', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const events: AgentStreamEvent[] = [];

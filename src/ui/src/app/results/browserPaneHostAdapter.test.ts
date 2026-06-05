@@ -56,7 +56,7 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
 
   assert.doesNotMatch(adapterSource, /data-browser-writer-configured-url|data-browser-writer-recommended-url|title=\{candidate\.displayUrl\}/);
   assert.doesNotMatch(adapterSource, /configuredBaseUrl: writerDiagnostic|configuredDisplayUrl: writerDiagnostic|effectiveBaseUrl: writerDiagnostic|effectiveDisplayUrl: writerDiagnostic|recommendedBaseUrl: writerDiagnostic|recommendedDisplayUrl: writerDiagnostic/);
-  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|BrowserHostComputerUseAction|RightPaneBrowserHostAction/);
+  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|searchWithBrowserHostSession|BrowserHostComputerUseAction|RightPaneBrowserHostAction/);
   assert.doesNotMatch(adapterSource, /onHostActionRequest|requestHostAction|dispatchHostAction|sendHostAction/);
   assert.doesNotMatch(adapterSource, /bufferedTextRef|bufferedScrollRef|pendingCursorRef|pendingMouseMoveRef|mouseMoveRequestInFlightRef/);
   assert.doesNotMatch(adapterSource, /browserHostComputerUseActionFromHostAction|browserHostComputerUseKeyAction|browserHostActionWithUiTiming/);
@@ -108,9 +108,13 @@ test('browser host adapter owns native-only BrowserHostSession rendering extract
 
 test('browser host adapter does not route pane input through Computer Use execution', () => {
   const adapterSource = readFileSync(new URL('./browserPaneHostAdapter.tsx', import.meta.url), 'utf8');
+  const workspaceClientSource = readFileSync(new URL('../../api/workspaceClient.ts', import.meta.url), 'utf8');
 
   assert.match(adapterSource, /sendBrowserHostSessionAction/);
-  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|browserHostComputerUseActionFromHostAction|onHostActionRequest/);
+  assert.match(workspaceClientSource, /export async function searchWithBrowserHostSession/);
+  assert.match(workspaceClientSource, /export async function sendBrowserHostComputerUseAction/);
+  assert.doesNotMatch(adapterSource, /sendBrowserHostComputerUseAction|searchWithBrowserHostSession|browserHostComputerUseActionFromHostAction|onHostActionRequest/);
+  assert.doesNotMatch(adapterSource, /onHostActionRequest:\s*|onHostActionRequest=\{/);
   assert.doesNotMatch(adapterSource, /type_text|press_key|hotkey|mouse_down|mouse_move|mouse_up|wheel/);
   assert.doesNotMatch(adapterSource, /document\.querySelector\(['"][^'"]*(?:chat|composer)|\.focus\(\)[\s\S]*composer|window\.dispatchEvent\([\s\S]*KeyboardEvent/);
 });

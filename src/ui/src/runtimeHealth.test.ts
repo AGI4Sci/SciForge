@@ -149,6 +149,18 @@ describe('runtime health model status', () => {
     assert.equal(health.detail, 'Workspace Writer configured (masked)');
     assert.match(String(health.recoverAction), /runtime-module-dispatcher/);
     assert.match(String(health.recoverAction), /workspace:server/);
+    assert.deepEqual(health.capabilities, ['workspace-files']);
+  });
+
+  it('keeps bounded Workspace Writer capabilities on the public health item', () => {
+    const health = workspaceWriterHealth(defaultSciForgeConfig, {
+      online: true,
+      service: 'sciforge-workspace-writer',
+      capabilities: ['workspace-files', 'runtime-module-dispatcher', 'browser-host-session', 'browser-host-native-surface'],
+    });
+
+    assert.equal(health.status, RUNTIME_HEALTH_STATUS.ONLINE);
+    assert.deepEqual(health.capabilities, ['workspace-files', 'runtime-module-dispatcher', 'browser-host-session', 'browser-host-native-surface']);
   });
 
   it('only treats workspace writer health as online when /health returns the writer service JSON', async () => {

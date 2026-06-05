@@ -24,6 +24,7 @@ SciForge / Codex app-server
 - `textReasoner` 是 reasoning owner。
 - 模态模型只负责 `instruction + modality -> text observation`。
 - 所有模型按 workspace/profile 配置，不在代码里写死。
+- Computer Use 的 planner/local controller、screenshot/crop observation、candidate disambiguation、grounding translator 和 verifier explanation 等所有模型调用也统一走 `/v1/responses`，由 profile/role 选择 `textReasoner` 或 `translators.vision`。
 - 默认对外透明，只返回最终答案；内部过程写 refs-first trace。
 - 视觉输入可以多次补充，但次数由 profile 控制，默认 2 次。
 - 缺少视觉信息时降级回答，不能假装看过图。
@@ -38,6 +39,14 @@ SciForge / Codex app-server
 - SciForge artifact/file ref
 
 不做 protein structure、audio、video、table-specific translator 或公开 trace HTTP endpoint。未来新模态必须作为新的 translator role 接入，而不是扩张 router 的智能职责。
+
+## Computer Use 调用边界
+
+Computer Use 使用 Model Router 只是为了把模型能力统一成 provider-compatible `/v1/responses` 调用面。Router 可以返回文本观察、候选消歧说明、局部 controller 文本结果、视觉 grounding translator 输出、before/after compare 或 verifier explanation，并写 refs-first trace。
+
+Router 不决定何时观察、不选择桌面 action、不执行 GUI、不管理 WindowActionSession、lease 或 approval，也不判断 repair 或用户级 completion。Computer Use package 和 Agent Host 只能把 router 输出当 evidence record 或 local controller output；可执行 binding 仍来自 Host adapter / grounder，用户级完成仍由 Agent Host 结合 current evidence、action causality 和 validator/verifier 判定。
+
+Computer Use trace 对外只暴露 router profile/role/alias、trace refs、latency、status、modality refs、hash/尺寸和错误摘要。具体 provider/model 可以进入受限内部 trace，但 GUI、audit 和公共 payload 不应暴露 provider URL、API key、secret env 名、raw model slug 或 raw provider payload。
 
 ## 组件边界
 

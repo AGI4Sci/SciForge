@@ -6,14 +6,24 @@ Python 包名继续是 `sciforge_computer_use`，方便旧代码和人类开发�
 
 ## 边界
 
-- Computer Use 是 action provider，不是 sense。
-- Computer Use 是 TUI-owned extension，只直接和 TUI Host 通信；GUI 参与展示或确认时，由 TUI Host 调用 `gui.present` / `gui.ask_user`。
-- 它可以消费 `packages/observe/vision` 的 observation、OCR、focus region、Model Router vision/grounding translator observations 和 verifier feedback。
+- Computer Use 是 Agent Host 可调用的 GUI I/O augmentation action provider，不是 sense，也不是第二个 Agent Host。
+- Computer Use 只增强 Host 对 GUI 的观察输入和操作输出：输入侧整理 observe/screenshot/crop/OCR/vision/AX-DOM/PTY/file/artifact/freshness evidence，输出侧负责 ground/bind/execute/before-after/local verify/action ledger。
+- 它只直接和 Agent Host / host adapter 通信；GUI 参与展示或确认时，由 Agent Host 调用 `gui.present` / `gui.ask_user`，GUI 不拥有任务、executor 或 completion。
+- 它可以消费 `packages/observe/vision` 的 observation、OCR、focus region、Model Router `/v1/responses` vision/grounding translator observations 和 verifier feedback。
 - 它不把 `vision-sense`、UI components 或具体应用 shortcut 写入 action provider 主路径；`vision-sense` 不拥有 executor、scheduler、desktop bridge 或完成判断。
 - 它只执行通用 GUI action schema，并输出可验证 trace。
-- Package 仍是 Computer Use contract、loop、safety gate 和 trace policy 的真相源；`src/runtime` 只承载 TUI Host adapter / package bridge、`GatewayRequest` 转换、host ports、`ToolPayload` 包装、runtime event 接入，以及尚未迁出的 macOS 截图/输入/文件 IO host implementation。runtime bridge 可以写 refs-first chain/sidecar evidence，但不能把 runtime-only shortcut、shell artifact write 或 app-private automation 放进 action provider 主路径。
+- Package 仍是 Computer Use contract、domain-local loop、safety gate、evidence ledger 和 trace policy 的真相源；`src/runtime` 只承载 Agent Host adapter / package bridge、`GatewayRequest` 转换、host ports、`ToolPayload` 包装、runtime event 接入，以及尚未迁出的 macOS 截图/输入/文件 IO host implementation。runtime bridge 可以写 refs-first chain/sidecar evidence，但不能把 runtime-only shortcut、shell artifact write 或 app-private automation 放进 action provider 主路径。
 - `packages/actions/computer-use/virtual-app-screen-host` 现在只保留为 legacy VirtualAppScreen compatibility package，用来复验历史 host protocol、permission/preflight、virtual display/app surface lifecycle、surface transport descriptor、host grant、human fire-and-release input queue、automation barrier、pause/resume/stop 和 host-owned evidence writer。当前产品路线由 Desktop native Host / WindowActionSession / target-window Computer Use adapter 接入承载；新增通用 host 语义应面向 refs-first host-port 和 WindowAction evidence 投影，而不是把 legacy VirtualAppScreen 写回 blocking product route。
 - `provider-policy.ts` 记录稳定 host-port schema、display/target-window capture provider、executor provider、trace writer、event port 和 trace handoff target 命名；Host adapter 只实现这些命名后的平台端口。
+
+当前产品路径和诊断路径必须分开读：
+
+| 路径 | 用途 | 是否能作为产品通过 |
+|---|---|---|
+| Agent Host -> WindowActionSession / host adapter -> Computer Use action loop -> current evidence bundle | 默认产品路径，Host 借助 CU 完成真实 GUI 工作流 | 可以，但还必须有 current-run action causality、artifact/verifier、permission/cancel refs 和 Host completion |
+| package-local fixture / host-port probe / target-bound harness | contract、stdio、trace、ledger、validator 和局部动作诊断 | 不能单独作为用户级通过 |
+| legacy VirtualAppScreen / Docker / noVNC / RDP / M6 / isolated desktop | historical regression、backend packaging、兼容性或 opt-in diagnostic | 不能替代当前 Desktop native / app-server product path |
+| semantic verifier / KV-Ground-compatible / raw provider probe | legacy 模型协议诊断 | 不能作为默认模型入口或推荐 fallback |
 
 ## 对外交互
 
@@ -44,7 +54,7 @@ dispatchNativeTool(tool, payload, output_dir?)
 validateNativeToolPayload(tool, payload)
 ```
 
-另有两个 package-local contract module 只作为诊断/设计边界，不是 TUI Host 的稳定 runtime surface：
+另有两个 package-local contract module 只作为诊断/设计边界，不是 Agent Host 的稳定 runtime surface：
 
 ```text
 sciforge_computer_use.evidence_ledger.EvidenceLedger
@@ -56,29 +66,37 @@ sciforge_computer_use.virtual_desktop_session.VirtualDesktopSession
 sciforge_computer_use.virtual_desktop_session.VirtualDesktopSessionBlocked
 ```
 
-这些 API 可以验证 refs-first evidence ledger、planner brief、session refs 和 input lease skeleton。它们不启动真实虚拟桌面 backend，不移动真实鼠标键盘，不声明真实 GUI app acceptance。
+这些 API 可以验证 refs-first evidence ledger、planner brief、session refs 和 input lease skeleton。这里的 `planner_brief` 是局部 controller brief，不是用户级任务 planner。它们不启动真实虚拟桌面 backend，不移动真实鼠标键盘，不声明真实 GUI app acceptance。
 
-`hostPorts` 是模块和平台能力的唯一接触面，负责截图、裁剪、桌面/远程/dry-run 执行、trace 写入和事件上报。高风险动作不在模块内部弹 UI；模块返回 `needs-confirmation`、`approvalRequest`、trace refs 或 audit refs，由 TUI Host 决定是否调用 `gui.ask_user`，确认后再发起新的受控调用。
+`hostPorts` 是模块和平台能力的唯一接触面，负责截图、裁剪、桌面/远程/dry-run 执行、trace 写入和事件上报。高风险动作不在模块内部弹 UI；模块返回 `needs-confirmation`、`approvalRequest`、trace refs 或 audit refs，由 Agent Host 决定是否调用 `gui.ask_user`，确认后再发起新的受控调用。
 
-稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`model-router.capability.computer-use.planner`、`model-router.capability.computer-use.screenshot-translator`、`model-router.capability.computer-use.crop-translator`、`model-router.capability.computer-use.grounding-translator`、`model-router.capability.computer-use.verifier-translator`、`host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。Legacy grounding adapter 只在显式配置兼容 endpoint 时作为 metadata 暴露。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
+稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`model-router.capability.computer-use.planner`、`model-router.capability.computer-use.screenshot-translator`、`model-router.capability.computer-use.crop-translator`、`model-router.capability.computer-use.grounding-translator`、`model-router.capability.computer-use.verifier-translator`、`host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。其中 `planner` 端口只表示局部 next-action selector。所有涉及模型的端口都必须经 Model Router `/v1/responses`，用 workspace/profile role 解析 `textReasoner` 或 `translators.vision`；package 不接 provider URL、API key、raw model slug 或未注册 provider/profile。Legacy grounding adapter 只在显式配置兼容 endpoint 时作为 metadata 暴露。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
 
-迁移期的边界规则是：package 拥有 contract、loop、safety gate、trace handoff 名称和通用策略；`src/runtime` 的当前职责是 TUI Host bridge 和平台 host-port implementation 适配，例如 macOS `screencapture`、Swift/AppleScript/shared-input executor、workspace 文件写入和 runtime event transport。新增 Computer Use 通用策略必须进入 package 或 observe provider；runtime adapter 只能暴露 refs-first evidence 和 host-port plumbing。
+输入证据组合和效率规则：
+
+- 先使用 fresh session/window/action metadata、DOM/AX/UIA/PTY/file/validator 等结构化精确证据；不足时使用 target crop/OCR；仍不确定、可见状态关键或 verification 失败时再调用 Model Router vision/verifier。
+- 文本、role、value、artifact 内容由结构化 evidence 或 validator 证明；可见性、遮挡、布局、焦点、点击可达性和最终人类可见结果由 fresh screenshot/crop 证明。
+- Host binding / adapter hit-test / AX bounds / DOM rect 优先于模型坐标；模型只能给候选描述、消歧或 verifier explanation。
+- 低风险同 target/lease 动作可以批量执行，但每个 mutating action 都必须写 action ledger，并通过 `invalidates` / `staleBy` 使相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate 失效。
+- 导航、保存/导出、提交、上传、删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint。
+
+迁移期的边界规则是：package 拥有 contract、loop、safety gate、trace handoff 名称和通用策略；`src/runtime` 的当前职责是 Agent Host bridge 和平台 host-port implementation 适配，例如 macOS `screencapture`、Swift/AppleScript/shared-input executor、workspace 文件写入和 runtime event transport。新增 Computer Use 通用策略必须进入 package 或 observe provider；runtime adapter 只能暴露 refs-first evidence 和 host-port plumbing。
 
 历史 VirtualAppScreen backlog 只作为 compatibility/regression 语境保留：package-owned Native VirtualAppScreen Host、legacy product-gate wording、adapter-first background app control、annotation-to-proposal、background native window capture/action、research workflow/live acceptance matrix。当前 blocking product route 以 `PROJECT.md` 为准：默认 Browser search、Computer Use preflight、输入栏授权档位、hard-confirm / blocked policy、refs-first evidence 和 Desktop native 验收。BrowserRuntime 的 DOM/AX refs 只能作为 observation、target hint、freshness check、adapter source 或 verifier context；DOM/AX/Playwright 不得绕过 Computer Use 的 lease、before/after evidence 和 validator 单独证明完成。Docker/noVNC/RDP/M6 multi-screen、DeskPad、BetterDisplay、Mirage 和 Sunshine/Moonlight 只保留为 legacy diagnostic、historical evidence、backend packaging、reference/benchmark 或 sidecar/ref 回归，不再写成 active product gate、并发模型或产品验收 owner。
 
 Legacy VirtualAppScreen real-driver compatibility smoke 只通过显式 opt-in script 进入：`npm run smoke:virtual-app-screen-macos-real-driver:opt-in`、`npm run smoke:virtual-app-screen-macos-real-human-input:opt-in`、`npm run smoke:virtual-app-screen-linux-xpra-real-driver:opt-in`、`npm run smoke:virtual-app-screen-linux-xpra-real-human-input:opt-in`、`npm run smoke:virtual-app-screen-windows-idd-real-driver:opt-in` 和 `npm run smoke:virtual-app-screen-windows-idd-real-human-input:opt-in`。它们不属于普通 `verify`，也不是当前 blocking product route；平台、权限、driver、target app/window 或 isolated input/control hook 不满足时必须 blocked/fail-closed，不能升级成 active product pass。macOS 入口还要求真实 runtime hooks opt-in：`SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1|true|yes|on`，target app 使用 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_*` 标量环境变量或 `SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_JSON` 指定；macOS human-input 仍需要外部 isolated hook command，且该 command 在 `capabilityProbe=true` 时返回安全 `inputAdapterCapability`，正常调用返回 refs-first evidence 和隔离字段。Linux Xpra real-driver opt-in 验证 attach、readFrame 和 Host-owned native refs；Linux Xpra real-human-input opt-in 还要求 `SCIFORGE_VIRTUAL_APP_SCREEN_LINUX_XPRA_REAL_HUMAN_INPUT=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_LINUX_XPRA_REAL_DRIVER=1`、`SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS=1`、`xpra`、`xdotool` 和 agent-owned Xpra display。Linux input hook 只能使用 `DISPLAY=<session.display>`，不能使用宿主真实 DISPLAY、shared system input 或焦点抢占。Windows IDD npm scripts use the shell-neutral `tools/run-virtual-app-screen-real-opt-in-smoke.ts` launcher and can receive `--linux-manifest` / `--evidence-manifest` args; Windows IDD real-driver opt-in verifies attach, readFrame, Host-owned native refs, `diagnosticOnly=false` evidence and Host ledger replay, and requires Windows `win32`, real driver/permission/target app readiness. Windows IDD real-human-input opt-in also requires a passed Linux real closed-loop manifest, human input, takeover/pause, resume/readFrame, isolated sidecar evidence and Windows platform/driver conditions. If opted-in attach blocks, the smoke verifies fail-closed evidence and then fails the compatibility command. Dogfood product smoke 与 legacy real-driver opt-in 是不同证据面，不能互相替代。
 
-后续 runtime 集成里的 planner 必须通过 `model-router.capability.computer-use.planner` 或 Host 暴露的等价 Model Router capability 使用统一 provider。只有明确的 transport/protocol failure（502/gateway/upstream/proxy/network/timeout 等）才允许写 blocked diagnostics；不得静默 fallback 到未注册 provider/model/profile，也不得绕过 DOM/accessibility/tool 禁令。当前 package-only 闭环不调试 runtime planner fallback。
+后续 runtime 集成里的局部 next-action selector 必须通过 `model-router.capability.computer-use.planner` 或 Host 暴露的等价 Model Router capability 使用统一 provider。只有明确的 transport/protocol failure（502/gateway/upstream/proxy/network/timeout 等）才允许写 blocked diagnostics；不得静默 fallback 到未注册 provider/model/profile，也不得绕过 DOM/accessibility/tool 禁令。当前 package-only 闭环不调试 runtime planner fallback。
 
-进程边界下，TUI Host 可以通过 JSON CLI 调用同一个 package loop：
+进程边界下，Agent Host 可以通过 JSON CLI 调用同一个 package loop：
 
 ```bash
 python -m sciforge_computer_use --request-json '{"task":"click visible search box"}' --host-port-stdio
 ```
 
-`--host-port-stdio` 使用 JSONL 协议：package 在 stdout 发出 `hostPortCall`，Host 在 stdin 返回 `hostPortResult`，最终输出 `finalResult`。这让 `run_task(request, hostPorts)` 仍然拥有 action loop，同时截图、planner、grounder、executor、verifier、trace writer 和 runtime event 仍由 TUI Host 注入。fixture 模式只用于 package tests 和 dry-run diagnostics，不能作为真实 Computer Use 成功证据。
+`--host-port-stdio` 使用 JSONL 协议：package 在 stdout 发出 `hostPortCall`，Host 在 stdin 返回 `hostPortResult`，最终输出 `finalResult`。这让 `run_task(request, hostPorts)` 仍然拥有 action loop，同时截图、局部 next-action selector、grounder、executor、verifier、trace writer 和 runtime event 仍由 Agent Host 注入。fixture 模式只用于 package tests 和 dry-run diagnostics，不能作为真实 Computer Use 成功证据。
 
-Runtime package bridge 会在 run bundle 内写 `tui-host-run-task-chain.json`，记录 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 以及可选 `gui-present.json` / `gui-ask-user.json` 的 refs，并在 trace 的 `packageBridge.tuiHostRunTaskChainRef` 暴露该清单。它还会写 refs-first sidecars：`directory-listing.json`、按需 `approval-request.json` / `risk-audit.json` / `confirmed-request.json` / `blocked-manifest.json` / `repair-hint.json` / `continuation-request.json`。这些文件只证明 TUI Host -> package `run_task` -> GUI intent metadata、审批/修复/目录索引链路，不能替代真实截图、输入日志、artifact、verifier 或 completion-grade isolated-L3 用户级验收。
+Runtime package bridge 会在 run bundle 内写 `tui-host-run-task-chain.json`，记录 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 以及可选 `gui-present.json` / `gui-ask-user.json` 的 refs，并在 trace 的 `packageBridge.tuiHostRunTaskChainRef` 暴露该清单。它还会写 refs-first sidecars：`directory-listing.json`、按需 `approval-request.json` / `risk-audit.json` / `confirmed-request.json` / `blocked-manifest.json` / `repair-hint.json` / `continuation-request.json`。这些文件只证明 Agent Host -> package `run_task` -> GUI intent metadata、审批/修复/目录索引链路，不能替代真实截图、输入日志、artifact、verifier 或 completion-grade 用户级验收。
 
 Package-local fixture 可以从文件运行，并把 refs-first result、trace 和本地 final artifact 写入指定目录：
 
@@ -195,7 +213,7 @@ PY
 
 更多复杂任务 fixture 保持同一 generic host/executor contract：`target-bound-csv-table-edit.json` 覆盖 CSV/表格编辑，`target-bound-form-dialog.json` 覆盖表单填写与 Tab 导航，`target-bound-visible-high-risk-confirmation.json` 覆盖可见高风险确认 demo，`target-bound-form-high-risk-submit.json` 覆盖高风险外发提交 fail closed，`target-bound-menu-hotkey.json` 覆盖鼠标菜单 + 键盘保存，`target-bound-preview-directory.json` 覆盖保存后预览和目录 file-list refs，`target-bound-cross-app-document-workflow.json` 覆盖 package-owned source reader -> Word-compatible writer -> file browser/preview 的跨应用形状诊断。Package tests 还覆盖两个不需要单独 fixture 文件的衍生场景：安全表单步骤完成后，高风险确认弹窗按钮仍返回 `needs-confirmation`；保存位置需要连续多次 scroll 后才可见时，viewport recovery evidence 仍保留 scroll action、delta、state refs 和最终选中元素。
 
-该 probe 是 package-owned target-bound host，不是 SciForge runtime、GUI、browser acceptance、CU-NEXT 或 shared system input。成功 run 会写 `target-bound-window-host-probe-manifest.json`、`desktop-host-port-preflight-manifest.json`、`target-bound-input-adapter-manifest.json`、`input-adapter-target-binding.json`、`target-window.json`、`target-binding-proof.json`、`computer-use-result.json`、`vision-trace.json` 和 `target-bound-real-window-probe-evidence.json`。证据必须满足 `preflightStatus=ready`、`targetBindingValidation(requireExistingRefs=true)`、distinct initial/final screenshot refs、`inputExecuted=true`、`executeFailClosed=false`、`realWindowEvidence=true`、`diagnosticOnly=false`，并且 `osInputExecuted=false`、`sharedSystemInputUsed=false`、`systemPointerMoved=false`、`systemKeyboardEventsSent=false`。Host 会在 manifest/result `failureDiagnostics`、execution metadata 和 target-bound evidence 的 `realWindowEvidenceRefs` 中写独立 `targetPointerStateRef` / `pointerEventLogRef`、`targetKeyboardStateRef` / `keyboardEventLogRef`、`targetInputEventLogRef` / `inputEventLogRef`。当 scenario 的 `workflowRequirements.requiredInputModalities=["pointer","keyboard"]` 时，validator 会同时读取 result/trace steps 和这些 event log refs，要求 modality-specific event log 非空，并要求 event `actionIndex` 覆盖对应 pointer / keyboard step。Declared artifact output 由 `artifactSpec.kind` 或 `finalArtifactRef` 扩展名选择 renderer；`text` / `markdown` / `csv` 写文本类文件，`.pptx` / `slide-deck` 会写 OOXML deck 并写 `artifactValidationRef` / `pptxValidationRef`，`.docx` / `word-document` 会写 Word-compatible OOXML document 并写 `artifactValidationRef` / `docxValidationRef`。PPTX/DOCX validators 记录 zip/XML/slideCount/paragraph/table/list/hash/size/无宏校验，并抽取通用 `textRuns`、`textRunCount`、`textCharCount` 和 `normalizedTextSha256`，供跨格式内容因果校验复用。产物 evidence 还必须能追到 `artifactMetadata.savedByActionIndex` 和 `savedByInputModality`：PPTX、DOCX 或文件不能只因为 renderer 生成了文件就被声明完成，保存动作必须是 generic `save` 或 `Ctrl/Cmd+S` 一类键盘动作，且有对应 keyboard event。Planner contract 允许标准本地文档保存热键，但继续拒绝显式 app-private 或未知快捷键。带 `--source-repair-manifest` 重跑时，它也会把 ambiguous repair replay 或 viewport/offscreen recovery evidence 提升为 real-window evidence，但仍只在 package-owned target-bound window 范围内声明成功。
+该 probe 是 package-owned target-bound host，不是 SciForge runtime、GUI、browser acceptance、CU-NEXT 或 shared system input。这里的 `diagnosticOnly=false` 只表示 package-owned target-bound evidence 通过自身 validator，不表示 active Desktop native product pass。成功 run 会写 `target-bound-window-host-probe-manifest.json`、`desktop-host-port-preflight-manifest.json`、`target-bound-input-adapter-manifest.json`、`input-adapter-target-binding.json`、`target-window.json`、`target-binding-proof.json`、`computer-use-result.json`、`vision-trace.json` 和 `target-bound-real-window-probe-evidence.json`。证据必须满足 `preflightStatus=ready`、`targetBindingValidation(requireExistingRefs=true)`、distinct initial/final screenshot refs、`inputExecuted=true`、`executeFailClosed=false`、`realWindowEvidence=true`、`diagnosticOnly=false`，并且 `osInputExecuted=false`、`sharedSystemInputUsed=false`、`systemPointerMoved=false`、`systemKeyboardEventsSent=false`。Host 会在 manifest/result `failureDiagnostics`、execution metadata 和 target-bound evidence 的 `realWindowEvidenceRefs` 中写独立 `targetPointerStateRef` / `pointerEventLogRef`、`targetKeyboardStateRef` / `keyboardEventLogRef`、`targetInputEventLogRef` / `inputEventLogRef`。当 scenario 的 `workflowRequirements.requiredInputModalities=["pointer","keyboard"]` 时，validator 会同时读取 result/trace steps 和这些 event log refs，要求 modality-specific event log 非空，并要求 event `actionIndex` 覆盖对应 pointer / keyboard step。Declared artifact output 由 `artifactSpec.kind` 或 `finalArtifactRef` 扩展名选择 renderer；`text` / `markdown` / `csv` 写文本类文件，`.pptx` / `slide-deck` 会写 OOXML deck 并写 `artifactValidationRef` / `pptxValidationRef`，`.docx` / `word-document` 会写 Word-compatible OOXML document 并写 `artifactValidationRef` / `docxValidationRef`。PPTX/DOCX validators 记录 zip/XML/slideCount/paragraph/table/list/hash/size/无宏校验，并抽取通用 `textRuns`、`textRunCount`、`textCharCount` 和 `normalizedTextSha256`，供跨格式内容因果校验复用。产物 evidence 还必须能追到 `artifactMetadata.savedByActionIndex` 和 `savedByInputModality`：PPTX、DOCX 或文件不能只因为 renderer 生成了文件就被声明完成，保存动作必须是 generic `save` 或 `Ctrl/Cmd+S` 一类键盘动作，且有对应 keyboard event。Local controller contract 允许标准本地文档保存热键，但继续拒绝显式 app-private 或未知快捷键。带 `--source-repair-manifest` 重跑时，它也会把 ambiguous repair replay 或 viewport/offscreen recovery evidence 提升为 real-window evidence，但仍只在 package-owned target-bound window 范围内声明成功。
 
 Blocked repair manifest 本身由 package-local `sciforge_computer_use/repair_manifest.py` 的 `validate_repair_manifest` / `validateRepairManifest` 校验。该 validator 要求 package-local blocked manifests 保留显式 negative side-effect flags（如 `inputExecuted=false`、`sharedSystemInputUsed=false`、`realWindowEvidence=false`、`rawPayloadWritten=false`、`inlineImageWritten=false`，并保持 `diagnosticOnly=true`），拒绝 inline/base64 payload evidence，并可用 `require_existing_refs=True` 检查 result、trace、screenshot、observation、artifact 和 probe refs 指向本地文件。它只提升 Task C 的审计性，不把 package-local repair evidence 标成 C 完成。
 
@@ -455,7 +473,7 @@ Semantic verifier probe 会先跑 text-only preflight，再尝试有限的 multi
 
 - `ComputerUseRequest.schema_version = sciforge.computer-use.request.v1`
 - `ComputerUseRequest.approval_ref` 绑定上游确认；仅设置 `risk_policy=allow-confirmed` 不足以执行高风险动作。
-- `ComputerUseRequest.providers` 记录 TUI Host 注入的 sense、grounder、executor 和 verifier provider id。
+- `ComputerUseRequest.providers` 记录 Agent Host 注入的 sense、grounder、executor 和 verifier provider id。
 - `ComputerUseRequest.metadata.requiresFinalArtifact=true`、`metadata.finalArtifactRequired=true`、`metadata.artifactPolicy.requiresFinalArtifact=true` 或 `metadata.acceptance.requiresFinalArtifact=true` 会启用 final artifact evidence guard；此时 completed result 必须从 final observation、visible artifact record 或 verifier metadata 中取得 `finalArtifactRef` / `finalArtifactRefs`，planner/action metadata 不能单独满足完成证据。
 - `ComputerUseRequest.metadata.requiresDirectoryEvidence=true`、`metadata.fileListEvidenceRequired=true`、`metadata.acceptance.requiresFileListEvidence=true` 或 `metadata.artifactPolicy.requiresDirectoryEvidence=true` 会启用目录/file-list evidence guard；此时 completed result 还必须有当前 final observation screenshot ref，并从 final observation 或 verifier metadata 中取得非控制文件的 file-list artifact ref 和 data ref。Planner/action metadata 不能满足该目录证据。
 - `ComputerUseResult.schema_version = sciforge.computer-use.result.v1`
@@ -463,11 +481,11 @@ Semantic verifier probe 会先跑 text-only preflight，再尝试有限的 multi
 - `Verification.metadata.semanticVerifier` / legacy `vlmVerifier` / 同义视觉 verifier block 会被规范化成 refs-first `semanticVerifier` 摘要，只保留 provider/model/verdict/confidence/reason/evidence refs 等紧凑字段；raw payload、inline image 和 base64 会被丢弃或 fail closed，semantic metadata 不拥有执行、坐标或 completion 决策权。`fakeProvider` 或 `diagnosticOnly` semantic summary 只能证明 wire path / metadata plumbing，不能替代真实 verifier verdict、当前视觉证据或 artifact-producing success。
 - `ComputerUseResult.approval_request` 是 refs-first confirmation intent；它不是 GUI 调用。
 
-Planner contract 是一轮只输出一个 generic action 或 `done=true`。Planner 输出坐标、app-private shortcut、unsupported action 或空 action 时，package 直接返回 structured failure；坐标必须来自 Grounder。`done=true` 必须由当前观察、focus-region 证据、verifier feedback 或 artifact refs 支撑；artifact-producing task 还必须有当前轮视觉/文件证据证明 bundle-local `final-artifact-ref` 指向真实产物，而不能复用 prior-round ledger、旧截图或旧 trace 摘要。当文本推理不确定、ledger 与当前画面不一致，或只能从历史 action ledger 猜测结果时，planner 必须请求重复观察、聚焦 crop 或扩大/重选区域，不能把 ledger 当作成功证明。
+Local controller contract 是一轮只输出一个 generic action、`done=true` 局部达成信号或 blocked。它输出坐标、app-private shortcut、unsupported action 或空 action 时，package 直接返回 structured failure；坐标必须来自 Grounder / Host adapter。`done=true` 只代表局部目标达成 candidate，必须由当前观察、focus-region 证据、verifier feedback 或 artifact refs 支撑；artifact-producing task 还必须有当前轮视觉/文件证据证明 bundle-local `final-artifact-ref` 指向真实产物，而不能复用 prior-round ledger、旧截图或旧 trace 摘要。当文本推理不确定、ledger 与当前画面不一致，或只能从历史 action ledger 猜测结果时，local controller 必须请求重复观察、聚焦 crop 或扩大/重选区域，不能把 ledger 当作成功证明。用户级 completion 仍由 Agent Host 判定。
 
 ## Model Router Vision / Grounding、输入与 trace
 
-Computer Use 的截图理解、before/after 比较、候选目标消歧、语义 verifier 和需要模型参与的 grounding 默认统一使用 Model Router capability surface。Grounder provider 不是 planner 或 executor；它只把当前 screenshot/crop ref 加 target description 转成可审计坐标、confidence/text observation 和 diagnostics。具体上游 provider/model 由 router profile 解析，不作为 action provider 的默认值或公共契约。
+Computer Use 的局部 next-action selector、截图理解、crop inspection、before/after 比较、候选目标消歧、语义 verifier 和需要模型参与的 grounding 默认统一使用 Model Router `/v1/responses` capability surface。Grounder provider 不是 planner 或 executor；它只把当前 screenshot/crop ref 加 target description 转成可审计候选、confidence/text observation 和 diagnostics。具体上游 provider/model 由 router profile 解析，不作为 action provider 的默认值或公共契约；GUI、audit 和公共 payload 只暴露 router profile/role/alias、trace refs、latency、status 和 modality refs。
 
 历史 `KV-Ground` provider、endpoint 和环境变量只作为兼容调试路径保留，不代表默认模型。如果 host adapter 仍沿用这条路径，trace/evidence 必须明确记录它是 compatibility provider，并且不得把旧服务名写成默认 grounding 模型。
 
@@ -484,11 +502,13 @@ export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="file-ref"
 
 ## 验收边界
 
-当前 package contract、runtime package bridge 与 CU-NEXT validation/readiness smoke gate 已经存在，但默认闭环仍主要验证 package-local API/CLI/host-port/fixture/probe 和 refs-first bridge evidence；它们不等同于 browser acceptance、release gate 或真实 CU-NEXT task completion。下面的 L2/L3 描述是用户级集成验收边界，不是 package-only diagnostic 自身的完成条件。
+当前 package contract、runtime package bridge 与 CU-NEXT validation/readiness smoke gate 已经存在，但默认闭环仍主要验证 package-local API/CLI/host-port/fixture/probe 和 refs-first bridge evidence；它们不等同于 browser acceptance、release gate 或真实 CU-NEXT task completion。下面的 L2/L3 描述是历史用户级集成验收边界，不是 package-only diagnostic 自身的完成条件；当前产品验收应以 Agent Host 借助 CU 完成 Desktop native / WindowActionSession current-run evidence bundle 为准。
 
-真实输入 smoke 只证明基础链路可用，不等于用户级成功。Computer Use 的最终验收至少需要一个可见用户产物，例如用可用的 slide app 制作并保存一页 PPT；目标打通需要一个多 App 工作流，例如 Browser/资料页 -> slide app -> Finder/保存对话框 -> TUI Host `gui.present` 展示 artifact refs 和 trace refs。
+真实输入 smoke 只证明基础链路可用，不等于用户级成功。Agent Host 借助 Computer Use 的最终验收至少需要一个可见用户产物，例如用可用的 slide app 制作并保存一页 PPT；目标打通需要一个多 App 工作流，例如 Browser/资料页 -> slide app -> Finder/保存对话框 -> Agent Host `gui.present` 展示 artifact refs 和 trace refs。
 
-递进测试可以先做 single-window / single-app probes，用来验证 capture、grounding、executor、verifier、`done=true` 判断和证据打包；这些 probe 即使能产生一个文件，也只能算 L2 前置或诊断证据，不能冒充 CU-NEXT L3 多 App 工作流。Artifact-producing acceptance 必须同时满足：产物 ref 是当前 run bundle 内的 `final-artifact-ref`，result/trace/`ToolPayload` 明确暴露 `finalArtifactRef`，最终截图能看到产物或保存位置，verifier verdict 明确覆盖产物存在/可见性，按 request metadata 要求提供当前目录 file-list artifact/data refs，TUI Host 已用 `gui.present` 展示该 ref 和 trace 摘要。缺任一项时返回 `blocked` / `repair-needed` 或 diagnostic manifest，不得返回用户级完成。
+递进测试可以先做 single-window / single-app probes，用来验证 capture、grounding、executor、verifier、局部 `done=true` candidate 和证据打包；这些 probe 即使能产生一个文件，也只能算前置或诊断证据，不能冒充产品级多 App 工作流。Artifact-producing acceptance 必须同时满足：产物 ref 是当前 run bundle 内的 `final-artifact-ref`，result/trace/`ToolPayload` 明确暴露 `finalArtifactRef`，最终截图能看到产物或保存位置，verifier verdict 明确覆盖产物存在/可见性，按 request metadata 要求提供当前目录 file-list artifact/data refs，Agent Host 已用 `gui.present` 展示该 ref 和 trace 摘要。缺任一项时返回 `blocked` / `repair-needed` 或 diagnostic manifest，不得返回用户级完成。
+
+证据组合验收遵循同一规则：structured exactness 用于文本、DOM/AX 状态、文件 metadata 和 artifact validator；visible pixels 用于当前 UI 可见性、遮挡、焦点、点击可达性和人类可见结果；Host binding 优先于 model coordinates；任一关键证据 stale、scope 不匹配或互相冲突时必须 blocked/repair-needed，而不是用 confidence 覆盖 freshness。
 
 L3 isolated multi-app workflow 的 evidence contract 现在只作为 legacy backend diagnostic / historical evidence 的最低门槛；contract/validator 通过单元形状不等于 active product gate 已完成。旧 Linux/noVNC backend 在同一 session 内完成 source -> writer -> file preview 工作流，并产出当前截图、输入日志、window-bound pointer proof、artifact/file-list validator、viewer、ledger 和 `gui.present` refs 后，可以作为历史回归证据输入 acceptance matrix；它不能替代 native app-server/native plugin 调用、VirtualAppScreen app/window/session refs、adapter readiness 或 BrowserRuntime DOM/AX observation refs。Package-owned target-bound cross-app fixture 继续只证明 package harness 的跨应用形状诊断。
 
@@ -513,10 +533,11 @@ CU-NEXT live acceptance 还要求任务级语义 marker。`tools/computer-use-ne
 最小 loop：
 
 ```text
-observe -> planner -> safety -> locate -> execute -> verify -> trace
+observe/enrich -> evidence ledger -> observation snapshot -> local controller brief
+-> select generic action -> safety -> locate -> execute -> verify -> trace
 ```
 
-`max_steps` 统计可执行动作。可执行动作用尽后，loop 允许一次 final no-execute completion check：再 `observe` 一次，把最终观察、trace/ledger、verifier feedback 和 artifact refs 交给 planner 做 completion-only 判断；该阶段不得调用 safety、grounder 或 executor。只有 planner 明确返回 `done=true` 时，package 才能追加 planning-only done step 并返回 `completed`；否则继续返回正常 `max-steps` failure。
+`max_steps` 统计可执行动作，也是可靠性预算，不是鼓励长链 GUI 点击。loop 默认使用 compact controller brief、局部 crop、cache/read-through refs 和低风险短 batch 提高效率，但 cache 必须被 action `invalidates` / `staleBy` 管理。可执行动作用尽后，loop 允许一次 final no-execute local-goal check：再 `observe` 一次，把最终观察、trace/ledger、verifier feedback 和 artifact refs 交给 local controller 做 completion-only 判断；该阶段不得调用 safety、grounder 或 executor。只有 local controller 明确返回 `done=true` 且证据未 stale 时，package 才能追加 planning-only done step 并返回局部 completed candidate；否则继续返回正常 `max-steps` failure。用户级完成仍由 Agent Host 根据当前 run 因果链和 validator/verifier 判定。
 
 高风险动作默认 fail closed：发送、删除、支付、授权、发布、外部提交、覆盖、上传等动作必须由上游显式确认，或进入 human approval / verifier policy。Trace 不内联截图 payload、base64 或大日志，只写 refs、ledger、diagnostics 和紧凑摘要。
 

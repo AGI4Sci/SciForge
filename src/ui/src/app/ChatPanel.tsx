@@ -669,6 +669,7 @@ export function ChatPanel({
         targetPeer,
         scenarioOverride,
         composerDeclaredIntents: composerDeclaredIntentsForSession(baseSession),
+        runtimeHealth,
         availableComponentIds,
         defaultComponentIds: scenarioOverride?.defaultComponents?.length
           ? scenarioOverride.defaultComponents

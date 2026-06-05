@@ -1,4 +1,5 @@
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
+import type { CodexAgentHostRuntimeTruth } from './agent-host-turn-loop.js';
 
 export type AgentCliApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 export type AgentCliSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -8,6 +9,10 @@ export interface RuntimeDeclaredIntentSnapshot {
     profileId?: string;
     publicLabel?: string;
     source?: string;
+    scope?: {
+      user: 'current-user';
+      workspace: 'current-workspace';
+    };
     singleTurnOverride?: boolean;
     hardConfirmCategories?: string[];
     actionId?: string;
@@ -28,6 +33,43 @@ export interface RuntimeDeclaredIntentSnapshot {
     actionId?: string;
     declaredAt?: string;
   };
+}
+
+export interface AgentHostGroundingSnapshot {
+  schemaVersion: 'sciforge.agent-host.grounding-snapshot.v1';
+  source: 'codex-agent-host-turn-loop';
+  productCapabilities: {
+    browser: 'supported';
+    computerUse: 'supported';
+  };
+  runtimeReadiness: {
+    browser: 'ready' | 'blocked';
+    computerUse: 'ready' | 'blocked';
+  };
+  readiness: {
+    browserHostSession: string;
+    nativeBridge: string;
+    nativeSurface: string;
+    windowActionSession: string;
+    computerUseAdapter: string;
+  };
+  blockers: string[];
+  authorizationProfile?: {
+    id: string;
+    publicLabel: string;
+    scope: {
+      user: 'current-user';
+      workspace: 'current-workspace';
+    };
+  };
+  singleTurnOverride?: boolean;
+  actionContext: {
+    targetBound: boolean;
+    freshObservation: boolean;
+    permissionRefsPresent: boolean;
+    stopCancelPath: boolean;
+  };
+  refs: string[];
 }
 
 export interface AgentCliStartTurnInput {
@@ -53,6 +95,8 @@ export interface AgentCliStartTurnInput {
   humanApproval?: Record<string, unknown>;
   uiState?: Record<string, unknown>;
   declaredIntents?: RuntimeDeclaredIntentSnapshot;
+  agentHostGrounding?: AgentHostGroundingSnapshot;
+  agentHostRuntimeTruth?: CodexAgentHostRuntimeTruth;
 }
 
 export interface AgentCliTurn {

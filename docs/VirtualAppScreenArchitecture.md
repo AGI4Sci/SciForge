@@ -6,21 +6,26 @@
 
 旧的隔离 `VirtualAppScreen` 产品需求已废弃。SciForge 不再把目标设计为“创建一个 agent-owned virtual display 并隔离运行 app”。
 
+产品入口统一为默认聊天 turn，而不是 Browser Search / Computer Use 的独立普通用户入口。GUI 前端保持薄：只提交自然语言文本、refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 在 `Codex Agent Host Turn Loop` 内完成 `Ground`、`Guard`、`Act / Answer`，不新增独立 turn router/gateway 产品层。
+
 新的产品形态是：
 
 ```text
 真实应用窗口正常打开
   -> 用户选择 Annotate 模式：SciForge page / Screen region / App window
   -> SciForge 生成 annotation/image/target refs
-  -> refs 作为 pending context 随下一条用户消息提交
-  -> Agent Host 读取 refs 和用户意图
-  -> 如果是回答/解释：直接使用 refs 作为上下文
-  -> 如果是“把这里改成 X”：自动进入或复用 WindowActionSession
+  -> refs 作为 pending context 随下一条自然语言消息提交
+  -> Codex Agent Host Turn Loop
+     Ground: 读取 refs、BrowserHostSession/search/read evidence、screen/window/app state 和用户意图
+     Guard: 检查 Autonomy、permission refs、capability readiness、hard-confirm 和 blocked policy
+     Act / Answer: 直接回答，或自动进入/复用 WindowActionSession
   -> actorCursor 可见地操作真实窗口
   -> 右侧 Image / Evidence Pane 展示图片证据、注释和 before/after evidence
 ```
 
 右侧旧 `Screen` pane 升级为通用 Image / Evidence Pane。它只展示图片、crop、annotation、provenance 和 action evidence，不再表示远程桌面、虚拟屏幕或 live control surface。
+
+`/computer-use` 只保留给 debug、expert、smoke 和 diagnostic；legacy gateway / router 只作为迁移或诊断边界描述，不能成为普通用户默认入口。
 
 ## 三个产品模块
 
@@ -30,7 +35,7 @@
 | Image / Evidence Pane | 展示截图、crop、Browser evidence、artifact preview、annotation overlay 和 before/after evidence | 不执行鼠标键盘、不拥有 session、不判定完成 |
 | Window Action Session | 让 agent 以 actorCursor 和 scoped input adapter 操作真实窗口 | 不承诺隔离虚拟显示器、不伪装多只 OS 鼠标 |
 
-Annotation 和 Computer Use 必须分开写。Annotation 只负责上下文和绑定；Computer Use 只作为 Window Action 的 action/input adapter 来源之一。自动进入 Window Action 由 Agent Host 决定，不由 Annotation 自己执行。
+Annotation 和 Computer Use 必须分开写。Annotation 只负责上下文和绑定；Computer Use 只作为 Window Action 的 action/input adapter 来源之一。自动进入 Window Action 由 Codex/TUI Agent Host 决定，不由 Annotation、GUI 或独立 gateway 自己执行。
 
 ## Annotation Modes
 
@@ -53,11 +58,11 @@ User starts Annotate
   -> desktop host captures crop and metadata
   -> create annotationRef + imageRef + targetRef
   -> attach pending context to composer
-  -> user sends message
-  -> Agent Host reads refs and intent
+  -> user sends natural-language message with refs through the default chat entry
+  -> Codex Agent Host Turn Loop runs Ground / Guard / Act-or-Answer
 ```
 
-采用 Codex 策略：标注是下一条用户消息的上下文，不是自动任务队列。区别在于：如果下一条用户消息表达了明确修改意图，Agent Host 可以自动进入 Window Action，不再需要先问“是否允许 agent 操作这个窗口”。
+采用 Codex 策略：标注是下一条用户消息的上下文，不是自动任务队列，也不是 slash 命令入口。区别在于：如果下一条用户消息表达了明确修改意图，Codex/TUI Agent Host 可以自动进入 Window Action，不再需要先问“是否允许 agent 操作这个窗口”。
 
 ## Target Binding
 
@@ -116,7 +121,7 @@ candidates?
 
 ## Automatic Window Action
 
-当用户把 annotation refs 带入下一条消息，并表达修改意图时，Agent Host 自动进入 Window Action：
+当用户把 annotation refs 带入下一条消息，并表达修改意图时，Codex/TUI Agent Host 在默认聊天 turn 内自动进入 Window Action：
 
 ```text
 annotationRef + user mutating intent
@@ -134,6 +139,17 @@ annotationRef + user mutating intent
 这条规则只取消“进入 Window Action 前的普通确认”，不取消风险治理。产品默认采用高自主：普通低风险窗口动作可以在预检通过后自动执行；支付、发送、提交、删除、上传、账号/安全、法律合规和外部系统执行等动作必须 hard-confirm；captcha/访问控制绕过、身份伪装、批量注册、不可逆批量删除、敏感数据发往不明确目的地和第三方高风险指令默认 blocked。
 
 Window Action 必须携带 authorization profile、permission refs、risk decision、confirmation refs、fresh observation、before/after evidence 和 stop/take-over path。网页内容、模型输出或 tool result 不能扩大授权。缺少 target binding、fresh observation、permission ref 或 cancel path 时，系统必须 fail closed 并返回可恢复 diagnostics。
+
+Window Action 中的 Computer Use 只作为 GUI I/O augmentation layer：输入侧把 target-bound evidence 整理成 evidence ledger / observation snapshot / local controller brief，输出侧把 Host 给出的局部 GUI objective 绑定到可执行 target 并写 action ledger。它不重新解释用户级任务，不做跨模块规划，不决定 approval 或 completion。
+
+证据解析原则：
+
+- 证据必须同 owner/session/target；WindowActionSession / BrowserHostSession / app-native scoped evidence 优先于全屏或全局推断。
+- 结构化能力优先用于文本、role、value、selected/disabled、文件 metadata、PTY transcript 和 artifact validator。
+- Fresh screenshot / target crop 优先用于可见性、遮挡、布局、焦点、点击可达性和人类可见结果。
+- 截图、crop、OCR、vision、DOM/AX/UIA 都是 refs-first evidence 或 hint，不是固定流程；freshness > confidence。
+- Model Router `/v1/responses` 是所有 Computer Use 模型调用入口，`translators.vision` 只输出文本观察或 verifier explanation，不能执行动作或宣布完成。
+- 默认局部观察和 cheap evidence first；只有 target 丢失、证据冲突、目标不唯一、风险升高或 verification 失败时升级到更重观察。
 
 ## Window Action Session
 
@@ -213,6 +229,8 @@ lastActionRef
 5. focused system input
 ```
 
+这是候选 adapter 优先级，不是硬 fallback 链。Host 必须按当前 target、permission、freshness、input isolation、风险和可验证性选择 adapter；如果没有可审计 scoped adapter，就 blocked、handoff 或显式 shared-system-input diagnostic。
+
 非抢焦点 adapter 可以并行。凡是需要真实窗口置前、系统键盘、系统 pointer、菜单栏或 IME 的动作，进入全局 `FocusLease`，串行执行。窗口可以弹出在显示器上，也可以放到后层；当动作需要焦点时允许短暂置前或接管焦点，UI 必须显示当前 agent、目标窗口和动作状态。
 
 ## Image / Evidence Pane
@@ -280,6 +298,8 @@ Image pane 是右侧结果栏的通用图片展示区。
 - focus lease ref when focus takeover is used
 - result/evidence timeline refs
 
+每次 mutating action 还必须声明 stale / invalidation：相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate 默认失效。低风险同一 target/lease 内可以批量动作；导航、保存/导出、提交、上传、删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint。
+
 ## 验收
 
 - Global Annotate 能在真实 Desktop app 窗口上产生 annotation/image refs。
@@ -287,6 +307,7 @@ Image pane 是右侧结果栏的通用图片展示区。
 - 低置信度自动绑定默认不绑定窗口，不弹窗。
 - `App window` 能显式选择窗口并产生 `windowRef` + `windowLocalBounds`。
 - annotation 作为 pending context 随下一条用户消息提交。
+- 默认聊天入口提交自然语言文本、refs、Autonomy profile 和确认/取消；GUI 不把 `/computer-use` 作为普通用户默认入口。
 - 用户说“把这里改成 X”时，manual-bound 或高置信度 auto-bound annotation 自动进入或复用 WindowActionSession。
 - 每个 agent session 有独立 actorCursor 和 ScopedInputAdapter。
 - focus-required action 通过全局 FocusLease 串行执行，并在 UI/evidence 中可见。

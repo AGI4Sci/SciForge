@@ -9,6 +9,7 @@ import { isRecord } from '../gateway-utils.js';
 import { failedTaskPayload } from './payload-validation.js';
 import { completeGeneratedTaskRunOutputLifecycle } from './generated-task-runner-output-lifecycle.js';
 import { normalizeToolPayloadShape } from './direct-answer-payload.js';
+import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
 
 test('pre-output generated task failure preserves session-bundle partial artifact refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-partial-'));
@@ -461,6 +462,168 @@ test('failed-with-reason payload is a valid terminal result even when process ex
   assert.equal(repairAttempted, false);
   assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
   assert.match(JSON.stringify(payload), /provider returned no usable response/);
+});
+
+test('workspace-task-runner failure checkpoint without partial refs enters repair rerun', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generated-runner-checkpoint-repair-'));
+  const sessionBundleRel = '.sciforge/sessions/2026-05-14_runner-checkpoint-repair';
+  await mkdir(join(workspace, sessionBundleRel, 'task-results'), { recursive: true });
+  const outputRel = `${sessionBundleRel}/task-results/generated-runner-checkpoint.json`;
+  await writeFile(join(workspace, outputRel), `${JSON.stringify({
+    status: 'failed-with-reason',
+    message: 'Generated workspace task failed before writing a final ToolPayload. SciForge wrote a minimal failure payload with runtime refs.',
+    confidence: 0.2,
+    claimType: 'failed-with-reason',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'SciForge runtime wrote this checkpoint after the workspace task failed before producing a final ToolPayload.',
+    claims: [],
+    uiManifest: [{ componentId: 'unknown-artifact-inspector', artifactRef: 'runtime-failure', priority: 1 }],
+    executionUnits: [{
+      id: 'generated-runner-checkpoint-runtime-failure',
+      status: 'failed-with-reason',
+      tool: 'workspace-task-runner',
+      codeRef: `${sessionBundleRel}/tasks/generated-runner-checkpoint/task.py`,
+      outputRef: outputRel,
+      stdoutRef: `${sessionBundleRel}/logs/generated-runner-checkpoint.stdout.log`,
+      stderrRef: `${sessionBundleRel}/logs/generated-runner-checkpoint.stderr.log`,
+      exitCode: 2,
+      failureReason: 'Workspace task exited 2: missing matrix/metadata refs',
+      recoverActions: ['inspect-stdout-stderr', 'resume-or-repair-generated-task'],
+      partialRefs: [],
+    }],
+    artifacts: [{
+      id: 'runtime-failure',
+      type: 'runtime-diagnostic',
+      schemaVersion: 'sciforge.partial-checkpoint.v1',
+      data: {
+        status: 'failed-with-reason',
+        taskId: 'generated-runner-checkpoint',
+        failureReason: 'Workspace task exited 2: missing matrix/metadata refs',
+        exitCode: 2,
+        partialFiles: [],
+        refs: {
+          outputRel,
+          taskRel: `${sessionBundleRel}/tasks/generated-runner-checkpoint/task.py`,
+        },
+        recoverActions: ['inspect-stdout-stderr', 'resume-or-repair-generated-task'],
+      },
+      metadata: {
+        status: 'failed-with-reason',
+        source: 'workspace-task-runner',
+      },
+    }],
+    workEvidence: [{
+      kind: 'artifact',
+      id: 'generated-runner-checkpoint-partial-files',
+      status: 'partial',
+      provider: 'workspace-task-runner',
+      resultCount: 0,
+      evidenceRefs: [],
+      failureReason: 'Workspace task exited 2: missing matrix/metadata refs',
+      recoverActions: ['inspect-stdout-stderr', 'resume-or-repair-generated-task'],
+      rawRef: outputRel,
+    }],
+  }, null, 2)}\n`);
+
+  let repairFailureReason = '';
+  const request = {
+    workspacePath: workspace,
+    skillDomain: 'omics',
+    prompt: 'Run omics task and repair missing refs.',
+    artifacts: [],
+    uiState: {
+      sessionId: 'session-runner-checkpoint-repair',
+      sessionCreatedAt: '2026-05-14T03:00:00.000Z',
+    },
+  } as GatewayRequest;
+  const skill = {
+    id: 'omics-test',
+    kind: 'builtin',
+    available: true,
+    checkedAt: '2026-05-14T03:00:00.000Z',
+    reason: 'test',
+  } as unknown as SkillAvailability;
+  const repairedPayload = {
+    message: 'Task repaired.',
+    confidence: 0.8,
+    claimType: 'fact',
+    evidenceLevel: 'runtime',
+    reasoningTrace: 'repair rerun succeeded',
+    claims: [],
+    uiManifest: [],
+    executionUnits: [{ id: 'repair-rerun', status: 'done', tool: 'agentserver.generated.python' }],
+    artifacts: [],
+  } as ToolPayload;
+  const run = {
+    spec: {
+      id: 'generated-runner-checkpoint',
+      language: 'python',
+      entrypoint: 'main',
+      taskRel: `${sessionBundleRel}/tasks/generated-runner-checkpoint/task.py`,
+    },
+    workspace,
+    command: 'python3',
+    args: [],
+    exitCode: 2,
+    stdout: '',
+    stderr: 'missing matrix/metadata refs',
+    stdoutRef: `${sessionBundleRel}/logs/generated-runner-checkpoint.stdout.log`,
+    stderrRef: `${sessionBundleRel}/logs/generated-runner-checkpoint.stderr.log`,
+    outputRef: outputRel,
+    runtimeFingerprint: { language: 'python', command: 'python3' },
+  } as unknown as WorkspaceTaskRunResult;
+
+  const payload = await completeGeneratedTaskRunOutputLifecycle({
+    workspace,
+    request,
+    skill,
+    skills: [skill],
+    taskId: 'generated-runner-checkpoint',
+    generation: {
+      ok: true,
+      runId: 'run-runner-checkpoint',
+      response: {
+        taskFiles: [],
+        entrypoint: { language: 'python', path: 'tasks/generated-runner-checkpoint/task.py' },
+        environmentRequirements: {},
+        validationCommand: '',
+        expectedArtifacts: [],
+      },
+    },
+    run,
+    taskRel: run.spec.taskRel,
+    inputRel: `${sessionBundleRel}/task-inputs/generated-runner-checkpoint.json`,
+    outputRel,
+    stdoutRel: run.stdoutRef,
+    stderrRel: run.stderrRef,
+    supplementArtifactTypes: [],
+    runGeneratedTask: async () => undefined,
+    deps: {
+      attemptPlanRefs: () => ({}),
+      failedTaskPayload,
+      tryAgentServerRepairAndRerun: async (params: Parameters<GeneratedTaskRunnerDeps['tryAgentServerRepairAndRerun']>[0]) => {
+        repairFailureReason = params.failureReason;
+        return repairedPayload;
+      },
+      validateAndNormalizePayload: async (value: ToolPayload) => value,
+      normalizeToolPayloadShape,
+      coerceWorkspaceTaskPayload: (value: unknown) => value as ToolPayload,
+      schemaErrors: () => [],
+      firstPayloadFailureReason: (value: ToolPayload) => {
+        const unit = value.executionUnits.find((entry) => typeof entry === 'object' && entry !== null) as Record<string, unknown> | undefined;
+        return typeof unit?.failureReason === 'string' ? unit.failureReason : undefined;
+      },
+      payloadHasFailureStatus: (value: ToolPayload) => value.executionUnits.some((entry) => {
+        const status = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>).status : undefined;
+        return /failed|error/i.test(String(status || ''));
+      }),
+      repairNeededPayload: failedTaskPayload as never,
+    } as never,
+  });
+
+  assert.match(repairFailureReason, /missing matrix\/metadata refs/);
+  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.match(JSON.stringify(payload), /repair-rerun-result/);
 });
 
 test('normalizes generated task payload shape before validation even when schema errors are empty', async () => {

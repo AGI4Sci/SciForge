@@ -646,3 +646,589 @@
   border-color: transparent;
   box-shadow: none;
 }
+
+/* Cursor Agent density pass: IDE-like layout and compact controls, UI only. */
+
+.app-shell .topbar {
+  height: 52px;
+  padding: 0 16px;
+}
+
+.app-shell .searchbox {
+  width: min(460px, 45vw);
+  height: 34px;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 8px;
+}
+
+.app-shell .topbar-actions {
+  gap: 8px;
+}
+
+.app-shell .topbar-annotation-button {
+  min-height: 30px;
+  max-width: 116px;
+  padding: 0 9px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.app-shell .topbar-actions .icon-button {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+}
+
+.codex-quiet-shell.workbench-canvas-shell {
+  min-height: calc(100vh - 52px);
+  padding: 0;
+  background:
+    linear-gradient(rgba(123, 147, 176, 0.045) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(90deg, rgba(123, 147, 176, 0.04) 1px, transparent 1px) 0 0 / 48px 48px,
+    var(--surface-subtle);
+}
+
+.codex-quiet-shell .workbench-grid {
+  gap: 0;
+}
+
+.codex-quiet-shell .workbench-canvas .chat-panel,
+.codex-quiet-shell .workbench-canvas .results-panel {
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+  border-radius: 0;
+}
+
+.codex-quiet-shell .workbench-canvas .chat-panel {
+  border-right-color: color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.codex-quiet-shell .workbench-canvas .results-panel {
+  border-left-color: color-mix(in srgb, var(--border) 76%, transparent);
+}
+
+.codex-quiet-shell .workbench-resize-handle {
+  min-width: 6px;
+  background: color-mix(in srgb, var(--border) 38%, transparent);
+}
+
+.codex-quiet-shell .workbench-resize-handle::before {
+  inset: 0 2px;
+  background: color-mix(in srgb, var(--border-strong) 42%, transparent);
+}
+
+.codex-quiet-shell .workbench-resize-handle:hover::before {
+  background: color-mix(in srgb, var(--accent) 52%, var(--border-strong));
+  box-shadow: none;
+}
+
+.codex-quiet-shell .panel-title {
+  min-height: 44px;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom-color: color-mix(in srgb, var(--border) 78%, transparent);
+}
+
+.codex-quiet-shell .panel-title.compact {
+  flex-wrap: nowrap;
+}
+
+.codex-quiet-shell .chat-title-button {
+  max-width: min(100%, 380px);
+}
+
+.codex-quiet-shell .chat-title-button span {
+  margin-top: 0;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.codex-quiet-shell .chat-title-button strong,
+.codex-quiet-shell .panel-title .panel-scenario-name {
+  font-size: 13px;
+  font-weight: 680;
+  letter-spacing: 0;
+}
+
+.codex-quiet-shell .panel-actions {
+  flex: 0 1 auto;
+  gap: 5px;
+}
+
+.codex-quiet-shell .chat-actions-menu > summary,
+.codex-quiet-shell .results-collapse-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .results-collapse-button {
+  top: 3px;
+  left: 4px;
+  width: 24px;
+  height: 24px;
+  min-height: 24px;
+  color: var(--bio-400);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+}
+
+.codex-quiet-shell .agent-mini {
+  width: 24px;
+  height: 24px;
+}
+
+.codex-quiet-shell .messages {
+  padding: 18px clamp(28px, 5vw, 70px) 12px;
+}
+
+.codex-quiet-shell .message {
+  margin: 8px 0;
+}
+
+.codex-quiet-shell .message.assistant-message {
+  margin: 14px 0 18px;
+}
+
+.codex-quiet-shell .message.assistant-message .message-body {
+  width: min(100%, 78ch);
+}
+
+.codex-quiet-shell .message.user .message-body {
+  max-width: min(62%, 46ch);
+  padding: 7px 10px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .message.system .message-body {
+  padding: 7px 9px;
+  border-radius: 7px;
+}
+
+.codex-quiet-shell .message-meta {
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.codex-quiet-shell .message-meta strong,
+.codex-quiet-shell .message-meta span,
+.codex-quiet-shell .message-meta .badge {
+  font-size: 10px;
+}
+
+.codex-quiet-shell .message.assistant-message .message-meta .badge,
+.codex-quiet-shell .badge,
+.codex-quiet-shell .claim-tag,
+.codex-quiet-shell .evidence-tag,
+.codex-quiet-shell .confidence {
+  min-height: 18px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.codex-quiet-shell .message p,
+.codex-quiet-shell .message-content,
+.codex-quiet-shell .message-markdown {
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.codex-quiet-shell .final-answer-prose {
+  max-width: min(100%, 78ch);
+}
+
+.codex-quiet-shell .final-answer-prose .message-markdown > * + * {
+  margin-top: 0.62em;
+}
+
+.codex-quiet-shell .final-answer-prose :where(p, li) {
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.codex-quiet-shell .final-answer-prose h1 {
+  font-size: 17px;
+}
+
+.codex-quiet-shell .final-answer-prose h2 {
+  font-size: 14px;
+}
+
+.codex-quiet-shell .final-answer-prose h3 {
+  font-size: 13px;
+}
+
+.codex-quiet-shell .final-answer-prose :where(ul, ol) {
+  gap: 3px;
+}
+
+.codex-quiet-shell .message-actions button,
+.codex-quiet-shell .message.assistant-message .message-run-link {
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  border-radius: 5px;
+}
+
+.codex-quiet-shell .codex-work-status {
+  padding: 5px 18px 0;
+}
+
+.codex-quiet-shell .codex-work-status button {
+  min-height: 24px;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.codex-quiet-shell .run-link-strip,
+.codex-quiet-shell .run-readiness {
+  padding: 5px 18px;
+}
+
+.codex-quiet-shell .stream-events {
+  min-height: 36px;
+  padding: 6px 18px 8px;
+}
+
+.codex-quiet-shell .composer {
+  align-items: center;
+  gap: 5px;
+  margin: 6px 18px 14px;
+  padding: 8px 9px;
+  padding-top: 11px;
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .composer-collapsed {
+  min-height: 36px;
+  margin: 6px 18px 14px;
+  padding: 0 10px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .composer-collapse-button {
+  top: 5px;
+  right: 7px;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.codex-quiet-shell .composer-resize-handle {
+  top: 3px;
+  height: 6px;
+}
+
+.codex-quiet-shell .composer-resize-handle::before {
+  width: 30px;
+  height: 2px;
+}
+
+.codex-quiet-shell .reference-composer,
+.codex-quiet-shell .composer-runtime-row,
+.codex-quiet-shell .composer-bottom-toolbar {
+  gap: 5px;
+}
+
+.codex-quiet-shell .composer-add-menu > summary,
+.codex-quiet-shell .reference-trigger,
+.codex-quiet-shell .composer-runtime-pill,
+.codex-quiet-shell .composer-queue-status {
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.codex-quiet-shell .composer-model-menu > summary {
+  min-height: 28px;
+  max-width: min(190px, 38vw);
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.codex-quiet-shell .composer-icon-button {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+}
+
+.codex-quiet-shell .composer .action-button {
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+.codex-quiet-shell .composer textarea {
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.codex-quiet-shell .result-tabs {
+  min-height: 30px;
+  gap: 2px;
+  padding: 0 4px 0 30px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.codex-quiet-shell .result-tabstrip {
+  gap: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.codex-quiet-shell .result-page-tab-item,
+.codex-quiet-shell .result-page-tab {
+  min-height: 24px;
+  border-radius: 4px;
+  color: var(--bio-400);
+  font-size: 10px;
+  font-weight: 680;
+}
+
+.codex-quiet-shell .result-page-tab {
+  max-width: 126px;
+  padding: 0 8px;
+}
+
+.codex-quiet-shell .result-page-tab span {
+  max-width: 106px;
+}
+
+.codex-quiet-shell .result-page-tab-item.active,
+.codex-quiet-shell .result-page-tab.active,
+.codex-quiet-shell .result-page-tab-item.active .result-page-tab {
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border-strong) 72%, transparent);
+}
+
+.codex-quiet-shell .result-new-tab-button {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  color: var(--bio-400);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+  font-size: 10px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .result-new-tab-button span {
+  display: none;
+}
+
+.codex-quiet-shell .result-active-tab-close,
+.codex-quiet-shell .result-focus-mode button {
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  height: 24px;
+  color: var(--bio-400);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+}
+
+.codex-quiet-shell .result-focus-mode {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.codex-quiet-shell .results-collapse-button:hover,
+.codex-quiet-shell .result-new-tab-button:hover,
+.codex-quiet-shell .result-new-tab-button[aria-expanded='true'],
+.codex-quiet-shell .result-active-tab-close:hover,
+.codex-quiet-shell .result-focus-mode button:hover,
+.codex-quiet-shell .result-focus-mode button.active {
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+  border-color: transparent;
+}
+
+.codex-quiet-shell .right-pane-terminal-toolbar {
+  min-height: 32px;
+  gap: 6px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.codex-quiet-shell .right-pane-terminal-toolbar > div {
+  gap: 6px;
+}
+
+.codex-quiet-shell .right-pane-terminal-toolbar button {
+  min-height: 24px;
+  padding: 0 7px;
+  color: var(--bio-300);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .right-pane-terminal-toolbar button:hover:not(:disabled) {
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+}
+
+.codex-quiet-shell .result-new-tab-menu {
+  border-radius: 6px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.codex-quiet-shell .result-new-tab-menu button {
+  min-height: 26px;
+  font-size: 11px;
+}
+
+.codex-quiet-shell .result-content {
+  padding: 12px;
+}
+
+.codex-quiet-shell .active-run-banner {
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 9px;
+  border-radius: 7px;
+}
+
+.codex-quiet-shell .workspace-object-preview {
+  gap: 6px;
+  margin-bottom: 10px;
+  border-radius: 6px;
+}
+
+.codex-quiet-shell .workspace-object-preview-head {
+  gap: 6px;
+  padding: 7px 8px;
+}
+
+.codex-quiet-shell .workspace-object-preview > p,
+.codex-quiet-shell .workspace-object-preview > a,
+.codex-quiet-shell .workspace-object-preview > code,
+.codex-quiet-shell .workspace-object-preview > .unsupported-preview-package,
+.codex-quiet-shell .workspace-object-preview > .workspace-object-media-note,
+.codex-quiet-shell .workspace-object-preview > .workspace-file-inline-viewer,
+.codex-quiet-shell .workspace-object-preview > .workspace-object-image-frame {
+  margin: 0 8px 8px;
+}
+
+.codex-quiet-shell .right-pane-tool-dock {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.codex-quiet-shell .right-pane-tool-dock button {
+  min-height: 60px;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 6px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .right-pane-tool-dock span {
+  font-size: 11px;
+  font-weight: 780;
+}
+
+.codex-quiet-shell .right-pane-tool-dock small {
+  font-size: 10px;
+  line-height: 1.28;
+}
+
+@media (max-width: 960px) {
+  .codex-quiet-shell .right-pane-tool-dock {
+    grid-template-columns: 1fr;
+  }
+}
+
+.codex-quiet-shell .registry-grid {
+  gap: 8px;
+}
+
+.codex-quiet-shell .registry-slot {
+  gap: 8px;
+  padding: 10px;
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .artifact-card-actions {
+  gap: 5px;
+}
+
+.codex-quiet-shell .artifact-card-actions button,
+.codex-quiet-shell .handoff-preview-actions button,
+.codex-quiet-shell .artifact-inspector-head button {
+  min-height: 26px;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 10px;
+}
+
+.codex-quiet-shell .artifact-inspector-drawer {
+  width: min(560px, calc(100vw - 36px));
+  padding: 14px;
+}
+
+.codex-quiet-shell .artifact-inspector-head {
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.codex-quiet-shell .inspector-ref-list,
+.codex-quiet-shell .inspector-json {
+  border-radius: 6px;
+}
+
+.app-shell.theme-light .codex-quiet-shell.workbench-canvas-shell {
+  background:
+    linear-gradient(rgba(124, 139, 160, 0.075) 1px, transparent 1px) 0 0 / 48px 48px,
+    linear-gradient(90deg, rgba(124, 139, 160, 0.065) 1px, transparent 1px) 0 0 / 48px 48px,
+    var(--surface-subtle);
+}
+
+.app-shell.theme-light .codex-quiet-shell .workbench-canvas .chat-panel,
+.app-shell.theme-light .codex-quiet-shell .workbench-canvas .results-panel {
+  background: color-mix(in srgb, var(--surface-panel) 94%, transparent);
+  border-color: color-mix(in srgb, var(--border) 86%, transparent);
+  box-shadow: none;
+}
+
+.app-shell.theme-light .codex-quiet-shell .result-tabs,
+.app-shell.theme-light .codex-quiet-shell .composer {
+  background: color-mix(in srgb, var(--surface-panel) 92%, transparent);
+  box-shadow: none;
+}
+
+.app-shell.theme-light .codex-quiet-shell .result-tabstrip,
+.app-shell.theme-light .codex-quiet-shell .result-focus-mode {
+  background: transparent;
+  box-shadow: none;
+}

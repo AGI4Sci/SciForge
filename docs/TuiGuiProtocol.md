@@ -1,6 +1,6 @@
 # TUI / GUI 协议
 
-最后更新：2026-06-01
+最后更新：2026-06-05
 
 ## 结论
 
@@ -10,13 +10,15 @@ SciForge 不定义新的 TUI plugin/runtime 协议。最终协议只有两个方
 
 Codex CLI / app-server 如何注册 tool、plugin、skill、MCP、slash command 和 custom model provider，全部使用 Codex 原生机制。SciForge 不定义 `registerCommand`、`registerTool`、`registerPolicy` 这类 host API，也不要求独立 AgentServer。
 
-跨 GUI、skills、memory、capabilities、verifier、browser 和 actions 的通用模块边界见 [`Architecture.md`](Architecture.md#agent-host-semantic-pipeline)：canonical 函数是 `module.describe/query/read/invoke`。本文件中的 `gui.*` 是 GUI 模块的 host-specific adapter alias，用于说明当前 GUI-TUI 迁移语义；稳定范式中等价于 `module.*` 调用。
+默认产品入口是一个聊天 turn：GUI 只提交自然语言文本、结构化 refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 拥有 `Codex Agent Host Turn Loop`，内部只有 `Ground`、`Guard`、`Act / Answer` 三段。Browser Search、Browser Pane 和 Computer Use 都是这个 turn loop 中可被选择的能力或展示面，不是独立入口、turn router/gateway 或 runtime gateway 产品层。
+
+跨 GUI、skills、memory、capabilities、verifier、browser 和 actions 的通用模块边界见 [`Architecture.md`](Architecture.md#codex-agent-host-turn-loop-与-semantic-pipeline)：canonical 函数是 `module.describe/query/read/invoke`。本文件中的 `gui.*` 是 GUI 模块的 host-specific adapter alias，用于说明当前 GUI-TUI 迁移语义；稳定范式中等价于 `module.*` 调用。
 
 ## 数据方向
 
 ```text
 用户 -> GUI
-  GUI 将手势、表单、文件和选择翻译成终端等价文本
+  GUI 提交自然语言文本、refs、Autonomy profile、确认/取消
   -> TUI stdin / chat input / 原生命令输入
 
 GUI 内部状态
@@ -24,7 +26,7 @@ GUI 内部状态
   -> 通过 compact context、gui.get_context 或只读 GUI resources 暴露
 
 TUI agent
-  解析文本、推理，并使用原生 skills/plugins/tools
+  在 Ground / Guard / Act-or-Answer turn loop 中解析文本、推理，并使用原生 skills/plugins/tools
   需要界面状态时读取 GUI resources
   通过注入的 gui.* tools 表达展示意图
   -> GUI 协商 placement、timing、conflict 和 rendering
@@ -32,26 +34,22 @@ TUI agent
 
 ## 唯一硬输入契约：GUI → TUI 是文本
 
-GUI 所有输入都必须能还原成用户在终端里手敲的文本：
+默认 GUI 输入只包含自然语言文本、结构化 refs、Autonomy profile 和确认/取消结果。它们必须能还原成用户在终端里手敲的文本；debug/expert 控件可以生成 slash command，但不能把 slash command 升级成普通用户默认入口：
 
 ```text
 普通输入          -> "请总结 artifacts/report.md 的证据强度"
-删除按钮          -> "rm report.md"
-重新运行按钮      -> "/rerun run-123"
-带证据修复按钮    -> "/recover run-123 --with-evidence"
-打开 artifact     -> "open artifacts/report.md"
-能力偏好          -> "/capabilities plan --prefer literature.search pdf.extract"
-选中对象后追问    -> "ask --ref artifacts/table.csv \"这些异常点是什么？\""
-打开内置浏览器    -> "/browser open https://example.com"
-请求浏览器截图    -> "/browser snapshot --tab current --screenshot --dom"
-浏览器人工接管    -> "/browser takeover browser-session-1"
+选中对象后追问    -> text: "这些异常点是什么？", refs: ["artifacts/table.csv"]
+Autonomy 选择     -> autonomyProfile: "high"
+确认/取消         -> confirmationResult: "confirm" | "cancel"
+debug/expert      -> "/rerun run-123"
+debug/expert      -> "/browser snapshot --tab current --screenshot --dom"
 ```
 
 GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送给 TUI，但这些只是传输细节。SciForge 不把传输方法上升为业务协议。
 
 ## Built-in Browser 输入边界
 
-`browser_runtime` 属于 TUI/Codex runtime capability，host-owned `BrowserHostSession` 是 live browser owner。GUI 可以展示 session/tabs/snapshot refs 和 Desktop Electron `WebContentsView` native surface，也可以把用户点击翻译成 `/browser ...` 文本命令；它不能自己选择 `playwright_browser_automation`、`playwright_edge_browser` 或其它 provider。
+Browser Pane 是 host-owned `BrowserHostSession` 的 display/control panel，不是 Browser agent。`browser_runtime` 属于 Codex/TUI Agent Host 在 Ground 或 Act 阶段可用的 capability，host-owned `BrowserHostSession` 是 live browser owner。GUI 可以展示 session/tabs/snapshot refs 和 Desktop Electron `WebContentsView` native surface，但默认只提交自然语言文本、refs、Autonomy profile 和确认/取消；它不能自己选择 `playwright_browser_automation`、`playwright_edge_browser` 或其它 provider。
 
 浏览器截图、DOM snapshot、console logs、network logs 和下载文件必须通过 refs 进入 GUI projection。GUI state 不保存 `data:image/...;base64,...`、完整 DOM 或完整日志。截图、PDF、document、proxy materialization、旧 frame 和旧 replay 只能是 evidence/artifact，不得作为 Browser pane 的第二套交互真相源或交互 fallback。`localhost:5173` / Web shell 只能验证 React UI、blocked/error/handoff 诊断和 toolbar 状态；真实网页打开、输入、focus、resize 和 navigation 必须在 Desktop Electron native host 中验证。`/frame` HTTP route 只作 evidence/manual inspection，不能接管 live view。登录、上传、下载、外部提交、授权、支付、删除、发送、写剪贴板和 visible takeover 都必须先由 TUI 发起 confirmation/handoff。
 
@@ -59,7 +57,9 @@ GUI 可以通过 stdio、pty、WebSocket、HTTP 或本地进程 API 把文本送
 
 ## Computer Use 输入边界
 
-Computer Use 属于 TUI/Codex native action provider。GUI 可以把用户意图翻译成终端等价文本，例如：
+Computer Use 是默认聊天 turn 中可被 Codex/TUI Agent Host 选择的 native action capability，不是普通用户独立入口。默认用户请求写成自然语言文本 + refs + Autonomy profile；Host 在 `Codex Agent Host Turn Loop` 内决定是否需要 Computer Use。
+
+`/computer-use` 只保留 debug/expert/smoke/diagnostic 用途，例如：
 
 ```text
 /computer-use observe --screen current
@@ -67,17 +67,20 @@ Computer Use 属于 TUI/Codex native action provider。GUI 可以把用户意图
 /computer-use replay computer-use:replay/bundle-123
 ```
 
-这些文本只是用户输入，不是 GUI 调用 executor。正式执行路径必须是：
+这些文本只是诊断或专家输入，不是 GUI 调用 executor，也不是普通用户默认入口。正式执行路径必须是：
 
 ```text
-GUI text
-  -> Codex app-server production path
-  -> Codex native Computer Use tool/plugin/MCP
-  -> packages/actions/computer-use L1 resource adapter
-  -> L0 capture/ground/execute/verify/trace handlers
-  -> refs-first result / approval request / replay refs
-  -> Agent Host
-  -> module.invoke({ moduleId: 'gui', intent: 'present' | 'ask_user' | 'notify' | 'set_status' })
+GUI chat text + refs + Autonomy profile
+  -> Codex Agent Host Turn Loop
+     Ground: collect workspace / BrowserHostSession / WindowActionSession / evidence refs
+     Guard: apply risk, authorization, autonomy profile, confirmation and handoff rules
+     Act / Answer:
+       -> optional Codex native Computer Use tool/plugin/MCP
+       -> packages/actions/computer-use L1 resource adapter
+       -> L0 capture/ground/execute/verify/trace handlers
+       -> refs-first result / approval request / replay refs
+       -> module.invoke({ moduleId: 'gui', intent: 'present' | 'ask_user' | 'notify' | 'set_status' })
+       or answer directly
 ```
 
 GUI 对 Computer Use / Window Action 的合法职责：
@@ -97,13 +100,13 @@ GUI 禁止做的事：
 
 Actor cursor 是 presentation 和 collaboration state；真正改变桌面/窗口状态的动作必须由 TUI Host 通过 WindowActionSession 和 scoped scheduler lease 串行进入 executor adapter。agent 操作真实 app/window，不要求隔离虚拟屏幕；缺少独立 input adapter 时，只能生成 diagnostic/blocked/handoff 或 `shared-system-input` evidence，不能自动切到 replay/snapshot/shared system input 继续通过最终用户级验收。
 
-`/computer-use` Workspace Gateway、AgentServer、runtime gateway、exec-MCP 和 `codex exec --json` 路径只能是 legacy/test-only/diagnostic adapter。它们可以帮助读取旧 trace、运行 fixture 或做迁移 smoke，但新增协议、按钮和 public surface 不能依赖这些路径作为产品 fallback。
+`/computer-use` Workspace Gateway、AgentServer、runtime gateway、exec-MCP 和 `codex exec --json` 路径只能是 legacy/test-only/diagnostic adapter。它们可以帮助读取旧 trace、运行 fixture 或做迁移 smoke，但新增协议、按钮和 public surface 不能依赖这些路径作为普通用户入口、产品 fallback 或独立 router/gateway 层。
 
 ## 右侧结果区 package renderer 边界
 
-右侧结果区通过 UI manifest slot 选择 package renderer。`browser-workbench`、`image-evidence-viewer`、`terminal-session-viewer`、`workspace-file-viewer` 都属于 GUI presentation module：它们可以渲染 refs、owner-owned Browser surface、图片证据、buffer、tree、draft、selection 和 view-local event data，也可以提供终端等价文本建议；它们不得启动 provider、PTY/process、workspace write 或跨域读取。
+右侧结果区通过 UI manifest slot 选择 package renderer。`browser-workbench`、`image-evidence-viewer`、`terminal-session-viewer`、`workspace-file-viewer` 都属于 GUI presentation module：它们可以渲染 refs、owner-owned Browser surface、图片证据、buffer、tree、draft、selection 和 view-local event data，也可以提供自然语言/ref intent draft；debug/expert 模式才提供终端等价文本建议。它们不得启动 provider、PTY/process、workspace write 或跨域读取。
 
-TUI/Host 对这些 view-local event 的处理必须重新进入协议边界：浏览器动作用 `/browser ...` 或 BrowserHostSession/browser runtime intent，Window Action 动作进入 Computer Use scoped executor lease，终端输入进入 Host-owned terminal adapter，文件保存进入 workspace adapter。GUI 只显示 Host/TUI 返回的新 projection、refs、draft 状态或错误。Browser 不能用 iframe/proxy/snapshot/replay/旧 frame 建立第二个可交互真相源；Image/Evidence 不能被升级成交互 fallback。
+TUI/Host 对这些 view-local event 的处理必须重新进入协议边界：浏览器动作默认进入 BrowserHostSession/browser runtime intent，debug/expert 模式才生成 `/browser ...` 文本；Window Action 动作进入 Computer Use scoped executor lease，终端输入进入 Host-owned terminal adapter，文件保存进入 workspace adapter。GUI 只显示 Host/TUI 返回的新 projection、refs、draft 状态或错误。Browser 不能用 iframe/proxy/snapshot/replay/旧 frame 建立第二个可交互真相源；Image/Evidence 不能被升级成交互 fallback。
 
 ## AnnotationSidebar 连续反馈输入
 
@@ -139,11 +142,11 @@ type AnnotationPlanOnlyEnvelope = {
 };
 ```
 
-`annotation-plan-only` projection 只能产出澄清问题、2-3 个选择项、摘要和 feedback draft。它不能启动 repair、修改文件、运行代码、提交 GitHub issue、改变 provider/tool route，或把隐藏 guidance 注入 Runtime Codex。用户可以跳过澄清直接保存。
+`annotation-plan-only` projection 只能产出澄清问题、2-3 个选择项、摘要和 feedback draft。它不能启动 repair、修改文件、运行代码、提交 GitHub issue、改变 provider/tool route，或把隐藏 guidance 注入 downstream Runtime Codex adapter。用户可以跳过澄清直接保存。
 
-实现边界必须是双层 fail-closed：`runPromptOrchestrator` 先识别 `turnMode: 'annotation-plan-only'` 或 structural envelope，在主 conversation kernel 内生成本地 plan draft event/message/run，并跳过 target lookup、context compaction、runtime transport 和 repair stage；如果该请求漏到 `sendSciForgeToolMessage`，transport 层必须直接拒绝，不能构造 Codex Runtime stream request。
+实现边界必须是双层 fail-closed：`runPromptOrchestrator` 先识别 `turnMode: 'annotation-plan-only'` 或 structural envelope，在主 conversation kernel 内生成本地 plan draft event/message/run，并跳过 target lookup、context compaction、runtime transport 和 repair stage；如果该请求漏到 `sendSciForgeToolMessage`，transport 层必须直接拒绝，不能构造 downstream Runtime Codex stream request。
 
-`annotation-quick-action` 只允许单对象、局部、可解释、可回退的小范围 copy/style 类请求。它可以进入 Runtime Codex text-command path，但必须禁止 GitHub sync、repair handoff、commit、push、PR 和 merge；如果请求范围不清、跨对象、跨文件、需要外部同步或高风险写入，侧栏必须转入收件箱。
+`annotation-quick-action` 只允许单对象、局部、可解释、可回退的小范围 copy/style 类请求。它可以进入 Agent Host text-command path，Runtime Codex 只是在被选中时承接下游执行的 adapter；该路径必须禁止 GitHub sync、repair handoff、commit、push、PR 和 merge。如果请求范围不清、跨对象、跨文件、需要外部同步或高风险写入，侧栏必须转入收件箱。
 
 保存动作写入反馈收件箱的本地 `annotation-plan` record。record 应包含引用对象列表、原始描述、澄清问答摘要、action log、修改建议、验收标准、页面 URL/route、selector/DOM path、截图和 evidence refs。复杂 repair/code/GitHub sync 只能从反馈收件箱中的显式按钮和确认边界开始。
 
@@ -759,7 +762,7 @@ AgentServer 不属于最终协议层。若当前实现仍存在 AgentServer adap
 
 ## 最小实现
 
-1. GUI 把用户输入和所有按钮都转成文本发给 TUI。
+1. GUI 默认只把自然语言文本、refs、Autonomy profile 和确认/取消发给 TUI；debug/expert 按钮最多生成终端等价文本。
 2. GUI 内部建立 semantic event bus 和 hot-region projector。
 3. 把 shell、hot-region、region detail 和 debug material 暴露为只读 GUI resource tree。
 4. 通过目标 TUI 的原生方式注入 `module.describe/query/read/invoke`；迁移期 legacy host 可通过 adapter shim 同时注入 `gui.present`、`gui.ask_user`、`gui.notify`、`gui.set_status`、`gui.apply_batch`、`gui.get_context` 和只读 `gui.list/read/search/stat/watch` alias。

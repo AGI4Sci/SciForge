@@ -1,0 +1,126 @@
+export const CU_NEXT_TASK_MAP_SCHEMA_VERSION = 'sciforge.computer-use.cu-next-task-map.v1' as const;
+
+export type CuNextTaskId = string;
+
+export type CuNextRequirement =
+  | 'l2-artifact-refs'
+  | 'l3-workflow-refs'
+  | 'approval-chain'
+  | 'repair-continuity'
+  | 'dense-grounding'
+  | 'user-control-refs'
+  | 'observe-before-mutate-refs'
+  | 'platform-sidecar-isolation'
+  | 'product-path-classification'
+  | 'current-bundle-evidence'
+  | 'dom-ax-observation-hints'
+  | 'no-dom-playwright-accessibility';
+
+export interface CuNextTaskMapping {
+  taskId: CuNextTaskId;
+  title: string;
+  slug: string;
+  priority: number;
+  primaryScenarioId: string;
+  longScenarioIds: string[];
+  requirements: CuNextRequirement[];
+  recommendedTargetMode: 'active-window' | 'app-window' | 'window-id' | 'display';
+  recommendedTargetApp?: string;
+  recommendedMaxSteps: number;
+}
+
+export interface CuNextTaskMap {
+  schemaVersion: typeof CU_NEXT_TASK_MAP_SCHEMA_VERSION;
+  tasks: CuNextTaskMapping[];
+}
+
+export const DEFAULT_CU_NEXT_TASK_MAP = {
+  schemaVersion: CU_NEXT_TASK_MAP_SCHEMA_VERSION,
+  tasks: [
+    {
+      taskId: 'CU-NEXT-01',
+      title: 'Literature to briefing deck',
+      slug: 'literature-to-briefing-deck',
+      priority: 4,
+      primaryScenarioId: 'CU-LONG-001',
+      longScenarioIds: ['CU-LONG-001', 'CU-LONG-002'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Browser',
+      recommendedMaxSteps: 10,
+    },
+    {
+      taskId: 'CU-NEXT-02',
+      title: 'Spreadsheet to chart report',
+      slug: 'spreadsheet-to-chart-report',
+      priority: 5,
+      primaryScenarioId: 'CU-LONG-002',
+      longScenarioIds: ['CU-LONG-002'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Finder',
+      recommendedMaxSteps: 10,
+    },
+    {
+      taskId: 'CU-NEXT-03',
+      title: 'Web research to mail draft',
+      slug: 'web-research-to-mail-draft',
+      priority: 6,
+      primaryScenarioId: 'CU-LONG-009',
+      longScenarioIds: ['CU-LONG-001', 'CU-LONG-009'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'approval-chain', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Browser',
+      recommendedMaxSteps: 12,
+    },
+    {
+      taskId: 'CU-NEXT-04',
+      title: 'File organization and index',
+      slug: 'file-organization-index',
+      priority: 2,
+      primaryScenarioId: 'CU-LONG-005',
+      longScenarioIds: ['CU-LONG-005'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Finder',
+      recommendedMaxSteps: 8,
+    },
+    {
+      taskId: 'CU-NEXT-05',
+      title: 'Failure recovery and multiturn repair',
+      slug: 'failure-recovery-multiturn-repair',
+      priority: 7,
+      primaryScenarioId: 'CU-LONG-006',
+      longScenarioIds: ['CU-LONG-006', 'CU-LONG-008'],
+      requirements: ['l2-artifact-refs', 'l3-workflow-refs', 'repair-continuity', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Browser',
+      recommendedMaxSteps: 12,
+    },
+    {
+      taskId: 'CU-NEXT-06',
+      title: 'High-risk approval chain',
+      slug: 'high-risk-approval-chain',
+      priority: 3,
+      primaryScenarioId: 'CU-LONG-009',
+      longScenarioIds: ['CU-LONG-009'],
+      requirements: ['l3-workflow-refs', 'approval-chain', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Browser',
+      recommendedMaxSteps: 8,
+    },
+    {
+      taskId: 'CU-NEXT-07',
+      title: 'Visual grounding pressure test',
+      slug: 'visual-grounding-pressure-test',
+      priority: 1,
+      primaryScenarioId: 'CU-LONG-004',
+      longScenarioIds: ['CU-LONG-004', 'CU-LONG-007'],
+      requirements: ['l3-workflow-refs', 'dense-grounding', 'user-control-refs', 'observe-before-mutate-refs', 'platform-sidecar-isolation', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'app-window',
+      recommendedTargetApp: 'Browser',
+      recommendedMaxSteps: 8,
+    },
+  ],
+} satisfies CuNextTaskMap;
+export const CU_NEXT_TASK_MAPPINGS = DEFAULT_CU_NEXT_TASK_MAP.tasks;

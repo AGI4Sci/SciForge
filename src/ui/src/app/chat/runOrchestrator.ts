@@ -69,6 +69,7 @@ export interface RunPromptOrchestratorInput {
   targetPeer?: PeerInstance;
   scenarioOverride?: ScenarioRuntimeOverride;
   composerDeclaredIntents?: ComposerDeclaredIntentSnapshot;
+  runtimeHealth?: Array<{ id: string; status: string; source?: string; capabilities?: string[] }>;
   availableComponentIds: string[];
   defaultComponentIds: string[];
   scenarioPackageRef: ScenarioPackageRef;
@@ -155,6 +156,7 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
       config: input.config,
       scenarioOverride: input.scenarioOverride,
       composerDeclaredIntents: input.composerDeclaredIntents,
+      runtimeHealth: input.runtimeHealth,
       availableComponentIds: input.availableComponentIds,
       scenarioPackageRef: input.scenarioPackageRef,
       skillPlanRef: input.skillPlanRef,

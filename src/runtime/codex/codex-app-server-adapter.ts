@@ -28,6 +28,8 @@ export interface CodexAppServerStartTurnRequest {
   humanApproval?: Record<string, unknown>;
   uiState?: Record<string, unknown>;
   declaredIntents?: AgentCliStartTurnInput['declaredIntents'];
+  agentHostGrounding?: AgentCliStartTurnInput['agentHostGrounding'];
+  agentHostRuntimeTruth?: AgentCliStartTurnInput['agentHostRuntimeTruth'];
   abortSignal?: AbortSignal;
 }
 
@@ -88,6 +90,8 @@ export class CodexAppServerAdapter implements AgentCliAdapter {
       humanApproval: input.humanApproval,
       uiState: input.uiState,
       declaredIntents: input.declaredIntents,
+      agentHostGrounding: input.agentHostGrounding,
+      agentHostRuntimeTruth: input.agentHostRuntimeTruth,
       abortSignal: input.abortSignal,
     });
     const publicRuntimeMode = isHostOwnedComputerUseRuntimeIntent(input.runtimeIntent);

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { createModuleDescription, moduleResult } from '../../../packages/contracts/runtime/modules.js';
 import {
   ensureRuntimeHome,
   RUNTIME_KEY_ENV,
@@ -113,6 +114,66 @@ test('Codex app-server client serves provider-safe sub-agent dynamic tool aliase
   assert.match(text, /artifact:subagent-transcript-[a-f0-9]{12}/);
 });
 
+test('Codex app-server client blocks generic actions.execute dynamic tool calls before dispatcher invoke', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    toolCall: {
+      namespace: 'module',
+      tool: 'invoke',
+      arguments: {
+        moduleId: 'actions',
+        intent: 'execute',
+        approvalToken: 'approved-action-token',
+      },
+    },
+  });
+  let invokeCalled = false;
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async () => moduleResult({
+        moduleId: 'actions',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'actions',
+          title: 'Actions',
+          summary: 'Action execution.',
+          intents: [{ name: 'execute', sideEffect: 'workspace', requiresApproval: true }],
+          facets: { approval: true, refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'actions', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'actions', ok: true, value: {} }),
+      invoke: async () => {
+        invokeCalled = true;
+        return moduleResult({ moduleId: 'actions', ok: true, value: { executed: true } });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Try a generic actions.execute dynamic call.',
+    workspacePath: workspace,
+    commandId: 'app-server-client-actions-execute-policy',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(invokeCalled, false);
+  assert.equal(appServer.toolCallResponse?.success, true);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /agent_host_blocked:execute/);
+  assert.match(text, /Computer Use Guard/);
+  assert.doesNotMatch(text, /approved-action-token|approvalToken/);
+});
+
 test('Codex app-server client treats GUI spawn_agent text as ordinary app-server input', async () => {
   const workspace = await tempWorkspace();
   await writeFile(join(workspace, 'PROJECT.md'), '- [ ] sub-agent live parity\n', 'utf8');
@@ -191,6 +252,79 @@ test('Codex app-server client projects Multitask declared intent into app-server
   assert.match(developerInstructions, /multi_agent_v1_spawn_agent/);
   assert.doesNotMatch(appServer.turnStartParams.input[0]?.text as string, /\/multitask|multi_agent_v1\.spawn_agent/i);
   assert.doesNotMatch(developerInstructions, /providerUrl|apiKey|codexHome|rawModel|modelConfig|stdout|stderr|Applications\/workspace/i);
+});
+
+test('Codex app-server client injects bounded Agent Host grounding facts into developer instructions', async () => {
+  const workspace = await tempWorkspace();
+  await writeFile(join(workspace, 'PROJECT.md'), '- [ ] grounded facts\n', 'utf8');
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Summarize the local plan from provided refs only.',
+    workspacePath: workspace,
+    commandId: 'agent-host-grounding-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    agentHostGrounding: {
+      schemaVersion: 'sciforge.agent-host.grounding-snapshot.v1',
+      source: 'codex-agent-host-turn-loop',
+      productCapabilities: {
+        browser: 'supported',
+        computerUse: 'supported',
+      },
+      runtimeReadiness: {
+        browser: 'ready',
+        computerUse: 'blocked',
+      },
+      readiness: {
+        browserHostSession: 'ready',
+        nativeBridge: 'ready',
+        nativeSurface: 'ready',
+        windowActionSession: 'blocked',
+        computerUseAdapter: 'blocked',
+      },
+      blockers: ['window-action-session-unavailable', 'computer-use-adapter-unavailable'],
+      authorizationProfile: {
+        id: 'high-autonomy',
+        publicLabel: 'High Autonomy',
+        scope: {
+          user: 'current-user',
+          workspace: 'current-workspace',
+        },
+      },
+      actionContext: {
+        targetBound: false,
+        freshObservation: false,
+        permissionRefsPresent: false,
+        stopCancelPath: false,
+      },
+      refs: ['runtime-health:workspace', 'https://private.example.invalid/token?secret=sk-private'],
+    },
+  });
+  await collect(stream.events);
+
+  assert.deepEqual(appServer.turnStartParams.input, [{
+    type: 'text',
+    text: 'Summarize the local plan from provided refs only.',
+    text_elements: [],
+  }]);
+  const developerInstructions = String(appServer.threadStartParams.developerInstructions ?? '');
+  assert.match(developerInstructions, /Agent Host grounded capability facts/);
+  assert.match(developerInstructions, /Browser=supported/);
+  assert.match(developerInstructions, /Computer Use=supported/);
+  assert.match(developerInstructions, /Browser=ready/);
+  assert.match(developerInstructions, /Computer Use=blocked/);
+  assert.match(developerInstructions, /window-action-session-unavailable/);
+  assert.match(developerInstructions, /current-user\/current-workspace/);
+  assert.match(developerInstructions, /runtime-health:workspace/);
+  assert.doesNotMatch(developerInstructions, /private\.example|sk-private|Applications\/workspace|raw JSONL/i);
 });
 
 test('Codex app-server client treats slash terminal turn events as stream completion', async () => {
@@ -758,7 +892,7 @@ function fakeAppServer(options: {
   terminalEvent?: string;
   terminalStatus?: string;
   autoToolCall?: boolean;
-  toolCall?: { namespace?: string; tool: string };
+  toolCall?: { namespace?: string; tool: string; arguments?: Record<string, unknown> };
 } = {}) {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
@@ -840,7 +974,7 @@ function fakeAppServer(options: {
             callId: 'subagent-call-1',
             ...(toolCall.namespace ? { namespace: toolCall.namespace } : {}),
             tool: toolCall.tool,
-            arguments: {
+            arguments: toolCall.arguments ?? {
               message: 'Inspect PROJECT.md for open sub-agent tasks.',
               items: [{ path: 'PROJECT.md' }],
             },

@@ -2,6 +2,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { AgentCliAdapter, AgentCliStartTurnInput } from './agent-cli-adapter.js';
+import {
+  createCodexAgentHostGroundingSnapshot,
+  evaluateCodexAgentHostTurnLoop,
+  resolveCodexAgentHostRuntimeTruth,
+  type CodexAgentHostComputerUseActMaterializer,
+  type CodexAgentHostRuntimeTruth,
+  type CodexAgentHostRuntimeTruthResolver,
+} from './agent-host-turn-loop.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import {
   CODEX_RUNTIME_STREAM_PATH,
@@ -19,11 +27,17 @@ export { CODEX_RUNTIME_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH };
 
 const codexRuntimeWss = new WebSocketServer({ noServer: true });
 
+export interface CodexRuntimeRouteOptions {
+  agentHostRuntimeTruthResolver?: CodexAgentHostRuntimeTruthResolver;
+  computerUseActMaterializer?: CodexAgentHostComputerUseActMaterializer;
+}
+
 export async function handleCodexRuntimeRoutes(
   req: IncomingMessage,
   res: ServerResponse,
   url: URL,
   adapter: AgentCliAdapter,
+  options: CodexRuntimeRouteOptions = {},
 ): Promise<boolean> {
   if (url.pathname !== CODEX_RUNTIME_STREAM_PATH) return false;
   if (req.method !== 'POST') {
@@ -54,7 +68,7 @@ export async function handleCodexRuntimeRoutes(
       expectedTransport: 'sse',
       shouldContinue: () => !res.writableEnded && !res.destroyed,
       emit: (event, data) => writeSse(res, event, data),
-    });
+    }, {}, options);
   } catch (error) {
     writeSse(res, 'error', { ok: false, error: error instanceof Error ? error.message : String(error) });
   } finally {
@@ -68,11 +82,12 @@ export function handleCodexRuntimeUpgrade(
   socket: Duplex,
   head: Buffer,
   adapter: AgentCliAdapter,
+  options: CodexRuntimeRouteOptions = {},
 ): boolean {
   const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`);
   if (url.pathname !== CODEX_RUNTIME_WEBSOCKET_PATH) return false;
   codexRuntimeWss.handleUpgrade(req, socket, head, (ws) => {
-    connectCodexRuntimeSocket(ws, adapter).catch((err: unknown) => {
+    connectCodexRuntimeSocket(ws, adapter, options).catch((err: unknown) => {
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'error', error: err instanceof Error ? err.message : String(err) }));
         ws.close(1011, 'codex realtime unavailable');
@@ -82,7 +97,7 @@ export function handleCodexRuntimeUpgrade(
   return true;
 }
 
-async function connectCodexRuntimeSocket(ws: WebSocket, adapter: AgentCliAdapter) {
+async function connectCodexRuntimeSocket(ws: WebSocket, adapter: AgentCliAdapter, options: CodexRuntimeRouteOptions = {}) {
   const abort = new AbortController();
   ws.on('close', () => abort.abort());
   const pendingControlMessages: string[] = [];
@@ -147,7 +162,7 @@ async function connectCodexRuntimeSocket(ws: WebSocket, adapter: AgentCliAdapter
       controlState.attemptId = turn.attemptId;
       controlState.codexSessionId = turn.codexSessionId;
     },
-  });
+  }, options);
   if (ws.readyState === WebSocket.OPEN) ws.close(1000, 'codex realtime complete');
 }
 
@@ -163,6 +178,7 @@ async function runCodexRuntimeTurn(
   hooks: {
     onTurnStarted?: (turn: { turnId: string; attemptId: string; codexSessionId?: string }) => void;
   } = {},
+  options: CodexRuntimeRouteOptions = {},
 ) {
   assertCodexRuntimeRequestBoundary(body);
   const commandText = stringField(body.commandText);
@@ -189,6 +205,48 @@ async function runCodexRuntimeTurn(
     }));
   }, CODEX_RUNTIME_HEARTBEAT_MS);
   try {
+    const agentHostRuntimeTruth = await resolveAgentHostRuntimeTruthForTurn(body, {
+      commandText,
+      workspacePath,
+      commandId,
+      attemptId,
+      auditMetadata: body.auditMetadata,
+      abortSignal,
+      resolver: options.agentHostRuntimeTruthResolver,
+    });
+    const agentHostTurnLoopResult = await evaluateCodexAgentHostTurnLoop({
+      input: body.agentHostInput,
+      commandText,
+      workspacePath,
+      commandId,
+      attemptId,
+      auditMetadata: body.auditMetadata,
+      runtimeTruth: agentHostRuntimeTruth,
+      runtimeTruthRefresh: options.agentHostRuntimeTruthResolver
+        ? ({ step, previousResult }) => resolveAgentHostRuntimeTruthForTurn(body, {
+          commandText,
+          workspacePath,
+          commandId,
+          attemptId,
+          auditMetadata: {
+            source: 'computer-use-act-loop-refresh',
+            step,
+            previousEvidenceRefs: previousResult?.evidenceRefs?.slice(0, 12),
+          },
+          abortSignal,
+          resolver: options.agentHostRuntimeTruthResolver,
+        })
+        : undefined,
+      computerUseActMaterializer: options.computerUseActMaterializer,
+      abortSignal,
+    });
+    if (agentHostTurnLoopResult) {
+      lastRuntimeEventAt = Date.now();
+      output.emit('agent_host_turn_loop', agentHostTurnLoopResult.event);
+      output.emit('done', agentHostTurnLoopResult.result);
+      return;
+    }
+    const agentHostGrounding = createCodexAgentHostGroundingSnapshot(body.agentHostInput, { runtimeTruth: agentHostRuntimeTruth });
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
@@ -207,6 +265,8 @@ async function runCodexRuntimeTurn(
       humanApproval: isRecord(body.humanApproval) ? body.humanApproval : undefined,
       uiState: isRecord(body.uiState) ? body.uiState : undefined,
       declaredIntents: declaredIntentsFromAuditMetadata(body.auditMetadata),
+      agentHostGrounding,
+      agentHostRuntimeTruth,
       abortSignal,
     });
     hooks.onTurnStarted?.({
@@ -223,6 +283,46 @@ async function runCodexRuntimeTurn(
     }
   } finally {
     clearInterval(heartbeat);
+  }
+}
+
+async function resolveAgentHostRuntimeTruthForTurn(
+  body: Record<string, unknown>,
+  input: {
+    commandText: string;
+    workspacePath: string;
+    commandId?: string;
+    attemptId?: string;
+    auditMetadata?: unknown;
+    abortSignal: AbortSignal;
+    resolver?: CodexAgentHostRuntimeTruthResolver;
+  },
+): Promise<CodexAgentHostRuntimeTruth | undefined> {
+  if (!input.resolver) return undefined;
+  try {
+    return await resolveCodexAgentHostRuntimeTruth({
+      input: body.agentHostInput,
+      commandText: input.commandText,
+      workspacePath: input.workspacePath,
+      commandId: input.commandId,
+      attemptId: input.attemptId,
+      auditMetadata: input.auditMetadata,
+      abortSignal: input.abortSignal,
+      runtimeTruthResolver: input.resolver,
+    });
+  } catch {
+    return {
+      schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+      source: 'runtime-truth-resolver-error',
+      readiness: {
+        browserHostSession: 'blocked',
+        nativeBridge: 'blocked',
+        nativeSurface: 'blocked',
+        windowActionSession: 'blocked',
+        computerUseAdapter: 'blocked',
+      },
+      refs: ['runtime-truth:resolver-error'],
+    };
   }
 }
 
@@ -426,6 +526,7 @@ const CODEX_RUNTIME_REQUEST_ALLOWED_KEYS = new Set([
   'guiExtension',
   'humanApproval',
   'uiState',
+  'agentHostInput',
   'auditMetadata',
 ]);
 
@@ -566,10 +667,20 @@ function declaredAuthorizationIntent(value: unknown): NonNullable<AgentCliStartT
     ...(profileId ? { profileId } : {}),
     ...(publicLabel ? { publicLabel } : {}),
     ...(safeDeclaredIntentText(value.source, 80) ? { source: safeDeclaredIntentText(value.source, 80) } : {}),
+    ...(declaredAuthorizationScope(value.scope) ? { scope: declaredAuthorizationScope(value.scope) } : {}),
     ...(typeof value.singleTurnOverride === 'boolean' ? { singleTurnOverride: value.singleTurnOverride } : {}),
     ...(hardConfirmCategories?.length ? { hardConfirmCategories } : {}),
     ...(safeDeclaredIntentText(value.actionId, 120) ? { actionId: safeDeclaredIntentText(value.actionId, 120) } : {}),
     ...(safeDeclaredIntentText(value.declaredAt, 80) ? { declaredAt: safeDeclaredIntentText(value.declaredAt, 80) } : {}),
+  };
+}
+
+function declaredAuthorizationScope(value: unknown): NonNullable<NonNullable<AgentCliStartTurnInput['declaredIntents']>['authorization']>['scope'] | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.user !== 'current-user' || value.workspace !== 'current-workspace') return undefined;
+  return {
+    user: 'current-user',
+    workspace: 'current-workspace',
   };
 }
 

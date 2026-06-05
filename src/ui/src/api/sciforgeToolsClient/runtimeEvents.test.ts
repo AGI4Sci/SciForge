@@ -738,6 +738,61 @@ test('SSE reader exposes generic public hard-confirm fields without leaking comm
   assert.doesNotMatch(JSON.stringify(result), /provider\.example|sk-secret|private\.example|private-trace|stdout\.log|rawPayload|commandText.*#submit/);
 });
 
+test('SSE reader preserves approval refs containing risk-missing without treating them as sk secrets', async () => {
+  const commandId = 'codex-command-public-approval-ref-risk-missing';
+  const approvalRef = 'approval:computer-use:chat-live-risk-missing-round-1';
+  const secretApprovalRef = 'approval:computer-use:sk-real-secret-token-12345678';
+  const body = [
+    'event: gui_ask_user',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'gui_ask_user',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      raw: {
+        source: `gui.ask_user:${commandId}`,
+        askUser: {
+          kind: 'hard-confirm',
+          title: 'External action requires confirmation',
+          approvalRequest: {
+            id: approvalRef,
+            approvalRef,
+            approval_ref: secretApprovalRef,
+            risk_level: 'high',
+            action_kind: 'external-send',
+          },
+        },
+      },
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+    })}`,
+    '',
+  ].join('\n');
+
+  const stream = await readWorkspaceToolStream(createSseResponse(body), () => undefined);
+  const result = stream.result as {
+    guiAskUser?: {
+      approvalRequest?: Record<string, unknown>;
+      choices?: Array<{ commandText?: string }>;
+    };
+  };
+
+  assert.equal(stream.error, undefined);
+  assert.equal(result.guiAskUser?.approvalRequest?.id, approvalRef);
+  assert.equal(result.guiAskUser?.approvalRequest?.approvalRef, approvalRef);
+  assert.equal(result.guiAskUser?.approvalRequest?.approval_ref, undefined);
+  assert.equal(result.guiAskUser?.choices?.[0]?.commandText, `/computer-use approve --approval-ref "${approvalRef}"`);
+  assert.doesNotMatch(JSON.stringify(result), /sk-real-secret-token/);
+});
+
 test('SSE reader turns Computer Use TUI host action metadata into visible result and confirmation refs', async () => {
   const commandId = 'codex-command-computer-use-actions';
   const traceRef = '.sciforge/vision-runs/cu-risk/vision-trace.json';

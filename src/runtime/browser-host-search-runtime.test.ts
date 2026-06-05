@@ -21,6 +21,7 @@ test('browser_host_search_runtime turns browser_search intent into refs-first Br
     schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
     query: 'host owned browser',
     engine: 'bing',
+    searchedAt: '2026-06-01T00:00:01.000Z',
     searchUrl: 'https://www.bing.com/search?q=host+owned+browser',
     finalUrl: 'https://www.bing.com/search?q=host+owned+browser',
     results: [
@@ -91,9 +92,12 @@ test('browser_host_search_runtime turns browser_search intent into refs-first Br
 
   const searchArtifact = payload.artifacts?.find((artifact): artifact is BrowserHostRuntimeArtifact => artifactIdStartsWith(artifact, 'browser-search-results-'));
   const projectionArtifact = payload.artifacts?.find((artifact): artifact is BrowserHostRuntimeArtifact => artifactIdStartsWith(artifact, 'browser-host-projection-'));
+  const searchMetadata = searchArtifact?.metadata as Record<string, any> | undefined;
   const searchData = searchArtifact?.data as Record<string, any> | undefined;
   const projectionData = projectionArtifact?.data as Record<string, any> | undefined;
   assert.equal(searchArtifact?.schemaVersion, BROWSER_HOST_SEARCH_SCHEMA);
+  assert.equal(searchMetadata?.searchedAt, '2026-06-01T00:00:01.000Z');
+  assert.equal(searchData?.searchedAt, '2026-06-01T00:00:01.000Z');
   assert.equal(searchData?.searchResultRef, 'browser-host-session:search-session/search-results.json');
   assert.equal(searchData?.browserSessionRef, 'browser-host-session:search-session');
   assert.equal(searchData?.projectionRef, `artifact:${projectionArtifact?.id}`);

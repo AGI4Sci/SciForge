@@ -366,8 +366,11 @@ async function materializedCaseFromInputCase(
   for (const capabilityId of matrixCase.requiredCapabilityIds) {
     if (!(inputCase.capabilityIds ?? []).includes(capabilityId)) issues.push(`missing-capability:${capabilityId}`);
   }
-  if (unsafeSourceRefs(inputCase.sourceRefs ?? [])) issues.push('unsafe-source-or-evidence-ref');
-  if (unsafeSourceRefs(sourceRefsFromExecutorSourceRefs(inputCase.executorSourceRefs))) issues.push('unsafe-source-or-evidence-ref');
+  const declaredSourceRefs = inputCase.sourceRefs ?? [];
+  const executorSourceRefs = sourceRefsFromExecutorSourceRefs(inputCase.executorSourceRefs);
+  if (uiProjectionSourceRefs([...declaredSourceRefs, ...executorSourceRefs])) issues.push('ui-projection-source-not-action-runner');
+  if (unsafeSourceRefs(declaredSourceRefs)) issues.push('unsafe-source-or-evidence-ref');
+  if (unsafeSourceRefs(executorSourceRefs)) issues.push('unsafe-source-or-evidence-ref');
 
   const requiredEvidenceIssues = await requiredEvidenceIssuesFor(matrixCase.requiredEvidenceKinds, inputCase.evidenceRefs);
   issues.push(...requiredEvidenceIssues);
@@ -820,6 +823,10 @@ function unsafeSourceRefs(refs: string[]) {
   return refs.some((ref) => !safeSourceRef(ref));
 }
 
+function uiProjectionSourceRefs(refs: string[]) {
+  return refs.some((ref) => /^gui\.(?:present|blocked|repair):/i.test(ref));
+}
+
 function safeSourceRefs(refs: string[]) {
   return refs.map(safeSourceRef).filter((ref): ref is string => Boolean(ref));
 }
@@ -827,7 +834,7 @@ function safeSourceRefs(refs: string[]) {
 function safeSourceRef(ref: string | undefined) {
   if (!ref || forbiddenDiagnosticPattern.test(ref)) return undefined;
   if (isWorkspaceFileRef(ref)) return ref;
-  if (/^(?:computer-use|computer-use-session|gui\.present|gui\.blocked|gui\.repair|window|permission|approval):[a-z0-9_./:-]+$/i.test(ref)) {
+  if (/^(?:computer-use|computer-use-session|window|permission|approval):[a-z0-9_./:-]+$/i.test(ref)) {
     return ref;
   }
   return undefined;

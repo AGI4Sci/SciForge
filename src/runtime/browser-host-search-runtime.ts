@@ -163,6 +163,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
       metadata: {
         source: TOOL_ID,
         providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+        searchedAt: output.searchedAt,
         finalUrl: output.finalUrl,
         browserSessionRef,
         projectionRef,
@@ -171,6 +172,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
       data: {
         query: output.query,
         engine: output.engine,
+        searchedAt: output.searchedAt,
         finalUrl: output.finalUrl,
         browserSessionRef,
         projectionRef,

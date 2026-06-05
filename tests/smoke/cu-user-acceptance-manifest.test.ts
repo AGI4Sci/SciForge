@@ -452,6 +452,13 @@ test('CU-05 CLI writes the evaluated manifest from JSON input', async () => {
   }
 });
 
+test('CU-05 tool entrypoint delegates manifest semantics to the package owner', async () => {
+  const source = await readFile('tools/cu-user-acceptance-manifest.ts', 'utf8');
+
+  assert.match(source, /\.\.\/packages\/actions\/computer-use\/user-acceptance-manifest\.js/);
+  assert.doesNotMatch(source, /export function buildCuUserAcceptanceManifest/);
+});
+
 function requiredHostChain(runId: string) {
   return [
     {

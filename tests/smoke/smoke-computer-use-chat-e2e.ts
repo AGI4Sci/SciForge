@@ -1,122 +1,175 @@
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import type { AgentStreamEvent, SendAgentMessageInput } from '../../src/ui/src/domain';
 import { sendSciForgeToolMessage } from '../../src/ui/src/api/sciforgeToolsClient';
+import { handleCodexRuntimeRoutes, type CodexRuntimeRouteOptions } from '../../src/runtime/codex/codex-runtime-server.js';
+import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from '../../src/runtime/codex/agent-cli-adapter.js';
 
 const originalFetch = globalThis.fetch;
-const COMPUTER_USE_ACTION_PROVIDER_ID = 'action.sciforge.computer-use';
 
-try {
-  await smokeNaturalLanguageGuiPresent();
-  await smokeNeedsConfirmationProjection();
-  console.log('[ok] Computer Use chat E2E protocol smoke passed');
-} finally {
-  globalThis.fetch = originalFetch;
-}
-
-async function smokeNaturalLanguageGuiPresent() {
+async function smokeNaturalLanguageGuiGuard() {
+  const adapter = new FakeAdapter();
+  const server = await startRuntimeServer(adapter);
+  const baseUrl = serverBaseUrl(server);
   const bodies: Array<Record<string, unknown>> = [];
   const events: AgentStreamEvent[] = [];
-  const finalArtifactRef = '.sciforge/vision-runs/chat-e2e-present/report.md';
   globalThis.fetch = (async (url, init) => {
-    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-    assert.match(String(url), /\/api\/sciforge\/tools\/run\/stream$/);
-    return ndjsonResponse([
-      {
-        event: computerUseHostActionsEvent(String(bodies[0]?.uiState && (bodies[0].uiState as Record<string, unknown>).commandId), [{
-          port: 'gui.present',
-          target: 'computer-use.trace-summary',
-          payload: {
-            title: 'Computer Use report',
-            status: 'completed',
-            message: 'Computer Use produced a visible report artifact.',
-            traceRefs: ['.sciforge/vision-runs/chat-e2e-present/vision-trace.json'],
-            screenshotRefs: ['.sciforge/vision-runs/chat-e2e-present/step-001-after.png'],
-            artifactRefs: [finalArtifactRef],
-            executionUnitRefs: ['EU-chat-e2e-present'],
-            workEvidenceRefs: ['workEvidence:computer-use-action-provider:chat-e2e-present'],
-          },
-        }]),
-      },
-      { result: workspaceResult('completed') },
-    ]);
+    if (String(url).includes('/api/sciforge/runtime/codex/stream')) {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    }
+    return await originalFetch(url, init);
   }) as typeof fetch;
 
-  const response = await sendSciForgeToolMessage(input({
-    prompt: 'Use the visible desktop to inspect the files and produce a short index report.',
-    selectedActionIds: [COMPUTER_USE_ACTION_PROVIDER_ID],
-  }), {
-    onEvent: (event) => events.push(event),
-  });
+  try {
+    const response = await sendSciForgeToolMessage(input({
+      workspaceWriterBaseUrl: baseUrl,
+      prompt: 'Click the visible export button in the current window.',
+    }), {
+      onEvent: (event) => events.push(event),
+    });
 
-  assert.equal(bodies.length, 1);
-  assert.equal(bodies[0]?.handoffSource, 'ui-chat');
-  assert.equal(bodies[0]?.prompt, 'Use the visible desktop to inspect the files and produce a short index report.');
-  assert.deepEqual(bodies[0]?.selectedActionIds, [COMPUTER_USE_ACTION_PROVIDER_ID]);
-  assert.ok(events.some((event) => event.type === 'computer-use.tui-host-actions'));
-  assert.equal(response.message.status, 'completed');
-  assert.match(response.message.content, /Computer Use produced a visible report artifact/);
-  assert.match(String(response.message.provenance?.source), /^gui\.present:computer-use-command-.*:computer-use$/);
-  assert.ok(response.message.objectReferences?.some((reference) => reference.ref === `file:${finalArtifactRef}`));
+    assert.equal(bodies.length, 1);
+    assert.match(String(bodies[0]?.commandText), /Click the visible export button/);
+    assert.equal((bodies[0]?.agentHostInput as Record<string, unknown> | undefined)?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+    assert.equal('selectedActionIds' in bodies[0]!, false);
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(response.message.content, /Computer Use Guard blocked/i);
+    assert.match(response.message.content, /browser-host-session-unavailable|native-bridge-unavailable|target-unbound/);
+    const eventText = JSON.stringify(events);
+    assert.match(eventText, /agent-host-turn-loop/);
+    assert.match(eventText, /"stage":"Guard"/);
+    assert.match(eventText, /browser-host-session-unavailable|native-bridge-unavailable|target-unbound/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await closeServer(server);
+  }
 }
 
-async function smokeNeedsConfirmationProjection() {
+async function smokeNaturalLanguageGuiActionPath() {
+  const adapter = new FakeAdapter();
+  let materializerCalled = false;
+  let truthResolverCalled = false;
+  const server = await startRuntimeServer(adapter, {
+    agentHostRuntimeTruthResolver: async ({ commandText, agentHostInput }) => {
+      truthResolverCalled = true;
+      assert.match(commandText, /Scroll the current browser page/);
+      assert.equal(agentHostInput.schemaVersion, 'sciforge.codex-agent-host-input.v1');
+      return {
+        schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+        source: 'smoke-runtime-truth-ready',
+        readiness: {
+          browserHostSession: 'ready',
+          nativeBridge: 'ready',
+          nativeSurface: 'ready',
+          windowActionSession: 'ready',
+          computerUseAdapter: 'ready',
+        },
+        target: {
+          bound: true,
+          summary: 'Current browser page',
+          refs: ['browser-host-session:current-page'],
+        },
+        observation: {
+          fresh: true,
+          refs: ['browser-host-session:current-page/frame'],
+        },
+        permissions: {
+          refs: ['permission:turn/low-risk-navigation'],
+          stopCancelPath: true,
+        },
+        refs: ['runtime-truth:ready-computer-use'],
+      };
+    },
+    computerUseActMaterializer: async ({ commandText, preflight, runtimeTruth }) => {
+      materializerCalled = true;
+      assert.match(commandText, /Scroll the current browser page/);
+      assert.equal(preflight.status, 'ready');
+      assert.equal(preflight.target.summary, 'Current browser page');
+      assert.deepEqual(runtimeTruth?.refs, ['runtime-truth:ready-computer-use']);
+      return {
+        status: 'completed',
+        message: 'Computer Use action path executed by runtime-owned materializer.',
+        evidenceRefs: ['browser-host-session:current-page/action-state/scroll-1'],
+        executionUnits: [{
+          id: 'EU-computer-use-chat-e2e-action-path',
+          tool: 'browser-host-session.computer-use-action',
+          status: 'done',
+          outputRef: 'browser-host-session:current-page/action-state/scroll-1',
+        }],
+      };
+    },
+  });
+  const baseUrl = serverBaseUrl(server);
   const bodies: Array<Record<string, unknown>> = [];
-  globalThis.fetch = (async (_url, init) => {
-    bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
-    const commandId = String((bodies[0]?.uiState as Record<string, unknown> | undefined)?.commandId);
-    return ndjsonResponse([
-      {
-        event: computerUseHostActionsEvent(commandId, [{
-          port: 'gui.present',
-          target: 'computer-use.trace-summary',
-          payload: {
-            title: 'Computer Use guarded action',
-            status: 'needs-confirmation',
-            message: 'Computer Use stopped before the external send.',
-            traceRefs: ['.sciforge/vision-runs/chat-e2e-risk/vision-trace.json'],
-            screenshotRefs: ['.sciforge/vision-runs/chat-e2e-risk/step-003-before-send.png'],
-            artifactRefs: ['.sciforge/vision-runs/chat-e2e-risk/mail-draft.md'],
-            executionUnitRefs: ['EU-chat-e2e-risk'],
-            workEvidenceRefs: ['workEvidence:computer-use-action-provider:chat-e2e-risk'],
-          },
-        }, {
-          port: 'gui.ask_user',
-          target: 'computer-use.approval-request',
-          payload: {
-            approvalRequest: {
-              id: 'approval:computer-use:chat-e2e-risk',
-              confirmation_text: 'Allow Computer Use to send the drafted external email?',
-              risk_level: 'high',
-              action_kind: 'external-send',
-            },
-            relatedRefs: [
-              '.sciforge/vision-runs/chat-e2e-risk/vision-trace.json',
-              '.sciforge/vision-runs/chat-e2e-risk/risk-audit.json',
-            ],
-          },
-        }]),
-      },
-      { result: workspaceResult('needs-confirmation') },
-    ]);
+  const events: AgentStreamEvent[] = [];
+  globalThis.fetch = (async (url, init) => {
+    if (String(url).includes('/api/sciforge/runtime/codex/stream')) {
+      bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+    }
+    return await originalFetch(url, init);
   }) as typeof fetch;
 
-  const response = await sendSciForgeToolMessage(input({
-    prompt: 'Research the topic and draft an email, but stop before sending it.',
-    selectedActionIds: [COMPUTER_USE_ACTION_PROVIDER_ID],
-  }));
+  try {
+    const response = await sendSciForgeToolMessage(input({
+      workspaceWriterBaseUrl: baseUrl,
+      prompt: 'Scroll the current browser page to inspect visible results.',
+    }), {
+      onEvent: (event) => events.push(event),
+    });
 
-  assert.equal(response.message.provenance?.requiresUserConfirmation, true);
-  assert.match(response.message.content, /Allow Computer Use to send the drafted external email/);
-  assert.match(response.message.content, /Approval ref: `approval:computer-use:chat-e2e-risk`/);
-  assert.match(String(response.message.provenance?.source), /^gui\.ask_user:computer-use-command-.*:computer-use$/);
-  const raw = response.run.raw as Record<string, unknown>;
-  assert.equal((raw.guiAskUser as Record<string, unknown> | undefined)?.source, `gui.ask_user:${response.run.id}:computer-use`);
-  assert.ok(response.message.objectReferences?.some((reference) => reference.ref.endsWith('risk-audit.json')));
+    assert.equal(bodies.length, 1);
+    assert.match(String(bodies[0]?.commandText), /Scroll the current browser page/);
+    assert.equal('selectedActionIds' in bodies[0]!, false);
+    assert.equal(truthResolverCalled, true);
+    assert.equal(materializerCalled, true);
+    assert.equal(adapter.lastInput, undefined);
+    assert.doesNotMatch(response.message.content, /\/computer-use|selectedActionIds|没有直接|no direct computer use/i);
+    const eventText = JSON.stringify(events);
+    assert.match(eventText, /agent-host-turn-loop/);
+    assert.match(eventText, /"stage":"Act \/ Answer"/);
+    assert.match(eventText, /Computer Use action path executed by runtime-owned materializer/);
+    assert.match(eventText, /browser-host-session:current-page\/action-state\/scroll-1/);
+    assert.doesNotMatch(eventText, /ready-for-act|Act is waiting/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await closeServer(server);
+  }
+}
+
+async function smokeNeedsConfirmationRuntimeTransport() {
+  const adapter = new FakeAdapter();
+  const server = await startRuntimeServer(adapter);
+  const baseUrl = serverBaseUrl(server);
+  try {
+    const response = await fetch(`${baseUrl}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'Submit the registration form in the current browser window.',
+        workspacePath: '/tmp/current',
+        commandId: 'computer-use-chat-e2e-hard-confirm',
+        attemptId: 'computer-use-chat-e2e-hard-confirm-attempt-1',
+        agentHostInput: readyAgentHostInput('Submit the registration form in the current browser window.'),
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /requires hard confirmation/i);
+    assert.match(text, /needs-confirmation/);
+    assert.match(text, /"controls":\["Confirm","Cancel"\]/);
+  } finally {
+    await closeServer(server);
+  }
 }
 
 function input(options: {
+  workspaceWriterBaseUrl: string;
   prompt: string;
-  selectedActionIds: string[];
 }): SendAgentMessageInput {
   return {
     sessionId: 'computer-use-chat-e2e-session',
@@ -133,7 +186,7 @@ function input(options: {
     config: {
       schemaVersion: 1,
       agentServerBaseUrl: 'http://127.0.0.1:18080',
-      workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+      workspaceWriterBaseUrl: options.workspaceWriterBaseUrl,
       workspacePath: '/tmp/current',
       agentBackend: 'codex',
       modelProvider: 'native',
@@ -154,39 +207,81 @@ function input(options: {
       defaultComponents: [],
       allowedComponents: [],
       fallbackComponent: '',
-      selectedActionIds: options.selectedActionIds,
+      selectedActionIds: [],
     },
   };
 }
 
-function computerUseHostActionsEvent(commandId: string, actions: Array<Record<string, unknown>>) {
+function readyAgentHostInput(intentText: string) {
   return {
-    type: 'computer-use.tui-host-actions',
-    source: 'computer-use-package-bridge',
-    commandId,
-    attemptId: `${commandId}-attempt-1`,
-    detail: {
-      schemaVersion: 'sciforge.computer-use.tui-host-actions-batch.v1',
-      actions: actions.map((action) => ({
-        schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
-        ...action,
-      })),
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'smoke-runtime-transport',
+    intentText,
+    authorizationProfileId: 'high-autonomy',
+    policyOwner: 'codex-agent-host-runtime',
+    readiness: {
+      browserHostSession: 'ready',
+      nativeBridge: 'ready',
+      nativeSurface: 'ready',
+      windowActionSession: 'ready',
+      computerUseAdapter: 'ready',
+    },
+    target: {
+      bound: true,
+      summary: 'Registration form',
+      refs: ['browser-host-session:form'],
+    },
+    observation: {
+      fresh: true,
+      refs: ['browser-host-session:form/frame.png'],
+    },
+    permissions: {
+      refs: ['permission:turn/form-draft'],
+      stopCancelPath: true,
     },
   };
 }
 
-function workspaceResult(status: string) {
-  return {
-    status,
-    message: `Computer Use chat E2E ${status}.`,
-    executionUnits: [{ id: `EU-chat-e2e-${status}`, status: status === 'completed' ? 'done' : 'blocked' }],
-    artifacts: [],
-  };
-}
-
-function ndjsonResponse(items: unknown[]) {
-  return new Response(`${items.map((item) => JSON.stringify(item)).join('\n')}\n`, {
-    status: 200,
-    headers: { 'Content-Type': 'application/x-ndjson' },
+async function startRuntimeServer(adapter: AgentCliAdapter, options: CodexRuntimeRouteOptions = {}): Promise<Server> {
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, options);
   });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  return server;
+}
+
+function serverBaseUrl(server: Server) {
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  return `http://127.0.0.1:${(address as AddressInfo).port}`;
+}
+
+async function closeServer(server: Server) {
+  await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+}
+
+class FakeAdapter implements AgentCliAdapter {
+  lastInput?: AgentCliStartTurnInput;
+
+  async startTurn(input: AgentCliStartTurnInput): Promise<AgentCliTurn> {
+    this.lastInput = input;
+    return {
+      turnId: 'fake-turn',
+      attemptId: input.attemptId ?? 'fake-attempt',
+      events: (async function* () {})(),
+    };
+  }
+
+  async cancel() {}
+}
+
+try {
+  await smokeNaturalLanguageGuiGuard();
+  await smokeNaturalLanguageGuiActionPath();
+  await smokeNeedsConfirmationRuntimeTransport();
+  console.log('[ok] Computer Use chat E2E protocol smoke passed');
+} finally {
+  globalThis.fetch = originalFetch;
 }

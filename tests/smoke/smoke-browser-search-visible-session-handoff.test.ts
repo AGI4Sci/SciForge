@@ -307,6 +307,7 @@ function browserSearchOutput(): BrowserHostSearchOutput {
     engine: 'bing',
     searchUrl: 'https://www.bing.com/search?q=refs+first+visible+handoff',
     finalUrl: FINAL_URL,
+    searchedAt: '2026-06-01T00:00:01.000Z',
     results: [
       {
         title: 'Refs-first browser evidence',

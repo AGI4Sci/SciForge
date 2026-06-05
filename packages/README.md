@@ -37,7 +37,7 @@
 - `skills/meta_skills`：skill 创建、调试、沉淀、自进化和能力选择工作流。
 - `observe`：observe 层。输入是 `instruction + 其它模态`，输出是可审计 `text-response`，例如视觉摘要、OCR、区域描述、坐标、置信度和失败边界。Observe 不产生副作用。
 - `actions`：action 层。对环境产生影响的执行 provider，例如 Computer Use、浏览器沙箱、远程桌面、文件编辑、notebook/kernel 或未来实验设备动作。
-- `actions/computer-use/virtual-app-screen-host`：VirtualAppScreen 终局 C 的 Native Host / control-plane target package。它拥有 virtual display/app surface lifecycle、permission/preflight、frame/input transport、host grant、human fire-and-release input queue、automation barrier 和 host-owned evidence writer；平台 provider 和第三方工具只能在它背后作为 adapter/reference/diagnostic。
+- `actions/computer-use/virtual-app-screen-host`：VirtualAppScreen 终局 C 的 Native Host / control-plane target package。它只声明本地 virtual display/app surface、preflight refs、frame/input transport、host grant、human fire-and-release input queue、automation barrier 和 evidence writer contract；授权解释、approval / risk policy 与 runtime lifecycle 保留在 `src/runtime`。
 - `verifiers`：verify 层。输入是 result、trace、artifact、环境状态和验证 instruction，输出 verdict、reward、critique、evidence refs、repair hints 和 confidence；provider 可以是人类、其它 agent、规则测试、schema、环境观察或 simulator。
 - `presentation/components`：interactive views/renderers。面向用户和 agent 呈现 artifact 数据，并暴露鼠标、键盘、对象引用、事件和代码交互边界；它们不是 action provider。
 - `contracts/runtime`：运行时共享契约。

@@ -22,10 +22,14 @@ export interface VirtualAppScreenNativeHostSessionRecord {
   frameStreamRef?: string;
   currentFrameRef?: string;
   currentFrameSequence?: number;
+  currentFrameReadAt?: string;
   currentRunRef: string;
   currentRunPointerRef: string;
   adapterReadinessRef: string;
   evidenceLedgerRef: string;
+  permissionRefs: string[];
+  driverRefs: string[];
+  providerRefs: string[];
   inputLeaseRef?: string;
   actionAdapterRef?: string;
   diagnosticOnly: boolean;
@@ -69,10 +73,14 @@ export function recordVirtualAppScreenNativeHostSession(
     frameStreamRef: input.surface?.frameStreamRef,
     currentFrameRef: input.frame?.frameRef ?? input.surface?.currentFrameRef,
     currentFrameSequence: input.frame?.frameSequence ?? input.surface?.currentFrameSequence,
+    currentFrameReadAt: input.frame?.readAt,
     currentRunRef: input.session.evidenceContext.currentRunRef,
     currentRunPointerRef: input.refs?.currentRunPointerRef ?? input.session.currentRunPointerRef,
     adapterReadinessRef: input.refs?.adapterReadinessRef ?? input.session.readiness.adapterReadinessRef,
     evidenceLedgerRef: input.refs?.evidenceLedgerRef ?? input.session.ledgerRef,
+    permissionRefs: [...input.session.readiness.permissionRefs],
+    driverRefs: [...input.session.readiness.driverRefs],
+    providerRefs: [...input.session.readiness.providerRefs],
     inputLeaseRef: input.refs?.inputLeaseRef,
     actionAdapterRef: input.refs?.actionAdapterRef,
     diagnosticOnly: input.session.readiness.diagnosticOnly,
@@ -105,6 +113,7 @@ export function updateVirtualAppScreenNativeHostSessionFrame(options: {
     ...record,
     currentFrameRef: options.frame.frameRef,
     currentFrameSequence: options.frame.frameSequence,
+    currentFrameReadAt: options.frame.readAt,
   };
   nativeHostRecordsBySessionRef.set(updated.sessionRef, updated);
   if (updated.screenRef) nativeHostRecordsByScreenRef.set(updated.screenRef, updated);

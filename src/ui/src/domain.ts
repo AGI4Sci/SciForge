@@ -942,9 +942,17 @@ export interface SendAgentMessageInput {
   conversationLaneId?: string;
   runtimeResumePolicy?: RuntimeResumePolicy;
   composerDeclaredIntents?: ComposerDeclaredIntentSnapshot;
+  runtimeHealth?: AgentHostRuntimeHealthProjectionItem[];
   windowActionHandoff?: AgentHostWindowActionHandoff;
   verificationResult?: Record<string, unknown>;
   recentVerificationResults?: Array<Record<string, unknown>>;
+}
+
+export interface AgentHostRuntimeHealthProjectionItem {
+  id: string;
+  status: string;
+  source?: string;
+  capabilities?: string[];
 }
 
 export interface ScenarioRuntimeOverride {

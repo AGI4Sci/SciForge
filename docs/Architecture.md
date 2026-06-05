@@ -8,9 +8,9 @@ SciForge 是 TUI agent 的 GUI extension，不是 agent host。
 
 > **TUI / agent host 拥有全部任务逻辑；GUI 把用户意图变成文本，并把自己作为 `module.*` GUI extension 暴露给 TUI；`gui.*` 只作为迁移 shim。**
 
-Codex backend 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend；默认运行期 provider 指向 SciForge Model Router 的公开 alias/profile，由 router profile 选择 text reasoner 与 modality translators，而不是把某个具体上游模型写成产品事实。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
+Codex Agent Host 负责上下文、记忆、工具、插件、算法、修复和执行。SciForge 长期只支持 Codex backend 作为 Agent Host 集成；默认运行期 provider 指向 SciForge Model Router 的公开 alias/profile，由 router profile 选择 text reasoner 与 modality translators，而不是把某个具体上游模型写成产品事实。SciForge GUI 负责人体工学输入、可视化展示、确认、输入收集和焦点控制。
 
-当前产品默认能力见 [`superpowers/specs/2026-06-05-default-browser-computer-use-design.md`](superpowers/specs/2026-06-05-default-browser-computer-use-design.md)：外部/实时/网页/引用请求默认可以进入 Browser search/read evidence；GUI 操作意图默认进入 Computer Use preflight。能力声明必须来自 runtime health、BrowserHostSession、native surface、target binding、authorization profile 和 evidence refs，而不是模型固定自述。默认 `High Autonomy` 不等于无审批；发送、提交、上传、删除、支付、账号/安全、法律合规和外部系统执行等动作仍必须 hard-confirm。
+当前产品默认入口是一个普通聊天 turn，而不是 Browser Search、Computer Use、turn router/gateway 或 runtime gateway 的独立产品层。GUI 只提交自然语言文本、结构化 refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 在同一个 `Codex Agent Host Turn Loop` 中决策：`Ground` 收集 workspace、BrowserHostSession、WindowActionSession/evidence 等上下文，`Guard` 按风险、授权和 autonomy profile 判定是否确认、handoff 或阻断，`Act / Answer` 决定调用 Browser/Computer Use/connector/workspace 等能力或直接回答。Runtime Codex 是 downstream runtime adapter，不是默认聊天 product owner。能力声明必须来自 runtime health、BrowserHostSession、native surface、target binding、authorization profile 和 evidence refs，而不是模型固定自述。默认 `High Autonomy` 不等于无审批；发送、提交、上传、删除、支付、账号/安全、法律合规和外部系统执行等动作仍必须 hard-confirm。
 
 ## 最终分层
 
@@ -35,9 +35,11 @@ Native Agent Extensions
   不直接 import 或调用 GUI implementation
 ```
 
-## Agent Host Semantic Pipeline
+## Codex Agent Host Turn Loop 与 Semantic Pipeline
 
-SciForge 的跨模块组合采用 Agent Host Semantic Pipeline，而不是让 GUI 或 runtime 成为第二个 agent host。
+SciForge 的跨模块组合由 `Codex Agent Host Turn Loop` 驱动，并采用 Agent Host Semantic Pipeline 组织模块调用，而不是让 GUI、runtime、turn router 或 gateway 成为第二个 agent host。
+
+默认聊天 turn 的产品语义只有三段：`Ground` 读取用户文本、refs、workspace、BrowserHostSession、WindowActionSession 和其它证据；`Guard` 结合 autonomy profile、policy、approval 和 handoff 规则判断是否继续；`Act / Answer` 要么调用 Browser、Computer Use、connector、workspace 等模块，要么直接回答。Browser Search 和 Computer Use 是这个 loop 中可被选择的能力，不是平行产品入口。
 
 > **Agent Host 负责编排；模块只暴露统一的标准函数；复杂功能通过 typed semantic pipeline 组合完成；GUI 也是一个特殊模块。**
 
@@ -133,16 +135,16 @@ GUI 模块的 canonical 调用也是 `module.*`。迁移期只能在 adapter shi
 
 ## 两个方向
 
-### 1. GUI → TUI：全部是文本
+### 1. GUI → TUI：文本、refs、Autonomy profile 和确认/取消
 
-GUI 所有用户动作都变成终端等价文本：
+GUI 默认只提交自然语言文本、结构化 refs、Autonomy profile 和确认/取消结果，不调用 Browser、Computer Use、connector 或 workspace 业务函数。Debug/expert surface 可以生成终端等价文本，但不能成为普通用户默认入口：
 
 ```text
-点击删除文件      -> rm report.md
-点击重试          -> /rerun run-123
-点击修复          -> /recover run-123 --with-evidence
-点击打开 artifact -> open artifacts/report.md
-表单提交          -> /capabilities plan --prefer literature.search pdf.extract
+普通输入          -> "请总结 artifacts/report.md 的证据强度"
+选中对象后追问    -> text: "这些异常点是什么？", refs: ["artifacts/table.csv"]
+Autonomy 选择     -> autonomyProfile: "high"
+确认/取消         -> confirmationResult: "confirm" | "cancel"
+debug/expert      -> "/rerun run-123"
 ```
 
 没有 `deleteFile(path)`、`triggerRecover(actionId)`、`updateCapabilityPreference(patch)` 这类 GUI -> TUI 业务函数。
@@ -170,7 +172,7 @@ GUI-origin 常见信息流：
 
 ```text
 User / GUI gesture
-  -> terminal-equivalent text
+  -> natural-language text + refs / Autonomy profile / confirmation result
   -> TUI Agent Host
   -> native extension module
   -> refs-first result | approval request | repair hint | compact payload
@@ -198,9 +200,13 @@ External message / webhook / chat command
 
 高风险副作用必须走同一条受控 Host 路径。Computer Use 的发送、删除、支付、授权、发布、外部提交，或飞书连接器的真实发送/同步/删除，不直接弹 GUI，也不直接执行；extension 返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`，TUI Host 决定是否调用 `gui.ask_user` 或外部通道的显式确认机制收集确认，确认后再发起下一次受控调用。
 
-Computer Use / Window Action 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 必须包含真实用户产物、当前 WindowActionSession evidence、action causality、artifact/verifier refs、`gui.present` refs 和 bounded before/after evidence。目标打通需要覆盖多 app/window/session 工作流，例如 Browser/资料页、notebook/terminal 实验、editor/report artifact 和 SciForge Image/Evidence 展示。GUI 在这些验收中仍只发送终端等价文本、展示 refs 和收集确认，不直接执行桌面操作；`gui.present` 只能证明用户可见展示，不能替代 executor、validator 或 action/evidence 证据。
+Computer Use / Window Action 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 必须包含真实用户产物、当前 WindowActionSession evidence、action causality、artifact/verifier refs、`gui.present` refs 和 bounded before/after evidence。目标打通需要覆盖多 app/window/session 工作流，例如 Browser/资料页、notebook/terminal 实验、editor/report artifact 和 SciForge Image/Evidence 展示。GUI 在这些验收中仍只提交自然语言/ref intent、Autonomy profile、确认/取消或展示 refs，不直接执行桌面操作；`gui.present` 只能证明用户可见展示，不能替代 executor、validator 或 action/evidence 证据。
 
-Computer Use action provider 可以消费 `packages/observe/vision` 的 observation、focus-region、grounding 和 verifier feedback，但执行所有桌面/远程/dry-run action 的 owner 仍是 `packages/actions/computer-use` 以及 TUI Host 注入的 host ports。当前终局不是隔离 VirtualAppScreen，而是 **Host-owned real window/app action**：用户和 agent 面对正常系统窗口；SciForge 用 WindowActionSession、windowRef、actorCursor、adapter route 和 before/after evidence 解释动作。底层优先使用 BrowserHostSession/CDP/Playwright、app-native command、editor extension、terminal PTY、Accessibility/UI Automation/AT-SPI、Model Router vision translator 生成的 grounding/observation，或显式 shared-system-input evidence。`vision-sense` 不拥有 executor、scheduler、desktop bridge、MCP 会话或用户级完成判断；它只产生 refs-first 的视觉信号。Computer Use 不按具体上游模型类型做产品级分叉；router profile 的 `textReasoner` 是 reasoning owner，`translators.vision` 只把截图、crop 或 ref 转译成文本观察。截图、crop、replay、PDF 或 document export 只能作为 evidence/artifact，不作为第二个可交互屏幕，也不是交互 fallback。Computer Use trace 只记录 surface/window refs、截图 refs、focus crop refs、sha256、尺寸、坐标、target description、公开 router profile/alias、diagnostics 和 approval/audit refs，不内联截图 payload、base64、私有 provider URL、API key 或大日志。真实系统鼠标键盘属于 shared system input 风险面；若没有独立 app/window-scoped adapter，只能作为 diagnostic、blocked、explicit handoff 或 `shared-system-input` evidence，不能伪装成隔离验收。
+Generated-task 的 `completionCandidate`、ArtifactDelivery 和普通 artifact/workEvidence refs 只是可恢复或可展示证据，不能提升为 Agent Host 的 `completionTruth`。用户级 workflow completion 必须由 runtime owner 产出同一 current-run 的 verifier manifest/evidence refs，并通过 package-owned validator 或受控 truth adapter；未验证候选产物只能投影为 repair-needed/unverified。
+
+Computer Use action provider 是 Agent Host 的 GUI I/O augmentation layer，不是第二个 planner/agent。输入增强包括 observe、screenshot、crop、OCR、Model Router vision observation、AX/DOM/UIA hints、PTY/editor/file/artifact evidence、freshness 和 action history；输出增强包括 ground/bind、execute、before/after evidence、local verify、action ledger 和 stale invalidation。用户级任务理解、跨模块规划、approval 决策、repair 和 completion 仍归 Agent Host。
+
+Computer Use action provider 可以消费 `packages/observe/vision` 的 observation、focus-region、grounding 和 verifier feedback，但执行所有桌面/远程/dry-run action 的 owner 仍是 `packages/actions/computer-use` 以及 TUI Host 注入的 host ports。当前终局不是隔离 VirtualAppScreen，而是 **Host-owned real window/app action**：用户和 agent 面对正常系统窗口；SciForge 用 WindowActionSession、windowRef、actorCursor、adapter route 和 before/after evidence 解释动作。底层优先使用 BrowserHostSession/CDP/Playwright、app-native command、editor extension、terminal PTY、Accessibility/UI Automation/AT-SPI、Model Router vision translator 生成的 grounding/observation，或显式 shared-system-input evidence。证据组合按用途选择，而不是固定流水线：文本、role、value 和 artifact 内容优先结构化 exact evidence；可见性、遮挡、布局、焦点、点击可达性和最终人类可见结果优先 fresh screenshot/crop；freshness > confidence，同 owner/session/target evidence 优先；cheap evidence first，不确定、冲突或风险升高时再升级到 crop/OCR/vision/verifier。`vision-sense` 不拥有 executor、scheduler、desktop bridge、MCP 会话或用户级完成判断；它只产生 refs-first 的视觉信号。Computer Use 不按具体上游模型类型做产品级分叉；router profile 的 `textReasoner` 是 reasoning owner，`translators.vision` 只把截图、crop 或 ref 转译成文本观察。截图、crop、replay、PDF 或 document export 只能作为 evidence/artifact，不作为第二个可交互屏幕，也不是交互 fallback。Computer Use trace 只记录 surface/window refs、截图 refs、focus crop refs、sha256、尺寸、坐标、target description、公开 router profile/alias、diagnostics 和 approval/audit refs，不内联截图 payload、base64、私有 provider URL、API key 或大日志。真实系统鼠标键盘属于 shared system input 风险面；若没有独立 app/window-scoped adapter，只能作为 diagnostic、blocked、explicit handoff 或 `shared-system-input` evidence，不能伪装成隔离验收。
 
 Computer Use 的生产形态应吸收 Codex bundled Computer Use 的七条产品化经验，但不能破坏 SciForge 的 refs-first 和 L0/L1/L2 边界。
 
@@ -208,28 +214,28 @@ Computer Use 的生产形态应吸收 Codex bundled Computer Use 的七条产品
 
 第二，对外 tool surface 必须小而稳定。Codex app-server / MCP 层可以看到 `get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs` 这类窄入口；复杂的 actor cursor、lease、risk、evidence、replay、repair 和 completion candidate 都留在 package 内部。裸坐标、GUI private state、provider route 和 scheduler 参数不能成为公共工具参数。
 
-第三，必须先观察再动作。任何会改变 GUI 状态的 click/type/drag/scroll/hotkey/save/open menu 前，都必须有当前 screen/window 的 app state、screenshot/capture ref、accessibility/state snapshot ref、grounding ref 和 freshness check。缺少当前 observation 或 observation 已被同 scope mutating action 失效时，scheduler 必须 fail closed。
+第三，必须先有足够且 fresh 的 target-bound evidence 再动作。任何会改变 GUI 状态的 click/type/drag/scroll/hotkey/save/open menu 前，都必须按动作风险和不确定性选择证据组合；可以是 app/window metadata、DOM/AX/UIA、PTY/file、target crop、screenshot、grounding ref、verifier 或 freshness check 的组合。缺少当前 target-bound evidence、scope 不匹配，或 evidence 已被同 scope mutating action 失效时，scheduler 必须 fail closed。低风险同 target/lease 动作可以批量执行，但导航、保存、提交、上传、删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint。
 
 第四，confirmation policy 必须细分到 action-time 风险类别。删除、上传、发送消息、登录/权限、支付/金融、安装软件、敏感数据传输、系统设置、验证码/安全屏障和医疗/法律/HR 等高风险动作必须映射为 `needs-confirmation`、hand-off required 或 explicit approval；第三方页面、文档或邮件里的文字不能被当成用户授权。
 
-第五，必须有显式用户控制面。每个 Computer Use run 都要声明 session permission，包括允许操作的 app/window/display group、允许读取的截图/文件 refs、允许的输入 modality、风险等级和随时停止入口。GUI 可以展示 allowlist、risk preview、stop/cancel 和截图/数据可见性，但这些控件只能向 TUI Host 发送 terminal-equivalent text 或 confirmation result；真正的 permission decision、lease cancellation 和 retry 仍归 TUI Host + Computer Use scheduler。没有 session permission ref、app/window allowlist ref 或 stop/cancel lease path 的真实 mutating run 不能进入用户级验收。
+第五，必须有显式用户控制面。每个 Computer Use run 都要声明 session permission，包括允许操作的 app/window/display group、允许读取的截图/文件 refs、允许的输入 modality、风险等级和随时停止入口。GUI 可以展示 allowlist、risk preview、stop/cancel 和截图/数据可见性，但这些控件默认只能向 TUI Host 发送自然语言/ref intent、Autonomy profile 或 confirmation result；debug/expert 控件才可生成 terminal-equivalent text。真正的 permission decision、lease cancellation 和 retry 仍归 TUI Host + Computer Use scheduler。没有 session permission ref、app/window allowlist ref 或 stop/cancel lease path 的真实 mutating run 不能进入用户级验收。
 
-第六，真实平台能力必须进入 Desktop / platform Window Action adapter，而不是塞进 GUI 或 generic runtime。macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、focused-window detection、click/type/scroll/hotkey 和 permission/preflight 都属于 Host/backend adapter 能力。Host 只暴露 typed MCP/native tool/host-port calls，返回 window/action refs、capture refs、accessibility/state refs、input accepted refs、automation barrier refs、executor event refs、risk refs 和 permission/preflight refs；它禁止 planning、capability ranking、跨模块调用、GUI renderer dependency、用户级 completion 和直接写 artifact 成功结论。SciForge runtime 只能注入 workspace/session context 和 host process lifecycle，不能把平台实现升级成 public Computer Use policy。Docker、noVNC、RDP、DeskPad、BetterDisplay、Mirage 和 Sunshine/Moonlight 只描述 backend packaging、历史诊断证据、reference adapter 或 benchmark，不再作为当前 active gate、产品验收 owner 或第二交互真相源。
+第六，真实平台能力必须进入 Desktop / platform Window Action adapter，而不是塞进 GUI 或 downstream runtime adapter。macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、focused-window detection、click/type/scroll/hotkey 和 permission/preflight 都属于 Host/backend adapter 能力。Host 只暴露 typed MCP/native tool/host-port calls，返回 window/action refs、capture refs、accessibility/state refs、input accepted refs、automation barrier refs、executor event refs、risk refs 和 permission/preflight refs；它禁止 planning、capability ranking、跨模块调用、GUI renderer dependency、用户级 completion 和直接写 artifact 成功结论。SciForge runtime 只能注入 workspace/session context 和 host process lifecycle，不能把平台实现升级成 public Computer Use policy。Docker、noVNC、RDP、DeskPad、BetterDisplay、Mirage 和 Sunshine/Moonlight 只描述 backend packaging、历史诊断证据、reference adapter 或 benchmark，不再作为当前 active gate、产品验收 owner 或第二交互真相源。
 
 第七，产品化 smoke 必须从 package diagnostic 前进到 Desktop native / real window path。默认 release gate 仍不运行长耗时 live tests，但 active backlog 至少要覆盖：Codex app-server/native plugin 调用 SciForge Computer Use、WindowActionSession active gate、adapter readiness、BrowserRuntime DOM/AX observation refs 作为只读 hint、research workflow user-acceptance manifest、高风险 confirmation stop、blocked recovery 和 Image/Evidence 可见证据。package-owned target-bound harness 只能证明 contract 和 diagnostic；Docker/noVNC/RDP/M6 multi-screen run 只能作为 legacy diagnostic、historical evidence、backend packaging 或 sidecar/ref historical regression 复验，不能替代 native app-server/native plugin + app/window/session adapter contract + current bundle evidence，也不能阻塞当前路线。
 
-Computer Use 的 L0/L1/L2 边界必须比一般 action provider 更严格。L2 只能是 Codex app-server 或 Codex CLI/native plugin host，它负责任务规划、跨模块 pipeline、approval、repair 和用户级 completion；Computer Use package 不能成为第二个任务大脑。L1 只能是 Computer Use / Window Action 资源适配层，管理 target app/window/session、actor cursor、input intent、executor lease、evidence 和 replay refs，以及 backend/provider lifecycle；它不做跨模块 planning、capability ranking、prompt route 或 completion 判断。L0 是单动作 handler，例如 capture、crop、ground、execute、verify、writeTrace、emitEvent。多鼠标在产品语义上先是 actor cursor / intent / overlay；真实 OS multi-pointer 或 multi-seat 只是未来可替换 executor backend，不进入 planner、GUI 或 schema 的核心假设。历史 AgentServer、runtime gateway、`codex exec --json` 和 GUI `/computer-use` special route 只能作为 legacy/test-only/diagnostic adapter；新增生产路径应收敛到 Codex app-server + native tool/plugin/MCP。
+Computer Use 的 L0/L1/L2 边界必须比一般 action provider 更严格。L2 是 `Codex Agent Host Turn Loop`；生产形态由 Codex app-server 承载，Codex CLI/native plugin host 只作为 expert/debug/smoke/diagnostic host。L2 负责任务规划、跨模块 pipeline、approval、repair 和用户级 completion；Computer Use package 不能成为第二个任务大脑。L1 只能是 Computer Use / Window Action 资源适配层，管理 target app/window/session、actor cursor、input intent、executor lease、evidence 和 replay refs，以及 backend/provider lifecycle；它不做跨模块 planning、capability ranking、prompt route 或 completion 判断。L0 是单动作 handler，例如 capture、crop、ground、execute、verify、writeTrace、emitEvent。多鼠标在产品语义上先是 actor cursor / intent / overlay；真实 OS multi-pointer 或 multi-seat 只是未来可替换 executor backend，不进入 planner、GUI 或 schema 的核心假设。历史 AgentServer、runtime gateway、`codex exec --json` 和 `/computer-use` debug/expert/smoke/diagnostic route 只能作为 legacy/test-only/diagnostic adapter；新增生产路径应收敛到默认聊天 turn -> Codex app-server + native tool/plugin/MCP。
 
 Computer Use 文件责任按生产路径拆成下表，任何新增代码都应落到对应层，而不是把 runtime 或 GUI 重新变成半个 L2。
 
 | 区域 | 层级 | 允许做 | 禁止做 |
 |---|---|---|---|
-| Codex app-server native tool/plugin/MCP | L2 Root Agent Host | 生产入口、跨模块 pipeline、approval、repair、用户级 completion 和 pipeline trace。 | 把 `codex exec --json`、AgentServer 或 Workspace Gateway 作为产品 fallback。 |
-| Codex CLI/native plugin | L2 debug host | 本地调试和 smoke，复用同一 Computer Use native surface。 | 成为 rich-client production runtime。 |
+| Codex Agent Host Turn Loop / Codex app-server native tool/plugin/MCP | L2 Root Agent Host | 默认聊天 turn、Ground/Guard/Act/Answer、跨模块 pipeline、approval、repair、用户级 completion 和 pipeline trace。 | 把 `codex exec --json`、AgentServer、Workspace Gateway 或 `/computer-use` 当作普通用户产品入口或 fallback。 |
+| Codex CLI/native plugin | L2 debug host | 本地 expert/debug/smoke/diagnostic，复用同一 Computer Use native surface。 | 成为 rich-client production runtime 或默认聊天 product owner。 |
 | `packages/actions/computer-use` | L1/L0 owner | request/result schema、session/display group/screen/cursor/lease/replay contract、domain-local action loop、scheduler、executor adapter contract、safety、trace、L0 handler routing。 | 直接调用 GUI、browser、file、verifier 或决定用户级 completion。 |
 | `packages/actions/computer-use/virtual-app-screen-host` | deprecated compatibility | 历史 VirtualAppScreen trace / fixture / regression 的兼容读取和迁移辅助。 | planning、completion、GUI import、scheduler policy、workspace write policy、把第三方虚拟屏幕 UI 当 product truth，或作为当前 active product gate。 |
 | `packages/observe/vision` | L0 sense provider | capture/crop/OCR、Model Router vision translator/grounding 输出、verifier feedback 和 file-ref-only visual memory。 | 执行 click/type/drag/scroll/hotkey/save，或拥有 scheduler/lease。 |
-| `src/runtime/computer-use` | host adapter | 注入 workspace/session context、platform host ports、runtime event projection 和 legacy diagnostic shim。 | 保存 generic Computer Use policy，暴露新增 public API，或绕过 package contract。 |
+| `src/runtime/computer-use` | host adapter | 注入 workspace/session context、platform host ports、downstream runtime event projection 和 legacy diagnostic shim。 | 保存 generic Computer Use policy，暴露新增 public API，或绕过 package contract。 |
 | Platform adapter / MCP service | L0 platform backend | Host 背后的 OS-specific capture、accessibility/state snapshot、focused-window binding、executor command、permission/preflight 和 isolation report。 | planning、completion、GUI presentation、workspace write policy、provider ranking、mint host grant 或绕过 scheduler/approval。 |
 | User control surface | GUI/TUI presentation + L2 policy | 展示 session permission、app/window allowlist、risk preview、stop/cancel、confirmation 和 data visibility refs。 | 直接执行动作、私自扩大 permission、把 allowlist 当 completion evidence。 |
 | GUI presentation / viewer overlay | GUI module | 渲染 Image/Evidence refs、WindowActionSession actor cursor overlay、lease owner、proposal 状态、confirmation UI 和 `gui.present` 投影。 | 执行 Computer Use action、传 executor 参数或把 placeholder frame 当 completion evidence。 |
@@ -260,15 +266,15 @@ DOM / pointer / keyboard / scroll / modal events
 
 注释侧栏复用主 conversation kernel 的 session、references、structured stream/event 和 GUI-TUI 对话能力。无副作用的整理/预览/保存反馈使用 `annotation-plan-only` envelope；低风险小改动使用 `annotation-quick-action` envelope，并必须保持单对象、局部、可解释、可回退。复杂改动、跨对象关系、repair、GitHub、commit、push、PR 和 merge 必须进入收件箱。
 
-`annotation-plan-only` 边界由主 conversation kernel 和 runtime transport 双层保证：`runPromptOrchestrator` 对该 turn 本地生成 intent draft 响应并跳过 target lookup、context compaction、runtime 和 repair stage；`sendSciForgeToolMessage` 对漏到 Codex Runtime transport 的 plan-only envelope 直接拒绝。quick action 不复用这个 lane，避免 UI 暗示执行但底层仍是 plan-only。
+`annotation-plan-only` 边界由主 conversation kernel 和 runtime transport 双层保证：`runPromptOrchestrator` 对该 turn 本地生成 intent draft 响应并跳过 target lookup、context compaction、runtime 和 repair stage；`sendSciForgeToolMessage` 对漏到 downstream Runtime Codex transport 的 plan-only envelope 直接拒绝。quick action 不复用这个 lane，避免 UI 暗示执行但底层仍是 plan-only。
 
 保存注释时，GUI 生成本地 feedback inbox `annotation-plan` record，包括引用对象、原始描述、澄清问答摘要、action log、修改建议、验收标准、URL/route、selector/DOM path 和 screenshot/evidence refs。复杂后续 repair/code/GitHub sync 必须由用户在收件箱中显式启动，并经过对应确认边界。
 
 ## 内置浏览器运行时
 
-SciForge 的内置浏览器是 TUI/Codex runtime 的 `browser_runtime` capability 和 host-owned `BrowserHostSession`，不是 GUI 自己实现的网页 agent。GUI 可以展示 browser session、tabs、当前 URL、Desktop Electron `WebContentsView` live surface、截图 refs、DOM snapshot refs、console/network refs 和 human takeover 状态，也可以把按钮转换成 `/browser ...` 这类终端等价文本；但 GUI 不判断网页任务意图、不选择 Playwright provider、不拼 browser prompt、不把网页正文或截图 base64 写进 workspace state。
+SciForge 的内置 Browser Pane 是 host-owned `BrowserHostSession` 的 display/control panel；`BrowserHostSession` 是 live browser owner。`browser_runtime` 是 Codex/TUI Agent Host 可在 Ground 或 Act 阶段使用的 capability，不是 GUI 自己实现的网页 agent，也不是独立 Browser agent。GUI 可以展示 browser session、tabs、当前 URL、Desktop Electron `WebContentsView` live surface、截图 refs、DOM snapshot refs、console/network refs 和 human takeover 状态；默认聊天仍只提交自然语言文本、refs、Autonomy profile 和确认/取消。GUI 不判断网页任务意图、不选择 Playwright provider、不拼 browser prompt、不把网页正文或截图 base64 写进 workspace state。
 
-默认浏览器路径使用 `BrowserHostSession` 持有真实 Chromium/CDP session、action channel、live surface 和 evidence refs；底层可以接 `playwright_browser_automation`、native embedded browser adapter 或同一 session 的 host frame-stream，但 BrowserHostSession 仍是唯一 live browser owner。需要登录、验证码、2FA、账户权限或人工接管时，才显式进入 visible takeover / handoff，并要求用户确认。截图、DOM、console、network、PDF/document projection 和下载结果必须 refs-first；projection 只保存 ref、摘要、尺寸/hash/targetRect 等可审计元数据，不能作为 Browser pane 的第二画面真相源或交互 fallback。
+当 turn loop 需要浏览器能力时，`BrowserHostSession` 持有真实 Chromium/CDP session、action channel、live surface 和 evidence refs；底层可以接 `playwright_browser_automation`、native embedded browser adapter 或同一 session 的 host frame-stream，但 BrowserHostSession 仍是唯一 live browser owner。需要登录、验证码、2FA、账户权限或人工接管时，才显式进入 visible takeover / handoff，并要求用户确认。截图、DOM、console、network、PDF/document projection 和下载结果必须 refs-first；projection 只保存 ref、摘要、尺寸/hash/targetRect 等可审计元数据，不能作为 Browser pane 的第二画面真相源或交互 fallback。
 
 实现分层必须保持三段式：纯 schema/helper 放在 `@sciforge-ui/runtime-contract/browser-runtime`；TUI provider wrapper、manifest 和 Playwright MCP adapter 放在 `packages/observe/web`；右侧结果区和工作台展示放在 `packages/presentation/components/browser-workbench` 或 `src/ui` host 装配层。`src/ui/**` 只能 import shared contract 与 GUI presentation package，不得 import `@sciforge-observe/web/browser-runtime`。Computer Use 可以消费 BrowserRuntime 产出的 DOM/AX snapshot refs、stable target refs 或 PageQuery refs，但它们只能作为 observation、target hint、freshness check 或 verifier context；DOM/AX/Playwright 不能成为 Computer Use executor 或 completion evidence。
 
@@ -285,7 +291,7 @@ Cursor/Codex agent 风格的右侧结果区由 `ResultShell` 和 package-owned p
 | Pane / 组件 | GUI package owner | Host / TUI owner | 必须保持的边界 |
 |---|---|---|---|
 | Results / `ResultShell` | 路由 object ref、placement、loading/empty/error/blocked/unsupported 状态和 object action UI。 | TUI 负责决定哪些 artifact/file/image/table/report/interactive view 是可预览结果。 | Results 不展示普通 chat answer，不从日志推断 completion，不内联 provider payload。 |
-| Browser / `browser-workbench` | 渲染 browser projection、typed state、tabs、Desktop Electron `WebContentsView` live surface、snapshot/log refs、Open/Back/Forward/Reload/Stop/Snapshot/State/Takeover/Copy URL/Open External 命令。 | `BrowserHostSession` / `packages/observe/web` / TUI `browser_runtime` 拥有 provider、CDP/Playwright/native browser adapter、登录接管、DOM/AX/console/network/screenshot/search refs、非桌面 diagnostic/evidence stream 和网页动作。 | GUI 只发 `/browser ...` 文本或 declared intent；不选择 provider、不跨域读取 DOM、不把 iframe/proxy/snapshot/旧 frame/系统 popup 当 live browser、第二真相源或交互 fallback、不判断网页任务完成。 |
+| Browser / `browser-workbench` | 渲染 browser projection、typed state、tabs、Desktop Electron `WebContentsView` live surface、snapshot/log refs、Open/Back/Forward/Reload/Stop/Snapshot/State/Takeover/Copy URL/Open External 命令。 | `BrowserHostSession` / `packages/observe/web` / TUI `browser_runtime` 拥有 provider、CDP/Playwright/native browser adapter、登录接管、DOM/AX/console/network/screenshot/search refs、非桌面 diagnostic/evidence stream 和网页动作。 | GUI 默认只发自然语言/ref intent 或 declared intent，debug/expert 才生成 `/browser ...` 文本；不选择 provider、不跨域读取 DOM、不把 iframe/proxy/snapshot/旧 frame/系统 popup 当 live browser、第二真相源或交互 fallback、不判断网页任务完成。 |
 | Image / Evidence / `image-evidence-viewer` | 渲染截图、crop、Browser evidence、window capture、artifact preview、replay/history image、annotation overlay 和 provenance。 | BrowserHostSession、WindowActionSession、Global Annotation、artifact preview 和 ref materializer 拥有证据生成与 refs。 | GUI 不执行 Computer Use action，不持有 executor lease，不接收 raw screenshot/base64/provider payload；截图/replay/PDF/document 只能是证据或静态对象，不是第二个交互真相源或交互 fallback。 |
 | Terminal / `terminal-session-viewer` | 渲染 host-owned live surface 或 transcript fallback、cwd、status、rows/cols、exit code、Copy/Download/Stop/Focus/Resize/Input/Paste intents。 | TUI/Host PTY adapter 拥有 process、socket、stdin、resize、stop、copy/download materialization 和 transcript refs。 | Terminal pane 不展示 Active result、agent answer、trace dump、activity/environment summary；stopped/error session 不能继续输入。 |
 | Files / `workspace-file-viewer` | 渲染 workspace tree、选中文件、只读/编辑草稿、dirty/cancel/save/error 状态、copy/open/toggle view intents。 | Host workspace adapter 拥有 list/read/write、路径规范化、权限、冲突处理、大文件/二进制策略和持久化。 | 默认只读；显式 Edit 后才允许草稿；GUI 不直接写 workspace，不把绝对私有路径作为长期上下文。 |
@@ -305,7 +311,7 @@ Cursor/Codex agent 风格的右侧结果区由 `ResultShell` 和 package-owned p
 - Image 像视觉证据栏：主体展示截图、crop、Browser evidence、window capture、artifact preview 和 replay/history image；actor cursor 和真实输入状态属于 WindowActionSession/Browser projection，replay/snapshot 只作证据，不能作为备用交互面。
 - Files 像文件查看器/编辑器：默认只读、显式编辑、保存失败保留草稿；多 tab 状态互不污染。
 - References 像 provenance inspector：按对象类型分组，支持 open/focus/copy/pin；不把 raw trace/provider payload 当 UI。
-- 所有 pane 的按钮都是 focus/open、declared intent 或 terminal-equivalent text；不会因为点击 citation 就自动把 ref 塞进 composer。
+- 所有 pane 的按钮都是 focus/open、declared intent、confirmation/cancel 或 debug/expert terminal-equivalent text；不会因为点击 citation 就自动把 ref 塞进 composer。
 
 ## TUI 感知 GUI：只读虚拟资源树
 
@@ -344,7 +350,7 @@ GUI resource search 不是让 TUI grep 原始 DOM。它搜索的是 GUI projecto
 
 能力分成两个目录，不能混在一起：
 
-1. **任务能力目录**：skills、tools、plugins、MCP、provider、verifier、harness 和 capability discovery 都属于 TUI/Codex 原生生态。GUI 想触发发现时，只发送终端等价文本，例如 `/capabilities search`、`/capabilities expand`、`/capabilities plan`、`/capabilities explain`。
+1. **任务能力目录**：skills、tools、plugins、MCP、provider、verifier、harness 和 capability discovery 都属于 TUI/Codex 原生生态。GUI 想触发发现时，默认提交自然语言文本、refs 和 Autonomy profile；debug/expert 控件才生成 `/capabilities search`、`/capabilities expand`、`/capabilities plan`、`/capabilities explain` 这类终端等价文本。
 2. **展示能力目录**：`packages/presentation/components` 里的 renderer、viewer、workbench 组件属于 GUI extension。它们只说明“GUI 能怎么展示某类 artifact/ref”，不说明“任务应该调用哪个算法或工具”。
 
 GUI 展示能力通过只读资源暴露给 TUI：
@@ -440,7 +446,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 - Codex custom model provider / `model_providers.<id>.base_url`；默认指向 SciForge Model Router 的 `/v1/responses` facade。
 - 必要时的本地 Codex provider proxy。
 
-默认生产集成目标是上游 Codex app-server + custom model provider，默认 provider 指向 SciForge Model Router；router profile 再解析 text reasoner、vision translator、trace root 和补问预算。GUI 启动或连接 Codex app-server，把用户操作翻译成文本写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为 legacy/test-only 兼容和历史证据；Claude Code stream-json 可作为可选 backend adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
+默认聊天 turn 的 Agent Host 集成目标是上游 Codex app-server + custom model provider，默认 provider 指向 SciForge Model Router；router profile 再解析 text reasoner、vision translator、trace root 和补问预算。GUI 启动或连接 Codex app-server，把用户自然语言、refs、Autonomy profile 和确认/取消写入 agent host，再消费其 thread/turn/item/approval 事件流。`codex exec --json` 只作为 legacy/test-only 兼容和历史证据；Claude Code stream-json 可作为可选 downstream runtime adapter。SciForge 不再要求常驻 AgentServer；历史 `AgentServer` / `runtime gateway` 只能作为当前代码兼容层或迁移来源，不是最终架构依赖，也不得出现在新增 public API 中。
 
 迁移目标应收敛为 `CodexAppServerAdapter` 生产默认、`CodexExecJsonAdapter` legacy/test-only、`ClaudeStreamJsonAdapter` 可选。现有 `AgentCliAdapter` 继续隔离进程和事件细节，但不能把 `codex exec --json` 视为产品 fallback。细节见 [`CodexRuntimeMigration.md`](../packages/backend/CodexRuntimeMigration.md)。
 
@@ -460,7 +466,7 @@ SciForge 不定义新的 agent extension API。所有算法和策略扩展都使
 | Artifact schema / verifier | TUI 原生 tool 或 skill。 |
 | GUI 展示、确认、输入收集 | SciForge GUI module 暴露的 `module.invoke({ moduleId: 'gui', intent })`；`gui.*` 只作为 adapter shim。 |
 
-外部连接器和 Computer Use 遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化、Computer Use executor 或 API。GUI 按钮只生成终端等价文本，例如 `/connectors feishu draft-message ...` 或 `/computer-use run ...`；外部聊天消息也可以由 connector intake 直接进入 Agent Host input queue，等价于 Web 端输入栏提交。TUI 决定是否调用 connector/action provider。拓展模块输出 refs-first 结果，例如 external refs、artifact refs、trace refs、draft refs、approval request、audit refs；发送、删除、同步、桌面输入等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并由 TUI Host 通过 `gui.ask_user` 或外部通道中的明确确认收集确认。
+外部连接器和 Computer Use 遵守同一条边界：GUI 不直接调用第三方 SDK、CLI、桌面自动化、Computer Use executor 或 API。默认 GUI 只提交自然语言文本、refs、Autonomy profile 和确认/取消；expert/debug 控件可以生成终端等价文本，例如 `/connectors feishu draft-message ...`，但普通 Computer Use 需求仍由默认聊天 turn 触发，`/computer-use` 只保留 debug/expert/smoke/diagnostic 用途。外部聊天消息也可以由 connector intake 直接进入 Agent Host input queue，等价于 Web 端输入栏提交。TUI 决定是否调用 connector/action provider。拓展模块输出 refs-first 结果，例如 external refs、artifact refs、trace refs、draft refs、approval request、audit refs；发送、删除、同步、桌面输入等有外部副作用的操作必须经过 TUI 侧 approval / dry-run / idempotency 规则，并由 TUI Host 通过 `gui.ask_user` 或外部通道中的明确确认收集确认。
 
 ## Desktop Packaging Direction
 
@@ -526,7 +532,8 @@ effectiveConfidence = clamp(min(sourceScore ?? evidenceDefault, evidenceCap) - p
 
 React/UI 只做 presentation behavior：
 
-- 用户手势 -> 命令文本。
+- 用户输入/选择 -> 自然语言文本、refs、Autonomy profile 或 confirmation result。
+- debug/expert 手势 -> 终端等价文本。
 - semantic event bus -> shell/hot-region context。
 - 只读虚拟 GUI resources -> `list/read/search/stat/watch`。
 - `gui.*` intent 的执行。
@@ -543,7 +550,7 @@ React/UI 也不直接执行 Computer Use、连接器 CLI、外部 API 或桌面 
 - 不需要独立 AgentServer；默认直接连接 Codex backend。
 - 默认运行期不得消耗 OpenAI token，除非用户显式 opt in；生产默认应让 Codex backend 走 SciForge Model Router 的公开 alias/profile，由私有 router config 选择具体上游 provider。
 - GUI 没有 provider 分支、repair 策略、capability ranking、prompt route。
-- 所有 GUI 按钮最终只发送文本。
+- 默认 GUI 只发送自然语言文本、refs、Autonomy profile 和确认/取消；debug/expert 按钮最多生成终端等价文本。
 - 全局注释侧栏是连续反馈入口：澄清/预览/保存反馈使用无副作用 lane，低风险小改动使用 quick action，复杂执行进入收件箱。
 - 注释、反馈和收件箱的 Web UI smoke 可以使用 Codex in-app browser 或 `localhost:5173`；涉及真实 Browser Pane、窗口捕获、全局 overlay 或 native input 的产品验收必须使用 Desktop Electron native host。
 - TUI 用原生机制调用 intent-based `gui.*` tools；GUI 可协商、延迟或拒绝。

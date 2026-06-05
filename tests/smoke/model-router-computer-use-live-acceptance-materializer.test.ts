@@ -114,6 +114,33 @@ test('Model Router Computer Use live acceptance materializer blocks unsafe sourc
   }
 });
 
+test('Model Router Computer Use live acceptance materializer blocks GUI projection refs as action-runner sources', async () => {
+  const workspace = await mkWorkspace('cu-live-materializer-ui-projection-');
+  const outInput = join(workspace, 'matrix-input.json');
+  const input = await materializerInput(workspace, 'ui-projection-run');
+  input.cases[0].sourceRefs = ['gui.present:ui-projection-run/browser-research'];
+  input.cases[0].executorSourceRefs = {
+    ...input.cases[0].executorSourceRefs,
+    refs: ['gui.present:ui-projection-run/browser-research/executor'],
+  };
+  try {
+    const manifest = await runModelRouterComputerUseLiveAcceptanceMaterializer({
+      input,
+      outInputPath: outInput,
+      runRootPath: join(workspace, 'materialized-runs'),
+      now: () => new Date('2026-06-05T04:05:06.000Z'),
+    });
+
+    assert.equal(manifest.status, 'blocked');
+    assert.equal(manifest.outputs.matrixInputWritten, false);
+    assert.ok(manifest.issues.includes('browser-research:ui-projection-source-not-action-runner'), manifest.issues.join('\n'));
+    await assert.rejects(access(outInput));
+    assert.doesNotMatch(JSON.stringify(manifest), forbiddenMaterializerOutputPattern);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Model Router Computer Use live acceptance materializer blocks non-mutating or diagnostic-only live attestations', async () => {
   const workspace = await mkWorkspace('cu-live-materializer-attestation-');
   const outInput = join(workspace, 'matrix-input.json');

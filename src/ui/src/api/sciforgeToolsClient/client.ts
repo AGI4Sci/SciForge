@@ -10,6 +10,11 @@ import { DEFAULT_AGENT_REQUEST_TIMEOUT_MS } from '@sciforge-ui/runtime-contract/
 import { collectRuntimeRefsFromValue } from '@sciforge-ui/runtime-contract/references';
 import { createCodexRealtimeSessionEnvelope } from '@sciforge-ui/runtime-contract/codex-realtime-session';
 import {
+  composerComputerUseCommandRequiresExactTerminalText,
+  composerPromptIsComputerUseSlashCommand,
+  composerPromptMentionsRelativeModality,
+} from '@sciforge-ui/runtime-contract/ui-composer-intent-policy';
+import {
   buildSilentStreamDecisionRecord,
   buildSilentStreamRunId,
   isSeedDemoOrFixtureMessage,
@@ -427,6 +432,7 @@ function buildCodexRuntimeStreamRequest(input: {
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
   const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
+  const agentHostInput = buildCodexAgentHostInput(input.input, input.referenceSummary);
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
     realtimeSession: createCodexRealtimeSessionEnvelope({
@@ -441,6 +447,7 @@ function buildCodexRuntimeStreamRequest(input: {
     profile,
     codexSessionId,
     allowOpenAiRuntime: config.allowOpenAiRuntime === true,
+    agentHostInput,
     guiExtension: {
       enabled: true,
     },
@@ -453,7 +460,7 @@ function buildCodexRuntimeStreamRequest(input: {
       boundary: 'GUI-to-TUI input is terminal-equivalent text only; non-text fields are adapter metadata and must not be interpreted as task context.',
       promptCarriedBy: 'commandText',
       legacyHandoffBoundary: 'GUI transcript, artifact bodies, expected results, capability selection, provider routing, and recovery policy stay outside the Runtime Codex task request.',
-      declaredPreferenceBoundary: 'Composer model/mode choices are public declared intents under guiLocalProjection only; they are not provider routes or concrete runtime model names.',
+      declaredPreferenceBoundary: 'Composer model/mode/Autonomy choices are public declared intents for Agent Host policy under guiLocalProjection only; they are not provider routes or concrete runtime model names.',
       runtime: {
         kind: 'codex',
         provider,
@@ -470,6 +477,54 @@ function buildCodexRuntimeStreamRequest(input: {
         `audit:codex-runtime:${input.commandId}:${attemptId}:normalized-events`,
       ],
     },
+  };
+}
+
+function buildCodexAgentHostInput(input: SendAgentMessageInput, referenceSummary: Array<Record<string, unknown>>) {
+  const authorization = safeComposerDeclaredIntents(input.composerDeclaredIntents)?.authorization
+    ?? defaultComposerDeclaredAuthorization();
+  const readiness = buildCodexAgentHostRuntimeReadinessProjection(input.runtimeHealth);
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'ui-normal-composer-transport',
+    intentText: input.prompt.trim().slice(0, 2_000),
+    authorizationProfileId: authorization.profileId,
+    authorizationProfileSource: authorization.source,
+    authorizationScope: authorization.scope,
+    singleTurnOverride: authorization.singleTurnOverride,
+    policyOwner: 'codex-agent-host-runtime',
+    refs: uniqueRuntimeStringList(referenceSummary.flatMap((reference) => [
+      reference.ref,
+      reference.path,
+      reference.dataRef,
+      reference.id,
+    ])).slice(0, 24),
+    ...(readiness ? { readiness } : {}),
+  };
+}
+
+function buildCodexAgentHostRuntimeReadinessProjection(value: SendAgentMessageInput['runtimeHealth']) {
+  const items = (value ?? []).flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const id = knownString(item.id, ['ui', 'workspace', 'codex-runtime', 'agentserver', 'model', 'library']);
+    const status = knownString(item.status, ['online', 'checking', 'optional', 'not-configured', 'offline']);
+    if (!id || !status) return [];
+    const source = knownString(item.source, ['settings', 'runtime-provider-preflight']);
+    const capabilities = uniqueRuntimeStringList(Array.isArray(item.capabilities) ? item.capabilities : []).slice(0, 64);
+    return [{
+      id,
+      status,
+      ...(source ? { source } : {}),
+      ...(capabilities.length ? { capabilities } : {}),
+    }];
+  }).slice(0, 8);
+  if (!items.length) return undefined;
+  return {
+    schemaVersion: 'sciforge.agent-host-runtime-readiness-projection.v1',
+    source: 'ui-runtime-health-projection',
+    policyOwner: 'codex-agent-host-runtime',
+    items,
+    refs: items.map((item) => `runtime-health:${item.id}`).slice(0, 8),
   };
 }
 
@@ -554,7 +609,8 @@ function auditOnlyGuiProjectionRefs(
   const claimRefs = (input.claims ?? []).slice(-16).map((claim) => `claim:${claim.id}`);
   const executionRefs = (input.executionUnits ?? []).slice(-16).map((unit) => `execution-unit:${unit.id}`);
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
-  const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents);
+  const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents)
+    ?? defaultComposerAuthorizationDeclaredIntents();
   const windowActionHandoff = safeWindowActionHandoff(input.windowActionHandoff);
   return {
     currentTurnId: input.currentTurnId,
@@ -703,12 +759,69 @@ function safeComposerDeclaredIntents(value: unknown) {
   if (value.schemaVersion !== 'sciforge.composer-declared-intents.v1' || value.source !== 'ui-action-audit-log') return undefined;
   const model = safeComposerDeclaredModelIntent(value.model);
   const mode = safeComposerDeclaredModeIntent(value.mode);
-  if (!model && !mode) return undefined;
+  const authorization = safeComposerDeclaredAuthorization(value.authorization);
+  if (!model && !mode && !authorization) return undefined;
   return {
     schemaVersion: 'sciforge.composer-declared-intents.v1',
     source: 'ui-action-audit-log',
     ...(model ? { model } : {}),
     ...(mode ? { mode } : {}),
+    ...(authorization ? { authorization } : {}),
+  };
+}
+
+function defaultComposerDeclaredAuthorization() {
+  return {
+    profileId: 'high-autonomy',
+    publicLabel: 'High Autonomy',
+    scope: {
+      user: 'current-user',
+      workspace: 'current-workspace',
+    },
+    source: 'composer-autonomy-default',
+    singleTurnOverride: false,
+    hardConfirmCategories: [...COMPOSER_HARD_CONFIRM_CATEGORIES],
+  };
+}
+
+function defaultComposerAuthorizationDeclaredIntents() {
+  return {
+    schemaVersion: 'sciforge.composer-declared-intents.v1',
+    source: 'ui-action-audit-log',
+    authorization: defaultComposerDeclaredAuthorization(),
+  };
+}
+
+const COMPOSER_HARD_CONFIRM_CATEGORIES = [
+  'payments-transfers-purchases',
+  'external-communications',
+  'external-system-submission',
+  'remote-delete-overwrite-archive',
+  'external-upload',
+  'account-security-privacy-billing',
+  'legal-compliance-contracts',
+  'external-system-execution',
+] as const;
+
+function safeComposerDeclaredAuthorization(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  const profileId = knownString(value.profileId, ['assisted-autonomy', 'high-autonomy', 'research-sandbox-max']);
+  if (!profileId) return undefined;
+  const source = knownString(value.source, ['composer-autonomy-default', 'composer-autonomy-menu']) ?? 'composer-autonomy-default';
+  const actionId = asString(value.actionId);
+  const declaredAt = asString(value.declaredAt);
+  return {
+    profileId,
+    publicLabel: publicComposerDeclaredAuthorizationLabel(value.publicLabel, profileId),
+    scope: {
+      user: 'current-user',
+      workspace: 'current-workspace',
+    },
+    source,
+    singleTurnOverride: value.singleTurnOverride === true,
+    ...(actionId ? { actionId } : {}),
+    ...(declaredAt ? { declaredAt } : {}),
+    hardConfirmCategories: [...COMPOSER_HARD_CONFIRM_CATEGORIES],
   };
 }
 
@@ -785,6 +898,18 @@ function publicComposerDeclaredModeLabel(value: unknown, modeIntentId: string | 
   return compact;
 }
 
+function publicComposerDeclaredAuthorizationLabel(value: unknown, profileId: string) {
+  const fallback = profileId === 'assisted-autonomy'
+    ? 'Assisted Autonomy'
+    : profileId === 'research-sandbox-max'
+      ? 'Research Sandbox Max'
+      : 'High Autonomy';
+  if (typeof value !== 'string') return fallback;
+  const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
+  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
+  return compact;
+}
+
 function assertCodexRuntimeStreamRequestBoundary(request: ReturnType<typeof buildCodexRuntimeStreamRequest>) {
   const forbidden = [
     'prompt',
@@ -850,8 +975,8 @@ function buildCodexRuntimeCommandText(
   }));
   const modalityRefs = routerModalityRefsForRuntimeCommand(input.input, input.referenceSummary);
   const refs = uniqueRuntimeStringList([...modalityRefs, ...readableRefs]).slice(0, 12);
-  const computerUseCommand = /^\/(?:computer-use|computer\s+use)\b/i.test(prompt);
-  const exactComputerUseCommand = computerUseCommandRequiresExactTerminalText(prompt);
+  const computerUseCommand = composerPromptIsComputerUseSlashCommand(prompt);
+  const exactComputerUseCommand = composerComputerUseCommandRequiresExactTerminalText(prompt);
   if (exactComputerUseCommand) return prompt;
   const taskText = computerUseCommand
     ? [prompt, refs.length ? ['Approval/source refs:', ...refs.map((ref) => `- ${ref}`)].join('\n') : undefined].filter(Boolean).join('\n\n')
@@ -891,17 +1016,10 @@ function routerModalityRefsForRuntimeCommand(
   referenceSummary: Array<Record<string, unknown>>,
 ) {
   const explicit = routerModalityRefsFromReferenceLikeRecords(referenceSummary);
-  const relative = promptMentionsRelativeModality(input.prompt)
+  const relative = composerPromptMentionsRelativeModality(input.prompt)
     ? recentVisibleRouterModalityRefs(input)
     : [];
   return uniqueRuntimeStringList([...explicit, ...relative]).slice(0, 8);
-}
-
-function promptMentionsRelativeModality(prompt: string) {
-  return /\b(?:above|previous|prior|last|earlier|attached|attachment|this|that|current|selected)\b.*\b(?:image|picture|photo|screenshot|figure|chart|plot|diagram|file|attachment|audio|video|table|document|pdf)\b/i.test(prompt)
-    || /\b(?:image|picture|photo|screenshot|figure|chart|plot|diagram|file|attachment|audio|video|table|document|pdf)\b.*\b(?:above|previous|prior|last|earlier|attached|attachment|this|that|current|selected)\b/i.test(prompt)
-    || /(?:上面|前面|刚才|上一[个张份]|这个|这张|该|当前|选中|附件|上传).{0,16}(?:图片|图像|截图|图|照片|文件|附件|音频|视频|表格|文档|PDF)/i.test(prompt)
-    || /(?:图片|图像|截图|图|照片|文件|附件|音频|视频|表格|文档|PDF).{0,16}(?:上面|前面|刚才|上一[个张份]|这个|这张|该|当前|选中|附件|上传)/i.test(prompt);
 }
 
 function recentVisibleRouterModalityRefs(input: SendAgentMessageInput) {
@@ -976,10 +1094,6 @@ function safeRouterModalityRef(ref: string) {
     && !ref.startsWith('~')
     && !ref.includes('\\')
     && !ref.includes('//');
-}
-
-function computerUseCommandRequiresExactTerminalText(prompt: string) {
-  return /^\/(?:computer-use|computer\s+use)\s+(?:screen\s+(?:attach|reconnect)|permission-handoff|permission-recheck|input-intent|reject|continue|repair)\b/i.test(prompt.trim());
 }
 
 function selectedVisibleMessageContextForRuntimeCommand(input: SendAgentMessageInput): string | undefined {

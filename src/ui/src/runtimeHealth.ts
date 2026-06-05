@@ -15,6 +15,7 @@ export interface RuntimeHealthItem {
   status: RuntimeHealthStatus;
   detail: string;
   recoverAction?: string;
+  capabilities?: string[];
 }
 
 export interface WorkspaceWriterHealthProbe {
@@ -78,9 +79,16 @@ export function workspaceWriterHealth(
         status: RUNTIME_HEALTH_STATUS.OFFLINE,
         detail: workspaceWriterConfiguredDetail(config),
         recoverAction: `Workspace Writer 在线但缺少 ${RUNTIME_MODULE_DISPATCHER_CAPABILITY}；重启 npm run workspace:server 后刷新`,
+        capabilities: boundedWorkspaceCapabilities(workspaceProbe.capabilities),
       };
     }
-    return { id: 'workspace', label: 'Workspace Writer', status: RUNTIME_HEALTH_STATUS.ONLINE, detail: workspaceWriterConfiguredDetail(config) };
+    return {
+      id: 'workspace',
+      label: 'Workspace Writer',
+      status: RUNTIME_HEALTH_STATUS.ONLINE,
+      detail: workspaceWriterConfiguredDetail(config),
+      capabilities: boundedWorkspaceCapabilities(workspaceProbe.capabilities),
+    };
   }
   const defaultUrl = defaultSciForgeConfig.workspaceWriterBaseUrl;
   const configuredUrl = config.workspaceWriterBaseUrl.replace(/\/+$/, '');
@@ -95,6 +103,13 @@ export function workspaceWriterHealth(
     detail: workspaceWriterConfiguredDetail(config),
     recoverAction: portDriftAction ?? '启动 npm run workspace:server 后刷新',
   };
+}
+
+function boundedWorkspaceCapabilities(value: string[]) {
+  return value
+    .filter((item) => item.trim().length > 0 && item.length <= 120)
+    .map((item) => item.trim())
+    .slice(0, 64);
 }
 
 function normalizeWriterProbe(value: WorkspaceWriterHealthProbe | boolean): WorkspaceWriterHealthProbe {

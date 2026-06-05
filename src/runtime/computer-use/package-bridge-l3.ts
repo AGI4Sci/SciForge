@@ -10,8 +10,8 @@ import {
   type PackageBridgeInvocationProcessSummary,
 } from './package-bridge-invocation-diagnostics.js';
 import { workspaceRel } from './utils.js';
-import { CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF } from '../../../tools/computer-use-next/evidence-classification.js';
-import { materializeCuNextL3CompletionEvidence } from '../../../tools/computer-use-next/materialize-l3-completion-evidence.js';
+import { CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF } from '../../../packages/actions/computer-use/evidence-classification.js';
+import { materializeCuNextL3CompletionEvidence } from '../../../packages/actions/computer-use/materialize-l3-completion-evidence.js';
 
 const EMBEDDED_L3_EVIDENCE_DIR = 'evidence/l3';
 export const EMBEDDED_L3_DIAGNOSTIC_REF = 'embedded-l3-completion-producer-diagnostics.json';

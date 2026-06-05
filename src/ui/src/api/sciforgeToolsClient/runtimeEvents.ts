@@ -287,6 +287,11 @@ async function readWorkspaceToolSse(
         result = withStructuredRuntimeDoneProjection(data);
         return;
       }
+      const agentHostMessage = isRecord(data) ? agentHostTurnLoopDoneMessage(data) : undefined;
+      if (agentHostMessage) {
+        result = withAssistantMessageRuntimeResult(data, agentHostMessage);
+        return;
+      }
       const nativeMessage = joinAssistantStreamText(genericMessages);
       if (nativeMessage) {
         if (!runtimeNativeMessageSafeForVisibleAnswer(nativeMessage)) {
@@ -1669,7 +1674,7 @@ function publicEvidenceRef(value: unknown): string | undefined {
     || ref.length > 180
     || /^(?:audit|raw|stdout|stderr|provider):/i.test(ref)
     || /(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge|raw|stdout|stderr|provider)(?:[/:]|$)/i.test(ref)
-    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
+    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:^|[^A-Za-z0-9])(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
   ) return undefined;
   return ref;
 }
@@ -1752,7 +1757,7 @@ function safeApprovalRef(value: unknown): string | undefined {
     || ref.length > 180
     || /^(?:audit|raw|stdout|stderr|provider):/i.test(ref)
     || /(?:^|[/:])(?:Users|Applications|Volumes|private|var|tmp|\.sciforge|raw|stdout|stderr|provider)(?:[/:]|$)/i.test(ref)
-    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
+    || /\b(?:authorization|bearer|api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password|credential|client[_-]?secret)\b|(?:^|[^A-Za-z0-9])(?:sk|rk|pk)-[A-Za-z0-9._-]{8,}/i.test(ref)
   ) return undefined;
   return ref;
 }
@@ -2003,6 +2008,18 @@ function safeSummaryText(value: unknown): string | undefined {
     return 'Summary detail is available by ref.';
   }
   return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+}
+
+function agentHostTurnLoopDoneMessage(data: Record<string, unknown>): string | undefined {
+  if (data.type !== 'done') return undefined;
+  const message = safeSummaryText(data.message);
+  if (!message) return undefined;
+  const hasAgentHostExecution = recordList(data.executionUnits).some((unit) => asString(unit.tool) === 'codex-agent-host-turn-loop');
+  const hasAgentHostArtifact = recordList(data.artifacts).some((artifact) => {
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    return asString(metadata.source) === 'codex-agent-host-turn-loop';
+  });
+  return hasAgentHostExecution || hasAgentHostArtifact ? message : undefined;
 }
 
 function refLabel(ref: string) {

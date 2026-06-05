@@ -15,18 +15,18 @@ import {
 import { workspaceRel } from './utils.js';
 import {
   CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
-} from '../../../tools/computer-use-next/evidence-classification.js';
+} from '../../../packages/actions/computer-use/evidence-classification.js';
 import {
   cuNextCompletionGradeEvidenceIssues,
   cuNextCompletedL3CompletionEvidenceIssues,
-} from '../../../tools/computer-use-next/completion-grade.js';
-import { projectCuNextTaskAcceptanceMarkers } from '../../../tools/computer-use-next/acceptance-projection.js';
-import type { CuNextTaskId, CuNextTaskMapping } from '../../../tools/computer-use-next/task-map.js';
+} from '../../../packages/actions/computer-use/completion-grade.js';
+import { projectCuNextTaskAcceptanceMarkers } from '../../../packages/actions/computer-use/acceptance-projection.js';
+import type { CuNextTaskId, CuNextTaskMapping } from '../../../packages/actions/computer-use/task-map.js';
 import {
   buildCuUserAcceptanceManifest,
   type CuEvidenceClaim,
   type CuUserAcceptanceInput,
-} from '../../../tools/cu-user-acceptance-manifest.js';
+} from '../../../packages/actions/computer-use/user-acceptance-manifest.js';
 
 const TUI_HOST_RUN_TASK_CHAIN_SCHEMA = 'sciforge.computer-use.tui-host-run-task-chain.v1';
 const COMPLETION_GRADE_DIAGNOSTIC_SCHEMA = 'sciforge.computer-use.completion-grade-diagnostic.v1';

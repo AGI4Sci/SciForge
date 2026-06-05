@@ -176,6 +176,18 @@ export function defaultAuthorizationProfile(): AuthorizationProfile {
   return AUTHORIZATION_PROFILES['high-autonomy'];
 }
 
+export function authorizationProfileOrDefault(profileId: unknown): {
+  profile: AuthorizationProfile;
+  source: 'declared' | 'default' | 'declared-invalid-profile';
+} {
+  if (profileId === undefined || profileId === null || profileId === '') {
+    return { profile: defaultAuthorizationProfile(), source: 'default' };
+  }
+  const profile = authorizationProfile(profileId);
+  if (profile) return { profile, source: 'declared' };
+  return { profile: defaultAuthorizationProfile(), source: 'declared-invalid-profile' };
+}
+
 export function evaluateBrowserEvidenceNeed(input: BrowserEvidenceDecisionInput): BrowserEvidenceDecision {
   const prompt = compactText(input.prompt, 600);
   if (!prompt) return { decision: 'skip', reason: 'empty-query' };
@@ -254,7 +266,7 @@ export function classifyComputerUseRisk(input: {
 }
 
 export function evaluateComputerUsePreflight(input: ComputerUsePreflightInput): ComputerUsePreflightResult {
-  const authorization = input.authorizationProfile ?? defaultAuthorizationProfile();
+  const authorization = input.authorizationProfile ?? authorizationProfileOrDefault(undefined).profile;
   const targetRefs = boundedRefs(input.target?.refs ?? []);
   const observationRefs = boundedRefs(input.observation?.refs ?? []);
   const permissionRefs = boundedRefs(input.permissions?.refs ?? []);
@@ -319,9 +331,70 @@ export function capabilityAnswerProjection(input: CapabilityAnswerProjectionInpu
 }
 
 export function defaultGuiOperationIntent(input: BrowserEvidenceDecisionInput): boolean {
-  if (/^\s*\/(?:computer-use|browser)\b/i.test(input.prompt)) return false;
+  const prompt = compactText(input.prompt, 600);
+  if (/^\s*\/(?:computer-use|browser)\b/i.test(prompt)) return false;
+  if (hardConfirmCategoryForText(normalizeRiskText(prompt))) return true;
   if (evaluateBrowserEvidenceNeed(input).decision === 'search') return false;
-  return /\b(?:click|double[-\s]?click|type|fill|scroll|select|open\s+(?:the\s+)?(?:app|window|menu)|press|drag|operate|control|gui|screen|window|button|field|page|点击|输入|填写|滚动|选择|打开窗口|操作|按钮|页面)\b/i.test(input.prompt);
+  return /\b(?:click|double[-\s]?click|type|fill|scroll|select|open\s+(?:the\s+)?(?:app|window|menu)|press|drag|operate|control|gui|screen|window|button|field|page|点击|输入|填写|滚动|选择|打开窗口|操作|按钮|页面)\b/i.test(prompt);
+}
+
+export function requiresComputerUseProductCompletionEvidence(input: {
+  commandText: string;
+  message?: string;
+  claimType?: string;
+  claimTexts?: string[];
+  executionUnitTexts?: string[];
+}): boolean {
+  const claimText = [
+    input.commandText,
+    input.message,
+    input.claimType,
+    ...(input.claimTexts ?? []),
+    ...(input.executionUnitTexts ?? []),
+  ].filter((item): item is string => Boolean(item)).join(' ');
+  const normalized = claimText.toLowerCase();
+  const completionClaim = /\b(?:product[-\s]?completion|workflow\s+(?:complete|completed|completion)|artifact\s+(?:complete|completed|completion|workflow)|final\s+artifact|final\s+report|multi[-\s]?step.*completion|user[-\s]?level.*completion)\b/i.test(claimText)
+    || /(?:工作流|流程|产物|最终产物|报告产物|最终报告|多步骤|用户级).{0,24}(?:完成|已完成|保存|预览|交付)|(?:完成|保存|预览|交付).{0,24}(?:工作流|流程|产物|最终产物|报告产物|最终报告)/i.test(claimText);
+  const guiActionCount = [
+    /\bclick\b/i,
+    /\btype\b/i,
+    /\bpress\b/i,
+    /\bsave\b/i,
+    /\bopen\b/i,
+    /\bpreview\b/i,
+    /\bwriter\b/i,
+    /\bwindow\b/i,
+    /点击/,
+    /输入/,
+    /保存/,
+    /打开/,
+    /预览/,
+    /窗口/,
+  ].filter((pattern) => pattern.test(input.commandText)).length;
+  const workflowIntent = guiActionCount >= 3
+    && (/\b(?:workflow|writer|preview|save|file|document|artifact|summary|report|complete|completion|final)\b/i.test(input.commandText)
+      || /(?:工作流|流程|预览|保存|文件|文档|产物|报告|总结|摘要|完成|最终)/i.test(input.commandText));
+  return completionClaim || (workflowIntent && (/\b(?:complete|completed|completion|workflow|preview|final|artifact|report)\b/i.test(normalized)
+    || /(?:完成|工作流|流程|预览|最终|产物|报告)/i.test(input.commandText)));
+}
+
+export function hasCurrentRunComputerUseCompletionEvidenceRefs(refs: string[]): boolean {
+  const accepted = refs.map((ref) => ref.trim()).filter(safeCurrentRunComputerUseCompletionEvidenceRef);
+  const acceptanceDirs = accepted
+    .map((ref) => currentRunDirForLeaf(ref, 'cu-user-acceptance-manifest.json'))
+    .filter((ref): ref is string => Boolean(ref));
+  const completionDirs = accepted
+    .map((ref) => currentRunDirForLeaf(ref, 'isolated-desktop-l3-workflow-evidence.json'))
+    .filter((ref): ref is string => Boolean(ref));
+  if (!acceptanceDirs.length || !completionDirs.length) return false;
+  return acceptanceDirs.some((dir) =>
+    completionDirs.includes(dir)
+    && accepted.some((ref) =>
+      ref === `${dir}/current-run.json`
+      || ref === `${dir}/current-run-pointer.json`
+      || /\/current-run(?:-pointer)?\.json$/u.test(ref) && ref.startsWith(`${dir}/`),
+    ),
+  );
 }
 
 export function defaultCapabilityQuestion(prompt: string): DefaultCapabilityQuestion | undefined {
@@ -334,6 +407,17 @@ export function defaultCapabilityQuestion(prompt: string): DefaultCapabilityQues
     return 'browser';
   }
   return undefined;
+}
+
+function safeCurrentRunComputerUseCompletionEvidenceRef(ref: string): boolean {
+  if (!ref || ref.length > 240) return false;
+  if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:)/i.test(ref)) return false;
+  if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(ref)) return false;
+  return /^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(ref) && !ref.includes('..');
+}
+
+function currentRunDirForLeaf(ref: string, leaf: string): string | undefined {
+  return ref.endsWith(`/${leaf}`) ? ref.slice(0, -1 * (`/${leaf}`).length) : undefined;
 }
 
 function readinessBlockers(readiness: ComputerUsePreflightInput['readiness']): ComputerUsePreflightBlocker[] {
@@ -384,7 +468,10 @@ function hardConfirmCategoryForText(text: string): HardConfirmCategory | undefin
   if (matchesAny(text, [/\b(?:legal|compliance|contract|terms|sign|signature|authorize|授权|合规|合同|条款|签署|签名)\b/])) {
     return 'legal-compliance-contracts';
   }
-  if (matchesAny(text, [/\b(?:deploy|ci\/cd|ci|cd|cloud\s+resource|database\s+migration|db\s+migration|terraform|kubernetes|release|部署|云资源|数据库迁移|发布)\b/])) {
+  if (matchesAny(text, [
+    /\b(?:deploy|ci\/cd|ci|cd|cloud\s+resource|database\s+migration|db\s+migration|terraform|kubernetes|部署|云资源|数据库迁移|发布)\b/,
+    /\brelease\b.{0,32}\b(?:to|production|prod|external|server|cloud)\b/,
+  ])) {
     return 'external-system-execution';
   }
   return undefined;

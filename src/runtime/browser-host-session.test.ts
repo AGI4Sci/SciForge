@@ -2171,6 +2171,7 @@ function createRouteManager(
         engine: 'bing',
         searchUrl: 'https://www.bing.com/search?q=query',
         finalUrl: session.url,
+        searchedAt: '2026-06-01T00:00:01.000Z',
         results: [{ title: 'Result', url: 'https://example.org/result', snippet: 'Snippet' }],
         session,
         searchResultRef: 'browser-host-session:search-route/search-results.json',

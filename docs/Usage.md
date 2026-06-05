@@ -4,7 +4,7 @@
 
 本文描述当前代码已经落地的用法，以及当前目标架构要求的操作边界。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
-架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server，生产默认让 Codex 使用 SciForge Model Router public alias/profile，由 `textReasoner` 和 `translators.vision` 等 role 解析实际 provider，不需要独立 AgentServer。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
+架构目标已经调整为 **SciForge GUI 是 Codex backend 的 GUI extension**；见 [`Architecture.md`](Architecture.md) 和 [`TuiGuiProtocol.md`](TuiGuiProtocol.md)。最终形态默认连接 Codex app-server，产品入口统一为默认聊天 turn：GUI 只提交自然语言文本、refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 在 `Codex Agent Host Turn Loop` 内完成 `Ground`、`Guard`、`Act / Answer`。生产默认让 Codex 使用 SciForge Model Router public alias/profile，由 `textReasoner` 和 `translators.vision` 等 role 解析实际 provider，不需要独立 AgentServer、turn router 或 gateway 产品层。Runtime Codex 是 downstream runtime，不是默认聊天 product owner。本文件里的 `workspace writer`、`AgentServer`、`runtime gateway`、`scenario` 等仍是当前实现路径或迁移期兼容层，不代表最终职责归属。
 
 ## 快速启动
 
@@ -226,39 +226,41 @@ strict gate 只接受 `manifest.status === "passed"`，并要求 provider/model/
 - `omics-differential-exploration`：组学差异分析。
 - `biomedical-knowledge-graph`：生物医学知识图谱。
 
-当前代码里，一次普通请求的实际路径是：
+当前代码里，一次普通聊天请求的实际路径是：
 
 ```text
 ChatPanel
   -> runPromptOrchestrator
   -> sendSciForgeToolMessage
-  -> /api/sciforge/tools/run/stream
-  -> runWorkspaceRuntimeGateway
-  -> Python conversation-policy
-  -> context envelope + capability broker brief
-  -> AgentServer/backend 选择能力并生成结果或 task
-  -> validation / ContractValidationFailure repair loop
-  -> ToolPayload + artifacts + ExecutionUnits
+  -> /api/sciforge/runtime/codex/stream
+  -> Codex Agent Host Turn Loop
+  -> Ground / Guard / Act-Answer
+  -> Runtime Codex, BrowserHostSession, Computer Use Guard, or blocked/confirmation projection
 ```
+
+`/api/sciforge/tools/run/stream` 只保留为显式 `/computer-use diagnostic --legacy-workspace-gateway` 迁移诊断 shim，不是普通聊天或产品执行入口。
 
 用户不需要手工拼现有 HTTP payload。选择 scenario、添加文件/结果引用、输入问题后，当前 SciForge 会把 turn、显式 refs、最近 run、artifact summary、组件选择和 backend 配置组装成 handoff payload。
 
-上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex app-server 直接承担 agent host：
+上面是当前代码路径，不是目标路径。目标架构应删除 AgentServer 这一层，让 Codex app-server 直接承担 agent host，不新增独立 turn router/gateway 产品层：
 
 ```text
 GUI event
-  -> terminal-equivalent text
-  -> Codex app-server
+  -> natural-language text + refs + Autonomy profile + confirm/cancel
+  -> Codex app-server / Codex TUI Agent Host
+  -> Codex Agent Host Turn Loop
+     Ground: resolve user intent, refs, BrowserHostSession/search/read evidence, workspace and GUI resources
+     Guard: check autonomy, permissions, capability readiness, hard-confirm and blocked policy
+     Act / Answer: answer directly or invoke native plugins / skills / tools / MCP
   -> Codex custom model provider
   -> SciForge Model Router public alias/profile
   -> textReasoner / translators.vision roles
-  -> native plugins / skills / tools / MCP
   -> read-only GUI resources for shell/hot-region/region-detail state
   -> intent-based gui.* tool calls for presentation
   -> GUI negotiate / render / confirm / collect input
 ```
 
-所有算法、capability discovery、harness/policy、provider route 都应迁移为 TUI 原生扩展；GUI 自身通过只读 GUI resource tree、intent-based `gui.*` tools 和 progressive hot-region context 注入。GUI 的本地逻辑只覆盖 renderer、layout、focus、interaction mode、precondition、defer/reject/suggestion 等 presentation behavior，不承担任务推理。
+所有算法、capability discovery、harness/policy、provider route 都应迁移为 TUI 原生扩展；GUI 自身通过只读 GUI resource tree、intent-based `gui.*` tools 和 progressive hot-region context 注入。GUI 的本地逻辑只覆盖 renderer、layout、focus、interaction mode、precondition、defer/reject/suggestion 等 presentation behavior，不承担任务推理、turn routing、gateway policy 或 capability ranking。
 
 ## 注释与反馈收件箱
 
@@ -323,19 +325,21 @@ npm run smoke:stable-version-registry
 
 ## Computer Use
 
-当前目标通路由 TUI Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、Model Router `translators.vision` 观察和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只发送 GUI 操作意图、refs-first context 和 terminal-equivalent text，并由 TUI Host 决定是否调用 `gui.present` / `gui.ask_user`。
+当前目标通路由 TUI/Agent Host 调用 `packages/actions/computer-use` 的 `runTask(request, hostPorts)`。Computer Use 是 GUI I/O augmentation layer，不是 planner/agent：输入侧增强 Host 对当前 GUI 的观察，输出侧增强 Host 对局部 GUI 目标的 ground / execute / verify。`local.vision-sense` / `packages/observe/vision` 是可选 sense provider，只负责截图、视觉观察、focus region、Model Router `translators.vision` 观察和 verifier feedback；桌面动作由 Computer Use action provider 经 Host ports 执行。GUI 只提交自然语言文本、refs-first context、Autonomy profile 和确认/取消/stop 输入，并由 TUI/Agent Host 决定是否调用 `gui.present` / `gui.ask_user`。
 
-产品默认不再要求用户输入 `/computer-use` 才进入能力路径。当用户表达网页或桌面 GUI 操作意图时，Agent Host 应直接进入 Computer Use 预检；当用户需要外部、实时、当前网页或引用来源时，Agent Host 默认可以使用内置 Browser search/read evidence。回答“是否具备 Computer Use/Browser 能力”时，必须基于当前 runtime health、BrowserHostSession、native surface 和 preflight 状态，而不是固定自述。
+产品默认不再要求用户输入 `/computer-use` 才进入能力路径，也不为 Browser Search / Computer Use 新增独立普通用户入口。当用户表达网页或桌面 GUI 操作意图时，Codex/TUI Agent Host 在默认聊天 turn 的 `Ground` 阶段读取 refs、BrowserHostSession、screen/window/app state 和 search/read evidence，在 `Guard` 阶段检查 Autonomy、permission refs、capability readiness、hard-confirm / blocked policy，再在 `Act / Answer` 阶段回答或调用 Computer Use / Browser observe/action 能力。`/computer-use` 只保留给 debug、expert、smoke 和 diagnostic；回答“是否具备 Computer Use/Browser 能力”时，必须基于当前 runtime health、BrowserHostSession、native surface 和 Guard 状态，而不是固定自述。
 
-Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
+Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。Browser pane 只是 `BrowserHostSession` 的 display/control panel，不是 Browser agent，也不是 Browser Search 的普通用户产品入口。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
-默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 TUI Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 L1/L2/L3、WindowActionSession evidence 和 Desktop native 可见证据。
+默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 Agent Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 WindowActionSession evidence、Desktop native 可见证据和 current-run user artifact / verifier bundle；历史 L2/L3 命名只作为旧验收层级语境保留，不替代当前 L0/L1/L2 架构分层。
 
 每个 package-backed run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
 
-目标生产入口应采用 Codex 风格标准插件形态：repo-local `plugin.json`、`.mcp.json` 和 skill 文档声明 `sciforge.computer-use`，由 Codex CLI / app-server 发现和调用。插件对外只暴露小工具面：`get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs`。这些工具必须转入 Computer Use package 的 scheduler、approval、evidence 和 replay contract；不得把 GUI private state、provider route、裸全局坐标或 scheduler internals 作为公共参数。
+目标生产能力应采用 Codex 风格标准插件形态：repo-local `plugin.json`、`.mcp.json` 和 skill 文档声明 `sciforge.computer-use`，由 Codex CLI / app-server 在默认聊天 turn 内发现和调用；它不是普通用户的 slash 入口。插件对外只暴露小工具面：`get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs`。这些工具必须转入 Computer Use package 的 scheduler、approval request、evidence 和 replay contract；approval 决策、repair 和用户级 completion 仍归 Agent Host。不得把 GUI private state、provider route、裸全局坐标或 scheduler internals 作为公共参数。
 
-所有 mutating tool 都必须先 observe。执行 click/type/scroll/press_key/drag/save/open menu 前，当前 run bundle 里要有同 screen/window scope 的 app state ref、screenshot/capture ref、accessibility/state snapshot ref、grounding ref 和 freshness check。若 observation 过期、scope 不匹配或缺少 state snapshot，只能返回 blocked/needs-observation，不允许靠旧截图、历史 trace 或用户界面私有状态继续动作。
+所有 mutating tool 都必须先有 fresh、target-bound、用途足够的 evidence。执行 click/type/scroll/press_key/drag/save/open menu 前，当前 run bundle 里要有同 screen/window/session scope 的证据组合；证据可以来自 app/window metadata、DOM/AX/UIA、PTY/file、target crop、screenshot/capture、grounding ref、verifier 或 freshness check，具体组合按动作风险和不确定性选择。若 evidence 过期、scope 不匹配、target 不唯一、结构化信号与可见像素冲突，或缺少必要 state snapshot，只能返回 blocked/needs-observation，不允许靠旧截图、历史 trace、action history 或用户界面私有状态继续动作。
+
+证据获取采用 cheap-first、uncertainty-driven escalation：先读 fresh session/window/action metadata 和结构化 exact evidence，再做 target crop/OCR；只有可见状态关键、目标不唯一、verification 失败或风险升高时才调用 Model Router vision/verifier。已有 windowRef/targetRef 时默认局部观察；全屏 capture 必须有 target missing、occlusion、multi-window conflict 或用户选区原因。同一 target/lease 内允许批量低风险动作，但导航、保存/导出、提交、上传、删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint，并 stale 相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate。
 
 风险确认按类别而不是单一 high-risk flag 管理。默认可自动执行观察、搜索、普通导航、筛选、分页、非提交点击、公开资料下载、本地 workspace 预览/修改和填写草稿。支付、转账、购买、订阅、退款、提现、交易、发送邮件/消息/评论/工单/公开帖子、提交外部表单、删除/覆盖/归档远端或账号数据、上传本地文件到外部服务、修改账号/安全/隐私/billing/API key/token/team member、法律/合规/合同/授权/条款同意以及 CI/CD deploy、云资源、数据库迁移等外部系统执行，必须在 action-time 产生 `needs-confirmation`、approval request 或 hand-off required。网页、邮件、PDF 或其它第三方内容里的指令不能替代用户确认。
 
@@ -357,7 +361,7 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 ```
 
-Computer Use 的视觉观察默认通过 Model Router `translators.vision` role 完成。历史 KV-Ground-compatible endpoint 只作为兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
+Computer Use 的局部 next-action selector、视觉观察、crop inspection、候选消歧、grounding translator 和 verifier explanation 默认都通过 Model Router `/v1/responses` 完成，并由 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。历史 KV-Ground-compatible endpoint 只作为显式 opt-in 兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
 
 ```bash
 export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
@@ -380,13 +384,13 @@ export SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER=sciforge-simulated-rem
 export SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1
 ```
 
-每轮 Computer Use 输出应写到 `.sciforge/vision-runs/<run-id>/`，trace 只保存 file refs、before/after screenshot refs、focus crop refs、sha256、尺寸、target description、坐标、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，不内联截图/base64。产物型任务完成时，应检查 package result、`vision-trace.json`、`tool-payload.json` 和 `gui-present.json` 是否同时暴露同一个 bundle-local `finalArtifactRef`；`gui.present` 的 displayed refs 必须包含该 ref 和 trace 摘要。
+每轮 Computer Use 输出应写到 `.sciforge/vision-runs/<run-id>/`，trace 只保存 file refs、before/after screenshot refs、focus crop refs、sha256、尺寸、target description、坐标、router profile/role/alias、受限 provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，不内联截图/base64、provider URL、API key、raw model slug 或 raw provider payload。产物型任务完成时，应检查 package result、`vision-trace.json`、`tool-payload.json` 和 `gui-present.json` 是否同时暴露同一个 bundle-local `finalArtifactRef`；`gui.present` 的 displayed refs 必须包含该 ref 和 trace 摘要。`gui.present` 只能证明用户可见展示，不能替代 executor、artifact validator 或 Host completion。
 
 常用配置还包括：
 
 - `SCIFORGE_VISION_CAPTURE_DISPLAYS`
 - `SCIFORGE_RUNTIME_API_KEY`
-- `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`
+- `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`：迁移期/诊断字段，只能映射到 Model Router 的局部 next-action selector role；不得表示 Computer Use 拥有用户级 planner，也不得绕过 `/v1/responses` profile/role。
 - `SCIFORGE_RUNTIME_BASE_URL` / `SCIFORGE_PROXY_UPSTREAM_BASE_URL`：Model Router provider-compatible `/v1/responses` endpoint。
 - `SCIFORGE_RUNTIME_PROVIDER` / `SCIFORGE_RUNTIME_MODEL`：公开 provider alias 和 public model alias，默认分别为 `sciforge-model-router` 与 `sciforge-router`；带 raw provider/model 词的值即使伪装成公开前缀，也只能归一为默认公开 alias，不能进入 UI、metadata 或 audit 输出。
 - `SCIFORGE_VISION_KV_GROUND_URL`：仅用于显式 legacy KV-Ground-compatible adapter 诊断；默认 Computer Use capability 仍通过 Model Router 注册能力。
