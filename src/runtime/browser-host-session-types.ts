@@ -313,6 +313,8 @@ export interface BrowserHostSearchInput {
   query: string;
   sessionId?: string;
   limit?: number;
+  sourcePageLimit?: number;
+  preferredResults?: BrowserHostSearchResult[];
   region?: string;
   engine?: BrowserHostSearchEngine;
   timeoutMs?: number;
@@ -324,6 +326,23 @@ export interface BrowserHostSearchResult {
   snippet: string;
 }
 
+export interface BrowserHostSearchSourcePage {
+  resultIndex: number;
+  title: string;
+  url: string;
+  finalUrl: string;
+  openedAt: string;
+  status: 'read' | 'failed';
+  textRef?: string;
+  textPreview?: string;
+  textSummary?: string;
+  textArtifactKind?: 'page-text' | 'structured-summary';
+  textCharCount?: number;
+  sourceTextCharCount?: number;
+  textSha1?: string;
+  error?: string;
+}
+
 export interface BrowserHostSearchOutput {
   schemaVersion: typeof BROWSER_HOST_SEARCH_SCHEMA;
   query: string;
@@ -332,6 +351,7 @@ export interface BrowserHostSearchOutput {
   searchUrl: string;
   finalUrl: string;
   results: BrowserHostSearchResult[];
+  sourcePages?: BrowserHostSearchSourcePage[];
   session: BrowserHostSessionState;
   searchResultRef: string;
   screenshotRef?: string;

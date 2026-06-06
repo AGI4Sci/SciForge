@@ -92,8 +92,11 @@ const requiredComputerUseAdapterClassifications = new Set([
   'backend-packaging-not-concurrency-model',
   'legacy-diagnostic-backend-packaging',
 ]);
-const requiredComputerUseProductBacklogSubtasks = new Set([
+const requiredComputerUseOwnershipProductSubtasks = new Set([
   'CU-PKG-22-virtual-app-screen-user-acceptance-product-gate',
+]);
+const requiredComputerUseActionProductBacklogIds = new Set([
+  'CU-PKG-22-window-action-session-current-evidence-product-gate',
   'CU-PKG-24-browser-runtime-dom-ax-observation-refs',
   'CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix',
   'CU-PKG-26-public-surface-parity-guard',
@@ -103,10 +106,12 @@ const requiredComputerUseHistoricalRegressionSubtasks = new Set([
 ]);
 const requiredComputerUseBoundarySubtasks = new Set([
   'CU-PKG-20-import-boundary-guard',
-  ...requiredComputerUseProductBacklogSubtasks,
+  ...requiredComputerUseOwnershipProductSubtasks,
   ...requiredComputerUseHistoricalRegressionSubtasks,
 ]);
-const requiredComputerUseNativeSurfaces = [
+const requiredComputerUseOwnershipNativeSurfaces = [
+  'WindowActionSession action router',
+  'current-run evidence bundle',
   'virtual-app-screen-user-acceptance product gate',
   'virtual-app-screen-user-acceptance-manifest',
   'BrowserRuntime DOM/AX observation refs',
@@ -114,28 +119,59 @@ const requiredComputerUseNativeSurfaces = [
   'native multi-screen/multi-actor cursor historical opt-in regression',
   'multi-screen live demo historical diagnostic',
 ];
-const requiredVirtualAppScreenUserAcceptanceManifestFields = new Set([
+const requiredComputerUseActionNativeSurfaces = [
+  'WindowActionSession current evidence product gate',
+  'computer-use-current-evidence-bundle manifest',
+  'BrowserRuntime DOM/AX observation refs',
+  'native multi-app workflow/live acceptance matrix',
+  'legacy VirtualAppScreen compatibility diagnostics',
+  'native multi-screen/multi-actor cursor historical opt-in regression',
+  'multi-screen live demo historical diagnostic',
+];
+const requiredCurrentEvidenceBundleManifestFields = new Set([
   'taskId',
   'scenarioId',
   'userIntent',
-  'targetAppRefs',
+  'currentBundleRef',
+  'windowActionSessionRef',
+  'hostPortsRef',
   'targetWindowRefs',
-  'sessionRefs',
-  'adapterReadinessRefs',
-  'screenFrameRefs',
-  'inputIntentRefs',
   'executorEventRefs',
   'beforeAfterFrameRefs',
-  'annotationProposalRefs',
   'artifactRefs',
   'verificationRefs',
-  'guiPresentRefs',
-  'replayRef',
+  'traceRefs',
   'evidenceLedgerRef',
   'isolationFlags',
   'blockedReason',
 ]);
-const requiredVirtualAppScreenForbiddenSubstituteGateIds = new Set([
+const requiredCurrentEvidenceBundleProvenance = new Set([
+  'taskId',
+  'scenarioId',
+  'userIntent',
+  'currentBundleRef',
+  'windowActionSessionRef',
+  'hostPortsRef',
+  'targetWindowRefs',
+  'appStateRef',
+  'screenshotRef',
+  'focusCropRefs',
+  'groundingRefs',
+  'executorLeaseRefs',
+  'executorEventRefs',
+  'beforeAfterFrameRefs',
+  'artifactRefs',
+  'verificationRefs',
+  'guiPresentRefs',
+  'approvalRefs',
+  'cancelRefs',
+  'traceRefs',
+  'replayRefs',
+  'evidenceLedgerRef',
+  'isolationFlags',
+  'blockedReason',
+]);
+const requiredCurrentEvidenceForbiddenSubstituteGateIds = new Set([
   'package-smoke',
   'm6-native-multi-screen',
   'target-bound-fixture',
@@ -577,12 +613,17 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
       issues.push(`Computer Use ownership manifest is missing migration subtask ${id}.`);
     }
   }
-  for (const surface of requiredComputerUseNativeSurfaces) {
-    if (!policy.targetNativeSurfaces.includes(surface) || !policy.actionProviderPublicSurface.requiredNativeSurfaces.includes(surface)) {
+  for (const surface of requiredComputerUseOwnershipNativeSurfaces) {
+    if (!policy.targetNativeSurfaces.includes(surface)) {
+      issues.push(`Computer Use ownership manifest is missing native surface ${surface}.`);
+    }
+  }
+  for (const surface of requiredComputerUseActionNativeSurfaces) {
+    if (!policy.actionProviderPublicSurface.requiredNativeSurfaces.includes(surface)) {
       issues.push(`Computer Use public surface parity is missing native surface ${surface}.`);
     }
   }
-  for (const id of requiredComputerUseProductBacklogSubtasks) {
+  for (const id of requiredComputerUseActionProductBacklogIds) {
     if (!policy.actionProviderPublicSurface.requiredBacklogIds.has(id)) {
       issues.push(`Computer Use public surface parity is missing backlog id ${id}.`);
     }
@@ -593,23 +634,31 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
     }
   }
   const nativePolicy = policy.actionProviderPublicSurface.nativeProductGatePolicy;
-  if (nativePolicy.activeGate !== 'virtual-app-screen-user-acceptance') {
-    issues.push('Computer Use active product gate must be virtual-app-screen-user-acceptance.');
+  if (nativePolicy.activeGate !== 'window-action-session-current-evidence') {
+    issues.push('Computer Use active product gate must be window-action-session-current-evidence.');
   }
-  if (nativePolicy.manifestName !== 'virtual-app-screen-user-acceptance-manifest') {
-    issues.push('Computer Use active product gate must name virtual-app-screen-user-acceptance-manifest.');
+  if (nativePolicy.manifestName !== 'computer-use-current-evidence-bundle') {
+    issues.push('Computer Use active product gate must name computer-use-current-evidence-bundle.');
   }
-  if (nativePolicy.manifestSchemaRef !== 'sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1') {
-    issues.push('Computer Use active product gate must declare the VirtualAppScreen user acceptance manifest schema ref.');
+  if (nativePolicy.manifestSchemaRef !== 'sciforge.computer-use.current-evidence-bundle.v1') {
+    issues.push('Computer Use active product gate must declare the current evidence bundle schema ref.');
   }
-  for (const field of requiredVirtualAppScreenUserAcceptanceManifestFields) {
+  if (!/WindowActionSession|TypeScript|host-port/i.test(nativePolicy.productionHost ?? '')) {
+    issues.push('Computer Use active product gate production host must name the TypeScript WindowActionSession host-port route.');
+  }
+  for (const field of requiredCurrentEvidenceBundleManifestFields) {
     if (!nativePolicy.requiredManifestFields.has(field) || !nativePolicy.requiredProvenance.has(field)) {
-      issues.push(`Computer Use VirtualAppScreen user acceptance policy is missing manifest/provenance field ${field}.`);
+      issues.push(`Computer Use current evidence bundle policy is missing manifest/provenance field ${field}.`);
     }
   }
-  for (const gateId of requiredVirtualAppScreenForbiddenSubstituteGateIds) {
+  for (const field of requiredCurrentEvidenceBundleProvenance) {
+    if (!nativePolicy.requiredProvenance.has(field)) {
+      issues.push(`Computer Use current evidence bundle policy is missing provenance field ${field}.`);
+    }
+  }
+  for (const gateId of requiredCurrentEvidenceForbiddenSubstituteGateIds) {
     if (!nativePolicy.forbiddenSubstituteGateIds.has(gateId)) {
-      issues.push(`Computer Use VirtualAppScreen user acceptance policy must reject substitute gate ${gateId}.`);
+      issues.push(`Computer Use current evidence bundle policy must reject substitute gate ${gateId}.`);
     }
   }
   for (const historicalGate of ['m6-native-multi-screen', 'multi-screen-live-demo']) {
@@ -628,11 +677,8 @@ export function computerUseBoundaryManifestIssues(policy: ComputerUseBoundaryPol
     }
   }
   for (const provenance of requiredComputerUseNativeProvenance) {
-    if (
-      !policy.actionProviderPublicSurface.nativeToolsContract.requiredProvenance.has(provenance)
-      || !policy.actionProviderPublicSurface.nativeProductGatePolicy.requiredProvenance.has(provenance)
-    ) {
-      issues.push(`Computer Use native product/public surface is missing required provenance ${provenance}.`);
+    if (!policy.actionProviderPublicSurface.nativeToolsContract.requiredProvenance.has(provenance)) {
+      issues.push(`Computer Use native tool public surface is missing required provenance ${provenance}.`);
     }
   }
   if (!policy.actionProviderPublicSurface.diagnosticProbes.has('nativeMultiScreenLiveDemo')) {

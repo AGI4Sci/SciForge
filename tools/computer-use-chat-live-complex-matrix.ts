@@ -8,20 +8,19 @@ import {
 import {
   runComputerUseChatLiveContinuationE2E,
   runComputerUseChatLiveE2E,
-  type ComputerUseChatLiveContinuationE2EManifest,
-  type ComputerUseChatLiveE2EExpectedStatus,
-  type ComputerUseChatLiveE2EManifest,
-  type ComputerUseChatLiveE2EOptions,
 } from './computer-use-chat-live-e2e.js';
+import type {
+  ComputerUseChatLiveContinuationE2EManifest,
+  ComputerUseChatLiveE2EExpectedStatus,
+  ComputerUseChatLiveE2EManifest,
+  ComputerUseChatLiveE2EOptions,
+} from './computer-use-chat-live-e2e-contract.js';
 import {
   classifyCuNextEvidence,
   type CuNextEvidenceClassification,
   type CuNextEvidenceClassificationInput,
 } from './computer-use-next/evidence-classification.js';
-import {
-  buildComputerUseChatLiveResourceDiagnostics,
-  type ComputerUseChatLiveResourceDiagnostics,
-} from './computer-use-chat-live-resource-diagnostics.js';
+import { buildComputerUseChatLiveResourceDiagnostics } from './computer-use-chat-live-resource-diagnostics.js';
 import {
   buildComputerUseChatLiveCaseIsolationResetManifest,
   buildComputerUseChatLiveCaseIsolationSeedPlan,
@@ -37,238 +36,44 @@ import {
   type ComputerUseChatLiveComplexMatrixCase,
   type ComputerUseChatLiveComplexMatrixCaseId,
 } from './computer-use-chat-live-complex-matrix-cases.js';
+import {
+  COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_AGGREGATE_SCHEMA,
+  COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_SCHEMA,
+  type ComputerUseChatLiveComplexMatrixAggregateCase,
+  type ComputerUseChatLiveComplexMatrixAggregateManifest,
+  type ComputerUseChatLiveComplexMatrixCaseIsolation,
+  type ComputerUseChatLiveComplexMatrixCaseResult,
+  type ComputerUseChatLiveComplexMatrixCaseRetryAttempt,
+  type ComputerUseChatLiveComplexMatrixCleanupManifest,
+  type ComputerUseChatLiveComplexMatrixManifest,
+  type ComputerUseChatLiveComplexMatrixOptions,
+  type ComputerUseChatLiveComplexMatrixStabilityDiagnostics,
+} from './computer-use-chat-live-complex-matrix-contract.js';
+import { diagnosticBlockersForComplexMatrixAggregateCase } from './computer-use-chat-live-complex-matrix-diagnostic-blockers.js';
 
 export {
   COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES,
   type ComputerUseChatLiveComplexMatrixCase,
   type ComputerUseChatLiveComplexMatrixCaseId,
 } from './computer-use-chat-live-complex-matrix-cases.js';
-
-export const COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_SCHEMA =
-  'sciforge.computer-use.chat-live-complex-matrix.v1' as const;
-export const COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_AGGREGATE_SCHEMA =
-  'sciforge.computer-use.chat-live-complex-matrix.aggregate.v1' as const;
-
-export interface ComputerUseChatLiveComplexMatrixOptions extends ComputerUseChatLiveE2EOptions {
-  caseIds?: ComputerUseChatLiveComplexMatrixCaseId[];
-  caseIsolationStrategy?: ComputerUseChatLiveCaseIsolationStrategy;
-  caseTimeoutMs?: number;
-}
-
-export interface ComputerUseChatLiveComplexMatrixCaseResult {
-  id: ComputerUseChatLiveComplexMatrixCaseId;
-  label: string;
-  expectedStatus: ComputerUseChatLiveE2EExpectedStatus;
-  taskId: string;
-  scenarioId: string;
-  prompt: string;
-  status: 'passed' | 'failed' | 'blocked';
-  requestSubmitted: boolean;
-  liveAcceptanceCandidate: boolean;
-  isolation: ComputerUseChatLiveComplexMatrixCaseIsolation;
-  evidenceClassification: Pick<
-    CuNextEvidenceClassification,
-    'kind' | 'canCompleteBackend' | 'canCompleteL3Workflow' | 'blockedReasons' | 'rejectedShortcuts' | 'claimLimit'
-  >;
-  runManifest: ComputerUseChatLiveE2EManifest;
-  autoContinuation?: Pick<
-    ComputerUseChatLiveContinuationE2EManifest,
-    'schemaVersion' | 'checkedAt' | 'status' | 'evidenceMode' | 'continuation' | 'issues' | 'requestSubmitted' | 'liveAcceptanceCandidate'
-  >;
-  retryAttempts?: ComputerUseChatLiveComplexMatrixCaseRetryAttempt[];
-  issues: string[];
-}
-
-export interface ComputerUseChatLiveComplexMatrixCaseRetryAttempt {
-  schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.case-retry.v1';
-  attempt: number;
-  maxAttempts: number;
-  reason:
-    | 'non-completed-expected-state-drift'
-    | 'completed-expected-state-drift'
-    | 'completed-completion-evidence-drift'
-    | 'case-run-transient-error';
-  expectedStatus: ComputerUseChatLiveE2EExpectedStatus;
-  observedStatus: ComputerUseChatLiveE2EManifest['status'];
-  observedVisibleStatus?: string;
-  sourceRunManifest: ComputerUseChatLiveE2EManifest;
-  cleanupBeforeRetry: {
-    cleanupManifestRef?: string;
-    cleanupStatus: ComputerUseChatLiveComplexMatrixCaseIsolation['cleanupStatus'];
-    cleanupIssues: string[];
-  };
-  retryBoundary: {
-    sessionId: string;
-    currentTurnId: string;
-    workspaceSeed: ComputerUseChatLiveComplexMatrixCaseIsolation['workspaceSeed'];
-    prompt: string;
-    requestSubmitted: boolean;
-    status: ComputerUseChatLiveE2EManifest['status'];
-    issues: string[];
-  };
-}
-
-export interface ComputerUseChatLiveComplexMatrixCaseIsolation {
-  schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.case-isolation.v1';
-  matrixRunId: string;
-  caseRunId: string;
-  caseIndex: number;
-  sessionId: string;
-  currentTurnId: string;
-  workspaceSeed: {
-    kind: 'shared-workspace-case-seed' | ComputerUseChatLiveCaseIsolationStrategy;
-    seed: string;
-    workspacePathConfigured: boolean;
-    caseWorkspacePath?: string;
-  };
-  resetManifestRef?: string;
-  resetStatus?: 'passed' | 'failed' | 'not-enabled' | 'write-failed';
-  resetIssues: string[];
-  cleanupManifestRef?: string;
-  cleanupStatus: 'planned' | 'recorded' | 'inline-only' | 'write-failed';
-  cleanupIssues: string[];
-}
-
-export interface ComputerUseChatLiveComplexMatrixCleanupManifest {
-  schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.case-cleanup.v1';
-  checkedAt: string;
-  matrixRunId: string;
-  caseRunId: string;
-  caseId: ComputerUseChatLiveComplexMatrixCaseId;
-  status: ComputerUseChatLiveComplexMatrixCaseResult['status'];
-  sessionId: string;
-  currentTurnId: string;
-  workspaceSeed: ComputerUseChatLiveComplexMatrixCaseIsolation['workspaceSeed'];
-  runDirRefs: string[];
-  finalArtifactRefs: string[];
-  guiReceiptRefs: string[];
-  acceptanceRefs: {
-    runDirRef?: string;
-    acceptanceManifestRef?: string;
-    completionEvidenceRef?: string;
-    producerDiagnosticRefs: string[];
-  };
-  resourceReleaseChecks: Array<{
-    kind: 'workspace-seed' | 'run-dir' | 'gui-receipt' | 'l3-producer' | 'timeout';
-    status: 'recorded' | 'not-applicable' | 'needs-review';
-    ref?: string;
-    note: string;
-  }>;
-  residualIssues: string[];
-}
-
-export interface ComputerUseChatLiveComplexMatrixStabilityDiagnostics {
-  schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.stability-diagnostics.v1';
-  caseOrdering: {
-    selectedCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    resultCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    preservedSelectedOrder: boolean;
-    duplicateResultCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    missingResultCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    extraResultCaseIds: string[];
-  };
-  retryBoundary: {
-    mode: 'case-scoped';
-    matrixContinuesAfterCaseFailure: boolean;
-    failedCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    submittedAfterFailureCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    autoContinuationCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    boundedRetryCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    cases: Array<{
-      id: ComputerUseChatLiveComplexMatrixCaseId;
-      caseIndex: number;
-      status: ComputerUseChatLiveComplexMatrixCaseResult['status'];
-      requestSubmitted: boolean;
-      autoContinuationAttempted: boolean;
-      boundedRetryAttempts: number;
-      boundary:
-        | 'blocked-before-submit'
-        | 'single-case-continuation'
-        | 'single-case-bounded-retry'
-        | 'case-run-failure-captured'
-        | 'no-retry-needed';
-    }>;
-  };
-  cleanupManifestSummary: {
-    expectedCaseCount: number;
-    plannedManifestRefs: string[];
-    recordedManifestRefs: string[];
-    inlineOnlyCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    writeFailedCaseIds: ComputerUseChatLiveComplexMatrixCaseId[];
-    cleanupIssuesByCase: Array<{
-      id: ComputerUseChatLiveComplexMatrixCaseId;
-      cleanupStatus: ComputerUseChatLiveComplexMatrixCaseIsolation['cleanupStatus'];
-      issues: string[];
-    }>;
-  };
-}
-
-export interface ComputerUseChatLiveComplexMatrixManifest {
-  schemaVersion: typeof COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_SCHEMA;
-  checkedAt: string;
-  status: 'passed' | 'failed' | 'blocked';
-  releaseAcceptance: 'opt-in-only';
-  evidenceMode: 'current-chat-run-complex-matrix-only';
-  preflight: Pick<ComputerUseChatLivePreflightManifest, 'schemaVersion' | 'status' | 'missingEnv' | 'policyViolations' | 'serviceChecks'>;
-  caseIsolationPlan?: Pick<
-    ComputerUseChatLiveCaseIsolationSeedPlan,
-    'schemaVersion' | 'checkedAt' | 'matrixRunId' | 'strategy' | 'baseWorkspacePath' | 'resetManifestSchemaVersion' | 'runnerIntegration' | 'issues'
-  > & {
-    cases: Array<Pick<ComputerUseChatLiveCaseIsolationSeedPlanCase, 'id' | 'caseRunId' | 'sessionId' | 'currentTurnId' | 'workspace' | 'isolationContract'>>;
-  };
-  cases: ComputerUseChatLiveComplexMatrixCaseResult[];
-  stabilityDiagnostics: ComputerUseChatLiveComplexMatrixStabilityDiagnostics;
-  issues: string[];
-  requestSubmitted: boolean;
-  resourceDiagnostics: ComputerUseChatLiveResourceDiagnostics;
-  completionPolicy: {
-    fixturePackageLocalHarnessCompletesProjectTasks: false;
-    completionRequiresCurrentChatRunIsolatedL3Bundle: true;
-  };
-}
+export {
+  COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_AGGREGATE_SCHEMA,
+  COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_SCHEMA,
+  type ComputerUseChatLiveComplexMatrixAggregateCase,
+  type ComputerUseChatLiveComplexMatrixAggregateManifest,
+  type ComputerUseChatLiveComplexMatrixCaseIsolation,
+  type ComputerUseChatLiveComplexMatrixCaseResult,
+  type ComputerUseChatLiveComplexMatrixCaseRetryAttempt,
+  type ComputerUseChatLiveComplexMatrixCleanupManifest,
+  type ComputerUseChatLiveComplexMatrixDiagnosticBlocker,
+  type ComputerUseChatLiveComplexMatrixManifest,
+  type ComputerUseChatLiveComplexMatrixOptions,
+  type ComputerUseChatLiveComplexMatrixStabilityDiagnostics,
+} from './computer-use-chat-live-complex-matrix-contract.js';
 
 const EXPECTED_STATUS_DRIFT_MAX_RETRIES = 1;
 const DEFAULT_COMPLEX_MATRIX_CASE_TIMEOUT_MS = 600_000;
 const MAX_DEFAULT_COMPLEX_MATRIX_CASE_TIMEOUT_MS = 600_000;
-
-export interface ComputerUseChatLiveComplexMatrixAggregateCase {
-  id: ComputerUseChatLiveComplexMatrixCaseId;
-  label: string;
-  taskId: string;
-  scenarioId: string;
-  expectedStatus: ComputerUseChatLiveE2EExpectedStatus;
-  status: 'passed' | 'failed' | 'blocked' | 'missing';
-  sourceManifestRef?: string;
-  sourceCheckedAt?: string;
-  evidenceKind?: CuNextEvidenceClassification['kind'];
-  liveAcceptanceCandidate: boolean;
-  requestSubmitted: boolean;
-  issues: string[];
-  acceptanceRefs: {
-    runDirRef?: string;
-    acceptanceManifestRef?: string;
-    completionEvidenceRef?: string;
-    finalArtifactRefs: string[];
-    guiPresentRefs: string[];
-  };
-  residualStabilityNotes: string[];
-}
-
-export interface ComputerUseChatLiveComplexMatrixAggregateManifest {
-  schemaVersion: typeof COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_AGGREGATE_SCHEMA;
-  checkedAt: string;
-  status: 'passed' | 'failed';
-  releaseAcceptance: 'opt-in-only';
-  evidenceMode: 'split-live-manifest-aggregate';
-  sourceManifestRefs: string[];
-  cases: ComputerUseChatLiveComplexMatrixAggregateCase[];
-  issues: string[];
-  completionPolicy: {
-    fixturePackageLocalHarnessCompletesProjectTasks: false;
-    completionRequiresCurrentChatRunIsolatedL3Bundle: true;
-    aggregateRequiresEveryCasePassed: true;
-  };
-}
 
 interface CliArgs {
   out?: string;
@@ -679,9 +484,10 @@ async function runMatrixCase(
   retryAttempts?: ComputerUseChatLiveComplexMatrixCaseRetryAttempt[];
 }> {
   if (item.expectedStatus !== 'completed') {
+    const casePrompt = computerUseCommandPrompt(item.prompt);
     const firstRunManifest = await runComputerUseChatLiveE2E({
       ...options,
-      prompt: item.prompt,
+      prompt: casePrompt,
       expectedStatus: item.expectedStatus,
       taskId: item.taskId,
       scenarioId: item.scenarioId,
@@ -710,9 +516,10 @@ async function runMatrixCase(
       reason: retryReason,
       sourceRunManifest: firstRunManifest,
     });
+    const retryCommandPrompt = computerUseCommandPrompt(retryPrompt);
     const retryRunManifest = await runComputerUseChatLiveE2E({
       ...options,
-      prompt: retryPrompt,
+      prompt: retryCommandPrompt,
       expectedStatus: item.expectedStatus,
       taskId: item.taskId,
       scenarioId: item.scenarioId,
@@ -740,7 +547,7 @@ async function runMatrixCase(
           sessionId: retryIsolation.sessionId,
           currentTurnId: retryIsolation.currentTurnId,
           workspaceSeed: retryIsolation.workspaceSeed,
-          prompt: retryPrompt,
+          prompt: retryCommandPrompt,
           requestSubmitted: retryRunManifest.requestSubmitted,
           status: retryRunManifest.status,
           issues: retryRunManifest.issues,
@@ -750,7 +557,7 @@ async function runMatrixCase(
   }
   const continuation = await runComputerUseChatLiveContinuationE2E({
     ...options,
-    firstPrompt: item.prompt,
+    firstPrompt: computerUseCommandPrompt(item.prompt),
     firstExpectedStatus: 'completed',
     secondExpectedStatus: 'completed',
     taskId: item.taskId,
@@ -789,9 +596,10 @@ async function runMatrixCase(
         reason: retryReason,
         sourceRunManifest: selectedRunManifest,
       });
+      const retryCommandPrompt = computerUseCommandPrompt(retryPrompt);
       const retryRunManifest = await runComputerUseChatLiveE2E({
         ...options,
-        prompt: retryPrompt,
+        prompt: retryCommandPrompt,
         expectedStatus: item.expectedStatus,
         taskId: item.taskId,
         scenarioId: item.scenarioId,
@@ -820,7 +628,7 @@ async function runMatrixCase(
             sessionId: retryIsolation.sessionId,
             currentTurnId: retryIsolation.currentTurnId,
             workspaceSeed: retryIsolation.workspaceSeed,
-            prompt: retryPrompt,
+            prompt: retryCommandPrompt,
             requestSubmitted: retryRunManifest.requestSubmitted,
             status: retryRunManifest.status,
             issues: retryRunManifest.issues,
@@ -855,6 +663,8 @@ function nonCompletedRetryReason(
   runManifest: ComputerUseChatLiveE2EManifest,
 ): ComputerUseChatLiveComplexMatrixCaseRetryAttempt['reason'] | undefined {
   if (item.expectedStatus === 'completed') return undefined;
+  const preflightRetryReason = casePreflightTransientBlockRetryReason(runManifest);
+  if (preflightRetryReason) return preflightRetryReason;
   if (!runManifest.requestSubmitted) return undefined;
   if (!nonCompletedExpectedStateDriftIssues(item, runManifest).length) return undefined;
   return 'non-completed-expected-state-drift';
@@ -865,10 +675,55 @@ function completedRetryReason(
   runManifest: ComputerUseChatLiveE2EManifest,
 ): ComputerUseChatLiveComplexMatrixCaseRetryAttempt['reason'] | undefined {
   if (item.expectedStatus !== 'completed') return undefined;
+  const preflightRetryReason = casePreflightTransientBlockRetryReason(runManifest);
+  if (preflightRetryReason) return preflightRetryReason;
   if (!runManifest.requestSubmitted) return undefined;
   if (expectedStateForRunManifest(runManifest) !== 'completed') return 'completed-expected-state-drift';
   if (completedCompletionEvidenceDriftIssues(item, runManifest).length) return 'completed-completion-evidence-drift';
   return undefined;
+}
+
+function casePreflightTransientBlockRetryReason(
+  runManifest: ComputerUseChatLiveE2EManifest,
+): ComputerUseChatLiveComplexMatrixCaseRetryAttempt['reason'] | undefined {
+  if (runManifest.requestSubmitted) return undefined;
+  if (runManifest.status !== 'blocked') return undefined;
+  if (!runManifest.issues.includes('live-preflight-not-ready')) return undefined;
+  return transientCasePreflightBlock(runManifest.preflight) ? 'case-preflight-transient-block' : undefined;
+}
+
+function transientCasePreflightBlock(
+  preflight: ComputerUseChatLiveE2EManifest['preflight'],
+): boolean {
+  if (preflight.status === 'ready') return false;
+  if (preflight.missingEnv.length > 0 || preflight.policyViolations.length > 0) return false;
+  const failedServices = preflight.serviceChecks.filter((check) => check.status === 'fail');
+  if (failedServices.some((check) => !transientCasePreflightDiagnostic(check.error))) return false;
+  const runtimeProviderBlocked = preflight.runtimeProviderPreflight?.status === 'blocked';
+  if (runtimeProviderBlocked && !transientRuntimeProviderCasePreflightBlock(preflight.runtimeProviderPreflight)) {
+    return false;
+  }
+  return failedServices.length > 0 || runtimeProviderBlocked;
+}
+
+function transientRuntimeProviderCasePreflightBlock(
+  preflight: ComputerUseChatLiveE2EManifest['preflight']['runtimeProviderPreflight'],
+): boolean {
+  if (!preflight || preflight.status !== 'blocked') return false;
+  if (preflight.missingEnv.length > 0 || preflight.policyViolations.length > 0) return false;
+  if (transientCasePreflightDiagnostic(preflight.readIssue)) return true;
+  const httpStatus = preflight.checkedHealthz?.httpStatus;
+  if (typeof httpStatus === 'number' && transientProviderHealthStatus(httpStatus)) return true;
+  return transientCasePreflightDiagnostic(preflight.category);
+}
+
+function transientProviderHealthStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || (status >= 500 && status <= 599);
+}
+
+function transientCasePreflightDiagnostic(message: string | undefined): boolean {
+  if (!message) return false;
+  return /\b(?:AbortError|aborted|timeout|timed out|fetch failed|network|terminated|socket hang up|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|temporar(?:y|ily)|transient|unavailable|overloaded|rate[- ]?limited|upstream-outage)\b/i.test(message);
 }
 
 function completedCompletionEvidenceDriftIssues(
@@ -990,10 +845,19 @@ function retryPromptObservationText(input: {
   reason?: ComputerUseChatLiveComplexMatrixCaseRetryAttempt['reason'];
   sourceRunManifest: ComputerUseChatLiveE2EManifest;
 }): string {
+  if (input.reason === 'case-preflight-transient-block') {
+    return `Matrix bounded retry ${input.attempt}/${input.maxAttempts}: the previous case attempt was blocked before submission by a transient live preflight block instead of reaching expected ${input.item.expectedStatus}.`;
+  }
   if (input.reason === 'completed-completion-evidence-drift') {
     return `Matrix bounded retry ${input.attempt}/${input.maxAttempts}: the previous current-chat run reached a completed visible state, but current-run completion-grade evidence was missing or invalid instead of proving expected ${input.item.expectedStatus}.`;
   }
   return `Matrix bounded retry ${input.attempt}/${input.maxAttempts}: the previous current-chat run observed ${expectedStateForRunManifest(input.sourceRunManifest)} instead of expected ${input.item.expectedStatus}.`;
+}
+
+function computerUseCommandPrompt(prompt: string): string {
+  const trimmed = prompt.trim();
+  if (/^\/computer-use(?:\s|$)/i.test(trimmed)) return trimmed;
+  return `/computer-use ${trimmed}`;
 }
 
 function expectedStateGuardText(
@@ -1123,6 +987,11 @@ function aggregateCaseFromResult(
   sourceManifestRef: string,
   sourceCheckedAt: string,
 ): ComputerUseChatLiveComplexMatrixAggregateCase {
+  const acceptanceIssues = aggregateCaseAcceptanceIssues({
+    status: result.status,
+    evidenceKind: result.evidenceClassification.kind,
+  });
+  const issues = uniqueStrings([...result.issues, ...acceptanceIssues]);
   const finalArtifactRefs = uniqueStrings([
     ...result.runManifest.artifactRefs,
     ...result.runManifest.displayedRefs,
@@ -1137,13 +1006,13 @@ function aggregateCaseFromResult(
     taskId: result.taskId,
     scenarioId: result.scenarioId,
     expectedStatus: result.expectedStatus,
-    status: result.status,
+    status: result.status === 'passed' && acceptanceIssues.length ? 'failed' : result.status,
     sourceManifestRef,
     sourceCheckedAt,
     evidenceKind: result.evidenceClassification.kind,
     liveAcceptanceCandidate: result.liveAcceptanceCandidate,
     requestSubmitted: result.requestSubmitted,
-    issues: result.issues,
+    issues,
     acceptanceRefs: {
       runDirRef: result.runManifest.liveAcceptanceBundle?.runDirRef,
       acceptanceManifestRef: result.runManifest.liveAcceptanceBundle?.acceptanceManifestRef,
@@ -1151,11 +1020,17 @@ function aggregateCaseFromResult(
       finalArtifactRefs,
       guiPresentRefs,
     },
-    residualStabilityNotes: result.status === 'passed'
+    residualStabilityNotes: result.status === 'passed' && acceptanceIssues.length === 0
       ? []
       : [
         'This source manifest cannot prove the case; use a later passed split live manifest or rerun this case.',
       ],
+    diagnosticBlockers: diagnosticBlockersForComplexMatrixAggregateCase({
+      expectedStatus: result.expectedStatus,
+      evidenceClassification: result.evidenceClassification,
+      runManifest: result.runManifest,
+      issues,
+    }),
   };
 }
 
@@ -1170,6 +1045,20 @@ function aggregateCaseRank(item: ComputerUseChatLiveComplexMatrixAggregateCase):
   const currentRunL3 = item.evidenceKind === 'isolated-L3' ? 100_000 : 0;
   const submitted = item.requestSubmitted ? 10_000 : 0;
   return passed + currentRunL3 + submitted + Date.parse(item.sourceCheckedAt ?? '1970-01-01T00:00:00.000Z') / 1_000_000_000;
+}
+
+function aggregateCaseAcceptanceIssues(input: {
+  status: ComputerUseChatLiveComplexMatrixAggregateCase['status'];
+  evidenceKind?: CuNextEvidenceClassification['kind'] | string;
+}): string[] {
+  if (input.status !== 'passed') return [];
+  return diagnosticMatrixEvidenceKind(input.evidenceKind)
+    ? [`matrix-diagnostic-only-evidence-kind:${input.evidenceKind}`]
+    : [];
+}
+
+function diagnosticMatrixEvidenceKind(kind: string | undefined): boolean {
+  return kind === 'fixture' || kind === 'package-local' || kind === 'target-bound-real';
 }
 
 function missingAggregateCase(item: ComputerUseChatLiveComplexMatrixCase): ComputerUseChatLiveComplexMatrixAggregateCase {
@@ -1190,6 +1079,7 @@ function missingAggregateCase(item: ComputerUseChatLiveComplexMatrixCase): Compu
     residualStabilityNotes: [
       'No source manifest in the aggregate input contained this case.',
     ],
+    diagnosticBlockers: [],
   };
 }
 
@@ -1297,12 +1187,8 @@ function missingEvidenceRequirementRefIssues(
   item: ComputerUseChatLiveComplexMatrixCase,
   runManifest: ComputerUseChatLiveE2EManifest,
 ): string[] {
-  if (item.expectedStatus !== 'completed') return [];
-  const refs = [
-    ...runManifest.displayedRefs,
-    ...runManifest.artifactRefs,
-    ...runManifest.auditRefs,
-  ];
+  if (runManifest.status !== item.expectedStatus) return [];
+  const refs = complexMatrixEvidenceRefs(runManifest);
   return item.evidenceRequirements.flatMap((requirement) => {
     const patterns = evidenceRequirementRefPatterns(requirement);
     if (!patterns.length) return [];
@@ -1311,8 +1197,108 @@ function missingEvidenceRequirementRefIssues(
   });
 }
 
-function evidenceRequirementRefPatterns(requirement: string): RegExp[] {
+function complexMatrixEvidenceRefs(runManifest: ComputerUseChatLiveE2EManifest): string[] {
+  return uniqueStrings([
+    ...runManifest.displayedRefs,
+    ...runManifest.artifactRefs,
+    ...runManifest.auditRefs,
+    ...runManifest.approvalRequestRefs,
+    ...runManifest.guiAskUserRecordRefs,
+    ...runManifest.riskAuditRefs,
+    ...runManifest.confirmedRequestRefs,
+    ...runManifest.approvalDecisionRefs,
+    ...runManifest.sourceApprovalRequestRefs,
+    ...runManifest.sourceGuiAskUserRecordRefs,
+    ...runManifest.sourceRiskAuditRefs,
+    ...(runManifest.deniedExecutionProof?.refs ?? []),
+    ...runManifest.failureDiagnostics.flatMap((diagnostic) => diagnostic.refs),
+    ...(runManifest.packageBridgeCompletionGrade?.diagnosticRefs ?? []),
+    ...(runManifest.packageBridgeCompletionGrade?.acceptanceManifestRefs ?? []),
+    ...(runManifest.packageBridgeCompletionGrade?.acceptanceInputRefs ?? []),
+    ...(runManifest.packageBridgeCompletionGrade?.completionEvidenceRefs ?? []),
+    ...(runManifest.packageBridgeCompletionGrade?.producerDiagnosticRefs ?? []),
+    runManifest.liveAcceptanceBundle?.runDirRef,
+    runManifest.liveAcceptanceBundle?.acceptanceManifestRef,
+    runManifest.liveAcceptanceBundle?.completionEvidenceRef,
+    runManifest.productStrict?.acceptanceManifestRef,
+  ].filter((ref): ref is string => typeof ref === 'string' && ref.length > 0));
+}
+
+export function evidenceRequirementRefPatterns(requirement: string): RegExp[] {
   switch (requirement) {
+    case 'browser-research':
+      return [/(?:^|\/)(?:browser|web|source|research)[^/]*\.(?:json|md|txt)$/i];
+    case 'local-report':
+      return [/(?:^|\/)(?:local-)?(?:report|briefing|analysis)[^/]*\.(?:md|txt|json)$/i];
+    case 'source-ref-causality':
+    case 'source-to-table-to-report-causality':
+    case 'cross-app-causality':
+      return [/(?:^|\/)(?:source|causality|run-task-chain)[^/]*\.(?:json|md)$/i];
+    case 'csv-or-table-source':
+      return [/(?:^|\/)(?:csv|table|spreadsheet)[^/]*\.(?:csv|json|md)$/i];
+    case 'file-artifact-validator-refs':
+    case 'artifact-validator-refs':
+    case 'artifact-validation':
+      return [/(?:^|\/)(?:artifact-)?validator[^/]*\.json$/i, /(?:^|\/)validation[^/]*\.json$/i];
+    case 'browser-form-draft':
+      return [/(?:^|\/)(?:browser-)?(?:form|draft)[^/]*\.(?:json|md|txt)$/i];
+    case 'hard-confirm-submit':
+    case 'hard-confirm':
+    case 'approval-request':
+    case 'approval-sidecars':
+    case 'current-action-type-turn-authorization':
+    case 'cancel-no-execution':
+    case 'confirm-current-action-type-turn-only':
+      return [/(?:^|\/)(?:approval-request|gui-ask-user|risk-audit|approval-decision|confirmed-request)[^/]*\.json$/i];
+    case 'gui.ask_user':
+      return [/(?:^|\/)gui-ask-user[^/]*\.json$/i];
+    case 'risk-audit':
+    case 'deniedExecuted=false':
+      return [/(?:^|\/)(?:risk-audit|approval-request|gui-ask-user)[^/]*\.json$/i];
+    case 'file-manager-evidence':
+      return [/(?:^|\/)(?:file-manager|finder|files?)[^/]*\.(?:json|png|md)$/i];
+    case 'directory-listing-refs':
+    case 'file-list-evidence':
+      return [/(?:^|\/)(?:directory-listing|file-list)[^/]*\.json$/i];
+    case 'file-organization-evidence':
+      return [/(?:^|\/)(?:file-organization|organization-index|file-index|index)[^/]*\.(?:json|md|txt)$/i];
+    case 'explicit-terminal-workflow':
+    case 'terminal-evidence':
+      return [/(?:^|\/)terminal[^/]*\.(?:json|md|txt|log)$/i];
+    case 'notebook-workflow':
+      return [/(?:^|\/)notebook[^/]*\.(?:ipynb|json|md|txt)$/i];
+    case 'browser-source-reader':
+      return [/(?:^|\/)(?:browser-source-reader|source-reader|browser-source)[^/]*\.(?:json|md|txt)$/i];
+    case 'editor-evidence':
+      return [/(?:^|\/)editor[^/]*\.(?:json|md|txt|png)$/i];
+    case 'file-preview-evidence':
+      return [/(?:^|\/)(?:file-preview|preview)[^/]*\.(?:json|md|txt|png)$/i];
+    case 'viewport-recovery':
+      return [/(?:^|\/)viewport-recovery[^/]*\.json$/i];
+    case 'scroll-evidence':
+      return [/(?:^|\/)scroll[^/]*\.(?:json|png)$/i];
+    case 'viewport-state-refs':
+      return [/(?:^|\/)viewport-state[^/]*\.json$/i];
+    case 'fresh-observation':
+    case 'fresh-re-observation':
+      return [/(?:^|\/)(?:(?:fresh-)?re-?observation|vision-trace)[^/]*\.(?:json|png)$/i];
+    case 'blocked-repair-manifest':
+    case 'blocked-target-manifest':
+      return [/(?:^|\/)blocked-(?:repair-)?manifest[^/]*\.json$/i];
+    case 'repair-hint':
+      return [/(?:^|\/)repair-hint[^/]*\.json$/i];
+    case 'continuation-request':
+      return [/(?:^|\/)continuation-request[^/]*\.json$/i];
+    case 'run-task-chain':
+      return [/(?:^|\/)(?:tui-host-)?run-task-chain[^/]*\.json$/i];
+    case 'focus-crops':
+      return [/(?:^|\/)(?:focus-)?crop[^/]*\.(?:json|png)$/i];
+    case 'ocr-refs':
+      return [/(?:^|\/)ocr[^/]*\.(?:json|txt|md|png)$/i];
+    case 'vision-translator-refs':
+      return [/(?:^|\/)vision-translator[^/]*\.json$/i];
+    case 'ambiguous-target-blocked':
+      return [/(?:^|\/)(?:ambiguous-target|target-ambiguity|dense-grounding-rejections)[^/]*\.json$/i];
     case 'dense-grounding-rejections':
       return [/(?:^|\/)dense-grounding-rejections\.json$/i];
     default:
@@ -1477,7 +1463,9 @@ async function buildOptionalCaseIsolationPlan(input: {
 }): Promise<ComputerUseChatLiveCaseIsolationSeedPlan | undefined> {
   if (!input.options.caseIsolationStrategy) return undefined;
   const baseWorkspacePath = workspacePathForOptions(input.options);
-  if (!baseWorkspacePath) return undefined;
+  if (!baseWorkspacePath) {
+    throw new Error(`--case-isolation ${input.options.caseIsolationStrategy} requires --workspace PATH or SCIFORGE_WORKSPACE_PATH; refusing to run without per-case workspace forks.`);
+  }
   return buildComputerUseChatLiveCaseIsolationSeedPlan({
     matrixRunId: input.matrixRunId,
     baseWorkspacePath,
@@ -1773,7 +1761,15 @@ function resourceReleaseChecksForCase(input: {
 }
 
 function workspacePathForOptions(options: ComputerUseChatLiveComplexMatrixOptions): string | undefined {
-  return options.workspacePath ?? options.env?.SCIFORGE_WORKSPACE_PATH ?? process.env.SCIFORGE_WORKSPACE_PATH;
+  if (options.workspacePath !== undefined) return nonEmptyOptionValue(options.workspacePath);
+  if (options.env && Object.prototype.hasOwnProperty.call(options.env, 'SCIFORGE_WORKSPACE_PATH')) {
+    return nonEmptyOptionValue(options.env.SCIFORGE_WORKSPACE_PATH);
+  }
+  return nonEmptyOptionValue(process.env.SCIFORGE_WORKSPACE_PATH);
+}
+
+function nonEmptyOptionValue(value: string | undefined): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
 }
 
 function cleanupManifestRefForCase(

@@ -1,4 +1,4 @@
-import type { ToolPackageManifest } from './types';
+import type { ToolPackageManifest } from './types.js';
 
 export const toolPackageManifests = [
   {
@@ -54,8 +54,8 @@ export const toolPackageManifests = [
       "vision-trace"
     ],
     "requiredConfig": [
-      "shared-llm-config",
-      "kv-ground-base-url",
+      "shared-model-router-config",
+      "model-router-vision-grounding",
       "trace-output-dir"
     ],
     "docs": {
@@ -72,7 +72,7 @@ export const toolPackageManifests = [
       "grounding",
       "text-output",
       "computer-use-input",
-      "kv-ground"
+      "model-router"
     ],
     "provider": "local",
     "sensePlugin": {
@@ -103,4 +103,4 @@ export const toolPackageManifests = [
   }
 ] as const satisfies readonly ToolPackageManifest[];
 
-export type { SensePluginManifest, ToolPackageManifest, ToolPackageSource } from './types';
+export type { SensePluginManifest, ToolPackageManifest, ToolPackageSource } from './types.js';

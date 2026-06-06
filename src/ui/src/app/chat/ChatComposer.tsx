@@ -256,22 +256,21 @@ export function ChatComposer({
             <Sparkles size={13} />
             {assistantConnectionLabel(runtimeContext, t)}
           </span>
-          <span className="composer-runtime-pill permission" title={t({ 'zh-CN': '权限', 'en-US': 'Permission' })}>
-            <ShieldCheck size={13} />
-            {permissionLabel(runtimeContext.permissionMode, t)}
-          </span>
           <details ref={autonomyMenuRef} className="composer-autonomy-menu">
             <summary title={t({ 'zh-CN': 'Autonomy', 'en-US': 'Autonomy' })}>
               <ShieldCheck size={13} aria-hidden />
               <span>{t({ 'zh-CN': 'Autonomy', 'en-US': 'Autonomy' })}</span>
               <em>{autonomyIntent.label}</em>
+              <ChevronDown size={12} aria-hidden className="composer-autonomy-menu-chevron" />
             </summary>
             <div className="composer-autonomy-menu-panel">
               {composerAutonomySelectionIntents(locale).map((option) => (
                 <button
                   key={option.id}
                   type="button"
+                  className="composer-autonomy-option"
                   data-autonomy-option={option.id}
+                  data-autonomy-selected={autonomyIntent.id === option.id ? 'true' : undefined}
                   aria-pressed={autonomyIntent.id === option.id}
                   onClick={() => handleAutonomyIntent(option)}
                 >
@@ -429,13 +428,4 @@ function assistantConnectionLabel(context: NonNullable<Parameters<typeof ChatCom
   return context.model.trim()
     ? t({ 'zh-CN': 'Assistant 已连接', 'en-US': 'Assistant connected' })
     : t({ 'zh-CN': '连接未配置', 'en-US': 'Connection not configured' });
-}
-
-function permissionLabel(permissionMode: string, t: Translate) {
-  const normalized = permissionMode.trim();
-  if (!normalized) return t({ 'zh-CN': '权限未设置', 'en-US': 'Permission not set' });
-  if (/read[-_\s]?only|readonly|只读/i.test(normalized)) return t({ 'zh-CN': '只读', 'en-US': 'Read-only' });
-  if (/write|写|可写/i.test(normalized)) return t({ 'zh-CN': '可写', 'en-US': 'Writable' });
-  if (/ask|approve|confirm|确认|审批/i.test(normalized)) return t({ 'zh-CN': '先询问', 'en-US': 'Ask first' });
-  return t({ 'zh-CN': '权限已设置', 'en-US': 'Permission set' });
 }

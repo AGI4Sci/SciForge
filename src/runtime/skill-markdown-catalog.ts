@@ -4,7 +4,7 @@ import {
   markdownCatalogRuntimeDefaults,
   type MarkdownSkillPackage,
   type MarkdownToolPackage,
-} from '../../packages/skills/markdown-catalog';
+} from '../../packages/skills/markdown-catalog.js';
 import type { SkillManifest } from './runtime-types.js';
 
 export {

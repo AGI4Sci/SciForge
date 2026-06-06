@@ -19,6 +19,7 @@
   "files": [
     "README.md",
     "index.ts",
+    "component-compatibility.ts",
     "types.ts",
     "workbench-policy.ts",
     "workbench-renderers.tsx",
@@ -33,6 +34,7 @@
   ],
   "exports": {
     ".": "./index.ts",
+    "./component-compatibility": "./component-compatibility.ts",
     "./types": "./types.ts",
     "./workbench-policy": "./workbench-policy.ts",
     "./workbench-renderers": "./workbench-renderers.tsx",

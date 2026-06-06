@@ -17,6 +17,7 @@ import {
   mergeClaims,
   mergeExecutionUnits,
   mergeRuntimeArtifacts,
+  rebaseAcceptedSessionForLocalFollowup,
   requestPayloadForTurn,
   resolveGuidanceQueueAfterRun,
   rollbackSessionBeforeMessage,
@@ -25,6 +26,7 @@ import {
 } from './sessionTransforms';
 import { enrichRepairRaw } from './sessionRepairRaw';
 import { latestProgressModelFromCompactTrace } from '../../processProgress';
+import { detectSessionWriteConflict, withSessionWriteGuard } from '../../sessionStore';
 import { conversationProjectionMigrationAuditFixtureForRun } from '../conversation-projection-view-model';
 import { objectReferenceForUploadedArtifact, parseSciForgeReferenceAttribute, referenceForMessage, referenceForUploadedArtifact, sciForgeReferenceAttribute } from '../../../../../packages/support/object-references';
 
@@ -160,6 +162,49 @@ test('chat title derivation is generic, bounded, and leak-safe', () => {
   assert.equal(existingUser.session.title, 'Existing human title');
   assert.equal(uploadThenPrompt.session.title, 'summarize the uploaded table');
   assert.doesNotMatch(safeTitle, /provider|token|sk-secret|\/Users|https?:\/\//i);
+});
+
+test('local optimistic and clarification response transforms can be applied sequentially under write guard', () => {
+  const baseSession = withSessionWriteGuard(session());
+  const { session: optimisticSession } = createOptimisticUserTurnSession({
+    baseSession,
+    prompt: '搜索今天 huggingface 上最火的工作',
+    references: [],
+  });
+  const parentAcceptedOptimistic = withSessionWriteGuard(optimisticSession);
+  const localFollowupBase = rebaseAcceptedSessionForLocalFollowup(optimisticSession);
+  const response: NormalizedAgentResponse = {
+    message: message('msg-clarify', 'scenario', '我需要先确认你说的“工作”具体指哪类对象。', '2026-05-07T01:00:00.000Z'),
+    run: {
+      id: 'run-clarify',
+      scenarioId: 'literature-evidence-review',
+      status: 'completed',
+      prompt: '搜索今天 huggingface 上最火的工作',
+      response: '我需要先确认你说的“工作”具体指哪类对象。',
+      createdAt: '2026-05-07T01:00:00.000Z',
+      completedAt: '2026-05-07T01:00:00.000Z',
+    },
+    uiManifest: [],
+    claims: [],
+    executionUnits: [],
+    artifacts: [],
+    notebook: [],
+  };
+
+  const finalSession = mergeAgentResponseIntoSession({
+    baseSession: localFollowupBase,
+    response,
+    scenarioPackageRef: { id: 'literature-evidence-review', version: '1', source: 'built-in' },
+    skillPlanRef: 'skill-plan',
+    uiPlanRef: 'ui-plan',
+  });
+
+  assert.equal(detectSessionWriteConflict(parentAcceptedOptimistic, finalSession)?.kind, undefined);
+  assert.deepEqual(finalSession.messages.map((item) => item.content), [
+    '搜索今天 huggingface 上最火的工作',
+    '我需要先确认你说的“工作”具体指哪类对象。',
+  ]);
+  assert.equal(finalSession.runs[0]?.id, 'run-clarify');
 });
 
 test('builds minimal first-turn payload but retains prior work and explicit references', () => {

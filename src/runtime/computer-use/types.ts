@@ -205,6 +205,7 @@ export interface VisionCompletionPolicy {
 export interface ComputerUsePlannerConfig {
   profile?: string;
   allowOpenAiRuntime?: boolean;
+  env?: NodeJS.ProcessEnv;
   timeoutMs: number;
   maxTokens: number;
 }

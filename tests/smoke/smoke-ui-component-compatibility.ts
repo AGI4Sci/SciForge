@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
-import { uiComponentManifests, uiComponentCompatibilityAliases } from '../../packages/presentation/components/index.js';
+import { uiComponentCompatibilityAliases } from '../../packages/presentation/components/component-compatibility.js';
+import { uiComponentManifests } from '../../packages/presentation/components/index.js';
 import { uiComponentElements } from '../../packages/scenarios/core/src/componentElements.js';
 import { composeRuntimeUiManifest } from '../../src/runtime/workspace-runtime-gateway.js';
 import { acceptedArtifactTypesForComponent, artifactTypesForComponents, uiModuleRegistry } from '../../src/ui/src/uiModuleRegistry.js';

@@ -1,5 +1,5 @@
-import type { SkillPackageManifest } from './types';
-import type { ToolPackageManifest } from './tool_skills/types';
+import type { SkillPackageManifest } from './types.js';
+import type { ToolPackageManifest } from './tool_skills/types.js';
 
 const PACKAGE_ROUTING_TAGS = new Set([
   '',

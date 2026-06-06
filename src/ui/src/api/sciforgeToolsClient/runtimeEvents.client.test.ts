@@ -197,6 +197,14 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
                 dataVisibilityRef: 'computer-use:data-visibility/current.json',
                 stopRef: 'computer-use:stop/current',
                 cancelLeaseRef: 'computer-use:lease/current',
+                inputLeaseRef: 'computer-use:lease/input/current',
+                userLeaseRef: 'computer-use:lease/user/current',
+                agentLeaseRef: 'computer-use:lease/agent/current',
+                activeLeaseOwnerRef: 'computer-use:lease/owner/current',
+                leaseStatus: 'agent-active',
+                takeoverRef: 'computer-use:lease/takeover/current',
+                pauseRef: 'computer-use:lease/pause-agent/current',
+                resumeRef: 'computer-use:lease/resume-agent/current',
                 approvalMode: 'required',
                 approvalRequestRef: 'computer-use:approval/request.json',
                 sessionRef: 'computer-use:session/live/current-bundle.json',
@@ -277,6 +285,14 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
                 dataVisibilityRef: 'computer-use:data-visibility/current.json',
                 stopRef: 'computer-use:stop/current',
                 cancelLeaseRef: 'computer-use:lease/current',
+                inputLeaseRef: 'computer-use:lease/input/current',
+                userLeaseRef: 'computer-use:lease/user/current',
+                agentLeaseRef: 'computer-use:lease/agent/current',
+                activeLeaseOwnerRef: 'computer-use:lease/owner/current',
+                leaseStatus: 'agent-active',
+                takeoverRef: 'computer-use:lease/takeover/current',
+                pauseRef: 'computer-use:lease/pause-agent/current',
+                resumeRef: 'computer-use:lease/resume-agent/current',
                 approvalMode: 'required',
                 approvalRequestRef: 'computer-use:approval/request.json',
                 providerRoute: 'SHOULD_NOT_LEAK',
@@ -321,6 +337,14 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     assert.equal(controlData?.dataVisibilityRef, 'computer-use:data-visibility/current.json');
     assert.equal(controlData?.stopRef, 'computer-use:stop/current');
     assert.equal(controlData?.cancelLeaseRef, 'computer-use:lease/current');
+    assert.equal(controlData?.inputLeaseRef, 'computer-use:lease/input/current');
+    assert.equal(controlData?.userLeaseRef, 'computer-use:lease/user/current');
+    assert.equal(controlData?.agentLeaseRef, 'computer-use:lease/agent/current');
+    assert.equal(controlData?.activeLeaseOwnerRef, 'computer-use:lease/owner/current');
+    assert.equal(controlData?.leaseStatus, 'agent-active');
+    assert.equal(controlData?.takeoverRef, 'computer-use:lease/takeover/current');
+    assert.equal(controlData?.pauseRef, 'computer-use:lease/pause-agent/current');
+    assert.equal(controlData?.resumeRef, 'computer-use:lease/resume-agent/current');
     assert.equal(controlData?.approvalMode, 'required');
     assert.equal(controlData?.status, 'needs-confirmation');
     assert.ok(screenSlot);
@@ -337,6 +361,14 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     assert.deepEqual(screenData?.sidecarCallRefs, ['computer-use:sidecar/live/calls/execute-1.json']);
     assert.deepEqual(screenData?.targetRefs, ['computer-use:target/live/screen-1-button.json']);
     assert.deepEqual(screenData?.schedulerLeaseRefs, ['computer-use:lease/live/scheduler-screen-1.json']);
+    assert.equal(screenData?.inputLeaseRef, 'computer-use:lease/input/current');
+    assert.equal(screenData?.userLeaseRef, 'computer-use:lease/user/current');
+    assert.equal(screenData?.agentLeaseRef, 'computer-use:lease/agent/current');
+    assert.equal(screenData?.activeLeaseOwnerRef, 'computer-use:lease/owner/current');
+    assert.equal(screenData?.leaseStatus, 'agent-active');
+    assert.equal(screenData?.takeoverRef, 'computer-use:lease/takeover/current');
+    assert.equal(screenData?.pauseRef, 'computer-use:lease/pause-agent/current');
+    assert.equal(screenData?.resumeRef, 'computer-use:lease/resume-agent/current');
     assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.screenCount, 2);
     assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.actorCursorCount, 3);
     assert.equal((screenData?.runSummary as Record<string, unknown> | undefined)?.sidecarBindingKind, 'macos-native-virtual-screen');
@@ -348,6 +380,9 @@ test('Runtime Codex Computer Use host actions materialize user control plane as 
     assert.match(String((raw.guiPresentation as Record<string, unknown>).text), /validation ref `computer-use:validation\/live\/validation\.json`/);
     assert.match(String((raw.guiPresentation as Record<string, unknown>).text), /validation status `accepted`/);
     assert.equal(guiControl.approvalRef, 'approval:computer-use:control-plane');
+    assert.equal(guiControl.takeoverRef, 'computer-use:lease/takeover/current');
+    assert.equal(guiControl.pauseRef, 'computer-use:lease/pause-agent/current');
+    assert.equal(guiControl.resumeRef, 'computer-use:lease/resume-agent/current');
     assert.deepEqual(recursiveForbiddenKeys(controlData, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
     assert.deepEqual(recursiveForbiddenKeys(guiControl, ['providerRoute', 'executorLease', 'schedulerParams', 'screenId', 'leaseScope']), []);
     assert.deepEqual(recursiveForbiddenKeys(screenData, ['providerRoute', 'executorLease', 'schedulerParams', 'rawScreenshot', 'rawTrace', 'token', 'screenId', 'leaseScope']), []);
@@ -570,6 +605,299 @@ test('Runtime Codex foreground final message can use native assistant message pr
   }
 });
 
+test('Runtime Codex BrowserHostSession Agent Host candidate result asks for source reading without gui.present', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      const message = [
+        '我找到了关于“伊朗局势”的候选来源，但目前只读取了搜索结果页的标题和摘要，还没有打开并阅读来源页面，所以不能把这些内容当作完整结论：',
+        '',
+        '- 伊朗局势专题报道显示，相关事件仍在更新中。来源：https://news.sina.cn/zt_d/subject-1767894979',
+        '- 另一条报道提到美伊互袭波及多国。来源：https://news.cctv.com/2026/06/03/example.shtml',
+        '',
+        '需要完整回答时，请确认是否继续打开并阅读这些来源；我会在读完页面正文后再总结。',
+      ].join('\n');
+      return new Response([
+        'event: agent_host_turn_loop\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'audit',
+          status: 'agent-host-turn-loop',
+          message,
+          commandId,
+          attemptId,
+          evidenceRefs: [`audit:codex-agent-host-turn-loop:${commandId}:${attemptId}`],
+          raw: {
+            schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+            selectedRuntime: 'browser-host-search-runtime',
+          },
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          type: 'done',
+          status: 'done',
+          commandId,
+          attemptId,
+          message,
+          displayIntent: {
+            protocolStatus: 'protocol-partial',
+            taskOutcome: 'needs-human',
+            status: 'needs-human',
+          },
+          claims: [{
+            id: 'claim-browser-host-search',
+            type: 'fact',
+            text: 'BrowserHostSession search returned bounded results for 伊朗局势.',
+            evidenceLevel: 'runtime',
+            supportingRefs: ['browser-host-session:browser-host-test/search-results.json'],
+          }],
+          executionUnits: [{
+            id: 'EU-browser-host-search',
+            tool: 'browser_search',
+            status: 'needs-human',
+            selectedRuntime: 'browser-host-search-runtime',
+            outputRef: 'browser-host-session:browser-host-test/search-results.json',
+          }],
+          artifacts: [{
+            id: 'browser-search-results',
+            type: 'browser-search-results',
+            producerScenario: 'knowledge',
+            schemaVersion: 'sciforge.browser-host-session.search-result.v1',
+            metadata: {
+              source: 'browser_search',
+              browserSessionRef: 'browser-host-session:browser-host-test',
+              searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
+            },
+            data: {
+              query: '伊朗局势',
+              engine: 'bing',
+              results: [{
+                title: '关注伊朗局势',
+                url: 'https://news.sina.cn/zt_d/subject-1767894979',
+              }],
+            },
+          }],
+          evidenceRefs: [
+            'https://cn.bing.com/search?q=%E4%BC%8A%E6%9C%97%E5%B1%80%E5%8A%BF',
+            'browser-host-session:browser-host-test/search-results.json',
+          ],
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '通过内置浏览器搜索伊朗局势',
+    });
+
+    assert.equal(response.run.status, 'completed');
+    assert.equal(response.message.status, 'completed');
+    assert.match(response.message.content, /候选来源/);
+    assert.match(response.message.content, /还没有打开并阅读来源页面/);
+    assert.doesNotMatch(response.message.content, /^BrowserHostSession search:/);
+    assert.doesNotMatch(response.message.content, /Runtime Codex 运行未完成|gui\.present/i);
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex BrowserHostSession repair-needed diagnostics stay visible without gui.present', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      const message = [
+        '内置浏览器这次没有成功打开搜索页，因此不能判断“伊朗局势”的真实搜索结果。当前阻塞是：BrowserHostSession 原生适配器未连接。',
+        '请先恢复 SciForge 的内置浏览器适配器；恢复后我会重新搜索、打开来源页面并阅读正文后再总结。',
+        '完整下一步：重启或配置 native adapter，然后重新发起搜索；打开候选来源页面，阅读正文、日期、作者和上下文；最后确认：不要只展示链接，要在读完来源页面正文后再回答。',
+        '附加说明：这条消息特意超过普通摘要长度，用来保证 BrowserHostSession 的用户可见诊断不会在关键恢复动作之前被截断；如果这里被截断，用户仍然只能看到半句原因和半句建议。',
+        '末尾校验：完整诊断必须保留到这里。',
+      ].join('');
+      return new Response([
+        'event: done\n',
+        `data: ${JSON.stringify({
+          type: 'done',
+          status: 'done',
+          commandId,
+          attemptId,
+          message,
+          displayIntent: {
+            protocolStatus: 'protocol-partial',
+            taskOutcome: 'needs-work',
+            status: 'repair-needed',
+            reason: 'browser-host-session-unavailable',
+          },
+          claims: [{
+            id: 'claim-browser-host-search-unavailable',
+            type: 'diagnostic',
+            text: message,
+            evidenceLevel: 'runtime',
+            supportingRefs: ['browser-host-session:browser-host-test/search-results.json'],
+          }],
+          executionUnits: [{
+            id: 'EU-browser-host-search',
+            tool: 'browser_search',
+            status: 'repair-needed',
+            selectedRuntime: 'browser-host-search-runtime',
+            runtimeProfileId: 'browser-host-session',
+            outputRef: 'browser-host-session:browser-host-test/search-results.json',
+          }],
+          artifacts: [{
+            id: 'browser-search-results',
+            type: 'browser-search-results',
+            producerScenario: 'knowledge',
+            schemaVersion: 'sciforge.browser-host-session.search-result.v1',
+            metadata: {
+              source: 'browser_search',
+              browserSessionRef: 'browser-host-session:browser-host-test',
+              searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
+            },
+            data: {
+              query: '伊朗局势',
+              engine: 'bing',
+              results: [],
+              answerEvidenceState: 'browser-unavailable',
+              browserHostSessionDiagnostics: ['Native embedded BrowserHostSession adapter is required.'],
+            },
+          }],
+          evidenceRefs: [
+            'browser-host-session:browser-host-test/search-results.json',
+          ],
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '通过内置浏览器搜索伊朗局势',
+    });
+
+    assert.match(response.message.content, /内置浏览器这次没有成功打开搜索页/);
+    assert.match(response.message.content, /原生适配器未连接/);
+    assert.match(response.message.content, /最后确认：不要只展示链接，要在读完来源页面正文后再回答/);
+    assert.match(response.message.content, /末尾校验：完整诊断必须保留到这里/);
+    assert.doesNotMatch(response.message.content, /Runtime Codex 运行未完成|gui\.present/i);
+    assert.equal(response.message.provenance?.kind, 'live-runtime-codex');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex BrowserHostSession done message fails closed when it contains raw provider payload text', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: done\n',
+        `data: ${JSON.stringify({
+          type: 'done',
+          status: 'done',
+          commandId,
+          attemptId,
+          message: 'BrowserHostSession rawProviderPayload data:image/png;base64,DO_NOT_SHOW stdoutRef=private',
+          displayIntent: {
+            protocolStatus: 'protocol-partial',
+            taskOutcome: 'needs-human',
+            status: 'needs-human',
+          },
+          executionUnits: [{
+            id: 'EU-browser-host-search',
+            tool: 'browser_search',
+            status: 'needs-human',
+            selectedRuntime: 'browser-host-search-runtime',
+            outputRef: 'browser-host-session:browser-host-test/search-results.json',
+          }],
+          artifacts: [{
+            id: 'browser-search-results',
+            type: 'browser-search-results',
+            schemaVersion: 'sciforge.browser-host-session.search-result.v1',
+            metadata: {
+              source: 'browser_search',
+              browserSessionRef: 'browser-host-session:browser-host-test',
+              searchResultRef: 'browser-host-session:browser-host-test/search-results.json',
+            },
+            data: { query: 'safe query', results: [] },
+          }],
+          evidenceRefs: ['browser-host-session:browser-host-test/search-results.json'],
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage({
+      ...runtimeRequestInput(),
+      prompt: '通过内置浏览器搜索资料',
+    });
+
+    assert.equal(response.message.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex 运行未完成/);
+    assert.doesNotMatch(response.message.content, /rawProviderPayload|data:image|base64|DO_NOT_SHOW|stdoutRef/i);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex SSE diagnostic error event does not override later successful done', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      const attemptId = `${commandId}-attempt-1`;
+      return new Response([
+        'event: error\n',
+        `data: ${JSON.stringify({
+          type: 'process-progress',
+          status: 'warning',
+          message: 'Provider retry failed once; runtime is continuing with retry.',
+          commandId,
+          attemptId,
+        })}\n\n`,
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: 'RECOVERED_AFTER_DIAGNOSTIC_ERROR',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+
+    assert.equal(response.run.status, 'completed');
+    assert.equal(response.message.content, 'RECOVERED_AFTER_DIAGNOSTIC_ERROR');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('Runtime Codex foreground tool-call protocol text fails closed instead of completing', async () => {
   const originalFetch = globalThis.fetch;
   try {
@@ -610,6 +938,54 @@ test('Runtime Codex foreground tool-call protocol text fails closed instead of c
     assert.equal(response.run.status, 'failed');
     assert.match(response.message.content, /Runtime Codex 运行未完成/);
     assert.doesNotMatch(response.message.content, /DSML|tool_call|private-skill/);
+    const raw = response.run.raw as Record<string, unknown>;
+    const failure = raw.codexRuntimeFailure as Record<string, unknown>;
+    assert.equal(failure.failureKind, 'missing-gui-present');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Runtime Codex foreground plural tool_calls protocol text fails closed instead of completing', async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = (async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String(body.commandId);
+      return new Response([
+        'event: message\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'message',
+          text: '我先打开浏览器搜索相关信息。\\n\\n<｜DSML｜tool_calls><｜DSML｜invoke name="multi_agent_v1_spawn_agent"><｜DSML｜parameter name="title" string="true">搜索伊朗局势</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+        'event: done\n',
+        `data: ${JSON.stringify({
+          schemaVersion: 'sciforge.codex.normalized-event.v1',
+          type: 'done',
+          status: 'done',
+          message: 'Runtime Codex completed successfully.',
+          provider: 'sciforge-model-router',
+          model: 'sciforge-router',
+          profile: 'sciforge-runtime-default',
+          workspace: '/tmp/current',
+          commandId,
+          attemptId: `${commandId}-attempt-1`,
+        })}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+    }) as typeof fetch;
+
+    const response = await sendSciForgeToolMessage(runtimeRequestInput());
+    assert.equal(response.message.status, 'failed');
+    assert.equal(response.run.status, 'failed');
+    assert.match(response.message.content, /Runtime Codex 运行未完成/);
+    assert.doesNotMatch(response.message.content, /DSML|tool_calls|multi_agent|伊朗/);
     const raw = response.run.raw as Record<string, unknown>;
     const failure = raw.codexRuntimeFailure as Record<string, unknown>;
     assert.equal(failure.failureKind, 'missing-gui-present');

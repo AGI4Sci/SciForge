@@ -6,13 +6,18 @@ from pathlib import Path
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+LEGACY_PYTHON_DIAGNOSTIC_ENV = "SCIFORGE_COMPUTER_USE_LEGACY_PYTHON_DIAGNOSTIC"
 
 
-def run_cli(*args, stdin=None):
+def run_cli(*args, stdin=None, diagnostic=True):
     env = {
         **os.environ,
         "PYTHONPATH": str(PACKAGE_ROOT),
     }
+    if diagnostic:
+        env[LEGACY_PYTHON_DIAGNOSTIC_ENV] = "1"
+    else:
+        env.pop(LEGACY_PYTHON_DIAGNOSTIC_ENV, None)
     return subprocess.run(
         [sys.executable, "-m", "sciforge_computer_use", *args],
         cwd=PACKAGE_ROOT,
@@ -23,6 +28,23 @@ def run_cli(*args, stdin=None):
         env=env,
         check=False,
     )
+
+
+def test_cli_fails_closed_without_diagnostic_env():
+    completed = run_cli(
+        "--request-json",
+        json.dumps({"task": "create a local report", "maxSteps": 1}),
+        "--fixture-json",
+        json.dumps({"plans": [{"done": True, "reason": "would otherwise complete"}]}),
+        diagnostic=False,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stderr == ""
+    payload = json.loads(completed.stdout)
+    assert payload["status"] == "failed-with-reason"
+    assert LEGACY_PYTHON_DIAGNOSTIC_ENV in payload["message"]
+    assert payload["failureDiagnostics"]["failedStage"] == "legacy-python-diagnostic-gate"
 
 
 def test_cli_fixture_file_persists_trace_and_result_with_local_final_refs(tmp_path):

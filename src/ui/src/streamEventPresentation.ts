@@ -632,15 +632,14 @@ function streamImportanceForBackendProfile(
   profile: BackendPresentationProfileId,
 ): StreamEventImportance | undefined {
   const type = event.type.toLowerCase();
-  const raw = isRecord(event.raw) ? event.raw : {};
-  const status = stringField(raw.status)?.toLowerCase() ?? '';
+  const auditOnly = isRawRuntimeAuditEvent(event);
   if (profile === 'cursor-agent-like') {
-    if (type === 'audit' || type === 'run_started' || status === 'raw-jsonl' || status === 'stderr') return 'debug';
+    if (type === 'audit' || type === 'run_started' || auditOnly) return 'debug';
     if (type === 'tool_started' || type === 'tool_completed' || type === 'message_delta' || type === 'assistant_delta') return 'background';
     if (type === 'approval_requested' || type === 'gui_ask_user') return 'key';
   }
   if (profile === 'codex-cli-like') {
-    if (type === 'audit' || type === 'run_started' || status === 'raw-jsonl' || status === 'stderr') return 'debug';
+    if (type === 'audit' || type === 'run_started' || auditOnly) return 'debug';
     if (type === 'tool_started' || type === 'tool_completed') return 'background';
   }
   if (profile === 'claude-code-like') {

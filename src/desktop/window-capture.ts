@@ -58,6 +58,7 @@ export type DesktopWindowCaptureDiagnostic = {
   message: string;
   refs?: string[];
   providerId?: string;
+  fallbackReason?: DesktopWindowCaptureFullScreenFallbackReason;
 };
 
 export type DesktopWindowCaptureProviderRequest = {
@@ -70,11 +71,34 @@ export type DesktopWindowCaptureProviderRequest = {
 export type DesktopWindowCaptureProviderResult = {
   captureRef?: string;
   imageRef?: string;
+  screenshotRef?: string;
+  cropRef?: string;
+  targetRef?: string;
+  windowRef?: string;
+  regionRef?: string;
+  screenId?: string;
+  bounds?: DesktopWindowCaptureBounds;
+  scale?: number;
+  windowLocalBounds?: DesktopWindowCaptureBounds;
+  captureKind?: 'window' | 'region' | 'full-screen';
+  fullScreenFallback?: boolean;
+  fullScreenFallbackReason?: DesktopWindowCaptureFullScreenFallbackReason;
+  fallback?: {
+    kind?: 'full-screen';
+    strategy?: 'full-screen';
+    reason?: DesktopWindowCaptureFullScreenFallbackReason;
+  };
   capturedAt?: string;
   hash?: string;
   bytes?: ArrayBuffer | ArrayBufferView;
   diagnostics?: DesktopWindowCaptureDiagnostic[];
 };
+
+export type DesktopWindowCaptureFullScreenFallbackReason =
+  | 'target-missing'
+  | 'occlusion'
+  | 'multi-window-conflict'
+  | 'user-selected-screen-region';
 
 export type DesktopWindowCaptureProviderAvailabilityContext = {
   platform: string;
@@ -131,12 +155,16 @@ export type DesktopWindowCaptureResult = {
   status: 'captured' | 'blocked';
   captureRef: string | null;
   imageRef: string | null;
+  screenshotRef: string | null;
+  cropRef: string | null;
   targetRef: string | null;
   windowRef: string | null;
   regionRef: string | null;
   screenId: string | null;
   bounds: DesktopWindowCaptureBounds | null;
   scale: number | null;
+  windowLocalBounds: DesktopWindowCaptureBounds | null;
+  fallbackReason: DesktopWindowCaptureFullScreenFallbackReason | null;
   capturedAt: string | null;
   captureTime: string | null;
   hash: string | null;
@@ -227,32 +255,69 @@ export async function captureSelectedDesktopWindowTarget(
     });
   }
 
+  const fallbackReason = fullScreenFallbackReasonForProviderResult(providerResult);
+  const fallbackDiagnostics = fallbackReason
+    ? [fullScreenFallbackRecordedDiagnostic(fallbackReason, normalized.selection, provider.providerId)]
+    : [];
+  if (providerResultUsesFullScreenFallback(providerResult) && !fallbackReason) {
+    return blockedDesktopWindowCaptureResult({
+      request,
+      selection: normalized.selection,
+      providerId: provider.providerId,
+      diagnostics: [
+        {
+          code: 'desktop.window-capture.full-screen-fallback-reason-required',
+          level: 'error',
+          message: 'Desktop window capture provider attempted full-screen fallback without recording a generic fallback reason.',
+          providerId: provider.providerId,
+        },
+        ...boundedDiagnostics(providerResult.diagnostics ?? [], provider.providerId),
+      ],
+    });
+  }
+
   const hash = normalizeHash(providerResult.hash) ?? hashProviderBytes(providerResult.bytes);
   if (!hash) {
     return blockedDesktopWindowCaptureResult({
       request,
       selection: normalized.selection,
       providerId: provider.providerId,
-      diagnostics: [{
-        code: 'desktop.window-capture.hash-required',
-        level: 'error',
-        message: 'Desktop window capture provider did not return a hash or bytes to hash.',
-        providerId: provider.providerId,
-      }],
+      diagnostics: [
+        ...fallbackDiagnostics,
+        {
+          code: 'desktop.window-capture.hash-required',
+          level: 'error',
+          message: 'Desktop window capture provider did not return a hash or bytes to hash.',
+          providerId: provider.providerId,
+        },
+      ],
     });
   }
 
   const capturedAt = textOrNull(providerResult.capturedAt) ?? requestedAt;
   const target = targetRefsForSelection(normalized.selection);
+  const observedBounds = validBounds(providerResult.bounds as DesktopWindowCaptureBounds)
+    ? { ...(providerResult.bounds as DesktopWindowCaptureBounds) }
+    : { ...normalized.selection.bounds };
+  const observedScale = positiveNumberOrNull(providerResult.scale) ?? normalized.selection.scale;
+  const observedScreenId = safeMetadataText(providerResult.screenId) ?? normalized.selection.screenId;
+  const windowLocalBounds = windowLocalBoundsForCapturedSelection(normalized.selection, providerResult, observedBounds);
   const captureRef = boundedProviderResultRef(providerResult.captureRef, provider.providerId, normalized.selection.kind, 'capture')
     ?? defaultCaptureRef(normalized.workspaceId, normalized.sessionId, target.targetRef, hash);
   const imageRef = boundedProviderResultRef(providerResult.imageRef, provider.providerId, normalized.selection.kind, 'image') ?? `${captureRef}:image`;
+  const screenshotRef = boundedProviderEvidenceRef(providerResult.screenshotRef, normalized, target.targetRef, hash, 'screenshot');
+  const cropRef = boundedProviderEvidenceRef(providerResult.cropRef, normalized, target.targetRef, hash, 'crop');
   const windowActionSession = options.createWindowActionSession === false
     ? null
     : windowActionSessionForCapturedSelection(normalized.selection, {
       captureRef,
       imageRef,
+      screenshotRef,
+      cropRef,
       capturedAt,
+      bounds: observedBounds,
+      scale: observedScale,
+      screenId: observedScreenId,
     });
 
   return {
@@ -260,12 +325,16 @@ export async function captureSelectedDesktopWindowTarget(
     status: 'captured',
     captureRef,
     imageRef,
+    screenshotRef,
+    cropRef,
     targetRef: target.targetRef,
     windowRef: target.windowRef,
     regionRef: target.regionRef,
-    screenId: normalized.selection.screenId,
-    bounds: { ...normalized.selection.bounds },
-    scale: normalized.selection.scale,
+    screenId: observedScreenId,
+    bounds: observedBounds,
+    scale: observedScale,
+    windowLocalBounds,
+    fallbackReason,
     capturedAt,
     captureTime: capturedAt,
     hash,
@@ -274,6 +343,7 @@ export async function captureSelectedDesktopWindowTarget(
     windowActionSession,
     privacy: privacyForSelection(normalized.selection),
     diagnostics: [
+      ...fallbackDiagnostics,
       {
         code: 'desktop.window-capture.captured',
         level: 'info',
@@ -378,6 +448,7 @@ function createMacOSScreencaptureFallbackProvider(
             imageRef: defaultProviderResultRef(MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID, input.selection.kind, 'image'),
             capturedAt: input.requestedAt,
             hash,
+            diagnostics: [macOSScreencaptureFallbackReasonDiagnostic(input.selection)],
           };
         } finally {
           if (tempFile.cleanup) {
@@ -389,6 +460,27 @@ function createMacOSScreencaptureFallbackProvider(
       },
     },
   });
+}
+
+function macOSScreencaptureFallbackReasonDiagnostic(
+  selection: DesktopWindowCaptureSelection,
+): DesktopWindowCaptureDiagnostic {
+  if (selection.kind === 'region') {
+    return {
+      code: 'desktop.window-capture.fallback.user-selected-screen-region',
+      level: 'info',
+      message: 'macOS screencapture fallback used the explicit user-selected screen region instead of ambient full-screen capture.',
+      refs: [selection.regionRef],
+      providerId: MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
+    };
+  }
+  return {
+    code: 'desktop.window-capture.fallback.user-selected-window',
+    level: 'info',
+    message: 'macOS screencapture fallback used the explicit user-selected window instead of ambient full-screen capture.',
+    refs: [selection.windowRef],
+    providerId: MACOS_SCREENCAPTURE_FALLBACK_PROVIDER_ID,
+  };
 }
 
 function createAdapterBackedDesktopWindowCaptureProvider(options: {
@@ -597,18 +689,24 @@ function normalizeDesktopWindowCaptureRequest(request: DesktopWindowCaptureReque
 
   if (!request.selection) {
     return {
-      diagnostics: [{
-        code: 'desktop.window-capture.selection-required',
-        level: 'error',
-        message: 'Desktop window capture requires an explicit user-selected window or region.',
-      }],
+      diagnostics: [
+        fullScreenFallbackRecordedDiagnostic('target-missing'),
+        {
+          code: 'desktop.window-capture.selection-required',
+          level: 'error',
+          message: 'Desktop window capture requires an explicit user-selected window or region.',
+        },
+      ],
     };
   }
 
   const selectionIssue = validateSelection(request.selection);
   if (selectionIssue) {
     return {
-      diagnostics: [selectionIssue],
+      diagnostics: [
+        ...fallbackDiagnosticsForInvalidSelection(request.selection, selectionIssue),
+        selectionIssue,
+      ],
     };
   }
 
@@ -689,6 +787,7 @@ function blockedDesktopWindowCaptureResult(options: {
 }): DesktopWindowCaptureResult {
   const selection = options.selection ?? options.request.selection;
   const includeSelectionScope = Boolean(selection && blockedSelectionHasExplicitScope(selection, options.diagnostics));
+  const fallbackReason = fallbackReasonFromDiagnostics(options.diagnostics);
   const target = includeSelectionScope ? targetRefsForSelection(selection as DesktopWindowCaptureSelection) : {
     targetRef: null,
     windowRef: null,
@@ -699,12 +798,16 @@ function blockedDesktopWindowCaptureResult(options: {
     status: 'blocked',
     captureRef: null,
     imageRef: null,
+    screenshotRef: null,
+    cropRef: null,
     targetRef: target.targetRef,
     windowRef: target.windowRef,
     regionRef: target.regionRef,
     screenId: includeSelectionScope ? selection?.screenId ?? null : null,
     bounds: includeSelectionScope && selection?.bounds ? { ...selection.bounds } : null,
     scale: includeSelectionScope ? selection?.scale ?? null : null,
+    windowLocalBounds: null,
+    fallbackReason,
     capturedAt: null,
     captureTime: null,
     hash: null,
@@ -720,13 +823,15 @@ function providerSupportsPlatform(provider: DesktopWindowCaptureProvider, platfo
   return !provider.supportedPlatforms || provider.supportedPlatforms.includes(platform);
 }
 
-function validBounds(bounds: DesktopWindowCaptureBounds): boolean {
-  return Number.isFinite(bounds.x)
-    && Number.isFinite(bounds.y)
-    && Number.isFinite(bounds.width)
-    && Number.isFinite(bounds.height)
-    && bounds.width > 0
-    && bounds.height > 0;
+function validBounds(bounds: unknown): bounds is DesktopWindowCaptureBounds {
+  if (!bounds || typeof bounds !== 'object' || Array.isArray(bounds)) return false;
+  const record = bounds as Record<string, unknown>;
+  return Number.isFinite(record.x)
+    && Number.isFinite(record.y)
+    && Number.isFinite(record.width)
+    && Number.isFinite(record.height)
+    && (record.width as number) > 0
+    && (record.height as number) > 0;
 }
 
 function privacyForSelection(selection: DesktopWindowCaptureSelection): DesktopWindowCapturePrivacy {
@@ -771,21 +876,197 @@ function targetRefsForSelection(selection: DesktopWindowCaptureSelection): {
     };
 }
 
+function fallbackDiagnosticsForInvalidSelection(
+  selection: unknown,
+  issue: DesktopWindowCaptureDiagnostic,
+): DesktopWindowCaptureDiagnostic[] {
+  if (issue.code === 'desktop.window-capture.selection-kind-invalid') {
+    return [fullScreenFallbackRecordedDiagnostic('user-selected-screen-region')];
+  }
+  if (
+    issue.code === 'desktop.window-capture.user-selection-required'
+    || issue.code === 'desktop.window-capture.window-ref-required'
+    || issue.code === 'desktop.window-capture.region-ref-required'
+  ) {
+    return [fullScreenFallbackRecordedDiagnostic('target-missing')];
+  }
+  const record = recordOrNull(selection);
+  if (record?.kind === 'display' || record?.kind === 'screen' || record?.kind === 'full-screen') {
+    return [fullScreenFallbackRecordedDiagnostic('user-selected-screen-region')];
+  }
+  return [];
+}
+
+function providerResultUsesFullScreenFallback(result: DesktopWindowCaptureProviderResult): boolean {
+  const fallback = recordOrNull(result.fallback);
+  return result.captureKind === 'full-screen'
+    || result.fullScreenFallback === true
+    || fallback?.kind === 'full-screen'
+    || fallback?.strategy === 'full-screen';
+}
+
+function fullScreenFallbackReasonForProviderResult(
+  result: DesktopWindowCaptureProviderResult,
+): DesktopWindowCaptureFullScreenFallbackReason | null {
+  const fallback = recordOrNull(result.fallback);
+  return normalizeFullScreenFallbackReason(result.fullScreenFallbackReason)
+    ?? normalizeFullScreenFallbackReason(fallback?.reason);
+}
+
+function normalizeFullScreenFallbackReason(value: unknown): DesktopWindowCaptureFullScreenFallbackReason | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/-reason$/u, '');
+  if (normalized === 'target-missing' || normalized === 'missing-target') return 'target-missing';
+  if (normalized === 'occlusion' || normalized === 'occluded') return 'occlusion';
+  if (normalized === 'multi-window-conflict' || normalized === 'window-conflict') return 'multi-window-conflict';
+  if (
+    normalized === 'user-selected-screen-region'
+    || normalized === 'selected-screen-region'
+    || normalized === 'screen-region'
+  ) {
+    return 'user-selected-screen-region';
+  }
+  return null;
+}
+
+function fullScreenFallbackRecordedDiagnostic(
+  reason: DesktopWindowCaptureFullScreenFallbackReason,
+  selection?: DesktopWindowCaptureSelection,
+  providerId?: string,
+): DesktopWindowCaptureDiagnostic {
+  return {
+    code: 'desktop.window-capture.full-screen-fallback-recorded',
+    level: 'info',
+    message: fullScreenFallbackReasonMessage(reason),
+    fallbackReason: reason,
+    ...(selection ? { refs: selectedTargetDiagnosticRefs(selection) } : {}),
+    ...(providerId ? { providerId } : {}),
+  };
+}
+
+function fullScreenFallbackReasonMessage(reason: DesktopWindowCaptureFullScreenFallbackReason): string {
+  if (reason === 'target-missing') {
+    return 'Desktop window capture recorded target missing before blocking or using a full-screen fallback.';
+  }
+  if (reason === 'occlusion') {
+    return 'Desktop window capture recorded target occlusion before using a full-screen fallback.';
+  }
+  if (reason === 'multi-window-conflict') {
+    return 'Desktop window capture recorded a multi-window conflict before using a full-screen fallback.';
+  }
+  return 'Desktop window capture recorded a user-selected screen-region reason before blocking or using a full-screen fallback.';
+}
+
+function selectedTargetDiagnosticRefs(selection: DesktopWindowCaptureSelection): string[] {
+  return selection.kind === 'window' ? [selection.windowRef] : [selection.regionRef];
+}
+
+function fallbackReasonFromDiagnostics(
+  diagnostics: DesktopWindowCaptureDiagnostic[],
+): DesktopWindowCaptureFullScreenFallbackReason | null {
+  for (const diagnostic of diagnostics) {
+    const reason = normalizeFullScreenFallbackReason(diagnostic.fallbackReason);
+    if (reason) return reason;
+    if (diagnostic.code.startsWith('desktop.window-capture.fallback.')) {
+      const codeReason = normalizeFullScreenFallbackReason(
+        diagnostic.code.replace('desktop.window-capture.fallback.', ''),
+      );
+      if (codeReason) return codeReason;
+    }
+  }
+  return null;
+}
+
+function windowLocalBoundsForCapturedSelection(
+  selection: DesktopWindowCaptureSelection,
+  providerResult: DesktopWindowCaptureProviderResult,
+  observedBounds: DesktopWindowCaptureBounds,
+): DesktopWindowCaptureBounds | null {
+  if (validBounds(providerResult.windowLocalBounds as DesktopWindowCaptureBounds)) {
+    return { ...(providerResult.windowLocalBounds as DesktopWindowCaptureBounds) };
+  }
+  if (selection.kind !== 'window') return null;
+  return {
+    x: 0,
+    y: 0,
+    width: observedBounds.width,
+    height: observedBounds.height,
+  };
+}
+
+function positiveNumberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function safeMetadataText(value: unknown): string | null {
+  const text = textOrNull(value);
+  if (!text || containsUnsafePayloadText(text)) return null;
+  return text.slice(0, 160);
+}
+
+function boundedProviderEvidenceRef(
+  value: unknown,
+  request: { workspaceId: string; sessionId: string },
+  targetRef: string,
+  hash: string,
+  refKind: 'screenshot' | 'crop',
+): string {
+  const ref = textOrNull(value);
+  if (ref && safeDesktopWindowCaptureEvidenceRef(ref)) return ref.slice(0, 240);
+  return defaultDesktopWindowCaptureEvidenceRef(request.workspaceId, request.sessionId, targetRef, hash, refKind);
+}
+
+function safeDesktopWindowCaptureEvidenceRef(ref: string): boolean {
+  if (containsUnsafePayloadText(ref)) return false;
+  return /^desktop-window-capture:[A-Za-z0-9._:/-]{1,220}$/u.test(ref);
+}
+
+function defaultDesktopWindowCaptureEvidenceRef(
+  workspaceId: string,
+  sessionId: string,
+  targetRef: string,
+  hash: string,
+  refKind: 'screenshot' | 'crop',
+): string {
+  const hashSuffix = hash.replace(/^sha256:/, '').slice(0, 16);
+  return [
+    'desktop-window-capture',
+    sanitizeRefSegment(workspaceId),
+    sanitizeRefSegment(sessionId),
+    refKind,
+    sanitizeRefSegment(targetRef).slice(0, 80),
+    hashSuffix,
+  ].join(':');
+}
+
 function windowActionSessionForCapturedSelection(
   selection: DesktopWindowCaptureSelection,
-  options: { captureRef: string; imageRef: string; capturedAt: string },
+  options: {
+    captureRef: string;
+    imageRef: string;
+    screenshotRef: string;
+    cropRef: string;
+    capturedAt: string;
+    bounds: DesktopWindowCaptureBounds;
+    scale: number;
+    screenId: string;
+  },
 ) {
   if (selection.kind !== 'window') return null;
   return createWindowActionSession({
     windowRef: selection.windowRef,
     process: selection.process,
     app: selection.app,
-    bounds: selection.bounds,
-    scale: selection.scale,
-    screenId: selection.screenId,
+    bounds: options.bounds,
+    scale: options.scale,
+    screenId: options.screenId,
     evidenceRefs: [
       { kind: 'capture', ref: options.captureRef },
       { kind: 'image', ref: options.imageRef },
+      { kind: 'screenshot', ref: options.screenshotRef },
+      { kind: 'crop', ref: options.cropRef },
     ],
     timestamp: options.capturedAt,
   });
@@ -915,10 +1196,39 @@ function boundedDiagnostics(
   providerId: string,
 ): DesktopWindowCaptureDiagnostic[] {
   return diagnostics.map((diagnostic) => ({
-    code: textOrNull(diagnostic.code)?.slice(0, 160) ?? 'desktop.window-capture.provider-diagnostic',
+    code: safeDiagnosticCode(diagnostic.code),
     level: diagnostic.level,
-    message: textOrNull(diagnostic.message)?.slice(0, 400) ?? 'Desktop window capture provider diagnostic.',
-    ...(diagnostic.refs ? { refs: diagnostic.refs.filter((ref) => textOrNull(ref)).map((ref) => ref.slice(0, 240)) } : {}),
+    message: safeDiagnosticMessage(diagnostic.message),
+    ...(diagnostic.refs ? { refs: diagnostic.refs.flatMap(safeProviderDiagnosticRef) } : {}),
+    ...(normalizeFullScreenFallbackReason(diagnostic.fallbackReason) ? { fallbackReason: normalizeFullScreenFallbackReason(diagnostic.fallbackReason) as DesktopWindowCaptureFullScreenFallbackReason } : {}),
     providerId: diagnostic.providerId ?? providerId,
   }));
+}
+
+function safeDiagnosticCode(value: unknown): string {
+  const code = textOrNull(value);
+  if (!code || containsUnsafePayloadText(code)) return 'desktop.window-capture.provider-diagnostic';
+  return code.replace(/[^A-Za-z0-9._:-]+/g, '-').slice(0, 160) || 'desktop.window-capture.provider-diagnostic';
+}
+
+function safeDiagnosticMessage(value: unknown): string {
+  const message = textOrNull(value);
+  if (!message) return 'Desktop window capture provider diagnostic.';
+  if (containsUnsafePayloadText(message)) {
+    return 'Desktop window capture provider diagnostic included redacted payload text.';
+  }
+  return message.slice(0, 400);
+}
+
+function safeProviderDiagnosticRef(value: unknown): string[] {
+  const ref = textOrNull(value);
+  if (!ref || containsUnsafePayloadText(ref)) return [];
+  if (!/^(?:desktop-window-capture|desktop-annotation|window-action-session|capture|image|crop|screenshot):[A-Za-z0-9._:/-]{1,220}$/u.test(ref)) {
+    return [];
+  }
+  return [ref.slice(0, 240)];
+}
+
+function containsUnsafePayloadText(value: string): boolean {
+  return /^data:|^https?:|^file:|;base64|base64,|api[-_]?key|token=|secret|password|passwd|bearer|<[^>]*>/i.test(value);
 }

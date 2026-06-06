@@ -1,4 +1,4 @@
-import type { SkillPackageManifest } from './types';
+import type { SkillPackageManifest } from './types.js';
 
 export const skillPackageManifests = [
   {
@@ -6962,7 +6962,7 @@ export const skillPackageManifests = [
     ],
     "examplePrompts": [
       "vision gui task",
-      "sciforge vision sense observation",
+      "vision computer action provider",
       "Use vision gui task and return structured SciForge artifacts"
     ],
     "docs": {

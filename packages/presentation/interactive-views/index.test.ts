@@ -26,7 +26,6 @@ import {
   interactiveResultSlotSubtitle,
   interactiveUnknownComponentFallbackPolicy,
   interactiveViewComponentRank,
-  interactiveViewCompatibilityAliases,
   interactiveViewManifests,
   interactiveViewPackageRendererForComponent,
   interactiveViewPlanSourceIds,
@@ -47,12 +46,15 @@ import {
   standaloneWorkspaceArtifactPayloadPolicy,
   structureSummaryMetricPresentation,
   stripDirectAnswerJsonFence,
-  uiComponentCompatibilityAliases,
   uiComponentManifests,
   uploadedInteractiveEvidenceArtifacts,
   validateInteractiveViewModuleBinding,
   visionSenseTraceOutputViews,
 } from './index';
+import {
+  interactiveViewCompatibilityAliases,
+  uiComponentCompatibilityAliases,
+} from '../components/component-compatibility.js';
 
 test('interactive views alias preserves ui-components registry compatibility', () => {
   assert.equal(interactiveViewManifests, uiComponentManifests);
@@ -190,6 +192,23 @@ test('runtime ui manifest policy does not fabricate missing targeted artifact re
   const reportSlot = manifest.find((slot) => slot.componentId === 'report-viewer');
   assert.equal(reportSlot?.artifactRef, undefined);
   assert.equal(manifest.find((slot) => slot.componentId === 'point-set-viewer')?.artifactRef, 'omics-differential-expression');
+});
+
+test('runtime ui manifest policy selects registered skeleton viewers from prompt intent', () => {
+  const manifest = composeRuntimeUiManifestSlots(
+    [],
+    [{ id: 'genome-track-demo', type: 'genome-track' }],
+    {
+      skillDomain: 'omics',
+      prompt: 'Show genome track, image annotation, spatial omics and statistical annotation views.',
+    },
+  );
+
+  assert.deepEqual(
+    manifest.map((slot) => slot.componentId),
+    ['genome-track-viewer', 'image-annotation-viewer', 'spatial-omics-viewer', 'statistical-annotation-layer', 'execution-unit-table'],
+  );
+  assert.equal(manifest[0].artifactRef, 'genome-track-demo');
 });
 
 test('runtime ui manifest policy routes browser, terminal, and file artifacts through package viewers', () => {

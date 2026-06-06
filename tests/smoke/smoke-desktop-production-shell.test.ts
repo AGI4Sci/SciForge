@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import test from 'node:test';
 import {
   DesktopProductionShellController,
@@ -81,6 +81,19 @@ test('R-DESK sidecar lifecycle belongs to Electron main and the launcher', () =>
     assert.equal(sidecar.shutdownTrigger, 'launcher-shutdown');
     assert.equal(sidecar.rendererMayStart, false);
   }
+});
+
+test('R-DESK compiled sidecars import package runtime policies with ESM file extensions', () => {
+  const projectRoot = process.cwd();
+  const violations: string[] = [];
+  for (const filePath of runtimeSourceFiles(join(projectRoot, 'src', 'runtime'))) {
+    const source = readFileSync(filePath, 'utf8');
+    for (const match of source.matchAll(extensionlessPackageImportPattern)) {
+      violations.push(`${relative(projectRoot, filePath)}: ${match[0]}`);
+    }
+  }
+
+  assert.deepEqual(violations, []);
 });
 
 test('R-DESK preload exposes a narrow renderer contract with Node disabled', () => {
@@ -490,4 +503,20 @@ function infoPlistFixture(): string {
   </dict>
 </plist>
 `;
+}
+
+const extensionlessPackageImportPattern = /from\s+['"](?:\.\.\/)+packages\/[^'"]+(?<!\.(?:js|json|css|wasm))['"]/g;
+
+function runtimeSourceFiles(root: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(root)) {
+    const filePath = join(root, entry);
+    const stats = statSync(filePath);
+    if (stats.isDirectory()) {
+      files.push(...runtimeSourceFiles(filePath));
+      continue;
+    }
+    if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) files.push(filePath);
+  }
+  return files.sort();
 }

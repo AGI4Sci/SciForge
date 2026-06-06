@@ -12,11 +12,8 @@ import { inputChannelContract } from '../../src/runtime/computer-use/window-targ
 import type { AgentCliAdapter, AgentCliStartTurnInput } from '../../src/runtime/codex/agent-cli-adapter.js';
 import type { NormalizedAgentEvent } from '../../src/runtime/codex/codex-event-normalizer.js';
 import {
-  closeServer,
-  createJsonPostServer,
   createVisionWorkspace,
   findVisionTraceArtifact,
-  listenLocal,
   readVisionTraceJson,
   restoreVisionSenseEnv,
   runVisionSenseGateway,
@@ -191,7 +188,13 @@ try {
   assert.equal((trace.imageMemory as Record<string, unknown>).policy, 'file-ref-only');
   const genericComputerUse = trace.genericComputerUse as Record<string, unknown>;
   assert.deepEqual(genericComputerUse.appSpecificShortcuts, []);
-  assert.deepEqual(genericComputerUse.requires, ['WindowTargetProvider', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier']);
+  assert.deepEqual(genericComputerUse.requires, [
+    'WindowTargetProvider',
+    'ModelRouterPlannerCapability',
+    'ModelRouterGroundingTranslator',
+    'GuiExecutor',
+    'ModelRouterVerifierTranslator',
+  ]);
   const refs = (trace.imageMemory as Record<string, unknown>).refs as Array<Record<string, unknown>>;
   assert.equal(refs.length, 20);
   assert.deepEqual(refs.map((ref) => ref.displayId), [1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2, 1, 2]);
@@ -217,7 +220,8 @@ try {
   assert.match(String(prematureCreation.executionUnits[0].failureReason), /Visible artifact task did not satisfy completion acceptance/i);
   const { trace: prematureTrace } = await readVisionTraceJson(prematureCreationWorkspace, prematureCreation);
   const prematureLastStep = (prematureTrace.steps as Array<Record<string, unknown>>).at(-1);
-  assert.match(String(prematureLastStep?.failureReason), /visible content entry|structure-edit/i);
+  const prematureVerifier = prematureLastStep?.verifier as Record<string, unknown> | undefined;
+  assert.match(String(prematureLastStep?.failureReason ?? prematureVerifier?.reason), /visible content entry|structure-edit/i);
 
   const highRiskWorkspace = await createVisionWorkspace('high-risk');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-high-risk-smoke';
@@ -248,157 +252,6 @@ try {
   assert.equal(inferredHighRisk.executionUnits[0].status, 'failed-with-reason');
   assert.match(String(inferredHighRisk.executionUnits[0].failureReason), /High-risk Computer Use action blocked/i);
 
-  const grounderRequests: Array<Record<string, unknown>> = [];
-  const grounderServer = createJsonPostServer('/predict/', (body) => {
-    grounderRequests.push(body);
-    assert.match(String(body.text_prompt), /click coordinates/i);
-    assert.match(String(body.text_prompt), /the generic search box/);
-    if (grounderRequests.length === 1) {
-      assert.match(String(body.image_path), /step-001-before-display-1\.png$/);
-      assert.equal(body.coordinate_space, 'window-local');
-    } else {
-      assert.match(String(body.image_path), /step-001-before-focus-step-001-before-display-1\.png$/);
-      assert.equal(body.coordinate_space, 'crop-local');
-    }
-    return { coordinates: [42, 24], image_size: { width: 100, height: 80 }, text: 'click' };
-  });
-  const grounderBaseUrl = await listenLocal(grounderServer);
-  try {
-    const groundedWorkspace = await createVisionWorkspace('grounder');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-grounder-smoke';
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = grounderBaseUrl;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
-      { type: 'click', targetDescription: 'the generic search box' },
-    ]);
-    const grounded = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use to click a visually described target.',
-      workspacePath: groundedWorkspace,
-    });
-    assert.equal(grounded.executionUnits[0].status, 'done');
-    const { trace: groundedTrace } = await readVisionTraceJson(groundedWorkspace, grounded);
-    const groundedStep = (groundedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
-    assert.ok(groundedStep);
-    assert.equal(((groundedStep.plannedAction as Record<string, unknown>)?.x), 42);
-    assert.equal(((groundedStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
-    const fineGrounding = ((groundedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>);
-    assert.equal(fineGrounding?.stage, 'fine');
-    assert.match(String(fineGrounding?.provider), /kv-ground/);
-    assert.equal(fineGrounding?.cropLocalX, 42);
-    assert.equal(fineGrounding?.cropLocalY, 24);
-    assert.equal(fineGrounding?.windowLocalX, 42);
-    assert.equal(fineGrounding?.windowLocalY, 24);
-    assert.ok(fineGrounding?.focusScreenshotRef);
-    assert.equal(grounderRequests.length, 2);
-    assert.equal((((groundedStep.verifier as Record<string, unknown>)?.regionSemantic as Record<string, unknown>)?.schemaVersion), 'sciforge.vision-sense.region-semantic-verifier.v1');
-  } finally {
-    await closeServer(grounderServer);
-  }
-
-  const observeOnlyGrounderRequests: Array<Record<string, unknown>> = [];
-  const observeOnlyGrounderServer = createJsonPostServer('/predict/', (body) => {
-    observeOnlyGrounderRequests.push(body);
-    assert.match(String(body.text_prompt), /results summary panel/);
-    return { coordinates: [36, 28], image_size: { width: 100, height: 80 }, text: 'click' };
-  });
-  const observeOnlyGrounderBaseUrl = await listenLocal(observeOnlyGrounderServer);
-  try {
-    const observeOnlyWorkspace = await createVisionWorkspace('grounder-observe-only');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-grounder-observe-only-smoke';
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = observeOnlyGrounderBaseUrl;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
-      { type: 'wait', ms: 1, targetDescription: 'results summary panel' },
-    ]);
-    const observed = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use to observe a visually described target without clicking it.',
-      workspacePath: observeOnlyWorkspace,
-    });
-    const { trace: observedTrace } = await readVisionTraceJson(observeOnlyWorkspace, observed);
-    const observedStep = (observedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-wait');
-    assert.ok(observedStep);
-    assert.equal(((observedStep.plannedAction as Record<string, unknown>)?.type), 'wait');
-    assert.equal(((observedStep.grounding as Record<string, unknown>)?.observationOnly), true);
-    assert.equal(((observedStep.grounding as Record<string, unknown>)?.provider), 'coarse-to-fine');
-    assert.equal((observedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-click'), false);
-    assert.ok((((observedStep.visualFocus as Record<string, unknown>)?.beforeFocusScreenshotRefs) as unknown[]).length > 0);
-    const fineGrounding = ((observedStep.grounding as Record<string, unknown>)?.fineGrounding as Record<string, unknown>);
-    assert.ok(fineGrounding?.focusScreenshotRef);
-    assert.equal(observeOnlyGrounderRequests.length, 2);
-  } finally {
-    await closeServer(observeOnlyGrounderServer);
-  }
-
-  const kvFailureWorkspace = await createVisionWorkspace('kv-ground-fail-closed');
-  process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-kv-ground-fail-closed-smoke';
-  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:1';
-  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([
-    { type: 'click', targetDescription: 'visually described target that must not use fallback' },
-  ]);
-  const kvGroundFailClosed = await runVisionSenseGateway({
-    skillDomain: 'literature',
-    prompt: 'Use generic computer use to click a target; KV-Ground failure must fail closed instead of using a visual grounder fallback.',
-    workspacePath: kvFailureWorkspace,
-  });
-  assert.equal(kvGroundFailClosed.executionUnits[0].status, 'failed-with-reason');
-  assert.match(String(kvGroundFailClosed.executionUnits[0].failureReason), /KV Grounder (?:health preflight|request) failed/i);
-  const { trace: kvFailureTrace, text: kvFailureTraceText } = await readVisionTraceJson(kvFailureWorkspace, kvGroundFailClosed);
-  assert.doesNotMatch(kvFailureTraceText, /fallbackFrom|openai-compatible-vision-grounder/i);
-  const kvFailureStep = (kvFailureTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
-  assert.ok(kvFailureStep);
-  assert.equal(((kvFailureStep.grounding as Record<string, unknown>)?.provider), 'kv-ground');
-  assert.match(String(kvFailureStep.failureReason), /KV Grounder (?:health preflight|request) failed/i);
-
-  let plannerCalls = 0;
-  const plannerRawRequests: string[] = [];
-  installFakeRuntimeCodexPlanner((input) => {
-    plannerCalls += 1;
-    plannerRawRequests.push(input.commandText);
-    return plannerCalls === 1
-      ? JSON.stringify({
-          done: false,
-          reason: 'click target first',
-          actions: [
-            { actionType: 'click', target_description: 'the generic planner target' },
-          ],
-        })
-      : JSON.stringify({ done: true, reason: 'target clicked', actions: [] });
-  });
-  const plannerGrounderServer = createJsonPostServer('/predict/', (body) => {
-    assert.match(String(body.text_prompt), /click coordinates/i);
-    assert.match(String(body.text_prompt), /the generic planner target/);
-    return { coordinates: [12, 34], image_size: { width: 100, height: 80 } };
-  });
-  const plannerGrounderBaseUrl = await listenLocal(plannerGrounderServer);
-  try {
-    const plannerWorkspace = await createVisionWorkspace('planner');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-planner-smoke';
-    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = plannerGrounderBaseUrl;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    const planned = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use planner to click the visible target.',
-      workspacePath: plannerWorkspace,
-    });
-    assert.equal(planned.executionUnits[0].status, 'done');
-    const { trace: plannedTrace } = await readVisionTraceJson(plannerWorkspace, planned);
-    assert.ok((plannedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-000-plan'));
-    assert.ok((plannedTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-replan'));
-    const executeStep = (plannedTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-click');
-    assert.ok(executeStep);
-    assert.equal(((executeStep.plannedAction as Record<string, unknown>)?.x), 12);
-    assert.match(String((executeStep.verifier as Record<string, unknown>)?.planningFeedback), /pixel=.*window=.*grounding=/);
-    assert.match(plannerRawRequests[1] ?? '', /verifierFeedback=.*pixel=/);
-    assert.match(plannerRawRequests[1] ?? '', /no-visible-effect=true/);
-    assert.deepEqual((plannedTrace.genericComputerUse as Record<string, unknown>).appSpecificShortcuts, []);
-  } finally {
-    await closeServer(plannerGrounderServer);
-    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
-  }
-
   let maxStepsPlannerCalls = 0;
   installFakeRuntimeCodexPlanner((input) => {
     maxStepsPlannerCalls += 1;
@@ -415,7 +268,6 @@ try {
     const maxStepsWorkspace = await createVisionWorkspace('maxsteps');
     process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-maxsteps-smoke';
     delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
-    delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
     process.env.SCIFORGE_VISION_MAX_STEPS = '1';
     const maxSteps = await runVisionSenseGateway({
       skillDomain: 'literature',
@@ -472,52 +324,6 @@ try {
     setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
   }
 
-  let waitRetryPlannerCalls = 0;
-  installFakeRuntimeCodexPlanner((input) => {
-    waitRetryPlannerCalls += 1;
-    const raw = input.commandText;
-    if (waitRetryPlannerCalls === 2) assert.match(raw, /actions must contain exactly one generic action/);
-    return waitRetryPlannerCalls === 1
-      ? JSON.stringify({
-          done: false,
-          reason: 'need another observation before acting',
-          actions: [{ actionType: 'wait', ms: 100 }],
-        })
-      : waitRetryPlannerCalls === 2
-        ? JSON.stringify({
-            done: false,
-            reason: 'act on the supplied screenshot',
-            actions: [{ actionType: 'click', targetDescription: 'the retry target' }],
-          })
-        : JSON.stringify({ done: true, reason: 'retry target clicked', actions: [] });
-  });
-  const waitRetryGrounderServer = createJsonPostServer('/predict/', (body) => {
-    assert.match(String(body.text_prompt), /click coordinates/i);
-    assert.match(String(body.text_prompt), /the retry target/);
-    return { coordinates: [22, 44], image_size: { width: 100, height: 80 } };
-  });
-  const waitRetryGrounderBaseUrl = await listenLocal(waitRetryGrounderServer);
-  try {
-    const waitRetryWorkspace = await createVisionWorkspace('wait-retry');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-wait-retry-smoke';
-    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = waitRetryGrounderBaseUrl;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    const waitRetry = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use planner to handle wait-then-action planning.',
-      workspacePath: waitRetryWorkspace,
-    });
-    assert.equal(waitRetryPlannerCalls, 3);
-    assert.equal(waitRetry.executionUnits[0].status, 'done');
-    const { trace: waitRetryTrace } = await readVisionTraceJson(waitRetryWorkspace, waitRetry);
-    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-001-execute-wait'));
-    assert.ok((waitRetryTrace.steps as Array<Record<string, unknown>>).some((step) => step.id === 'step-002-execute-click'));
-  } finally {
-    await closeServer(waitRetryGrounderServer);
-    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
-  }
-
   const settingsFormWorkspace = await createVisionWorkspace('settings-form-ledger');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-settings-form-ledger-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
@@ -533,7 +339,6 @@ try {
     { type: 'click', x: 60, y: 60, targetDescription: 'visible close button' },
     { type: 'click', x: 70, y: 70, targetDescription: 'unrelated extra control that should not run' },
   ]);
-  delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
   const settingsForm = await runVisionSenseGateway({
     skillDomain: 'literature',
     prompt: 'Use generic computer use for a low-risk settings/preferences form-control coverage task; do not submit or save.',
@@ -546,76 +351,11 @@ try {
   assert.equal(settingsFormSteps.length, 8);
   assert.match(JSON.stringify(settingsFormSteps.at(-1)?.verifier ?? {}), /settings\/form control workflow/);
 
-  let coordinateRetryPlannerCalls = 0;
-  installFakeRuntimeCodexPlanner((input) => {
-    coordinateRetryPlannerCalls += 1;
-    const raw = input.commandText;
-    if (coordinateRetryPlannerCalls === 2) assert.match(raw, /violated the planner contract by including coordinates/);
-    return coordinateRetryPlannerCalls === 1
-      ? JSON.stringify({
-          done: false,
-          reason: 'bad coordinate plan',
-          actions: [{ actionType: 'drag', fromX: 0, fromY: 0, toX: 10, toY: 10 }],
-        })
-      : coordinateRetryPlannerCalls === 2
-        ? JSON.stringify({
-            done: false,
-            reason: 'rewrite with visual descriptions',
-            actions: [{
-              actionType: 'drag',
-              sourceDescription: 'the generic window title bar',
-              destinationDescription: 'the visible destination area',
-            }],
-          })
-        : JSON.stringify({ done: true, reason: 'drag completed', actions: [] });
-  });
-  const coordinateRetryGrounderServer = createJsonPostServer('/predict/', (body) => {
-    const textPrompt = String(body.text_prompt);
-    assert.match(textPrompt, /generic window title bar|visible destination area/);
-    return {
-      coordinates: textPrompt.includes('title bar') ? [10, 20] : [80, 90],
-      image_size: { width: 100, height: 100 },
-    };
-  });
-  const coordinateRetryGrounderBaseUrl = await listenLocal(coordinateRetryGrounderServer);
-  try {
-    const coordinateRetryWorkspace = await createVisionWorkspace('coordinate-retry');
-    process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-coordinate-retry-smoke';
-    delete process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON;
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = coordinateRetryGrounderBaseUrl;
-    process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-    const coordinateRetry = await runVisionSenseGateway({
-      skillDomain: 'literature',
-      prompt: 'Use generic computer use planner to rewrite coordinate actions through the grounder.',
-      workspacePath: coordinateRetryWorkspace,
-    });
-    assert.equal(coordinateRetryPlannerCalls, 3);
-    assert.equal(coordinateRetry.executionUnits[0].status, 'done');
-    const { trace: coordinateRetryTrace } = await readVisionTraceJson(coordinateRetryWorkspace, coordinateRetry);
-    const dragStep = (coordinateRetryTrace.steps as Array<Record<string, unknown>>).find((step) => step.id === 'step-001-execute-drag');
-    assert.ok(dragStep);
-    assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.fromX), 10);
-    assert.equal(((dragStep.plannedAction as Record<string, unknown>)?.toX), 80);
-  } finally {
-    await closeServer(coordinateRetryGrounderServer);
-    setComputerUsePackageBridgeCodexPlannerAdapterForTests(undefined);
-  }
-
   const windowTargetWorkspace = await createVisionWorkspace('window-target');
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-target-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
   process.env.SCIFORGE_VISION_CAPTURE_DISPLAYS = '1,2';
-  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'click', targetDescription: 'generic window-local target' }]);
-  process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS = '1';
-  const windowGrounderServer = createJsonPostServer('/predict/', (body) => {
-    assert.match(String(body.text_prompt), /click coordinates/i);
-    assert.match(String(body.text_prompt), /generic window-local target/);
-    assert.match(String(body.image_path), /step-001-before-window-/);
-    return { coordinates: [80, 40], image_size: { width: 160, height: 80 } };
-  });
-  const windowGrounderBaseUrl = await listenLocal(windowGrounderServer);
-  try {
-    process.env.SCIFORGE_VISION_KV_GROUND_URL = windowGrounderBaseUrl;
+  process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'click', x: 80, y: 40, targetDescription: 'generic window-local target' }]);
     const windowTarget = await runVisionSenseGateway({
       skillDomain: 'literature',
       prompt: 'Use generic computer use inside the target window only.',
@@ -709,9 +449,6 @@ try {
     assert.equal(((windowStep.scheduler as Record<string, unknown>)?.failClosedIsolation), true);
     assert.equal((((windowStep.verifier as Record<string, unknown>)?.windowConsistency as Record<string, unknown>)?.status), 'same-target-window');
     assert.equal((((windowStep.verifier as Record<string, unknown>)?.windowConsistency as Record<string, unknown>)?.sameWindow), true);
-  } finally {
-    await closeServer(windowGrounderServer);
-  }
 
   const providerFailureWorkspace = await createVisionWorkspace('window-provider-failure');
   const providerFailureTarget = {
@@ -774,7 +511,26 @@ try {
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.acquiredAt, 'string');
   assert.equal(typeof (realExecutorLockResult.schedulerLease as Record<string, unknown>)?.releasedAt, 'string');
   assert.match(String((realExecutorLockResult.schedulerLease as Record<string, unknown>)?.lockPath), /sciforge-computer-use-locks/);
-  const openAppNoPointerResult = await executeGenericDesktopAction({ type: 'open_app', appName: 'Example App' }, {
+  const providerObservationAt = new Date().toISOString();
+  const openAppNoPointerResult = await executeGenericDesktopAction({
+    type: 'open_app',
+    appName: 'Example App',
+    observeBeforeMutate: {
+      appStateRef: 'smoke://window-provider-failure/app-state',
+      screenshotRef: 'smoke://window-provider-failure/screenshot',
+      accessibilitySnapshotRef: 'smoke://window-provider-failure/accessibility',
+      groundingRef: 'smoke://window-provider-failure/grounding',
+      displayGroupId: 'display-group-default',
+      screenId: 'screen-default',
+      observedAt: providerObservationAt,
+      freshnessCheck: {
+        status: 'current',
+        observedAt: providerObservationAt,
+        checkedAt: providerObservationAt,
+        maxAgeMs: 300_000,
+      },
+    },
+  }, {
     ...providerFailureConfig,
     runId: 'open-app-no-pointer-smoke',
     desktopPlatform: 'linux',
@@ -787,7 +543,8 @@ try {
   assert.equal(openAppNoPointerResult.exitCode, 126);
   assert.match(openAppNoPointerResult.stderr, /No real generic GUI executor is configured/i);
   assert.doesNotMatch(openAppNoPointerResult.stderr, /shared system mouse\/keyboard input was not explicitly allowed/i);
-  assert.equal((openAppNoPointerResult.schedulerLease as Record<string, unknown>)?.lockId, 'smoke-open-app-lock-424242');
+  assert.equal((openAppNoPointerResult.schedulerLease as Record<string, unknown>)?.lockId, 'cu-focus-lease-global');
+  assert.equal(((openAppNoPointerResult.schedulerLease as Record<string, unknown>)?.focusLeaseProjection as Record<string, unknown>)?.requiresGlobalFocus, true);
   const displayFallbackPointerActions: GenericVisionAction[] = [
     { type: 'click', x: 5, y: 5 },
     { type: 'double_click', x: 5, y: 5 },
@@ -873,7 +630,6 @@ try {
   process.env.SCIFORGE_VISION_RUN_ID = 'generic-cu-window-isolation-smoke';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '0';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'click', x: 5, y: 5 }]);
-  delete process.env.SCIFORGE_VISION_KV_GROUND_URL;
   const isolatedWindow = await runVisionSenseGateway({
     skillDomain: 'literature',
     prompt: 'Use generic computer use only if the requested target window can be isolated.',

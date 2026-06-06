@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type { ComputerUseConfig, ScreenshotRef } from '../computer-use/types.js';
-import { resolveActionGrounding, screenshotToExecutorPoint } from './computer-use-grounding.js';
+import {
+  buildFocusRegionFromVisionSense,
+  buildRegionSemanticVerifierFromVisionSense,
+  buildVerifierPlanningFeedbackFromVisionSense,
+  resolveActionGrounding,
+  screenshotToExecutorPoint,
+} from './computer-use-grounding.js';
 
 function baseConfig(): ComputerUseConfig {
   return {
@@ -25,7 +28,6 @@ function baseConfig(): ComputerUseConfig {
     allowHighRiskActions: false,
     planner: { allowOpenAiRuntime: false, timeoutMs: 1000, maxTokens: 512 },
     grounder: {
-      baseUrl: 'http://127.0.0.1:18081/',
       timeoutMs: 1000,
       allowServiceLocalPaths: false,
       upload: { strategy: 'inline' },
@@ -61,12 +63,6 @@ function fetchStub(handler: (url: string, init?: RequestInit) => Promise<Respons
   }) as typeof fetch;
 }
 
-function diagnosticsFrom(grounding: Record<string, unknown> | undefined) {
-  assert.ok(grounding);
-  assert.ok(Array.isArray(grounding.diagnostics));
-  return grounding.diagnostics as Array<Record<string, unknown>>;
-}
-
 test('window screenshot coordinate mapping accounts for asymmetric macOS window shadow', () => {
   const config = {
     desktopPlatform: 'darwin',
@@ -91,92 +87,98 @@ test('window screenshot coordinate mapping accounts for asymmetric macOS window 
   assert.ok(mapped.y > 80 && mapped.y < 86);
 });
 
-test('legacy grounding adapter records sanitized /health diagnostics alongside /predict/ attempts', async (t) => {
-  const tempDir = await mkdtemp(join(tmpdir(), 'sciforge-grounding-diagnostics-'));
-  const screenshotPath = join(tempDir, 'before.png');
-  await writeFile(
-    screenshotPath,
-    Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lwNfWQAAAABJRU5ErkJggg==', 'base64'),
-  );
-  t.after(async () => {
-    await rm(tempDir, { recursive: true, force: true });
-  });
-  const calls: Array<{ url: string; method: string | undefined }> = [];
-  t.mock.method(globalThis, 'fetch', fetchStub(async (url, init) => {
-    calls.push({ url, method: init?.method });
-    if (url.endsWith('/health')) {
-      return new Response(JSON.stringify({
-        ok: true,
-        model_dir: '/models/legacy-grounding-adapter',
-        cuda_available: true,
-        gpu_count: 1,
-        inline_image_supported: true,
-        max_inline_image_bytes: 20971520,
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    if (url.endsWith('/predict/')) {
-      return new Response(JSON.stringify({
-        coordinates: [481.18, 1060.88],
-        text: "click(start_box='[326, 943]')",
-        raw_text: "click(start_box='[326, 943]')",
-        image_size: { width: 1476, height: 1125 },
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-    assert.fail(`unexpected URL ${url}`);
-  }));
+test('remote-desktop independent adapter grounds target descriptions without legacy service', async () => {
+  const config = {
+    ...baseConfig(),
+    inputAdapter: 'remote-desktop',
+    independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+    grounder: {
+      timeoutMs: 1000,
+      allowServiceLocalPaths: false,
+      upload: { strategy: 'inline' as const },
+    },
+  };
 
   const result = await resolveActionGrounding(
-    { type: 'click', targetDescription: 'Submit button' },
-    [screenshotRef(screenshotPath)],
-    baseConfig(),
+    { type: 'click', targetDescription: 'blank editor body' },
+    [screenshotRef()],
+    config,
   );
 
-  if (result.ok !== true) assert.fail(result.reason);
-  assert.deepEqual(calls.map((call) => [call.method, call.url]), [
-    ['GET', 'http://127.0.0.1:18081/health'],
-    ['POST', 'http://127.0.0.1:18081/predict/'],
-  ]);
-  const diagnostics = diagnosticsFrom(result.grounding);
-  assert.equal(diagnostics.length, 2);
-  assert.equal(diagnostics[0]?.stage, 'health');
-  assert.equal(diagnostics[0]?.method, 'GET');
-  assert.equal(diagnostics[0]?.status, 'ok');
-  assert.equal(diagnostics[0]?.schemaVersion, 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1');
-  assert.equal((diagnostics[0]?.responseSummary as Record<string, unknown>).ok, true);
-  assert.equal((diagnostics[0]?.responseSummary as Record<string, unknown>).inlineImageSupported, true);
-  assert.equal(diagnostics[1]?.stage, 'predict');
-  assert.equal(diagnostics[1]?.method, 'POST');
-  assert.equal(diagnostics[1]?.status, 'ok');
-  assert.equal(result.grounding?.healthUrl, 'http://127.0.0.1:18081/health');
-  assert.equal(result.grounding?.grounderUrl, 'http://127.0.0.1:18081/predict/');
-  assert.deepEqual([result.grounding?.x, result.grounding?.y], [481.18, 1060.88]);
-  assert.equal(result.grounding?.rawText, "click(start_box='[326, 943]')");
-  assert.deepEqual(result.grounding?.imageSize, { width: 1476, height: 1125 });
-  assert.equal((result.grounding?.responseSummary as Record<string, unknown>).hasCoordinates, true);
-  assert.doesNotMatch(JSON.stringify(result.grounding), /rawResponse|responseBody|providerRequestBody|providerResponseBody|image_base64|data:image|base64/i);
+  assert.equal(result.ok, true);
+  assert.equal(result.action.type, 'click');
+  assert.equal(result.grounding?.provider, 'ts-target-bound-independent-input-grounder');
+  assert.equal(Object.hasOwn(result.grounding ?? {}, 'legacyAdapterUsed'), false);
+  assert.equal(result.grounding?.sharedSystemInputUsed, false);
 });
 
-test('legacy grounding adapter health connection refused is recorded as blocked diagnostic evidence without live service', async (t) => {
+test('coarse-to-fine helpers run in TypeScript without Python bridge', async () => {
+  const previous = process.env.SCIFORGE_VISION_SENSE_PYTHON;
+  process.env.SCIFORGE_VISION_SENSE_PYTHON = '/definitely/missing/python';
+  try {
+    const focusRegion = await buildFocusRegionFromVisionSense(screenshotRef(), {
+      localX: 481.18,
+      localY: 1060.88,
+      targetDescription: 'Submit button',
+    });
+
+    assert.deepEqual(focusRegion, {
+      sourceScreenshotRef: '.sciforge/vision-runs/grounding-diagnostics-test/step-000-before.png',
+      coordinateFrame: 'source-screenshot-pixels',
+      x: 301,
+      y: 825,
+      width: 360,
+      height: 300,
+      centerX: 481.18,
+      centerY: 1060.88,
+      sourceWidth: 1476,
+      sourceHeight: 1125,
+      reason: 'Submit button',
+    });
+
+    const feedback = await buildVerifierPlanningFeedbackFromVisionSense({
+      action: { type: 'click', targetDescription: 'Submit button' },
+      status: 'failed',
+      grounding: { status: 'ok', localX: 481.18, localY: 1060.88, targetDescription: 'Submit button' },
+      pixelDiff: { possiblyNoEffect: true, pairs: [{ changedByteRatio: 0.0001, possiblyNoEffect: true }] },
+      visualFocus: { region: focusRegion },
+      failureReason: 'button did not react',
+    });
+
+    assert.match(feedback, /pixel=no-visible-effect/);
+    assert.match(feedback, /target="Submit button"/);
+    assert.match(feedback, /focus=bbox\(301,825,360,300\)/);
+    assert.match(feedback, /next=replan/);
+    assert.match(feedback, /produced no visible window effect/);
+
+    const semantic = await buildRegionSemanticVerifierFromVisionSense({
+      action: { type: 'click', targetDescription: 'Submit button' },
+      status: 'done',
+      grounding: { targetDescription: 'Submit button' },
+      pixelDiff: { possiblyNoEffect: false, pairs: [{ changedByteRatio: 0.01 }] },
+      focusPixelDiff: { possiblyNoEffect: true, pairs: [{ possiblyNoEffect: true }] },
+      visualFocus: { region: focusRegion },
+    });
+
+    assert.equal(semantic?.schemaVersion, 'sciforge.vision-sense.region-semantic-verifier.v1');
+    assert.equal(semantic?.verdict, 'off-target-or-unrelated-window-change');
+    assert.equal(semantic?.targetDescription, 'Submit button');
+    assert.equal((semantic?.focusRegion as Record<string, unknown>)?.x, 301);
+    assert.equal(semantic?.focusChanged, false);
+    assert.equal(semantic?.windowChanged, true);
+    assert.equal(semantic?.possiblyNoEffect, true);
+    assert.match(String(semantic?.summary), /regionSemantic=off-target-or-unrelated-window-change/);
+  } finally {
+    if (previous === undefined) delete process.env.SCIFORGE_VISION_SENSE_PYTHON;
+    else process.env.SCIFORGE_VISION_SENSE_PYTHON = previous;
+  }
+});
+
+test('Model Router grounding translator failure does not call direct grounding services', async (t) => {
   const calls: string[] = [];
   t.mock.method(globalThis, 'fetch', fetchStub(async (url) => {
     calls.push(url);
-    if (url.endsWith('/health')) {
-      const error = new TypeError('fetch failed') as Error & { cause?: unknown };
-      error.cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:18081'), {
-        code: 'ECONNREFUSED',
-        errno: -61,
-        address: '127.0.0.1',
-        port: 18081,
-      });
-      throw error;
-    }
-    assert.fail('predict should not run after failed health preflight');
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
   }));
 
   const result = await resolveActionGrounding(
@@ -186,16 +188,10 @@ test('legacy grounding adapter health connection refused is recorded as blocked 
   );
 
   assert.equal(result.ok, false);
-  if (result.ok) assert.fail('connection refused health preflight should fail closed');
-  assert.deepEqual(calls, ['http://127.0.0.1:18081/health']);
-  assert.match(result.reason, /\/health/);
-  assert.match(result.reason, /ECONNREFUSED/);
-  const diagnostics = diagnosticsFrom(result.grounding);
-  assert.equal(diagnostics.length, 1);
-  assert.equal(diagnostics[0]?.stage, 'health');
-  assert.equal(diagnostics[0]?.status, 'failed');
-  assert.equal(diagnostics[0]?.blocked, true);
-  assert.match(JSON.stringify(diagnostics[0]), /ECONNREFUSED/);
-  assert.match(JSON.stringify(diagnostics[0]), /127\.0\.0\.1/);
-  assert.match(JSON.stringify(diagnostics[0]), /18081/);
+  if (result.ok) assert.fail('missing Model Router grounding coordinates should fail closed');
+  assert.deepEqual(calls, []);
+  assert.match(result.reason, /Model Router grounding translator/);
+  assert.equal(result.grounding?.provider, 'model-router.capability.computer-use.grounding-translator');
+  assert.equal(result.grounding?.reason, 'missing model-router grounding translator result');
+  assert.doesNotMatch(JSON.stringify(result.grounding), /health|predict|legacy|127\.0\.0\.1|18081/i);
 });

@@ -12,7 +12,7 @@ test('copyDesktopStaticAssets materializes runtime JSON manifests and Computer U
 
   const result = await copyDesktopStaticAssets({ rootDir: workspace });
 
-  assert.equal(result.files, 15);
+  assert.equal(result.files, 14);
   assert.equal(result.dirs, 3);
   assert.equal(
     await readFile(join(workspace, 'dist-desktop/packages/actions/computer-use/action-provider.manifest.json'), 'utf8'),
@@ -41,7 +41,6 @@ async function writeRequiredStaticAssetFixture(workspace: string): Promise<void>
     'packages/actions/computer-use/virtual-app-screen-host/capability.manifest.json': '{"id":"virtual-app-screen-host"}\n',
     'packages/actions/computer-use/pyproject.toml': '[project]\nname="sciforge-computer-use"\n',
     'packages/actions/computer-use/README.md': '# Computer Use\n',
-    'packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md': '# KV Ground\n',
     'packages/actions/computer-use/sciforge_computer_use/__main__.py': 'print("ok")\n',
     'packages/actions/computer-use/sciforge_computer_use/__pycache__/stale.pyc': 'cache',
     'packages/actions/computer-use/fixtures/sample.json': '{}\n',

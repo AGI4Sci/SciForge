@@ -1127,6 +1127,35 @@ test('attachResultPresentationContract keeps protocol failure visible over backg
   assert.match(String(visibleAnswer?.text), /ToolPayload envelope|preflight/i);
 });
 
+test('attachResultPresentationContract does not let explicit satisfaction override failed execution units', () => {
+  const attached = attachResultPresentationContract(payload({
+    message: 'The patch is complete, but verification failed.',
+    displayIntent: {
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      status: 'completed',
+    },
+    executionUnits: [{
+      id: 'unit-failed-test',
+      status: 'failed-with-reason',
+      tool: 'verification',
+      failureReason: 'Focused regression failed.',
+      nextStep: 'Repair the failing regression and rerun verification.',
+    }],
+  }), {
+    request: {
+      skillDomain: 'knowledge',
+      prompt: 'Implement a bug fix and verify it.',
+      artifacts: [],
+    },
+  });
+
+  const card = attached.displayIntent?.taskRunCard as Record<string, any> | undefined;
+  assert.equal(card?.protocolStatus, 'protocol-failed');
+  assert.notEqual(card?.taskOutcome, 'satisfied');
+  assert.match(String(card?.nextStep), /Repair|verification|regression/i);
+});
+
 test('attachResultPresentationContract blocks satisfied outcome when request requires verification but no verdict exists', () => {
   const attached = attachResultPresentationContract(payload({
     message: 'P5 methodology review is complete. Please see the generated report.',

@@ -358,16 +358,30 @@ function approvalRequestSummaryFromSidecar(sidecar: Record<string, unknown> | un
     : isRecord(recordAt(sidecar, 'payload')?.approvalRequest)
       ? recordAt(sidecar, 'payload')?.approvalRequest
       : sidecar;
-  return approvalRequestSummaryFromRecord(isRecord(approvalRequest) ? approvalRequest : undefined);
+  return mergeApprovalRequestSummaries([
+    approvalRequestSummaryFromRecord(isRecord(approvalRequest) ? approvalRequest : undefined),
+    approvalRequest === sidecar ? undefined : approvalRequestSummaryFromRecord(sidecar),
+  ]);
 }
 
 function approvalRequestSummaryFromRecord(record: Record<string, unknown> | undefined): ComputerUseChatLiveE2EManifest['approvalRequest'] | undefined {
   if (!record) return undefined;
+  const highRiskAction = recordAt(record, 'highRiskAction') ?? recordAt(recordAt(record, 'approvalBoundary'), 'highRiskAction');
+  const reason = stringAt(record, 'reason') ?? stringAt(recordAt(record, 'approvalBoundary'), 'reason');
+  const riskLevel = stringAt(record, 'riskLevel')
+    ?? stringAt(record, 'risk_level')
+    ?? stringAt(record, 'risk')
+    ?? (highRiskAction || /high[- ]?risk/i.test(reason ?? '') ? 'high' : undefined);
   return {
     approvalRef: stringAt(record, 'approvalRef') ?? stringAt(record, 'approval_ref') ?? stringAt(record, 'id'),
     approvalRequestId: stringAt(record, 'approvalRequestId') ?? stringAt(record, 'approval_request_id') ?? stringAt(record, 'id'),
-    riskLevel: stringAt(record, 'riskLevel') ?? stringAt(record, 'risk_level') ?? stringAt(record, 'risk'),
-    actionKind: stringAt(record, 'actionKind') ?? stringAt(record, 'action_kind') ?? stringAt(record, 'actionRef') ?? stringAt(record, 'action_ref'),
+    riskLevel,
+    actionKind: stringAt(record, 'actionKind')
+      ?? stringAt(record, 'action_kind')
+      ?? stringAt(record, 'actionRef')
+      ?? stringAt(record, 'action_ref')
+      ?? stringAt(highRiskAction, 'actionKind')
+      ?? stringAt(highRiskAction, 'action_kind'),
   };
 }
 

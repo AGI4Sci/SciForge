@@ -65,6 +65,65 @@ test('public model list exposes only the configured public alias', async () => {
   }
 });
 
+test('healthz reports provider readiness without leaking private bindings', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-healthz-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/healthz?check=upstream`);
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    const serialized = JSON.stringify(body);
+
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.upstream, {
+      category: 'ready',
+      ok: true,
+      retryable: false,
+      releaseAcceptance: 'not-evaluated',
+    });
+    assert.doesNotMatch(serialized, forbiddenPublicSurfacePattern);
+  } finally {
+    await server.close();
+  }
+});
+
+test('healthz blocks missing provider credentials without leaking binding names', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-healthz-missing-auth-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: {},
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/healthz?check=upstream`);
+    assert.equal(response.status, 503);
+    const body = await response.json() as Record<string, unknown>;
+    const serialized = JSON.stringify(body);
+
+    assert.equal(body.ok, false);
+    assert.deepEqual(body.upstream, {
+      category: 'provider-auth',
+      ok: false,
+      retryable: false,
+      httpStatus: 401,
+      releaseAcceptance: 'not-evaluated',
+    });
+    assert.doesNotMatch(serialized, forbiddenPublicSurfacePattern);
+  } finally {
+    await server.close();
+  }
+});
+
 test('pure text responses are routed only to the configured text reasoner', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-text-'));
   const calls: CapturedFetch[] = [];
@@ -294,6 +353,97 @@ test('textual ask refs do not route non-visual artifacts through the vision tran
   }
 });
 
+test('structured textual ref metadata beats chart and figure title keywords', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-textual-metadata-ref-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'I could not inspect the referenced modality.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Summarize the attached notes.' },
+            {
+              ref: 'artifact:chart-figure-notes',
+              title: 'Chart and figure notes',
+              mime_type: 'text/plain',
+            },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.doesNotMatch(JSON.stringify(calls[0]?.body), /vision-model|SciForge visual ref/i);
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"kind":\s*"document"/);
+    assert.match(traceText, /"degraded":\s*true/);
+    assert.doesNotMatch(traceText, /"kind":\s*"vision\.image"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('structured image metadata routes opaque refs through the vision translator', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-opaque-image-ref-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('vision-initial', 'Observation: the opaque ref is an image.'),
+      chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The opaque ref is an image.' })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'What is shown?' },
+            { ref: 'artifact:opaque-asset', media_type: 'image' },
+          ],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.match(JSON.stringify(calls[0]?.body), /artifact:opaque-asset/);
+    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+
+    const traceText = await readTraceBundle(workspaceRoot);
+    assert.match(traceText, /"kind":\s*"vision\.image"/);
+    assert.match(traceText, /"source":\s*"ref"/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('unsupported explicit modality refs degrade without using the vision translator', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-unsupported-modality-ref-'));
   const calls: CapturedFetch[] = [];
@@ -450,6 +600,7 @@ test('absolute trace roots do not leak local paths in public metadata trace refs
 test('profile and provider configuration failures fail closed before upstream calls', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-fail-closed-'));
   const calls: CapturedFetch[] = [];
+  const rawPrivateProfile = 'https://private-profile.example/v1?token=secret-token';
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig(),
@@ -467,6 +618,16 @@ test('profile and provider configuration failures fail closed before upstream ca
     assert.equal(unknownProfile.status, 400);
     assert.match(await unknownProfile.text(), /unknown_profile/);
 
+    const unsafeProfile = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-sciforge-model-router-profile': rawPrivateProfile },
+      body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
+    });
+    assert.equal(unsafeProfile.status, 400);
+    const unsafeProfileText = await unsafeProfile.text();
+    assert.match(unsafeProfileText, /unknown_profile/);
+    assert.doesNotMatch(unsafeProfileText, /private-profile|secret-token|https:\/\//i);
+
     const missingSecret = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -483,6 +644,7 @@ test('profile and provider configuration failures fail closed before upstream ca
 test('default public model alias rejects unregistered request models', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-default-alias-'));
   const calls: CapturedFetch[] = [];
+  const rawPrivateModel = 'https://private-provider.example/v1/models/raw-model?token=secret-token';
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig({ publicModelAlias: null }),
@@ -495,11 +657,13 @@ test('default public model alias rejects unregistered request models', async () 
     const response = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'gpt-4o', input: 'hello', metadata: { profile: 'default' } }),
+      body: JSON.stringify({ model: rawPrivateModel, input: 'hello', metadata: { profile: 'default' } }),
     });
 
     assert.equal(response.status, 400);
-    assert.match(await response.text(), /unregistered_model/);
+    const text = await response.text();
+    assert.match(text, /unregistered_model/);
+    assert.doesNotMatch(text, /private-provider|raw-model|secret-token|https:\/\//i);
     assert.equal(calls.length, 0);
   } finally {
     await server.close();

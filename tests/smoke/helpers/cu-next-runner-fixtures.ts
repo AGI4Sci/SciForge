@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -116,10 +117,14 @@ export async function writeCuNextValidateRunLiveAcceptanceFixture(
     round.failureDiagnosticsRefs = [`evidence/${roundDirName}/failure-diagnostics.json`];
   }
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const manifestRunId = manifest.run?.id;
+  assert.equal(typeof manifestRunId, 'string', 'prepared manifest should include run.id');
   await writeFile(join(runDir, 'scenario-summary.json'), `${JSON.stringify({
     schemaVersion: 'sciforge.computer-use-long.scenario-summary.v1',
     scenarioId: 'CU-LONG-004',
     status: 'passed',
+    runId: manifestRunId,
+    validation: { ok: true },
   }, null, 2)}\n`);
   const finalRound = (manifest.rounds as Array<Record<string, unknown>>).at(-1);
   assert.ok(finalRound?.visionTraceRef, 'fixture should have a passed final round trace ref');
@@ -151,8 +156,12 @@ export async function materializeCuNextAcceptanceRefs(acceptanceDir: string, acc
     if (await fileExists(target)) return;
     if (/\.(png|jpg|jpeg|webp)$/i.test(ref)) {
       await writeFile(target, fixturePng);
+    } else if (/\.(?:csv|tsv)$/i.test(ref)) {
+      await writeFile(target, 'label,x,y\nexport,100,80\n');
     } else if (/dense-grounding-rejections\.json$|rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/.test(ref)) {
       await writeFile(target, `${JSON.stringify(denseGroundingRejectedTargetFixture(ref), null, 2)}\n`);
+    } else if (/freshness-check\.json$/i.test(ref)) {
+      await writeFile(target, `${JSON.stringify(freshnessCheckFixture(ref), null, 2)}\n`);
     } else {
       await writeFile(target, `${JSON.stringify({ ref, fixture: 'materialized-live-acceptance-ref' }, null, 2)}\n`);
     }
@@ -182,10 +191,103 @@ async function materializeCompletionEvidenceRefs(acceptanceDir: string, completi
     await mkdir(dirname(target), { recursive: true });
     if (/\.(png|jpg|jpeg|webp)$/i.test(ref)) {
       await writeFile(target, fixturePng);
+    } else if (/\.validation\.json$/i.test(ref)) {
+      await writeFile(target, `${JSON.stringify(await fixtureArtifactValidationRecord(acceptanceDir, completionEvidence, ref), null, 2)}\n`);
     } else {
       await writeFile(target, `${JSON.stringify({ ref, fixture: 'materialized-completion-evidence-ref' }, null, 2)}\n`);
     }
   }));
+}
+
+async function fixtureArtifactValidationRecord(
+  acceptanceDir: string,
+  completionEvidence: Record<string, unknown>,
+  validationRef: string,
+): Promise<Record<string, unknown>> {
+  const taskBinding = recordFixtureValue(completionEvidence.taskArtifactBinding);
+  const sourceEvidence = recordFixtureValue(completionEvidence.sourceEvidence);
+  const derivedContentEvidence = recordFixtureValue(completionEvidence.derivedContentEvidence);
+  const artifactCausality = recordFixtureValue(completionEvidence.artifactCausality);
+  const presentationEvidence = recordFixtureValue(completionEvidence.presentationEvidence);
+  const finalArtifactRef = stringFixtureValue(taskBinding.finalArtifactRef)
+    ?? stringList(taskBinding.finalArtifactRefs)[0]
+    ?? stringList(completionEvidence.taskFinalArtifactRefs)[0]
+    ?? stringFixtureValue(completionEvidence.finalArtifactRef)
+    ?? validationRef.replace(/\.validation\.json$/i, '');
+  const artifactPath = materializedFixtureRefPath(acceptanceDir, finalArtifactRef);
+  const bytes = await readFixtureArtifactBytes(artifactPath, finalArtifactRef);
+  const contentRefs = uniqueStringList([
+    finalArtifactRef,
+    ...stringList(taskBinding.finalArtifactRefs),
+    ...stringList(completionEvidence.taskFinalArtifactRefs),
+    ...stringList(presentationEvidence.artifactRefs),
+  ]);
+  const sourceRefs = uniqueStringList([
+    ...stringList(sourceEvidence.sourceFactRefs),
+    ...stringList(sourceEvidence.sourceObservationRefs),
+    ...stringList(derivedContentEvidence.supportedFactRefs),
+  ]);
+  const format = fixtureArtifactFormat(finalArtifactRef);
+  return {
+    schemaVersion: 'sciforge.computer-use.artifact-validation.v1',
+    status: 'passed',
+    ok: true,
+    productAcceptanceEvidence: true,
+    artifactValidationRef: validationRef,
+    finalArtifactRef,
+    artifactRef: finalArtifactRef,
+    contentRefs,
+    checkedRefs: contentRefs,
+    sourceRefs,
+    format,
+    validator: `sciforge-generic-${format}-artifact-contract-validator`,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    bytes: bytes.byteLength,
+    savedByActionIndex: numberFixtureValue(artifactCausality.savedByActionIndex),
+    savedByActionRef: stringFixtureValue(artifactCausality.savedByActionRef)
+      ?? stringFixtureValue(artifactCausality.savedByCommandEventRef),
+    currentRunCausality: true,
+    metadata: {
+      validationScope: 'product-smoke-record',
+      productAcceptanceEvidence: true,
+      finalArtifactRef,
+      contentRefs,
+      sourceRefs,
+    },
+  };
+}
+
+async function readFixtureArtifactBytes(path: string, ref: string): Promise<Buffer> {
+  try {
+    return await readFile(path);
+  } catch {
+    if (/\.(?:csv|tsv)$/i.test(ref)) return Buffer.from('label,x,y\nexport,100,80\n', 'utf8');
+    if (/\.(png|jpg|jpeg|webp)$/i.test(ref)) return fixturePng;
+    return Buffer.from(`fixture artifact for ${ref}\n`, 'utf8');
+  }
+}
+
+function fixtureArtifactFormat(ref: string): string {
+  const normalized = ref.toLowerCase().split(/[?#]/, 1)[0];
+  if (/\.pptx$/.test(normalized)) return 'pptx';
+  if (/\.docx$/.test(normalized)) return 'docx';
+  if (/\.(?:csv|tsv)$/.test(normalized)) return 'csv';
+  if (/\.md$|\.markdown$/.test(normalized)) return 'markdown';
+  if (/\.(?:png|jpe?g|webp|gif|bmp|tiff?)$/.test(normalized)) return 'image';
+  if (/\.(?:pdf|html?|rtf)$/.test(normalized)) return 'report';
+  return 'file';
+}
+
+function recordFixtureValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringFixtureValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function numberFixtureValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
 function materializedFixtureRefPath(acceptanceDir: string, ref: string) {
@@ -508,6 +610,7 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
   const ref = (name: string) => name;
   const sessionRef = `computer-use-session:${runId}`;
   const finalArtifactRef = ref('dense-grounding-export.csv');
+  const artifactValidationRef = ref('evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json');
   const replayFrameRef = ref('before.png');
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
@@ -560,6 +663,14 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
         refs: [ref('gui-present.json')],
         artifactRefs: [finalArtifactRef],
       },
+      {
+        id: 'artifact-validation-record',
+        kind: 'artifact-validation-record',
+        status: 'present',
+        ref: artifactValidationRef,
+        refs: [artifactValidationRef],
+        artifactRefs: [finalArtifactRef],
+      },
     ],
     screenshotRefs: {
       before: [replayFrameRef],
@@ -568,6 +679,7 @@ export function passedBundleLocalCuNext07AcceptanceManifest(): Record<string, un
     focusCropRefs: [ref('focus-crop.png')],
     groundingDiagnosticsRefs: [ref('coarse-fine-rejected-targets.json')],
     executorLease: { status: 'present', ref: ref('executor-lease.json') },
+    artifactValidationRef,
     finalArtifactRef,
     finalVisibleScreenshotRef: ref('final-visible.png'),
     verifierVerdict: {
@@ -685,25 +797,12 @@ export function browserStep(): Record<string, unknown> {
   };
 }
 
-export function passedKvGroundManifest(): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.kv-ground-smoke.v1',
-    runId: 'kv-ground-smoke-20260525T000000Z',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    endpoint: 'http://127.0.0.1:18081',
-    checks: {
-      health: { ok: true },
-      predict: { coordinates: [480, 1062] },
-    },
-    predictRequest: { textPrompt: 'Click the Ask SciForge input box' },
-  };
-}
-
 export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
   const runId = 'cu-next-07-wrapper';
   const ref = (name: string) => name;
   const sessionRef = `computer-use-session:${runId}`;
   const finalArtifactRef = ref('dense-grounding-export.csv');
+  const artifactValidationRef = ref('evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json');
   const replayFrameRef = ref('before.png');
   return {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
@@ -772,6 +871,14 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
         refs: [ref('gui-present.json')],
         artifactRefs: [finalArtifactRef],
       },
+      {
+        id: 'artifact-validation-record',
+        kind: 'artifact-validation-record',
+        status: 'present',
+        ref: artifactValidationRef,
+        refs: [artifactValidationRef],
+        artifactRefs: [finalArtifactRef],
+      },
     ],
     screenshotRefs: {
       before: [replayFrameRef],
@@ -780,6 +887,7 @@ export function passedCuNext07AcceptanceManifest(): Record<string, unknown> {
     focusCropRefs: [ref('focus-crop.png')],
     groundingDiagnosticsRefs: [ref('coarse-fine-rejected-targets.json')],
     executorLease: { status: 'present', ref: ref('executor-lease.json') },
+    artifactValidationRef,
     finalArtifactRef,
     finalVisibleScreenshotRef: ref('final-visible.png'),
     verifierVerdict: {
@@ -815,6 +923,39 @@ function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<st
   const writerCursorId = `${runId}-cursor-writer`;
   const previewActorId = `${runId}-actor-preview`;
   const previewCursorId = `${runId}-cursor-preview`;
+  const primaryMutatingAction = {
+    actionKind: 'click',
+    screenId,
+    windowId,
+    actorId,
+    cursorId,
+    leaseId: `${runId}-lease-window-main`,
+    leaseScope: {
+      kind: 'window-local',
+      screenId,
+      windowId,
+    },
+    target: {
+      scope: 'window',
+      screenId,
+      windowId,
+      bounds: { x: 64, y: 72, width: 160, height: 36 },
+    },
+    beforeEvidenceRefs: [ref('before.png')],
+    afterEvidenceRefs: [ref('after.png')],
+    beforeFrameRefs: [ref('before.png')],
+    afterFrameRefs: [ref('after.png')],
+    inputIntentRef: ref('input-intents/click-export.json'),
+    providerAdapterRef: ref('sidecar-executor-adapter.json'),
+    currentAppStateRef: ref('current-app-state.json'),
+    currentScreenshotRef: ref('before.png'),
+    stateSnapshotRef: ref('state-snapshot.json'),
+    freshnessCheckRef: ref('freshness-check.json'),
+    groundingRefs: [ref('coarse-fine-rejected-targets.json'), ref('browser-grounding-hints.json')],
+    executorEventRef: ref('executor-event.json'),
+    verificationRefs: [ref('verifier-verdict.json')],
+    artifactRefs: [ref('dense-grounding-export.csv')],
+  };
   return {
     productPathClassification: {
       schemaVersion: 'sciforge.computer-use.product-path-classification.v1',
@@ -1012,41 +1153,28 @@ function cuNext07AcceptanceProductRefs(runId: string, prefix: string): Record<st
         leaseOwnerRefs: [ref('screen-global-lease.json')],
       },
     ],
-    mutatingActions: [
-      {
-        actionKind: 'click',
-        screenId,
-        windowId,
-        actorId,
-        cursorId,
-        leaseId: `${runId}-lease-window-main`,
-        leaseScope: {
-          kind: 'window-local',
-          screenId,
-          windowId,
-        },
-        target: {
-          scope: 'window',
-          screenId,
-          windowId,
-          bounds: { x: 64, y: 72, width: 160, height: 36 },
-        },
-        beforeEvidenceRefs: [ref('before.png')],
-        afterEvidenceRefs: [ref('after.png')],
-        beforeFrameRefs: [ref('before.png')],
-        afterFrameRefs: [ref('after.png')],
-        inputIntentRef: ref('input-intents/click-export.json'),
-        providerAdapterRef: ref('sidecar-executor-adapter.json'),
-        currentAppStateRef: ref('current-app-state.json'),
-        currentScreenshotRef: ref('before.png'),
-        stateSnapshotRef: ref('state-snapshot.json'),
-        freshnessCheckRef: ref('freshness-check.json'),
-        groundingRefs: [ref('coarse-fine-rejected-targets.json'), ref('browser-grounding-hints.json')],
-        executorEventRef: ref('executor-event.json'),
-        verificationRefs: [ref('verifier-verdict.json')],
-        artifactRefs: [ref('dense-grounding-export.csv')],
-      },
-    ],
+    mutatingActions: [primaryMutatingAction],
+    actionLedgerRef: ref('evidence-ledger.json'),
+    evidenceLedgerActions: [primaryMutatingAction],
+    evidenceLedger: {
+      ref: ref('evidence-ledger.json'),
+      actionLedgerRef: ref('evidence-ledger.json'),
+      actions: [primaryMutatingAction],
+    },
+    evidenceIndexRef: ref('evidence-index.json'),
+    evidenceIndex: {
+      ref: ref('evidence-index.json'),
+      refs: [
+        ref('evidence-ledger.json'),
+        ref('before.png'),
+        ref('after.png'),
+        ref('input-intents/click-export.json'),
+        ref('sidecar-executor-adapter.json'),
+        ref('executor-event.json'),
+        ref('verifier-verdict.json'),
+        ref('dense-grounding-export.csv'),
+      ],
+    },
     replayBundle: {
       ref: ref('replay-bundle.json'),
       frames: [
@@ -1096,6 +1224,7 @@ export function cuNext07DenseGroundingMarker(runId?: string): Record<string, unk
     coarseWindowScreenshotRef: `${prefix}coarse-window.png`,
     focusCropRef: `${prefix}focus-crop.png`,
     fineGroundingDiagnosticRef: `${prefix}fine-grounding-diagnostic.json`,
+    artifactValidationRef: `${prefix}evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json`,
     rejectedTargetRefs: [
       `${prefix}rejected-save-target.json`,
       `${prefix}rejected-share-target.json`,
@@ -1323,7 +1452,7 @@ export function cuNextProjectionTrace(runId: string, runRef: string): Record<str
           },
         ],
         plannedAction: { type: 'click', appName: 'Browser', targetDescription: 'visible source summary' },
-        grounding: { provider: 'kv-ground', localX: 100, localY: 80 },
+        grounding: { provider: 'model-router.capability.computer-use.grounding-translator', localX: 100, localY: 80 },
       },
       {
         id: 'step-002-dense-app',
@@ -1345,13 +1474,13 @@ export function cuNextProjectionTrace(runId: string, runRef: string): Record<str
           },
         ],
         plannedAction: { type: 'click', appName: 'Dense Toolbar App', targetDescription: 'export button' },
-        fineGrounding: { provider: 'kv-ground', status: 'accepted', targetDescription: 'Export button', rejectedTargets: ['Save', 'Share'] },
+        fineGrounding: { provider: 'model-router.capability.computer-use.grounding-translator', status: 'accepted', targetDescription: 'Export button', rejectedTargets: ['Save', 'Share'] },
         denseGroundingRejectedTargets: [
           {
             fineGroundingRejected: true,
             targetDescription: 'Export button',
             fineGrounding: {
-              provider: 'kv-ground',
+              provider: 'model-router.capability.computer-use.grounding-translator',
               status: 'rejected',
               targetDescription: 'Save button',
               rejectionReason: 'neighboring decoy target',
@@ -1366,7 +1495,7 @@ export function cuNextProjectionTrace(runId: string, runRef: string): Record<str
             fineGroundingRejected: true,
             targetDescription: 'Export button',
             fineGrounding: {
-              provider: 'kv-ground',
+              provider: 'model-router.capability.computer-use.grounding-translator',
               status: 'rejected',
               targetDescription: 'Share button',
               rejectionReason: 'neighboring decoy target',
@@ -1487,5 +1616,16 @@ function denseGroundingRejectedTargetFixture(ref: string): Record<string, unknow
     coarseWindowScreenshotRef: ref.replace(/dense-grounding-rejections\.json$|rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/, 'coarse-window.png'),
     focusCropRef: ref.replace(/dense-grounding-rejections\.json$|rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/, 'focus-crop.png'),
     fineGroundingDiagnosticRef: ref.replace(/dense-grounding-rejections\.json$|rejected-.+-target\.json$|coarse-fine-rejected-targets\.json$/, 'fine-grounding-diagnostic.json'),
+  };
+}
+
+function freshnessCheckFixture(ref: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+    ref,
+    status: 'current',
+    observedAt: '2026-05-28T00:00:00.000Z',
+    checkedAt: '2026-05-28T00:00:00.000Z',
+    maxAgeMs: 30_000,
   };
 }

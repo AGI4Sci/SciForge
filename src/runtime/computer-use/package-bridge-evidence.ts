@@ -976,6 +976,15 @@ function screenshotRefsForAcceptance(
     .filter((item) => !item.id.includes('-focus-') && !item.path.includes('-focus-'))
     .map((item) => item.path);
   const completionScreenshots = stringArrayAt(completionEvidence, 'screenshotRefs');
+  const completionScreenshotRecord = recordAt(completionEvidence, 'screenshotRefs');
+  const completionBeforeScreenshots = stringArrayAt(completionScreenshotRecord, 'before');
+  const completionAfterScreenshots = stringArrayAt(completionScreenshotRecord, 'after');
+  if (completionBeforeScreenshots.length > 0 || completionAfterScreenshots.length > 0) {
+    return {
+      before: uniqueStrings([...completionBeforeScreenshots, ...completionScreenshots]),
+      after: uniqueStrings([...completionAfterScreenshots, ...completionScreenshots]),
+    };
+  }
   const refs = uniqueStrings([...windowScreenshots, ...completionScreenshots]);
   const midpoint = Math.max(1, Math.floor(refs.length / 2));
   return {
@@ -1026,7 +1035,7 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
     createdAt: new Date().toISOString(),
     runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
     actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
-    hostPortProtocol: 'stdio-jsonl',
+    hostPortProtocol: 'ts-host-port-loop',
     status: params.guiPresent ? 'presented' : 'recorded',
     resultStatus: params.payload.executionUnits?.[0]?.status,
     origin: chatOrigin,
@@ -1069,7 +1078,7 @@ export function buildPackageBridgeTuiHostRunTaskChain(params: {
         requestRef,
         hostPortsRef,
         traceRef,
-        note: 'TUI Host called the Computer Use package run_task bridge with injected host ports.',
+        note: 'TUI Host called the Computer Use TypeScript action-provider loop with injected host ports.',
       },
       {
         id: 'computer-use-action-provider',
@@ -1177,8 +1186,9 @@ function buildPackageBridgeAcceptanceInput(params: {
     typeof candidate === 'string'
     && isCurrentRunTaskFinalArtifactRef(candidate, runDirRef)
   ));
-  const finalVisibleScreenshotRef = finalWindowScreenshotRef(params.state.screenshotLedger)
-    ?? firstStringAt(params.completionEvidence, [['presentationEvidence', 'finalVisibleScreenshotRef']])
+  const finalVisibleScreenshotRef = firstStringAt(params.completionEvidence, [['presentationEvidence', 'finalVisibleScreenshotRef']])
+    ?? currentRunFinalVisibleScreenshotRef(params.state.runDir, runDirRef)
+    ?? finalWindowScreenshotRef(params.state.screenshotLedger)
     ?? stringArrayAt(params.completionEvidence, 'screenshotRefs').at(-1);
   const screenshotRefs = screenshotRefsForAcceptance(params.state, params.completionEvidence);
   const focusCropRefs = uniqueStrings([
@@ -1235,6 +1245,18 @@ function buildPackageBridgeAcceptanceInput(params: {
     continuationRequestRef: continuationContext ? ref('continuation-request.json') : undefined,
     directoryListingRef: ref('directory-listing.json'),
     denseGroundingRejectionRef: effectiveGroundingDiagnosticsRefs[0],
+  });
+  const diagnosticProductPathProjection = buildPackageBridgeDiagnosticCurrentRunProjection({
+    completionEvidence: params.completionEvidence,
+    effectiveGroundingDiagnosticsRefs,
+    effectiveFocusCropRefs,
+    finalArtifactRef,
+    finalVisibleScreenshotRef,
+    packageResult: params.packageResult,
+    ref,
+    runDirRef,
+    runId: params.state.runId,
+    screenshotRefs,
   });
   const evidenceClaims: CuEvidenceClaim[] = [
     {
@@ -1304,6 +1326,7 @@ function buildPackageBridgeAcceptanceInput(params: {
       apps: workflowApps.length ? workflowApps : ['isolated-source-app', 'isolated-writer-app', 'isolated-preview-app'],
       windowSwitchTraceRefs,
     },
+    productPathClassification: diagnosticProductPathProjection.productPathClassification,
     tuiHostChain: [
       {
         id: 'chat-origin',
@@ -1336,13 +1359,7 @@ function buildPackageBridgeAcceptanceInput(params: {
     screenshotRefs,
     focusCropRefs: effectiveFocusCropRefs,
     groundingDiagnosticsRefs: effectiveGroundingDiagnosticsRefs,
-    executorLease: {
-      status: 'present',
-      ref: completionEvidenceRef(params.completionEvidence, 'executorCommandEventLogRef')
-        ?? completionEvidenceRef(params.completionEvidence, 'inputEventLogRef')
-        ?? ref('host-ports.json'),
-      owner: 'sciforge-independent-input-adapter isolated-L3',
-    },
+    executorLease: diagnosticProductPathProjection.executorLease as NonNullable<CuUserAcceptanceInput['executorLease']>,
     finalArtifactRef,
     finalVisibleScreenshotRef,
     verifierVerdict: {
@@ -1355,17 +1372,248 @@ function buildPackageBridgeAcceptanceInput(params: {
       status: 'present',
       recordRef: ref('gui-present.json'),
       payloadRef: ref('tool-payload.json'),
-      displayedRefs: uniqueStrings([finalArtifactRef, finalVisibleScreenshotRef].filter((item): item is string => Boolean(item))),
+      displayedRefs: uniqueStrings([
+        finalArtifactRef,
+        finalVisibleScreenshotRef,
+        ...diagnosticProductPathProjection.guiPresentDisplayedRefs,
+      ].filter((item): item is string => Boolean(item))),
       recordRefs: [ref('gui-present.json')],
       artifactRefs: finalArtifactRef ? [finalArtifactRef] : [],
       sessionRefs: independentInputSessionRefs,
     },
+    currentBundleRef: runDirRef,
+    displayGroupId: diagnosticProductPathProjection.displayGroupId,
+    screenId: diagnosticProductPathProjection.screenId,
+    screenIds: [diagnosticProductPathProjection.screenId],
+    actorId: diagnosticProductPathProjection.actorId,
+    actorIds: [diagnosticProductPathProjection.actorId],
+    cursorId: diagnosticProductPathProjection.cursorId,
+    cursorIds: [diagnosticProductPathProjection.cursorId],
+    virtualDisplayGroup: diagnosticProductPathProjection.virtualDisplayGroup,
+    actorCursorProvenance: diagnosticProductPathProjection.actorCursorProvenance,
+    executorLeases: [diagnosticProductPathProjection.executorLease],
+    actionCausality: diagnosticProductPathProjection.actionCausality,
+    replayBundle: diagnosticProductPathProjection.replayBundle,
+    evidenceLedger: diagnosticProductPathProjection.evidenceLedger,
     evidenceMarkers: [
       ...recordArrayAt(params.completionEvidence, 'evidenceMarkers'),
       ...projectedTaskAcceptance.evidenceMarkers,
     ],
     completionEvidence: params.completionEvidence,
     completionEvidenceRef: CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF,
+  };
+}
+
+function buildPackageBridgeDiagnosticCurrentRunProjection(params: {
+  completionEvidence: Record<string, unknown>;
+  effectiveFocusCropRefs: string[];
+  effectiveGroundingDiagnosticsRefs: string[];
+  finalArtifactRef?: string;
+  finalVisibleScreenshotRef?: string;
+  packageResult: Record<string, unknown>;
+  ref: (name: string) => string;
+  runDirRef: string;
+  runId: string;
+  screenshotRefs: { before: string[]; after: string[] };
+}) {
+  const displayGroupId = `${params.runId}-diagnostic-display-group`;
+  const screenId = `${params.runId}-diagnostic-screen`;
+  const windowId = `${params.runId}-diagnostic-window`;
+  const actorId = `${params.runId}-diagnostic-actor`;
+  const cursorId = `${params.runId}-diagnostic-cursor`;
+  const leaseId = `${params.runId}-diagnostic-window-lease`;
+  const toCurrentRunRef = (candidate: string | undefined): string | undefined => {
+    if (!candidate) return undefined;
+    const trimmed = candidate.trim();
+    if (!trimmed) return undefined;
+    if (trimmed.startsWith(`${params.runDirRef}/`)) return trimmed;
+    if (trimmed.startsWith('.sciforge/vision-runs/')) return undefined;
+    if (!isBundleLocalRef(trimmed)) return undefined;
+    return `${params.runDirRef}/${trimmed.replace(/^\.\//, '')}`;
+  };
+  const packageStep = recordArrayAt(params.packageResult, 'steps')[0];
+  const beforeRef = toCurrentRunRef(stringAt(packageStep, 'beforeRef'))
+    ?? toCurrentRunRef(params.screenshotRefs.before[0])
+    ?? toCurrentRunRef(stringArrayAt(params.completionEvidence, 'screenshotRefs')[0])
+    ?? params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF);
+  const afterRef = toCurrentRunRef(stringAt(packageStep, 'afterRef'))
+    ?? toCurrentRunRef(params.screenshotRefs.after.at(-1))
+    ?? toCurrentRunRef(stringArrayAt(params.completionEvidence, 'screenshotRefs').at(-1))
+    ?? beforeRef;
+  const finalVisibleRef = toCurrentRunRef(params.finalVisibleScreenshotRef)
+    ?? toCurrentRunRef(firstStringAt(params.completionEvidence, [['presentationEvidence', 'finalVisibleScreenshotRef']]))
+    ?? afterRef;
+  const focusCropRefs = uniqueStrings(params.effectiveFocusCropRefs.map(toCurrentRunRef).filter((ref): ref is string => Boolean(ref)));
+  const groundingRefs = uniqueStrings(params.effectiveGroundingDiagnosticsRefs.map(toCurrentRunRef).filter((ref): ref is string => Boolean(ref)));
+  const evidenceIndexRefs = uniqueStrings([
+    params.ref('directory-listing.json'),
+    toCurrentRunRef(completionEvidenceRef(params.completionEvidence, 'evidenceIndexRef')),
+  ].filter((ref): ref is string => Boolean(ref)));
+  const packageAction = recordAt(packageStep, 'action') ?? recordAt(packageStep, 'plan');
+  const actionKind = stringAt(packageAction, 'kind')
+    ?? stringAt(packageAction, 'type')
+    ?? 'diagnostic-package-action';
+  const commonDiagnosticFlags = {
+    diagnosticOnly: true,
+    packageDiagnosticOnly: true,
+    productSmokeEligible: false,
+    productNativeEligible: false,
+  };
+  const leaseScope = {
+    kind: 'window-local',
+    displayGroupId,
+    screenId,
+    windowId,
+    ...commonDiagnosticFlags,
+  };
+  const executorLease = {
+    status: 'present',
+    ref: toCurrentRunRef(completionEvidenceRef(params.completionEvidence, 'executorCommandEventLogRef'))
+      ?? toCurrentRunRef(completionEvidenceRef(params.completionEvidence, 'inputEventLogRef'))
+      ?? params.ref('host-ports.json'),
+    owner: 'computer-use-package-bridge-diagnostic-projection',
+    leaseId,
+    screenId,
+    windowId,
+    actorId,
+    cursorId,
+    leaseScope,
+    ...commonDiagnosticFlags,
+  };
+  const actionCausality = [compactEvidenceRecord({
+    schemaVersion: 'sciforge.computer-use.diagnostic-action-causality.v1',
+    actionKind,
+    screenId,
+    windowId,
+    actorId,
+    cursorId,
+    leaseId,
+    leaseScope,
+    target: {
+      scope: 'window',
+      screenId,
+      windowId,
+    },
+    inputIntentRef: params.ref('computer-use-request.json'),
+    providerAdapterRef: params.ref('host-ports.json'),
+    executorEventRef: params.ref('tui-host-run-task-chain.json'),
+    beforeEvidenceRefs: [beforeRef],
+    afterEvidenceRefs: uniqueStrings([afterRef, finalVisibleRef]),
+    groundingRefs,
+    verificationRefs: [params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF)],
+    artifactRefs: params.finalArtifactRef ? [params.finalArtifactRef] : undefined,
+    evidenceIndexRefs,
+    completionEvidenceEligible: false,
+    ...commonDiagnosticFlags,
+  })];
+  const replayFrameRef = finalVisibleRef ?? afterRef;
+  const replayBundle = compactEvidenceRecord({
+    schemaVersion: 'sciforge.computer-use.diagnostic-replay-bundle.v1',
+    ref: replayFrameRef,
+    frames: [
+      compactEvidenceRecord({
+        screenId,
+        screenshotRef: replayFrameRef,
+        sourceEvidenceRefs: uniqueStrings([afterRef, finalVisibleRef]),
+        cursorOverlayRefs: [params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF)],
+        ...commonDiagnosticFlags,
+      }),
+    ],
+    cursorOverlayRefs: [params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF)],
+    leaseOwnerRefs: [executorLease.ref],
+    beforeEvidenceRefs: [beforeRef],
+    afterEvidenceRefs: [replayFrameRef],
+    evidenceIndexRefs,
+    ...commonDiagnosticFlags,
+  });
+  const virtualDisplayGroup = {
+    schemaVersion: 'sciforge.computer-use.diagnostic-display-group.v1',
+    displayGroupId,
+    ref: params.ref('directory-listing.json'),
+    currentBundleRef: params.runDirRef,
+    screens: [
+      compactEvidenceRecord({
+        screenId,
+        windowId,
+        ref: replayFrameRef,
+        screenRef: replayFrameRef,
+        displayGroupId,
+        evidenceRefs: uniqueStrings([beforeRef, afterRef, replayFrameRef]),
+        ...commonDiagnosticFlags,
+      }),
+    ],
+    windows: [
+      {
+        windowId,
+        screenId,
+        ref: params.ref('gui-present.json'),
+        evidenceRefs: uniqueStrings([params.ref('gui-present.json'), replayFrameRef]),
+        ...commonDiagnosticFlags,
+      },
+    ],
+    ...commonDiagnosticFlags,
+  };
+  const actorCursorProvenance = [
+    {
+      actorId,
+      cursorId,
+      screenId,
+      ref: params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      actorCursorLogRef: params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      displayGroupId,
+      ...commonDiagnosticFlags,
+    },
+  ];
+  const productPathClassification = {
+    schemaVersion: 'sciforge.computer-use.product-path-classification.v1',
+    tier: 'package-diagnostic',
+    entrypoint: 'runtime-codex-native-route/package-bridge',
+    hops: ['runtime-codex-native-route', 'workspace-runtime', 'computer-use-package-bridge', 'ts-host-port-loop'],
+    appServerRunRef: params.ref('tui-host-run-task-chain.json'),
+    sciforgeComputerUseRunTaskRef: params.ref('tui-host-run-task-chain.json'),
+    currentBundleRef: params.runDirRef,
+    currentBundleOnly: true,
+    evidenceIndexRefs,
+    ...commonDiagnosticFlags,
+  };
+  const evidenceLedger = {
+    schemaVersion: 'sciforge.computer-use.diagnostic-evidence-ledger.v1',
+    currentBundleRef: params.runDirRef,
+    evidenceIndexRefs,
+    displayGroupRefs: [virtualDisplayGroup.ref],
+    screenRefs: [replayFrameRef],
+    actionCausalityRefs: [params.ref('cu-user-acceptance-input.json')],
+    replayRefs: [replayFrameRef],
+    refs: uniqueStrings([
+      params.ref('computer-use-request.json'),
+      params.ref('host-ports.json'),
+      params.ref('tool-payload.json'),
+      params.ref('tui-host-run-task-chain.json'),
+      params.ref('gui-present.json'),
+      params.ref(CU_NEXT_CANONICAL_COMPLETION_EVIDENCE_REF),
+      params.finalArtifactRef,
+      beforeRef,
+      afterRef,
+      finalVisibleRef,
+      ...focusCropRefs,
+      ...groundingRefs,
+      ...evidenceIndexRefs,
+    ].filter((ref): ref is string => Boolean(ref))),
+    ...commonDiagnosticFlags,
+  };
+  return {
+    actorCursorProvenance,
+    actionCausality,
+    actorId,
+    cursorId,
+    displayGroupId,
+    evidenceLedger,
+    executorLease,
+    guiPresentDisplayedRefs: uniqueStrings([replayFrameRef].filter((ref): ref is string => Boolean(ref))),
+    productPathClassification,
+    replayBundle,
+    screenId,
+    virtualDisplayGroup,
   };
 }
 
@@ -1417,6 +1665,26 @@ async function writeJson(path: string, value: unknown) {
 function finalWindowScreenshotRef(refs: Array<{ id: string; path: string }>) {
   return [...refs].reverse().find((ref) => !ref.id.includes('-focus-') && !ref.path.includes('-focus-'))?.path
     ?? refs.at(-1)?.path;
+}
+
+function currentRunFinalVisibleScreenshotRef(runDir: string, runDirRef: string) {
+  const candidates = [
+    'final-visible.png',
+    'final-visible.jpg',
+    'final-visible.jpeg',
+    'final-visible.webp',
+  ];
+  for (const candidate of candidates) {
+    const path = resolve(runDir, candidate);
+    if (!isPathInside(runDir, path)) continue;
+    try {
+      const info = lstatSync(path);
+      if (info.isFile() && !info.isSymbolicLink()) return `${runDirRef}/${candidate}`;
+    } catch {
+      // Optional final-visible sidecar is best-effort; completion evidence refs remain authoritative.
+    }
+  }
+  return undefined;
 }
 
 function recordAt(value: unknown, key: string) {

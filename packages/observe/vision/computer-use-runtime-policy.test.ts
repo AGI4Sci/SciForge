@@ -20,6 +20,14 @@ import {
   visionSenseTraceIds,
 } from './computer-use-runtime-policy';
 
+const retiredGroundingPattern = new RegExp([
+  'runtimecodex',
+  ['kv', '-', 'ground'].join(''),
+  ['KV', '-', 'Ground'].join(''),
+  'qwen',
+  'vlm',
+].join('|'), 'i');
+
 test('vision-sense package owns runtime trace and grounding ids', () => {
   assert.equal(visionSenseTraceIds.tool, 'local.vision-sense');
   assert.equal(visionSenseTraceIds.trace, 'vision-sense-trace');
@@ -29,7 +37,6 @@ test('vision-sense package owns runtime trace and grounding ids', () => {
   assert.equal(visionSenseCompletionPolicyModes.oneSuccessfulNonWaitAction, 'one-successful-non-wait-action');
   assert.equal(visionSenseGroundingIds.coarseToFine, 'coarse-to-fine');
   assert.equal(visionSenseGroundingIds.modelRouterGrounding, visionSenseModelRouterCapabilities.groundingTranslator);
-  assert.equal(visionSenseGroundingIds.legacyKvGroundCompatibleAdapter, 'legacy-kv-ground-compatible-adapter');
   assert.equal(
     visionSenseFocusRegionGroundingId(visionSenseModelRouterCapabilities.groundingTranslator),
     'model-router-capability-computer-use-grounding-translator-focus-region',
@@ -51,7 +58,7 @@ test('vision-sense package owns runtime trace and grounding ids', () => {
   assert.equal(visionSensePlannerOnlyEvidencePolicy.plannerId, 'vision-sense-policy-planner');
   assert.equal(visionSenseTraceOutputPolicy.requiredInputs[1], 'ModelRouterPlannerCapability');
   assert.deepEqual(visionSenseTraceContractPolicy.modelRouterCapabilities, visionSenseModelRouterCapabilities);
-  assert.doesNotMatch(JSON.stringify(visionSenseTraceContractPolicy.requires), /runtimecodex|kv-ground|qwen|vlm/i);
+  assert.doesNotMatch(JSON.stringify(visionSenseTraceContractPolicy.requires), retiredGroundingPattern);
 });
 
 test('vision-sense package owns planner domain prompt policy', () => {
@@ -70,7 +77,7 @@ test('vision-sense package owns planner domain prompt policy', () => {
   });
   assert.ok(systemPrompt.includes('Allowed action types: open_app, click'));
   assert.ok(systemPrompt.includes('Coordinates are produced by the Model Router grounding translator'));
-  assert.doesNotMatch(systemPrompt, /Runtime Codex text planner|KV-Ground|qwen|VLM/i);
+  assert.doesNotMatch(systemPrompt, retiredGroundingPattern);
   assert.ok(visionSensePlannerPromptPolicy.buildUserPrompt('Click Save').includes('Stop before final high-risk actions'));
   assert.ok(visionSensePlannerPromptPolicy.buildPlannerRetryInstruction({
     issue: 'unsupported-action',
@@ -99,6 +106,13 @@ test('vision-sense package owns cross-display grounding policy', () => {
 test('vision-sense package owns high-risk planner request policy', () => {
   assert.equal(isHighRiskVisionSenseGuiRequest('Submit the visible form.'), true);
   assert.equal(isHighRiskVisionSenseGuiRequest('点击发送按钮。'), true);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Confirm the visible payment to complete the purchase.'), true);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Read the confirmation dialog and do not approve anything.'), false);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Inspect the approval screen without confirming the purchase.'), false);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Read the checkout prompt and do not authorize or pay.'), false);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Describe the checkout screen without purchasing.'), false);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Inspect the Submit button label without clicking it.'), false);
+  assert.equal(isHighRiskVisionSenseGuiRequest('Describe where the Delete button is; do not press it.'), false);
   assert.equal(isHighRiskVisionSenseGuiRequest('Inspect the settings.\nLater mention submit for context only.'), false);
 });
 

@@ -12,7 +12,7 @@ import {
   selectedCapabilityForRegistryEntry,
 } from './provider-runtime-registry.js';
 import { workspaceCodeTaskPromptPolicy } from '@sciforge-ui/runtime-contract/generated-work-policy';
-import { AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE } from '../../../packages/skills/runtime-policy';
+import { AGENTSERVER_SUPPLEMENTAL_GENERATION_EVENT_TYPE } from '../../../packages/skills/runtime-policy.js';
 
 type RunAgentServerGeneratedTask = (
   request: GatewayRequest,

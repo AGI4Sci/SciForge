@@ -1,5 +1,5 @@
 export const allowedActionTypes = new Set(['open_app', 'click', 'double_click', 'drag', 'type_text', 'press_key', 'hotkey', 'scroll', 'wait']);
-export const requiredPipeline = ['WindowTarget', 'RuntimeCodexPlanner', 'Grounder', 'GuiExecutor', 'Verifier', 'vision-trace'];
+export const requiredPipeline = ['WindowTarget', 'RuntimeCodexPlanner', 'GroundingTranslator', 'GuiExecutor', 'Verifier', 'vision-trace'];
 export const requiredTraceMetadata = [
   'windowTarget',
   'window screenshot refs',
@@ -202,6 +202,7 @@ export interface ComputerUseLongMatrixRunResult {
   scenarioIds: string[];
   passedScenarioIds: string[];
   repairNeededScenarioIds: string[];
+  repairManifestPath?: string;
   executionPlan?: {
     mode: 'parallel-analysis' | 'serialized-real-gui';
     maxConcurrency: number;
@@ -219,6 +220,30 @@ export interface ComputerUseLongMatrixRunResult {
     repairDiagnostics?: ComputerUseLongRepairDiagnostics;
     nextRepairFocus?: string[];
   }>;
+}
+
+export interface ComputerUseLongMatrixRepairManifest {
+  schemaVersion: 'sciforge.computer-use-long.repair-manifest.v1';
+  taskId: 'T084';
+  matrixId: string;
+  status: 'repair-needed';
+  scenarioIds: string[];
+  repairNeededScenarioIds: string[];
+  preflightReportPath?: string;
+  failedPreflightChecks: Array<{
+    id: string;
+    category: string;
+    message: string;
+    repairAction?: string;
+  }>;
+  scenarioRepairs: Array<{
+    scenarioId: string;
+    manifestPath?: string;
+    summaryPath?: string;
+    issues: string[];
+    nextRepairFocus: string[];
+  }>;
+  nextRepairFocus: string[];
 }
 
 export interface ComputerUseLongMatrixReport {

@@ -11,6 +11,8 @@ import {
   type CodexAgentHostRuntimeTruthResolver,
 } from './agent-host-turn-loop.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
+import { sanitizeCompletionEvidencePolicy } from '../computer-use/completion-evidence-policy.js';
+import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import {
   CODEX_RUNTIME_STREAM_PATH,
   CODEX_RUNTIME_WEBSOCKET_PATH,
@@ -191,6 +193,7 @@ async function runCodexRuntimeTurn(
   if (realtimeSession.eventTransport !== output.expectedTransport) {
     throw new Error(`Runtime Codex realtime session eventTransport must be ${output.expectedTransport} for this endpoint.`);
   }
+  const agentHostInput = agentHostInputForRuntimeTurn(body, commandText);
   const streamStartedAt = Date.now();
   let lastRuntimeEventAt = streamStartedAt;
   output.emit('realtime_session', realtimeSession);
@@ -205,7 +208,11 @@ async function runCodexRuntimeTurn(
     }));
   }, CODEX_RUNTIME_HEARTBEAT_MS);
   try {
+    const explicitRuntimeIntent = runtimeHostIntent(body.runtimeIntent);
+    const runtimeIntent = explicitRuntimeIntent ?? runtimeHostIntentFromCommandText(commandText);
+    const explicitComputerUseNativeRouteIntent = explicitRuntimeIntent?.kind === 'computer-use-native-route';
     const agentHostRuntimeTruth = await resolveAgentHostRuntimeTruthForTurn(body, {
+      agentHostInput,
       commandText,
       workspacePath,
       commandId,
@@ -214,39 +221,43 @@ async function runCodexRuntimeTurn(
       abortSignal,
       resolver: options.agentHostRuntimeTruthResolver,
     });
-    const agentHostTurnLoopResult = await evaluateCodexAgentHostTurnLoop({
-      input: body.agentHostInput,
-      commandText,
-      workspacePath,
-      commandId,
-      attemptId,
-      auditMetadata: body.auditMetadata,
-      runtimeTruth: agentHostRuntimeTruth,
-      runtimeTruthRefresh: options.agentHostRuntimeTruthResolver
-        ? ({ step, previousResult }) => resolveAgentHostRuntimeTruthForTurn(body, {
-          commandText,
-          workspacePath,
-          commandId,
-          attemptId,
-          auditMetadata: {
-            source: 'computer-use-act-loop-refresh',
-            step,
-            previousEvidenceRefs: previousResult?.evidenceRefs?.slice(0, 12),
-          },
-          abortSignal,
-          resolver: options.agentHostRuntimeTruthResolver,
-        })
-        : undefined,
-      computerUseActMaterializer: options.computerUseActMaterializer,
-      abortSignal,
-    });
+    const agentHostTurnLoopResult = explicitComputerUseNativeRouteIntent
+      ? undefined
+      : await evaluateCodexAgentHostTurnLoop({
+        input: agentHostInput,
+        commandText,
+        workspacePath,
+        commandId,
+        attemptId,
+        auditMetadata: body.auditMetadata,
+        runtimeTruth: agentHostRuntimeTruth,
+        runtimeTruthRefresh: options.agentHostRuntimeTruthResolver
+          ? ({ step, previousResult }) => resolveAgentHostRuntimeTruthForTurn(body, {
+            agentHostInput,
+            commandText,
+            workspacePath,
+            commandId,
+            attemptId,
+            auditMetadata: {
+              source: 'computer-use-act-loop-refresh',
+              step,
+              previousEvidenceRefs: previousResult?.evidenceRefs?.slice(0, 12),
+            },
+            abortSignal,
+            resolver: options.agentHostRuntimeTruthResolver,
+          })
+          : undefined,
+        computerUseActMaterializer: options.computerUseActMaterializer,
+        abortSignal,
+      });
     if (agentHostTurnLoopResult) {
       lastRuntimeEventAt = Date.now();
       output.emit('agent_host_turn_loop', agentHostTurnLoopResult.event);
       output.emit('done', agentHostTurnLoopResult.result);
       return;
     }
-    const agentHostGrounding = createCodexAgentHostGroundingSnapshot(body.agentHostInput, { runtimeTruth: agentHostRuntimeTruth });
+    const agentHostGrounding = createCodexAgentHostGroundingSnapshot(agentHostInput, { runtimeTruth: agentHostRuntimeTruth });
+    const approvalMetadata = sanitizeCodexRuntimeApprovalMetadata(body);
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,
@@ -255,15 +266,15 @@ async function runCodexRuntimeTurn(
       profile: stringField(body.profile),
       codexSessionId: realtimeSession.codexSessionId ?? stringField(body.codexSessionId) ?? stringField(body.nativeSessionId),
       allowOpenAiRuntime: body.allowOpenAiRuntime === true,
-      runtimeIntent: runtimeHostIntent(body.runtimeIntent),
+      runtimeIntent,
       guiExtension: isRecord(body.guiExtension)
         ? {
           enabled: body.guiExtension.enabled !== false,
           statePath: stringField(body.guiExtension.statePath),
         }
         : undefined,
-      humanApproval: isRecord(body.humanApproval) ? body.humanApproval : undefined,
-      uiState: isRecord(body.uiState) ? body.uiState : undefined,
+      humanApproval: approvalMetadata.humanApproval,
+      uiState: approvalMetadata.uiState,
       declaredIntents: declaredIntentsFromAuditMetadata(body.auditMetadata),
       agentHostGrounding,
       agentHostRuntimeTruth,
@@ -289,6 +300,7 @@ async function runCodexRuntimeTurn(
 async function resolveAgentHostRuntimeTruthForTurn(
   body: Record<string, unknown>,
   input: {
+    agentHostInput: unknown;
     commandText: string;
     workspacePath: string;
     commandId?: string;
@@ -301,7 +313,7 @@ async function resolveAgentHostRuntimeTruthForTurn(
   if (!input.resolver) return undefined;
   try {
     return await resolveCodexAgentHostRuntimeTruth({
-      input: body.agentHostInput,
+      input: input.agentHostInput,
       commandText: input.commandText,
       workspacePath: input.workspacePath,
       commandId: input.commandId,
@@ -324,6 +336,57 @@ async function resolveAgentHostRuntimeTruthForTurn(
       refs: ['runtime-truth:resolver-error'],
     };
   }
+}
+
+function agentHostInputForRuntimeTurn(body: Record<string, unknown>, commandText: string): unknown {
+  const commandIntentText = userIntentTextFromCommandText(commandText).slice(0, 2_000);
+  if (isRecord(body.agentHostInput) && body.agentHostInput.schemaVersion === 'sciforge.codex-agent-host-input.v1') {
+    return {
+      ...body.agentHostInput,
+      intentText: commandIntentTextFromAskCommand(commandText)?.slice(0, 2_000)
+        ?? stringField(body.agentHostInput.intentText)
+        ?? commandIntentText,
+    };
+  }
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'runtime-codex-server-fallback',
+    intentText: commandIntentText,
+    authorizationProfileId: 'high-autonomy',
+    policyOwner: 'codex-agent-host-runtime',
+    refs: [],
+  };
+}
+
+function userIntentTextFromCommandText(commandText: string): string {
+  return commandIntentTextFromAskCommand(commandText) ?? commandText.trim();
+}
+
+function commandIntentTextFromAskCommand(commandText: string): string | undefined {
+  const text = commandText.replace(/\s+/g, ' ').trim();
+  if (!/^ask(?:\s|$)/i.test(text)) return undefined;
+  const quotedSegments = quotedCommandSegments(text).filter((segment) => !looksLikeReferenceSegment(segment));
+  return quotedSegments.at(-1);
+}
+
+function quotedCommandSegments(text: string): string[] {
+  const segments: string[] = [];
+  const pattern = /"((?:\\"|[^"])*)"|'((?:\\'|[^'])*)'|“([^”]*)”/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text))) {
+    const raw = match[1] ?? match[2] ?? match[3] ?? '';
+    const unescaped = raw.replace(/\\"/g, '"').replace(/\\'/g, "'");
+    const compact = unescaped.replace(/\s+/g, ' ').trim();
+    if (compact) segments.push(compact);
+  }
+  return segments;
+}
+
+function looksLikeReferenceSegment(value: string): boolean {
+  return /^(?:artifact|message|run|session|browser-host-session|runtime-health|gui\.present):/i.test(value)
+    || /^\.?\.?\/?\.sciforge\//i.test(value)
+    || /^\/(?:Applications|Users|Volumes|private|tmp|var)\//i.test(value)
+    || /^https?:\/\//i.test(value);
 }
 
 interface CodexRuntimeControlState {
@@ -554,6 +617,9 @@ const CODEX_RUNTIME_HOST_INTENT_ALLOWED_KEYS = new Set([
   'schemaVersion',
   'kind',
   'source',
+  'completionEvidencePolicy',
+  'computerUseNext',
+  'computerUseLong',
 ]);
 
 function normalizeRealtimeSessionEnvelope(
@@ -596,6 +662,13 @@ const CODEX_RUNTIME_FORBIDDEN_NESTED_KEYS = new Set([
   'transportAgentContext',
 ]);
 
+const CODEX_RUNTIME_UNSAFE_APPROVAL_KEY_PATTERN = /(?:sidecar|^approvalRequest$|^highRiskAction$|raw|provider.*payload|^payload$|base64|api[_-]?key|secret|password|(?:access|auth)?[_-]?token|authorization|credential|screenshot|bitmap|blob|data[_-]?url|(?:^|(?:source|target|raw))url$|uri$|href$)/i;
+const CODEX_RUNTIME_UNSAFE_APPROVAL_STRING_PATTERN = /(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|providerPayload|data:[^,\s]+;base64,|https?:\/\/)/i;
+const CODEX_RUNTIME_BASE64ISH_APPROVAL_STRING_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
+const CODEX_RUNTIME_APPROVAL_MAX_DEPTH = 8;
+const CODEX_RUNTIME_APPROVAL_MAX_ARRAY_ITEMS = 32;
+const CODEX_RUNTIME_APPROVAL_MAX_STRING_LENGTH = 500;
+
 function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Record<string, unknown> {
   if (!isRecord(body)) throw new Error('Runtime Codex request body must be an object');
   const extraKeys = Object.keys(body).filter((key) => !CODEX_RUNTIME_REQUEST_ALLOWED_KEYS.has(key));
@@ -622,6 +695,74 @@ function assertCodexRuntimeRequestBoundary(body: unknown): asserts body is Recor
   }
 }
 
+function sanitizeCodexRuntimeApprovalMetadata(body: Record<string, unknown>): {
+  humanApproval?: Record<string, unknown>;
+  uiState?: Record<string, unknown>;
+} {
+  return {
+    humanApproval: sanitizeCodexRuntimeHumanApproval(body.humanApproval),
+    uiState: sanitizeCodexRuntimeApprovalUiState(body.uiState),
+  };
+}
+
+function sanitizeCodexRuntimeHumanApproval(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    approvalRef: safeRuntimeApprovalString(value.approvalRef),
+    decision: safeRuntimeApprovalString(value.decision),
+    source: safeRuntimeApprovalString(value.source),
+    approvalProvenance: sanitizeRuntimeApprovalValue(value.approvalProvenance),
+  });
+}
+
+function sanitizeCodexRuntimeApprovalUiState(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    schemaVersion: safeRuntimeApprovalString(value.schemaVersion),
+    approvalRef: safeRuntimeApprovalString(value.approvalRef),
+    computerUseApprovalRef: safeRuntimeApprovalString(value.computerUseApprovalRef),
+    terminalEquivalentText: typeof value.terminalEquivalentText === 'boolean' ? value.terminalEquivalentText : undefined,
+    approvalProvenance: sanitizeRuntimeApprovalValue(value.approvalProvenance),
+  });
+}
+
+function sanitizeRuntimeApprovalValue(value: unknown, depth = 0): unknown {
+  if (depth > CODEX_RUNTIME_APPROVAL_MAX_DEPTH) return undefined;
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return safeRuntimeApprovalString(value);
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const items = value
+      .slice(0, CODEX_RUNTIME_APPROVAL_MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeRuntimeApprovalValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+    return items.length ? items : undefined;
+  }
+  if (!isRecord(value)) return undefined;
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (!safeRuntimeApprovalKey(key)) continue;
+    const sanitized = sanitizeRuntimeApprovalValue(entry, depth + 1);
+    if (sanitized !== undefined) out[key] = sanitized;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+function safeRuntimeApprovalKey(key: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9_:-]{0,80}$/.test(key)
+    && !CODEX_RUNTIME_UNSAFE_APPROVAL_KEY_PATTERN.test(key);
+}
+
+function safeRuntimeApprovalString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > CODEX_RUNTIME_APPROVAL_MAX_STRING_LENGTH) return undefined;
+  if (CODEX_RUNTIME_UNSAFE_APPROVAL_STRING_PATTERN.test(text)) return undefined;
+  if (CODEX_RUNTIME_BASE64ISH_APPROVAL_STRING_PATTERN.test(text)) return undefined;
+  return text;
+}
+
 function runtimeHostIntent(value: unknown): AgentCliStartTurnInput['runtimeIntent'] | undefined {
   if (!isRecord(value)) return undefined;
   const extra = Object.keys(value).filter((key) => !CODEX_RUNTIME_HOST_INTENT_ALLOWED_KEYS.has(key));
@@ -629,11 +770,72 @@ function runtimeHostIntent(value: unknown): AgentCliStartTurnInput['runtimeInten
   if (value.schemaVersion !== 'sciforge.runtime-codex.host-intent.v1') return undefined;
   if (value.kind !== 'computer-use-native-route') return undefined;
   if (value.source !== 'host-owned') return undefined;
+  const completionEvidencePolicy = sanitizeCompletionEvidencePolicy(value.completionEvidencePolicy);
+  const computerUseNext = sanitizeComputerUseNextBinding(value.computerUseNext);
+  const computerUseLong = sanitizeComputerUseLongBinding(value.computerUseLong);
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
+    ...(computerUseNext ? { computerUseNext } : {}),
+    ...(computerUseLong ? { computerUseLong } : {}),
+  };
+}
+
+function runtimeHostIntentFromCommandText(commandText: string): AgentCliStartTurnInput['runtimeIntent'] | undefined {
+  if (!isComputerUseNativeRouteCommand(commandText)) return undefined;
   return {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
     kind: 'computer-use-native-route',
     source: 'host-owned',
   };
+}
+
+function sanitizeComputerUseNextBinding(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    taskId: stringField(value.taskId),
+    scenarioId: stringField(value.scenarioId),
+    title: stringField(value.title),
+    requirements: stringListField(value.requirements),
+    safetyBoundary: booleanRecord(value.safetyBoundary),
+  });
+}
+
+function sanitizeComputerUseLongBinding(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    taskId: stringField(value.taskId),
+    scenarioId: stringField(value.scenarioId),
+    title: stringField(value.title),
+    requirements: stringListField(value.requirements),
+    safetyBoundary: booleanRecord(value.safetyBoundary),
+  });
+}
+
+function stringListField(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))];
+  return out.length ? out : undefined;
+}
+
+function booleanRecord(value: unknown): Record<string, boolean> | undefined {
+  if (!isRecord(value)) return undefined;
+  const out = Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => (
+    /^[a-zA-Z][a-zA-Z0-9_]*$/.test(entry[0])
+    && typeof entry[1] === 'boolean'
+  )));
+  return Object.keys(out).length ? out : undefined;
+}
+
+function nonEmptyRecord(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out = Object.fromEntries(Object.entries(value).filter(([, item]) => {
+    if (item === undefined || item === null) return false;
+    if (Array.isArray(item) && item.length === 0) return false;
+    return true;
+  }));
+  return Object.keys(out).length ? out : undefined;
 }
 
 function declaredIntentsFromAuditMetadata(value: unknown): AgentCliStartTurnInput['declaredIntents'] | undefined {

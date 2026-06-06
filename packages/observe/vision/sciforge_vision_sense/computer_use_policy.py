@@ -31,13 +31,35 @@ HIGH_RISK_GUI_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+HIGH_RISK_SEMANTIC_ACTION_PATTERN = re.compile(
+    r"\bconfirm\b|\bapprove\b|\bfinali[sz]e\b|complete\s+(?:the\s+)?(?:payment|purchase|order|checkout|transaction)|"
+    r"\bpurchas(?:e|ing)\b|\bcheckout\b|wire transfer|external authorization|grant access|share externally|\bupload\b|\boverwrite\b|"
+    r"permanently remove|确认|批准|完成支付|完成购买|下单|结账|转账|外发|上传|覆盖|永久删除",
+    re.IGNORECASE,
+)
+
+OBSERVATIONAL_SAFETY_BOUNDARY_PATTERN = re.compile(
+    r"inspect|describe|summari[sz]e|identify|locate|find|look at|read|explain|mention|label|context|"
+    r"without\s+(?:clicking|pressing|submitting|sending|deleting|authorizing|paying|confirming|approving|purchasing|checking\s*out|uploading|overwriting)|"
+    r"do not\s+(?:click|press|submit|send|delete|authorize|pay|confirm|approve|purchase|check\s*out|upload|overwrite)|"
+    r"检查|描述|总结|识别|定位|查看|阅读|不要|不点击|不按|不提交|不发送|不删除|不授权|不支付|不确认|不批准|不购买|不结账|不上传|不覆盖",
+    re.IGNORECASE,
+)
+
+DIRECT_HIGH_RISK_ACTION_START_PATTERN = re.compile(
+    r"^\s*(?:submit|send|delete|authorize|pay|publish|click|press|confirm|approve|finali[sz]e|"
+    r"complete|purchase|checkout|upload|overwrite|提交|发送|删除|授权|支付|发布|点击|按|"
+    r"确认|批准|完成支付|完成购买|下单|结账|上传|覆盖)",
+    re.IGNORECASE,
+)
+
 NEGATED_HIGH_RISK_BOUNDARY_PATTERN = re.compile(
-    r"do not\s+(?:click\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|"
-    r"don't\s+(?:click\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|"
-    r"without\s+(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload)|"
-    r"不要[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)|"
-    r"不能[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)|"
-    r"不(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发)",
+    r"do not\s+(?:click\s+|press\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload|confirm|approve|purchase|check\s*out)|"
+    r"don't\s+(?:click\s+|press\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload|confirm|approve|purchase|check\s*out)|"
+    r"without\s+(?:clicking|pressing|submitting|saving|sending|deleting|removing|overwriting|authorizing|paying|publishing|uploading|confirming|approving|purchasing|checking\s*out)|"
+    r"不要[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)|"
+    r"不能[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)|"
+    r"不(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)",
     re.IGNORECASE,
 )
 
@@ -99,6 +121,17 @@ class MatrixExecutionPlan:
     maxConcurrency: int
     realGuiSerialized: bool
     reason: str
+
+
+@dataclass(frozen=True)
+class SemanticSignalDecision:
+    schemaVersion: str
+    signal: str
+    riskLevel: str
+    final: bool
+    confidence: float
+    reason: str
+    detectors: dict[str, bool]
 
 
 def is_planner_only_evidence_task(text: str) -> bool:
@@ -166,7 +199,63 @@ def is_no_visible_effect_step(step: Mapping[str, Any]) -> bool:
 
 
 def is_high_risk_gui_request(text: str) -> bool:
-    return bool(HIGH_RISK_GUI_PATTERN.search(_primary_task_text(text)))
+    return assess_high_risk_gui_request(text).riskLevel == "high"
+
+
+def assess_high_risk_gui_request(text: str) -> SemanticSignalDecision:
+    primary = _primary_task_text(text)
+    lexical_high_risk = bool(HIGH_RISK_GUI_PATTERN.search(primary))
+    semantic_high_risk_action = bool(HIGH_RISK_SEMANTIC_ACTION_PATTERN.search(primary))
+    observational_boundary = bool(OBSERVATIONAL_SAFETY_BOUNDARY_PATTERN.search(primary))
+    negated_high_risk_boundary = bool(NEGATED_HIGH_RISK_BOUNDARY_PATTERN.search(primary))
+    high_risk_signal = lexical_high_risk or semantic_high_risk_action
+    collision = (
+        high_risk_signal
+        and observational_boundary
+        and not DIRECT_HIGH_RISK_ACTION_START_PATTERN.search(primary)
+        and (not semantic_high_risk_action or negated_high_risk_boundary)
+    )
+
+    # Final safety risk decisions use this semantic signal; regex matches above are bounded evidence only.
+    if not high_risk_signal or collision:
+        return SemanticSignalDecision(
+            schemaVersion="sciforge.vision-sense.semantic-signal-decision.v1",
+            signal="low-risk-or-observation-request",
+            riskLevel="low",
+            final=True,
+            confidence=0.78 if collision else 0.72,
+            reason=(
+                "High-risk control words appear in an observation or negated boundary, not as the requested GUI action."
+                if collision
+                else "No high-risk GUI action semantic signal was detected in the primary task line."
+            ),
+            detectors={
+                "lexicalHighRisk": lexical_high_risk,
+                "semanticHighRiskAction": semantic_high_risk_action,
+                "observationalBoundary": observational_boundary,
+                "negatedHighRiskBoundary": negated_high_risk_boundary,
+                "collision": collision,
+            },
+        )
+    return SemanticSignalDecision(
+        schemaVersion="sciforge.vision-sense.semantic-signal-decision.v1",
+        signal="high-risk-gui-request",
+        riskLevel="high",
+        final=True,
+        confidence=0.9 if semantic_high_risk_action else 0.82,
+        reason=(
+            "Primary task line asks for a high-consequence GUI action."
+            if semantic_high_risk_action
+            else "Primary task line directly asks for a high-risk GUI control action."
+        ),
+        detectors={
+            "lexicalHighRisk": lexical_high_risk,
+            "semanticHighRiskAction": semantic_high_risk_action,
+            "observationalBoundary": observational_boundary,
+            "negatedHighRiskBoundary": negated_high_risk_boundary,
+            "collision": False,
+        },
+    )
 
 
 def has_negated_high_risk_boundary(text: str) -> bool:
@@ -175,6 +264,7 @@ def has_negated_high_risk_boundary(text: str) -> bool:
 
 def is_low_risk_settings_form_task(task: str) -> bool:
     primary = _primary_task_text(task)
+    # Low-risk routing is a semantic boundary; lexical detectors may only supply bounded evidence.
     if is_high_risk_gui_request(primary) and not has_negated_high_risk_boundary(primary):
         return False
     return bool(SETTINGS_FORM_INTENT_PATTERN.search(primary) and LOW_RISK_BOUNDARY_PATTERN.search(primary))
@@ -182,6 +272,7 @@ def is_low_risk_settings_form_task(task: str) -> bool:
 
 def is_low_risk_file_manager_task(task: str) -> bool:
     primary = _primary_task_text(task)
+    # Low-risk routing is a semantic boundary; lexical detectors may only supply bounded evidence.
     if is_high_risk_gui_request(primary) and not has_negated_high_risk_boundary(primary):
         return False
     destructive = DESTRUCTIVE_FILE_PATTERN.search(primary)
@@ -190,6 +281,7 @@ def is_low_risk_file_manager_task(task: str) -> bool:
 
 def is_low_risk_creation_task(task: str) -> bool:
     primary = _primary_task_text(task)
+    # Low-risk routing is a semantic boundary; lexical detectors may only supply bounded evidence.
     if is_high_risk_gui_request(primary) and not has_negated_high_risk_boundary(primary):
         return False
     return bool(CREATION_INTENT_PATTERN.search(primary) and VISIBLE_ARTIFACT_INTENT_PATTERN.search(primary))
@@ -197,6 +289,7 @@ def is_low_risk_creation_task(task: str) -> bool:
 
 def is_low_risk_validation_recovery_task(task: str) -> bool:
     primary = _primary_task_text(task)
+    # Low-risk routing is a semantic boundary; lexical detectors may only supply bounded evidence.
     if is_high_risk_gui_request(primary) and not has_negated_high_risk_boundary(primary):
         return False
     return bool(VALIDATION_RECOVERY_INTENT_PATTERN.search(primary) and VALIDATION_LOW_RISK_BOUNDARY_PATTERN.search(primary))
@@ -204,6 +297,7 @@ def is_low_risk_validation_recovery_task(task: str) -> bool:
 
 def is_low_risk_expected_failure_task(task: str) -> bool:
     primary = _primary_task_text(task)
+    # Low-risk routing is a semantic boundary; lexical detectors may only supply bounded evidence.
     if is_high_risk_gui_request(primary) and not has_negated_high_risk_boundary(primary):
         return False
     return bool(EXPECTED_FAILURE_INTENT_PATTERN.search(primary) and re.search(r"low[- ]?risk|低风险|failed-with-reason", primary, re.IGNORECASE))
@@ -458,6 +552,11 @@ ACTION_LEDGER_COMPLETION_REASONS = {
 
 
 def action_ledger_completion(task: str, steps: list[Mapping[str, Any]]) -> dict[str, Any]:
+    # Final completion truth must come from this structured ledger signal; regex detectors below are bounded evidence only.
+    return action_ledger_completion_signal(task, steps)
+
+
+def action_ledger_completion_signal(task: str, steps: list[Mapping[str, Any]]) -> dict[str, Any]:
     checks = [
         ("candidate-evidence-screening", should_complete_from_candidate_action_ledger),
         ("visible-artifact-creation", should_complete_from_creation_action_ledger),
@@ -469,8 +568,31 @@ def action_ledger_completion(task: str, steps: list[Mapping[str, Any]]) -> dict[
     ]
     for kind, check in checks:
         if check(task, steps):
-            return {"complete": True, "kind": kind, "reason": ACTION_LEDGER_COMPLETION_REASONS[kind]}
-    return {"complete": False}
+            semantic_signal = {
+                "signal": "action-ledger-completion",
+                "final": True,
+                "finalComplete": True,
+                "detectorKind": kind,
+                "evidenceStepCount": len(_done_gui_steps(steps, require_effect=True)),
+            }
+            return {
+                "schemaVersion": "sciforge.vision-sense.completion-semantic-signal.v1",
+                "complete": semantic_signal["finalComplete"],
+                "kind": kind,
+                "reason": ACTION_LEDGER_COMPLETION_REASONS[kind],
+                "semanticSignal": semantic_signal,
+            }
+    semantic_signal = {
+        "signal": "action-ledger-incomplete",
+        "final": True,
+        "finalComplete": False,
+        "evidenceStepCount": len(_done_gui_steps(steps, require_effect=True)),
+    }
+    return {
+        "schemaVersion": "sciforge.vision-sense.completion-semantic-signal.v1",
+        "complete": semantic_signal["finalComplete"],
+        "semanticSignal": semantic_signal,
+    }
 
 
 def visible_artifact_completion_gap(task: str, steps: list[Mapping[str, Any]]) -> str:

@@ -11,8 +11,8 @@ import {
   toolPackageOutputArtifactTypes,
   toolPackageUnavailableRepairHints,
 } from '../../packages/skills/capability-projection-policy.js';
-import { skillPackageManifests, type SkillPackageManifest } from '../../packages/skills';
-import { toolPackageManifests, type ToolPackageManifest } from '../../packages/skills/tool_skills';
+import { skillPackageManifests, type SkillPackageManifest } from '../../packages/skills/index.js';
+import { toolPackageManifests, type ToolPackageManifest } from '../../packages/skills/tool_skills/index.js';
 
 export function skillAndToolPackageCapabilityManifests(): CapabilityManifest[] {
   return [

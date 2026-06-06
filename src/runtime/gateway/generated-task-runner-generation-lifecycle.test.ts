@@ -11,7 +11,7 @@ import {
   resolveGeneratedTaskGenerationRetryLifecycle,
   type GeneratedTaskGenerationLifecycleDeps,
 } from './generated-task-runner-generation-lifecycle.js';
-import { setBrowserAutomationForTests, setPdfTextExtractionForTests } from '../../../packages/workers/web-worker/src/web-tools';
+import { setBrowserAutomationForTests, setPdfTextExtractionForTests } from '../../../packages/workers/web-worker/src/web-tools.js';
 
 const readyWebProviderRequest: GatewayRequest = {
   skillDomain: 'literature',

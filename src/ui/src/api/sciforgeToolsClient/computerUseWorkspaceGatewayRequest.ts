@@ -25,7 +25,7 @@ function uniqueRuntimeStringList(values: unknown[]) {
   return Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)));
 }
 
-function sanitizedCompletionEvidencePolicy(value: unknown): Record<string, unknown> | undefined {
+export function sanitizedCompletionEvidencePolicy(value: unknown): Record<string, unknown> | undefined {
   if (!isRecord(value) || value.schemaVersion !== COMPLETION_EVIDENCE_POLICY_SCHEMA) return undefined;
   const producers = Array.isArray(value.producers)
     ? value.producers.flatMap((producer) => {
@@ -45,6 +45,65 @@ function sanitizedCompletionEvidencePolicy(value: unknown): Record<string, unkno
     schemaVersion: COMPLETION_EVIDENCE_POLICY_SCHEMA,
     producers,
   };
+}
+
+export function sanitizedComputerUseTaskBindings(scenarioOverride: unknown): {
+  computerUseNext?: Record<string, unknown>;
+  computerUseLong?: Record<string, unknown>;
+} | undefined {
+  if (!isRecord(scenarioOverride)) return undefined;
+  const computerUseNext = sanitizedComputerUseNext(scenarioOverride.computerUseNext);
+  const computerUseLong = sanitizedComputerUseLong(scenarioOverride.computerUseLong);
+  if (!computerUseNext && !computerUseLong) return undefined;
+  return {
+    ...(computerUseNext ? { computerUseNext } : {}),
+    ...(computerUseLong ? { computerUseLong } : {}),
+  };
+}
+
+function sanitizedComputerUseNext(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const safetyBoundary = sanitizedBooleanRecord(value.safetyBoundary);
+  const out = compactRecord({
+    taskId: asString(value.taskId),
+    scenarioId: asString(value.scenarioId),
+    title: asString(value.title),
+    requirements: asStringArray(value.requirements),
+    ...(safetyBoundary ? { safetyBoundary } : {}),
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+
+function sanitizedComputerUseLong(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  const safetyBoundary = sanitizedBooleanRecord(value.safetyBoundary);
+  const out = compactRecord({
+    taskId: asString(value.taskId),
+    scenarioId: asString(value.scenarioId),
+    title: asString(value.title),
+    requirements: asStringArray(value.requirements),
+    ...(safetyBoundary ? { safetyBoundary } : {}),
+  });
+  return Object.keys(out).length ? out : undefined;
+}
+
+function sanitizedBooleanRecord(value: unknown): Record<string, boolean> | undefined {
+  if (!isRecord(value)) return undefined;
+  const out = Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, boolean] => (
+      /^[a-zA-Z][a-zA-Z0-9_]*$/.test(entry[0])
+      && typeof entry[1] === 'boolean'
+    )),
+  );
+  return Object.keys(out).length ? out : undefined;
+}
+
+function compactRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => {
+    if (item === undefined || item === null) return false;
+    if (Array.isArray(item) && item.length === 0) return false;
+    return true;
+  }));
 }
 
 export function computerUseTerminalEquivalentTextRequested(input: SendAgentMessageInput) {
@@ -72,6 +131,7 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
     ...(approvalProvenance ? { approvalProvenance } : {}),
   } : undefined;
   const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
+  const taskBindings = sanitizedComputerUseTaskBindings(scenario);
   const terminalEquivalentText = input.prompt.trim();
   return {
     schemaVersion: LEGACY_WORKSPACE_GATEWAY_SHIM_SCHEMA,
@@ -105,6 +165,7 @@ export function buildComputerUseWorkspaceGatewayRequest(input: SendAgentMessageI
       approvalRef,
       approvalProvenance,
       completionEvidencePolicy,
+      ...(taskBindings ?? {}),
       guiOwnsExecutor: false,
       guiOwnsExecutionRoute: false,
     },

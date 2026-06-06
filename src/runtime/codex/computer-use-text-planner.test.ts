@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from './agent-cli-adapter.js';
@@ -8,6 +9,17 @@ import {
   runComputerUseCodexTextPlanner,
   runComputerUseDirectChatTextPlannerFallback,
 } from './computer-use-text-planner.js';
+
+test('computer use text planner source exposes no direct provider fetch hook', () => {
+  const source = readFileSync(new URL('./computer-use-text-planner.ts', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /\bfetchImpl\b/);
+  assert.doesNotMatch(source, /\bfetch\s*\(/);
+  assert.doesNotMatch(
+    source,
+    /chat\/completions|\/v1\/chat|SCIFORGE_PROXY_UPSTREAM_BASE_URL|SCIFORGE_RUNTIME_BASE_URL|SCIFORGE_RUNTIME_API_KEY|SCIFORGE_RUNTIME_MODEL|OPENAI_API_KEY|ANTHROPIC_API_KEY/,
+  );
+});
 
 test('computer use text planner command is strict JSON-only and text-only', () => {
   const command = buildComputerUseTextPlannerCommand({
@@ -146,6 +158,33 @@ test('computer use text planner records terminal and raw-jsonl counts for empty 
   assert.equal(result.ok ? undefined : result.raw.events[2]?.rawEventType, 'turn.started');
 });
 
+test('computer use text planner ignores retry-shaped failed events when later planner JSON arrives', async () => {
+  const adapter = new FakePlannerAdapter([
+    { type: 'failed', status: 'failed', message: 'Reconnecting... 1/5' },
+    {
+      type: 'message',
+      status: 'completed',
+      text: JSON.stringify({
+        done: false,
+        reason: 'wait for visible state',
+        actions: [{ type: 'wait' }],
+      }),
+    },
+    { type: 'done', status: 'done', message: 'Runtime Codex completed successfully.', exitCode: 0, signal: null },
+  ]);
+
+  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+    workspace: '/tmp',
+    adapter,
+    commandId: 'codex-computer-use-plan-retry-then-json-test',
+  });
+
+  assert.equal(result.ok, true);
+  assert.match(result.ok ? result.text : '', /"type":"wait"/);
+  assert.equal(result.ok ? result.raw.diagnostics.sawFinalMessage : false, true);
+  assert.equal(result.ok ? result.raw.diagnostics.terminalEventCounts.failed : undefined, undefined);
+});
+
 test('computer use text planner marks observed aborts from cancelled terminal events', async () => {
   const adapter = new FakePlannerAdapter([
     { type: 'audit', status: 'raw-jsonl', raw: { type: 'thread.started', payload: { id: 'thread-abort' } } },
@@ -179,8 +218,7 @@ test('computer use text planner fails closed after Codex transport failure inste
     { type: 'audit', status: 'raw-jsonl', raw: { type: 'turn.started' } },
     { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
   ]);
-  let fetchCalled = false;
-  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+  const { result, fetchCalled } = await withFetchTrap(() => runComputerUseCodexTextPlanner(basePlannerInput(), {
     workspace: '/tmp',
     adapter,
     commandId: 'codex-computer-use-plan-fail-closed-test',
@@ -189,11 +227,7 @@ test('computer use text planner fails closed after Codex transport failure inste
       SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1/',
       SCIFORGE_RUNTIME_MODEL: 'private-upstream-model',
     },
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error('fetch must not be called after Runtime Codex transport failure');
-    },
-  });
+  }));
 
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.reason, /unexpected status 502 Bad Gateway/);
@@ -204,8 +238,7 @@ test('computer use text planner fails closed after Codex transport failure inste
 });
 
 test('computer use legacy direct chat fallback API is disabled even with provider config', async () => {
-  let fetchCalled = false;
-  const result = await runComputerUseDirectChatTextPlannerFallback(basePlannerInput(), {
+  const { result, fetchCalled } = await withFetchTrap(() => runComputerUseDirectChatTextPlannerFallback(basePlannerInput(), {
     workspace: '/tmp',
     commandId: 'codex-computer-use-plan-disabled-fallback-test',
     attemptId: 'attempt-disabled-fallback',
@@ -215,11 +248,7 @@ test('computer use legacy direct chat fallback API is disabled even with provide
       SCIFORGE_RUNTIME_MODEL: 'private-upstream-model',
       SCIFORGE_COMPUTER_USE_DIRECT_TEXT_PLANNER_RETRIES: '3',
     },
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error('fetch must not be called by disabled direct fallback');
-    },
-  }, 'Runtime Codex text planner transport timed out before returning a terminal event.');
+  }, 'Runtime Codex text planner transport timed out before returning a terminal event.'));
 
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.reason, /requires the registered Model Router provider\/capability path/);
@@ -251,17 +280,12 @@ test('computer use text planner keeps Codex failure when direct fallback config 
     { type: 'failed', status: 'failed', message: 'unexpected status 502 Bad Gateway', exitCode: 1, signal: null },
   ]);
 
-  let fetchCalled = false;
-  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+  const { result, fetchCalled } = await withFetchTrap(() => runComputerUseCodexTextPlanner(basePlannerInput(), {
     workspace: '/tmp',
     adapter,
     commandId: 'codex-computer-use-plan-no-fallback-test',
     env: {},
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error('fetch must not be called without fallback config');
-    },
-  });
+  }));
 
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.reason, /unexpected status 502 Bad Gateway/);
@@ -275,8 +299,7 @@ test('computer use text planner does not direct-fallback for non-transport plann
     { type: 'failed', status: 'failed', message: 'Planner returned invalid JSON object', exitCode: 1, signal: null },
   ]);
 
-  let fetchCalled = false;
-  const result = await runComputerUseCodexTextPlanner(basePlannerInput(), {
+  const { result, fetchCalled } = await withFetchTrap(() => runComputerUseCodexTextPlanner(basePlannerInput(), {
     workspace: '/tmp',
     adapter,
     commandId: 'codex-computer-use-plan-invalid-json-test',
@@ -285,11 +308,7 @@ test('computer use text planner does not direct-fallback for non-transport plann
       SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://provider.example/v1',
       SCIFORGE_RUNTIME_MODEL: 'bailian/deepseek-v4-flash',
     },
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error('fetch must not be called for non-transport planner failures');
-    },
-  });
+  }));
 
   assert.equal(result.ok, false);
   assert.match(result.ok ? '' : result.reason, /Planner returned invalid JSON object/);
@@ -306,6 +325,21 @@ function basePlannerInput() {
     desktopPlatform: 'darwin',
     maxStepsRemaining: 3,
   };
+}
+
+async function withFetchTrap<T>(run: () => Promise<T>): Promise<{ result: T; fetchCalled: boolean }> {
+  const originalFetch = globalThis.fetch;
+  let fetchCalled = false;
+  globalThis.fetch = (async () => {
+    fetchCalled = true;
+    throw new Error('computer use text planner must not call fetch directly');
+  }) as typeof fetch;
+  try {
+    const result = await run();
+    return { result, fetchCalled };
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 class FakePlannerAdapter implements AgentCliAdapter {

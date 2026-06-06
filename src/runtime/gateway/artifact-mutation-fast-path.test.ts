@@ -71,6 +71,52 @@ test('artifact mutation fast path yields to Computer Use provider requests', asy
   assert.equal(await readFile(join(workspace, 'report.md'), 'utf8'), '# Old Report\n');
 });
 
+test('artifact mutation fast path ignores keyword-only edit discussions without write intent', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-keyword-collision-'));
+  await writeFile(join(workspace, 'report.md'), '# Old Report\nBudget $120,000 for 12 months.\n', 'utf8');
+
+  const payload = await tryRunArtifactMutationFastPath({
+    skillDomain: 'knowledge',
+    workspacePath: workspace,
+    artifacts: [],
+    prompt: [
+      'For report.md, explain how an editor would update, rewrite, save, or replace markdown artifacts safely.',
+      'This is only a discussion of edit policy and should not write files or mutate the workspace.',
+      'Mention examples like budget 80,000 USD and duration 9 months, but do not apply them.',
+    ].join(' '),
+  });
+
+  assert.equal(payload, undefined);
+  assert.equal(await readFile(join(workspace, 'report.md'), 'utf8'), '# Old Report\nBudget $120,000 for 12 months.\n');
+});
+
+test('artifact mutation fast path requires explicit selected markdown ref and concrete write operation', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-artifact-semantic-write-'));
+  await mkdir(join(workspace, 'selected'), { recursive: true });
+  await writeFile(join(workspace, 'selected', 'report.md'), '# Report\nBudget $120,000 for 12 months.\n', 'utf8');
+
+  const payload = await tryRunArtifactMutationFastPath({
+    skillDomain: 'knowledge',
+    workspacePath: workspace,
+    artifacts: [{ id: 'report', type: 'research-report', metadata: { markdownRef: 'selected/report.md' } }],
+    uiState: {
+      currentReferences: [{ kind: 'file', ref: 'file:selected/report.md', title: 'report.md' }],
+    },
+    prompt: [
+      'Update the selected artifact and write back the changes.',
+      'Use the current ref selected/report.md only.',
+      'Replace the budget with 80,000 USD and duration with 9 months.',
+    ].join(' '),
+  });
+
+  assert.ok(payload);
+  assert.deepEqual(payload?.artifacts.map((artifact) => artifact.path), ['selected/report.md']);
+  const updated = await readFile(join(workspace, 'selected', 'report.md'), 'utf8');
+  assert.match(updated, /Budget: \$80,000/);
+  assert.match(updated, /Duration: 9 months/);
+  assert.doesNotMatch(updated, /120,000|12 months/);
+});
+
 test('artifact mutation fast path applies generic constraint rewrites to arbitrary markdown artifacts', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-generic-artifact-mutation-'));
   const packageDir = join(workspace, 'audit-package');

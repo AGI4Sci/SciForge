@@ -85,6 +85,53 @@ test('screen pane model normalizes Computer Use artifacts into refs-first replay
   assert.doesNotMatch(serialized, /rawScreenshot|providerRoute|executorLease|SHOULD_NOT_SURVIVE|data:image|base64|screenId/);
 });
 
+test('screen pane model preserves sanitized WindowActionSession lease control refs', () => {
+  const artifact: RuntimeArtifact = {
+    id: 'computer-use-screen-control-refs',
+    type: 'computer-use-virtual-screen',
+    producerScenario: 'computer-use',
+    schemaVersion: 'sciforge.computer-use.virtual-screen.v1',
+    metadata: { runId: 'run-screen-controls' },
+    data: {
+      status: 'ready',
+      attachState: 'live',
+      surfaceMode: 'live',
+      sessionRef: 'computer-use:session/run-screen-controls/session.json',
+      screenRef: 'computer-use:screen/run-screen-controls/screen-1.json',
+      currentFrameRef: 'computer-use:frames/run-screen-controls/current.png',
+      inputLeaseRef: 'computer-use:leases/run-screen-controls/input.json',
+      userLeaseRef: 'computer-use:leases/run-screen-controls/user.json',
+      agentLeaseRef: 'computer-use:leases/run-screen-controls/agent.json',
+      activeLeaseOwnerRef: 'computer-use:leases/run-screen-controls/active-owner.json',
+      leaseStatus: 'agent-active',
+      takeoverRef: 'computer-use:leases/run-screen-controls/takeover.json',
+      pauseRef: 'computer-use:leases/run-screen-controls/pause-agent.json',
+      resumeRef: 'computer-use:leases/run-screen-controls/resume-agent.json',
+      stopRef: 'computer-use:leases/run-screen-controls/stop-session.json',
+      actionAdapterRef: 'computer-use:adapters/run-screen-controls/action-adapter.json',
+      adapterReadinessRef: 'computer-use:readiness/run-screen-controls/provider-readiness.json',
+      providerPayload: {
+        takeoverRef: 'data:application/json;base64,DO_NOT_PROJECT',
+      },
+      executorParams: { command: '/computer-use click --x 20 --y 40' },
+    },
+  };
+
+  const payload = virtualScreenPayloadFromArtifact(artifact, testConfig());
+
+  assert.ok(payload);
+  assert.equal(payload.inputLeaseRef, 'computer-use:leases/run-screen-controls/input.json');
+  assert.equal(payload.userLeaseRef, 'computer-use:leases/run-screen-controls/user.json');
+  assert.equal(payload.agentLeaseRef, 'computer-use:leases/run-screen-controls/agent.json');
+  assert.equal(payload.activeLeaseOwnerRef, 'computer-use:leases/run-screen-controls/active-owner.json');
+  assert.equal(payload.leaseStatus, 'agent-active');
+  assert.equal(payload.takeoverRef, 'computer-use:leases/run-screen-controls/takeover.json');
+  assert.equal(payload.pauseRef, 'computer-use:leases/run-screen-controls/pause-agent.json');
+  assert.equal(payload.resumeRef, 'computer-use:leases/run-screen-controls/resume-agent.json');
+  assert.equal(payload.stopRef, 'computer-use:leases/run-screen-controls/stop-session.json');
+  assert.doesNotMatch(JSON.stringify(payload), /providerPayload|executorParams|DO_NOT_PROJECT|data:application|computer-use click/);
+});
+
 test('screen pane model uses the active run only and does not reuse stale session screen artifacts', () => {
   const oldArtifact: RuntimeArtifact = {
     id: 'old-screen',

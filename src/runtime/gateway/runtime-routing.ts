@@ -1,5 +1,5 @@
 import type { GatewayRequest, SkillAvailability, ToolPayload, WorkspaceTaskRunResult } from '../runtime-types.js';
-import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy';
+import { skillRuntimeRoutePolicy } from '../../../packages/skills/runtime-policy.js';
 import { capabilityProviderPrimaryRouteProvider, capabilityProviderRouteTraceRef } from '@sciforge-ui/runtime-contract/capability-provider-policy';
 import { isRecord } from '../gateway-utils.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';

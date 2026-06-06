@@ -161,6 +161,7 @@ export async function acquireComputerUseSchedulerLease(params: {
 export function computerUseSchedulerLockId(targetResolution: ResolvedWindowTarget, options: { sharedSystemInput?: boolean; leaseScope?: ComputerUseLeaseScope; focusLeaseProjection?: ComputerUseFocusLeaseProjection } = {}) {
   if (options.sharedSystemInput) return 'shared-system-input';
   if (options.focusLeaseProjection) return options.focusLeaseProjection.lockId;
+  if (options.leaseScope?.reason === 'read-only-or-time-based-action' && targetResolution.schedulerLockId) return targetResolution.schedulerLockId;
   if (options.leaseScope && targetResolution.inputIsolation === 'require-focused-target') return GLOBAL_FOCUS_LEASE_LOCK_ID;
   return scopedSchedulerLockId(targetResolution, options.leaseScope);
 }
@@ -915,7 +916,9 @@ function observeBeforeMutateStaleReason(
   if (observedAtMs === undefined) return 'observation timestamp is missing or invalid';
   if (checkedAtMs === undefined) return 'freshness check timestamp is missing or invalid';
   if (expiresAtMs !== undefined && nowMs > expiresAtMs) return `observation expired at ${freshness.expiresAt}`;
-  const maxAgeMs = Math.max(1, freshness.maxAgeMs ?? defaultMaxAgeMs ?? 30_000);
+  const defaultCapMs = Math.max(1, defaultMaxAgeMs ?? 30_000);
+  const declaredMaxAgeMs = freshness.maxAgeMs !== undefined ? Math.max(1, freshness.maxAgeMs) : defaultCapMs;
+  const maxAgeMs = Math.min(declaredMaxAgeMs, defaultCapMs);
   if (nowMs - observedAtMs > maxAgeMs) return `observation is older than ${maxAgeMs}ms`;
   if (nowMs - checkedAtMs > maxAgeMs) return `freshness check is older than ${maxAgeMs}ms`;
   return '';

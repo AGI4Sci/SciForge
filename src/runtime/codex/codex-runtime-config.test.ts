@@ -135,6 +135,50 @@ test('runtime config guard heals stale on-disk provider config before app-server
   assert.doesNotMatch(healedConfig, /model_provider = "native"|bailian\/deepseek-v4-flash|127\.0\.0\.1:3891/);
 });
 
+test('runtime config guard derives provider base_url from live proxy service URL alias', async () => {
+  const workspace = await tempWorkspace();
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-proxy-url-root-'));
+  const codexHome = join(root, 'codex-home');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), runtimeConfig(), 'utf8');
+
+  await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: {
+      SCIFORGE_RUNTIME_ROOT: root,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      SCIFORGE_PROXY_URL: 'http://127.0.0.1:5175/healthz',
+      [RUNTIME_KEY_ENV]: 'test-key',
+    },
+  });
+
+  const healedConfig = await readFile(join(codexHome, 'config.toml'), 'utf8');
+  assert.match(healedConfig, /base_url = "http:\/\/127\.0\.0\.1:5175\/v1"/);
+  assert.doesNotMatch(healedConfig, /127\.0\.0\.1:3892/);
+});
+
+test('runtime config guard derives provider base_url from live proxy port binding', async () => {
+  const workspace = await tempWorkspace();
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-runtime-proxy-port-root-'));
+  const codexHome = join(root, 'codex-home');
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(join(codexHome, 'config.toml'), runtimeConfig(), 'utf8');
+
+  await assertCodexRuntimeConfig({
+    workspacePath: workspace,
+    env: {
+      SCIFORGE_RUNTIME_ROOT: root,
+      SCIFORGE_RUNTIME_CODEX_HOME: codexHome,
+      SCIFORGE_PROXY_PORT: '5175',
+      [RUNTIME_KEY_ENV]: 'test-key',
+    },
+  });
+
+  const healedConfig = await readFile(join(codexHome, 'config.toml'), 'utf8');
+  assert.match(healedConfig, /base_url = "http:\/\/127\.0\.0\.1:5175\/v1"/);
+  assert.doesNotMatch(healedConfig, /127\.0\.0\.1:3892/);
+});
+
 test('runtime config guard fails closed when workspace is missing', async () => {
   await assert.rejects(
     () => assertCodexRuntimeConfig({
@@ -222,6 +266,18 @@ test('runtime environment forces isolated CODEX_HOME over inherited values', () 
 
   assert.equal(env.CODEX_HOME, '/isolated/codex-home');
   assert.equal(env.CODEX_USER_HOME, undefined);
+});
+
+test('runtime environment bypasses inherited proxies for loopback Model Router calls', () => {
+  const env = codexRuntimeEnv({
+    HTTP_PROXY: 'http://127.0.0.1:7890',
+    NO_PROXY: 'metadata.internal',
+    no_proxy: 'example.internal,localhost',
+  }, '/isolated/codex-home');
+
+  assert.equal(env.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(env.NO_PROXY, 'metadata.internal,127.0.0.1,localhost,::1');
+  assert.equal(env.no_proxy, 'example.internal,localhost,127.0.0.1,::1');
 });
 
 async function tempWorkspace() {

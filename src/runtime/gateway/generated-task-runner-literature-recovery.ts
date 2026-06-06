@@ -8,7 +8,7 @@ import {
   literatureProviderMetadataMissingFullTextStatus,
   literatureRecoverySearchQuery,
 } from '@sciforge-ui/runtime-contract/generated-work-policy';
-import { invokeWebTool } from '../../../packages/workers/web-worker/src/worker';
+import { invokeWebTool } from '../../../packages/workers/web-worker/src/worker.js';
 
 export async function literatureGenerationFailureRecoveryPayload(
   request: GatewayRequest,

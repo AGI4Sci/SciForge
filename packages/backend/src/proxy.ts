@@ -7,6 +7,7 @@ import {
   functionCallOutputItem,
   makeId,
   messageOutputItem,
+  providerSafeProxyErrorMessage,
   responsesToChatCompletions,
   type ChatCompletionRequest,
   type ChatToolCall,
@@ -169,11 +170,12 @@ export function createCodexResponsesProxyServer(options: CodexResponsesProxyServ
       }
       return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
     } catch (error) {
-      options.log?.(`proxy error: ${error instanceof Error ? error.message : String(error)}`);
+      const message = providerSafeProxyErrorMessage(error);
+      options.log?.(`proxy error: ${message}`);
       return sendJson(response, 500, {
         error: {
           code: 'sciforge_proxy_error',
-          message: error instanceof Error ? error.message : String(error),
+          message,
         },
       });
     }

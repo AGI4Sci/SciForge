@@ -1948,10 +1948,6 @@ export function SciForgeApp() {
               feedbackGithubRepo={config.feedbackGithubRepo}
               detectedGithubRepo={detectedFeedbackGithubRepo}
               feedbackGithubToken={config.feedbackGithubToken}
-              workspaceLoading={workspaceLoadingVisible}
-              workspaceLoadingDetail={workspaceLoadingVisible
-                ? workspaceLoadingDetail
-                : workspaceStatus || 'workspace snapshot loaded'}
               githubSyncedOpenIssues={workspaceState.githubSyncedOpenIssues ?? []}
               onReplaceGithubSyncedOpenIssues={feedbackActions.replaceGithubSyncedOpenIssues}
               onImportGithubOpenIssues={feedbackActions.importGithubOpenIssuesAsFeedback}

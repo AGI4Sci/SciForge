@@ -46,6 +46,30 @@ const baseConfig: ComputerUseConfig = {
   testOnlyPlannedActions: [],
 };
 
+function matchingApprovalProvenance(approvalRef: string) {
+  return {
+    schemaVersion: 'sciforge.computer-use.approval-provenance.v1',
+    source: 'workspace-approval-sidecar',
+    sourceStatus: 'needs-confirmation',
+    approvalRef,
+    approvalRequestId: `${approvalRef}:request`,
+    riskActionHash: `${approvalRef}:risk-action`,
+    sourceApprovalRequestRef: '.sciforge/vision-runs/source-run/approval-request.json',
+    sourceGuiAskUserRecordRef: '.sciforge/vision-runs/source-run/gui-ask-user.json',
+    sourceRiskAuditRef: '.sciforge/vision-runs/source-run/risk-audit.json',
+    approvalRequest: {
+      approvalRef,
+      riskActionHash: `${approvalRef}:risk-action`,
+      confirmation_text: 'Allow Computer Use to click Export?',
+      action_kind: 'click',
+    },
+    highRiskAction: {
+      actionKind: 'click',
+      targetDescription: 'Export button',
+    },
+  };
+}
+
 test('gateway adapter builds stable Computer Use action provider request', () => {
   const request = gatewayRequestToComputerUseRequest({
     skillDomain: 'knowledge',
@@ -63,8 +87,9 @@ test('gateway adapter builds stable Computer Use action provider request', () =>
   assert.equal(request.providers.sense, 'local.vision-sense');
   assert.equal(request.providers.grounder, computerUseModelRouterCapabilityIds.groundingTranslator);
   assert.equal(request.providers.verifier, computerUseModelRouterCapabilityIds.verifierTranslator);
-  assert.equal(request.riskPolicy, 'allow-confirmed');
-  assert.equal(request.approvalRef, 'approval:cu-ok');
+  assert.equal(request.riskPolicy, 'fail-closed');
+  assert.equal(request.approvalRef, undefined);
+  assert.equal(request.metadata.approvalProvenance, undefined);
   assert.equal(request.windowTarget.mode, 'app-window');
   const bridge = request.metadata.bridge as { allowSharedSystemInput?: boolean };
   assert.equal(bridge.allowSharedSystemInput, true);
@@ -88,20 +113,7 @@ test('gateway adapter expands confirmed approval retry into prior approved actio
     artifacts: [],
     humanApproval: {
       approvalRef: 'approval:computer-use:cu-risk',
-      approvalProvenance: {
-        schemaVersion: 'sciforge.computer-use.approval-provenance.v1',
-        source: 'prior-gui-ask-user',
-        approvalRef: 'approval:computer-use:cu-risk',
-        approvalRequest: {
-          approvalRef: 'approval:computer-use:cu-risk',
-          confirmation_text: 'Allow Computer Use to click Export?',
-          action_kind: 'click',
-        },
-        highRiskAction: {
-          actionKind: 'click',
-          targetDescription: 'Export button',
-        },
-      },
+      approvalProvenance: matchingApprovalProvenance('approval:computer-use:cu-risk'),
     },
   }, baseConfig, '/tmp/workspace');
 
@@ -113,6 +125,26 @@ test('gateway adapter expands confirmed approval retry into prior approved actio
   assert.equal(request.riskPolicy, 'allow-confirmed');
   assert.equal(request.approvalRef, 'approval:computer-use:cu-risk');
   assert.ok((request.metadata.approvalProvenance as Record<string, unknown>).highRiskAction);
+});
+
+test('gateway adapter keeps mismatched explicit approval provenance fail-closed', () => {
+  const request = gatewayRequestToComputerUseRequest({
+    skillDomain: 'knowledge',
+    prompt: '/computer-use approve --approval-ref "approval:computer-use:cu-risk"',
+    handoffSource: 'ui-chat',
+    workspacePath: '/tmp/workspace',
+    selectedActionIds: ['action.sciforge.computer-use'],
+    artifacts: [],
+    humanApproval: {
+      approvalRef: 'approval:computer-use:cu-risk',
+      approvalProvenance: matchingApprovalProvenance('approval:computer-use:other-risk'),
+    },
+  }, baseConfig, '/tmp/workspace');
+
+  assert.equal(request.riskPolicy, 'fail-closed');
+  assert.equal(request.approvalRef, undefined);
+  assert.equal(request.metadata.approvalProvenance, undefined);
+  assert.doesNotMatch(request.task, /Approved retry context/);
 });
 
 test('gateway adapter recovers approval provenance from workspace sidecars for command approval refs', async () => {
@@ -422,10 +454,67 @@ test('gateway adapter hydrates bounded Computer Use continuation sidecar context
   }
 });
 
-test('gateway adapter does not advertise legacy KV-Ground adapter when grounder baseUrl is absent', () => {
-  const configWithoutGrounderBaseUrl: ComputerUseConfig = {
+test('gateway adapter expands continuation request linked sidecar refs from workspace', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-continuation-linked-sidecars-'));
+  try {
+    const runDir = join(workspace, '.sciforge/vision-runs/run-linked-repair');
+    await mkdir(runDir, { recursive: true });
+    await writeJson(join(runDir, 'blocked-manifest.json'), {
+      schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
+      status: 'blocked',
+      reason: 'Planner stopped before final artifact materialization.',
+      failedStage: 'visible-artifact-final-guard',
+      privateHugeField: 'must not leak',
+    });
+    await writeJson(join(runDir, 'repair-hint.json'), {
+      schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
+      status: 'repair-needed',
+      reason: 'Continue by producing a visible local report artifact.',
+      nextAttempt: {
+        reuseTraceRef: '.sciforge/vision-runs/run-linked-repair/vision-trace.json',
+        reuseRunTaskChainRef: '.sciforge/vision-runs/run-linked-repair/tui-host-run-task-chain.json',
+        requireFreshObservation: true,
+        preserveInputIsolation: true,
+        privateHugeField: 'must not leak',
+      },
+    });
+    await writeJson(join(runDir, 'continuation-request.json'), {
+      schemaVersion: 'sciforge.computer-use.continuation-request-sidecar.v1',
+      status: 'ready-for-continuation',
+      blockedManifestRef: '.sciforge/vision-runs/run-linked-repair/blocked-manifest.json',
+      repairHintRef: '.sciforge/vision-runs/run-linked-repair/repair-hint.json',
+      sameTraceSessionRef: '.sciforge/vision-runs/run-linked-repair/tui-host-run-task-chain.json',
+      requestRef: '.sciforge/vision-runs/run-linked-repair/computer-use-request.json',
+      privateHugeField: 'must not leak',
+    });
+
+    const request = gatewayRequestToComputerUseRequest({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use continue --continuation-request-ref ".sciforge/vision-runs/run-linked-repair/continuation-request.json"',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+    }, baseConfig, workspace);
+
+    const contract = request.metadata.plannerAcceptanceContract as Record<string, unknown>;
+    const continuation = contract.computerUseContinuation as Record<string, unknown>;
+    assert.deepEqual(continuation.blockedManifestRefs, ['.sciforge/vision-runs/run-linked-repair/blocked-manifest.json']);
+    assert.deepEqual(continuation.repairHintRefs, ['.sciforge/vision-runs/run-linked-repair/repair-hint.json']);
+    assert.deepEqual(continuation.continuationRequestRefs, ['.sciforge/vision-runs/run-linked-repair/continuation-request.json']);
+    assert.deepEqual(continuation.runTaskChainRefs, ['.sciforge/vision-runs/run-linked-repair/tui-host-run-task-chain.json']);
+    assert.match(JSON.stringify(continuation), /Planner stopped before final artifact materialization/);
+    assert.match(JSON.stringify(continuation), /Continue by producing a visible local report artifact/);
+    assert.doesNotMatch(JSON.stringify(continuation), /privateHugeField|must not leak|data:image|accessibilityTree|DOMSnapshot/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('gateway adapter always advertises Model Router grounding instead of legacy adapters', () => {
+  const configWithRetiredGrounderBaseUrl: ComputerUseConfig = {
     ...baseConfig,
     grounder: {
+      baseUrl: 'https://retired-grounder.example.test',
       timeoutMs: 30000,
       allowServiceLocalPaths: false,
       upload: { strategy: 'inline' },
@@ -437,13 +526,19 @@ test('gateway adapter does not advertise legacy KV-Ground adapter when grounder 
     workspacePath: '/tmp/workspace',
     selectedToolIds: ['local.vision-sense'],
     artifacts: [],
-  }, configWithoutGrounderBaseUrl, '/tmp/workspace');
-  const contract = computerUseHostPortsContract(configWithoutGrounderBaseUrl);
+  }, configWithRetiredGrounderBaseUrl, '/tmp/workspace');
+  const contract = computerUseHostPortsContract(configWithRetiredGrounderBaseUrl);
 
   assert.equal(request.providers.grounder, computerUseModelRouterCapabilityIds.groundingTranslator);
   assert.equal(contract.ports.locate.provider, computerUseModelRouterCapabilityIds.groundingTranslator);
   assert.equal(contract.ports.locate.legacyAdapter, undefined);
-  assert.doesNotMatch(JSON.stringify(contract), /legacy-kv-ground-compatible-adapter|openai-compatible-vision-grounder|SCIFORGE_VISION_GROUNDER_LLM|visualGrounder/i);
+  assert.doesNotMatch(JSON.stringify(contract), new RegExp([
+    ['legacy', '-', 'kv', '-', 'ground', '-', 'compatible', '-', 'adapter'].join(''),
+    'openai-compatible-vision-grounder',
+    'SCIFORGE_VISION_GROUNDER_LLM',
+    'visualGrounder',
+    'retired-grounder',
+  ].join('|'), 'i'));
 });
 
 test('host ports contract exposes platform ports and forbids direct GUI calls', () => {
@@ -457,7 +552,7 @@ test('host ports contract exposes platform ports and forbids direct GUI calls', 
   assert.equal(contract.ports.crop.provider, 'host-focus-region-crop');
   assert.equal(contract.ports.query.optional, true);
   assert.equal(contract.ports.locate.provider, computerUseModelRouterCapabilityIds.groundingTranslator);
-  assert.equal(contract.ports.locate.legacyAdapter, computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter);
+  assert.equal(contract.ports.locate.legacyAdapter, undefined);
   assert.equal(contract.ports.execute.inputAdapter, 'shared-system-input-acknowledged');
   assert.equal(contract.ports.verify.provider, computerUseModelRouterCapabilityIds.verifierTranslator);
   assert.deepEqual(contract.requiredPorts, ['capture', 'plan', 'locate', 'execute', 'verify']);

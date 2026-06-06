@@ -1,7 +1,7 @@
 import { access, readdir, readFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-import type { SkillDomain } from './matching-policy';
+import type { SkillDomain } from './matching-policy.js';
 
 export interface MarkdownSkillPackage {
   id: string;

@@ -11,16 +11,23 @@ PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 HOST_PORT_CALL_SCHEMA = "sciforge.computer-use.host-port-call.v1"
 HOST_PORT_RESULT_SCHEMA = "sciforge.computer-use.host-port-result.v1"
 FINAL_RESULT_SCHEMA = "sciforge.computer-use.cli-final-result.v1"
+LEGACY_PYTHON_DIAGNOSTIC_ENV = "SCIFORGE_COMPUTER_USE_LEGACY_PYTHON_DIAGNOSTIC"
 
 
 def run_host_port_stdio(
     request: dict[str, Any],
     handler: Callable[[dict[str, Any], list[dict[str, Any]]], dict[str, Any]],
+    *,
+    diagnostic: bool = True,
 ) -> tuple[int, list[dict[str, Any]], str]:
     env = {
         **os.environ,
         "PYTHONPATH": str(PACKAGE_ROOT),
     }
+    if diagnostic:
+        env[LEGACY_PYTHON_DIAGNOSTIC_ENV] = "1"
+    else:
+        env.pop(LEGACY_PYTHON_DIAGNOSTIC_ENV, None)
     process = subprocess.Popen(
         [
             sys.executable,
@@ -70,6 +77,24 @@ def run_host_port_stdio(
 
     stderr = process.stderr.read()
     return process.returncode, messages, stderr
+
+
+def test_cli_host_port_stdio_fails_closed_without_diagnostic_env():
+    returncode, messages, stderr = run_host_port_stdio(
+        {"task": "click Run", "maxSteps": 1},
+        lambda call, _messages: (_ for _ in ()).throw(AssertionError(f"unexpected host port call: {call}")),
+        diagnostic=False,
+    )
+
+    assert returncode == 1
+    assert stderr == ""
+    assert len(messages) == 1
+    assert messages[0]["schemaVersion"] == FINAL_RESULT_SCHEMA
+    assert messages[0]["type"] == "finalResult"
+    result = messages[0]["result"]
+    assert result["status"] == "failed-with-reason"
+    assert LEGACY_PYTHON_DIAGNOSTIC_ENV in result["message"]
+    assert result["failureDiagnostics"]["failedStage"] == "legacy-python-diagnostic-gate"
 
 
 def test_cli_host_port_stdio_round_trips_all_ports_and_final_result():

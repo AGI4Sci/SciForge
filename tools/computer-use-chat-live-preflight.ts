@@ -92,7 +92,8 @@ interface LocalConfigInput {
 export const suggestedComputerUseChatSmokePrompt = [
   '/computer-use Use the visible desktop to inspect the current active window,',
   'then open or focus a local text editor and create a short local visible report artifact in the editor body.',
-  'The report must name the visible app/window, one visible UI fact, and the evidence refs.',
+  'The report must name the visible app/window, one visible UI fact, and human-readable evidence labels from the current run bundle.',
+  'Do not type raw JSON, filesystem paths, filenames, or evidence ref strings into the editor body; summarize refs with short labels such as before screenshot, after screenshot, and trace bundle.',
   'Use only low-risk local GUI actions needed to materialize the report, such as open_app for a local editor and type_text into the document body.',
   'Do not type the report into search, filter, chat, address, send, submit, upload, share, or publish fields.',
   'Do not send, delete, upload, submit, publish, external-post, or use shared/system input.',
@@ -182,7 +183,7 @@ export async function buildComputerUseChatLivePreflightManifest(
       : undefined,
   ].filter((item): item is string => Boolean(item));
 
-  const serviceChecks = await Promise.all([
+  const rawServiceChecks = await Promise.all([
     checkService({
       id: 'sciforge-ui',
       label: 'SciForge UI',
@@ -194,7 +195,8 @@ export async function buildComputerUseChatLivePreflightManifest(
     checkService({
       id: 'workspace-writer',
       label: 'Workspace writer',
-      url: effectiveEnv.SCIFORGE_WORKSPACE_WRITER_URL || loopbackUrl(effectiveEnv.SCIFORGE_WORKSPACE_PORT, 5174, '/health'),
+      url: serviceHealthUrl(effectiveEnv.SCIFORGE_WORKSPACE_WRITER_URL, '/health')
+        || loopbackUrl(effectiveEnv.SCIFORGE_WORKSPACE_PORT, 5174, '/health'),
       fallbackUrls: effectiveEnv.SCIFORGE_WORKSPACE_WRITER_URL || effectiveEnv.SCIFORGE_WORKSPACE_PORT
         ? []
         : [loopbackUrl('6173', 5174, '/health')],
@@ -204,23 +206,26 @@ export async function buildComputerUseChatLivePreflightManifest(
     checkService({
       id: 'runtime-codex',
       label: 'Runtime Codex sidecar',
-      url: effectiveEnv.SCIFORGE_RUNTIME_CODEX_URL || loopbackUrl(effectiveEnv.SCIFORGE_RUNTIME_CODEX_PORT, 18080, '/health'),
+      url: serviceHealthUrl(effectiveEnv.SCIFORGE_RUNTIME_CODEX_URL, '/health')
+        || loopbackUrl(effectiveEnv.SCIFORGE_RUNTIME_CODEX_PORT, 18080, '/health'),
       fetchImpl,
       timeoutMs,
     }),
     checkService({
       id: 'provider-proxy',
       label: 'Provider proxy',
-      url: effectiveEnv.SCIFORGE_PROXY_URL || loopbackUrl(effectiveEnv.SCIFORGE_PROXY_PORT, 3891, '/healthz'),
+      url: providerProxyHealthUrl(effectiveEnv),
+      fallbackUrls: providerProxyFallbackHealthUrls(effectiveEnv),
       fetchImpl,
       timeoutMs,
     }),
   ]);
   const runtimeProviderPreflight = await readWorkspaceRuntimeProviderPreflight({
-    serviceChecks,
+    serviceChecks: rawServiceChecks,
     fetchImpl,
     timeoutMs,
   });
+  const serviceChecks = reconcileProviderProxyServiceCheck(rawServiceChecks, runtimeProviderPreflight);
   const runtimeProviderReady = runtimeProviderPreflight
     ? runtimeProviderPreflight.status === 'ready'
     : serviceChecks.find((check) => check.id === 'workspace-writer')?.status !== 'pass';
@@ -285,6 +290,30 @@ export async function runComputerUseChatLivePreflightCli(argv = process.argv): P
   if (args.strict && manifest.status !== 'ready') process.exitCode = 1;
 }
 
+function reconcileProviderProxyServiceCheck(
+  serviceChecks: ComputerUseChatLivePreflightManifest['serviceChecks'],
+  runtimeProviderPreflight: ComputerUseChatLivePreflightManifest['runtimeProviderPreflight'] | undefined,
+): ComputerUseChatLivePreflightManifest['serviceChecks'] {
+  if (runtimeProviderPreflight?.status !== 'ready') return serviceChecks;
+  return serviceChecks.map((check) => {
+    if (check.id !== 'provider-proxy' || check.status !== 'fail') return check;
+    if (!providerProxyProbeFailureIsTransportOnly(check.error)) return check;
+    return {
+      id: check.id,
+      label: check.label,
+      url: check.url,
+      status: 'pass' as const,
+      httpStatus: runtimeProviderPreflight.checkedHealthz?.httpStatus,
+    };
+  });
+}
+
+function providerProxyProbeFailureIsTransportOnly(error: string | undefined): boolean {
+  if (!error) return false;
+  return /aborted|aborterror|timed out|timeout|failed to fetch|couldn'?t connect|connection refused|econnrefused|network/i.test(error)
+    && !/not ready|upstream-outage|provider-auth|rate-limited|blocked|unauthorized|forbidden/i.test(error);
+}
+
 async function checkService(input: {
   id: string;
   label: string;
@@ -329,9 +358,11 @@ async function requestServiceHealth(input: {
     const contentType = response.headers.get('content-type') ?? '';
     const text = await response.text();
     const payload = parseJson(text);
-    const okPayload = isRecord(payload) ? payload.ok === true || payload.status === 'ok' || payload.ready === true : false;
+    const jsonPayload = isRecord(payload);
+    const okPayload = jsonPayload ? payload.ok === true || payload.status === 'ok' || payload.ready === true : false;
+    const notReadyPayload = jsonPayload && healthPayloadReportsNotReady(payload);
     const htmlOk = input.acceptsHtml === true && /html/i.test(contentType);
-    if (response.ok && (okPayload || htmlOk || text.trim().length > 0)) {
+    if (response.ok && !notReadyPayload && (okPayload || htmlOk || (!jsonPayload && text.trim().length > 0))) {
       return {
         id: input.id,
         label: input.label,
@@ -346,7 +377,9 @@ async function requestServiceHealth(input: {
       url: diagnosticUrl,
       status: 'fail',
       httpStatus: response.status,
-      error: response.ok ? 'health response did not contain a ready marker' : `HTTP ${response.status}`,
+      error: response.ok
+        ? healthNotReadyDiagnostic(payload) ?? 'health response did not contain a ready marker'
+        : `HTTP ${response.status}`,
     };
   } catch (error) {
     return {
@@ -564,7 +597,6 @@ function envWithLocalConfigDefaults(
     'SCIFORGE_VISION_DESKTOP_BRIDGE',
     'SCIFORGE_VISION_INPUT_ADAPTER',
     'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
-    'SCIFORGE_VISION_KV_GROUND_URL',
   ]) {
     if (hasEnv(effective, name)) continue;
     const value = firstConfigString(configs, configPathsForEnv(name));
@@ -619,12 +651,6 @@ function configPathsForEnv(name: string): string[][] {
       ['visionSense', 'inputAdapterProvider'],
       ['computerUse', 'independentInputAdapterProvider'],
       ['computerUse', 'inputAdapterProvider'],
-    ];
-  }
-  if (name === 'SCIFORGE_VISION_KV_GROUND_URL') {
-    return [
-      ['visionSense', 'grounderBaseUrl'],
-      ['grounder', 'baseUrl'],
     ];
   }
   return [];
@@ -696,6 +722,89 @@ function loopbackUrl(portValue: string | undefined, defaultPort: number, path: s
   const port = Number(portValue);
   const safePort = Number.isInteger(port) && port > 0 ? port : defaultPort;
   return `http://127.0.0.1:${safePort}${path}`;
+}
+
+function providerProxyHealthUrl(env: NodeJS.ProcessEnv): string {
+  return providerProxyUpstreamHealthUrl(
+    serviceHealthUrl(env.SCIFORGE_PROXY_URL, '/healthz')
+      || loopbackUrl(env.SCIFORGE_PROXY_PORT, 3891, '/healthz'),
+  );
+}
+
+function providerProxyFallbackHealthUrls(env: NodeJS.ProcessEnv): string[] {
+  if (env.SCIFORGE_PROXY_URL || env.SCIFORGE_PROXY_PORT) return [];
+  return [providerProxyUpstreamHealthUrl(loopbackUrl(env.SCIFORGE_MODEL_ROUTER_PORT, 3892, '/healthz'))];
+}
+
+function serviceHealthUrl(base: string | undefined, path: string): string | undefined {
+  const value = base?.trim();
+  if (!value) return undefined;
+  const pathPattern = new RegExp(`${escapeRegExp(path)}/?$`, 'i');
+  try {
+    const url = new URL(value);
+    if (!pathPattern.test(url.pathname)) {
+      url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
+    }
+    return url.toString();
+  } catch {
+    return pathPattern.test(value) ? value : `${value.replace(/\/+$/, '')}${path}`;
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function providerProxyUpstreamHealthUrl(value: string): string {
+  return withQueryParam(value, 'check', 'upstream');
+}
+
+function withQueryParam(value: string, key: string, paramValue: string): string {
+  try {
+    const url = new URL(value);
+    url.searchParams.set(key, paramValue);
+    return url.toString();
+  } catch {
+    const [beforeHash, hash = ''] = value.split('#', 2);
+    const separator = beforeHash.includes('?') ? '&' : '?';
+    return `${beforeHash}${separator}${encodeURIComponent(key)}=${encodeURIComponent(paramValue)}${hash ? `#${hash}` : ''}`;
+  }
+}
+
+function healthPayloadReportsNotReady(payload: Record<string, unknown>): boolean {
+  const status = stringField(payload.status)?.toLowerCase();
+  const upstream = isRecord(payload.upstream) ? payload.upstream : undefined;
+  const upstreamStatus = upstream ? stringField(upstream.status)?.toLowerCase() : undefined;
+  return payload.ok === false
+    || payload.ready === false
+    || status === 'blocked'
+    || status === 'failed'
+    || status === 'fail'
+    || status === 'error'
+    || upstream?.ok === false
+    || upstream?.ready === false
+    || upstreamStatus === 'blocked'
+    || upstreamStatus === 'failed'
+    || upstreamStatus === 'fail'
+    || upstreamStatus === 'error';
+}
+
+function healthNotReadyDiagnostic(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  const upstream = isRecord(payload.upstream) ? payload.upstream : undefined;
+  const details = uniqueStrings([
+    stringField(payload.category),
+    stringField(payload.status),
+    stringField(payload.message),
+    upstream ? stringField(upstream.category) : undefined,
+    upstream ? stringField(upstream.status) : undefined,
+    upstream ? stringField(upstream.message) : undefined,
+  ]);
+  return sanitizeDiagnosticText(
+    details.length
+      ? `health response reported not ready: ${details.join(', ')}`
+      : 'health response reported not ready',
+  );
 }
 
 function appendPath(base: string, path: string): string {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -30,6 +30,10 @@ test('Computer Use complex matrix release report shows monolithic diagnostic and
     const report = await buildComputerUseChatLiveComplexMatrixReleaseReport({
       monolithicManifestPath: monolithicPath,
       aggregateFrom: [splitPath],
+      env: {
+        SCIFORGE_STATE_DIR: join(workspace, 'empty-state'),
+        SCIFORGE_LIVE_RESOURCE_LIFECYCLE_DIR: join(workspace, 'empty-lifecycle'),
+      },
       now: () => new Date('2026-05-29T01:00:00.000Z'),
     });
 
@@ -42,9 +46,10 @@ test('Computer Use complex matrix release report shows monolithic diagnostic and
     assert.equal(report.resourceDiagnostics.status, 'passed', JSON.stringify(report.resourceDiagnostics.issues));
     assert.ok(report.resourceDiagnostics.refs.runDirRefs.includes('.sciforge/vision-runs/literature-briefing-report'));
     assert.ok(report.resourceDiagnostics.refs.acceptanceManifestRefs.includes('.sciforge/vision-runs/literature-briefing-report/cu-user-acceptance-manifest.json'));
-    assert.equal(report.caseCoverage.requiredCaseCount, 7);
-    assert.equal(report.caseCoverage.coveredCaseCount, 7);
-    assert.equal(report.caseCoverage.passedCaseCount, 7);
+    const requiredCaseCount = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.length;
+    assert.equal(report.caseCoverage.requiredCaseCount, requiredCaseCount);
+    assert.equal(report.caseCoverage.coveredCaseCount, requiredCaseCount);
+    assert.equal(report.caseCoverage.passedCaseCount, requiredCaseCount);
     assert.deepEqual(report.caseCoverage.missingCaseIds, []);
     assert.deepEqual(report.caseCoverage.failedCaseIds, []);
     assert.match(report.residualStabilityNotes.join('\n'), /Monolithic diagnostic status is failed/);
@@ -151,8 +156,10 @@ test('Computer Use complex matrix release report fails strict acceptance when ag
     assert.equal(report.status, 'failed');
     assert.equal(report.aggregateStatus.status, 'passed');
     assert.ok(report.resourceDiagnostics.resources.processes.some((item) => item.pid === 4242));
-    assert.deepEqual(report.caseCoverage.missingCaseIds, ['dense-visual-grounding']);
-    assert.ok(report.issues.includes('dense-visual-grounding:missing-from-aggregate'));
+    const missingCaseId = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.at(-1)?.id;
+    assert.ok(missingCaseId);
+    assert.deepEqual(report.caseCoverage.missingCaseIds, [missingCaseId]);
+    assert.ok(report.issues.includes(`${missingCaseId}:missing-from-aggregate`));
     assert.equal(releaseReportHasStrictFailures(report), true);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -195,6 +202,241 @@ test('Computer Use complex matrix release report fails when aggregate status is 
   }
 });
 
+test('Computer Use complex matrix release report summarizes diagnostic-only product blockers without satisfying strict acceptance', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-release-report-blockers-'));
+  try {
+    const aggregatePath = join(workspace, 'aggregate.json');
+    await writeJson(aggregatePath, {
+      schemaVersion: COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_AGGREGATE_SCHEMA,
+      checkedAt: '2026-05-29T00:00:00.000Z',
+      status: 'failed',
+      releaseAcceptance: 'opt-in-only',
+      evidenceMode: 'split-live-manifest-aggregate',
+      sourceManifestRefs: [],
+      cases: COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item, index) => (
+        index === 0
+          ? aggregateCase(item, {
+            status: 'failed',
+            evidenceKind: 'package-local',
+            liveAcceptanceCandidate: false,
+            issues: ['expected-completed-got-repair-needed'],
+            diagnosticBlockers: [{
+              category: 'planner-route',
+              diagnosticOnly: true,
+              summary: 'Plan-stage Runtime Codex planner returned repair-needed from https://provider.example/v1 token=blocker-secret.',
+              refs: ['.sciforge/vision-runs/literature-briefing-report/blocked-manifest.json'],
+              issues: ['expected-completed-got-repair-needed api_key=sk-blocker-secret'],
+            }, {
+              category: 'native-host-evidence',
+              diagnosticOnly: true,
+              summary: 'Current run is missing native host GUI evidence refs.',
+              refs: [],
+              issues: ['missing-computer-use-tui-host-actions-event'],
+            }],
+          })
+          : aggregateCase(item)
+      )),
+      issues: ['literature-briefing-report:expected-completed-got-repair-needed'],
+      completionPolicy: {
+        fixturePackageLocalHarnessCompletesProjectTasks: false,
+        completionRequiresCurrentChatRunIsolatedL3Bundle: true,
+        aggregateRequiresEveryCasePassed: true,
+      },
+    });
+
+    const report = await buildComputerUseChatLiveComplexMatrixReleaseReport({
+      aggregateManifestPath: aggregatePath,
+      now: () => new Date('2026-05-29T01:00:00.000Z'),
+    });
+
+    const item = report.caseCoverage.cases.find((candidate) => candidate.id === 'literature-briefing-report');
+    assert.equal(report.status, 'failed');
+    assert.equal(releaseReportHasStrictFailures(report), true);
+    assert.deepEqual(report.caseCoverage.failedCaseIds, ['literature-briefing-report']);
+    assert.equal(item?.status, 'failed');
+    assert.deepEqual(item?.diagnosticBlockers.map((blocker) => blocker.category), ['planner-route', 'native-host-evidence']);
+    assert.equal(report.productBlockerSummary.diagnosticOnly, true);
+    assert.ok(report.productBlockerSummary.categories.some((category) => (
+      category.category === 'planner-route'
+      && category.caseIds.includes('literature-briefing-report')
+    )));
+    assert.ok(report.productBlockerSummary.cases.some((summary) => (
+      summary.id === 'literature-briefing-report'
+      && summary.categories.includes('native-host-evidence')
+    )));
+    assert.ok(report.issues.includes('literature-briefing-report:aggregate-case-not-passed'));
+    const serialized = JSON.stringify(report);
+    assert.equal(serialized.includes('provider.example'), false);
+    assert.equal(serialized.includes('blocker-secret'), false);
+    assert.equal(serialized.includes('sk-blocker-secret'), false);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use complex matrix release report fails when a passed aggregate case is diagnostic-only', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-release-report-diagnostic-case-'));
+  try {
+    const splitPath = join(workspace, 'split.json');
+    await writeJson(splitPath, {
+      schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.v1',
+      checkedAt: '2026-05-29T00:00:00.000Z',
+      status: 'passed',
+      releaseAcceptance: 'opt-in-only',
+      evidenceMode: 'current-chat-run-complex-matrix-only',
+      preflight: {
+        schemaVersion: 'sciforge.computer-use.chat-live-preflight.v1',
+        status: 'ready',
+        missingEnv: [],
+        policyViolations: [],
+        serviceChecks: [],
+      },
+      cases: COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item) => matrixCase(
+        item,
+        item.id === 'high-risk-approval-chain'
+          ? { evidenceKind: 'package-local', liveAcceptanceCandidate: false }
+          : {},
+      )),
+      issues: [],
+      requestSubmitted: true,
+      completionPolicy: {
+        fixturePackageLocalHarnessCompletesProjectTasks: false,
+        completionRequiresCurrentChatRunIsolatedL3Bundle: true,
+      },
+    });
+
+    const report = await buildComputerUseChatLiveComplexMatrixReleaseReport({
+      aggregateFrom: [splitPath],
+      now: () => new Date('2026-05-29T01:00:00.000Z'),
+    });
+
+    const highRisk = report.caseCoverage.cases.find((item) => item.id === 'high-risk-approval-chain');
+    assert.equal(report.status, 'failed');
+    assert.deepEqual(report.caseCoverage.failedCaseIds, ['high-risk-approval-chain']);
+    assert.ok(highRisk?.issues.includes('matrix-diagnostic-only-evidence-kind:package-local'));
+    assert.ok(report.issues.includes('high-risk-approval-chain:aggregate-case-not-passed'));
+    assert.equal(releaseReportHasStrictFailures(report), true);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use complex matrix release package command keeps aggregate prep non-strict', async () => {
+  const packageJson = JSON.parse(await readFile('package.json', 'utf8')) as {
+    scripts?: Record<string, string>;
+  };
+  const scripts = packageJson.scripts ?? {};
+  const aggregateScript = scripts['smoke:computer-use-chat-live-complex-matrix:aggregate'] ?? '';
+  const releaseScript = scripts['release:computer-use-chat-live-complex-matrix-report'] ?? '';
+  const reportScript = scripts['smoke:computer-use-chat-live-complex-matrix:opt-in-report'] ?? '';
+
+  assert.match(aggregateScript, /--aggregate-from docs\/test-artifacts\/computer-use-chat-live-complex-matrix\/manifest-isolated\.json/);
+  assert.doesNotMatch(aggregateScript, /--strict/);
+  assert.match(releaseScript, /smoke:computer-use-chat-live-complex-matrix:aggregate --silent/);
+  assert.match(releaseScript, /smoke:computer-use-chat-live-complex-matrix:opt-in-report --silent/);
+  assert.match(
+    releaseScript,
+    /smoke:computer-use-chat-live-complex-matrix:aggregate --silent\s*&&\s*npm run smoke:computer-use-chat-live-complex-matrix:opt-in-report --silent/,
+  );
+  assert.match(
+    reportScript,
+    /--aggregate-from docs\/test-artifacts\/computer-use-chat-live-complex-matrix\/manifest-isolated\.json/,
+  );
+  assert.match(reportScript, /--strict/);
+  assert.doesNotMatch(
+    reportScript,
+    /--aggregate docs\/test-artifacts\/computer-use-chat-live-complex-matrix\/aggregate-manifest\.json/,
+  );
+});
+
+function matrixCase(
+  item: (typeof COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES)[number],
+  patch?: Partial<{
+    evidenceKind: string;
+    liveAcceptanceCandidate: boolean;
+  }>,
+): Record<string, unknown> {
+  const evidenceKind = patch?.evidenceKind ?? (item.expectedStatus === 'completed' ? 'isolated-L3' : 'isolated-L1');
+  const liveAcceptanceCandidate = patch?.liveAcceptanceCandidate ?? evidenceKind === 'isolated-L3';
+  const aggregate = aggregateCase(item, {
+    evidenceKind,
+    liveAcceptanceCandidate,
+  });
+  return {
+    id: aggregate.id,
+    label: aggregate.label,
+    expectedStatus: aggregate.expectedStatus,
+    taskId: aggregate.taskId,
+    scenarioId: aggregate.scenarioId,
+    prompt: item.prompt,
+    status: aggregate.status,
+    requestSubmitted: aggregate.requestSubmitted,
+    liveAcceptanceCandidate: aggregate.liveAcceptanceCandidate,
+    isolation: {
+      schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.case-isolation.v1',
+      matrixRunId: 'matrix-test',
+      caseRunId: `case-${item.id}`,
+      caseIndex: 0,
+      sessionId: `session-${item.id}`,
+      currentTurnId: `turn-${item.id}`,
+      workspaceSeed: {
+        kind: 'shared-workspace-case-seed',
+        seed: `seed-${item.id}`,
+        workspacePathConfigured: true,
+      },
+      cleanupStatus: 'inline-only',
+      cleanupIssues: [],
+    },
+    evidenceClassification: {
+      kind: evidenceKind,
+      canCompleteBackend: evidenceKind === 'isolated-L1',
+      canCompleteL3Workflow: evidenceKind === 'isolated-L3',
+      blockedReasons: [],
+      rejectedShortcuts: [],
+      claimLimit: evidenceKind === 'package-local' ? 'diagnostic-only' : 'desktop-product-path',
+    },
+    runManifest: {
+      schemaVersion: 'sciforge.computer-use.chat-live-e2e.v1',
+      checkedAt: '2026-05-29T00:00:00.000Z',
+      status: item.expectedStatus,
+      expectedStatus: item.expectedStatus,
+      releaseAcceptance: 'not-evaluated',
+      evidenceMode: 'current-chat-run-only',
+      preflight: {},
+      prompt: item.prompt,
+      eventTypes: [],
+      eventSummaries: [],
+      displayedRefs: aggregate.acceptanceRefs.guiPresentRefs,
+      artifactRefs: aggregate.acceptanceRefs.finalArtifactRefs,
+      auditRefs: [],
+      approvalRequestRefs: [],
+      guiAskUserRecordRefs: [],
+      riskAuditRefs: [],
+      confirmedRequestRefs: [],
+      approvalDecisionRefs: [],
+      sourceApprovalRequestRefs: [],
+      sourceGuiAskUserRecordRefs: [],
+      sourceRiskAuditRefs: [],
+      evidenceReadIssues: [],
+      recoverActions: [],
+      failureDiagnostics: [],
+      liveAcceptanceBundle: evidenceKind === 'isolated-L3'
+        ? {
+          status: 'valid',
+          runDirRef: aggregate.acceptanceRefs.runDirRef,
+          acceptanceManifestRef: aggregate.acceptanceRefs.acceptanceManifestRef,
+          completionEvidenceRef: aggregate.acceptanceRefs.completionEvidenceRef,
+          issues: [],
+        }
+        : undefined,
+      issues: [],
+      requestSubmitted: true,
+      liveAcceptanceCandidate,
+    },
+    issues: [],
+  };
+}
+
 function buildSplitMatrixManifest(): unknown {
   return {
     schemaVersion: 'sciforge.computer-use.chat-live-complex-matrix.v1',
@@ -236,12 +478,12 @@ function buildSplitMatrixManifest(): unknown {
         cleanupIssues: [],
       },
       evidenceClassification: {
-        kind: item.expectedStatus === 'completed' ? 'isolated-L3' : 'package-local',
-        canCompleteBackend: item.expectedStatus === 'completed',
+        kind: item.expectedStatus === 'completed' ? 'isolated-L3' : 'isolated-L1',
+        canCompleteBackend: item.expectedStatus !== 'completed',
         canCompleteL3Workflow: item.expectedStatus === 'completed',
         blockedReasons: [],
         rejectedShortcuts: [],
-        claimLimit: item.expectedStatus === 'completed' ? 'can-complete' : 'diagnostic-only',
+        claimLimit: item.expectedStatus === 'completed' ? 'can-complete' : 'desktop-product-path',
       },
       runManifest: {
         schemaVersion: 'sciforge.computer-use.chat-live-e2e.v1',
@@ -302,7 +544,7 @@ function aggregateCase(
     status: 'passed',
     sourceManifestRef: `docs/test-artifacts/${item.id}.json`,
     sourceCheckedAt: '2026-05-29T00:00:00.000Z',
-    evidenceKind: item.expectedStatus === 'completed' ? 'isolated-L3' : 'package-local',
+    evidenceKind: item.expectedStatus === 'completed' ? 'isolated-L3' : 'isolated-L1',
     liveAcceptanceCandidate: item.expectedStatus === 'completed',
     requestSubmitted: true,
     issues: [],
@@ -314,6 +556,7 @@ function aggregateCase(
       guiPresentRefs: [`.sciforge/vision-runs/${item.id}/vision-trace.json`],
     },
     residualStabilityNotes: [],
+    diagnosticBlockers: [],
     ...overrides,
   };
 }
@@ -339,6 +582,13 @@ interface AggregateCaseFixture {
     guiPresentRefs: string[];
   };
   residualStabilityNotes: string[];
+  diagnosticBlockers: Array<{
+    category: 'planner-route' | 'native-host-evidence' | 'current-run-l3' | 'approval-boundary' | 'expected-state';
+    diagnosticOnly: true;
+    summary: string;
+    refs: string[];
+    issues: string[];
+  }>;
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {

@@ -191,8 +191,6 @@ export function authorizationProfileOrDefault(profileId: unknown): {
 export function evaluateBrowserEvidenceNeed(input: BrowserEvidenceDecisionInput): BrowserEvidenceDecision {
   const prompt = compactText(input.prompt, 600);
   if (!prompt) return { decision: 'skip', reason: 'empty-query' };
-  if (forbidsNetwork(prompt)) return { decision: 'skip', reason: 'local-only-or-no-network' };
-  if (localRefsOnly(prompt)) return { decision: 'skip', reason: 'local-only-or-no-network' };
 
   const selected = [
     ...(input.selectedToolIds ?? []),
@@ -200,20 +198,32 @@ export function evaluateBrowserEvidenceNeed(input: BrowserEvidenceDecisionInput)
     ...(input.availableSkills ?? []),
   ].join(' ');
   const combined = `${prompt}\n${selected}`;
-  if (explicitBrowserSearch(combined)) {
-    const query = browserSearchQueryFromText(prompt) ?? prompt;
+  const signals = browserEvidenceSemanticSignals(prompt, combined);
+  if (signals.noNetworkConstraint || signals.localOnlyConstraint) return { decision: 'skip', reason: 'local-only-or-no-network' };
+
+  if (signals.explicitBrowserSearch) {
+    const query = semanticBrowserSearchQueryFromPrompt(prompt) ?? prompt;
     return { decision: 'search', reason: 'explicit-browser-search', query };
   }
 
   const url = firstPublicHttpUrl(prompt);
-  if (url || browserRefRequest(combined)) {
+  if (url || signals.browserReferenceRequest) {
     return { decision: 'search', reason: 'url-or-browser-ref-request', query: url ?? prompt };
   }
 
-  if (currentExternalOrCitationRequest(prompt)) {
-    return { decision: 'search', reason: 'current-external-or-citation-request', query: prompt };
+  if (signals.currentExternalEvidenceNeeded) {
+    const query = semanticBrowserSearchQueryFromPrompt(prompt) ?? prompt;
+    return { decision: 'search', reason: 'current-external-or-citation-request', query };
   }
   return { decision: 'skip', reason: 'no-browser-evidence-needed' };
+}
+
+export function semanticBrowserSearchQueryFromPrompt(prompt: string): string | undefined {
+  const explicitQuery = browserSearchQueryFromText(prompt);
+  if (explicitQuery) return explicitQuery;
+  const url = firstPublicHttpUrl(prompt);
+  if (url) return url;
+  return naturalLanguageSearchTopicFromPrompt(prompt);
 }
 
 export function browserSearchEngineFromPrompt(prompt: string): 'bing' | 'duckduckgo' {
@@ -233,6 +243,7 @@ export function classifyComputerUseRisk(input: {
   authorizationProfile?: AuthorizationProfile;
 }): ComputerUseRiskClassification {
   const text = normalizeRiskText(input.action);
+  const authorization = input.authorizationProfile ?? defaultAuthorizationProfile();
   if (matchesAny(text, [
     /\b(?:bypass|circumvent|solve|defeat)\b.*\b(?:captcha|2fa|mfa|login\s+risk|access\s+control|security\s+barrier)\b/,
     /\b(?:identity\s+spoof|impersonat|pretend\s+to\s+be|冒充|绕过.*(?:验证码|风控|访问控制|安全屏障))\b/,
@@ -247,8 +258,17 @@ export function classifyComputerUseRisk(input: {
     };
   }
 
-  const hardConfirm = hardConfirmCategoryForText(text);
-  if (hardConfirm) {
+  const sideEffect = computerUseSideEffectSignals(text);
+  const hardConfirm = sideEffect.category;
+  if (hardConfirm && authorization.blockedCategories.includes(hardConfirm)) {
+    return {
+      decision: 'blocked',
+      category: hardConfirm,
+      hardConfirm: false,
+      reason: `${hardConfirm} is blocked by the selected autonomy profile`,
+    };
+  }
+  if (hardConfirm && authorization.hardConfirmCategories.includes(hardConfirm)) {
     return {
       decision: 'needs-confirmation',
       category: hardConfirm,
@@ -447,34 +467,57 @@ function blocker(reason: ComputerUsePreflightBlocker['reason']): ComputerUsePref
 }
 
 function hardConfirmCategoryForText(text: string): HardConfirmCategory | undefined {
-  if (matchesAny(text, [/\b(?:pay|payment|purchase|buy|subscribe|subscription|refund|withdraw|transfer|trade|trading|checkout|付款|支付|购买|订阅|退款|提现|转账|交易)\b/])) {
-    return 'payments-transfers-purchases';
+  return computerUseSideEffectSignals(text).category;
+}
+
+function computerUseSideEffectSignals(text: string): { category?: HardConfirmCategory; signals: string[] } {
+  const signals: string[] = [];
+  let category: HardConfirmCategory | undefined;
+  const choose = (next: HardConfirmCategory, signal: string) => {
+    if (!category) category = next;
+    signals.push(signal);
+  };
+
+  // Semantic safety principle: natural-language tokens below are only evidence
+  // for a side-effect category. The final action decision is made by combining
+  // the category with the selected authorization profile, never by a bare
+  // keyword match alone.
+  if (matchesAny(text, [/\b(?:pay|payment|purchase|buy|order|invoice|paid|subscribe|subscription|refund|withdraw|transfer|wire|trade|trading|checkout|付款|支付|购买|下单|订单|订阅|退款|提现|转账|交易)\b/])) {
+    choose('payments-transfers-purchases', 'monetary-or-purchase-side-effect');
   }
+  if (category) return { category, signals };
+
   if (matchesAny(text, [/\b(?:send|email|message|comment|ticket|post|publish|reply|dm|slack|wechat|发送|邮件|消息|评论|工单|公开帖子|回复)\b/])) {
-    return 'external-communications';
+    choose('external-communications', 'external-communication-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [/\b(?:submit|register|apply|appointment|book|booking|enroll|sign\s*up|报名|提交|注册|申请|预约)\b/])) {
-    return 'external-system-submission';
+    choose('external-system-submission', 'external-submission-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [/\b(?:delete|remove|overwrite|replace|close|archive|destroy|删除|覆盖|关闭|归档)\b.*\b(?:remote|account|cloud|server|external|远端|账号|云|外部)?/])) {
-    return 'remote-delete-overwrite-archive';
+    choose('remote-delete-overwrite-archive', 'remote-destructive-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [/\b(?:upload|attach|share)\b.*\b(?:file|image|dataset|credential|report|local|文件|图片|数据集|凭证|报告|本地)\b/])) {
-    return 'external-upload';
+    choose('external-upload', 'external-upload-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [/\b(?:account|security|privacy|billing|api\s*key|token|team\s*member|permission|role|password|账号|安全|隐私|账单|权限|密钥|令牌|成员)\b/])) {
-    return 'account-security-privacy-billing';
+    choose('account-security-privacy-billing', 'account-security-privacy-billing-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [/\b(?:legal|compliance|contract|terms|sign|signature|authorize|授权|合规|合同|条款|签署|签名)\b/])) {
-    return 'legal-compliance-contracts';
+    choose('legal-compliance-contracts', 'legal-compliance-contract-side-effect');
   }
+  if (category) return { category, signals };
   if (matchesAny(text, [
     /\b(?:deploy|ci\/cd|ci|cd|cloud\s+resource|database\s+migration|db\s+migration|terraform|kubernetes|部署|云资源|数据库迁移|发布)\b/,
     /\brelease\b.{0,32}\b(?:to|production|prod|external|server|cloud)\b/,
   ])) {
-    return 'external-system-execution';
+    choose('external-system-execution', 'external-system-execution-side-effect');
   }
-  return undefined;
+  return { category, signals };
 }
 
 function hardConfirmReason(category: HardConfirmCategory) {
@@ -491,21 +534,75 @@ function hardConfirmReason(category: HardConfirmCategory) {
   return reasons[category];
 }
 
+function browserEvidenceSemanticSignals(prompt: string, combined: string) {
+  const noNetworkConstraint = forbidsNetwork(prompt);
+  const localOnlyConstraint = localRefsOnly(prompt);
+  const explicitBrowserSearchSignal = explicitBrowserSearch(combined);
+  const browserReferenceSignal = browserRefRequest(combined);
+  const currentExternalSignal = currentExternalOrCitationRequest(prompt);
+  const lookupIntentSignal = externalLookupIntent(prompt);
+  const publicTopicSignal = publicExternalTopicSignal(prompt);
+
+  // Semantic routing principle: regex/keyword checks above are bounded feature
+  // detectors only. The policy decision must be made from structured signals so
+  // future changes cannot regress to one literal phrase such as "search" or
+  // "内置浏览器".
+  return {
+    noNetworkConstraint,
+    localOnlyConstraint,
+    explicitBrowserSearch: explicitBrowserSearchSignal,
+    browserReferenceRequest: browserReferenceSignal,
+    currentExternalEvidenceNeeded: currentExternalSignal || (lookupIntentSignal && publicTopicSignal),
+  };
+}
+
 function explicitBrowserSearch(text: string) {
-  return /\bbrowser_search\b/i.test(text)
-    || /\/browser\s+search\b/i.test(text)
-    || (/\b(?:browser|rendered|浏览器)\b/i.test(text) && /\b(?:search|query|检索|搜索)\b/i.test(text))
-    || /\bbrowser_runtime\b/i.test(text);
+  return hasAsciiToken(text, 'browser_search')
+    || /(?:^|[^A-Za-z0-9_])\/browser\s+search(?=$|[^A-Za-z0-9_])/i.test(text)
+    || (browserSearchSurfaceMention(text) && browserSearchVerbMention(text))
+    || hasAsciiToken(text, 'browser_runtime');
 }
 
 function browserRefRequest(text: string) {
-  return /\b(?:browser\s+ref|browser\s+pane|BrowserHostSession|网页证据|浏览器引用)\b/i.test(text);
+  return /(?:^|[^A-Za-z0-9_])(?:browser\s+ref|browser\s+pane|BrowserHostSession)(?=$|[^A-Za-z0-9_])/i.test(text)
+    || hasCjkTerm(text, ['网页证据', '浏览器引用', '浏览器面板']);
 }
 
 function currentExternalOrCitationRequest(text: string) {
-  const asksForEvidence = /\b(?:cite|citation|source|sources|url|link|reference|verify|引用|来源|链接|验证)\b/i.test(text);
-  const asksForCurrent = /\b(?:latest|today|recent|real[-\s]?time|up[-\s]?to[-\s]?date|pricing|price|schedule|law|regulation|docs?|paper|product|web|website|external|release|version|changelog|最新|实时|今天|网页|外部|来源|价格|法规|文档|论文|版本|发布)\b/i.test(text);
+  const asksForEvidence = hasAsciiToken(text, 'cite|citation|sources?|url|link|reference|verify')
+    || hasCjkTerm(text, ['引用', '来源', '链接', '验证', '确认', '核实', '查证']);
+  const asksForCurrent = hasAsciiToken(text, 'latest|today|recent|real[-\\s]?time|up[-\\s]?to[-\\s]?date|pricing|price|schedule|law|regulation|docs?|paper|product|web|website|external|release|version|changelog')
+    || hasCjkTerm(text, ['最新', '实时', '今天', '当前', '现在', '近期', '现状', '网页', '外部', '价格', '法规', '官方文档', '在线文档', '论文', '版本', '发布']);
   return asksForEvidence || asksForCurrent;
+}
+
+function externalLookupIntent(text: string) {
+  return hasAsciiToken(text, 'look\\s*up|check|verify|confirm|find\\s+out|what\\s+is|who\\s+is|when\\s+is')
+    || /(?:查一下|查询一下|帮我查|帮我确认|确认一下|核实一下|了解一下|看看).{0,80}/.test(text);
+}
+
+function publicExternalTopicSignal(text: string) {
+  return hasAsciiToken(text, 'news|situation|conflict|policy|law|regulation|price|pricing|stock|weather|schedule|release|version|changelog|company|product|country|government|election|market')
+    || hasCjkTerm(text, [
+      '新闻',
+      '局势',
+      '形势',
+      '冲突',
+      '政策',
+      '法规',
+      '价格',
+      '股价',
+      '天气',
+      '日程',
+      '版本',
+      '发布',
+      '公司',
+      '产品',
+      '国家',
+      '政府',
+      '选举',
+      '市场',
+    ]);
 }
 
 function browserSearchQueryFromText(prompt: string): string | undefined {
@@ -513,14 +610,89 @@ function browserSearchQueryFromText(prompt: string): string | undefined {
     /browser_search\s*\(\s*(?:query\s*[:=]\s*)?["“']([^"”']+)["”']\s*\)/i,
     /\/browser\s+search\s+["“']([^"”']+)["”']/i,
     /(?:browser\s+search|search|query|搜索|检索)\s*[:：]\s*["“']?([^"”'\n。；;]+)/i,
+    /(?:请|帮我|帮忙|给我|麻烦)?\s*(?:通过|使用|用)?\s*(?:内置)?\s*(?:浏览器|网页|网络|互联网)?\s*(?:搜索|检索|查询|查找)\s*[:：]?\s*["“']?([^"”'\n。；;]+)/i,
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(prompt);
-    const value = match?.[1]?.trim();
+    const value = cleanBrowserSearchQueryCandidate(match?.[1]);
     if (value) return compactText(value, 240);
   }
-  if (/\bbrowser_search\b/i.test(prompt)) return compactText(prompt.replace(/\bbrowser_search\b/ig, '').replace(/["“”']/g, ' '), 240);
+  if (hasAsciiToken(prompt, 'browser_search')) {
+    return compactText(prompt.replace(/browser_search/ig, '').replace(/["“”']/g, ' '), 240);
+  }
   return undefined;
+}
+
+function naturalLanguageSearchTopicFromPrompt(prompt: string): string | undefined {
+  let query = compactText(prompt.replace(/[“”"']/g, ' '), 240);
+  if (!query) return undefined;
+  const colonQuery = queryAfterSemanticRequestPrefix(query);
+  if (colonQuery) query = colonQuery;
+
+  // Semantic query principle: the search topic is the user's information target,
+  // not the UI action phrase. These lexical removals are bounded feature cleanup
+  // after the structured browser-evidence decision has already been made.
+  query = stripBrowserSearchRequestFraming(query);
+  query = stripSearchResultPresentationInstructions(query);
+  query = query.replace(/^the\s+(?=(?:current|latest|recent)\b)/i, '');
+  query = query.replace(/^(?:这个|这条|这篇)?(?:新闻|消息|报道|信息)\s*/i, '');
+  query = query.replace(/^(?:the|this)\s+(?:news|article|report)\s*[:：-]?\s*/i, '');
+  query = query.replace(/[。；;，,.!?！？\s]+$/g, '').trim();
+  return query ? compactText(query, 240) : undefined;
+}
+
+function queryAfterSemanticRequestPrefix(text: string): string | undefined {
+  const match = /^(.{0,80})[:：]\s*(.+)$/.exec(text);
+  if (!match) return undefined;
+  const prefix = match[1] ?? '';
+  const candidate = cleanBrowserSearchQueryCandidate(match[2]);
+  if (!candidate) return undefined;
+  if (externalLookupIntent(prefix) || currentExternalOrCitationRequest(prefix) || browserSearchSurfaceMention(prefix)) {
+    return candidate;
+  }
+  return undefined;
+}
+
+function stripBrowserSearchRequestFraming(text: string): string {
+  let query = text.trim();
+  for (let index = 0; index < 3; index += 1) {
+    const next = query
+      .replace(/^(?:please\s+)?(?:(?:use|using|with|through)\s+(?:the\s+)?(?:built[-\s]?in\s+|in[-\s]?app\s+)?(?:browser|web|internet)\s+)?(?:find\s+out|find|look\s+up|check|verify|confirm|search(?:\s+for)?|query|open|browse)\s+/i, '')
+      .replace(/^(?:what|who|when|where)\s+(?:is|are|was|were)\s+/i, '')
+      .replace(/^(?:请|帮我|帮忙|给我|麻烦(?:你)?|你能不能|能否|可以)?\s*(?:通过|使用|用)?\s*(?:SciForge\s*)?(?:的)?\s*(?:内置)?\s*(?:浏览器|网页|网络|互联网)?\s*(?:上|里|中)?\s*(?:搜索|检索|查询|查找|查看|看看|了解|确认|核实|查证|查一下|查询一下|打开)\s*(?:一下)?\s*/i, '')
+      .trim();
+    if (next === query) break;
+    query = next;
+  }
+  return query;
+}
+
+function stripSearchResultPresentationInstructions(text: string): string {
+  return text
+    .replace(/\s+(?:and|then)\s+(?:cite|include|provide|summarize|list|return|show)\b.*$/i, '')
+    .replace(/\s+with\s+(?:citations?|sources?|source\s+urls?|links?|references?)\b.*$/i, '')
+    .replace(/\s+please\s+(?:cite|include|provide|summarize|list|return|show)\b.*$/i, '')
+    .replace(/(?:并|同时|然后|顺便).{0,30}(?:总结|概括|引用|来源|链接|网址|列出|给出|提供).*$/i, '')
+    .trim();
+}
+
+function browserSearchSurfaceMention(text: string) {
+  return hasAsciiToken(text, 'browser|rendered')
+    || hasCjkTerm(text, ['浏览器', '内置浏览器', '网页', '网络', '互联网']);
+}
+
+function browserSearchVerbMention(text: string) {
+  return hasAsciiToken(text, 'search|query')
+    || hasCjkTerm(text, ['搜索', '检索', '查询', '查找']);
+}
+
+function cleanBrowserSearchQueryCandidate(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  let query = compactText(value.replace(/[“”"']/g, ' '), 240);
+  query = query.replace(/^(?:网页|网络|互联网|浏览器)\s*(?:上|里|中)?\s*(?:查看|看看|搜索|检索|查询|查找)?\s*/i, '');
+  query = query.replace(/^(?:查看|看看|了解|查询|搜索|检索|查找|一下)\s*/i, '');
+  query = query.replace(/[。；;，,]+$/g, '').trim();
+  return query ? compactText(query, 240) : undefined;
 }
 
 function firstPublicHttpUrl(text: string) {
@@ -556,4 +728,12 @@ function boundedRefs(refs: string[]) {
 
 function matchesAny(text: string, patterns: RegExp[]) {
   return patterns.some((pattern) => pattern.test(text));
+}
+
+function hasAsciiToken(text: string, alternatives: string) {
+  return new RegExp(`(?:^|[^A-Za-z0-9_])(?:${alternatives})(?=$|[^A-Za-z0-9_])`, 'i').test(text);
+}
+
+function hasCjkTerm(text: string, terms: readonly string[]) {
+  return terms.some((term) => text.includes(term));
 }

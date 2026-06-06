@@ -188,6 +188,37 @@ test('Computer Use Act loop fails closed when step budget is exhausted without c
   assert.ok(result?.evidenceRefs.includes('action-ledger:base/budget-2'));
 });
 
+test('Computer Use Act loop can require user-level completion truth instead of accepting action-only truth', async () => {
+  let baseCalls = 0;
+  const materializer = createComputerUseActLoopMaterializer({
+    maxSteps: 2,
+    requireUserLevelCompletionTruth: true,
+    baseMaterializer: async () => {
+      baseCalls += 1;
+      return completedStep(`action-only-${baseCalls}`, {
+        completionTruth: {
+          schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+          scope: 'action',
+          status: 'satisfied',
+          evidenceRefs: [`action-ledger:base/action-only-${baseCalls}`],
+          validator: 'single-action-evidence',
+        },
+      });
+    },
+    refreshRuntimeTruth: async ({ step }) => readyRuntimeTruth(`action-only-${step}`),
+    evaluatePreflight: ({ runtimeTruth, step }) => readyPreflight(runtimeTruth, step),
+  });
+
+  const result = await materializer(baseInput({ runtimeTruth: readyRuntimeTruth('action-only-initial') }));
+
+  assert.equal(baseCalls, 2);
+  assert.equal(result?.status, 'blocked');
+  assert.match(result?.message ?? '', /budget|maxSteps|completion evidence/i);
+  assert.equal(result?.completionTruth, undefined);
+  assert.ok(result?.evidenceRefs.includes('action-ledger:base/action-only-1'));
+  assert.ok(result?.evidenceRefs.includes('action-ledger:base/action-only-2'));
+});
+
 test('Computer Use Act loop maps verified package bridge workEvidence before ending', async () => {
   let baseCalls = 0;
   const runDir = '.sciforge/vision-runs/act-loop-package-bridge-complete';

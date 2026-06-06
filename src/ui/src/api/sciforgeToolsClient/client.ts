@@ -39,6 +39,8 @@ import {
   buildComputerUseWorkspaceGatewayRequest,
   computerUseTerminalEquivalentTextRequested,
   computerUseWorkspaceGatewayDiagnosticRequested,
+  sanitizedCompletionEvidencePolicy,
+  sanitizedComputerUseTaskBindings,
 } from './computerUseWorkspaceGatewayRequest';
 import { attachRuntimeGuiPresentationToResponse } from './runtimeGuiPresentation';
 import { hasAnnotationPlanOnlyEnvelopeMarker, isAnnotationPlanOnlyEnvelope } from '../../feedback/annotationPlanModel';
@@ -48,7 +50,6 @@ const DEFAULT_RUNTIME_PROFILE = 'sciforge-runtime-default';
 const DEFAULT_RUNTIME_PROVIDER = 'sciforge-model-router';
 const DEFAULT_RUNTIME_MODEL_ALIAS = 'sciforge-router';
 const UNCONFIGURED_RUNTIME_MODEL = 'unconfigured';
-
 const TRANSPORT_SESSION_MESSAGE_LIMIT = 12;
 const TRANSPORT_RUN_LIMIT = 8;
 const TRANSPORT_EXECUTION_UNIT_LIMIT = 16;
@@ -432,6 +433,7 @@ function buildCodexRuntimeStreamRequest(input: {
   const commandText = buildCodexRuntimeCommandText(input, { resumeRequested: Boolean(codexSessionId) });
   const attemptId = `${input.commandId}-attempt-1`;
   const computerUseApproval = computerUseApprovalRuntimeMetadata(input.input, commandText, input.referenceSummary);
+  const runtimeIntent = computerUseRuntimeHostIntent(input.input, commandText);
   const agentHostInput = buildCodexAgentHostInput(input.input, input.referenceSummary);
   return {
     schemaVersion: CODEX_RUNTIME_REQUEST_SCHEMA_VERSION,
@@ -451,6 +453,7 @@ function buildCodexRuntimeStreamRequest(input: {
     guiExtension: {
       enabled: true,
     },
+    ...(runtimeIntent ? { runtimeIntent } : {}),
     ...(computerUseApproval ? {
       humanApproval: computerUseApproval.humanApproval,
       uiState: computerUseApproval.uiState,
@@ -477,6 +480,22 @@ function buildCodexRuntimeStreamRequest(input: {
         `audit:codex-runtime:${input.commandId}:${attemptId}:normalized-events`,
       ],
     },
+  };
+}
+
+function computerUseRuntimeHostIntent(input: SendAgentMessageInput, commandText: string) {
+  const scenario = input.scenarioOverride;
+  const completionEvidencePolicy = sanitizedCompletionEvidencePolicy(scenario?.completionEvidencePolicy);
+  const taskBindings = sanitizedComputerUseTaskBindings(scenario);
+  if (!completionEvidencePolicy && !taskBindings) return undefined;
+  const computerUseCommand = composerPromptIsComputerUseSlashCommand(commandText.trimStart());
+  if (!computerUseCommand && !taskBindings) return undefined;
+  return {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
+    ...(taskBindings ?? {}),
   };
 }
 
@@ -611,13 +630,11 @@ function auditOnlyGuiProjectionRefs(
   const nonSeedMessageCount = (input.messages ?? []).filter((message) => !isSeedDemoOrFixtureMessage(message)).length;
   const composerDeclaredIntents = safeComposerDeclaredIntents(input.composerDeclaredIntents)
     ?? defaultComposerAuthorizationDeclaredIntents();
-  const windowActionHandoff = safeWindowActionHandoff(input.windowActionHandoff);
   return {
     currentTurnId: input.currentTurnId,
     selectedRefCount: referenceSummary.length,
     refs: uniqueRuntimeStringList([...references, ...runRefs, ...artifactRefs, ...claimRefs, ...executionRefs]).slice(0, 48),
     ...(composerDeclaredIntents ? { composerDeclaredIntents } : {}),
-    ...(windowActionHandoff ? { windowActionHandoff } : {}),
     counts: {
       nonSeedMessages: nonSeedMessageCount,
       seedMessagesExcluded: (input.messages ?? []).length - nonSeedMessageCount,
@@ -627,131 +644,6 @@ function auditOnlyGuiProjectionRefs(
       executionUnitRefs: input.executionUnits?.length ?? 0,
     },
   };
-}
-
-function safeWindowActionHandoff(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  if (value.schemaVersion !== 'sciforge.window-action-handoff.v1') return undefined;
-  if (value.source !== 'run-orchestrator') return undefined;
-  if (value.mode !== 'enter-or-reuse-window-action-session') return undefined;
-  const intent = knownString(value.intent, ['annotation-quick-action', 'explicit-modification']);
-  const actionFlowRef = safeAuditRef(value.actionFlowRef);
-  const highConfidenceThreshold = asFiniteNumber(value.highConfidenceThreshold);
-  const promotedRefs = Array.isArray(value.promotedRefs)
-    ? value.promotedRefs.map(safeWindowActionHandoffRef).filter((ref): ref is NonNullable<ReturnType<typeof safeWindowActionHandoffRef>> => Boolean(ref)).slice(0, 8)
-    : [];
-  if (!intent || !actionFlowRef || highConfidenceThreshold === undefined || !promotedRefs.length) return undefined;
-  return {
-    schemaVersion: 'sciforge.window-action-handoff.v1',
-    source: 'run-orchestrator',
-    mode: 'enter-or-reuse-window-action-session',
-    intent,
-    actionFlowRef,
-    highConfidenceThreshold,
-    promotedRefs,
-  };
-}
-
-function safeWindowActionHandoffRef(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  const referenceId = boundedAuditText(value.referenceId, 96);
-  const ref = safeAuditRef(value.ref);
-  const title = boundedAuditText(value.title, 120);
-  const binding = safeWindowActionBinding(value.windowBinding);
-  if (!referenceId || !ref || !title || !binding) return undefined;
-  const sourceKind = boundedAuditText(value.sourceKind, 64);
-  const annotationRef = safeAuditRef(value.annotationRef);
-  const imageRef = safeAuditRef(value.imageRef);
-  const screenshotRef = safeAuditRef(value.screenshotRef);
-  const cropRef = safeAuditRef(value.cropRef);
-  const targetRef = safeAuditRef(value.targetRef);
-  const evidenceRefs = safeWindowActionEvidenceRefs(value.evidenceRefs);
-  return {
-    referenceId,
-    ref,
-    title,
-    ...(sourceKind ? { sourceKind } : {}),
-    ...(annotationRef ? { annotationRef } : {}),
-    ...(imageRef ? { imageRef } : {}),
-    ...(screenshotRef ? { screenshotRef } : {}),
-    ...(cropRef ? { cropRef } : {}),
-    ...(targetRef ? { targetRef } : {}),
-    evidenceRefs,
-    windowBinding: binding,
-  };
-}
-
-function safeWindowActionBinding(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  const status = knownString(value.status, ['manual-bound', 'auto-bound']);
-  const windowRef = safeAuditRef(value.windowRef);
-  if (!status || !windowRef) return undefined;
-  const confidence = asFiniteNumber(value.confidence);
-  const reason = boundedAuditText(value.reason, 160);
-  const appName = boundedAuditText(value.appName, 80);
-  const bundleId = boundedAuditText(value.bundleId, 120);
-  const title = boundedAuditText(value.title, 160);
-  const screenId = boundedAuditText(value.screenId, 80);
-  const pid = asFiniteNumber(value.pid);
-  const scale = asFiniteNumber(value.scale);
-  const windowBounds = safeWindowActionBounds(value.windowBounds);
-  const windowLocalBounds = safeWindowActionBounds(value.windowLocalBounds);
-  return {
-    status,
-    ...(confidence !== undefined ? { confidence } : {}),
-    ...(reason ? { reason } : {}),
-    windowRef,
-    ...(appName ? { appName } : {}),
-    ...(bundleId ? { bundleId } : {}),
-    ...(pid !== undefined ? { pid: Math.trunc(pid) } : {}),
-    ...(title ? { title } : {}),
-    ...(screenId ? { screenId } : {}),
-    ...(scale !== undefined ? { scale } : {}),
-    ...(windowBounds ? { windowBounds } : {}),
-    ...(windowLocalBounds ? { windowLocalBounds } : {}),
-  };
-}
-
-function safeWindowActionBounds(value: unknown) {
-  if (!isRecord(value)) return undefined;
-  const x = asFiniteNumber(value.x);
-  const y = asFiniteNumber(value.y);
-  const width = asFiniteNumber(value.width);
-  const height = asFiniteNumber(value.height);
-  if (x === undefined || y === undefined || width === undefined || height === undefined) return undefined;
-  return { x, y, width: Math.max(1, width), height: Math.max(1, height) };
-}
-
-function safeWindowActionEvidenceRefs(value: unknown) {
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  const output: Array<{ kind: string; ref: string }> = [];
-  for (const item of value) {
-    if (!isRecord(item)) continue;
-    const kind = boundedAuditText(item.kind, 64);
-    const ref = safeAuditRef(item.ref);
-    if (!kind || !ref) continue;
-    const key = `${kind}\n${ref}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    output.push({ kind, ref });
-  }
-  return output.slice(0, 8);
-}
-
-function safeAuditRef(value: unknown) {
-  const text = asString(value);
-  if (!text) return undefined;
-  if (!/^[a-z][a-z0-9+.-]*:[a-z0-9][a-z0-9._:/#?-]*$/i.test(text)) return undefined;
-  if (/^(?:data|https?):/i.test(text)) return undefined;
-  return text.slice(0, 240);
-}
-
-function boundedAuditText(value: unknown, max: number) {
-  const text = asString(value);
-  if (!text) return undefined;
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  return normalized ? normalized.slice(0, max) : undefined;
 }
 
 function safeComposerDeclaredIntents(value: unknown) {
@@ -864,8 +756,10 @@ function knownString<T extends string>(value: unknown, allowed: readonly T[]): T
   return typeof value === 'string' && (allowed as readonly string[]).includes(value) ? value as T : undefined;
 }
 
+const PUBLIC_COMPOSER_LABEL_INTERNAL_DETAIL_PATTERN = /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i;
+
 function publicComposerDeclaredLabel(value: unknown, modelIntentId: string | undefined) {
-  const fallback = modelIntentId === 'max'
+  const defaultLabel = modelIntentId === 'max'
     ? 'MAX Mode'
     : modelIntentId === 'assistant-fast'
       ? 'Assistant Fast'
@@ -876,14 +770,11 @@ function publicComposerDeclaredLabel(value: unknown, modelIntentId: string | und
           : modelIntentId === 'auto'
             ? 'Auto'
             : 'Assistant Auto';
-  if (typeof value !== 'string') return fallback;
-  const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
-  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
-  return compact;
+  return sanitizedPublicComposerDeclaredLabel(value, defaultLabel);
 }
 
 function publicComposerDeclaredModeLabel(value: unknown, modeIntentId: string | undefined) {
-  const fallback = modeIntentId === 'plan'
+  const defaultLabel = modeIntentId === 'plan'
     ? 'Plan'
     : modeIntentId === 'debug'
       ? 'Debug'
@@ -892,21 +783,22 @@ function publicComposerDeclaredModeLabel(value: unknown, modeIntentId: string | 
         : modeIntentId === 'ask'
           ? 'Ask'
           : undefined;
-  if (typeof value !== 'string') return fallback;
-  const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
-  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
-  return compact;
+  return sanitizedPublicComposerDeclaredLabel(value, defaultLabel);
 }
 
 function publicComposerDeclaredAuthorizationLabel(value: unknown, profileId: string) {
-  const fallback = profileId === 'assisted-autonomy'
+  const defaultLabel = profileId === 'assisted-autonomy'
     ? 'Assisted Autonomy'
     : profileId === 'research-sandbox-max'
       ? 'Research Sandbox Max'
       : 'High Autonomy';
-  if (typeof value !== 'string') return fallback;
+  return sanitizedPublicComposerDeclaredLabel(value, defaultLabel);
+}
+
+function sanitizedPublicComposerDeclaredLabel(value: unknown, defaultLabel: string | undefined) {
+  if (typeof value !== 'string') return defaultLabel;
   const compact = value.replace(/\s+/g, ' ').trim().slice(0, 48);
-  if (!compact || /(?:secret|token|api.?key|authorization|password|provider|modelName|modelProvider|modelBaseUrl|baseUrl|endpoint|url|workspacePath|profile|https?:\/\/|\/Users\/|\/Applications\/|\/tmp\/|sk-)/i.test(compact)) return fallback;
+  if (!compact || PUBLIC_COMPOSER_LABEL_INTERNAL_DETAIL_PATTERN.test(compact)) return defaultLabel;
   return compact;
 }
 

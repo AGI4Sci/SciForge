@@ -37,7 +37,6 @@ test('composer shows Codex-style context hints without provider, model, profile,
   assert.match(html, /Local environment/);
   assert.match(html, /data-local-environment="true"/);
   assert.match(html, /Assistant connected/);
-  assert.match(html, /Writable/);
   assert.match(html, /Autonomy/);
   assert.match(html, /High Autonomy/);
   for (const id of ['assisted-autonomy', 'high-autonomy', 'research-sandbox-max']) {
@@ -90,7 +89,7 @@ test('composer keeps unset runtime context generic', () => {
 
   assert.match(html, /No workspace/);
   assert.match(html, /Connection not configured/);
-  assert.match(html, /Permission not set/);
+  assert.doesNotMatch(html, /Permission not set|Permission set|Writable|Read-only/i);
   assert.doesNotMatch(html, /provider|runtime codex|run id/i);
   assert.doesNotMatch(html, /\bprofile\b/i);
 });

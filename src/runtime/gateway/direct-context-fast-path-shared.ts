@@ -1,7 +1,7 @@
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
-import { runtimeResultViewSlotsPolicy } from '../../../packages/presentation/interactive-views';
+import { runtimeResultViewSlotsPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import {
   DIRECT_CONTEXT_FAST_PATH_POLICY,
   buildDirectContextFastPathItems,
@@ -53,6 +53,13 @@ export interface DirectContextDecision {
   transformMode?: DirectContextTransformMode;
   sufficiency: 'sufficient' | 'insufficient';
   blockReason?: string;
+  semanticSignal?: {
+    schemaVersion: 'sciforge.direct-context.semantic-signal.v1';
+    signal: 'refs-backed-bounded-artifact-followup';
+    refsFirstEvidence: boolean;
+    lexicalFeatures: string[];
+    confidence: 'low' | 'medium';
+  };
 }
 
 function directContextUiManifest(primaryArtifactRef: string, primaryArtifactType: string) {
@@ -501,6 +508,8 @@ export function fallbackDirectContextDecisionForBoundedArtifactFollowup(request:
     : records;
   const refs = uniqueStrings(scopedRecords.flatMap((artifact) => directContextRefTokensFromRecord(artifact)));
   if (!refs.length) return undefined;
+  const forbidsFreshWork = boundedArtifactFollowupForbidsFreshWork(request.prompt);
+  const explicitSelectedOnly = explicitSelectedOnlyPrompt(request.prompt);
   return {
     decisionRef: `decision:harness-bounded-artifact-${sha1(JSON.stringify({ prompt: request.prompt, refs })).slice(0, 10)}`,
     decisionOwner: 'harness-policy',
@@ -510,6 +519,17 @@ export function fallbackDirectContextDecisionForBoundedArtifactFollowup(request:
     allowDirectContext: true,
     transformMode: directContextBoundedArtifactTransformMode(request.prompt),
     sufficiency: 'sufficient',
+    semanticSignal: {
+      schemaVersion: 'sciforge.direct-context.semantic-signal.v1',
+      signal: 'refs-backed-bounded-artifact-followup',
+      refsFirstEvidence: true,
+      lexicalFeatures: [
+        'bounded-artifact-followup',
+        ...(forbidsFreshWork ? ['forbids-fresh-work'] : []),
+        ...(explicitSelectedOnly ? ['explicit-selected-only'] : []),
+      ],
+      confidence: forbidsFreshWork || explicitSelectedOnly ? 'medium' : 'low',
+    },
   };
 }
 
@@ -630,6 +650,7 @@ function directContextRecordMatchesSelectedRef(record: Record<string, unknown>, 
 
 export function artifactMutationFollowupRequiresBackend(text: string) {
   if (explicitAnswerOnlyNoToolsRequested(text)) return false;
+  if (explicitReadOnlyNoMutationRequested(text)) return false;
   if (readOnlyArtifactInfoRequested(text)) return false;
   if (readOnlyHypotheticalArtifactRevisionRequested(text)) return false;
   const refersToExistingContext = /(previous|prior|last|existing|current|visible|selected|above|artifact|matrix|report|deliverable|document|file|workspace|上一轮|之前|已有|当前|选中|证据矩阵|报告|产物|交付物|文档|文件)/i.test(text);
@@ -637,6 +658,10 @@ export function artifactMutationFollowupRequiresBackend(text: string) {
   const deliverableScope = /(artifact|file|document|deliverable|workspace|path|\.md|decision log|risk register|timeline|budget|scope|success metrics|artifact\/file|产物|交付物|文档|文件|路径|决策日志|风险登记|时间线|预算|成功指标|所有受影响结论)/i.test(text);
   const asksForPaths = /(artifact\/file path|artifact path|file path|workspace file|updated artifact|new file|路径|更新后的 artifact|新的 artifact|新文件|文件路径)/i.test(text);
   return refersToExistingContext && ((asksForMutation && deliverableScope) || asksForPaths);
+}
+
+function explicitReadOnlyNoMutationRequested(text: string) {
+  return /(?:read[-\s]?only|only read|inspect only|do not (?:rewrite|write|modify|edit|save)|don't (?:rewrite|write|modify|edit|save)|no changes)|只读|只检查|不要(?:重写|写入|写回|覆盖|保存|修改|更新)|不(?:要)?(?:重写|写入|写回|覆盖|保存|修改|更新)/i.test(text);
 }
 
 function readOnlyArtifactInfoRequested(text: string) {
@@ -696,11 +721,17 @@ export function isBoundedAnswerArtifact(value: unknown) {
 }
 
 export function directContextDecisionAllowsAnswer(decision: DirectContextDecision) {
+  // Final direct-context allow truth must come from structured decision semantics and refs,
+  // not lexical feature detectors that only hint at intent.
+  const harnessSemanticSignalOk = decision.decisionOwner !== 'harness-policy'
+    || (decision.semanticSignal?.schemaVersion === 'sciforge.direct-context.semantic-signal.v1'
+      && decision.semanticSignal.refsFirstEvidence === true);
   return decision.allowDirectContext === true
     && decision.sufficiency === 'sufficient'
     && Boolean(decision.decisionRef)
     && decision.requiredTypedContext.length > 0
-    && decision.usedRefs.length > 0;
+    && decision.usedRefs.length > 0
+    && harnessSemanticSignalOk;
 }
 
 export function stringField(value: unknown) {

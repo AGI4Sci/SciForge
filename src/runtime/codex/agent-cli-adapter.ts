@@ -87,6 +87,9 @@ export interface AgentCliStartTurnInput {
     schemaVersion: 'sciforge.runtime-codex.host-intent.v1';
     kind: 'computer-use-native-route';
     source: 'host-owned';
+    completionEvidencePolicy?: Record<string, unknown>;
+    computerUseNext?: Record<string, unknown>;
+    computerUseLong?: Record<string, unknown>;
   };
   guiExtension?: {
     enabled?: boolean;

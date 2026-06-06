@@ -37,6 +37,10 @@ PROMPT_NAME = "semantic-verifier-prompt.txt"
 DIAGNOSTIC_BODY_READ_LIMIT = 64 * 1024
 PROJECT_VERIFIER_MODEL_ID = "sciforge-router"
 PROJECT_VERIFIER_MODEL_IDS = ("sciforge-router", "model-router.capability.computer-use.verifier-translator", "sciforge-router-no-temperature")
+LEGACY_DIRECT_PROVIDER_DIAGNOSTIC_ONLY = True
+PRODUCT_MODEL_ROUTER_CALL_SURFACE = False
+PRODUCT_DEFAULT_ACCEPTANCE_ALLOWED = False
+USER_ACCEPTANCE_ELIGIBLE = False
 
 DEFAULT_PROMPT = (
     "Verify this Computer Use screenshot evidence. Return only JSON with keys "
@@ -275,6 +279,7 @@ def run_semantic_verifier_probe(
             "evidenceRefs": [str(image_path), str(prompt_ref)],
             **vlm_evidence,
             "rawPayloadWritten": False,
+            **_diagnostic_boundary_fields(),
         },
     )
     _write_json(
@@ -294,6 +299,7 @@ def run_semantic_verifier_probe(
             **vlm_evidence,
             "rawPayloadWritten": False,
             "inlineImageWritten": False,
+            **_diagnostic_boundary_fields(),
         },
     )
     manifest = {
@@ -320,10 +326,21 @@ def run_semantic_verifier_probe(
         **vlm_evidence,
         "rawPayloadWritten": False,
         "inlineImageWritten": False,
+        **_diagnostic_boundary_fields(),
         "note": "This probe verifies the package metadata boundary; verifier output remains optional evidence and does not own execution, coordinates, or completion.",
     }
     _write_json(output_dir / MANIFEST_NAME, manifest)
     return manifest
+
+
+def _diagnostic_boundary_fields() -> dict[str, Any]:
+    return {
+        "legacyDirectProviderDiagnosticOnly": LEGACY_DIRECT_PROVIDER_DIAGNOSTIC_ONLY,
+        "productModelRouterCallSurface": PRODUCT_MODEL_ROUTER_CALL_SURFACE,
+        "productDefaultAcceptanceAllowed": PRODUCT_DEFAULT_ACCEPTANCE_ALLOWED,
+        "diagnosticOnly": LEGACY_DIRECT_PROVIDER_DIAGNOSTIC_ONLY,
+        "userAcceptanceEligible": USER_ACCEPTANCE_ELIGIBLE,
+    }
 
 
 def _load_vision_config(config_file: Path | None) -> VisionConfig | None:
@@ -1342,6 +1359,7 @@ def _blocked_manifest(
         "rawPayloadWritten": False,
         "inlineImageWritten": False,
         "providerDiagnostics": dict(provider_diagnostics) if provider_diagnostics else None,
+        **_diagnostic_boundary_fields(),
     }
 
 

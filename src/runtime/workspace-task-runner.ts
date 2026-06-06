@@ -6,7 +6,7 @@ import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import type { WorkspaceTaskRunResult, WorkspaceTaskSpec } from './runtime-types.js';
 import { pruneTaskInputRetention } from './workspace-retention.js';
 import { buildWorkspaceTaskInput } from './workspace-task-input.js';
-import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy';
+import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy.js';
 
 const execFileAsync = promisify(execFile);
 const PARTIAL_CHECKPOINT_MAX_FILES = 40;

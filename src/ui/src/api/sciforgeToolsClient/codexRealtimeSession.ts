@@ -277,10 +277,24 @@ function parseRuntimeSocketMessage(value: unknown):
 
 function runtimeSocketPayloadIsTerminal(eventName: string, data: unknown) {
   const eventType = eventName.trim().toLowerCase();
-  if (eventType === 'done' || eventType === 'failed' || eventType === 'cancelled' || eventType === 'canceled' || eventType === 'error') return true;
+  if (eventType === 'done' || eventType === 'cancelled' || eventType === 'canceled') return true;
   if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
   const record = data as Record<string, unknown>;
   const type = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+  const status = typeof record.status === 'string' ? record.status.trim().toLowerCase() : '';
+  const ok = typeof record.ok === 'boolean' ? record.ok : undefined;
+  const hasExplicitError = typeof record.error === 'string' && record.error.trim().length > 0;
+  // Event names are transport labels, not task truth. Keep diagnostic
+  // error/failed events streaming until the payload itself declares terminal
+  // failure or a final done/cancelled event arrives.
+  if (eventType === 'error' || eventType === 'failed') {
+    return ok === false
+      || type === 'error'
+      || type === 'failed'
+      || status === 'failed'
+      || status === 'error'
+      || hasExplicitError;
+  }
   return type === 'done'
     || type === 'failed'
     || type === 'cancelled'

@@ -230,7 +230,7 @@ test('CU-NEXT dense grounding and anti-shortcut coverage reject DOM, Playwright,
     targetDescription: 'Export button in the top toolbar, excluding Save, AutoSave, and Share.',
     coarseWindowScreenshotRef: '.sciforge/vision-runs/cu-next-07/dense-toolbar-window.png',
     focusCropRef: '.sciforge/vision-runs/cu-next-07/export-toolbar-focus-crop.png',
-    fineGroundingDiagnosticRef: '.sciforge/vision-runs/cu-next-07/kv-ground-export-diagnostics.json',
+    fineGroundingDiagnosticRef: '.sciforge/vision-runs/cu-next-07/model-router-grounding-export-diagnostics.json',
     rejectedTargetRefs: [
       '.sciforge/vision-runs/cu-next-07/rejected-save-crosshair.json',
       '.sciforge/vision-runs/cu-next-07/rejected-share-crosshair.json',
@@ -241,7 +241,7 @@ test('CU-NEXT dense grounding and anti-shortcut coverage reject DOM, Playwright,
   assert.doesNotMatch(denseGrounding.targetDescription, /near AutoSave/i);
   assert.match(denseGrounding.targetDescription, /excluding Save, AutoSave, and Share/);
   assert.match(denseGrounding.focusCropRef, /focus-crop\.png$/);
-  assert.match(denseGrounding.fineGroundingDiagnosticRef, /kv-ground.*diagnostics\.json$/);
+  assert.match(denseGrounding.fineGroundingDiagnosticRef, /model-router-grounding.*diagnostics\.json$/);
   assert.equal(denseGrounding.rejectedTargetRefs.length, 2);
 
   const guard = evaluateCuUserAcceptanceAntiShortcutGuard([

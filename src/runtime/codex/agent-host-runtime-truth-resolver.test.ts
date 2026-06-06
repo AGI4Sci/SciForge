@@ -8,7 +8,7 @@ import {
   createDefaultCodexAgentHostRuntimeTruthResolver,
 } from './agent-host-runtime-truth-resolver.js';
 import type { BrowserHostSessionManager } from '../browser-host-session.js';
-import { createWindowActionSession } from '../window-action-session.js';
+import { createActorCursor, createWindowActionSession } from '../window-action-session.js';
 import type { WindowActionSessionStore } from '../window-action-session-store.js';
 import {
   recordVirtualAppScreenNativeHostSession,
@@ -19,7 +19,10 @@ import {
   recordVirtualAppScreenProviderSession,
   resetVirtualAppScreenProviderSessionStoreForTests,
 } from '../computer-use/virtual-app-screen-provider-session-store.js';
-import type { NormalizedCodexAgentHostInput } from './agent-host-turn-loop.js';
+import {
+  resolveCodexAgentHostRuntimeTruth,
+  type NormalizedCodexAgentHostInput,
+} from './agent-host-turn-loop.js';
 import type {
   NativeHostFrame,
   NativeHostLiveSurface,
@@ -67,6 +70,53 @@ test('default Agent Host runtime truth resolver blocks UI-only readiness hints',
   assert.equal(truth?.observation?.fresh, false);
   assert.deepEqual(truth?.permissions?.refs, []);
   assert.equal(truth?.permissions?.stopCancelPath, false);
+});
+
+test('Agent Host runtime truth sanitizer rejects unsafe structured adapter strings and refs', async () => {
+  const truth = await resolveCodexAgentHostRuntimeTruth({
+    input: normalizedAgentHostInput({ refs: ['browser-host-session:structured-sanitizer'] }),
+    commandText: 'Click the visible button.',
+    workspacePath: '/tmp/workspace',
+    runtimeTruthResolver: async () => ({
+      schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
+      adapter: {
+        providerId: 'https://provider.example/raw?token=secret-token',
+        refs: [
+          'adapter-registry:structured-sanitizer',
+          'ui:projected-adapter',
+          'data:image/png;base64,AAAA',
+        ],
+        capabilityRefs: [
+          'runtime-truth:computer-use-capability/structured-sanitizer',
+          'fixture:capability',
+        ],
+        inputIsolation: {
+          mode: 'raw payload bearer token',
+          refsOnly: true,
+          sharedSystemInput: false,
+          requiresFocusLease: false,
+          refs: [
+            'lease:structured-sanitizer/input',
+            'https://provider.example/frame',
+            'bearer:projected-token',
+          ],
+        },
+      },
+      refs: [
+        'runtime-truth:structured-sanitizer',
+        'ui:projected-truth',
+        'Authorization: Bearer secret-token',
+      ],
+    }),
+  });
+
+  assert.equal(truth?.adapter?.providerId, undefined);
+  assert.equal(truth?.adapter?.inputIsolation?.mode, undefined);
+  assert.deepEqual(truth?.adapter?.refs, ['adapter-registry:structured-sanitizer']);
+  assert.deepEqual(truth?.adapter?.capabilityRefs, ['runtime-truth:computer-use-capability/structured-sanitizer']);
+  assert.deepEqual(truth?.adapter?.inputIsolation?.refs, ['lease:structured-sanitizer/input']);
+  assert.deepEqual(truth?.refs, ['runtime-truth:structured-sanitizer']);
+  assert.doesNotMatch(JSON.stringify(truth), /gui(?:\.|:)|ui:|fixture:|replay:|https?:\/\/|data:image|base64|raw\b|payload\b|secret|token|bearer/i);
 });
 
 test('default Agent Host runtime truth resolver verifies BrowserHostSession refs from runtime state', async () => {
@@ -195,6 +245,36 @@ test('default Agent Host runtime truth resolver materializes BrowserHostSession 
     assert.ok(truth?.refs?.includes('adapter-registry:browser-host-session/computer-use'));
     assert.ok(truth?.permissions?.refs?.some((ref) => ref.startsWith('permission:turn/codex-command-default-act-time/')));
     assert.equal(truth?.permissions?.stopCancelPath, true);
+    assert.deepEqual(truth?.sessions?.sessionReadyRefs, [
+      'browser-host-session:verified',
+      'window-action-session:browser-host-session/verified',
+    ]);
+    assert.deepEqual(truth?.sessions?.targetRefs, [
+      'browser-host-session:verified',
+      'window-action-session:browser-host-session/verified',
+    ]);
+    assert.deepEqual(truth?.sessions?.observationRefs, [
+      'browser-host-session:verified/frame.png',
+      'browser-host-session:verified/screenshot.png',
+    ]);
+    assert.deepEqual(truth?.sessions?.inputLeaseRefs, ['lease:browser-host-session/verified/agent-host']);
+    assert.equal(truth?.adapter?.providerId, 'sciforge.browser-host-session.computer-use-adapter');
+    assert.ok(truth?.adapter?.refs?.includes('adapter-registry:browser-host-session/computer-use'));
+    assert.ok(truth?.adapter?.capabilityRefs?.includes('runtime-truth:computer-use-capability/browser-host-session/verified'));
+    assert.deepEqual(truth?.adapter?.inputIsolation, {
+      mode: 'browser-host-native-surface',
+      refsOnly: true,
+      sharedSystemInput: false,
+      requiresFocusLease: false,
+      singleInteractiveTruth: true,
+      secondTruthSource: false,
+      refs: ['browser-host-session:verified/live-surface'],
+    });
+    assert.ok(truth?.permissions?.permissionRefs?.some((ref) => ref.startsWith('permission:turn/codex-command-default-act-time/')));
+    assert.deepEqual(truth?.permissions?.appAllowlistRefs, ['runtime-truth:app-allowlist/browser-host-session/verified']);
+    assert.deepEqual(truth?.permissions?.windowAllowlistRefs, ['runtime-truth:window-allowlist/browser-host-session/verified']);
+    assert.deepEqual(truth?.permissions?.riskPreviewRefs, ['action-ledger:browser-host-session/verified/risk/ordinary-navigation']);
+    assert.deepEqual(truth?.controlPath?.cancelRefs, ['cancel:runtime-codex/codex-command-default-act-time/codex-command-default-act-time-attempt-1']);
     assert.ok(truth?.refs?.includes('stop:browser-host-session/verified/stop'));
     assert.ok(truth?.refs?.includes('stop:browser-host-session/verified/close'));
     assert.ok(truth?.refs?.includes('cancel:runtime-codex/codex-command-default-act-time/codex-command-default-act-time-attempt-1'));
@@ -353,7 +433,7 @@ test('default Agent Host runtime truth resolver materializes active WindowAction
   assert.ok(permissionLedger);
   assert.ok(stopCancelTakeoverStore);
   const windowStore = actTimeStores.windowActionSessionStore as unknown as WindowActionSessionStore;
-  windowStore.upsert(createWindowActionSession({
+  const activeSession = createWindowActionSession({
     id: 'desktop-window-main',
     windowRef: 'desktop-native:window/main',
     app: { id: 'com.example.App', name: 'Example App', kind: 'ordinary-app' },
@@ -362,9 +442,40 @@ test('default Agent Host runtime truth resolver materializes active WindowAction
       { kind: 'fake-ui', ref: 'ui:window-ready' },
     ],
     timestamp: now,
-  }), {
+  });
+  activeSession.actorCursor = createActorCursor({
+    agentId: 'codex-agent-host',
+    cursorId: 'main-cursor',
+    color: '#2563eb',
+    label: 'Codex',
+    status: 'observing',
+    evidenceRefs: [
+      'window-action-session:desktop-window-main/actor-cursor/main-cursor',
+      'ui:projected-cursor',
+    ],
+  });
+  activeSession.scopedInputAdapters = [{
+    schemaVersion: 'sciforge.scoped-input-adapter.v1',
+    ref: 'window-action-session:desktop-window-main/scoped-input/main',
+    agentId: 'codex-agent-host',
+    actorCursorRef: 'window-action-session:desktop-window-main/actor-cursor/main-cursor',
+    windowActionSessionRef: 'window-action-session:desktop-window-main',
+    targetWindowRef: 'desktop-native:window/main',
+    adapter: 'accessibility-ui-automation',
+    focusMode: 'requires-focus',
+    inputQueueRef: 'window-action-session:desktop-window-main/input-queue/main',
+    focusLeaseRef: 'lease:window-action-session/desktop-window-main/focus/main',
+    evidenceRefs: [
+      { kind: 'window-action-session', ref: 'window-action-session:desktop-window-main/scoped-input/main' },
+      { kind: 'lease', ref: 'lease:window-action-session/desktop-window-main/focus/main' },
+      { kind: 'ui', ref: 'ui:projected-input' },
+    ],
+    createdAt: now,
+    updatedAt: now,
+  }];
+  windowStore.upsert(activeSession, {
     targetRefs: ['desktop-native:window/main'],
-    observationRefs: ['desktop-native:window/main/frame'],
+    observationRefs: ['desktop-native:window/main/frame', 'ui:projected-frame'],
     refs: ['action-ledger:desktop-window-main/upsert', 'gui.present:fake-window'],
     timestamp: now,
   });
@@ -395,11 +506,38 @@ test('default Agent Host runtime truth resolver materializes active WindowAction
   assert.equal(truth?.readiness?.nativeBridge, 'blocked');
   assert.equal(truth?.readiness?.nativeSurface, 'blocked');
   assert.equal(truth?.readiness?.windowActionSession, 'ready');
-  assert.equal(truth?.readiness?.computerUseAdapter, 'blocked');
+  assert.equal(truth?.readiness?.computerUseAdapter, 'ready');
   assert.equal(truth?.target?.bound, true);
   assert.deepEqual(truth?.target?.refs, ['desktop-native:window/main', 'window-action-session:desktop-window-main']);
   assert.equal(truth?.observation?.fresh, true);
   assert.deepEqual(truth?.observation?.refs, ['desktop-native:window/main/frame']);
+  assert.deepEqual(truth?.sessions?.sessionReadyRefs, [
+    'window-action-session:desktop-window-main',
+    'action-ledger:window-action-session/desktop-window-main/upsert',
+    'lease:window-action-session/desktop-window-main/agent-host',
+    'desktop-native:window/main',
+    'action-ledger:desktop-window-main/upsert',
+    'window-action-session:desktop-window-main/actor-cursor/main-cursor',
+    'window-action-session:desktop-window-main/scoped-input/main',
+    'lease:window-action-session/desktop-window-main/focus/main',
+  ]);
+  assert.deepEqual(truth?.sessions?.targetRefs, ['desktop-native:window/main', 'window-action-session:desktop-window-main']);
+  assert.deepEqual(truth?.sessions?.actorCursorRefs, ['window-action-session:desktop-window-main/actor-cursor/main-cursor']);
+  assert.deepEqual(truth?.sessions?.inputLeaseRefs, ['lease:window-action-session/desktop-window-main/agent-host']);
+  assert.deepEqual(truth?.sessions?.focusLeaseRefs, ['lease:window-action-session/desktop-window-main/focus/main']);
+  assert.deepEqual(truth?.sessions?.observationRefs, ['desktop-native:window/main/frame']);
+  assert.ok(truth?.refs?.includes('adapter-registry:sciforge.window-action-session.computer-use-adapter'));
+  assert.ok(truth?.refs?.includes('runtime-truth:computer-use-adapter/window-action-session/desktop-window-main'));
+  assert.deepEqual(truth?.adapter?.inputIsolation, {
+    mode: 'requires-focus',
+    refsOnly: true,
+    sharedSystemInput: false,
+    requiresFocusLease: true,
+    refs: [
+      'window-action-session:desktop-window-main/scoped-input/main',
+      'lease:window-action-session/desktop-window-main/focus/main',
+    ],
+  });
   assert.ok(truth?.permissions?.refs?.some((ref) => ref.startsWith('permission:turn/codex-command-window-action/')));
   assert.equal(truth?.permissions?.stopCancelPath, true);
   assert.ok(truth?.refs?.includes('stop:window-action-session/desktop-window-main/stop'));
@@ -527,6 +665,57 @@ test('default Agent Host runtime truth resolver keeps WindowActionSession eviden
   ]);
   assert.equal(truth?.permissions?.stopCancelPath, true);
   assert.doesNotMatch(JSON.stringify(truth), /gui(?:\.|:)|ui:|fixture:|replay:|https?:\/\/|data:image|base64|token|bearer/i);
+});
+
+test('default Agent Host runtime truth resolver fail-closes WindowActionSession adapter readiness without a registry handler', async () => {
+  const now = '2026-06-06T00:04:30.000Z';
+  const actTimeStores = createDefaultCodexAgentHostBrowserActTimeStores({
+    now: () => new Date(now),
+  });
+  const windowStore = actTimeStores.windowActionSessionStore as unknown as WindowActionSessionStore;
+  windowStore.upsert(createWindowActionSession({
+    id: 'desktop-window-no-handler',
+    windowRef: 'desktop-native:window/no-handler',
+    app: { id: 'com.example.App', name: 'Example App', kind: 'ordinary-app' },
+    evidenceRefs: [{ kind: 'desktop-native', ref: 'desktop-native:window/no-handler' }],
+    timestamp: now,
+  }), {
+    targetRefs: ['desktop-native:window/no-handler'],
+    observationRefs: ['desktop-native:window/no-handler/frame'],
+    timestamp: now,
+  });
+  const resolver = createDefaultCodexAgentHostRuntimeTruthResolver({
+    env: {},
+    actTimeStores: {
+      ...actTimeStores,
+      computerUseAdapterRegistry: {
+        async materializeBrowserHostAdapter() {
+          return undefined;
+        },
+      },
+    },
+    now: () => new Date(now),
+  });
+
+  const truth = await resolver({
+    input: {},
+    agentHostInput: normalizedAgentHostInput({
+      refs: ['desktop-native:window/no-handler'],
+      target: { refs: ['desktop-native:window/no-handler'] },
+      observation: { refs: ['desktop-native:window/no-handler/frame'] },
+    }),
+    commandText: 'Click the visible export button in the current desktop window.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-window-action-no-handler',
+    attemptId: 'codex-command-window-action-no-handler-attempt-1',
+  });
+
+  assert.equal(truth?.readiness?.windowActionSession, 'ready');
+  assert.equal(truth?.readiness?.computerUseAdapter, 'blocked');
+  assert.equal(truth?.target?.bound, true);
+  assert.equal(truth?.permissions?.stopCancelPath, true);
+  assert.ok(truth?.refs?.includes('window-action-session:desktop-window-no-handler'));
+  assert.ok(!truth?.refs?.some((ref) => ref.includes('computer-use-adapter/window-action-session/desktop-window-no-handler')));
 });
 
 test('default Agent Host runtime truth resolver materializes VirtualAppScreen Native Host refs from runtime owner stores', async () => {

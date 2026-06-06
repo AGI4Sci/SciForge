@@ -9,8 +9,55 @@ export function runtimeGuiChoicesFromEventPayload(payload: unknown): RuntimeGuiC
 }
 
 export function isTerminalEquivalentRuntimeCommand(commandText: string) {
-  return commandText.length > 0
-    && !/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(commandText);
+  const text = commandText.replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  if (/\b(?:deleteFile|triggerRecover|updateCapabilityPreference|UserActionApi|ProjectionApi)\b/.test(text)) return false;
+  return !isExecutableGuiRuntimeCommand(text);
+}
+
+const COMPUTER_USE_CONTROL_VERBS = new Set([
+  'approve',
+  'reject',
+  'cancel',
+  'stop',
+  'takeover',
+  'pause',
+  'resume',
+  'status',
+  'debug',
+]);
+
+const BROWSER_EXECUTABLE_VERBS = new Set([
+  'click',
+  'type',
+  'press',
+  'scroll',
+  'drag',
+  'move',
+  'hover',
+  'select',
+  'fill',
+  'screenshot',
+  'execute',
+  'eval',
+]);
+
+function isExecutableGuiRuntimeCommand(commandText: string) {
+  const match = commandText.match(/^\/([a-z0-9-]+)(?:\s+([a-z0-9-]+))?/i);
+  if (!match) return false;
+  const namespace = match[1]?.toLowerCase();
+  const verb = match[2]?.toLowerCase() ?? '';
+  if (namespace === 'computer-use') {
+    if (verb === 'input-intent') return !isVirtualScreenLeaseControlCommand(commandText);
+    return !COMPUTER_USE_CONTROL_VERBS.has(verb);
+  }
+  if (namespace === 'browser') return BROWSER_EXECUTABLE_VERBS.has(verb);
+  return false;
+}
+
+function isVirtualScreenLeaseControlCommand(commandText: string) {
+  return /(?:^|\s)--source\s+(?:"virtual-app-screen-control"|'virtual-app-screen-control'|virtual-app-screen-control)(?:\s|$)/.test(commandText)
+    && /(?:^|\s)--kind\s+(?:"(?:takeover|pause-agent|resume-agent|stop-session)"|'(?:takeover|pause-agent|resume-agent|stop-session)'|(?:takeover|pause-agent|resume-agent|stop-session))(?:\s|$)/.test(commandText);
 }
 
 function candidateGuiSurfaces(payload: unknown): unknown[] {

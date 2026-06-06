@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import type { GatewayRequest, ToolPayload, VerificationResult, WorkspaceRuntimeCallbacks } from './runtime-types.js';
 import { emitWorkspaceRuntimeEvent } from './workspace-runtime-events.js';
 import { sha1 } from './workspace-task-runner.js';
-import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy';
+import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy.js';
 
 const TOOL_ID = 'sciforge.local-tabular-analysis.csv';
 const execFileAsync = promisify(execFile);

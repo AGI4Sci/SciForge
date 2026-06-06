@@ -35,12 +35,7 @@ const rules: Rule[] = [
     id: 'provider-scenario-prompt-special-case',
     message: 'Runtime/UI code carries provider, scenario, or prompt special-case branching that should be manifest/catalog driven.',
     appliesTo: isLegacyPolicySurface,
-    match: (line, file) => isCodeLine(line)
-      && !/^export\s+/.test(line.trim())
-      && !isPackageManifestFallbackLine(line)
-      && /\b(provider|scenario|prompt)\b/i.test(`${basename(file)} ${line}`)
-      && /(?:^\s*(?:if|else if|switch|case)\b|\?\s|\.includes\(|\.startsWith\(|\.endsWith\(|\.match\(|\.test\(|new RegExp|\/[^/\n]+\/[a-z]*|===|!==)/.test(line)
-      && /(?:[`'"][a-z0-9][a-z0-9._:/-]*(?:[._:/-][a-z0-9][a-z0-9._:/-]*)+[`'"]|\/[^/\n]+\/[a-z]*|\b(?:provider|scenario|prompt)\s*(?:[.[]|===|!==))/.test(line),
+    match: isProviderScenarioPromptSpecialCaseLine,
   },
   {
     id: 'legacy-adapter-compat-reexport',
@@ -324,7 +319,16 @@ async function computerUseLegacyStructuralErrors(files: string[]): Promise<strin
     .filter((rel) => /^src\/runtime\//.test(rel)
       || /^packages\/actions\/computer-use\//.test(rel)
       || /^packages\/observe\/vision\//.test(rel)
+      || /^tools\/cu-next-(?:readiness-manifest|run)\.ts$/.test(rel)
       || /^tools\/computer-use-long-task-pool\//.test(rel));
+  const retiredGroundingProviderPattern = new RegExp(`\\b(?:${[
+    ['KV', '-', 'Ground'].join(''),
+    ['kv', '-', 'ground'].join(''),
+    ['kv', 'Ground'].join(''),
+    ['KV', 'Ground'].join(''),
+    `${['SCIFORGE', 'VISION', 'KV', 'GROUND'].join('_')}(?:_[A-Z0-9_]+)?`,
+    ['legacy', 'Kv', 'Ground', 'Compatible', 'Adapter'].join(''),
+  ].join('|')})\\b`);
   const bannedPatterns: Array<{ id: string; pattern: RegExp; message: string }> = [
     {
       id: 'legacy-action-loop',
@@ -344,12 +348,17 @@ async function computerUseLegacyStructuralErrors(files: string[]): Promise<strin
     {
       id: 'legacy-openai-compatible-grounder',
       pattern: /\bopenai-compatible-vision-grounder\b/,
-      message: 'openai-compatible visual grounder fallback must not be reintroduced; KV-Ground failures fail closed',
+      message: 'openai-compatible visual grounder fallback must not be reintroduced; use Model Router grounding translator',
     },
     {
       id: 'legacy-visual-grounder-config',
       pattern: /\bvisualGrounder(?:BaseUrl|ApiKey|Model|TimeoutMs|Config)?\b/,
-      message: 'visualGrounder config fields must not be reintroduced beside the KV-Ground provider',
+      message: 'visualGrounder config fields must not be reintroduced beside the Model Router grounding translator',
+    },
+    {
+      id: 'legacy-direct-grounding-active-path',
+      pattern: retiredGroundingProviderPattern,
+      message: 'retired direct grounding code paths must not remain active; use Model Router grounding translator',
     },
     {
       id: 'legacy-static-computer-use-actions',
@@ -360,6 +369,11 @@ async function computerUseLegacyStructuralErrors(files: string[]): Promise<strin
       id: 'legacy-vision-planner-env',
       pattern: /\bSCIFORGE_VISION_PLANNER(?:_[A-Z0-9_]+)?\b/,
       message: 'legacy vision planner env vars must not return; Computer Use planner config uses SCIFORGE_COMPUTER_USE_PLANNER_*.',
+    },
+    {
+      id: 'legacy-cu-next-package-schema-dependency',
+      pattern: /\btools\/computer-use-next\b/,
+      message: 'package action loop schema must stay TypeScript-owned and must not import tools/computer-use-next',
     },
   ];
 
@@ -410,6 +424,127 @@ async function computerUseLegacyStructuralErrors(files: string[]): Promise<strin
       }
     }
   }
+  errors.push(...await computerUseProductDefaultPathErrors());
+  return errors;
+}
+
+async function computerUseProductDefaultPathErrors(): Promise<string[]> {
+  const errors: string[] = [];
+  const scripts = await packageScripts();
+  const productScriptRoots = computerUseProductScriptRoots(scripts);
+  const productGraph = reachableScripts(scripts, productScriptRoots);
+  const legacyCommandPattern = /\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use|embedded-isolated-desktop|isolated[_-]desktop|novnc|noVNC|docker\s+build[\s\S]*computer-use/i;
+
+  for (const [name, command] of Object.entries(scripts)) {
+    if (!isComputerUseScript(name, command) || !legacyCommandPattern.test(command)) continue;
+    if (isLegacyDiagnosticScriptLabel(name, command)) continue;
+    errors.push(`package.json script "${name}" references legacy Python/isolated Computer Use routes without an opt-in, diagnostic, or legacy label.`);
+  }
+
+  for (const name of productGraph) {
+    const command = scripts[name] ?? '';
+    if (legacyCommandPattern.test(command)) {
+      errors.push(`product/default script "${name}" must stay TS-only and must not reference Python, pytest, sciforge_computer_use, Docker/noVNC, or isolated Computer Use routes.`);
+    }
+  }
+
+  const actionManifestText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'action-provider.manifest.json'));
+  const actionManifest = parseJsonRecord(actionManifestText);
+  const entrypoint = asRecord(actionManifest?.entrypoint);
+  const legacyPython = asRecord(actionManifest?.legacyPythonImplementation);
+  const entrypointText = JSON.stringify(entrypoint ?? {});
+  if (entrypoint?.type !== 'typescript-package') {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json entrypoint.type must be "typescript-package"; Python is legacy-obsolete and cannot be the product/default route.');
+  }
+  if (/\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use/i.test(entrypointText)) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json entrypoint must not reference Python, pytest, or sciforge_computer_use; move those commands under legacy diagnostic metadata.');
+  }
+  if (
+    legacyPython?.legacyObsolete !== true
+    || legacyPython?.diagnosticOnly !== true
+    || legacyPython?.productDefaultAcceptanceAllowed !== false
+  ) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json must declare legacyPythonImplementation as legacyObsolete=true, diagnosticOnly=true, and productDefaultAcceptanceAllowed=false.');
+  }
+  const mcpConfigText = await readTextIfExists(join(root, '.mcp.json'));
+  const mcpConfig = parseJsonRecord(mcpConfigText);
+  const mcpServers = asRecord(mcpConfig?.mcpServers);
+  for (const [serverName, serverValue] of Object.entries(mcpServers ?? {})) {
+    const server = asRecord(serverValue);
+    const serverText = JSON.stringify(server ?? {});
+    const exposesComputerUse = /computer[-_]use|sciforge_computer_use/i.test(`${serverName} ${serverText}`);
+    if (exposesComputerUse && legacyCommandPattern.test(serverText)) {
+      errors.push('.mcp.json must not expose the retired Python sciforge-computer-use MCP server by default; keep that path manual legacy diagnostic only.');
+    }
+  }
+  if (actionManifest?.virtualAppScreenRuntimeProductFallbackAllowed !== false) {
+    errors.push('packages/actions/computer-use/action-provider.manifest.json must explicitly set virtualAppScreenRuntimeProductFallbackAllowed=false for product/default acceptance.');
+  }
+
+  const readme = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'README.md'));
+  if (!/Python files are legacy-obsolete and cannot be referenced by product\/default acceptance/.test(readme)) {
+    errors.push('packages/actions/computer-use/README.md must state: "Python files are legacy-obsolete and cannot be referenced by product/default acceptance".');
+  }
+  const semanticVerifierProbeText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', 'semantic_verifier_probe.py'));
+  if (semanticVerifierProbeUsesDirectProvider(semanticVerifierProbeText)) {
+    if (
+      !/LEGACY_DIRECT_PROVIDER_DIAGNOSTIC_ONLY\s*=\s*True/.test(semanticVerifierProbeText)
+      || !/PRODUCT_MODEL_ROUTER_CALL_SURFACE\s*=\s*False/.test(semanticVerifierProbeText)
+      || !/PRODUCT_DEFAULT_ACCEPTANCE_ALLOWED\s*=\s*False/.test(semanticVerifierProbeText)
+      || !/USER_ACCEPTANCE_ELIGIBLE\s*=\s*False/.test(semanticVerifierProbeText)
+      || !/"legacyDirectProviderDiagnosticOnly"\s*:/.test(semanticVerifierProbeText)
+      || !/"productModelRouterCallSurface"\s*:/.test(semanticVerifierProbeText)
+    ) {
+      errors.push('packages/actions/computer-use/sciforge_computer_use/semantic_verifier_probe.py semantic verifier direct-provider probe must remain explicit legacy diagnostic-only and outside the product Model Router call surface.');
+    }
+    const semanticVerifierContract: Record<string, unknown> = asRecord(actionManifest?.semanticVerifierProbeContract) ?? {};
+    if (
+      semanticVerifierContract.legacyDirectProviderDiagnosticOnly !== true
+      || semanticVerifierContract.productModelRouterCallSurface !== false
+      || semanticVerifierContract.productDefaultAcceptanceAllowed !== false
+      || semanticVerifierContract.userAcceptanceEligible !== false
+    ) {
+      errors.push('packages/actions/computer-use/action-provider.manifest.json semanticVerifierProbeContract must declare legacyDirectProviderDiagnosticOnly=true, productModelRouterCallSurface=false, productDefaultAcceptanceAllowed=false, and userAcceptanceEligible=false.');
+    }
+    if (!/semantic verifier direct-provider probe is `legacyDirectProviderDiagnosticOnly=true`, `productModelRouterCallSurface=false`, and `productDefaultAcceptanceAllowed=false`/.test(readme)) {
+      errors.push('packages/actions/computer-use/README.md must state that the semantic verifier direct-provider probe is legacy diagnostic-only and outside the CU Model Router product call surface.');
+    }
+  }
+
+  const pythonMainText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', '__main__.py'));
+  const pythonCliText = await readTextIfExists(join(root, 'packages', 'actions', 'computer-use', 'sciforge_computer_use', 'cli.py'));
+  const diagnosticEnvName = 'SCIFORGE_COMPUTER_USE_LEGACY_PYTHON_DIAGNOSTIC';
+  const diagnosticGateIndex = pythonCliText.indexOf('if not _legacy_python_diagnostic_enabled():');
+  const parserIndex = pythonCliText.indexOf('argparse.ArgumentParser');
+  if (!/from \.cli import main/.test(pythonMainText) || !/raise SystemExit\(main\(\)\)/.test(pythonMainText)) {
+    errors.push('packages/actions/computer-use/sciforge_computer_use/__main__.py must stay a thin module hook through cli.main().');
+  }
+  if (!pythonCliText.includes(diagnosticEnvName)) {
+    errors.push(`packages/actions/computer-use/sciforge_computer_use/cli.py must declare ${diagnosticEnvName} for explicit diagnostic-only Python CLI opt-in.`);
+  }
+  if (!/os\.environ\.get\(LEGACY_PYTHON_DIAGNOSTIC_ENV\)\s*==\s*["']1["']/.test(pythonCliText)) {
+    errors.push(`packages/actions/computer-use/sciforge_computer_use/cli.py must require ${diagnosticEnvName}=1 before the legacy Python CLI can run.`);
+  }
+  if (diagnosticGateIndex < 0 || parserIndex < 0 || diagnosticGateIndex > parserIndex) {
+    errors.push('packages/actions/computer-use/sciforge_computer_use/cli.py must enforce the legacy Python diagnostic env gate before argument parsing or default execution.');
+  }
+  if (!/failed_stage=LEGACY_PYTHON_DIAGNOSTIC_FAILURE_STAGE/.test(pythonCliText) || !/--host-port-stdio[\s\S]{0,160}_emit_protocol_final/.test(pythonCliText)) {
+    errors.push('packages/actions/computer-use/sciforge_computer_use/cli.py must fail closed with structured diagnostics for default and host-port stdio Python execution.');
+  }
+
+  const defaultMaterializerText = await readTextIfExists(join(root, 'src', 'runtime', 'codex', 'agent-host-computer-use-act-materializer.ts'));
+  if (/\bpython3?\b|\bpytest\b|sciforge_computer_use|packages\/actions\/computer-use\/sciforge_computer_use/i.test(defaultMaterializerText)) {
+    errors.push('src/runtime/codex/agent-host-computer-use-act-materializer.ts must not depend on Python, pytest, or sciforge_computer_use.');
+  }
+  if (/virtualAppScreen/i.test(defaultMaterializerText)) {
+    for (const name of productGraph) {
+      const command = scripts[name] ?? '';
+      if (/\bbackend:codex-runtime:server\b|codex-runtime-standalone-server|createDefaultComputerUseActMaterializer|agent-host-computer-use-act-materializer/i.test(command)) {
+        errors.push(`product/default script "${name}" must not route product acceptance through the runtime default VirtualAppScreen materializer fallback.`);
+      }
+    }
+  }
+
   return errors;
 }
 
@@ -419,6 +554,12 @@ async function readTextIfExists(path: string) {
   } catch {
     return '';
   }
+}
+
+function semanticVerifierProbeUsesDirectProvider(text: string) {
+  if (!text) return false;
+  return /visionLLM/.test(text)
+    && /urllib\.request|Authorization|chat[_-]?completions|\/chat\/completions|provider_endpoints/i.test(text);
 }
 
 function trackedMigration(file: string, rule: string) {
@@ -469,6 +610,20 @@ function isPackageManifestFallbackLine(line: string) {
   return /\bfallbackModuleIds\s*:/.test(line) || /\bfallbackAcceptable\s*:/.test(line);
 }
 
+function isProviderScenarioPromptSpecialCaseLine(line: string, file: string) {
+  const branchSurface = stripQuotedStringLiterals(line);
+  return isCodeLine(line)
+    && !/^export\s+/.test(line.trim())
+    && !isPackageManifestFallbackLine(line)
+    && /\b(provider|scenario|prompt)\b/i.test(`${basename(file)} ${line}`)
+    && /(?:^\s*(?:if|else if|switch|case)\b|\?\s|\.includes\(|\.startsWith\(|\.endsWith\(|\.match\(|\.test\(|new RegExp|\/[^/\n]+\/[a-z]*|===|!==)/.test(branchSurface)
+    && /(?:[`'"][a-z0-9][a-z0-9._:/-]*(?:[._:/-][a-z0-9][a-z0-9._:/-]*)+[`'"]|\/[^/\n]+\/[a-z]*|\b(?:provider|scenario|prompt)\s*(?:[.[]|===|!==))/.test(line);
+}
+
+function stripQuotedStringLiterals(line: string) {
+  return line.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, '');
+}
+
 function isLegacyPolicySurface(file: string) {
   return /^src\/runtime\/gateway\//.test(file)
     || /^src\/runtime\/skill-registry\//.test(file)
@@ -491,6 +646,73 @@ function isForbiddenFieldRegistryLine(lines: string[], index: number) {
     if (cursor < index && /^\]\);?$/.test(candidate)) return false;
   }
   return false;
+}
+
+async function packageScripts(): Promise<Record<string, string>> {
+  const packageJson = parseJsonRecord(await readTextIfExists(join(root, 'package.json')));
+  const scripts = asRecord(packageJson?.scripts);
+  if (!scripts) return {};
+  return Object.fromEntries(
+    Object.entries(scripts).filter((entry): entry is [string, string] => typeof entry[1] === 'string'),
+  );
+}
+
+function computerUseProductScriptRoots(scripts: Record<string, string>) {
+  return Object.keys(scripts).filter((name) => {
+    if (isLegacyDiagnosticScriptLabel(name, scripts[name] ?? '')) return false;
+    return name === 'verify'
+      || name === 'verify:fast'
+      || name.startsWith('verify:single-agent')
+      || name === 'smoke:real-task-matrix'
+      || name === 'smoke:real-task-offline-gates'
+      || name === 'smoke:computer-use-chat-e2e'
+      || name === 'smoke:desktop-computer-use-hard-confirm-product'
+      || name === 'smoke:computer-use-chat-live-preflight'
+      || name.startsWith('smoke:cu-next-')
+      || name.startsWith('smoke:model-router-computer-use-live-acceptance');
+  });
+}
+
+function reachableScripts(scripts: Record<string, string>, roots: string[]) {
+  const visited = new Set<string>();
+  const queue = roots.filter((name) => scripts[name] !== undefined);
+  while (queue.length) {
+    const name = queue.shift();
+    if (!name || visited.has(name)) continue;
+    visited.add(name);
+    for (const child of referencedNpmScripts(scripts[name] ?? '')) {
+      if (!visited.has(child) && scripts[child] !== undefined) queue.push(child);
+    }
+  }
+  return visited;
+}
+
+function referencedNpmScripts(command: string) {
+  return [...command.matchAll(/\bnpm\s+run\s+([a-z0-9:_-]+)/gi)].map((match) => match[1]).filter(Boolean);
+}
+
+function isComputerUseScript(name: string, command: string) {
+  return /computer-use|cu-|virtual-app-screen|model-router-computer-use/i.test(`${name} ${command}`);
+}
+
+function isLegacyDiagnosticScriptLabel(name: string, command: string) {
+  return /(?:^|[:-])(?:opt-in|diagnostic|legacy|historical)(?:$|[:-])/i.test(name)
+    || /\b(?:opt-in|diagnostic|legacy|historical)\b/i.test(command);
+}
+
+function parseJsonRecord(text: string) {
+  if (!text.trim()) return undefined;
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return undefined;
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 async function collectSourceFilesIfExists(dir: string): Promise<string[]> {

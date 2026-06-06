@@ -5,7 +5,7 @@ import type { GatewayRequest, SkillAvailability, ToolPayload } from '../runtime-
 import { sessionBundleRelForRequest, sessionBundleResourceRel } from '../session-bundle.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { materializeBackendPayloadOutput, type RuntimeRefBundle } from './artifact-materializer.js';
-import { agentServerStablePayloadTaskId } from '../../../packages/skills/runtime-policy';
+import { agentServerStablePayloadTaskId } from '../../../packages/skills/runtime-policy.js';
 
 export function backendPayloadRefs(taskId: string, taskRel: string, sessionBundleRel?: string): RuntimeRefBundle {
   return {

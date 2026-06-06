@@ -16,8 +16,8 @@ export {
   type UiActionRecord,
   type ValidationResult,
   type WorkspaceRef,
-} from './trajectory-contract';
-export { buildSampleScientificReproductionTrajectory } from './sample-trajectory';
+} from './trajectory-contract.js';
+export { buildSampleScientificReproductionTrajectory } from './sample-trajectory.js';
 export {
   auditTrajectoryTrainingRecord,
   buildTrajectoryTrainingRecordFromStoredAttempt,
@@ -26,4 +26,4 @@ export {
   type TrajectoryAuditIssue,
   type TrajectoryAuditResult,
   type TrajectorySourceSubject,
-} from './trajectory-export';
+} from './trajectory-export.js';

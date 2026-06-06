@@ -9,7 +9,7 @@ import {
   type SelfPromptRecommendation,
   type TrajectoryStep,
   type WorkspaceRef,
-} from './trajectory-contract';
+} from './trajectory-contract.js';
 
 const SCIENTIFIC_REPRODUCTION_ARTIFACT_TYPES = new Set([
   'paper-claim-graph',

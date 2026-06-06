@@ -1,10 +1,12 @@
 # Screen Annotation / Image Evidence / Visible Window Action 架构
 
-最后更新：2026-06-05
+最后更新：2026-06-06
 
 ## 结论
 
 旧的隔离 `VirtualAppScreen` 产品需求已废弃。SciForge 不再把目标设计为“创建一个 agent-owned virtual display 并隔离运行 app”。
+
+任何仍引用 `VirtualAppScreen`、isolated desktop、noVNC、Docker、Xpra、RDP、IDD 或 legacy `diagnosticOnly=false` / `userAcceptanceEligible=true` 字段的证据，都只能作为 compatibility diagnostic、historical regression 或迁移排查语境读取。它不能替代 Desktop Electron native host、真实 `BrowserHostSession` / `WindowActionSession`、permission refs、scoped adapter evidence 和 current-run artifact/verifier bundle，也不能作为 product path 通过条件。
 
 产品入口统一为默认聊天 turn，而不是 Browser Search / Computer Use 的独立普通用户入口。GUI 前端保持薄：只提交自然语言文本、refs、Autonomy profile 和确认/取消；Codex/TUI Agent Host 在 `Codex Agent Host Turn Loop` 内完成 `Ground`、`Guard`、`Act / Answer`，不新增独立 turn router/gateway 产品层。
 
@@ -312,7 +314,7 @@ Image pane 是右侧结果栏的通用图片展示区。
 - 每个 agent session 有独立 actorCursor 和 ScopedInputAdapter。
 - focus-required action 通过全局 FocusLease 串行执行，并在 UI/evidence 中可见。
 - Image pane 能打开 annotation crop、before/after evidence 并显示 provenance。
-- 旧隔离虚拟屏幕路线不再出现在 active PROJECT 任务中。
+- 旧隔离虚拟屏幕路线不再作为 active product path 或 Desktop product acceptance 通过条件。
 
 ## 任务入口
 

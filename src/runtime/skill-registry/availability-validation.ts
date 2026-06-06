@@ -1,4 +1,4 @@
-import { planSkillAvailabilityValidation, skillAvailabilityFailureReason } from '../../../packages/skills/runtime-policy';
+import { planSkillAvailabilityValidation, skillAvailabilityFailureReason } from '../../../packages/skills/runtime-policy.js';
 import type { SkillAvailability, SkillManifest } from '../runtime-types.js';
 import { fileExists } from '../workspace-task-runner.js';
 

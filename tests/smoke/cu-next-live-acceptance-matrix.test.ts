@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -934,6 +935,7 @@ test('CU-NEXT task marker projector emits validator-accepted markers for CU-NEXT
       taskId,
       evidence,
       refRecords: {
+        ...acceptanceSupportRefRecords(taskId),
         ...(isApprovalTask(taskId) ? approvalChainRefRecords(taskId) : {}),
         ...(taskId === 'CU-NEXT-07' ? denseGroundingRefRecords(taskId) : {}),
       },
@@ -1269,6 +1271,85 @@ test('CU-NEXT live acceptance fail-closes without user control, observe-before-m
   assert.ok(hasIssue(result, 'missing-observe-before-mutate-ref'));
   assert.ok(hasIssue(result, 'missing-platform-sidecar-isolation'));
   assert.ok(hasIssue(result, 'invalid-product-path-classification'));
+});
+
+test('CU-NEXT live acceptance requires freshnessCheckRef to resolve in refRecords', () => {
+  const taskId: CuNextTaskId = 'CU-NEXT-07';
+  const evidence = liveAcceptanceEvidence(taskId);
+  const refRecords = denseGroundingRefRecords(taskId);
+  delete refRecords[ref(taskId, 'freshness-check.json')];
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId,
+    evidence,
+    refRecords,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.checks.requiredRefs, false);
+  assert.ok(hasIssue(result, 'invalid-observe-before-mutate-freshness'));
+  assert.match(result.issues.map((issue) => issue.reason).join('\n'), /freshnessCheckRef must resolve/);
+});
+
+test('CU-NEXT live acceptance rejects stale or expired freshnessCheckRef records', () => {
+  const taskId: CuNextTaskId = 'CU-NEXT-07';
+  for (const [name, freshnessRecord, expected] of [
+    ['stale', {
+      schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+      status: 'stale',
+      observedAt: '2026-05-28T00:00:00.000Z',
+      checkedAt: '2026-05-28T00:00:00.000Z',
+      maxAgeMs: 30_000,
+      reason: 'visible state was invalidated by a later executor event',
+    }, /freshness status is stale|visible state was invalidated/],
+    ['expired', {
+      schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+      status: 'current',
+      observedAt: '2026-05-28T00:00:00.000Z',
+      checkedAt: '2026-05-28T00:00:11.000Z',
+      expiresAt: '2026-05-28T00:00:10.000Z',
+      maxAgeMs: 30_000,
+    }, /expired/],
+  ] as const) {
+    const refRecords = {
+      ...denseGroundingRefRecords(taskId),
+      [ref(taskId, 'freshness-check.json')]: freshnessRecord,
+    };
+
+    const result = validateCuNextLiveAcceptanceTaskEvidence({
+      taskId,
+      evidence: liveAcceptanceEvidence(taskId),
+      refRecords,
+    });
+
+    assert.equal(result.ok, false, name);
+    assert.ok(hasIssue(result, 'invalid-observe-before-mutate-freshness'), name);
+    assert.match(result.issues.map((issue) => issue.reason).join('\n'), expected);
+  }
+});
+
+test('CU-NEXT live acceptance caps freshnessCheckRef maxAgeMs to the visual evidence default', () => {
+  const taskId: CuNextTaskId = 'CU-NEXT-07';
+  const refRecords = {
+    ...denseGroundingRefRecords(taskId),
+    [ref(taskId, 'freshness-check.json')]: {
+      schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+      status: 'current',
+      observedAt: '2026-05-28T00:00:00.000Z',
+      checkedAt: '2026-05-28T00:01:00.000Z',
+      maxAgeMs: 300_000,
+    },
+  };
+
+  const result = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId,
+    evidence: liveAcceptanceEvidence(taskId),
+    refRecords,
+  });
+
+  assert.equal(result.ok, false);
+  assert.ok(hasIssue(result, 'invalid-observe-before-mutate-freshness'));
+  assert.match(result.issues.map((issue) => issue.reason).join('\n'), /older than 30000ms/);
 });
 
 test('CU-NEXT live acceptance requires each action to trace InputIntent through adapter executor frames verifier and artifact', () => {
@@ -1661,6 +1742,7 @@ function liveAcceptanceInput(taskId: CuNextTaskId) {
     taskId,
     evidence: liveAcceptanceEvidence(taskId),
     refRecords: {
+      ...acceptanceSupportRefRecords(taskId),
       ...(isApprovalTask(taskId) ? approvalChainRefRecords(taskId) : {}),
       ...(taskId === 'CU-NEXT-07' ? denseGroundingRefRecords(taskId) : {}),
     },
@@ -1673,6 +1755,39 @@ function liveAcceptanceEvidence(
 ): Record<string, unknown> {
   const mapping = mappingFor(taskId);
   const finalArtifactRef = ref(taskId, finalArtifactName(taskId));
+  const finalArtifactValidationRef = artifactValidationRef(taskId);
+  const sourceRefs = artifactSourceRefs(taskId);
+  const primaryMutatingAction = {
+    actionKind: 'click',
+    screenId: `${runId(taskId)}-screen-main`,
+    windowId: `${runId(taskId)}-window-main`,
+    actorId: `${runId(taskId)}-actor-agent`,
+    cursorId: `${runId(taskId)}-cursor-agent`,
+    leaseId: `${runId(taskId)}-lease-window-main`,
+    leaseScope: {
+      kind: 'window-local',
+      screenId: `${runId(taskId)}-screen-main`,
+      windowId: `${runId(taskId)}-window-main`,
+    },
+    target: {
+      scope: 'window',
+      screenId: `${runId(taskId)}-screen-main`,
+      windowId: `${runId(taskId)}-window-main`,
+      bounds: { x: 10, y: 12, width: 80, height: 28 },
+    },
+    beforeEvidenceRefs: [ref(taskId, 'before.png')],
+    afterEvidenceRefs: [ref(taskId, 'after.png')],
+    inputIntentRef: ref(taskId, 'input-intent-click.json'),
+    providerAdapterRef: ref(taskId, 'sidecar-executor-adapter.json'),
+    currentAppStateRef: ref(taskId, 'current-app-state.json'),
+    currentScreenshotRef: ref(taskId, 'before.png'),
+    stateSnapshotRef: ref(taskId, 'state-snapshot.json'),
+    freshnessCheckRef: ref(taskId, 'freshness-check.json'),
+    groundingRefs: [ref(taskId, 'grounding-diagnostics.json'), ref(taskId, 'browser-grounding-hints.json')],
+    executorEventRef: ref(taskId, 'executor-event.json'),
+    verificationRefs: [ref(taskId, 'verifier-verdict.json')],
+    artifactRefs: [finalArtifactRef],
+  };
   const evidence: Record<string, unknown> = {
     schemaVersion: 'sciforge.computer-use.user-acceptance-manifest.v1',
     runId: runId(taskId),
@@ -1939,39 +2054,29 @@ function liveAcceptanceEvidence(
         leaseOwnerRefs: [ref(taskId, 'screen-global-lease.json')],
       },
     ],
-    mutatingActions: [
-      {
-        actionKind: 'click',
-        screenId: `${runId(taskId)}-screen-main`,
-        windowId: `${runId(taskId)}-window-main`,
-        actorId: `${runId(taskId)}-actor-agent`,
-        cursorId: `${runId(taskId)}-cursor-agent`,
-        leaseId: `${runId(taskId)}-lease-window-main`,
-        leaseScope: {
-          kind: 'window-local',
-          screenId: `${runId(taskId)}-screen-main`,
-          windowId: `${runId(taskId)}-window-main`,
-        },
-        target: {
-          scope: 'window',
-          screenId: `${runId(taskId)}-screen-main`,
-          windowId: `${runId(taskId)}-window-main`,
-          bounds: { x: 10, y: 12, width: 80, height: 28 },
-        },
-        beforeEvidenceRefs: [ref(taskId, 'before.png')],
-        afterEvidenceRefs: [ref(taskId, 'after.png')],
-        inputIntentRef: ref(taskId, 'input-intent-click.json'),
-        providerAdapterRef: ref(taskId, 'sidecar-executor-adapter.json'),
-        currentAppStateRef: ref(taskId, 'current-app-state.json'),
-        currentScreenshotRef: ref(taskId, 'before.png'),
-        stateSnapshotRef: ref(taskId, 'state-snapshot.json'),
-        freshnessCheckRef: ref(taskId, 'freshness-check.json'),
-        groundingRefs: [ref(taskId, 'grounding-diagnostics.json'), ref(taskId, 'browser-grounding-hints.json')],
-        executorEventRef: ref(taskId, 'executor-event.json'),
-        verificationRefs: [ref(taskId, 'verifier-verdict.json')],
-        artifactRefs: [finalArtifactRef],
-      },
-    ],
+    mutatingActions: [primaryMutatingAction],
+    actionLedgerRef: ref(taskId, 'evidence-ledger.json'),
+    evidenceLedgerActions: [primaryMutatingAction],
+    evidenceLedger: {
+      ref: ref(taskId, 'evidence-ledger.json'),
+      actionLedgerRef: ref(taskId, 'evidence-ledger.json'),
+      actions: [primaryMutatingAction],
+    },
+    evidenceIndexRef: ref(taskId, 'evidence-index.json'),
+    evidenceIndex: {
+      ref: ref(taskId, 'evidence-index.json'),
+      refs: [
+        ref(taskId, 'evidence-ledger.json'),
+        ref(taskId, 'before.png'),
+        ref(taskId, 'after.png'),
+        ref(taskId, 'input-intent-click.json'),
+        ref(taskId, 'sidecar-executor-adapter.json'),
+        ref(taskId, 'executor-event.json'),
+        ref(taskId, 'verifier-verdict.json'),
+        finalArtifactRef,
+        finalArtifactValidationRef,
+      ],
+    },
     replayBundle: {
       ref: ref(taskId, 'replay-bundle.json'),
       frames: [
@@ -2011,11 +2116,28 @@ function liveAcceptanceEvidence(
       afterEvidenceRefs: [ref(taskId, 'after.png'), ref(taskId, 'preview-after.png')],
     },
     finalArtifactRef,
+    artifactValidationRef: finalArtifactValidationRef,
+    taskFinalArtifactRefs: [finalArtifactRef],
+    sourceRefs,
+    artifactCausality: {
+      savedByActionIndex: 0,
+      savedByActionRef: ref(taskId, 'executor-event.json'),
+      finalArtifactRef,
+      artifactValidationRef: finalArtifactValidationRef,
+      currentRunCausality: true,
+      shellDirectArtifactWrite: false,
+    },
     finalVisibleScreenshotRef: ref(taskId, 'final-visible.png'),
     verifierVerdict: {
       status: 'passed',
       verdict: 'multi-app-workflow-passed',
       ref: ref(taskId, 'verifier-verdict.json'),
+      artifactValidationRef: finalArtifactValidationRef,
+      contentRefs: [finalArtifactRef],
+      checkedRefs: [finalArtifactRef],
+      sourceRefs,
+      savedByActionIndex: 0,
+      savedByActionRef: ref(taskId, 'executor-event.json'),
     },
     guiPresent: {
       status: 'present',
@@ -2300,6 +2422,7 @@ function denseGroundingRefRecords(
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
+    ...acceptanceSupportRefRecords(taskId),
     [ref(taskId, 'dense-grounding-rejections.json')]: {
       schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
       status: 'recorded',
@@ -2313,6 +2436,86 @@ function denseGroundingRefRecords(
       coarseWindowScreenshotRef: ref(taskId, 'coarse-window.png'),
       focusCropRef: ref(taskId, 'focus-crop.png'),
       fineGroundingDiagnosticRef: ref(taskId, 'fine-grounding-diagnostic.json'),
+      ...overrides,
+    },
+  };
+}
+
+function acceptanceSupportRefRecords(
+  taskId: CuNextTaskId,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    ...freshnessCheckRefRecords(taskId),
+    [artifactValidationRef(taskId)]: artifactValidationRecord(taskId),
+    ...overrides,
+  };
+}
+
+function artifactValidationRecord(taskId: CuNextTaskId): Record<string, unknown> {
+  const finalArtifactRef = ref(taskId, finalArtifactName(taskId));
+  const contentRefs = [finalArtifactRef];
+  const sourceRefs = artifactSourceRefs(taskId);
+  const format = artifactFormat(finalArtifactRef);
+  return {
+    schemaVersion: 'sciforge.computer-use.artifact-validation.v1',
+    status: 'passed',
+    ok: true,
+    productAcceptanceEvidence: true,
+    artifactValidationRef: artifactValidationRef(taskId),
+    finalArtifactRef,
+    artifactRef: finalArtifactRef,
+    contentRefs,
+    checkedRefs: contentRefs,
+    sourceRefs,
+    format,
+    validator: `sciforge-generic-${format}-artifact-contract-validator`,
+    sha256: createHash('sha256').update(JSON.stringify({ finalArtifactRef, contentRefs, sourceRefs })).digest('hex'),
+    bytes: 128,
+    currentRunCausality: true,
+    metadata: {
+      validationScope: 'product-smoke-record',
+      productAcceptanceEvidence: true,
+      finalArtifactRef,
+      contentRefs,
+      sourceRefs,
+    },
+  };
+}
+
+function artifactSourceRefs(taskId: CuNextTaskId): string[] {
+  return [
+    ref(taskId, 'source-facts.json'),
+    ref(taskId, 'before.png'),
+  ];
+}
+
+function artifactValidationRef(taskId: CuNextTaskId): string {
+  return ref(taskId, `${finalArtifactName(taskId)}.validation.json`);
+}
+
+function artifactFormat(artifactRef: string): string {
+  const name = artifactRef.toLowerCase().split(/[?#]/, 1)[0];
+  if (name.endsWith('.pptx')) return 'pptx';
+  if (name.endsWith('.odt')) return 'odt';
+  if (name.endsWith('.eml')) return 'eml';
+  if (name.endsWith('.md') || name.endsWith('.markdown')) return 'markdown';
+  if (name.endsWith('.csv')) return 'csv';
+  if (name.endsWith('.txt')) return 'text';
+  return 'file';
+}
+
+function freshnessCheckRefRecords(
+  taskId: CuNextTaskId,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    [ref(taskId, 'freshness-check.json')]: {
+      schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+      status: 'current',
+      observedAt: '2026-05-28T00:00:00.000Z',
+      checkedAt: '2026-05-28T00:00:00.000Z',
+      maxAgeMs: 30_000,
       ...overrides,
     },
   };

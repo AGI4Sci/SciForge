@@ -26,6 +26,7 @@ import {
   isComputerUseNativeRouteCommand,
   type ComputerUseNativeRouteInput,
 } from './computer-use-native-route.js';
+import { isCodexSamplingRetryMessage } from './codex-event-normalizer.js';
 import {
   defaultSubagentTranscriptRoot,
   prepareRuntimeSubagentInjection,
@@ -884,6 +885,7 @@ function isTerminalTurnEvent(event: unknown, threadId: string, turnId: string) {
   if (eventThreadId && eventThreadId !== threadId) return false;
   if (eventTurnId && eventTurnId !== turnId) return false;
   const normalizedMethod = method.trim().toLowerCase().replace(/\./g, '/');
+  if (isRetryableCodexAppServerTerminalEvent(normalizedMethod, event, params)) return false;
   const status = (stringAt(params, 'status') ?? stringAt(turn, 'status') ?? '').trim().toLowerCase();
   const isTurnScopedStatus = normalizedMethod.startsWith('turn/') || Boolean(turn);
   return normalizedMethod === 'turn/completed'
@@ -904,6 +906,24 @@ function isTerminalTurnEvent(event: unknown, threadId: string, turnId: string) {
       || status === 'cancelled'
       || status === 'canceled'
     ));
+}
+
+function isRetryableCodexAppServerTerminalEvent(
+  normalizedMethod: string,
+  event: Record<string, unknown>,
+  params: Record<string, unknown>,
+): boolean {
+  if (
+    normalizedMethod !== 'error'
+    && normalizedMethod !== 'turn/error'
+    && normalizedMethod !== 'turn/failed'
+    && normalizedMethod !== 'turn/failure'
+  ) return false;
+  const error = recordAt(params, 'error') ?? recordAt(event, 'error');
+  const message = stringAt(params, 'message')
+    ?? stringAt(event, 'message')
+    ?? stringAt(error, 'message');
+  return Boolean(message && isCodexSamplingRetryMessage(message));
 }
 
 function parseJsonRecord(value: unknown): Record<string, unknown> | undefined {

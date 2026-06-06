@@ -9,9 +9,15 @@ import { executorBoundary } from './executor.js';
 import { independentInputAdapterExecutionBoundary } from './independent-input-adapter.js';
 import { computerUseArtifactIntentText } from './package-bridge-execute-port.js';
 import {
+  computerUseRequiresSavedVisibleArtifact,
+  computerUseRequiresVisibleArtifact,
+} from '../../../packages/actions/computer-use/runtime-policy.js';
+import {
   finalVisibleArtifactForTrace,
 } from './package-bridge-final-artifacts.js';
 import {
+  packageBridgeAcceptanceProgressCompletion,
+  packageBridgeAcceptanceProgressQuotaIssue,
   packageBridgeLedgerCompletionQuotaIssue,
   packageBridgeVisibleArtifactPolicy,
 } from './package-bridge-policy.js';
@@ -89,6 +95,9 @@ export async function verifyPackageBridgePort(
   const afterFocusRefs = state.afterFocusRefsByObservationRef.get(beforeObservationRef) ?? [];
   const executionOk = execution.ok !== false;
   const artifactIntentText = computerUseArtifactIntentText(request);
+  const finalVisibleArtifact = finalVisibleArtifactForTrace(state.visibleArtifacts, {
+    requireSaved: computerUseRequiresSavedVisibleArtifact(artifactIntentText),
+  });
   const artifactGap = packageBridgeVisibleArtifactPolicy({
     task: artifactIntentText,
     executedActions: state.executedActions,
@@ -191,16 +200,35 @@ export async function verifyPackageBridgePort(
   const ledgerCompletionQuotaIssue = ledgerCompletion?.complete
     ? packageBridgeLedgerCompletionQuotaIssue(plannerAcceptanceContract, state.executedActions, config.maxSteps)
     : undefined;
+  const acceptanceProgressQuotaIssue = packageBridgeAcceptanceProgressQuotaIssue(plannerAcceptanceContract, state.executedActions, config.maxSteps);
   const ledgerCompletionArtifactIssue = ledgerCompletion?.complete && !ledgerCompletionQuotaIssue
     ? packageBridgeVisibleArtifactPolicy({
       task: artifactIntentText,
       executedActions: state.executedActions,
       finalAttempt: true,
-      finalVisibleArtifact: finalVisibleArtifactForTrace(state.visibleArtifacts),
+      finalVisibleArtifact,
     })
     : undefined;
   const ledgerCompletionAccepted = Boolean(ledgerCompletion?.complete && !ledgerCompletionQuotaIssue && !ledgerCompletionArtifactIssue);
-  if (ledgerCompletionAccepted) {
+  const acceptanceProgressCompletion = executionOk && !acceptanceProgressQuotaIssue
+    ? packageBridgeAcceptanceProgressCompletion(plannerAcceptanceContract, state.executedActions)
+    : undefined;
+  const visibleArtifactCompletionIssue = executionOk && computerUseRequiresVisibleArtifact(artifactIntentText)
+    ? packageBridgeVisibleArtifactPolicy({
+      task: artifactIntentText,
+      executedActions: state.executedActions,
+      finalAttempt: true,
+      finalVisibleArtifact,
+    })
+    : undefined;
+  const visibleArtifactCompletionAccepted = Boolean(
+    executionOk
+    && finalVisibleArtifact
+    && computerUseRequiresVisibleArtifact(artifactIntentText)
+    && !acceptanceProgressQuotaIssue
+    && !visibleArtifactCompletionIssue,
+  );
+  if (ledgerCompletionAccepted || acceptanceProgressCompletion || visibleArtifactCompletionAccepted) {
     state.actionQueue.length = 0;
     state.plannerReportedDone = true;
   }
@@ -209,7 +237,7 @@ export async function verifyPackageBridgePort(
       task: artifactIntentText,
       executedActions: state.executedActions,
       finalAttempt: true,
-      finalVisibleArtifact: finalVisibleArtifactForTrace(state.visibleArtifacts),
+      finalVisibleArtifact,
     })
     : '';
   if (fixtureQueueExhaustedArtifactGap) {
@@ -229,22 +257,31 @@ export async function verifyPackageBridgePort(
     pushHistoryStep(verification);
     return verification;
   }
-  const done = executionOk && (ledgerCompletionAccepted || (!state.dynamicPlannerEnabled && (state.actionQueue.length === 0 || (
+  const fixtureCompletionAccepted = !state.dynamicPlannerEnabled && !acceptanceProgressQuotaIssue && (state.actionQueue.length === 0 || (
     config.completionPolicy?.mode === 'one-successful-non-wait-action' && action.type !== 'wait'
-  ))));
+  ));
+  const done = executionOk && (ledgerCompletionAccepted || Boolean(acceptanceProgressCompletion) || visibleArtifactCompletionAccepted || fixtureCompletionAccepted);
   const verification = {
     ok: executionOk,
     done,
     reason: executionOk
       ? ledgerCompletionQuotaIssue
-        ? ledgerCompletionQuotaIssue
-        : ledgerCompletionArtifactIssue
-        ? ledgerCompletionArtifactIssue
-        : ledgerCompletionAccepted
-        ? ledgerCompletion?.reason || 'action-ledger completion policy satisfied'
-        : done
-        ? 'Computer Use package bridge verifier accepted final action.'
-        : 'Computer Use package bridge verifier accepted action; more actions remain.'
+      ? ledgerCompletionQuotaIssue
+      : acceptanceProgressQuotaIssue
+      ? acceptanceProgressQuotaIssue
+      : ledgerCompletionArtifactIssue
+      ? ledgerCompletionArtifactIssue
+      : visibleArtifactCompletionIssue
+      ? visibleArtifactCompletionIssue
+      : ledgerCompletionAccepted
+      ? ledgerCompletion?.reason || 'action-ledger completion policy satisfied'
+      : visibleArtifactCompletionAccepted
+      ? 'visible final artifact accepted by current-run verifier'
+      : acceptanceProgressCompletion
+      ? acceptanceProgressCompletion.reason
+      : done
+      ? 'Computer Use package bridge verifier accepted final action.'
+      : 'Computer Use package bridge verifier accepted action; more actions remain.'
       : stringAt(execution, 'message') || 'Computer Use package bridge executor failed.',
     changed: pixelDiff.possiblyNoEffect === false,
     metadata: {
@@ -256,7 +293,15 @@ export async function verifyPackageBridgePort(
       visualFocus,
       ledgerCompletion: ledgerCompletion?.complete ? ledgerCompletion : undefined,
       ledgerCompletionQuotaIssue,
+      acceptanceProgressQuotaIssue,
       ledgerCompletionArtifactIssue,
+      visibleArtifactCompletion: visibleArtifactCompletionAccepted ? {
+        status: 'satisfied',
+        finalArtifactRef: finalVisibleArtifact?.artifactRef,
+      } : undefined,
+      acceptanceProgressCompletion,
+      finalArtifactRef: visibleArtifactCompletionAccepted ? finalVisibleArtifact?.artifactRef : undefined,
+      finalArtifactRefs: visibleArtifactCompletionAccepted && finalVisibleArtifact?.artifactRef ? [finalVisibleArtifact.artifactRef] : undefined,
       beforeScreenshotRefs: beforeRefs.map(toTraceScreenshotRef),
       afterScreenshotRefs: afterRefs.map(toTraceScreenshotRef),
       queuedActionsRemaining: state.actionQueue.length,

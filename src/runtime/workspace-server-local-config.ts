@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { normalizeWorkspaceRootPath } from './workspace-paths.js';
 import {
   DEFAULT_PROXY_BASE_URL,
@@ -11,6 +11,9 @@ import { resolveProxyCliOptions } from '../../packages/backend/src/cli-config.js
 import {
   computerUseWorkspaceEnvFromLocalSettings,
   localProviderSettings,
+  readLocalProviderSettings,
+  readRequiredLocalProviderSettings,
+  type LocalProviderSettings,
 } from '../../packages/backend/src/local-provider-config.js';
 import { startCodexResponsesProxyServer, type StartedCodexResponsesProxy } from '../../packages/backend/src/proxy.js';
 import { runtimeProviderProxyBaseUrl as normalizeRuntimeProviderProxyBaseUrl } from './workspace-server-runtime-provider-preflight.js';
@@ -172,6 +175,7 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
   const env = options.env ?? process.env;
   const cwd = options.cwd ?? process.cwd();
   const defaultProxyBaseUrl = options.defaultProxyBaseUrl ?? DEFAULT_PROXY_BASE_URL;
+  const runtimeLlmConfigPath = resolve(env.SCIFORGE_CONFIG_PATH?.trim() || join(cwd, 'config.local.json'));
 
   async function readLocalSciForgeConfig() {
     const parsed = await readConfigLocalJson();
@@ -284,20 +288,33 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
   }
 
   async function runtimeCodexEnvFromLocalConfig(configuredLocalConfig?: Record<string, unknown>): Promise<NodeJS.ProcessEnv> {
-    const localConfig = configuredLocalConfig ?? await readConfigLocalJson();
-    const settings = localProviderSettings(localConfig);
+    const loadedSettings = configuredLocalConfig
+      ? localProviderSettings(configuredLocalConfig, { configPath: runtimeLlmConfigLocalPath() })
+      : isDesktopSidecarEnv(env)
+        ? readLocalProviderSettings(runtimeLlmConfigLocalPath())
+      : readRequiredLocalProviderSettings(runtimeLlmConfigLocalPath());
+    const settings = completeDesktopSidecarLocalProviderSettings(loadedSettings, env);
+    assertCompleteLocalProviderSettings(settings, runtimeLlmConfigLocalPath());
     const localEnv = computerUseWorkspaceEnvFromLocalSettings(settings);
-    const upstreamBaseUrl = localEnv.SCIFORGE_RUNTIME_BASE_URL ?? localEnv.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
-    const upstreamModel = localEnv.SCIFORGE_RUNTIME_MODEL;
-    const upstreamApiKey = localEnv.SCIFORGE_RUNTIME_API_KEY;
+    const upstreamBaseUrl = settings.baseUrl!;
+    const upstreamModel = settings.model!;
+    const upstreamApiKey = settings.apiKey!;
     return {
       ...env,
-      SCIFORGE_CONFIG_PATH: options.configLocalPath,
+      SCIFORGE_CONFIG_PATH: runtimeLlmConfigLocalPath(),
       ...localEnv,
-      ...(upstreamBaseUrl && !env.SCIFORGE_TEXT_BASE_URL ? { SCIFORGE_TEXT_BASE_URL: upstreamBaseUrl } : {}),
-      ...(upstreamModel && !env.SCIFORGE_TEXT_MODEL ? { SCIFORGE_TEXT_MODEL: upstreamModel } : {}),
-      ...(upstreamApiKey && !env.SCIFORGE_TEXT_API_KEY ? { SCIFORGE_TEXT_API_KEY: upstreamApiKey } : {}),
-      ...(upstreamApiKey && !env.SCIFORGE_VISION_API_KEY ? { SCIFORGE_VISION_API_KEY: upstreamApiKey } : {}),
+      ...(settings.provider ? {
+        SCIFORGE_TEXT_PROVIDER: settings.provider,
+        SCIFORGE_VISION_PROVIDER: settings.provider,
+      } : {}),
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: upstreamBaseUrl,
+      SCIFORGE_PROXY_DEFAULT_MODEL: upstreamModel,
+      SCIFORGE_TEXT_BASE_URL: upstreamBaseUrl,
+      SCIFORGE_TEXT_MODEL: upstreamModel,
+      SCIFORGE_TEXT_API_KEY: upstreamApiKey,
+      SCIFORGE_VISION_BASE_URL: upstreamBaseUrl,
+      SCIFORGE_VISION_MODEL: upstreamModel,
+      SCIFORGE_VISION_API_KEY: upstreamApiKey,
       SCIFORGE_RUNTIME_PROVIDER: RUNTIME_PROVIDER,
       SCIFORGE_RUNTIME_MODEL: RUNTIME_MODEL,
       SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS: RUNTIME_MODEL,
@@ -331,11 +348,8 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
         upstreamApiKey: options.upstreamApiKey,
         defaultModel: options.defaultModel,
         forceNonStreamingUpstream: options.forceNonStreamingUpstream,
-        resolveDynamicOptions: () => {
-          const latest = resolveProxyCliOptions([], {
-            ...env,
-            SCIFORGE_CONFIG_PATH: configLocalPath(),
-          });
+        resolveDynamicOptions: async () => {
+          const latest = resolveProxyCliOptions([], await runtimeCodexEnvFromLocalConfig());
           return {
             upstreamBaseUrl: latest.upstreamBaseUrl,
             upstreamApiKey: latest.upstreamApiKey,
@@ -392,7 +406,10 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
     return options.configLocalPath;
   }
 
-  void cwd;
+  function runtimeLlmConfigLocalPath() {
+    return runtimeLlmConfigPath;
+  }
+
   return {
     readLocalSciForgeConfig,
     writeLocalSciForgeConfig,
@@ -406,6 +423,113 @@ export function createWorkspaceLocalConfigService(options: WorkspaceLocalConfigS
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function assertCompleteLocalProviderSettings(settings: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}, configPath: string): void {
+  const missing: string[] = [];
+  if (!settings.apiKey) missing.push('apiKey/llm.apiKey/codexProxy.apiKey');
+  if (!settings.baseUrl) missing.push('baseUrl/llm.baseUrl/codexProxy.upstreamBaseUrl');
+  if (!settings.model) missing.push('model/llm.model/codexProxy.defaultModel');
+  if (!missing.length) return;
+  throw new Error(`Incomplete config.local.json at ${configPath}; missing ${missing.join(', ')}.`);
+}
+
+function completeDesktopSidecarLocalProviderSettings(
+  settings: LocalProviderSettings,
+  env: NodeJS.ProcessEnv,
+): LocalProviderSettings {
+  if (isCompleteLocalProviderSettings(settings)) return settings;
+  if (!isDesktopSidecarEnv(env)) return settings;
+  const injected = localProviderSettingsFromDesktopSidecarEnv(env);
+  if (!injected || !isCompleteLocalProviderSettings(injected)) return settings;
+  return {
+    ...settings,
+    ...injected,
+    ...(settings.provider && settings.provider !== RUNTIME_PROVIDER ? {
+      provider: settings.provider,
+      providerSource: settings.providerSource,
+    } : {}),
+    ...(settings.forceNonStreamingUpstream === true ? {
+      forceNonStreamingUpstream: settings.forceNonStreamingUpstream,
+      forceNonStreamingUpstreamSource: settings.forceNonStreamingUpstreamSource,
+    } : {}),
+    ...(settings.virtualAppScreenEnv ? { virtualAppScreenEnv: settings.virtualAppScreenEnv } : {}),
+  };
+}
+
+function isCompleteLocalProviderSettings(settings: {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}): boolean {
+  return !!(settings.apiKey && settings.baseUrl && settings.model);
+}
+
+function isDesktopSidecarEnv(env: NodeJS.ProcessEnv): boolean {
+  return !!(
+    stringValue(env.SCIFORGE_DESKTOP_SIDECAR)
+    || stringValue(env.SCIFORGE_DESKTOP_USER_DATA_DIR)
+    || stringValue(env.SCIFORGE_DESKTOP_APP_ROOT)
+    || stringValue(env.SCIFORGE_DESKTOP_DEV)
+  );
+}
+
+function localProviderSettingsFromDesktopSidecarEnv(env: NodeJS.ProcessEnv): LocalProviderSettings | undefined {
+  const apiKeyEnvName = stringValue(env.SCIFORGE_PROXY_API_KEY_ENV);
+  const apiKey = firstEnvString(env, [
+    ...(apiKeyEnvName ? [apiKeyEnvName] : []),
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_VISION_API_KEY',
+  ]);
+  const baseUrl = firstEnvString(env, [
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_VISION_BASE_URL',
+  ], (value) => value.replace(/\/+$/, ''));
+  const model = firstEnvString(env, [
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_VISION_MODEL',
+  ], (value, key) => key === 'SCIFORGE_RUNTIME_MODEL' && value === RUNTIME_MODEL ? '' : value);
+  const provider = firstEnvString(env, [
+    'SCIFORGE_TEXT_PROVIDER',
+    'SCIFORGE_VISION_PROVIDER',
+    'SCIFORGE_RUNTIME_PROVIDER',
+  ], (value, key) => key === 'SCIFORGE_RUNTIME_PROVIDER' && value === RUNTIME_PROVIDER ? '' : value);
+  const forceNonStreamingUpstream = env.SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM === '1';
+
+  if (!apiKey && !baseUrl && !model && !provider && !forceNonStreamingUpstream) return undefined;
+  return {
+    ...(apiKey ? { apiKey: apiKey.value, apiKeySource: apiKey.source } : {}),
+    ...(baseUrl ? { baseUrl: baseUrl.value, baseUrlSource: baseUrl.source } : {}),
+    ...(model ? { model: model.value, modelSource: model.source } : {}),
+    ...(provider ? { provider: provider.value, providerSource: provider.source } : {}),
+    ...(forceNonStreamingUpstream ? {
+      forceNonStreamingUpstream: true,
+      forceNonStreamingUpstreamSource: 'env:SCIFORGE_PROXY_FORCE_NON_STREAMING_UPSTREAM',
+    } : {}),
+  };
+}
+
+function firstEnvString(
+  env: NodeJS.ProcessEnv,
+  keys: string[],
+  normalize: (value: string, key: string) => string = (value) => value,
+): { value: string; source: string } | undefined {
+  for (const key of keys) {
+    const normalizedKey = key.trim();
+    if (!normalizedKey) continue;
+    const value = normalize(stringValue(env[normalizedKey]), normalizedKey);
+    if (value) return { value, source: `env:${normalizedKey}` };
+  }
+  return undefined;
 }
 
 function isAddrInUse(error: unknown): boolean {

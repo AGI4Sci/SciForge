@@ -14,6 +14,8 @@ test('sidebar footer actions render status feedback and settings commands', () =
 
   assert.match(html, /sidebar-footer-actions/);
   assert.match(html, /role="status"/);
+  assert.match(html, /data-testid="sidebar-footer-status"/);
+  assert.match(html, /data-sidebar-footer-health="connected"/);
   assert.match(html, /SciForge/);
   assert.match(html, /Local runtime/);
   assert.match(html, /Connected/);
@@ -38,6 +40,8 @@ test('sidebar footer status redacts path and secret-like workspace labels', () =
 test('sidebar footer status normalizes connected syncing warning and unavailable states', () => {
   assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: 'Connected' }).health, 'connected');
   assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: 'Syncing workspace snapshot' }).health, 'syncing');
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: '已同步到 /workspace/p2/.sciforge' }).health, 'connected');
+  assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceStatus: 'Synced to /workspace/p2/.sciforge' }).health, 'connected');
   assert.equal(buildSidebarFooterStatus({ workspacePath: '/workspace/p2', workspaceError: 'writer unavailable' }).health, 'warning');
   assert.equal(buildSidebarFooterStatus({ workspacePath: '', workspaceStatus: 'Connected' }).health, 'unavailable');
 });

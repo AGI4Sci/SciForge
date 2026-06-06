@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from '../codex/agent-cli-adapter.js';
@@ -115,6 +118,34 @@ test('text planner receives structured acceptance contract without private GUI s
   assert.match(adapter.commandTexts[0] ?? '', /Planner acceptance contract JSON/);
   assert.match(adapter.commandTexts[0] ?? '', /scroll action ledger/);
   assert.doesNotMatch(adapter.commandTexts[0] ?? '', /DOM_SHOULD_NOT_LEAK|AX_SHOULD_NOT_LEAK|data:image/);
+});
+
+test('text planner receives the current runtime provider proxy env instead of falling back to defaults', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-planner-env-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-planner-workspace-'));
+  const config = baseConfig();
+  config.planner.env = {
+    SCIFORGE_RUNTIME_ROOT: runtimeRoot,
+    SCIFORGE_RUNTIME_API_KEY: 'test-runtime-key',
+    SCIFORGE_PROXY_BASE_URL: 'http://127.0.0.1:5175/v1',
+    SCIFORGE_RUNTIME_MODEL: 'sciforge-router',
+    SCIFORGE_CODEX_APP_SERVER_COMMAND: '/bin/false',
+  };
+
+  const result = await appendPlannerStep({
+    id: 'step-000-plan',
+    task: 'inspect the visible pane',
+    observation: { ref: 'screen-ref', summary: 'A visible app pane.', visibleTexts: ['Overview'] },
+    screenshotRefs: [screenshotRef()],
+    steps: [],
+    config,
+    workspace,
+  });
+
+  assert.equal(result.ok, false);
+  const runtimeConfig = await readFile(join(runtimeRoot, 'codex-home', 'config.toml'), 'utf8');
+  assert.match(runtimeConfig, /base_url = "http:\/\/127\.0\.0\.1:5175\/v1"/);
+  assert.doesNotMatch(runtimeConfig, /127\.0\.0\.1:3892/);
 });
 
 test('text planner rejects coordinate output instead of passing it to executor', async () => {
@@ -725,6 +756,7 @@ test('text planner rejects done for report artifact intent before visible artifa
   assert.equal(adapter.commandTexts.length, 2);
   assert.match(adapter.commandTexts[1] ?? '', /visible final artifact\/report ref/);
   assert.match(adapter.commandTexts[1] ?? '', /field\/control evidence/);
+  assert.match(adapter.commandTexts[1] ?? '', /do not type raw JSON, filesystem paths, filenames, or evidence ref strings/i);
 });
 
 test('text planner does not treat inline text entry as final artifact intent', async () => {

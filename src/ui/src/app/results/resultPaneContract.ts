@@ -22,7 +22,7 @@ export const RESULT_PANE_LIFECYCLE_STATES = [
 export type ResultPaneLifecycleState = typeof RESULT_PANE_LIFECYCLE_STATES[number];
 export type ResultPaneObjectStateKind = ResultPaneLifecycleState | 'unsupported';
 export type ResultPaneRoutePurpose = 'focus' | 'open';
-export type ResultPaneRouteReason = 'preferred-view' | 'ref-prefix' | 'artifact-type' | 'image-ref' | 'object-kind' | 'fallback' | 'unsupported';
+export type ResultPaneRouteReason = 'preferred-view' | 'ref-prefix' | 'artifact-type' | 'image-ref' | 'object-kind' | 'view-policy-default' | 'unsupported';
 
 export type ResultPaneRedactionHint =
   | 'refs-first'
@@ -521,7 +521,7 @@ export function resolveResultPaneRoute(reference: unknown, options: { purpose?: 
   return {
     pane: 'primary',
     purpose,
-    reason: objectKind || objectRef || artifactType || preferredView ? 'fallback' : 'unsupported',
+    reason: objectKind || objectRef || artifactType || preferredView ? 'view-policy-default' : 'unsupported',
     composerInsertion: false,
     objectKind,
     objectRef,
@@ -712,7 +712,7 @@ function unsupportedRoute(route: ResultPaneRoute): ResultPaneRoute {
   return {
     pane: route.pane,
     purpose: route.purpose,
-    reason: route.reason === 'fallback' ? 'unsupported' : route.reason,
+    reason: route.reason === 'view-policy-default' ? 'unsupported' : route.reason,
     composerInsertion: false,
     matched: route.matched,
     objectKind: redactInlineText(route.objectKind),

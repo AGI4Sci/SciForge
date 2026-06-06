@@ -240,3 +240,213 @@
 .theme-light .feedback-highlight-box {
   box-shadow: 0 0 0 9999px rgba(27, 39, 58, 0.12);
 }
+
+/* Right-pane browser, image evidence, and terminal surfaces */
+.theme-light .right-pane-browser-surface .browser-workbench-viewer,
+.theme-light .right-pane-browser-surface .browser-workbench-viewer-preview,
+.theme-light .right-pane-terminal-live,
+.theme-light .right-pane-terminal-live .terminal-session-viewer,
+.theme-light .right-pane-terminal-live .terminal-session-viewer-screen {
+  background: var(--surface-muted);
+}
+
+.theme-light .right-pane-browser-surface .browser-workbench-viewer-topbar,
+.theme-light .right-pane-terminal-toolbar {
+  border-bottom-color: var(--border);
+  background: var(--surface-raised);
+}
+
+.theme-light .browser-workbench-viewer-actions button,
+.theme-light .browser-workbench-viewer-tabs button,
+.theme-light .browser-workbench-viewer-refs button,
+.theme-light .browser-workbench-viewer-state-actions a,
+.theme-light .browser-workbench-viewer-state-actions button,
+.theme-light .right-pane-terminal-toolbar button,
+.theme-light .right-pane-terminal-writer-actions button,
+.theme-light .right-pane-browser-writer-actions button {
+  color: var(--text-secondary);
+  background: var(--surface-input);
+  border-color: var(--border);
+}
+
+.theme-light .browser-workbench-viewer-actions button:hover,
+.theme-light .browser-workbench-viewer-tabs button:hover,
+.theme-light .browser-workbench-viewer-refs button:hover,
+.theme-light .browser-workbench-viewer-state-actions a:hover,
+.theme-light .browser-workbench-viewer-state-actions button:hover,
+.theme-light .right-pane-terminal-toolbar button:hover:not(:disabled),
+.theme-light .right-pane-terminal-writer-actions button:hover,
+.theme-light .right-pane-browser-writer-actions button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+}
+
+.theme-light .browser-workbench-viewer-state {
+  color: var(--text-secondary);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(246, 248, 251, 0.98)),
+    var(--surface-subtle);
+}
+
+.theme-light .browser-workbench-viewer-state strong {
+  color: var(--text-primary);
+}
+
+.theme-light .browser-workbench-viewer-state p {
+  color: var(--text-muted);
+}
+
+.theme-light .browser-workbench-viewer-state dt {
+  color: var(--text-faint);
+}
+
+.theme-light .browser-workbench-viewer-state dd {
+  color: var(--text-secondary);
+}
+
+.theme-light .browser-workbench-viewer-address input {
+  color: var(--text-primary);
+  background: var(--surface-input);
+  border-color: var(--border-strong);
+}
+
+.theme-light .image-evidence-toolbar {
+  border-color: var(--border);
+  background: var(--surface-raised);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.theme-light .image-evidence-control {
+  color: var(--text-secondary);
+  border-color: var(--border);
+  background: var(--surface-input);
+}
+
+.theme-light .image-evidence-control svg {
+  color: var(--text-muted);
+}
+
+.theme-light .image-evidence-control:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.theme-light .right-pane-image-evidence-surface[data-image-view-mode='fit'] .image-evidence-control[data-view-control='fit'],
+.theme-light .right-pane-image-evidence-surface[data-image-view-mode='actual-size'] .image-evidence-control[data-view-control='actual-size'],
+.theme-light .right-pane-image-evidence-surface[data-image-view-mode='pan'] .image-evidence-control[data-view-control='pan'] {
+  color: var(--text-primary);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.theme-light .right-pane-image-evidence-surface[data-image-provenance-expanded='true'] .image-evidence-control[data-view-control='provenance'] {
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--blue) 42%, transparent);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
+}
+
+.theme-light .image-evidence-status {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.theme-light .image-evidence-stage {
+  background: var(--surface-subtle);
+  border-color: var(--border);
+}
+
+.theme-light .image-evidence-footer {
+  border-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.theme-light .right-pane-image-evidence-surface[data-image-provenance-expanded='true'] .image-evidence-footer {
+  border-color: color-mix(in srgb, var(--blue) 34%, transparent);
+  background: var(--surface-raised);
+}
+
+.theme-light .image-evidence-empty p {
+  color: var(--text-muted);
+}
+
+.theme-light .right-pane-terminal-toolbar strong {
+  color: var(--text-primary);
+}
+
+.theme-light .right-pane-terminal-live .terminal-session-viewer-screen {
+  border-color: var(--border);
+}
+
+.theme-light .right-pane-terminal-transcript-preview {
+  border-top-color: var(--border);
+  background: var(--surface-muted);
+}
+
+.theme-light .right-pane-terminal-hint {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+}
+
+.theme-light .right-pane-terminal-writer-diagnostic,
+.theme-light .right-pane-browser-writer-diagnostic {
+  color: var(--text-secondary);
+  background: var(--warning-soft);
+  border-bottom-color: var(--warning-border);
+}
+
+.theme-light .right-pane-terminal-writer-diagnostic strong,
+.theme-light .right-pane-browser-writer-diagnostic strong {
+  color: var(--text-primary);
+}
+
+.theme-light .right-pane-terminal-writer-diagnostic dd,
+.theme-light .right-pane-browser-writer-diagnostic dd {
+  color: var(--text-secondary);
+}
+
+/* Primary result empty state and tool dock */
+.theme-light .result-content > .stack {
+  gap: 12px;
+}
+
+.theme-light .empty-runtime-state {
+  color: var(--text-muted);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.theme-light .empty-runtime-state strong {
+  color: var(--text-primary);
+}
+
+.theme-light .empty-runtime-state p {
+  color: var(--text-secondary);
+}
+
+.theme-light .empty-recover-actions span {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+
+.theme-light .right-pane-tool-dock button {
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border-color: var(--border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+.theme-light .right-pane-tool-dock button:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
+}
+
+.theme-light .right-pane-tool-dock span {
+  color: var(--text-primary);
+}
+
+.theme-light .right-pane-tool-dock small {
+  color: var(--text-muted);
+}

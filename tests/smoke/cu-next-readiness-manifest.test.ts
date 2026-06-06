@@ -31,8 +31,8 @@ test('current CU-NEXT readiness manifest requires both checked PROJECT items and
   assert.equal(manifest.completionEligible, manifest.status === 'ready');
   assert.equal(manifest.tasks.length, CU_NEXT_TASK_MAPPINGS.length);
   assert.deepEqual(manifest.tasks.map((task) => task.id), CU_NEXT_TASK_MAPPINGS.map((mapping) => mapping.taskId));
-  assert.equal(manifest.globalEvidence.kvGround.status, 'passed');
-  assert.equal(manifest.globalEvidence.kvGround.endpoint, 'http://127.0.0.1:18081');
+  assert.equal(Object.hasOwn(manifest.globalEvidence, 'kvGround'), false);
+  assert.equal(manifest.globalEvidence.modelRouterGrounding.status, manifest.globalEvidence.runtimeBrowser.status);
   assert.ok(['passed', 'blocked'].includes(manifest.globalEvidence.runtimeBrowser.status));
 
   for (const task of manifest.tasks) {
@@ -77,12 +77,6 @@ test('readiness manifest rejects fixture, shared-input, and shortcut-substitute 
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest(),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
     };
 
     const shortcut = buildCuNextReadinessManifestFromData({
@@ -175,12 +169,6 @@ test('readiness manifest requires exact taskId binding instead of text mentions'
       path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
       data: passedBrowserManifest(),
     },
-    kvGroundSmokeManifests: [
-      {
-        path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-        data: passedKvGroundManifest(),
-      },
-    ],
     userAcceptanceManifests: [
       {
         path: '.sciforge/vision-runs/cu-next-mixed/cu-user-acceptance-manifest.json',
@@ -211,12 +199,6 @@ test('readiness manifest distinguishes evidence-ready from fully passed PROJECT 
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest(),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
       userAcceptanceManifests: [
         {
           path: acceptanceRef,
@@ -278,12 +260,6 @@ test('readiness manifest only promotes completion-grade isolated-L3 evidence', a
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest(),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
     };
 
     const targetBound = buildCuNextReadinessManifestFromData({
@@ -442,12 +418,6 @@ test('readiness manifest rejects strong acceptance evidence with a missing requi
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest(),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
       userAcceptanceManifests: [
         {
           path: acceptanceRef,
@@ -481,12 +451,6 @@ test('readiness manifest blocks stale runtime browser observedAt from release el
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest({ observedAt: '2026-05-23T23:59:00.000Z' }),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
       userAcceptanceManifests: [
         {
           path: acceptanceRef,
@@ -512,13 +476,11 @@ test('CU-NEXT readiness CLI writes a JSON manifest', async () => {
   try {
     const projectPath = join(workspace, 'PROJECT.md');
     const browserPath = join(workspace, 'browser.json');
-    const kvPath = join(workspace, 'kv-ground-smoke.json');
     const acceptanceRef = denseGroundingAcceptanceRef('CU-NEXT-07');
     const acceptancePath = join(workspace, acceptanceRef);
     const outPath = join(workspace, 'readiness.json');
     await writeFile(projectPath, cuNextProjectFixture({ checkedTask: 'CU-NEXT-07' }));
     await writeFile(browserPath, JSON.stringify(passedBrowserManifest({ observedAt: new Date().toISOString() }), null, 2));
-    await writeFile(kvPath, JSON.stringify(passedKvGroundManifest(), null, 2));
     await writeEvidenceBundle(workspace, acceptanceRef, passedCuNextAcceptanceManifest('CU-NEXT-07'));
 
     const { stdout } = await execFileAsync(process.execPath, [
@@ -531,8 +493,6 @@ test('CU-NEXT readiness CLI writes a JSON manifest', async () => {
       projectPath,
       '--browser-manifest',
       browserPath,
-      '--kv-ground-smoke',
-      kvPath,
       '--acceptance-manifest',
       acceptancePath,
       '--out',
@@ -543,6 +503,8 @@ test('CU-NEXT readiness CLI writes a JSON manifest', async () => {
     const written = JSON.parse(await readFile(outPath, 'utf8'));
     assert.equal(written.schemaVersion, 'sciforge.computer-use.cu-next-readiness.v1');
     assert.equal(written.tasks.find((task: { id: string }) => task.id === 'CU-NEXT-07')?.status, 'passed');
+    assert.equal(Object.hasOwn(written.globalEvidence, 'kvGround'), false);
+    assert.equal(written.globalEvidence.modelRouterGrounding.status, 'passed');
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -563,12 +525,6 @@ test('CU-NEXT readiness accepts real cu-user-acceptance builder output with exac
         path: 'docs/test-artifacts/runtime-codex-browser-acceptance/manifest.json',
         data: passedBrowserManifest(),
       },
-      kvGroundSmokeManifests: [
-        {
-          path: '.sciforge/vision-runs/kv-ground-smoke/kv-ground-smoke.json',
-          data: passedKvGroundManifest(),
-        },
-      ],
       userAcceptanceManifests: [
         {
           path: acceptanceRef,
@@ -657,7 +613,36 @@ async function writeFixtureFile(root: string, manifestDir: string, ref: string):
     await writeFile(path, JSON.stringify(denseGroundingRejectedTargetFixture(ref), null, 2));
     return;
   }
+  if (/\.validation\.json$/i.test(ref)) {
+    await writeFile(path, JSON.stringify(productArtifactValidationFixture(), null, 2));
+    return;
+  }
+  if (/freshness-check\.json$/i.test(ref)) {
+    await writeFile(path, JSON.stringify(freshnessCheckFixture(ref), null, 2));
+    return;
+  }
   await writeFile(path, 'fixture evidence\n');
+}
+
+function productArtifactValidationFixture(): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.artifact-validation.v1',
+    status: 'passed',
+    ok: true,
+    finalArtifactRef: 'dense-grounding-export.csv',
+    artifactRef: 'dense-grounding-export.csv',
+    contentRefs: ['dense-grounding-export.csv'],
+    checkedRefs: ['dense-grounding-export.csv'],
+    sourceRefs: ['before.png', 'source-facts.json'],
+    format: 'csv',
+    validator: 'sciforge-generic-csv-artifact-contract-validator',
+    sha256: 'b643a37f2b949e7c08d5c8c8b861c907a07781dcb4d4294ac467b234e9b1f4f8',
+    bytes: 32,
+    metadata: {
+      validationScope: 'product-smoke-record',
+      finalArtifactRef: 'dense-grounding-export.csv',
+    },
+  };
 }
 
 function denseGroundingRejectedTargetFixture(ref: string): Record<string, unknown> {
@@ -673,6 +658,17 @@ function denseGroundingRejectedTargetFixture(ref: string): Record<string, unknow
     coarseWindowScreenshotRef: ref.replace(/rejected-.+-target\.json$/, 'coarse-window.png'),
     focusCropRef: ref.replace(/rejected-.+-target\.json$/, 'focus-crop.png'),
     fineGroundingDiagnosticRef: ref.replace(/rejected-.+-target\.json$/, 'fine-grounding-diagnostic.json'),
+  };
+}
+
+function freshnessCheckFixture(ref: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.freshness-check.v1',
+    ref,
+    status: 'current',
+    observedAt: '2026-05-28T00:00:00.000Z',
+    checkedAt: '2026-05-28T00:00:00.000Z',
+    maxAgeMs: 30_000,
   };
 }
 
@@ -697,6 +693,10 @@ async function materializeCompletionEvidenceRefs(bundleDir: string, completionEv
   await Promise.all(collectCompletionEvidenceFileRefs(completionEvidence).map(async (ref) => {
     const path = resolve(bundleDir, ref);
     await mkdir(dirname(path), { recursive: true });
+    if (/\.validation\.json$/i.test(ref)) {
+      await writeFile(path, JSON.stringify(productArtifactValidationFixture(), null, 2));
+      return;
+    }
     await writeFile(path, 'fixture completion evidence ref\n');
   }));
 }
@@ -775,27 +775,6 @@ function passedBrowserManifest(options: { observedAt?: string } = {}): Record<st
       providerModelProfileVisible: true,
       workspaceCommandIdVisible: true,
       secondTurnVisibleAnswerConfirmed: true,
-    },
-  };
-}
-
-function passedKvGroundManifest(): Record<string, unknown> {
-  return {
-    schemaVersion: 'sciforge.kv-ground-smoke.v1',
-    runId: 'kv-ground-smoke-20260525T000000Z',
-    createdAt: '2026-05-25T00:00:00.000Z',
-    endpoint: 'http://127.0.0.1:18081',
-    checks: {
-      health: {
-        ok: true,
-      },
-      predict: {
-        coordinates: [480, 1062],
-      },
-    },
-    predictRequest: {
-      imageRef: 'docs/assets/sciforge-product-overview.png',
-      textPrompt: 'Click the Ask SciForge input box',
     },
   };
 }
@@ -886,6 +865,11 @@ function realCuNextAcceptanceInput(taskId: string): Parameters<typeof buildCuUse
     executorQueue: base.executorQueue,
     mutatingActions: base.mutatingActions,
     replayBundle: base.replayBundle,
+    evidenceLedger: base.evidenceLedger,
+    evidenceLedgerActions: base.evidenceLedgerActions,
+    evidenceIndex: base.evidenceIndex,
+    evidenceIndexRef: base.evidenceIndexRef,
+    actionLedgerRef: base.actionLedgerRef,
   };
 }
 

@@ -16,6 +16,8 @@ import {
   renderComputerUseLongRepairPlan,
   renderComputerUseLongRunbook,
   renderComputerUseLongMatrixReport,
+  resolveComputerUseLongMatrixSummaryPath,
+  runComputerUseLongTaskPoolCli,
   runComputerUseLongMatrix,
   runComputerUseLongRound,
   runComputerUseLongScenario,
@@ -27,6 +29,27 @@ import {
 import { toolPackageManifests } from '../../packages/skills/tool_skills';
 
 const inlineImagePayloadPattern = /data:image\/[a-z0-9.+-]+;base64,|;base64,[A-Za-z0-9+/=]{16,}/i;
+
+async function captureStdout(fn: () => Promise<void>) {
+  const originalWrite = process.stdout.write;
+  const originalExitCode = process.exitCode;
+  let output = '';
+  process.exitCode = undefined;
+  process.stdout.write = ((chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+    output += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk);
+    const done = typeof encodingOrCallback === 'function' ? encodingOrCallback : callback;
+    done?.();
+    return true;
+  }) as typeof process.stdout.write;
+  try {
+    await fn();
+    return { output, exitCode: process.exitCode };
+  } finally {
+    process.stdout.write = originalWrite;
+    process.exitCode = originalExitCode;
+  }
+}
+
 const pool = await loadComputerUseLongTaskPool();
 const visionSenseTool = toolPackageManifests.find((tool) => tool.id === 'local.vision-sense');
 assert.ok(visionSenseTool);
@@ -61,6 +84,30 @@ for (const scenario of pool.scenarios) {
   assert.match(scenarioContract, /input channel|mouse\/keyboard|generic mouse|keyboard/i, `${scenario.id} checks generic input channel`);
   assert.match(scenarioContract, /scheduler|serialized|ordered/i, `${scenario.id} checks serialized scheduling`);
   assert.equal(scenario.safetyBoundary.appSpecificShortcutsAllowed, false, `${scenario.id} forbids app-specific shortcuts`);
+}
+const releaseReadinessContract = pool.scenarios.map((scenario) => [
+  scenario.id,
+  scenario.title,
+  scenario.goal,
+  ...scenario.acceptance,
+  ...scenario.requiredEvidence,
+  ...scenario.failureRecord,
+  ...scenario.rounds.flatMap((round) => [round.prompt, ...round.expectedTrace]),
+].join(' ')).join('\n');
+const releaseReadinessCoverage = [
+  [/browser research report|browser report|research report artifact/i, 'browser report refs'],
+  [/form hard-confirm|hard-confirm.*form|确认.*表单|表单.*确认/i, 'form hard-confirm refs'],
+  [/CSV\/table validator refs|CSV|table validator|表格.*validator/i, 'CSV/table validator refs'],
+  [/file manager evidence|file manager screenshots|文件管理器.*evidence/i, 'file manager evidence'],
+  [/terminal\/notebook|terminal workflow|notebook workflow|终端|notebook/i, 'terminal/notebook workflow'],
+  [/cross-app document|source reader.*editor.*file preview|源.*编辑.*文件预览/i, 'cross-app document evidence'],
+  [/visual disambiguation|crop\/OCR\/vision translator|OCR|语义歧义/i, 'visual disambiguation evidence'],
+  [/viewport recovery|viewport state refs|滚动恢复|viewport/i, 'viewport recovery evidence'],
+  [/fresh re-observation|repair fresh re-observation|重新观察|re-observation/i, 'repair fresh re-observation'],
+  [/high-risk confirmation|Cancel.*Confirm|Confirm.*Cancel|当前 action\/type\/turn|高风险.*确认/i, 'high-risk confirmation evidence'],
+] as const;
+for (const [pattern, label] of releaseReadinessCoverage) {
+  assert.match(releaseReadinessContract, pattern, `CU-LONG task pool covers ${label}`);
 }
 
 const runbook = renderComputerUseLongRunbook(pool);
@@ -124,11 +171,13 @@ const previousRuntimeApiKey = process.env.SCIFORGE_RUNTIME_API_KEY;
 const previousProxyUpstreamBaseUrl = process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
 const previousRuntimeBaseUrl = process.env.SCIFORGE_RUNTIME_BASE_URL;
 const previousPlannerProfile = process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE;
-const previousKvGrounderUrl = process.env.SCIFORGE_VISION_KV_GROUND_URL;
 const previousHighRisk = process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
 const previousInputAdapter = process.env.SCIFORGE_VISION_INPUT_ADAPTER;
 const previousInputAdapterProvider = process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
 const previousAllowSharedInput = process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
+const previousDesktopNativeHost = process.env.SCIFORGE_VISION_DESKTOP_NATIVE_HOST;
+const previousBrowserHostNativeAdapterUrl = process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+const previousRightPaneNativeActionChannel = process.env.SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_BROWSER_HOST_ACTION_CHANNEL_URL;
 try {
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE = '1';
   process.env.SCIFORGE_VISION_DESKTOP_BRIDGE_DRY_RUN = '1';
@@ -141,10 +190,13 @@ try {
   process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   delete process.env.SCIFORGE_RUNTIME_BASE_URL;
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
-  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   delete process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS;
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
+  delete process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
   delete process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT;
+  delete process.env.SCIFORGE_VISION_DESKTOP_NATIVE_HOST;
+  delete process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL;
+  delete process.env.SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_BROWSER_HOST_ACTION_CHANNEL_URL;
   const smokeActionsJson = JSON.stringify([{ type: 'type_text', text: 'T084 generic window CU round smoke' }]);
   const preflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001', 'CU-LONG-006'],
@@ -167,6 +219,32 @@ try {
   assert.equal(missingUpstreamPreflight.ok, false);
   assert.equal(missingUpstreamPlannerCheck?.status, 'fail');
   assert.match(String(missingUpstreamPlannerCheck?.message), /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+  delete process.env.SCIFORGE_RUNTIME_API_KEY;
+  delete process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL;
+  delete process.env.SCIFORGE_RUNTIME_BASE_URL;
+  const configOnlyPath = join(preparedRoot, 'runtime-config-only.local.json');
+  await writeFile(configOnlyPath, JSON.stringify({
+    llm: {
+      apiKey: 'config-only-secret',
+      baseUrl: 'http://127.0.0.1:3888/v1',
+      model: 'config-only-model',
+    },
+    computerUse: {
+      plannerProfile: 'config-only-profile',
+    },
+  }), 'utf8');
+  process.env.SCIFORGE_CONFIG_PATH = configOnlyPath;
+  const configOnlyPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: true,
+  });
+  const configOnlyPlannerCheck = configOnlyPreflight.checks.find((check) => check.id === 'runtime-codex-planner');
+  assert.equal(configOnlyPlannerCheck?.status, 'pass');
+  assert.equal(configOnlyPreflight.ok, true);
+  assert.doesNotMatch(JSON.stringify(configOnlyPreflight), /config-only-secret/);
+  process.env.SCIFORGE_CONFIG_PATH = join(preparedRoot, 'empty-config.local.json');
+  process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
   process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   const realInputBlockedPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
@@ -176,6 +254,25 @@ try {
   });
   assert.equal(realInputBlockedPreflight.ok, false);
   assert.ok(realInputBlockedPreflight.checks.some((check) => check.id === 'input-isolation' && check.status === 'fail'));
+  const realInputBlockedMatrixCli = await captureStdout(() => runComputerUseLongTaskPoolCli([
+    'node',
+    'tools/computer-use-long-task-pool.ts',
+    'run-matrix',
+    '--real',
+    '--scenarios',
+    'CU-LONG-001',
+    '--workspace-path',
+    '/tmp/sciforge-cu-workspace',
+    '--out-root',
+    join(preparedRoot, 'cli-real-input-blocked-matrix'),
+    '--max-steps',
+    '1',
+  ]));
+  assert.equal(realInputBlockedMatrixCli.exitCode, 1);
+  assert.match(realInputBlockedMatrixCli.output, /desktop-product-path/);
+  assert.match(realInputBlockedMatrixCli.output, /input-isolation/);
+  assert.match(realInputBlockedMatrixCli.output, /Desktop native host evidence|executable independent input adapter/i);
+  assert.doesNotMatch(realInputBlockedMatrixCli.output, /runtime-codex-planner.*incomplete/i);
   process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT = '1';
   const realSharedInputPreflight = await preflightComputerUseLong({
     scenarioIds: ['CU-LONG-001'],
@@ -184,6 +281,10 @@ try {
     actionsJson: smokeActionsJson,
   });
   assert.equal(realSharedInputPreflight.checks.find((check) => check.id === 'input-isolation')?.status, 'warn');
+  assert.equal(realSharedInputPreflight.ok, false);
+  const sharedInputProductPathCheck = realSharedInputPreflight.checks.find((check) => check.id === 'desktop-product-path');
+  assert.equal(sharedInputProductPathCheck?.status, 'fail');
+  assert.match(String(sharedInputProductPathCheck?.message), /Desktop native host|executable independent input adapter/i);
   const independentInputAdapters = ['remote-desktop', 'virtual-hid'] as const;
   for (const inputAdapter of independentInputAdapters) {
     process.env.SCIFORGE_VISION_INPUT_ADAPTER = inputAdapter;
@@ -212,6 +313,20 @@ try {
   assert.equal(executableInputIsolationCheck?.status, 'pass');
   assert.match(String(executableInputIsolationCheck?.message), /remote-desktop/);
   assert.match(String(executableInputIsolationCheck?.message), /sciforge-simulated-remote-desktop/);
+  assert.equal(executableIndependentInputPreflight.checks.find((check) => check.id === 'desktop-product-path')?.status, 'pass');
+  process.env.SCIFORGE_VISION_INPUT_ADAPTER = 'remote-desktop-session';
+  process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER = 'simulated_remote_desktop';
+  const executableIndependentInputAliasPreflight = await preflightComputerUseLong({
+    scenarioIds: ['CU-LONG-001'],
+    workspacePath: '/tmp/sciforge-cu-workspace',
+    dryRun: false,
+    actionsJson: smokeActionsJson,
+  });
+  const executableInputAliasIsolationCheck = executableIndependentInputAliasPreflight.checks.find((check) => check.id === 'input-isolation');
+  assert.equal(executableInputAliasIsolationCheck?.status, 'pass');
+  assert.match(String(executableInputAliasIsolationCheck?.message), /remote-desktop/);
+  assert.match(String(executableInputAliasIsolationCheck?.message), /sciforge-simulated-remote-desktop/);
+  assert.equal(executableIndependentInputAliasPreflight.checks.find((check) => check.id === 'desktop-product-path')?.status, 'pass');
   delete process.env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
   delete process.env.SCIFORGE_VISION_INPUT_ADAPTER;
   const fixturePreflight = await preflightComputerUseLong({
@@ -318,6 +433,16 @@ try {
   const brokenValidation = await validateComputerUseLongRun({ manifestPath: brokenManifestPath });
   assert.equal(brokenValidation.ok, false);
   assert.ok(brokenValidation.issues.some((issue) => /round 1 missing actionLedgerRefs/.test(issue)));
+  const rawPayloadManifestPath = join(preparedScenario.runDir, 'raw-payload-manifest.json');
+  await copyFile(preparedScenario.manifestPath, rawPayloadManifestPath);
+  const rawPayloadManifest = JSON.parse(await readFile(rawPayloadManifestPath, 'utf8')) as Record<string, unknown>;
+  rawPayloadManifest.providerPayload = {
+    screenshot: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+  };
+  await writeFile(rawPayloadManifestPath, `${JSON.stringify(rawPayloadManifest, null, 2)}\n`);
+  const rawPayloadManifestValidation = await validateComputerUseLongRun({ manifestPath: rawPayloadManifestPath });
+  assert.equal(rawPayloadManifestValidation.ok, false);
+  assert.ok(rawPayloadManifestValidation.issues.some((issue) => /raw|provider payload|inline image|base64/i.test(issue)));
 
   const matrixRun = await runComputerUseLongMatrix({
     scenarioIds: ['CU-LONG-001', 'CU-LONG-006'],
@@ -349,6 +474,48 @@ try {
   const matrixValidation = await validateComputerUseLongMatrix({ summaryPath: matrixRun.summaryPath });
   assert.deepEqual(matrixValidation.issues, []);
   assert.equal(matrixValidation.metrics.validatedRuns, 2);
+  assert.equal(await resolveComputerUseLongMatrixSummaryPath({ outRoot: preparedRoot }), matrixRun.summaryPath);
+  const implicitMatrixValidation = await validateComputerUseLongMatrix({ outRoot: preparedRoot });
+  assert.deepEqual(implicitMatrixValidation.issues, []);
+  assert.equal(implicitMatrixValidation.summaryPath, matrixRun.summaryPath);
+  const matrixSummaryJson = JSON.parse(matrixSummary) as Record<string, unknown>;
+  const matrixSummaryResults = matrixSummaryJson.results as Array<Record<string, unknown>>;
+  assert.ok(matrixSummaryResults.every((result) => typeof result.summaryPath === 'string' && result.summaryPath), 'matrix results record scenario summary refs');
+  const missingSummaryPathSummary = JSON.parse(matrixSummary) as Record<string, unknown>;
+  delete ((missingSummaryPathSummary.results as Array<Record<string, unknown>>)[0]).summaryPath;
+  const missingSummaryPathSummaryPath = join(preparedRoot, 'matrix-missing-summary-path.json');
+  await writeFile(missingSummaryPathSummaryPath, `${JSON.stringify(missingSummaryPathSummary, null, 2)}\n`);
+  const missingSummaryPathValidation = await validateComputerUseLongMatrix({ summaryPath: missingSummaryPathSummaryPath });
+  assert.equal(missingSummaryPathValidation.ok, false);
+  assert.ok(missingSummaryPathValidation.issues.some((issue) => /summaryPath|scenario summary/i.test(issue)));
+  const mismatchedRunStatusSummary = JSON.parse(matrixSummary) as Record<string, unknown>;
+  ((mismatchedRunStatusSummary.results as Array<Record<string, unknown>>)[0]).runStatus = 'repair-needed';
+  const mismatchedRunStatusSummaryPath = join(preparedRoot, 'matrix-mismatched-run-status.json');
+  await writeFile(mismatchedRunStatusSummaryPath, `${JSON.stringify(mismatchedRunStatusSummary, null, 2)}\n`);
+  const mismatchedRunStatusValidation = await validateComputerUseLongMatrix({ summaryPath: mismatchedRunStatusSummaryPath });
+  assert.equal(mismatchedRunStatusValidation.ok, false);
+  assert.ok(mismatchedRunStatusValidation.issues.some((issue) => /passed matrix|runStatus/i.test(issue)));
+  const scenarioSummaryPath = String(matrixSummaryResults[0].summaryPath);
+  const originalScenarioSummary = await readFile(scenarioSummaryPath, 'utf8');
+  const scenarioSummaryWithoutValidatorEvidence = JSON.parse(originalScenarioSummary) as Record<string, unknown>;
+  delete scenarioSummaryWithoutValidatorEvidence.validation;
+  try {
+    await writeFile(scenarioSummaryPath, `${JSON.stringify(scenarioSummaryWithoutValidatorEvidence, null, 2)}\n`);
+    const missingValidatorEvidenceValidation = await validateComputerUseLongMatrix({ summaryPath: matrixRun.summaryPath });
+    assert.equal(missingValidatorEvidenceValidation.ok, false);
+    assert.ok(missingValidatorEvidenceValidation.issues.some((issue) => /validator evidence|scenario-summary validation/i.test(issue)));
+  } finally {
+    await writeFile(scenarioSummaryPath, originalScenarioSummary);
+  }
+  const rawPayloadMatrixSummary = JSON.parse(matrixSummary) as Record<string, unknown>;
+  ((rawPayloadMatrixSummary.results as Array<Record<string, unknown>>)[0]).providerPayload = {
+    screenshot: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ',
+  };
+  const rawPayloadMatrixSummaryPath = join(preparedRoot, 'matrix-raw-payload-summary.json');
+  await writeFile(rawPayloadMatrixSummaryPath, `${JSON.stringify(rawPayloadMatrixSummary, null, 2)}\n`);
+  const rawPayloadMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: rawPayloadMatrixSummaryPath });
+  assert.equal(rawPayloadMatrixValidation.ok, false);
+  assert.ok(rawPayloadMatrixValidation.issues.some((issue) => /raw|provider payload|inline image|base64/i.test(issue)));
   const matrixReport = await renderComputerUseLongMatrixReport({ summaryPath: matrixRun.summaryPath });
   assert.equal(matrixReport.ok, true);
   assert.equal((await stat(matrixReport.reportPath)).isFile(), true);
@@ -356,14 +523,25 @@ try {
   assert.match(matrixReport.markdown, /## Preflight/);
   assert.match(matrixReport.markdown, /Genericity Rules Rechecked/);
   assert.doesNotMatch(matrixReport.markdown, inlineImagePayloadPattern);
+  const implicitMatrixReport = await renderComputerUseLongMatrixReport({
+    outRoot: preparedRoot,
+    out: join(preparedRoot, 'implicit-matrix-report.md'),
+  });
+  assert.equal(implicitMatrixReport.ok, true);
+  assert.equal(implicitMatrixReport.summaryPath, matrixRun.summaryPath);
   const passedRepairPlan = await renderComputerUseLongRepairPlan({ summaryPath: matrixRun.summaryPath });
   assert.equal(passedRepairPlan.ok, true);
   assert.equal(passedRepairPlan.actionCount, 0);
+  const implicitPassedRepairPlan = await renderComputerUseLongRepairPlan({
+    outRoot: preparedRoot,
+    out: join(preparedRoot, 'implicit-repair-plan.md'),
+  });
+  assert.equal(implicitPassedRepairPlan.ok, true);
+  assert.equal(implicitPassedRepairPlan.summaryPath, matrixRun.summaryPath);
 
   process.env.SCIFORGE_RUNTIME_API_KEY = 'runtime-codex-text-planner-key';
   process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'runtime-codex-text-planner-profile';
-  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = smokeActionsJson;
   const fixtureActionMatrix = await runComputerUseLongMatrix({
@@ -401,7 +579,6 @@ try {
   process.env.SCIFORGE_RUNTIME_API_KEY = 'preflight-key';
   process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL = 'http://127.0.0.1:3888/v1';
   process.env.SCIFORGE_COMPUTER_USE_PLANNER_PROFILE = 'preflight-profile';
-  process.env.SCIFORGE_VISION_KV_GROUND_URL = 'http://127.0.0.1:9999';
   process.env.SCIFORGE_VISION_TEST_ACTION_FIXTURES = '1';
   process.env.SCIFORGE_VISION_TEST_ACTIONS_JSON = JSON.stringify([{ type: 'wait', ms: 1 }]);
 
@@ -422,9 +599,41 @@ try {
   assert.deepEqual(blockedMatrix.repairNeededScenarioIds, ['CU-LONG-001']);
   const blockedMatrixSummary = await readFile(blockedMatrix.summaryPath, 'utf8');
   assert.match(blockedMatrixSummary, /high-risk-boundary/);
+  assert.doesNotMatch(blockedMatrixSummary, inlineImagePayloadPattern);
+  const blockedMatrixSummaryJson = JSON.parse(blockedMatrixSummary) as Record<string, unknown>;
+  assert.equal(typeof blockedMatrixSummaryJson.repairManifestPath, 'string');
+  const blockedRepairManifestText = await readFile(String(blockedMatrixSummaryJson.repairManifestPath), 'utf8');
+  assert.match(blockedRepairManifestText, /sciforge\.computer-use-long\.repair-manifest\.v1/);
+  assert.doesNotMatch(blockedRepairManifestText, inlineImagePayloadPattern);
+  const blockedRepairManifest = JSON.parse(blockedRepairManifestText) as Record<string, unknown>;
+  assert.ok(Array.isArray(blockedRepairManifest.nextRepairFocus) && blockedRepairManifest.nextRepairFocus.length > 0);
   const blockedMatrixValidation = await validateComputerUseLongMatrix({ summaryPath: blockedMatrix.summaryPath });
-  assert.deepEqual(blockedMatrixValidation.issues, []);
+  assert.equal(blockedMatrixValidation.ok, false);
+  assert.ok(blockedMatrixValidation.issues.some((issue) => /matrix.status must be passed/i.test(issue)));
   assert.equal(blockedMatrixValidation.metrics.preflightFailedChecks, 1);
+  const blockedMatrixInspectionValidation = await validateComputerUseLongMatrix({
+    summaryPath: blockedMatrix.summaryPath,
+    requirePassed: false,
+  });
+  assert.deepEqual(blockedMatrixInspectionValidation.issues, []);
+  assert.equal(blockedMatrixInspectionValidation.metrics.preflightFailedChecks, 1);
+  const blockedMatrixInspectionCli = await captureStdout(() => runComputerUseLongTaskPoolCli([
+    'node',
+    'tools/computer-use-long-task-pool.ts',
+    'validate-matrix',
+    '--summary',
+    blockedMatrix.summaryPath,
+    '--allow-repair-needed',
+  ]));
+  assert.equal(blockedMatrixInspectionCli.exitCode, undefined);
+  assert.match(blockedMatrixInspectionCli.output, /CU-LONG matrix repair-needed structural inspection passed/);
+  assert.doesNotMatch(blockedMatrixInspectionCli.output, /CU-LONG matrix validation passed/);
+  const blockedWithoutRepairManifestPath = join(preparedRoot, 'blocked-matrix-no-repair-manifest.json');
+  delete blockedMatrixSummaryJson.repairManifestPath;
+  await writeFile(blockedWithoutRepairManifestPath, `${JSON.stringify(blockedMatrixSummaryJson, null, 2)}\n`);
+  const blockedWithoutRepairManifestValidation = await validateComputerUseLongMatrix({ summaryPath: blockedWithoutRepairManifestPath });
+  assert.equal(blockedWithoutRepairManifestValidation.ok, false);
+  assert.ok(blockedWithoutRepairManifestValidation.issues.some((issue) => /repair manifest|next repair focus/i.test(issue)));
   const blockedMatrixReport = await renderComputerUseLongMatrixReport({ summaryPath: blockedMatrix.summaryPath });
   assert.equal(blockedMatrixReport.ok, false);
   assert.equal(blockedMatrixReport.issueCategories['safety-boundary'], 1);
@@ -466,11 +675,13 @@ try {
   restoreEnv('SCIFORGE_PROXY_UPSTREAM_BASE_URL', previousProxyUpstreamBaseUrl);
   restoreEnv('SCIFORGE_RUNTIME_BASE_URL', previousRuntimeBaseUrl);
   restoreEnv('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', previousPlannerProfile);
-  restoreEnv('SCIFORGE_VISION_KV_GROUND_URL', previousKvGrounderUrl);
   restoreEnv('SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS', previousHighRisk);
   restoreEnv('SCIFORGE_VISION_INPUT_ADAPTER', previousInputAdapter);
   restoreEnv('SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER', previousInputAdapterProvider);
   restoreEnv('SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT', previousAllowSharedInput);
+  restoreEnv('SCIFORGE_VISION_DESKTOP_NATIVE_HOST', previousDesktopNativeHost);
+  restoreEnv('SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL', previousBrowserHostNativeAdapterUrl);
+  restoreEnv('SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_BROWSER_HOST_ACTION_CHANNEL_URL', previousRightPaneNativeActionChannel);
 }
 
 const traceWorkspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-trace-'));

@@ -206,6 +206,7 @@ function routerFixtureFor(path: string) {
       providers: [{
         providerId: 'sciforge.model-router.responses',
         capabilityId: 'model_router_responses',
+        healthPath: '/healthz',
       }],
     };
   }

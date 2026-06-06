@@ -1,7 +1,7 @@
 import {
   SCIENTIFIC_REPRODUCTION_TRAJECTORY_SCHEMA_VERSION,
   type ScientificReproductionTrajectory,
-} from './trajectory-contract';
+} from './trajectory-contract.js';
 
 export function buildSampleScientificReproductionTrajectory(): ScientificReproductionTrajectory {
   return {

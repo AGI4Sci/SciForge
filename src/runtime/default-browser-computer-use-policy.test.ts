@@ -46,7 +46,7 @@ test('browser evidence decision defaults external current citation requests to s
   }), {
     decision: 'search',
     reason: 'current-external-or-citation-request',
-    query: 'What is the current Python release? Please cite source URLs.',
+    query: 'current Python release',
   });
 
   assert.deepEqual(evaluateBrowserEvidenceNeed({
@@ -59,6 +59,51 @@ test('browser evidence decision defaults external current citation requests to s
 
   assert.equal(evaluateBrowserEvidenceNeed({
     prompt: 'Do not use the internet. Summarize the current Python release from local notes only.',
+  }).decision, 'skip');
+});
+
+test('browser evidence decision recognizes Chinese browser search requests and extracts focused queries', () => {
+  assert.deepEqual(evaluateBrowserEvidenceNeed({
+    prompt: '通过内置浏览器搜索伊朗局势',
+  }), {
+    decision: 'search',
+    reason: 'explicit-browser-search',
+    query: '伊朗局势',
+  });
+
+  const latest = evaluateBrowserEvidenceNeed({
+    prompt: '请搜索网页查看伊朗局势最新消息',
+  });
+  assert.equal(latest.decision, 'search');
+  assert.equal(latest.reason, 'explicit-browser-search');
+  assert.equal(latest.query, '伊朗局势最新消息');
+
+  assert.deepEqual(evaluateBrowserEvidenceNeed({
+    prompt: '查一下伊朗局势',
+  }), {
+    decision: 'search',
+    reason: 'current-external-or-citation-request',
+    query: '伊朗局势',
+  });
+
+  assert.deepEqual(evaluateBrowserEvidenceNeed({
+    prompt: '帮我确认这个新闻：伊朗局势',
+  }), {
+    decision: 'search',
+    reason: 'current-external-or-citation-request',
+    query: '伊朗局势',
+  });
+
+  assert.deepEqual(evaluateBrowserEvidenceNeed({
+    prompt: '查一下伊朗局势最新信息',
+  }), {
+    decision: 'search',
+    reason: 'current-external-or-citation-request',
+    query: '伊朗局势最新信息',
+  });
+
+  assert.equal(evaluateBrowserEvidenceNeed({
+    prompt: '只用本地资料，不要联网，搜索网页查看伊朗局势',
   }).decision, 'skip');
 });
 
@@ -103,6 +148,35 @@ test('computer use risk classifier separates auto, hard-confirm, and blocked cat
     category: 'security-boundary-bypass',
     hardConfirm: false,
     reason: 'security, access-control, or platform-abuse bypass is blocked by default',
+  });
+});
+
+test('computer use risk classifier uses semantic side-effect signals and authorization profile policy', () => {
+  const assisted = defaultAuthorizationProfile();
+  const noPayments = {
+    ...assisted,
+    hardConfirmCategories: assisted.hardConfirmCategories.filter((category) => category !== 'payments-transfers-purchases'),
+    blockedCategories: [...assisted.blockedCategories, 'payments-transfers-purchases'],
+  };
+
+  assert.deepEqual(classifyComputerUseRisk({
+    action: 'place this order for the paid dataset',
+    authorizationProfile: assisted,
+  }), {
+    decision: 'needs-confirmation',
+    category: 'payments-transfers-purchases',
+    hardConfirm: true,
+    reason: 'payments, transfers, purchases, subscriptions, refunds, withdrawals, and trading require hard confirmation',
+  });
+
+  assert.deepEqual(classifyComputerUseRisk({
+    action: 'place this order for the paid dataset',
+    authorizationProfile: noPayments,
+  }), {
+    decision: 'blocked',
+    category: 'payments-transfers-purchases',
+    hardConfirm: false,
+    reason: 'payments-transfers-purchases is blocked by the selected autonomy profile',
   });
 });
 

@@ -10,21 +10,33 @@
   "antiTriggers": ["vision-only question", "artifact rendering", "schema-only validation"],
   "integrationLevel": "package-local-host-ports",
   "entrypoint": {
-    "type": "python-package",
-    "package": "sciforge-computer-use",
-    "module": "sciforge_computer_use",
-    "symbol": "run_task",
-    "cli": "python -m sciforge_computer_use --request-json '<json>' --host-port-stdio",
-    "discoveryProbe": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
-    "virtualDesktopProbe": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir>",
-    "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
-    "nativeToolProbe": "python -m sciforge_computer_use.native_tool --tool get_app_state --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
-    "platformSidecarProbe": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
-    "virtualDisplayProviderProbe": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>",
+    "type": "typescript-package",
+    "package": "@agi4sci/sciforge-computer-use-action-provider",
+    "module": "packages/actions/computer-use/host-adapter-contract.ts",
+    "symbol": "createComputerUseHostAdapter",
     "path": "packages/actions/computer-use",
-    "interface": "runTask(request, hostPorts)",
-    "notes": "Computer Use Python action loop、contract、safety 和 trace 的唯一物理真相源。"
+    "interface": "createComputerUseHostAdapter({ hostPorts, dispatchHostPort })",
+    "productRoute": "Agent Host -> WindowActionSession -> TypeScript host-port contract -> current evidence bundle",
+    "notes": "Computer Use product/default acceptance is TS-only and consumes refs-first host ports plus WindowAction evidence projection."
   },
+  "legacyPythonImplementation": {
+    "legacyObsolete": true,
+    "diagnosticOnly": true,
+    "productDefaultAcceptanceAllowed": false,
+    "filesPath": "packages/actions/computer-use/sciforge_computer_use",
+    "scriptLabelRequirement": "Every package.json script that invokes this implementation must include opt-in, diagnostic, legacy, or historical in the script name or command.",
+    "claimLimit": "Python files are legacy-obsolete and cannot be referenced by product/default acceptance. These commands may be used only for isolated historical diagnostics, package-local regression archaeology, or manual compatibility probes.",
+    "diagnosticCommands": {
+      "stdioLoop": "python -m sciforge_computer_use --request-json '<json>' --host-port-stdio",
+      "discoveryProbe": "python -m sciforge_computer_use.plugin_probe --output-dir <dir> --run-fixture",
+      "virtualDesktopProbe": "python -m sciforge_computer_use.virtual_desktop_probe --scenario-file <file> --output-dir <dir>",
+      "targetBoundWindowHostProbe": "python -m sciforge_computer_use.target_bound_window_host_probe --scenario-file <file> --output-dir <dir>",
+      "nativeToolProbe": "python -m sciforge_computer_use.native_tool --tool get_app_state --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
+      "platformSidecarProbe": "python -m sciforge_computer_use.platform_sidecar --tool preflight --payload-json '{\"displayGroupId\":\"debug-display-group\",\"screenId\":\"debug-screen\"}' --output-dir <dir>",
+      "virtualDisplayProviderProbe": "python -m sciforge_computer_use.virtual_display_provider --target-app-kind vscode --output-dir <dir>"
+    }
+  },
+  "virtualAppScreenRuntimeProductFallbackAllowed": false,
   "actionSchema": {
     "schemaRef": "sciforge.computer-use.request.v1",
     "inputShape": {
@@ -248,15 +260,16 @@
     "requiredFalseFlags": ["affectsPhysicalDisplay", "requiresFocusSteal", "sharedSystemInputUsed", "systemPointerMoved", "systemKeyboardEventsSent"],
     "requiredRefs": ["providerProbeRef", "providerReadinessRef", "adapterReadinessRef", "liveSurfaceRef", "surfaceTransport", "frameStreamRef", "currentFrameRef", "inputIntentRef", "beforeAfterFrameRef", "verificationRef", "evidenceLedgerRef"],
     "failClosedWhen": ["driver-or-runtime-missing", "permission-missing", "shared-system-input-required", "physical-display-affected", "focus-steal-required", "multiple-interactive-surfaces", "current-session-evidence-missing"],
-    "claimLimit": "The virtual display provider contract proves catalog/probe/readiness/invoke boundaries only. A VirtualAppScreen pass requires current-session provider-executed createSession, launchApp, attachSurface, executeInputIntent, live frame, before/after, GUI-present, and evidence-ledger refs."
+    "claimLimit": "The virtual display provider contract proves catalog/probe/readiness/invoke boundaries only. It is legacy compatibility evidence and cannot replace the TypeScript WindowActionSession product path, current evidence bundle, action causality, verifier refs, or Host completion."
   },
   "nativeToolsContract": {
     "schemaRef": "sciforge.computer-use.native-tool-manifest.v1",
-    "productionHost": "Codex app-server native tool/plugin/MCP or module.invoke(actions, execute)",
+    "productionHost": "TypeScript host adapter via Agent Host WindowActionSession and refs-first host ports",
     "diagnosticEntrypoint": "python -m sciforge_computer_use.native_tool --tool <get_app_state|observe|click|type_text|scroll|press_key|propose_action|execute_scoped_action|get_replay_refs> --payload-json '<json>' --output-dir <dir>",
     "mcpServer": {
+      "legacyDiagnosticOnly": true,
       "serverName": "sciforge-computer-use",
-      "configRef": ".mcp.json",
+      "configRef": "manual-legacy-diagnostic-only; repo default .mcp.json intentionally omits this server",
       "command": "python -m sciforge_computer_use.mcp_server",
       "transport": "stdio"
     },
@@ -286,34 +299,35 @@
     "schemaRef": "sciforge.computer-use.public-surface-parity.v1",
     "ownershipMapRef": "docs/native-extension-ownership-map.json#entries/computer-use",
     "requiredBacklogIds": [
-      "CU-PKG-22-virtual-app-screen-user-acceptance-product-gate",
+      "CU-PKG-22-window-action-session-current-evidence-product-gate",
       "CU-PKG-23-multi-screen-live-demo",
       "CU-PKG-24-browser-runtime-dom-ax-observation-refs",
       "CU-PKG-25-native-multi-app-workflow-live-acceptance-matrix",
       "CU-PKG-26-public-surface-parity-guard"
     ],
     "requiredNativeSurfaces": [
-      "virtual-app-screen-user-acceptance product gate",
-      "virtual-app-screen-user-acceptance-manifest",
+      "WindowActionSession current evidence product gate",
+      "computer-use-current-evidence-bundle manifest",
       "BrowserRuntime DOM/AX observation refs",
       "native multi-app workflow/live acceptance matrix",
+      "legacy VirtualAppScreen compatibility diagnostics",
       "native multi-screen/multi-actor cursor historical opt-in regression",
       "multi-screen live demo historical diagnostic"
     ],
     "nativeProductGatePolicy": {
-      "activeGate": "virtual-app-screen-user-acceptance",
-      "manifestName": "virtual-app-screen-user-acceptance-manifest",
-      "manifestSchemaRef": "sciforge.computer-use.virtual-app-screen-user-acceptance-manifest.v1",
-      "productionHost": "Codex app-server native tool/plugin/MCP or module.invoke(actions, execute)",
-      "requiredProvenance": ["taskId", "scenarioId", "userIntent", "providerId", "providerProbeRef", "providerReadinessRef", "liveSurfaceRef", "surfaceTransport", "frameStreamRef", "currentFrameRef", "singleInteractiveTruth", "targetAppRefs", "targetWindowRefs", "sessionRefs", "adapterReadinessRefs", "screenFrameRefs", "inputIntentRefs", "executorEventRefs", "beforeAfterFrameRefs", "annotationProposalRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "replayRef", "evidenceLedgerRef", "isolationFlags", "blockedReason", "displayGroupId", "screenId", "windowId", "actorId", "cursorId", "leaseId", "schedulerLeaseRef", "appStateRef", "screenshotRef", "groundingRefs", "traceRefs", "replayRefs", "currentBundleRef", "guiPresentRef when presentation is requested"],
-      "requiredManifestFields": ["taskId", "scenarioId", "userIntent", "targetAppRefs", "targetWindowRefs", "sessionRefs", "adapterReadinessRefs", "screenFrameRefs", "inputIntentRefs", "executorEventRefs", "beforeAfterFrameRefs", "annotationProposalRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "replayRef", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
+      "activeGate": "window-action-session-current-evidence",
+      "manifestName": "computer-use-current-evidence-bundle",
+      "manifestSchemaRef": "sciforge.computer-use.current-evidence-bundle.v1",
+      "productionHost": "Agent Host WindowActionSession via TypeScript host-port adapter",
+      "requiredProvenance": ["taskId", "scenarioId", "userIntent", "currentBundleRef", "windowActionSessionRef", "hostPortsRef", "targetWindowRefs", "appStateRef", "screenshotRef", "focusCropRefs", "groundingRefs", "executorLeaseRefs", "executorEventRefs", "beforeAfterFrameRefs", "artifactRefs", "verificationRefs", "guiPresentRefs", "approvalRefs", "cancelRefs", "traceRefs", "replayRefs", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
+      "requiredManifestFields": ["taskId", "scenarioId", "userIntent", "currentBundleRef", "windowActionSessionRef", "hostPortsRef", "targetWindowRefs", "executorEventRefs", "beforeAfterFrameRefs", "artifactRefs", "verificationRefs", "traceRefs", "evidenceLedgerRef", "isolationFlags", "blockedReason"],
       "passStatePolicy": {
-        "passedRequires": ["artifactRefs", "visible Screen frame refs", "action causality", "validator/verifier refs", "gui.present refs", "replay refs", "isolation flags"],
+        "passedRequires": ["artifactRefs", "visible screenshot/frame refs", "action causality", "validator/verifier refs", "gui.present refs when presentation is requested", "replay refs", "isolation flags"],
         "blockedStatuses": ["blocked", "needs-confirmation", "requires-handoff"],
         "m6NativeMultiScreenUserLevelPassAllowed": false,
         "packageSmokeUserLevelPassAllowed": false
       },
-      "historicalRegressionGateIds": ["m6-native-multi-screen", "multi-screen-live-demo"],
+      "historicalRegressionGateIds": ["legacy-compatibility-diagnostics", "m6-native-multi-screen", "multi-screen-live-demo"],
       "forbiddenSubstituteGateIds": ["package-smoke", "m6-native-multi-screen", "target-bound-fixture", "historical-docker-novnc", "single-click-smoke", "dom", "playwright", "accessibility", "shell-direct-artifact", "old-trace", "gui-executor", "shared-system-input"],
       "guiExecutionAllowed": false,
       "runtimeBridgePublicProductionApiAllowed": false,
@@ -332,7 +346,7 @@
       "activeProductGateEligible": false,
       "historicalEvidenceAllowedWhenRefsFirst": true
     },
-    "claimLimit": "This parity block keeps the action manifest aligned with the ownership map. virtual-app-screen-user-acceptance is the active Computer Use product gate and requires a virtual-app-screen-user-acceptance-manifest; M6/native multi-screen is retained only as historical opt-in regression/diagnostic evidence, while Docker/noVNC/RDP remain legacy diagnostic or backend packaging and cannot be the product owner."
+    "claimLimit": "This parity block keeps the action manifest aligned with the TS-only product route. WindowActionSession current evidence is the active Computer Use product gate; VirtualAppScreen, M6/native multi-screen, Docker/noVNC/RDP, and Python probes are retained only as legacy, historical, opt-in, or diagnostic evidence and cannot be the product owner."
   },
   "platformSidecarContract": {
     "schemaRef": "sciforge.computer-use.platform-sidecar-manifest.v1",
@@ -747,6 +761,10 @@
     "traceSchemaRef": "sciforge.computer-use.semantic-verifier-trace.v1",
     "diagnosticsSchemaRef": "sciforge.computer-use.provider-diagnostics.v1",
     "probe": "sciforge_computer_use.semantic_verifier_probe",
+    "legacyDirectProviderDiagnosticOnly": true,
+    "productModelRouterCallSurface": false,
+    "productDefaultAcceptanceAllowed": false,
+    "userAcceptanceEligible": false,
     "configSourcePolicy": "Reads ignored local visionLLM config only; manifests may record config refs, model id, and URL origin but never API keys.",
     "endpointResolution": {
       "acceptedBaseUrlKinds": ["api-base", "chat-completions-endpoint", "responses-endpoint", "models-endpoint"],

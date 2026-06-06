@@ -12,6 +12,7 @@ from sciforge_vision_sense.computer_use_policy import (  # noqa: E402
     action_ledger_completion,
     build_default_window_target,
     build_matrix_execution_plan,
+    is_high_risk_gui_request,
     is_planner_only_evidence_task,
     rewrite_planner_action,
     should_tolerate_dense_ui_no_effect_action,
@@ -27,6 +28,16 @@ class ComputerUsePolicyTest(unittest.TestCase):
         self.assertTrue(is_planner_only_evidence_task("refs-only final screen acceptance report; do not perform GUI actions"))
         self.assertFalse(is_planner_only_evidence_task("Click the Save button in the target window"))
         self.assertFalse(is_planner_only_evidence_task("Summarize trace refs, then click the visible result"))
+
+    def test_high_risk_request_uses_semantic_action_signal(self) -> None:
+        self.assertTrue(is_high_risk_gui_request("Confirm the visible payment to complete the purchase."))
+        self.assertTrue(is_high_risk_gui_request("Approve access for the external authorization dialog."))
+        self.assertFalse(is_high_risk_gui_request("Read the confirmation dialog and do not approve anything."))
+        self.assertFalse(is_high_risk_gui_request("Inspect the approval screen without confirming the purchase."))
+        self.assertFalse(is_high_risk_gui_request("Read the checkout prompt and do not authorize or pay."))
+        self.assertFalse(is_high_risk_gui_request("Describe the checkout screen without purchasing."))
+        self.assertFalse(is_high_risk_gui_request("Inspect the Submit button label without clicking it."))
+        self.assertFalse(is_high_risk_gui_request("Describe where the Delete button is; do not press it."))
 
     def test_matrix_plan_serializes_real_gui_and_parallelizes_dry_run(self) -> None:
         real = build_matrix_execution_plan(dry_run=False, scenario_count=10, requested_max_concurrency=4)

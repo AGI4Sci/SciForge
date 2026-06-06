@@ -76,6 +76,23 @@ describe('scenarioRoutingPolicy', () => {
     assert.ok(matches.includes('omics-differential-exploration'));
   });
 
+  it('does not route incidental lexical collisions as scenario truth', () => {
+    const matches = matchedScenariosForPrompt('Review the package target screen and spatial layout for a structure viewer.');
+
+    assert.ok(!matches.includes('omics-differential-exploration'));
+    assert.ok(matches.includes('structure-exploration'));
+  });
+
+  it('does not turn token overlap alone into unsupported scope truth', () => {
+    const result = scopeCheck(
+      'literature-evidence-review',
+      'Prepare notes about systematic review final judgment wording for a package policy screen.',
+    );
+
+    assert.deepEqual(result.unsupportedMatches, []);
+    assert.equal(result.inScope, true);
+  });
+
   it('builds scope handoff prompts from package-owned policy', () => {
     const result = scopeCheck(
       'omics-differential-exploration',

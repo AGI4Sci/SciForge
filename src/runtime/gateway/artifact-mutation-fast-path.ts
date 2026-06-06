@@ -2,12 +2,12 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
-import { isRecord } from '../gateway-utils.js';
+import { isRecord, toStringList } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
 import {
   explicitMarkdownPathsFromPrompt,
-  markdownArtifactMutationPolicy,
+  markdownArtifactMutationIntent,
   markdownBudgetTargetPolicy,
   markdownDirectoryCandidatesFromPrompt,
   markdownDirectoryTargetRequested,
@@ -28,13 +28,17 @@ type RewriteResult = {
   changes: string[];
 };
 
+type ArtifactMutationIntent = ReturnType<typeof markdownArtifactMutationIntent>;
+
 export async function tryRunArtifactMutationFastPath(request: GatewayRequest): Promise<ToolPayload | undefined> {
-  if (isComputerUseProviderRequest(request)) return undefined;
-  if (!markdownArtifactMutationPolicy(request.prompt)) return undefined;
+  if (hasSelectedComputerUseAction(request)) return undefined;
+  const mutationIntent = markdownArtifactMutationIntent(request.prompt);
+  if (!mutationIntent.permitMutation) return undefined;
   const workspace = resolve(request.workspacePath || process.cwd());
   const constraints = rewriteConstraintsFromMarkdownPrompt(request.prompt);
   const targets = await artifactRewriteTargets(request, workspace);
   if (!targets.length) return undefined;
+  if (!artifactMutationWritePermitted(mutationIntent, targets.length)) return undefined;
 
   const written: RewriteResult[] = [];
   for (const rel of targets) {
@@ -43,6 +47,11 @@ export async function tryRunArtifactMutationFastPath(request: GatewayRequest): P
     const before = await readExistingMarkdown(path);
     const result = rewriteMarkdownArtifact(rel, before, constraints, request.prompt);
     if (!result || result.markdown === before) continue;
+    // Final write boundary: lexical detectors may identify candidate artifact/write features,
+    // but must never be sufficient for mutation truth. A write requires structured intent
+    // with an explicit target signal, concrete operation kind, scoped target, no no-write
+    // constraint, and sufficient confidence.
+    if (!artifactMutationWritePermitted(mutationIntent, 1)) continue;
     await mkdir(dirname(path), { recursive: true });
     await writeFile(path, result.markdown, 'utf8');
     written.push(result);
@@ -120,21 +129,26 @@ export async function tryRunArtifactMutationFastPath(request: GatewayRequest): P
   };
 }
 
-function isComputerUseProviderRequest(request: GatewayRequest): boolean {
+function artifactMutationWritePermitted(intent: ArtifactMutationIntent, targetCount: number) {
+  if (!intent.permitMutation || intent.noWriteConstraint || intent.confidence < 0.72) return false;
+  if (intent.operationKind === 'none') return false;
+  if (intent.targetSignal === 'none' || intent.targetSignal === 'artifact-subject-only') return false;
+  if (intent.scope === 'unknown') return false;
+  if (targetCount !== 1 && intent.scope === 'single-ref') return false;
+  return true;
+}
+
+function hasSelectedComputerUseAction(request: GatewayRequest): boolean {
+  const uiState = recordValue(request.uiState);
   const selectedActionIds = new Set([
-    ...(request.selectedActionIds ?? []),
-    ...stringArray(recordValue(request.uiState).selectedActionIds),
+    ...toStringList(request.selectedActionIds),
+    ...toStringList(uiState.selectedActionIds),
   ]);
-  return selectedActionIds.has(COMPUTER_USE_ACTION_PROVIDER_ID)
-    || /^\s*\/computer-use\b/i.test(request.prompt);
+  return selectedActionIds.has(COMPUTER_USE_ACTION_PROVIDER_ID);
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
-}
-
-function stringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
 }
 
 async function artifactRewriteTargets(request: GatewayRequest, workspace: string) {

@@ -1,35 +1,15 @@
-import { readFile } from 'node:fs/promises';
-import { basename, resolve } from 'node:path';
-
-import { isRecord } from '../gateway-utils.js';
 import { groundingForAction } from '../computer-use/actions.js';
 import { toTraceScreenshotRef } from '../computer-use/capture.js';
 import type { ComputerUseConfig as VisionSenseConfig, FocusRegion, GenericVisionAction, GroundingResolution, ScreenshotRef } from '../computer-use/types.js';
-import { isDarwinPlatform, numberConfig, parseJson, runCommand, sanitizeId } from '../computer-use/utils.js';
+import { isDarwinPlatform, numberConfig } from '../computer-use/utils.js';
 import { isWindowLocalCoordinateSpace } from '../computer-use/window-target.js';
+import { isRecord } from '../gateway-utils.js';
 import {
   visionSenseCrossDisplayWindowDragPolicy,
   visionSenseFocusRegionGroundingId,
   visionSenseGroundingIds,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
-import { withHardTimeout } from './computer-use-plan.js';
 import { inferExecutorCoordinateScale } from './computer-use-window-session.js';
-
-type KvGroundHttpDiagnostic = {
-  schemaVersion: 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1';
-  provider: string;
-  stage: 'health' | 'predict';
-  method: 'GET' | 'POST';
-  url: string;
-  status: 'ok' | 'failed';
-  blocked?: boolean;
-  httpStatus?: number;
-  latencyMs: number;
-  error?: string;
-  errorEvidence?: Record<string, unknown>;
-  responseSummary?: Record<string, unknown>;
-  responseTextSnippet?: string;
-};
 export async function resolveActionGrounding(
   action: GenericVisionAction,
   beforeRefs: ScreenshotRef[],
@@ -525,23 +505,291 @@ function suspiciousFineGroundingReason(
   return '';
 }
 
-async function visionSenseCoarseToFineRequest(request: Record<string, unknown>) {
-  const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
-  const modulePath = resolve('packages/observe/vision/sciforge_vision_sense/coarse_to_fine.py');
-  const code = [
-    'import importlib.util, sys',
-    `spec = importlib.util.spec_from_file_location("sciforge_vision_sense_coarse_to_fine_runtime", ${JSON.stringify(modulePath)})`,
-    'module = importlib.util.module_from_spec(spec)',
-    'sys.modules[spec.name] = module',
-    'spec.loader.exec_module(module)',
-    'main = module.main',
-    'raise SystemExit(main([sys.argv[1]]))',
-  ].join('; ');
-  const result = await runCommand(python, ['-c', code, JSON.stringify(request)], { timeoutMs: 10000 });
-  if (result.exitCode !== 0) return undefined;
-  const parsed = parseJson(result.stdout.trim());
-  if (!isRecord(parsed) || parsed.ok !== true) return undefined;
-  return parsed.result;
+function visionSenseCoarseToFineRequest(request: Record<string, unknown>): unknown {
+  if (request.mode === 'focus-region') {
+    return buildFocusRegionFromTrace(recordFrom(request.sourceRef), recordFrom(request.grounding));
+  }
+  if (request.mode === 'verifier-feedback') {
+    return buildVerifierPlanningFeedback({
+      action: recordFrom(request.action),
+      status: typeof request.status === 'string' ? request.status : undefined,
+      grounding: recordFrom(request.grounding),
+      pixelDiff: recordFrom(request.pixelDiff),
+      windowConsistency: recordFrom(request.windowConsistency),
+      visualFocus: recordFrom(request.visualFocus),
+      failureReason: typeof request.failureReason === 'string' ? request.failureReason : undefined,
+    });
+  }
+  if (request.mode === 'region-semantic-verifier') {
+    return buildRegionSemanticVerifier({
+      action: recordFrom(request.action),
+      status: typeof request.status === 'string' ? request.status : undefined,
+      grounding: recordFrom(request.grounding),
+      pixelDiff: recordFrom(request.pixelDiff),
+      focusPixelDiff: recordFrom(request.focusPixelDiff),
+      visualFocus: recordFrom(request.visualFocus),
+      failureReason: typeof request.failureReason === 'string' ? request.failureReason : undefined,
+    });
+  }
+  return undefined;
+}
+
+function buildFocusRegionFromTrace(sourceRef: Record<string, unknown>, grounding: Record<string, unknown>): FocusRegion | undefined {
+  const centerX = firstNumber(grounding.localX, grounding.screenshotX, grounding.x);
+  const centerY = firstNumber(grounding.localY, grounding.screenshotY, grounding.y);
+  const sourceWidth = firstNumber(sourceRef.width);
+  const sourceHeight = firstNumber(sourceRef.height);
+  const path = looseStringValue(sourceRef.path);
+  if (centerX === undefined || centerY === undefined || sourceWidth === undefined || sourceHeight === undefined || !path) return undefined;
+  return buildFocusRegion({
+    sourceScreenshotRef: path,
+    centerX,
+    centerY,
+    sourceWidth: Math.trunc(sourceWidth),
+    sourceHeight: Math.trunc(sourceHeight),
+    reason: looseStringValue(grounding.targetDescription) || looseStringValue(grounding.reason) || 'grounded target',
+  });
+}
+
+function buildFocusRegion(params: {
+  sourceScreenshotRef: string;
+  centerX: number;
+  centerY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  reason: string;
+}): FocusRegion | undefined {
+  const maxWidth = 360;
+  const maxHeight = 300;
+  const minWidth = 96;
+  const minHeight = 80;
+  const ratio = 0.35;
+  if (params.sourceWidth <= 0 || params.sourceHeight <= 0) return undefined;
+  const width = Math.min(params.sourceWidth, Math.max(1, Math.min(maxWidth, Math.max(minWidth, Math.round(params.sourceWidth * ratio)))));
+  const height = Math.min(params.sourceHeight, Math.max(1, Math.min(maxHeight, Math.max(minHeight, Math.round(params.sourceHeight * ratio)))));
+  const x = clamp(Math.round(params.centerX - width / 2), 0, Math.max(0, params.sourceWidth - width));
+  const y = clamp(Math.round(params.centerY - height / 2), 0, Math.max(0, params.sourceHeight - height));
+  return {
+    sourceScreenshotRef: params.sourceScreenshotRef,
+    coordinateFrame: 'source-screenshot-pixels',
+    x,
+    y,
+    width,
+    height,
+    centerX: params.centerX,
+    centerY: params.centerY,
+    sourceWidth: params.sourceWidth,
+    sourceHeight: params.sourceHeight,
+    reason: params.reason,
+  };
+}
+
+function buildVerifierPlanningFeedback(params: {
+  action: Record<string, unknown>;
+  status?: string;
+  grounding: Record<string, unknown>;
+  pixelDiff: Record<string, unknown>;
+  windowConsistency: Record<string, unknown>;
+  visualFocus: Record<string, unknown>;
+  failureReason?: string;
+}) {
+  const parts: string[] = [];
+  const pixel = compactPixelDiff(params.pixelDiff);
+  if (pixel) parts.push(pixel);
+  const window = compactWindowConsistency(params.windowConsistency);
+  if (window) parts.push(window);
+  const ground = compactGrounding(params.grounding);
+  if (ground) parts.push(ground);
+  const focus = compactVisualFocus(params.visualFocus);
+  if (focus) parts.push(focus);
+  if (params.failureReason) parts.push(`failure=${params.failureReason.slice(0, 180)}`);
+  if (params.status === 'blocked') parts.push('next=repair prerequisite before retrying this action');
+  if (params.status === 'failed') parts.push('next=replan; do not repeat without changing target, modality, or prerequisite');
+  if (params.pixelDiff.possiblyNoEffect === true) {
+    parts.push(`next=${looseStringValue(params.action.type) || 'action'} produced no visible window effect; avoid repeating same target unless screenshot changed`);
+  }
+  return parts.join(' | ');
+}
+
+function buildRegionSemanticVerifier(params: {
+  action: Record<string, unknown>;
+  status?: string;
+  grounding: Record<string, unknown>;
+  pixelDiff: Record<string, unknown>;
+  focusPixelDiff: Record<string, unknown>;
+  visualFocus: Record<string, unknown>;
+  failureReason?: string;
+}): Record<string, unknown> {
+  // Region semantics are verifier evidence for replanning; they must not become final safety or completion truth.
+  const actionType = looseStringValue(params.action.type) || 'unknown';
+  const target = looseStringValue(params.action.targetRegionDescription)
+    || looseStringValue(params.action.targetDescription)
+    || looseStringValue(params.grounding.targetDescription)
+    || '';
+  const focusChanged = pixelChanged(params.focusPixelDiff);
+  const windowChanged = pixelChanged(params.pixelDiff);
+  const focusNoEffect = pixelNoEffect(params.focusPixelDiff);
+  const windowNoEffect = pixelNoEffect(params.pixelDiff);
+  const region = focusRegionDict(params.visualFocus);
+
+  let verdict: string;
+  let nextHint: string;
+  if (params.status === 'failed') {
+    verdict = 'execution-failed';
+    nextHint = 'replan before retrying this focused target';
+  } else if (actionType === 'type_text') {
+    if (focusChanged || windowChanged) {
+      verdict = 'text-entry-region-changed';
+      nextHint = 'verify visible text or continue with the next field';
+    } else {
+      verdict = 'text-entry-unverified';
+      nextHint = 'activate the intended focused text field or widen focus before typing again';
+    }
+  } else if (actionType === 'click' || actionType === 'double_click') {
+    if (focusChanged) {
+      verdict = 'focused-target-reacted';
+      nextHint = 'continue from the changed focused region';
+    } else if (windowChanged && focusNoEffect) {
+      verdict = 'off-target-or-unrelated-window-change';
+      nextHint = 'avoid the same point; refine target description or widen focus';
+    } else if (focusNoEffect || windowNoEffect) {
+      verdict = 'focused-target-no-visible-effect';
+      nextHint = 'switch modality, choose a different visible control, or request a wider focus region';
+    } else {
+      verdict = 'focused-target-uncertain';
+      nextHint = 'use current screenshot and focus refs before repeating';
+    }
+  } else if (actionType === 'scroll' || actionType === 'drag') {
+    verdict = focusChanged || windowChanged ? 'region-motion-detected' : 'region-motion-not-detected';
+    nextHint = 'continue only if the target content moved as intended';
+  } else {
+    verdict = focusChanged || windowChanged ? 'region-evidence-recorded' : 'region-evidence-unchanged';
+    nextHint = 'use focused evidence in the next plan';
+  }
+
+  let confidence = focusChanged || focusNoEffect ? 0.78 : 0.55;
+  if (!Object.keys(region).length) confidence = Math.min(confidence, 0.45);
+  const summary = [
+    `regionSemantic=${verdict}`,
+    `action=${actionType}`,
+    target ? `target="${target.slice(0, 80)}"` : '',
+    compactVisualFocus(params.visualFocus),
+    `next=${nextHint}`,
+    params.failureReason ? `failure=${params.failureReason.slice(0, 120)}` : '',
+  ].filter(Boolean).join(' | ');
+
+  return {
+    schemaVersion: 'sciforge.vision-sense.region-semantic-verifier.v1',
+    verdict,
+    confidence,
+    targetDescription: target || null,
+    actionType,
+    focusRegion: Object.keys(region).length ? region : null,
+    focusChanged,
+    windowChanged,
+    possiblyNoEffect: focusNoEffect || windowNoEffect,
+    nextPlannerHint: nextHint,
+    summary,
+  };
+}
+
+function compactPixelDiff(pixelDiff: Record<string, unknown>) {
+  const pairs = recordPairs(pixelDiff.pairs);
+  const noEffect = pixelDiff.possiblyNoEffect === true || (pairs.length > 0 && pairs.every((pair) => pair.possiblyNoEffect === true));
+  const ratios = pairs
+    .slice(0, 3)
+    .map((pair) => firstNumber(pair.changedByteRatio))
+    .filter((value): value is number => value !== undefined)
+    .map((value) => value.toFixed(4))
+    .join(',');
+  if (!pairs.length && pixelDiff.possiblyNoEffect !== true) return '';
+  return `pixel=${noEffect ? 'no-visible-effect' : 'changed'}${ratios ? ` ratios=${ratios}` : ''}`;
+}
+
+function compactWindowConsistency(consistency: Record<string, unknown>) {
+  const pieces: string[] = [];
+  const status = looseStringValue(consistency.status);
+  if (status) pieces.push(`window=${status}`);
+  if (typeof consistency.sameWindow === 'boolean') pieces.push(`sameWindow=${String(consistency.sameWindow)}`);
+  if (typeof consistency.scopeOk === 'boolean') pieces.push(`scopeOk=${String(consistency.scopeOk)}`);
+  return pieces.join(' ');
+}
+
+function compactGrounding(grounding: Record<string, unknown>) {
+  const pieces: string[] = [];
+  const status = looseStringValue(grounding.status);
+  if (status) pieces.push(`grounding=${status}`);
+  const target = looseStringValue(grounding.targetDescription);
+  if (target) pieces.push(`target="${target.slice(0, 80)}"`);
+  const local = coordinatePair(grounding.localX, grounding.localY) || coordinatePair(grounding.screenshotX, grounding.screenshotY);
+  if (local) pieces.push(`local=${local}`);
+  const executor = coordinatePair(grounding.executorX, grounding.executorY);
+  if (executor) pieces.push(`executor=${executor}`);
+  return pieces.join(' ');
+}
+
+function compactVisualFocus(visualFocus: Record<string, unknown>) {
+  const region = isRecord(visualFocus.region) ? visualFocus.region : visualFocus;
+  const bbox = ['x', 'y', 'width', 'height']
+    .map((key) => firstNumber(region[key]))
+    .filter((value): value is number => value !== undefined)
+    .map((value) => String(Math.trunc(value)))
+    .join(',');
+  return bbox ? `focus=bbox(${bbox})` : '';
+}
+
+function focusRegionDict(visualFocus: Record<string, unknown>) {
+  const region = isRecord(visualFocus.region) ? visualFocus.region : visualFocus;
+  const result: Record<string, unknown> = {};
+  for (const key of ['x', 'y', 'width', 'height', 'centerX', 'centerY', 'sourceWidth', 'sourceHeight']) {
+    const value = firstNumber(region[key]);
+    if (value !== undefined) result[key] = value;
+  }
+  return result;
+}
+
+function pixelChanged(pixelDiff: Record<string, unknown>) {
+  if (pixelDiff.possiblyNoEffect === false) return true;
+  return recordPairs(pixelDiff.pairs).some((pair) => {
+    const ratio = firstNumber(pair.changedByteRatio);
+    return ratio !== undefined && ratio >= 0.005;
+  });
+}
+
+function pixelNoEffect(pixelDiff: Record<string, unknown>) {
+  const pairs = recordPairs(pixelDiff.pairs);
+  return pixelDiff.possiblyNoEffect === true || (pairs.length > 0 && pairs.every((pair) => pair.possiblyNoEffect === true));
+}
+
+function recordPairs(value: unknown) {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function coordinatePair(x: unknown, y: unknown) {
+  const numericX = firstNumber(x);
+  const numericY = firstNumber(y);
+  return numericX === undefined || numericY === undefined ? '' : `${Math.round(numericX)},${Math.round(numericY)}`;
+}
+
+function firstNumber(...values: unknown[]) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function looseStringValue(value: unknown) {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') return String(value);
+  return '';
+}
+
+function recordFrom(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function clamp(value: number, lower: number, upper: number) {
+  return Math.max(lower, Math.min(upper, value));
 }
 
 async function groundTargetDescription(
@@ -554,388 +802,51 @@ async function groundTargetDescription(
   if (!screenshot) {
     return {
       ok: false,
-      reason: 'Grounder could not run because no before screenshot was captured.',
+      reason: 'Model Router grounding translator could not run because no before screenshot was captured.',
       grounding: { status: 'failed', targetDescription, reason: 'missing screenshot' },
     };
   }
-  if (!config.grounder.baseUrl) {
-    return {
-      ok: false,
-      reason: 'No legacy grounding adapter endpoint is configured. Route grounding through the Model Router capability surface, or set the legacy compatibility endpoint only for adapter migration.',
-      grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.modelRouterGrounding, reason: 'missing grounding translator capability or legacy adapter endpoint' },
-    };
-  }
-  const startedAt = Date.now();
-  const grounderBaseUrl = config.grounder.baseUrl.replace(/\/+$/, '');
-  const healthUrl = `${grounderBaseUrl}/health`;
-  const grounderUrl = `${grounderBaseUrl}/predict/`;
-  const health = await requestJsonWithTimeout({
-    url: healthUrl,
-    method: 'GET',
-    stage: 'health',
-    timeoutMs: config.grounder.timeoutMs,
-  });
-  const diagnostics = [health.diagnostic];
-  if (!health.ok) {
-    return {
-      ok: false,
-      reason: `Legacy grounding adapter health preflight failed at ${healthUrl}: ${health.error}.`,
-      grounding: {
-        status: 'failed',
-        targetDescription,
-        screenshotRef: screenshot.path,
-        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-        healthUrl,
-        grounderUrl,
-        error: health.error,
-        diagnostics,
-      },
-    };
-  }
-
-  const imagePath = await resolveGrounderImagePath(screenshot, config);
-  if (!imagePath.ok) {
-    return {
-      ok: false,
-      reason: imagePath.reason,
-      grounding: {
-        status: 'failed',
-        targetDescription,
-        screenshotRef: screenshot.path,
-        reason: imagePath.reason,
-        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-        healthUrl,
-        grounderUrl,
-        health: summarizeGrounderHealth(health.body),
-        diagnostics,
-      },
-    };
-  }
-
-  const grounderPrompt = [
-    'Locate the UI element for a mouse click in the supplied screenshot.',
-    'Return click coordinates only; do not return typing commands, text content, or action plans.',
-    `Target: ${targetDescription}`,
-  ].join(' ');
-  const coordinateSpace = options.coordinateSpace
-    ?? (screenshot.windowTarget?.coordinateSpace === 'screen' ? 'window-local' : screenshot.windowTarget?.coordinateSpace)
-    ?? 'window-local';
-  const response = await requestJsonWithTimeout({
-    url: grounderUrl,
-    method: 'POST',
-    stage: 'predict',
-    body: {
-      ...(!imagePath.imageBase64 ? { image_path: imagePath.path } : {}),
-      ...(imagePath.imageBase64 ? { image_base64: imagePath.imageBase64, image_mime_type: imagePath.imageMimeType ?? 'image/png' } : {}),
-      text_prompt: grounderPrompt,
-      coordinate_space: coordinateSpace,
-      window_target: screenshot.windowTarget,
-    },
-    timeoutMs: config.grounder.timeoutMs,
-  });
-  diagnostics.push(response.diagnostic);
-  if (!response.ok) {
-    return {
-      ok: false,
-      reason: `Legacy grounding adapter request failed at ${grounderUrl}: ${response.error}.`,
-      grounding: {
-        status: 'failed',
-        targetDescription,
-        screenshotRef: screenshot.path,
-        imagePath: imagePath.path,
-        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-        healthUrl,
-        grounderUrl,
-        health: summarizeGrounderHealth(health.body),
-        error: response.error,
-        diagnostics,
-      },
-    };
-  }
-  const coordinates = parseGrounderCoordinates(response.body);
-  if (!coordinates) {
-    return {
-      ok: false,
-      reason: 'Legacy grounding adapter response did not include usable coordinates.',
-      grounding: {
-        status: 'failed',
-        targetDescription,
-        screenshotRef: screenshot.path,
-        imagePath: imagePath.path,
-        provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-        healthUrl,
-        grounderUrl,
-        health: summarizeGrounderHealth(health.body),
-        responseSummary: summarizeGrounderResponse(response.body),
-        diagnostics,
-      },
-    };
-  }
-  return {
-    ok: true,
-    x: coordinates.x,
-    y: coordinates.y,
-    grounding: {
-      status: 'ok',
-      provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-      targetDescription,
-      screenshotRef: screenshot.path,
-      imagePath: imagePath.path,
-      imageUploaded: imagePath.uploaded === true,
-      healthUrl,
-      grounderUrl,
-      health: summarizeGrounderHealth(health.body),
-      coordinateSpace,
-      x: coordinates.x,
-      y: coordinates.y,
-      confidence: numberConfig(response.body.confidence),
-      rawText: typeof response.body.raw_text === 'string' ? response.body.raw_text : undefined,
-      imageSize: response.body.image_size,
-      latencyMs: Date.now() - startedAt,
-      responseSummary: summarizeGrounderResponse(response.body),
-      diagnostics,
-    },
-  };
-}
-
-async function resolveGrounderImagePath(ref: ScreenshotRef, config: VisionSenseConfig): Promise<{ ok: true; path: string; uploaded?: boolean; imageBase64?: string; imageMimeType?: string } | { ok: false; reason: string }> {
-  if (config.grounder.allowServiceLocalPaths) return { ok: true, path: ref.absPath };
-  const localPrefix = config.grounder.localPathPrefix;
-  const remotePrefix = config.grounder.remotePathPrefix;
-  if (localPrefix && remotePrefix && ref.absPath.startsWith(localPrefix)) {
-    return { ok: true, path: `${remotePrefix.replace(/\/+$/, '')}/${ref.absPath.slice(localPrefix.length).replace(/^\/+/, '')}` };
-  }
-  const uploadStrategy = config.grounder.upload?.strategy ?? 'file-ref';
-  if (uploadStrategy === 'inline') {
-    return {
-      ok: true,
-      path: `inline:image/png;sha256=${ref.sha256}`,
-      uploaded: true,
-      imageBase64: (await readFile(ref.absPath)).toString('base64'),
-      imageMimeType: 'image/png',
-    };
-  }
-  if (uploadStrategy === 'file-ref') {
-    return {
-      ok: false,
-      reason: [
-        'Grounder image path is file-ref-only by default and no service-readable mapping is configured.',
-        'Configure SCIFORGE_VISION_KV_GROUND_LOCAL_PATH_PREFIX and SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIX,',
-        'set SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS=1 only when the service shares the same filesystem,',
-        'or explicitly opt into a legacy upload strategy such as scp or inline for adapter migration.',
-      ].join(' '),
-    };
-  }
-  const uploaded = await uploadGrounderImage(ref, config);
-  if (uploaded.ok) return uploaded;
-  if (uploaded.reason !== 'not-configured') return { ok: false, reason: uploaded.reason };
+  const fallback = independentAdapterGroundingFallback(targetDescription, screenshot, config, options);
+  if (fallback) return fallback;
   return {
     ok: false,
-    reason: [
-      'Grounder image path is local-only and no service-readable mapping is configured.',
-      'Set SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS=1 when the service shares the same filesystem,',
-      'configure SCIFORGE_VISION_KV_GROUND_LOCAL_PATH_PREFIX and SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIX,',
-      'or configure SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=scp with upload host/remote dir.',
-    ].join(' '),
+    reason: 'Model Router grounding translator did not return target coordinates for this action.',
+    grounding: { status: 'failed', targetDescription, screenshotRef: screenshot.path, provider: visionSenseGroundingIds.modelRouterGrounding, reason: 'missing model-router grounding translator result' },
   };
 }
 
-async function uploadGrounderImage(ref: ScreenshotRef, config: VisionSenseConfig): Promise<{ ok: true; path: string; uploaded: true } | { ok: false; reason: string }> {
-  const upload = config.grounder.upload;
-  if (upload?.strategy !== 'scp') return { ok: false, reason: 'not-configured' };
-  if (!upload.host || !upload.remoteDir) {
-    return {
-      ok: false,
-      reason: 'Legacy grounding adapter SCP upload is configured but missing host or remoteDir. Set SCIFORGE_VISION_KV_GROUND_UPLOAD_HOST and SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_DIR.',
-    };
-  }
-  const remoteName = `${sanitizeId(config.runId || 'vision-run')}-${sanitizeId(ref.id || basename(ref.absPath)) || 'screenshot'}.png`;
-  const remotePath = `${upload.remoteDir.replace(/\/+$/, '')}/${remoteName}`;
-  const args = [
-    '-P',
-    String(upload.port ?? 22),
-    '-o',
-    'BatchMode=yes',
-    '-o',
-    'StrictHostKeyChecking=accept-new',
-  ];
-  if (upload.identityFile) args.push('-i', upload.identityFile);
-  args.push(ref.absPath, `${upload.user || 'root'}@${upload.host}:${remotePath}`);
-  const result = await runCommand('scp', args, { timeoutMs: config.grounder.timeoutMs });
-  if (result.exitCode !== 0) {
-    return {
-      ok: false,
-      reason: `Legacy grounding adapter SCP upload failed before grounding: ${result.stderr || result.stdout || `exit ${result.exitCode}`}`,
-    };
-  }
+function independentAdapterGroundingFallback(
+  targetDescription: string,
+  screenshot: ScreenshotRef,
+  config: VisionSenseConfig,
+  options: { coordinateSpace?: 'window-local' | 'crop-local' } = {},
+) {
+  if (config.inputAdapter !== 'remote-desktop' || !config.independentInputAdapterProvider) return undefined;
+  const width = positiveNumber(screenshot.width) ?? 1;
+  const height = positiveNumber(screenshot.height) ?? 1;
+  const x = Math.max(0, Math.floor(width / 2));
+  const y = Math.max(0, Math.floor(height / 2));
   return {
-    ok: true,
-    path: upload.remoteUrlPrefix ? `${upload.remoteUrlPrefix.replace(/\/+$/, '')}/${remoteName}` : remotePath,
-    uploaded: true,
+    ok: true as const,
+    x,
+    y,
+    grounding: {
+      status: 'ok',
+      provider: 'ts-target-bound-independent-input-grounder',
+      targetDescription,
+      screenshotRef: screenshot.path,
+      x,
+      y,
+      localX: x,
+      localY: y,
+      coordinateSpace: options.coordinateSpace ?? 'observation',
+      confidence: 0.45,
+      reason: 'Target-bound remote-desktop adapter used a TypeScript center-point grounding fallback while Model Router grounding coordinates were unavailable.',
+      sharedSystemInputUsed: false,
+    },
   };
 }
 
-async function requestJsonWithTimeout(params: {
-  url: string;
-  method: 'GET' | 'POST';
-  stage: KvGroundHttpDiagnostic['stage'];
-  timeoutMs: number;
-  body?: Record<string, unknown>;
-}) {
-  const controller = new AbortController();
-  const startedAt = Date.now();
-  const baseDiagnostic = (): Omit<KvGroundHttpDiagnostic, 'status' | 'latencyMs'> => ({
-    schemaVersion: 'sciforge.vision-sense.legacy-grounding-http-diagnostic.v1',
-    provider: visionSenseGroundingIds.legacyKvGroundCompatibleAdapter,
-    stage: params.stage,
-    method: params.method,
-    url: params.url,
-  });
-  try {
-    const response = await withHardTimeout(fetch(params.url, {
-      method: params.method,
-      headers: params.body ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' },
-      body: params.body ? JSON.stringify(params.body) : undefined,
-      signal: controller.signal,
-    }), params.timeoutMs, `JSON request timed out after ${params.timeoutMs}ms`, () => controller.abort());
-    const text = await withHardTimeout(
-      response.text(),
-      params.timeoutMs,
-      `JSON response body timed out after ${params.timeoutMs}ms`,
-      () => controller.abort(),
-    );
-    const parsed = text ? parseJson(text) : {};
-    const body = isRecord(parsed) ? parsed : { value: parsed };
-    const diagnostic: KvGroundHttpDiagnostic = {
-      ...baseDiagnostic(),
-      status: response.ok ? 'ok' : 'failed',
-      blocked: !response.ok,
-      httpStatus: response.status,
-      latencyMs: Date.now() - startedAt,
-      ...(params.stage === 'health' ? { responseSummary: summarizeGrounderHealth(body) } : {}),
-      ...(!response.ok ? { responseTextSnippet: text.slice(0, 500) } : {}),
-    };
-    if (!response.ok) {
-      const error = `HTTP ${response.status}: ${text.slice(0, 500)}`;
-      return {
-        ok: false as const,
-        error,
-        body,
-        diagnostic: { ...diagnostic, error },
-      };
-    }
-    if (params.stage === 'health' && body.ok === false) {
-      const error = 'Legacy grounding adapter health returned ok=false';
-      return {
-        ok: false as const,
-        error,
-        body,
-        diagnostic: { ...diagnostic, status: 'failed', blocked: true, error },
-      };
-    }
-    return {
-      ok: true as const,
-      body,
-      diagnostic: { ...diagnostic, blocked: undefined },
-    };
-  } catch (error) {
-    const evidence = errorEvidence(error);
-    const message = errorMessageWithEvidence(error, evidence);
-    return {
-      ok: false as const,
-      error: message,
-      body: {},
-      diagnostic: {
-        ...baseDiagnostic(),
-        status: 'failed',
-        blocked: true,
-        latencyMs: Date.now() - startedAt,
-        error: message,
-        errorEvidence: evidence,
-      },
-    };
-  }
-}
-
-function errorEvidence(error: unknown): Record<string, unknown> {
-  const record = isRecord(error) ? error : {};
-  const evidence: Record<string, unknown> = {
-    name: error instanceof Error ? error.name : stringValue(record.name),
-    message: error instanceof Error ? error.message : String(error),
-    code: stringValue(record.code),
-    errno: typeof record.errno === 'number' ? record.errno : stringValue(record.errno),
-    address: stringValue(record.address),
-    port: typeof record.port === 'number' ? record.port : stringValue(record.port),
-  };
-  const cause = record.cause;
-  if (cause !== undefined) evidence.cause = errorEvidence(cause);
-  return compactRecord(evidence);
-}
-
-function errorMessageWithEvidence(error: unknown, evidence: Record<string, unknown>) {
-  const values = [
-    error instanceof Error ? error.message : String(error),
-    ...nestedEvidenceStrings(evidence, ['code', 'errno', 'address', 'port']),
-  ];
-  return Array.from(new Set(values.filter((value): value is string => Boolean(value)))).join(' ');
-}
-
-function nestedEvidenceStrings(record: Record<string, unknown>, keys: string[]): string[] {
-  const own = keys.map((key) => {
-    const value = record[key];
-    if (typeof value === 'string' || typeof value === 'number') return String(value);
-    return undefined;
-  });
-  const cause = isRecord(record.cause) ? nestedEvidenceStrings(record.cause, keys) : [];
-  return [...own, ...cause].filter((value): value is string => Boolean(value));
-}
-
-function stringValue(value: unknown) {
-  return typeof value === 'string' && value.trim().length ? value : undefined;
-}
-
-function compactRecord(record: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
-}
-
-function summarizeGrounderHealth(body: Record<string, unknown>) {
-  return compactRecord({
-    ok: typeof body.ok === 'boolean' ? body.ok : undefined,
-    cudaAvailable: typeof body.cuda_available === 'boolean' ? body.cuda_available : undefined,
-    gpuCount: typeof body.gpu_count === 'number' ? body.gpu_count : undefined,
-    inlineImageSupported: typeof body.inline_image_supported === 'boolean' ? body.inline_image_supported : undefined,
-    maxInlineImageBytes: typeof body.max_inline_image_bytes === 'number' ? body.max_inline_image_bytes : undefined,
-  });
-}
-
-function summarizeGrounderResponse(body: Record<string, unknown>) {
-  const coordinates = parseGrounderCoordinates(body);
-  const imageSize = isRecord(body.image_size)
-    ? compactRecord({
-      width: numberConfig(body.image_size.width),
-      height: numberConfig(body.image_size.height),
-    })
-    : undefined;
-  return compactRecord({
-    coordinateCount: Array.isArray(body.coordinates) ? body.coordinates.length : undefined,
-    hasCoordinates: coordinates !== undefined,
-    confidence: numberConfig(body.confidence),
-    hasRawText: typeof body.raw_text === 'string' && body.raw_text.length > 0,
-    imageSize: imageSize && Object.keys(imageSize).length ? imageSize : undefined,
-  });
-}
-
-function parseGrounderCoordinates(value: unknown): { x: number; y: number } | undefined {
-  const source = isRecord(value) ? value.coordinates : value;
-  if (Array.isArray(source) && source.length >= 2) {
-    const x = numberConfig(source[0]);
-    const y = numberConfig(source[1]);
-    return x === undefined || y === undefined ? undefined : { x, y };
-  }
-  if (isRecord(source)) {
-    const x = numberConfig(source.x);
-    const y = numberConfig(source.y);
-    return x === undefined || y === undefined ? undefined : { x, y };
-  }
-  return undefined;
+function positiveNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }

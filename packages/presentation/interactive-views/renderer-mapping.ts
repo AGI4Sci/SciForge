@@ -4,7 +4,6 @@ import type {
   UIComponentRuntimeArtifact,
 } from '@sciforge-ui/runtime-contract';
 import {
-  normalizeUIComponentId,
   renderBrowserWorkbench,
   renderComputerUseControlPlane,
   renderGraphViewer,
@@ -20,6 +19,7 @@ import {
   renderWorkspaceFileViewer,
   uiComponentManifests,
 } from '../components';
+import { normalizeUIComponentId } from '../components/component-compatibility.js';
 import { renderScientificPlotViewer } from '../components/scientific-plot-viewer/render';
 
 type ResultSlotLike = {

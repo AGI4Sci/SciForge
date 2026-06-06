@@ -69,6 +69,11 @@ def test_semantic_verifier_probe_writes_refs_first_summary_from_provider(tmp_pat
     assert manifest["expectedProjectModelId"] == "sciforge-router"
     assert manifest["projectVerifierEvidenceEligible"] is False
     assert manifest["modelPresenceVerified"] is None
+    assert manifest["legacyDirectProviderDiagnosticOnly"] is True
+    assert manifest["productModelRouterCallSurface"] is False
+    assert manifest["productDefaultAcceptanceAllowed"] is False
+    assert manifest["diagnosticOnly"] is True
+    assert manifest["userAcceptanceEligible"] is False
     assert "/models did not verify the configured model" in manifest["projectVerifierEvidenceBlockers"]
     assert manifest["semanticVerifier"] == {
         "schemaVersion": "sciforge.computer-use.semantic-verifier.v1",
@@ -91,6 +96,12 @@ def test_semantic_verifier_probe_writes_refs_first_summary_from_provider(tmp_pat
         assert "secret-token" not in serialized
         assert "data:image" not in serialized
         assert "base64" not in serialized.lower()
+        payload = json.loads(serialized)
+        assert payload["legacyDirectProviderDiagnosticOnly"] is True
+        assert payload["productModelRouterCallSurface"] is False
+        assert payload["productDefaultAcceptanceAllowed"] is False
+        assert payload["diagnosticOnly"] is True
+        assert payload["userAcceptanceEligible"] is False
 
 
 def test_semantic_verifier_probe_marks_project_vlm_eligible_only_with_model_presence(tmp_path):

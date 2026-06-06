@@ -238,7 +238,7 @@ export function createElectronDesktopMainController(
       ? createDesktopBrowserHostSurfaceController(electron)
       : undefined;
     const browserHostSurfaceStart = browserHostSurface
-      ? await browserHostSurface.startServer()
+      ? await browserHostSurface.startServer({ url: process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL })
       : undefined;
     const launcher = options.launcher ?? new ProductionRuntimeLauncher({
       appDataRoot: electron.app.getPath('userData'),

@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile } from 'node:fs/promises';
-import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -15,8 +14,6 @@ export const visionSenseEnvKeys = [
   'SCIFORGE_VISION_CAPTURE_DISPLAYS',
   'SCIFORGE_VISION_TEST_ACTION_FIXTURES',
   'SCIFORGE_VISION_TEST_ACTIONS_JSON',
-  'SCIFORGE_VISION_KV_GROUND_URL',
-  'SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS',
   'SCIFORGE_VISION_MAX_STEPS',
   'SCIFORGE_VISION_DESKTOP_PLATFORM',
 ] as const;
@@ -96,45 +93,4 @@ export async function readVisionTraceJson(workspacePath: string, result: Gateway
     trace: JSON.parse(text) as Record<string, unknown>,
     text,
   };
-}
-
-export function createJsonPostServer(
-  path: string,
-  handler: (body: Record<string, unknown>, raw: string) => unknown,
-) {
-  return createServer((request, response) => {
-    if (request.method === 'GET' && request.url === '/health') {
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify({
-        ok: true,
-        inline_image_supported: true,
-        max_inline_image_bytes: 20971520,
-      }));
-      return;
-    }
-    if (request.method !== 'POST' || request.url !== path) {
-      response.statusCode = 404;
-      response.end('not found');
-      return;
-    }
-    let raw = '';
-    request.on('data', (chunk) => {
-      raw += String(chunk);
-    });
-    request.on('end', () => {
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify(handler(JSON.parse(raw) as Record<string, unknown>, raw)));
-    });
-  });
-}
-
-export async function listenLocal(server: Server) {
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  return `http://127.0.0.1:${address.port}`;
-}
-
-export async function closeServer(server: Server) {
-  await new Promise<void>((resolve) => server.close(() => resolve()));
 }

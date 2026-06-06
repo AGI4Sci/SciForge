@@ -24,7 +24,7 @@ import {
   resolveReportFullTextPolicy,
   slug,
   unique,
-} from './retrieval-normalization';
+} from './retrieval-normalization.js';
 
 export type LiteratureRetrievalStatus = 'success' | 'partial' | 'failed';
 export type LiteratureProviderAttemptStatus = 'success' | 'empty' | 'timeout' | 'error' | 'skipped';

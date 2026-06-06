@@ -17,7 +17,7 @@ import type {
   NormalizedLiteraturePaper,
   OfflineLiteraturePaperRecord,
   OfflineLiteratureRetrievalRunnerInput,
-} from './index';
+} from './index.js';
 
 const DEFAULT_PROVIDER_IDS = ['pubmed', 'crossref', 'semantic-scholar', 'openalex', 'arxiv', 'web-search', 'scp-biomedical-search'];
 const CITATION_FIELDS: CitationVerificationResult['checkedFields'] = ['doi', 'pmid', 'arxivId', 'title', 'year', 'journal'];

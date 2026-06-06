@@ -1,6 +1,5 @@
-import { spawn } from 'node:child_process';
-import { readFile, stat, unlink, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import type {
   ComputerUseLongMatrixRunResult,
@@ -49,6 +48,7 @@ export function renderScenarioSummary(
     scenarioId: manifest.scenarioId,
     title: manifest.title,
     status: manifest.status,
+    runId: manifest.run.id,
     minRounds: scenario.minRounds,
     requiredPipeline: manifest.universalPipeline,
     validationContract: manifest.validationContract,
@@ -84,6 +84,7 @@ export async function writeMatrixSummary(summaryPath: string, matrixId: string, 
     scenarioIds: summary.scenarioIds,
     passedScenarioIds: summary.passedScenarioIds,
     repairNeededScenarioIds: summary.repairNeededScenarioIds,
+    repairManifestPath: summary.repairManifestPath,
     executionPlan: summary.executionPlan,
     preflight: summary.preflight ? {
       ok: summary.preflight.ok,
@@ -110,12 +111,12 @@ function matrixExecutionPlan(dryRun: boolean, scenarioCount: number, requestedMa
     mode: 'parallel-analysis',
     maxConcurrency,
     realGuiSerialized: true,
-    reason: 'Dry-run scenarios produce file-ref evidence without touching real GUI input, so planner/grounder/verifier analysis can run concurrently.',
+    reason: 'Dry-run scenarios produce file-ref evidence without touching real GUI input, so planner, grounding translator, and verifier analysis can run concurrently.',
   };
 }
 
 export async function matrixExecutionPlanFromVisionSense(dryRun: boolean, scenarioCount: number, requestedMaxConcurrency: number | undefined): Promise<NonNullable<ComputerUseLongMatrixRunResult['executionPlan']>> {
-  const result = await runVisionSensePythonJson('sciforge_vision_sense.computer_use_policy', {
+  const result = await runVisionSenseTsJson('sciforge_vision_sense.computer_use_policy', {
     mode: 'matrix-execution-plan',
     dryRun,
     scenarioCount,
@@ -178,7 +179,7 @@ export function renderMatrixReportMarkdown(
   lines.push(
     '',
     '## Genericity Rules Rechecked',
-    '- All evidence must come from WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    '- All evidence must come from WindowTarget -> RuntimeCodexPlanner -> GroundingTranslator -> GuiExecutor -> Verifier -> vision-trace.',
     '- WindowTarget must select a concrete target window before planning, and all coordinates must be window-local.',
     '- Screenshot refs must be window screenshots with window identity, bounds, dimensions, and sha256 metadata.',
     '- GUI execution must record the generic input channel and serialized scheduler metadata.',
@@ -289,7 +290,7 @@ export function renderRepairPlanMarkdown(summaryPath: string, summary: Record<st
   lines.push('## Ordered Actions');
   actions.forEach((action, index) => lines.push(`${index + 1}. ${action}`));
   lines.push('', '## Rerun Commands');
-  lines.push(`- npm run computer-use-long:validate-matrix -- --summary ${summaryPath}`);
+  lines.push(`- npm run computer-use-long:validate-matrix -- --summary ${summaryPath} --allow-repair-needed`);
   lines.push(`- npm run computer-use-long:matrix-report -- --summary ${summaryPath}`);
   const repairNeededScenarioIds = Array.isArray(summary.repairNeededScenarioIds) ? summary.repairNeededScenarioIds.map(String) : [];
   if (repairNeededScenarioIds.length) lines.push(`- npm run computer-use-long:run-matrix -- --scenarios ${repairNeededScenarioIds.join(',')}`);
@@ -300,7 +301,7 @@ export function categorizeComputerUseIssue(issue: string) {
   if (/action count|non[-\s]?wait action|generic action|action shortfall|acceptance minimum|maxSteps/i.test(issue)) return 'action-budget';
   if (/planner|planning|RuntimeCodexPlanner/i.test(issue)) return 'planner';
   if (/windowTarget|window target|target window|window-local|window screenshot|displayId|window bounds/i.test(issue)) return 'window-target';
-  if (/ground|coordinate|targetDescription|KV-Ground/i.test(issue)) return 'grounder';
+  if (/ground|coordinate|targetDescription/i.test(issue)) return 'grounding-translator';
   if (/executor|execution|mouse|keyboard|click|drag|scroll|type_text|System Events|CGEvent|osascript|Swift/i.test(issue)) return 'executor';
   if (/input-channel|inputChannel|scheduler|serialized|ordered/i.test(issue)) return 'scheduler';
   if (/verifier|pixel|checked/i.test(issue)) return 'verifier';
@@ -367,7 +368,7 @@ export function repairActionsForIssues(issues: string[]) {
   if (categories.has('action-budget')) actions.push('Increase the real-run action budget or continue additional evidence-producing generic mouse/keyboard steps until the scenario acceptance minimum is met.');
   if (categories.has('window-target')) actions.push('Ensure WindowTarget selects the concrete app/window first, captures window screenshots, and maps every point in window-local coordinates.');
   if (categories.has('planner')) actions.push('Inspect planner prompt/output JSON and ensure it emits generic action schema without coordinates or app-private fields.');
-  if (categories.has('grounder')) actions.push('Check KV-Ground configuration and ensure screenshot paths are readable by the Grounder.');
+  if (categories.has('grounding-translator')) actions.push('Check Model Router grounding translator profile, screenshot refs, and coordinate-frame evidence before rerunning the scenario.');
   if (categories.has('executor')) actions.push('Verify the generic mouse/keyboard executor, coordinate scale, display selection, and dry-run/real-run mode.');
   if (categories.has('scheduler')) actions.push('Record generic input-channel metadata and serialize window actions with before/after screenshot boundaries.');
   if (categories.has('verifier')) actions.push('Strengthen step verifier evidence so every GUI action has after-screenshot and pixel/state validation.');
@@ -396,6 +397,40 @@ export function missingEvidenceRefsFromIssues(issues: string[]) {
     if (/completionEvidenceRef.+(?:missing|required)/i.test(issue) || /completionEvidenceRef\s+is\s+required/i.test(issue)) refs.push('completionEvidenceRef');
   }
   return dedupeStrings(refs);
+}
+
+export function collectRefsFirstManifestPayloadIssues(value: unknown, label: string) {
+  const issues: string[] = [];
+  collectRefsFirstManifestPayloadIssuesAt(value, label, issues, 0);
+  return issues;
+}
+
+function collectRefsFirstManifestPayloadIssuesAt(value: unknown, path: string, issues: string[], depth: number) {
+  if (depth > 30) return;
+  if (typeof value === 'string') {
+    if (/data:image\/[a-z0-9.+-]+;base64,|;base64,[A-Za-z0-9+/=]{16,}/i.test(value)) {
+      issues.push(`${path} contains inline image/base64 payload; manifests must store refs-first evidence only`);
+    }
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => collectRefsFirstManifestPayloadIssuesAt(item, `${path}[${index}]`, issues, depth + 1));
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = `${path}.${key}`;
+    if (isDisallowedManifestPayloadKey(key)) {
+      issues.push(`${childPath} is a raw/provider payload field; manifests must reference bounded artifacts instead`);
+    }
+    collectRefsFirstManifestPayloadIssuesAt(child, childPath, issues, depth + 1);
+  }
+}
+
+function isDisallowedManifestPayloadKey(key: string) {
+  return /^(?:providerPayload|rawProviderPayload|rawScreenshot|screenshotDataUrl|screenshotBase64|imageDataUrl|imageBase64)$/i.test(key)
+    || /^(?:raw|provider).*(?:screenshot|payload|response)$/i.test(key)
+    || /^(?:screenshot|image).*(?:base64|dataUrl|bytes)$/i.test(key);
 }
 
 export function firstString(...values: Array<unknown>) {
@@ -435,7 +470,7 @@ export async function renderRoundRuntimePrompt(
   return [
     `[T084 ${manifest.scenarioId} round ${round.round}] ${round.prompt}`,
     '',
-    'You must use the generic Computer Use pipeline only: WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace.',
+    'You must use the generic Computer Use pipeline only: WindowTarget -> RuntimeCodexPlanner -> GroundingTranslator -> GuiExecutor -> Verifier -> vision-trace.',
     'WindowTarget must select the target window first; every screenshot ref must be a window screenshot with window id/title, bounds, sha256, width, and height.',
     'Grounding and executor coordinates must be window-local, and every GUI action must record the generic mouse/keyboard input channel plus serialized scheduler metadata.',
     'Do not inspect DOM, accessibility trees, application private APIs, files, source code, or app-specific shortcuts to complete the GUI task.',
@@ -509,7 +544,7 @@ async function buildVisualMemoryBlockFromVisionSense(priorRounds: PreparedComput
       path: resolveManifestRef(manifestDir, prior.visionTraceRef as string),
     }));
   if (!traces.length) return '';
-  const result = await runVisionSensePythonJson('sciforge_vision_sense.visual_memory', {
+  const result = await runVisionSenseTsJson('sciforge_vision_sense.visual_memory', {
     mode: 'cross-round-followup',
     traces,
     maxScreenshotRefsPerTrace: 5,
@@ -522,7 +557,7 @@ async function buildVisualMemoryBlockFromVisionSense(priorRounds: PreparedComput
 }
 
 export async function validateTraceContractWithVisionSense(options: { tracePath: string; workspacePath: string; rawText: string }) {
-  const result = await runVisionSensePythonJson('sciforge_vision_sense.trace_contract', {
+  const result = await runVisionSenseTsJson('sciforge_vision_sense.trace_contract', {
     tracePath: options.tracePath,
     workspacePath: options.workspacePath,
     rawText: options.rawText,
@@ -559,46 +594,53 @@ export function findPayloadTraceRef(payload: { artifacts?: Array<Record<string, 
   return undefined;
 }
 
-export async function runVisionSensePythonJson(moduleName: string, request: Record<string, unknown>) {
-  const python = process.env.SCIFORGE_VISION_SENSE_PYTHON || 'python3';
-  const packageRoot = resolve('packages/observe/vision');
-  const requestJson = JSON.stringify(request);
-  const requestFile = requestJson.length > 100_000
-    ? join('/tmp', `sciforge-vision-sense-request-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`)
-    : undefined;
-  if (requestFile) await writeFile(requestFile, requestJson, 'utf8');
-  const code = [
-    'import sys',
-    `sys.path.insert(0, ${JSON.stringify(packageRoot)})`,
-    `from ${moduleName} import main`,
-    'arg = sys.argv[1]',
-    'arg = open(arg[1:], "r", encoding="utf-8").read() if arg.startswith("@") else arg',
-    'raise SystemExit(main([arg]))',
-  ].join('; ');
-  const result = await new Promise<{ exitCode: number; stdout: string; stderr: string }>((resolvePromise) => {
-    const child = spawn(python, ['-c', code, requestFile ? `@${requestFile}` : requestJson], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    const timeout = setTimeout(() => child.kill('SIGTERM'), 10000);
-    child.stdout.on('data', (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-    });
-    child.on('error', (error) => {
-      clearTimeout(timeout);
-      resolvePromise({ exitCode: 127, stdout, stderr: stderr || error.message });
-    });
-    child.on('close', (code, signal) => {
-      clearTimeout(timeout);
-      resolvePromise({ exitCode: code ?? (signal ? 143 : 1), stdout, stderr });
-    });
-  });
-  if (requestFile) await unlink(requestFile).catch(() => undefined);
-  if (result.exitCode !== 0) return undefined;
-  const parsed = extractJsonObject(result.stdout.trim());
-  return isRecord(parsed) && parsed.ok === true ? parsed.result : undefined;
+export async function runVisionSenseTsJson(moduleName: string, request: Record<string, unknown>): Promise<unknown> {
+  if (moduleName === 'sciforge_vision_sense.computer_use_policy') {
+    return computerUsePolicyResultFromRequest(request);
+  }
+  return undefined;
+}
+
+function computerUsePolicyResultFromRequest(request: Record<string, unknown>): unknown {
+  if (request.mode === 'matrix-execution-plan') {
+    return matrixExecutionPlan(
+      Boolean(request.dryRun),
+      typeof request.scenarioCount === 'number' ? request.scenarioCount : Number(request.scenarioCount || 0),
+      request.requestedMaxConcurrency === undefined || request.requestedMaxConcurrency === null
+        ? undefined
+        : Number(request.requestedMaxConcurrency),
+    );
+  }
+  if (request.mode === 'default-window-target') {
+    const dryRun = Boolean(request.dryRun);
+    const appName = firstString(request.appName);
+    const title = firstString(request.title);
+    const mode = firstString(request.targetMode);
+    if (!dryRun) {
+      return {
+        enabled: true,
+        required: true,
+        mode: mode ?? (appName || title ? 'app-window' : 'active-window'),
+        appName,
+        title,
+        coordinateSpace: 'window',
+        inputIsolation: 'require-focused-target',
+      };
+    }
+    const round = typeof request.round === 'number' ? request.round : Number(request.round || 0);
+    return {
+      enabled: true,
+      required: true,
+      mode: 'window-id',
+      windowId: 84000 + Math.trunc(Number.isFinite(round) ? round : 0),
+      appName: 'SciForge T084 Harness',
+      title: `${firstString(request.scenarioId) ?? ''} ${firstString(request.runId) ?? ''} round ${Math.trunc(Number.isFinite(round) ? round : 0)}`,
+      bounds: { x: 0, y: 0, width: 1280, height: 800 },
+      coordinateSpace: 'window',
+      inputIsolation: 'require-focused-target',
+    };
+  }
+  return undefined;
 }
 
 export function resolveTraceArtifactPath(traceRef: string, workspacePath: string) {
@@ -729,7 +771,7 @@ export async function defaultWindowTargetForRound(
   dryRun: boolean,
   targetOverride: { appName?: string; title?: string; mode?: 'active-window' | 'app-window' | 'window-id' | 'display' } = {},
 ) {
-  const result = await runVisionSensePythonJson('sciforge_vision_sense.computer_use_policy', {
+  const result = await runVisionSenseTsJson('sciforge_vision_sense.computer_use_policy', {
     mode: 'default-window-target',
     scenarioId: manifest.scenarioId,
     runId: manifest.run.id,
@@ -908,23 +950,6 @@ export function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-export function extractJsonObject(text: string): unknown {
-  try {
-    return JSON.parse(text);
-  } catch {
-    const start = text.indexOf('{');
-    const end = text.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-      try {
-        return JSON.parse(text.slice(start, end + 1));
-      } catch {
-        return undefined;
-      }
-    }
-    return undefined;
-  }
-}
-
 export function renderPreparedRunChecklist(scenario: ComputerUseLongScenario, manifest: PreparedComputerUseLongRun) {
   const lines = [
     `# ${scenario.id} ${scenario.title}`,
@@ -933,7 +958,7 @@ export function renderPreparedRunChecklist(scenario: ComputerUseLongScenario, ma
     `Workspace: ${manifest.run.workspacePath}`,
     '',
     '## Non-Negotiable Genericity Rules',
-    '- Use only the shared WindowTarget -> RuntimeCodexPlanner -> Grounder -> GuiExecutor -> Verifier -> vision-trace path.',
+    '- Use only the shared WindowTarget -> RuntimeCodexPlanner -> GroundingTranslator -> GuiExecutor -> Verifier -> vision-trace path.',
     '- Select a concrete target window before planning; record window id/title, app identity, bounds, displayId, and window-local coordinate space.',
     '- Store only window screenshot refs with path, sha256, width/height, window identity, displayId, and bounds.',
     '- Record generic mouse/keyboard input-channel metadata and serialized scheduler metadata for every executed GUI action.',

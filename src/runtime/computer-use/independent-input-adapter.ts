@@ -485,7 +485,7 @@ async function synthesizeIndependentAdapterObserveBeforeMutateEvidence(options: 
       status: 'current',
       observedAt: options.now,
       checkedAt: options.now,
-      maxAgeMs: 300000,
+      maxAgeMs: 30_000,
     },
   }, null, 2)}\n`, 'utf8');
   return {
@@ -506,7 +506,7 @@ async function synthesizeIndependentAdapterObserveBeforeMutateEvidence(options: 
       status: 'current',
       observedAt: options.now,
       checkedAt: options.now,
-      maxAgeMs: 300000,
+      maxAgeMs: 30_000,
     },
   };
 }

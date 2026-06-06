@@ -1,11 +1,11 @@
 ---
 name: sciforge-computer-use
-description: Use the repo-local SciForge Computer Use MCP tools for scoped, refs-first desktop observation and action proposals. Use when a task needs get_app_state, observe, click, type_text, scroll, press_key, propose_action, execute_scoped_action, or get_replay_refs through the sciforge.computer-use boundary.
+description: Legacy diagnostic only. Use the retired repo-local SciForge Computer Use MCP tools only for package-local refs-first debugging, not for product/default Computer Use acceptance.
 ---
 
 # SciForge Computer Use
 
-Use this skill only through the repo-local `sciforge-computer-use` MCP server declared in the repository `.mcp.json`.
+Use this skill only for legacy diagnostics through the repo-local `sciforge-computer-use` MCP server declared in the repository `.mcp.json`. The product Computer Use path is TypeScript-only: Agent Host -> WindowActionSession -> TypeScript host-port contract -> current evidence bundle.
 
 ## Boundary
 
@@ -14,7 +14,7 @@ Use this skill only through the repo-local `sciforge-computer-use` MCP server de
 - Do not pass provider routes, GUI private state, scheduler internals, executor adapter refs, lease ids, lease scopes, or bare global coordinates as tool arguments.
 - Mutating facade tools require current app-state, screenshot, accessibility snapshot, before-evidence, and grounding refs in the same screen/window scope.
 - High-risk actions must stop at `needs-confirmation` and return approval refs. Confirmation and user-level completion stay with the L2 host.
-- Package-local diagnostic calls may return `blocked` after writing proposal, lease, executor-event, and evidence refs. That is expected until a host-bound platform executor is attached.
+- Package-local diagnostic calls may return `blocked` after writing proposal, lease, executor-event, and evidence refs. That is expected; this retired Python MCP path must not be promoted to product/default acceptance.
 
 ## Tools
 
@@ -27,7 +27,7 @@ Use this skill only through the repo-local `sciforge-computer-use` MCP server de
 - `execute_scoped_action`: execute an already proposed scoped action through refs-first evidence.
 - `get_replay_refs`: read replay bundle refs for the display group.
 
-## Diagnostic Commands
+## Legacy Diagnostic Commands
 
 ```bash
 python -m sciforge_computer_use.plugin_probe --output-dir /tmp/sciforge-computer-use-plugin-probe --run-fixture

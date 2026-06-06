@@ -1,6 +1,6 @@
 # SciForge 使用与运维
 
-最后更新：2026-05-24
+最后更新：2026-06-06
 
 本文描述当前代码已经落地的用法，以及当前目标架构要求的操作边界。脚本真相源是 [`../package.json`](../package.json)，配置默认值真相源是 [`../src/ui/src/config.ts`](../src/ui/src/config.ts)。
 
@@ -151,21 +151,19 @@ npm run backend:model-router -- --host 127.0.0.1 --port 3892
 先做不含 secret 的端口分诊：
 
 ```bash
-curl -fsS http://127.0.0.1:18081/health
 curl -fsS http://127.0.0.1:5173/ >/dev/null
 curl -fsS http://127.0.0.1:6173/health
 curl -fsS http://127.0.0.1:18080/health
 curl -fsS http://127.0.0.1:3892/health
 ```
 
-历史 Runtime Codex browser acceptance 拓扑曾要求 KV-Ground compatibility service 与下列本地服务同时在线；当前 Computer Use 设计通过 Model Router 的 `translators.vision` role 获取视觉观察，不把固定视觉 provider 或 raw model slug 写成产品默认值：
+Computer Use 通过 Model Router 的 `translators.vision` role 获取视觉观察，不把固定视觉 provider 或 raw model slug 写成产品默认值。当前本地服务拓扑为：
 
 ```text
-Legacy Grounder: http://127.0.0.1:18081/health
-UI:               http://127.0.0.1:5173/
+UI:                http://127.0.0.1:5173/
 Workspace writer: http://127.0.0.1:6173/health
-Runtime Codex:    http://127.0.0.1:18080/health
-Model Router:     http://127.0.0.1:3892/health
+Runtime Codex:     http://127.0.0.1:18080/health
+Model Router:      http://127.0.0.1:3892/health
 ```
 
 no-secret 启动顺序示例：
@@ -331,9 +329,32 @@ npm run smoke:stable-version-registry
 
 Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `BrowserHostSession` 持有 live browser owner，桌面主画面使用同一 session 的 `WebContentsView` native embedded adapter。Browser pane 只是 `BrowserHostSession` 的 display/control panel，不是 Browser agent，也不是 Browser Search 的普通用户产品入口。右侧旧 Screen pane 已迁移为 Image / Evidence Pane；它只展示 screenshot、crop、Browser evidence、window capture、artifact preview 和 replay/history image，不拥有 live control surface。frame-stream、WebRTC、canvas、`/frame` route、截图、PDF、document、proxy materialization、replay 和旧 frame 只用于 evidence/artifact 或审计，不作为第二个可交互画面，也不能替代当前 live Browser 或 Window Action 验收。无法 attach native surface 时必须 blocked / handoff / retry diagnostics，不能自动切到替代交互路径。
 
-默认 Computer Use runtime 已收敛到 package-backed host adapter：desktop bridge preflight 通过后，runtime 会通过 `python -m sciforge_computer_use --host-port-stdio` 调用 Python package 的 `run_task(request, hostPorts)`，再把 package result 映射成 Agent Host 的 `gui.present` / `gui.ask_user` action metadata。该路径证明 package process boundary；最终验收仍必须完成真实 WindowActionSession evidence、Desktop native 可见证据和 current-run user artifact / verifier bundle；历史 L2/L3 命名只作为旧验收层级语境保留，不替代当前 L0/L1/L2 架构分层。
+### Desktop Computer Use product path
 
-每个 package-backed run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
+Desktop CU 的产品入口必须是 SciForge Desktop Electron shell 里的普通聊天 turn。Web/Vite、Codex in-app browser、终端 probe、`/computer-use`、package harness、isolated desktop producer 和旧 workspace gateway 只能作为 smoke、diagnostic、historical regression 或迁移排查；即使它们写出 completed-looking evidence，也不能声明 Desktop product pass。
+
+本地启动 Desktop shell 时，先按上文提供 Runtime Codex、Model Router、workspace writer 和 `SCIFORGE_RUNTIME_API_KEY` service-env，再启动 Electron host：
+
+```bash
+npm run desktop:dev
+```
+
+生产壳或打包壳复测使用：
+
+```bash
+npm run desktop:start:prod
+npm run desktop:package:dir
+```
+
+一个可声明产品验收的 Desktop CU run 至少要从默认聊天输入进入，并在 current run bundle 中同时留下 Electron product shell、dynamic workspace writer、Runtime Codex transport、Desktop native host、`BrowserHostSession` 或 `WindowActionSession` target、permission / allowlist refs、必要 hard-confirm refs、action ledger、native sidecar or scoped adapter evidence、before/after evidence、viewer/replay refs、verifier/artifact refs 和 `gui.present` refs。GUI 仍只展示、确认、收集 stop/cancel 和投影 refs；它不是 executor，也不能把用户界面私有状态提升为完成证据。
+
+Desktop permission 先由 Host / platform sidecar 做 preflight，而不是由文档或 GUI 假设成功。macOS Accessibility / Screen Recording、Windows UI Automation、native window capture、WebContents/WebView binding、target window binding、scoped input adapter、focus lease、display group 和 actor cursor provenance 都要产生 refs-first readiness 或 denial diagnostics。缺权限、缺 target、用户未确认 OS 弹窗、shared system input 未显式允许，或 native sidecar 只能 dry-run 时，结果只能是 `blocked`、`handoff`、`retry` 或 diagnostic manifest；不能写成 product pass。
+
+Blocked recovery 是正常产品路径的一部分。被阻断的 run 必须写出 current-run blocked manifest、block reason、缺失 permission/capability refs、repair hint 和可重试 probe；恢复时只能在用户补权限、重新选择 target、提供当前 approval ref 或 Host 重新观察后继续，并要写 fresh re-observation 与新的 causality refs。不能用旧 screenshot、历史 trace、prior-round completion、package-local repair replay 或 action history 直接恢复为完成。高风险外部动作停在 `needs-confirmation` 可以是正确的 hard-confirm stop projection；它不是 diagnostic failure，也不等于动作已执行。
+
+迁移期 package bridge / diagnostic adapter 会把 Computer Use request、host ports、package result、`gui.present` / `gui.ask_user` action metadata 和 trace 绑定起来，证明 process boundary 与 refs-first contract。若本机兼容排查仍调用 `python -m sciforge_computer_use --host-port-stdio`，该路径必须显式标成 legacy diagnostic / historical regression；product/default acceptance 不能引用 Python、pytest、Docker/noVNC、isolated desktop 或 M6 作为通过证据。当前产品路径以 TypeScript host-port contract、WindowActionSession evidence projection 和 current-run refs 为准；最终验收仍必须完成真实 WindowActionSession evidence、Desktop native 可见证据和 current-run user artifact / verifier bundle。历史 L2/L3 命名只作为旧验收层级语境保留，不替代当前 L0/L1/L2 架构分层。
+
+每个 package bridge / diagnostic run 还会写 `.sciforge/vision-runs/<run-id>/tui-host-run-task-chain.json`，把 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 和可选 `gui-present.json` / `gui-ask-user.json` 绑定成 refs-first 链路清单；trace 的 `packageBridge.tuiHostRunTaskChainRef` 会指向它。这个清单方便 CU-NEXT 和人工复核定位链路 evidence，但不等同于真实任务完成。
 
 目标生产能力应采用 Codex 风格标准插件形态：repo-local `plugin.json`、`.mcp.json` 和 skill 文档声明 `sciforge.computer-use`，由 Codex CLI / app-server 在默认聊天 turn 内发现和调用；它不是普通用户的 slash 入口。插件对外只暴露小工具面：`get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs`。这些工具必须转入 Computer Use package 的 scheduler、approval request、evidence 和 replay contract；approval 决策、repair 和用户级 completion 仍归 Agent Host。不得把 GUI private state、provider route、裸全局坐标或 scheduler internals 作为公共参数。
 
@@ -351,9 +372,25 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 
 产品化 smoke 分三层执行：
 
-1. package diagnostic：`plugin_probe`、`target_bound_window_host_probe`、`visible_run`，证明 SciForge Computer Use action provider、manifest、stdio、trace、viewer 和 artifact validation 可用。
-2. platform smoke：Codex app-server/native plugin 或 `module.invoke(actions, execute)` 调用 SciForge Computer Use，再经 platform sidecar / WindowActionSession 完成一个真实单 app 输入任务，要求 action adapter route、真实 window/capture refs 和 executor lease refs。
-3. product smoke：真实 artifact 任务、多 app workflow、高风险 confirmation stop、blocked recovery 和 viewer/replay evidence 全部使用当前 bundle refs。只有这一层可作为用户级完成证据。
+1. package diagnostic：`plugin_probe`、`target_bound_window_host_probe`、`visible_run`，证明 SciForge Computer Use action provider、manifest、stdio、trace、viewer 和 artifact validation 可用。`acceptanceTier=package-diagnostic`、package-owned target-bound evidence、legacy `diagnosticOnly=false` 或 historical `userAcceptanceEligible=true` 都只描述该 harness 自身，不是 Desktop product pass。
+2. platform smoke：Codex app-server/native plugin 或 `module.invoke(actions, execute)` 调用 SciForge Computer Use，再经 Desktop native host、platform sidecar / WindowActionSession 完成一个真实单 app 输入任务，要求 action adapter route、真实 window/capture refs、permission refs 和 executor lease refs。它证明 native path 可用，但仍需要任务级 artifact/verifier evidence 才能声明用户级完成。
+3. product smoke：从 Desktop Electron 普通聊天进入，真实 artifact 任务、多 app workflow、高风险 confirmation stop、blocked recovery 和 viewer/replay evidence 全部使用当前 bundle refs。只有这一层可作为用户级完成证据。
+
+当前严格/opt-in smoke 的含义：
+
+```bash
+npm run smoke:computer-use-chat-live-preflight:strict
+npm run smoke:desktop-computer-use-hard-confirm-product:strict
+npm run smoke:desktop-browser-native-live-acceptance:strict
+npm run smoke:computer-use-chat-live-e2e:product-strict
+npm run smoke:computer-use-chat-live-e2e:opt-in
+npm run smoke:computer-use-chat-live-complex-matrix:opt-in-isolated
+npm run release:computer-use-chat-live-complex-matrix-report
+```
+
+`release:computer-use-chat-live-complex-matrix-report` 会先以非 strict artifact-prep 模式刷新 split aggregate artifact，再生成 strict `release-report.json`。最终退出码由 strict release report 决定，`live-preflight-not-ready`、package diagnostic 或缺 current-run L3 evidence 仍必须 fail closed。
+
+`smoke:computer-use-chat-live-preflight:strict` 只证明 live acceptance 前置条件和 fail-closed 分类。`smoke:desktop-computer-use-hard-confirm-product:strict` 与 `smoke:desktop-browser-native-live-acceptance:strict` 分别验证 Desktop hard-confirm 和 native Browser live surface 的产品路径条件。`smoke:computer-use-chat-live-e2e:product-strict` 只在 evidence 明确来自普通 Desktop chat、Electron product shell、Desktop native host、当前 `BrowserHostSession` / `WindowActionSession`、permission refs、action ledger、hard-confirm refs、artifact/verifier refs 和 bounded replay bundle 时，才可声明 Desktop CU product acceptance；缺这些 refs 必须 fail closed。`smoke:computer-use-chat-live-e2e:opt-in`、complex matrix 和 release report 目前仍可引用 embedded isolated desktop L3 / package diagnostic evidence；它们适合回归和迁移报告，不能替代 Desktop Electron native host + current-run WindowActionSession / BrowserHostSession evidence。
 
 启用真实桌面 bridge：
 
@@ -361,15 +398,7 @@ Browser pane 的目标体验采用 Desktop Electron native host：Browser 由 `B
 export SCIFORGE_VISION_DESKTOP_BRIDGE=1
 ```
 
-Computer Use 的局部 next-action selector、视觉观察、crop inspection、候选消歧、grounding translator 和 verifier explanation 默认都通过 Model Router `/v1/responses` 完成，并由 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。历史 KV-Ground-compatible endpoint 只作为显式 opt-in 兼容调试路径；若仍使用它，接入前先记录实际 endpoint，并至少做一次 health check：
-
-```bash
-export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
-export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="inline"
-curl "$SCIFORGE_VISION_KV_GROUND_URL/health"
-```
-
-`/predict/` smoke 要使用本机截图或测试图，确认返回包含 `coordinates`、`image_size` 和可解析坐标系。兼容服务读不到本机路径时保持 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline`，由 SciForge 在请求里发送 `image_base64`；只有明确存在共享挂载和路径前缀映射时才传服务端可读 `image_path`。
+Computer Use 的局部 next-action selector、视觉观察、crop inspection、候选消歧、grounding translator 和 verifier explanation 都通过 Model Router `/v1/responses` 完成，并由 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。Computer Use live/product preflight 不再接受独立 grounding service 作为 ready 条件。
 
 真实输入优先使用目标 app/window 的独立 action adapter。Browser pane 的桌面高性能路径已经采用 `WebContentsView` native embedded adapter；普通窗口动作通过 WindowActionSession 路由到 app-native command、Accessibility/UI Automation/AT-SPI、BrowserHostSession/CDP/Playwright 或显式 `shared-system-input` evidence。截图投影只属于 Image / Evidence 查看器，不承担替代交互路径。
 
@@ -393,7 +422,6 @@ export SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT=1
 - `SCIFORGE_COMPUTER_USE_PLANNER_PROFILE`：迁移期/诊断字段，只能映射到 Model Router 的局部 next-action selector role；不得表示 Computer Use 拥有用户级 planner，也不得绕过 `/v1/responses` profile/role。
 - `SCIFORGE_RUNTIME_BASE_URL` / `SCIFORGE_PROXY_UPSTREAM_BASE_URL`：Model Router provider-compatible `/v1/responses` endpoint。
 - `SCIFORGE_RUNTIME_PROVIDER` / `SCIFORGE_RUNTIME_MODEL`：公开 provider alias 和 public model alias，默认分别为 `sciforge-model-router` 与 `sciforge-router`；带 raw provider/model 词的值即使伪装成公开前缀，也只能归一为默认公开 alias，不能进入 UI、metadata 或 audit 输出。
-- `SCIFORGE_VISION_KV_GROUND_URL`：仅用于显式 legacy KV-Ground-compatible adapter 诊断；默认 Computer Use capability 仍通过 Model Router 注册能力。
 
 详细能力边界和排障见 [`../packages/observe/vision/README.md`](../packages/observe/vision/README.md) 与 [`../packages/actions/computer-use/README.md`](../packages/actions/computer-use/README.md)。
 
@@ -475,7 +503,11 @@ npm run verify:deep
 npm run smoke:browser
 npm run smoke:vision-sense-runtime
 npm run computer-use-long:preflight
+npm run computer-use-long:run-matrix
+npm run computer-use-long:validate-matrix
 ```
+
+`computer-use-long:validate-matrix` 默认是 release gate：matrix 必须是 `passed` 才返回成功。若 `run-matrix` 因缺 Desktop native host、independent input adapter、权限或其他真实产品路径 evidence 而写出 `repair-needed` summary，使用 `npm run computer-use-long:validate-matrix -- --allow-repair-needed` 只做结构化 repair manifest 检查；它不能作为通过验收。
 
 文档相关 smoke：
 

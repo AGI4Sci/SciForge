@@ -51,11 +51,24 @@ export interface ComputerUseAdapterRegistryBrowserHostMaterializeInput {
   abortSignal?: AbortSignal;
 }
 
+export interface ComputerUseAdapterRegistryWindowActionSessionMaterializeInput {
+  sessionId: string;
+  sessionRef: string;
+  windowRef: string;
+  targetRefs?: string[];
+  observationRefs?: string[];
+  commandId?: string;
+  attemptId?: string;
+  riskCategory?: string;
+  abortSignal?: AbortSignal;
+}
+
 export interface ComputerUseAdapterRegistry {
   register(registration: ComputerUseAdapterRegistration): ComputerUseAdapterReadiness;
   probe(input: ComputerUseAdapterProbeInput): ComputerUseAdapterReadiness;
   getReady(providerId: string): ComputerUseAdapterReadiness;
   materializeBrowserHostAdapter(input: ComputerUseAdapterRegistryBrowserHostMaterializeInput): ComputerUseAdapterReadiness;
+  materializeWindowActionSessionAdapter(input: ComputerUseAdapterRegistryWindowActionSessionMaterializeInput): ComputerUseAdapterReadiness;
 }
 
 interface AdapterRecord {
@@ -154,11 +167,42 @@ export function createInMemoryComputerUseAdapterRegistry(options: {
     });
   }
 
+  function materializeWindowActionSessionAdapter(input: ComputerUseAdapterRegistryWindowActionSessionMaterializeInput): ComputerUseAdapterReadiness {
+    const providerId = 'sciforge.window-action-session.computer-use-adapter';
+    const sessionId = safeRefPart(input.sessionId);
+    register({
+      providerId,
+      kind: 'window-action-session',
+      source: 'runtime',
+      evidenceRefs: [
+        input.sessionRef,
+        input.windowRef,
+        `computer-use:adapter/window-action-session/${sessionId}.json`,
+        `runtime-truth:computer-use-adapter/window-action-session/${sessionId}`,
+      ],
+    });
+    return probe({
+      providerId,
+      probeSource: 'runtime-probe',
+      nativeBridgeReady: true,
+      nativeSurfaceReady: true,
+      evidenceRefs: [
+        input.sessionRef,
+        input.windowRef,
+        ...(input.targetRefs ?? []),
+        ...(input.observationRefs ?? []),
+        `computer-use:adapter/window-action-session/${sessionId}.json`,
+        `runtime-truth:computer-use-adapter/window-action-session/${sessionId}`,
+      ],
+    });
+  }
+
   return {
     register,
     probe,
     getReady,
     materializeBrowserHostAdapter,
+    materializeWindowActionSessionAdapter,
   };
 }
 

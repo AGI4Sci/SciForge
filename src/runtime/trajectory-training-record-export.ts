@@ -8,8 +8,8 @@ import {
   type StoredAttemptLike,
   type TrajectoryAuditIssue,
   type TrajectoryAuditResult,
-} from '../../packages/skills/pipeline_skills/scientific-reproduction-loop/trajectory-export';
-import type { ScientificReproductionTrajectory } from '../../packages/skills/pipeline_skills/scientific-reproduction-loop/trajectory-contract';
+} from '../../packages/skills/pipeline_skills/scientific-reproduction-loop/trajectory-export.js';
+import type { ScientificReproductionTrajectory } from '../../packages/skills/pipeline_skills/scientific-reproduction-loop/trajectory-contract.js';
 import type { TaskAttemptRecord } from './runtime-types.js';
 import { fileExists } from './workspace-task-runner.js';
 

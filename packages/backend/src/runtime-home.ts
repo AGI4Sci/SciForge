@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readRequiredLocalProviderSettings } from './local-provider-config.js';
 
 export const RUNTIME_PROFILE = 'sciforge-runtime-default';
 export const RUNTIME_PROVIDER = 'sciforge-model-router';
@@ -42,6 +43,11 @@ export type RuntimeExecOptions = {
   workspace?: string;
   allowWorkspaceOutsideRuntimeRoot?: boolean;
   paths?: RuntimeHomePathOptions;
+};
+
+export type RuntimeReadyOptions = {
+  env?: NodeJS.ProcessEnv;
+  configLocalPath?: string;
 };
 
 export type RuntimeHomePathOptions = {
@@ -140,18 +146,20 @@ export function resolveRuntimeWorkspace(options: RuntimeExecOptions = {}): strin
   return workspace;
 }
 
-export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise<void> {
+export async function assertRuntimeReady(
+  paths = getRuntimeHomePaths(),
+  options: RuntimeReadyOptions = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
   assertPathInside(paths.codexHome, paths.runtimeRoot, 'runtime CODEX_HOME');
-  resolveRuntimeCodexSandbox(process.env);
+  resolveRuntimeCodexSandbox(env);
   const config = await readRuntimeConfig(paths.configPath);
   for (const required of [RUNTIME_PROFILE, RUNTIME_KEY_ENV, 'wire_api = "responses"']) {
     if (!config.includes(required)) {
       throw new Error(`Runtime Codex config is missing ${required}`);
     }
   }
-  if (!process.env[RUNTIME_KEY_ENV]) {
-    throw new Error(`Missing ${RUNTIME_KEY_ENV}; set it in the service environment, not in repository files.`);
-  }
+  applyRuntimeKeyFromLocalProviderConfig(env, options.configLocalPath);
   const profileConfig = tableBlock(config, `profiles.${RUNTIME_PROFILE}`);
   const provider = valueForKey(profileConfig, 'model_provider') ?? valueForKey(config, 'model_provider');
   const model = valueForKey(profileConfig, 'model') ?? valueForKey(config, 'model');
@@ -165,7 +173,7 @@ export async function assertRuntimeReady(paths = getRuntimeHomePaths()): Promise
   if (!proxyBaseUrl) {
     throw new Error(`Runtime Codex provider ${provider} is missing proxy base_url.`);
   }
-  if (process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
+  if (env.SCIFORGE_ALLOW_OPENAI_RUNTIME !== '1' && /openai/i.test(`${provider}\n${model}\n${proxyBaseUrl}`)) {
     throw new Error('OpenAI Runtime Codex provider/model is disabled unless SCIFORGE_ALLOW_OPENAI_RUNTIME=1.');
   }
 }
@@ -214,6 +222,15 @@ function managedRuntimeConfigMatches(currentConfig: string, desiredConfig: strin
     && current.providerBaseUrl === desired.providerBaseUrl
     && current.providerEnvKey === desired.providerEnvKey
     && current.providerWireApi === desired.providerWireApi;
+}
+
+function applyRuntimeKeyFromLocalProviderConfig(env: NodeJS.ProcessEnv, configLocalPath?: string): void {
+  const localConfigPath = resolve(configLocalPath ?? env.SCIFORGE_CONFIG_PATH?.trim() ?? 'config.local.json');
+  const settings = readRequiredLocalProviderSettings(localConfigPath);
+  if (!settings.apiKey) {
+    throw new Error(`Missing ${RUNTIME_KEY_ENV}; configure apiKey, llm.apiKey, or codexProxy.apiKey in ${localConfigPath}.`);
+  }
+  env[RUNTIME_KEY_ENV] = settings.apiKey;
 }
 
 function runtimeConfigSignature(config: string) {

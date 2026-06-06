@@ -88,10 +88,9 @@ export interface CuNextReadinessManifest {
       ref?: string;
       reason?: string;
     };
-    kvGround: {
+    modelRouterGrounding: {
       status: 'passed' | 'blocked' | 'missing';
       ref?: string;
-      endpoint?: string;
       reason?: string;
     };
   };
@@ -136,24 +135,6 @@ interface RuntimeBrowserManifest {
     providerModelProfileVisible?: unknown;
     workspaceCommandIdVisible?: unknown;
     secondTurnVisibleAnswerConfirmed?: unknown;
-  };
-}
-
-interface KvGroundSmokeManifest {
-  schemaVersion?: unknown;
-  runId?: unknown;
-  createdAt?: unknown;
-  endpoint?: unknown;
-  predictRequest?: unknown;
-  checks?: {
-    health?: {
-      ok?: unknown;
-    };
-    predict?: {
-      coordinates?: unknown;
-      text?: unknown;
-      raw_text?: unknown;
-    };
   };
 }
 
@@ -230,7 +211,6 @@ export interface CuNextReadinessBuildInput {
   projectRef?: string;
   generatedAt?: string;
   runtimeBrowserManifest?: CuNextEvidenceFile;
-  kvGroundSmokeManifests?: CuNextEvidenceFile[];
   userAcceptanceManifests?: CuNextEvidenceFile[];
   taskMap?: CuNextTaskMap;
 }
@@ -241,7 +221,6 @@ export interface CuNextReadinessBuildOptions {
   runtimeBrowserManifestPath?: string;
   searchDirs?: string[];
   userAcceptanceManifestPaths?: string[];
-  kvGroundSmokePaths?: string[];
   generatedAt?: string;
   taskMapPath?: string;
 }
@@ -253,7 +232,7 @@ export function buildCuNextReadinessManifestFromData(input: CuNextReadinessBuild
   const taskMappings = input.taskMap ? readinessMappingsFromTaskMap(input.taskMap) : CU_NEXT_TASK_MAPPINGS;
   const projectTasks = extractCuNextProjectTasks(input.projectText);
   const runtimeBrowser = evaluateRuntimeBrowser(input.runtimeBrowserManifest, generatedAt);
-  const kvGround = evaluateKvGround(input.kvGroundSmokeManifests ?? []);
+  const modelRouterGrounding = evaluateModelRouterGrounding(runtimeBrowser);
   const tasks = taskMappings.map((mapping) => {
     const projectTask = projectTasks.get(mapping.taskId);
     if (!projectTask) {
@@ -261,7 +240,7 @@ export function buildCuNextReadinessManifestFromData(input: CuNextReadinessBuild
     }
     return evaluateTask(mapping, projectTask, input.userAcceptanceManifests ?? [], runtimeBrowser, root);
   });
-  const blockedItems = collectBlockedItems(tasks, runtimeBrowser, kvGround, projectTasks, taskMappings);
+  const blockedItems = collectBlockedItems(tasks, runtimeBrowser, projectTasks, taskMappings);
   const completionEligible = blockedItems.length === 0 && tasks.every((task) => task.status === 'passed');
   return {
     schemaVersion: CU_NEXT_READINESS_SCHEMA_VERSION,
@@ -271,7 +250,7 @@ export function buildCuNextReadinessManifestFromData(input: CuNextReadinessBuild
     completionEligible,
     globalEvidence: {
       runtimeBrowser,
-      kvGround,
+      modelRouterGrounding,
     },
     tasks,
     blockedItems,
@@ -290,7 +269,6 @@ export async function buildCuNextReadinessManifest(options: CuNextReadinessBuild
   const projectText = await readFile(projectPath, 'utf8');
   const discovered = await discoverEvidenceFiles(root, searchDirs);
   const explicitUserAcceptance = await readExistingJsonFiles(root, options.userAcceptanceManifestPaths ?? []);
-  const explicitKvGround = await readExistingJsonFiles(root, options.kvGroundSmokePaths ?? []);
   const runtimeBrowserManifest = await readOptionalJsonFile(root, runtimeBrowserManifestPath);
 
   return buildCuNextReadinessManifestFromData({
@@ -302,10 +280,6 @@ export async function buildCuNextReadinessManifest(options: CuNextReadinessBuild
     userAcceptanceManifests: [
       ...explicitUserAcceptance,
       ...discovered.filter((file) => file.path.endsWith('/cu-user-acceptance-manifest.json')),
-    ],
-    kvGroundSmokeManifests: [
-      ...explicitKvGround,
-      ...discovered.filter((file) => file.path.endsWith('/kv-ground-smoke.json')),
     ],
     taskMap,
   });
@@ -500,13 +474,32 @@ function hasValidApprovalChainSidecars(
 function approvalChainRefRecords(manifest: UserAcceptanceManifest, context: EvidenceBundleContext): Record<string, unknown> {
   const refs = approvalChainSidecarRefsFromEvidence(manifest);
   const markerRefs = markerEvidenceRefs(manifest.evidenceMarkers);
+  const freshnessRefs = liveAcceptanceFreshnessCheckRefs(manifest);
   return Object.fromEntries(uniqueStrings([
     ...Object.values(refs).filter((ref): ref is string => Boolean(ref)),
     ...markerRefs,
+    ...freshnessRefs,
   ]).flatMap((ref) => {
     const record = readEvidenceBundleJsonRef(ref, context);
     return record === undefined ? [] : [[ref, record] as const];
   }));
+}
+
+function liveAcceptanceFreshnessCheckRefs(manifest: UserAcceptanceManifest): string[] {
+  const evidence = manifest as Record<string, unknown>;
+  const observeBeforeMutate = recordValue(evidence.observeBeforeMutate);
+  const observationFreshness = recordValue(evidence.observationFreshness);
+  const refs = [
+    stringValue(observeBeforeMutate.freshnessCheckRef),
+    stringValue(observeBeforeMutate.evidenceFreshnessRef),
+    stringValue(observationFreshness.freshnessCheckRef),
+    stringValue(observationFreshness.evidenceFreshnessRef),
+    ...records(evidence.mutatingActions).flatMap((action) => [
+      stringValue(action.freshnessCheckRef),
+      stringValue(action.evidenceFreshnessRef),
+    ]),
+  ];
+  return uniqueStrings(refs.filter((ref): ref is string => typeof ref === 'string' && Boolean(filePathFromRef(ref))));
 }
 
 function readEvidenceBundleJsonRef(ref: string | undefined, context: EvidenceBundleContext): unknown {
@@ -746,45 +739,26 @@ function evaluateRuntimeBrowser(
       };
 }
 
-function evaluateKvGround(files: CuNextEvidenceFile[]): CuNextReadinessManifest['globalEvidence']['kvGround'] {
-  if (files.length === 0) {
+function evaluateModelRouterGrounding(
+  runtimeBrowser: CuNextReadinessManifest['globalEvidence']['runtimeBrowser'],
+): CuNextReadinessManifest['globalEvidence']['modelRouterGrounding'] {
+  if (runtimeBrowser.status !== 'passed') {
     return {
-      status: 'missing',
-      reason: 'Legacy KV-Ground smoke manifest was not found; this is optional for the Model Router grounding translator gate.',
-    };
-  }
-  const sorted = [...files].sort((a, b) => evidenceTimestamp(a).localeCompare(evidenceTimestamp(b)) || a.path.localeCompare(b.path));
-  const latest = sorted.at(-1);
-  if (!latest) {
-    return {
-      status: 'missing',
-      reason: 'Legacy KV-Ground smoke manifest was not found; this is optional for the Model Router grounding translator gate.',
-    };
-  }
-  const data = latest.data as KvGroundSmokeManifest;
-  const passed = data.schemaVersion === 'sciforge.kv-ground-smoke.v1'
-    && data.checks?.health?.ok === true
-    && isCoordinatePair(data.checks.predict?.coordinates)
-    && isNonEmptyString(data.endpoint)
-    && data.predictRequest !== undefined;
-  if (passed) {
-    return {
-      status: 'passed',
-      ref: latest.path,
-      endpoint: stringValue(data.endpoint),
+      status: runtimeBrowser.status,
+      ref: runtimeBrowser.ref,
+      reason: runtimeBrowser.reason
+        ?? 'Model Router grounding translator evidence depends on current Runtime Browser acceptance.',
     };
   }
   return {
-    status: 'blocked',
-    ref: latest.path,
-    reason: 'Latest legacy KV-Ground smoke evidence does not contain both /health ok and /predict coordinates.',
+    status: 'passed',
+    ref: runtimeBrowser.ref,
   };
 }
 
 function collectBlockedItems(
   tasks: CuNextReadinessTask[],
   runtimeBrowser: CuNextReadinessManifest['globalEvidence']['runtimeBrowser'],
-  _legacyKvGround: CuNextReadinessManifest['globalEvidence']['kvGround'],
   projectTasks: Map<CuNextTaskId, CuNextProjectTask>,
   taskMappings: CuNextTaskMapping[],
 ): CuNextReadinessManifest['blockedItems'] {
@@ -859,7 +833,7 @@ async function collectJsonEvidenceRefs(root: string, dir: string): Promise<strin
       continue;
     }
     if (!entry.isFile()) continue;
-    if (entry.name === 'cu-user-acceptance-manifest.json' || entry.name === 'kv-ground-smoke.json') {
+    if (entry.name === 'cu-user-acceptance-manifest.json') {
       refs.push(normalizeRef(root, absolute));
     }
   }
@@ -1008,15 +982,6 @@ function runtimeBrowserFreshnessIssue(value: unknown, generatedAt: string): stri
   return undefined;
 }
 
-function evidenceTimestamp(file: CuNextEvidenceFile): string {
-  const data = file.data as { createdAt?: unknown; observedAt?: unknown; runId?: unknown };
-  const direct = stringValue(data.createdAt) ?? stringValue(data.observedAt);
-  if (direct) return direct;
-  const runIdTimestamp = stringValue(data.runId)?.match(/20\d{6}T?\d{6}Z?/i)?.[0];
-  if (runIdTimestamp) return runIdTimestamp;
-  return file.path;
-}
-
 function isArrayEmpty(value: unknown): boolean {
   return Array.isArray(value) && value.length === 0;
 }
@@ -1035,6 +1000,10 @@ function stringValue(value: unknown): string | undefined {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter(isNonEmptyString) : [];
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function uniqueStrings(values: string[]): string[] {
@@ -1091,12 +1060,6 @@ function findRecordValue(
   return false;
 }
 
-function isCoordinatePair(value: unknown): boolean {
-  return Array.isArray(value)
-    && value.length === 2
-    && value.every((coordinate) => typeof coordinate === 'number' && Number.isFinite(coordinate));
-}
-
 function isCuNextTaskId(value: string): value is CuNextTaskId {
   return /^CU-NEXT-\d{2,}$/.test(value);
 }
@@ -1137,11 +1100,6 @@ function parseArgs(argv: string[]): CuNextReadinessCliArgs {
     }
     if (arg === '--acceptance-manifest') {
       args.userAcceptanceManifestPaths = [...(args.userAcceptanceManifestPaths ?? []), requiredArg(arg, value)];
-      index += 1;
-      continue;
-    }
-    if (arg === '--kv-ground-smoke') {
-      args.kvGroundSmokePaths = [...(args.kvGroundSmokePaths ?? []), requiredArg(arg, value)];
       index += 1;
       continue;
     }

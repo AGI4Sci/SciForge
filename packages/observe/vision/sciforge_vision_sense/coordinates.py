@@ -115,7 +115,7 @@ def crop_window_from_point(
 ) -> BBox:
     """Build a clipped crop bbox around a point-only grounding result.
 
-    KV-Ground may return only a single point. The MVP uses this helper to turn
+    A grounding translator may return only a single point. This helper turns
     that point into a local crop window for a future second grounding pass.
     """
 

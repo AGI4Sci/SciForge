@@ -147,18 +147,82 @@ test('runtime readiness rejects OpenAI-looking proxy without explicit opt-in', a
   };
   await mkdir(codexHome, { recursive: true });
   await writeFile(paths.configPath, runtimeConfigToml({ proxyBaseUrl: 'https://api.openai.com/v1', provider: 'openai-compatible', model: 'gpt-test' }), 'utf8');
-  const previousKey = process.env[RUNTIME_KEY_ENV];
-  const previousAllow = process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME;
-  process.env[RUNTIME_KEY_ENV] = 'test-key';
-  delete process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME;
-  try {
-    await assert.rejects(() => assertRuntimeReady(paths), /OpenAI Runtime Codex provider\/model is disabled/);
-    process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME = '1';
-    await assert.doesNotReject(() => assertRuntimeReady(paths));
-  } finally {
-    if (previousKey === undefined) delete process.env[RUNTIME_KEY_ENV];
-    else process.env[RUNTIME_KEY_ENV] = previousKey;
-    if (previousAllow === undefined) delete process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME;
-    else process.env.SCIFORGE_ALLOW_OPENAI_RUNTIME = previousAllow;
-  }
+  const configLocalPath = join(runtimeRoot, 'config.local.json');
+  await writeFile(configLocalPath, JSON.stringify({
+    llm: {
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'test-key',
+      model: 'test-model',
+    },
+  }), 'utf8');
+  const env = {
+    SCIFORGE_CONFIG_PATH: configLocalPath,
+  } as NodeJS.ProcessEnv;
+
+  await assert.rejects(() => assertRuntimeReady(paths, { env }), /OpenAI Runtime Codex provider\/model is disabled/);
+  env.SCIFORGE_ALLOW_OPENAI_RUNTIME = '1';
+  await assert.doesNotReject(() => assertRuntimeReady(paths, { env }));
+});
+
+test('runtime readiness accepts config.local derived key without writing it to Codex config', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-config-local-ready-'));
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const configLocalPath = join(runtimeRoot, 'config.local.json');
+  const paths = {
+    backendRoot: runtimeRoot,
+    runtimeRoot,
+    codexHome,
+    configPath: join(codexHome, 'config.toml'),
+    memoriesDir: join(codexHome, 'memories'),
+    sessionsDir: join(codexHome, 'sessions'),
+    logsDir: join(runtimeRoot, 'logs'),
+    defaultWorkspace: join(runtimeRoot, 'workspaces', 'default'),
+  };
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(configLocalPath, JSON.stringify({
+    llm: {
+      baseUrl: 'https://provider.example/v1',
+      apiKey: 'config-local-secret',
+      model: 'config-local-model',
+    },
+  }), 'utf8');
+  await writeFile(paths.configPath, runtimeConfigToml({ proxyBaseUrl: DEFAULT_PROXY_BASE_URL }), 'utf8');
+
+  const env = {
+    SCIFORGE_CONFIG_PATH: configLocalPath,
+  } as NodeJS.ProcessEnv;
+
+  await assert.doesNotReject(() => assertRuntimeReady(paths, { env }));
+  assert.equal(env[RUNTIME_KEY_ENV], 'config-local-secret');
+
+  const config = await readFile(paths.configPath, 'utf8');
+  assert.doesNotMatch(config, /config-local-secret/);
+  assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
+});
+
+test('runtime readiness fails closed when config.local is missing even with stale service env', async () => {
+  const runtimeRoot = await mkdtemp(join(tmpdir(), 'sciforge-runtime-missing-config-local-'));
+  const codexHome = join(runtimeRoot, 'codex-home');
+  const paths = {
+    backendRoot: runtimeRoot,
+    runtimeRoot,
+    codexHome,
+    configPath: join(codexHome, 'config.toml'),
+    memoriesDir: join(codexHome, 'memories'),
+    sessionsDir: join(codexHome, 'sessions'),
+    logsDir: join(runtimeRoot, 'logs'),
+    defaultWorkspace: join(runtimeRoot, 'workspaces', 'default'),
+  };
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(paths.configPath, runtimeConfigToml({ proxyBaseUrl: DEFAULT_PROXY_BASE_URL }), 'utf8');
+
+  await assert.rejects(
+    () => assertRuntimeReady(paths, {
+      env: {
+        SCIFORGE_CONFIG_PATH: join(runtimeRoot, 'missing-config.local.json'),
+        [RUNTIME_KEY_ENV]: 'stale-service-secret',
+      } as NodeJS.ProcessEnv,
+    }),
+    /config\.local\.json/,
+  );
 });

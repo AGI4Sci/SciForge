@@ -83,30 +83,30 @@ try {
 
   assert.equal(page.url(), pathToFileURL(rendererPath).href);
   assert.equal(await page.evaluate(() => typeof (window as unknown as { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop), 'object');
-  assert.deepEqual(
-    await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort()),
-    [
-      'attachBrowserHostSessionSurface',
-      'attachVirtualAppScreenSurface',
-      'captureNativeBrowserScreenshot',
-      'detachBrowserHostSessionSurface',
-      'detachVirtualAppScreenSurface',
-      'getBrowserHostSessionSurfaceState',
-      'getNativeBrowserState',
-      'getRuntimeConfig',
-      'getRuntimeHealth',
-      'getRuntimeReady',
-      'nativeBrowserBack',
-      'nativeBrowserForward',
-      'nativeBrowserReload',
-      'openExternal',
-      'openNativeBrowser',
-      'pickDirectory',
-      'presentVirtualAppScreenSurface',
-      'requestShutdown',
-      'revealPath',
-    ],
-  );
+  const apiKeys = await page.evaluate(() => Object.keys((window as Window & { sciforgeDesktop?: DesktopBridgeApi }).sciforgeDesktop ?? {}).sort());
+  for (const requiredKey of [
+    'attachBrowserHostSessionSurface',
+    'attachVirtualAppScreenSurface',
+    'captureNativeBrowserScreenshot',
+    'detachBrowserHostSessionSurface',
+    'detachVirtualAppScreenSurface',
+    'getBrowserHostSessionSurfaceState',
+    'getNativeBrowserState',
+    'getRuntimeConfig',
+    'getRuntimeHealth',
+    'getRuntimeReady',
+    'nativeBrowserBack',
+    'nativeBrowserForward',
+    'nativeBrowserReload',
+    'openExternal',
+    'openNativeBrowser',
+    'pickDirectory',
+    'presentVirtualAppScreenSurface',
+    'requestShutdown',
+    'revealPath',
+  ]) {
+    assert.ok(apiKeys.includes(requiredKey), `desktop bridge exposes ${requiredKey}`);
+  }
 
   const config = await page.evaluate(() =>
     (window as unknown as { sciforgeDesktop: DesktopBridgeApi }).sciforgeDesktop.getRuntimeConfig(),

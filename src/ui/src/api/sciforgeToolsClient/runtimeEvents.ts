@@ -24,7 +24,7 @@ import {
   COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
   computerUseControlPlaneDisplayedRefs,
   hasComputerUseControlPlanePresentation,
-  normalizeComputerUseControlPlanePayload,
+  normalizeComputerUseControlPlanePayload as normalizePresentationComputerUseControlPlanePayload,
   type ComputerUseControlPlanePayload,
 } from '../../../../../packages/presentation/components';
 import { runtimeNativeMessageLiveAcceptanceEligible, runtimeNativeMessageSafeForVisibleAnswer } from './runtimeNativeMessage';
@@ -255,7 +255,7 @@ async function readWorkspaceToolSse(
     } catch {
       // Keep text-only SSE data as diagnostics.
     }
-    if (eventName === 'error' || eventName === 'failed') {
+    if (runtimeSseEventIsTerminalFailure(eventName, data)) {
       error = isRecord(data) ? asString(data.error) || asString(data.message) || JSON.stringify(data) : String(data);
       onEvent(data);
       return;
@@ -321,6 +321,26 @@ async function readWorkspaceToolSse(
   }
   if (buffer.trim()) consumeBlock(buffer);
   return { result, error };
+}
+
+function runtimeSseEventIsTerminalFailure(eventName: string, data: unknown) {
+  const eventType = eventName.trim().toLowerCase();
+  if (eventType !== 'error' && eventType !== 'failed') return false;
+  if (!isRecord(data)) return true;
+  const type = asString(data.type)?.trim().toLowerCase();
+  const status = asString(data.status)?.trim().toLowerCase();
+  const ok = asBoolean(data.ok);
+  const hasExplicitError = Boolean(asString(data.error));
+
+  // Semantic stream principle: event names are transport labels. A literal
+  // "error" or "failed" event can be a retry/progress diagnostic; only a
+  // payload that structurally declares terminal failure should end the turn.
+  return ok === false
+    || type === 'error'
+    || type === 'failed'
+    || status === 'failed'
+    || status === 'error'
+    || hasExplicitError;
 }
 
 function assistantTextFromStreamEventRecord(eventName: string, data: Record<string, unknown>): AssistantStreamTextFragment | undefined {
@@ -741,7 +761,7 @@ function guiPresentationFromEvent(event: Record<string, unknown>, result: Record
     status: asString(nested.status) ?? asString(event.status),
     displayedRefs: asStringArray(nested.displayedRefs),
     placement: isRecord(nested.placement) ? nested.placement : undefined,
-    controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
+    controlPlane: normalizeRuntimeComputerUseControlPlanePayload(nested.controlPlane),
     virtualScreen: normalizeComputerUseVirtualScreenPayload(nested.virtualScreen),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
@@ -798,7 +818,7 @@ function guiAskUserFromEvent(event: Record<string, unknown>, result: Record<stri
     relatedRefs,
     displayedRefs: relatedRefs,
     placement: isRecord(nested.placement) ? nested.placement : undefined,
-    controlPlane: normalizeComputerUseControlPlanePayload(nested.controlPlane),
+    controlPlane: normalizeRuntimeComputerUseControlPlanePayload(nested.controlPlane),
     commandId,
     attemptId: asString(event.attemptId) ?? asString(result.attemptId),
     provider: publicRuntimeMetadataValueFrom(event.provider, result.provider, 'provider'),
@@ -886,7 +906,10 @@ function guiEventsFromComputerUseTuiHostActions(event: Record<string, unknown>):
 
 function computerUseSummaryFromPresentationPayload(payload: Record<string, unknown>) {
   const controlPlane = computerUseControlPlaneFromActionPayload(payload);
-  const controlPlaneRefs = computerUseControlPlaneDisplayedRefs(controlPlane);
+  const controlPlaneRefs = uniqueStrings([
+    ...computerUseControlPlaneDisplayedRefs(controlPlane),
+    ...computerUseControlLeaseDisplayedRefs(controlPlane),
+  ]);
   const virtualScreen = normalizeComputerUseVirtualScreenPayload(payload);
   const virtualScreenRefs = computerUseVirtualScreenDisplayedRefs(virtualScreen);
   const virtualScreenSummary = computerUseVirtualScreenSummaryLines(virtualScreen);
@@ -985,6 +1008,18 @@ function isComputerUseControlEvidenceRef(ref: string) {
     || /^(?:artifact|audit|workEvidence|EU):/i.test(ref);
 }
 
+function normalizeRuntimeComputerUseControlPlanePayload(value: unknown): ComputerUseControlPlanePayload | undefined {
+  const normalized = normalizePresentationComputerUseControlPlanePayload(value);
+  if (!normalized) return undefined;
+  const leaseControl = isRecord(value)
+    ? computerUseControlLeaseProjection(value)
+    : {};
+  return compactRecord({
+    ...normalized,
+    ...leaseControl,
+  }) as ComputerUseControlPlanePayload;
+}
+
 function computerUseControlPlaneFromActionPayload(
   payload: Record<string, unknown>,
   approvalRequest?: Record<string, unknown>,
@@ -993,21 +1028,52 @@ function computerUseControlPlaneFromActionPayload(
   const approvalRequestRef = asString(payload.approvalRequestRef)
     ?? asString(payload.approval_request_ref)
     ?? (asStringArray(payload.approvalRequestRefs) ?? [])[0];
-  const normalized = normalizeComputerUseControlPlanePayload({
+  const leaseControl = computerUseControlLeaseProjection(payload);
+  const normalized = normalizeRuntimeComputerUseControlPlanePayload({
     ...payload,
     approvalRef: asString(payload.approvalRef) ?? asString(payload.approval_ref) ?? approvalRef,
     approvalRequestRef,
     approvalMode: asString(payload.approvalMode) ?? asString(payload.approval_mode) ?? (approvalRef ? 'required' : undefined),
     status: asString(payload.status) ?? (approvalRef ? 'needs-confirmation' : undefined),
   });
-  return hasComputerUseControlPlanePresentation(normalized) ? normalized : undefined;
+  if (!hasComputerUseControlPlanePresentation(normalized)) return undefined;
+  return compactRecord({
+    ...normalized,
+    ...leaseControl,
+  }) as ComputerUseControlPlanePayload;
+}
+
+function computerUseControlLeaseProjection(value: Record<string, unknown>) {
+  return compactRecord({
+    inputLeaseRef: safeRef(value.inputLeaseRef),
+    userLeaseRef: safeRef(value.userLeaseRef),
+    agentLeaseRef: safeRef(value.agentLeaseRef),
+    activeLeaseOwnerRef: safeRef(value.activeLeaseOwnerRef),
+    leaseStatus: safeLeaseStatus(value.leaseStatus),
+    takeoverRef: safeRef(value.takeoverRef),
+    pauseRef: safeRef(value.pauseRef),
+    resumeRef: safeRef(value.resumeRef),
+  });
+}
+
+function computerUseControlLeaseDisplayedRefs(value: unknown) {
+  if (!isRecord(value)) return [];
+  return uniqueStrings([
+    safeRef(value.inputLeaseRef),
+    safeRef(value.userLeaseRef),
+    safeRef(value.agentLeaseRef),
+    safeRef(value.activeLeaseOwnerRef),
+    safeRef(value.takeoverRef),
+    safeRef(value.pauseRef),
+    safeRef(value.resumeRef),
+  ].filter((ref): ref is string => Boolean(ref)));
 }
 
 function computerUseControlPlaneResultBundle(value: unknown, commandId: string | undefined): {
   artifact?: Record<string, unknown>;
   slot?: Record<string, unknown>;
 } {
-  const payload = normalizeComputerUseControlPlanePayload(value);
+  const payload = normalizeRuntimeComputerUseControlPlanePayload(value);
   if (!payload) return {};
   const id = `computer-use-control-plane-${safeRefSegment(commandId ?? payload.sessionPermissionRef ?? payload.stopRef ?? 'current')}`;
   const artifact = {
@@ -1124,6 +1190,14 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     : undefined;
   const stopRef = safeRef(value.stopRef);
   const cancelLeaseRef = safeRef(value.cancelLeaseRef);
+  const userLeaseRef = safeRef(value.userLeaseRef);
+  const agentLeaseRef = safeRef(value.agentLeaseRef);
+  const activeLeaseOwnerRef = safeRef(value.activeLeaseOwnerRef);
+  const activeLeaseOwnerRole = safeLeaseStatus(value.activeLeaseOwnerRole);
+  const leaseStatus = safeLeaseStatus(value.leaseStatus);
+  const takeoverRef = safeRef(value.takeoverRef);
+  const pauseRef = safeRef(value.pauseRef);
+  const resumeRef = safeRef(value.resumeRef);
   const sessionRef = safeRef(value.sessionRef) ?? safeRef(value.sessionManifestRef);
   const displayGroupRef = safeRef(value.displayGroupRef) ?? safeRef(value.currentBundleRef);
   const screenRef = safeRef(value.screenRef) ?? visibleScreenRefs[0];
@@ -1207,6 +1281,15 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     || frames.length
     || inputIntentRefs.length
     || executorEventRefs.length
+    || inputLeaseRef
+    || userLeaseRef
+    || agentLeaseRef
+    || activeLeaseOwnerRef
+    || takeoverRef
+    || pauseRef
+    || resumeRef
+    || stopRef
+    || cancelLeaseRef
     || visibleScreenRefs.length
     || cursorOverlayRefs.length
     || leaseOwnerRefs.length
@@ -1224,8 +1307,22 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
       ? value.isolation
       : undefined;
   const isolation = normalizeVirtualScreenIsolationFlags(isolationSource);
+  const projectedStatus = computerUseVirtualScreenProjectedStatus({
+    presentationState: value.presentationState,
+    attachState: value.attachState,
+    validationStatus: value.validationStatus,
+    validationStatusSnake: value.validation_status,
+    validation: value.validation,
+    blockedRef,
+    errorRef,
+    completionEvidenceRef,
+    currentFrameRef,
+    frameRefs,
+    frames,
+    visibleScreenRefs,
+  });
   const runSummary = normalizeComputerUseRunSummary(value.runSummary, {
-    status: asString(value.status),
+    status: projectedStatus,
     runId: asString(value.runId),
     validationRef,
     currentBundleRef,
@@ -1294,6 +1391,11 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     inputIntentRefs,
     executorEventRefs,
     inputLeaseRef,
+    activeLeaseOwnerRef,
+    activeLeaseOwnerRole,
+    userLeaseRef,
+    agentLeaseRef,
+    leaseStatus,
     actionAdapterRef,
     adapterReadinessRef,
     preflightRef,
@@ -1320,6 +1422,9 @@ function normalizeComputerUseVirtualScreenPayload(value: unknown): Record<string
     permissionRequired,
     permissionGranted,
     sharedInputAllowed,
+    takeoverRef,
+    pauseRef,
+    resumeRef,
     stopRef,
     cancelLeaseRef,
     handoffRef,
@@ -1352,33 +1457,58 @@ function normalizeComputerUseRunSummary(
   value: unknown,
   fallback: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
-  const raw = isRecord(value) ? value : {};
+  const source = isRecord(value) ? value : {};
   const summary = compactRecord({
     schemaVersion: 'sciforge.computer-use.run-summary.v1',
-    status: asString(raw.status) ?? asString(fallback.status),
-    runId: safeRef(raw.runId) ?? safeRef(fallback.runId),
-    validationRef: safeRef(raw.validationRef) ?? safeRef(fallback.validationRef),
-    currentBundleRef: safeRef(raw.currentBundleRef) ?? safeRef(fallback.currentBundleRef),
-    evidenceBundleIndexRef: safeRef(raw.evidenceBundleIndexRef) ?? safeRef(raw.evidenceIndexRef) ?? safeRef(fallback.evidenceBundleIndexRef),
-    replayRef: safeRef(raw.replayRef) ?? safeRef(fallback.replayRef),
-    validationStatus: safeSummaryText(raw.validationStatus) ?? safeSummaryText(fallback.validationStatus),
-    validationOk: asBoolean(raw.validationOk) ?? asBoolean(fallback.validationOk),
-    sidecarBindingRef: safeRef(raw.sidecarBindingRef) ?? safeRef(fallback.sidecarBindingRef),
-    sidecarCapabilitiesRef: safeRef(raw.sidecarCapabilitiesRef) ?? safeRef(fallback.sidecarCapabilitiesRef),
-    sidecarDiscoveryRef: safeRef(raw.sidecarDiscoveryRef) ?? safeRef(fallback.sidecarDiscoveryRef),
-    sidecarBindingKind: safeSummaryText(raw.sidecarBindingKind) ?? safeSummaryText(fallback.sidecarBindingKind),
-    realNativeSidecarExecuted: asBoolean(raw.realNativeSidecarExecuted) ?? asBoolean(fallback.realNativeSidecarExecuted),
-    providerSessionRevalidated: asBoolean(raw.providerSessionRevalidated) ?? asBoolean(fallback.providerSessionRevalidated),
-    completionEligible: asBoolean(raw.completionEligible) ?? asBoolean(fallback.completionEligible),
-    screenCount: positiveInteger(raw.screenCount) ?? positiveInteger(fallback.screenCount),
-    actorCursorCount: positiveInteger(raw.actorCursorCount) ?? positiveInteger(fallback.actorCursorCount),
-    frameCount: positiveInteger(raw.frameCount) ?? positiveInteger(fallback.frameCount),
-    cursorOverlayCount: positiveInteger(raw.cursorOverlayCount) ?? positiveInteger(fallback.cursorOverlayCount),
-    schedulerLeaseCount: positiveInteger(raw.schedulerLeaseCount) ?? positiveInteger(fallback.schedulerLeaseCount),
-    targetCount: positiveInteger(raw.targetCount) ?? positiveInteger(fallback.targetCount),
-    blockedReason: safeSummaryText(raw.blockedReason) ?? safeSummaryText(fallback.blockedReason),
+    status: asString(fallback.status),
+    runId: safeRef(source.runId) ?? safeRef(fallback.runId),
+    validationRef: safeRef(source.validationRef) ?? safeRef(fallback.validationRef),
+    currentBundleRef: safeRef(source.currentBundleRef) ?? safeRef(fallback.currentBundleRef),
+    evidenceBundleIndexRef: safeRef(source.evidenceBundleIndexRef) ?? safeRef(source.evidenceIndexRef) ?? safeRef(fallback.evidenceBundleIndexRef),
+    replayRef: safeRef(source.replayRef) ?? safeRef(fallback.replayRef),
+    validationStatus: safeSummaryText(source.validationStatus) ?? safeSummaryText(fallback.validationStatus),
+    validationOk: asBoolean(source.validationOk) ?? asBoolean(fallback.validationOk),
+    sidecarBindingRef: safeRef(source.sidecarBindingRef) ?? safeRef(fallback.sidecarBindingRef),
+    sidecarCapabilitiesRef: safeRef(source.sidecarCapabilitiesRef) ?? safeRef(fallback.sidecarCapabilitiesRef),
+    sidecarDiscoveryRef: safeRef(source.sidecarDiscoveryRef) ?? safeRef(fallback.sidecarDiscoveryRef),
+    sidecarBindingKind: safeSummaryText(source.sidecarBindingKind) ?? safeSummaryText(fallback.sidecarBindingKind),
+    realNativeSidecarExecuted: asBoolean(source.realNativeSidecarExecuted) ?? asBoolean(fallback.realNativeSidecarExecuted),
+    providerSessionRevalidated: asBoolean(source.providerSessionRevalidated) ?? asBoolean(fallback.providerSessionRevalidated),
+    completionEligible: asBoolean(source.completionEligible) ?? asBoolean(fallback.completionEligible),
+    screenCount: positiveInteger(source.screenCount) ?? positiveInteger(fallback.screenCount),
+    actorCursorCount: positiveInteger(source.actorCursorCount) ?? positiveInteger(fallback.actorCursorCount),
+    frameCount: positiveInteger(source.frameCount) ?? positiveInteger(fallback.frameCount),
+    cursorOverlayCount: positiveInteger(source.cursorOverlayCount) ?? positiveInteger(fallback.cursorOverlayCount),
+    schedulerLeaseCount: positiveInteger(source.schedulerLeaseCount) ?? positiveInteger(fallback.schedulerLeaseCount),
+    targetCount: positiveInteger(source.targetCount) ?? positiveInteger(fallback.targetCount),
+    blockedReason: safeSummaryText(source.blockedReason) ?? safeSummaryText(fallback.blockedReason),
   });
   return Object.keys(summary).length > 1 ? summary : undefined;
+}
+
+function computerUseVirtualScreenProjectedStatus(input: {
+  presentationState: unknown;
+  attachState: unknown;
+  validationStatus: unknown;
+  validationStatusSnake: unknown;
+  validation: unknown;
+  blockedRef?: string;
+  errorRef?: string;
+  completionEvidenceRef?: string;
+  currentFrameRef?: string;
+  frameRefs: string[];
+  frames: Record<string, unknown>[];
+  visibleScreenRefs: string[];
+}) {
+  return safeSummaryText(input.presentationState)
+    ?? safeSummaryText(input.attachState)
+    ?? safeSummaryText(input.validationStatus)
+    ?? safeSummaryText(input.validationStatusSnake)
+    ?? (isRecord(input.validation) ? safeSummaryText(input.validation.status) : undefined)
+    ?? (input.errorRef ? 'error' : undefined)
+    ?? (input.blockedRef ? 'blocked' : undefined)
+    ?? (input.completionEvidenceRef ? 'completed' : undefined)
+    ?? (input.currentFrameRef || input.frameRefs.length || input.frames.length || input.visibleScreenRefs.length ? 'ready' : undefined);
 }
 
 function computerUseVirtualScreenDisplayedRefs(payload: Record<string, unknown> | undefined): string[] {
@@ -2001,25 +2131,96 @@ function nonNegativeInteger(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : undefined;
 }
 
-function safeSummaryText(value: unknown): string | undefined {
+function safeSummaryText(value: unknown, maxLength = 240): string | undefined {
   const text = asString(value);
   if (!text) return undefined;
   if (/^\s*[\[{]/.test(text) || /authorization|bearer|api[_-]?key|password|secret|token/i.test(text)) {
     return 'Summary detail is available by ref.';
   }
-  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
+  const boundedMaxLength = Math.max(80, Math.min(4000, Math.floor(maxLength)));
+  return text.length > boundedMaxLength ? `${text.slice(0, boundedMaxLength - 3)}...` : text;
+}
+
+function safeLeaseStatus(value: unknown): string | undefined {
+  const status = asString(value)?.trim();
+  if (!status) return undefined;
+  return /^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(status) ? status : undefined;
 }
 
 function agentHostTurnLoopDoneMessage(data: Record<string, unknown>): string | undefined {
   if (data.type !== 'done') return undefined;
-  const message = safeSummaryText(data.message);
-  if (!message) return undefined;
   const hasAgentHostExecution = recordList(data.executionUnits).some((unit) => asString(unit.tool) === 'codex-agent-host-turn-loop');
   const hasAgentHostArtifact = recordList(data.artifacts).some((artifact) => {
     const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
     return asString(metadata.source) === 'codex-agent-host-turn-loop';
   });
-  return hasAgentHostExecution || hasAgentHostArtifact ? message : undefined;
+  const hasBrowserEvidence = hasAgentHostBrowserEvidenceCompletion(data);
+  const message = safeSummaryText(data.message, hasBrowserEvidence ? 1600 : 240);
+  if (!message) return undefined;
+  if (!agentHostVisibleMessageSafeForProjection(message)) return undefined;
+  return hasAgentHostExecution || hasAgentHostArtifact || hasBrowserEvidence ? message : undefined;
+}
+
+function agentHostVisibleMessageSafeForProjection(message: string) {
+  const lower = message.toLowerCase();
+  if (
+    lower.includes('data:image') ||
+    lower.includes('base64') ||
+    lower.includes('rawscreenshot') ||
+    lower.includes('raw_screenshot') ||
+    lower.includes('rawproviderpayload') ||
+    lower.includes('providerpayload') ||
+    lower.includes('provider payload') ||
+    lower.includes('stdout:') ||
+    lower.includes('stderr:') ||
+    lower.includes('stdoutref') ||
+    lower.includes('stderrref') ||
+    lower.includes('<html') ||
+    lower.includes('authorization:') ||
+    lower.includes('bearer ') ||
+    lower.includes('api-key') ||
+    lower.includes('apikey') ||
+    lower.includes('password') ||
+    lower.includes('secret') ||
+    lower.includes('token')
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function hasAgentHostBrowserEvidenceCompletion(data: Record<string, unknown>) {
+  const displayIntent = isRecord(data.displayIntent) ? data.displayIntent : {};
+  const protocolAllowsVisibleBrowserAnswer = asString(displayIntent.protocolStatus) === 'protocol-success'
+    || asString(displayIntent.taskOutcome) === 'satisfied'
+    || asString(displayIntent.status) === 'completed'
+    || asString(displayIntent.taskOutcome) === 'needs-human'
+    || asString(displayIntent.status) === 'needs-human'
+    || asString(displayIntent.taskOutcome) === 'needs-work'
+    || asString(displayIntent.status) === 'repair-needed';
+  const executionUnits = recordList(data.executionUnits);
+  const artifacts = recordList(data.artifacts);
+  const refs = asStringArray(data.evidenceRefs) ?? [];
+  const hasBrowserExecution = executionUnits.some((unit) => {
+    return asString(unit.selectedRuntime) === 'browser-host-search-runtime'
+      || asString(unit.runtimeProfileId) === 'browser-host-session'
+      || asString(unit.tool) === 'browser_search';
+  });
+  const hasBrowserArtifact = artifacts.some((artifact) => {
+    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+    return asString(artifact.type) === 'browser-search-results'
+      || asString(artifact.schemaVersion) === 'sciforge.browser-host-session.search-result.v1'
+      || asString(metadata.source) === 'browser_search'
+      || Boolean(asString(metadata.browserSessionRef)?.startsWith('browser-host-session:'));
+  });
+  const hasBrowserRef = refs.some((ref) => ref.startsWith('browser-host-session:'));
+
+  // Semantic visibility principle: refs-first BrowserHostSession output is a
+  // valid visible answer when runtime evidence says the browser task completed,
+  // needs source-reading continuation, or produced a browser-specific repair
+  // diagnostic. Do not require a literal gui.present marker or success words in
+  // provider text.
+  return protocolAllowsVisibleBrowserAnswer && (hasBrowserExecution || hasBrowserArtifact || hasBrowserRef);
 }
 
 function refLabel(ref: string) {

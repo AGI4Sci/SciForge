@@ -111,11 +111,27 @@ export function gatewayRequestToComputerUseRequest(
   const explicitApprovalRef = computerUseApprovalRef(request);
   const approveCommandText = computerUseApproveCommandText(request);
   const commandApprovalRef = approveCommandText ? approvalRefFromComputerUseApproveCommand(approveCommandText) : undefined;
-  const approvalRefForRecovery = explicitApprovalRef ?? commandApprovalRef;
   const requestApprovalProvenance = computerUseApprovalProvenance(request);
-  const approvalProvenance = requestApprovalProvenance
-    ?? (commandApprovalRef ? computerUseApprovalProvenanceFromWorkspaceSidecars(workspace, approvalRefForRecovery) : undefined);
-  const approvalRef = explicitApprovalRef ?? (approvalProvenance ? approvalRefForRecovery : undefined);
+  const requestedApprovalRef = explicitApprovalRef ?? commandApprovalRef;
+  const matchingRequestApprovalProvenance = requestedApprovalRef
+    && requestApprovalProvenance
+    && approvalProvenanceMatchesApprovalRef(requestApprovalProvenance, requestedApprovalRef)
+    ? requestApprovalProvenance
+    : undefined;
+  const recoveredApprovalProvenance = !matchingRequestApprovalProvenance && commandApprovalRef
+    ? computerUseApprovalProvenanceFromWorkspaceSidecars(workspace, commandApprovalRef)
+    : undefined;
+  const matchingRecoveredApprovalProvenance = commandApprovalRef
+    && recoveredApprovalProvenance
+    && approvalProvenanceMatchesApprovalRef(recoveredApprovalProvenance, commandApprovalRef)
+    ? recoveredApprovalProvenance
+    : undefined;
+  const approvalProvenance = matchingRequestApprovalProvenance ?? matchingRecoveredApprovalProvenance;
+  const approvalRef = matchingRequestApprovalProvenance
+    ? requestedApprovalRef
+    : matchingRecoveredApprovalProvenance
+      ? commandApprovalRef
+      : undefined;
   const plannerAcceptanceContract = withComputerUseContinuationContract(
     computerUsePlannerAcceptanceContract(request),
     computerUseContinuationContract(request, workspace),
@@ -247,7 +263,7 @@ export function computerUseHostPortsContract(config: ComputerUseConfig) {
       locate: {
         provider: computerUseModelRouterCapabilityIds.groundingTranslator,
         returns: 'Grounding with target-window or crop-local coordinates and diagnostics',
-        legacyAdapter: config.grounder.baseUrl ? computerUseHostPortProviderIds.legacyKvGroundCompatibleAdapter : undefined,
+        legacyAdapter: undefined,
       },
       execute: {
         provider: independentInputAdapterExecutionBoundary(config) ?? computerUseExecuteHostPortProvider(config),
@@ -355,11 +371,11 @@ function withComputerUseContinuationContract(
 function computerUseContinuationContract(request: GatewayRequest, workspace: string): Record<string, unknown> | undefined {
   const references = computerUseContinuationReferenceRecords(request);
   const promptRefs = refsFromText(request.prompt);
-  const blockedManifestRefs = uniqueStrings([
+  const initialBlockedManifestRefs = uniqueStrings([
     ...refsFromUnknown(references, sidecarRefKey('blocked-manifest.json', /blockedManifestRef/i)),
     ...promptRefs.filter((ref) => ref.endsWith('blocked-manifest.json')),
   ]);
-  const repairHintRefs = uniqueStrings([
+  const initialRepairHintRefs = uniqueStrings([
     ...refsFromUnknown(references, sidecarRefKey('repair-hint.json', /repairHintRef/i)),
     ...promptRefs.filter((ref) => ref.endsWith('repair-hint.json')),
   ]);
@@ -367,22 +383,55 @@ function computerUseContinuationContract(request: GatewayRequest, workspace: str
     ...refsFromUnknown(references, sidecarRefKey('continuation-request.json', /continuationRequestRef/i)),
     ...promptRefs.filter((ref) => ref.endsWith('continuation-request.json')),
   ]);
+  const continuationRequestSummaries = continuationSidecarSummariesFromSources(
+    references,
+    workspace,
+    continuationRequestRefs,
+    'continuation-request.json',
+  );
+  const blockedManifestRefs = uniqueStrings([
+    ...initialBlockedManifestRefs,
+    ...continuationRequestSummaries
+      .map((summary) => stringAt(summary, 'blockedManifestRef'))
+      .filter((ref): ref is string => Boolean(ref && isSidecarPathRef(ref, 'blocked-manifest.json'))),
+  ]);
+  const repairHintRefs = uniqueStrings([
+    ...initialRepairHintRefs,
+    ...continuationRequestSummaries
+      .map((summary) => stringAt(summary, 'repairHintRef'))
+      .filter((ref): ref is string => Boolean(ref && isSidecarPathRef(ref, 'repair-hint.json'))),
+  ]);
+  const repairHintSummaries = continuationSidecarSummariesFromSources(
+    references,
+    workspace,
+    repairHintRefs,
+    'repair-hint.json',
+  );
   const runTaskChainRefs = uniqueStrings([
     ...refsFromUnknown(references, sidecarRefKey('tui-host-run-task-chain.json', /tuiHostRunTaskChainRef|runTaskChainRef/i)),
     ...promptRefs.filter((ref) => ref.endsWith('tui-host-run-task-chain.json')),
+    ...continuationRequestSummaries
+      .map((summary) => stringAt(summary, 'sameTraceSessionRef'))
+      .filter((ref): ref is string => Boolean(ref && isSidecarPathRef(ref, 'tui-host-run-task-chain.json'))),
+    ...repairHintSummaries
+      .map((summary) => stringAt(recordAt(summary, 'nextAttempt'), 'reuseRunTaskChainRef'))
+      .filter((ref): ref is string => Boolean(ref && isSidecarPathRef(ref, 'tui-host-run-task-chain.json'))),
   ]);
   const hasRefs = blockedManifestRefs.length > 0
     || repairHintRefs.length > 0
     || continuationRequestRefs.length > 0
     || runTaskChainRefs.length > 0;
   if (!hasRefs) return undefined;
+  const blockedManifestSummaries = continuationSidecarSummariesFromSources(
+    references,
+    workspace,
+    blockedManifestRefs,
+    'blocked-manifest.json',
+  );
   const sidecars = compactRecord({
-    blockedManifest: continuationSidecarSummary(references, 'blocked-manifest.json')
-      ?? continuationSidecarSummaryFromWorkspace(workspace, blockedManifestRefs, 'blocked-manifest.json'),
-    repairHint: continuationSidecarSummary(references, 'repair-hint.json')
-      ?? continuationSidecarSummaryFromWorkspace(workspace, repairHintRefs, 'repair-hint.json'),
-    continuationRequest: continuationSidecarSummary(references, 'continuation-request.json')
-      ?? continuationSidecarSummaryFromWorkspace(workspace, continuationRequestRefs, 'continuation-request.json'),
+    blockedManifest: blockedManifestSummaries[0],
+    repairHint: repairHintSummaries[0],
+    continuationRequest: continuationRequestSummaries[0],
   });
   return compactRecord({
     schemaVersion: 'sciforge.computer-use.continuation-context.v1',
@@ -408,31 +457,45 @@ function computerUseContinuationReferenceRecords(request: GatewayRequest) {
   ];
 }
 
-function continuationSidecarSummary(references: Record<string, unknown>[], filename: string) {
-  const reference = references.find((item) => {
-    const ref = stringAt(item, 'ref') ?? stringAt(recordAt(item, 'payload'), 'path');
-    return ref ? ref.endsWith(filename) : false;
-  });
-  if (!reference) return undefined;
-  const payload = recordAt(reference, 'payload');
-  const sidecar = recordAt(payload, 'sidecar')
-    ?? recordAt(payload, 'json')
-    ?? recordAt(payload, 'record')
-    ?? recordAt(reference, 'sidecar');
-  if (!sidecar) return undefined;
-  return continuationSidecarRecordSummary(sidecar);
+function continuationSidecarSummariesFromSources(
+  references: Record<string, unknown>[],
+  workspace: string,
+  refs: string[],
+  filename: string,
+) {
+  return [
+    ...continuationSidecarSummaries(references, filename),
+    ...continuationSidecarSummariesFromWorkspace(workspace, refs, filename),
+  ];
 }
 
-function continuationSidecarSummaryFromWorkspace(workspace: string, refs: string[], filename: string) {
+function continuationSidecarSummaries(references: Record<string, unknown>[], filename: string) {
+  const summaries: Record<string, unknown>[] = [];
+  for (const reference of references) {
+    const ref = stringAt(reference, 'ref') ?? stringAt(recordAt(reference, 'payload'), 'path');
+    if (!ref?.endsWith(filename)) continue;
+    const payload = recordAt(reference, 'payload');
+    const sidecar = recordAt(payload, 'sidecar')
+      ?? recordAt(payload, 'json')
+      ?? recordAt(payload, 'record')
+      ?? recordAt(reference, 'sidecar');
+    const summary = sidecar ? continuationSidecarRecordSummary(sidecar) : undefined;
+    if (summary) summaries.push(summary);
+  }
+  return summaries;
+}
+
+function continuationSidecarSummariesFromWorkspace(workspace: string, refs: string[], filename: string) {
+  const summaries: Record<string, unknown>[] = [];
   for (const ref of refs) {
     if (!isSidecarPathRef(ref, filename)) continue;
     const path = workspaceBoundPath(workspace, ref);
     if (!path) continue;
     const sidecar = readJsonRecordSync(path);
     const summary = sidecar ? continuationSidecarRecordSummary(sidecar) : undefined;
-    if (summary) return summary;
+    if (summary) summaries.push(summary);
   }
-  return undefined;
+  return summaries;
 }
 
 function continuationSidecarRecordSummary(sidecar: Record<string, unknown>) {
@@ -509,6 +572,86 @@ function computerUseApprovalProvenance(request: GatewayRequest) {
     recordAt(recordAt(request.uiState, 'humanApprovalPolicy'), 'approvalProvenance'),
   ];
   return candidates.find(Boolean);
+}
+
+function approvalProvenanceMatchesApprovalRef(
+  provenance: Record<string, unknown>,
+  approvalRef: string,
+) {
+  const refs = approvalProvenanceRefs(provenance);
+  if (!refs.includes(approvalRef)) return false;
+  if (refs.some((ref) => ref !== approvalRef)) return false;
+  if (approvalProvenanceRiskActionHashes(provenance).length === 0) return false;
+  return approvalProvenanceHasPriorBoundary(provenance);
+}
+
+function approvalProvenanceRefs(provenance: Record<string, unknown>) {
+  const approvalRequest = recordAt(provenance, 'approvalRequest') ?? recordAt(provenance, 'approval_request');
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const guiAskUserPayload = recordAt(guiAskUserSidecar, 'payload');
+  const guiAskUserApprovalRequest = recordAt(guiAskUserPayload, 'approvalRequest') ?? recordAt(guiAskUserPayload, 'approval_request');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  const approvalDecisionSidecar = recordAt(provenance, 'approvalDecisionSidecar') ?? recordAt(provenance, 'approval_decision_sidecar');
+  const confirmedRequestSidecar = recordAt(provenance, 'confirmedRequestSidecar') ?? recordAt(provenance, 'confirmed_request_sidecar');
+  return uniqueStrings([
+    stringAt(provenance, 'approvalRef'),
+    stringAt(provenance, 'approval_ref'),
+    stringAt(approvalRequest, 'approvalRef'),
+    stringAt(approvalRequest, 'approval_ref'),
+    stringAt(approvalRequestSidecar, 'approvalRef'),
+    stringAt(approvalRequestSidecar, 'approval_ref'),
+    stringAt(guiAskUserSidecar, 'approvalRef'),
+    stringAt(guiAskUserSidecar, 'approval_ref'),
+    stringAt(guiAskUserApprovalRequest, 'approvalRef'),
+    stringAt(guiAskUserApprovalRequest, 'approval_ref'),
+    stringAt(riskAuditSidecar, 'approvalRef'),
+    stringAt(riskAuditSidecar, 'approval_ref'),
+    stringAt(approvalDecisionSidecar, 'approvalRef'),
+    stringAt(approvalDecisionSidecar, 'approval_ref'),
+    stringAt(confirmedRequestSidecar, 'approvalRef'),
+    stringAt(confirmedRequestSidecar, 'approval_ref'),
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function approvalProvenanceRiskActionHashes(provenance: Record<string, unknown>) {
+  const approvalRequest = recordAt(provenance, 'approvalRequest') ?? recordAt(provenance, 'approval_request');
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const guiAskUserPayload = recordAt(guiAskUserSidecar, 'payload');
+  const guiAskUserApprovalRequest = recordAt(guiAskUserPayload, 'approvalRequest') ?? recordAt(guiAskUserPayload, 'approval_request');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  const approvalDecisionSidecar = recordAt(provenance, 'approvalDecisionSidecar') ?? recordAt(provenance, 'approval_decision_sidecar');
+  const confirmedRequestSidecar = recordAt(provenance, 'confirmedRequestSidecar') ?? recordAt(provenance, 'confirmed_request_sidecar');
+  return uniqueStrings([
+    stringAt(provenance, 'riskActionHash'),
+    stringAt(provenance, 'risk_action_hash'),
+    stringAt(approvalRequest, 'riskActionHash'),
+    stringAt(approvalRequest, 'risk_action_hash'),
+    stringAt(approvalRequestSidecar, 'riskActionHash'),
+    stringAt(approvalRequestSidecar, 'risk_action_hash'),
+    stringAt(guiAskUserSidecar, 'riskActionHash'),
+    stringAt(guiAskUserSidecar, 'risk_action_hash'),
+    stringAt(guiAskUserApprovalRequest, 'riskActionHash'),
+    stringAt(guiAskUserApprovalRequest, 'risk_action_hash'),
+    stringAt(riskAuditSidecar, 'riskActionHash'),
+    stringAt(riskAuditSidecar, 'risk_action_hash'),
+    stringAt(approvalDecisionSidecar, 'riskActionHash'),
+    stringAt(approvalDecisionSidecar, 'risk_action_hash'),
+    stringAt(confirmedRequestSidecar, 'riskActionHash'),
+    stringAt(confirmedRequestSidecar, 'risk_action_hash'),
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function approvalProvenanceHasPriorBoundary(provenance: Record<string, unknown>) {
+  const sourceApprovalRequestRef = stringAt(provenance, 'sourceApprovalRequestRef') ?? stringAt(provenance, 'source_approval_request_ref');
+  const sourceGuiAskUserRecordRef = stringAt(provenance, 'sourceGuiAskUserRecordRef') ?? stringAt(provenance, 'source_gui_ask_user_record_ref');
+  const sourceRiskAuditRef = stringAt(provenance, 'sourceRiskAuditRef') ?? stringAt(provenance, 'source_risk_audit_ref');
+  if (sourceApprovalRequestRef && sourceGuiAskUserRecordRef && sourceRiskAuditRef) return true;
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  return Boolean(approvalRequestSidecar && guiAskUserSidecar && riskAuditSidecar);
 }
 
 function computerUseApprovalProvenanceFromWorkspaceSidecars(

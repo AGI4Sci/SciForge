@@ -77,6 +77,44 @@ test('right pane surface adapter routes Image Evidence presentation without live
   assert.doesNotMatch(html, /virtual-app-screen|VirtualAppScreen|live-surface|input-intent|attachVirtualAppScreen|data:image|base64|providerRoute|executorLease/);
 });
 
+test('right pane image evidence host renders Computer Use timeline and evidence refs first', () => {
+  const html = renderToStaticMarkup(createElement(RightPaneActiveSurface, {
+    ...baseProps(),
+    resultTab: 'image' as never,
+    imageEvidencePayload: {
+      status: 'ready',
+      sourceKind: 'annotation-crop',
+      imageRef: 'computer-use:session/evidence/crops/target.png',
+      annotationRefs: ['computer-use:session/evidence/annotations/target.json'],
+      beforeScreenshotRef: 'computer-use:session/evidence/frames/before.png',
+      afterScreenshotRef: 'computer-use:session/evidence/frames/after.png',
+      artifactPreviewRef: 'artifact:evidence-output/preview.png',
+      actionTimelineRefs: [
+        'computer-use:session/evidence/timeline/observe.json',
+        'computer-use:session/evidence/timeline/click.json',
+      ],
+      provenanceRefs: ['computer-use:session/evidence/provenance.json'],
+      providerPayload: { screenshot: 'data:image/png;base64,DO_NOT_RENDER' },
+    },
+  } as RightPaneActiveSurfaceProps & Record<string, unknown>));
+
+  assert.match(html, /data-image-evidence-ref-panel="true"/);
+  assert.match(html, /Annotation crop/);
+  assert.match(html, /Before screenshot/);
+  assert.match(html, /After screenshot/);
+  assert.match(html, /Artifact preview/);
+  assert.match(html, /Action timeline/);
+  assert.match(html, /Provenance/);
+  assert.match(html, /computer-use:session\/evidence\/annotations\/target\.json/);
+  assert.match(html, /computer-use:session\/evidence\/frames\/before\.png/);
+  assert.match(html, /computer-use:session\/evidence\/frames\/after\.png/);
+  assert.match(html, /artifact:evidence-output\/preview\.png/);
+  assert.match(html, /computer-use:session\/evidence\/timeline\/observe\.json/);
+  assert.match(html, /computer-use:session\/evidence\/timeline\/click\.json/);
+  assert.match(html, /computer-use:session\/evidence\/provenance\.json/);
+  assert.doesNotMatch(html, /providerPayload|data:image|base64|DO_NOT_RENDER/);
+});
+
 test('right pane image evidence host supports contained preview and image-click original opening', () => {
   const adapterSource = readFileSync(new URL('./imagePaneHostAdapter.tsx', import.meta.url), 'utf8');
   const styles = readFileSync(new URL('../../styles/app-04.css', import.meta.url), 'utf8');

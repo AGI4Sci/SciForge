@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -164,6 +165,8 @@ test('remote-desktop simulated input adapter maintains a virtual multi-app sessi
     assert.equal(session.visibleArtifacts[0]?.delivery, 'virtual-remote-session-artifact');
     assert.equal(session.visibleArtifacts[0]?.status, 'visible-and-saved');
     assert.equal(session.visibleArtifacts[0]?.artifactRef, 'virtual-slide-deck.md');
+    const synthesizedEvidence = JSON.parse(await readFile(join(workspace, 'independent-input-before-000.json'), 'utf8')) as Record<string, any>;
+    assert.equal(synthesizedEvidence.freshnessCheck?.maxAgeMs, 30_000);
     assert.match(await readFile(join(workspace, 'virtual-slide-deck.md'), 'utf8'), /systemMouseEvents: not-sent/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
@@ -197,6 +200,43 @@ test('remote-desktop simulated input adapter materializes summary prompts as vis
     assert.equal(session.visibleArtifacts[0]?.artifactRef, 'report.md');
     assert.match(await readFile(join(workspace, 'report.md'), 'utf8'), /字段视觉证据总结/);
     await assert.rejects(readFile(join(workspace, 'vision-trace.json'), 'utf8'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('remote-desktop simulated input adapter blocks stale visual evidence in production validation mode', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-independent-input-stale-visual-'));
+  try {
+    const config = baseConfig('independent-input-adapter-stale-visual');
+    config.testActionFixtureMode = false;
+    const observedAt = new Date(Date.now() - 60_000).toISOString();
+    const result = await executeIndependentInputAdapterAction({
+      type: 'click',
+      x: 12,
+      y: 16,
+      targetDescription: 'visible Save icon',
+      observeBeforeMutate: observeEvidence({
+        observedAt,
+        capturedAt: observedAt,
+        freshnessCheckedAt: observedAt,
+        freshnessCheck: {
+          status: 'current',
+          observedAt,
+          checkedAt: observedAt,
+          maxAgeMs: 300_000,
+        },
+      }),
+    }, config, resolvedWindowTarget(), {
+      workspace,
+      runDir: workspace,
+      stepIndex: 0,
+    });
+
+    assert.equal(result.exitCode, 125);
+    assert.match(result.stderr, /observation is older than 30000ms/);
+    assert.equal(existsSync(join(workspace, 'independent-input-adapter.json')), false);
+    assert.equal(existsSync(join(workspace, 'executor-projection.json')), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -358,7 +398,7 @@ function observeEvidence(overrides: Partial<ComputerUseObserveBeforeMutateEviden
       status: 'current',
       observedAt: '2026-05-31T10:00:00.000Z',
       checkedAt: '2026-05-31T10:00:00.000Z',
-      maxAgeMs: 300000,
+      maxAgeMs: 30_000,
     },
     ...overrides,
   };

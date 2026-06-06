@@ -97,7 +97,16 @@ test('writePackageBridgeTracePort writes trace and promotes package final artifa
       status: 'completed',
       message: 'done',
       finalArtifactRefs: [ref],
-      steps: [],
+      steps: [{
+        status: 'done',
+        verification: {
+          ok: true,
+          done: true,
+          metadata: {
+            finalArtifactRefs: [ref],
+          },
+        },
+      }],
     }]), {
       workspace,
       config: baseConfig(runId),

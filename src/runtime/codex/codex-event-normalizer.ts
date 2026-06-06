@@ -462,7 +462,7 @@ function guiAskUserFromRaw(
   };
 }
 
-function isCodexSamplingRetryMessage(value: string): boolean {
+export function isCodexSamplingRetryMessage(value: string): boolean {
   return /Reconnecting\.\.\.\s+\d+\/\d+/i.test(value)
     || /stream disconnected - retrying sampling request/i.test(value);
 }

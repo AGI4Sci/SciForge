@@ -83,17 +83,17 @@ class TraceRuntimeTest(unittest.TestCase):
         command = build_scp_command(
             "/tmp/screen.png",
             ScpUploadTarget(
-                host="kv-ground.example.test",
+                host="vision-assets.example.test",
                 port=22022,
                 user="vision",
-                remote_dir="/srv/kv-ground/screens",
+                remote_dir="/srv/vision-assets/screens",
             ),
             "screen.png",
         )
 
         self.assertEqual(command[:5], ["scp", "-P", "22022", "-o", "BatchMode=yes"])
         self.assertEqual(command[-2], "/tmp/screen.png")
-        self.assertEqual(command[-1], "vision@kv-ground.example.test:/srv/kv-ground/screens/screen.png")
+        self.assertEqual(command[-1], "vision@vision-assets.example.test:/srv/vision-assets/screens/screen.png")
 
 
 if __name__ == "__main__":

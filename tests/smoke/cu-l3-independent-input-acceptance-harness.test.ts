@@ -689,7 +689,7 @@ function validTrace(options: { runId: string; runRef: string }) {
           },
         ],
         plannedAction: { type: 'click', targetDescription: 'visible source summary' },
-        grounding: { provider: 'kv-ground', localX: 100, localY: 80 },
+        grounding: { provider: 'model-router.capability.computer-use.grounding-translator', localX: 100, localY: 80 },
       },
       {
         id: 'step-002-slide',

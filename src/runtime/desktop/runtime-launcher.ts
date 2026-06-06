@@ -304,6 +304,8 @@ export class ProductionRuntimeLauncher {
     const providerProxy = this.sidecarPorts.get('provider-proxy');
     const runtimeCodex = this.sidecarPorts.get('runtime-codex');
     if (this.appData) {
+      env.SCIFORGE_DESKTOP_SIDECAR = '1';
+      env.SCIFORGE_DESKTOP_USER_DATA_DIR = this.appData.appDataRoot;
       env.SCIFORGE_CONFIG_PATH = join(this.appData.configDir, 'config.local.json');
       env.SCIFORGE_STATE_DIR = this.appData.globalStateDir;
       env.SCIFORGE_LOG_DIR = this.appData.logDir;

@@ -2860,10 +2860,139 @@
   color: var(--accent);
 }
 
-.composer-runtime-pill.permission {
-  color: var(--coral);
-  border-color: rgba(255, 112, 67, 0.34);
-  background: rgba(255, 112, 67, 0.08);
+.composer-autonomy-menu {
+  position: relative;
+  display: inline-flex;
+  max-width: min(100%, 360px);
+}
+
+.composer-autonomy-menu > summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-height: 23px;
+  padding: 0 8px;
+  color: var(--bio-300);
+  background: var(--surface-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 850;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.composer-autonomy-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.composer-autonomy-menu > summary:hover,
+.composer-autonomy-menu[open] > summary {
+  color: var(--accent);
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.composer-autonomy-menu > summary svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.composer-autonomy-menu > summary span {
+  flex-shrink: 0;
+}
+
+.composer-autonomy-menu > summary em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--bio-450);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.composer-autonomy-menu-chevron {
+  flex-shrink: 0;
+  margin-left: 1px;
+  color: var(--bio-450);
+  transition: transform 120ms ease;
+}
+
+.composer-autonomy-menu[open] .composer-autonomy-menu-chevron {
+  transform: rotate(180deg);
+}
+
+.composer-autonomy-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 85;
+  width: min(280px, calc(100vw - 28px));
+  display: grid;
+  gap: 3px;
+  padding: 6px;
+  color: var(--bio-100);
+  background: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.composer-autonomy-option {
+  min-width: 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  color: var(--bio-200);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 760;
+  text-align: left;
+  cursor: pointer;
+}
+
+.composer-autonomy-option::before {
+  content: '';
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--bio-450);
+  border-radius: 999px;
+}
+
+.composer-autonomy-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-autonomy-option:hover {
+  color: var(--bio-50);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.composer-autonomy-option[aria-pressed='true'],
+.composer-autonomy-option[data-autonomy-selected='true'] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.composer-autonomy-option[aria-pressed='true']::before,
+.composer-autonomy-option[data-autonomy-selected='true']::before {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1.5px var(--surface-elevated);
 }
 
 .composer-bottom-toolbar {
@@ -4353,9 +4482,9 @@
   align-content: start;
   gap: 6px;
   padding: 10px;
-  color: var(--bio-200);
+  color: var(--text-secondary);
   text-align: left;
-  background: rgba(15, 23, 42, 0.68);
+  background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 7px;
   cursor: pointer;
@@ -4363,7 +4492,7 @@
 }
 
 .right-pane-tool-dock button:hover {
-  color: var(--bio-50);
+  color: var(--text-primary);
   background: var(--surface-hover);
   border-color: color-mix(in srgb, var(--accent) 32%, transparent);
 }
@@ -4379,13 +4508,13 @@
 }
 
 .right-pane-tool-dock span {
-  color: inherit;
+  color: var(--text-primary);
   font-size: 12px;
   font-weight: 900;
 }
 
 .right-pane-tool-dock small {
-  color: var(--bio-400);
+  color: var(--text-muted);
   font-size: 10px;
   line-height: 1.35;
 }
@@ -4497,6 +4626,21 @@
   border: 1px solid var(--border);
   border-radius: 7px;
   background: rgba(2, 6, 23, 0.42);
+}
+
+.image-evidence-empty {
+  display: grid;
+  place-items: center;
+  min-height: 120px;
+  padding: 18px;
+  text-align: center;
+}
+
+.image-evidence-empty p {
+  margin: 0;
+  color: var(--bio-400);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .image-evidence-frame {

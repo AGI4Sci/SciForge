@@ -34,6 +34,7 @@ import {
   visionSenseTraceContractPolicy,
   visionSenseTraceIds,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import { computerUseRequiresSavedVisibleArtifact } from '../../../packages/actions/computer-use/runtime-policy.js';
 import { VISION_TOOL_ID } from '../vision-sense/computer-use-trace-output.js';
 import {
   pixelDiffForScreenshotSets,
@@ -47,6 +48,47 @@ import {
 import { tuiHostRunTaskChainPath } from './package-bridge-evidence.js';
 
 export const PACKAGE_BRIDGE_TRACE_SCHEMA = 'sciforge.computer-use.package-bridge-trace.v1';
+const OBSERVATION_COST_TIER_USAGE_SCHEMA = 'sciforge.computer-use.observation-cost-tier-usage.v1';
+const ACTION_LEDGER_CAUSALITY_SCHEMA = 'sciforge.computer-use.action-ledger-causality.v1';
+const COMPUTER_USE_COST_TIERS = ['T0', 'T1', 'T2', 'T3', 'T4', 'T5'] as const;
+const SAFE_TRACE_REF_PREFIXES = new Set([
+  'action',
+  'artifact',
+  'artifact-validation',
+  'attempt',
+  'benchmark-result',
+  'computer-use',
+  'evidence',
+  'execution-unit',
+  'executor-event',
+  'freshness',
+  'grounding',
+  'harness-contract',
+  'harness-trace',
+  'ledger',
+  'log',
+  'observation',
+  'run',
+  'screen',
+  'target',
+  'trace',
+  'verification',
+  'verification-artifact',
+  'window',
+]);
+
+type ComputerUseTraceCostTier = (typeof COMPUTER_USE_COST_TIERS)[number];
+
+type ObservationCostTierUsageEntry = {
+  tier: ComputerUseTraceCostTier;
+  ref?: string;
+  sourceKind?: string;
+  fromTier?: ComputerUseTraceCostTier;
+  upgradeReason?: string;
+  latencyMs?: number;
+  modelCallCount?: number;
+  reasonCodes?: string[];
+};
 
 export type PackageBridgeTraceState = {
   runId: string;
@@ -80,8 +122,13 @@ export type PackageBridgeTraceInput = {
 
 export function materializePackageBridgeTrace(params: PackageBridgeTraceInput) {
   const now = new Date().toISOString();
-  const finalVisibleArtifact = finalVisibleArtifactForTrace(params.state.visibleArtifacts);
-  const finalArtifactRefs = finalArtifactRefsForTrace(params.state.visibleArtifacts);
+  const packageResult = sanitizeTracePayload(params.packageResult) as Record<string, unknown>;
+  const taskText = stringAt(params.actionProviderRequest, 'task')
+    ?? stringAt(params.request, 'text')
+    ?? '';
+  const finalArtifactSelection = { requireSaved: computerUseRequiresSavedVisibleArtifact(taskText) };
+  const finalVisibleArtifact = finalVisibleArtifactForTrace(params.state.visibleArtifacts, finalArtifactSelection);
+  const finalArtifactRefs = finalArtifactRefsForTrace(params.state.visibleArtifacts, finalArtifactSelection);
   const finalArtifactRef = finalVisibleArtifact?.artifactRef;
   const finalVisibleScreenshotRef = finalWindowScreenshotRef(params.state.screenshotLedger);
   return {
@@ -93,7 +140,7 @@ export function materializePackageBridgeTrace(params: PackageBridgeTraceInput) {
       schemaVersion: PACKAGE_BRIDGE_TRACE_SCHEMA,
       runtime: 'sciforge.workspace-runtime.computer-use-package-bridge',
       actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
-      hostPortProtocol: 'stdio-jsonl',
+      hostPortProtocol: 'ts-host-port-loop',
       tuiHostRunTaskChainRef: workspaceRel(params.workspace, tuiHostRunTaskChainPath(params.state.runDir)),
     },
     actionProvider: COMPUTER_USE_ACTION_PROVIDER_ID,
@@ -193,17 +240,18 @@ export function materializePackageBridgeTrace(params: PackageBridgeTraceInput) {
         .map((ref) => ref.path),
       invalidRefs: [],
       diagnostics: [],
-      noInlineImages: !/data:image\/|;base64,/.test(JSON.stringify(params.packageResult)),
+      noInlineImages: !/data:image\/|;base64,/i.test(JSON.stringify(packageResult)),
     },
-    steps: packageResultStepsToVisionSteps(params.packageResult, params.state, params.config),
-    packageResult: params.packageResult,
+    observationCostTierUsage: observationCostTierUsageForPackageResult(packageResult, params.state.runId),
+    steps: packageResultStepsToVisionSteps(packageResult, params.state, params.config),
+    packageResult,
   };
 }
 
 export async function writePackageBridgeTrace(params: PackageBridgeTraceInput) {
   const tracePath = join(params.state.runDir, 'vision-trace.json');
   params.state.tracePath = tracePath;
-  const trace = materializePackageBridgeTrace(params);
+  const trace = sanitizeTracePayload(materializePackageBridgeTrace(params));
   await writeFile(tracePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
   return tracePath;
 }
@@ -298,6 +346,16 @@ export function packageResultStepsToVisionSteps(
       pixelDiff: focusPixelDiff,
       fineGrounding: isRecord(grounding.fineGrounding) ? grounding.fineGrounding : undefined,
     } : undefined;
+    const actionLedgerCausality = packageActionLedgerCausality({
+      step,
+      actionRecord,
+      grounding,
+      beforeRefs,
+      afterRefs,
+      execution,
+      executionMetadata,
+      verification,
+    });
     return {
       id: `step-${String(index + 1).padStart(3, '0')}-${status === 'blocked' ? 'blocked' : 'execute'}-${action.type}`,
       kind: 'gui-execution',
@@ -311,6 +369,7 @@ export function packageResultStepsToVisionSteps(
       mappedCoordinate: mappedCoordinateMetadata(grounding, action),
       inputChannel: stepInputChannelMetadata(config, state.targetResolution),
       visualFocus,
+      actionLedgerCausality,
       execution: execution ? {
         executor: config.dryRun ? 'dry-run-generic-gui-executor' : independentInputAdapterExecutionBoundary(config) ?? executorBoundary(config),
         inputChannel: inputChannelDescription(config, state.targetResolution),
@@ -340,9 +399,336 @@ export function packageResultStepsToVisionSteps(
         packageVerification: verification,
       },
       failureReason: stringAt(step, 'failureReason') ?? stringAt(step, 'failure_reason') ?? undefined,
-    };
+    } as LoopStep;
   });
   return mergePlannerAndActionTraceSteps(state.plannerTraceSteps, actionSteps);
+}
+
+function observationCostTierUsageForPackageResult(packageResult: Record<string, unknown>, currentRunId: string) {
+  const entries = uniqueCostTierUsageEntries(collectObservationCostTierUsageEntries(packageResult, currentRunId))
+    .sort((left, right) =>
+      costTierRank(left.tier) - costTierRank(right.tier)
+      || (left.ref ?? '').localeCompare(right.ref ?? ''),
+    );
+  if (!entries.length) return undefined;
+  const byTier = Object.fromEntries(
+    COMPUTER_USE_COST_TIERS.map((tier) => [tier, entries.filter((entry) => entry.tier === tier)]),
+  ) as Record<ComputerUseTraceCostTier, ObservationCostTierUsageEntry[]>;
+  return {
+    schemaVersion: OBSERVATION_COST_TIER_USAGE_SCHEMA,
+    entries,
+    byTier,
+  };
+}
+
+function collectObservationCostTierUsageEntries(packageResult: Record<string, unknown>, currentRunId: string): ObservationCostTierUsageEntry[] {
+  const entries: ObservationCostTierUsageEntry[] = [];
+  const visit = (item: unknown) => {
+    if (!isRecord(item)) return;
+    if (isNonCurrentOrDiagnosticCostTierRecord(item, currentRunId)) return;
+
+    const observation = recordAt(item, 'observation');
+    const metadata = recordAt(item, 'metadata');
+    if (isNonCurrentOrDiagnosticCostTierRecord(observation, currentRunId)) return;
+    if (isNonCurrentOrDiagnosticCostTierRecord(metadata, currentRunId)) return;
+    const registration = recordAt(item, 'costTierRegistration')
+      ?? recordAt(observation, 'costTierRegistration')
+      ?? recordAt(metadata, 'costTierRegistration');
+    const source = recordAt(item, 'source') ?? recordAt(observation, 'source') ?? recordAt(metadata, 'source');
+    const ref = firstSafeRefFromRecords([item, observation, metadata], [
+      'ref',
+      'evidenceRef',
+      'observationRef',
+      'traceRef',
+      'screenshotRef',
+      'captureRef',
+      'path',
+    ]);
+    const sourceKind = safeTextAtKeys(item, ['sourceKind'])
+      ?? safeTextAtKeys(registration, ['sourceKind'])
+      ?? safeTextAtKeys(source, ['kind']);
+    if (isDiagnosticSourceKind(sourceKind)) return;
+    const tier = parseCostTier(
+      safeTextAtKeys(registration, ['tier', 'costTier'])
+      ?? safeTextAtKeys(item, ['tier', 'costTier'])
+      ?? safeTextAtKeys(observation, ['tier', 'costTier']),
+    );
+    if (tier) {
+      const entry: ObservationCostTierUsageEntry = { tier };
+      if (ref) entry.ref = ref;
+      if (sourceKind) entry.sourceKind = sourceKind;
+      const fromTier = parseCostTier(safeTextAtKeys(registration, ['fromTier', 'from']));
+      if (fromTier) entry.fromTier = fromTier;
+      const upgradeReason = safeTextAtKeys(registration, ['upgradeReason', 'reason'])
+        ?? safeTextAtKeys(item, ['upgradeReason', 'reason']);
+      if (upgradeReason) entry.upgradeReason = upgradeReason;
+      const latencyMs = numberAtKeys(registration, ['latencyMs', 'latency_ms'])
+        ?? numberAtKeys(item, ['latencyMs', 'latency_ms']);
+      if (latencyMs !== undefined) entry.latencyMs = latencyMs;
+      const modelCallCount = numberAtKeys(registration, ['modelCallCount', 'modelCalls', 'model_call_count', 'model_calls'])
+        ?? numberAtKeys(item, ['modelCallCount', 'modelCalls', 'model_call_count', 'model_calls']);
+      if (modelCallCount !== undefined) entry.modelCallCount = modelCallCount;
+      const reasonCodes = safeStringList(registration?.reasonCodes ?? item.reasonCodes);
+      if (reasonCodes.length) entry.reasonCodes = reasonCodes;
+      entries.push(entry);
+    }
+  };
+  for (const record of explicitObservationCostTierRecords(packageResult)) visit(record);
+  return entries;
+}
+
+function explicitObservationCostTierRecords(packageResult: Record<string, unknown>) {
+  const evidence = recordAt(packageResult, 'evidence');
+  return [
+    ...recordListAt(packageResult, 'observationCostTierUsage'),
+    ...recordListAt(packageResult, 'evidenceLedger'),
+    ...recordListAt(packageResult, 'observationLedger'),
+    ...recordListAt(packageResult, 'evidenceRecords'),
+    ...recordListAt(packageResult, 'observations'),
+    ...recordListAt(evidence, 'ledger'),
+    ...recordListAt(evidence, 'records'),
+    ...recordListAt(evidence, 'observations'),
+  ];
+}
+
+function isNonCurrentOrDiagnosticCostTierRecord(record: Record<string, unknown> | undefined, currentRunId: string) {
+  if (!record) return false;
+  const recordRunId = safeTextAtKeys(record, ['runId', 'currentRunId']);
+  if (recordRunId && recordRunId !== currentRunId) return true;
+  if (record.stale === true || record.debug === true || record.debugOnly === true || record.providerDebug === true) return true;
+  const status = safeTextAtKeys(record, ['status', 'freshnessStatus']);
+  if (status && /stale|debug/i.test(status)) return true;
+  const classification = safeTextAtKeys(record, ['classification', 'tier', 'category']);
+  return Boolean(classification && /debug/i.test(classification));
+}
+
+function isDiagnosticSourceKind(value: string | undefined) {
+  return Boolean(value && /debug|provider/i.test(value));
+}
+
+function uniqueCostTierUsageEntries(entries: ObservationCostTierUsageEntry[]) {
+  const seen = new Set<string>();
+  const unique: ObservationCostTierUsageEntry[] = [];
+  for (const entry of entries) {
+    const key = [
+      entry.tier,
+      entry.ref ?? '',
+      entry.sourceKind ?? '',
+      entry.fromTier ?? '',
+      entry.upgradeReason ?? '',
+      entry.latencyMs ?? '',
+      entry.modelCallCount ?? '',
+      (entry.reasonCodes ?? []).join(','),
+    ].join('\0');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(entry);
+  }
+  return unique;
+}
+
+function packageActionLedgerCausality(input: {
+  step: Record<string, unknown>;
+  actionRecord: Record<string, unknown>;
+  grounding: Record<string, unknown>;
+  beforeRefs: ScreenshotRef[];
+  afterRefs: ScreenshotRef[];
+  execution?: Record<string, unknown>;
+  executionMetadata?: Record<string, unknown>;
+  verification?: Record<string, unknown>;
+}) {
+  const stepMetadata = recordAt(input.step, 'metadata');
+  const actionMetadata = recordAt(input.actionRecord, 'metadata');
+  const groundingMetadata = recordAt(input.grounding, 'metadata');
+  const verificationMetadata = recordAt(input.verification, 'metadata');
+  const beforeObserveRefs = observeBeforeMutateRefs(recordAt(input.actionRecord, 'observeBeforeMutate'))
+    .concat(observeBeforeMutateRefs(recordAt(actionMetadata, 'observeBeforeMutate')));
+  const groundingObserveRefs = groundingHintRefs(recordAt(input.actionRecord, 'observeBeforeMutate'))
+    .concat(groundingHintRefs(recordAt(actionMetadata, 'observeBeforeMutate')));
+  const invalidation = freshnessInvalidationRefsAndKeys([
+    input.step,
+    stepMetadata,
+    input.actionRecord,
+    actionMetadata,
+    input.grounding,
+    groundingMetadata,
+    input.execution,
+    input.executionMetadata,
+    input.verification,
+    verificationMetadata,
+  ]);
+  const evidenceScope = traceEvidenceScopeForActionLedger([
+    input.step,
+    stepMetadata,
+    input.actionRecord,
+    actionMetadata,
+    input.grounding,
+    groundingMetadata,
+    input.execution,
+    input.executionMetadata,
+    input.verification,
+    verificationMetadata,
+  ]);
+  const executorEventRef = firstSafeRefFromRecords([
+    input.step,
+    input.execution,
+    input.executionMetadata,
+    recordAt(input.execution, 'executorEvent'),
+  ], [
+    'executorEventRef',
+    'executeEventRef',
+    'commandEventRef',
+    'executorCommandEventRef',
+    'commandEventLogRef',
+    'ref',
+  ]);
+
+  const beforeEvidenceRefs = uniqueTraceStrings([
+    ...input.beforeRefs.flatMap((ref) => safeRefStrings(ref.path)),
+    ...refsAtKeys(input.step, ['beforeEvidenceRef', 'beforeEvidenceRefs']),
+    ...refsAtKeys(stepMetadata, ['beforeEvidenceRef', 'beforeEvidenceRefs']),
+    ...refsAtKeys(input.actionRecord, ['beforeEvidenceRef', 'beforeEvidenceRefs']),
+    ...refsAtKeys(actionMetadata, ['beforeEvidenceRef', 'beforeEvidenceRefs']),
+    ...refsAtKeys(input.grounding, ['sourceObservationRef', 'browserRuntimeObservationRef']),
+    ...refsAtKeys(groundingMetadata, ['sourceObservationRef', 'browserRuntimeObservationRef']),
+    ...beforeObserveRefs,
+  ]);
+  const groundingRefs = uniqueTraceStrings([
+    ...refsAtKeys(input.step, ['groundingRef', 'groundingRefs']),
+    ...refsAtKeys(stepMetadata, ['groundingRef', 'groundingRefs']),
+    ...refsAtKeys(input.actionRecord, ['groundingRef', 'groundingRefs']),
+    ...refsAtKeys(actionMetadata, ['groundingRef', 'groundingRefs']),
+    ...refsAtKeys(input.grounding, ['groundingRef', 'groundingRefs', 'groundingHintRefs']),
+    ...refsAtKeys(groundingMetadata, ['groundingRef', 'groundingRefs', 'groundingHintRefs']),
+    ...groundingObserveRefs,
+  ]);
+  const afterEvidenceRefs = uniqueTraceStrings([
+    ...input.afterRefs.flatMap((ref) => safeRefStrings(ref.path)),
+    ...refsAtKeys(input.step, ['afterEvidenceRef', 'afterEvidenceRefs']),
+    ...refsAtKeys(stepMetadata, ['afterEvidenceRef', 'afterEvidenceRefs']),
+    ...refsAtKeys(input.actionRecord, ['afterEvidenceRef', 'afterEvidenceRefs']),
+    ...refsAtKeys(actionMetadata, ['afterEvidenceRef', 'afterEvidenceRefs']),
+  ]);
+  const verificationRefs = uniqueTraceStrings([
+    ...refsAtKeys(input.step, ['verificationRef', 'verificationRefs']),
+    ...refsAtKeys(stepMetadata, ['verificationRef', 'verificationRefs']),
+    ...refsAtKeys(input.actionRecord, ['verificationRef', 'verificationRefs']),
+    ...refsAtKeys(actionMetadata, ['verificationRef', 'verificationRefs']),
+    ...refsAtKeys(input.verification, ['ref', 'verificationRef', 'verificationRefs']),
+    ...refsAtKeys(verificationMetadata, ['ref', 'verificationRef', 'verificationRefs']),
+  ]);
+  const missingRequiredRefs = [
+    groundingRefs.length ? undefined : 'groundingRefs',
+    executorEventRef ? undefined : 'executorEventRef',
+    verificationRefs.length ? undefined : 'verificationRefs',
+    invalidation.refs.length || invalidation.keys.length ? undefined : 'freshnessInvalidation',
+  ].filter((value): value is string => Boolean(value));
+
+  return {
+    schemaVersion: ACTION_LEDGER_CAUSALITY_SCHEMA,
+    status: missingRequiredRefs.length ? 'incomplete' : 'complete',
+    complete: missingRequiredRefs.length === 0,
+    missingRequiredRefs,
+    beforeEvidenceRefs,
+    groundingRefs,
+    executorEventRef,
+    afterEvidenceRefs,
+    verificationRefs,
+    freshnessInvalidationRefs: invalidation.refs,
+    freshnessInvalidationKeys: invalidation.keys,
+    evidenceScope,
+  };
+}
+
+function traceEvidenceScopeForActionLedger(records: Array<Record<string, unknown> | undefined>) {
+  const evidenceScope = firstRecordFromRecords(records, ['evidenceScope', 'observationScope']);
+  const scopeRecords = evidenceScope ? [evidenceScope, ...records] : records;
+  const targetRef = firstSafeRefFromRecords(scopeRecords, ['targetRef']);
+  const windowRef = firstSafeRefFromRecords(scopeRecords, ['windowRef', 'targetWindowRef']);
+  const screenRef = firstSafeRefFromRecords(scopeRecords, ['screenRef']);
+  const explicitKind = normalizeEvidenceScopeKind(safeTextAtKeys(evidenceScope, ['kind', 'scopeKind', 'scopeType', 'type']));
+  const kind = explicitKind ?? (targetRef ? 'target' : windowRef ? 'window' : undefined);
+  if (!kind) return undefined;
+  const explicitReason = safeTextAtKeys(evidenceScope, ['reason', 'scopeReason', 'upgradeReason']);
+  if ((kind === 'full-screen' || kind === 'cross-window') && !explicitReason) return undefined;
+  const reason = explicitReason ?? 'target/window refs present in trace metadata';
+  const scope: Record<string, unknown> = { kind };
+  if (targetRef) scope.targetRef = targetRef;
+  if (windowRef) scope.windowRef = windowRef;
+  if (screenRef) scope.screenRef = screenRef;
+  const explicitWindowRefs = refsAtKeys(evidenceScope, ['windowRefs']);
+  const windowRefs = uniqueTraceStrings([
+    ...explicitWindowRefs,
+    kind === 'cross-window' ? windowRef : undefined,
+  ]);
+  if (windowRefs.length) scope.windowRefs = windowRefs;
+  scope.reason = reason;
+  return scope;
+}
+
+function normalizeEvidenceScopeKind(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'target' || normalized === 'target-crop') return 'target';
+  if (normalized === 'window' || normalized === 'window-local' || normalized === 'window-crop') return 'window';
+  if (normalized === 'cross-window' || normalized === 'multi-window') return 'cross-window';
+  if (normalized === 'full-screen' || normalized === 'fullscreen' || normalized === 'screen' || normalized === 'display' || normalized === 'global') return 'full-screen';
+  return normalized;
+}
+
+function freshnessInvalidationRefsAndKeys(values: Array<Record<string, unknown> | undefined>) {
+  const refs: string[] = [];
+  const keys: string[] = [];
+  const collect = (value: unknown) => {
+    if (!isRecord(value)) return;
+    refs.push(
+      ...refsAtKeys(value, ['refs', 'staleEvidenceRefs', 'freshnessInvalidationRefs', 'invalidatesRefs']),
+      ...refsAtKeys(recordAt(value, 'invalidates'), ['refs']),
+    );
+    keys.push(
+      ...safeStringsAtKeys(value, ['keys', 'staleEvidenceKeys', 'freshnessInvalidationKeys', 'invalidatesKeys', 'staleEvidenceKinds']),
+      ...safeStringsAtKeys(recordAt(value, 'invalidates'), ['keys']),
+    );
+  };
+  for (const value of values) {
+    if (!value) continue;
+    collect(recordAt(value, 'freshnessInvalidation'));
+    collect(recordAt(value, 'staleEvidenceInvalidation'));
+    collect(recordAt(value, 'visibleEvidenceInvalidation'));
+    collect(recordAt(value, 'invalidates'));
+    collect({
+      freshnessInvalidationRefs: value.freshnessInvalidationRefs,
+      freshnessInvalidationKeys: value.freshnessInvalidationKeys,
+      staleEvidenceRefs: value.staleEvidenceRefs,
+      staleEvidenceKeys: value.staleEvidenceKeys,
+    });
+  }
+  return {
+    refs: uniqueTraceStrings(refs),
+    keys: uniqueTraceStrings(keys),
+  };
+}
+
+function observeBeforeMutateRefs(value: Record<string, unknown> | undefined) {
+  return [
+    ...refsAtKeys(value, [
+      'appStateRef',
+      'screenshotRef',
+      'captureRef',
+      'accessibilitySnapshotRef',
+      'stateSnapshotRef',
+      'browserRuntimeObservationRef',
+      'browserRuntimeVisibleDomRef',
+      'browserRuntimeAccessibilitySnapshotRef',
+      'browserRuntimePlaywrightEvaluateRef',
+      'browserRuntimeStateSnapshotRef',
+      'sourceObservationRef',
+    ]),
+  ];
+}
+
+function groundingHintRefs(value: Record<string, unknown> | undefined) {
+  return refsAtKeys(value, ['groundingRef', 'groundingHintRefs']);
 }
 
 function preservePackageBlockedRisk(
@@ -539,10 +925,194 @@ function stringList(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
+function recordListAt(value: Record<string, unknown> | undefined, key: string) {
+  if (!value || !Array.isArray(value[key])) return [];
+  return value[key].filter(isRecord);
+}
+
 function scrollDirection(value: string | undefined): 'up' | 'down' | 'left' | 'right' {
   return value === 'up' || value === 'left' || value === 'right' ? value : 'down';
 }
 
+function sanitizeTracePayload(value: unknown, seen = new WeakMap<object, unknown>()): unknown {
+  if (typeof value === 'string') return sanitizeTraceString(value);
+  if (value === null || typeof value !== 'object') return value;
+  const prior = seen.get(value);
+  if (prior) return prior;
+  if (Array.isArray(value)) {
+    const sanitizedArray: unknown[] = [];
+    seen.set(value, sanitizedArray);
+    sanitizedArray.push(
+      ...value
+        .map((item) => sanitizeTracePayload(item, seen))
+        .filter((item) => item !== undefined),
+    );
+    return sanitizedArray;
+  }
+  if (!isRecord(value)) return value;
+  const sanitized: Record<string, unknown> = {};
+  seen.set(value, sanitized);
+  for (const [key, item] of Object.entries(value)) {
+    if (isSensitiveTracePayloadKey(key)) continue;
+    const sanitizedItem = sanitizeTracePayload(item, seen);
+    if (sanitizedItem !== undefined) sanitized[key] = sanitizedItem;
+  }
+  return sanitized;
+}
+
+function sanitizeTraceString(value: string) {
+  if (isSensitiveTracePayloadToken(value)) return '[redacted-trace-payload-token]';
+  if (hasInlinePayload(value)) return '[redacted-inline-trace-payload]';
+  if (value.length > 4096 && !isSafeTraceRef(value)) return '[redacted-large-trace-string]';
+  return value;
+}
+
+function isSensitiveTracePayloadKey(key: string) {
+  const normalized = normalizeTracePayloadToken(key);
+  return normalized === 'rawproviderpayload'
+    || normalized === 'providerrequestbody'
+    || normalized === 'providerresponsebody'
+    || normalized === 'rawpayload'
+    || normalized === 'rawscreenshot'
+    || normalized === 'inlinescreenshot'
+    || normalized === 'inlineimagebytes'
+    || normalized === 'imagebytes'
+    || normalized === 'imagebase64'
+    || normalized === 'screenshotbase64'
+    || normalized === 'base64';
+}
+
+function isSensitiveTracePayloadToken(value: string) {
+  const text = value.trim();
+  if (!text || text.length > 80) return false;
+  return isSensitiveTracePayloadKey(text);
+}
+
+function normalizeTracePayloadToken(value: string) {
+  return value.replace(/[^a-z0-9]/gi, '').toLowerCase();
+}
+
 function parseRiskLevel(value: string | undefined): 'low' | 'medium' | 'high' | undefined {
   return value === 'low' || value === 'medium' || value === 'high' ? value : undefined;
+}
+
+function parseCostTier(value: string | undefined): ComputerUseTraceCostTier | undefined {
+  return COMPUTER_USE_COST_TIERS.includes(value as ComputerUseTraceCostTier)
+    ? value as ComputerUseTraceCostTier
+    : undefined;
+}
+
+function costTierRank(tier: ComputerUseTraceCostTier) {
+  return COMPUTER_USE_COST_TIERS.indexOf(tier);
+}
+
+function numberAtKeys(value: Record<string, unknown> | undefined, keys: string[]) {
+  if (!value) return undefined;
+  for (const key of keys) {
+    const number = numberAt(value[key]);
+    if (number !== undefined) return number;
+  }
+  return undefined;
+}
+
+function safeTextAtKeys(value: Record<string, unknown> | undefined, keys: string[]) {
+  if (!value) return undefined;
+  for (const key of keys) {
+    const item = safeTraceText(value[key]);
+    if (item) return item;
+  }
+  return undefined;
+}
+
+function safeStringsAtKeys(value: Record<string, unknown> | undefined, keys: string[]) {
+  if (!value) return [];
+  return uniqueTraceStrings(keys.flatMap((key) => safeStringList(value[key])));
+}
+
+function refsAtKeys(value: Record<string, unknown> | undefined, keys: string[]) {
+  if (!value) return [];
+  return uniqueTraceStrings(keys.flatMap((key) => safeRefStrings(value[key])));
+}
+
+function firstSafeRefFromRecords(records: Array<Record<string, unknown> | undefined>, keys: string[]) {
+  for (const record of records) {
+    if (!record) continue;
+    const direct = refsAtKeys(record, keys)[0];
+    if (direct) return direct;
+    const targetRefs = refsAtKeys(recordAt(record, 'targetRefs'), keys)[0];
+    if (targetRefs) return targetRefs;
+    const target = refsAtKeys(recordAt(record, 'target'), keys)[0];
+    if (target) return target;
+    const session = refsAtKeys(recordAt(record, 'session'), keys)[0];
+    if (session) return session;
+  }
+  return undefined;
+}
+
+function firstRecordFromRecords(records: Array<Record<string, unknown> | undefined>, keys: string[]) {
+  for (const record of records) {
+    if (!record) continue;
+    for (const key of keys) {
+      const found = recordAt(record, key);
+      if (found) return found;
+    }
+  }
+  return undefined;
+}
+
+function safeRefStrings(value: unknown): string[] {
+  if (typeof value === 'string') return isSafeTraceRef(value) ? [value.trim()] : [];
+  if (Array.isArray(value)) return value.flatMap(safeRefStrings);
+  if (isRecord(value)) {
+    return uniqueTraceStrings([
+      ...safeRefStrings(value.ref),
+      ...safeRefStrings(value.path),
+      ...safeRefStrings(value.uri),
+    ]);
+  }
+  return [];
+}
+
+function safeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return uniqueTraceStrings(value.flatMap((item) => {
+    const text = safeTraceText(item);
+    return text ? [text] : [];
+  }));
+}
+
+function safeTraceText(value: unknown) {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  return text && !hasInlinePayload(text) ? text : undefined;
+}
+
+function isSafeTraceRef(value: string) {
+  const text = value.trim();
+  if (!text || hasInlinePayload(text)) return false;
+  if (text.startsWith('.sciforge/')) return !text.includes('://');
+  if (text.startsWith('/') || /^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return false;
+  const separatorIndex = text.indexOf(':');
+  if (separatorIndex <= 0) return false;
+  const prefix = text.slice(0, separatorIndex);
+  const body = text.slice(separatorIndex + 1);
+  if (!SAFE_TRACE_REF_PREFIXES.has(prefix)) return false;
+  if (!body || body.startsWith('/') || body.startsWith('//') || body.includes('://')) return false;
+  return true;
+}
+
+function hasInlinePayload(value: string) {
+  return /data:image|;base64,/i.test(value);
+}
+
+function uniqueTraceStrings(values: readonly (string | undefined)[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const value of values) {
+    const text = safeTraceText(value);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    unique.push(text);
+  }
+  return unique;
 }

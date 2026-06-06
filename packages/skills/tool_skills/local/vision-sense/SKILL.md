@@ -47,4 +47,4 @@ Computer Use 模块化边界：
 
 ## 维护说明
 
-本包刻意采用 dependency injection，便于 fake-test。它提供 contract、manifest、prompt helpers、Model Router grounding translator helper、历史 KV-Ground-compatible adapter、trace helpers 和 verifier-facing text outputs；真实桌面控制始终留在 package boundary 之外。
+本包刻意采用 dependency injection，便于 fake-test。它提供 contract、manifest、prompt helpers、Model Router grounding translator helper、trace helpers 和 verifier-facing text outputs；真实桌面控制始终留在 package boundary 之外。

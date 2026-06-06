@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { ModuleFunctionName, ModulePipelineTraceStep } from '@sciforge-ui/runtime-contract/modules';
-import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { isCodexSamplingRetryMessage, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 
 export const BACKEND_NORMALIZED_EVENT_SCHEMA_VERSION = 'sciforge.backend-normalized-event.v1' as const;
 
@@ -312,9 +312,17 @@ function normalizeCodexAppServerEvent(
   }
 
   if (/error|failed|failure/.test(lowerType)) {
+    const message = text ?? stringField(raw.message) ?? type;
+    if (isCodexSamplingRetryMessage(message)) {
+      return singleEvent(backendEvent(backend, 'audit', raw, options, {
+        ...commonFields(raw, payload, item),
+        message,
+        status: 'provider-retry',
+      }));
+    }
     return singleEvent(backendEvent(backend, 'failed', raw, options, {
       ...commonFields(raw, payload, item),
-      message: text ?? stringField(raw.message) ?? type,
+      message,
       status: 'failed',
     }));
   }

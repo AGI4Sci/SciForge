@@ -38,11 +38,10 @@ export const RIGHT_PANE_SCOPED_SMOKE_SELECTORS = {
   browserSystemWindowSurface: '[data-browser-host-surface="system-browser-window"]',
   browserProxyIframe: '[data-component-id="browser-workbench"] iframe[src^="/api/sciforge/browser/proxy"]',
   browserDirectExternalAnchor: '[data-component-id="browser-workbench"] a[href^="http://"], [data-component-id="browser-workbench"] a[href^="https://"]',
-  browserLegacyLiveSurface: [
+  browserUnsupportedLiveSurface: [
     '[data-component-id="browser-workbench"] [data-browser-frame-stream-ref]',
     '[data-component-id="browser-workbench"] [data-browser-frame-source]',
     '[data-component-id="browser-workbench"] [data-browser-frame-renderer]',
-    '[data-component-id="browser-workbench"] [data-browser-http-frame-live-fallback]',
     '[data-component-id="browser-workbench"] [data-browser-webrtc-handoff]',
     '[data-component-id="browser-workbench"] [data-browser-frame-transport="host-stream"]',
     '[data-component-id="browser-workbench"] [data-browser-frame-transport="websocket-binary"]',
@@ -118,7 +117,7 @@ export interface RightPaneScopedSmokeEvidenceInput {
   browserSystemWindowSurfaceCount?: unknown;
   browserProxyIframeCount?: unknown;
   browserDirectExternalAnchorCount?: unknown;
-  browserLegacyLiveSurfaceCount?: unknown;
+  browserUnsupportedLiveSurfaceCount?: unknown;
   browserCanvasSurfaceCount?: unknown;
   browserHttpFrameImageCount?: unknown;
   imageEvidenceViewerCount?: unknown;
@@ -161,7 +160,7 @@ export interface RightPaneScopedSmokeEvidence {
   browserSystemWindowSurfaceCount: number;
   browserProxyIframeCount: number;
   browserDirectExternalAnchorCount: number;
-  browserLegacyLiveSurfaceCount: number;
+  browserUnsupportedLiveSurfaceCount: number;
   browserCanvasSurfaceCount: number;
   browserHttpFrameImageCount: number;
   imageEvidenceViewerCount: number;
@@ -292,7 +291,7 @@ export function createRightPaneScopedSmokeEvidence(input: RightPaneScopedSmokeEv
     browserSystemWindowSurfaceCount: boundedSmokeCount(input.browserSystemWindowSurfaceCount),
     browserProxyIframeCount: boundedSmokeCount(input.browserProxyIframeCount),
     browserDirectExternalAnchorCount: boundedSmokeCount(input.browserDirectExternalAnchorCount),
-    browserLegacyLiveSurfaceCount: boundedSmokeCount(input.browserLegacyLiveSurfaceCount),
+    browserUnsupportedLiveSurfaceCount: boundedSmokeCount(input.browserUnsupportedLiveSurfaceCount),
     browserCanvasSurfaceCount: boundedSmokeCount(input.browserCanvasSurfaceCount),
     browserHttpFrameImageCount: boundedSmokeCount(input.browserHttpFrameImageCount),
     imageEvidenceViewerCount: boundedSmokeCount(input.imageEvidenceViewerCount),
@@ -361,7 +360,7 @@ export function collectRightPaneScopedSmokeSignals(
     browserSystemWindowSurfaceCount: count(documentLike, selectors.browserSystemWindowSurface),
     browserProxyIframeCount: count(documentLike, selectors.browserProxyIframe),
     browserDirectExternalAnchorCount: count(documentLike, selectors.browserDirectExternalAnchor),
-    browserLegacyLiveSurfaceCount: count(documentLike, selectors.browserLegacyLiveSurface),
+    browserUnsupportedLiveSurfaceCount: count(documentLike, selectors.browserUnsupportedLiveSurface),
     browserCanvasSurfaceCount: count(documentLike, selectors.browserCanvasSurface),
     browserHttpFrameImageCount: count(documentLike, selectors.browserHttpFrameImage),
     imageEvidenceViewerCount: count(documentLike, selectors.imageEvidenceViewer),

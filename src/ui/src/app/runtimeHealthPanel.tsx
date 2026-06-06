@@ -16,34 +16,41 @@ import { Badge, cx } from './uiPrimitives';
 
 export type { RuntimeHealthItem };
 
+export interface RuntimeHealthProbeOptions {
+  fetchImpl?: typeof fetch;
+  retryAttempts?: number;
+  retryDelayMs?: number;
+  allowStaticDefaultProbe?: boolean;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+const DESKTOP_RUNTIME_HEALTH_REFRESH_LIMIT_MS = 90_000;
+
 export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) {
   const [items, setItems] = useState<RuntimeHealthItem[]>(() => buildInitialHealth(config, libraryCount));
 
   useEffect(() => {
     let cancelled = false;
     setItems(buildInitialHealth(config, libraryCount));
+    const startedAt = Date.now();
+    const desktopBridge = desktopRuntimeBridgeAvailable();
+    const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
     async function check() {
-      const shouldCheckDefaultWriter = config.workspaceWriterBaseUrl.replace(/\/+$/, '') !== defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '');
-      const [workspaceProbe, defaultWorkspaceProbe] = await Promise.all([
-        probeWorkspaceWriterHealthDetailsUrl(`${config.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`),
-        shouldCheckDefaultWriter ? probeWorkspaceWriterHealthDetailsUrl(`${defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '')}/health`) : Promise.resolve({ online: false, capabilities: [] }),
-      ]);
-      const providerPreflightNotice = workspaceProbe.online && workspaceProbe.capabilities.includes('runtime-provider-preflight-manifest')
-        ? await loadProviderPreflightNotice(config)
-        : undefined;
-      if (cancelled) return;
-      setItems([
-        { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
-        workspaceWriterHealth(config, workspaceProbe, defaultWorkspaceProbe),
-        codexRuntimeHealth(config, workspaceProbe.online),
-        modelHealth(config, providerPreflightNotice),
-        {
-          id: 'library',
-          label: 'Scenario Library',
-          status: libraryCount && libraryCount > 0 ? 'online' : 'optional',
-          detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
-        },
-      ]);
+      let refreshAttempt = 0;
+      while (!cancelled) {
+        const nextItems = await buildRuntimeHealthItems(config, libraryCount, {
+          retryAttempts: desktopBridge ? 12 : undefined,
+          retryDelayMs: desktopBridge ? 500 : undefined,
+        });
+        if (cancelled) return;
+        setItems(nextItems);
+        if (!shouldContinueRuntimeHealthRefresh(nextItems, {
+          desktopBridgeAvailable: desktopBridge,
+          elapsedMs: Date.now() - startedAt,
+        })) return;
+        refreshAttempt += 1;
+        await sleep(runtimeHealthRefreshDelayMs(refreshAttempt));
+      }
     }
     void check();
     return () => {
@@ -60,6 +67,71 @@ export function useRuntimeHealth(config: SciForgeConfig, libraryCount?: number) 
   ]);
 
   return items;
+}
+
+export function shouldContinueRuntimeHealthRefresh(
+  items: RuntimeHealthItem[],
+  context: { desktopBridgeAvailable: boolean; elapsedMs: number },
+) {
+  if (!context.desktopBridgeAvailable) return false;
+  if (context.elapsedMs >= DESKTOP_RUNTIME_HEALTH_REFRESH_LIMIT_MS) return false;
+  const required = items.filter((item) => item.id === 'workspace' || item.id === 'codex-runtime');
+  return required.some((item) => item.status === 'checking' || item.status === 'offline');
+}
+
+function runtimeHealthRefreshDelayMs(attempt: number) {
+  return Math.min(5_000, 500 * Math.max(1, attempt));
+}
+
+export async function buildRuntimeHealthItems(
+  config: SciForgeConfig,
+  libraryCount?: number,
+  options: RuntimeHealthProbeOptions = {},
+): Promise<RuntimeHealthItem[]> {
+  const configuredWriter = config.workspaceWriterBaseUrl.replace(/\/+$/, '');
+  const staticDefaultWriter = defaultSciForgeConfig.workspaceWriterBaseUrl.replace(/\/+$/, '');
+  const shouldCheckDefaultWriter = (options.allowStaticDefaultProbe ?? !desktopRuntimeBridgeAvailable())
+    && configuredWriter !== staticDefaultWriter;
+  const desktopBridge = desktopRuntimeBridgeAvailable();
+  const workspaceProbe = await probeWorkspaceWriterHealthWithRetry(`${configuredWriter}/health`, {
+    ...options,
+    retryAttempts: options.retryAttempts ?? (desktopBridge ? 12 : undefined),
+    retryDelayMs: options.retryDelayMs ?? (desktopBridge ? 500 : undefined),
+  });
+  const defaultWorkspaceProbe = shouldCheckDefaultWriter && !workspaceProbe.online
+    ? await probeWorkspaceWriterHealthDetailsUrl(`${staticDefaultWriter}/health`, { fetchImpl: options.fetchImpl })
+    : { online: false, capabilities: [] };
+  const providerPreflightNotice = workspaceProbe.online && workspaceProbe.capabilities.includes('runtime-provider-preflight-manifest')
+    ? await loadProviderPreflightNotice(config)
+    : undefined;
+  return [
+    { id: 'ui', label: 'Web UI', status: 'online', detail: '当前页面已加载' },
+    workspaceWriterHealth(config, workspaceProbe, defaultWorkspaceProbe),
+    codexRuntimeHealth(config, workspaceProbe.online),
+    modelHealth(config, providerPreflightNotice),
+    {
+      id: 'library',
+      label: 'Scenario Library',
+      status: libraryCount && libraryCount > 0 ? 'online' : 'optional',
+      detail: libraryCount && libraryCount > 0 ? `${libraryCount} packages in workspace` : '可先导入官方 package 或编译新场景',
+    },
+  ];
+}
+
+async function probeWorkspaceWriterHealthWithRetry(url: string, options: RuntimeHealthProbeOptions) {
+  const attempts = Math.max(1, Math.min(8, Math.floor(options.retryAttempts ?? 4)));
+  const delayMs = Math.max(0, Math.min(2_000, Math.floor(options.retryDelayMs ?? 250)));
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms)));
+  let latest = await probeWorkspaceWriterHealthDetailsUrl(url, { fetchImpl: options.fetchImpl });
+  for (let attempt = 1; attempt < attempts && !latest.online; attempt += 1) {
+    if (delayMs > 0) await sleep(delayMs);
+    latest = await probeWorkspaceWriterHealthDetailsUrl(url, { fetchImpl: options.fetchImpl });
+  }
+  return latest;
+}
+
+function desktopRuntimeBridgeAvailable() {
+  return typeof window !== 'undefined' && typeof window.sciforgeDesktop?.getRuntimeConfig === 'function';
 }
 
 async function loadProviderPreflightNotice(config: SciForgeConfig) {

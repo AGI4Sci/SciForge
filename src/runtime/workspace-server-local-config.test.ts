@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 
 import {
@@ -188,18 +188,22 @@ test('normalizeToolProviderRoutes trims route fields, filters enums, de-duplicat
 });
 
 test('workspace Computer Use env from local config includes safe VirtualAppScreen native driver env', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-computer-use-env-'));
   const service = createWorkspaceLocalConfigService({
-    configLocalPath: '/tmp/sciforge-config.local.json',
+    configLocalPath: join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json'),
     runtimeCodexPort: 18080,
     workspaceWriterPort: 5174,
-    defaultWorkspacePath: '/tmp/sciforge-workspace',
+    defaultWorkspacePath: join(root, 'workspace'),
+    cwd: root,
     env: {
-      HOME: '/tmp/sciforge-home',
+      HOME: join(root, 'home'),
     } as NodeJS.ProcessEnv,
   });
 
   const env = await service.runtimeCodexEnvFromLocalConfig({
     apiKey: 'root-key',
+    baseUrl: 'https://provider.example/v1',
+    model: 'root-model',
     computerUse: {
       virtualAppScreen: {
         env: {
@@ -212,10 +216,148 @@ test('workspace Computer Use env from local config includes safe VirtualAppScree
   });
 
   assert.equal(env.SCIFORGE_RUNTIME_API_KEY, 'root-key');
-  assert.equal(env.SCIFORGE_CONFIG_PATH, '/tmp/sciforge-config.local.json');
+  assert.equal(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://provider.example/v1');
+  assert.equal(env.SCIFORGE_PROXY_DEFAULT_MODEL, 'root-model');
+  assert.equal(env.SCIFORGE_CONFIG_PATH, join(root, 'config.local.json'));
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS, '1');
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND, 'powerpoint');
   assert.equal(env.SCIFORGE_VIRTUAL_APP_SCREEN_MACOS_PERMISSION_GRANTS, undefined);
+});
+
+test('workspace runtime env uses config.local root fields over stale service env', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-root-config-local-'));
+  const configLocalPath = join(root, 'config.local.json');
+  const parallelConfigLocalPath = join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json');
+  await writeFile(configLocalPath, JSON.stringify({
+    provider: 'openai-compatible',
+    apiKey: 'root-local-secret',
+    baseUrl: 'https://root-provider.example/v1/',
+    model: 'root-local-model',
+  }), 'utf8');
+  await mkdir(dirname(parallelConfigLocalPath), { recursive: true });
+  await writeFile(parallelConfigLocalPath, JSON.stringify({
+    apiKey: 'parallel-secret-must-not-win',
+    baseUrl: 'https://parallel-provider.example/v1',
+    model: 'parallel-model',
+  }), 'utf8');
+  const service = createWorkspaceLocalConfigService({
+    configLocalPath: parallelConfigLocalPath,
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: join(root, 'workspace'),
+    cwd: root,
+    env: {
+      HOME: join(root, 'home'),
+      SCIFORGE_TEXT_BASE_URL: 'https://stale-service.example/v1',
+      SCIFORGE_TEXT_MODEL: 'stale-service-model',
+      SCIFORGE_TEXT_API_KEY: 'stale-service-secret',
+      SCIFORGE_PROXY_DEFAULT_MODEL: 'stale-proxy-model',
+    } as NodeJS.ProcessEnv,
+  });
+
+  const env = await service.runtimeCodexEnvFromLocalConfig();
+
+  assert.equal(env.SCIFORGE_CONFIG_PATH, configLocalPath);
+  assert.equal(env.SCIFORGE_RUNTIME_API_KEY, 'root-local-secret');
+  assert.equal(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://root-provider.example/v1');
+  assert.equal(env.SCIFORGE_PROXY_DEFAULT_MODEL, 'root-local-model');
+  assert.equal(env.SCIFORGE_TEXT_BASE_URL, 'https://root-provider.example/v1');
+  assert.equal(env.SCIFORGE_TEXT_MODEL, 'root-local-model');
+  assert.equal(env.SCIFORGE_TEXT_API_KEY, 'root-local-secret');
+  assert.equal(env.SCIFORGE_VISION_BASE_URL, 'https://root-provider.example/v1');
+  assert.equal(env.SCIFORGE_VISION_MODEL, 'root-local-model');
+  assert.equal(env.SCIFORGE_VISION_API_KEY, 'root-local-secret');
+  assert.equal(env.SCIFORGE_RUNTIME_PROVIDER, 'sciforge-model-router');
+  assert.equal(env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
+});
+
+test('workspace runtime env fails closed when config.local is missing', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-missing-config-local-'));
+  const configLocalPath = join(root, 'workspace', 'parallel', 'p1', '.sciforge', 'config.local.json');
+  await mkdir(dirname(configLocalPath), { recursive: true });
+  await writeFile(configLocalPath, JSON.stringify({
+    apiKey: 'parallel-secret-must-not-win',
+    baseUrl: 'https://parallel-provider.example/v1',
+    model: 'parallel-model',
+  }), 'utf8');
+  const service = createWorkspaceLocalConfigService({
+    configLocalPath,
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: join(root, 'workspace'),
+    cwd: root,
+    env: {
+      HOME: join(root, 'home'),
+      SCIFORGE_RUNTIME_API_KEY: 'stale-service-secret',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://stale-service.example/v1',
+      SCIFORGE_PROXY_DEFAULT_MODEL: 'stale-service-model',
+    } as NodeJS.ProcessEnv,
+  });
+
+  await assert.rejects(
+    () => service.runtimeCodexEnvFromLocalConfig(),
+    /config\.local\.json/,
+  );
+});
+
+test('desktop sidecar runtime env can use provider settings injected by the launcher when appData config is non-secret', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-desktop-sidecar-config-local-'));
+  const appData = join(root, 'appData');
+  const configLocalPath = join(appData, 'config', 'config.local.json');
+  await mkdir(dirname(configLocalPath), { recursive: true });
+  await writeFile(configLocalPath, JSON.stringify({
+    llm: {
+      provider: 'native',
+      baseUrl: '',
+      apiKey: '',
+      model: 'sciforge-router',
+    },
+    codexProxy: {
+      upstreamBaseUrl: '',
+      apiKey: '',
+      defaultModel: '',
+    },
+    sciforge: {
+      workspacePath: join(root, 'workspace'),
+    },
+  }), 'utf8');
+  const service = createWorkspaceLocalConfigService({
+    configLocalPath,
+    runtimeCodexPort: 18080,
+    workspaceWriterPort: 5174,
+    defaultWorkspacePath: join(root, 'workspace'),
+    env: {
+      HOME: join(root, 'home'),
+      SCIFORGE_CONFIG_PATH: configLocalPath,
+      SCIFORGE_DESKTOP_SIDECAR: '1',
+      SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL: 'http://127.0.0.1:60284',
+      SCIFORGE_RUNTIME_API_KEY: 'desktop-launcher-secret',
+      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://desktop-provider.example/v1',
+      SCIFORGE_PROXY_DEFAULT_MODEL: 'desktop-upstream-model',
+      SCIFORGE_TEXT_BASE_URL: 'https://desktop-provider.example/v1',
+      SCIFORGE_TEXT_MODEL: 'desktop-upstream-model',
+      SCIFORGE_TEXT_API_KEY: 'desktop-launcher-secret',
+      SCIFORGE_VISION_BASE_URL: 'https://desktop-provider.example/v1',
+      SCIFORGE_VISION_MODEL: 'desktop-upstream-model',
+      SCIFORGE_VISION_API_KEY: 'desktop-launcher-secret',
+    } as NodeJS.ProcessEnv,
+  });
+
+  const env = await service.runtimeCodexEnvFromLocalConfig();
+
+  assert.equal(env.SCIFORGE_CONFIG_PATH, configLocalPath);
+  assert.equal(env.SCIFORGE_RUNTIME_API_KEY, 'desktop-launcher-secret');
+  assert.equal(env.SCIFORGE_PROXY_UPSTREAM_BASE_URL, 'https://desktop-provider.example/v1');
+  assert.equal(env.SCIFORGE_PROXY_DEFAULT_MODEL, 'desktop-upstream-model');
+  assert.equal(env.SCIFORGE_TEXT_BASE_URL, 'https://desktop-provider.example/v1');
+  assert.equal(env.SCIFORGE_TEXT_MODEL, 'desktop-upstream-model');
+  assert.equal(env.SCIFORGE_TEXT_API_KEY, 'desktop-launcher-secret');
+  assert.equal(env.SCIFORGE_VISION_BASE_URL, 'https://desktop-provider.example/v1');
+  assert.equal(env.SCIFORGE_VISION_MODEL, 'desktop-upstream-model');
+  assert.equal(env.SCIFORGE_VISION_API_KEY, 'desktop-launcher-secret');
+  assert.equal(env.SCIFORGE_RUNTIME_PROVIDER, 'sciforge-model-router');
+  assert.equal(env.SCIFORGE_RUNTIME_MODEL, 'sciforge-router');
+  assert.equal(env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL, 'http://127.0.0.1:60284');
 });
 
 test('workspace runtime config uses public Model Router alias while preserving raw role env', async () => {

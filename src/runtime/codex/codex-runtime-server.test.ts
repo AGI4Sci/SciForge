@@ -72,6 +72,324 @@ test('runtime bridge request detection does not treat legacy exec JSON as a prod
   assert.equal(codexRuntimeBridgeRequested({ useCodexRuntimeBridge: true }), true);
 });
 
+test('HTTP/SSE endpoint forwards sanitized Computer Use completion evidence policy as host intent metadata', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '/computer-use write a visible report',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-policy',
+        attemptId: 'codex-command-policy-attempt-1',
+        runtimeIntent: {
+          schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+          kind: 'computer-use-native-route',
+          source: 'host-owned',
+          completionEvidencePolicy: {
+            schemaVersion: 'sciforge.completion-evidence-policy.v1',
+            secret: 'SECRET_POLICY_SHOULD_NOT_LEAK',
+            producers: [{
+              id: 'computer-use.embedded-isolated-desktop-l3',
+              enabled: true,
+              trigger: 'on-completed-current-run',
+              token: 'SECRET_PRODUCER_SHOULD_NOT_LEAK',
+            }, {
+              id: 'computer-use.unknown-producer',
+              enabled: true,
+              trigger: 'on-completed-current-run',
+            }],
+          },
+          computerUseNext: {
+            taskId: 'CU-NEXT-01',
+            scenarioId: 'CU-LONG-001',
+            title: 'Briefing deck',
+            requirements: ['refs-first-evidence-bundle', ''],
+            safetyBoundary: {
+              noDomAccessibility: true,
+              secretFlag: 'SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK',
+            },
+            secret: 'SECRET_NEXT_SHOULD_NOT_LEAK',
+          },
+          computerUseLong: {
+            taskId: 'CU-NEXT-01',
+            cuNextTaskId: 'CU-NEXT-01',
+            scenarioId: 'CU-LONG-001',
+            title: 'Briefing deck',
+            requiredEvidence: ['cu-user-acceptance-manifest.json'],
+            safetyBoundary: {
+              noDomAccessibility: true,
+              secretFlag: 'SECRET_LONG_SHOULD_NOT_LEAK',
+            },
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: done/);
+    assert.deepEqual(adapter.lastInput?.runtimeIntent?.completionEvidencePolicy, {
+      schemaVersion: 'sciforge.completion-evidence-policy.v1',
+      producers: [{
+        id: 'computer-use.embedded-isolated-desktop-l3',
+        enabled: true,
+        trigger: 'on-completed-current-run',
+      }],
+    });
+    assert.deepEqual(adapter.lastInput?.runtimeIntent?.computerUseNext, {
+      taskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      requirements: ['refs-first-evidence-bundle'],
+      safetyBoundary: {
+        noDomAccessibility: true,
+      },
+    });
+    assert.deepEqual(adapter.lastInput?.runtimeIntent?.computerUseLong, {
+      taskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      safetyBoundary: {
+        noDomAccessibility: true,
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput), /SECRET_POLICY_SHOULD_NOT_LEAK|SECRET_PRODUCER_SHOULD_NOT_LEAK|unknown-producer|SECRET_NEXT_SHOULD_NOT_LEAK|SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK|SECRET_LONG_SHOULD_NOT_LEAK|cuNextTaskId|requiredEvidence/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint scrubs approval provenance sidecars before adapter', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '/computer-use approve guarded action',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-approval-provenance-sanitize',
+        attemptId: 'codex-command-approval-provenance-sanitize-attempt-1',
+        humanApproval: {
+          approvalRef: 'approval:safe-ref',
+          decision: 'approved',
+          source: 'runtime-gui',
+          approvalProvenance: {
+            source: 'runtime-gui',
+            actor: 'current-user',
+            refs: ['approval:safe-ref', 'permission:turn/gui-action'],
+            approvalRequestSidecar: {
+              rawUrl: 'https://example.invalid/SECRET_APPROVAL_URL',
+              apiKey: 'SECRET_APPROVAL_API_KEY',
+              providerPayload: { request: 'SECRET_PROVIDER_PAYLOAD' },
+            },
+            guiAskUserSidecar: {
+              screenshotBase64: 'data:image/png;base64,SECRET_APPROVAL_IMAGE',
+            },
+            riskAuditSidecar: {
+              highRiskAction: {
+                secret: 'SECRET_HIGH_RISK_ACTION',
+              },
+            },
+            nested: {
+              note: 'safe approval note',
+              rawScenario: {
+                url: 'https://example.invalid/SECRET_SCENARIO_URL',
+              },
+              publicFlag: true,
+            },
+          },
+        },
+        uiState: {
+          schemaVersion: 'sciforge.runtime-codex.approval-ui.v1',
+          approvalRef: 'approval:safe-ref',
+          computerUseApprovalRef: 'approval:safe-ref',
+          terminalEquivalentText: true,
+          approvalProvenance: {
+            source: 'runtime-gui',
+            refs: ['approval:safe-ref'],
+            approvalRequest: {
+              url: 'https://example.invalid/SECRET_UI_APPROVAL_URL',
+              providerPayload: 'SECRET_UI_PROVIDER_PAYLOAD',
+            },
+            safePrimitive: 'approved by user',
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: done/);
+    assert.deepEqual(adapter.lastInput?.humanApproval, {
+      approvalRef: 'approval:safe-ref',
+      decision: 'approved',
+      source: 'runtime-gui',
+      approvalProvenance: {
+        source: 'runtime-gui',
+        actor: 'current-user',
+        refs: ['approval:safe-ref', 'permission:turn/gui-action'],
+        nested: {
+          note: 'safe approval note',
+          publicFlag: true,
+        },
+      },
+    });
+    assert.deepEqual(adapter.lastInput?.uiState, {
+      schemaVersion: 'sciforge.runtime-codex.approval-ui.v1',
+      approvalRef: 'approval:safe-ref',
+      computerUseApprovalRef: 'approval:safe-ref',
+      terminalEquivalentText: true,
+      approvalProvenance: {
+        source: 'runtime-gui',
+        refs: ['approval:safe-ref'],
+        safePrimitive: 'approved by user',
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(adapter.lastInput), /SECRET|Sidecar|sidecar|approvalRequest|highRiskAction|rawScenario|rawUrl|providerPayload|screenshotBase64|data:image|base64|apiKey|example\.invalid/);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint derives host-owned Computer Use runtime intent from command text', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '/computer-use click the guarded Submit button',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-derived-intent',
+        attemptId: 'codex-command-derived-intent-attempt-1',
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: done/);
+    assert.deepEqual(adapter.lastInput?.runtimeIntent, {
+      schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+      kind: 'computer-use-native-route',
+      source: 'host-owned',
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint lets explicit Computer Use native route intent bypass Agent Host turn loop', async () => {
+  const adapter = new FakeAdapter();
+  const materializer = () => ({
+    status: 'blocked' as const,
+    message: 'Agent Host turn loop should not own explicit native route intent.',
+    evidenceRefs: ['computer-use:agent-host-loop'],
+  });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter, { computerUseActMaterializer: materializer });
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+  const commandText = [
+    '/computer-use Use SciForge Desktop for a repair workflow when a required source or app state is unavailable in the current product surface.',
+    'Return repair-needed with blocked-manifest.json, repair-hint.json, continuation-request.json, run-task-chain refs, and current-run trace refs.',
+  ].join(' ');
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText,
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-native-priority',
+        attemptId: 'codex-command-native-priority-attempt-1',
+        runtimeIntent: {
+          schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+          kind: 'computer-use-native-route',
+          source: 'host-owned',
+          computerUseNext: { taskId: 'CU-NEXT-05' },
+          computerUseLong: { taskId: 'CU-NEXT-05', scenarioId: 'CU-LONG-006' },
+        },
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: commandText,
+          authorizationProfileId: 'high-autonomy',
+          authorizationProfileSource: 'composer-autonomy-default',
+          policyOwner: 'codex-agent-host-runtime',
+          readiness: {
+            schemaVersion: 'sciforge.agent-host-runtime-readiness-projection.v1',
+            source: 'ui-runtime-health-projection',
+            items: [{
+              id: 'workspace',
+              status: 'online',
+              capabilities: [
+                'runtime-module-dispatcher',
+                'browser-host-session',
+                'browser-host-native-surface',
+                'computer-use-adapter',
+              ],
+            }],
+            refs: ['runtime-health:workspace'],
+          },
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.match(text, /event: turn/);
+    assert.doesNotMatch(text, /event: agent_host_turn_loop/);
+    assert.deepEqual(adapter.lastInput?.runtimeIntent, {
+      schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+      kind: 'computer-use-native-route',
+      source: 'host-owned',
+      computerUseNext: { taskId: 'CU-NEXT-05' },
+      computerUseLong: { taskId: 'CU-NEXT-05', scenarioId: 'CU-LONG-006' },
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
 test('HTTP/SSE endpoint forwards safe composer Multitask intent as adapter metadata', async () => {
   const adapter = new FakeAdapter();
   const server = createServer((req, res) => {
@@ -945,8 +1263,213 @@ test('HTTP/SSE endpoint routes current external fact requests to BrowserHostSess
     assert.equal(adapter.lastInput, undefined);
     assert.match(text, /event: agent_host_turn_loop/);
     assert.match(text, /browser-host-search-runtime/);
-    assert.match(text, /BrowserHostSession browser_search failed|BrowserHostSession search returned/i);
+    assert.match(text, /BrowserHostSession browser_search failed|BrowserHostSession search returned|BrowserHostSession search could not read search results/i);
     assert.doesNotMatch(text, /raw DOM|base64|data:image/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint routes Chinese BrowserHost search requests to the search runtime', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '通过内置浏览器搜索伊朗局势',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser-cn',
+        attemptId: 'codex-command-agent-host-browser-cn-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '通过内置浏览器搜索伊朗局势',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /browser-host-search-runtime/);
+    assert.match(text, /伊朗局势/);
+    assert.doesNotMatch(text, /<Function:\s*browser_search>/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint asks for clarification before ambiguous BrowserHost search requests', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'ask --ref artifact:hf-papers-report "搜索今天 huggingface 上最火的工作"',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser-clarification',
+        attemptId: 'codex-command-agent-host-browser-clarification-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: '搜索今天 huggingface 上最火的工作',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /request-clarification-runtime/);
+    assert.match(text, /Daily Papers|models|datasets|Spaces|jobs|职位/);
+    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint falls back to quoted command intent when Agent Host input is malformed', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'ask --ref artifact:hf-papers-report "搜索今天 huggingface 上最火的工作"',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser-clarification-malformed',
+        attemptId: 'codex-command-agent-host-browser-clarification-malformed-attempt-1',
+        agentHostInput: {
+          source: 'malformed-without-schema',
+          intentText: '',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /request-clarification-runtime/);
+    assert.match(text, /Daily Papers|models|datasets|Spaces|jobs|职位/);
+    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint prefers quoted command intent when Agent Host intent drifts from the executable command', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'ask --ref "artifact:hf-papers-report" "搜索今天 huggingface 上最火的工作"',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser-clarification-drift',
+        attemptId: 'codex-command-agent-host-browser-clarification-drift-attempt-1',
+        agentHostInput: {
+          schemaVersion: 'sciforge.codex-agent-host-input.v1',
+          source: 'ui-normal-composer-transport',
+          intentText: 'Summarize current context.',
+          authorizationProfileId: 'high-autonomy',
+          policyOwner: 'codex-agent-host-runtime',
+        },
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /request-clarification-runtime/);
+    assert.match(text, /Daily Papers|models|datasets|Spaces|jobs|职位/);
+    assert.doesNotMatch(text, /browser-host-search-runtime|search-results|BrowserHostSession browser_search/i);
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('HTTP/SSE endpoint synthesizes Agent Host input for browser search requests that omit it', async () => {
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: '通过内置浏览器搜索伊朗局势',
+        workspacePath: '/tmp/workspace',
+        commandId: 'codex-command-agent-host-browser-cn-fallback',
+        attemptId: 'codex-command-agent-host-browser-cn-fallback-attempt-1',
+      }),
+    });
+    const text = await response.text();
+
+    assert.equal(adapter.lastInput, undefined);
+    assert.match(text, /event: agent_host_turn_loop/);
+    assert.match(text, /browser-host-search-runtime/);
+    assert.match(text, /伊朗局势/);
+    assert.doesNotMatch(text, /<[^>]*DSML[^>]*tool_calls/i);
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
@@ -989,7 +1512,8 @@ test('product Runtime Codex entries wire default composite Computer Use Act mate
 
   const compositeSource = await readFile(new URL('./agent-host-computer-use-act-materializer.ts', import.meta.url), 'utf8');
   assert.match(compositeSource, /createDefaultBrowserHostComputerUseActMaterializer/);
-  assert.match(compositeSource, /createDefaultVirtualAppScreenComputerUseActMaterializer/);
+  assert.match(compositeSource, /createDefaultWindowActionSessionComputerUseActMaterializer/);
+  assert.doesNotMatch(compositeSource, /createDefaultVirtualAppScreenComputerUseActMaterializer|VirtualAppScreen/i);
 });
 
 test('HTTP/SSE endpoint fails closed when the Codex app-server adapter is unavailable', async () => {

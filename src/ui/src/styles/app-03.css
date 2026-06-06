@@ -1381,8 +1381,8 @@ code,
   min-height: 132px;
   align-content: center;
   padding: 16px;
-  color: var(--bio-300);
-  border: 1px dashed rgba(123, 147, 176, 0.42);
+  color: var(--text-muted);
+  border: 1px dashed var(--border-strong);
   border-radius: 8px;
   background: var(--surface-subtle);
 }
@@ -1427,13 +1427,14 @@ code,
 }
 
 .empty-runtime-state strong {
-  color: var(--bio-100);
+  color: var(--text-primary);
   font-size: 14px;
 }
 
 .empty-runtime-state p {
   max-width: 58ch;
   margin: 0;
+  color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.55;
 }
@@ -1446,9 +1447,9 @@ code,
 
 .empty-recover-actions span {
   padding: 4px 7px;
-  color: var(--bio-200);
-  background: rgba(123, 147, 176, 0.09);
-  border: 1px solid rgba(123, 147, 176, 0.2);
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 11px;
 }

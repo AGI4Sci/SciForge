@@ -61,6 +61,41 @@ test('image pane model converts legacy computer-use virtual screen frames into r
   assert.doesNotMatch(serialized, /providerSessionRevalidated|providerExecuted|singleInteractiveTruth/);
 });
 
+test('image pane model projects Computer Use evidence refs for crop before after artifact timeline and provenance', () => {
+  const payload = normalizeImageEvidencePayload({
+    type: 'computer-use-window-action-evidence',
+    sourceKind: 'annotation-crop',
+    imageRef: 'computer-use:session/run-evidence/crops/target.png',
+    annotationRefs: ['computer-use:session/run-evidence/annotations/target.json'],
+    beforeFrameRef: 'computer-use:session/run-evidence/frames/before.png',
+    afterFrameRef: 'computer-use:session/run-evidence/frames/after.png',
+    artifactPreviewRef: 'artifact:run-evidence/output-preview.png',
+    actionTimelineRefs: [
+      'computer-use:session/run-evidence/timeline/observe.json',
+      'computer-use:session/run-evidence/timeline/click.json',
+    ],
+    provenanceRef: 'computer-use:session/run-evidence/provenance.json',
+    provenanceRefs: ['computer-use:session/run-evidence/provenance.json'],
+    rawScreenshot: 'data:image/png;base64,DO_NOT_PROJECT',
+    providerPayload: { screenshot: 'DO_NOT_PROJECT' },
+    executorParams: { x: 10, y: 20 },
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.sourceKind, 'annotation-crop');
+  assert.equal(payload.imageRef, 'computer-use:session/run-evidence/crops/target.png');
+  assert.deepEqual(payload.annotationRefs, ['computer-use:session/run-evidence/annotations/target.json']);
+  assert.equal(payload.beforeScreenshotRef, 'computer-use:session/run-evidence/frames/before.png');
+  assert.equal(payload.afterScreenshotRef, 'computer-use:session/run-evidence/frames/after.png');
+  assert.equal(payload.artifactPreviewRef, 'artifact:run-evidence/output-preview.png');
+  assert.deepEqual(payload.actionTimelineRefs, [
+    'computer-use:session/run-evidence/timeline/observe.json',
+    'computer-use:session/run-evidence/timeline/click.json',
+  ]);
+  assert.deepEqual(payload.provenanceRefs, ['computer-use:session/run-evidence/provenance.json']);
+  assert.doesNotMatch(JSON.stringify(payload), /rawScreenshot|data:image|base64|providerPayload|executorParams|DO_NOT_PROJECT/);
+});
+
 test('image pane model reads legacy frameRefs arrays as image evidence without live control refs', () => {
   const artifact: RuntimeArtifact = {
     id: 'legacy-frame-array',
@@ -118,6 +153,33 @@ test('image pane model ignores raw image bytes and data URLs without retaining p
   });
 
   assert.equal(payload, undefined);
+});
+
+test('image pane model drops unsafe evidence refs from Computer Use timelines', () => {
+  const payload = normalizeImageEvidencePayload({
+    type: 'computer-use-window-action-evidence',
+    imageRef: 'computer-use:session/run-safe/crops/target.png',
+    beforeFrameRef: 'data:image/png;base64,DO_NOT_KEEP',
+    afterFrameRef: 'blob:provider-private-after',
+    artifactPreviewRef: 'artifact:run-safe/output-preview.png',
+    actionTimelineRefs: [
+      'computer-use:session/run-safe/timeline/click.json',
+      'rawProviderPayload:DO_NOT_KEEP',
+      'computer-use:session/run-safe/timeline/base64-provider-log.json',
+    ],
+    provenanceRefs: [
+      'computer-use:session/run-safe/provenance.json',
+      'stderrRef:DO_NOT_KEEP',
+    ],
+  });
+
+  assert.ok(payload);
+  assert.equal(payload.beforeScreenshotRef, undefined);
+  assert.equal(payload.afterScreenshotRef, undefined);
+  assert.equal(payload.artifactPreviewRef, 'artifact:run-safe/output-preview.png');
+  assert.deepEqual(payload.actionTimelineRefs, ['computer-use:session/run-safe/timeline/click.json']);
+  assert.deepEqual(payload.provenanceRefs, ['computer-use:session/run-safe/provenance.json']);
+  assert.doesNotMatch(JSON.stringify(payload), /data:image|base64|blob:|rawProviderPayload|stderrRef|DO_NOT_KEEP/i);
 });
 
 test('right pane image evidence payload promotes focused feedback bundle screenshot provenance', () => {

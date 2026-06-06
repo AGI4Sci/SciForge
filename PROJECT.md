@@ -1,6 +1,6 @@
 # SciForge 项目协议
 
-最后更新：2026-06-05
+最后更新：2026-06-06
 
 ## 当前目标
 
@@ -40,6 +40,7 @@ SciForge 当前只围绕这次确认过的产品需求推进：
 - 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
 - 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
 - LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
+- 谨慎关闭正在运行的agent, 关闭正在运行的agent之前需要发个消息问一下
 
 ## 长文件拆分登记
 
@@ -60,6 +61,11 @@ SciForge 当前只围绕这次确认过的产品需求推进：
 | `src/ui/src/app/sciforgeApp/FeedbackInboxPage.tsx` | registered-watch | 拆分 list model、detail view、diagnostics panel、repair action controls。 |
 | `src/ui/src/api/sciforgeToolsClient/client.ts` | registered-watch | 拆分 runtime failure metadata、public metadata scrubber、request builders。 |
 | `src/ui/src/app/SciForgeApp.tsx` | registered-watch | 拆分 shell composition、runtime wiring、workspace/session providers、modal orchestration。 |
+| `packages/actions/computer-use/sciforge_computer_use/contracts.py` | registered-watch | 保持 legacy/diagnostic-only；拆分 schema dataclasses/constants、protocol types、public validators、security/ref sanitizers、VirtualAppScreen acceptance helpers。 |
+| `packages/actions/computer-use/sciforge_computer_use/trace.py` | near-budget-registered | 保持 legacy/diagnostic-only；拆分 trace schema、writer/reader、redaction、artifact/ref projection。 |
+| `tools/computer-use-chat-live-e2e.ts` | near-budget-registered | 拆分 CLI/product-strict gate、manifest validator、current-run bundle checks、artifact/report helpers。 |
+| `tools/computer-use-chat-live-complex-matrix.ts` | near-budget-registered | 拆分 case registry、per-case runner、product/diagnostic classifier、aggregate report writer。 |
+| `src/desktop/annotation-overlay.ts` | near-budget-registered | 拆分 overlay lifecycle、selection geometry、IPC payload sanitizer、render controls。 |
 
 ## T122 源码语义迁移登记
 
@@ -73,7 +79,7 @@ SciForge 当前只围绕这次确认过的产品需求推进：
 
 - `[x]` 只能表示当前活动产品聊天链路或明确的文档调查项已经验证。
 - `[ ]` 表示尚未实现、尚未接入活动聊天链路、只有局部测试通过，或还需要和用户确认取舍。
-- 本文档是唯一活动任务板，不再新增 `PROJECT_*.md`。
+- 本文档是总任务板；Computer Use 专项细分由 [`PROJECT_CU.md`](PROJECT_CU.md) 和 `PROJECT_CU_00..05` 并行工作包维护，根级旧泛化任务板不再恢复。
 
 ### 0. 已确认事实
 
@@ -126,7 +132,7 @@ SciForge 当前只围绕这次确认过的产品需求推进：
 - [x] 正常 Runtime Codex 请求不得只把 Autonomy 和 readiness 放进 audit-only 文本；必须先经过 Codex Agent Host Turn Loop 的 Ground/Guard。
 - [x] 如果保留 Runtime Codex 作为下游生成器，必须在它启动前注入 grounded capability facts，避免下游模型回答“我没有直接能力”。
 - [x] Runtime Codex product route 必须优先使用 runtime truth resolver；UI/Web dev readiness projection 不能覆盖 Workspace Writer、native adapter health 或 BrowserHostSession 真实状态。
-- [x] Desktop product path 必须使用 Electron dynamic workspace writer 跑 strict product smoke；Web dev source writer 只能作为 diagnostic，不得替代 Desktop native ready 状态。`smoke:desktop-computer-use-hard-confirm-product` 仍 fail-closed diagnostic；`smoke:desktop-computer-use-hard-confirm-product:strict` 会 opt-in 启动真实 Electron product shell、从 `sciforgeDesktop.getRuntimeConfig()` 校验 dynamic Workspace Writer `/health`，打开 Browser pane 建立真实 BrowserHostSession refs，再走 Runtime Codex hard-confirm probe。2026-06-05 fresh build 后 strict 已通过，manifest `canClaimPass=true`，证据覆盖 Electron product shell、dynamic Workspace Writer、native host、Runtime Codex SSE、Computer Use Guard/preflight surface 和 Confirm/Cancel hard-confirm surface。
+- [x] Desktop product path 必须使用 Electron dynamic workspace writer 跑 strict product smoke；Web dev source writer 只能作为 diagnostic，不得替代 Desktop native ready 状态。当前同步 gate/口径事实和 `PROJECT_CU_03_NATIVE_GUI.md` 的 current-run evidence：非 strict `smoke:desktop-computer-use-hard-confirm-product` 仍是 fail-closed diagnostic；`smoke:desktop-computer-use-hard-confirm-product:strict` 已在 Electron product shell 路径通过。
 - [x] Health / Guard evidence refs 必须 refs-first、bounded、脱敏，并能在聊天回答和 run audit 中追溯。
 
 ### 5. P1：旧链路去留
@@ -169,9 +175,11 @@ SciForge 当前只围绕这次确认过的产品需求推进：
 - [x] Capability answer tests 覆盖 ready、blocked、Web dev、native surface unavailable，并通过正常聊天 transport。
 - [x] Browser default tests 覆盖 fresh/external/current/URL/search-needed 和 no-network/local-only 场景，并证明从 composer 进入 Browser search。
 - [x] Computer Use Guard tests 覆盖 target、surface、observation、permission、cancel path 缺失的 fail-closed，并证明普通 GUI 意图会触发。
-- [x] Desktop smoke 使用 Electron native host 验证 BrowserHostSession、native surface、Computer Use preflight 和 hard-confirm surface；Vite 只作为 diagnostic。当前已通过 Browser native strict smoke、focused Computer Use Guard/hard-confirm transport smoke、`smoke:desktop-computer-use-hard-confirm-product` 的 blocked-by-default/trusted-executor-only/dynamic-workspace-writer gate contract，以及 `smoke:desktop-computer-use-hard-confirm-product:strict` 真实 Electron executor；strict manifest `canClaimPass=true` 且包含 Confirm/Cancel hard-confirm surface。
+- [x] Desktop smoke 口径要求 Electron native host 覆盖 BrowserHostSession、native surface、Computer Use preflight 和 hard-confirm surface；Vite 只作为 diagnostic。当前 audit 已包含 strict Desktop hard-confirm product smoke 和 Desktop Browser native live acceptance current-run evidence；chat live/complex matrix release acceptance 仍 fail-closed，不能据此声明全 Computer Use release 完成。
 - [x] Computer Use approval retry validator 防御性合并 GUI approval summary、approval sidecar 和 risk sidecar；缺 source sidecar 的 confirmed retry 必须 fail closed。
 - [x] 文档改动至少运行 `git diff --check`；实现改动必须补充 focused tests 和 Desktop native product smoke。
+- [x] 2026-06-06 global board audit reran `git diff --check`, `npm run typecheck --silent`, `npm run smoke:no-legacy-paths --silent`, and `npm run smoke:no-hardcoded-success --silent`; all exited `0`.
+- [ ] 2026-06-06 focused preflight/release/long audit is not fully green: request-clarification, release gate/report, and CU-LONG contract smoke exited `0`, but the combined preflight-focused test command exited `1` on the Model Router CU live-acceptance preflight CLI strict sanitized-manifest subtest. Do not claim chat live E2E or complex matrix release acceptance from this audit.
 
 ## 非目标
 

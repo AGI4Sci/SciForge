@@ -304,6 +304,48 @@ test('SSE reader fails closed when native Runtime Codex message is an internal t
   assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|private-skill|tool_call/);
 });
 
+test('SSE reader fails closed when native Runtime Codex message uses plural DSML tool_calls protocol', async () => {
+  const commandId = 'codex-command-native-tool-calls-protocol';
+  const body = [
+    'event: message',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'message',
+      text: '我先打开浏览器搜索相关信息。\\n\\n<｜DSML｜tool_calls><｜DSML｜invoke name="multi_agent_v1_spawn_agent"><｜DSML｜parameter name="title" string="true">搜索伊朗局势</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜tool_calls>',
+      commandId,
+      profile: 'sciforge-runtime-default',
+    })}`,
+    '',
+    'event: done',
+    `data: ${JSON.stringify({
+      schemaVersion: 'sciforge.codex.normalized-event.v1',
+      type: 'done',
+      status: 'done',
+      message: 'Runtime Codex completed successfully.',
+      provider: 'sciforge-model-router',
+      model: 'sciforge-router',
+      profile: 'sciforge-runtime-default',
+      workspace: '/tmp/current',
+      commandId,
+      attemptId: `${commandId}-attempt-1`,
+      evidenceRefs: [`audit:codex-runtime:${commandId}:${commandId}-attempt-1:normalized-events`],
+    })}`,
+    '',
+  ].join('\n');
+  const seen: unknown[] = [];
+  const response = createSseResponse(body);
+
+  const stream = await readWorkspaceToolStream(response, (event) => seen.push(event));
+
+  assert.match(stream.error ?? '', /completed without gui\.present/i);
+  assert.equal(stream.result, undefined);
+  const failed = seen.at(-1) as { type?: string; status?: string; message?: string; raw?: Record<string, unknown> };
+  assert.equal(failed.type, 'failed');
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.raw?.boundary, 'gui-present-required');
+  assert.doesNotMatch(`${stream.error}\n${failed.message}`, /DSML|multi_agent|tool_calls|伊朗/);
+});
+
 test('SSE reader joins CJK native assistant deltas without inserting word spaces', async () => {
   const commandId = 'codex-command-native-cjk-message';
   const body = [

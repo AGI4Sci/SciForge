@@ -20,17 +20,16 @@ import { feedbackRepairAuditForIssue, type FeedbackRepairAuditViewModel } from '
 import { FeedbackRepairAuditPanel, repairSafeMode } from '../../feedback/FeedbackRepairAuditPanel';
 import { FeedbackCodexTerminalPanel } from '../../feedback/FeedbackCodexTerminalPanel';
 import { ANNOTATION_PLAN_SOURCE } from '../../feedback/annotationPlanModel';
-import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairHumanVerification, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState, type SciForgeWorkspaceWriterHealth } from '../../domain';
+import { makeId, nowIso, type FeedbackCommentRecord, type FeedbackCommentStatus, type FeedbackRepairActionRecord, type FeedbackRepairGuidanceRecord, type FeedbackRepairHumanVerification, type FeedbackRepairResultRecord, type FeedbackRepairRunRecord, type GithubSyncedOpenIssueRecord, type PeerInstance, type RuntimeCodexBrowserAcceptanceManifest, type RuntimeProviderPreflightManifest, type SciForgeConfig, type SciForgeWorkspaceState } from '../../domain';
 import { exportJsonFile } from '../exportUtils';
 import { APP_BUILD_ID, feedbackStatusVariant, formatSessionTime, requestTitleFromFeedback } from '../appShell/appHelpers';
 import { Badge, cx } from '../uiPrimitives';
 import { FeedbackActionConfirmation } from './FeedbackActionConfirmation';
 import { FeedbackEvidenceReview, feedbackEvidenceSummary } from './FeedbackEvidenceReview';
-import { FeedbackInboxDiagnostics, type FeedbackPageStateNotice } from './FeedbackInboxDiagnostics';
 import { FeedbackInboxToolbar, FEEDBACK_STATUS_FILTERS, type FeedbackGitOperationMode, type FeedbackStatusFilter } from './FeedbackInboxToolbar';
 import { FeedbackRepairResolutionComposer } from './FeedbackRepairResolutionComposer';
 import { buildBlockedRepairHandoffResultInput, DEFAULT_FEEDBACK_REPAIR_CONFIRMATION_POLICY, type RepairBlockedFailureKind } from './feedbackBlockedRepairResult';
-import { repairPeerReadinessFromProbe, repairReadinessSummary, workspaceWriterReadinessRows, type RepairPeerReadinessByName, type RepairPeerReadinessProbe } from './feedbackRepairReadiness';
+import { repairPeerReadinessFromProbe, repairReadinessSummary, type RepairPeerReadinessByName, type RepairPeerReadinessProbe } from './feedbackRepairReadiness';
 
 type PendingGithubActionKind = 'submit-issue' | 'sync-open-issues';
 type PendingQueueActionKind = 'soft-delete';
@@ -97,8 +96,6 @@ export function FeedbackInboxPage({
   feedbackGithubRepo,
   detectedGithubRepo,
   feedbackGithubToken,
-  workspaceLoading = false,
-  workspaceLoadingDetail,
   githubSyncedOpenIssues,
   onReplaceGithubSyncedOpenIssues,
   onImportGithubOpenIssues,
@@ -128,8 +125,6 @@ export function FeedbackInboxPage({
   feedbackGithubRepo?: string;
   detectedGithubRepo?: string;
   feedbackGithubToken?: string;
-  workspaceLoading?: boolean;
-  workspaceLoadingDetail?: string;
   githubSyncedOpenIssues: GithubSyncedOpenIssueRecord[];
   onReplaceGithubSyncedOpenIssues: (issues: GithubSyncedOpenIssueRecord[]) => void;
   onImportGithubOpenIssues: (issues: GithubSyncedOpenIssueRecord[]) => number;
@@ -164,9 +159,6 @@ export function FeedbackInboxPage({
   const [runtimePreflightError, setRuntimePreflightError] = useState('');
   const [browserAcceptanceManifest, setBrowserAcceptanceManifest] = useState<RuntimeCodexBrowserAcceptanceManifest | undefined>();
   const [browserAcceptanceError, setBrowserAcceptanceError] = useState('');
-  const [workspaceWriterHealth, setWorkspaceWriterHealth] = useState<SciForgeWorkspaceWriterHealth | undefined>();
-  const [workspaceWriterHealthError, setWorkspaceWriterHealthError] = useState('');
-  const [diagnosticProbeKey, setDiagnosticProbeKey] = useState(0);
   const effectiveGithubRepo = useMemo(
     () => {
       const configured = feedbackGithubRepo?.trim();
@@ -214,10 +206,6 @@ export function FeedbackInboxPage({
     () => repairReadinessSummary(config.peerInstances ?? [], configuredRepairTargets, runtimePreflightManifest, runtimePreflightError, browserAcceptanceManifest, browserAcceptanceError, peerReadinessByName),
     [browserAcceptanceError, browserAcceptanceManifest, config.peerInstances, configuredRepairTargets, peerReadinessByName, runtimePreflightError, runtimePreflightManifest],
   );
-  const writerReadinessRows = useMemo(
-    () => workspaceWriterReadinessRows(workspaceWriterHealth, workspaceWriterHealthError, config.workspaceWriterBaseUrl),
-    [config.workspaceWriterBaseUrl, workspaceWriterHealth, workspaceWriterHealthError],
-  );
   const statusCounts = useMemo(() => feedbackStatusCounts(comments), [comments]);
   const activeComments = comments.filter((comment) => comment.status !== 'deleted');
   const normalizedSearchQuery = searchQuery.trim().toLowerCase();
@@ -246,33 +234,10 @@ export function FeedbackInboxPage({
   const issueScopeLabel = selectedVisibleActiveComments.length
     ? `当前可见已选 ${selectedVisibleActiveComments.length} 条反馈`
     : `当前筛选和搜索结果中的 ${issueScopeComments.length} 条未删除反馈`;
-  const pageStateNotices = useMemo(
-    () => feedbackPageStateNotices({
-      comments,
-      effectiveGithubRepo,
-      feedbackGithubToken,
-      githubDryRun,
-      repairReadiness,
-      workspaceLoading,
-      workspaceLoadingDetail,
-      writerReadinessRows,
-    }),
-    [comments, effectiveGithubRepo, feedbackGithubToken, githubDryRun, repairReadiness, workspaceLoading, workspaceLoadingDetail, writerReadinessRows],
-  );
-
   useEffect(() => {
     let cancelled = false;
     setRuntimePreflightError('');
     setBrowserAcceptanceError('');
-    setWorkspaceWriterHealthError('');
-    setWorkspaceWriterHealth(undefined);
-    loadWorkspaceWriterHealth(config).then((health) => {
-      if (!cancelled) setWorkspaceWriterHealth(health);
-    }).catch((error) => {
-      if (cancelled) return;
-      setWorkspaceWriterHealth(undefined);
-      setWorkspaceWriterHealthError(error instanceof Error ? error.message : String(error));
-    });
     loadRuntimeProviderPreflightManifest(config).then((manifest) => {
       if (!cancelled) setRuntimePreflightManifest(manifest);
     }).catch((error) => {
@@ -290,7 +255,7 @@ export function FeedbackInboxPage({
     return () => {
       cancelled = true;
     };
-  }, [config.workspacePath, config.workspaceWriterBaseUrl, diagnosticProbeKey]);
+  }, [config.workspacePath, config.workspaceWriterBaseUrl]);
 
   useEffect(() => {
     let cancelled = false;
@@ -323,11 +288,7 @@ export function FeedbackInboxPage({
     return () => {
       cancelled = true;
     };
-  }, [config, configuredRepairTargets, repairTargetProbeKey, diagnosticProbeKey]);
-
-  function refreshPageDiagnostics() {
-    setDiagnosticProbeKey((key) => key + 1);
-  }
+  }, [config, configuredRepairTargets, repairTargetProbeKey]);
 
   function ensureGithubTokenOrOpenSettings(): boolean {
     const token = feedbackGithubToken?.trim();
@@ -1049,16 +1010,11 @@ export function FeedbackInboxPage({
         </div>
         <div className="feedback-stats">
           <span><strong>{activeComments.length}</strong> active</span>
-          <span><strong>{statusCounts.comment ?? 0}</strong> comment</span>
-          <span><strong>{statusCounts.request ?? 0}</strong> request</span>
-          <span><strong>{requests.length}</strong> requests</span>
           <span><strong>{comments.filter((item) => item.status === 'open').length}</strong> open</span>
           <span><strong>{githubSyncedOpenIssues.length}</strong> GitHub open</span>
           <span><strong>{statusCounts.blocked ?? 0}</strong> blocked</span>
-          <span><strong>{statusCounts.deleted ?? 0}</strong> deleted</span>
         </div>
       </section>
-      <FeedbackInboxDiagnostics pageStateNotices={pageStateNotices} repairReadiness={repairReadiness} writerReadinessRows={writerReadinessRows} onOpenGithubSettings={onOpenGithubSettings} onRefreshPageDiagnostics={refreshPageDiagnostics} />
       {pendingRepairAction ? (
         <section className="feedback-page-state" aria-label="repair git action confirmation">
           <div className="feedback-page-state-head">
@@ -1529,96 +1485,6 @@ function feedbackStatusCounts(comments: FeedbackCommentRecord[]): Partial<Record
     counts[comment.status] = (counts[comment.status] ?? 0) + 1;
     return counts;
   }, {});
-}
-
-function feedbackPageStateNotices(input: {
-  comments: FeedbackCommentRecord[];
-  effectiveGithubRepo: string;
-  feedbackGithubToken?: string;
-  githubDryRun: boolean;
-  repairReadiness: ReturnType<typeof repairReadinessSummary>;
-  workspaceLoading: boolean;
-  workspaceLoadingDetail?: string;
-  writerReadinessRows: ReturnType<typeof workspaceWriterReadinessRows>;
-}): FeedbackPageStateNotice[] {
-  const activeComments = input.comments.filter((comment) => comment.status !== 'deleted');
-  const evidenceSummaries = activeComments.map((comment) => feedbackEvidenceSummary(comment));
-  const missingEvidenceCount = evidenceSummaries.filter((summary) => summary.status === 'missing').length;
-  const partialEvidenceCount = evidenceSummaries.filter((summary) => summary.status === 'partial').length;
-  const writerRow = input.writerReadinessRows[0];
-  const peerRow = input.repairReadiness.rows.find((row) => row.label === 'repair peers');
-  const providerRow = input.repairReadiness.rows.find((row) => row.label === 'provider preflight');
-  const missingEnvRow = input.repairReadiness.rows.find((row) => row.label === 'missing env');
-  const githubTokenPresent = Boolean(input.feedbackGithubToken?.trim());
-  return [
-    {
-      id: 'workspace-data',
-      label: 'workspace data',
-      value: input.workspaceLoading ? '加载中' : 'loaded',
-      detail: input.workspaceLoading
-        ? input.workspaceLoadingDetail || '正在加载 config.local.json 和 .sciforge/workspace-state.json；操作范围会在加载完成后刷新'
-        : input.workspaceLoadingDetail || 'workspace snapshot loaded; feedback counts and action scopes reflect the current local state',
-      state: input.workspaceLoading ? 'partial' : 'ready',
-    },
-    {
-      id: 'workspace-writer',
-      label: 'workspace writer',
-      value: writerRow?.value ?? 'checking',
-      detail: writerRow?.detail ?? 'checking /health before local feedback or repair actions',
-      state: writerRow?.state ?? 'partial',
-    },
-    {
-      id: 'provider-env',
-      label: 'provider/env',
-      value: providerRow?.value ?? 'missing',
-      detail: input.repairReadiness.providerReady
-        ? `ready; ${missingEnvRow?.value === 'none' ? 'missing env none' : missingEnvRow?.value ?? 'env checked'}`
-        : input.repairReadiness.providerBlocker || providerRow?.detail || 'provider preflight missing',
-      state: input.repairReadiness.providerReady ? 'ready' : providerRow?.state ?? 'blocked',
-    },
-    {
-      id: 'repair-peer',
-      label: 'repair peer sync',
-      value: peerRow?.value ?? 'missing',
-      detail: peerRow?.detail ?? 'no repair peer diagnostic loaded yet',
-      state: peerRow?.state ?? 'blocked',
-    },
-    {
-      id: 'github-token',
-      label: 'GitHub token',
-      value: input.githubDryRun ? 'dry-run' : githubTokenPresent ? 'configured' : 'missing',
-      detail: input.githubDryRun
-        ? `dry-run keeps ${input.effectiveGithubRepo || 'configured repo'} local; no GitHub API call`
-        : githubTokenPresent
-          ? `ready for ${input.effectiveGithubRepo || 'configured repo'} external confirmation gates`
-          : `missing PAT for ${input.effectiveGithubRepo || 'configured repo'}; submit/sync opens settings and keeps local state`,
-      state: input.githubDryRun || githubTokenPresent ? 'ready' : 'blocked',
-    },
-    {
-      id: 'user-confirmation',
-      label: 'user confirmation',
-      value: 'manual gates',
-      detail: 'GitHub submit/sync require in-app confirmation; repair guidance is sent only from human terminal input',
-      state: 'partial',
-    },
-    {
-      id: 'screenshot-evidence',
-      label: 'screenshot evidence',
-      value: activeComments.length
-        ? missingEvidenceCount
-          ? `${missingEvidenceCount} missing`
-          : partialEvidenceCount
-            ? `${partialEvidenceCount} partial`
-            : 'complete'
-        : 'no feedback',
-      detail: activeComments.length
-        ? missingEvidenceCount || partialEvidenceCount
-          ? `${missingEvidenceCount} missing and ${partialEvidenceCount} partial active feedback item(s); affected cards show fallback refs and diagnostics`
-          : `${activeComments.length} active feedback item(s) have complete evidence summary`
-        : 'create feedback from the workbench to capture target and screenshot evidence',
-      state: missingEvidenceCount ? 'blocked' : partialEvidenceCount ? 'partial' : 'ready',
-    },
-  ];
 }
 
 function feedbackRepairCardSummary(audit: FeedbackRepairAuditViewModel) {

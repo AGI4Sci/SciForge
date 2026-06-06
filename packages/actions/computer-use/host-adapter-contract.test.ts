@@ -107,6 +107,8 @@ test('ComputerUseHostAdapter contract is reusable and GUI-free at the package bo
     },
   });
 
+  assert.equal(computerUseActionProviderContractIds.requestSchema, 'sciforge.computer-use.request.v1');
+  assert.equal(computerUseActionProviderContractIds.resultSchema, 'sciforge.computer-use.result.v1');
   assert.equal(contract.hostAdapterSchemaVersion, computerUseActionProviderContractIds.hostAdapterSchema);
   assert.equal(contract.actionProvider, computerUseActionProviderContractIds.actionProviderId);
   assert.deepEqual(contract.requiredPorts, computerUseHostPortLists.required);
@@ -209,6 +211,6 @@ test('package host adapter contract does not import runtime or GUI implementatio
   const source = await readFile(new URL('./host-adapter-contract.ts', import.meta.url), 'utf8');
   const importTargets = Array.from(source.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g), (match) => match[1]);
 
-  assert.deepEqual(importTargets, ['./provider-policy.js']);
+  assert.deepEqual(importTargets, ['./action-schema.js', './provider-policy.js']);
   assert.doesNotMatch(source, /from\s+['"][^'"]*(?:src\/ui|src\/runtime|gui-module|gui-mcp)[^'"]*['"]/);
 });

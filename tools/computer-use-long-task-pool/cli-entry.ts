@@ -89,6 +89,14 @@ export async function runComputerUseLongTaskPoolCli(argv = process.argv) {
       process.stdout.write(`  passed scenarios: ${result.passedScenarioIds.join(', ')}\n`);
       process.stdout.write(`  repair-needed scenarios: ${result.repairNeededScenarioIds.join(', ')}\n`);
       process.stdout.write(`  summary: ${result.summaryPath}\n`);
+      const failedPreflightChecks = result.preflight?.checks.filter((check) => check.status === 'fail') ?? [];
+      if (failedPreflightChecks.length) {
+        process.stdout.write('  failed preflight checks:\n');
+        for (const check of failedPreflightChecks) {
+          process.stdout.write(`  - [${check.category}/${check.id}] ${check.message}\n`);
+          if (check.repairAction) process.stdout.write(`    repair: ${check.repairAction}\n`);
+        }
+      }
       process.exitCode = 1;
     } else {
       process.stdout.write('[ok] CU-LONG matrix passed\n');
@@ -109,7 +117,9 @@ export async function runComputerUseLongTaskPoolCli(argv = process.argv) {
       for (const issue of result.issues) process.stdout.write(`- ${issue}\n`);
       process.exitCode = 1;
     } else {
-      process.stdout.write('[ok] CU-LONG matrix validation passed\n');
+      process.stdout.write(args.requirePassed === false
+        ? '[ok] CU-LONG matrix repair-needed structural inspection passed\n'
+        : '[ok] CU-LONG matrix validation passed\n');
       process.stdout.write(`  scenarios: ${result.scenarioIds.join(', ')}\n`);
       process.stdout.write(`  validated runs: ${result.metrics.validatedRuns}\n`);
     }
@@ -388,13 +398,16 @@ function parseRunMatrixArgs(args: string[]) {
 }
 
 function parseMatrixReportArgs(args: string[]) {
-  const options: Parameters<typeof renderComputerUseLongMatrixReport>[0] = { summaryPath: '' };
+  const options: Parameters<typeof renderComputerUseLongMatrixReport>[0] = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === 'matrix-report') continue;
     if (arg === '--summary') {
       options.summaryPath = readArgValue(args, index, arg);
       index += 1;
+    } else if (arg === '--out-root') {
+      options.outRoot = readArgValue(args, index, arg);
+      index += 1;
     } else if (arg === '--out') {
       options.out = readArgValue(args, index, arg);
       index += 1;
@@ -402,33 +415,39 @@ function parseMatrixReportArgs(args: string[]) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  if (!options.summaryPath) throw new Error('matrix-report requires --summary <matrix-summary.json>');
   return options;
 }
 
 function parseValidateMatrixArgs(args: string[]) {
-  const options: Parameters<typeof validateComputerUseLongMatrix>[0] = { summaryPath: '' };
+  const options: Parameters<typeof validateComputerUseLongMatrix>[0] = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === 'validate-matrix') continue;
     if (arg === '--summary') {
       options.summaryPath = readArgValue(args, index, arg);
       index += 1;
+    } else if (arg === '--out-root') {
+      options.outRoot = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--allow-repair-needed') {
+      options.requirePassed = false;
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  if (!options.summaryPath) throw new Error('validate-matrix requires --summary <matrix-summary.json>');
   return options;
 }
 
 function parseRepairPlanArgs(args: string[]) {
-  const options: Parameters<typeof renderComputerUseLongRepairPlan>[0] = { summaryPath: '' };
+  const options: Parameters<typeof renderComputerUseLongRepairPlan>[0] = {};
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === 'repair-plan') continue;
     if (arg === '--summary') {
       options.summaryPath = readArgValue(args, index, arg);
+      index += 1;
+    } else if (arg === '--out-root') {
+      options.outRoot = readArgValue(args, index, arg);
       index += 1;
     } else if (arg === '--out') {
       options.out = readArgValue(args, index, arg);
@@ -437,7 +456,6 @@ function parseRepairPlanArgs(args: string[]) {
       throw new Error(`Unknown argument: ${arg}`);
     }
   }
-  if (!options.summaryPath) throw new Error('repair-plan requires --summary <matrix-summary.json>');
   return options;
 }
 

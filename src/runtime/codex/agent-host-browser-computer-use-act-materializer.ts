@@ -24,6 +24,8 @@ import type {
 const TOOL_ID = 'browser-host-session.computer-use-act-materializer';
 const ADAPTER_REF = 'adapter-registry:browser-host-session/computer-use';
 
+export type { BrowserHostComputerUseAction };
+
 export type BrowserHostComputerUseActionPlannerResult =
   | {
       status: 'planned';
@@ -66,20 +68,16 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
       return blockedResult(input, plan.message, ['action-ledger:planner/blocked', ...planRefs, `browser-host-session:${sessionId}`]);
     }
     if (plan.status === 'done') {
-      return {
-        status: 'completed',
-        message: plan.message,
-        confidence: 0.74,
-        claimType: 'runtime-action',
-        reasoningTrace: 'Computer Use planner determined the browser target already satisfied the requested low-risk GUI action.',
-        evidenceRefs: runtimeOwnedRefs([
-          `action-ledger:browser-host-session/${sessionId}/planner-done`,
+      return blockedResult(
+        input,
+        'Computer Use planner-done is only a local action candidate; runtime action evidence or validated completionTruth is required before completion.',
+        [
+          'action-ledger:planner/done-local-candidate',
+          `action-ledger:browser-host-session/${sessionId}/planner-done-local-candidate`,
           `browser-host-session:${sessionId}`,
           ...planRefs,
-        ]),
-        executionUnits: [executionUnit(input, sessionId, 'done', 'planner-done')],
-        claims: [claim(input, plan.message, [`action-ledger:browser-host-session/${sessionId}/planner-done`, ...planRefs])],
-      };
+        ],
+      );
     }
     const actions = plan.status === 'planned' ? plan.actions : [];
     if (actions.length !== 1) {
@@ -88,8 +86,9 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
     const action = actions[0];
     if (!action) return blockedResult(input, 'Computer Use Act materializer blocked: planner returned no executable action.', ['action-ledger:planner/action-missing', ...planRefs]);
     const actionId = safeToken(input.attemptId) || `agent-host-act-${Date.now()}`;
+    let plannedHostAction;
     try {
-      browserHostActionFromComputerUse(action, { actionId });
+      plannedHostAction = browserHostActionFromComputerUse(action, { actionId });
     } catch (error) {
       return blockedResult(input, `Computer Use Act materializer blocked before host execution: ${safeErrorMessage(error)}`, [
         'action-ledger:planner/grounding-required',
@@ -97,11 +96,23 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
         `browser-host-session:${sessionId}`,
       ]);
     }
+    const beforeRefs = browserHostBeforeEvidenceRefs(input);
+    if (browserHostActionRequiresEvidenceBoundary(plannedHostAction.action) && beforeRefs.length === 0) {
+      return blockedResult(input, 'Computer Use Act materializer blocked before host execution: before evidence is missing for the mutating BrowserHostSession action.', [
+        'action-ledger:browser-host-session/missing-before-evidence',
+        ...planRefs,
+        `browser-host-session:${sessionId}`,
+      ]);
+    }
     let executed;
     try {
+      const executedAt = now().toISOString();
       executed = await executeBrowserHostComputerUseAction(manager, input.workspacePath, sessionId, action, {
         actionId,
-        adapterSentAt: now().toISOString(),
+        adapterSentAt: executedAt,
+        permissionRef: permissionRefs(input)[0],
+        cancelRef: cancelRef(input),
+        now: executedAt,
       });
     } catch (error) {
       return blockedResult(input, `Computer Use Act materializer blocked during BrowserHostSession execution: ${safeErrorMessage(error)}`, [
@@ -110,13 +121,21 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
         `browser-host-session:${sessionId}`,
       ]);
     }
-    const evidenceRefs = runtimeOwnedRefs([
-      ADAPTER_REF,
-      `browser-host-session:${sessionId}/action-state/${actionId}`,
-      ...planRefs,
-      ...permissionRefs(input),
-      ...browserHostActionEvidenceRefs(executed.session, actionId),
-    ]);
+    const actionEvidence = browserHostMaterializedActionEvidenceRefs(input, executed.session, actionId, plannedHostAction.action, planRefs);
+    if (browserHostActionRequiresEvidenceBoundary(plannedHostAction.action) && actionEvidence.afterRefs.length === 0) {
+      return blockedResult(input, 'Computer Use Act materializer blocked after BrowserHostSession execution: after evidence is missing for the mutating action.', [
+        'action-ledger:browser-host-session/missing-after-evidence',
+        ...actionEvidence.refs,
+      ]);
+    }
+    const missingCompletionEvidence = browserHostMissingCompletionEvidence(actionEvidence);
+    if (browserHostActionRequiresEvidenceBoundary(plannedHostAction.action) && missingCompletionEvidence) {
+      return blockedResult(input, `Computer Use Act materializer blocked after BrowserHostSession execution: completion evidence is missing ${missingCompletionEvidence} for the current action.`, [
+        'action-ledger:browser-host-session/missing-completion-evidence',
+        ...actionEvidence.refs,
+      ]);
+    }
+    const evidenceRefs = actionEvidence.refs;
     return {
       status: 'completed',
       message: `Computer Use action executed through BrowserHostSession: ${action.type}.`,
@@ -124,7 +143,7 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
       claimType: 'runtime-action',
       reasoningTrace: 'SciForge executed one low-risk Computer Use action through the runtime-owned BrowserHostSession input adapter after Guard readiness passed.',
       evidenceRefs,
-      executionUnits: [executionUnit(input, sessionId, 'done', action.type, actionId, evidenceRefs[0])],
+      executionUnits: [executionUnit(input, sessionId, 'done', action.type, actionId, browserHostActionStateRef(sessionId, actionId))],
       artifacts: [{
         id: `browser-host-computer-use-action-${safeToken(actionId) || 'action'}`,
         type: 'computer-use-action-result',
@@ -139,6 +158,15 @@ export function createDefaultBrowserHostComputerUseActMaterializer(options: {
           actionType: action.type,
           sharedSystemInputUsed: false,
           singleInteractiveTruth: true,
+          evidence: {
+            beforeRefs: actionEvidence.beforeRefs,
+            groundingRefs: actionEvidence.groundingRefs,
+            executorRefs: actionEvidence.executorRefs,
+            afterRefs: actionEvidence.afterRefs,
+            verificationRefs: actionEvidence.verificationRefs,
+            staleInvalidationRefs: actionEvidence.staleInvalidationRefs,
+            ledgerRefs: actionEvidence.ledgerRefs,
+          },
           evidenceRefs,
         },
       }],
@@ -164,7 +192,6 @@ export function createRuntimeCodexTextPlannerActionPlanner(options: Partial<Comp
       profile: options.profile,
       adapter: options.adapter,
       env: options.env,
-      fetchImpl: options.fetchImpl,
       allowOpenAiRuntime: options.allowOpenAiRuntime,
     });
     if (!run.ok) {
@@ -225,6 +252,8 @@ function plannerResultFromText(text: string): BrowserHostComputerUseActionPlanne
 function preflightNotReady(input: CodexAgentHostComputerUseActMaterializerInput): string | undefined {
   if (input.preflight.status !== 'ready') return `Computer Use Act materializer blocked: preflight status is ${input.preflight.status}.`;
   if (input.preflight.risk.decision !== 'auto') return `Computer Use Act materializer blocked: risk decision is ${input.preflight.risk.decision}.`;
+  if (input.runtimeTruth?.target?.bound !== true) return 'Computer Use Act materializer blocked: runtime target is not bound.';
+  if (input.runtimeTruth?.observation?.fresh !== true) return 'Computer Use Act materializer blocked: runtime observation is stale or not fresh.';
   if (!input.runtimeTruth?.permissions?.refs?.length) return 'Computer Use Act materializer blocked: runtime permission refs are missing.';
   if (input.runtimeTruth.permissions.stopCancelPath !== true) return 'Computer Use Act materializer blocked: runtime stop/cancel path is missing.';
   const readiness = input.runtimeTruth.readiness ?? {};
@@ -255,11 +284,123 @@ function browserHostActionEvidenceRefs(session: BrowserHostSessionState, actionI
   return runtimeOwnedRefs([
     session.visibleAction?.visibleActionRef,
     session.visibleAction?.actorCursorRef,
-    session.actorCursor?.lastAction?.evidenceRefs?.[0],
+    ...(session.actorCursor?.lastAction?.evidenceRefs ?? []),
+    ...(session.actorCursor?.evidenceRefs ?? []),
+    ...(session.actorCursors ?? []).flatMap((cursor) => [
+      ...(cursor.lastAction?.evidenceRefs ?? []),
+      ...(cursor.evidenceRefs ?? []),
+    ]),
     session.frameRef,
     session.screenshotRef,
-    `browser-host-session:${session.id}/action-state/${actionId}`,
+    browserHostActionStateRef(session.id, actionId),
+  ], 48);
+}
+
+function browserHostMaterializedActionEvidenceRefs(
+  input: CodexAgentHostComputerUseActMaterializerInput,
+  session: BrowserHostSessionState,
+  actionId: string,
+  hostAction: string,
+  planRefs: string[],
+): {
+  refs: string[];
+  beforeRefs: string[];
+  groundingRefs: string[];
+  executorRefs: string[];
+  afterRefs: string[];
+  verificationRefs: string[];
+  staleInvalidationRefs: string[];
+  ledgerRefs: string[];
+} {
+  const sessionId = safeToken(session.id) || browserHostSessionIdFromInput(input) || 'unknown';
+  const beforeRefs = browserHostBeforeEvidenceRefs(input);
+  const safePlanRefs = runtimeOwnedRefs(planRefs).slice(0, 8);
+  const groundingRefs = runtimeOwnedRefs([
+    ...safePlanRefs,
+    session.visibleAction?.visibleActionRef,
+    session.visibleAction?.actorCursorRef,
+    `action-ledger:browser-host-session/${sessionId}/actions/${actionId}/grounding`,
   ]);
+  const executorRefs = runtimeOwnedRefs([
+    ADAPTER_REF,
+    browserHostActionStateRef(sessionId, actionId),
+    `action-ledger:browser-host-session/${sessionId}/actions/${actionId}/executor-event`,
+  ]);
+  const afterRefs = browserHostAfterEvidenceRefs(session);
+  const postActionRefs = browserHostCurrentActionRefs(browserHostActionEvidenceRefs(session, actionId), actionId);
+  const verificationRefs = browserHostVerificationEvidenceRefs(postActionRefs);
+  const staleInvalidationRefs = browserHostFreshnessInvalidationEvidenceRefs(postActionRefs);
+  const ledgerRefs = runtimeOwnedRefs([
+    `action-ledger:browser-host-session/${sessionId}/actions/${actionId}/completed`,
+    `action-ledger:browser-host-session/${sessionId}/actions/${actionId}/${safeToken(hostAction) || 'action'}`,
+  ]);
+  return {
+    refs: runtimeOwnedRefs([
+      ...beforeRefs,
+      ...groundingRefs,
+      ...executorRefs,
+      ...afterRefs,
+      ...verificationRefs,
+      ...staleInvalidationRefs,
+      ...ledgerRefs,
+      ...permissionRefs(input),
+      ...postActionRefs,
+    ], 48),
+    beforeRefs,
+    groundingRefs,
+    executorRefs,
+    afterRefs,
+    verificationRefs,
+    staleInvalidationRefs,
+    ledgerRefs,
+  };
+}
+
+function browserHostMissingCompletionEvidence(evidence: {
+  verificationRefs: string[];
+  staleInvalidationRefs: string[];
+}): string | undefined {
+  const missing: string[] = [];
+  if (evidence.verificationRefs.length === 0) missing.push('verifier refs');
+  if (evidence.staleInvalidationRefs.length === 0) missing.push('freshness invalidation refs');
+  return missing.length ? missing.join(' and ') : undefined;
+}
+
+function browserHostCurrentActionRefs(refs: string[], actionId: string): string[] {
+  const safeActionId = safeToken(actionId);
+  const safeRefs = runtimeOwnedRefs(refs, 48);
+  if (!safeActionId) return safeRefs;
+  return safeRefs.filter((ref) => ref.includes(safeActionId));
+}
+
+function browserHostVerificationEvidenceRefs(refs: string[]): string[] {
+  return runtimeOwnedRefs(refs.filter((ref) => /(?:^|[:/._-])(?:verification|verifier|validation|validator)(?:[:/._-]|$)/i.test(ref)), 8);
+}
+
+function browserHostFreshnessInvalidationEvidenceRefs(refs: string[]): string[] {
+  return runtimeOwnedRefs(refs.filter((ref) => /(?:^|[:/._-])(?:freshness(?:[-_/](?:check|invalidation|invalidated))?|stale[-_/]invalidation|invalidat(?:e|ed|ion))(?:[:/._-]|$)/i.test(ref)), 8);
+}
+
+function browserHostBeforeEvidenceRefs(input: CodexAgentHostComputerUseActMaterializerInput): string[] {
+  return runtimeOwnedRefs([
+    ...(input.runtimeTruth?.observation?.refs ?? []),
+    ...input.preflight.evidenceRefs,
+  ]).filter((ref) => !ref.startsWith('permission:')).slice(0, 8);
+}
+
+function browserHostAfterEvidenceRefs(session: BrowserHostSessionState): string[] {
+  return runtimeOwnedRefs([
+    session.frameRef,
+    session.screenshotRef,
+  ]);
+}
+
+function browserHostActionStateRef(sessionId: string, actionId: string): string {
+  return `browser-host-session:${safeToken(sessionId) || 'unknown'}/action-state/${safeToken(actionId) || 'action'}`;
+}
+
+function browserHostActionRequiresEvidenceBoundary(action: string): boolean {
+  return !['state', 'snapshot', 'cursor', 'native-os-ui-proof'].includes(action);
 }
 
 function blockedResult(
@@ -286,6 +427,13 @@ function blockedResult(
 
 function permissionRefs(input: CodexAgentHostComputerUseActMaterializerInput): string[] {
   return runtimeOwnedRefs(input.runtimeTruth?.permissions?.refs ?? []);
+}
+
+function cancelRef(input: CodexAgentHostComputerUseActMaterializerInput): string | undefined {
+  return runtimeOwnedRefs([
+    ...(input.runtimeTruth?.permissions?.controlPath?.cancelRefs ?? []),
+    ...(input.runtimeTruth?.refs ?? []),
+  ]).find((ref) => ref.startsWith('cancel:'));
 }
 
 function executionUnit(
@@ -343,8 +491,8 @@ function recentActionSummary(input: CodexAgentHostComputerUseActMaterializerInpu
     .join('\n');
 }
 
-function runtimeOwnedRefs(refs: Array<string | undefined>): string[] {
-  return [...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && runtimeOwnedRef(ref)))].slice(0, 24);
+function runtimeOwnedRefs(refs: Array<string | undefined>, limit = 24): string[] {
+  return [...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && runtimeOwnedRef(ref)))].slice(0, limit);
 }
 
 function runtimeOwnedRef(ref: string): boolean {
@@ -361,6 +509,7 @@ function runtimeOwnedRef(ref: string): boolean {
     lower.includes('https://') ||
     lower.includes('data:image') ||
     lower.includes('base64') ||
+    /(^|[:/._-])raw([:/._-]|$)/.test(lower) ||
     lower.includes('<html') ||
     lower.includes('secret') ||
     lower.includes('token') ||

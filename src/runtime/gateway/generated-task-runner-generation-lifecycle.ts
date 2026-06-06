@@ -20,9 +20,9 @@ import {
   generatedTaskSuccessBudgetDebitId,
   recordAgentServerDirectPayloadSuccessLedgerLifecycle,
 } from './generated-task-runner-validation-lifecycle.js';
-import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views';
-import { CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE, CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH, CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID, CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, buildCurrentReferenceDigestRecoveryPayload, currentReferenceDigestFailureCanRecover, currentReferenceDigestRecoveryCandidates, type CurrentReferenceDigestRecoverySource } from '../../../packages/contracts/runtime/artifact-policy';
-import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, agentServerGeneratedEntrypointContractReason, agentServerGeneratedTaskInterfaceContractReason, agentServerGeneratedTaskRetryDetail, agentServerPathOnlyStrictRetryDirectPayloadReason, agentServerPathOnlyStrictRetryStillMissingReason, agentServerPathOnlyTaskFilesReason, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy';
+import { reportRuntimeResultViewSlots } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
+import { CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_DETAIL, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_MESSAGE, CURRENT_REFERENCE_DIGEST_RECOVERY_EVENT_TYPE, CURRENT_REFERENCE_DIGEST_RECOVERY_LOG_LINE, CURRENT_REFERENCE_DIGEST_RECOVERY_REF_PATH, CURRENT_REFERENCE_DIGEST_RECOVERY_REPORT_ARTIFACT_ID, CURRENT_REFERENCE_DIGEST_RECOVERY_RUNTIME_LABEL, buildCurrentReferenceDigestRecoveryPayload, currentReferenceDigestFailureCanRecover, currentReferenceDigestRecoveryCandidates, type CurrentReferenceDigestRecoverySource } from '../../../packages/contracts/runtime/artifact-policy.js';
+import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE, agentServerGeneratedEntrypointContractReason, agentServerGeneratedTaskInterfaceContractReason, agentServerGeneratedTaskRetryDetail, agentServerPathOnlyStrictRetryDirectPayloadReason, agentServerPathOnlyStrictRetryStillMissingReason, agentServerPathOnlyTaskFilesReason, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy.js';
 import {
   generatedTaskLiteratureDeliverablesExpected,
   generatedTaskRecoveryTaskPath,

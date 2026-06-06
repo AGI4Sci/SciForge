@@ -24,7 +24,7 @@ type ComputerUseMatrixEntry = {
     | 'project-board-evidence'
     | 'package-boundary'
     | 'runtime-codex-planner'
-    | 'kv-ground-diagnostics'
+    | 'model-router-grounding-diagnostics'
     | 'real-input-trace'
     | 'gui-present'
     | 'l2-artifact'
@@ -48,7 +48,7 @@ const matrix: ComputerUseMatrixEntry[] = [
   task('CU-NEXT-04', 'file-organization-index', ['smoke:computer-use-long', 'smoke:no-legacy-paths'], ['project-board-evidence', 'l3-multi-app', 'l2-artifact', 'real-input-trace', 'gui-present', 'no-legacy-paths']),
   task('CU-NEXT-05', 'failure-recovery-multiturn-repair', ['smoke:web-multiturn-final', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'repair-continuity', 'l3-multi-app', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
   task('CU-NEXT-06', 'high-risk-approval-chain', ['smoke:runtime-codex-browser-acceptance', 'smoke:no-hardcoded-success'], ['project-board-evidence', 'approval-chain', 'real-input-trace', 'gui-present', 'no-hardcoded-success']),
-  task('CU-NEXT-07', 'visual-grounding-pressure-test', ['smoke:computer-use-long', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'dense-grounding', 'kv-ground-diagnostics', 'real-input-trace']),
+  task('CU-NEXT-07', 'visual-grounding-pressure-test', ['smoke:computer-use-long', 'smoke:vision-sense-runtime'], ['project-board-evidence', 'dense-grounding', 'model-router-grounding-diagnostics', 'real-input-trace']),
 ];
 
 const projectTasks = extractComputerUseTaskBoard(projectText);

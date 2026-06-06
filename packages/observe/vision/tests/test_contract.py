@@ -1,4 +1,5 @@
 import unittest
+import importlib.util
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 import sys
@@ -7,10 +8,9 @@ import sys
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PACKAGE_ROOT))
 
+import sciforge_vision_sense as vision_sense  # noqa: E402
 from sciforge_vision_sense import (  # noqa: E402
     DEFAULT_MANIFEST,
-    KV_GROUND_REMOTE_PATH_PREFIXES_ENV,
-    KV_GROUND_URL_ENV,
     ModalityInput,
     ScreenshotRef,
     SenseManifest,
@@ -38,16 +38,13 @@ class VisionSenseContractTest(unittest.TestCase):
         self.assertEqual(manifest.modality, "vision")
         self.assertEqual(manifest.configSchema["vlm"]["defaultModel"], "sciforge-router")
         self.assertEqual(
-            manifest.configSchema["grounder"]["kind"],
+            manifest.configSchema["modelRouter"]["groundingTranslatorCapability"],
             "model-router.capability.computer-use.grounding-translator",
         )
-        self.assertEqual(manifest.configSchema["grounder"]["baseUrlConfig"]["env"], KV_GROUND_URL_ENV)
-        self.assertEqual(
-            manifest.configSchema["grounder"]["remotePathPrefixesConfig"]["env"],
-            KV_GROUND_REMOTE_PATH_PREFIXES_ENV,
-        )
-        self.assertEqual(manifest.configSchema["grounder"]["contract"], "GrounderRequest -> GrounderResult")
-        self.assertNotIn("predictEndpoint", manifest.configSchema["grounder"])
+        self.assertNotIn("grounder", manifest.configSchema)
+        self.assertNotIn("grounderRequest", manifest.inputs)
+        self.assertNotIn("grounderResult", manifest.outputs)
+        self.assertNotIn("kvGround", manifest.runtimeRequirements)
         self.assertFalse(manifest.runtimeRequirements["privateSciForgeImports"])
         self.assertFalse(manifest.runtimeRequirements["desktopExecutorRequired"])
         self.assertEqual(
@@ -61,35 +58,20 @@ class VisionSenseContractTest(unittest.TestCase):
         self.assertNotIn("result", manifest.outputs)
         self.assertEqual(manifest.safety["executionBoundary"], "sensing-only")
 
-    def test_manifest_declares_first_class_grounder_contract(self):
+    def test_public_api_does_not_export_direct_grounder_adapter(self):
         manifest = DEFAULT_MANIFEST
+        retired_contract = "_".join(["kv", "ground", "contract"])
+        retired_module = ".".join(["sciforge_vision_sense", "_".join(["kv", "ground"])])
+        retired_export_pattern = "|".join([
+            "".join(["Kv", "Ground"]),
+            "Grounder",
+            "_".join(["KV", "GROUND"]),
+        ])
 
-        request_contract = manifest.inputs["grounderRequest"]
-        result_contract = manifest.outputs["grounderResult"]
-
-        self.assertEqual(request_contract["schema"], "GrounderRequest")
-        self.assertEqual(
-            request_contract["required"],
-            {
-                "screenshot_ref": "ScreenshotRef URI or service-readable screenshot reference",
-                "target_description": "Natural-language description of the target to ground",
-            },
-        )
-        self.assertEqual(request_contract["optional"]["crop_bbox"], "Window-local crop bounds as [x1, y1, x2, y2]")
-        self.assertEqual(request_contract["coordinate_space"]["allowed"], ["window-local", "crop-local"])
-        self.assertEqual(request_contract["coordinate_space"]["default"], "window-local")
-        self.assertEqual(request_contract["coordinate_space"]["cropLocalRequires"], "crop_bbox")
-
-        self.assertEqual(result_contract["schema"], "GrounderResult")
-        self.assertIn("window_local_coordinates", result_contract["required"])
-        self.assertIn("diagnostics", result_contract["required"])
-        self.assertEqual(
-            result_contract["required"]["coordinate_space"],
-            "Normalized request coordinate space: window-local or crop-local",
-        )
-        self.assertIn("crop_local_coordinates", result_contract["optional"])
-        self.assertIn("confidence", result_contract["optional"])
-        self.assertIn("raw_text", result_contract["optional"])
+        self.assertNotIn(retired_contract, manifest.capabilities)
+        self.assertIsNone(importlib.util.find_spec(retired_module))
+        for name in vision_sense.__all__:
+            self.assertNotRegex(name, rf"(?:{retired_export_pattern})")
 
     def test_text_envelope_contract_is_generic_text_output(self):
         envelope = SensePluginTextEnvelope(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import fields, is_dataclass
 from itertools import count
@@ -26,9 +27,28 @@ from .trace import compact_result_for_handoff, result_to_trace
 HOST_PORT_CALL_SCHEMA = "sciforge.computer-use.host-port-call.v1"
 HOST_PORT_RESULT_SCHEMA = "sciforge.computer-use.host-port-result.v1"
 FINAL_RESULT_SCHEMA = "sciforge.computer-use.cli-final-result.v1"
+LEGACY_PYTHON_DIAGNOSTIC_ENV = "SCIFORGE_COMPUTER_USE_LEGACY_PYTHON_DIAGNOSTIC"
+LEGACY_PYTHON_DIAGNOSTIC_FAILURE_STAGE = "legacy-python-diagnostic-gate"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if not _legacy_python_diagnostic_enabled():
+        payload = _failure_result(
+            (
+                "The package-local Python Computer Use CLI is legacy-obsolete and diagnostic-only. "
+                f"Set {LEGACY_PYTHON_DIAGNOSTIC_ENV}=1 to run this diagnostic surface explicitly."
+            ),
+            failed_stage=LEGACY_PYTHON_DIAGNOSTIC_FAILURE_STAGE,
+        )
+        if "--host-port-stdio" in raw_argv:
+            _emit_protocol_final(payload)
+        else:
+            json.dump(payload, sys.stdout, sort_keys=True)
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        return 1
+
     parser = argparse.ArgumentParser(description="Run sciforge_computer_use.run_task from JSON.")
     parser.add_argument("--request-json", help="ComputerUseRequest JSON. If omitted, stdin is read as JSON.")
     parser.add_argument("--fixture-json", help="Fixture hostPorts JSON for tests and dry-run diagnostics.")
@@ -42,7 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="Use JSONL stdout/stdin host-port calls. Requires --request-json.",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
 
     try:
         request = _load_json_arg_or_stdin(args.request_json)
@@ -340,7 +360,7 @@ def _result_payload(result: ComputerUseResult) -> dict[str, Any]:
     }
 
 
-def _failure_result(reason: str) -> dict[str, Any]:
+def _failure_result(reason: str, *, failed_stage: str = "cli") -> dict[str, Any]:
     return {
         "schemaVersion": "sciforge.computer-use.result.v1",
         "status": "failed-with-reason",
@@ -353,12 +373,16 @@ def _failure_result(reason: str) -> dict[str, Any]:
         "finalArtifactRef": None,
         "finalArtifactRefs": [],
         "approvalRequest": None,
-        "failureDiagnostics": {"failedStage": "cli"},
+        "failureDiagnostics": {"failedStage": failed_stage},
         "metrics": {},
         "steps": [],
         "budgetDebits": [],
         "budgetDebitRefs": [],
     }
+
+
+def _legacy_python_diagnostic_enabled() -> bool:
+    return os.environ.get(LEGACY_PYTHON_DIAGNOSTIC_ENV) == "1"
 
 
 def _json_value(value: Any) -> Any:

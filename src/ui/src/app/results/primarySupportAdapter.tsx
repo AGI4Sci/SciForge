@@ -323,10 +323,15 @@ function ManifestDiagnostics({ items, locale }: { items: ResultsRendererManifest
   );
 }
 
+const SUPPORT_STATUS_LABELS: Record<string, Record<ResultLocale, string>> = {
+  bound: { 'zh-CN': '可用', 'en-US': 'Ready' },
+  fallback: { 'zh-CN': '备用', 'en-US': 'Alternate' },
+  'missing-artifact': { 'zh-CN': '等待内容', 'en-US': 'Waiting for content' },
+  'missing-component': { 'zh-CN': '等待视图', 'en-US': 'Waiting for view' },
+};
+
 function resultStatusLabel(status: string, locale?: ResultLocale) {
-  if (status === 'bound') return resultText(locale, { 'zh-CN': '可用', 'en-US': 'Ready' });
-  if (status === 'fallback') return resultText(locale, { 'zh-CN': '备用视图', 'en-US': 'Alternate view' });
-  if (status === 'missing-artifact') return resultText(locale, { 'zh-CN': '等待内容', 'en-US': 'Waiting for content' });
-  if (status === 'missing-component') return resultText(locale, { 'zh-CN': '等待视图', 'en-US': 'Waiting for view' });
+  const label = SUPPORT_STATUS_LABELS[status];
+  if (label) return resultText(locale, label);
   return resultText(locale, { 'zh-CN': '已保存', 'en-US': 'Saved' });
 }

@@ -27,6 +27,24 @@ const XTermTerminal = xtermModule.Terminal
   ?? (xtermModule as typeof xtermModule & { default?: typeof xtermModule }).default?.Terminal;
 type XTermTerminalInstance = InstanceType<typeof xtermModule.Terminal>;
 
+const XTERM_THEME_DARK = {
+  background: '#06101b',
+  foreground: '#d7fbe8',
+  cursor: '#22f0bf',
+  selectionBackground: '#245d89',
+} as const;
+
+const XTERM_THEME_LIGHT = {
+  background: '#f8fafc',
+  foreground: '#1e293b',
+  cursor: '#009f72',
+  selectionBackground: 'rgba(0, 159, 114, 0.22)',
+} as const;
+
+function xtermThemeForAppTheme(theme: SciForgeConfig['theme']) {
+  return (theme ?? 'dark') === 'light' ? XTERM_THEME_LIGHT : XTERM_THEME_DARK;
+}
+
 type TerminalServerMessage =
   | { type: 'output'; data?: string }
   | { type: 'status'; session?: WorkspaceTerminalSession }
@@ -92,12 +110,7 @@ export function RightPaneTerminalTool({
       fontSize: 12,
       lineHeight: 1.25,
       scrollback: 8000,
-      theme: {
-        background: '#06101b',
-        foreground: '#d7fbe8',
-        cursor: '#22f0bf',
-        selectionBackground: '#245d89',
-      },
+      theme: xtermThemeForAppTheme(config.theme),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -137,6 +150,12 @@ export function RightPaneTerminalTool({
       setXtermReady(false);
     };
   }, []);
+
+  useEffect(() => {
+    const terminal = xtermRef.current;
+    if (!terminal) return;
+    terminal.options.theme = xtermThemeForAppTheme(config.theme);
+  }, [config.theme]);
 
   useEffect(() => {
     if (!xtermReady || !terminalSession) return;
@@ -387,6 +406,7 @@ export function RightPaneTerminalTool({
           title: resultText(locale, { 'zh-CN': 'Workspace Terminal', 'en-US': 'Workspace Terminal' }),
           props: {
             mode: 'live',
+            theme: (config.theme ?? 'dark') === 'light' ? 'light' : 'dark',
             adapter: terminalAdapter,
             sessionRef,
             sessionId,

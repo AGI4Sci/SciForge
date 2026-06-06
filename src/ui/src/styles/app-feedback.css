@@ -809,6 +809,15 @@
   gap: 12px;
 }
 
+.feedback-repair-readiness-head-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
 .feedback-repair-readiness-head div {
   display: grid;
   gap: 4px;

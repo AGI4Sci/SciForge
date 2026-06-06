@@ -68,6 +68,8 @@ export function createDesktopAnnotationWindowCaptureProvider(
         ? compactRefs([
           provenanceRefForWindowCaptureResult(result.captureRef),
           provenanceRefForWindowCaptureResult(result.imageRef),
+          provenanceRefForWindowCaptureResult(result.screenshotRef),
+          provenanceRefForWindowCaptureResult(result.cropRef),
         ])
         : [
           `${owned.prefix}window-capture/blocked/${sanitizeRefSegment(input.captureId)}`,
@@ -116,6 +118,8 @@ export function createDesktopAnnotationWindowCaptureProvider(
           provenanceRefs,
           windowCaptureRef: result.captureRef,
           windowCaptureImageRef: result.imageRef,
+          windowCaptureScreenshotRef: result.screenshotRef,
+          windowCaptureCropRef: result.cropRef,
           windowBinding,
           ...(windowBindingCandidates ? { windowBindingCandidates } : {}),
           diagnostics: providerDiagnostics,
@@ -518,6 +522,7 @@ function ownedAnnotationCaptureRefs(input: DesktopAnnotationCaptureProviderInput
 
 function provenanceRefForWindowCaptureResult(ref: string | null): string | undefined {
   if (!ref) return undefined;
+  if (ref.startsWith('desktop-window-capture:')) return ref;
   return ref.includes(':desktop-window-capture:')
     ? ref
     : ref.replace(/^([^:]+):/, '$1:desktop-window-capture:');

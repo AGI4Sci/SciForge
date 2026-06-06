@@ -55,7 +55,7 @@ export type BrowserRuntimeCommandType =
   | 'browser.close';
 
 export type BrowserRuntimeRiskLevel = 'low' | 'medium' | 'high';
-export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-snapshot' | 'ax-snapshot' | 'console-log' | 'network-log' | 'search-result' | 'download';
+export type BrowserRuntimeTraceRefKind = 'browser-frame' | 'screenshot' | 'dom-snapshot' | 'ax-snapshot' | 'console-log' | 'network-log' | 'search-result' | 'source-page' | 'download';
 export type BrowserHostSessionStatus = 'starting' | 'loading' | 'ready' | 'failed' | 'closed';
 export type BrowserHostSessionAction = 'navigate' | 'back' | 'forward' | 'reload' | 'stop' | 'click' | 'double-click' | 'mouse-down' | 'mouse-move' | 'mouse-up' | 'drag' | 'type' | 'press' | 'scroll' | 'cursor' | 'native-os-ui-proof' | 'snapshot' | 'state' | 'close';
 export type BrowserHostSessionActionRiskType = 'navigation-external' | 'form-submit' | 'credential' | 'payment' | 'destructive' | 'low-risk-input' | 'scroll' | 'click';
@@ -838,6 +838,7 @@ function browserRuntimeTraceRefKind(value: unknown): BrowserRuntimeTraceRefKind 
     || value === 'console-log'
     || value === 'network-log'
     || value === 'search-result'
+    || value === 'source-page'
     || value === 'download'
     ? value
     : undefined;

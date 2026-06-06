@@ -93,6 +93,59 @@ describe('runPromptOrchestrator target instance guard', () => {
     assert.equal(fetched.length, 0);
   });
 
+  it('asks for clarification before backend runtime on ambiguous Hugging Face ranking requests', async () => {
+    const fetched: string[] = [];
+    const events: AgentStreamEvent[] = [];
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      fetched.push(String(input));
+      return jsonResponse({ ok: false, error: 'ambiguous request must not fetch' }, 500);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '搜索今天 huggingface 上最火的工作',
+      onStreamEvent: (event) => events.push(event),
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(fetched.length, 0);
+    assert.match(result.finalResponse.message.content, /需要先确认/);
+    assert.match(result.finalResponse.message.content, /Daily Papers\/papers、models、datasets、Spaces，还是 jobs\/职位/);
+    assert.equal(result.finalResponse.message.provenance?.runtimeRequestEligible, false);
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'request_clarification');
+    assert.equal(result.finalResponse.executionUnits[0]?.status, 'needs-human');
+    assert.equal(events.find((event) => event.type === 'clarification-needed')?.label, 'Needs clarification');
+  });
+
+  it('keeps specific Hugging Face Daily Papers requests on the backend runtime path', async () => {
+    const fetched: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      fetched.push(String(input));
+      const url = String(input);
+      if (url.includes(CODEX_RUNTIME_STREAM_PATH)) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        assert.equal(body.commandText, '搜索 Hugging Face Daily Papers 今天热门论文');
+        assert.equal((body.agentHostInput as Record<string, unknown> | undefined)?.intentText, '搜索 Hugging Face Daily Papers 今天热门论文');
+        return streamResponse([{
+          result: {
+            message: 'Backend searched Daily Papers.',
+            executionUnits: [{ id: 'unit-browser-search', tool: 'browser_search', status: 'done' }],
+            artifacts: [],
+          },
+        }]);
+      }
+      return jsonResponse({ ok: false, error: `unexpected ${url}` }, 404);
+    }) as typeof fetch;
+
+    const result = await runPromptOrchestrator(orchestratorInput({
+      prompt: '搜索 Hugging Face Daily Papers 今天热门论文',
+    }));
+
+    assert.equal(result.status, 'completed');
+    assert.equal(fetched.some((url) => url.includes(CODEX_RUNTIME_STREAM_PATH)), true);
+    assert.equal(result.finalResponse.message.content, 'Backend searched Daily Papers.');
+    assert.equal(result.finalResponse.executionUnits[0]?.tool, 'browser_search');
+  });
+
   it('forwards annotation quick-action lane metadata so runtime transport starts fresh', async () => {
     const runtimeRequests: Array<Record<string, unknown>> = [];
     const previousCodexSessionId = '019e4f00-1111-7000-9000-orchestrator';

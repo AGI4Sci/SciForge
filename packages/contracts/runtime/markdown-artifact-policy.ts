@@ -9,6 +9,17 @@ export type MarkdownArtifactRewriteConstraints = {
   prohibitedTerms: string[];
 };
 
+export type MarkdownArtifactMutationIntent = {
+  hasArtifactSubject: boolean;
+  targetSignal: 'explicit-ref' | 'selected-ref' | 'directory-ref' | 'artifact-subject-only' | 'none';
+  operationKind: 'writeback' | 'rewrite' | 'update' | 'replace' | 'none';
+  scope: 'single-ref' | 'multi-ref' | 'directory' | 'unknown';
+  noWriteConstraint: boolean;
+  readonlyOrQuestion: boolean;
+  confidence: number;
+  permitMutation: boolean;
+};
+
 export function markdownReadonlyQuestionPolicy(prompt: string) {
   if (!markdownArtifactTargetPolicy(prompt)) return false;
   if (!explicitMarkdownPathsFromPrompt(prompt).length) return false;
@@ -16,7 +27,35 @@ export function markdownReadonlyQuestionPolicy(prompt: string) {
 }
 
 export function markdownArtifactMutationPolicy(prompt: string) {
-  return !markdownReadonlyOrNoChangePolicy(prompt) && markdownArtifactTargetPolicy(prompt) && markdownMutationIntentPolicy(prompt);
+  return markdownArtifactMutationIntent(prompt).permitMutation;
+}
+
+export function markdownArtifactMutationIntent(prompt: string): MarkdownArtifactMutationIntent {
+  const explicitRefs = explicitMarkdownPathsFromPrompt(prompt);
+  const hasArtifactSubject = markdownArtifactTargetPolicy(prompt);
+  const noWriteConstraint = markdownReadonlyOrNoChangePolicy(prompt) || markdownNoWriteConstraintPolicy(prompt);
+  const questionOnly = markdownQuestionIntentPolicy(prompt) && markdownDiscussionOnlyPolicy(prompt);
+  const operationKind = markdownMutationOperationKind(prompt);
+  const targetSignal = markdownMutationTargetSignal(prompt, explicitRefs);
+  const scope = markdownMutationScope(prompt, explicitRefs, targetSignal);
+  const confidence = markdownMutationConfidence({
+    hasArtifactSubject,
+    targetSignal,
+    operationKind,
+    scope,
+    noWriteConstraint,
+    questionOnly,
+  });
+  return {
+    hasArtifactSubject,
+    targetSignal,
+    operationKind,
+    scope,
+    noWriteConstraint,
+    readonlyOrQuestion: noWriteConstraint || questionOnly,
+    confidence,
+    permitMutation: confidence >= 0.72 && operationKind !== 'none' && targetSignal !== 'none' && targetSignal !== 'artifact-subject-only' && !noWriteConstraint && !questionOnly,
+  };
 }
 
 export function markdownReadonlyBulletPreference(prompt: string) {
@@ -98,12 +137,61 @@ function markdownReadonlyOrNoChangePolicy(prompt: string) {
   return /(?:read[-\s]?only|only read|do not (?:rewrite|write|modify|edit|save)|no changes)|只读|不要(?:重写|写入|写回|覆盖|保存|修改|更新)/i.test(prompt);
 }
 
+function markdownNoWriteConstraintPolicy(prompt: string) {
+  return /\b(?:should\s+not|must\s+not|do\s+not|don't|without)\s+(?:write|write\s*back|save|persist|mutate|modify|edit|apply)\b|\b(?:discussion|explanation|policy|guidance)\s+only\b|\bdo\s+not\s+apply\b|不要(?:写入|写回|保存|应用|实际修改)|不(?:要|应|应该)(?:写入|写回|保存|应用|实际修改)/i.test(prompt);
+}
+
 function markdownQuestionIntentPolicy(prompt: string) {
   return /\b(?:what|which|whether|does|how|why|summari[sz]e|list|audit|check|explain|state|name)\b|总结|列出|说明|解释|检查|审计|指出|回答/i.test(prompt);
 }
 
 function markdownMutationIntentPolicy(prompt: string) {
   return /\b(?:write\s*back|overwrite|persist|save|update|revise|rewrite|edit|modify|replace|regenerate)\b|写回|写入|覆盖|保存|更新|修订|重写|改写|修改|替换|重新生成/i.test(prompt);
+}
+
+function markdownMutationOperationKind(prompt: string): MarkdownArtifactMutationIntent['operationKind'] {
+  if (/\b(?:write\s*back|persist|save|overwrite)\b|写回|写入|覆盖|保存/i.test(prompt)) return 'writeback';
+  if (/\b(?:rewrite|revise|regenerate)\b|重写|改写|修订|重新生成/i.test(prompt)) return 'rewrite';
+  if (/\b(?:replace|substitute)\b|替换/i.test(prompt)) return 'replace';
+  if (/\b(?:update|edit|modify)\b|更新|修改/i.test(prompt)) return 'update';
+  return 'none';
+}
+
+function markdownMutationTargetSignal(prompt: string, explicitRefs: string[]): MarkdownArtifactMutationIntent['targetSignal'] {
+  if (explicitRefs.length) return 'explicit-ref';
+  if (selectedMarkdownTargetRequested(prompt)) return 'selected-ref';
+  if (markdownDirectoryTargetRequested(prompt) && markdownDirectoryCandidatesFromPrompt(prompt).length) return 'directory-ref';
+  if (markdownArtifactTargetPolicy(prompt)) return 'artifact-subject-only';
+  return 'none';
+}
+
+function markdownMutationScope(
+  prompt: string,
+  explicitRefs: string[],
+  targetSignal: MarkdownArtifactMutationIntent['targetSignal'],
+): MarkdownArtifactMutationIntent['scope'] {
+  if (targetSignal === 'directory-ref') return 'directory';
+  if (explicitRefs.length > 1 || markdownDirectoryTargetRequested(prompt)) return 'multi-ref';
+  if (explicitRefs.length === 1 || targetSignal === 'selected-ref') return 'single-ref';
+  return 'unknown';
+}
+
+function markdownDiscussionOnlyPolicy(prompt: string) {
+  return /\b(?:explain|discuss|describe|audit|check|list|how)\b.{0,80}\b(?:would|could|policy|safely|without applying)\b|只(?:说明|解释|讨论)/i.test(prompt);
+}
+
+function markdownMutationConfidence(input: Pick<MarkdownArtifactMutationIntent, 'hasArtifactSubject' | 'targetSignal' | 'operationKind' | 'scope' | 'noWriteConstraint'> & { questionOnly: boolean }) {
+  let score = 0;
+  if (input.hasArtifactSubject) score += 0.18;
+  if (input.targetSignal === 'explicit-ref') score += 0.32;
+  if (input.targetSignal === 'selected-ref') score += 0.28;
+  if (input.targetSignal === 'directory-ref') score += 0.24;
+  if (input.operationKind === 'writeback') score += 0.32;
+  else if (input.operationKind !== 'none') score += 0.24;
+  if (input.scope !== 'unknown') score += 0.12;
+  if (input.noWriteConstraint) score -= 0.48;
+  if (input.questionOnly) score -= 0.24;
+  return Math.max(0, Math.min(0.98, Number(score.toFixed(2))));
 }
 
 function positiveConstraintText(prompt: string) {

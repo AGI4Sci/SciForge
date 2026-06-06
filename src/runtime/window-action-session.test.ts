@@ -9,14 +9,17 @@ import {
   createWindowActionSessionFromAnnotationMetadata,
   dispatchWindowAction,
   enterWindowActionSession,
+  markWindowActionObservationStale,
   leaveWindowActionSession,
   planWindowActionFocusLease,
+  projectWindowActionSessionForGui,
   pauseWindowActionSession,
   releaseWindowActionFocusLease,
   recordWindowAction,
   removeWindowActionSession,
   routeWindowAction,
   stopWindowActionSession,
+  WINDOW_ACTION_OBSERVATION_STALE_REASONS,
   windowActionCandidateFromAnnotationMetadata,
   type WindowActionObserveBeforeMutateEvidence,
 } from './window-action-session.js';
@@ -221,6 +224,47 @@ test('WindowActionSession keeps a bounded cursor/action contract and routes acti
   ]);
 });
 
+test('WindowActionSession product schema owns refs-first target, leases, authorization, controls, and observation lifecycle', () => {
+  const session = createWindowActionSession({
+    id: 'product-window',
+    windowRef: 'window:product/main',
+    app: { id: 'org.sciforge.Product', name: 'Product Window', kind: 'ordinary-app' },
+    bounds: { x: 4, y: 8, width: 640, height: 480 },
+    screenId: 'screen-main',
+    evidenceRefs: [
+      { kind: 'evidence-ledger', ref: 'evidence:window-action-session/product-window/ledger' },
+      { kind: 'raw', ref: 'data:image/png;base64,secret-pixels' },
+    ],
+    timestamp: now,
+  });
+
+  assert.deepEqual(session.targetSummary, {
+    label: 'Product Window',
+    appKind: 'ordinary-app',
+    windowRef: 'window:product/main',
+    screenId: 'screen-main',
+    bounds: { x: 4, y: 8, width: 640, height: 480 },
+  });
+  assert.deepEqual(session.adapterRefs, []);
+  assert.equal(session.inputLease.ref, 'input-lease:window-action-session/product-window');
+  assert.equal(session.inputLease.status, 'available');
+  assert.equal(session.authorizationProfile.status, 'authorized');
+  assert.equal(session.authorizationProfile.profileRef, 'permission:window-action-session/product-window/authorization-profile');
+  assert.deepEqual(session.permissionRefs, ['permission:window-action-session/product-window/act']);
+  assert.deepEqual(session.controlRefs, {
+    cancelRef: 'cancel:window-action-session/product-window',
+    stopRef: 'stop:window-action-session/product-window',
+  });
+  assert.deepEqual(session.evidenceLedgerRefs, ['evidence:window-action-session/product-window/ledger']);
+  assert.equal(session.observation.status, 'unknown');
+  assert.deepEqual(session.observation.stale, {
+    reasons: [],
+    refreshRequired: true,
+    evidenceRefs: [],
+  });
+  assert.doesNotMatch(JSON.stringify(session), /data:image|base64|secret-pixels/);
+});
+
 test('WindowActionSession dispatcher hands actions to Agent Host adapters instead of GUI execution', async () => {
   const cursor = createActorCursor({
     agentId: 'agent-runtime-1',
@@ -241,6 +285,7 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
       app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
       capabilities: { appNativeCommand: true, accessibility: true, systemInput: true },
     },
+    actionId: 'codex-window-action-attempt-1',
     action: 'type',
     status: 'running',
     textLength: 6,
@@ -249,7 +294,7 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
     observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:vscode:main' }),
   }, {
     'app-native-command': async ({ route, input }) => {
-      calls.push(`${route.owner}:${route.adapter}:${route.guiExecutable}:${input.action}`);
+      calls.push(`${route.owner}:${route.adapter}:${route.guiExecutable}:${input.action}:${input.actionId}`);
       return {
         status: 'completed',
         evidenceRefs: [{ kind: 'command', ref: 'app-native-command:vscode:type-1' }],
@@ -257,11 +302,12 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
     },
   });
 
-  assert.deepEqual(calls, ['agent-host-adapter:app-native-command:false:type']);
+  assert.deepEqual(calls, ['agent-host-adapter:app-native-command:false:type:codex-window-action-attempt-1']);
   assert.equal(dispatched.route.adapter, 'app-native-command');
   assert.equal(dispatched.route.owner, 'agent-host-adapter');
   assert.equal(dispatched.route.guiExecutable, false);
   assert.equal(dispatched.session.events.at(-1)?.type, 'type');
+  assert.equal(dispatched.session.events.at(-1)?.actionId, 'codex-window-action-attempt-1');
   assert.equal(dispatched.session.events.at(-1)?.status, 'completed');
   assert.deepEqual(dispatched.session.events.at(-1)?.evidenceRefs, [
     { kind: 'command', ref: 'app-native-command:vscode:type-1' },
@@ -270,7 +316,7 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
   const systemInput = await dispatchWindowAction(session, {
     target: {
       app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
-      capabilities: { systemInput: true },
+      capabilities: { systemInput: true, explicitHandoff: true },
     },
     action: 'click',
     status: 'running',
@@ -290,6 +336,326 @@ test('WindowActionSession dispatcher hands actions to Agent Host adapters instea
     { kind: 'focus-lease', ref: 'focus-lease:screen:built-in/agent-runtime-1/2026-06-03t00:00:00.000z' },
     { kind: 'screenshot', ref: 'window-action-ref:system-input-after' },
   ]);
+});
+
+test('Accessibility scoped input adapter exposes only target hints, state snapshots, and non-private bindings', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    windowRef: 'window:legacy-canvas:main',
+    app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+    screenId: 'screen:built-in',
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now });
+  const route = routeWindowAction({
+    target: {
+      app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+      capabilities: { accessibility: true },
+    },
+    action: 'click',
+  });
+  assert.equal(route.adapter, 'accessibility-ui-automation');
+  assert.equal(route.owner, 'agent-host-adapter');
+  assert.equal(route.guiExecutable, false);
+  assert.equal(route.evidence?.accessibilityTargetHintsOnly, true);
+  assert.equal(route.evidence?.nonPrivateActionBindingOnly, true);
+  assert.deepEqual(route.evidenceRefs, [
+    { kind: 'target-hint', ref: 'accessibility-ui-automation:legacy.canvas:target-hints' },
+    { kind: 'state-snapshot', ref: 'accessibility-ui-automation:legacy.canvas:state-snapshot' },
+    { kind: 'non-private-action-binding', ref: 'accessibility-ui-automation:legacy.canvas:click:action-binding' },
+  ]);
+
+  let handlerCalls = 0;
+  const dispatched = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+      capabilities: { accessibility: true },
+    },
+    action: 'click',
+    status: 'running',
+    timestamp: now,
+    targetDescription: 'visible search field',
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:accessibility-before-click' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:legacy-canvas:main' }),
+  }, {
+    'accessibility-ui-automation': async ({ scopedInputAdapter }) => {
+      handlerCalls += 1;
+      assert.deepEqual(scopedInputAdapter.evidenceRefs, route.evidenceRefs);
+      return {
+        status: 'completed',
+        evidenceRefs: [{ kind: 'executor-event', ref: 'accessibility-ui-automation:legacy.canvas/click/executor-event' }],
+        afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:accessibility-after-click' }],
+      };
+    },
+  }, {
+    agentId: 'agent-runtime-1',
+    actorCursorRef: 'actor-cursor:agent-runtime-1/cursor-runtime-1',
+  });
+
+  assert.equal(handlerCalls, 1);
+  assert.equal(dispatched.adapterResult.status, 'completed');
+  assert.equal(dispatched.session.events.at(-1)?.scopedInputAdapterRef, dispatched.scopedInputAdapter.ref);
+  assert.equal(dispatched.scopedInputAdapter.adapter, 'accessibility-ui-automation');
+});
+
+test('Terminal scoped input adapter records PTY evidence and blocks shell artifacts outside explicit terminal workflows', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    windowRef: 'window:terminal:main',
+    app: { id: 'com.apple.Terminal', name: 'Terminal', kind: 'terminal' },
+    screenId: 'screen:built-in',
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now });
+  const terminalEvidence = {
+    commandIntentRefs: [{ kind: 'command-intent', ref: 'terminal-pty:session-1/intent/echo-report' }],
+    visibleTerminalSessionRefs: [{ kind: 'visible-terminal-session', ref: 'terminal-pty:session-1/visible' }],
+    transcriptRefs: [{ kind: 'transcript', ref: 'terminal-pty:session-1/transcript/1' }],
+    exitCode: 0,
+    artifactRefs: [{ kind: 'artifact', ref: 'terminal-pty:session-1/artifacts/report.md' }],
+  };
+  let blockedHandlerCalls = 0;
+
+  const blocked = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.apple.Terminal', name: 'Terminal', kind: 'terminal' },
+      capabilities: { terminal: true },
+    },
+    action: 'type',
+    status: 'running',
+    timestamp: now,
+    text: 'echo report > report.md',
+    textLength: 23,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:terminal-before-type' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:terminal:main' }),
+  }, {
+    terminal: async () => {
+      blockedHandlerCalls += 1;
+      return {
+        status: 'completed',
+        evidenceRefs: [{ kind: 'executor-event', ref: 'terminal-pty:session-1/executor-event/1' }],
+        afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:terminal-after-type' }],
+        ...terminalEvidence,
+      };
+    },
+  });
+
+  assert.equal(blockedHandlerCalls, 1);
+  assert.equal(blocked.adapterResult.status, 'blocked');
+  assert.match(JSON.stringify(blocked.session.events.at(-1)?.evidenceRefs ?? []), /terminal-workflow-required|shell-artifact-not-gui/);
+
+  const completed = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.apple.Terminal', name: 'Terminal', kind: 'terminal' },
+      capabilities: { terminal: true, terminalWorkflow: true },
+    },
+    action: 'type',
+    status: 'running',
+    timestamp: now,
+    text: 'echo report > report.md',
+    textLength: 23,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:terminal-before-type' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:terminal:main' }),
+  }, {
+    terminal: async () => ({
+      status: 'completed',
+      evidenceRefs: [{ kind: 'executor-event', ref: 'terminal-pty:session-1/executor-event/1' }],
+      afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:terminal-after-type' }],
+      ...terminalEvidence,
+    }),
+  });
+
+  assert.equal(completed.route.adapter, 'terminal');
+  assert.equal(completed.adapterResult.status, 'completed');
+  assert.deepEqual(completed.session.events.at(-1)?.evidenceRefs, [
+    ...completed.route.evidenceRefs,
+    { kind: 'executor-event', ref: 'terminal-pty:session-1/executor-event/1' },
+    ...terminalEvidence.commandIntentRefs,
+    ...terminalEvidence.visibleTerminalSessionRefs,
+    ...terminalEvidence.transcriptRefs,
+    { kind: 'exit-code', ref: 'terminal-pty:session-1/exit-code/0' },
+    ...terminalEvidence.artifactRefs,
+  ]);
+  assert.doesNotMatch(JSON.stringify(completed.session.events.at(-1)), /echo report > report\.md/);
+});
+
+test('Editor save actions require visible input event and artifact validator refs', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    windowRef: 'window:vscode:main',
+    app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
+    screenId: 'screen:built-in',
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now });
+
+  const missingValidator = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
+      capabilities: { appNativeCommand: true, accessibility: true },
+    },
+    action: 'save',
+    status: 'running',
+    timestamp: now,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:editor-before-save' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:vscode:main' }),
+  }, {
+    'app-native-command': async () => ({
+      status: 'completed',
+      evidenceRefs: [{ kind: 'executor-event', ref: 'app-native-command:vscode/save/executor-event' }],
+      afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:editor-after-save' }],
+    }),
+  });
+
+  assert.equal(missingValidator.adapterResult.status, 'blocked');
+  assert.match(JSON.stringify(missingValidator.session.events.at(-1)?.evidenceRefs ?? []), /editor-save-validation/);
+
+  const saved = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
+      capabilities: { appNativeCommand: true, accessibility: true },
+    },
+    action: 'save',
+    status: 'running',
+    timestamp: now,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:editor-before-save' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:vscode:main' }),
+  }, {
+    'app-native-command': async () => ({
+      status: 'completed',
+      evidenceRefs: [
+        { kind: 'executor-event', ref: 'app-native-command:vscode/save/executor-event' },
+        { kind: 'input-event', ref: 'app-native-command:vscode/save/input-event' },
+        { kind: 'artifact-validator', ref: 'window-action-session:vscode-main/artifact-validator/report.md' },
+      ],
+      afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:editor-after-save' }],
+    }),
+  });
+
+  assert.equal(saved.adapterResult.status, 'completed');
+  assert.match(JSON.stringify(saved.session.events.at(-1)?.evidenceRefs ?? []), /input-event/);
+  assert.match(JSON.stringify(saved.session.events.at(-1)?.evidenceRefs ?? []), /artifact-validator/);
+});
+
+test('File manager adapter requires visible selection and directory evidence, and remote deletes hard-confirm first', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    windowRef: 'window:finder:main',
+    app: { id: 'com.apple.finder', name: 'Finder', kind: 'file-manager' },
+    screenId: 'screen:built-in',
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now });
+  let deleteHandlerCalls = 0;
+
+  const deleteBlocked = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.apple.finder', name: 'Finder', kind: 'file-manager' },
+      capabilities: { fileManager: true, remote: true },
+    },
+    action: 'delete',
+    status: 'running',
+    timestamp: now,
+    targetDescription: 'remote report.csv',
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:file-manager-before-delete' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:finder:main' }),
+  }, {
+    'file-manager': async () => {
+      deleteHandlerCalls += 1;
+      return { status: 'completed' };
+    },
+  });
+
+  assert.equal(deleteHandlerCalls, 0);
+  assert.equal(deleteBlocked.adapterResult.status, 'blocked');
+  assert.match(JSON.stringify(deleteBlocked.session.events.at(-1)?.evidenceRefs ?? []), /hard-confirm/);
+
+  const renamed = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'com.apple.finder', name: 'Finder', kind: 'file-manager' },
+      capabilities: { fileManager: true },
+    },
+    action: 'rename',
+    status: 'running',
+    timestamp: now,
+    targetDescription: 'report draft.md',
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:file-manager-before-rename' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:finder:main' }),
+  }, {
+    'file-manager': async () => ({
+      status: 'completed',
+      evidenceRefs: [
+        { kind: 'executor-event', ref: 'file-manager:finder/rename/executor-event' },
+        { kind: 'visible-file-selection', ref: 'file-manager:finder/selection/report-draft' },
+        { kind: 'directory-evidence', ref: 'file-manager:finder/directory/listing-after-rename' },
+      ],
+      afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:file-manager-after-rename' }],
+    }),
+  });
+
+  assert.equal(renamed.route.adapter, 'file-manager');
+  assert.equal(renamed.adapterResult.status, 'completed');
+  assert.match(JSON.stringify(renamed.session.events.at(-1)?.evidenceRefs ?? []), /visible-file-selection/);
+  assert.match(JSON.stringify(renamed.session.events.at(-1)?.evidenceRefs ?? []), /directory-evidence/);
+});
+
+test('Shared system input fallback is blocked by default and only runs for diagnostics or explicit handoff', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    windowRef: 'window:legacy-canvas:main',
+    app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+    screenId: 'screen:built-in',
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now });
+  let blockedHandlerCalls = 0;
+
+  const blocked = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+      capabilities: { systemInput: true },
+    },
+    action: 'click',
+    status: 'running',
+    timestamp: now,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:system-input-before' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:legacy-canvas:main' }),
+  }, {
+    'system-input': async () => {
+      blockedHandlerCalls += 1;
+      return { status: 'completed' };
+    },
+  });
+
+  assert.equal(blockedHandlerCalls, 0);
+  assert.equal(blocked.adapterResult.status, 'blocked');
+  assert.match(JSON.stringify(blocked.session.events.at(-1)?.evidenceRefs ?? []), /shared-system-input-default-blocked/);
+
+  const diagnostic = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'legacy.canvas', name: 'Legacy Canvas', kind: 'ordinary-app' },
+      capabilities: { systemInput: true, diagnostic: true },
+    },
+    action: 'click',
+    status: 'running',
+    timestamp: now,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:system-input-before' }],
+    observeBeforeMutate: windowObserveEvidence({ screenId: 'screen:built-in', windowRef: 'window:legacy-canvas:main' }),
+  }, {
+    'system-input': async () => ({
+      status: 'completed',
+      evidenceRefs: [{ kind: 'executor-event', ref: 'shared-system-input:legacy.canvas/click/executor-event' }],
+      afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:system-input-after' }],
+    }),
+  });
+
+  assert.equal(diagnostic.adapterResult.status, 'completed');
+  assert.equal(diagnostic.route.evidence?.diagnosticOnly, true);
 });
 
 test('WindowActionSession creates scoped input adapter refs per agent session', async () => {
@@ -482,6 +848,138 @@ test('WindowActionSession blocks mutating dispatches with stale observe-before-m
   assert.equal(blocked.session.events.at(-1)?.type, 'click');
   assert.equal(blocked.session.events.at(-1)?.status, 'blocked');
   assert.match(JSON.stringify(blocked.session.events.at(-1)?.evidenceRefs ?? []), /stale-observation|observe-before-mutate/);
+});
+
+test('WindowActionSession records structured stale lifecycle for refresh-forcing causes', () => {
+  assert.deepEqual(WINDOW_ACTION_OBSERVATION_STALE_REASONS, [
+    'focus-loss',
+    'window-migration',
+    'resize',
+    'occlusion',
+    'close',
+    'navigation',
+    'scroll',
+    'input',
+  ]);
+
+  const session = createWindowActionSession({
+    id: 'stale-window',
+    windowRef: 'window:stale/main',
+    screenId: 'screen-main',
+    timestamp: now,
+  });
+
+  for (const reason of WINDOW_ACTION_OBSERVATION_STALE_REASONS) {
+    const stale = markWindowActionObservationStale(session, reason, {
+      timestamp: now,
+      evidenceRefs: [{ kind: 'observation', ref: `evidence:window-action-session/stale-window/${reason}` }],
+    });
+    assert.deepEqual(stale.observation.stale.reasons, [reason]);
+    assert.equal(stale.observation.stale.refreshRequired, reason !== 'close');
+    assert.equal(stale.observation.status, reason === 'close' ? 'blocked' : 'stale');
+  }
+
+  const resized = markWindowActionObservationStale(session, 'resize', { timestamp: now });
+  assert.equal(resized.observation.status, 'stale');
+  assert.deepEqual(resized.observation.stale.reasons, ['resize']);
+
+  const navigated = markWindowActionObservationStale(session, 'navigation', { timestamp: now });
+  assert.equal(navigated.observation.status, 'stale');
+  assert.deepEqual(navigated.observation.stale.reasons, ['navigation']);
+
+  const inputStale = markWindowActionObservationStale(session, 'input', { timestamp: now });
+  assert.equal(inputStale.observation.status, 'stale');
+  assert.deepEqual(inputStale.observation.stale.reasons, ['input']);
+});
+
+test('dispatch evidence visibly ties actor cursor to the same WindowActionSession owner prefix', async () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    id: 'owned-window',
+    windowRef: 'window:owned/main',
+    app: { id: 'org.sciforge.Owned', name: 'Owned Window', kind: 'ordinary-app' },
+    timestamp: now,
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+    cursorId: 'cursor-runtime-1',
+  }), {
+    timestamp: now,
+    actorCursorRef: 'actor-cursor:window-action-session/owned-window/agent-runtime-1/cursor-runtime-1',
+  });
+
+  const dispatched = await dispatchWindowAction(session, {
+    target: {
+      app: { id: 'org.sciforge.Owned', name: 'Owned Window', kind: 'ordinary-app' },
+      capabilities: { accessibility: true },
+    },
+    action: 'click',
+    status: 'running',
+    timestamp: now,
+    beforeEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-ref:owned-before-click' }],
+    observeBeforeMutate: windowObserveEvidence({ windowRef: 'window:owned/main' }),
+  }, {
+    'accessibility-ui-automation': async () => ({
+      status: 'completed',
+      evidenceRefs: [{ kind: 'executor-event', ref: 'accessibility-ui-automation:owned/click/executor-event' }],
+    }),
+  }, {
+    agentId: 'agent-runtime-1',
+    actorCursorRef: 'actor-cursor:window-action-session/owned-window/agent-runtime-1/cursor-runtime-1',
+  });
+
+  const event = dispatched.session.events.at(-1);
+  assert.equal(event?.actorCursorRef, 'actor-cursor:window-action-session/owned-window/agent-runtime-1/cursor-runtime-1');
+  assert.ok(event?.evidenceRefs.some((item) => (
+    item.kind === 'actor-cursor'
+    && item.ref === 'actor-cursor:window-action-session/owned-window/agent-runtime-1/cursor-runtime-1'
+  )));
+  assert.ok(event?.actorCursorRef?.startsWith(`actor-cursor:window-action-session/${dispatched.session.id}/`));
+  assert.equal(dispatched.session.actorCursor?.target?.sessionId, dispatched.session.id);
+});
+
+test('GUI projection exposes only session status, actor cursor, confirmation, and stop/cancel controls', () => {
+  const session = enterWindowActionSession(createWindowActionSession({
+    id: 'gui-projected',
+    windowRef: 'window:gui/main',
+    app: { id: 'org.sciforge.Gui', name: 'GUI Window', kind: 'ordinary-app' },
+    timestamp: now,
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+    cursorId: 'cursor-runtime-1',
+  }), {
+    timestamp: now,
+    actorCursorRef: 'actor-cursor:window-action-session/gui-projected/agent-runtime-1/cursor-runtime-1',
+  });
+
+  const projection = projectWindowActionSessionForGui(session, {
+    confirmationRef: 'approval:window-action-session/gui-projected/confirm-risk',
+  });
+
+  assert.deepEqual(Object.keys(projection).sort(), [
+    'actorCursor',
+    'confirmation',
+    'controls',
+    'schemaVersion',
+    'sessionRef',
+    'status',
+  ]);
+  assert.equal(projection.status, 'active');
+  assert.equal(projection.actorCursor?.ref, 'actor-cursor:window-action-session/gui-projected/agent-runtime-1/cursor-runtime-1');
+  assert.deepEqual(projection.controls, {
+    cancelRef: 'cancel:window-action-session/gui-projected',
+    stopRef: 'stop:window-action-session/gui-projected',
+  });
+  assert.deepEqual(projection.confirmation, {
+    required: true,
+    confirmationRef: 'approval:window-action-session/gui-projected/confirm-risk',
+  });
+  assert.equal('events' in projection, false);
+  assert.equal('scopedInputAdapters' in projection, false);
+  assert.equal('evidenceRefs' in projection, false);
+  assert.equal('adapterRefs' in projection, false);
 });
 
 test('FocusLease serializes focused system input while focus-free adapters remain parallel', () => {
@@ -798,7 +1296,9 @@ test('annotation window metadata feeds generic adapter routing with accessibilit
   const accessibilityRoute = routeWindowAction({ target: candidate.routeTarget!, action: 'click' });
   assert.equal(accessibilityRoute.adapter, 'accessibility-ui-automation');
   assert.deepEqual(accessibilityRoute.evidenceRefs, [
-    { kind: 'accessibility-ui-automation', ref: 'accessibility-ui-automation:legacy.canvas:click' },
+    { kind: 'target-hint', ref: 'accessibility-ui-automation:legacy.canvas:target-hints' },
+    { kind: 'state-snapshot', ref: 'accessibility-ui-automation:legacy.canvas:state-snapshot' },
+    { kind: 'non-private-action-binding', ref: 'accessibility-ui-automation:legacy.canvas:click:action-binding' },
   ]);
 
   const fallback = windowActionCandidateFromAnnotationMetadata({

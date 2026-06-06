@@ -20,6 +20,7 @@ export interface ChatLiveFailureDiagnostic {
     | 'canonical-l3-missing'
     | 'canonical-l3-blocked'
     | 'canonical-l3-producer-failure'
+    | 'package-bridge-repair-needed'
     | 'package-bridge-process-failure';
   summary: string;
   refs: string[];
@@ -173,6 +174,48 @@ export function packageBridgeProcessFailureDiagnosticsFromTrace(input: {
     refs: input.ref ? [input.ref] : [],
     recoverActions: [
       'Open the current-run vision trace and fix the package bridge process failure before treating the chat run as completed.',
+    ],
+  }];
+}
+
+export function packageBridgeRepairNeededDiagnosticsFromSidecars(input: {
+  blockedManifest?: { record: Record<string, unknown>; ref?: string };
+  repairHint?: { record: Record<string, unknown>; ref?: string };
+  continuationRequest?: { record: Record<string, unknown>; ref?: string };
+}): ChatLiveFailureDiagnostic[] {
+  const blocked = input.blockedManifest?.record;
+  const repairHint = input.repairHint?.record;
+  const continuationRequest = input.continuationRequest?.record;
+  if (!blocked && !repairHint) return [];
+  const failedStage = stringAt(blocked, 'failedStage') ?? 'repair-needed';
+  const reason = safeIssueText(stringAt(blocked, 'reason') ?? stringAt(repairHint, 'reason') ?? 'Computer Use package bridge returned repair-needed.');
+  const continuationRequestRef = input.continuationRequest?.ref
+    ?? stringAt(blocked, 'continuationRequestRef')
+    ?? stringAt(repairHint, 'continuationRequestRef');
+  const refs = uniqueStrings([
+    input.blockedManifest?.ref,
+    input.repairHint?.ref,
+    input.continuationRequest?.ref,
+    stringAt(blocked, 'traceRef'),
+    stringAt(blocked, 'requestRef'),
+    stringAt(blocked, 'tuiHostRunTaskChainRef'),
+    stringAt(blocked, 'repairHintRef'),
+    stringAt(blocked, 'continuationRequestRef'),
+    stringAt(repairHint, 'blockedManifestRef'),
+    recordAt(repairHint, 'nextAttempt') ? stringAt(recordAt(repairHint, 'nextAttempt'), 'reuseTraceRef') : undefined,
+    recordAt(repairHint, 'nextAttempt') ? stringAt(recordAt(repairHint, 'nextAttempt'), 'reuseRunTaskChainRef') : undefined,
+    stringAt(continuationRequest, 'blockedManifestRef'),
+    stringAt(continuationRequest, 'repairHintRef'),
+    stringAt(continuationRequest, 'sameTraceSessionRef'),
+  ]).slice(0, 12);
+  return [{
+    kind: 'package-bridge-repair-needed',
+    summary: `Computer Use package bridge returned repair-needed after submission: failedStage=${safeIssueText(failedStage)}; reason=${reason}`,
+    refs,
+    recoverActions: [
+      continuationRequestRef
+        ? `/computer-use continue --continuation-request-ref "${continuationRequestRef}"`
+        : 'Open the current-run blocked-manifest and repair-hint refs, then rerun after resolving the listed Computer Use package bridge blocker.',
     ],
   }];
 }

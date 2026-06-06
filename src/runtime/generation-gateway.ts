@@ -146,14 +146,15 @@ import { tryRunVisionSenseRuntime } from './vision-sense-runtime.js';
 import { tryRunPlaywrightEdgeBrowserRuntime } from './playwright-edge-browser-runtime.js';
 import { tryRunBrowserComputerUseCapabilityRuntime } from './browser-computer-use-capability-runtime.js';
 import { tryRunBrowserHostSearchRuntime } from './browser-host-search-runtime.js';
+import { tryRunRequestClarificationRuntime } from './request-clarification-runtime.js';
 import { tryRunLocalDataSensitivityRuntime } from './local-data-sensitivity-runtime.js';
 import { tryRunLocalTabularAnalysisRuntime } from './local-tabular-analysis-runtime.js';
 import { tryRunLocalCodeDebugRuntime } from './local-code-debug-runtime.js';
 import { tryRunLocalReproducibleMethodRuntime } from './local-reproducible-method-runtime.js';
 import { tryRunLocalMethodologyFinalizerRuntime } from './local-methodology-finalizer-runtime.js';
 import { applyConversationPolicy } from './conversation-policy/apply.js';
-import { toolPackageManifests } from '../../packages/skills/tool_skills';
-import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../packages/skills/runtime-policy';
+import { toolPackageManifests } from '../../packages/skills/tool_skills/index.js';
+import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../packages/skills/runtime-policy.js';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import {
   agentServerConvergenceGuardEvent,
@@ -189,6 +190,7 @@ configurePayloadValidationContext(attemptPlanRefs);
 
 export const STAGE_CONVERSATION_POLICY = 'conversation-policy';
 export const STAGE_REQUEST_ENRICHMENT = 'request-enrichment';
+export const STAGE_REQUEST_CLARIFICATION_RUNTIME = 'request-clarification-runtime';
 export const STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH = 'browser-computer-use-capability-truth';
 export const STAGE_CAPABILITY_PROVIDER_PREFLIGHT = 'capability-provider-preflight';
 export const STAGE_DIRECT_CONTEXT_FAST_PATH = 'direct-context-fast-path';
@@ -209,6 +211,7 @@ export const STAGE_AGENTSERVER_GENERATION = 'agentserver-generation';
 export type GatewayPipelineStageName =
   | typeof STAGE_CONVERSATION_POLICY
   | typeof STAGE_REQUEST_ENRICHMENT
+  | typeof STAGE_REQUEST_CLARIFICATION_RUNTIME
   | typeof STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH
   | typeof STAGE_CAPABILITY_PROVIDER_PREFLIGHT
   | typeof STAGE_DIRECT_CONTEXT_FAST_PATH
@@ -246,6 +249,7 @@ export interface GatewayPipelineStage {
 export const GATEWAY_PIPELINE_STAGE_ORDER: GatewayPipelineStageName[] = [
   STAGE_CONVERSATION_POLICY,
   STAGE_REQUEST_ENRICHMENT,
+  STAGE_REQUEST_CLARIFICATION_RUNTIME,
   STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
   STAGE_BROWSER_HOST_SEARCH_RUNTIME,
   STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
@@ -291,6 +295,13 @@ export const GATEWAY_PIPELINE_STAGES: GatewayPipelineStage[] = [
           await requestWithAgentHarnessShadow(context.request, context.telemetry.callbacks, context.policyApplication),
         ),
       };
+    },
+  },
+  {
+    name: STAGE_REQUEST_CLARIFICATION_RUNTIME,
+    async execute(context) {
+      const payload = tryRunRequestClarificationRuntime(context.request);
+      return payload ? { kind: 'short-circuit', payload } : { kind: 'continue' };
     },
   },
   {

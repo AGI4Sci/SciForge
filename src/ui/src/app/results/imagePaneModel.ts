@@ -67,6 +67,10 @@ export interface ImageEvidencePayload {
   createdAt?: string;
   provenanceRef?: string;
   annotationRefs?: string[];
+  beforeScreenshotRef?: string;
+  afterScreenshotRef?: string;
+  artifactPreviewRef?: string;
+  actionTimelineRefs?: string[];
   targetRef?: string;
   windowRef?: string;
   browserSessionRef?: string;
@@ -168,6 +172,36 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
   if (!imageRef) return undefined;
 
   const replayRef = safeRef(asString(record.replayRef));
+  const beforeScreenshotRef = firstNonEmptyString(
+    safeRef(asString(record.beforeScreenshotRef)),
+    safeRef(asString(record.beforeFrameRef)),
+    safeRef(asString(record.beforeImageRef)),
+    safeRef(asString(frameRecord?.beforeScreenshotRef)),
+    safeRef(asString(frameRecord?.beforeFrameRef)),
+    safeRef(asString(frameRecord?.beforeImageRef)),
+  );
+  const afterScreenshotRef = firstNonEmptyString(
+    safeRef(asString(record.afterScreenshotRef)),
+    safeRef(asString(record.afterFrameRef)),
+    safeRef(asString(record.afterImageRef)),
+    safeRef(asString(frameRecord?.afterScreenshotRef)),
+    safeRef(asString(frameRecord?.afterFrameRef)),
+    safeRef(asString(frameRecord?.afterImageRef)),
+  );
+  const artifactPreviewRef = firstNonEmptyString(
+    safeRef(asString(record.artifactPreviewRef)),
+    safeRef(asString(record.artifactPreviewImageRef)),
+    safeRef(asString(record.previewArtifactRef)),
+  );
+  const actionTimelineRefs = refList(
+    asStringList(record.actionTimelineRefs).map(safeRef),
+    asStringList(record.timelineRefs).map(safeRef),
+    asStringList(record.actionRefs).map(safeRef),
+    refsFromRecordList(record.actionTimeline, ['ref', 'timelineRef', 'actionRef', 'eventRef']),
+    refsFromRecordList(record.actionTimelineItems, ['ref', 'timelineRef', 'actionRef', 'eventRef']),
+    refsFromRecordList(record.actions, ['ref', 'actionRef', 'timelineRef', 'eventRef']),
+    refsFromRecordList(record.events, ['ref', 'eventRef', 'timelineRef', 'actionRef']),
+  );
   const evidenceLedgerRef = safeRef(firstNonEmptyString(
     asString(record.provenanceRef),
     asString(record.evidenceLedgerRef),
@@ -224,6 +258,10 @@ export function normalizeImageEvidencePayload(input: unknown): ImageEvidencePayl
       asStringList(record.annotationOverlayRefs).map(safeRef),
       asStringList(record.annotationProposalRefs).map(safeRef),
     ),
+    beforeScreenshotRef,
+    afterScreenshotRef,
+    artifactPreviewRef,
+    actionTimelineRefs,
     targetRef: firstNonEmptyString(
       safeRef(asString(record.targetRef)),
       windowRef,
@@ -286,6 +324,9 @@ function compactImageEvidencePayload(payload: ImageEvidencePayload): ImageEviden
     'sha256',
     'createdAt',
     'provenanceRef',
+    'beforeScreenshotRef',
+    'afterScreenshotRef',
+    'artifactPreviewRef',
     'targetRef',
     'windowRef',
     'browserSessionRef',
@@ -308,6 +349,7 @@ function compactImageEvidencePayload(payload: ImageEvidencePayload): ImageEviden
     if (value !== undefined) Object.assign(compacted, { [key]: value });
   }
   if (payload.annotationRefs?.length) compacted.annotationRefs = payload.annotationRefs;
+  if (payload.actionTimelineRefs?.length) compacted.actionTimelineRefs = payload.actionTimelineRefs;
   if (payload.provenanceRefs?.length) compacted.provenanceRefs = payload.provenanceRefs;
   if (payload.windowBinding) compacted.windowBinding = payload.windowBinding;
   return compacted;
@@ -454,9 +496,30 @@ function safeRef(value: string | undefined) {
   if (!value) return undefined;
   const ref = value.trim();
   if (!ref) return undefined;
+  if (ref.length > 500) return undefined;
+  const lower = ref.toLowerCase();
   if (/^data:/i.test(ref)) return undefined;
   if (/^https?:\/\//i.test(ref)) return undefined;
+  if (/^(?:blob|file|javascript):/i.test(ref)) return undefined;
   if (/^\/api\/.*(?:preview|provider|executor|route)/i.test(ref)) return undefined;
+  if (
+    lower.includes('base64') ||
+    lower.includes('rawscreenshot') ||
+    lower.includes('raw_screenshot') ||
+    lower.includes('rawprovider') ||
+    lower.includes('providerpayload') ||
+    lower.includes('provider-payload') ||
+    lower.includes('stdout') ||
+    lower.includes('stderr') ||
+    lower.includes('<html') ||
+    lower.includes('authorization') ||
+    lower.includes('bearer') ||
+    lower.includes('api-key') ||
+    lower.includes('apikey') ||
+    lower.includes('password') ||
+    lower.includes('secret') ||
+    lower.includes('token')
+  ) return undefined;
   return ref;
 }
 
@@ -524,6 +587,22 @@ function refList(...values: Array<string | undefined | Array<string | undefined>
     }
   }
   return Array.from(new Set(refs));
+}
+
+function refsFromRecordList(value: unknown, keys: string[]) {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    if (typeof entry === 'string') {
+      const ref = safeRef(entry);
+      return ref ? [ref] : [];
+    }
+    if (!isRecord(entry)) return [];
+    for (const key of keys) {
+      const ref = safeRef(asString(entry[key]));
+      if (ref) return [ref];
+    }
+    return [];
+  });
 }
 
 function firstNonEmptyString(...values: Array<string | undefined>) {

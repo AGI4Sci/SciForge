@@ -12,6 +12,7 @@ import type {
 import { makeId, nowIso } from '../../domain';
 import { mergeObjectReferences } from '../../../../../packages/support/object-references';
 import { normalizeScenarioPromptTitle } from '@sciforge/scenario-core/scenario-routing-policy';
+import { withSessionWriteGuard } from '../../sessionStore';
 import {
   ACCEPTANCE_REPAIR_RERUN_TOOL_ID,
 } from '@sciforge-ui/runtime-contract/events';
@@ -98,6 +99,10 @@ export function createOptimisticUserTurnSession({
     updatedAt: now,
   };
   return { session: nextSession, userMessage };
+}
+
+export function rebaseAcceptedSessionForLocalFollowup(session: SciForgeSession): SciForgeSession {
+  return withSessionWriteGuard(session);
 }
 
 function isExistingUserAuthoredMessage(message: SciForgeMessage) {

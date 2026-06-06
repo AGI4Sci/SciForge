@@ -11,6 +11,7 @@ import {
   localProviderSettings,
   providerEnvFromLocalSettings,
   readLocalProviderSettings,
+  readRequiredLocalProviderSettings,
   runtimeCodexEnvFromLocalSettings,
   virtualAppScreenEnvFromLocalSettings,
 } from './local-provider-config';
@@ -52,20 +53,102 @@ test('local provider settings read textLLM env fallback before codex proxy', () 
       env: {
         SCIFORGE_RUNTIME_API_KEY: 'text-env-key',
         SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-env.example/v1/',
+        SCIFORGE_PROXY_DEFAULT_MODEL: 'text-env-model',
       },
     },
     codexProxy: {
       apiKey: 'proxy-key',
       upstreamBaseUrl: 'https://proxy.example/v1',
+      defaultModel: 'proxy-model',
     },
   });
 
   assert.equal(settings.apiKey, 'text-env-key');
   assert.equal(settings.baseUrl, 'https://text-env.example/v1');
+  assert.equal(settings.model, 'text-env-model');
   assert.deepEqual(providerEnvFromLocalSettings(settings), {
     SCIFORGE_RUNTIME_API_KEY: 'text-env-key',
     SCIFORGE_RUNTIME_BASE_URL: 'https://text-env.example/v1',
     SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://text-env.example/v1',
+    SCIFORGE_RUNTIME_MODEL: 'text-env-model',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'text-env-model',
+  });
+});
+
+test('local provider settings read runtimeCodexProxy env aliases', () => {
+  const settings = localProviderSettings({
+    runtimeCodexProxy: {
+      env: {
+        SCIFORGE_RUNTIME_API_KEY: 'runtime-env-key',
+        SCIFORGE_RUNTIME_BASE_URL: 'https://runtime-env.example',
+        SCIFORGE_RUNTIME_MODEL: 'runtime-env-model',
+      },
+    },
+  });
+
+  assert.equal(settings.apiKey, 'runtime-env-key');
+  assert.equal(settings.baseUrl, 'https://runtime-env.example/v1');
+  assert.equal(settings.model, 'runtime-env-model');
+});
+
+test('local provider settings normalize bare upstream base URL to openai compatible v1 path', () => {
+  const settings = localProviderSettings({
+    llm: {
+      apiKey: 'llm-key',
+      baseUrl: 'https://bare-provider.example///',
+      model: 'bare-model',
+    },
+  });
+
+  assert.equal(settings.baseUrl, 'https://bare-provider.example/v1');
+});
+
+test('required local provider settings fail closed when upstream config is incomplete', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-local-provider-'));
+  const configPath = join(dir, 'config.local.json');
+  writeFileSync(configPath, JSON.stringify({ virtualAppScreen: { env: {} } }));
+
+  assert.throws(
+    () => readRequiredLocalProviderSettings(configPath),
+    /config\.local\.json.*missing required local LLM upstream config.*apiKey.*baseUrl.*model/,
+  );
+});
+
+test('local provider settings fail closed when config.local cannot be read', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sciforge-local-provider-missing-'));
+  const missingConfigPath = join(dir, 'config.local.json');
+  const invalidConfigPath = join(dir, 'invalid-config.local.json');
+  writeFileSync(invalidConfigPath, '{not-json');
+
+  assert.throws(
+    () => readLocalProviderSettings(missingConfigPath),
+    /Missing config\.local\.json/,
+  );
+  assert.throws(
+    () => readLocalProviderSettings(invalidConfigPath),
+    /Invalid config\.local\.json/,
+  );
+});
+
+test('root local provider fields generate complete runtime upstream env', () => {
+  const settings = localProviderSettings({
+    provider: 'openai-compatible',
+    apiKey: 'root-key',
+    baseUrl: 'https://root-provider.example/openai-compatible///',
+    model: 'root-model',
+  });
+
+  assert.equal(settings.provider, 'openai-compatible');
+  assert.equal(settings.apiKey, 'root-key');
+  assert.equal(settings.baseUrl, 'https://root-provider.example/openai-compatible');
+  assert.equal(settings.model, 'root-model');
+  assert.deepEqual(providerEnvFromLocalSettings(settings), {
+    SCIFORGE_RUNTIME_API_KEY: 'root-key',
+    SCIFORGE_RUNTIME_PROVIDER: 'openai-compatible',
+    SCIFORGE_RUNTIME_BASE_URL: 'https://root-provider.example/openai-compatible',
+    SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'https://root-provider.example/openai-compatible',
+    SCIFORGE_RUNTIME_MODEL: 'root-model',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
   });
 });
 
@@ -206,10 +289,12 @@ test('runtime codex env keeps VirtualAppScreen native driver env out of the app-
   assert.deepEqual(runtimeCodexEnvFromLocalSettings(settings), {
     SCIFORGE_RUNTIME_API_KEY: 'root-key',
     SCIFORGE_RUNTIME_MODEL: 'root-model',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
   });
   assert.deepEqual(computerUseWorkspaceEnvFromLocalSettings(settings), {
     SCIFORGE_RUNTIME_API_KEY: 'root-key',
     SCIFORGE_RUNTIME_MODEL: 'root-model',
+    SCIFORGE_PROXY_DEFAULT_MODEL: 'root-model',
     SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_HOOKS: '1',
     SCIFORGE_VIRTUAL_APP_SCREEN_NATIVE_DRIVER_TARGET_APP_KIND: 'vscode-editor',
   });

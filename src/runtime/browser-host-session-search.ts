@@ -1,3 +1,5 @@
+import { Buffer } from 'node:buffer';
+
 import type {
   BrowserHostSearchEngine,
   BrowserHostSearchOutput,
@@ -32,6 +34,11 @@ export function browserHostSearchSummary(output: BrowserHostSearchOutput, maxRes
     `BrowserHostSession search: ${output.query}`,
     `Final URL: ${output.finalUrl}`,
     `Results: ${output.results.length}`,
+    `Opened source pages: ${(output.sourcePages ?? []).filter((page) => page.status === 'read').length}`,
+    ...(output.sourcePages ?? [])
+      .filter((page) => page.status === 'read' && page.textRef)
+      .slice(0, maxResults)
+      .map((page, index) => `Source ${index + 1}: ${page.title} - ${page.finalUrl || page.url}\n   ${page.textRef}`),
     ...lines,
   ].join('\n');
 }
@@ -44,6 +51,64 @@ export async function genericSearchResultsFromDriver(driver: BrowserHostSessionD
     .filter(Boolean)
     .slice(0, limit)
     .map((line, index) => ({ title: line.slice(0, 120), url: driver.url(), snippet: index === 0 ? line : '' }));
+}
+
+export function browserHostSearchResultExtractionScript(limit: number): string {
+  const safeLimit = Math.max(1, Math.min(10, Math.floor(limit || 5)));
+  return `(() => {
+    const limit = ${JSON.stringify(safeLimit)};
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const rows = [];
+    const seen = new Set();
+    const navTitle = /^(?:skip to content|web|images|videos|news|maps|shopping|more|all|search)$/i;
+    const add = (title, href, snippet) => {
+      const cleanTitle = clean(title);
+      const url = String(href || '');
+      if (!cleanTitle || !url || seen.has(url) || navTitle.test(cleanTitle)) return;
+      seen.add(url);
+      rows.push({
+        title: cleanTitle,
+        url,
+        snippet: clean(snippet).replace(cleanTitle, '').trim()
+      });
+    };
+    const resultSelectors = [
+      '#b_results > li.b_algo',
+      '#b_results > li.b_ans',
+      'li.b_algo',
+      'article[data-testid="result"]',
+      'div[data-testid="result"]',
+      'div.result',
+      'article.result',
+      'div.g',
+      'div.MjjYud',
+      '[data-sokoban-container]'
+    ];
+    const titleSelectors = [
+      'h2 a[href]',
+      'h3 a[href]',
+      'a[data-testid="result-title-a"][href]',
+      'a.result__a[href]',
+      'a[href]'
+    ];
+    for (const resultSelector of resultSelectors) {
+      for (const container of Array.from(document.querySelectorAll(resultSelector))) {
+        const anchor = titleSelectors
+          .map((selector) => container.querySelector ? container.querySelector(selector) : null)
+          .find((candidate) => candidate && candidate.href && clean(candidate.textContent));
+        if (!anchor) continue;
+        add(anchor.textContent, anchor.href, container.innerText || container.textContent || '');
+        if (rows.length >= limit) return rows.slice(0, limit);
+      }
+    }
+    if (rows.length) return rows.slice(0, limit);
+    for (const anchor of Array.from(document.querySelectorAll('a[href]'))) {
+      const container = anchor.closest ? anchor.closest('li, article, div') : null;
+      add(anchor.textContent, anchor.href, container && (container.innerText || container.textContent || ''));
+      if (rows.length >= limit) break;
+    }
+    return rows.slice(0, limit);
+  })()`;
 }
 
 export function nativeSearchResult(value: unknown): BrowserHostSearchResult {
@@ -62,6 +127,8 @@ export function decodeSearchRedirect(value: string) {
     if (uddg) return decodeURIComponent(uddg);
     const target = url.searchParams.get('url') ?? url.searchParams.get('u');
     if (target && /^https?:\/\//i.test(target)) return target;
+    const bingTarget = decodeBingRedirectTarget(target);
+    if (bingTarget) return bingTarget;
     return url.toString();
   } catch {
     return value;
@@ -75,7 +142,7 @@ export function boundedSearchResults(rows: Array<Partial<BrowserHostSearchResult
     const url = typeof row.url === 'string' ? decodeSearchRedirect(row.url.trim()) : '';
     const title = cleanText(String(row.title ?? ''));
     if (!title || !/^https?:\/\//i.test(url) || seen.has(url)) continue;
-    if (/^(?:https?:\/\/)?(?:www\.)?(?:bing|duckduckgo)\.com(?:\/|$)/i.test(url)) continue;
+    if (isSearchEngineNavigationUrl(url, title)) continue;
     seen.add(url);
     results.push({
       title: title.slice(0, 180),
@@ -85,6 +152,37 @@ export function boundedSearchResults(rows: Array<Partial<BrowserHostSearchResult
     if (results.length >= limit) break;
   }
   return results;
+}
+
+function decodeBingRedirectTarget(value: string | null): string | undefined {
+  if (!value) return undefined;
+  const candidate = value.replace(/^a\d/i, '');
+  if (!candidate || candidate === value) return undefined;
+  try {
+    const decoded = Buffer.from(candidate, 'base64url').toString('utf8');
+    return /^https?:\/\//i.test(decoded) ? decoded : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isSearchEngineNavigationUrl(value: string, title: string): boolean {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    const path = url.pathname.toLowerCase();
+    if (!/(^|\.)bing\.com$|(^|\.)duckduckgo\.com$|(^|\.)google\.[a-z.]+$/i.test(host)) return false;
+    if (/^(?:skip to content|web|images|videos|news|maps|shopping|more|all|search)$/i.test(title)) return true;
+    if (/(^|\.)bing\.com$/i.test(host)) {
+      return path === '/' || path === '/search' || /^\/(?:images|videos|news|maps)\/search/.test(path);
+    }
+    if (/(^|\.)duckduckgo\.com$/i.test(host)) {
+      return path === '/' || path === '/html/' || path === '/html';
+    }
+    return path === '/search' || path.startsWith('/search/');
+  } catch {
+    return false;
+  }
 }
 
 function cleanText(value: string) {

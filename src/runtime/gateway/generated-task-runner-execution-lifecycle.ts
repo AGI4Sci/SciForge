@@ -22,7 +22,7 @@ import {
 } from './generated-task-runner-validation-lifecycle.js';
 import { isGeneratedTaskCapabilityFirstPolicyIssue } from './generated-task-payload-preflight.js';
 import type { GeneratedTaskRunnerDeps } from './generated-task-runner.js';
-import { AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy';
+import { AGENTSERVER_GENERATED_TASK_MATERIALIZED_EVENT_TYPE, workspaceTaskPythonCommandCandidates } from '../../../packages/skills/runtime-policy.js';
 
 const execFileAsync = promisify(execFile);
 

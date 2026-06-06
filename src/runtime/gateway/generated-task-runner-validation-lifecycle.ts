@@ -81,6 +81,12 @@ type RepairAttemptRunner = (params: {
 type GeneratedTaskAttemptStatus = 'done' | 'repair-needed' | 'failed-with-reason';
 type AttemptPlanRefs = (request: GatewayRequest, skill?: SkillAvailability, fallbackReason?: string) => Record<string, unknown>;
 
+const GENERATED_TASK_PARTIAL_CHECKPOINT_SCHEMA = 'sciforge.partial-checkpoint.v1';
+const GENERATED_TASK_RUNTIME_FAILURE_ARTIFACT_ID = 'runtime-failure';
+const GENERATED_TASK_RUNTIME_DIAGNOSTIC_ARTIFACT_TYPE = 'runtime-diagnostic';
+const GENERATED_TASK_REPAIR_RECOVER_ACTION = 'resume-or-repair-generated-task';
+const GENERATED_TASK_REUSE_PARTIAL_REFS_ACTION = 'reuse-partial-artifact-refs';
+
 export interface GeneratedTaskRuntimeRefs extends RuntimeRefBundle {
   inputRel?: string;
 }
@@ -825,31 +831,9 @@ export function payloadHasRepairOrFailureStatus(payload: ToolPayload) {
 function generatedTaskRunnerFailureCheckpointRepairReason(payload: ToolPayload, run: WorkspaceTaskRunResult) {
   if (run.exitCode === 0) return undefined;
   const units = toRecordList(payload.executionUnits);
-  const runnerFailureUnits = units.filter((unit) => {
-    const tool = String(unit.tool || '');
-    const status = String(unit.status || '');
-    return tool === 'workspace-task-runner'
-      && /failed|error/i.test(status)
-      && toStringList(unit.recoverActions).includes('resume-or-repair-generated-task');
-  });
-  if (!runnerFailureUnits.length) return undefined;
-  const hasRunnerFailureArtifact = toRecordList(payload.artifacts).some((artifact) => {
-    const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
-    const data = isRecord(artifact.data) ? artifact.data : {};
-    const payloadRecord = payload as unknown as Record<string, unknown>;
-    const payloadStatus = String(payloadRecord.status || payload.claimType || '');
-    const schemaVersion = String(artifact.schemaVersion || metadata.checkpointContract || '');
-    const source = String(metadata.source || '');
-    const status = String(data.status || metadata.status || payloadStatus);
-    const partialFiles = Array.isArray(data.partialFiles) ? data.partialFiles : [];
-    const runnerCheckpointArtifact = schemaVersion === 'sciforge.partial-checkpoint.v1'
-      || (artifact.id === 'runtime-failure' && artifact.type === 'runtime-diagnostic');
-    return source === 'workspace-task-runner'
-      && runnerCheckpointArtifact
-      && /failed-with-reason/i.test(status)
-      && partialFiles.length === 0;
-  });
-  if (!hasRunnerFailureArtifact) return undefined;
+  const checkpointFailureUnits = units.filter(isGeneratedTaskRepairCheckpointUnit);
+  if (!checkpointFailureUnits.length) return undefined;
+  if (!toRecordList(payload.artifacts).some((artifact) => isGeneratedTaskFailureCheckpointArtifact(payload, artifact))) return undefined;
   if (generatedTaskRunnerCheckpointPartialRefs(payload).length) return undefined;
   return firstRepairOrFailurePayloadReason(payload)
     ?? run.stderr
@@ -859,7 +843,7 @@ function generatedTaskRunnerFailureCheckpointRepairReason(payload: ToolPayload, 
 function generatedTaskRunnerCheckpointPartialRefs(payload: ToolPayload) {
   const unitRefs = toRecordList(payload.executionUnits).flatMap((unit) => toStringList(unit.partialRefs));
   const evidenceRefs = toRecordList(payload.workEvidence)
-    .filter((item) => item.provider === 'workspace-task-runner')
+    .filter(isPartialArtifactWorkEvidence)
     .flatMap((item) => toStringList(item.evidenceRefs));
   const artifactRefs = toRecordList(payload.artifacts).flatMap((artifact) => {
     const data = isRecord(artifact.data) ? artifact.data : {};
@@ -867,6 +851,41 @@ function generatedTaskRunnerCheckpointPartialRefs(payload: ToolPayload) {
     return partialFiles.flatMap((file) => isRecord(file) ? toStringList(file.ref) : []);
   });
   return uniqueStrings([...unitRefs, ...evidenceRefs, ...artifactRefs]);
+}
+
+function isGeneratedTaskRepairCheckpointUnit(unit: Record<string, unknown>) {
+  const status = String(unit.status || '');
+  return /failed|error/i.test(status)
+    && toStringList(unit.recoverActions).includes(GENERATED_TASK_REPAIR_RECOVER_ACTION);
+}
+
+function isGeneratedTaskFailureCheckpointArtifact(payload: ToolPayload, artifact: Record<string, unknown>) {
+  const metadata = isRecord(artifact.metadata) ? artifact.metadata : {};
+  const data = isRecord(artifact.data) ? artifact.data : {};
+  const payloadRecord = payload as unknown as Record<string, unknown>;
+  const payloadStatus = String(payloadRecord.status || payload.claimType || '');
+  const schemaVersion = String(artifact.schemaVersion || metadata.checkpointContract || '');
+  const status = String(data.status || metadata.status || payloadStatus);
+  const partialFiles = Array.isArray(data.partialFiles) ? data.partialFiles : [];
+  return isGeneratedTaskCheckpointArtifact(artifact, schemaVersion)
+    && /failed-with-reason/i.test(status)
+    && partialFiles.length === 0;
+}
+
+function isGeneratedTaskCheckpointArtifact(artifact: Record<string, unknown>, schemaVersion: string) {
+  return schemaVersion === GENERATED_TASK_PARTIAL_CHECKPOINT_SCHEMA
+    || (
+      artifact.id === GENERATED_TASK_RUNTIME_FAILURE_ARTIFACT_ID
+      && artifact.type === GENERATED_TASK_RUNTIME_DIAGNOSTIC_ARTIFACT_TYPE
+    );
+}
+
+function isPartialArtifactWorkEvidence(item: Record<string, unknown>) {
+  return /partial/i.test(String(item.status || ''))
+    && (
+      toStringList(item.evidenceRefs).length > 0
+      || toStringList(item.recoverActions).includes(GENERATED_TASK_REUSE_PARTIAL_REFS_ACTION)
+    );
 }
 
 function generatedTaskSchemaFailureReason(schemaErrors: string[]) {

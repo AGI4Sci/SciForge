@@ -11,6 +11,7 @@ import {
   completionGradeFailureDiagnostics,
   invocationProcessDiagnosticSummaries,
   packageBridgeProcessFailureDiagnosticsFromTrace,
+  packageBridgeRepairNeededDiagnosticsFromSidecars,
   safeIssueText,
   uniqueFailureDiagnostics,
   type ChatLiveExpectedStatus,
@@ -25,6 +26,7 @@ import {
   isRecord,
   recordAt,
   recordList,
+  refsFromUnknown,
   stringAt,
   stringList,
   uniqueStrings,
@@ -77,7 +79,12 @@ export async function attachComputerUseChatLiveCompletionEvidence<T extends Comp
   env: NodeJS.ProcessEnv;
   options?: ComputerUseChatLiveCompletionEvidenceOptions;
 }): Promise<T> {
-  if (!shouldValidateLiveAcceptanceBundle(input.manifest)) return input.manifest;
+  if (!shouldValidateLiveAcceptanceBundle(input.manifest)) {
+    return {
+      ...input.manifest,
+      liveAcceptanceCandidate: false,
+    };
+  }
   const workspacePath = input.options?.workspacePath
     ?? input.env.SCIFORGE_WORKSPACE_PATH
     ?? process.cwd();
@@ -105,8 +112,13 @@ export async function attachComputerUseChatLiveCompletionEvidence<T extends Comp
       refs,
       taskId: input.options?.taskId,
     });
+    const ledgerProjection = await materializeCurrentRunLedgerSidecars({
+      workspacePath,
+      refs,
+    });
     projectionIssues.push(...sidecarProjection.issues);
-    projectionRefs = sidecarProjection.refs;
+    projectionIssues.push(...ledgerProjection.issues);
+    projectionRefs = uniqueStrings([...sidecarProjection.refs, ...ledgerProjection.refs]);
     bundle = await validateCurrentRunLiveAcceptanceBundle({
       workspacePath,
       refs,
@@ -161,11 +173,30 @@ export async function attachComputerUseChatLivePackageInvocationFailureDiagnosti
     ...input.manifest.auditRefs,
   ]), input.workspacePath, readIssues);
   const traceRefs = refs.filter((ref) => /(?:^|\/)vision-trace\.json$/i.test(ref));
+  const blockedManifestRefs = refs.filter((ref) => /(?:^|\/)blocked-manifest\.json$/i.test(ref));
+  const repairHintRefs = refs.filter((ref) => /(?:^|\/)repair-hint\.json$/i.test(ref));
+  const continuationRequestRefs = refs.filter((ref) => /(?:^|\/)continuation-request\.json$/i.test(ref));
   const traces = await readJsonRefs(traceRefs.slice(0, 3), input.workspacePath, readIssues);
-  const diagnostics = traces.flatMap((trace, index) => packageBridgeProcessFailureDiagnosticsFromTrace({
-    trace,
-    ref: traceRefs[index],
-  }));
+  const [
+    blockedManifests,
+    repairHints,
+    continuationRequests,
+  ] = await Promise.all([
+    readJsonRefs(blockedManifestRefs.slice(0, 1), input.workspacePath, readIssues),
+    readJsonRefs(repairHintRefs.slice(0, 1), input.workspacePath, readIssues),
+    readJsonRefs(continuationRequestRefs.slice(0, 1), input.workspacePath, readIssues),
+  ]);
+  const diagnostics = [
+    ...traces.flatMap((trace, index) => packageBridgeProcessFailureDiagnosticsFromTrace({
+      trace,
+      ref: traceRefs[index],
+    })),
+    ...packageBridgeRepairNeededDiagnosticsFromSidecars({
+      blockedManifest: blockedManifests[0] ? { record: blockedManifests[0], ref: blockedManifestRefs[0] } : undefined,
+      repairHint: repairHints[0] ? { record: repairHints[0], ref: repairHintRefs[0] } : undefined,
+      continuationRequest: continuationRequests[0] ? { record: continuationRequests[0], ref: continuationRequestRefs[0] } : undefined,
+    }),
+  ];
   if (!diagnostics.length) return input.manifest;
   return {
     ...input.manifest,
@@ -258,7 +289,9 @@ export async function collectComputerUseChatLivePackageBridgeCompletionGradeEvid
   };
 }
 
-export function shouldValidateLiveAcceptanceBundle(manifest: ComputerUseChatLiveCompletionManifestLike) {
+export function shouldValidateLiveAcceptanceBundle(
+  manifest: ComputerUseChatLiveCompletionManifestLike,
+) {
   if (!manifest.requestSubmitted) return false;
   if (manifest.expectedStatus !== 'completed') return false;
   return manifest.visibleStatus === 'output-materialized' || manifest.status === 'completed';
@@ -367,6 +400,181 @@ async function materializeCurrentRunCuNextProjectionSidecars(input: {
   await updateCuNextAcceptanceInputMarker(resolve(runDirPath, 'cu-user-acceptance-input.json'), evidenceMarkers);
   await appendDirectoryListingRef(resolve(runDirPath, 'directory-listing.json'), sidecarRef);
   return { issues: [], refs: [sidecarRef] };
+}
+
+async function materializeCurrentRunLedgerSidecars(input: {
+  workspacePath: string;
+  refs: string[];
+}): Promise<{ issues: string[]; refs: string[] }> {
+  const runDirRef = currentRunDirRefFromRefs(input.refs);
+  if (!runDirRef) return { issues: [], refs: [] };
+  const runDirPath = resolve(input.workspacePath, runDirRef);
+  const manifestPath = resolve(runDirPath, 'cu-user-acceptance-manifest.json');
+  const manifest = await readOptionalJsonRecord(manifestPath);
+  if (!manifest) return { issues: [], refs: [] };
+
+  const actionLedgerRef = firstManifestRef(manifest, [
+    'actionLedgerRef',
+    'mutatingActionLedgerRef',
+    'evidenceActionLedgerRef',
+  ]) ?? firstManifestRef(recordAt(manifest, 'evidenceLedger'), ['ref', 'actionLedgerRef']);
+  const evidenceIndexRef = firstManifestRef(manifest, [
+    'evidenceIndexRef',
+    'evidenceRefsIndexRef',
+    'currentRunEvidenceIndexRef',
+  ]) ?? firstManifestRef(recordAt(manifest, 'evidenceIndex'), ['ref', 'indexRef']);
+
+  const actionLedger = actionLedgerSidecar(manifest);
+  const actionLedgerActions = recordList(actionLedger.actions);
+  const needsIndependentLedgerRecords = actionLedgerActions.length > 0
+    && !hasIndependentActionLedgerRecords(manifest, actionLedgerRef);
+  const refs: string[] = [];
+  const updates: Record<string, unknown> = {};
+  if (!actionLedgerRef || needsIndependentLedgerRecords) {
+    const ref = actionLedgerRef ?? 'action-ledger.json';
+    refs.push(`${runDirRef}/${ref}`);
+    if (!actionLedgerRef) updates.actionLedgerRef = ref;
+    updates.evidenceLedger = {
+      ...(recordAt(manifest, 'evidenceLedger') ?? {}),
+      ref,
+      actionLedgerRef: ref,
+      actions: actionLedgerActions,
+    };
+    if (isWorkspaceLocalRef(ref)) {
+      await writeFile(resolve(runDirPath, ref), `${JSON.stringify(actionLedger, null, 2)}\n`, 'utf8');
+    }
+  }
+  if (!evidenceIndexRef) {
+    const ref = 'evidence-index.json';
+    refs.push(`${runDirRef}/${ref}`);
+    updates.evidenceIndexRef = ref;
+    updates.evidenceIndex = {
+      ...(recordAt(manifest, 'evidenceIndex') ?? {}),
+      ref,
+    };
+    await writeFile(resolve(runDirPath, ref), `${JSON.stringify(evidenceIndexSidecar(manifest, runDirRef), null, 2)}\n`, 'utf8');
+  }
+  if (!refs.length) return { issues: [], refs: [] };
+  await writeFile(manifestPath, `${JSON.stringify({ ...manifest, ...updates }, null, 2)}\n`, 'utf8');
+  for (const ref of refs) {
+    await appendDirectoryListingRef(resolve(runDirPath, 'directory-listing.json'), ref);
+  }
+  return { issues: [], refs };
+}
+
+function actionLedgerSidecar(manifest: Record<string, unknown>): Record<string, unknown> {
+  const actions = [
+    ...recordList(manifest.mutatingActions),
+    ...recordList(manifest.actionCausality),
+    ...recordList(manifest.evidenceLedgerActions),
+    ...recordList(recordAt(manifest, 'evidenceLedger')?.actions),
+  ];
+  return {
+    schemaVersion: 'sciforge.computer-use.chat-live-action-ledger.v1',
+    status: 'present',
+    actionCount: actions.length,
+    actions: actions.map((action, index) => compactRecord({
+      index,
+      actionKind: stringAt(action, 'actionKind') ?? stringAt(action, 'kind') ?? stringAt(action, 'type'),
+      screenId: stringAt(action, 'screenId'),
+      windowId: stringAt(action, 'windowId'),
+      actorId: stringAt(action, 'actorId'),
+      cursorId: stringAt(action, 'cursorId'),
+      inputIntentRef: stringAt(action, 'inputIntentRef') ?? stringAt(action, 'intentRef') ?? stringAt(action, 'inputRef'),
+      providerAdapterRef: stringAt(action, 'providerAdapterRef')
+        ?? stringAt(action, 'adapterRef')
+        ?? stringAt(action, 'executorAdapterRef')
+        ?? stringAt(action, 'actionAdapterRef'),
+      executorEventRef: stringAt(action, 'executorEventRef') ?? stringAt(action, 'executeEventRef'),
+      beforeEvidenceRefs: uniqueStrings([
+        ...stringList(action.beforeEvidenceRefs),
+        ...stringList(action.beforeFrameRefs),
+        stringAt(action, 'beforeFrameRef'),
+        stringAt(action, 'beforeScreenshotRef'),
+        stringAt(action, 'currentScreenshotRef'),
+      ].filter((ref): ref is string => Boolean(ref))),
+      afterEvidenceRefs: uniqueStrings([
+        ...stringList(action.afterEvidenceRefs),
+        ...stringList(action.afterFrameRefs),
+        stringAt(action, 'afterFrameRef'),
+        stringAt(action, 'afterScreenshotRef'),
+      ].filter((ref): ref is string => Boolean(ref))),
+      verificationRefs: uniqueStrings([
+        ...stringList(action.verificationRefs),
+        ...stringList(action.verifierRefs),
+        stringAt(action, 'verifierRef'),
+        stringAt(action, 'verificationRef'),
+        stringAt(action, 'verifierVerdictRef'),
+      ].filter((ref): ref is string => Boolean(ref))),
+      artifactRefs: uniqueStrings([
+        ...stringList(action.artifactRefs),
+        ...stringList(action.outputArtifactRefs),
+        stringAt(action, 'artifactRef'),
+        stringAt(action, 'finalArtifactRef'),
+        stringAt(manifest, 'finalArtifactRef'),
+      ].filter((ref): ref is string => Boolean(ref))),
+      blockedEvidenceRefs: uniqueStrings([
+        ...stringList(action.blockedEvidenceRefs),
+        ...stringList(action.blockedReasonRefs),
+        stringAt(action, 'blockedReasonRef'),
+        stringAt(action, 'permissionHandoffRef'),
+        stringAt(action, 'observeOnlyRef'),
+        stringAt(manifest, 'blockedReasonRef'),
+        stringAt(manifest, 'permissionHandoffRef'),
+        stringAt(manifest, 'observeOnlyRef'),
+      ].filter((ref): ref is string => Boolean(ref))),
+      blockedReason: stringAt(action, 'blockedReason') ?? stringAt(manifest, 'blockedReason'),
+    })),
+  };
+}
+
+function hasIndependentActionLedgerRecords(
+  manifest: Record<string, unknown>,
+  actionLedgerRef: string | undefined,
+): boolean {
+  const ledger = recordAt(manifest, 'evidenceLedger') ?? recordAt(manifest, 'actionLedger');
+  const ledgerActions = [
+    ...recordList(ledger?.actions),
+    ...recordList(ledger?.actionRecords),
+    ...recordList(ledger?.mutatingActions),
+    ...recordList(ledger?.entries),
+    ...recordList(ledger?.records),
+    ...recordList(manifest.evidenceLedgerActions),
+  ];
+  const ledgerRefs = uniqueStrings([
+    stringAt(ledger, 'ref'),
+    stringAt(ledger, 'actionLedgerRef'),
+    ...stringList(ledger?.refs),
+    ...stringList(ledger?.evidenceRefs),
+    ...stringList(ledger?.actionCausalityRefs),
+  ].filter((ref): ref is string => Boolean(ref)));
+  return ledgerActions.some((action) => (
+    Boolean(stringAt(action, 'executorEventRef') ?? stringAt(action, 'executeEventRef') ?? stringAt(action, 'eventRef') ?? stringAt(action, 'ref'))
+    && (
+      stringList(action.beforeEvidenceRefs).length > 0
+      || stringList(action.afterEvidenceRefs).length > 0
+      || stringList(action.verificationRefs).length > 0
+      || stringList(action.artifactRefs).length > 0
+    )
+  )) && (!actionLedgerRef || ledgerRefs.includes(actionLedgerRef) || stringAt(ledger, 'ref') === actionLedgerRef);
+}
+
+function evidenceIndexSidecar(manifest: Record<string, unknown>, runDirRef: string): Record<string, unknown> {
+  return {
+    schemaVersion: 'sciforge.computer-use.chat-live-evidence-index.v1',
+    status: 'present',
+    runDirRef,
+    refs: refsFromUnknown(manifest).filter((ref) => isWorkspaceLocalRef(ref)),
+  };
+}
+
+function firstManifestRef(record: Record<string, unknown> | undefined, keys: string[]): string | undefined {
+  if (!record) return undefined;
+  for (const key of keys) {
+    const value = stringAt(record, key);
+    if (value) return value;
+  }
+  return undefined;
 }
 
 async function updateCuNextAcceptanceInputMarker(path: string, evidenceMarkers: Array<Record<string, unknown>>) {

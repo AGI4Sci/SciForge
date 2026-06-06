@@ -7,6 +7,7 @@ import { buildDesktopNativeReadiness, type DesktopNativeReadiness } from '../src
 export type DesktopDevShellProcessId = 'vite' | 'workspace-writer' | 'provider-proxy' | 'runtime-codex' | 'electron';
 const MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router';
 const MODEL_ROUTER_DEFAULT_PROFILE = 'sciforge-runtime-default';
+export const DESKTOP_DEV_DEFAULT_BROWSER_HOST_NATIVE_ADAPTER_URL = 'http://127.0.0.1:5177';
 
 export type DesktopDevShellProcessPlan = {
   id: DesktopDevShellProcessId;
@@ -86,7 +87,12 @@ export function createDesktopDevShellPlan(options: DesktopDevShellCreatePlanOpti
   const workspaceWriterUrl = sanitizeLoopbackHttpUrl(options.workspaceWriterUrl ?? 'http://127.0.0.1:5174') ?? 'http://127.0.0.1:5174';
   const providerProxyUrl = sanitizeLoopbackHttpUrl(options.providerProxyUrl ?? 'http://127.0.0.1:5175') ?? 'http://127.0.0.1:5175';
   const runtimeCodexUrl = sanitizeLoopbackHttpUrl(options.runtimeCodexUrl ?? 'http://127.0.0.1:5176') ?? 'http://127.0.0.1:5176';
-  const nativeAdapterUrl = sanitizeLoopbackHttpUrl(options.nativeAdapterUrl ?? env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL);
+  const nativeAdapterUrl = firstSanitizedLoopbackHttpUrl([
+    options.nativeAdapterUrl,
+    env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL,
+    config.browserHostNativeAdapterUrl,
+    DESKTOP_DEV_DEFAULT_BROWSER_HOST_NATIVE_ADAPTER_URL,
+  ]);
   const apiKey = stringValue(env.SCIFORGE_RUNTIME_API_KEY)
     ?? stringValue(env.SCIFORGE_TEXT_API_KEY)
     ?? stringValue(env.SCIFORGE_VISION_API_KEY)
@@ -295,6 +301,7 @@ type DesktopDevShellConfig = {
   model?: string;
   visionBaseUrl?: string;
   visionModel?: string;
+  browserHostNativeAdapterUrl?: string;
 };
 
 function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
@@ -307,6 +314,9 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
     const textLLMEnv = recordField(textLLM, 'env');
     const codexProxy = recordField(parsed, 'codexProxy');
     const visionSense = recordField(parsed, 'visionSense');
+    const desktop = recordField(parsed, 'desktop');
+    const desktopBrowserHost = recordField(desktop, 'browserHost');
+    const browserHost = recordField(parsed, 'browserHost');
     return {
       source: path,
       apiKey: stringValue(textLLMEnv.SCIFORGE_RUNTIME_API_KEY)
@@ -338,10 +348,23 @@ function readDesktopDevShellConfig(path: string): DesktopDevShellConfig {
       visionModel: stringValue(visionSense.vlmModel)
         ?? stringValue(visionSense.model)
         ?? stringValue(visionSense.modelName),
+      browserHostNativeAdapterUrl: stringValue(desktop.browserHostNativeAdapterUrl)
+        ?? stringValue(desktop.nativeAdapterUrl)
+        ?? stringValue(desktopBrowserHost.nativeAdapterUrl)
+        ?? stringValue(browserHost.nativeAdapterUrl)
+        ?? stringValue(parsed.browserHostNativeAdapterUrl),
     };
   } catch {
     return { source: path };
   }
+}
+
+function firstSanitizedLoopbackHttpUrl(values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const sanitized = sanitizeLoopbackHttpUrl(value);
+    if (sanitized) return sanitized;
+  }
+  return undefined;
 }
 
 function sanitizeLoopbackHttpUrl(value: string | undefined): string | undefined {

@@ -1,4 +1,4 @@
-import { scoreSkillByPackagePolicy, selectSkillByPackagePolicy, skillAllowedByPackagePolicy } from '../../../packages/skills/matching-policy';
+import { scoreSkillByPackagePolicy, selectSkillByPackagePolicy, skillAllowedByPackagePolicy } from '../../../packages/skills/matching-policy.js';
 import type { GatewayRequest, SciForgeSkillDomain, SkillAvailability, SkillManifest } from '../runtime-types.js';
 
 export function matchSkill(request: GatewayRequest, skills: SkillAvailability[]): SkillAvailability | undefined {

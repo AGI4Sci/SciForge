@@ -133,6 +133,25 @@ test('normalizes backend assistant deltas without trimming markdown whitespace',
   ]);
 });
 
+test('normalizes Codex app-server sampling retry failures as audit instead of terminal failure', () => {
+  const normalized = normalizeBackendEvents([
+    {
+      method: 'turn/failed',
+      params: {
+        threadId: 'thread-retry',
+        turnId: 'turn-retry',
+        status: 'failed',
+        message: 'Reconnecting... 1/5',
+        turn: { id: 'turn-retry', status: 'failed' },
+      },
+    },
+  ], { backend: 'codex-app-server', now: fixedNow });
+
+  assert.deepEqual(normalized.events.map((event) => event.type), ['audit']);
+  assert.equal(normalized.events[0]?.status, 'provider-retry');
+  assert.equal(normalized.events[0]?.message, 'Reconnecting... 1/5');
+});
+
 test('normalizes Claude partial messages and control request/response events', () => {
   const normalized = normalizeBackendEvents([
     {

@@ -144,6 +144,7 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
         requestConfig.plannerProfile,
         fileConfig.plannerProfile,
       ),
+      env: runtimeCodexPlannerEnv(process.env),
       allowOpenAiRuntime: booleanConfig(
         process.env.SCIFORGE_COMPUTER_USE_PLANNER_ALLOW_OPENAI_RUNTIME,
         requestConfig.plannerAllowOpenAiRuntime,
@@ -154,24 +155,10 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
       maxTokens: numberConfig(process.env.SCIFORGE_COMPUTER_USE_PLANNER_MAX_TOKENS, requestConfig.plannerMaxTokens, fileConfig.plannerMaxTokens) ?? 512,
     },
     grounder: {
-      baseUrl: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_URL, requestConfig.grounderBaseUrl, fileConfig.grounderBaseUrl),
-      timeoutMs: numberConfig(process.env.SCIFORGE_VISION_KV_GROUND_TIMEOUT_MS, requestConfig.grounderTimeoutMs, fileConfig.grounderTimeoutMs) ?? 30000,
-      allowServiceLocalPaths: booleanConfig(
-        process.env.SCIFORGE_VISION_KV_GROUND_ALLOW_SERVICE_LOCAL_PATHS,
-        requestConfig.grounderAllowServiceLocalPaths,
-        fileConfig.grounderAllowServiceLocalPaths,
-        false,
-      ),
-      localPathPrefix: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_LOCAL_PATH_PREFIX, requestConfig.grounderLocalPathPrefix, fileConfig.grounderLocalPathPrefix),
-      remotePathPrefix: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_REMOTE_PATH_PREFIX, requestConfig.grounderRemotePathPrefix, fileConfig.grounderRemotePathPrefix),
+      timeoutMs: numberConfig(requestConfig.grounderTimeoutMs, fileConfig.grounderTimeoutMs) ?? 30000,
+      allowServiceLocalPaths: false,
       upload: {
-        strategy: normalizeGrounderUploadStrategy(stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY, requestConfig.grounderUploadStrategy, fileConfig.grounderUploadStrategy)),
-        host: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_HOST, requestConfig.grounderUploadHost, fileConfig.grounderUploadHost),
-        user: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_USER, requestConfig.grounderUploadUser, fileConfig.grounderUploadUser) ?? 'root',
-        port: numberConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_PORT, requestConfig.grounderUploadPort, fileConfig.grounderUploadPort) ?? 22,
-        remoteDir: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_DIR, requestConfig.grounderUploadRemoteDir, fileConfig.grounderUploadRemoteDir),
-        identityFile: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_IDENTITY_FILE, requestConfig.grounderUploadIdentityFile, fileConfig.grounderUploadIdentityFile),
-        remoteUrlPrefix: stringConfig(process.env.SCIFORGE_VISION_KV_GROUND_UPLOAD_REMOTE_URL_PREFIX, requestConfig.grounderUploadRemoteUrlPrefix, fileConfig.grounderUploadRemoteUrlPrefix),
+        strategy: 'file-ref',
       },
     },
     testActionFixtureMode: booleanConfig(
@@ -182,6 +169,51 @@ export async function loadVisionSenseConfig(workspace: string, request: GatewayR
     ),
     testOnlyPlannedActions: parseTestOnlyActions(requestConfig, fileConfig),
   };
+}
+
+function runtimeCodexPlannerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
+  const allowed = [
+    'SCIFORGE_CONFIG_PATH',
+    'SCIFORGE_RUNTIME_ROOT',
+    'SCIFORGE_RUNTIME_CODEX_HOME',
+    'SCIFORGE_RUNTIME_DEFAULT_WORKSPACE',
+    'SCIFORGE_RUNTIME_API_KEY',
+    'SCIFORGE_RUNTIME_BASE_URL',
+    'SCIFORGE_RUNTIME_PROVIDER',
+    'SCIFORGE_RUNTIME_MODEL',
+    'SCIFORGE_RUNTIME_PROFILE',
+    'SCIFORGE_RUNTIME_CODEX_SANDBOX',
+    'SCIFORGE_PROXY_BASE_URL',
+    'SCIFORGE_PROXY_URL',
+    'SCIFORGE_PROXY_HOST',
+    'SCIFORGE_PROXY_PORT',
+    'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
+    'SCIFORGE_PROXY_DEFAULT_MODEL',
+    'SCIFORGE_MODEL_ROUTER_HOST',
+    'SCIFORGE_MODEL_ROUTER_PORT',
+    'SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS',
+    'SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE',
+    'SCIFORGE_TEXT_PROVIDER',
+    'SCIFORGE_TEXT_BASE_URL',
+    'SCIFORGE_TEXT_MODEL',
+    'SCIFORGE_TEXT_API_KEY',
+    'SCIFORGE_VISION_PROVIDER',
+    'SCIFORGE_VISION_BASE_URL',
+    'SCIFORGE_VISION_MODEL',
+    'SCIFORGE_VISION_API_KEY',
+    'SCIFORGE_CODEX_APP_SERVER_COMMAND',
+    'SCIFORGE_CODEX_APP_SERVER_EPHEMERAL',
+    'SCIFORGE_ALLOW_OPENAI_RUNTIME',
+    'PATH',
+    'NO_PROXY',
+    'no_proxy',
+  ];
+  const result: NodeJS.ProcessEnv = {};
+  for (const key of allowed) {
+    const value = env[key]?.trim();
+    if (value) result[key] = value;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function parseVisibleTextExtractionConfig(
@@ -211,14 +243,6 @@ function parseVisibleTextExtractionConfig(
 
 function parseVisionAppAliases(): Record<string, string> {
   return parseVisionSenseAppAliases(process.env.SCIFORGE_VISION_APP_ALIASES_JSON);
-}
-
-function normalizeGrounderUploadStrategy(value: string | undefined): 'scp' | 'inline' | 'file-ref' | undefined {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === 'scp') return 'scp';
-  if (normalized === 'inline' || normalized === 'base64') return 'inline';
-  if (normalized === 'file-ref' || normalized === 'ref' || normalized === 'shared-path') return 'file-ref';
-  return undefined;
 }
 
 function parseTestOnlyActions(

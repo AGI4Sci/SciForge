@@ -1,5 +1,5 @@
-import { toolPackageManifests } from './tool_skills';
-import type { ToolPackageManifest } from './tool_skills/types';
+import { toolPackageManifests } from './tool_skills/index.js';
+import type { ToolPackageManifest } from './tool_skills/types.js';
 
 export function selectedToolContractForRuntime(toolId: string): Record<string, unknown> {
   const manifest = (toolPackageManifests as readonly ToolPackageManifest[]).find((tool) => tool.id === toolId);

@@ -326,6 +326,48 @@ test('materializeBrowserHostAdapter returns resolver-compatible ready or blocked
   assert.match(blocked.summary ?? '', /blocked/i);
 });
 
+test('materializeWindowActionSessionAdapter returns runtime-probed ready records and blocks unsafe refs', () => {
+  const registry = createInMemoryComputerUseAdapterRegistry({ now: () => new Date('2026-06-06T03:00:00.000Z') });
+
+  const ready = registry.materializeWindowActionSessionAdapter({
+    sessionId: 'desktop-window-main',
+    sessionRef: 'window-action-session:desktop-window-main',
+    windowRef: 'desktop-native:window/main',
+    targetRefs: ['desktop-native:window/main'],
+    observationRefs: ['desktop-native:window/main/frame'],
+    commandId: 'codex-command-window-action',
+    attemptId: 'codex-command-window-action-attempt-1',
+    riskCategory: 'computer-use-low',
+  });
+
+  assert.equal(ready.status, 'ready');
+  assert.equal(ready.ready, true);
+  assert.equal(ready.kind, 'window-action-session');
+  assert.equal(ready.providerId, 'sciforge.window-action-session.computer-use-adapter');
+  assert.deepEqual(ready.refs, [
+    'adapter-registry:sciforge.window-action-session.computer-use-adapter',
+    'window-action-session:desktop-window-main',
+    'desktop-native:window/main',
+    'desktop-native:window/main/frame',
+    'computer-use:adapter/window-action-session/desktop-window-main.json',
+    'runtime-truth:computer-use-adapter/window-action-session/desktop-window-main',
+  ]);
+
+  const unsafe = registry.materializeWindowActionSessionAdapter({
+    sessionId: 'unsafe-window',
+    sessionRef: 'window-action-session:unsafe-window',
+    windowRef: 'ui:fake-window',
+    targetRefs: ['desktop-native:window/unsafe-window'],
+    observationRefs: ['data:image/png;base64,AAAA'],
+  });
+
+  assert.equal(unsafe.status, 'blocked');
+  assert.equal(unsafe.ready, false);
+  assert.match(unsafe.blockedReason ?? '', /unsafe evidence/i);
+  assert.deepEqual(unsafe.refs, ['adapter-registry:sciforge.window-action-session.computer-use-adapter']);
+  assert.doesNotMatch(JSON.stringify(unsafe), /ui:|data:image|base64/i);
+});
+
 function readyBrowserHostSession(overrides: Partial<BrowserHostSessionState> = {}): BrowserHostSessionState {
   return {
     schemaVersion: 'sciforge.browser-host-session.state.v1',

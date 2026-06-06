@@ -53,3 +53,16 @@ test('generic action parser downgrades false high-risk labels on benign visible 
   assert.equal(submitClick?.riskLevel, 'high');
   assert.equal(submitClick?.requiresConfirmation, true);
 });
+
+test('generic action parser infers confirmation for unannotated high-risk targets', () => {
+  const [action] = parseGenericActions([{
+    type: 'click',
+    x: 10,
+    y: 10,
+    targetDescription: 'Submit payment button',
+  }]);
+
+  assert.equal(action?.type, 'click');
+  assert.equal(action?.riskLevel, 'high');
+  assert.equal(action?.requiresConfirmation, true);
+});

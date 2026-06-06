@@ -8,8 +8,11 @@ import {
   runComputerUseChatLiveApprovalRetryE2E,
   runComputerUseChatLiveE2E,
   runComputerUseChatLiveContinuationE2E,
+  suggestedComputerUseChatProductStrictPrompt,
   validateComputerUseChatLiveE2EResponse,
 } from '../../tools/computer-use-chat-live-e2e.js';
+import { shouldValidateLiveAcceptanceBundle } from '../../tools/computer-use-chat-live-completion-evidence.js';
+import { parseComputerUseChatLiveCliArgs } from '../../tools/computer-use-chat-live-cli.js';
 import { sendSciForgeToolMessage } from '../../src/ui/src/api/sciforgeToolsClient/client.js';
 import type { NormalizedAgentResponse, SciForgeRun } from '../../src/ui/src/domain.js';
 import {
@@ -17,6 +20,7 @@ import {
   writeBundleLocalCuNext07Acceptance,
 } from './helpers/cu-next-runner-fixtures.js';
 import { validateCurrentRunLiveAcceptanceBundle } from '../../tools/computer-use-next/live-acceptance-bundle.js';
+import { validateCuNextLiveAcceptanceTaskEvidence } from '../../packages/actions/computer-use/live-acceptance-validator.js';
 
 test('Computer Use chat live E2E blocks before submit when live preflight is not ready', async () => {
   const manifest = await runComputerUseChatLiveE2E({
@@ -32,6 +36,186 @@ test('Computer Use chat live E2E blocks before submit when live preflight is not
   assert.ok(manifest.issues.some((issue) => issue.startsWith('missing:SCIFORGE_RUNTIME_API_KEY')));
 });
 
+test('Computer Use chat live E2E records Runtime Codex provider preflight blockers before submit', async () => {
+  const manifest = await runComputerUseChatLiveE2E({
+    env: readyEnv(),
+    localConfigs: [],
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        return jsonResponse({
+          ok: true,
+          manifest: {
+            category: 'missing-runtime-env',
+            runtimeApiKeyPresentInServiceEnv: false,
+            upstreamBaseUrlPresent: true,
+            missingEnv: ['SCIFORGE_RUNTIME_API_KEY'],
+            policyViolations: [],
+            evidenceMode: 'current-env-diagnostic-only',
+            releaseAcceptance: 'not-evaluated',
+          },
+        });
+      }
+      return readyServiceResponse(url);
+    },
+  });
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.requestSubmitted, false);
+  assert.equal(manifest.preflight.runtimeProviderPreflight?.status, 'blocked');
+  assert.ok(manifest.issues.includes('runtime-provider-preflight-blocked'));
+  assert.ok(manifest.issues.includes('runtime-provider:missing:SCIFORGE_RUNTIME_API_KEY'));
+  assert.ok(manifest.issues.includes('runtime-provider:category:missing-runtime-env'));
+});
+
+test('Computer Use chat live E2E fail-closes with product blockers when input isolation is not ready', async () => {
+  const env = readyEnv();
+  delete env.SCIFORGE_VISION_INPUT_ADAPTER;
+  delete env.SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER;
+
+  const manifest = await runComputerUseChatLiveE2E({
+    env,
+    localConfigs: [],
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: readyServiceResponse,
+  });
+
+  const productBlockers = manifest.productBlockers ?? [];
+
+  assert.equal(manifest.status, 'blocked');
+  assert.equal(manifest.requestSubmitted, false);
+  assert.deepEqual(productBlockers.map((blocker) => blocker.id), ['desktop-product-path', 'input-isolation']);
+  assert.ok(productBlockers.some((blocker) => (
+    blocker.id === 'desktop-product-path'
+    && blocker.code === 'no-desktop-product-input-path'
+    && blocker.sourceIssues?.includes('missing:SCIFORGE_VISION_INPUT_ADAPTER')
+    && blocker.sourceIssues?.includes('missing:SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER')
+  )));
+  assert.ok(productBlockers.some((blocker) => (
+    blocker.id === 'input-isolation'
+    && blocker.code === 'no-independent-input-adapter-provider'
+    && blocker.sourceIssues?.includes('missing:SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER')
+  )));
+  assert.ok(manifest.issues.includes('product-blocker:desktop-product-path:no-desktop-product-input-path'));
+  assert.ok(manifest.issues.includes('product-blocker:input-isolation:no-independent-input-adapter-provider'));
+});
+
+test('Computer Use chat live E2E retries transient preflight service aborts before submit', async () => {
+  let providerProxyHealthCalls = 0;
+  let runtimeProviderPreflightCalls = 0;
+  let streamCalls = 0;
+  const manifest = await runComputerUseChatLiveE2E({
+    env: {
+      ...readyEnv(),
+      SCIFORGE_COMPUTER_USE_CHAT_LIVE_PREFLIGHT_RETRY_DELAY_MS: '0',
+    },
+    localConfigs: [],
+    expectedStatus: 'repair-needed',
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: async (input) => {
+      const url = String(input);
+      if (url.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
+        runtimeProviderPreflightCalls += 1;
+        if (runtimeProviderPreflightCalls === 1) {
+          throw new Error('This operation was aborted');
+        }
+        return readyServiceResponse(url);
+      }
+      if (url.includes(':3891') && urlPathname(url).endsWith('/healthz')) {
+        providerProxyHealthCalls += 1;
+        if (providerProxyHealthCalls === 1) {
+          throw new Error('This operation was aborted');
+        }
+        return readyServiceResponse(url);
+      }
+      if (url.endsWith('/api/sciforge/tools/run/stream')) {
+        streamCalls += 1;
+        return ndjsonResponse([
+          {
+            result: {
+              status: 'repair-needed',
+              message: 'Computer Use repair needed after transient preflight recovery.',
+              executionUnits: [],
+              artifacts: [],
+            },
+          },
+        ]);
+      }
+      return readyServiceResponse(url);
+    },
+  });
+
+  assert.equal(providerProxyHealthCalls, 2);
+  assert.equal(runtimeProviderPreflightCalls, 2);
+  assert.equal(streamCalls, 1);
+  assert.equal(manifest.preflight.status, 'ready');
+  assert.equal(manifest.requestSubmitted, true);
+  assert.equal(manifest.issues.includes('live-preflight-not-ready'), false);
+  assert.equal(manifest.issues.includes('service:provider-proxy'), false);
+  assert.equal(manifest.issues.some((issue) => issue.startsWith('runtime-provider:read-issue:')), false);
+});
+
+test('Computer Use chat live completion evidence guard validates completed manifests without task options', () => {
+  assert.equal(shouldValidateLiveAcceptanceBundle({
+    expectedStatus: 'completed',
+    status: 'completed',
+    visibleStatus: 'output-materialized',
+    displayedRefs: ['.sciforge/vision-runs/current-run/vision-trace.json'],
+    artifactRefs: ['.sciforge/vision-runs/current-run/report.md'],
+    auditRefs: ['.sciforge/vision-runs/current-run/tui-host-run-task-chain.json'],
+    evidenceReadIssues: [],
+    failureDiagnostics: [],
+    issues: [],
+    requestSubmitted: true,
+    liveAcceptanceCandidate: false,
+  }), true);
+});
+
+test('CU-NEXT live acceptance rejects existence-only final artifact verifier support', () => {
+  const evidence = passedCuNext07AcceptanceManifest();
+  delete evidence.completionEvidence;
+  delete evidence.artifactValidationRef;
+  evidence.verifierVerdict = {
+    status: 'passed',
+    verdict: 'multi-app-workflow-passed',
+    ref: 'verifier-verdict.json',
+    checks: ['exists'],
+    checkedRefs: [String(evidence.finalArtifactRef)],
+  };
+
+  const validation = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+  });
+  const issueIds = validation.issues.map((issue) => issue.id);
+
+  assert.equal(validation.ok, false);
+  assert.ok(issueIds.includes('missing-artifact-validation-ref'));
+  assert.ok(issueIds.includes('invalid-artifact-verifier-support'));
+});
+
+test('CU-NEXT live acceptance rejects package-diagnostic evidence as product smoke', () => {
+  const evidence = passedCuNext07AcceptanceManifest();
+  evidence.productPathClassification = {
+    ...(evidence.productPathClassification as Record<string, unknown>),
+    tier: 'package-diagnostic',
+    diagnosticOnly: true,
+    packageDiagnosticOnly: true,
+  };
+
+  const validation = validateCuNextLiveAcceptanceTaskEvidence({
+    taskId: 'CU-NEXT-07',
+    evidence,
+  });
+
+  assert.equal(validation.ok, false);
+  assert.ok(validation.issues.some((issue) => (
+    issue.id === 'invalid-product-path-classification'
+    && /package diagnostic/i.test(issue.reason)
+  )));
+});
+
 test('Computer Use chat live E2E submits through chat client and validates current gui.present refs', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-e2e-'));
   const bodies: Array<Record<string, unknown>> = [];
@@ -44,8 +228,6 @@ test('Computer Use chat live E2E submits through chat client and validates curre
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
-      taskId: 'CU-NEXT-07',
-      scenarioId: 'CU-LONG-004',
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
         const url = String(input);
@@ -89,19 +271,12 @@ test('Computer Use chat live E2E submits through chat client and validates curre
     assert.match(String(bodies[0]?.commandText), /^\/computer-use/);
     assert.equal('selectedActionIds' in (bodies[0] ?? {}), false);
     assert.equal('computerUseNext' in (bodies[0]?.uiState as Record<string, unknown> | undefined ?? {}), false);
-    assert.equal(manifest.status, 'completed');
-    assert.deepEqual(manifest.issues, []);
+    assert.equal(manifest.status, 'failed');
     assert.equal(manifest.requestSubmitted, true);
-    assert.equal(manifest.liveAcceptanceCandidate, true);
-    assert.equal(manifest.liveAcceptanceBundle?.status, 'valid');
+    assert.equal(manifest.liveAcceptanceCandidate, false);
+    assert.equal(manifest.liveAcceptanceBundle?.status, 'invalid');
     assert.equal(manifest.liveAcceptanceBundle?.acceptanceManifestRef, '.sciforge/vision-runs/cu-next-07-wrapper/cu-user-acceptance-manifest.json');
-    assert.equal(manifest.packageBridgeCompletionGrade?.status, 'attached');
-    assert.deepEqual(manifest.packageBridgeCompletionGrade?.acceptanceManifestRefs, [
-      '.sciforge/vision-runs/cu-next-07-wrapper/cu-user-acceptance-manifest.json',
-    ]);
-    assert.deepEqual(manifest.packageBridgeCompletionGrade?.completionEvidenceRefs, [
-      '.sciforge/vision-runs/cu-next-07-wrapper/isolated-desktop-l3-workflow-evidence.json',
-    ]);
+    assert.ok(manifest.issues.some((issue) => /fixture, demo, or synthetic evidence/.test(issue)));
     assert.ok(manifest.displayedRefs.includes(traceRef));
     assert.ok(manifest.artifactRefs.includes(finalArtifactRef));
     assert.ok(manifest.auditRefs.includes(runTaskChainRef));
@@ -111,11 +286,282 @@ test('Computer Use chat live E2E submits through chat client and validates curre
   }
 });
 
-test('Computer Use chat request injects sanitized completion evidence policy into workspace payload', async () => {
+test('Computer Use chat live product strict rejects completed bundle without Desktop product path evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-product-strict-missing-'));
+  try {
+    await writeBundleLocalCuNext07Acceptance(workspace);
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      productStrict: true,
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
+      prompt: 'Use the visible SciForge Desktop chat to complete the Computer Use acceptance task.',
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: completedCuNext07ResponseFetch(),
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.equal(manifest.releaseAcceptance, 'desktop-product-strict');
+    assert.equal(manifest.productStrict?.status, 'failed');
+    assert.equal(manifest.liveAcceptanceBundle?.status, 'invalid');
+    assert.ok(manifest.issues.includes('product-strict:electron-product-shell-required'));
+    assert.ok(manifest.issues.includes('product-strict:desktop-native-host-required'));
+    assert.ok(manifest.issues.includes('product-strict:browser-host-or-window-action-session-target-required'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use chat live product strict rejects fixture-promoted Desktop product evidence', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-product-strict-pass-'));
+  try {
+    const acceptancePath = await writeBundleLocalCuNext07Acceptance(workspace);
+    await promoteCuNext07BundleToDesktopProductPath(acceptancePath);
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      productStrict: true,
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
+      prompt: 'Use the visible SciForge Desktop chat to complete the Computer Use acceptance task.',
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: completedCuNext07ResponseFetch(),
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.equal(manifest.releaseAcceptance, 'desktop-product-strict');
+    assert.equal(manifest.productStrict?.status, 'failed');
+    assert.equal(manifest.liveAcceptanceBundle?.status, 'invalid');
+    assert.ok(manifest.issues.includes('product-strict:package-diagnostic-path-not-product'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use chat live product strict rejects slash command prompt as diagnostic entrypoint', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-product-strict-slash-'));
+  try {
+    const acceptancePath = await writeBundleLocalCuNext07Acceptance(workspace);
+    await promoteCuNext07BundleToDesktopProductPath(acceptancePath);
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      productStrict: true,
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
+      prompt: '/computer-use complete the acceptance task',
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: completedCuNext07ResponseFetch(),
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.equal(manifest.productStrict?.status, 'failed');
+    assert.ok(manifest.issues.includes('product-strict:ordinary-desktop-chat-entrypoint-required'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use chat live product strict rejects isolated completion producer as product pass', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-product-strict-isolated-producer-'));
+  try {
+    const acceptancePath = await writeBundleLocalCuNext07Acceptance(workspace);
+    await promoteCuNext07BundleToDesktopProductPath(acceptancePath);
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      productStrict: true,
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
+      completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
+      prompt: 'Use the visible SciForge Desktop chat to complete the Computer Use acceptance task.',
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: completedCuNext07ResponseFetch(),
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.equal(manifest.productStrict?.status, 'failed');
+    assert.ok(manifest.issues.includes('product-strict:isolated-producer-completion-not-product-path'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use chat live product-strict CLI uses ordinary Desktop chat prompt by default', () => {
+  const args = parseComputerUseChatLiveCliArgs(['--product-strict', '--strict']);
+
+  assert.equal(args.productStrict, true);
+  assert.equal(args.strict, true);
+  assert.equal(args.prompt, undefined);
+  assert.doesNotMatch(suggestedComputerUseChatProductStrictPrompt, /^\s*\/computer-use\b/i);
+  assert.match(suggestedComputerUseChatProductStrictPrompt, /visible desktop/i);
+});
+
+test('Computer Use chat live product strict routes ordinary chat through host-owned Computer Use intent', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const manifest = await runComputerUseChatLiveE2E({
+    env: readyEnv(),
+    localConfigs: [],
+    productStrict: true,
+    taskId: 'CU-NEXT-01',
+    scenarioId: 'CU-LONG-001',
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/sciforge/tools/run/stream')) {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return ndjsonResponse([
+          { result: { status: 'blocked', message: 'Computer Use product strict route inspection.', executionUnits: [], artifacts: [] } },
+        ]);
+      }
+      return readyServiceResponse(url);
+    },
+  });
+
+  assert.equal(manifest.requestSubmitted, true);
+  assert.equal(bodies.length, 1);
+  assert.doesNotMatch(String(bodies[0]?.commandText), /^\s*\/computer-use\b/i);
+  assert.deepEqual(
+    bodies[0]?.runtimeIntent,
+    {
+      schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+      kind: 'computer-use-native-route',
+      source: 'host-owned',
+      computerUseNext: {
+        taskId: 'CU-NEXT-01',
+        title: 'Computer Use live task acceptance',
+        requirements: [
+          'chat-origin-current-run',
+          'refs-first-evidence-bundle',
+          'no-dom-playwright-accessibility-or-shell-file-write-substitute',
+        ],
+      },
+      computerUseLong: {
+        taskId: 'CU-NEXT-01',
+        scenarioId: 'CU-LONG-001',
+        title: 'Computer Use live task acceptance',
+        safetyBoundary: {
+          noDomAccessibility: true,
+          noShellDirectArtifactWrite: true,
+          noSharedSystemInput: true,
+        },
+      },
+    },
+  );
+});
+
+test('Computer Use chat live E2E routes task scenario through Computer Use request metadata', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const manifest = await runComputerUseChatLiveE2E({
+    env: readyEnv(),
+    localConfigs: [],
+    taskId: 'CU-NEXT-07',
+    scenarioId: 'CU-LONG-004',
+    expectedStatus: 'blocked',
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/sciforge/tools/run/stream')) {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return ndjsonResponse([
+          { result: { status: 'blocked', message: 'Computer Use blocked for routing inspection.', executionUnits: [], artifacts: [] } },
+        ]);
+      }
+      return readyServiceResponse(url);
+    },
+  });
+
+  assert.equal(manifest.requestSubmitted, true);
+  assert.equal(bodies.length, 1);
+  assert.match(String(bodies[0]?.commandText), /CU-NEXT-07/);
+  assert.match(String(bodies[0]?.commandText), /CU-LONG-004/);
+});
+
+test('Computer Use chat live E2E projects task bindings into Runtime Codex host intent command text', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const manifest = await runComputerUseChatLiveE2E({
+    env: readyEnv(),
+    localConfigs: [],
+    taskId: 'CU-NEXT-07',
+    scenarioId: 'CU-LONG-004',
+    completionEvidenceProducerIds: [
+      'computer-use.embedded-isolated-desktop-l3',
+      'computer-use.unknown-producer',
+    ],
+    expectedStatus: 'blocked',
+    now: () => new Date('2026-05-29T00:00:00.000Z'),
+    fetchImpl: async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/api/sciforge/tools/run/stream')) {
+        bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
+        return ndjsonResponse([
+          { result: { status: 'blocked', message: 'Computer Use blocked for host intent inspection.', executionUnits: [], artifacts: [] } },
+        ]);
+      }
+      return readyServiceResponse(url);
+    },
+  });
+
+  assert.equal(manifest.requestSubmitted, true);
+  assert.equal(bodies.length, 1);
+  assert.deepEqual(bodies[0]?.uiState, {
+    commandId: bodies[0]?.commandId,
+    attemptId: bodies[0]?.attemptId,
+  });
+  const transportUiState = bodies[0]?.uiState as Record<string, unknown> | undefined ?? {};
+  assert.equal('completionEvidencePolicy' in transportUiState, false);
+  assert.equal('computerUseNext' in transportUiState, false);
+  assert.equal('computerUseLong' in transportUiState, false);
+  assert.equal('selectedActionIds' in bodies[0], false);
+  assert.equal('selectedToolIds' in bodies[0], false);
+  assert.deepEqual(
+    bodies[0]?.runtimeIntent,
+    {
+      schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+      kind: 'computer-use-native-route',
+      source: 'host-owned',
+      completionEvidencePolicy: {
+        schemaVersion: 'sciforge.completion-evidence-policy.v1',
+        producers: [{
+          id: 'computer-use.embedded-isolated-desktop-l3',
+          enabled: true,
+          trigger: 'on-completed-current-run',
+        }],
+      },
+      computerUseNext: {
+        taskId: 'CU-NEXT-07',
+        title: 'Computer Use live task acceptance',
+        requirements: [
+          'chat-origin-current-run',
+          'refs-first-evidence-bundle',
+          'no-dom-playwright-accessibility-or-shell-file-write-substitute',
+        ],
+      },
+      computerUseLong: {
+        taskId: 'CU-NEXT-07',
+        scenarioId: 'CU-LONG-004',
+        title: 'Computer Use live task acceptance',
+        safetyBoundary: {
+          noDomAccessibility: true,
+          noShellDirectArtifactWrite: true,
+          noSharedSystemInput: true,
+        },
+      },
+    },
+  );
+  assert.doesNotMatch(JSON.stringify(bodies[0]), /unknown-producer|selectedActionIds|selectedToolIds/);
+});
+
+test('Computer Use legacy diagnostic workspace request injects sanitized completion evidence policy', async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (input, init) => {
-    assert.equal(String(input), 'http://workspace.test/api/sciforge/runtime/codex/stream');
+    assert.equal(String(input), 'http://workspace.test/api/sciforge/tools/run/stream');
     bodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>);
     return ndjsonResponse([
       { result: { status: 'completed', message: 'Computer Use completed.', executionUnits: [], artifacts: [] } },
@@ -128,7 +574,7 @@ test('Computer Use chat request injects sanitized completion evidence policy int
       scenarioId: 'literature-evidence-review',
       agentName: 'Computer Use',
       agentDomain: 'computer-use',
-      prompt: '/computer-use run complete the visible task',
+      prompt: '/computer-use diagnostic --legacy-workspace-gateway run complete the visible task',
       references: [],
       roleView: 'researcher',
       messages: [],
@@ -188,9 +634,22 @@ test('Computer Use chat request injects sanitized completion evidence policy int
   }
 
   assert.equal(bodies.length, 1);
-  assert.equal(bodies[0]?.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
-  assert.match(String(bodies[0]?.commandText), /^\/computer-use run complete the visible task/);
-  assert.equal('completionEvidencePolicy' in (bodies[0]?.uiState as Record<string, unknown> | undefined ?? {}), false);
+  assert.equal(bodies[0]?.schemaVersion, 'sciforge.computer-use.legacy-workspace-gateway-diagnostic.v1');
+  assert.equal(bodies[0]?.kind, 'legacy-diagnostic-shim');
+  assert.equal(bodies[0]?.diagnosticOnly, true);
+  assert.match(String(bodies[0]?.terminalEquivalentText), /^\/computer-use diagnostic --legacy-workspace-gateway run complete the visible task/);
+  const uiState = bodies[0]?.uiState as Record<string, unknown> | undefined ?? {};
+  assert.deepEqual(
+    uiState.completionEvidencePolicy,
+    {
+      schemaVersion: 'sciforge.completion-evidence-policy.v1',
+      producers: [{
+        id: 'computer-use.embedded-isolated-desktop-l3',
+        enabled: true,
+        trigger: 'on-completed-current-run',
+      }],
+    },
+  );
   assert.doesNotMatch(
     JSON.stringify(bodies[0]),
     /SECRET_POLICY_SHOULD_NOT_LEAK|SECRET_PRODUCER_SHOULD_NOT_LEAK|UNKNOWN_PRODUCER_SHOULD_NOT_LEAK|unknown-producer/,
@@ -1024,6 +1483,80 @@ test('Computer Use chat live E2E rejects completed chat results without current-
   }
 });
 
+test('Computer Use chat live E2E rejects product-path completed smoke without current-run acceptance bundle', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-product-smoke-'));
+  try {
+    const traceRef = '.sciforge/vision-runs/product-smoke/vision-trace.json';
+    const finalArtifactRef = '.sciforge/vision-runs/product-smoke/report.md';
+    const runTaskChainRef = '.sciforge/vision-runs/product-smoke/tui-host-run-task-chain.json';
+    await writeJson(join(workspace, traceRef), {
+      schemaVersion: 'sciforge.computer-use.package-bridge-trace.v1',
+      status: 'done',
+      finalArtifactRef,
+    });
+    await writeJson(join(workspace, runTaskChainRef), {
+      schemaVersion: 'sciforge.computer-use.tui-host-run-task-chain.v1',
+      links: [
+        { kind: 'gui.present', status: 'present', recordRef: `${runTaskChainRef}#links/gui-present` },
+      ],
+    });
+    await writeJson(join(workspace, finalArtifactRef), {
+      title: 'Visible product smoke report',
+    });
+
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/api/sciforge/tools/run/stream')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          const commandId = String((body.uiState as Record<string, unknown>).commandId);
+          return ndjsonResponse([
+            {
+              event: {
+                type: 'computer-use.tui-host-actions',
+                source: 'computer-use-package-bridge',
+                commandId,
+                attemptId: `${commandId}-attempt-1`,
+                detail: {
+                  actions: [{
+                    schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+                    port: 'gui.present',
+                    target: 'computer-use.trace-summary',
+                    payload: {
+                      title: 'Computer Use result',
+                      status: 'completed',
+                      message: 'Computer Use produced a visible report.',
+                      traceRefs: [traceRef],
+                      artifactRefs: [finalArtifactRef],
+                      runTaskChainRefs: [runTaskChainRef],
+                    },
+                  }],
+                },
+              },
+            },
+            { result: { status: 'completed', message: 'Computer Use completed.', executionUnits: [], artifacts: [] } },
+          ]);
+        }
+        return readyServiceResponse(url);
+      },
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.ok(manifest.issues.includes(
+      'completion-grade: package bridge completion-grade evidence must be attached for completed chat Computer Use run (fail-closed).',
+    ));
+    assert.ok(manifest.issues.some((issue) => /cu-user-acceptance-manifest\.json is missing/i.test(issue)));
+    assert.equal(manifest.liveAcceptanceCandidate, false);
+    assert.equal(manifest.packageBridgeCompletionGrade?.status, 'missing');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Computer Use chat live E2E surfaces package bridge completion-grade diagnostics when manifest is missing', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-diagnostic-bundle-'));
   try {
@@ -1267,6 +1800,139 @@ test('Computer Use chat live E2E surfaces sanitized package bridge process failu
   }
 });
 
+test('Computer Use chat live E2E surfaces repair-needed sidecar diagnostics after submitted planner failure', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-chat-live-repair-sidecar-diagnostics-'));
+  try {
+    const runDir = '.sciforge/vision-runs/package-planner-failed';
+    const traceRef = `${runDir}/vision-trace.json`;
+    const requestRef = `${runDir}/computer-use-request.json`;
+    const runTaskChainRef = `${runDir}/tui-host-run-task-chain.json`;
+    const blockedManifestRef = `${runDir}/blocked-manifest.json`;
+    const repairHintRef = `${runDir}/repair-hint.json`;
+    const continuationRequestRef = `${runDir}/continuation-request.json`;
+    const directoryListingRef = `${runDir}/directory-listing.json`;
+    await writeJson(join(workspace, traceRef), {
+      schemaVersion: 'sciforge.vision-sense.trace.v1',
+      status: 'blocked',
+    });
+    await writeJson(join(workspace, requestRef), {
+      schemaVersion: 'sciforge.computer-use.request.v1',
+      task: '/computer-use produce a report',
+      privateHugeField: 'must not leak',
+    });
+    await writeJson(join(workspace, blockedManifestRef), {
+      schemaVersion: 'sciforge.computer-use.blocked-manifest-sidecar.v1',
+      status: 'blocked',
+      failedStage: 'plan',
+      reason: 'Runtime Codex text planner failed: Reconnecting... 1/5 Diagnostics: plannerText=message:no,delta:no,emptyFinal:yes; api_key=sk-sidecar-secret',
+      traceRef,
+      requestRef,
+      tuiHostRunTaskChainRef: runTaskChainRef,
+      repairHintRef,
+      continuationRequestRef,
+      privateHugeField: 'must not leak',
+    });
+    await writeJson(join(workspace, repairHintRef), {
+      schemaVersion: 'sciforge.computer-use.repair-hint-sidecar.v1',
+      status: 'repair-needed',
+      reason: 'Retry after planner stream produces no final text. token=repair-secret',
+      blockedManifestRef,
+      nextAttempt: {
+        reuseTraceRef: traceRef,
+        reuseRunTaskChainRef: runTaskChainRef,
+        requireFreshObservation: true,
+        preserveInputIsolation: true,
+      },
+    });
+    await writeJson(join(workspace, continuationRequestRef), {
+      schemaVersion: 'sciforge.computer-use.continuation-request-sidecar.v1',
+      status: 'ready-for-continuation',
+      blockedManifestRef,
+      repairHintRef,
+      sameTraceSessionRef: runTaskChainRef,
+    });
+    await writeJson(join(workspace, runTaskChainRef), {
+      schemaVersion: 'sciforge.computer-use.tui-host-run-task-chain.v1',
+      refs: {
+        traceRef,
+        requestRef,
+        blockedManifestRef,
+        repairHintRef,
+        continuationRequestRef,
+        directoryListingRef,
+      },
+    });
+    await writeJson(join(workspace, directoryListingRef), {
+      schemaVersion: 'sciforge.computer-use.directory-listing.v1',
+      fileRefs: [traceRef, requestRef, runTaskChainRef, blockedManifestRef, repairHintRef, continuationRequestRef],
+    });
+
+    const manifest = await runComputerUseChatLiveE2E({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/api/sciforge/tools/run/stream')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          const commandId = String((body.uiState as Record<string, unknown>).commandId);
+          return ndjsonResponse([
+            {
+              event: {
+                type: 'computer-use.tui-host-actions',
+                source: 'computer-use-package-bridge',
+                commandId,
+                attemptId: `${commandId}-attempt-1`,
+                detail: {
+                  actions: [{
+                    schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+                    port: 'gui.present',
+                    target: 'computer-use.trace-summary',
+                    payload: {
+                      title: 'Computer Use repair needed',
+                      status: 'repair-needed',
+                      message: 'Planner failed before producing a usable action plan.',
+                      traceRefs: [traceRef],
+                      runTaskChainRefs: [runTaskChainRef],
+                      blockedManifestRefs: [blockedManifestRef],
+                      repairHintRefs: [repairHintRef],
+                      continuationRequestRefs: [continuationRequestRef],
+                      directoryListingRefs: [directoryListingRef],
+                    },
+                  }],
+                },
+              },
+            },
+            { result: { status: 'repair-needed', message: 'Computer Use repair needed.', executionUnits: [], artifacts: [] } },
+          ]);
+        }
+        return readyServiceResponse(url);
+      },
+    });
+
+    assert.equal(manifest.status, 'failed');
+    assert.equal(manifest.visibleStatus, 'repair-needed');
+    assert.ok(manifest.issues.includes('expected-completed-got-repair-needed'));
+    const diagnostic = manifest.failureDiagnostics.find((item) => String(item.kind) === 'package-bridge-repair-needed');
+    assert.ok(diagnostic);
+    assert.ok(diagnostic.refs.includes(blockedManifestRef));
+    assert.ok(diagnostic.refs.includes(repairHintRef));
+    assert.ok(diagnostic.refs.includes(continuationRequestRef));
+    assert.ok(diagnostic.refs.includes(traceRef));
+    assert.ok(diagnostic.refs.includes(requestRef));
+    assert.ok(diagnostic.refs.includes(runTaskChainRef));
+    assert.match(diagnostic.summary, /failedStage=plan/);
+    assert.match(diagnostic.summary, /plannerText=message:no,delta:no,emptyFinal:yes/);
+    assert.ok(diagnostic.recoverActions.some((action) => action.includes(continuationRequestRef)));
+    const serialized = JSON.stringify(manifest);
+    assert.doesNotMatch(serialized, /must not leak|sk-sidecar-secret|repair-secret/);
+    assert.match(serialized, /\[redacted\]/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('Computer Use chat live E2E validator rejects gui.present final artifact mismatch', () => {
   const manifest = validateComputerUseChatLiveE2EResponse({
     expectedStatus: 'completed',
@@ -1432,6 +2098,117 @@ test('Computer Use chat live E2E validator rejects needs-confirmation without ri
 
   assert.equal(manifest.status, 'failed');
   assert.ok(manifest.issues.includes('needs-confirmation-missing-risk-audit-ref'));
+});
+
+test('Computer Use chat live E2E validator accepts refs-first high-risk sidecar metadata without explicit risk level', () => {
+  const traceRef = '.sciforge/vision-runs/high-risk-sidecar/vision-trace.json';
+  const runTaskChainRef = '.sciforge/vision-runs/high-risk-sidecar/tui-host-run-task-chain.json';
+  const approvalRequestRef = '.sciforge/vision-runs/high-risk-sidecar/approval-request.json';
+  const guiAskUserRef = '.sciforge/vision-runs/high-risk-sidecar/gui-ask-user.json';
+  const riskAuditRef = '.sciforge/vision-runs/high-risk-sidecar/risk-audit.json';
+  const approvalRequest = {
+    id: 'approval-request:computer-use:sidecar-risk',
+    approvalRequestId: 'approval-request:computer-use:sidecar-risk',
+    status: 'needs-confirmation',
+    action_kind: 'click',
+    target: {
+      description: 'Share button',
+    },
+    reason: 'approval-required: high-risk Computer Use action stopped before grounding or executor event creation',
+  };
+  const sidecarBase = {
+    status: 'needs-confirmation',
+    approvalRequestId: 'approval-request:computer-use:sidecar-risk',
+    approvalRef: 'approval-request:computer-use:sidecar-risk',
+    riskActionHash: 'risk-action:computer-use:sidecar-risk',
+    deniedExecuted: false,
+    packageMayCallGuiDirectly: false,
+  };
+  const manifest = validateComputerUseChatLiveE2EResponse({
+    expectedStatus: 'needs-confirmation',
+    prompt: '/computer-use guarded smoke',
+    checkedAt: '2026-05-29T00:00:00.000Z',
+    preflight: readyPreflight(),
+    approvalEvidence: {
+      approvalRequestRefs: [approvalRequestRef],
+      guiAskUserRecordRefs: [guiAskUserRef],
+      riskAuditRefs: [riskAuditRef],
+      confirmedRequestRefs: [],
+      approvalDecisionRefs: [],
+      sourceApprovalRequestRefs: [],
+      sourceGuiAskUserRecordRefs: [],
+      sourceRiskAuditRefs: [],
+      approvalRequestSidecar: {
+        ...sidecarBase,
+        approvalRequest,
+        approvalBoundary: {
+          highRiskAction: {
+            actionKind: 'click',
+            targetDescription: 'Share button',
+          },
+        },
+      },
+      guiAskUserSidecar: {
+        ...sidecarBase,
+        payload: { approvalRequest },
+      },
+      riskAuditSidecar: {
+        ...sidecarBase,
+        highRiskAction: {
+          actionKind: 'click',
+          targetDescription: 'Share button',
+        },
+      },
+      readIssues: [],
+    },
+    events: [{
+      id: 'evt-computer-use-host-actions',
+      type: 'computer-use.tui-host-actions',
+      label: 'Computer Use host actions',
+      createdAt: '2026-05-29T00:00:00.000Z',
+    }],
+    response: {
+      message: {} as NormalizedAgentResponse['message'],
+      uiManifest: [],
+      claims: [],
+      executionUnits: [],
+      artifacts: [],
+      notebook: [],
+      run: {
+        id: 'run-high-risk-sidecar',
+        scenarioId: 'high-risk-sidecar',
+        status: 'failed',
+        prompt: '/computer-use guarded smoke',
+        response: 'needs confirmation',
+        createdAt: '2026-05-29T00:00:00.000Z',
+        raw: {
+          guiPresentation: {
+            source: 'gui.present:run-high-risk-sidecar:computer-use',
+            displayedRefs: [traceRef, runTaskChainRef],
+          },
+          guiAskUser: {
+            source: 'gui.ask_user:run-high-risk-sidecar:computer-use',
+            approvalRequest,
+            relatedRefs: [traceRef],
+          },
+          displayIntent: {
+            conversationProjection: {
+              visibleAnswer: {
+                status: 'needs-human',
+                artifactRefs: [traceRef, runTaskChainRef],
+              },
+              artifacts: [{ ref: traceRef }, { ref: runTaskChainRef }],
+              auditRefs: [runTaskChainRef],
+            },
+          },
+        },
+      },
+    },
+  });
+
+  assert.equal(manifest.status, 'needs-confirmation');
+  assert.deepEqual(manifest.issues, []);
+  assert.equal(manifest.approvalRequest?.riskLevel, 'high');
 });
 
 test('Computer Use chat live continuation E2E reuses repair sidecar refs in second request and events', async () => {
@@ -1638,17 +2415,15 @@ test('Computer Use chat live continuation E2E accepts repair-needed then complet
     });
 
     assert.equal(bodies.length, 2);
-    assert.equal(manifest.status, 'passed', JSON.stringify(manifest.issues));
+    assert.equal(manifest.status, 'failed', JSON.stringify(manifest.issues));
     assert.equal(manifest.requestSubmitted, true);
-    assert.equal(manifest.liveAcceptanceCandidate, true);
-    assert.deepEqual(manifest.issues, []);
-    assert.equal(manifest.secondTurn?.status, 'completed');
-    assert.equal(manifest.secondTurn?.liveAcceptanceCandidate, true);
-    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'valid');
+    assert.ok(manifest.issues.includes('second-completed-live-acceptance-bundle-invalid'));
+    assert.equal(manifest.secondTurn?.status, 'failed');
+    assert.equal(manifest.secondTurn?.liveAcceptanceCandidate, false);
+    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'invalid');
     assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.acceptanceManifestRef, '.sciforge/vision-runs/cu-next-07-wrapper/cu-user-acceptance-manifest.json');
-    assert.equal(manifest.secondTurn?.packageBridgeCompletionGrade?.status, 'attached');
     assert.equal(manifest.continuation.completedGate?.firstRepairSidecarPayloadHydrated, true);
-    assert.equal(manifest.continuation.completedGate?.currentRunBundle?.status, 'valid');
+    assert.equal(manifest.continuation.completedGate?.currentRunBundle?.status, 'invalid');
     assert.equal(
       manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.acceptanceFinalArtifactRef,
       finalArtifactRef,
@@ -1786,8 +2561,8 @@ test('Computer Use chat live continuation E2E ignores pseudo final artifact refs
     });
 
     assert.equal(bodies.length, 2);
-    assert.equal(manifest.status, 'passed', manifest.issues.join('\n'));
-    assert.deepEqual(manifest.issues, []);
+    assert.equal(manifest.status, 'failed', manifest.issues.join('\n'));
+    assert.ok(manifest.issues.includes('second-completed-live-acceptance-bundle-invalid'));
     assert.deepEqual(manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.secondTurnFinalArtifactRefs, [finalArtifactRef]);
     assert.deepEqual(
       manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.rejectedFinalArtifactRefs.map((item) => item.ref),
@@ -1877,7 +2652,7 @@ test('Computer Use chat live continuation E2E rejects completed when repair side
 
     assert.equal(bodies.length, 2);
     assert.equal(manifest.status, 'failed');
-    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'valid');
+    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'invalid');
     assert.deepEqual(manifest.continuation.sidecarHydration.requestSidecars, {
       continuationRequest: false,
       repairHint: false,
@@ -1918,6 +2693,8 @@ test('Computer Use chat live continuation E2E rejects completed final artifact r
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
+      taskId: 'CU-NEXT-07',
+      scenarioId: 'CU-LONG-004',
       secondExpectedStatus: 'completed',
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
@@ -1982,9 +2759,9 @@ test('Computer Use chat live continuation E2E rejects completed final artifact r
 
     assert.equal(bodies.length, 2);
     assert.equal(manifest.status, 'failed');
-    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'valid');
+    assert.equal(manifest.secondTurn?.liveAcceptanceBundle?.status, 'invalid');
     assert.equal(manifest.continuation.completedGate?.firstRepairSidecarPayloadHydrated, true);
-    assert.equal(manifest.continuation.completedGate?.currentRunBundle?.status, 'valid');
+    assert.equal(manifest.continuation.completedGate?.currentRunBundle?.status, 'invalid');
     assert.equal(manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.consistent, false);
     assert.deepEqual(manifest.continuation.completedGate?.finalArtifactGuiPresentRefs.matchingFinalArtifactRefs, []);
     assert.ok(manifest.issues.includes(`second-completed-final-artifact-missing-from-second-turn-artifacts:${acceptanceFinalArtifactRef}`));
@@ -2119,10 +2896,11 @@ test('Computer Use chat live acceptance bundle normalizes current-run-prefixed r
       refs: ['.sciforge/vision-runs/cu-next-07-wrapper/vision-trace.json'],
     });
 
-    assert.equal(result.status, 'valid', result.issues.join('\n'));
+    assert.equal(result.status, 'invalid', result.issues.join('\n'));
     assert.equal(result.runDirRef, '.sciforge/vision-runs/cu-next-07-wrapper');
     assert.equal(result.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
     assert.deepEqual(result.missingRefs, []);
+    assert.ok(result.issues.some((issue) => /fixture, demo, or synthetic evidence/.test(issue)));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -2228,6 +3006,113 @@ test('Computer Use chat live acceptance bundle rejects artifact pseudo refs as c
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+function completedCuNext07ResponseFetch(): typeof fetch {
+  const traceRef = '.sciforge/vision-runs/cu-next-07-wrapper/vision-trace.json';
+  const finalArtifactRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-export.csv';
+  const runTaskChainRef = '.sciforge/vision-runs/cu-next-07-wrapper/tui-host-run-task-chain.json';
+  return (async (input, init) => {
+    const url = String(input);
+    if (url.endsWith('/api/sciforge/tools/run/stream')) {
+      const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+      const commandId = String((body.uiState as Record<string, unknown>).commandId);
+      return ndjsonResponse([
+        {
+          event: {
+            type: 'computer-use.tui-host-actions',
+            source: 'computer-use-package-bridge',
+            commandId,
+            attemptId: `${commandId}-attempt-1`,
+            detail: {
+              actions: [{
+                schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+                port: 'gui.present',
+                target: 'computer-use.trace-summary',
+                payload: {
+                  title: 'Computer Use result',
+                  status: 'completed',
+                  message: 'Computer Use produced a visible report.',
+                  traceRefs: [traceRef],
+                  artifactRefs: [finalArtifactRef],
+                  runTaskChainRefs: [runTaskChainRef],
+                },
+              }],
+            },
+          },
+        },
+        { result: { status: 'completed', message: 'Computer Use completed.', executionUnits: [], artifacts: [] } },
+      ]);
+    }
+    return readyServiceResponse(url);
+  }) as typeof fetch;
+}
+
+async function promoteCuNext07BundleToDesktopProductPath(manifestPath: string): Promise<void> {
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+  const runDirRef = '.sciforge/vision-runs/cu-next-07-wrapper';
+  const productPathClassification = manifest.productPathClassification as Record<string, unknown>;
+  manifest.productPathClassification = {
+    ...productPathClassification,
+    tier: 'package-diagnostic',
+    entrypoint: 'sciforge-desktop-chat',
+    shell: 'electron-product',
+    workspaceWriter: 'electron-dynamic',
+    runtimeTransport: 'runtime-codex-sse',
+    desktopNativeHost: 'sciforgeDesktop',
+    targetKind: 'BrowserHostSession',
+    targetRefs: ['browser-host-session:cu-next-07-wrapper/live-surface'],
+    currentBundleRef: '.',
+    ordinaryDesktopChat: true,
+    isolatedProducerCompletionOnly: false,
+    diagnosticOnly: true,
+    packageDiagnosticOnly: true,
+    hops: [
+      'sciforge-desktop-chat',
+      'electron-product-shell',
+      'electron-dynamic-workspace-writer',
+      'runtime-codex-transport',
+      'desktop-native-host',
+      'BrowserHostSession',
+      'codex-app-server',
+      'codex-native-plugin',
+      'sciforge-computer-use',
+      'native-multi-screen-sidecar',
+    ],
+  };
+  manifest.tuiHostChain = [
+    ...((Array.isArray(manifest.tuiHostChain) ? manifest.tuiHostChain : []) as Array<Record<string, unknown>>),
+    {
+      id: 'desktop-product-chat',
+      kind: 'desktop-product-chat',
+      status: 'present',
+      requestRef: 'computer-use-request.json',
+      shellRef: 'electron-product-shell:dist-ui-index',
+      workspaceWriterRef: 'electron-dynamic-workspace-writer:runtime-config-health',
+      runtimeTransportRef: 'runtime-codex-transport:sse-agent-host-turn-loop',
+      nativeHostRef: 'desktop-native-host:sciforgeDesktop',
+      targetRef: 'browser-host-session:cu-next-07-wrapper/live-surface',
+    },
+  ];
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeJson(join(dirname(manifestPath), 'desktop-product-path.json'), {
+    schemaVersion: 'sciforge.computer-use.desktop-product-path.v1',
+    shell: 'electron-product',
+    workspaceWriter: 'electron-dynamic',
+    runtimeTransport: 'runtime-codex-sse',
+    desktopNativeHost: 'sciforgeDesktop',
+    targetKind: 'BrowserHostSession',
+    currentBundleRef: runDirRef,
+    diagnosticOnly: true,
+    packageDiagnosticOnly: true,
+    refs: [
+      'electron-product-shell:dist-ui-index',
+      'electron-dynamic-workspace-writer:runtime-config-health',
+      'runtime-codex-transport:sse-agent-host-turn-loop',
+      'desktop-native-host:sciforgeDesktop',
+      'browser-host-session:cu-next-07-wrapper/live-surface',
+    ],
+  });
+}
 
 async function writeNeedsConfirmationSidecars(workspace: string, input: {
   traceRef: string;
@@ -2564,7 +3449,6 @@ function readyEnv(): NodeJS.ProcessEnv {
     SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
     SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
     SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-    SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:18081',
     SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
     SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
     SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
@@ -2606,7 +3490,8 @@ function readyPreflight() {
   };
 }
 
-function readyServiceResponse(url: string): Response {
+async function readyServiceResponse(input: URL | RequestInfo): Promise<Response> {
+  const url = String(input);
   if (url.includes('/api/sciforge/runtime-provider-preflight/manifest')) {
     return jsonResponse({
       ok: true,
@@ -2625,9 +3510,17 @@ function readyServiceResponse(url: string): Response {
       },
     });
   }
-  if (url.endsWith('/healthz')) return jsonResponse({ ok: true });
-  if (url.endsWith('/health')) return jsonResponse({ ok: true, ready: true });
+  if (urlPathname(url).endsWith('/healthz')) return jsonResponse({ ok: true });
+  if (urlPathname(url).endsWith('/health')) return jsonResponse({ ok: true, ready: true });
   return htmlResponse('<!doctype html><html><body>SciForge</body></html>');
+}
+
+function urlPathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split(/[?#]/, 1)[0] ?? url;
+  }
 }
 
 function jsonResponse(payload: unknown): Response {

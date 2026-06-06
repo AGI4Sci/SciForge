@@ -1,5 +1,6 @@
 import { sha1 } from '../workspace-task-runner.js';
 import { tryRunBrowserHostSearchRuntime } from '../browser-host-search-runtime.js';
+import { tryRunRequestClarificationRuntime } from '../request-clarification-runtime.js';
 import { taskProjectSkillDomain } from '../../../packages/contracts/runtime/handoff.js';
 import {
   authorizationProfileOrDefault,
@@ -116,9 +117,42 @@ export interface CodexAgentHostRuntimeTruth {
   };
   permissions?: {
     refs?: string[];
+    permissionRefs?: string[];
+    appAllowlistRefs?: string[];
+    windowAllowlistRefs?: string[];
+    riskPreviewRefs?: string[];
     stopCancelPath?: boolean;
     controlPath?: CodexAgentHostRuntimeControlPath;
   };
+  sessions?: CodexAgentHostRuntimeSessionTruth;
+  adapter?: CodexAgentHostRuntimeAdapterTruth;
+  controlPath?: CodexAgentHostRuntimeControlPath;
+  refs?: string[];
+}
+
+export interface CodexAgentHostRuntimeSessionTruth {
+  sessionReadyRefs?: string[];
+  targetRefs?: string[];
+  actorCursorRefs?: string[];
+  inputLeaseRefs?: string[];
+  focusLeaseRefs?: string[];
+  observationRefs?: string[];
+}
+
+export interface CodexAgentHostRuntimeAdapterTruth {
+  providerId?: string;
+  refs?: string[];
+  capabilityRefs?: string[];
+  inputIsolation?: CodexAgentHostRuntimeAdapterInputIsolation;
+}
+
+export interface CodexAgentHostRuntimeAdapterInputIsolation {
+  mode?: string;
+  refsOnly: boolean;
+  sharedSystemInput?: boolean;
+  requiresFocusLease?: boolean;
+  singleInteractiveTruth?: boolean;
+  secondTruthSource?: boolean;
   refs?: string[];
 }
 
@@ -189,6 +223,15 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
   const authorizationResolution = authorizationProfileOrDefault(agentHostInput.authorizationProfileId);
   const authorizationProfile = authorizationResolution.profile;
   const metadata = baseEventMetadata({ ...input, commandId, attemptId });
+  const semanticPrompt = agentHostInput.intentText ?? input.commandText;
+  const runtimeRequest = {
+    skillDomain: BROWSER_EVIDENCE_DOMAIN,
+    prompt: semanticPrompt,
+    workspacePath: input.workspacePath,
+    artifacts: [],
+    references: agentHostInput.refs.map((ref) => ({ ref })),
+    uiState: {},
+  };
 
   if (authorizationResolution.source === 'declared-invalid-profile') {
     const invalidProfileId = agentHostInput.authorizationProfileId ?? 'unknown';
@@ -258,6 +301,39 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
           opposingRefs: [],
         }],
         evidenceRefs: agentHostInput.refs,
+      }),
+    };
+  }
+
+  const clarificationPayload = tryRunRequestClarificationRuntime(runtimeRequest);
+  if (clarificationPayload) {
+    const message = clarificationPayload.message;
+    return {
+      event: {
+        ...metadata,
+        type: 'audit',
+        status: 'agent-host-turn-loop',
+        message,
+        raw: {
+          schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+          stage: 'Clarify',
+          ground,
+          selectedRuntime: 'request-clarification-runtime',
+        },
+      },
+      result: structuredResult({
+        commandId,
+        message,
+        confidence: clarificationPayload.confidence ?? 0.6,
+        claimType: clarificationPayload.claimType,
+        evidenceLevel: 'request-understanding',
+        reasoningTrace: clarificationPayload.reasoningTrace,
+        status: browserPayloadStatus(clarificationPayload.displayIntent),
+        artifacts: clarificationPayload.artifacts ?? [],
+        uiManifest: clarificationPayload.uiManifest ?? [],
+        executionUnits: clarificationPayload.executionUnits ?? [],
+        claims: clarificationPayload.claims ?? [],
+        evidenceRefs: evidenceRefsFromToolPayload(clarificationPayload),
       }),
     };
   }
@@ -470,14 +546,7 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
   }
 
   if (ground.intent === 'browser-evidence') {
-    const payload = await tryRunBrowserHostSearchRuntime({
-      skillDomain: BROWSER_EVIDENCE_DOMAIN,
-      prompt: input.commandText,
-      workspacePath: input.workspacePath,
-      artifacts: [],
-      references: agentHostInput.refs.map((ref) => ({ ref })),
-      uiState: {},
-    });
+    const payload = await tryRunBrowserHostSearchRuntime(runtimeRequest);
     if (!payload) return undefined;
     const message = payload.message;
     return {
@@ -1096,9 +1165,16 @@ function sanitizeRuntimeTruth(value: unknown): CodexAgentHostRuntimeTruth | unde
       ...stringList(value.permissions.permissionRefs),
       ...stringList(value.permissions.evidenceRefs),
     ].filter(runtimeOwnedRuntimeTruthRef),
+    permissionRefs: stringList(value.permissions.permissionRefs).filter(runtimeOwnedRuntimeTruthRef),
+    appAllowlistRefs: stringList(value.permissions.appAllowlistRefs).filter(runtimeOwnedRuntimeTruthRef),
+    windowAllowlistRefs: stringList(value.permissions.windowAllowlistRefs).filter(runtimeOwnedRuntimeTruthRef),
+    riskPreviewRefs: stringList(value.permissions.riskPreviewRefs).filter(runtimeOwnedRuntimeTruthRef),
     stopCancelPath: value.permissions.stopCancelPath === true || value.permissions.cancelPath === true || value.permissions.takeOverPath === true,
     ...(sanitizeRuntimeControlPath(value.permissions.controlPath) ? { controlPath: sanitizeRuntimeControlPath(value.permissions.controlPath) } : {}),
   } : undefined;
+  const sessions = sanitizeRuntimeSessionTruth(value.sessions);
+  const adapter = sanitizeRuntimeAdapterTruth(value.adapter);
+  const controlPath = sanitizeRuntimeControlPath(value.controlPath);
   return {
     schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
     ...(stringField(value.source) ? { source: stringField(value.source) } : {}),
@@ -1106,8 +1182,67 @@ function sanitizeRuntimeTruth(value: unknown): CodexAgentHostRuntimeTruth | unde
     ...(target ? { target } : {}),
     ...(observation ? { observation } : {}),
     ...(permissions ? { permissions } : {}),
+    ...(sessions ? { sessions } : {}),
+    ...(adapter ? { adapter } : {}),
+    ...(controlPath ? { controlPath } : {}),
     refs: stringList(value.refs).filter(runtimeOwnedRuntimeTruthRef),
   };
+}
+
+function sanitizeRuntimeSessionTruth(value: unknown): CodexAgentHostRuntimeSessionTruth | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionReadyRefs = stringList(value.sessionReadyRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const targetRefs = stringList(value.targetRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const actorCursorRefs = stringList(value.actorCursorRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const inputLeaseRefs = stringList(value.inputLeaseRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const focusLeaseRefs = stringList(value.focusLeaseRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const observationRefs = stringList(value.observationRefs).filter(runtimeOwnedRuntimeTruthRef);
+  if (!sessionReadyRefs.length && !targetRefs.length && !actorCursorRefs.length && !inputLeaseRefs.length && !focusLeaseRefs.length && !observationRefs.length) {
+    return undefined;
+  }
+  return {
+    ...(sessionReadyRefs.length ? { sessionReadyRefs } : {}),
+    ...(targetRefs.length ? { targetRefs } : {}),
+    ...(actorCursorRefs.length ? { actorCursorRefs } : {}),
+    ...(inputLeaseRefs.length ? { inputLeaseRefs } : {}),
+    ...(focusLeaseRefs.length ? { focusLeaseRefs } : {}),
+    ...(observationRefs.length ? { observationRefs } : {}),
+  };
+}
+
+function sanitizeRuntimeAdapterTruth(value: unknown): CodexAgentHostRuntimeAdapterTruth | undefined {
+  if (!isRecord(value)) return undefined;
+  const refs = stringList(value.refs).filter(runtimeOwnedRuntimeTruthRef);
+  const capabilityRefs = stringList(value.capabilityRefs).filter(runtimeOwnedRuntimeTruthRef);
+  const inputIsolation = sanitizeRuntimeInputIsolation(value.inputIsolation);
+  const providerId = safeRuntimeTruthStringField(value.providerId);
+  if (!providerId && !refs.length && !capabilityRefs.length && !inputIsolation) return undefined;
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(refs.length ? { refs } : {}),
+    ...(capabilityRefs.length ? { capabilityRefs } : {}),
+    ...(inputIsolation ? { inputIsolation } : {}),
+  };
+}
+
+function sanitizeRuntimeInputIsolation(value: unknown): CodexAgentHostRuntimeAdapterInputIsolation | undefined {
+  if (!isRecord(value)) return undefined;
+  const refs = stringList(value.refs).filter(runtimeOwnedRuntimeTruthRef);
+  const mode = safeRuntimeTruthStringField(value.mode);
+  return {
+    ...(mode ? { mode } : {}),
+    refsOnly: value.refsOnly !== false,
+    ...(typeof value.sharedSystemInput === 'boolean' ? { sharedSystemInput: value.sharedSystemInput } : {}),
+    ...(typeof value.requiresFocusLease === 'boolean' ? { requiresFocusLease: value.requiresFocusLease } : {}),
+    ...(typeof value.singleInteractiveTruth === 'boolean' ? { singleInteractiveTruth: value.singleInteractiveTruth } : {}),
+    ...(typeof value.secondTruthSource === 'boolean' ? { secondTruthSource: value.secondTruthSource } : {}),
+    ...(refs.length ? { refs } : {}),
+  };
+}
+
+function safeRuntimeTruthStringField(value: unknown): string | undefined {
+  const text = stringField(value);
+  return text && !unsafeDiagnosticText(text) ? text : undefined;
 }
 
 function sanitizeRuntimeControlPath(value: unknown): CodexAgentHostRuntimeControlPath | undefined {

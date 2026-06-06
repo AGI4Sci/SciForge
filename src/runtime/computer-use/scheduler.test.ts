@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   computerUseFocusLeaseProjectionForAction,
+  computerUseSchedulerLockId,
   computerUseStaleEvidenceInvalidationForAction,
   leaseScopesConflict,
   scheduleComputerUseActionProposals,
@@ -402,6 +403,22 @@ test('scheduler focus lease projection keeps legacy lease scope and classifies t
   assert.equal(projection.requiresGlobalFocus, false);
 });
 
+test('scheduler lock id keeps target lock for wait actions that do not require executor focus', () => {
+  const target = resolvedWindowTarget();
+  const decision = validateComputerUseScopedAction({
+    action: { type: 'wait', ms: 1 },
+    targetResolution: target,
+    now: '2026-05-31T10:00:01.000Z',
+  });
+
+  assert.equal(decision.ok, true);
+  assert.equal(decision.ok ? decision.focusLeaseProjection.requiresGlobalFocus : undefined, false);
+  assert.equal(
+    decision.ok ? computerUseSchedulerLockId(target, { leaseScope: decision.leaseScope }) : undefined,
+    target.schedulerLockId,
+  );
+});
+
 test('scheduler returns needs-observation when mutating action lacks current refs', () => {
   const target = resolvedWindowTarget();
   const decision = validateComputerUseScopedAction({
@@ -488,6 +505,34 @@ test('scheduler blocks observe-before-mutate scope mismatches and stale freshnes
   assert.equal(stale.ok, false);
   assert.equal(stale.status, 'needs-observation');
   assert.match(stale.reason, /invalidated/);
+});
+
+test('scheduler caps visual observe-before-mutate age even when evidence declares a wider freshness window', () => {
+  const target = resolvedWindowTarget();
+  const decision = validateComputerUseScopedAction({
+    action: {
+      type: 'click',
+      targetDescription: 'Search field',
+      observeBeforeMutate: {
+        ...observeEvidence(),
+        observedAt: '2026-05-31T09:59:00.000Z',
+        capturedAt: '2026-05-31T09:59:00.000Z',
+        freshnessCheckedAt: '2026-05-31T09:59:00.000Z',
+        freshnessCheck: {
+          status: 'current',
+          observedAt: '2026-05-31T09:59:00.000Z',
+          checkedAt: '2026-05-31T09:59:00.000Z',
+          maxAgeMs: 300_000,
+        },
+      },
+    },
+    targetResolution: target,
+    now: '2026-05-31T10:00:00.001Z',
+  });
+
+  assert.equal(decision.ok, false);
+  assert.equal(decision.status, 'needs-observation');
+  assert.match(decision.reason, /observation is older than 30000ms/);
 });
 
 test('scheduler rejects freshness evidence with missing observation or check timestamps', () => {

@@ -130,6 +130,8 @@ test('production launcher resolves sidecar port conflicts and injects actual por
     assert.equal(capturedEnv[0]?.SCIFORGE_PROXY_BASE_URL, providerBinding?.url);
     assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_PORT, String(runtimeBinding?.actual));
     assert.equal(capturedEnv[0]?.SCIFORGE_RUNTIME_CODEX_URL, runtimeBinding?.url);
+    assert.equal(capturedEnv[0]?.SCIFORGE_DESKTOP_SIDECAR, '1');
+    assert.equal(capturedEnv[0]?.SCIFORGE_DESKTOP_USER_DATA_DIR, join(root, 'app-data'));
     assert.equal(capturedEnv[0]?.SCIFORGE_CONFIG_PATH, join(root, 'app-data', 'config', 'config.local.json'));
     assert.equal(capturedEnv[0]?.SCIFORGE_STATE_DIR, join(root, 'app-data', 'state'));
     assert.equal(capturedEnv[0]?.SCIFORGE_LOG_DIR, join(root, 'app-data', 'logs'));

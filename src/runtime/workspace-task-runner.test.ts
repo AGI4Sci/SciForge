@@ -4,7 +4,7 @@ import { access, chmod, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy';
+import { workspaceTaskPythonCommandCandidates } from '../../packages/skills/runtime-policy.js';
 import { runWorkspaceTask } from './workspace-task-runner.js';
 
 test('workspace task runner delegates Python runtime candidate policy to skills package', async () => {

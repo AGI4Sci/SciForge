@@ -205,6 +205,108 @@ test('Codex app-server client treats GUI spawn_agent text as ordinary app-server
   assert.deepEqual(events.map((event) => event.method), ['turn/completed']);
 });
 
+test('Codex app-server client keeps streaming after retryable provider error notifications', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    autoToolCall: false,
+    turnEvents: [
+      {
+        method: 'error',
+        params: {
+          message: 'Reconnecting... 1/5 (unexpected status 502 Bad Gateway: Unknown error)',
+        },
+      },
+      {
+        method: 'response_item',
+        params: {
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '{"done":false,"actions":[{"type":"wait"}]}' }],
+          },
+        },
+      },
+      {
+        method: 'turn/completed',
+        params: {
+          status: 'completed',
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      },
+    ],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Plan one generic Computer Use action.',
+    workspacePath: workspace,
+    commandId: 'retryable-provider-error-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  assert.deepEqual(events.map((event) => event.method), ['error', 'response_item', 'turn/completed']);
+});
+
+test('Codex app-server client keeps streaming after retryable turn failed notifications', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({
+    autoToolCall: false,
+    turnEvents: [
+      {
+        method: 'turn/failed',
+        params: {
+          status: 'failed',
+          message: 'Reconnecting... 1/5',
+          turn: { id: 'turn-1', status: 'failed' },
+        },
+      },
+      {
+        method: 'response_item',
+        params: {
+          item: {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: '{"done":false,"actions":[{"type":"wait"}]}' }],
+          },
+        },
+      },
+      {
+        method: 'turn/completed',
+        params: {
+          status: 'completed',
+          turn: { id: 'turn-1', status: 'completed' },
+        },
+      },
+    ],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Plan one generic Computer Use action.',
+    workspacePath: workspace,
+    commandId: 'retryable-turn-failed-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  const events = await collect(stream.events) as Array<Record<string, unknown>>;
+
+  assert.deepEqual(events.map((event) => event.method), ['turn/failed', 'response_item', 'turn/completed']);
+});
+
 test('Codex app-server client projects Multitask declared intent into app-server instructions without changing turn text', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -893,6 +995,7 @@ function fakeAppServer(options: {
   terminalStatus?: string;
   autoToolCall?: boolean;
   toolCall?: { namespace?: string; tool: string; arguments?: Record<string, unknown> };
+  turnEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const emitter = new EventEmitter();
   const stdin = new PassThrough();
@@ -981,15 +1084,14 @@ function fakeAppServer(options: {
           },
         }), 0);
       } else {
-        setTimeout(() => write({
+        const turnEvents = options.turnEvents ?? [{
           method: options.terminalEvent ?? 'turn/completed',
           params: {
-            threadId,
-            turnId: 'turn-1',
             status: options.terminalStatus,
             turn: { id: 'turn-1', status: options.terminalStatus ?? 'completed' },
           },
-        }), 0);
+        }];
+        turnEvents.forEach((event, index) => setTimeout(() => write(turnEvent(event, threadId)), index));
       }
       return;
     }
@@ -1063,6 +1165,20 @@ function fakeAppServer(options: {
     },
     get mcpToolCallParams() {
       return state.mcpToolCallParams;
+    },
+  };
+}
+
+function turnEvent(event: Record<string, unknown>, threadId: string): Record<string, unknown> {
+  const params = event.params && typeof event.params === 'object' && !Array.isArray(event.params)
+    ? event.params as Record<string, unknown>
+    : {};
+  return {
+    ...event,
+    params: {
+      ...params,
+      threadId: params.threadId ?? threadId,
+      turnId: params.turnId ?? 'turn-1',
     },
   };
 }

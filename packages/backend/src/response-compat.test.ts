@@ -40,6 +40,89 @@ test('converts Responses input into Chat Completions messages and tools', () => 
   assert.equal(Array.isArray(request.tools), true);
 });
 
+test('maps public SciForge router aliases to the configured upstream default model', () => {
+  const defaultModel = 'bailian/deepseek-v4-flash';
+
+  for (const model of ['sciforge-router', 'sciforge-router-cu', 'sciforge-router-gui'] as const) {
+    const request = responsesToChatCompletions({
+      model,
+      input: 'Reply with OK',
+    }, {
+      defaultModel,
+    });
+
+    assert.equal(request.model, defaultModel);
+  }
+});
+
+test('preserves public SciForge router aliases in Responses objects', () => {
+  const response = chatCompletionToResponse({
+    id: 'chatcmpl_router_alias',
+    created: 1716100000,
+    model: 'bailian/private-upstream-model',
+    choices: [{ message: { role: 'assistant', content: 'OK' } }],
+  }, {
+    model: 'sciforge-router-cu',
+  });
+
+  assert.equal(response.model, 'sciforge-router-cu');
+  assert.doesNotMatch(JSON.stringify(response), /private-upstream|bailian\/private/);
+});
+
+test('scrubs provider dynamic tool aliases to portable slugs', () => {
+  const request = responsesToChatCompletions({
+    model: 'bailian/deepseek-v4-flash',
+    input: 'delegate',
+    tools: [{
+      namespace: 'provider:https://private.example/v1?token=secret',
+      name: 'spawn.agent',
+      inputSchema: { type: 'object', properties: {} },
+    }],
+  });
+
+  assert.deepEqual(
+    (request.tools as Array<{ function?: { name?: string } }>).map((tool) => tool.function?.name),
+    ['dynamic_tool_spawn_agent_e0b1a00f'],
+  );
+  assert.doesNotMatch(JSON.stringify(request.tools), /private\.example|token|secret|https/);
+  assert.deepEqual(chatToolNameAliasesFromResponsesTools([{
+    namespace: 'provider:https://private.example/v1?token=secret',
+    name: 'spawn.agent',
+    inputSchema: { type: 'object', properties: {} },
+  }]), {
+    dynamic_tool_spawn_agent_e0b1a00f: 'dynamic_tool_spawn_agent_e0b1a00f',
+  });
+});
+
+test('keeps provider-unsafe dynamic tool aliases scrubbed in Responses function calls', () => {
+  const response = chatCompletionToResponse({
+    id: 'chatcmpl_private_tool_alias',
+    model: 'deepseek-v4-flash',
+    choices: [{
+      message: {
+        role: 'assistant',
+        tool_calls: [{
+          id: 'call_private_subagent',
+          type: 'function',
+          function: {
+            name: 'dynamic_tool_spawn_agent_e0b1a00f',
+            arguments: '{"message":"inspect"}',
+          },
+        }],
+      },
+    }],
+  }, { model: 'deepseek-v4-flash' }, chatToolNameAliasesFromResponsesTools([{
+    namespace: 'provider:https://private.example/v1?token=secret',
+    name: 'spawn.agent',
+    inputSchema: { type: 'object', properties: {} },
+  }]));
+
+  const [item] = response.output as Array<{ type?: string; name?: string }>;
+  assert.equal(item.type, 'function_call');
+  assert.equal(item.name, 'dynamic_tool_spawn_agent_e0b1a00f');
+  assert.doesNotMatch(JSON.stringify(response), /private\.example|token|secret|https/);
+});
+
 test('preserves app-server namespaced dynamic tools when lowering Responses tools', () => {
   const request = responsesToChatCompletions({
     model: 'bailian/deepseek-v4-flash',
@@ -557,6 +640,36 @@ test('keeps proxy process alive when upstream Responses fetch rejects', async ()
     const health = await fetch(`${proxy.url}/healthz`);
     assert.equal(health.status, 200);
     assert.equal((await health.json() as { ok?: boolean }).ok, true);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test('scrubs provider details when proxy catch-all errors include private upstream material', async () => {
+  const logs: string[] = [];
+  const proxy = await startCodexResponsesProxyServer({
+    upstreamBaseUrl: 'https://private-provider.example/v1?token=secret',
+    upstreamApiKey: 'sk-secret',
+    defaultModel: 'bailian/private-model',
+    port: 0,
+    log: (message) => logs.push(message),
+    fetchImpl: async () => {
+      throw new Error('fetch failed for https://private-provider.example/v1?token=secret using sk-secret and bailian/private-model');
+    },
+  });
+
+  try {
+    const response = await fetch(`${proxy.url}/v1/responses`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer caller-secret' },
+      body: JSON.stringify({ model: 'sciforge-router-cu', input: 'hello' }),
+    });
+    const text = await response.text();
+
+    assert.equal(response.status, 500);
+    assert.match(text, /sciforge_proxy_error/);
+    assert.doesNotMatch(text, /private-provider|token=secret|sk-secret|caller-secret|private-model|bailian\/private/i);
+    assert.doesNotMatch(logs.join('\n'), /private-provider|token=secret|sk-secret|caller-secret|private-model|bailian\/private/i);
   } finally {
     await proxy.close();
   }

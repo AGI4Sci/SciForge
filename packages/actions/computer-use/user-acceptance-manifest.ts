@@ -198,6 +198,9 @@ export interface CuUserAcceptanceInput {
   inputEvents?: Array<Record<string, unknown>>;
   evidenceLedgerActions?: Array<Record<string, unknown>>;
   evidenceLedger?: Record<string, unknown>;
+  evidenceIndex?: Record<string, unknown>;
+  evidenceIndexRef?: string;
+  actionLedgerRef?: string;
   replayBundle?: Record<string, unknown>;
   replayManifest?: Record<string, unknown>;
   visibleReplay?: Record<string, unknown>;
@@ -359,6 +362,9 @@ const cuUserAcceptancePassthroughKeys = [
   'inputEvents',
   'evidenceLedgerActions',
   'evidenceLedger',
+  'evidenceIndex',
+  'evidenceIndexRef',
+  'actionLedgerRef',
   'replayManifest',
   'visibleReplay',
   'replayRef',

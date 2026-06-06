@@ -2,174 +2,325 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createDefaultComputerUseActMaterializer } from './agent-host-computer-use-act-materializer.js';
-import type { CodexAgentHostRuntimeTruth, NormalizedCodexAgentHostInput } from './agent-host-turn-loop.js';
+import type { BrowserHostSessionManager } from '../browser-host-session.js';
+import {
+  createActorCursor,
+  createWindowActionSession,
+  enterWindowActionSession,
+} from '../window-action-session.js';
+import { createInMemoryWindowActionSessionStore } from '../window-action-session-store.js';
+import {
+  computerUseModelRouterCapabilityIds,
+} from '../../../packages/actions/computer-use/provider-policy.js';
 import type { ComputerUsePreflightResult } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
-import type { GenericVisionAction } from '../computer-use/types.js';
-import {
-  buildVirtualDisplaySurfaceTransportDescriptor,
-} from '../computer-use/virtual-display-provider.js';
-import { parseVirtualAppScreenRuntimeCommand } from '../computer-use/virtual-app-screen-command.js';
-import { recordVirtualAppScreenProviderSession, resetVirtualAppScreenProviderSessionStoreForTests } from '../computer-use/virtual-app-screen-provider-session-store.js';
-import { recordVirtualAppScreenNativeHostSession, resetVirtualAppScreenNativeHostSessionStoreForTests } from '../computer-use/virtual-app-screen-native-host-session-store.js';
-import {
-  ContractSmokeNativeHostPlatformAdapter,
-  InMemoryNativeVirtualAppScreenHost,
-  type NativeHostAppProfile,
-  type NativeHostFrame,
-  type NativeHostHumanInputAccepted,
-  type NativeHostHumanInputEvent,
-  type NativeHostLiveSurface,
-  type NativeHostMaybePromise,
-  type NativeHostReadinessRecord,
-  type NativeHostResult,
-  type NativeHostSession,
-  type NativeHostSurfaceTarget,
-  type NativeVirtualAppScreenHostDescription,
-} from '../../../packages/actions/computer-use/virtual-app-screen-host/src/index.js';
+import type { CodexAgentHostRuntimeTruth, NormalizedCodexAgentHostInput } from './agent-host-turn-loop.js';
 
-test('default Computer Use Act materializer executes a NativeHost VirtualAppScreen action through input runtime', async () => {
-  const fixture = nativeHostFixture();
+test('default Computer Use Act materializer routes BrowserHostSession through the TS product path', async () => {
+  const acted: Array<{ workspacePath: string; sessionId: string; input: Record<string, unknown> }> = [];
   const materializer = createDefaultComputerUseActMaterializer({
-    virtualAppScreen: {
+    browser: {
+      browserHostSessionManager: browserHostManager(acted),
       actionPlanner: async () => ({
         status: 'planned',
-        message: 'Click the grounded virtual screen point.',
-        actions: [{
-          type: 'click',
-          x: 180,
-          y: 450,
-          targetDescription: 'grounded button',
-          screenId: fixture.screenRef,
-          windowId: fixture.targetWindowRef,
-          riskLevel: 'low',
-          grounding: {
-            frame: {
-              width: 1440,
-              height: 900,
-            },
-          },
-        }],
-        evidenceRefs: ['action-ledger:planner/native-host-click'],
+        message: 'Scroll down to inspect visible results.',
+        actions: [{ type: 'scroll', direction: 'down', amount: 320 }],
+        evidenceRefs: ['action-ledger:planner/default-scroll-down'],
       }),
     },
   });
 
   const result = await materializer({
-    agentHostInput: readyAgentHostInput(fixture),
-    preflight: readyPreflight(fixture),
-    commandText: 'Click the grounded button in the virtual app screen.',
+    agentHostInput: readyAgentHostInput(),
+    preflight: readyPreflight(),
+    commandText: 'Scroll the current browser page.',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-native-host-act',
-    attemptId: 'codex-command-native-host-act-attempt-1',
-    runtimeTruth: runtimeTruth(fixture),
+    commandId: 'codex-command-default-browser-act',
+    attemptId: 'codex-command-default-browser-act-attempt-1',
+    runtimeTruth: runtimeTruth(),
   });
 
   assert.equal(result?.status, 'completed', result?.message);
-  assert.match(result?.message ?? '', /VirtualAppScreen input "click" executed/);
-  assert.ok(result?.evidenceRefs.includes(fixture.inputLeaseRef));
-  assert.ok(result?.evidenceRefs.includes(fixture.actionAdapterRef));
-  assert.ok(result?.evidenceRefs.includes(fixture.currentRunPointerRef));
-  assert.ok(result?.evidenceRefs.some((ref) => ref.startsWith(`${fixture.evidenceLedgerRef}/events/`)));
-  assert.doesNotMatch(JSON.stringify(result), /executeGenericDesktopAction|sharedSystemInputUsed":true|gui\.present|ui:|fixture:|replay:/);
-
-  const ledger = fixture.host.getLedger(fixture.sessionId);
-  assert.ok(ledger);
-  assert.equal(ledger.entries.some((entry) => entry.type === 'human-input.accepted'), true);
-
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  assert.equal(acted.length, 1);
+  assert.equal(acted[0]?.workspacePath, '/tmp/workspace');
+  assert.equal(acted[0]?.sessionId, 'verified');
+  assert.equal(acted[0]?.input.action, 'scroll');
+  assert.equal(acted[0]?.input.deltaY, 320);
+  assert.ok(result?.evidenceRefs.includes('adapter-registry:browser-host-session/computer-use'));
+  assert.ok(result?.evidenceRefs.includes('browser-host-session:verified/visible-actions/codex-command-default-browser-act-attempt-1.json'));
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:/i);
 });
 
-test('default Computer Use Act materializer fails closed for unsafe or incomplete VirtualAppScreen bindings', async (t) => {
-  const cases: Array<{
-    name: string;
-    fixture?: () => NativeHostFixture;
-    action?: (fixture: NativeHostFixture) => GenericVisionAction;
-    expected: RegExp;
-  }> = [
-    {
-      name: 'diagnostic-only native host',
-      fixture: () => nativeHostFixture({ diagnosticOnly: true }),
-      expected: /diagnostic-only/,
-    },
-    {
-      name: 'missing current frame',
-      fixture: () => nativeHostFixture({ omitCurrentFrame: true }),
-      expected: /current frame evidence is missing/,
-    },
-    {
-      name: 'missing permission refs',
-      fixture: () => nativeHostFixture({ permissionRefs: [] }),
-      expected: /permission refs are missing/,
-    },
-    {
-      name: 'missing grant validation',
-      fixture: () => nativeHostFixture({ omitGrantValidation: true }),
-      expected: /grant/,
-    },
-    {
-      name: 'missing input lease',
-      fixture: () => nativeHostFixture({ omitInputLease: true }),
-      expected: /lease|adapter/,
-    },
-    {
-      name: 'missing action adapter',
-      fixture: () => nativeHostFixture({ omitActionAdapter: true }),
-      expected: /lease|adapter/,
-    },
-    {
-      name: 'ungrounded pointer action',
-      fixture: () => nativeHostFixture(),
-      action: (fixture) => ({
-        type: 'click',
-        targetDescription: 'ambiguous button',
-        screenId: fixture.screenRef,
-        windowId: fixture.targetWindowRef,
-        riskLevel: 'low',
-      }),
-      expected: /ungrounded|x\/y/,
-    },
-  ];
-
-  for (const testCase of cases) {
-    await t.test(testCase.name, async () => {
-      const fixture = testCase.fixture?.() ?? nativeHostFixture();
-      const materializer = createDefaultComputerUseActMaterializer({
-        virtualAppScreen: {
-          actionPlanner: async () => ({
-            status: 'planned',
-            message: 'Plan one action.',
-            actions: [testCase.action?.(fixture) ?? groundedClickAction(fixture)],
-            evidenceRefs: ['action-ledger:planner/native-host-click'],
-          }),
-        },
-      });
-
-      const result = await materializer({
-        agentHostInput: readyAgentHostInput(fixture),
-        preflight: readyPreflight(fixture),
-        commandText: 'Click the grounded button in the virtual app screen.',
-        workspacePath: '/tmp/workspace',
-        commandId: 'codex-command-native-host-act-blocked',
-        attemptId: 'codex-command-native-host-act-blocked-attempt-1',
-        runtimeTruth: runtimeTruth(fixture),
-      });
-
-      assert.equal(result?.status, 'blocked');
-      assert.match(result?.message ?? '', testCase.expected);
-      assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|history:/);
-
-      resetVirtualAppScreenProviderSessionStoreForTests();
-      resetVirtualAppScreenNativeHostSessionStoreForTests();
-    });
-  }
-});
-
-test('default Computer Use Act materializer does not bind GUI, fixture, replay, or history refs as executable targets', async () => {
+test('default Computer Use Act materializer gives planners only the Host-normalized local GUI objective', async () => {
+  const plannerCommandTexts: string[] = [];
   const materializer = createDefaultComputerUseActMaterializer({
-    virtualAppScreen: {
+    browser: {
+      browserHostSessionManager: browserHostManager([]),
+      actionPlanner: async (input) => {
+        plannerCommandTexts.push(input.commandText);
+        return {
+          status: 'blocked',
+          message: 'Planner stopped after inspecting the local objective.',
+          actions: [],
+          evidenceRefs: ['action-ledger:planner/normalized-intent-probe'],
+        };
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: readyAgentHostInput({ intentText: 'Scroll the current browser page.' }),
+    preflight: readyPreflight(),
+    commandText: 'User request: research the whole topic, summarize it, then if the browser is open scroll the current page.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-normalized-intent',
+    attemptId: 'codex-command-default-normalized-intent-attempt-1',
+    runtimeTruth: runtimeTruth(),
+  });
+
+  assert.equal(result?.status, 'blocked');
+  assert.deepEqual(plannerCommandTexts, ['Scroll the current browser page.']);
+  assert.doesNotMatch(JSON.stringify(result), /research the whole topic|summarize it/i);
+});
+
+test('default Computer Use Act materializer requires Act loop when normalized GUI objective has workflow completion semantics', async () => {
+  const acted: Array<{ workspacePath: string; sessionId: string; input: Record<string, unknown> }> = [];
+  const plannerCommandTexts: string[] = [];
+  const refreshSteps: number[] = [];
+  const workflowObjective = 'Click the writer window, type the final report, save the artifact, open preview, and mark the workflow complete.';
+  const materializer = createDefaultComputerUseActMaterializer({
+    maxActLoopSteps: 2,
+    browser: {
+      browserHostSessionManager: browserHostManager(acted),
+      actionPlanner: async (input) => {
+        plannerCommandTexts.push(input.commandText);
+        return {
+          status: 'planned',
+          message: 'Scroll one grounded local GUI step.',
+          actions: [{ type: 'scroll', direction: 'down', amount: 120 }],
+          evidenceRefs: [`action-ledger:planner/normalized-workflow-step-${plannerCommandTexts.length}`],
+        };
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: readyAgentHostInput({ intentText: workflowObjective }),
+    preflight: readyPreflight(),
+    commandText: 'Scroll the current browser page.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-normalized-workflow-loop',
+    attemptId: 'codex-command-default-normalized-workflow-loop-attempt-1',
+    runtimeTruth: runtimeTruth(),
+    refreshRuntimeTruth: async ({ step }) => {
+      refreshSteps.push(step);
+      return runtimeTruth({
+        observationRefs: [`browser-host-session:verified/frame-normalized-workflow-step-${step}.png`],
+        permissionRefs: [`permission:turn/normalized-workflow-step-${step}`],
+      });
+    },
+  });
+
+  assert.equal(result?.status, 'blocked');
+  assert.match(result?.message ?? '', /maxSteps|completion evidence/i);
+  assert.equal(acted.length, 2);
+  assert.deepEqual(refreshSteps, [1, 2]);
+  assert.deepEqual(plannerCommandTexts, [workflowObjective, workflowObjective]);
+  assert.ok(result?.evidenceRefs.some((ref) => ref.startsWith('runtime-truth:computer-use-act-loop/')));
+});
+
+test('default Computer Use Act materializer projects hard-confirm preflight as needs-confirmation', async () => {
+  let plannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    browser: {
+      browserHostSessionManager: browserHostManager([]),
       actionPlanner: async () => {
-        throw new Error('planner should not run without a runtime-owned target binding');
+        plannerCalls += 1;
+        throw new Error('planner must not run before Agent Host approval');
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: readyAgentHostInput({ intentText: 'Submit the visible external form.' }),
+    preflight: needsConfirmationPreflight(),
+    commandText: 'Please handle this web workflow and submit the external form when ready.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-needs-confirmation',
+    attemptId: 'codex-command-default-needs-confirmation-attempt-1',
+    runtimeTruth: runtimeTruth(),
+  });
+
+  assert.equal(plannerCalls, 0);
+  assert.equal(result?.status, 'needs-confirmation');
+  assert.equal(result?.claimType, 'agent-host-approval-request');
+  assert.ok(result?.evidenceRefs.includes('permission:turn/codex-command-default-browser-act/hard-confirm/external-system-submission'));
+  assert.ok(result?.artifacts?.some((artifact) => artifact.type === 'agent-host-approval-request'));
+  assert.ok(result?.artifacts?.some((artifact) => artifact.type === 'gui-hard-confirm-projection'));
+  assert.ok(result?.uiManifest?.some((entry) => entry.type === 'gui-hard-confirm-projection'));
+  assert.doesNotMatch(JSON.stringify(result), /handle this web workflow|base64|raw-|\/raw|secret|token|password/i);
+});
+
+test('default Computer Use Act materializer emits sanitized structured recovery diagnostics when blocked', async () => {
+  let plannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    browser: {
+      browserHostSessionManager: browserHostManager([]),
+      actionPlanner: async () => {
+        plannerCalls += 1;
+        return {
+          status: 'blocked',
+          message: 'Planner blocked on generic sanitized recovery path.',
+          evidenceRefs: ['action-ledger:planner/recovery-diagnostics-blocked'],
+        };
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: {
+      schemaVersion: 'sciforge.codex-agent-host-input.v1',
+      source: 'test',
+      intentText: 'Click the projected thing.',
+      authorizationProfileId: 'high-autonomy',
+      singleTurnOverride: false,
+      refs: ['browser-host-session:verified', 'gui.present:screen-pane', 'fixture:screen', 'replay:frame', 'browser-host-session:raw-screenshot'],
+      readiness: {},
+      target: {},
+      observation: {},
+      permissions: {},
+    },
+    preflight: {
+      ...readyPreflight(),
+      target: { summary: 'Unsafe projected target', refs: ['browser-host-session:verified', 'gui.present:screen-pane', 'fixture:screen'] },
+      evidenceRefs: [
+        'browser-host-session:verified/frame.png',
+        'replay:frame',
+        'history:run',
+        'permission:turn/codex-command-default-browser-act/ordinary-navigation',
+      ],
+    },
+    commandText: 'Click the projected thing with raw/base64 diagnostic payloads.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-recovery-diagnostics',
+    attemptId: 'codex-command-default-recovery-diagnostics-attempt-1',
+    runtimeTruth: {
+      ...runtimeTruth(),
+      target: { bound: true, summary: 'Unsafe projected target', refs: ['browser-host-session:verified', 'gui.present:screen-pane', 'fixture:screen'] },
+      observation: { fresh: true, refs: ['browser-host-session:verified/frame.png', 'replay:frame', 'browser-host-session:raw-screenshot'] },
+      refs: ['browser-host-session:verified', 'gui.present:screen-pane', 'fixture:screen', 'replay:frame', 'history:run', 'browser-host-session:raw-screenshot'],
+    },
+  });
+
+  const diagnosticArtifact = result?.artifacts?.find((artifact) => artifact.type === 'computer-use-recovery-diagnostics');
+  assert.equal(plannerCalls, 1);
+  assert.equal(result?.status, 'blocked');
+  assert.ok(diagnosticArtifact, 'structured recovery diagnostics artifact is present');
+  assert.equal((diagnosticArtifact?.data as Record<string, unknown> | undefined)?.schemaVersion, 'sciforge.computer-use.recovery-diagnostics.v1');
+  assert.ok(result?.claims?.some((claim) => claim.type === 'recovery-diagnostic'));
+  assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|history:|base64|raw-|\/raw|secret|token|password/i);
+});
+
+test('default Computer Use Act materializer host-port contract binds model-required ports to Model Router capabilities', async () => {
+  const materializer = createDefaultComputerUseActMaterializer({
+    browser: {
+      browserHostSessionManager: browserHostManager([]),
+      actionPlanner: async () => ({
+        status: 'blocked',
+        message: 'Planner blocked to expose boundary artifacts.',
+        actions: [],
+        evidenceRefs: ['action-ledger:planner/host-port-truthfulness'],
+      }),
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: readyAgentHostInput(),
+    preflight: readyPreflight(),
+    commandText: 'Scroll the current browser page.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-host-port-contract',
+    attemptId: 'codex-command-default-host-port-contract-attempt-1',
+    runtimeTruth: runtimeTruth(),
+  });
+
+  const contractArtifact = result?.artifacts?.find((artifact) => artifact.type === 'computer-use-host-port-contract');
+  const contract = ((contractArtifact?.data as Record<string, unknown> | undefined)?.contract ?? {}) as Record<string, {
+    owner?: string;
+    route?: string;
+    directProvider?: boolean;
+  }>;
+
+  assert.equal(result?.status, 'blocked');
+  assert.ok(contractArtifact, 'host-port contract artifact is present');
+  assert.equal(contract.plan?.owner, 'model-router');
+  assert.equal(contract.plan?.route, computerUseModelRouterCapabilityIds.computerUsePlanner);
+  assert.equal(contract.locate?.owner, 'model-router');
+  assert.equal(contract.locate?.route, computerUseModelRouterCapabilityIds.groundingTranslator);
+  assert.equal(contract.verify?.owner, 'model-router');
+  assert.equal(contract.verify?.route, computerUseModelRouterCapabilityIds.verifierTranslator);
+  assert.equal(contract.plan?.directProvider, false);
+  assert.equal(contract.locate?.directProvider, false);
+  assert.equal(contract.verify?.directProvider, false);
+});
+
+test('default Computer Use Act materializer routes WindowActionSession through the TS product path', async () => {
+  const calls: Array<{ adapter: string; action: unknown; delta: unknown }> = [];
+  const materializer = createDefaultComputerUseActMaterializer({
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => ({
+        status: 'planned',
+        message: 'Scroll the active desktop window.',
+        nextAction: { type: 'scroll', direction: 'down', amount: 180 },
+        evidenceRefs: ['action-ledger:planner/default-window-scroll'],
+      }),
+      adapterHandlers: {
+        'app-native-command': async ({ route, input }) => {
+          calls.push({ adapter: route.adapter, action: input.action, delta: input.delta });
+          const actionId = String(input.actionId ?? 'missing-action-id');
+          return {
+            status: 'completed',
+            evidenceRefs: [
+              { kind: 'executor-event', ref: `app-native-command:vscode/scroll/${actionId}/executor-event` },
+              { kind: 'verification', ref: `window-action-session:vscode-main/actions/${actionId}/verification/verifier.json` },
+              { kind: 'freshness-invalidation', ref: `window-action-session:vscode-main/actions/${actionId}/freshness-invalidation.json` },
+            ],
+            afterEvidenceRefs: [{ kind: 'screenshot', ref: 'window-action-session:vscode-main/evidence/after-frame' }],
+          };
+        },
+      },
+      now: () => new Date('2026-06-03T00:00:00.000Z'),
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: windowActionAgentHostInput(),
+    preflight: windowActionPreflight(),
+    commandText: 'Scroll the active desktop window.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-window-action',
+    attemptId: 'codex-command-default-window-action-attempt-1',
+    runtimeTruth: windowActionRuntimeTruth(),
+  });
+
+  assert.equal(result?.status, 'completed', result?.message);
+  assert.deepEqual(calls, [{ adapter: 'app-native-command', action: 'scroll', delta: { y: 180 } }]);
+  assert.ok(result?.evidenceRefs.includes('adapter-registry:window-action-session/app-native-command/computer-use'));
+  assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/action-state/codex-command-default-window-action-attempt-1'));
+  assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/evidence/after-frame'));
+  assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/actions/codex-command-default-window-action-attempt-1/verification/verifier.json'));
+  assert.ok(result?.evidenceRefs.includes('window-action-session:vscode-main/actions/codex-command-default-window-action-attempt-1/freshness-invalidation.json'));
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:/i);
+});
+
+test('default Computer Use Act materializer fails closed instead of falling back to legacy non-TS targets', async () => {
+  let plannerCalls = 0;
+  const materializer = createDefaultComputerUseActMaterializer({
+    browser: {
+      browserHostSessionManager: browserHostManager([]),
+      actionPlanner: async () => {
+        plannerCalls += 1;
+        throw new Error('browser planner should not run without a BrowserHostSession target');
       },
     },
   });
@@ -188,145 +339,239 @@ test('default Computer Use Act materializer does not bind GUI, fixture, replay, 
       permissions: {},
     },
     preflight: {
-      ...readyPreflight(nativeHostFixture()),
-      target: { summary: 'Unsafe projection target', refs: ['gui.present:screen-pane', 'fixture:screen'] },
+      ...readyPreflight(),
+      target: { summary: 'Unsafe projected target', refs: ['gui.present:screen-pane', 'fixture:screen'] },
       evidenceRefs: ['replay:frame', 'history:run'],
     },
     commandText: 'Click the projected thing.',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-native-host-unsafe-refs',
-    attemptId: 'codex-command-native-host-unsafe-refs-attempt-1',
+    commandId: 'codex-command-default-unsafe-target',
+    attemptId: 'codex-command-default-unsafe-target-attempt-1',
     runtimeTruth: {
-      ...runtimeTruth(nativeHostFixture()),
-      target: { bound: true, summary: 'Unsafe projection target', refs: ['gui.present:screen-pane', 'fixture:screen'] },
+      ...runtimeTruth(),
+      target: { bound: true, summary: 'Unsafe projected target', refs: ['gui.present:screen-pane', 'fixture:screen'] },
       observation: { fresh: true, refs: ['replay:frame'] },
       refs: ['gui.present:screen-pane', 'fixture:screen', 'replay:frame', 'history:run'],
     },
   });
 
   assert.equal(result?.status, 'blocked');
-  assert.match(result?.message ?? '', /target binding is missing/);
-  assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|history:/);
-
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  assert.equal(plannerCalls, 0);
+  assert.match(result?.message ?? '', /TS-only.*BrowserHostSession.*WindowActionSession/i);
+  assert.ok(result?.evidenceRefs.includes('runtime-truth:computer-use-act-materializer/ts-product-target-missing'));
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:|history:/i);
 });
 
-test('default Computer Use Act materializer uses Act loop only for workflow completion requests', async () => {
-  const fixture = nativeHostFixture();
+test('default Computer Use Act materializer blocks legacy VirtualAppScreen/native-host refs as non-product targets', async () => {
+  const acted: Array<{ workspacePath: string; sessionId: string; input: Record<string, unknown> }> = [];
+  const materializer = createDefaultComputerUseActMaterializer({
+    browser: {
+      browserHostSessionManager: browserHostManager(acted),
+      actionPlanner: async () => {
+        throw new Error('browser planner should not run for legacy native-host refs');
+      },
+    },
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => {
+        throw new Error('window-action planner should not run for legacy native-host refs');
+      },
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: {
+      schemaVersion: 'sciforge.codex-agent-host-input.v1',
+      source: 'test',
+      intentText: 'Click the legacy projected window.',
+      authorizationProfileId: 'high-autonomy',
+      singleTurnOverride: false,
+      refs: [
+        'computer-use:native-host/sessions/legacy-session/session.json',
+        'computer-use:provider-session/legacy-session/owner.json',
+      ],
+      readiness: {},
+      target: {},
+      observation: {},
+      permissions: {},
+    },
+    preflight: {
+      ...readyPreflight(),
+      target: {
+        summary: 'Legacy native-host target',
+        refs: ['computer-use:native-host/sessions/legacy-session/session.json'],
+      },
+      evidenceRefs: ['computer-use:provider-session/legacy-session/owner.json'],
+    },
+    commandText: 'Click the legacy projected window.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-legacy-target',
+    attemptId: 'codex-command-default-legacy-target-attempt-1',
+    runtimeTruth: {
+      ...runtimeTruth(),
+      target: {
+        bound: true,
+        summary: 'Legacy native-host target',
+        refs: ['computer-use:native-host/sessions/legacy-session/session.json'],
+      },
+      observation: {
+        fresh: true,
+        refs: ['computer-use:provider-session/legacy-session/owner.json'],
+      },
+      refs: [
+        'computer-use:native-host/sessions/legacy-session/session.json',
+        'computer-use:provider-session/legacy-session/owner.json',
+        'permission:turn/legacy-native-host/ordinary-navigation',
+      ],
+    },
+  });
+
+  assert.equal(result?.status, 'blocked');
+  assert.equal(acted.length, 0);
+  assert.match(result?.message ?? '', /TS-only.*BrowserHostSession.*WindowActionSession/i);
+  assert.ok(result?.evidenceRefs.includes('runtime-truth:computer-use-act-materializer/ts-product-target-missing'));
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|native-host\/sessions|provider-session|python/i);
+});
+
+test('default Computer Use Act materializer runs workflow Act loop only through BrowserHostSession TS evidence', async () => {
+  const acted: Array<{ workspacePath: string; sessionId: string; input: Record<string, unknown> }> = [];
   let plannerCalls = 0;
   const refreshSteps: number[] = [];
   const materializer = createDefaultComputerUseActMaterializer({
     maxActLoopSteps: 2,
-    virtualAppScreen: {
+    browser: {
+      browserHostSessionManager: browserHostManager(acted),
       actionPlanner: async () => {
         plannerCalls += 1;
         return {
           status: 'planned',
-          message: 'Click one grounded workflow step.',
-          actions: [groundedClickAction(fixture)],
-          evidenceRefs: [`action-ledger:planner/workflow-step-${plannerCalls}`],
+          message: 'Scroll one grounded workflow step.',
+          actions: [{ type: 'scroll', direction: 'down', amount: 120 }],
+          evidenceRefs: [`action-ledger:planner/browser-workflow-step-${plannerCalls}`],
         };
       },
     },
   });
 
   const result = await materializer({
-    agentHostInput: readyAgentHostInput(fixture),
-    preflight: readyPreflight(fixture),
-    commandText: 'Click the first window, type notes into the writer window, press save, open the preview window, and mark the workflow complete.',
+    agentHostInput: readyAgentHostInput(),
+    preflight: readyPreflight(),
+    commandText: 'Click the first browser panel, type notes into the editor, press save, open the preview, and mark the workflow complete.',
     workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-native-host-workflow-loop',
-    attemptId: 'codex-command-native-host-workflow-loop-attempt-1',
-    runtimeTruth: runtimeTruth(fixture),
+    commandId: 'codex-command-default-browser-workflow-loop',
+    attemptId: 'codex-command-default-browser-workflow-loop-attempt-1',
+    runtimeTruth: runtimeTruth(),
     refreshRuntimeTruth: async ({ step }) => {
       refreshSteps.push(step);
-      return {
-        ...runtimeTruth(fixture),
-        observation: {
-          fresh: true,
-          refs: [`computer-use:observation/workflow-step-${step}`],
-        },
-        permissions: {
-          refs: [`permission:turn/workflow-step-${step}`],
-          stopCancelPath: true,
-        },
-      };
+      return runtimeTruth({
+        observationRefs: [`browser-host-session:verified/frame-step-${step}.png`],
+        permissionRefs: [`permission:turn/browser-workflow-step-${step}`],
+      });
     },
   });
 
   assert.equal(result?.status, 'blocked');
   assert.match(result?.message ?? '', /maxSteps|completion evidence/i);
   assert.equal(plannerCalls, 2);
+  assert.equal(acted.length, 2);
   assert.deepEqual(refreshSteps, [1, 2]);
-  assert.ok(result?.evidenceRefs.includes('permission:turn/workflow-step-2'));
+  assert.ok(result?.evidenceRefs.includes('permission:turn/browser-workflow-step-2'));
   assert.ok(result?.evidenceRefs.some((ref) => ref.startsWith('runtime-truth:computer-use-act-loop/')));
-  assert.doesNotMatch(JSON.stringify(result), /gui\.present|ui:|fixture:|replay:|history:/);
-
-  let chinesePlannerCalls = 0;
-  const chineseRefreshSteps: number[] = [];
-  const chineseMaterializer = createDefaultComputerUseActMaterializer({
-    maxActLoopSteps: 2,
-    virtualAppScreen: {
-      actionPlanner: async () => {
-        chinesePlannerCalls += 1;
-        return {
-          status: 'planned',
-          message: 'Click one grounded artifact workflow step.',
-          actions: [groundedClickAction(fixture)],
-          evidenceRefs: [`action-ledger:planner/chinese-artifact-workflow-step-${chinesePlannerCalls}`],
-        };
-      },
-    },
-  });
-
-  const chineseResult = await chineseMaterializer({
-    agentHostInput: readyAgentHostInput(fixture),
-    preflight: readyPreflight(fixture),
-    commandText: '点击编辑窗口，输入摘要，保存报告，打开预览窗口，并标记工作流完成。',
-    workspacePath: '/tmp/workspace',
-    commandId: 'codex-command-native-host-chinese-artifact-workflow-loop',
-    attemptId: 'codex-command-native-host-chinese-artifact-workflow-loop-attempt-1',
-    runtimeTruth: runtimeTruth(fixture),
-    refreshRuntimeTruth: async ({ step }) => {
-      chineseRefreshSteps.push(step);
-      return {
-        ...runtimeTruth(fixture),
-        observation: {
-          fresh: true,
-          refs: [`computer-use:observation/chinese-artifact-workflow-step-${step}`],
-        },
-        permissions: {
-          refs: [`permission:turn/chinese-artifact-workflow-step-${step}`],
-          stopCancelPath: true,
-        },
-      };
-    },
-  });
-
-  assert.equal(chineseResult?.status, 'blocked');
-  assert.match(chineseResult?.message ?? '', /maxSteps|completion evidence/i);
-  assert.equal(chinesePlannerCalls, 2);
-  assert.deepEqual(chineseRefreshSteps, [1, 2]);
-
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:|history:/i);
 });
 
-function readyAgentHostInput(fixture: NativeHostFixture): NormalizedCodexAgentHostInput {
+function browserHostManager(
+  acted: Array<{ workspacePath: string; sessionId: string; input: Record<string, unknown> }>,
+): BrowserHostSessionManager {
+  return {
+    async sessionState(_workspacePath: string, sessionId: string) {
+      return browserHostSessionState(sessionId);
+    },
+    async act(workspacePath: string, sessionId: string, input: Record<string, unknown>) {
+      acted.push({ workspacePath, sessionId, input });
+      return browserHostSessionState(sessionId, {
+        actionId: String(input.actionId ?? 'action'),
+        action: String(input.action ?? 'state'),
+        frameRef: `browser-host-session:${sessionId}/frame-after.png`,
+        screenshotRef: `browser-host-session:${sessionId}/screenshot-after.png`,
+      });
+    },
+  } as unknown as BrowserHostSessionManager;
+}
+
+function browserHostSessionState(
+  sessionId: string,
+  action?: {
+    actionId: string;
+    action: string;
+    frameRef: string;
+    screenshotRef: string;
+  },
+) {
+  return {
+    id: sessionId,
+    owner: 'host',
+    providerId: 'sciforge.browser-host-session',
+    status: 'ready',
+    workspacePath: '/tmp/workspace',
+    requestedUrl: 'https://runtime-owned.example/current',
+    url: 'https://runtime-owned.example/current',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    viewport: { width: 1280, height: 720, deviceScaleFactor: 1 },
+    canGoBack: false,
+    canGoForward: false,
+    liveSurfaceRef: `browser-host-session:${sessionId}/live-surface.json`,
+    frameRef: action?.frameRef ?? `browser-host-session:${sessionId}/frame-before.png`,
+    screenshotRef: action?.screenshotRef ?? `browser-host-session:${sessionId}/screenshot-before.png`,
+    diagnostics: [],
+    ...(action ? {
+      visibleAction: {
+        actionId: action.actionId,
+        action: action.action,
+        riskType: 'scroll',
+        visibleActionRef: `browser-host-session:${sessionId}/visible-actions/${action.actionId}.json`,
+      },
+      actorCursor: browserActorCursor(sessionId, action.actionId, action.action),
+    } : {}),
+  };
+}
+
+function browserActorCursor(sessionId: string, actionId: string, action: string) {
+  const evidenceRefs = [
+    `browser-host-session:${sessionId}/actions/${actionId}/verification/verifier.json`,
+    `browser-host-session:${sessionId}/actions/${actionId}/freshness-invalidation.json`,
+  ];
+  return {
+    agentId: 'agent-runtime-1',
+    cursorId: `cursor-${actionId}`,
+    color: '#28a0f0',
+    label: 'Runtime worker',
+    status: 'acting',
+    target: {
+      type: 'browser-pane',
+      sessionId,
+      windowRef: `window:browser:${sessionId}`,
+    },
+    lastAction: {
+      action: action === 'type' ? 'type' : action === 'click' ? 'click' : action === 'scroll' ? 'scroll' : 'observe',
+      status: 'completed',
+      evidenceRefs,
+    },
+    evidenceRefs,
+  };
+}
+
+function readyAgentHostInput(options: {
+  intentText?: string;
+} = {}): NormalizedCodexAgentHostInput {
   return {
     schemaVersion: 'sciforge.codex-agent-host-input.v1',
     source: 'test',
-    intentText: 'Click the grounded button in the virtual app screen.',
+    intentText: options.intentText ?? 'Scroll the current browser page.',
     authorizationProfileId: 'high-autonomy',
     singleTurnOverride: false,
-    refs: [
-      fixture.sessionRef,
-      fixture.screenRef,
-      fixture.currentFrameRef,
-      fixture.inputLeaseRef,
-      fixture.actionAdapterRef,
-    ],
+    refs: ['browser-host-session:verified', 'window-action-session:browser-host-session/verified'],
     readiness: {},
     target: {},
     observation: {},
@@ -334,25 +579,110 @@ function readyAgentHostInput(fixture: NativeHostFixture): NormalizedCodexAgentHo
   };
 }
 
-function groundedClickAction(fixture: NativeHostFixture): GenericVisionAction {
+function needsConfirmationPreflight(): ComputerUsePreflightResult {
   return {
-    type: 'click',
-    x: 180,
-    y: 450,
-    targetDescription: 'grounded button',
-    screenId: fixture.screenRef,
-    windowId: fixture.targetWindowRef,
-    riskLevel: 'low',
-    grounding: {
-      frame: {
-        width: 1440,
-        height: 900,
-      },
+    ...readyPreflight(),
+    status: 'needs-confirmation',
+    risk: {
+      decision: 'needs-confirmation',
+      category: 'external-system-submission',
+      hardConfirm: true,
+      reason: 'submitting forms that affect external systems requires hard confirmation',
+    },
+    evidenceRefs: [
+      'browser-host-session:verified/frame.png',
+      'permission:turn/codex-command-default-browser-act/hard-confirm/external-system-submission',
+    ],
+    confirmation: {
+      action: 'Submit the visible external form.',
+      target: 'Verified browser page',
+      impact: 'submitting forms that affect external systems requires hard confirmation',
+      evidenceRefs: [
+        'browser-host-session:verified/frame.png',
+        'permission:turn/codex-command-default-browser-act/hard-confirm/external-system-submission',
+      ],
+      authorizationProfile: readyPreflight().authorizationProfile,
+      controls: ['Confirm', 'Cancel'],
     },
   };
 }
 
-function readyPreflight(fixture: NativeHostFixture): ComputerUsePreflightResult {
+function readyWindowActionStore() {
+  const now = '2026-06-03T00:00:00.000Z';
+  const store = createInMemoryWindowActionSessionStore({ now: () => new Date(now) });
+  const session = enterWindowActionSession(createWindowActionSession({
+    id: 'vscode-main',
+    windowRef: 'window:vscode:main',
+    app: { id: 'com.microsoft.VSCode', name: 'Visual Studio Code', kind: 'editor' },
+    bounds: { x: 20, y: 30, width: 1200, height: 800 },
+    scale: 2,
+    screenId: 'screen-built-in',
+    evidenceRefs: [{ kind: 'session', ref: 'window-action-session:vscode-main' }],
+    timestamp: now,
+  }), createActorCursor({
+    agentId: 'agent-runtime-1',
+    color: '#28a0f0',
+    label: 'Runtime worker',
+  }), { timestamp: now, actorCursorRef: 'actor-cursor:agent-runtime-1/cursor-runtime-1' });
+  store.upsert(session, {
+    refs: ['action-ledger:window-action-session/vscode-main/upsert'],
+    targetRefs: ['window-action-session:vscode-main'],
+    observationRefs: ['window-action-session:vscode-main/evidence/before-frame'],
+    timestamp: now,
+  });
+  return store;
+}
+
+function windowActionAgentHostInput(): NormalizedCodexAgentHostInput {
+  return {
+    schemaVersion: 'sciforge.codex-agent-host-input.v1',
+    source: 'test',
+    intentText: 'Scroll the active desktop window.',
+    authorizationProfileId: 'high-autonomy',
+    singleTurnOverride: false,
+    refs: ['window-action-session:vscode-main'],
+    readiness: {},
+    target: {},
+    observation: {},
+    permissions: {},
+  };
+}
+
+function windowActionPreflight(): ComputerUsePreflightResult {
+  return {
+    ...readyPreflight(),
+    target: {
+      summary: 'Verified active desktop window',
+      refs: ['window-action-session:vscode-main'],
+    },
+    evidenceRefs: [
+      'window-action-session:vscode-main/evidence/before-frame',
+      'permission:turn/codex-command-default-window-action/ordinary-navigation',
+    ],
+  };
+}
+
+function windowActionRuntimeTruth(): CodexAgentHostRuntimeTruth {
+  return {
+    ...runtimeTruth({
+      observationRefs: ['window-action-session:vscode-main/evidence/before-frame'],
+      permissionRefs: ['permission:turn/codex-command-default-window-action/ordinary-navigation'],
+    }),
+    target: {
+      bound: true,
+      summary: 'Verified active desktop window',
+      refs: ['window-action-session:vscode-main'],
+    },
+    refs: [
+      'window-action-session:vscode-main',
+      'adapter-registry:sciforge.window-action-session.computer-use-adapter',
+      'runtime-truth:computer-use-adapter/window-action-session/vscode-main',
+      'cancel:runtime-turn/codex-command-default-window-action',
+    ],
+  };
+}
+
+function readyPreflight(): ComputerUsePreflightResult {
   return {
     schemaVersion: 'sciforge.computer-use.preflight.v1',
     status: 'ready',
@@ -366,13 +696,8 @@ function readyPreflight(fixture: NativeHostFixture): ComputerUsePreflightResult 
       blockedCategories: [],
     },
     target: {
-      summary: 'Verified native VirtualAppScreen',
-      refs: [
-        fixture.sessionRef,
-        fixture.screenRef,
-        fixture.targetWindowRef,
-        `window-action-session:native-host/${fixture.sessionId}`,
-      ],
+      summary: 'Verified browser page',
+      refs: ['browser-host-session:verified', 'window-action-session:browser-host-session/verified'],
     },
     readiness: {
       browserHostSession: 'ready',
@@ -381,12 +706,7 @@ function readyPreflight(fixture: NativeHostFixture): ComputerUsePreflightResult 
       windowActionSession: 'ready',
       computerUseAdapter: 'ready',
     },
-    evidenceRefs: [
-      fixture.currentFrameRef,
-      fixture.liveBindingAttachGrantRef,
-      fixture.grantValidationRef,
-      fixture.permissionRef,
-    ],
+    evidenceRefs: ['browser-host-session:verified/frame.png', 'permission:turn/codex-command-default-browser-act/ordinary-navigation'],
     risk: {
       decision: 'auto',
       category: 'ordinary-navigation',
@@ -397,7 +717,26 @@ function readyPreflight(fixture: NativeHostFixture): ComputerUsePreflightResult 
   };
 }
 
-function runtimeTruth(fixture: NativeHostFixture): CodexAgentHostRuntimeTruth {
+function runtimeTruth(options: {
+  observationRefs?: string[];
+  permissionRefs?: string[];
+} = {}): CodexAgentHostRuntimeTruth {
+  const observationRefs = options.observationRefs ?? ['browser-host-session:verified/frame.png'];
+  const permissionRefs = options.permissionRefs ?? ['permission:turn/codex-command-default-browser-act/ordinary-navigation'];
+  const observedAt = '2026-06-03T00:00:00.000Z';
+  const observation = {
+    fresh: true,
+    refs: observationRefs,
+    observedAt,
+    capturedAt: observedAt,
+    freshnessCheckedAt: observedAt,
+    freshnessCheck: {
+      status: 'current',
+      observedAt,
+      checkedAt: observedAt,
+      maxAgeMs: 30_000,
+    },
+  } as CodexAgentHostRuntimeTruth['observation'];
   return {
     schemaVersion: 'sciforge.agent-host.runtime-truth.v1',
     source: 'test',
@@ -410,310 +749,22 @@ function runtimeTruth(fixture: NativeHostFixture): CodexAgentHostRuntimeTruth {
     },
     target: {
       bound: true,
-      summary: 'Verified native VirtualAppScreen',
-      refs: [
-        fixture.sessionRef,
-        fixture.screenRef,
-        fixture.targetWindowRef,
-        `window-action-session:native-host/${fixture.sessionId}`,
-      ],
+      summary: 'Verified browser page',
+      refs: ['browser-host-session:verified', 'window-action-session:browser-host-session/verified'],
     },
-    observation: {
-      fresh: true,
-      refs: [fixture.currentFrameRef],
-    },
+    observation,
     permissions: {
-      refs: [fixture.permissionRef],
+      refs: permissionRefs,
       stopCancelPath: true,
     },
     refs: [
-      fixture.sessionRef,
-      fixture.screenRef,
-      fixture.currentFrameRef,
-      fixture.currentRunPointerRef,
-      fixture.inputLeaseRef,
-      fixture.actionAdapterRef,
-      fixture.adapterReadinessRef,
-      fixture.evidenceLedgerRef,
-      fixture.liveBindingAttachGrantRef,
-      fixture.grantValidationRef,
-      `adapter-registry:native-host/${fixture.sessionId}/virtual-app-screen-input`,
-      `cancel:runtime-turn/native-host/${fixture.sessionId}`,
+      'browser-host-session:verified',
+      'window-action-session:browser-host-session/verified',
+      'adapter-registry:browser-host-session/computer-use',
+      'browser-host-session:verified/stop',
+      'cancel:runtime-turn/codex-command-default-browser-act',
+      ...observationRefs,
+      ...permissionRefs,
     ],
   };
-}
-
-interface NativeHostFixture {
-  host: InMemoryNativeVirtualAppScreenHost;
-  sessionId: string;
-  sessionRef: string;
-  screenRef: string;
-  targetWindowRef: string;
-  currentFrameRef: string;
-  currentRunPointerRef: string;
-  inputLeaseRef: string;
-  actionAdapterRef: string;
-  adapterReadinessRef: string;
-  evidenceLedgerRef: string;
-  liveBindingAttachGrantRef: string;
-  grantValidationRef: string;
-  permissionRef: string;
-}
-
-function nativeHostFixture(options: {
-  diagnosticOnly?: boolean;
-  omitCurrentFrame?: boolean;
-  omitGrantValidation?: boolean;
-  omitInputLease?: boolean;
-  omitActionAdapter?: boolean;
-  permissionRefs?: string[];
-} = {}): NativeHostFixture {
-  resetVirtualAppScreenProviderSessionStoreForTests();
-  resetVirtualAppScreenNativeHostSessionStoreForTests();
-
-  const host = new InMemoryNativeVirtualAppScreenHost(new ProductModeContractSmokeNativeHostPlatformAdapter({
-    diagnosticOnly: options.diagnosticOnly === true,
-    permissionRefs: options.permissionRefs,
-  }));
-  const created = host.createSession(
-    { profileId: 'native-host-agent-act', defaultSurfaceTransport: 'native-frame-stream' },
-    { allowBackgroundRendering: true, allowSharedSystemInput: false },
-    {
-      currentRunRef: 'computer-use:run/native-host-agent-act/current-run.json',
-      evidenceRootRef: 'computer-use:run/native-host-agent-act/evidence',
-      guiPresentRef: 'gui.present:native-host-agent-act/screen-pane',
-    },
-  );
-  assert.equal(created.status, 'ok');
-  assert.equal(host.launchOrAttachApp(created.value.sessionId, {
-    appId: 'contract-smoke',
-    appRef: 'app:contract-smoke',
-  }).status, 'ok');
-  const attached = host.attachSurface(created.value.sessionId, {
-    screenRef: 'virtual-app-screen:native-host-agent-act/screen',
-    targetWindowRef: 'window:native-host-agent-act/main',
-    transport: 'native-frame-stream',
-  });
-  assert.equal(attached.status, 'ok');
-  const presented = host.presentSurface(created.value.sessionId, attached.value.liveBindingAttachGrantRef);
-  assert.equal(presented.status, 'ok');
-  const firstFrame = host.readFrame(created.value.sessionId);
-  assert.equal(firstFrame.status, 'ok');
-
-  const inputLeaseRef = 'computer-use:native-host/agent-act/leases/active.json';
-  const actionAdapterRef = 'computer-use:native-host/agent-act/adapters/contract-smoke.json';
-  const evidenceLedgerRef = created.value.ledgerRef;
-  const adapterReadinessRef = created.value.readiness.adapterReadinessRef;
-  const permissionRef = created.value.readiness.permissionRefs[0] ?? 'permission:native-host/agent-act';
-  const grantValidationRef = presented.value.validationLedgerEntryRef!;
-
-  recordVirtualAppScreenNativeHostSession({
-    host,
-    session: created.value,
-    surface: attached.value,
-    ...(options.omitCurrentFrame ? {} : { frame: firstFrame.value }),
-    refs: {
-      ...(options.omitInputLease ? {} : { inputLeaseRef }),
-      ...(options.omitActionAdapter ? {} : { actionAdapterRef }),
-      adapterReadinessRef,
-      evidenceLedgerRef,
-      ...(options.omitGrantValidation ? {} : { grantValidationRef }),
-    },
-  });
-  recordVirtualAppScreenProviderSession(parsedNativeHostAttachCommand({
-    screenRef: attached.value.screenRef,
-    targetAppRef: 'app:contract-smoke',
-    adapterReadinessRef,
-    evidenceLedgerRef,
-  }), {
-    schemaVersion: 'sciforge.computer-use.virtual-app-screen-session-manager.v1',
-    status: 'attached',
-    executorId: 'native-session-manager:native-host-agent-act-test',
-    providerId: 'native-virtual-app-screen-host',
-    refs: {
-      currentRunRef: created.value.evidenceContext.currentRunRef,
-      sessionRef: created.value.sessionRef,
-      liveSurfaceRef: attached.value.liveSurfaceRef,
-      surfaceTransportRef: attached.value.surfaceTransportRef,
-      frameStreamRef: attached.value.frameStreamRef,
-      currentFrameRef: firstFrame.value.frameRef,
-      frameTransportContractRef: attached.value.frameTransportContractRef,
-      frameTelemetryRef: attached.value.frameTelemetryRef,
-      mediaChannelRef: attached.value.mediaChannelRef,
-      dataChannelRef: attached.value.dataChannelRef,
-      liveBindingAttachGrantRef: attached.value.liveBindingAttachGrantRef,
-      grantValidationRef,
-      surfaceOwnerRef: attached.value.surfaceOwnerRef,
-      displayOwnerRef: attached.value.displayOwnerRef,
-      screenRef: attached.value.screenRef,
-      targetAppRef: 'app:contract-smoke',
-      targetWindowRef: attached.value.targetWindowRef,
-      inputLeaseRef,
-      actionAdapterRef,
-      adapterReadinessRef,
-      evidenceLedgerRef,
-      guiPresentRef: created.value.evidenceContext.guiPresentRef,
-    },
-    evidence: {
-      providerExecuted: true,
-      mutatingActionExecuted: false,
-      nativeSessionCreated: true,
-      liveFrameAttached: true,
-      currentFrameMaterialized: true,
-      guiPresented: true,
-      isolationVerified: true,
-      affectsPhysicalDisplay: false,
-      requiresFocusSteal: false,
-      sharedSystemInputUsed: false,
-      systemPointerMoved: false,
-      systemKeyboardEventsSent: false,
-      surfaceTransport: buildVirtualDisplaySurfaceTransportDescriptor({
-        providerId: 'native-virtual-app-screen-host',
-        transport: 'native-frame-stream',
-        surfaceTransportRef: attached.value.surfaceTransportRef,
-        liveSurfaceRef: attached.value.liveSurfaceRef,
-        frameStreamRef: attached.value.frameStreamRef,
-        currentFrameRef: firstFrame.value.frameRef,
-        frameTransportContractRef: attached.value.frameTransportContractRef!,
-        frameTelemetryRef: attached.value.frameTelemetryRef,
-        mediaChannelRef: attached.value.mediaChannelRef,
-        dataChannelRef: attached.value.dataChannelRef,
-        currentFrameSequence: firstFrame.value.frameSequence,
-      }),
-      evidenceRefs: [
-        attached.value.liveBindingAttachGrantRef,
-        grantValidationRef,
-        evidenceLedgerRef,
-        firstFrame.value.frameRef,
-      ],
-    },
-  });
-
-  return {
-    host,
-    sessionId: created.value.sessionId,
-    sessionRef: created.value.sessionRef,
-    screenRef: attached.value.screenRef,
-    targetWindowRef: attached.value.targetWindowRef,
-    currentFrameRef: firstFrame.value.frameRef,
-    currentRunPointerRef: created.value.currentRunPointerRef,
-    inputLeaseRef,
-    actionAdapterRef,
-    adapterReadinessRef,
-    evidenceLedgerRef,
-    liveBindingAttachGrantRef: attached.value.liveBindingAttachGrantRef,
-    grantValidationRef,
-    permissionRef,
-  };
-}
-
-class ProductModeContractSmokeNativeHostPlatformAdapter extends ContractSmokeNativeHostPlatformAdapter {
-  constructor(private readonly options: {
-    diagnosticOnly?: boolean;
-    permissionRefs?: string[];
-  } = {}) {
-    super();
-  }
-
-  override describe(): NativeVirtualAppScreenHostDescription {
-    const description = super.describe();
-    return {
-      ...description,
-      permissionRefs: this.options.permissionRefs ?? description.permissionRefs,
-      diagnosticOnly: this.options.diagnosticOnly === true,
-    };
-  }
-
-  override probe(): NativeHostReadinessRecord {
-    const probe = super.probe();
-    return {
-      ...probe,
-      permissionRefs: this.options.permissionRefs ?? probe.permissionRefs,
-      diagnosticOnly: this.options.diagnosticOnly === true,
-    };
-  }
-
-  launchOrAttachApp(_session: NativeHostSession, appProfile: NativeHostAppProfile): NativeHostResult<NativeHostAppProfile> {
-    return { status: 'ok', value: appProfile };
-  }
-
-  attachSurface(session: NativeHostSession, surfaceTarget: NativeHostSurfaceTarget): NativeHostResult<NativeHostLiveSurface> {
-    const surfaceId = surfaceTarget.surfaceId ?? `surface-${session.sessionId}`;
-    return {
-      status: 'ok',
-      value: {
-        surfaceId,
-        screenRef: surfaceTarget.screenRef,
-        targetAppRef: session.app?.appRef ?? 'app:contract-smoke',
-        targetWindowRef: surfaceTarget.targetWindowRef,
-        sessionRef: session.sessionRef,
-        liveSurfaceRef: `computer-use:native-host/surfaces/${surfaceId}/live-surface.json`,
-        liveBindingAttachGrantRef: `computer-use:native-host/grants/${surfaceId}/live-binding-attach-grant.json`,
-        surfaceOwnerRef: `computer-use:native-host/surfaces/${surfaceId}/surface-owner.json`,
-        displayOwnerRef: `computer-use:native-host/surfaces/${surfaceId}/display-owner.json`,
-        surfaceTransport: surfaceTarget.transport,
-        surfaceTransportRef: `computer-use:native-host/surfaces/${surfaceId}/surface-transport.json`,
-        frameStreamRef: `computer-use:native-host/surfaces/${surfaceId}/frame-stream.json`,
-        frameTransportContractRef: `computer-use:native-host/surfaces/${surfaceId}/frame-transport-contract.json`,
-        frameTelemetryRef: `computer-use:native-host/surfaces/${surfaceId}/frame-telemetry.json`,
-        currentFrameSequence: 0,
-      },
-    };
-  }
-
-  readFrame(session: NativeHostSession, _cursor?: string): NativeHostResult<NativeHostFrame> {
-    assert.ok(session.surface);
-    const frameSequence = session.surface.currentFrameSequence + 1;
-    const frameRef = `computer-use:native-host/frames/${session.surface.surfaceId}/${String(frameSequence).padStart(4, '0')}.png`;
-    return {
-      status: 'ok',
-      value: {
-        frameRef,
-        frameHash: 'a'.repeat(64),
-        frameSequence,
-        liveSurfaceRef: session.surface.liveSurfaceRef,
-        frameStreamRef: session.surface.frameStreamRef,
-        readAt: new Date().toISOString(),
-      },
-    };
-  }
-
-  sendHumanInput(
-    _session: NativeHostSession,
-    _inputEvent: NativeHostHumanInputEvent,
-  ): NativeHostMaybePromise<NativeHostResult<NativeHostHumanInputAccepted>> {
-    return {
-      status: 'ok',
-      value: {
-        inputAcceptedRef: 'computer-use:native-host/product-adapter/input-accepted.json',
-        inputSequence: 1,
-        acceptedAt: new Date().toISOString(),
-        fireAndRelease: true,
-        evidenceWillCatchUp: true,
-        providerEvidenceRefs: ['computer-use:native-host/product-adapter/provider-input.json'],
-      },
-    };
-  }
-}
-
-function parsedNativeHostAttachCommand(refs: {
-  screenRef: string;
-  targetAppRef: string;
-  adapterReadinessRef: string;
-  evidenceLedgerRef: string;
-}) {
-  const parsed = parseVirtualAppScreenRuntimeCommand([
-    '/computer-use screen attach',
-    '--source right-pane-screen',
-    '--profile "contract-smoke"',
-    `--target-app-ref "${refs.targetAppRef}"`,
-    `--screen-ref "${refs.screenRef}"`,
-    '--activation-ref "computer-use:native-host/agent-act/activation.json"',
-    `--adapter-readiness-ref "${refs.adapterReadinessRef}"`,
-    `--evidence-ledger-ref "${refs.evidenceLedgerRef}"`,
-    '--gui-present-ref "gui.present:native-host-agent-act/screen-pane"',
-  ].join(' '));
-  assert.equal(parsed.kind, 'parsed');
-  if (parsed.kind !== 'parsed') throw new Error('expected parsed attach command');
-  return parsed.command;
 }

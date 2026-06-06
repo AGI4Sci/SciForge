@@ -32,11 +32,31 @@ export const SUPPORTED_SCENARIO_SKILL_DOMAINS: readonly SkillDomain[] = Object.f
 const builtInScenarioIdSet = new Set<string>(builtInScenarioIds);
 const skillDomainSet = new Set<string>(SUPPORTED_SCENARIO_SKILL_DOMAINS);
 
-const scenarioPromptSignals: Record<ScenarioId, RegExp[]> = {
-  'literature-evidence-review': [/\b(pubmed|paper|literature|evidence|review|clinical trial|trial|文献|证据|综述|临床试验)\b/i],
-  'structure-exploration': [/\b(pdb|structure|alphafold|residue|ligand|pocket|binding|结构|残基|口袋|配体)\b/i],
-  'omics-differential-exploration': [/\b(omics|rna|expression|differential|deseq2|scanpy|umap|crispr screen|genome[- ]wide screen|screen|组学|表达|差异|筛选)\b/i],
-  'biomedical-knowledge-graph': [/\b(uniprot|chembl|opentargets|gene|protein|compound|drug|pathway|知识|药物|基因|蛋白|通路)\b/i],
+type ScenarioSemanticSignalCandidate = {
+  scenarioId: ScenarioId;
+  structuredSignals: string[];
+  lexicalFeatures: string[];
+  confidence: 'high' | 'low';
+  score: number;
+};
+
+const scenarioPromptSignals: Record<ScenarioId, { structured: RegExp[]; lexical: RegExp[] }> = {
+  'literature-evidence-review': {
+    structured: [/\b(pubmed|paper-list|clinical trial|semantic scholar|crossref|literature evidence|evidence review|文献|证据矩阵|综述|临床试验)\b/i],
+    lexical: [/\b(paper|literature|evidence|review|trial)\b/i],
+  },
+  'structure-exploration': {
+    structured: [/\b(pdb|alphafold|protein structure|structure viewer|molecule viewer|residue|ligand|pocket|binding|结构|残基|口袋|配体)\b/i],
+    lexical: [/\b(structure|protein)\b/i],
+  },
+  'omics-differential-exploration': {
+    structured: [/\b(omics|rna|expression matrix|differential expression|deseq2|scanpy|umap|crispr screen|genome[- ]wide screen|spatial transcriptomics|组学|表达|差异|筛选)\b/i],
+    lexical: [/\b(expression|differential|screen|spatial|matrix)\b/i],
+  },
+  'biomedical-knowledge-graph': {
+    structured: [/\b(uniprot|chembl|opentargets|knowledge graph|knowledge[- ]graph|compound|drug|pathway|知识图谱|药物|基因|蛋白|通路)\b/i],
+    lexical: [/\b(gene|protein|target|network)\b/i],
+  },
 };
 
 export function isBuiltInScenarioId(value: unknown): value is ScenarioId {
@@ -101,15 +121,21 @@ export function normalizeScenarioPromptTitle(
 }
 
 export function matchedScenariosForPrompt(prompt: string): ScenarioId[] {
-  return builtInScenarioIds.filter((scenarioId) => scenarioPromptSignals[scenarioId].some((pattern) => pattern.test(prompt)));
+  // Final routing truth must come from semantic candidates. Lexical detectors are retained only as low-confidence features.
+  return scenarioSemanticSignalCandidatesForPrompt(prompt)
+    .filter((candidate) => candidate.confidence === 'high')
+    .map((candidate) => candidate.scenarioId);
 }
 
 export function scopeCheck(scenarioId: ScenarioId, prompt: string): ScenarioScopeCheckResult {
   const spec = SCENARIO_SPECS[scenarioId];
   const normalized = prompt.toLowerCase();
   const matchedScenarios = matchedScenariosForPrompt(prompt);
+  // Unsupported-task routing must not treat token overlap as final truth; overlap remains low-confidence evidence only.
   const unsupportedMatches = spec.scopeDeclaration.unsupportedTasks
-    .filter((task) => tokenOverlap(normalized, task.toLowerCase()) >= 2);
+    .map((task) => scopeUnsupportedCandidate(task, normalized))
+    .filter((candidate) => candidate.confidence === 'high')
+    .map((candidate) => candidate.task);
   const crossAgentTargets = matchedScenarios.filter((candidate) => candidate !== scenarioId);
   const handoffTargets = uniqueScenarioIds([
     ...crossAgentTargets,
@@ -151,6 +177,41 @@ function buildScopePlan(scenarioId: ScenarioId, matchedScenarios: ScenarioId[], 
     plan.push(`Recommended handoff targets: ${handoffTargets.join(', ')}.`);
   }
   return plan;
+}
+
+function scenarioSemanticSignalCandidatesForPrompt(prompt: string): ScenarioSemanticSignalCandidate[] {
+  return builtInScenarioIds
+    .map((scenarioId) => {
+      const signals = scenarioPromptSignals[scenarioId];
+      const structuredSignals = matchedPatternSources(signals.structured, prompt);
+      const lexicalFeatures = matchedPatternSources(signals.lexical, prompt);
+      const score = structuredSignals.length * 10 + lexicalFeatures.length;
+      return {
+        scenarioId,
+        structuredSignals,
+        lexicalFeatures,
+        confidence: structuredSignals.length > 0 ? 'high' as const : 'low' as const,
+        score,
+      };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.scenarioId.localeCompare(right.scenarioId));
+}
+
+function matchedPatternSources(patterns: RegExp[], text: string) {
+  return patterns.filter((pattern) => pattern.test(text)).map((pattern) => pattern.source);
+}
+
+function scopeUnsupportedCandidate(
+  task: string,
+  normalizedPrompt: string,
+): { task: string; lexicalOverlap: number; confidence: 'high' | 'low' } {
+  const lexicalOverlap = tokenOverlap(normalizedPrompt, task.toLowerCase());
+  return {
+    task,
+    lexicalOverlap,
+    confidence: 'low' as const,
+  };
 }
 
 function tokenOverlap(left: string, right: string) {

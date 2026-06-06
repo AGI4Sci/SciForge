@@ -331,6 +331,47 @@ test('GuiProtocol ask_user creates modal state with terminal-equivalent command 
   assert.deepEqual(log.entries.map((entry) => [entry.tool, entry.applied]), [['gui.ask_user', true]]);
 });
 
+test('GuiProtocol ask_user filters native executable action commands while preserving control-plane commands', () => {
+  const gui = createGuiProtocolController({
+    revision: 12,
+    focusedPanel: 'results',
+    hotRegion: {
+      panel: 'results',
+      selectedRefs: ['computer-use:screen/live/screen-1.json'],
+      interactionMode: 'reading',
+      lastChangeAt: '2026-06-06T00:00:00.000Z',
+    },
+  });
+
+  const result = gui.askUser({
+    kind: 'confirmation',
+    title: 'Computer Use controls',
+    message: 'Review control plane choices.',
+    choices: [
+      { label: 'Click target', commandText: '/computer-use click --x 20 --y 40' },
+      { label: 'Browser click', commandText: '/browser click --selector "#submit"' },
+      { label: 'Stop', commandText: '/computer-use stop --stop-ref computer-use:stop/current.json' },
+      { label: 'Takeover', commandText: '/computer-use takeover --takeover-ref computer-use:leases/takeover.json' },
+      { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1' },
+    ],
+  });
+  const hot = JSON.parse(gui.read({ path: '/gui/hot-region.json' }).content) as { hotRegion: { availableActions: Array<{ commandText: string }> } };
+  const modalActions = JSON.parse(gui.read({ path: '/gui/regions/modal/actions.json' }).content) as { actions: Array<{ commandText: string }> };
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(hot.hotRegion.availableActions.map((action) => action.commandText), [
+    '/computer-use stop --stop-ref computer-use:stop/current.json',
+    '/computer-use takeover --takeover-ref computer-use:leases/takeover.json',
+    '/computer-use reject --approval-ref approval-1',
+  ]);
+  assert.deepEqual(modalActions.actions.map((action) => action.commandText), [
+    '/computer-use stop --stop-ref computer-use:stop/current.json',
+    '/computer-use takeover --takeover-ref computer-use:leases/takeover.json',
+    '/computer-use reject --approval-ref approval-1',
+  ]);
+  assert.doesNotMatch(JSON.stringify(modalActions), /computer-use click|browser click|#submit/);
+});
+
 test('GuiProtocol apply_batch supports GUI-local all-or-nothing and best-effort transactions', () => {
   const atomic = createGuiProtocolController({
     revision: 10,

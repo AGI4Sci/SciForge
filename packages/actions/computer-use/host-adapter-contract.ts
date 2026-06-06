@@ -1,4 +1,8 @@
 import {
+  COMPUTER_USE_ACTION_REQUEST_SCHEMA_VERSION,
+  COMPUTER_USE_ACTION_RESULT_SCHEMA_VERSION,
+} from './action-schema.js';
+import {
   computerUseHostPortLists,
   computerUseHostPortProviderIds,
   computerUseHostPortsContractIds,
@@ -8,7 +12,8 @@ import {
 
 export const computerUseActionProviderContractIds = {
   actionProviderId: 'action.sciforge.computer-use',
-  requestSchema: 'sciforge.computer-use.request.v1',
+  requestSchema: COMPUTER_USE_ACTION_REQUEST_SCHEMA_VERSION,
+  resultSchema: COMPUTER_USE_ACTION_RESULT_SCHEMA_VERSION,
   hostPortsSchema: computerUseHostPortsContractIds.schemaVersion,
   hostAdapterSchema: 'sciforge.computer-use.host-adapter.v1',
   tuiHostActionsSchema: 'sciforge.computer-use.tui-host-actions.v1',

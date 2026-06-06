@@ -7,11 +7,12 @@ import test from 'node:test';
 import {
   COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES,
   aggregateComputerUseChatLiveComplexMatrixManifests,
+  evidenceRequirementRefPatterns,
   runComputerUseChatLiveComplexMatrix,
 } from '../../tools/computer-use-chat-live-complex-matrix.js';
 import { writeBundleLocalCuNext07Acceptance } from './helpers/cu-next-runner-fixtures.js';
 
-test('Computer Use chat live complex matrix defines real task prompts and expected statuses', () => {
+test('Computer Use chat live complex matrix defines Desktop product intent cases and evidence contracts', () => {
   assert.deepEqual(
     COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item) => item.id),
     [
@@ -19,6 +20,9 @@ test('Computer Use chat live complex matrix defines real task prompts and expect
       'table-chart-analysis-report',
       'web-research-email-draft-stop',
       'file-organize-index',
+      'terminal-notebook-artifact-validation',
+      'cross-app-document-preview',
+      'viewport-recovery-state-refs',
       'failure-recovery-repair',
       'high-risk-approval-chain',
       'dense-visual-grounding',
@@ -31,9 +35,12 @@ test('Computer Use chat live complex matrix defines real task prompts and expect
   assert.equal(expectedStatuses['table-chart-analysis-report'], 'completed');
   assert.equal(expectedStatuses['web-research-email-draft-stop'], 'needs-confirmation');
   assert.equal(expectedStatuses['file-organize-index'], 'completed');
+  assert.equal(expectedStatuses['terminal-notebook-artifact-validation'], 'completed');
+  assert.equal(expectedStatuses['cross-app-document-preview'], 'completed');
+  assert.equal(expectedStatuses['viewport-recovery-state-refs'], 'completed');
   assert.equal(expectedStatuses['failure-recovery-repair'], 'repair-needed');
   assert.equal(expectedStatuses['high-risk-approval-chain'], 'needs-confirmation');
-  assert.equal(expectedStatuses['dense-visual-grounding'], 'completed');
+  assert.equal(expectedStatuses['dense-visual-grounding'], 'blocked');
   assert.deepEqual(
     Object.fromEntries(COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item) => [item.id, `${item.taskId}/${item.scenarioId}`])),
     {
@@ -41,26 +48,98 @@ test('Computer Use chat live complex matrix defines real task prompts and expect
       'table-chart-analysis-report': 'CU-NEXT-02/CU-LONG-002',
       'web-research-email-draft-stop': 'CU-NEXT-03/CU-LONG-009',
       'file-organize-index': 'CU-NEXT-04/CU-LONG-005',
+      'terminal-notebook-artifact-validation': 'CU-NEXT-05/CU-LONG-008',
+      'cross-app-document-preview': 'CU-NEXT-01/CU-LONG-001',
+      'viewport-recovery-state-refs': 'CU-NEXT-07/CU-LONG-007',
       'failure-recovery-repair': 'CU-NEXT-05/CU-LONG-006',
       'high-risk-approval-chain': 'CU-NEXT-06/CU-LONG-009',
       'dense-visual-grounding': 'CU-NEXT-07/CU-LONG-004',
     },
   );
+  const requirementsByCase = Object.fromEntries(
+    COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item) => [item.id, item.evidenceRequirements]),
+  ) as Record<string, string[]>;
   for (const item of COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES) {
-    assert.match(item.prompt, /^\/computer-use /);
+    assert.doesNotMatch(item.prompt, /^\/computer-use\b/);
+    assert.doesNotMatch(item.prompt, /fixture|package-local|readiness-only|Playwright|accessibility-tree|diagnostic harness/i);
     assert.doesNotMatch(item.prompt, /completion-grade/i);
-    assert.ok(item.evidenceRequirements.includes('current-chat-run'));
+    assert.ok(item.evidenceRequirements.includes('desktop-product-path'));
+    assert.ok(item.evidenceRequirements.includes('current-run-refs'));
+    assert.ok(item.evidenceRequirements.includes('refs-first-large-objects'));
     if (item.expectedStatus === 'completed') {
-      assert.match(item.prompt, /local|safe central content/i);
-      assert.match(item.prompt, /avoid toolbar\/action controls and external side effects|safe central content/i);
+      assert.match(item.prompt, /SciForge Desktop|Desktop product/i);
+      assert.match(item.prompt, /local|artifact|preview|report/i);
     }
   }
+  assertIncludesAll(requirementsByCase['literature-briefing-report'], [
+    'browser-research',
+    'local-report',
+    'source-ref-causality',
+  ]);
+  assertIncludesAll(requirementsByCase['web-research-email-draft-stop'], [
+    'browser-form-draft',
+    'hard-confirm-submit',
+    'current-action-type-turn-authorization',
+  ]);
+  assertIncludesAll(requirementsByCase['table-chart-analysis-report'], [
+    'csv-or-table-source',
+    'file-artifact-validator-refs',
+    'artifact-validation',
+  ]);
+  assertIncludesAll(requirementsByCase['file-organize-index'], [
+    'file-manager-evidence',
+    'directory-listing-refs',
+    'file-organization-evidence',
+  ]);
+  assertIncludesAll(requirementsByCase['terminal-notebook-artifact-validation'], [
+    'explicit-terminal-workflow',
+    'notebook-workflow',
+    'artifact-validator-refs',
+  ]);
+  assertIncludesAll(requirementsByCase['cross-app-document-preview'], [
+    'browser-source-reader',
+    'editor-evidence',
+    'file-preview-evidence',
+  ]);
+  assertIncludesAll(requirementsByCase['dense-visual-grounding'], [
+    'focus-crops',
+    'ocr-refs',
+    'vision-translator-refs',
+    'ambiguous-target-blocked',
+  ]);
+  assertIncludesAll(requirementsByCase['viewport-recovery-state-refs'], [
+    'scroll-evidence',
+    'viewport-state-refs',
+    'viewport-recovery',
+  ]);
+  assertIncludesAll(requirementsByCase['failure-recovery-repair'], [
+    'blocked-repair-manifest',
+    'fresh-re-observation',
+    'continuation-request',
+  ]);
+  assertIncludesAll(requirementsByCase['high-risk-approval-chain'], [
+    'cancel-no-execution',
+    'confirm-current-action-type-turn-only',
+    'risk-audit',
+  ]);
   const emailStop = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.find((item) => item.id === 'web-research-email-draft-stop');
-  assert.match(emailStop?.prompt ?? '', /explicit topic/);
-  assert.match(emailStop?.prompt ?? '', /qa-review@example\.invalid/);
-  assert.match(emailStop?.prompt ?? '', /final Send or Submit email action/);
-  assert.match(emailStop?.prompt ?? '', /not completion/);
-  assert.doesNotMatch(emailStop?.prompt ?? '', /current topic/);
+  assert.match(emailStop?.prompt ?? '', /form draft/i);
+  assert.match(emailStop?.prompt ?? '', /Submit/i);
+  assert.match(emailStop?.prompt ?? '', /hard confirmation/i);
+  assert.doesNotMatch(emailStop?.prompt ?? '', /qa-review@example\.invalid/);
+
+  const nonRefBackedRequirements = new Set([
+    'desktop-product-path',
+    'current-run-refs',
+    'refs-first-large-objects',
+    'gui.present',
+    'current-run-isolated-l3-bundle',
+  ]);
+  const requirementLabels = new Set(COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.flatMap((item) => item.evidenceRequirements));
+  const requirementsWithoutRefPatterns = [...requirementLabels]
+    .filter((requirement) => !nonRefBackedRequirements.has(requirement))
+    .filter((requirement) => evidenceRequirementRefPatterns(requirement).length === 0);
+  assert.deepEqual(requirementsWithoutRefPatterns, []);
 });
 
 test('Computer Use chat live complex matrix blocks before submit when preflight is not ready', async () => {
@@ -162,8 +241,9 @@ test('Computer Use chat live complex matrix retries transient per-case preflight
   assert.equal(manifest.cases[0]?.requestSubmitted, true);
 });
 
-test('Computer Use chat live complex matrix submits selected prompt and redacts secrets in manifest', async () => {
+test('Computer Use chat live complex matrix submits selected prompt through the Computer Use command path and redacts secrets in manifest', async () => {
   const bodies: Array<Record<string, unknown>> = [];
+  const runtimeRequestBodies: Array<Record<string, unknown>> = [];
   const runDir = '.sciforge/vision-runs/matrix-repair';
   const manifest = await runComputerUseChatLiveComplexMatrix({
     env: readyEnv(),
@@ -217,21 +297,62 @@ test('Computer Use chat live complex matrix submits selected prompt and redacts 
       }
       return readyServiceResponse(url);
     },
+    runtimeRequestBodies,
   });
 
   assert.equal(bodies.length, 1);
-  assert.equal(bodies[0]?.prompt, COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.find((item) => item.id === 'failure-recovery-repair')?.prompt);
-  const uiState = bodies[0]?.uiState as Record<string, unknown>;
-  assert.deepEqual((uiState.computerUseNext as Record<string, unknown>)?.taskId, 'CU-NEXT-05');
-  assert.deepEqual((uiState.computerUseLong as Record<string, unknown>)?.scenarioId, 'CU-LONG-006');
-  assert.deepEqual(uiState.completionEvidencePolicy, {
-    schemaVersion: 'sciforge.completion-evidence-policy.v1',
-    producers: [{
-      id: 'computer-use.embedded-isolated-desktop-l3',
-      enabled: true,
-      trigger: 'on-completed-current-run',
-    }],
-  });
+  assert.equal(runtimeRequestBodies.length, 1);
+  assert.equal(runtimeRequestBodies[0]?.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
+  assert.match(String(runtimeRequestBodies[0]?.commandId), /^codex-command-/);
+  assert.equal(runtimeRequestBodies[0]?.prompt, undefined);
+  assert.equal((runtimeRequestBodies[0]?.auditMetadata as Record<string, unknown> | undefined)?.promptCarriedBy, 'commandText');
+  const casePrompt = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.find((item) => item.id === 'failure-recovery-repair')?.prompt;
+  assert.ok(casePrompt);
+  assert.doesNotMatch(casePrompt, /^\/computer-use\b/);
+  const expectedPrompt = `/computer-use ${casePrompt}`;
+  assert.ok(String(bodies[0]?.prompt).startsWith(expectedPrompt));
+  assert.ok(String(bodies[0]?.commandText).startsWith(expectedPrompt));
+  assert.match(String(bodies[0]?.commandText), /Computer Use acceptance binding:/);
+  assert.match(String(bodies[0]?.commandText), /taskId: CU-NEXT-05/);
+  assert.match(String(bodies[0]?.commandText), /scenarioId: CU-LONG-006/);
+  assert.equal(requestCurrentTurnId(bodies[0]), manifest.cases[0]?.isolation.currentTurnId);
+  assert.equal((bodies[0]?.auditMetadata as Record<string, unknown> | undefined)?.promptCarriedBy, 'commandText');
+  const caseResult = manifest.cases[0];
+  assert.ok(caseResult);
+  const expectedRuntimeIntent = {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    completionEvidencePolicy: {
+      schemaVersion: 'sciforge.completion-evidence-policy.v1',
+      producers: [{
+        id: 'computer-use.embedded-isolated-desktop-l3',
+        enabled: true,
+        trigger: 'on-completed-current-run',
+      }],
+    },
+    computerUseNext: {
+      taskId: caseResult.taskId,
+      title: 'Computer Use live task acceptance',
+      requirements: [
+        'chat-origin-current-run',
+        'refs-first-evidence-bundle',
+        'no-dom-playwright-accessibility-or-shell-file-write-substitute',
+      ],
+    },
+    computerUseLong: {
+      taskId: caseResult.taskId,
+      scenarioId: caseResult.scenarioId,
+      title: 'Computer Use live task acceptance',
+      safetyBoundary: {
+        noDomAccessibility: true,
+        noShellDirectArtifactWrite: true,
+        noSharedSystemInput: true,
+      },
+    },
+  };
+  assert.deepEqual(runtimeRequestBodies[0]?.runtimeIntent, expectedRuntimeIntent);
+  assert.deepEqual(bodies[0]?.runtimeIntent, expectedRuntimeIntent);
   assert.equal(manifest.status, 'passed', JSON.stringify(manifest.issues));
   assert.equal(manifest.cases[0]?.expectedStatus, 'repair-needed');
   assert.equal(manifest.cases[0]?.taskId, 'CU-NEXT-05');
@@ -304,19 +425,45 @@ test('Computer Use chat live complex matrix keeps direct completed first turn wi
   const traceRef = '.sciforge/vision-runs/cu-next-07-wrapper/vision-trace.json';
   const finalArtifactRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-export.csv';
   const denseRejectionRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-rejections.json';
+  const viewportRecoveryRef = '.sciforge/vision-runs/cu-next-07-wrapper/viewport-recovery.json';
+  const scrollEvidenceRef = '.sciforge/vision-runs/cu-next-07-wrapper/scroll-evidence.json';
+  const viewportStateRef = '.sciforge/vision-runs/cu-next-07-wrapper/viewport-state.json';
+  const freshObservationRef = '.sciforge/vision-runs/cu-next-07-wrapper/fresh-observation.json';
   const runTaskChainRef = '.sciforge/vision-runs/cu-next-07-wrapper/tui-host-run-task-chain.json';
   try {
-    await writeBundleLocalCuNext07Acceptance(workspace);
+    await writeProductLikeBundleLocalCuNext07Acceptance(workspace);
     await writeJson(join(workspace, denseRejectionRef), {
       schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
       rejectedTargets: ['toolbar', 'results-table'],
+    });
+    await writeJson(join(workspace, viewportRecoveryRef), {
+      schemaVersion: 'sciforge.computer-use.viewport-recovery.v1',
+      recovered: true,
+      scrollEvidenceRef,
+      viewportStateRef,
+      freshObservationRef,
+    });
+    await writeJson(join(workspace, scrollEvidenceRef), {
+      schemaVersion: 'sciforge.computer-use.scroll-evidence.v1',
+      action: 'scroll-to-visible-content',
+      coordinateSpace: 'window-local',
+    });
+    await writeJson(join(workspace, viewportStateRef), {
+      schemaVersion: 'sciforge.computer-use.viewport-state.v1',
+      status: 'current',
+      visibleContent: true,
+    });
+    await writeJson(join(workspace, freshObservationRef), {
+      schemaVersion: 'sciforge.computer-use.fresh-observation.v1',
+      traceRef,
+      status: 'current',
     });
 
     const manifest = await runComputerUseChatLiveComplexMatrix({
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
-      caseIds: ['dense-visual-grounding'],
+      caseIds: ['viewport-recovery-state-refs'],
       completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
@@ -341,8 +488,22 @@ test('Computer Use chat live complex matrix keeps direct completed first turn wi
                       title: 'Computer Use matrix completed',
                       status: 'completed',
                       traceRefs: [traceRef],
-                      artifactRefs: [finalArtifactRef, denseRejectionRef],
-                      displayedRefs: [finalArtifactRef, denseRejectionRef],
+                      artifactRefs: [
+                        finalArtifactRef,
+                        denseRejectionRef,
+                        viewportRecoveryRef,
+                        scrollEvidenceRef,
+                        viewportStateRef,
+                        freshObservationRef,
+                      ],
+                      displayedRefs: [
+                        finalArtifactRef,
+                        denseRejectionRef,
+                        viewportRecoveryRef,
+                        scrollEvidenceRef,
+                        viewportStateRef,
+                        freshObservationRef,
+                      ],
                       runTaskChainRefs: [runTaskChainRef],
                     },
                   }],
@@ -373,8 +534,8 @@ test('Computer Use chat live complex matrix keeps direct completed first turn wi
     assert.equal(manifest.cases[0]?.runManifest.status, 'completed');
     const isolation = manifest.cases[0]?.isolation;
     assert.equal(isolation?.cleanupStatus, 'recorded', JSON.stringify(isolation?.cleanupIssues));
-    assert.match(isolation?.sessionId ?? '', /dense-visual-grounding/);
-    assert.match(isolation?.currentTurnId ?? '', /dense-visual-grounding/);
+    assert.match(isolation?.sessionId ?? '', /viewport-recovery-state-refs/);
+    assert.match(isolation?.currentTurnId ?? '', /viewport-recovery-state-refs/);
     assert.ok(isolation?.cleanupManifestRef);
     const cleanup = JSON.parse(await readFile(join(workspace, isolation.cleanupManifestRef), 'utf8')) as {
       schemaVersion?: string;
@@ -387,13 +548,87 @@ test('Computer Use chat live complex matrix keeps direct completed first turn wi
       resourceReleaseChecks?: Array<{ kind?: string; status?: string }>;
     };
     assert.equal(cleanup.schemaVersion, 'sciforge.computer-use.chat-live-complex-matrix.case-cleanup.v1');
-    assert.equal(cleanup.caseId, 'dense-visual-grounding');
+    assert.equal(cleanup.caseId, 'viewport-recovery-state-refs');
     assert.equal(cleanup.sessionId, isolation.sessionId);
     assert.equal(cleanup.currentTurnId, isolation.currentTurnId);
     assert.ok(cleanup.runDirRefs?.includes('.sciforge/vision-runs/cu-next-07-wrapper'));
     assert.ok(cleanup.finalArtifactRefs?.includes(finalArtifactRef));
     assert.ok(cleanup.guiReceiptRefs?.includes(finalArtifactRef));
     assert.ok(cleanup.resourceReleaseChecks?.some((check) => check.kind === 'workspace-seed' && check.status === 'recorded'));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('Computer Use chat live complex matrix rejects completed case missing ref-backed evidence requirements', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-complex-matrix-missing-req-ref-'));
+  const traceRef = '.sciforge/vision-runs/cu-next-07-wrapper/vision-trace.json';
+  const finalArtifactRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-export.csv';
+  const denseRejectionRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-rejections.json';
+  const runTaskChainRef = '.sciforge/vision-runs/cu-next-07-wrapper/tui-host-run-task-chain.json';
+  try {
+    await writeProductLikeBundleLocalCuNext07Acceptance(workspace);
+    await writeJson(join(workspace, denseRejectionRef), {
+      schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
+      rejectedTargets: ['toolbar', 'results-table'],
+    });
+
+    const manifest = await runComputerUseChatLiveComplexMatrix({
+      env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
+      workspacePath: workspace,
+      localConfigs: [],
+      caseIds: ['viewport-recovery-state-refs'],
+      completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: async (input, init) => {
+        const url = String(input);
+        if (url.endsWith('/api/sciforge/tools/run/stream')) {
+          const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          const commandId = String((body.uiState as Record<string, unknown>).commandId);
+          return ndjsonResponse([
+            {
+              event: {
+                type: 'computer-use.tui-host-actions',
+                source: 'computer-use-package-bridge',
+                commandId,
+                attemptId: `${commandId}-attempt-1`,
+                detail: {
+                  actions: [{
+                    schemaVersion: 'sciforge.computer-use.tui-host-actions.v1',
+                    port: 'gui.present',
+                    target: 'computer-use.trace-summary',
+                    payload: {
+                      title: 'Computer Use matrix completed without viewport refs',
+                      status: 'completed',
+                      traceRefs: [traceRef],
+                      artifactRefs: [finalArtifactRef, denseRejectionRef],
+                      displayedRefs: [finalArtifactRef, denseRejectionRef],
+                      runTaskChainRefs: [runTaskChainRef],
+                    },
+                  }],
+                },
+              },
+            },
+            {
+              result: {
+                status: 'completed',
+                message: 'Computer Use completed without viewport recovery refs.',
+                executionUnits: [],
+                artifacts: [],
+              },
+            },
+          ]);
+        }
+        return readyServiceResponse(url);
+      },
+    });
+
+    const result = manifest.cases[0];
+    assert.equal(manifest.status, 'failed');
+    assert.equal(result?.status, 'failed');
+    assert.ok(result?.issues.includes('matrix-missing-evidence-requirement-ref:viewport-recovery'));
+    assert.ok(result?.issues.includes('matrix-missing-evidence-requirement-ref:scroll-evidence'));
+    assert.ok(result?.issues.includes('matrix-missing-evidence-requirement-ref:viewport-state-refs'));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -410,13 +645,39 @@ test('Computer Use chat live complex matrix auto-continues completed case from r
   const secondTraceRef = '.sciforge/vision-runs/cu-next-07-wrapper/vision-trace.json';
   const finalArtifactRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-export.csv';
   const denseRejectionRef = '.sciforge/vision-runs/cu-next-07-wrapper/dense-grounding-rejections.json';
+  const viewportRecoveryRef = '.sciforge/vision-runs/cu-next-07-wrapper/viewport-recovery.json';
+  const scrollEvidenceRef = '.sciforge/vision-runs/cu-next-07-wrapper/scroll-evidence.json';
+  const viewportStateRef = '.sciforge/vision-runs/cu-next-07-wrapper/viewport-state.json';
+  const freshObservationRef = '.sciforge/vision-runs/cu-next-07-wrapper/fresh-observation.json';
   const secondRunTaskChainRef = '.sciforge/vision-runs/cu-next-07-wrapper/tui-host-run-task-chain.json';
   const secondComputerUseRequestRef = '.sciforge/vision-runs/cu-next-07-wrapper/computer-use-request.json';
   try {
-    await writeBundleLocalCuNext07Acceptance(workspace);
+    await writeProductLikeBundleLocalCuNext07Acceptance(workspace);
     await writeJson(join(workspace, denseRejectionRef), {
       schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
       rejectedTargets: ['toolbar', 'results-table'],
+    });
+    await writeJson(join(workspace, viewportRecoveryRef), {
+      schemaVersion: 'sciforge.computer-use.viewport-recovery.v1',
+      recovered: true,
+      scrollEvidenceRef,
+      viewportStateRef,
+      freshObservationRef,
+    });
+    await writeJson(join(workspace, scrollEvidenceRef), {
+      schemaVersion: 'sciforge.computer-use.scroll-evidence.v1',
+      action: 'scroll-to-visible-content',
+      coordinateSpace: 'window-local',
+    });
+    await writeJson(join(workspace, viewportStateRef), {
+      schemaVersion: 'sciforge.computer-use.viewport-state.v1',
+      status: 'current',
+      visibleContent: true,
+    });
+    await writeJson(join(workspace, freshObservationRef), {
+      schemaVersion: 'sciforge.computer-use.fresh-observation.v1',
+      traceRef: secondTraceRef,
+      status: 'current',
     });
     await writeContinuationRepairSidecars(workspace, {
       firstTraceRef,
@@ -430,7 +691,7 @@ test('Computer Use chat live complex matrix auto-continues completed case from r
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
-      caseIds: ['dense-visual-grounding'],
+      caseIds: ['viewport-recovery-state-refs'],
       completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
@@ -470,7 +731,26 @@ test('Computer Use chat live complex matrix auto-continues completed case from r
                         ? 'Completed with current-run final artifact and L3 completion-grade evidence.'
                         : 'Repair needed with complete continuation sidecars.',
                       traceRefs: [isSecond ? secondTraceRef : firstTraceRef],
-                      artifactRefs: isSecond ? [finalArtifactRef, denseRejectionRef] : [],
+                      artifactRefs: isSecond
+                        ? [
+                          finalArtifactRef,
+                          denseRejectionRef,
+                          viewportRecoveryRef,
+                          scrollEvidenceRef,
+                          viewportStateRef,
+                          freshObservationRef,
+                        ]
+                        : [],
+                      displayedRefs: isSecond
+                        ? [
+                          finalArtifactRef,
+                          denseRejectionRef,
+                          viewportRecoveryRef,
+                          scrollEvidenceRef,
+                          viewportStateRef,
+                          freshObservationRef,
+                        ]
+                        : [],
                       blockedManifestRefs: [blockedManifestRef],
                       repairHintRefs: [repairHintRef],
                       continuationRequestRefs: [continuationRequestRef],
@@ -622,7 +902,7 @@ test('Computer Use chat live complex matrix hard-times out hanging cases, writes
       out,
       caseIds: ['literature-briefing-report', 'failure-recovery-repair'],
       requestTimeoutMs: 60_000,
-      caseTimeoutMs: 20,
+      caseTimeoutMs: 250,
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
         const url = String(input);
@@ -685,7 +965,7 @@ test('Computer Use chat live complex matrix hard-times out hanging cases, writes
     assert.ok(progressBeforeSecondCase?.issues?.includes('matrix-run-incomplete:1/2'));
     assert.equal(manifest.status, 'failed');
     assert.equal(manifest.cases[0]?.status, 'failed');
-    assert.ok(manifest.cases[0]?.issues.some((issue) => issue.includes('timed out after 20ms')));
+    assert.ok(manifest.cases[0]?.issues.some((issue) => issue.includes('timed out after 250ms')));
     assert.equal(manifest.cases[1]?.status, 'passed', JSON.stringify(manifest.cases[1]?.issues));
     assert.equal(manifest.stabilityDiagnostics.retryBoundary.matrixContinuesAfterCaseFailure, true);
     assert.deepEqual(manifest.stabilityDiagnostics.retryBoundary.submittedAfterFailureCaseIds, ['failure-recovery-repair']);
@@ -812,10 +1092,12 @@ test('Computer Use chat live complex matrix retries non-completed expected-state
     });
 
     assert.equal(bodies.length, 2);
+    assert.match(String(bodies[0]?.prompt), /^\/computer-use\b/);
+    assert.match(String(bodies[1]?.prompt), /^\/computer-use\b/);
     assert.match(String(bodies[1]?.prompt), /Matrix bounded retry 1\/1/);
     assert.match(String(bodies[1]?.prompt), /Do not return completed or output-materialized/);
-    const firstTurnId = (bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
-    const retryTurnId = (bodies[1]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
+    const firstTurnId = requestCurrentTurnId(bodies[0]);
+    const retryTurnId = requestCurrentTurnId(bodies[1]);
     assert.ok(firstTurnId);
     assert.equal(retryTurnId, `${firstTurnId}-retry-1`);
     assert.equal(manifest.status, 'passed', JSON.stringify(manifest.issues));
@@ -889,7 +1171,7 @@ test('Computer Use chat live complex matrix retries completed expected-state dri
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
-      caseIds: ['dense-visual-grounding'],
+      caseIds: ['viewport-recovery-state-refs'],
       completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
@@ -917,8 +1199,22 @@ test('Computer Use chat live complex matrix retries completed expected-state dri
                         status: 'completed',
                         message: 'Completed with current-run final artifact and L3 completion-grade evidence.',
                         traceRefs: [completedRefs.traceRef],
-                        artifactRefs: [completedRefs.finalArtifactRef, completedRefs.denseRejectionRef],
-                        displayedRefs: [completedRefs.finalArtifactRef, completedRefs.denseRejectionRef],
+                        artifactRefs: [
+                          completedRefs.finalArtifactRef,
+                          completedRefs.denseRejectionRef,
+                          completedRefs.viewportRecoveryRef,
+                          completedRefs.scrollEvidenceRef,
+                          completedRefs.viewportStateRef,
+                          completedRefs.freshObservationRef,
+                        ],
+                        displayedRefs: [
+                          completedRefs.finalArtifactRef,
+                          completedRefs.denseRejectionRef,
+                          completedRefs.viewportRecoveryRef,
+                          completedRefs.scrollEvidenceRef,
+                          completedRefs.viewportStateRef,
+                          completedRefs.freshObservationRef,
+                        ],
                         runTaskChainRefs: [completedRefs.runTaskChainRef],
                       },
                     }]
@@ -967,8 +1263,8 @@ test('Computer Use chat live complex matrix retries completed expected-state dri
     assert.match(String(bodies[1]?.prompt), /Matrix bounded retry 1\/1/);
     assert.match(String(bodies[1]?.prompt), /observed needs-confirmation instead of expected completed/);
     assert.match(String(bodies[1]?.prompt), /Return completed only/);
-    const firstTurnId = (bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
-    const retryTurnId = (bodies[1]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
+    const firstTurnId = requestCurrentTurnId(bodies[0]);
+    const retryTurnId = requestCurrentTurnId(bodies[1]);
     assert.ok(firstTurnId);
     assert.match(firstTurnId, /-turn-1$/);
     assert.equal(retryTurnId, `${firstTurnId}-retry-1`);
@@ -992,7 +1288,7 @@ test('Computer Use chat live complex matrix retries completed expected-state dri
     assert.ok(result?.retryAttempts?.[0]?.sourceRunManifest.issues.includes('expected-completed-got-needs-confirmation'));
     assert.equal(result?.retryAttempts?.[0]?.cleanupBeforeRetry.cleanupStatus, 'recorded');
     assert.equal(result?.isolation.cleanupStatus, 'recorded', JSON.stringify(result?.isolation.cleanupIssues));
-    assert.deepEqual(manifest.stabilityDiagnostics.retryBoundary.boundedRetryCaseIds, ['dense-visual-grounding']);
+    assert.deepEqual(manifest.stabilityDiagnostics.retryBoundary.boundedRetryCaseIds, ['viewport-recovery-state-refs']);
     assert.equal(manifest.stabilityDiagnostics.retryBoundary.cases[0]?.boundary, 'single-case-bounded-retry');
     assert.equal(manifest.stabilityDiagnostics.retryBoundary.cases[0]?.boundedRetryAttempts, 1);
     const retryCleanupRef = result?.retryAttempts?.[0]?.cleanupBeforeRetry.cleanupManifestRef;
@@ -1018,7 +1314,7 @@ test('Computer Use chat live complex matrix retries completed completion-grade e
       env: { ...readyEnv(), SCIFORGE_WORKSPACE_PATH: workspace },
       workspacePath: workspace,
       localConfigs: [],
-      caseIds: ['dense-visual-grounding'],
+      caseIds: ['viewport-recovery-state-refs'],
       completionEvidenceProducerIds: ['computer-use.embedded-isolated-desktop-l3'],
       now: () => new Date('2026-05-29T00:00:00.000Z'),
       fetchImpl: async (input, init) => {
@@ -1050,10 +1346,24 @@ test('Computer Use chat live complex matrix retries completed completion-grade e
                         : 'Visible artifact exists, but current-run L3 completion evidence is missing.',
                       traceRefs: [isRetry ? completedRefs.traceRef : firstTraceRef],
                       artifactRefs: isRetry
-                        ? [completedRefs.finalArtifactRef, completedRefs.denseRejectionRef]
+                        ? [
+                          completedRefs.finalArtifactRef,
+                          completedRefs.denseRejectionRef,
+                          completedRefs.viewportRecoveryRef,
+                          completedRefs.scrollEvidenceRef,
+                          completedRefs.viewportStateRef,
+                          completedRefs.freshObservationRef,
+                        ]
                         : [firstArtifactRef],
                       displayedRefs: isRetry
-                        ? [completedRefs.finalArtifactRef, completedRefs.denseRejectionRef]
+                        ? [
+                          completedRefs.finalArtifactRef,
+                          completedRefs.denseRejectionRef,
+                          completedRefs.viewportRecoveryRef,
+                          completedRefs.scrollEvidenceRef,
+                          completedRefs.viewportStateRef,
+                          completedRefs.freshObservationRef,
+                        ]
                         : [firstArtifactRef],
                       runTaskChainRefs: [isRetry ? completedRefs.runTaskChainRef : firstRunTaskChainRef],
                     },
@@ -1081,8 +1391,8 @@ test('Computer Use chat live complex matrix retries completed completion-grade e
     assert.match(String(bodies[1]?.prompt), /Matrix bounded retry 1\/1/);
     assert.match(String(bodies[1]?.prompt), /completion-grade evidence was missing or invalid/);
     assert.match(String(bodies[1]?.prompt), /Return completed only/);
-    const firstTurnId = (bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
-    const retryTurnId = (bodies[1]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId;
+    const firstTurnId = requestCurrentTurnId(bodies[0]);
+    const retryTurnId = requestCurrentTurnId(bodies[1]);
     assert.ok(firstTurnId);
     assert.equal(retryTurnId, `${firstTurnId}-retry-1`);
     assert.equal(manifest.status, 'passed', JSON.stringify(manifest.issues));
@@ -1097,7 +1407,7 @@ test('Computer Use chat live complex matrix retries completed completion-grade e
     assert.equal(result?.retryAttempts?.[0]?.sourceRunManifest.packageBridgeCompletionGrade?.status, 'missing');
     assert.equal(result?.retryAttempts?.[0]?.sourceRunManifest.liveAcceptanceBundle?.status, 'missing');
     assert.equal(result?.retryAttempts?.[0]?.cleanupBeforeRetry.cleanupStatus, 'recorded');
-    assert.deepEqual(manifest.stabilityDiagnostics.retryBoundary.boundedRetryCaseIds, ['dense-visual-grounding']);
+    assert.deepEqual(manifest.stabilityDiagnostics.retryBoundary.boundedRetryCaseIds, ['viewport-recovery-state-refs']);
     assert.equal(manifest.stabilityDiagnostics.retryBoundary.cases[0]?.boundary, 'single-case-bounded-retry');
     const retryCleanupRef = result?.retryAttempts?.[0]?.cleanupBeforeRetry.cleanupManifestRef;
     assert.ok(retryCleanupRef);
@@ -1169,7 +1479,7 @@ test('Computer Use chat live complex matrix can run cases in materialized per-ca
     assert.equal(result?.isolation.resetStatus, 'passed', JSON.stringify(result?.isolation.resetIssues));
     assert.equal(result?.isolation.workspaceSeed.kind, 'per-case-workspace-fork');
     assert.ok(result?.isolation.workspaceSeed.caseWorkspacePath?.startsWith(workspace));
-    assert.equal((bodies[0]?.uiState as { currentTurnId?: string } | undefined)?.currentTurnId, result?.isolation.currentTurnId);
+    assert.equal(requestCurrentTurnId(bodies[0]), result?.isolation.currentTurnId);
     assert.ok(result?.isolation.resetManifestRef);
     const reset = JSON.parse(
       await readFile(join(result.isolation.workspaceSeed.caseWorkspacePath!, result.isolation.resetManifestRef), 'utf8'),
@@ -1181,6 +1491,23 @@ test('Computer Use chat live complex matrix can run cases in materialized per-ca
   }
 });
 
+test('Computer Use chat live complex matrix rejects requested case isolation without a workspace root', async () => {
+  await assert.rejects(
+    runComputerUseChatLiveComplexMatrix({
+      env: {
+        ...readyEnv(),
+        SCIFORGE_WORKSPACE_PATH: '',
+      },
+      localConfigs: [],
+      caseIsolationStrategy: 'per-case-workspace-fork',
+      caseIds: ['failure-recovery-repair'],
+      now: () => new Date('2026-05-29T00:00:00.000Z'),
+      fetchImpl: async (input) => readyServiceResponse(String(input)),
+    }),
+    /--case-isolation per-case-workspace-fork requires --workspace PATH or SCIFORGE_WORKSPACE_PATH/,
+  );
+});
+
 test('Computer Use chat live complex matrix aggregate selects passed split manifests per case', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sciforge-complex-matrix-aggregate-'));
   const passedA = matrixManifestFixture('2026-05-29T00:00:00.000Z', [
@@ -1189,11 +1516,14 @@ test('Computer Use chat live complex matrix aggregate selects passed split manif
   ]);
   const passedB = matrixManifestFixture('2026-05-29T00:01:00.000Z', [
     caseFixture('table-chart-analysis-report', 'passed', 'isolated-L3'),
-    caseFixture('web-research-email-draft-stop', 'passed', 'package-local'),
+    caseFixture('web-research-email-draft-stop', 'passed', 'isolated-L1'),
     caseFixture('file-organize-index', 'passed', 'isolated-L3'),
-    caseFixture('failure-recovery-repair', 'passed', 'package-local'),
-    caseFixture('high-risk-approval-chain', 'passed', 'package-local'),
-    caseFixture('dense-visual-grounding', 'passed', 'isolated-L3'),
+    caseFixture('terminal-notebook-artifact-validation', 'passed', 'isolated-L3'),
+    caseFixture('cross-app-document-preview', 'passed', 'isolated-L3'),
+    caseFixture('viewport-recovery-state-refs', 'passed', 'isolated-L3'),
+    caseFixture('failure-recovery-repair', 'passed', 'isolated-L1'),
+    caseFixture('high-risk-approval-chain', 'passed', 'isolated-L1'),
+    caseFixture('dense-visual-grounding', 'passed', 'isolated-L1'),
   ]);
   const first = join(dir, 'first.json');
   const second = join(dir, 'second.json');
@@ -1205,7 +1535,7 @@ test('Computer Use chat live complex matrix aggregate selects passed split manif
   });
 
   assert.equal(aggregate.status, 'passed', aggregate.issues.join('\n'));
-  assert.equal(aggregate.cases.length, 7);
+  assert.equal(aggregate.cases.length, 10);
   assert.deepEqual(aggregate.issues, []);
   assert.equal(
     aggregate.cases.find((item) => item.id === 'table-chart-analysis-report')?.sourceManifestRef,
@@ -1216,6 +1546,79 @@ test('Computer Use chat live complex matrix aggregate selects passed split manif
     '.sciforge/vision-runs/literature-briefing-report/isolated-desktop-l3-workflow-evidence.json',
   );
   assert.equal(aggregate.completionPolicy.aggregateRequiresEveryCasePassed, true);
+});
+
+test('Computer Use chat live complex matrix aggregate rejects diagnostic-only passed non-completed cases', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sciforge-complex-matrix-aggregate-diagnostic-'));
+  const manifestPath = join(dir, 'diagnostic-non-completed.json');
+  const cases = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.map((item) => caseFixture(
+    item.id,
+    'passed',
+    item.id === 'high-risk-approval-chain'
+      ? 'package-local'
+      : item.expectedStatus === 'completed'
+        ? 'isolated-L3'
+        : 'isolated-L1',
+  ));
+  await writeFile(manifestPath, `${JSON.stringify(matrixManifestFixture('2026-05-29T00:00:00.000Z', cases), null, 2)}\n`);
+
+  const aggregate = await aggregateComputerUseChatLiveComplexMatrixManifests([manifestPath], {
+    now: () => new Date('2026-05-29T00:01:00.000Z'),
+  });
+
+  const highRisk = aggregate.cases.find((item) => item.id === 'high-risk-approval-chain');
+  assert.equal(aggregate.status, 'failed');
+  assert.equal(highRisk?.status, 'failed');
+  assert.ok(highRisk?.issues.includes('matrix-diagnostic-only-evidence-kind:package-local'));
+  assert.ok(aggregate.issues.includes('high-risk-approval-chain:matrix-diagnostic-only-evidence-kind:package-local'));
+});
+
+test('Computer Use chat live complex matrix aggregate preserves diagnostic-only product blockers for failed cases', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sciforge-complex-matrix-aggregate-blockers-'));
+  const manifestPath = join(dir, 'failed-product-blockers.json');
+  const failed = caseFixture(
+    'literature-briefing-report',
+    'failed',
+    'package-local',
+    [
+      'missing-computer-use-tui-host-actions-event',
+      'missing-gui-present-or-gui-ask-user',
+      'missing-vision-trace-ref',
+      'missing-tui-host-run-task-chain-ref',
+      'completed-run-missing-artifact-ref',
+      'expected-completed-got-repair-needed',
+    ],
+  );
+  const failedRunManifest = failed.runManifest as Record<string, unknown>;
+  failedRunManifest.eventSummaries = [{
+    type: 'current-plan',
+    detailExcerpt: 'Computer Use terminal text is routed to Codex Runtime/native Computer Use package bridge.',
+  }];
+  failedRunManifest.visibleStatus = 'repair-needed';
+  failedRunManifest.failureDiagnostics = [{
+    kind: 'package-bridge-repair-needed',
+    summary: 'Computer Use package bridge returned repair-needed after submission: failedStage=plan; reason=plannerText=message:no,delta:no,emptyFinal:yes',
+    refs: ['.sciforge/vision-runs/literature-briefing-report/blocked-manifest.json'],
+    recoverActions: ['/computer-use continue --continuation-request-ref ".sciforge/vision-runs/literature-briefing-report/continuation-request.json"'],
+  }];
+  await writeFile(manifestPath, `${JSON.stringify(matrixManifestFixture('2026-05-29T00:00:00.000Z', [failed]), null, 2)}\n`);
+
+  const aggregate = await aggregateComputerUseChatLiveComplexMatrixManifests([manifestPath], {
+    now: () => new Date('2026-05-29T00:01:00.000Z'),
+  });
+
+  const item = aggregate.cases.find((candidate) => candidate.id === 'literature-briefing-report');
+  assert.equal(aggregate.status, 'failed');
+  assert.equal(item?.status, 'failed');
+  assert.ok(item?.issues.includes('expected-completed-got-repair-needed'));
+  assert.ok(aggregate.issues.includes('literature-briefing-report:expected-completed-got-repair-needed'));
+  const categories = item?.diagnosticBlockers.map((blocker) => blocker.category) ?? [];
+  assert.deepEqual(categories.sort(), ['current-run-l3', 'expected-state', 'native-host-evidence', 'planner-route']);
+  assert.ok(item?.diagnosticBlockers.every((blocker) => blocker.diagnosticOnly === true));
+  assert.ok(item?.diagnosticBlockers.some((blocker) => (
+    blocker.category === 'planner-route'
+    && blocker.refs.includes('.sciforge/vision-runs/literature-briefing-report/blocked-manifest.json')
+  )));
 });
 
 async function writeNeedsConfirmationSidecars(workspace: string, input: {
@@ -1289,22 +1692,56 @@ async function writeDenseGroundingCompletedSidecars(workspace: string): Promise<
   traceRef: string;
   finalArtifactRef: string;
   denseRejectionRef: string;
+  viewportRecoveryRef: string;
+  scrollEvidenceRef: string;
+  viewportStateRef: string;
+  freshObservationRef: string;
   runTaskChainRef: string;
   acceptanceManifestRef: string;
   completionEvidenceRef: string;
 }> {
-  await writeBundleLocalCuNext07Acceptance(workspace);
+  await writeProductLikeBundleLocalCuNext07Acceptance(workspace);
   const runDirRef = '.sciforge/vision-runs/cu-next-07-wrapper';
   const denseRejectionRef = `${runDirRef}/dense-grounding-rejections.json`;
+  const viewportRecoveryRef = `${runDirRef}/viewport-recovery.json`;
+  const scrollEvidenceRef = `${runDirRef}/scroll-evidence.json`;
+  const viewportStateRef = `${runDirRef}/viewport-state.json`;
+  const freshObservationRef = `${runDirRef}/fresh-observation.json`;
   await writeJson(join(workspace, denseRejectionRef), {
     schemaVersion: 'sciforge.computer-use.dense-grounding-rejections.v1',
     rejectedTargets: ['toolbar', 'results-table'],
+  });
+  await writeJson(join(workspace, viewportRecoveryRef), {
+    schemaVersion: 'sciforge.computer-use.viewport-recovery.v1',
+    recovered: true,
+    beforeStateRef: viewportStateRef,
+    scrollEvidenceRef,
+    freshObservationRef,
+  });
+  await writeJson(join(workspace, scrollEvidenceRef), {
+    schemaVersion: 'sciforge.computer-use.scroll-evidence.v1',
+    action: 'scroll-to-visible-content',
+    coordinateSpace: 'window-local',
+  });
+  await writeJson(join(workspace, viewportStateRef), {
+    schemaVersion: 'sciforge.computer-use.viewport-state.v1',
+    status: 'current',
+    visibleContent: true,
+  });
+  await writeJson(join(workspace, freshObservationRef), {
+    schemaVersion: 'sciforge.computer-use.fresh-observation.v1',
+    traceRef: `${runDirRef}/vision-trace.json`,
+    status: 'current',
   });
   return {
     runDirRef,
     traceRef: `${runDirRef}/vision-trace.json`,
     finalArtifactRef: `${runDirRef}/dense-grounding-export.csv`,
     denseRejectionRef,
+    viewportRecoveryRef,
+    scrollEvidenceRef,
+    viewportStateRef,
+    freshObservationRef,
     runTaskChainRef: `${runDirRef}/tui-host-run-task-chain.json`,
     acceptanceManifestRef: `${runDirRef}/cu-user-acceptance-manifest.json`,
     completionEvidenceRef: `${runDirRef}/isolated-desktop-l3-workflow-evidence.json`,
@@ -1427,9 +1864,105 @@ async function writeContinuationComputerUseRequest(workspace: string, input: {
   });
 }
 
+async function writeProductLikeBundleLocalCuNext07Acceptance(workspace: string): Promise<string> {
+  const manifestPath = await writeBundleLocalCuNext07Acceptance(workspace);
+  const acceptance = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>;
+  const runDir = dirname(manifestPath);
+  const finalArtifactRef = stringValue(acceptance.finalArtifactRef) ?? 'dense-grounding-export.csv';
+  const artifactValidationRef = stringValue(acceptance.artifactValidationRef)
+    ?? 'evidence/l3/isolated-l3-session/filesystem-root/out/source-summary.docx.validation.json';
+  await writeJson(join(runDir, artifactValidationRef), productLikeArtifactValidationRecord({
+    artifactValidationRef,
+    finalArtifactRef,
+    contentRefs: uniqueStrings([
+      finalArtifactRef,
+      ...stringList(recordValue(acceptance.guiPresent).artifactRefs),
+      ...stringList(recordValue(acceptance.guiPresent).displayedRefs),
+    ]),
+    sourceRefs: uniqueStrings([
+      ...stringList(recordValue(acceptance.screenshotRefs).before),
+      ...stringList(recordValue(acceptance.screenshotRefs).after),
+      ...stringList(acceptance.focusCropRefs),
+      ...stringList(acceptance.groundingDiagnosticsRefs),
+    ]),
+  }));
+  return manifestPath;
+}
+
+function productLikeArtifactValidationRecord(input: {
+  artifactValidationRef: string;
+  finalArtifactRef: string;
+  contentRefs: string[];
+  sourceRefs: string[];
+}): Record<string, unknown> {
+  const contentRefs = uniqueStrings([input.finalArtifactRef, ...input.contentRefs]);
+  const sourceRefs = uniqueStrings(input.sourceRefs.length ? input.sourceRefs : ['vision-trace.json']);
+  return {
+    schemaVersion: 'sciforge.computer-use.artifact-validation.v1',
+    status: 'passed',
+    ok: true,
+    diagnosticOnly: false,
+    packageDiagnosticOnly: false,
+    productAcceptanceEvidence: true,
+    artifactValidationRef: input.artifactValidationRef,
+    finalArtifactRef: input.finalArtifactRef,
+    artifactRef: input.finalArtifactRef,
+    artifactRefs: [input.finalArtifactRef],
+    contentRefs,
+    checkedRefs: contentRefs,
+    sourceRefs,
+    format: 'csv',
+    validator: 'sciforge-generic-csv-artifact-contract-validator',
+    sha256: '1'.repeat(64),
+    bytes: 32,
+    currentRunCausality: true,
+    metadata: {
+      schemaVersion: 'sciforge.computer-use.artifact-validation.metadata.v1',
+      generatedBy: 'sciforge-product-smoke-format-validator',
+      validationScope: 'current-run-product-smoke-record',
+      diagnosticOnly: false,
+      packageDiagnosticOnly: false,
+      productAcceptanceEvidence: true,
+      finalArtifactRef: input.finalArtifactRef,
+      contentRefs,
+      sourceRefs,
+    },
+  };
+}
+
 async function writeJson(path: string, payload: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function assertIncludesAll(actual: string[] | undefined, expected: string[]): void {
+  assert.ok(actual);
+  for (const item of expected) {
+    assert.ok(actual.includes(item), `${item} missing from ${JSON.stringify(actual)}`);
+  }
+}
+
+function requestCurrentTurnId(body: Record<string, unknown> | undefined): string | undefined {
+  const auditMetadata = body?.auditMetadata as Record<string, unknown> | undefined;
+  const guiLocalProjection = auditMetadata?.guiLocalProjection as Record<string, unknown> | undefined;
+  const currentTurnId = guiLocalProjection?.currentTurnId;
+  return typeof currentTurnId === 'string' ? currentTurnId : undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))];
 }
 
 function readyEnv(): NodeJS.ProcessEnv {
@@ -1439,7 +1972,6 @@ function readyEnv(): NodeJS.ProcessEnv {
     SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
     SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
     SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-    SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:18081',
     SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
     SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
     SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',
@@ -1474,7 +2006,7 @@ function matrixManifestFixture(checkedAt: string, cases: Array<Record<string, un
 function caseFixture(
   id: string,
   status: 'passed' | 'failed',
-  evidenceKind: 'isolated-L3' | 'package-local',
+  evidenceKind: 'isolated-L1' | 'isolated-L3' | 'package-local',
   issues: string[] = [],
 ) {
   const item = COMPUTER_USE_CHAT_LIVE_COMPLEX_MATRIX_CASES.find((candidate) => candidate.id === id);
@@ -1492,11 +2024,11 @@ function caseFixture(
     liveAcceptanceCandidate: evidenceKind === 'isolated-L3',
     evidenceClassification: {
       kind: evidenceKind,
-      canCompleteBackend: evidenceKind === 'isolated-L3',
+      canCompleteBackend: evidenceKind === 'isolated-L1',
       canCompleteL3Workflow: evidenceKind === 'isolated-L3',
       blockedReasons: [],
       rejectedShortcuts: [],
-      claimLimit: evidenceKind === 'isolated-L3' ? 'can complete' : 'diagnostic only',
+      claimLimit: evidenceKind === 'package-local' ? 'diagnostic only' : 'desktop product path',
     },
     runManifest: {
       schemaVersion: 'sciforge.computer-use.chat-live-e2e.v1',
@@ -1566,9 +2098,17 @@ function readyServiceResponse(url: string): Response {
       },
     });
   }
-  if (url.endsWith('/healthz')) return jsonResponse({ ok: true });
-  if (url.endsWith('/health')) return jsonResponse({ ok: true, ready: true });
+  if (urlPathname(url).endsWith('/healthz')) return jsonResponse({ ok: true });
+  if (urlPathname(url).endsWith('/health')) return jsonResponse({ ok: true, ready: true });
   return htmlResponse('<!doctype html><html><body>SciForge</body></html>');
+}
+
+function urlPathname(url: string): string {
+  try {
+    return new URL(url).pathname;
+  } catch {
+    return url.split(/[?#]/, 1)[0] ?? url;
+  }
 }
 
 function htmlResponse(body: string): Response {

@@ -9,7 +9,7 @@ import {
   skillPromotionShouldPropose,
   skillRuntimeLanguageForManifest,
   skillRuntimeTaskFileNameForManifest,
-} from '../../packages/skills/runtime-policy';
+} from '../../packages/skills/runtime-policy.js';
 import { buildCapabilityEvolutionCandidateSet } from './capability-evolution-ledger.js';
 import type { GatewayRequest, SkillAvailability, SkillManifest, SkillPromotionProposal, ToolPayload } from './runtime-types.js';
 import { loadSkillRegistry } from './skill-registry.js';

@@ -1,16 +1,18 @@
 import type { BrowserHostSessionState } from './browser-host-session.js';
 import {
   createWindowActionSession,
+  createWindowActionSessionFromAnnotationMetadata,
   pauseWindowActionSession,
   removeWindowActionSession,
   stopWindowActionSession,
   type WindowActionEvidenceRef,
+  type WindowActionSessionFromAnnotationOptions,
   type WindowActionSession,
 } from './window-action-session.js';
 
 type MaybeBrowserHostSession = Partial<BrowserHostSessionState> & {
   id?: string;
-  status?: string;
+  status?: BrowserHostSessionState['status'];
 };
 
 export interface WindowActionSessionStoreBrowserHostInput {
@@ -23,6 +25,12 @@ export interface WindowActionSessionStoreBrowserHostInput {
   nativeBridgeReady?: boolean;
   nativeSurfaceReady?: boolean;
   abortSignal?: AbortSignal;
+}
+
+export interface WindowActionSessionStoreAnnotationOptions extends WindowActionSessionFromAnnotationOptions {
+  refs?: unknown[];
+  targetRefs?: unknown[];
+  observationRefs?: unknown[];
 }
 
 export interface WindowActionSessionStoreUpsertOptions {
@@ -73,6 +81,10 @@ export interface WindowActionSessionStore {
   getActiveByRef(ref: string): WindowActionSessionStoreEntry | undefined;
   materializeForBrowserHostSession(
     input: WindowActionSessionStoreBrowserHostInput,
+  ): WindowActionSessionStoreMaterializeResult;
+  materializeForAnnotationMetadata(
+    metadata: unknown,
+    options?: WindowActionSessionStoreAnnotationOptions,
   ): WindowActionSessionStoreMaterializeResult;
   pause(ref: string, options?: WindowActionSessionStoreControlOptions): WindowActionSessionStoreControlResult;
   stop(ref: string, options?: WindowActionSessionStoreControlOptions): WindowActionSessionStoreControlResult;
@@ -192,6 +204,29 @@ class InMemoryWindowActionSessionStore implements WindowActionSessionStore {
         ? `WindowActionSession for BrowserHostSession ${sessionId}: ${safeSummary(input.browserHostSession.title)}`
         : `WindowActionSession for BrowserHostSession ${sessionId}`,
     );
+  }
+
+  materializeForAnnotationMetadata(
+    metadata: unknown,
+    options: WindowActionSessionStoreAnnotationOptions = {},
+  ): WindowActionSessionStoreMaterializeResult {
+    const created = createWindowActionSessionFromAnnotationMetadata(metadata, options);
+    if (created.status !== 'created') {
+      return blockedMaterializeResult(created.reason ?? created.candidate.reason ?? created.status);
+    }
+    const observationRefs = sanitizedRefs([
+      ...created.candidate.evidenceRefs.map((item) => item.ref),
+      ...unknownList(options.observationRefs),
+    ]);
+    return this.upsert(created.session, {
+      refs: options.refs,
+      targetRefs: [
+        created.session.windowRef,
+        ...unknownList(options.targetRefs),
+      ],
+      observationRefs,
+      timestamp: options.timestamp,
+    });
   }
 
   pause(ref: string, options: WindowActionSessionStoreControlOptions = {}): WindowActionSessionStoreControlResult {
@@ -372,7 +407,7 @@ function safeRuntimeOwnerRef(value: unknown): value is string {
   if (!ref || ref.length > 240) return false;
   if (/^(?:gui(?:\.|:)|ui:|gui-viewer:|screen-pane:|fixture:|replay:|replay-fixture:|snapshot-fixture:)/i.test(ref)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(ref)) return false;
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|native-adapter:|desktop-native:|permission:|approval:|cancel:|stop:|lease:|adapter-registry:|window:|action-ledger:|evidence:|workEvidence:|native-host:|audit:)/i.test(ref);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|window-action-flow:|computer-use:|native-adapter:|desktop-native:|desktop-window:|desktop-annotation:|permission:|approval:|cancel:|stop:|lease:|input-lease:|focus-lease:|scoped-input-adapter:|actor-cursor:|adapter-registry:|window:|window-action-ref:|action-ledger:|evidence:|workEvidence:|native-host:|audit:|accessibility-ui-automation:|shared-system-input:|executor-event:)/i.test(ref);
 }
 
 function safeEvidenceKind(value: unknown): value is string {

@@ -2,6 +2,7 @@ import type {
   CodexAgentHostComputerUseActMaterializer,
   CodexAgentHostComputerUseActMaterializerInput,
   CodexAgentHostComputerUseActMaterializerResult,
+  CodexAgentHostComputerUseCompletionTruth,
   CodexAgentHostRuntimeTruth,
   NormalizedCodexAgentHostInput,
 } from './agent-host-turn-loop.js';
@@ -15,6 +16,7 @@ import { completionTruthFromPackageBridgeWorkEvidence } from './agent-host-packa
 export interface ComputerUseActLoopMaterializerOptions {
   baseMaterializer?: CodexAgentHostComputerUseActMaterializer;
   maxSteps?: number;
+  requireUserLevelCompletionTruth?: boolean;
   refreshRuntimeTruth?: (input: ComputerUseActLoopStepInput) => Promise<CodexAgentHostRuntimeTruth | undefined> | CodexAgentHostRuntimeTruth | undefined;
   evaluatePreflight?: (input: ComputerUseActLoopStepInput) => Promise<ComputerUsePreflightResult> | ComputerUsePreflightResult;
 }
@@ -128,11 +130,12 @@ export function createComputerUseActLoopMaterializer(
       aggregate.artifacts.push(...safeRecords(stepResult.artifacts));
       aggregate.uiManifest.push(...safeRecords(stepResult.uiManifest));
       aggregate.claims.push(...safeRecords(stepResult.claims));
-      const completionTruth = stepResult.completionTruth
+      const candidateCompletionTruth = stepResult.completionTruth
         ?? completionTruthFromPackageBridgeWorkEvidence({
           evidenceRefs: aggregate.evidenceRefs,
           workEvidence: stepResult.workEvidence,
         });
+      const completionTruth = acceptedCompletionTruth(candidateCompletionTruth, options);
       if (stepResult.status !== 'completed') {
         return {
           ...stepResult,
@@ -159,6 +162,17 @@ export function createComputerUseActLoopMaterializer(
     }
     return blockedLoopResult(input, `Computer Use Act loop blocked: maxSteps budget (${maxSteps}) was exhausted before completion evidence was attached.`, aggregate.evidenceRefs);
   };
+}
+
+function acceptedCompletionTruth(
+  completionTruth: CodexAgentHostComputerUseCompletionTruth | undefined,
+  options: ComputerUseActLoopMaterializerOptions,
+): CodexAgentHostComputerUseCompletionTruth | undefined {
+  if (!completionTruth) return undefined;
+  if (!options.requireUserLevelCompletionTruth) return completionTruth;
+  return completionTruth.scope === 'user-task' || completionTruth.scope === 'workflow'
+    ? completionTruth
+    : undefined;
 }
 
 async function refreshRuntimeTruth(

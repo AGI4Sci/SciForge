@@ -3,7 +3,7 @@ import {
   COMPUTER_USE_CONTROL_PLANE_ARTIFACT_TYPE,
   COMPUTER_USE_CONTROL_PLANE_COMPONENT_ID,
   COMPUTER_USE_CONTROL_PLANE_SCHEMA_VERSION,
-} from './contract';
+} from './contract.js';
 
 export const manifest: UIComponentManifest = {
   packageName: '@sciforge-ui/computer-use-control-plane',

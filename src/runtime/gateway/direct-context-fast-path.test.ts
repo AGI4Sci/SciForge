@@ -85,6 +85,39 @@ test('direct context fast path yields to backend when prompt negates answer-only
   assert.equal(directContextFastPathPayload(request), undefined);
 });
 
+test('ambiguous update-me wording stays read-only when prompt asks selected artifact status only', () => {
+  const request: GatewayRequest = {
+    skillDomain: 'literature',
+    prompt: 'Update me on the current report status using only the selected artifact. Do not rewrite or save files.',
+    agentServerBaseUrl: 'http://agentserver.example.test',
+    artifacts: [{
+      id: 'selected-report',
+      type: 'research-report',
+      title: 'Selected Report',
+      data: {
+        markdown: 'The selected report status is partial: evidence matrix exists, but PDF verification is pending.',
+      },
+      metadata: { reportRef: '.sciforge/task-results/selected-report.md' },
+    }],
+    uiState: {
+      currentReferences: [{
+        id: 'selected-report-ref',
+        kind: 'artifact',
+        ref: 'artifact:selected-report',
+        title: 'Selected Report',
+        summary: 'The selected report status is partial: evidence matrix exists, but PDF verification is pending.',
+      }],
+    },
+  };
+
+  const payload = directContextFastPathPayload(request);
+
+  assert.ok(payload);
+  assert.equal(payload.executionUnits[0]?.tool, 'sciforge.direct-context-fast-path');
+  assert.equal(payload.displayIntent?.taskOutcome, 'satisfied');
+  assert.match(payload.message, /PDF verification is pending|partial/i);
+});
+
 test('context follow-up summarizes risk claims from current context instead of dumping refs', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',

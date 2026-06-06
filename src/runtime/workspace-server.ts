@@ -275,11 +275,17 @@ const workspaceServer = createServer(async (req, res) => {
     return;
   }
   if (url.pathname === CODEX_RUNTIME_STREAM_PATH) {
-    const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
-    if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
-      agentHostRuntimeTruthResolver,
-      computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
-    })) return;
+    try {
+      const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
+      if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
+        agentHostRuntimeTruthResolver,
+        computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
+      })) return;
+      writeJson(res, 404, { ok: false, error: 'Runtime Codex route not found.' });
+    } catch (err) {
+      writeJson(res, 503, { ok: false, error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
   }
   if (url.pathname === '/api/sciforge/instance/stable-version' && req.method === 'GET') {
     try {

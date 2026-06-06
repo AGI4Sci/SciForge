@@ -1,6 +1,6 @@
 import {
   renderImageEvidenceViewer,
-  type ImageEvidencePayload,
+  type ImageEvidencePayload as PresentationImageEvidencePayload,
 } from '../../../../../packages/presentation/components';
 import { CheckCircle2, Copy, Eye, History, PencilLine, X } from 'lucide-react';
 import { useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
@@ -23,6 +23,13 @@ export interface RightPaneImageEvidenceSlot {
   title: string;
   props: Record<string, unknown>;
 }
+
+type ImageEvidencePayload = PresentationImageEvidencePayload & {
+  beforeScreenshotRef?: string;
+  afterScreenshotRef?: string;
+  artifactPreviewRef?: string;
+  actionTimelineRefs?: string[];
+};
 
 export function rightPaneImageEvidenceSlot({
   payload,
@@ -443,9 +450,58 @@ export function RightPaneImageEvidenceTool({
         config,
         session,
       })}
+      <ImageEvidenceRefPanel payload={payload} />
       {portalImageEvidenceModal(originalImagePreviewModal)}
     </div>
   );
+}
+
+function ImageEvidenceRefPanel({ payload }: { payload?: ImageEvidencePayload }) {
+  const groups = imageEvidenceRefGroups(payload);
+  if (!groups.length) return null;
+  return (
+    <section className="image-evidence-ref-panel" data-image-evidence-ref-panel="true" aria-label="Image evidence references">
+      {groups.map((group) => (
+        <div className="image-evidence-ref-group" data-image-evidence-ref-group={group.key} key={group.key}>
+          <span>{group.label}</span>
+          <div>
+            {group.refs.map((ref) => (
+              <code data-image-evidence-ref={ref} key={ref}>{ref}</code>
+            ))}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
+function imageEvidenceRefGroups(payload: ImageEvidencePayload | undefined) {
+  if (!payload) return [];
+  const groups = [
+    { key: 'annotation-crop', label: 'Annotation crop', refs: safeImageEvidenceRefs(payload.annotationRefs) },
+    { key: 'before-screenshot', label: 'Before screenshot', refs: safeImageEvidenceRefs(payload.beforeScreenshotRef) },
+    { key: 'after-screenshot', label: 'After screenshot', refs: safeImageEvidenceRefs(payload.afterScreenshotRef) },
+    { key: 'artifact-preview', label: 'Artifact preview', refs: safeImageEvidenceRefs(payload.artifactPreviewRef) },
+    { key: 'action-timeline', label: 'Action timeline', refs: safeImageEvidenceRefs(payload.actionTimelineRefs) },
+    { key: 'provenance', label: 'Provenance', refs: safeImageEvidenceRefs(payload.provenanceRefs ?? payload.provenanceRef) },
+  ];
+  return groups.filter((group) => group.refs.length);
+}
+
+function safeImageEvidenceRefs(value: string | string[] | undefined) {
+  const refs = (Array.isArray(value) ? value : [value])
+    .map((ref) => safeImageEvidenceRef(ref))
+    .filter((ref): ref is string => Boolean(ref));
+  return Array.from(new Set(refs));
+}
+
+function safeImageEvidenceRef(value: string | undefined) {
+  const ref = value?.trim();
+  if (!ref) return undefined;
+  if (/^(?:data|blob|file|javascript):/i.test(ref)) return undefined;
+  if (/^https?:\/\//i.test(ref)) return undefined;
+  if (/^\/api\/.*(?:preview|provider|executor|route)/i.test(ref)) return undefined;
+  return ref;
 }
 
 function imageEvidenceViewStyle(state: ImageEvidenceViewState): CSSProperties {

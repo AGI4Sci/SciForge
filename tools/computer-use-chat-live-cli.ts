@@ -22,6 +22,7 @@ export interface ComputerUseChatLiveCliArgs {
   secondExpect: ComputerUseChatLiveCliExpectedStatus;
   continuation: boolean;
   approvalRetry: boolean;
+  productStrict: boolean;
   strict: boolean;
   json: boolean;
   needsConfirmation: boolean;
@@ -29,8 +30,13 @@ export interface ComputerUseChatLiveCliArgs {
 
 export interface ComputerUseChatLiveCliManifestSummary {
   status: string;
+  releaseAcceptance?: string;
   issues: string[];
   requestSubmitted: boolean;
+  productStrict?: {
+    status?: string;
+    issues?: string[];
+  };
   approvalRequestRefs?: string[];
   riskAuditRefs?: string[];
   deniedExecutionProof?: {
@@ -52,6 +58,7 @@ export function parseComputerUseChatLiveCliArgs(args: string[]): ComputerUseChat
     secondExpect: 'repair-needed',
     continuation: false,
     approvalRetry: false,
+    productStrict: false,
     strict: false,
     json: false,
     needsConfirmation: false,
@@ -60,6 +67,7 @@ export function parseComputerUseChatLiveCliArgs(args: string[]): ComputerUseChat
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === '--strict') parsed.strict = true;
+    else if (arg === '--product-strict') parsed.productStrict = true;
     else if (arg === '--json') parsed.json = true;
     else if (arg === '--continuation') parsed.continuation = true;
     else if (arg === '--approval-retry' || arg === '--confirmed-approval-retry') {
@@ -126,6 +134,13 @@ export function computerUseChatLiveCliStrictPassed(input: {
   expectedStatus: ComputerUseChatLiveCliExpectedStatus;
   manifest: ComputerUseChatLiveCliManifestSummary;
 }) {
+  if (input.args.productStrict) {
+    return input.manifest.status === input.expectedStatus
+      && input.manifest.releaseAcceptance === 'desktop-product-strict'
+      && input.manifest.productStrict?.status === 'passed'
+      && input.manifest.issues.length === 0
+      && input.expectedStatus === 'completed';
+  }
   if (input.args.approvalRetry || input.args.continuation) return input.manifest.status === 'passed';
   return input.manifest.status === input.expectedStatus;
 }

@@ -1,8 +1,8 @@
 # Computer Use Action Provider
 
-本目录是 Computer Use 的唯一 action provider 真相源，包含 provider manifest、Python action loop、contract、safety gate、trace helper 和 pytest。
+本目录是 Computer Use 的 action provider 真相源，产品路径只使用 TypeScript host-port contract、WindowActionSession evidence projection 和 current-run refs。
 
-Python 包名继续是 `sciforge_computer_use`，方便旧代码和人类开发者保持稳定 import；物理目录已收敛到 `packages/actions/computer-use`。
+Python files are legacy-obsolete and cannot be referenced by product/default acceptance. `sciforge_computer_use` 目录只保留为 legacy diagnostic / historical regression / manual compatibility probe；任何 Python、pytest、Docker/noVNC、isolated desktop 或 M6 入口都必须显式标成 opt-in、diagnostic、legacy 或 historical，且不能进入普通 `verify`、product smoke 或默认 acceptance。
 
 ## 边界
 
@@ -22,8 +22,11 @@ Python 包名继续是 `sciforge_computer_use`，方便旧代码和人类开发�
 |---|---|---|
 | Agent Host -> WindowActionSession / host adapter -> Computer Use action loop -> current evidence bundle | 默认产品路径，Host 借助 CU 完成真实 GUI 工作流 | 可以，但还必须有 current-run action causality、artifact/verifier、permission/cancel refs 和 Host completion |
 | package-local fixture / host-port probe / target-bound harness | contract、stdio、trace、ledger、validator 和局部动作诊断 | 不能单独作为用户级通过 |
-| legacy VirtualAppScreen / Docker / noVNC / RDP / M6 / isolated desktop | historical regression、backend packaging、兼容性或 opt-in diagnostic | 不能替代当前 Desktop native / app-server product path |
-| semantic verifier / KV-Ground-compatible / raw provider probe | legacy 模型协议诊断 | 不能作为默认模型入口或推荐 fallback |
+| legacy VirtualAppScreen / Python / Docker / noVNC / RDP / M6 / isolated desktop | historical regression、backend packaging、兼容性或 opt-in diagnostic | 不能替代当前 Desktop native / app-server product path |
+| semantic verifier / raw provider probe | legacy 模型协议诊断 | 不能作为默认模型入口或推荐 fallback |
+
+Package bridge acceptance may preserve a completed package-only L3 bundle as `productPathClassification.tier=package-diagnostic`; that classification is evidence for bridge/package diagnostics only and must never satisfy `product-smoke`.
+The package-local semantic verifier direct-provider probe is `legacyDirectProviderDiagnosticOnly=true`, `productModelRouterCallSurface=false`, and `productDefaultAcceptanceAllowed=false`; it is not part of the CU Model Router product call surface.
 
 ## 对外交互
 
@@ -70,7 +73,7 @@ sciforge_computer_use.virtual_desktop_session.VirtualDesktopSessionBlocked
 
 `hostPorts` 是模块和平台能力的唯一接触面，负责截图、裁剪、桌面/远程/dry-run 执行、trace 写入和事件上报。高风险动作不在模块内部弹 UI；模块返回 `needs-confirmation`、`approvalRequest`、trace refs 或 audit refs，由 Agent Host 决定是否调用 `gui.ask_user`，确认后再发起新的受控调用。
 
-稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`model-router.capability.computer-use.planner`、`model-router.capability.computer-use.screenshot-translator`、`model-router.capability.computer-use.crop-translator`、`model-router.capability.computer-use.grounding-translator`、`model-router.capability.computer-use.verifier-translator`、`host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。其中 `planner` 端口只表示局部 next-action selector。所有涉及模型的端口都必须经 Model Router `/v1/responses`，用 workspace/profile role 解析 `textReasoner` 或 `translators.vision`；package 不接 provider URL、API key、raw model slug 或未注册 provider/profile。Legacy grounding adapter 只在显式配置兼容 endpoint 时作为 metadata 暴露。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
+稳定 host-port 命名来自 `provider-policy.ts`：`display-capture` / `target-window-capture`、`model-router.capability.computer-use.planner`、`model-router.capability.computer-use.screenshot-translator`、`model-router.capability.computer-use.crop-translator`、`model-router.capability.computer-use.grounding-translator`、`model-router.capability.computer-use.verifier-translator`、`host-focus-region-crop`、`<desktopPlatform>-host-port-executor`、`<desktopPlatform>-generic-gui-executor`、`workspace-file-ref-trace-writer` 和 `workspace-runtime-events`。其中 `planner` 端口只表示局部 next-action selector。所有涉及模型的端口都必须经 Model Router `/v1/responses`，用 workspace/profile role 解析 `textReasoner` 或 `translators.vision`；package 不接 provider URL、API key、raw model slug 或未注册 provider/profile。Trace handoff 目标固定为 `computer-use.trace-summary` 与 `computer-use.approval-request`，payload 只允许 refs 和 compact summary。
 
 输入证据组合和效率规则：
 
@@ -88,7 +91,7 @@ Legacy VirtualAppScreen real-driver compatibility smoke 只通过显式 opt-in s
 
 后续 runtime 集成里的局部 next-action selector 必须通过 `model-router.capability.computer-use.planner` 或 Host 暴露的等价 Model Router capability 使用统一 provider。只有明确的 transport/protocol failure（502/gateway/upstream/proxy/network/timeout 等）才允许写 blocked diagnostics；不得静默 fallback 到未注册 provider/model/profile，也不得绕过 DOM/accessibility/tool 禁令。当前 package-only 闭环不调试 runtime planner fallback。
 
-进程边界下，Agent Host 可以通过 JSON CLI 调用同一个 package loop：
+Legacy diagnostic process boundary: historical Python CLI runs can still exercise the old package loop for archaeology and manual compatibility checks, but Agent Host product/default acceptance must use the TypeScript host adapter and WindowActionSession current evidence bundle:
 
 ```bash
 python -m sciforge_computer_use --request-json '{"task":"click visible search box"}' --host-port-stdio
@@ -98,7 +101,7 @@ python -m sciforge_computer_use --request-json '{"task":"click visible search bo
 
 Runtime package bridge 会在 run bundle 内写 `tui-host-run-task-chain.json`，记录 `computer-use-request.json`、`host-ports.json`、`tool-payload.json`、`vision-trace.json` 以及可选 `gui-present.json` / `gui-ask-user.json` 的 refs，并在 trace 的 `packageBridge.tuiHostRunTaskChainRef` 暴露该清单。它还会写 refs-first sidecars：`directory-listing.json`、按需 `approval-request.json` / `risk-audit.json` / `confirmed-request.json` / `blocked-manifest.json` / `repair-hint.json` / `continuation-request.json`。这些文件只证明 Agent Host -> package `run_task` -> GUI intent metadata、审批/修复/目录索引链路，不能替代真实截图、输入日志、artifact、verifier 或 completion-grade 用户级验收。
 
-Package-local fixture 可以从文件运行，并把 refs-first result、trace 和本地 final artifact 写入指定目录：
+Legacy package-local fixture diagnostics can still run from files and write refs-first result、trace 和本地 final artifact 到指定目录：
 
 ```bash
 python -m sciforge_computer_use \
@@ -109,7 +112,7 @@ python -m sciforge_computer_use \
 
 该命令只证明 CLI、fixture host ports、trace/result refs、budget debit 和 final artifact evidence guard 的 package-local plumbing。它不会证明真实桌面输入，也不能替代 runtime、GUI、CU-NEXT 或 release acceptance。
 
-插件发现面可以用 package-local probe 直接验证 manifest、Python API 和 CLI fixture 调用：
+Legacy discovery diagnostics can use the package-local probe to validate manifest、retired Python API 和 CLI fixture 调用：
 
 ```bash
 python -m sciforge_computer_use.plugin_probe \
@@ -119,7 +122,7 @@ python -m sciforge_computer_use.plugin_probe \
 
 该 probe 解析 `action-provider.manifest.json`，核对 `run_task` / `runTask` / `getManifest` 以及 repair、viewport、target-bound real-window evidence、isolated desktop L1/L3 evidence、target-bound adapter 等公开 API symbol，解析 manifest 中声明的 package-local builder/validator/response-compat dotted paths，检查 entrypoint path/module/CLI 是否 package-local，并对 entrypoint probe 与 `hostPortsContract.diagnosticProbes` 里的 `python -m sciforge_computer_use...` 命令做 import-only 校验。它可选用 stdin request + fixture JSON 调一次 `python -m sciforge_computer_use`。输出 `plugin-probe-manifest.json` 和 `plugin-probe-cli-result.json`；manifest 只写 refs/summary，不内联完整 action manifest 或 raw CLI stdout，也不触碰 SciForge runtime / GUI。该 probe 始终是 discovery diagnostic，`userAcceptanceEligible=false`，不能声明 L1/L3 完成。
 
-Codex native tool / MCP 调试入口也保持 package-local，可先验证 `get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs` 的最小闭环：
+Retired Codex native tool / MCP diagnostics remain package-local only. They can validate `get_app_state` / `observe`、`click`、`type_text`、`scroll`、`press_key`、`propose_action`、`execute_scoped_action` 和 `get_replay_refs` 的最小闭环, but they are not a product executor path:
 
 ```bash
 python -m sciforge_computer_use.native_tool \
@@ -128,9 +131,9 @@ python -m sciforge_computer_use.native_tool \
   --output-dir /tmp/sciforge-computer-use-native-tool
 ```
 
-Repo 根目录的 `plugin.json`、`.mcp.json` 和 `packages/actions/computer-use/skills/sciforge-computer-use/SKILL.md` 声明 `sciforge.computer-use`，让 Codex CLI / app-server 以本地 plugin + MCP + skill 形态发现它。该入口是 Codex app-server/native plugin 的 contract probe，不是 GUI executor。`get_app_state` / `observe` 和 `get_replay_refs` 只写 refs；`click` / `type_text` / `scroll` / `press_key` 是 L2 友好的 mutating facade，会在 package 内部投影为 scoped action proposal、executor lease、executor event 和 evidence refs；`propose_action` 对高风险动作返回 `needs-confirmation` 和 approval refs；`execute_scoped_action` 必须携带 screen/window/actor/cursor/proposal/evidence/grounding provenance，且在 package-local debug 模式只写 executor-event / blocked manifest refs，不移动共享系统鼠标键盘。payload validator 拒绝缺 `screenId`、裸全局坐标、缺 app state/screenshot/accessibility/evidence/grounding refs、inline raw screenshot/base64/data URL、provider raw payload、Authorization/token/secret/password，以及 provider route、GUI private state、scheduler internals、executor adapter ref、lease id/scope 等公共参数。真实 mutating action 仍必须由 L2 Host 通过 scoped executor adapter 执行。
+Repo 根目录的默认 `.mcp.json` 不再声明 `sciforge-computer-use`。Retired Python MCP/native-tool 只能作为手动 legacy diagnostic 运行，不能被 Codex CLI / app-server 作为默认 plugin、MCP、skill 或 product executor 自动发现。`get_app_state` / `observe` 和 `get_replay_refs` 只写 refs；`click` / `type_text` / `scroll` / `press_key` 在 legacy diagnostic 模式下只投影 scoped action proposal、executor lease、executor event 和 evidence refs；`propose_action` 对高风险动作返回 `needs-confirmation` 和 approval refs；`execute_scoped_action` 必须携带 screen/window/actor/cursor/proposal/evidence/grounding provenance，且在 package-local debug 模式只写 executor-event / blocked manifest refs，不移动共享系统鼠标键盘。payload validator 拒绝缺 `screenId`、裸全局坐标、缺 app state/screenshot/accessibility/evidence/grounding refs、inline raw screenshot/base64/data URL、provider raw payload、Authorization/token/secret/password，以及 provider route、GUI private state、scheduler internals、executor adapter ref、lease id/scope 等公共参数。真实 mutating action 必须由 TypeScript L2 Host / WindowActionSession 通过 scoped executor adapter 执行。
 
-Package-local host-port probe 可以走真实 JSONL stdio contract，由父进程实现 host ports，而不是使用内置 fixture host：
+Legacy package-local host-port probe 可以走真实 JSONL stdio contract，由父进程实现 host ports，而不是使用内置 fixture host：
 
 ```bash
 python -m sciforge_computer_use.host_ports_probe \
@@ -141,7 +144,7 @@ python -m sciforge_computer_use.host_ports_probe \
 
 该 probe 会写出 `host-port-probe-manifest.json`、`vision-trace.json` 和 `computer-use-result.json`。默认禁止 shared system input；scripted execution 只有在显式 `--allow-shared-input` 时才允许声明 `inputChannel=shared-system`。当前 probe 仍是 package-local scripted host ports，不等同于真实桌面输入证据，但它验证了独立插件的 stdio host-port 边界和 B 类目录证据 guard。
 
-Package-local virtual desktop host-port probe 走同一个真实 child stdio loop，但 host ports 由 package-local virtual desktop 提供，`execute` 绑定 `VirtualInputAdapter`，只更新 virtual pointer / keyboard / input state refs：
+Legacy package-local virtual desktop host-port probe 走同一个真实 child stdio loop，但 host ports 由 package-local virtual desktop 提供，`execute` 绑定 `VirtualInputAdapter`，只更新 virtual pointer / keyboard / input state refs：
 
 ```bash
 python -m sciforge_computer_use.virtual_desktop_probe \
@@ -152,7 +155,7 @@ python -m sciforge_computer_use.virtual_desktop_probe \
 
 Repository fixtures 包括 `fixtures/virtual-desktop-six-step.json` 和 `fixtures/virtual-desktop-ambiguous-before-after.json`。该 probe 产出 `virtual-desktop-probe-manifest.json`、`computer-use-result.json`、`vision-trace.json`、screenshot refs、artifact refs、final artifact refs、file-list refs 和 virtual input state refs；定位失败时还会写 `blocked-repair-manifest.json`，其中包含 `failedStage`、`locateFailures`、`viewportFailures`、trace/screenshot refs、scenario ambiguity 和 virtual input isolation 状态，方便抽出最小 disambiguation 或 viewport recovery probe 后重跑。即使 scenario 返回 `completed`，它仍是 state-only simulated input、`realWindowEvidence=false` 的诊断证据，不是真实桌面输入或真实窗口完成证据，不能完成 PROJECT 的 B/C/verifier。
 
-Package-owned target-bound window host-port probe 也走同一个真实 child stdio loop，但 parent host 拥有一个声明式目标窗口和 isolated executor。该 executor 只接受 generic actions（click / double_click / focus / type_text / press_key / hotkey / scroll / save），只改变这个 package-owned target environment，并写出 adapter manifest、target-window ref、binding proof、ready desktop preflight、result/trace refs 和 target-bound real-window evidence：
+Legacy package-owned target-bound window host-port probe 也走同一个真实 child stdio loop，但 parent host 拥有一个声明式目标窗口和 isolated executor。该 executor 只接受 generic actions（click / double_click / focus / type_text / press_key / hotkey / scroll / save），只改变这个 package-owned target environment，并写出 adapter manifest、target-window ref、binding proof、ready desktop preflight、result/trace refs 和 target-bound real-window evidence：
 
 ```bash
 python -m sciforge_computer_use.target_bound_window_host_probe \
@@ -280,7 +283,7 @@ docker run --rm \
   --resource-lock-root /tmp/sciforge-computer-use-l1-locks
 ```
 
-历史严格 Docker diagnostic 是 `npm run smoke:cu-isolated-l1:docker` / `npm run smoke:cu-isolated-l3:docker`，别名分别是 `npm run smoke:cu-isolated-l1:opt-in` 和 `npm run smoke:cu-isolated-l3:opt-in`；它们会构建 package Dockerfile 并直接运行 L1/L3 `--execute`，非 completed 时返回失败。需要只跑 pytest skip-gated opt-in 回归时可用 `npm run smoke:cu-isolated-l1:pytest-opt-in`。网络受限时可用 `SCIFORGE_DOCKER_BASE_IMAGE=<mirror-or-local-python-base>` 覆盖默认 base image，也可用 `SCIFORGE_DOCKER_DEBIAN_APT_MIRROR` / `SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR` 覆盖 Debian apt 下载源，并用 `SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES` 调整 apt retry；这些只改变镜像/apt 拉取来源和重试次数，不放宽 evidence schema。若 Docker Desktop 没有共享当前 repo 路径，可把 `SCIFORGE_CU_ISOLATED_L1_EVIDENCE_DIR` 或 `SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR` 指向 Docker 可挂载的宿主机目录，例如 `/tmp/sciforge-cu-isolated-l1` 或 `/tmp/sciforge-cu-isolated-l3`；这只改变 evidence volume 的宿主机位置，不改变容器内 evidence schema。这些入口和 `.github/workflows/cu-isolated-desktop-l1.yml` 的 `workflow_dispatch` 手动 job 都不进入普通 `verify`，也不再作为 active product gate。Docker bundle manifest、Docker build log、readiness manifest 或 noVNC/RDP viewer availability 都不能单独完成 PROJECT backend；历史 completed refs 可作为 regression/historical evidence，但 active acceptance 必须由 native app-server/native plugin surface、Computer Use package contract、platform sidecar contract 和 current refs-first evidence 共同证明。最近一次历史 Docker L1 diagnostic 使用 `public.ecr.aws/docker/library/python:3.12-slim-bookworm`、清华 Debian/security apt mirror、`SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES=5` 与 host evidence dir `/tmp/sciforge-cu-isolated-l1`，产出 `status=completed` 的 `/tmp/sciforge-cu-isolated-l1/l1/isolated-desktop-l1-smoke-probe-manifest.json`；历史 Docker L3 diagnostic 使用同类 build 参数和 `/tmp/sciforge-cu-isolated-l3`，产出 `status=completed` 的 `/tmp/sciforge-cu-isolated-l3/l3/isolated-desktop-l3-workflow-probe-manifest.json`。容器内复验 completed evidence validators 均返回 `ok=true`、`errorCount=0`。
+历史严格 Docker diagnostic 是 `npm run smoke:cu-legacy-isolated-l1:docker-diagnostic` / `npm run smoke:cu-legacy-isolated-l3:docker-diagnostic`，别名分别是 `npm run smoke:cu-isolated-l1:opt-in` 和 `npm run smoke:cu-isolated-l3:opt-in`；它们会构建 package Dockerfile 并直接运行 L1/L3 `--execute`，非 completed 时返回失败。需要只跑 pytest skip-gated opt-in 回归时可用 `npm run smoke:cu-legacy-isolated-l1:pytest-opt-in`。网络受限时可用 `SCIFORGE_DOCKER_BASE_IMAGE=<mirror-or-local-python-base>` 覆盖默认 base image，也可用 `SCIFORGE_DOCKER_DEBIAN_APT_MIRROR` / `SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR` 覆盖 Debian apt 下载源，并用 `SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES` 调整 apt retry；这些只改变镜像/apt 拉取来源和重试次数，不放宽 evidence schema。若 Docker Desktop 没有共享当前 repo 路径，可把 `SCIFORGE_CU_ISOLATED_L1_EVIDENCE_DIR` 或 `SCIFORGE_CU_ISOLATED_L3_EVIDENCE_DIR` 指向 Docker 可挂载的宿主机目录，例如 `/tmp/sciforge-cu-isolated-l1` 或 `/tmp/sciforge-cu-isolated-l3`；这只改变 evidence volume 的宿主机位置，不改变容器内 evidence schema。这些入口和 `.github/workflows/cu-isolated-desktop-l1.yml` 的 `workflow_dispatch` 手动 job 都不进入普通 `verify`，也不再作为 active product gate。Docker bundle manifest、Docker build log、readiness manifest 或 noVNC/RDP viewer availability 都不能单独完成 PROJECT backend；历史 completed refs 可作为 regression/historical evidence，但 active acceptance 必须由 native app-server/native plugin surface、Computer Use package contract、platform sidecar contract 和 current refs-first evidence 共同证明。最近一次历史 Docker L1 diagnostic 使用 `public.ecr.aws/docker/library/python:3.12-slim-bookworm`、清华 Debian/security apt mirror、`SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES=5` 与 host evidence dir `/tmp/sciforge-cu-isolated-l1`，产出 `status=completed` 的 `/tmp/sciforge-cu-isolated-l1/l1/isolated-desktop-l1-smoke-probe-manifest.json`；历史 Docker L3 diagnostic 使用同类 build 参数和 `/tmp/sciforge-cu-isolated-l3`，产出 `status=completed` 的 `/tmp/sciforge-cu-isolated-l3/l3/isolated-desktop-l3-workflow-probe-manifest.json`。容器内复验 completed evidence validators 均返回 `ok=true`、`errorCount=0`。
 
 Native M6 opt-in 入口是稳定 npm script：
 
@@ -487,16 +490,7 @@ Local controller contract 是一轮只输出一个 generic action、`done=true` 
 
 Computer Use 的局部 next-action selector、截图理解、crop inspection、before/after 比较、候选目标消歧、语义 verifier 和需要模型参与的 grounding 默认统一使用 Model Router `/v1/responses` capability surface。Grounder provider 不是 planner 或 executor；它只把当前 screenshot/crop ref 加 target description 转成可审计候选、confidence/text observation 和 diagnostics。具体上游 provider/model 由 router profile 解析，不作为 action provider 的默认值或公共契约；GUI、audit 和公共 payload 只暴露 router profile/role/alias、trace refs、latency、status 和 modality refs。
 
-历史 `KV-Ground` provider、endpoint 和环境变量只作为兼容调试路径保留，不代表默认模型。如果 host adapter 仍沿用这条路径，trace/evidence 必须明确记录它是 compatibility provider，并且不得把旧服务名写成默认 grounding 模型。
-
-兼容路径默认也应优先使用 file-ref / shared path refs。只有明确启用 legacy adapter 且共享路径不可用时，才允许短期 inline image upload：
-
-```bash
-export SCIFORGE_VISION_KV_GROUND_URL="http://127.0.0.1:18081"
-export SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY="file-ref"
-```
-
-只有 legacy adapter 调试场景才允许将 `SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY=inline` 作为临时 fallback；该 request payload 不得进入 trace、聊天正文或主上下文。Computer Use trace 可以记录截图 ref、focus crop ref、sha256、尺寸、target description、window/crop-local coordinates、router trace refs、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，但不得保存 raw screenshot payload、`data:image`、base64 或大日志。
+Direct grounding provider endpoint 和专用环境变量不属于当前 Computer Use 产品路径。Host adapter 必须通过 Model Router grounding translator capability 注入定位结果；Computer Use trace 可以记录截图 ref、focus crop ref、sha256、尺寸、target description、window/crop-local coordinates、router trace refs、provider metadata、executor lease、verifier verdict、approval/audit refs 和 diagnostics，但不得保存 raw screenshot payload、`data:image`、base64 或大日志。
 
 真实桌面输入优先使用独立 input adapter。当前 `remote-desktop` 只有在 Host 注册 `sciforge-simulated-remote-desktop` provider 时才可执行；该路径维护虚拟 pointer/keyboard state refs，不移动系统鼠标、不发送全局系统键盘事件。未注册 provider 的 `remote-desktop` / `virtual-hid` 会 fail closed。没有独立 adapter 时，鼠标键盘属于 shared system input，必须绑定低风险目标窗口、串行持有 executor lease，并在 request/result 中显式记录 acknowledgement 或 blocked reason。该路径仅是显式确认后的诊断/迁移路径，不能让 desktop preflight ready，也不能满足 PROJECT B/C、L2/L3 或最终输入隔离证据。
 
@@ -516,9 +510,9 @@ CU-NEXT live acceptance 还要求任务级语义 marker。`tools/computer-use-ne
 
 验收不得绕过真实 Computer Use 链路：Playwright、DOM、accessibility tree、app-specific API 可以作为声明过的 adapter source，但必须经过 observe/ground/propose/lease/execute/verify、before/after evidence 和 validator；直接文件生成或未登记 shortcut 不能替代应用操作。若目标 App、系统权限、background rendering 或 shared input policy 不满足，返回 `blocked` manifest。
 
-## Python Provider
+## Legacy Python Diagnostics
 
-本包定义稳定 Python contract：
+Python implementation is obsolete for product/default acceptance. 下面的 contract 名称只用于 legacy diagnostic、历史证据复验和人工兼容性排查：
 
 - `ComputerUseRequest`
 - `Observation`

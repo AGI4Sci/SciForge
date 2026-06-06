@@ -14,6 +14,10 @@ import {
   targetRepairWrittenBackEvent,
   targetWorktreePreparingEvent,
 } from '@sciforge-ui/runtime-contract';
+import {
+  resolveRequestClarificationNeed,
+  type RequestClarificationNeed,
+} from '@sciforge-ui/runtime-contract/request-clarification-policy';
 import { estimateContextWindowState, latestContextWindowState, shouldStartContextCompaction } from '../../contextWindow';
 import type { ScenarioId } from '../../data';
 import { latestLatencyPolicy, latestResponsePlan } from '../../latencyPolicy';
@@ -121,6 +125,16 @@ export async function runPromptOrchestrator(input: RunPromptOrchestratorInput): 
     if (isAnnotationPlanOnlyTurn(input)) {
       const response = buildAnnotationPlanOnlyOrchestratorResponse(input);
       handleStreamEvent(annotationPlanOnlyEvent(input, response.run.id));
+      return { status: 'completed', optimisticSession, finalResponse: response };
+    }
+    const clarification = resolveRequestClarificationNeed({
+      prompt: input.prompt,
+      references: input.references,
+      artifacts: optimisticSession.artifacts,
+    });
+    if (clarification) {
+      const response = buildClarificationOrchestratorResponse(input, clarification);
+      handleStreamEvent(clarificationNeededEvent(response.run.id, clarification.message));
       return { status: 'completed', optimisticSession, finalResponse: response };
     }
     const turnPayload = requestPayloadForTurn(optimisticSession, userMessage, input.references);
@@ -490,6 +504,117 @@ function buildAnnotationPlanOnlyOrchestratorResponse(input: RunPromptOrchestrato
     executionUnits: [],
     artifacts: [],
     notebook: [],
+  };
+}
+
+function buildClarificationOrchestratorResponse(
+  input: RunPromptOrchestratorInput,
+  clarification: RequestClarificationNeed,
+): NormalizedAgentResponse {
+  const completedAt = nowIso();
+  const runId = makeId('run');
+  const artifactId = `request-clarification-${runId}`;
+  return {
+    message: {
+      id: makeId('msg'),
+      role: 'scenario',
+      content: clarification.message,
+      references: input.references,
+      createdAt: completedAt,
+      updatedAt: completedAt,
+      status: 'completed',
+      evidence: 'meta',
+      claimType: 'hypothesis',
+      expandable: `Clarification needed: ${clarification.reason}`,
+      provenance: {
+        kind: 'request-clarification',
+        source: 'runPromptOrchestrator',
+        runtimeRequestEligible: false,
+        liveAcceptanceEligible: false,
+      },
+    },
+    run: {
+      id: runId,
+      scenarioId: input.scenarioId,
+      scenarioPackageRef: input.scenarioPackageRef,
+      skillPlanRef: input.skillPlanRef,
+      uiPlanRef: input.uiPlanRef,
+      status: 'completed',
+      prompt: input.prompt,
+      response: clarification.message,
+      references: input.references,
+      createdAt: completedAt,
+      completedAt,
+      raw: {
+        source: 'runPromptOrchestrator',
+        selectedRuntime: 'request-clarification-runtime',
+        reason: clarification.reason,
+      },
+    },
+    uiManifest: [{
+      componentId: 'report-viewer',
+      artifactRef: artifactId,
+      title: 'Clarification needed',
+      priority: 1,
+    }],
+    claims: [{
+      id: `claim-${artifactId}`,
+      type: 'hypothesis',
+      text: clarification.message,
+      confidence: 0.74,
+      evidenceLevel: 'meta',
+      supportingRefs: [],
+      opposingRefs: [],
+      updatedAt: completedAt,
+    }],
+    executionUnits: [{
+      id: `EU-${artifactId}`,
+      tool: 'request_clarification',
+      status: 'needs-human',
+      params: JSON.stringify({ reason: clarification.reason, prompt: input.prompt.slice(0, 240) }),
+      requiredInputs: ['target category', 'ranking surface'],
+      nextStep: 'Wait for the user to clarify the scope or target, then continue.',
+      outputRef: `artifact:${artifactId}`,
+      hash: runId.slice(0, 12),
+      runId,
+    }],
+    artifacts: [{
+      id: artifactId,
+      type: 'clarification-request',
+      producerScenario: input.scenarioId,
+      scenarioPackageRef: input.scenarioPackageRef,
+      schemaVersion: 'sciforge.request-clarification.v1',
+      metadata: {
+        format: 'markdown',
+        title: 'Clarification needed',
+      },
+      data: {
+        reason: clarification.reason,
+        prompt: input.prompt,
+        requiredInputs: clarification.requiredInputs,
+        markdown: [
+          '# Clarification needed',
+          '',
+          clarification.message,
+        ].join('\n'),
+      },
+    }],
+    notebook: [],
+  };
+}
+
+function clarificationNeededEvent(runId: string, message: string): AgentStreamEvent {
+  return {
+    id: makeId('evt'),
+    type: 'clarification-needed',
+    label: 'Needs clarification',
+    detail: message,
+    createdAt: nowIso(),
+    raw: {
+      runId,
+      source: 'runPromptOrchestrator',
+      selectedRuntime: 'request-clarification-runtime',
+    },
   };
 }
 

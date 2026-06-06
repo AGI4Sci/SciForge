@@ -1,6 +1,6 @@
 import type { AgentCliAdapter } from './agent-cli-adapter.js';
 import { createCodexAppServerRuntimeAdapter } from './codex-runtime-adapter.js';
-import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
+import { isCodexSamplingRetryMessage, type NormalizedAgentEvent } from './codex-event-normalizer.js';
 
 export const COMPUTER_USE_TEXT_PLANNER_SCHEMA = 'sciforge.computer-use.codex-text-planner.v1';
 
@@ -19,7 +19,6 @@ export interface ComputerUseTextPlannerOptions {
   workspace: string;
   adapter?: AgentCliAdapter;
   env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
   commandId?: string;
   attemptId?: string;
   profile?: string;
@@ -111,7 +110,8 @@ export async function runComputerUseCodexTextPlanner(
     events.push(summarizePlannerEvent(event));
     if (event.type === 'message' && event.text) finalMessage = event.text;
     if (event.type === 'message_delta' && event.text) deltaText += event.text;
-    if (event.type === 'failed' || event.type === 'cancelled') failed = event;
+    if (event.type === 'cancelled') failed = event;
+    if (event.type === 'failed' && !isRetryablePlannerFailure(event)) failed = event;
   }
 
   const text = (finalMessage || deltaText).trim();
@@ -172,6 +172,11 @@ export async function runComputerUseCodexTextPlanner(
       events,
     },
   };
+}
+
+function isRetryablePlannerFailure(event: NormalizedAgentEvent): boolean {
+  const message = event.message ?? event.text;
+  return Boolean(message && isCodexSamplingRetryMessage(message));
 }
 
 export async function runComputerUseDirectChatTextPlannerFallback(
@@ -298,6 +303,13 @@ function plannerRuntimeEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 function summarizePlannerEvent(event: NormalizedAgentEvent): PlannerEventSummary {
+  if (isRetryablePlannerFailure(event)) {
+    return {
+      type: 'audit',
+      status: 'provider-retry',
+      message: boundText(event.message ?? event.text, 320),
+    };
+  }
   const raw = isRecord(event.raw) ? event.raw : undefined;
   const payload = isRecord(raw?.payload) ? raw.payload : undefined;
   const item = isRecord(raw?.item)

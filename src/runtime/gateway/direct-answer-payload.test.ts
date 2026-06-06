@@ -319,7 +319,7 @@ test('plain AgentServer text cannot claim reproduction execution without durable
   assert.equal(payload.claimType, 'runtime-diagnostic');
   assert.equal(payload.displayIntent?.status, 'needs-human');
   assert.equal(payload.executionUnits[0]?.status, 'needs-human');
-  assert.match(payload.reasoningTrace, /structured patch\/test refs|durable workspace execution evidence/i);
+  assert.match(payload.reasoningTrace, /structured patch|structured workspace execution evidence/i);
   assert.deepEqual(schemaErrors(payload), []);
 });
 
@@ -340,7 +340,7 @@ test('plain AgentServer text cannot claim coding repair success without patch or
   assert.deepEqual(schemaErrors(payload), []);
 });
 
-test('plain AgentServer text can summarize coding completion when file paths and verification commands are cited', () => {
+test('plain AgentServer text cannot summarize coding completion from file paths and verification commands alone', () => {
   const payload = toolPayloadFromPlainAgentOutput(
     [
       'Implemented the patch in `src/runtime/gateway/direct-answer-payload.ts` and updated `src/runtime/gateway/direct-answer-payload.test.ts`.',
@@ -353,13 +353,35 @@ test('plain AgentServer text can summarize coding completion when file paths and
     },
   );
 
-  assert.equal(payload.claimType, 'agentserver-direct-answer');
-  assert.equal(payload.displayIntent?.status, 'completed');
-  assert.equal(payload.executionUnits[0]?.status, 'done');
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.reasoningTrace, /lacks structured patch/i);
   assert.deepEqual(schemaErrors(payload), []);
 });
 
-test('plain AgentServer text wraps markdown stage results even when they mention ToolPayload output refs', () => {
+test('plain AgentServer text cannot use file and command mentions to override failed verification diagnostics', () => {
+  const payload = toolPayloadFromPlainAgentOutput(
+    [
+      'Implemented the patch in `src/runtime/gateway/direct-answer-payload.ts`.',
+      'Verification: `npx tsx src/runtime/gateway/direct-answer-payload.test.ts` failed with assertion error.',
+      'The final status is not ready for PR.',
+    ].join('\n'),
+    {
+      skillDomain: 'knowledge',
+      prompt: 'Inspect this repository, implement a bug fix, update tests, and produce a PR-ready summary.',
+      artifacts: [],
+    },
+  );
+
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.reasoningTrace, /failed verification diagnostics/i);
+  assert.deepEqual(schemaErrors(payload), []);
+});
+
+test('plain AgentServer text does not complete markdown stage results from ToolPayload words alone', () => {
   const text = [
     '## Stage Result: implement — RCG-003 ODE Parameter-Fitting Repair',
     '',
@@ -391,10 +413,11 @@ test('plain AgentServer text wraps markdown stage results even when they mention
     artifacts: [],
   });
 
-  assert.equal(payload.claimType, 'agentserver-direct-answer');
-  assert.equal(payload.displayIntent?.status, 'completed');
-  assert.equal(payload.executionUnits[0]?.status, 'done');
-  assert.match(payload.message, /Repair SUCCEEDED/);
+  assert.equal(payload.claimType, 'runtime-diagnostic');
+  assert.equal(payload.displayIntent?.status, 'needs-human');
+  assert.equal(payload.executionUnits[0]?.status, 'needs-human');
+  assert.match(payload.message, /raw generated work|diagnostic/i);
+  assert.match(payload.reasoningTrace, /lacks structured patch, execution, artifact, or verification refs/i);
   assert.deepEqual(schemaErrors(payload), []);
 });
 

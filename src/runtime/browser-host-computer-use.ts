@@ -1,5 +1,11 @@
 import type { GenericVisionAction } from './computer-use/types.js';
 import type {
+  ComputerUseActionProvenance,
+  ComputerUseApprovalState,
+  ComputerUseLeaseScope,
+  ComputerUseVisibleEvidenceInvalidation,
+} from './computer-use/types.js';
+import type {
   BrowserHostMouseButton,
   BrowserHostMousePoint,
   BrowserHostSessionActionInput,
@@ -32,7 +38,26 @@ export interface BrowserHostComputerUseActionResult {
   singleInteractiveTruth: true;
   hostAction: BrowserHostSessionActionInput;
   session: BrowserHostSessionState;
+  beforeEvidenceRefs: string[];
+  groundingRefs: string[];
+  executorEventRef: string;
+  afterEvidenceRefs: string[];
+  verificationRefs: string[];
+  provenance: ComputerUseActionProvenance;
+  freshnessInvalidation: ComputerUseVisibleEvidenceInvalidation;
 }
+
+export type BrowserHostComputerUseReadinessReason =
+  | 'browser-host-session-missing'
+  | 'browser-host-session-stale'
+  | 'browser-host-session-hidden'
+  | 'browser-host-session-diagnostic-only'
+  | 'browser-host-session-permission-missing'
+  | 'browser-host-session-cancel-path-missing';
+
+export type BrowserHostComputerUseActionReadiness =
+  | { status: 'ready' }
+  | { status: 'blocked'; reason: BrowserHostComputerUseReadinessReason };
 
 export function browserHostActionFromComputerUse(
   action: BrowserHostComputerUseAction,
@@ -191,10 +216,62 @@ export async function executeBrowserHostComputerUseAction(
     actionId?: string;
     uiEventReceivedAt?: string;
     adapterSentAt?: string;
+    permissionRef?: string;
+    cancelRef?: string;
+    now?: string;
+    maxAgeMs?: number;
   } = {},
 ): Promise<BrowserHostComputerUseActionResult> {
+  const permissionRef = options.permissionRef ?? browserHostComputerUsePermissionRef(action);
+  const cancelRef = options.cancelRef ?? browserHostComputerUseCancelRef(action);
+  const beforeSession = await manager.sessionState(workspacePath, sessionId);
+  const readiness = browserHostComputerUseActionReadiness({
+    session: beforeSession,
+    action,
+    permissionRef,
+    cancelRef,
+    now: options.now,
+    maxAgeMs: options.maxAgeMs,
+  });
+  if (readiness.status === 'blocked') {
+    throw new Error(`BrowserHostSession Computer Use action blocked: ${readiness.reason}`);
+  }
   const hostAction = browserHostActionFromComputerUse(action, options);
+  hostAction.actorCursor ??= browserHostComputerUseActorCursor(options.actionId ?? hostAction.actionId);
   const session = await manager.act(workspacePath, sessionId, hostAction);
+  const actionMetadata = browserHostComputerUseActionMetadata(action);
+  const executorEventRef = browserHostComputerUseExecutorEventRef(session, options.actionId);
+  const sessionActionEvidenceRefs = browserHostComputerUseSessionActionEvidenceRefs(session);
+  const beforeEvidenceRefs = uniqueBrowserHostRefs([
+    ...stringRefs(actionMetadata.beforeEvidenceRefs),
+    ...browserHostComputerUseSessionEvidenceRefs(beforeSession),
+  ]);
+  const groundingRefs = uniqueBrowserHostRefs([
+    ...stringRefs(actionMetadata.groundingRefs),
+    ...stringRefs(actionMetadata.observeBeforeMutate?.groundingHintRefs),
+    actionMetadata.observeBeforeMutate?.groundingRef,
+    actionMetadata.observeBeforeMutate?.sourceObservationRef,
+  ]);
+  const afterEvidenceRefs = uniqueBrowserHostRefs([
+    ...browserHostComputerUseSessionEvidenceRefs(session),
+    session.visibleAction?.visibleActionRef,
+    ...(session.actorCursor?.lastAction?.evidenceRefs ?? []),
+    ...(session.actorCursor?.evidenceRefs ?? []),
+  ]);
+  const verificationRefs = uniqueBrowserHostRefs([
+    ...stringRefs(actionMetadata.verificationRefs),
+    executorEventRef,
+    browserHostSessionManifestRef(session),
+    ...sessionActionEvidenceRefs.filter((ref) => /(?:^|[:/._-])(?:verification|verifier|validation|validator)(?:[:/._-]|$)/i.test(ref)),
+  ]);
+  const provenance = browserHostComputerUseActionProvenance(action, {
+    beforeEvidenceRefs,
+    groundingRefs,
+    afterEvidenceRefs,
+    executorEventRef,
+    verificationRefs,
+  });
+  const freshnessInvalidation = browserHostComputerUseFreshnessInvalidation(action, provenance.leaseScope, session);
   return {
     schemaVersion: BROWSER_HOST_COMPUTER_USE_SCHEMA,
     providerId: BROWSER_HOST_COMPUTER_USE_PROVIDER_ID,
@@ -207,7 +284,46 @@ export async function executeBrowserHostComputerUseAction(
     singleInteractiveTruth: true,
     hostAction,
     session,
+    beforeEvidenceRefs,
+    groundingRefs,
+    executorEventRef,
+    afterEvidenceRefs,
+    verificationRefs,
+    provenance,
+    freshnessInvalidation,
   };
+}
+
+export function browserHostComputerUseActionReadiness(input: {
+  session?: BrowserHostSessionState;
+  action: BrowserHostComputerUseAction;
+  permissionRef?: string;
+  cancelRef?: string;
+  now?: string;
+  maxAgeMs?: number;
+}): BrowserHostComputerUseActionReadiness {
+  const session = input.session;
+  if (!session) return { status: 'blocked', reason: 'browser-host-session-missing' };
+  if ((session as { visible?: unknown }).visible === false) return { status: 'blocked', reason: 'browser-host-session-hidden' };
+  if (!session.liveSurfaceRef) return { status: 'blocked', reason: 'browser-host-session-hidden' };
+  if (
+    (session as { diagnosticOnly?: unknown }).diagnosticOnly === true ||
+    session.status === 'failed' ||
+    session.status === 'closed' ||
+    session.loadingProgress?.blocked === true ||
+    session.loadingProgress?.reason === 'host-diagnostic'
+  ) {
+    return { status: 'blocked', reason: 'browser-host-session-diagnostic-only' };
+  }
+  const maxAgeMs = input.maxAgeMs ?? 5_000;
+  const nowMs = Date.parse(input.now ?? new Date().toISOString());
+  const updatedAtMs = Date.parse(session.updatedAt);
+  if (!Number.isFinite(updatedAtMs) || (Number.isFinite(nowMs) && nowMs - updatedAtMs > maxAgeMs)) {
+    return { status: 'blocked', reason: 'browser-host-session-stale' };
+  }
+  if (!input.permissionRef) return { status: 'blocked', reason: 'browser-host-session-permission-missing' };
+  if (!input.cancelRef) return { status: 'blocked', reason: 'browser-host-session-cancel-path-missing' };
+  return { status: 'ready' };
 }
 
 function browserHostActionTimingInput(options: {
@@ -251,4 +367,176 @@ function browserHostComputerUseKey(key: string) {
 
 function browserHostComputerUseMouseButton(value: BrowserHostMouseButton | undefined): BrowserHostMouseButton {
   return value === 'right' || value === 'middle' ? value : 'left';
+}
+
+function browserHostComputerUseActionMetadata(action: BrowserHostComputerUseAction): Partial<GenericVisionAction> & Record<string, unknown> {
+  return action as Partial<GenericVisionAction> & Record<string, unknown>;
+}
+
+function browserHostComputerUseActorCursor(actionId: string | undefined): BrowserHostSessionActionInput['actorCursor'] {
+  const safeActionId = safeBrowserHostComputerUseRefSegment(actionId ?? 'action');
+  return {
+    agentId: 'browser-host-computer-use',
+    cursorId: `browser-host-computer-use-${safeActionId}`.slice(0, 96),
+    color: '#28a0f0',
+    label: 'BrowserHost Computer Use',
+  };
+}
+
+function browserHostComputerUsePermissionRef(action: BrowserHostComputerUseAction): string | undefined {
+  const metadata = browserHostComputerUseActionMetadata(action);
+  return safeBrowserHostComputerUseScopedRef(metadata.permissionRef, /^permission:/i)
+    ?? safeBrowserHostComputerUseScopedRef(metadata.permission, /^permission:/i);
+}
+
+function browserHostComputerUseCancelRef(action: BrowserHostComputerUseAction): string | undefined {
+  const metadata = browserHostComputerUseActionMetadata(action);
+  return safeBrowserHostComputerUseScopedRef(metadata.cancelRef, /^cancel:/i)
+    ?? safeBrowserHostComputerUseScopedRef(metadata.stopRef, /^(?:cancel:|stop:|browser-host-session:.*\/(?:stop|close|cancel)$)/i)
+    ?? safeBrowserHostComputerUseScopedRef(metadata.controlRef, /^(?:cancel:|stop:|browser-host-session:.*\/(?:stop|close|cancel)$)/i);
+}
+
+function safeBrowserHostComputerUseScopedRef(value: unknown, pattern: RegExp): string | undefined {
+  const ref = stringField(value);
+  if (!ref || ref.length > 240 || forbiddenBrowserHostRefPayload(ref) || !pattern.test(ref)) return undefined;
+  return ref;
+}
+
+function browserHostComputerUseSessionEvidenceRefs(session: BrowserHostSessionState | undefined): string[] {
+  if (!session) return [];
+  return uniqueBrowserHostRefs([
+    browserHostSessionManifestRef(session),
+    session.liveSurfaceRef,
+    session.frameRef,
+    session.screenshotRef,
+    session.domSnapshotRef,
+    session.axSnapshotRef,
+    session.consoleLogRef,
+    session.networkLogRef,
+    session.searchResultRef,
+  ]);
+}
+
+function browserHostComputerUseSessionActionEvidenceRefs(session: BrowserHostSessionState | undefined): string[] {
+  if (!session) return [];
+  return uniqueBrowserHostRefs([
+    ...(session.actorCursor?.lastAction?.evidenceRefs ?? []),
+    ...(session.actorCursor?.evidenceRefs ?? []),
+    ...(session.actorCursors ?? []).flatMap((cursor) => [
+      ...cursor.lastAction.evidenceRefs,
+      ...cursor.evidenceRefs,
+    ]),
+  ]);
+}
+
+function browserHostSessionManifestRef(session: BrowserHostSessionState): string {
+  return `browser-host-session:${session.id}/session.json`;
+}
+
+function browserHostComputerUseExecutorEventRef(session: BrowserHostSessionState, actionId: string | undefined): string {
+  return session.visibleAction?.visibleActionRef
+    ?? `browser-host-session:${session.id}/executor-events/${safeBrowserHostComputerUseRefSegment(actionId ?? session.lastActionTiming?.actionId ?? 'action')}.json`;
+}
+
+function browserHostComputerUseActionProvenance(
+  action: BrowserHostComputerUseAction,
+  refs: {
+    beforeEvidenceRefs: string[];
+    groundingRefs: string[];
+    afterEvidenceRefs: string[];
+    executorEventRef: string;
+    verificationRefs: string[];
+  },
+): ComputerUseActionProvenance {
+  const metadata = browserHostComputerUseActionMetadata(action);
+  return {
+    displayGroupId: stringField(metadata.displayGroupId) ?? 'browser-host-session',
+    screenId: stringField(metadata.screenId) ?? 'browser-host-session',
+    windowId: stringField(metadata.windowId),
+    actorId: stringField(metadata.actorId) ?? 'browser-host-session-agent',
+    cursorId: stringField(metadata.cursorId) ?? 'browser-host-session-cursor',
+    source: 'adapter',
+    leaseScope: leaseScopeField(metadata.leaseScope),
+    beforeEvidenceRefs: refs.beforeEvidenceRefs,
+    groundingRefs: refs.groundingRefs,
+    afterEvidenceRefs: refs.afterEvidenceRefs,
+    executorEventRef: refs.executorEventRef,
+    verificationRefs: refs.verificationRefs,
+    approvalState: approvalStateField(metadata.approvalState) ?? 'not-required',
+  };
+}
+
+function browserHostComputerUseFreshnessInvalidation(
+  action: BrowserHostComputerUseAction,
+  leaseScope: ComputerUseLeaseScope | undefined,
+  session: BrowserHostSessionState,
+): ComputerUseVisibleEvidenceInvalidation {
+  const metadata = browserHostComputerUseActionMetadata(action);
+  const scope = leaseScope ?? {
+    kind: 'window-local' as const,
+    displayGroupId: stringField(metadata.displayGroupId) ?? 'browser-host-session',
+    screenId: stringField(metadata.screenId) ?? 'browser-host-session',
+    windowId: stringField(metadata.windowId) ?? session.id,
+  };
+  return {
+    invalidatesVisibleState: browserHostActionMutatesVisibleState(action.type),
+    staleBy: session.visibleAction?.visibleActionRef ?? browserHostSessionManifestRef(session),
+    scope,
+    staleEvidenceKinds: ['observation', 'region', 'text', 'visual-object', 'vlm-claim', 'grounding'],
+    preservedEvidenceKinds: ['artifact', 'verification', 'completion-claim'],
+    reason: 'BrowserHostSession live input can change visible browser state; previous observation and grounding refs must be refreshed before later actions.',
+  };
+}
+
+function browserHostActionMutatesVisibleState(type: BrowserHostComputerUseAction['type']): boolean {
+  return type !== 'cursor' && type !== 'wait';
+}
+
+function stringRefs(value: unknown): string[] {
+  if (!Array.isArray(value)) return typeof value === 'string' ? [value] : [];
+  return value.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0);
+}
+
+function uniqueBrowserHostRefs(values: Array<string | undefined>): string[] {
+  const refs: string[] = [];
+  for (const value of values) {
+    const ref = typeof value === 'string' ? value.trim() : '';
+    if (!ref || refs.includes(ref) || forbiddenBrowserHostRefPayload(ref)) continue;
+    refs.push(ref.slice(0, 240));
+  }
+  return refs;
+}
+
+function forbiddenBrowserHostRefPayload(value: string): boolean {
+  return /data:image|;base64|<html|<body|api[-_\s]?key|secret|token=/i.test(value);
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function leaseScopeField(value: unknown): ComputerUseLeaseScope | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind === 'screen-global' || record.kind === 'window-local' ? record.kind : undefined;
+  const displayGroupId = stringField(record.displayGroupId);
+  const screenId = stringField(record.screenId);
+  if (!kind || !displayGroupId || !screenId) return undefined;
+  return {
+    kind,
+    displayGroupId,
+    screenId,
+    windowId: stringField(record.windowId),
+    reason: stringField(record.reason),
+  };
+}
+
+function approvalStateField(value: unknown): ComputerUseApprovalState | undefined {
+  return value === 'not-required' || value === 'needs-confirmation' || value === 'approved' || value === 'denied'
+    ? value
+    : undefined;
+}
+
+function safeBrowserHostComputerUseRefSegment(value: string): string {
+  return value.trim().replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'action';
 }

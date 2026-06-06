@@ -943,9 +943,18 @@
 .codex-quiet-shell .composer-add-menu > summary,
 .codex-quiet-shell .reference-trigger,
 .codex-quiet-shell .composer-runtime-pill,
+.codex-quiet-shell .composer-autonomy-menu > summary,
 .codex-quiet-shell .composer-queue-status {
   min-height: 22px;
   padding: 0 7px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 760;
+}
+
+.codex-quiet-shell .composer-autonomy-option {
+  min-height: 28px;
+  padding: 0 8px;
   border-radius: 6px;
   font-size: 10px;
   font-weight: 760;
@@ -1097,6 +1106,66 @@
   background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
 }
 
+.codex-quiet-shell .right-pane-browser-surface .browser-workbench-viewer-topbar {
+  min-height: 32px;
+  gap: 6px;
+  padding: 4px 6px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--border) 62%, transparent);
+}
+
+.codex-quiet-shell .right-pane-browser-surface .browser-workbench-viewer-address input {
+  min-height: 24px;
+  border-radius: 4px;
+}
+
+.codex-quiet-shell .right-pane-browser-surface .browser-workbench-viewer-actions button {
+  min-height: 24px;
+  color: var(--bio-300);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+  box-shadow: none;
+}
+
+.codex-quiet-shell .right-pane-browser-surface .browser-workbench-viewer-actions button:hover {
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+}
+
+.codex-quiet-shell .image-evidence-toolbar {
+  gap: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border-color: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: none;
+}
+
+.codex-quiet-shell .image-evidence-control {
+  min-height: 24px;
+  padding: 0 7px;
+  color: var(--bio-300);
+  background: transparent;
+  border-color: transparent;
+  border-radius: 4px;
+}
+
+.codex-quiet-shell .image-evidence-control:hover:not(:disabled) {
+  color: var(--bio-100);
+  background: color-mix(in srgb, var(--surface-hover) 64%, transparent);
+  border-color: transparent;
+}
+
+.codex-quiet-shell .image-evidence-stage {
+  border-radius: 6px;
+}
+
+.codex-quiet-shell .image-evidence-footer {
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-muted) 88%, transparent);
+}
+
 .codex-quiet-shell .result-new-tab-menu {
   border-radius: 6px;
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
@@ -1150,6 +1219,45 @@
   padding: 8px;
   border-radius: 6px;
   box-shadow: none;
+}
+
+.codex-quiet-shell .result-content > .stack {
+  gap: 10px;
+}
+
+.codex-quiet-shell .empty-runtime-state {
+  min-height: 108px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
+}
+
+.codex-quiet-shell .empty-runtime-state strong {
+  font-size: 13px;
+  font-weight: 820;
+}
+
+.codex-quiet-shell .empty-runtime-state p {
+  max-width: 52ch;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.app-shell.theme-light .codex-quiet-shell .empty-runtime-state {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.app-shell.theme-light .codex-quiet-shell .right-pane-tool-dock button {
+  background: var(--surface-raised);
+  border-color: var(--border);
+}
+
+.app-shell.theme-light .codex-quiet-shell .right-pane-tool-dock button:hover {
+  background: var(--surface-hover);
+  border-color: var(--accent-border);
 }
 
 .codex-quiet-shell .right-pane-tool-dock span {

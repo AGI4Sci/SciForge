@@ -31,7 +31,6 @@ const desktopStaticDirs: DesktopStaticAssetCopy[] = [
 const computerUsePackageFiles: DesktopStaticAssetCopy[] = [
   { from: 'packages/actions/computer-use/pyproject.toml' },
   { from: 'packages/actions/computer-use/README.md' },
-  { from: 'packages/actions/computer-use/KV_GROUND_SERVICE_GUIDE.md' },
 ];
 
 export async function copyDesktopStaticAssets(options: {

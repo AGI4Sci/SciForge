@@ -3,7 +3,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import type { GatewayRequest, ToolPayload } from '../runtime-types.js';
 import { isRecord } from '../gateway-utils.js';
 import { sha1 } from '../workspace-task-runner.js';
-import { runtimeResultViewSlotsPolicy } from '../../../packages/presentation/interactive-views';
+import { runtimeResultViewSlotsPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { expectedArtifactTypesForRequest } from './gateway-request.js';
 import {
   DIRECT_CONTEXT_FAST_PATH_POLICY,

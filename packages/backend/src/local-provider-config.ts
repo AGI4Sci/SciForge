@@ -28,6 +28,7 @@ export const LOCAL_PROVIDER_API_KEY_CANDIDATE_PATHS = [
   ['textLLM', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
   ['codexProxy', 'apiKey'],
   ['runtimeCodexProxy', 'apiKey'],
+  ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_API_KEY'],
 ] as const;
 
 const SAFE_VIRTUAL_APP_SCREEN_LOCAL_ENV_KEYS = new Set([
@@ -55,14 +56,35 @@ const VIRTUAL_APP_SCREEN_ENV_CANDIDATE_PATHS = [
   ['computerUse', 'virtualAppScreen', 'nativeDriver', 'env'],
 ] as const;
 
-export function readLocalProviderSettings(path = 'config.local.json'): LocalProviderSettings {
+export function defaultLocalProviderConfigPath(env: NodeJS.ProcessEnv = process.env): string {
+  return resolve(env.SCIFORGE_CONFIG_PATH?.trim() || 'config.local.json');
+}
+
+export function readLocalProviderSettings(path = defaultLocalProviderConfigPath()): LocalProviderSettings {
   const configPath = resolve(path);
-  if (!existsSync(configPath)) return {};
+  if (!existsSync(configPath)) {
+    throw new Error(`Missing config.local.json at ${configPath}; configure the local LLM upstream in config.local.json.`);
+  }
   try {
     const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
     return localProviderSettings(parsed, { configPath });
-  } catch {
-    return {};
+  } catch (error) {
+    throw new Error(`Invalid config.local.json at ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+export function readRequiredLocalProviderSettings(path = defaultLocalProviderConfigPath()): LocalProviderSettings {
+  const configPath = resolve(path);
+  if (!existsSync(configPath)) {
+    throw new Error(`Missing config.local.json at ${configPath}; configure the local LLM upstream in config.local.json.`);
+  }
+  try {
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as unknown;
+    const settings = localProviderSettings(parsed, { configPath });
+    assertRequiredLocalProviderSettings(settings, configPath);
+    return settings;
+  } catch (error) {
+    throw new Error(`Invalid config.local.json at ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -71,7 +93,7 @@ export function providerEnvFromLocalSettings(settings: LocalProviderSettings): R
     ...(settings.apiKey ? { SCIFORGE_RUNTIME_API_KEY: settings.apiKey } : {}),
     ...(settings.provider ? { SCIFORGE_RUNTIME_PROVIDER: settings.provider } : {}),
     ...(settings.baseUrl ? { SCIFORGE_RUNTIME_BASE_URL: settings.baseUrl, SCIFORGE_PROXY_UPSTREAM_BASE_URL: settings.baseUrl } : {}),
-    ...(settings.model ? { SCIFORGE_RUNTIME_MODEL: settings.model } : {}),
+    ...(settings.model ? { SCIFORGE_RUNTIME_MODEL: settings.model, SCIFORGE_PROXY_DEFAULT_MODEL: settings.model } : {}),
   };
 }
 
@@ -125,6 +147,7 @@ export function localProviderSettings(
   ]);
   const provider = firstString([
     candidate(root, ['runtimeProvider'], prefix),
+    candidate(root, ['provider'], prefix),
     candidate(root, ['llm', 'provider'], prefix),
     candidate(root, ['textLLM', 'provider'], prefix),
     candidate(root, ['codexProxy', 'runtimeProvider'], prefix),
@@ -134,6 +157,8 @@ export function localProviderSettings(
   ]);
   const baseUrl = firstString([
     candidate(root, ['modelBaseUrl'], prefix),
+    candidate(root, ['baseUrl'], prefix),
+    candidate(root, ['upstreamBaseUrl'], prefix),
     candidate(root, ['llm', 'baseUrl'], prefix),
     candidate(root, ['llm', 'upstreamBaseUrl'], prefix),
     candidate(root, ['textLLM', 'baseUrl'], prefix),
@@ -144,18 +169,26 @@ export function localProviderSettings(
     candidate(root, ['codexProxy', 'baseUrl'], prefix),
     candidate(root, ['runtimeCodexProxy', 'upstreamBaseUrl'], prefix),
     candidate(root, ['runtimeCodexProxy', 'baseUrl'], prefix),
-  ], trimTrailingSlashes);
+    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_PROXY_UPSTREAM_BASE_URL'], prefix),
+    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_BASE_URL'], prefix),
+  ], normalizeOpenAiCompatibleBaseUrl);
   const model = firstString([
     candidate(root, ['modelName'], prefix),
+    candidate(root, ['model'], prefix),
+    candidate(root, ['defaultModel'], prefix),
     candidate(root, ['llm', 'model'], prefix),
     candidate(root, ['llm', 'modelName'], prefix),
     candidate(root, ['llm', 'defaultModel'], prefix),
     candidate(root, ['textLLM', 'model'], prefix),
     candidate(root, ['textLLM', 'modelName'], prefix),
+    candidate(root, ['textLLM', 'env', 'SCIFORGE_PROXY_DEFAULT_MODEL'], prefix),
+    candidate(root, ['textLLM', 'env', 'SCIFORGE_RUNTIME_MODEL'], prefix),
     candidate(root, ['codexProxy', 'defaultModel'], prefix),
     candidate(root, ['codexProxy', 'model'], prefix),
     candidate(root, ['runtimeCodexProxy', 'defaultModel'], prefix),
     candidate(root, ['runtimeCodexProxy', 'model'], prefix),
+    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_PROXY_DEFAULT_MODEL'], prefix),
+    candidate(root, ['runtimeCodexProxy', 'env', 'SCIFORGE_RUNTIME_MODEL'], prefix),
   ]);
   const forceNonStreamingUpstream = [
     candidate(root, ['codexProxy', 'forceNonStreamingUpstream'], prefix),
@@ -174,6 +207,17 @@ export function localProviderSettings(
     } : {}),
     ...(Object.keys(virtualAppScreenEnv).length ? { virtualAppScreenEnv } : {}),
   };
+}
+
+function assertRequiredLocalProviderSettings(settings: LocalProviderSettings, configPath: string): void {
+  const missing = [
+    settings.apiKey ? undefined : 'apiKey',
+    settings.baseUrl ? undefined : 'baseUrl',
+    settings.model ? undefined : 'model',
+  ].filter((value): value is string => Boolean(value));
+  if (missing.length) {
+    throw new Error(`${configPath} is missing required local LLM upstream config: ${missing.join(', ')}.`);
+  }
 }
 
 function candidate(root: unknown, path: readonly string[], prefix: string): SourceCandidate {
@@ -203,8 +247,16 @@ function valueAtPath(root: unknown, path: readonly string[]): unknown {
   return current;
 }
 
-function trimTrailingSlashes(value: string) {
-  return value.replace(/\/+$/, '');
+function normalizeOpenAiCompatibleBaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  try {
+    const url = new URL(trimmed);
+    if (url.pathname === '' || url.pathname === '/') url.pathname = '/v1';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed;
+  }
 }
 
 function stringValue(value: unknown) {

@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import type {
   ComputerUseLongMatrixReport,
+  ComputerUseLongMatrixRepairManifest,
   ComputerUseLongMatrixRunResult,
   ComputerUseLongMatrixValidation,
   ComputerUseLongPreflightResult,
@@ -10,8 +11,14 @@ import type {
 } from './contracts.js';
 import { loadComputerUseLongTaskPool, prepareComputerUseLongRun, validateComputerUseLongTaskPool } from './task-pool.js';
 import { runComputerUseLongScenario, validateComputerUseLongRun } from './run-core.js';
+import { localProviderSettings } from '../../packages/backend/src/local-provider-config.js';
+import {
+  executableIndependentInputAdapter,
+  independentInputAdapterExecutionBoundary,
+} from '../../src/runtime/computer-use/independent-input-adapter.js';
 import {
   categorizeComputerUseIssue,
+  collectRefsFirstManifestPayloadIssues,
   collectScenarioRunIssues,
   firstString,
   getConfigString,
@@ -66,7 +73,7 @@ export async function runComputerUseLongMatrix(options: {
 
   if (preflight && !preflight.ok) {
     const summaryPath = join(matrixDir, 'matrix-summary.json');
-    const summary: ComputerUseLongMatrixRunResult = {
+    let summary: ComputerUseLongMatrixRunResult = {
       summaryPath,
       status: 'repair-needed',
       scenarioIds,
@@ -76,6 +83,7 @@ export async function runComputerUseLongMatrix(options: {
       preflight,
       results,
     };
+    summary = await writeRepairManifestForMatrix(matrixDir, matrixId, summary);
     await writeMatrixSummary(summaryPath, matrixId, summary);
     return summary;
   }
@@ -139,7 +147,7 @@ export async function runComputerUseLongMatrix(options: {
     .map((item) => item.scenarioId);
   const status: ComputerUseLongMatrixRunResult['status'] = repairNeededScenarioIds.length ? 'repair-needed' : 'passed';
   const summaryPath = join(matrixDir, 'matrix-summary.json');
-  const summary: ComputerUseLongMatrixRunResult = {
+  let summary: ComputerUseLongMatrixRunResult = {
     summaryPath,
     status,
     scenarioIds,
@@ -149,15 +157,81 @@ export async function runComputerUseLongMatrix(options: {
     preflight,
     results,
   };
+  if (status === 'repair-needed') {
+    summary = await writeRepairManifestForMatrix(matrixDir, matrixId, summary);
+  }
   await writeMatrixSummary(summaryPath, matrixId, summary);
   return summary;
 }
 
+async function writeRepairManifestForMatrix(
+  matrixDir: string,
+  matrixId: string,
+  summary: ComputerUseLongMatrixRunResult,
+): Promise<ComputerUseLongMatrixRunResult> {
+  const repairManifestPath = join(matrixDir, 'repair-manifest.json');
+  const repairManifest = renderRepairManifest(matrixId, summary);
+  await writeFile(repairManifestPath, `${JSON.stringify(repairManifest, null, 2)}\n`);
+  return {
+    ...summary,
+    repairManifestPath,
+  };
+}
+
+function renderRepairManifest(matrixId: string, summary: ComputerUseLongMatrixRunResult): ComputerUseLongMatrixRepairManifest {
+  const failedPreflightChecks = (summary.preflight?.checks ?? [])
+    .filter((check) => check.status === 'fail')
+    .map((check) => ({
+      id: check.id,
+      category: check.category,
+      message: check.message,
+      repairAction: check.repairAction,
+    }));
+  const preflightFocus = failedPreflightChecks.map((check) => (
+    `[preflight/${check.category}] ${check.repairAction || check.message || 'Fix the failed preflight check and rerun the matrix.'}`
+  ));
+  const scenarioRepairs = summary.results
+    .filter((result) => result.runStatus !== 'passed' || !result.validationOk || result.issues.length > 0)
+    .map((result) => {
+      const nextRepairFocus = dedupeStrings([
+        ...(result.nextRepairFocus ?? []),
+        ...(result.repairDiagnostics?.nextRepairFocus ?? []),
+        ...repairActionsForIssues(result.issues),
+      ]);
+      return {
+        scenarioId: result.scenarioId,
+        manifestPath: result.manifestPath,
+        summaryPath: result.summaryPath,
+        issues: result.issues,
+        nextRepairFocus,
+      };
+    });
+  const nextRepairFocus = dedupeStrings([
+    ...preflightFocus,
+    ...scenarioRepairs.flatMap((repair) => repair.nextRepairFocus),
+  ]);
+  return {
+    schemaVersion: 'sciforge.computer-use-long.repair-manifest.v1',
+    taskId: 'T084',
+    matrixId,
+    status: 'repair-needed',
+    scenarioIds: summary.scenarioIds,
+    repairNeededScenarioIds: summary.repairNeededScenarioIds,
+    preflightReportPath: summary.preflight?.reportPath,
+    failedPreflightChecks,
+    scenarioRepairs,
+    nextRepairFocus: nextRepairFocus.length
+      ? nextRepairFocus
+      : ['Inspect matrix preflight/results, repair the first blocking CU-LONG issue, then rerun validate-matrix.'],
+  };
+}
+
 export async function renderComputerUseLongMatrixReport(options: {
-  summaryPath: string;
+  summaryPath?: string;
+  outRoot?: string;
   out?: string;
 }): Promise<ComputerUseLongMatrixReport> {
-  const summaryPath = resolve(options.summaryPath);
+  const summaryPath = await resolveComputerUseLongMatrixSummaryPath(options);
   const summary = await readOptionalJson(summaryPath);
   if (!isRecord(summary)) throw new Error(`matrix summary is missing or invalid: ${summaryPath}`);
   const results = Array.isArray(summary.results) ? summary.results.filter(isRecord) : [];
@@ -188,9 +262,11 @@ export async function renderComputerUseLongMatrixReport(options: {
 }
 
 export async function validateComputerUseLongMatrix(options: {
-  summaryPath: string;
+  summaryPath?: string;
+  outRoot?: string;
+  requirePassed?: boolean;
 }): Promise<ComputerUseLongMatrixValidation> {
-  const summaryPath = resolve(options.summaryPath);
+  const summaryPath = await resolveComputerUseLongMatrixSummaryPath(options);
   const summary = await readOptionalJson(summaryPath);
   const issues: string[] = [];
   if (!isRecord(summary)) {
@@ -202,6 +278,7 @@ export async function validateComputerUseLongMatrix(options: {
       metrics: { resultCount: 0, passedScenarios: 0, repairNeededScenarios: 0, preflightFailedChecks: 0, validatedRuns: 0 },
     };
   }
+  issues.push(...collectRefsFirstManifestPayloadIssues(summary, 'matrix summary'));
   if (summary.schemaVersion !== 'sciforge.computer-use-long.matrix-summary.v1') issues.push('matrix summary schemaVersion is invalid');
   if (summary.taskId !== 'T084') issues.push('matrix summary taskId must be T084');
   const executionPlan = isRecord(summary.executionPlan) ? summary.executionPlan : undefined;
@@ -218,6 +295,9 @@ export async function validateComputerUseLongMatrix(options: {
   const repairNeededScenarioIds = Array.isArray(summary.repairNeededScenarioIds) ? summary.repairNeededScenarioIds.map(String) : [];
   const status = String(summary.status || '');
   if (status !== 'passed' && status !== 'repair-needed') issues.push('matrix summary status must be passed or repair-needed');
+  if (options.requirePassed !== false && status !== 'passed') {
+    issues.push('matrix.status must be passed; use --allow-repair-needed only for structural inspection of blocked repair manifests');
+  }
   const unknown = scenarioIds.filter((id) => !/^CU-LONG-\d{3}$/.test(id));
   if (unknown.length) issues.push(`matrix summary contains invalid scenario ids: ${unknown.join(', ')}`);
   for (const id of passedScenarioIds) {
@@ -228,6 +308,10 @@ export async function validateComputerUseLongMatrix(options: {
   }
   if (status === 'passed' && repairNeededScenarioIds.length) issues.push('passed matrix must not include repairNeededScenarioIds');
   if (status === 'repair-needed' && !repairNeededScenarioIds.length) issues.push('repair-needed matrix must include repairNeededScenarioIds');
+  if (status === 'passed') {
+    const missingPassedScenarioIds = scenarioIds.filter((id) => !passedScenarioIds.includes(id));
+    if (missingPassedScenarioIds.length) issues.push(`passed matrix missing passedScenarioIds: ${missingPassedScenarioIds.join(', ')}`);
+  }
 
   const preflight = isRecord(summary.preflight) ? summary.preflight : undefined;
   const preflightChecks = preflight && Array.isArray(preflight.checks) ? preflight.checks.filter(isRecord) : [];
@@ -238,11 +322,64 @@ export async function validateComputerUseLongMatrix(options: {
   }
   if (preflight && preflight.ok === false && preflightFailedChecks === 0) issues.push('failed preflight must include failed checks');
 
+  if (status === 'repair-needed') {
+    const repairManifestPath = typeof summary.repairManifestPath === 'string'
+      ? resolve(dirname(summaryPath), summary.repairManifestPath)
+      : '';
+    if (!repairManifestPath) {
+      issues.push('repair-needed matrix must include repair manifest path and next repair focus');
+    } else {
+      const repairManifest = await readOptionalJson(repairManifestPath);
+      if (!isRecord(repairManifest)) {
+        issues.push(`repair manifest is missing or invalid: ${repairManifestPath}`);
+      } else {
+        issues.push(...collectRefsFirstManifestPayloadIssues(repairManifest, 'repair manifest'));
+        if (repairManifest.schemaVersion !== 'sciforge.computer-use-long.repair-manifest.v1') {
+          issues.push('repair manifest schemaVersion is invalid');
+        }
+        if (repairManifest.taskId !== 'T084') issues.push('repair manifest taskId must be T084');
+        if (repairManifest.status !== 'repair-needed') issues.push('repair manifest status must be repair-needed');
+        const manifestScenarioIds = Array.isArray(repairManifest.scenarioIds) ? repairManifest.scenarioIds.map(String) : [];
+        const manifestRepairNeededScenarioIds = Array.isArray(repairManifest.repairNeededScenarioIds)
+          ? repairManifest.repairNeededScenarioIds.map(String)
+          : [];
+        if (scenarioIds.some((id) => !manifestScenarioIds.includes(id))) {
+          issues.push('repair manifest scenarioIds must cover selected matrix scenarios');
+        }
+        if (repairNeededScenarioIds.some((id) => !manifestRepairNeededScenarioIds.includes(id))) {
+          issues.push('repair manifest repairNeededScenarioIds must cover repair-needed matrix scenarios');
+        }
+        const nextRepairFocus = Array.isArray(repairManifest.nextRepairFocus)
+          ? repairManifest.nextRepairFocus.map(String).filter(Boolean)
+          : [];
+        if (!nextRepairFocus.length) issues.push('repair manifest next repair focus is missing');
+      }
+    }
+  }
+
   const results = Array.isArray(summary.results) ? summary.results.filter(isRecord) : [];
+  const resultScenarioIds = results.map((result) => String(result.scenarioId || ''));
+  const duplicateResultScenarioIds = resultScenarioIds.filter((id, index) => id && resultScenarioIds.indexOf(id) !== index);
+  if (duplicateResultScenarioIds.length) issues.push(`matrix summary contains duplicate result scenarios: ${Array.from(new Set(duplicateResultScenarioIds)).join(', ')}`);
+  if (status === 'passed') {
+    const missingResultScenarioIds = scenarioIds.filter((id) => !resultScenarioIds.includes(id));
+    if (missingResultScenarioIds.length) issues.push(`passed matrix missing result scenarios: ${missingResultScenarioIds.join(', ')}`);
+  }
   let validatedRuns = 0;
   for (const result of results) {
     const scenarioId = String(result.scenarioId || '');
     if (!scenarioIds.includes(scenarioId)) issues.push(`result scenario ${scenarioId || '<missing>'} was not selected`);
+    const runStatus = String(result.runStatus || '');
+    if (status === 'passed' && runStatus !== 'passed') {
+      issues.push(`passed matrix result ${scenarioId || '<missing>'} runStatus must be passed`);
+    }
+    if (status === 'passed' && result.validationOk !== true) {
+      issues.push(`passed matrix result ${scenarioId || '<missing>'} validationOk must be true`);
+    }
+    const scenarioSummaryPath = typeof result.summaryPath === 'string' ? resolve(dirname(summaryPath), result.summaryPath) : '';
+    if (status === 'passed' && !scenarioSummaryPath) {
+      issues.push(`passed matrix result ${scenarioId || '<missing>'} missing summaryPath for scenario summary validator evidence`);
+    }
     const manifestPath = typeof result.manifestPath === 'string' ? result.manifestPath : '';
     if (!manifestPath) {
       issues.push(`result ${scenarioId || '<missing>'} missing manifestPath`);
@@ -250,9 +387,12 @@ export async function validateComputerUseLongMatrix(options: {
     }
     const validation = await validateComputerUseLongRun({
       manifestPath,
-      requirePassed: result.runStatus === 'passed',
+      requirePassed: status === 'passed' || result.runStatus === 'passed',
     });
     validatedRuns += 1;
+    if (scenarioSummaryPath && validation.summaryPath && resolve(scenarioSummaryPath) !== resolve(validation.summaryPath)) {
+      issues.push(`result ${scenarioId} summaryPath does not match current-run scenario summary`);
+    }
     if (Boolean(result.validationOk) !== validation.ok) issues.push(`result ${scenarioId} validationOk does not match validate-run result`);
     if (validation.scenarioId !== scenarioId) issues.push(`result ${scenarioId} manifest scenario mismatch: ${validation.scenarioId}`);
     if (!validation.ok) {
@@ -276,11 +416,16 @@ export async function validateComputerUseLongMatrix(options: {
   };
 }
 
+function dedupeStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim())));
+}
+
 export async function renderComputerUseLongRepairPlan(options: {
-  summaryPath: string;
+  summaryPath?: string;
+  outRoot?: string;
   out?: string;
 }): Promise<ComputerUseLongRepairPlan> {
-  const summaryPath = resolve(options.summaryPath);
+  const summaryPath = await resolveComputerUseLongMatrixSummaryPath(options);
   const summary = await readOptionalJson(summaryPath);
   if (!isRecord(summary)) throw new Error(`matrix summary is missing or invalid: ${summaryPath}`);
   const markdown = renderRepairPlanMarkdown(summaryPath, summary);
@@ -294,6 +439,42 @@ export async function renderComputerUseLongRepairPlan(options: {
     markdown,
     actionCount,
   };
+}
+
+export async function resolveComputerUseLongMatrixSummaryPath(options: {
+  summaryPath?: string;
+  outRoot?: string;
+} = {}): Promise<string> {
+  if (options.summaryPath) return resolve(options.summaryPath);
+  const outRoot = resolve(options.outRoot || join('docs', 'test-artifacts', 'computer-use-long-matrix'));
+  const candidates: Array<{ path: string; mtimeMs: number; name: string }> = [];
+
+  const addCandidate = async (summaryPath: string, name: string) => {
+    try {
+      const summaryStat = await stat(summaryPath);
+      if (summaryStat.isFile()) candidates.push({ path: summaryPath, mtimeMs: summaryStat.mtimeMs, name });
+    } catch {
+      // Missing candidate paths are expected while scanning a matrix artifact root.
+    }
+  };
+
+  await addCandidate(join(outRoot, 'matrix-summary.json'), 'matrix-summary.json');
+  let entries: Array<{ isDirectory(): boolean; name: string }>;
+  try {
+    entries = await readdir(outRoot, { withFileTypes: true });
+  } catch {
+    throw new Error(`No CU-LONG matrix summary found under ${outRoot}; run npm run computer-use-long:run-matrix or pass --summary <matrix-summary.json>.`);
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    await addCandidate(join(outRoot, entry.name, 'matrix-summary.json'), entry.name);
+  }
+  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs || right.name.localeCompare(left.name));
+  const latest = candidates[0]?.path;
+  if (!latest) {
+    throw new Error(`No CU-LONG matrix summary found under ${outRoot}; run npm run computer-use-long:run-matrix or pass --summary <matrix-summary.json>.`);
+  }
+  return latest;
 }
 
 export async function preflightComputerUseLong(options: {
@@ -316,6 +497,7 @@ export async function preflightComputerUseLong(options: {
     await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.json')),
     await readOptionalJson(resolve(workspacePath, '.sciforge', 'config.local.json')),
   ].filter(isRecord);
+  const localProviderCandidates = configCandidates.map((config) => localProviderSettings(config));
   const checks: ComputerUseLongPreflightResult['checks'] = [];
   for (const issue of poolIssues) {
     checks.push({
@@ -391,17 +573,44 @@ export async function preflightComputerUseLong(options: {
   );
   const allowSharedSystemInput = /^1|true|yes$/i.test(process.env.SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT || '');
   const independentInputReady = Boolean(independentInputAdapter && /virtual-hid|remote-desktop/i.test(independentInputAdapter));
-  const independentInputExecutable = isExecutableIndependentInputAdapter(independentInputAdapter, independentInputAdapterProvider);
+  const independentInputExecutable = resolveExecutableIndependentInputAdapter(
+    independentInputAdapter,
+    independentInputAdapterProvider,
+  );
+  const nativeHostEvidence = desktopNativeHostEvidence(configCandidates);
+  const desktopNativeHostReady = Boolean(desktopEnabled && nativeHostEvidence);
+  checks.push(dryRun ? {
+    id: 'desktop-product-path',
+    status: 'pass',
+    category: 'executor',
+    message: 'Dry-run is diagnostic-only and records file-ref evidence without claiming a real Desktop product pass.',
+  } : desktopNativeHostReady ? {
+    id: 'desktop-product-path',
+    status: 'pass',
+    category: 'executor',
+    message: `Desktop native host evidence is configured for real CU-LONG runs: ${nativeHostEvidence}.`,
+  } : independentInputExecutable ? {
+    id: 'desktop-product-path',
+    status: 'pass',
+    category: 'executor',
+    message: `Executable independent input adapter is configured for real CU-LONG runs: ${independentInputExecutable.adapter} via ${independentInputExecutable.provider}.`,
+  } : {
+    id: 'desktop-product-path',
+    status: 'fail',
+    category: 'executor',
+    message: 'Real CU-LONG preflight requires Desktop native host evidence or an executable independent input adapter provider; bridge or adapter names alone are diagnostic-only.',
+    repairAction: 'Run from SciForge Desktop with native host evidence, or configure SCIFORGE_VISION_INPUT_ADAPTER=remote-desktop plus SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER=sciforge-simulated-remote-desktop.',
+  });
   checks.push(dryRun ? {
     id: 'input-isolation',
     status: 'pass',
     category: 'scheduler',
     message: 'Dry-run uses a virtual input channel and cannot move the user pointer or type on the user keyboard.',
-  } : independentInputReady && independentInputExecutable ? {
+  } : independentInputExecutable ? {
     id: 'input-isolation',
     status: 'pass',
     category: 'scheduler',
-    message: `Independent input adapter is configured and executable: ${independentInputAdapter} via ${independentInputAdapterProvider}.`,
+    message: `Independent input adapter is configured and executable: ${independentInputExecutable.adapter} via ${independentInputExecutable.provider}.`,
   } : independentInputReady ? {
     id: 'input-isolation',
     status: 'fail',
@@ -439,8 +648,8 @@ export async function preflightComputerUseLong(options: {
       getConfigString(config, ['visionSense', 'plannerProfile']),
     ]),
   );
-  const runtimeApiKeyReady = Boolean(firstString(process.env.SCIFORGE_RUNTIME_API_KEY));
-  const runtimeUpstreamBaseUrlReady = Boolean(runtimeCodexUpstreamBaseUrl(configCandidates));
+  const runtimeApiKeyReady = Boolean(runtimeCodexApiKey(localProviderCandidates));
+  const runtimeUpstreamBaseUrlReady = Boolean(runtimeCodexUpstreamBaseUrl(configCandidates, localProviderCandidates));
   const missingRuntimePlannerConfig = [
     runtimeApiKeyReady ? undefined : 'SCIFORGE_RUNTIME_API_KEY',
     runtimeUpstreamBaseUrlReady ? undefined : 'SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL',
@@ -459,43 +668,21 @@ export async function preflightComputerUseLong(options: {
     category: 'planner',
     message: `Runtime Codex text planner config is incomplete: missing ${missingRuntimePlannerConfig.join(', ')}.`,
     repairAction: [
-      'Set SCIFORGE_RUNTIME_API_KEY in the service environment, not via config-file secret fallback.',
+      'Set SCIFORGE_RUNTIME_API_KEY in the service environment or ignored local config.',
       'Set SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL in the service environment or ignored local config.',
       'Start or verify the provider proxy with SCIFORGE_PROXY_PORT=3891.',
       'Then rerun computer-use-next:preflight without --actions-json before attempting a real CU-NEXT scenario.',
     ].join(' '),
   });
 
-  const kvGrounderUrl = stripTrailingSlash(firstString(process.env.SCIFORGE_VISION_KV_GROUND_URL, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'grounderBaseUrl']))));
-  if (!kvGrounderUrl) {
-    checks.push({
-      id: 'grounder',
-      status: hasTestActionFixtures ? 'warn' : 'pass',
-      category: 'grounder',
-      message: 'Model Router grounding translator capability is the default; no legacy KV-Ground config is required.',
-    });
-  } else if (dryRun || hasTestActionFixtures) {
-    checks.push({
-      id: 'grounder',
-      status: hasTestActionFixtures ? 'warn' : 'pass',
-      category: 'grounder',
-      message: 'Legacy KV-Ground-compatible endpoint is configured; live health is not required for dry-run or fixture actions.',
-    });
-  } else {
-    const health = await checkKvGroundHealth(kvGrounderUrl);
-    checks.push(health.ok ? {
-      id: 'grounder',
-      status: 'pass',
-      category: 'grounder',
-      message: `Legacy KV-Ground health check passed at ${health.healthUrl}.`,
-    } : {
-      id: 'grounder',
-      status: 'fail',
-      category: 'grounder',
-      message: `Legacy KV-Ground health check failed at ${health.healthUrl}: ${health.reason}.`,
-      repairAction: 'Unset SCIFORGE_VISION_KV_GROUND_URL to use the default Model Router grounding translator, or start the explicit legacy KV-Ground endpoint and verify its /health route.',
-    });
-  }
+  checks.push({
+    id: 'grounding-translator',
+    status: hasTestActionFixtures ? 'warn' : 'pass',
+    category: 'grounding-translator',
+    message: hasTestActionFixtures
+      ? 'Model Router grounding translator is the default; test-only fixture actions bypass live grounding.'
+      : 'Model Router grounding translator capability is the default Computer Use grounding path.',
+  });
 
   const highRiskAllowed = /^(?:1|true|yes)$/i.test(firstString(process.env.SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS, ...configCandidates.map((config) => getConfigString(config, ['visionSense', 'allowHighRiskActions']))) || '');
   checks.push(highRiskAllowed ? {
@@ -521,7 +708,17 @@ export async function preflightComputerUseLong(options: {
   return { ok, scenarioIds, dryRun, checks, reportPath };
 }
 
-function runtimeCodexUpstreamBaseUrl(configCandidates: Array<Record<string, unknown>>) {
+function runtimeCodexApiKey(localProviderCandidates: Array<ReturnType<typeof localProviderSettings>>) {
+  if (process.env.SCIFORGE_RUNTIME_API_KEY !== undefined) {
+    return firstString(process.env.SCIFORGE_RUNTIME_API_KEY);
+  }
+  return firstString(...localProviderCandidates.map((settings) => settings.apiKey));
+}
+
+function runtimeCodexUpstreamBaseUrl(
+  configCandidates: Array<Record<string, unknown>>,
+  localProviderCandidates: Array<ReturnType<typeof localProviderSettings>>,
+) {
   if (process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL !== undefined) {
     return firstString(process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL);
   }
@@ -537,42 +734,26 @@ function runtimeCodexUpstreamBaseUrl(configCandidates: Array<Record<string, unkn
       getConfigString(config, ['runtimeCodexProxy', 'upstreamBaseUrl']),
       getConfigString(config, ['runtimeCodexProxy', 'baseUrl']),
     ]),
+    ...localProviderCandidates.map((settings) => settings.baseUrl),
   );
 }
 
-async function checkKvGroundHealth(baseUrl: string): Promise<{ ok: true; healthUrl: string } | { ok: false; healthUrl: string; reason: string }> {
-  const healthUrl = kvGroundHealthUrl(baseUrl);
-  const diagnosticHealthUrl = sanitizeDiagnosticUrl(healthUrl);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  const fail = (reason: string) => ({
-    ok: false as const,
-    healthUrl: diagnosticHealthUrl,
-    reason: sanitizeDiagnosticText(reason),
-  });
-  try {
-    const response = await fetch(healthUrl, { signal: controller.signal });
-    if (!response.ok) return fail(`HTTP ${response.status}`);
-    const text = await response.text();
-    const payload = parseJson(text);
-    if (!isRecord(payload)) return fail('response was not JSON');
-    if (payload.ok !== true) return fail(`response ok=${String(payload.ok)}`);
-    return { ok: true, healthUrl: diagnosticHealthUrl };
-  } catch (error) {
-    return fail(error instanceof Error ? error.message : String(error));
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function kvGroundHealthUrl(baseUrl: string) {
-  try {
-    const url = new URL(baseUrl);
-    url.pathname = `${url.pathname.replace(/\/+$/, '')}/health`;
-    return url.toString();
-  } catch {
-    return `${baseUrl}/health`;
-  }
+function desktopNativeHostEvidence(configCandidates: Array<Record<string, unknown>>) {
+  const evidence = firstString(
+    process.env.SCIFORGE_VISION_DESKTOP_NATIVE_HOST,
+    process.env.SCIFORGE_BROWSER_HOST_NATIVE_ADAPTER_URL,
+    process.env.SCIFORGE_RIGHT_PANE_NATIVE_OS_UI_BROWSER_HOST_ACTION_CHANNEL_URL,
+    process.env.SCIFORGE_VIRTUAL_APP_SCREEN_REAL_HOST_SESSION_EVIDENCE_MANIFEST,
+    ...configCandidates.flatMap((config) => [
+      getConfigString(config, ['visionSense', 'desktopNativeHost']),
+      getConfigString(config, ['visionSense', 'nativeHostEvidence']),
+      getConfigString(config, ['computerUse', 'desktopNativeHost']),
+      getConfigString(config, ['computerUse', 'nativeHostEvidence']),
+      getConfigString(config, ['desktop', 'nativeHost']),
+    ]),
+  );
+  if (!evidence || /^(?:0|false|no|disabled)$/i.test(evidence)) return undefined;
+  return sanitizeDiagnosticUrl(evidence);
 }
 
 function sanitizeDiagnosticUrl(value: string) {
@@ -612,17 +793,18 @@ function stripTrailingSlash(value: string | undefined) {
   return value?.replace(/\/+$/, '');
 }
 
-function parseJson(value: string) {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function isExecutableIndependentInputAdapter(adapter: string | undefined, provider: string | undefined) {
-  const normalizedAdapter = adapter?.trim().toLowerCase().replace(/[_\s]+/g, '-');
-  const normalizedProvider = provider?.trim().toLowerCase().replace(/[_\s]+/g, '-');
-  return normalizedAdapter === 'remote-desktop'
-    && (normalizedProvider === 'sciforge-simulated-remote-desktop' || normalizedProvider === 'simulated-remote-desktop');
+function resolveExecutableIndependentInputAdapter(adapter: string | undefined, provider: string | undefined) {
+  const config = {
+    inputAdapter: adapter,
+    independentInputAdapterProvider: provider,
+  } as Parameters<typeof executableIndependentInputAdapter>[0];
+  const executableAdapter = executableIndependentInputAdapter(config);
+  const executionBoundary = independentInputAdapterExecutionBoundary(config);
+  return executableAdapter && executionBoundary
+    ? {
+        adapter: executableAdapter,
+        provider: executionBoundary.replace(/-input-adapter$/, ''),
+        executionBoundary,
+      }
+    : undefined;
 }

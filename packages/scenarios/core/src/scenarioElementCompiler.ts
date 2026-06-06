@@ -65,6 +65,20 @@ export interface ScenarioRecommendationOptions {
   allowAgentServer?: boolean;
 }
 
+type SemanticConfidence = 'high' | 'low';
+
+interface SemanticSignalCandidate<TId extends string> {
+  id: TId;
+  structuredSignals: string[];
+  lexicalFeatures: string[];
+  confidence: SemanticConfidence;
+  score: number;
+}
+
+interface SkillSemanticSignalCandidate extends SemanticSignalCandidate<string> {
+  skill: SkillElement;
+}
+
 export function compileScenarioIRFromSelection(
   selection: ScenarioElementSelection,
   registry: ElementRegistry = elementRegistry,
@@ -159,27 +173,21 @@ export function recommendScenarioElements(
   options: ScenarioRecommendationOptions = {},
 ): ScenarioElementRecommendation {
   const text = description.toLowerCase();
-  const inferredDomain = inferDomainFromText(text);
-  const targetArtifactTypes = inferTargetArtifactTypes(text, inferredDomain);
-  const complexOpenEnded = requiresGeneratedCapability(text);
-  const matchedSkills = registry.skills
-    .filter((skill) => skill.skillDomains.includes(inferredDomain))
-    .filter((skill) => skill.source !== 'generated')
-    .map((skill) => ({
-      skill,
-      score: scoreSkillForDescription(skill, text, targetArtifactTypes),
-    }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.skill.id.localeCompare(right.skill.id))
-    .map((item) => item.skill)
-    .slice(0, 4);
+  const inferredDomainCandidate = bestSemanticCandidate(domainSemanticCandidates(text));
+  const inferredDomain = inferredDomainCandidate?.id ?? 'literature';
+  const targetArtifactTypes = inferredDomainCandidate ? inferTargetArtifactTypes(text, inferredDomain) : [];
+  const generatedCapabilityCandidate = generatedCapabilitySemanticCandidate(text, inferredDomainCandidate);
+  const complexOpenEnded = generatedCapabilityCandidate.confidence === 'high';
+  const matchedSkills = inferredDomainCandidate
+    ? skillSemanticCandidates(registry, inferredDomain, text, targetArtifactTypes)
+      .filter((candidate) => candidate.confidence === 'high')
+      .map((candidate) => candidate.skill)
+      .slice(0, 4)
+    : [];
   const generatedSkill = registry.skills.find((skill) => skill.id === `agentserver.generate.${inferredDomain}`);
   const selectedSkills = complexOpenEnded && generatedSkill
     ? [generatedSkill]
-    : unique([
-      ...matchedSkills,
-      ...(!matchedSkills.length && generatedSkill ? [generatedSkill] : []),
-    ]).slice(0, 5);
+    : unique(matchedSkills).slice(0, 5);
   const selectedArtifactTypes = unique(targetArtifactTypes.length
     ? targetArtifactTypes
     : selectedSkills.flatMap((skill) => skill.outputArtifactTypes).filter((artifactType) => artifactType !== 'runtime-artifact'));
@@ -187,13 +195,14 @@ export function recommendScenarioElements(
     registry.artifacts.filter((artifact) => selectedArtifactTypes.includes(artifact.artifactType)),
     registry,
   ), selectedArtifactTypes, complexOpenEnded);
+  // Final element recommendations must be selected from semantic candidates. Keyword/token detectors stay low-confidence features only.
   return {
     source: options.allowAgentServer && options.agentServerBaseUrl ? 'agentserver-placeholder' : 'heuristic',
     selectedSkillIds: selectedSkills.map((skill) => skill.id),
-    selectedToolIds: registry.tools
+    selectedToolIds: inferredDomainCandidate ? registry.tools
       .filter((tool) => tool.skillDomains.includes(inferredDomain))
       .slice(0, 4)
-      .map((tool) => tool.id),
+      .map((tool) => tool.id) : [],
     selectedArtifactTypes,
     selectedComponentIds,
     selectedFailurePolicyIds: ['failure.missing-input', 'failure.schema-mismatch', 'failure.backend-unavailable'],
@@ -477,21 +486,13 @@ function inferSkillDomain(skills: SkillElement[]): SkillDomain {
 }
 
 export function inferDomainFromText(text: string): SkillDomain {
-  if (/chembl|opentargets|drug|compound|disease|pathway|target|knowledge graph|knowledge[-\s]?graph|知识图谱|疾病|化合物|药物|靶点/.test(text)) return 'knowledge';
-  if (/rna|scrna|single[-\s]?cell|scatac|cite[-\s]?seq|perturb[-\s]?seq|velocity|scvelo|tabula sapiens|seurat|scanpy|harmony|scvi|totalvi|spatial transcriptomics|spatial|omics|matrix|deseq|umap|atlas|integration|label transfer|batch mixing|reference mapping|表达|差异|组学|单细胞|细胞图谱|跨数据集|标签迁移|整合|空间转录组/.test(text)) return 'omics';
-  if (/pdb|protein structure|structure|alphafold|ligand|residue|pocket|蛋白结构|结构|口袋|配体|残基/.test(text)) return 'structure';
-  return 'literature';
+  return bestSemanticCandidate(domainSemanticCandidates(text))?.id ?? 'literature';
 }
 
 function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
-  const artifacts = new Set<string>();
-  if (/report|summary|summari[sz]e|review|markdown|pdf|download|read|阅读|总结|报告|综述|下载/.test(text)) artifacts.add('research-report');
-  if (/paper|literature|pubmed|arxiv|semantic scholar|crossref|文献|论文|文章/.test(text)
-    || (domain === 'literature' && /evidence|证据/.test(text))) artifacts.add('paper-list');
-  if (/structure|pdb|alphafold|molecule|protein|ligand|residue|结构|蛋白|配体|残基/.test(text)) artifacts.add('structure-summary');
-  if (domain === 'omics' && /rna|scrna|omics|matrix|deseq|scanpy|umap|expression|表达|差异|组学|单细胞/.test(text)) artifacts.add('omics-differential-expression');
-  if (/chembl|uniprot|opentargets|drug|compound|disease|pathway|knowledge graph|network|知识图谱|疾病|化合物|药物|靶点|网络/.test(text)) artifacts.add('knowledge-graph');
-  if (/blast|alignment|sequence|序列|比对|同源/.test(text)) artifacts.add('sequence-alignment');
+  const artifacts = new Set(artifactSemanticCandidates(text)
+    .filter((candidate) => candidate.confidence === 'high')
+    .map((candidate) => candidate.id));
   if (isComplexCellReproductionTask(text)) {
     artifacts.add('omics-differential-expression');
     artifacts.add('research-report');
@@ -503,9 +504,142 @@ function inferTargetArtifactTypes(text: string, domain: SkillDomain) {
   return Array.from(artifacts);
 }
 
-function requiresGeneratedCapability(text: string) {
-  return /scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/.test(text)
-    || isComplexCellReproductionTask(text);
+function domainSemanticCandidates(text: string): Array<SemanticSignalCandidate<SkillDomain>> {
+  const signals: Record<SkillDomain, { structured: RegExp[]; lexical: RegExp[] }> = {
+    literature: {
+      structured: [/\b(pubmed|paper-list|semantic scholar|crossref|clinical trial|evidence matrix|文献|论文|证据矩阵|临床试验)\b/],
+      lexical: [/\b(paper|literature|evidence|review|trial)\b|综述|证据/],
+    },
+    structure: {
+      structured: [/\b(pdb|protein structure|structure viewer|molecule viewer|alphafold|ligand|residue|pocket|coordinate|蛋白结构|结构|口袋|配体|残基)\b/],
+      lexical: [/\b(structure|protein|binding)\b/],
+    },
+    omics: {
+      structured: [/\b(rna|scrna|single[-\s]?cell|scatac|cite[-\s]?seq|perturb[-\s]?seq|velocity|scvelo|tabula sapiens|seurat|scanpy|harmony|scvi|totalvi|spatial transcriptomics|omics|deseq|umap|atlas|label transfer|batch mixing|reference mapping|crispr screen|genome[-\s]?wide screen|表达|差异|组学|单细胞|细胞图谱|跨数据集|标签迁移|整合|空间转录组)\b/],
+      lexical: [/\b(spatial|screen|matrix|expression|integration)\b/],
+    },
+    knowledge: {
+      structured: [/\b(chembl|opentargets|drug|compound|disease|pathway|knowledge graph|knowledge[-\s]?graph|uniprot|知识图谱|疾病|化合物|药物|靶点)\b/],
+      lexical: [/\b(target|gene|protein|network)\b/],
+    },
+  };
+  return (Object.keys(signals) as SkillDomain[])
+    .map((domain) => semanticCandidate(domain, text, signals[domain]))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+}
+
+function artifactSemanticCandidates(text: string): Array<SemanticSignalCandidate<string>> {
+  const signals: Record<string, { structured: RegExp[]; lexical: RegExp[] }> = {
+    'research-report': {
+      structured: [/\b(research report|markdown report|pdf report|systematic review|总结报告|研究报告)\b/],
+      lexical: [/\b(report|summary|summari[sz]e|review|markdown|pdf|download|read)\b|阅读|总结|报告|综述|下载/],
+    },
+    'paper-list': {
+      structured: [/\b(paper-list|pubmed|semantic scholar|crossref|文献列表)\b/],
+      lexical: [/\b(paper|literature|arxiv|evidence)\b|文献|论文|文章|证据/],
+    },
+    'structure-summary': {
+      structured: [/\b(structure-summary|pdb|alphafold|protein structure|structure viewer|molecule viewer|ligand|residue|pocket|coordinate|结构摘要|蛋白结构|结构|配体|残基)\b/],
+      lexical: [/\b(structure|molecule|protein)\b/],
+    },
+    'omics-differential-expression': {
+      structured: [/\b(omics-differential-expression|differential expression|rna|scrna|single[-\s]?cell|omics|deseq|scanpy|umap|spatial transcriptomics|crispr screen|表达|差异|组学|单细胞)\b/],
+      lexical: [/\b(matrix|expression|screen|spatial)\b/],
+    },
+    'knowledge-graph': {
+      structured: [/\b(knowledge graph|knowledge[-\s]?graph|chembl|uniprot|opentargets|drug|compound|disease|pathway|知识图谱|疾病|化合物|药物|靶点|网络)\b/],
+      lexical: [/\b(target|network|gene|protein)\b/],
+    },
+    'sequence-alignment': {
+      structured: [/\b(blast|sequence alignment|序列比对)\b/],
+      lexical: [/\b(alignment|sequence)\b|序列|比对|同源/],
+    },
+  };
+  return Object.entries(signals)
+    .map(([artifactType, artifactSignals]) => semanticCandidate(artifactType, text, artifactSignals))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+}
+
+function skillSemanticCandidates(
+  registry: ElementRegistry,
+  domain: SkillDomain,
+  text: string,
+  targetArtifactTypes: string[],
+): SkillSemanticSignalCandidate[] {
+  return registry.skills
+    .filter((skill) => skill.skillDomains.includes(domain))
+    .filter((skill) => skill.source !== 'generated')
+    .map((skill) => {
+      const structuredSignals = [
+        ...skill.outputArtifactTypes
+          .filter((artifactType) => targetArtifactTypes.includes(artifactType))
+          .map((artifactType) => `output:${artifactType}`),
+        ...(skill.skillDomains.includes(domain) && targetArtifactTypes.some((artifactType) => skill.outputArtifactTypes.includes(artifactType))
+          ? [`domain:${domain}`]
+          : []),
+      ];
+      const lexicalFeatures = scoreSkillForDescription(skill, text, targetArtifactTypes) > 0
+        ? ['manifest-token-overlap']
+        : [];
+      return {
+        id: skill.id,
+        skill,
+        structuredSignals,
+        lexicalFeatures,
+        confidence: structuredSignals.length > 0 ? 'high' as const : 'low' as const,
+        score: structuredSignals.length * 10 + lexicalFeatures.length,
+      };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+}
+
+function generatedCapabilitySemanticCandidate(
+  text: string,
+  domainCandidate: SemanticSignalCandidate<SkillDomain> | undefined,
+): SemanticSignalCandidate<'generated-capability'> {
+  const structuredSignals = domainCandidate && (
+    /\b(scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web)\b|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/.test(text)
+    || isComplexCellReproductionTask(text)
+  )
+    ? [`domain:${domainCandidate.id}`]
+    : [];
+  const lexicalFeatures = matchedSignalSources([
+    /\b(scenario|workflow|pipeline|package|compile|generate|build|agent|download|read|report|summary|summari[sz]e|systematic|latest|today|arxiv|browser|google|web)\b|场景|流程|编译|生成|下载|阅读|报告|总结|系统性|最新|今天|浏览器|搜索/,
+  ], text);
+  return {
+    id: 'generated-capability',
+    structuredSignals,
+    lexicalFeatures,
+    confidence: structuredSignals.length > 0 ? 'high' : 'low',
+    score: structuredSignals.length * 10 + lexicalFeatures.length,
+  };
+}
+
+function semanticCandidate<TId extends string>(
+  id: TId,
+  text: string,
+  signals: { structured: RegExp[]; lexical: RegExp[] },
+): SemanticSignalCandidate<TId> {
+  const structuredSignals = matchedSignalSources(signals.structured, text);
+  const lexicalFeatures = matchedSignalSources(signals.lexical, text);
+  return {
+    id,
+    structuredSignals,
+    lexicalFeatures,
+    confidence: structuredSignals.length > 0 ? 'high' : 'low',
+    score: structuredSignals.length * 10 + lexicalFeatures.length,
+  };
+}
+
+function bestSemanticCandidate<TId extends string>(candidates: Array<SemanticSignalCandidate<TId>>) {
+  return candidates.find((candidate) => candidate.confidence === 'high');
+}
+
+function matchedSignalSources(patterns: RegExp[], text: string) {
+  return patterns.filter((pattern) => pattern.test(text)).map((pattern) => pattern.source);
 }
 
 function scoreSkillForDescription(skill: SkillElement, text: string, targetArtifactTypes: string[]) {

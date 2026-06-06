@@ -32,6 +32,7 @@ import {
 } from './browser-host-session.js';
 import {
   BROWSER_HOST_COMPUTER_USE_PROVIDER_ID,
+  browserHostComputerUseActionReadiness,
   browserHostActionFromComputerUse,
   executeBrowserHostComputerUseAction,
 } from './browser-host-computer-use.js';
@@ -308,9 +309,17 @@ test('BrowserHostSession publishes bounded visible action and risk ledger withou
       lastAction: {
         action: 'click',
         status: 'completed',
-        evidenceRefs: ['browser-host-session:visible-action-session/visible-actions/agent-click-visible.json'],
+        evidenceRefs: [
+          'browser-host-session:visible-action-session/visible-actions/agent-click-visible.json',
+          'browser-host-session:visible-action-session/actions/agent-click-visible/verification/verifier.json',
+          'browser-host-session:visible-action-session/actions/agent-click-visible/freshness-invalidation.json',
+        ],
       },
-      evidenceRefs: ['browser-host-session:visible-action-session/actor-cursors/cursor-shared-browser.json'],
+      evidenceRefs: [
+        'browser-host-session:visible-action-session/actor-cursors/cursor-shared-browser.json',
+        'browser-host-session:visible-action-session/actions/agent-click-visible/verification/verifier.json',
+        'browser-host-session:visible-action-session/actions/agent-click-visible/freshness-invalidation.json',
+      ],
     });
     assert.deepEqual(actorClicked.actorCursors, [actorClicked.actorCursor]);
 
@@ -1020,8 +1029,20 @@ test('BrowserHostSession search persists bounded search refs and excludes search
       'https://example.org/browser-host',
       'https://developer.mozilla.org/docs/Web/API',
     ]);
+    assert.equal(output.sourcePages?.length, 2);
+    assert.deepEqual(output.sourcePages?.map((page) => [page.resultIndex, page.status, page.url]), [
+      [0, 'read', 'https://example.org/browser-host'],
+      [1, 'read', 'https://developer.mozilla.org/docs/Web/API'],
+    ]);
+    assert.match(output.sourcePages?.[0]?.textPreview ?? '', /Browser Host/);
+    assert.match(output.sourcePages?.[0]?.textRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-1-[a-f0-9]+\.txt$/);
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://example.org/browser-host'));
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://developer.mozilla.org/docs/Web/API'));
+    const firstSourceText = await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePages?.[0]?.textRef ?? '')), 'utf8');
+    assert.match(firstSourceText, /Browser Host/);
     assert.match(output.searchResultRef, /^browser-host-session:/);
     assert.match(browserHostSearchSummary(output), /BrowserHostSession search: browser host session/);
+    assert.match(browserHostSearchSummary(output), /Opened source pages: 2/);
     assert.equal(output.automationSummary?.schemaVersion, 'sciforge.browser-runtime.automation-summary.v1');
     assert.equal(output.automationSummary?.kind, 'scrape');
     assert.equal(output.automationSummary?.boundedRefsOnly, true);
@@ -1036,10 +1057,187 @@ test('BrowserHostSession search persists bounded search refs and excludes search
       limit: 1,
     });
     assert.equal(reused.session.id, visible.id);
+    assert.equal(reused.sourcePages?.length, 1);
     assert.equal(reused.session.automationSummary?.kind, 'scrape');
     assert.equal(reused.session.automationSummary?.refs.some((ref) => ref.kind === 'search-result' && ref.ref === reused.searchResultRef), true);
     assert.equal(drivers.length, 2);
     assert.ok(drivers[1]?.actions.some((action) => action.startsWith('goto:https://www.bing.com/search?')));
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search prioritizes preferred official results before reading source pages', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-preferred-search-'));
+  const { factory, drivers } = fakeDriverFactory();
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'Hugging Face Daily Papers 今天热门论文',
+      limit: 3,
+      sourcePageLimit: 1,
+      preferredResults: [{
+        title: 'Hugging Face Daily Papers API',
+        url: 'https://huggingface.co/api/daily_papers?sort=trending',
+        snippet: 'Official Hugging Face Daily Papers API.',
+      }],
+    });
+
+    assert.equal(output.results[0]?.title, 'Hugging Face Daily Papers API');
+    assert.equal(output.results[0]?.url, 'https://huggingface.co/api/daily_papers?sort=trending');
+    assert.equal(output.sourcePages?.[0]?.url, 'https://huggingface.co/api/daily_papers?sort=trending');
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://huggingface.co/api/daily_papers?sort=trending'));
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search stores a bounded readable summary for Hugging Face Daily Papers API source pages', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-daily-papers-summary-'));
+  const dailyPapersApiUrl = 'https://huggingface.co/api/daily_papers?sort=trending';
+  const dailyPapersJson = JSON.stringify([
+    {
+      paper: {
+        id: '2606.03264',
+        authors: [
+          { _id: 'author-secret-1', name: 'Zelun Zhang', hidden: false },
+          { _id: 'author-secret-2', name: 'Hongen Liu', hidden: false },
+        ],
+        publishedAt: '2026-06-02T00:00:00.000Z',
+        title: 'PaddleOCR-VL-1.6: Expanding the Frontier of Document Parsing',
+        summary: 'We introduce PaddleOCR-VL-1.6, an upgraded compact document parsing model with region-aware data optimization and progressive post-training.',
+        upvotes: 13,
+      },
+      publishedAt: '2026-06-01T20:00:00.000Z',
+      title: 'PaddleOCR-VL-1.6: Expanding the Frontier of Document Parsing',
+      summary: 'Outer duplicate summary should not change the structured answer.',
+      numComments: 1,
+    },
+    {
+      paper: {
+        id: '2412.20138',
+        authors: [
+          { _id: 'author-secret-3', name: 'Yijia Xiao', hidden: false },
+          { _id: 'author-secret-4', name: 'Edward Sun', hidden: false },
+        ],
+        publishedAt: '2024-12-28T12:54:06.000Z',
+        title: 'TradingAgents: Multi-Agents LLM Financial Trading Framework',
+        summary: 'TradingAgents proposes a stock trading framework inspired by trading firms with LLM-powered analysts, researchers, risk managers, and traders.',
+        upvotes: 86,
+      },
+      publishedAt: '2024-12-28T07:54:06.000Z',
+      title: 'TradingAgents: Multi-Agents LLM Financial Trading Framework',
+      summary: 'Outer duplicate summary should not leak raw JSON details.',
+      numComments: 4,
+    },
+  ]);
+  const { factory } = fakeDriverFactory({
+    textByUrl: {
+      [dailyPapersApiUrl]: dailyPapersJson,
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'Hugging Face Daily Papers 今天热门论文',
+      limit: 1,
+      sourcePageLimit: 1,
+      preferredResults: [{
+        title: 'Hugging Face Daily Papers API',
+        url: dailyPapersApiUrl,
+        snippet: 'Official Hugging Face Daily Papers API.',
+      }],
+    });
+
+    const sourcePage = output.sourcePages?.[0];
+    assert.equal(sourcePage?.url, dailyPapersApiUrl);
+    assert.match(sourcePage?.textSummary ?? '', /PaddleOCR-VL-1\.6/);
+    assert.match(sourcePage?.textSummary ?? '', /TradingAgents/);
+    assert.match(sourcePage?.textSummary ?? '', /Zelun Zhang/);
+    assert.match(sourcePage?.textSummary ?? '', /86 upvotes/);
+    assert.doesNotMatch(sourcePage?.textSummary ?? '', /\{"paper"|author-secret|"_id"/);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search writes compact Daily Papers API source artifacts instead of truncated raw JSON', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-daily-papers-large-summary-'));
+  const dailyPapersApiUrl = 'https://huggingface.co/api/daily_papers?date=2026-06-05';
+  const dailyPapersJson = JSON.stringify(Array.from({ length: 40 }, (_, index) => ({
+    paper: {
+      id: `2606.${String(index + 1).padStart(5, '0')}`,
+      authors: [
+        { _id: `secret-author-${index}-1`, name: `Author ${index + 1}A` },
+        { _id: `secret-author-${index}-2`, name: `Author ${index + 1}B` },
+      ],
+      submittedOnDailyAt: '2026-06-05T09:00:00.000Z',
+      title: `Large Daily Paper ${index + 1}`,
+      summary: index < 3
+        ? `A concise research summary for large daily paper ${index + 1}. It covers repository context, evaluation detail, and implementation notes.`
+        : `A concise research summary for large daily paper ${index + 1}. ${'Repository context, evaluation detail, and implementation notes. '.repeat(70)}`,
+      upvotes: 80 - index,
+    },
+    numComments: index + 1,
+  })));
+  assert.ok(dailyPapersJson.length > 60_000);
+  const { factory } = fakeDriverFactory({
+    textByUrl: {
+      [dailyPapersApiUrl]: dailyPapersJson,
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'Hugging Face Daily Papers 今天热门论文',
+      limit: 1,
+      sourcePageLimit: 1,
+      preferredResults: [{
+        title: 'Hugging Face Daily Papers API (2026-06-05)',
+        url: dailyPapersApiUrl,
+        snippet: 'Official Hugging Face Daily Papers API fallback for 2026-06-05.',
+      }],
+    });
+
+    const sourcePage = output.sourcePages?.[0];
+    const sourceText = await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(sourcePage?.textRef ?? '')), 'utf8');
+    assert.match(sourcePage?.textSummary ?? '', /Large Daily Paper 1/);
+    assert.match(sourceText, /Hugging Face Daily Papers API/);
+    assert.match(sourceText, /Large Daily Paper 1/);
+    assert.match(sourceText, /Large Daily Paper 3/);
+    assert.doesNotMatch(sourceText, /^\[\{/);
+    assert.doesNotMatch(sourceText, /"_id"|secret-author/);
+    assert.ok(sourceText.length < 10_000);
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession search summarizes empty Hugging Face Daily Papers date API responses without raw JSON', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-daily-papers-empty-summary-'));
+  const dailyPapersApiUrl = 'https://huggingface.co/api/daily_papers?date=2026-06-06';
+  const { factory } = fakeDriverFactory({
+    textByUrl: {
+      [dailyPapersApiUrl]: '[]',
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.search(workspacePath, {
+      query: 'Hugging Face Daily Papers 今天热门论文',
+      limit: 1,
+      sourcePageLimit: 1,
+      preferredResults: [{
+        title: 'Hugging Face Daily Papers API (2026-06-06)',
+        url: dailyPapersApiUrl,
+        snippet: 'Official Hugging Face Daily Papers API for 2026-06-06.',
+      }],
+    });
+
+    const sourcePage = output.sourcePages?.[0];
+    assert.equal(sourcePage?.url, dailyPapersApiUrl);
+    assert.match(sourcePage?.textSummary ?? '', /no entries|2026-06-06/i);
+    assert.doesNotMatch(sourcePage?.textSummary ?? '', /^\[\]$/);
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
@@ -1157,7 +1355,13 @@ test('BrowserHostSession HTTP routes expose start, state, action, search, and mi
 
     const computerUseAction = await postJson(`${baseUrl}/api/sciforge/browser-host/sessions/route-session/computer-use-actions`, {
       workspacePath,
-      action: { type: 'click', x: 22, y: 33 },
+      action: {
+        type: 'click',
+        x: 22,
+        y: 33,
+        permissionRef: 'permission:turn/route-session/ordinary-navigation',
+        cancelRef: 'cancel:runtime-turn/route-session',
+      },
       capture: 'none',
     });
     assert.equal(computerUseAction.result.providerId, BROWSER_HOST_COMPUTER_USE_PROVIDER_ID);
@@ -1805,6 +2009,28 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
   assert.equal(drag.path?.length, 9);
   assert.deepEqual(drag.path?.[0], { x: 0, y: 0 });
   assert.deepEqual(drag.path?.[8], { x: 80, y: 40 });
+  assert.deepEqual(browserHostComputerUseActionReadiness({
+    session: {
+      schemaVersion: BROWSER_HOST_SESSION_SCHEMA,
+      id: 'hidden-session',
+      owner: 'host',
+      providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+      status: 'ready',
+      workspacePath: '/tmp/workspace',
+      requestedUrl: 'https://example.org',
+      url: 'https://example.org',
+      startedAt: '2026-06-06T00:00:00.000Z',
+      updatedAt: '2026-06-06T00:00:00.000Z',
+      viewport: { width: 1365, height: 900 },
+      canGoBack: false,
+      canGoForward: false,
+      diagnostics: [],
+    },
+    action: { type: 'click', x: 1, y: 2 },
+    permissionRef: 'permission:turn/hidden-session/ordinary-navigation',
+    cancelRef: 'cancel:runtime-turn/hidden-session',
+    now: '2026-06-06T00:00:00.000Z',
+  }), { status: 'blocked', reason: 'browser-host-session-hidden' });
 
   const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-cu-'));
   const { factory, drivers } = fakeDriverFactory();
@@ -1814,7 +2040,18 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
       url: 'example.org/computer-use',
       sessionId: 'cu-session',
     });
-    const result = await executeBrowserHostComputerUseAction(manager, workspacePath, session.id, { type: 'type_text', text: 'fluid search' });
+    await assert.rejects(
+      () => executeBrowserHostComputerUseAction(manager, workspacePath, session.id, { type: 'type_text', text: 'fluid search' }, {
+        now: session.updatedAt,
+      }),
+      /browser-host-session-permission-missing/,
+    );
+    const result = await executeBrowserHostComputerUseAction(manager, workspacePath, session.id, { type: 'type_text', text: 'fluid search' }, {
+      actionId: 'cu-type-action',
+      permissionRef: 'permission:turn/cu-session/ordinary-navigation',
+      cancelRef: 'cancel:runtime-turn/cu-session',
+      now: session.updatedAt,
+    });
     assert.equal(result.providerId, BROWSER_HOST_COMPUTER_USE_PROVIDER_ID);
     assert.equal(result.inputChannel, 'browser-host-session');
     assert.equal(result.sharedSystemInputUsed, false);
@@ -1824,12 +2061,28 @@ test('BrowserHostSession maps Computer Use generic actions onto the host-owned b
     assert.equal(result.singleInteractiveTruth, true);
     assert.equal(result.hostAction.capture, 'none');
     assert.equal(drivers[0]?.actions.at(-1), 'type:fluid search');
+    assert.ok(result.session.actorCursor?.lastAction.evidenceRefs.includes('browser-host-session:cu-session/actions/cu-type-action/verification/verifier.json'));
+    assert.ok(result.session.actorCursor?.lastAction.evidenceRefs.includes('browser-host-session:cu-session/actions/cu-type-action/freshness-invalidation.json'));
+    const verificationJson = await readFile(
+      join(browserHostSessionDir(workspacePath, 'cu-session'), 'actions', 'cu-type-action', 'verification', 'verifier.json'),
+      'utf8',
+    );
+    assert.deepEqual(JSON.parse(verificationJson).status, 'recorded');
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }
 });
 
-function fakeDriverFactory(options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}): {
+interface FakeBrowserHostDriverOptions {
+  failScreenshots?: boolean;
+  holdType?: boolean;
+  holdNavigation?: boolean;
+  holdStop?: boolean;
+  failNavigation?: boolean;
+  textByUrl?: Record<string, string>;
+}
+
+function fakeDriverFactory(options: FakeBrowserHostDriverOptions = {}): {
   factory: BrowserHostSessionDriverFactory;
   drivers: FakeBrowserHostDriver[];
   createInputs: Array<{ sessionId: string; viewport: unknown; timeoutMs: number; workspacePath?: string; workspaceProfileDir?: string }>;
@@ -1872,7 +2125,7 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   private heldActionPromise?: Promise<void>;
   private holdNavigation: boolean;
 
-  constructor(private readonly options: { failScreenshots?: boolean; holdType?: boolean; holdNavigation?: boolean; holdStop?: boolean; failNavigation?: boolean } = {}) {
+  constructor(private readonly options: FakeBrowserHostDriverOptions = {}) {
     this.holdNavigation = options.holdNavigation === true;
   }
 
@@ -1899,6 +2152,8 @@ class FakeBrowserHostDriver implements BrowserHostSessionDriver {
   }
 
   async text(): Promise<string> {
+    const custom = this.options.textByUrl?.[this.currentUrl];
+    if (custom !== undefined) return custom;
     return 'Browser Host\nhttps://example.org/browser-host\nReady';
   }
 
@@ -2091,7 +2346,7 @@ function createRouteManager(
     session.liveSurfaceRef = `browser-host-session:${sessionId}/live-surface`;
     session.liveSurfaceTransport = 'host-stream';
     session.singleInteractiveTruth = true;
-    session.updatedAt = '2026-06-01T00:00:02.000Z';
+    session.updatedAt = new Date().toISOString();
     return session;
   };
   return {
@@ -2108,10 +2363,12 @@ function createRouteManager(
         requestedUrl: normalizeBrowserHostUrl(input.url),
         url: normalizeBrowserHostUrl(input.url),
         startedAt: '2026-06-01T00:00:00.000Z',
-        updatedAt: '2026-06-01T00:00:00.000Z',
+        updatedAt: new Date().toISOString(),
         viewport: { width: 1365, height: 900 },
         canGoBack: false,
         canGoForward: false,
+        liveSurfaceRef: `browser-host-session:${id}/live-surface`,
+        singleInteractiveTruth: true,
         diagnostics: [],
       };
       sessions.set(id, session);
@@ -2158,7 +2415,7 @@ function createRouteManager(
           diagnostics: ['proof:input-caret-visible:observed'],
         };
       }
-      session.updatedAt = '2026-06-01T00:00:01.000Z';
+      session.updatedAt = new Date().toISOString();
       return session;
     },
     async search(_root: string, input: BrowserHostSearchInput) {

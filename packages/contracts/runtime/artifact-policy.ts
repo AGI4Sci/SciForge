@@ -1,5 +1,5 @@
-import type { SciForgeSharedSkillDomain } from './handoff';
-import { toolPayloadShapeContractSummary } from './tool-payload-shape';
+import type { SciForgeSharedSkillDomain } from './handoff.js';
+import { toolPayloadShapeContractSummary } from './tool-payload-shape.js';
 
 const DEFAULT_ARTIFACT_TYPE_BY_SKILL_DOMAIN: Record<SciForgeSharedSkillDomain, string> = {
   literature: 'paper-list',

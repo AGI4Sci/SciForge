@@ -26,8 +26,17 @@ export function normalizePlatformAction(action: GenericVisionAction, config: Com
 }
 
 export function normalizeGenericActionRisk<T extends GenericVisionAction>(action: T): T {
+  if (genericActionTextRequiresConfirmation(
+    action.targetDescription ?? action.targetRegionDescription,
+    action.confirmationText,
+  )) {
+    return {
+      ...action,
+      riskLevel: 'high',
+      requiresConfirmation: true,
+    };
+  }
   if (action.riskLevel !== 'high' && action.requiresConfirmation !== true) return action;
-  if (isExplicitSideEffectTarget(action)) return action;
   if (!isLowRiskGuiInspectionAction(action)) return action;
   return {
     ...action,
@@ -211,19 +220,17 @@ function isLowRiskGuiInspectionAction(action: GenericVisionAction): boolean {
   return isLowRiskGuiControlText(action.targetDescription);
 }
 
-function isExplicitSideEffectTarget(action: GenericVisionAction): boolean {
-  const primary = action.targetDescription ?? '';
-  const fallback = primary || action.targetRegionDescription || action.confirmationText || '';
-  return highRiskTargetPattern.test(primary || fallback);
-}
-
 function isLowRiskGuiControlText(text: string | undefined): boolean {
-  return lowRiskGuiControlPattern.test(text ?? '') && !highRiskTargetPattern.test(text ?? '');
+  return lowRiskGuiControlPattern.test(text ?? '') && !genericActionTextRequiresConfirmation(text);
 }
 
 const lowRiskGuiControlPattern = /\b(?:input|field|text\s*box|textbox|search\s*(?:box|field|input)|address\s*bar|url\s*field|checkbox|check\s*box|radio(?:\s*button)?|dropdown|drop-down|select(?:or)?|menu|toggle|switch|tab|filter|slider|form\s*field)\b|文本框|搜索框|地址栏|复选|单选|下拉|菜单|切换|开关|字段|控件/i;
 
 const highRiskTargetPattern = /\b(?:send|submit|delete|remove|pay|payment|purchase|buy|authorize|authorise|approve|publish|upload|share|post|external|overwrite|replace|deploy|merge|commit|sign\s*in|log\s*in)\b|发送|提交|删除|移除|支付|购买|付款|授权|批准|发布|上传|分享|外发|覆盖|替换|部署|登录/i;
+
+export function genericActionTextRequiresConfirmation(...values: Array<string | undefined>) {
+  return values.some((value) => highRiskTargetPattern.test(value ?? ''));
+}
 
 function normalizeScrollDirection(value: Record<string, unknown>): 'up' | 'down' | 'left' | 'right' | undefined {
   if (value.direction === 'up' || value.direction === 'down' || value.direction === 'left' || value.direction === 'right') {

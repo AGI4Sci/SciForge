@@ -133,7 +133,7 @@ export async function validateComputerUseLongTrace(options: {
   const coordinateContract = isRecord(genericComputerUse.coordinateContract) ? genericComputerUse.coordinateContract : {};
   const localFrame = firstString(coordinateContract.localCoordinateFrame, coordinateContract.grounderOutput, coordinateContract.executorInput);
   if (!localFrame || !/window|target-window/i.test(localFrame)) {
-    issues.push('genericComputerUse.coordinateContract must declare window-local Grounder/executor coordinates');
+    issues.push('genericComputerUse.coordinateContract must declare window-local grounding translator/executor coordinates');
   }
   const verifierContract = isRecord(genericComputerUse.verifierContract) ? genericComputerUse.verifierContract : {};
   const verifierScope = firstString(verifierContract.screenshotScope, verifierContract.beforeAfterWindowConsistency, verifierContract.completionEvidence);

@@ -20,6 +20,7 @@ import type {
   BrowserHostSearchInput,
   BrowserHostSearchOutput,
   BrowserHostSearchResult,
+  BrowserHostSearchSourcePage,
   BrowserHostSessionActorCursor,
   BrowserHostSessionActorCursorInput,
   BrowserHostSessionAction,
@@ -55,10 +56,16 @@ import {
 import {
   boundedSearchResults,
   browserHostSearchUrl,
+  browserHostSearchResultExtractionScript,
   decodeSearchRedirect,
   genericSearchResultsFromDriver,
   nativeSearchResult,
 } from './browser-host-session-search.js';
+import {
+  browserHostSearchSourcePageLimit,
+  failedBrowserHostSearchSourcePage,
+  persistBrowserHostSearchSourcePage,
+} from './browser-host-session-source-pages.js';
 
 export {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
@@ -463,6 +470,7 @@ export class BrowserHostSessionManager {
       markBrowserHostActionTimingActionEnd(timing);
       const captureOptions = browserHostCaptureOptions(input.action, captureMode);
       if (didCursor) {
+        await publishBrowserHostActionCompletionEvidence(session, input.action);
         finishBrowserHostActionTiming(session, timing, 'ok');
         await persistBrowserHostSession(session);
       } else if (didClose) {
@@ -471,6 +479,7 @@ export class BrowserHostSessionManager {
         await persistBrowserHostSession(session);
       } else if (captureOptions && browserHostActionDefersEvidenceCapture(input.action, captureMode)) {
         this.scheduleDeferredEvidenceCapture(session, captureOptions);
+        await publishBrowserHostActionCompletionEvidence(session, input.action);
         finishBrowserHostActionTiming(session, timing, 'ok', undefined, {
           paintAckSource: session.driver?.liveSurfaceTransport === 'native-embedded'
             ? 'native-adapter-action-state'
@@ -479,11 +488,13 @@ export class BrowserHostSessionManager {
         await persistBrowserHostSession(session);
       } else if (captureOptions) {
         await this.capture(session, captureOptions, timing);
+        await publishBrowserHostActionCompletionEvidence(session, input.action);
         finishBrowserHostActionTiming(session, timing, 'ok');
         await persistBrowserHostSession(session);
       } else {
         await this.refreshNavigationState(session);
         session.updatedAt = new Date().toISOString();
+        await publishBrowserHostActionCompletionEvidence(session, input.action);
         finishBrowserHostActionTiming(session, timing, 'ok');
         await persistBrowserHostSession(session);
       }
@@ -565,6 +576,18 @@ export class BrowserHostSessionManager {
     if (!results.length && active?.driver) {
       results = boundedSearchResults(await genericSearchResultsFromDriver(active.driver, limit), limit);
     }
+    results = mergePreferredSearchResults(input.preferredResults, results, limit);
+    const sourcePages = active?.driver
+      ? await this.readSearchResultSourcePages(active, results, input, limit)
+      : [];
+    if (active && sourcePages.some((page) => page.status === 'read')) {
+      await this.capture(active, {
+        includeScreenshot: true,
+        includeDom: true,
+        includeAx: true,
+        includeLogs: true,
+      });
+    }
     const resultRef = await persistBrowserHostSearchResults(active ?? session, {
       schemaVersion: BROWSER_HOST_SEARCH_SCHEMA,
       query,
@@ -573,12 +596,13 @@ export class BrowserHostSessionManager {
       searchUrl,
       finalUrl: active?.url || session.url,
       results,
+      sourcePages,
     });
     const automationSummary = browserHostAutomationSummary({
       kind: 'scrape',
       status: results.length ? 'completed' : 'partial',
       title: 'BrowserHostSession search scrape',
-      summary: `Search automation returned ${results.length} bounded result${results.length === 1 ? '' : 's'} and materialized refs for browser evidence.`,
+      summary: `Search automation returned ${results.length} bounded result${results.length === 1 ? '' : 's'}, opened ${sourcePages.filter((page) => page.status === 'read').length} source page${sourcePages.filter((page) => page.status === 'read').length === 1 ? '' : 's'}, and materialized refs for browser evidence.`,
       itemCount: results.length,
       refs: browserHostAutomationRefs({
         searchResultRef: resultRef,
@@ -604,6 +628,7 @@ export class BrowserHostSessionManager {
       searchUrl,
       finalUrl: state.url,
       results,
+      sourcePages,
       session: state,
       searchResultRef: resultRef,
       automationSummary,
@@ -818,6 +843,53 @@ export class BrowserHostSessionManager {
     await persistBrowserHostSession(session);
   }
 
+  private async readSearchResultSourcePages(
+    session: ActiveBrowserHostSession,
+    results: BrowserHostSearchResult[],
+    input: BrowserHostSearchInput,
+    searchLimit: number,
+  ): Promise<BrowserHostSearchSourcePage[]> {
+    if (!session.driver) return [];
+    const limit = browserHostSearchSourcePageLimit(input, searchLimit);
+    if (!limit) return [];
+    const pages: BrowserHostSearchSourcePage[] = [];
+    for (const [index, result] of results.slice(0, limit).entries()) {
+      const openedAt = new Date().toISOString();
+      try {
+        await session.driver.goto(result.url, input.timeoutMs ?? 45_000);
+        await this.refreshNavigationState(session);
+        if (sourcePageNavigationStayedOnSearchPage(result.url, session.url)) {
+          await session.driver.goto(result.url, input.timeoutMs ?? 45_000);
+          await this.refreshNavigationState(session);
+        }
+        if (sourcePageNavigationStayedOnSearchPage(result.url, session.url)) {
+          throw new Error(`source page navigation stayed on search page for ${safeBrowserHostUrlHost(result.url)}`);
+        }
+        const text = await session.driver.text();
+        pages.push(await persistBrowserHostSearchSourcePage({
+          sessionId: session.id,
+          sessionDir: browserHostSessionDir(session.workspacePath, session.id),
+          result,
+          resultIndex: index,
+          finalUrl: session.url,
+          openedAt,
+          text,
+        }));
+      } catch (error) {
+        const message = browserHostErrorMessage(error);
+        session.diagnostics.push(`BrowserHostSession source page read failed: ${message}`);
+        pages.push(failedBrowserHostSearchSourcePage({
+          result,
+          resultIndex: index,
+          openedAt,
+          error: message,
+        }));
+      }
+    }
+    session.updatedAt = new Date().toISOString();
+    return pages;
+  }
+
   private async refreshNavigationState(session: ActiveBrowserHostSession): Promise<void> {
     if (!session.driver) return;
     session.url = normalizeBrowserHostUrl(session.driver.url());
@@ -827,6 +899,37 @@ export class BrowserHostSessionManager {
     session.canGoForward = await session.driver.canGoForward().catch(() => false);
     session.updatedAt = new Date().toISOString();
   }
+}
+
+function sourcePageNavigationStayedOnSearchPage(requestedUrl: string, finalUrl: string) {
+  return !isSearchEngineUrl(requestedUrl) && isSearchEngineUrl(finalUrl);
+}
+
+function isSearchEngineUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return /(^|\.)bing\.com$|(^|\.)duckduckgo\.com$|(^|\.)google\.[a-z.]+$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function safeBrowserHostUrlHost(value: string) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return 'unknown-host';
+  }
+}
+
+function mergePreferredSearchResults(
+  preferredResults: BrowserHostSearchInput['preferredResults'] | undefined,
+  searchResults: BrowserHostSearchResult[],
+  limit: number,
+): BrowserHostSearchResult[] {
+  const preferred = boundedSearchResults(preferredResults ?? [], limit);
+  if (!preferred.length) return searchResults;
+  return boundedSearchResults([...preferred, ...searchResults], limit);
 }
 
 function browserHostActionIsUserInput(action: BrowserHostSessionAction): boolean {
@@ -1486,15 +1589,9 @@ class PlaywrightBrowserHostDriver implements BrowserHostSessionDriver {
   }
 
   async searchResults(limit: number): Promise<BrowserHostSearchResult[]> {
-    const rows = await this.page.$$eval('a[href]', (nodes) => nodes.map((node) => {
-      const anchor = node as HTMLAnchorElement;
-      const container = anchor.closest('li, article, div') as HTMLElement | null;
-      return {
-        title: (anchor.textContent ?? '').replace(/\s+/g, ' ').trim(),
-        url: anchor.href,
-        snippet: (container?.innerText ?? '').replace(/\s+/g, ' ').trim(),
-      };
-    }));
+    const rows = await this.page.evaluate<Array<{ title: string; url: string; snippet: string }>>(
+      browserHostSearchResultExtractionScript(limit),
+    );
     return boundedSearchResults(rows.map((row) => ({
       title: cleanText(row.title),
       url: decodeSearchRedirect(row.url),
@@ -2515,6 +2612,81 @@ async function publishBrowserHostActorCursor(
   if (!file) return;
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(publicCursor, null, 2), 'utf8');
+}
+
+async function publishBrowserHostActionCompletionEvidence(
+  session: ActiveBrowserHostSession,
+  action: BrowserHostSessionAction,
+): Promise<void> {
+  const visibleAction = session.visibleAction;
+  if (!visibleAction) return;
+  const actionId = visibleAction.actionId;
+  const verificationRef = browserHostRef(session.id, `actions/${actionId}/verification/verifier.json`);
+  const freshnessInvalidationRef = browserHostRef(session.id, `actions/${actionId}/freshness-invalidation.json`);
+  const executorRef = visibleAction.visibleActionRef ?? visibleAction.actorCursorRef;
+  const evidenceRefs = [executorRef, verificationRef, freshnessInvalidationRef].filter((ref): ref is string => Boolean(ref));
+  await writeBrowserHostActionEvidenceFile(session, verificationRef, {
+    schemaVersion: 'sciforge.browser-host-session.action-verification.v1',
+    providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+    sessionRef: browserHostRef(session.id, 'session.json'),
+    actionId,
+    action,
+    status: 'recorded',
+    refs: [executorRef, session.frameRef, session.screenshotRef].filter((ref): ref is string => Boolean(ref)),
+  });
+  await writeBrowserHostActionEvidenceFile(session, freshnessInvalidationRef, {
+    schemaVersion: 'sciforge.browser-host-session.freshness-invalidation.v1',
+    providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+    sessionRef: browserHostRef(session.id, 'session.json'),
+    actionId,
+    action,
+    invalidatesVisibleState: browserHostActionInvalidatesVisibleState(action),
+    staleBy: executorRef ?? browserHostRef(session.id, 'session.json'),
+    staleEvidenceKinds: ['observation', 'region', 'text', 'visual-object', 'grounding'],
+    preservedEvidenceKinds: ['artifact', 'verification', 'completion-claim'],
+  });
+  if (!session.actorCursor) return;
+  const nextCursor: BrowserHostSessionActorCursor = {
+    ...session.actorCursor,
+    lastAction: {
+      ...session.actorCursor.lastAction,
+      evidenceRefs: uniqueBrowserHostSessionRefs([
+        ...session.actorCursor.lastAction.evidenceRefs,
+        ...evidenceRefs,
+      ]),
+    },
+    evidenceRefs: uniqueBrowserHostSessionRefs([
+      ...session.actorCursor.evidenceRefs,
+      verificationRef,
+      freshnessInvalidationRef,
+    ]),
+  };
+  session.actorCursor = nextCursor;
+  session.actorCursors = [nextCursor];
+  const cursorRef = nextCursor.evidenceRefs.find((ref) => /\/actor-cursors\/[a-z0-9._:-]+\.json$/i.test(ref));
+  const cursorFile = cursorRef ? browserHostFileForRef(session.workspacePath, session.id, cursorRef) : undefined;
+  if (!cursorFile) return;
+  await mkdir(dirname(cursorFile), { recursive: true });
+  await writeFile(cursorFile, JSON.stringify(nextCursor, null, 2), 'utf8');
+}
+
+async function writeBrowserHostActionEvidenceFile(
+  session: Pick<ActiveBrowserHostSession, 'workspacePath' | 'id'>,
+  ref: string,
+  data: Record<string, unknown>,
+): Promise<void> {
+  const file = browserHostFileForRef(session.workspacePath, session.id, ref);
+  if (!file) return;
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, JSON.stringify(data, null, 2), 'utf8');
+}
+
+function browserHostActionInvalidatesVisibleState(action: BrowserHostSessionAction): boolean {
+  return !['cursor', 'native-os-ui-proof', 'snapshot', 'state'].includes(action);
+}
+
+function uniqueBrowserHostSessionRefs(refs: Array<string | undefined>): string[] {
+  return [...new Set(refs.filter((ref): ref is string => Boolean(browserHostRefField(ref))))].slice(0, 24);
 }
 
 function safeActorCursorId(value: string | undefined) {

@@ -55,11 +55,18 @@ type ModalityRef = {
   kind: ModalityKind;
   source: 'inline' | 'url' | 'ref';
   mime?: string;
+  semanticSignal: SemanticModalitySignal;
   sha256: string;
   byteLength?: number;
   safeRef?: string;
   urlSha256?: string;
   transientProviderPart?: JsonObject;
+};
+
+type SemanticModalitySignal = {
+  kind: ModalityKind;
+  evidence: Array<'structured-type' | 'structured-media-type' | 'structured-mime' | 'ref-extension' | 'ref-lexical-feature' | 'image-url'>;
+  refsFirst: boolean;
 };
 
 type ProviderCallRecord = {
@@ -98,6 +105,15 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
       if (request.method === 'OPTIONS') return sendCors(response);
       if (request.method === 'GET' && url.pathname === '/health') {
         return sendJson(response, 200, { ok: true, service: 'sciforge.model-router', checkedAt: new Date().toISOString() });
+      }
+      if (request.method === 'GET' && url.pathname === '/healthz') {
+        const upstream = modelRouterHealthzUpstreamDiagnostic(options.config, env);
+        return sendJson(response, upstream.ok ? 200 : 503, {
+          ok: upstream.ok,
+          service: 'sciforge.model-router',
+          checkedAt: new Date().toISOString(),
+          upstream,
+        });
       }
       if (request.method === 'GET' && url.pathname === '/manifest') {
         return sendJson(response, 200, modelRouterManifest as unknown as JsonObject);
@@ -138,6 +154,37 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   });
 }
 
+function modelRouterHealthzUpstreamDiagnostic(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+): JsonObject {
+  const profile = config.profiles[config.defaultProfile];
+  const provider = profile?.textReasoner;
+  if (!profile || !provider?.baseUrl || !provider.model) {
+    return {
+      category: 'repo-bug',
+      ok: false,
+      retryable: false,
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  if (!stringField(env[provider.apiKeyEnv])) {
+    return {
+      category: 'provider-auth',
+      ok: false,
+      retryable: false,
+      httpStatus: 401,
+      releaseAcceptance: 'not-evaluated',
+    };
+  }
+  return {
+    category: 'ready',
+    ok: true,
+    retryable: false,
+    releaseAcceptance: 'not-evaluated',
+  };
+}
+
 export async function startModelRouterServer(
   options: ModelRouterServerOptions & { host?: string; port?: number },
 ): Promise<StartedModelRouterServer> {
@@ -173,7 +220,7 @@ async function routeResponsesRequest(
   const request = isRecord(body) ? body : {};
   const profileId = requestedProfileId(request, context.request, context.config);
   const profile = context.config.profiles[profileId];
-  if (!profile) throw routerError(400, 'unknown_profile', `Model Router profile "${profileId}" is not registered.`);
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
   validateRequestedModel(request.model, context.config.publicModelAlias);
   validateProfile(profile);
   const textSecret = secretForProvider(profile.textReasoner, context.env, 'textReasoner');
@@ -193,8 +240,9 @@ async function routeResponsesRequest(
   const traceRedactionSecrets = [textSecret, visionSecret]
     .filter((value): value is string => typeof value === 'string' && value.length > 0);
 
-  const visionModalities = extracted.modalities.filter(isVisionImageModality);
-  const unsupportedModalities = extracted.modalities.filter((item) => !isVisionImageModality(item));
+  // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
+  const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
+  const unsupportedModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind !== 'vision.image');
 
   if (extracted.modalities.length > 0) {
     await writeTraceJson(trace, 'input-modalities.json', {
@@ -216,7 +264,7 @@ async function routeResponsesRequest(
 
   if (visionModalities.length > 0) {
     if (!profile.translators.vision || !visionSecret) {
-      throw routerError(400, 'missing_vision_translator', `Model Router profile "${profileId}" does not have a usable vision translator.`);
+      throw routerError(400, 'missing_vision_translator', 'Active Model Router profile does not have a usable vision translator.');
     }
     const initial = await callVisionTranslator({
       profile,
@@ -371,7 +419,7 @@ function validateRequestedModel(model: unknown, publicModelAlias: string | undef
   if (typeof model !== 'string' || !model.trim()) throw routerError(400, 'invalid_model', 'Model Router requests must use the public router model alias.');
   const expectedAlias = publicModelAlias ?? 'sciforge-model-router';
   if (model !== expectedAlias) {
-    throw routerError(400, 'unregistered_model', `Model "${model}" is not registered for this Model Router.`);
+    throw routerError(400, 'unregistered_model', 'Model Router requests must use the public router model alias.');
   }
 }
 
@@ -426,10 +474,9 @@ function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) 
     if (text) texts.push(text);
     return;
   }
-  const explicitKind = modalityKindFromType(type);
-  const inferredKind = explicitKind ?? modalityKindFromRecord(value);
-  if (explicitKind || value.image_url !== undefined || (value.ref !== undefined && inferredKind)) {
-    const ref = normalizeModalityPart(value, modalities.length + 1, inferredKind);
+  const signal = semanticSignalFromRecord(value);
+  if (signal || value.image_url !== undefined) {
+    const ref = normalizeModalityPart(value, modalities.length + 1, signal);
     if (ref) modalities.push(ref);
     return;
   }
@@ -438,49 +485,55 @@ function visitInput(value: unknown, texts: string[], modalities: ModalityRef[]) 
   if (value.input !== undefined) visitInput(value.input, texts, modalities);
 }
 
-function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, explicitKind?: ModalityKind): ModalityRef | undefined {
-  const kind = explicitKind ?? modalityKindFromRecord(value);
-  if (!kind) return undefined;
-  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
-  const mime = stringField(value.mime_type) ?? stringField(value.mimeType);
+function normalizeModalityPart(value: Record<string, unknown>, ordinal: number, signal?: SemanticModalitySignal): ModalityRef | undefined {
   const rawImageUrl = value.image_url;
   const imageUrl = typeof rawImageUrl === 'string'
     ? rawImageUrl
     : isRecord(rawImageUrl)
       ? stringField(rawImageUrl.url)
       : undefined;
+  const kind = signal?.kind ?? (imageUrl ? 'vision.image' : undefined);
+  if (!kind) return undefined;
+  const id = `${modalityIdPrefix(kind)}_${ordinal}`;
+  const mime = stringField(value.mime_type) ?? stringField(value.mimeType);
   const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef);
   if (imageUrl?.startsWith('data:image/')) {
+    const semanticSignal = signal ?? makeSemanticSignal(kind, ['image-url'], false);
     const payload = imageUrl.split(',', 2)[1] ?? '';
     const bytes = Buffer.from(payload, 'base64');
     return {
       id,
-      kind: 'vision.image',
+      kind,
       source: 'inline',
       mime: mime ?? mimeFromDataUrl(imageUrl),
+      semanticSignal,
       sha256: `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
       byteLength: bytes.byteLength,
       transientProviderPart: { type: 'image_url', image_url: { url: imageUrl } },
     };
   }
   if (imageUrl) {
+    const semanticSignal = signal ?? makeSemanticSignal(kind, ['image-url'], false);
     return {
       id,
-      kind: 'vision.image',
+      kind,
       source: 'url',
       mime,
+      semanticSignal,
       sha256: hashForTrace(imageUrl),
       urlSha256: hashForTrace(imageUrl),
       transientProviderPart: { type: 'image_url', image_url: { url: imageUrl } },
     };
   }
   if (ref) {
+    if (!signal) return undefined;
     const providerRef = safeTraceRef(ref);
     return {
       id,
       kind,
       source: 'ref',
       mime,
+      semanticSignal: signal,
       sha256: hashForTrace(ref),
       safeRef: providerRef,
       transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
@@ -600,9 +653,10 @@ function extractExplicitSciForgeRefs(userText: string, startOrdinal: number): { 
   const sanitized = userText.replace(
     /\bSciForge\s+(image|object|visual|audio|video|table|document|file|modality)\s+refs?\s*(?::|=|\bis\b)?\s*([A-Za-z0-9._:@/-]+)/gi,
     (matched: string, label: string, candidate: string) => {
-      const kind = modalityKindFromLabel(label) ?? modalityKindFromTextualRef(candidate);
+      const labelKind = modalityKindFromLabel(label);
+      const kind = labelKind ?? modalityKindFromTextualRef(candidate);
       if (!kind || !isAllowedTextualModalityRef(candidate, kind)) return 'SciForge ref redacted';
-      modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind));
+      modalities.push(modalityRefFromTextualRef(candidate, ordinal, kind, labelKind ? ['structured-type', ...lexicalRefFeatures(candidate)] : undefined));
       ordinal += 1;
       return 'SciForge ref attached';
     },
@@ -610,13 +664,19 @@ function extractExplicitSciForgeRefs(userText: string, startOrdinal: number): { 
   return { userText: sanitized.trim(), modalities };
 }
 
-function modalityRefFromTextualRef(ref: string, ordinal: number, kind: ModalityKind): ModalityRef {
+function modalityRefFromTextualRef(
+  ref: string,
+  ordinal: number,
+  kind: ModalityKind,
+  evidence: SemanticModalitySignal['evidence'] = ['ref-extension', ...lexicalRefFeatures(ref)],
+): ModalityRef {
   const id = `${modalityIdPrefix(kind)}_${ordinal}`;
   const providerRef = safeTraceRef(ref);
   return {
     id,
     kind,
     source: 'ref',
+    semanticSignal: makeSemanticSignal(kind, evidence, true),
     sha256: hashForTrace(ref),
     safeRef: providerRef,
     transientProviderPart: kind === 'vision.image' ? { type: 'text', text: `SciForge visual ref ${id}: ${providerRef}` } : undefined,
@@ -1127,21 +1187,56 @@ function isPrivateLikeTraceRef(ref: string) {
     || /^(?:artifact|ref|run):(?:\/|https?:\/\/|file:|~)/i.test(trimmed);
 }
 
-function modalityKindFromType(type: string | undefined): ModalityKind | undefined {
+function semanticSignalFromRecord(value: Record<string, unknown>): SemanticModalitySignal | undefined {
+  const typeKind = modalityKindFromSpecificType(stringField(value.type));
+  if (typeKind) return makeSemanticSignal(typeKind, ['structured-type'], true);
+
+  const mediaKind = modalityKindFromMediaType(
+    stringField(value.media_type)
+      ?? stringField(value.mediaType)
+      ?? stringField(value.modality),
+  );
+  if (mediaKind) return makeSemanticSignal(mediaKind, ['structured-media-type'], true);
+
+  const mimeKind = modalityKindFromMime(stringField(value.mime_type) ?? stringField(value.mimeType));
+  if (mimeKind) return makeSemanticSignal(mimeKind, ['structured-mime'], true);
+
+  const genericTypeKind = modalityKindFromGenericType(stringField(value.type));
+  if (genericTypeKind) return makeSemanticSignal(genericTypeKind, ['structured-type'], true);
+
+  const ref = stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? '';
+  const extensionKind = modalityKindFromTextualRefExtension(ref);
+  if (extensionKind) return makeSemanticSignal(extensionKind, ['ref-extension', ...lexicalRefFeatures(ref)], true);
+
+  return undefined;
+}
+
+function makeSemanticSignal(
+  kind: ModalityKind,
+  evidence: SemanticModalitySignal['evidence'],
+  refsFirst: boolean,
+): SemanticModalitySignal {
+  return { kind, evidence, refsFirst };
+}
+
+function finalModalityRoutingSignal(item: ModalityRef): SemanticModalitySignal {
+  return item.semanticSignal;
+}
+
+function modalityKindFromSpecificType(type: string | undefined): ModalityKind | undefined {
   const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
   if (!normalized) return undefined;
   if (normalized === 'input-image' || normalized === 'image') return 'vision.image';
   if (normalized === 'input-audio' || normalized === 'audio') return 'audio';
   if (normalized === 'input-video' || normalized === 'video') return 'video';
   if (normalized === 'input-table' || normalized === 'table' || normalized === 'spreadsheet') return 'table';
-  if (normalized === 'input-file' || normalized === 'file' || normalized === 'document') return 'document';
   return undefined;
 }
 
-function modalityKindFromRecord(value: Record<string, unknown>): ModalityKind | undefined {
-  return modalityKindFromType(stringField(value.type))
-    ?? modalityKindFromMime(stringField(value.mime_type) ?? stringField(value.mimeType))
-    ?? modalityKindFromTextualRef(stringField(value.ref) ?? stringField(value.file_ref) ?? stringField(value.artifactRef) ?? '');
+function modalityKindFromGenericType(type: string | undefined): ModalityKind | undefined {
+  const normalized = type?.trim().toLowerCase().replace(/_/g, '-');
+  if (normalized === 'input-file' || normalized === 'file' || normalized === 'document') return 'document';
+  return undefined;
 }
 
 function modalityKindFromLabel(label: string): ModalityKind | undefined {
@@ -1159,11 +1254,26 @@ function modalityKindFromMime(mime: string | undefined): ModalityKind | undefine
   if (/^audio\//i.test(mime)) return 'audio';
   if (/^video\//i.test(mime)) return 'video';
   if (/^(?:text\/csv|text\/tab-separated-values|application\/vnd\.openxmlformats-officedocument\.spreadsheetml\.sheet|application\/vnd\.ms-excel)/i.test(mime)) return 'table';
-  if (/^(?:application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation)/i.test(mime)) return 'document';
+  if (/^(?:text\/plain|text\/markdown|application\/pdf|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document|application\/vnd\.openxmlformats-officedocument\.presentationml\.presentation)/i.test(mime)) return 'document';
+  return undefined;
+}
+
+function modalityKindFromMediaType(value: string | undefined): ModalityKind | undefined {
+  const normalized = value?.trim().toLowerCase().replace(/_/g, '-');
+  if (!normalized) return undefined;
+  if (normalized === 'image' || normalized === 'visual') return 'vision.image';
+  if (normalized === 'audio') return 'audio';
+  if (normalized === 'video') return 'video';
+  if (normalized === 'table' || normalized === 'spreadsheet') return 'table';
+  if (normalized === 'document' || normalized === 'text' || normalized === 'file') return 'document';
   return undefined;
 }
 
 function modalityKindFromTextualRef(ref: string): ModalityKind | undefined {
+  return modalityKindFromTextualRefExtension(ref);
+}
+
+function modalityKindFromTextualRefExtension(ref: string): ModalityKind | undefined {
   if (!ref) return undefined;
   const path = traceRefPath(ref);
   if (!path || !isSafeTraceRef(ref)) return undefined;
@@ -1172,21 +1282,21 @@ function modalityKindFromTextualRef(ref: string): ModalityKind | undefined {
   if (/\.(?:mp4|mov|webm|m4v|avi)(?:$|[?#])/i.test(path)) return 'video';
   if (/\.(?:csv|tsv|xlsx?|ods)(?:$|[?#])/i.test(path)) return 'table';
   if (/\.(?:pdf|docx?|pptx?|txt|md|markdown)(?:$|[?#])/i.test(path)) return 'document';
-  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:upload|image|figure|fig|chart|plot|panel|microscopy|screenshot|photo|picture|visual|diagram)\b/i.test(path)) return 'vision.image';
-  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:audio|sound|speech|voice|recording)\b/i.test(path)) return 'audio';
-  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:video|movie|clip|screen-recording)\b/i.test(path)) return 'video';
-  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:table|spreadsheet|csv|tsv|matrix|worksheet)\b/i.test(path)) return 'table';
-  if (/^(?:artifact|ref|run):/i.test(ref) && /\b(?:document|doc|pdf|paper|report|slides|presentation|markdown|text)\b/i.test(path)) return 'document';
   return undefined;
+}
+
+function lexicalRefFeatures(ref: string): SemanticModalitySignal['evidence'] {
+  if (!ref) return [];
+  const path = traceRefPath(ref);
+  if (!/^(?:artifact|ref|run):/i.test(ref)) return [];
+  return /\b(?:upload|image|figure|fig|chart|plot|panel|microscopy|screenshot|photo|picture|visual|diagram|audio|sound|speech|voice|recording|video|movie|clip|screen-recording|table|spreadsheet|csv|tsv|matrix|worksheet|document|doc|pdf|paper|report|slides|presentation|markdown|text)\b/i.test(path)
+    ? ['ref-lexical-feature']
+    : [];
 }
 
 function modalityIdPrefix(kind: ModalityKind) {
   if (kind === 'vision.image') return 'image';
   return kind;
-}
-
-function isVisionImageModality(item: ModalityRef): item is ModalityRef & { kind: 'vision.image' } {
-  return item.kind === 'vision.image';
 }
 
 function isAllowedTextualModalityRef(ref: string, kind: ModalityKind) {

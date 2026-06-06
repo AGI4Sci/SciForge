@@ -1,4 +1,4 @@
-import { composeRuntimeUiManifestSlots, selectedViewComponentsForIntent } from '../../packages/presentation/interactive-views';
+import { composeRuntimeUiManifestSlots, selectedViewComponentsForIntent } from '../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { selectedComponentIdsForRequest } from './gateway/gateway-request.js';
 import type { GatewayRequest } from './runtime-types.js';
 

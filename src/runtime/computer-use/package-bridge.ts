@@ -39,7 +39,7 @@ import {
   type HostPortCall,
 } from './package-bridge-stdio.js';
 import { dispatchPackageBridgeHostPortCall } from './package-bridge-host-ports.js';
-import { runComputerUsePackageProcess } from './package-bridge-process.js';
+import { runComputerUsePackageProcess, type RunComputerUsePackageProcessOptions } from './package-bridge-process.js';
 import { attachPackageResultHostActions } from './package-bridge-presentation.js';
 import { packagePlanToGenericAction } from './package-bridge-action-conversion.js';
 import { capturePackageBridgePort } from './package-bridge-capture-port.js';
@@ -53,6 +53,10 @@ import {
   visionSenseModelRouterCapabilities,
   visionSenseRuntimeEventTypes,
 } from '../../../packages/observe/vision/computer-use-runtime-policy.js';
+import {
+  computerUseModelRouterTraceEvent,
+  computerUseVisionFailureObservation,
+} from '../../../packages/actions/computer-use/provider-policy.js';
 import {
   genericLoopPayload,
   VISION_TOOL_ID,
@@ -92,12 +96,22 @@ type PackageBridgeState = {
 export type ComputerUsePackageBridgeOptions = {
   codexPlannerAdapter?: AgentCliAdapter;
   l3CompletionProducer?: PackageBridgeL3CompletionProducer;
+  packageProcessRunner?: ComputerUsePackageProcessRunner;
 };
 
+type ComputerUsePackageProcessRunner = (
+  options: RunComputerUsePackageProcessOptions,
+) => Promise<Record<string, unknown>>;
+
 let codexPlannerAdapterForTests: AgentCliAdapter | undefined;
+let packageProcessRunnerForTests: ComputerUsePackageProcessRunner | undefined;
 
 export function setComputerUsePackageBridgeCodexPlannerAdapterForTests(adapter: AgentCliAdapter | undefined) {
   codexPlannerAdapterForTests = adapter;
+}
+
+export function setComputerUsePackageBridgeProcessRunnerForTests(runner: ComputerUsePackageProcessRunner | undefined) {
+  packageProcessRunnerForTests = runner;
 }
 
 export async function runComputerUsePackageBridge(
@@ -140,7 +154,7 @@ export async function runComputerUsePackageBridge(
     source: 'workspace-runtime',
     toolName: VISION_TOOL_ID,
     status: 'running',
-    message: 'Calling Computer Use package run_task through TUI Host stdio host ports.',
+    message: 'Calling Computer Use action provider through TypeScript TUI Host ports.',
     detail: JSON.stringify(materializePackageBridgeRuntimeSelectionDetail(packageInvocation, {
       runId,
       testActionFixtureMode: config.testActionFixtureMode,
@@ -198,12 +212,13 @@ export async function runComputerUsePackageBridge(
     return payload;
   }
 
-  const rawPackageResult = await runPythonPackageTask(packageInvocation.request, {
+  const rawPackageResult = await runTypeScriptPackageTask(packageInvocation.request, {
     workspace,
     config,
     callbacks,
     state,
     codexPlannerAdapter: options.codexPlannerAdapter ?? codexPlannerAdapterForTests,
+    packageProcessRunner: options.packageProcessRunner ?? packageProcessRunnerForTests,
   });
   promotePackageResultFinalArtifactRefs(rawPackageResult, workspace, state);
   const materializedResult = materializePackageBridgeResult({
@@ -277,7 +292,7 @@ export async function runComputerUsePackageBridge(
   return payload;
 }
 
-async function runPythonPackageTask(
+async function runTypeScriptPackageTask(
   actionProviderRequest: Record<string, unknown>,
   context: {
     workspace: string;
@@ -285,10 +300,11 @@ async function runPythonPackageTask(
     callbacks: WorkspaceRuntimeCallbacks;
     state: PackageBridgeState;
     codexPlannerAdapter?: AgentCliAdapter;
+    packageProcessRunner?: ComputerUsePackageProcessRunner;
   },
 ): Promise<Record<string, unknown>> {
-  // The stdio process runner is the bridge to packages/actions/computer-use (sciforge_computer_use).
-  return runComputerUsePackageProcess({
+  const runPackageProcess = context.packageProcessRunner ?? runComputerUsePackageProcess;
+  return runPackageProcess({
     actionProviderRequest,
     callbacks: context.callbacks,
     handleHostPortCall: (call) => handleHostPortCall(call, context),
@@ -441,7 +457,7 @@ function emitEventPort(
 }
 
 function shouldRunFineGroundingPass(grounding: Record<string, unknown>) {
-  return stringAt(grounding, 'provider') === 'kv-ground';
+  return stringAt(grounding, 'provider') === visionSenseModelRouterCapabilities.groundingTranslator;
 }
 
 function recordArg(call: HostPortCall, index: number): Record<string, unknown> {

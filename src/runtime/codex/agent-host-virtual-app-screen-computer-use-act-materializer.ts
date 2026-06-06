@@ -185,7 +185,6 @@ export function createRuntimeCodexVirtualAppScreenActionPlanner(
       profile: options.profile,
       adapter: options.adapter,
       env: options.env,
-      fetchImpl: options.fetchImpl,
       allowOpenAiRuntime: options.allowOpenAiRuntime,
     });
     if (!run.ok) {

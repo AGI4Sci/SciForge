@@ -1,8 +1,8 @@
 import {
   normalizeUIComponentId,
   uiComponentCompatibilityAliases,
-  uiComponentManifests,
-} from '../components';
+} from '../components/component-compatibility.js';
+import { uiComponentManifests } from '../components/manifest-registry.js';
 import type { PreviewDescriptorKind } from '@sciforge-ui/runtime-contract/preview';
 
 export type RuntimeUiManifestPolicyRequest = {
@@ -88,6 +88,19 @@ const ARTIFACT_COMPONENTS: Record<string, string> = {
   'workspace-file': 'workspace-file-viewer',
   'workspace-tree': 'workspace-file-viewer',
 };
+
+const PROMPT_COMPONENT_INTENTS: Array<{ componentId: string; pattern: RegExp }> = [
+  { componentId: 'record-table', pattern: /\b(?:data\s*table|table|record\s*table)\b|数据表|表格视图/i },
+  { componentId: 'evidence-matrix', pattern: /\b(?:evidence\s*matrix)\b|证据矩阵/i },
+  { componentId: 'execution-unit-table', pattern: /\b(?:execution\s*unit|execution\s*units|activity|provenance)\b|执行单元|活动记录|过程记录/i },
+  { componentId: 'browser-workbench', pattern: /\b(?:browser\s*workbench|browser\s*runtime|built[-\s]?in\s*browser)\b|内置浏览器|浏览器工作台/i },
+  { componentId: 'terminal-session-viewer', pattern: /\b(?:terminal\s*session|terminal\s*viewer|pty)\b|终端查看器|终端会话/i },
+  { componentId: 'workspace-file-viewer', pattern: /\b(?:workspace\s*file\s*viewer|file\s*viewer|file\s*tree)\b|文件查看器|文件树/i },
+  { componentId: 'genome-track-viewer', pattern: /\b(?:genome\s*track|genome\s*track\s*viewer|genomic\s*track)\b|基因组轨道/i },
+  { componentId: 'image-annotation-viewer', pattern: /\b(?:image\s*annotation|image\s*annotation\s*viewer|annotation\s*image)\b|图像标注/i },
+  { componentId: 'spatial-omics-viewer', pattern: /\b(?:spatial\s*omics|spatial\s*omics\s*viewer|spatial\s*transcriptomics)\b|空间组学/i },
+  { componentId: 'statistical-annotation-layer', pattern: /\b(?:statistical\s*annotation|statistical\s*annotation\s*layer|stats?\s*annotation)\b|统计标注/i },
+];
 
 const PREVIEW_KIND_COMPONENTS: Partial<Record<PreviewDescriptorKind, string>> = {
   markdown: 'report-viewer',
@@ -260,12 +273,9 @@ function promptSelectedComponentIds(prompt: string) {
   const text = prompt.trim();
   if (!text) return [];
   const selected: string[] = [];
-  if (/\b(?:data\s*table|table|record\s*table)\b|数据表|表格视图/i.test(text)) selected.push('record-table');
-  if (/\b(?:evidence\s*matrix)\b|证据矩阵/i.test(text)) selected.push('evidence-matrix');
-  if (/\b(?:execution\s*unit|execution\s*units|activity|provenance)\b|执行单元|活动记录|过程记录/i.test(text)) selected.push('execution-unit-table');
-  if (/\b(?:browser\s*workbench|browser\s*runtime|built[-\s]?in\s*browser)\b|内置浏览器|浏览器工作台/i.test(text)) selected.push('browser-workbench');
-  if (/\b(?:terminal\s*session|terminal\s*viewer|pty)\b|终端查看器|终端会话/i.test(text)) selected.push('terminal-session-viewer');
-  if (/\b(?:workspace\s*file\s*viewer|file\s*viewer|file\s*tree)\b|文件查看器|文件树/i.test(text)) selected.push('workspace-file-viewer');
+  for (const intent of PROMPT_COMPONENT_INTENTS) {
+    if (intent.pattern.test(text)) selected.push(intent.componentId);
+  }
   if (!/(?:不需要|不要|排除|without|no)\s*(?:网络图|network\s*graph|graph)/i.test(text)
     && /\b(?:network\s*graph|graph\s*viewer)\b|网络图/i.test(text)) {
     selected.push('graph-viewer');

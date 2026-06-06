@@ -25,7 +25,7 @@ const frozenHardcodedPolicyProse: Record<PromptBuilderName, {
 };
 
 const trustedPolicySpreadPattern = /\.\.\.agentServer[A-Za-z]*(?:PromptPolicyLines|ContractLines)\(/g;
-const trustedPolicyImportPattern = /from ['"](?:@sciforge-ui\/runtime-contract\/[^'"]+|\.\.\/\.\.\/\.\.\/packages\/skills\/runtime-policy)['"]/;
+const trustedPolicyImportPattern = /from ['"](?:@sciforge-ui\/runtime-contract\/[^'"]+|\.\.\/\.\.\/\.\.\/packages\/skills\/runtime-policy(?:\.js)?)['"]/;
 const promptRenderSummarySchema = 'sciforge.agentserver.prompt-render-plan-summary.v1';
 const promptProviderSpreadCallPattern = /\.\.\.([A-Za-z_$][\w$]*(?:PromptPolicyLines|ContractLines))\(/g;
 

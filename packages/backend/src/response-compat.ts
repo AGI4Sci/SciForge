@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export interface JsonObject {
@@ -59,7 +61,7 @@ export function responsesToChatCompletions(
   options: CodexResponsesProxyOptions = {},
 ): ChatCompletionRequest {
   const request = asRecord(value);
-  const model = stringOrUndefined(request.model) ?? options.defaultModel;
+  const model = upstreamModelForResponsesRequest(stringOrUndefined(request.model), options.defaultModel);
   if (!model) {
     throw new Error('Responses request must include model or proxy defaultModel');
   }
@@ -93,6 +95,16 @@ export function responsesToChatCompletions(
   return chatRequest;
 }
 
+function upstreamModelForResponsesRequest(model: string | undefined, defaultModel: string | undefined): string | undefined {
+  if (!model) return defaultModel;
+  if (defaultModel && isSciForgePublicRouterAlias(model)) return defaultModel;
+  return model;
+}
+
+function isSciForgePublicRouterAlias(model: string): boolean {
+  return model === 'sciforge-router' || model.startsWith('sciforge-router-');
+}
+
 export function chatCompletionToResponse(
   value: unknown,
   request: Pick<ResponsesRequest, 'model'> = {},
@@ -110,7 +122,7 @@ export function chatCompletionToResponse(
   if (text) output.push(messageOutputItem(text));
   output.push(...toolCalls);
 
-  const model = stringOrUndefined(completion.model) ?? stringOrUndefined(request.model) ?? 'unknown';
+  const model = responseModelForCompletion(completion.model, request.model);
   return compactObject({
     id: stringOrUndefined(completion.id) ?? makeId('resp'),
     object: 'response',
@@ -121,6 +133,12 @@ export function chatCompletionToResponse(
     output_text: text,
     usage: completion.usage,
   });
+}
+
+function responseModelForCompletion(completionModel: unknown, requestModel: unknown): string {
+  const requestedModel = stringOrUndefined(requestModel);
+  if (requestedModel && isSciForgePublicRouterAlias(requestedModel)) return requestedModel;
+  return stringOrUndefined(completionModel) ?? requestedModel ?? 'unknown';
 }
 
 export function messageOutputItem(text: string, id = makeId('msg')): JsonObject {
@@ -152,6 +170,14 @@ export function functionCallOutputItem(call: ChatToolCall, id = makeId('fc')): J
 
 export function makeId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export function providerSafeProxyErrorMessage(value: unknown): string {
+  const text = value instanceof Error ? value.message : String(value);
+  if (containsProviderUnsafeDetail(text)) {
+    return 'Provider proxy error. Private provider details were suppressed.';
+  }
+  return text.trim().slice(0, 500) || 'Provider proxy error.';
 }
 
 function inputToMessages(input: unknown): ChatMessage[] {
@@ -231,16 +257,33 @@ function namespacedDynamicTool(record: Record<string, unknown>): { chatName: str
   const namespace = stringOrUndefined(record.namespace);
   const name = stringOrUndefined(record.name);
   if (!namespace || !name) return undefined;
-  const responseName = `${namespace}.${name}`;
+  const originalResponseName = `${namespace}.${name}`;
+  const chatName = providerSafeFunctionName(`${namespace}__${name}`);
+  const responseName = containsSensitiveProviderSlug(originalResponseName) ? chatName : originalResponseName;
   return {
     responseName,
-    chatName: providerSafeFunctionName(`${namespace}__${name}`),
+    chatName,
   };
 }
 
 function providerSafeFunctionName(value: string): string {
+  if (containsSensitiveProviderSlug(value)) {
+    const fallbackName = value.split('__').at(-1) ?? 'dynamic_tool';
+    const safeFallbackName = providerSafeFunctionName(fallbackName);
+    return `dynamic_tool_${safeFallbackName}_${createHash('sha256').update(value).digest('hex').slice(0, 8)}`.slice(0, 64);
+  }
   const safe = value.replace(/[^A-Za-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
   return (safe || 'dynamic_tool').slice(0, 64);
+}
+
+function containsSensitiveProviderSlug(value: string): boolean {
+  return /:\/\/|(?:^|[?&#_-])(?:api[_-]?key|authorization|bearer|secret|token|client[_-]?secret)=?/i.test(value);
+}
+
+function containsProviderUnsafeDetail(value: string): boolean {
+  return containsSensitiveProviderSlug(value)
+    || /\b(?:api[_-]?key|authorization|bearer|secret|token|client[_-]?secret|password|credential)\b/i.test(value)
+    || /\b[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\b/.test(value);
 }
 
 function toolChoiceToChatToolChoice(value: unknown, aliases: Array<{ chatName: string; responseName: string }>): unknown {

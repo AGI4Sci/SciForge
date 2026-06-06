@@ -19,7 +19,7 @@ import {
   type UnifiedCapabilityGraph,
   type UnifiedCapabilityGraphInput,
 } from './capability-harness-candidates.js';
-import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry';
+import { uiComponentManifests } from '../../packages/presentation/components/manifest-registry.js';
 import type { UIComponentManifest } from '../../packages/contracts/runtime/index.js';
 import {
   discoverPackageCapabilityManifestsFromFiles,

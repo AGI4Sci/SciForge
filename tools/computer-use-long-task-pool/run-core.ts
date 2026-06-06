@@ -18,6 +18,7 @@ import {
 } from '../computer-use-next/approval-chain.js';
 import {
   defaultWindowTargetForRound,
+  collectRefsFirstManifestPayloadIssues,
   findPayloadTraceRef,
   firstString,
   isBrowserWindowTarget,
@@ -679,6 +680,7 @@ export async function runComputerUseLongScenario(options: {
   const validation = await validateComputerUseLongRun({
     manifestPath,
     requirePassed: latestManifest.status === 'passed',
+    requireScenarioSummaryValidation: false,
   });
   if (latestManifest.status === 'passed' && !validation.ok) {
     latestManifest.status = 'repair-needed';
@@ -795,11 +797,13 @@ function compactRecord(value: Record<string, unknown>): Record<string, unknown> 
 export async function validateComputerUseLongRun(options: {
   manifestPath: string;
   requirePassed?: boolean;
+  requireScenarioSummaryValidation?: boolean;
 }): Promise<ComputerUseLongRunValidation> {
   const manifestPath = resolve(options.manifestPath);
   const manifestDir = dirname(manifestPath);
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as PreparedComputerUseLongRun;
   const issues: string[] = [];
+  issues.push(...collectRefsFirstManifestPayloadIssues(manifest, 'manifest'));
   if (manifest.schemaVersion !== '1.0') issues.push('manifest.schemaVersion must be 1.0');
   if (manifest.taskId !== 'T084') issues.push('manifest.taskId must be T084');
   const pool = await loadComputerUseLongTaskPool();
@@ -858,9 +862,19 @@ export async function validateComputerUseLongRun(options: {
   } else if (!isRecord(summary)) {
     issues.push('scenario-summary.json must be a JSON object');
   } else {
+    issues.push(...collectRefsFirstManifestPayloadIssues(summary, 'scenario-summary'));
     if (summary.schemaVersion !== 'sciforge.computer-use-long.scenario-summary.v1') issues.push('scenario-summary schemaVersion is invalid');
     if (summary.scenarioId !== manifest.scenarioId) issues.push('scenario-summary scenarioId does not match manifest');
     if (summary.status !== manifest.status) issues.push('scenario-summary status does not match manifest');
+    if (summary.runId !== manifest.run.id) issues.push('scenario-summary runId does not match manifest current run');
+    if (options.requirePassed !== false && options.requireScenarioSummaryValidation !== false) {
+      const summaryValidation = isRecord(summary.validation) ? summary.validation : undefined;
+      if (!summaryValidation) {
+        issues.push('scenario-summary validation validator evidence is missing');
+      } else if (summaryValidation.ok !== true) {
+        issues.push('scenario-summary validation.ok must be true for passed run evidence');
+      }
+    }
   }
 
   const checkedRounds: number[] = [];

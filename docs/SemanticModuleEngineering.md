@@ -16,6 +16,12 @@ Semantic module engineering 有三个基本对象：
 
 Resource graph 的边必须表达语义关系，而不是实现调用关系。例如 `run -> artifact`、`observation -> screenshotRef`、`cursorEvent -> screenRef`、`verification -> evidenceRef` 是资源关系；`React component imported provider` 或 `runtime bridge called GUI directly` 不是合法语义边。
 
+## Semantic Decision Truth
+
+所有会改变系统行为的判断都必须由结构化语义信号和 refs-first evidence 归约而来，包括 capability routing、scenario selection、modality routing、workspace write/mutation、Computer Use risk、approval、runtime completion 和 user-visible success/failure。关键词、正则、文件名 token、状态文案和 UI label 只能作为 bounded feature detectors、presentation grouping 或 audit hints；它们不能单独成为最终路由、权限、写入、安全或完成真相。
+
+代码中的决策边界应显式保留这一原则：先收集 `intentKind`、`targetRef`、`operationKind`、`sideEffectClass`、`modalityEvidence`、`freshnessNeed`、`noNetwork/noWrite constraints`、`candidateRefs`、`confidence` 等结构化信号，再由 reducer 做最终决定。缺少结构化信号时，高影响路径必须 fail closed 到 confirmation、clarification、repair-needed 或 no-op，而不是回退成纯关键词匹配。
+
 ## L0/L1/L2 规则
 
 | 层级 | 拥有什么 | 不拥有 |

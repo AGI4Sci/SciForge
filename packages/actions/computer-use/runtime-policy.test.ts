@@ -7,6 +7,7 @@ import {
   computerUseInputChannelContract,
   computerUseInputChannelDescription,
   computerUseRealInputBlockReason,
+  computerUseRequiresSavedVisibleArtifact,
   computerUseRequiresVisibleArtifact,
   computerUseSchedulerLockIdForTarget,
   computerUseSchedulerRunMetadata,
@@ -20,6 +21,10 @@ import {
   normalizeComputerUseInputIsolation,
   normalizeComputerUseWindowTargetMode,
 } from './runtime-policy.js';
+import {
+  computerUseModelRouterCallPointManifest,
+  validateComputerUseModelRouterCall,
+} from './provider-policy.js';
 
 test('computer use runtime policy owns executor and adapter taxonomy', () => {
   assert.equal(computerUseExecutorBoundary('darwin'), 'darwin-system-events-generic-gui-executor');
@@ -28,6 +33,46 @@ test('computer use runtime policy owns executor and adapter taxonomy', () => {
   assert.equal(normalizeComputerUseIndependentInputAdapter('virtual-hid-device'), 'virtual-hid');
   assert.equal(normalizeComputerUseIndependentInputAdapter('unknown'), undefined);
   assert.equal(computerUseSystemEventsResultLine('click', true), 'system-events click visualCursor=not-shown-system-events-primary');
+});
+
+test('computer use model participation is limited to public Model Router roles', () => {
+  const manifest = computerUseModelRouterCallPointManifest();
+
+  assert.equal(manifest.endpoint, '/v1/responses');
+  assert.deepEqual(manifest.publicProfiles, ['textReasoner', 'translators.vision']);
+  assert.deepEqual(
+    manifest.callPoints.map((callPoint) => callPoint.id),
+    [
+      'local-action-planner',
+      'screenshot-describe',
+      'crop-inspect',
+      'ocr-vision-observation-summarize',
+      'candidate-disambiguation',
+      'grounding-translator',
+      'before-after-compare',
+      'verifier-explanation',
+    ],
+  );
+  assert.deepEqual(
+    validateComputerUseModelRouterCall({
+      callPoint: 'local-action-planner',
+      endpoint: '/v1/responses',
+      profile: 'textReasoner',
+      role: 'textReasoner',
+      modalityRefs: ['evidence:planner-context'],
+    }),
+    [],
+  );
+  assert.ok(
+    validateComputerUseModelRouterCall({
+      callPoint: 'screenshot-describe',
+      endpoint: 'https://provider.example/v1/chat/completions',
+      profile: 'private-vision-model',
+      role: 'translators.vision',
+      modalityRefs: ['data:image/png;base64,AAAA'],
+      providerConfig: { apiKey: 'sk-secret', model: 'raw-upstream-model' },
+    }).includes('endpoint.must-be-model-router-responses'),
+  );
 });
 
 test('computer use window target normalization lives in the package policy', () => {
@@ -173,7 +218,7 @@ test('visible artifact completion gap policy is package-owned', () => {
     computerUseVisibleArtifactGapReason(
       'create a PowerPoint slide with three source facts as body bullets',
       [
-        { type: 'type_text', text: 'SciForge L3 Computer Use Acceptance\n- TUI 主机调用 computer_use.runTask\n- KV-Ground 定位可见的浏览器和滑动控件\n- 参考文献优先追踪记录浏览器、幻灯片和伪影证据' },
+        { type: 'type_text', text: 'SciForge L3 Computer Use Acceptance\n- TUI 主机调用 computer_use.runTask\n- Model Router grounding translator 定位可见的浏览器和滑动控件\n- 参考文献优先追踪记录浏览器、幻灯片和伪影证据' },
       ],
       { finalAttempt: true },
     ),
@@ -193,6 +238,14 @@ test('visible artifact completion gap policy is package-owned', () => {
   assert.equal(computerUseRequiresVisibleArtifact('metadata contains artifactRefs from a previous diagnostic run'), false);
   assert.equal(computerUseRequiresVisibleArtifact('write an evidence summary report with action mapping'), true);
   assert.equal(computerUseRequiresVisibleArtifact('export the final report artifact'), true);
+  assert.equal(
+    computerUseRequiresSavedVisibleArtifact('create a short local visible report artifact in the editor body'),
+    false,
+  );
+  assert.equal(
+    computerUseRequiresSavedVisibleArtifact('create a slide deck with three facts from a browser source and save it in Finder'),
+    true,
+  );
 });
 
 test('filesystem path text entry is blocked outside file dialog context', () => {

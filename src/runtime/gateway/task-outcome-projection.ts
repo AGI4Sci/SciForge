@@ -726,11 +726,12 @@ function timestampFromPayload(payload: ToolPayload) {
 function protocolStatusFromPayload(payload: ToolPayload, units: RuntimeExecutionUnit[]): TaskProtocolStatus {
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const explicit = stringField(displayIntent.protocolStatus);
-  if (isTaskProtocolStatus(explicit)) return explicit;
   const displayStatus = stringField(displayIntent.status);
   if (displayStatus === 'cancelled') return 'cancelled';
+  const hasFailedExecutionUnit = units.some((unit) => ['failed', 'failed-with-reason', 'repair-needed'].includes(unit.status));
+  if (hasFailedExecutionUnit && explicit !== 'cancelled') return 'protocol-failed';
+  if (isTaskProtocolStatus(explicit)) return explicit;
   if (displayStatus === 'running' || units.some((unit) => unit.status === 'running' || unit.status === 'planned')) return 'running';
-  if (units.some((unit) => ['failed', 'failed-with-reason', 'repair-needed'].includes(unit.status))) return 'protocol-failed';
   if (payload.message || payload.artifacts.length || units.length || payload.claims.length) return 'protocol-success';
   return 'not-run';
 }
@@ -741,9 +742,12 @@ function taskOutcomeFromProjection(
   request: GatewayRequest | undefined,
   proxy: UserSatisfactionProxy,
 ): TaskOutcomeStatus {
+  // Final task outcome truth must be structured payload/projection semantics and refs-first evidence;
+  // lexical detectors may only contribute hints upstream.
   const displayIntent = isRecord(payload.displayIntent) ? payload.displayIntent : {};
   const explicit = stringField(displayIntent.taskOutcome);
   const explicitAnswerStatus = explicitAnswerStatusFromPayload(payload);
+  if (protocolStatus === 'protocol-failed') return proxy.preservesWorkRefs || proxy.usableResultVisible ? 'needs-work' : 'blocked';
   if (directReadOnlyPayloadCannotSatisfyDurableWriteRequest(payload, request)) return 'needs-work';
   if (verificationRequiredButUnsatisfied(payload, request)) {
     if (explicit === 'needs-human' || proxy.status === 'needs-human') return 'needs-human';
@@ -755,7 +759,6 @@ function taskOutcomeFromProjection(
   if (proxy.status === 'blocked') return 'blocked';
   if (protocolStatus === 'running' || protocolStatus === 'not-run') return 'unknown';
   if (protocolStatus === 'cancelled') return 'blocked';
-  if (protocolStatus === 'protocol-failed') return proxy.preservesWorkRefs || proxy.usableResultVisible ? 'needs-work' : 'blocked';
   return proxy.status === 'likely-satisfied' ? 'satisfied' : 'needs-work';
 }
 

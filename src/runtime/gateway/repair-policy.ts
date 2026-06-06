@@ -9,7 +9,7 @@ import {
   runtimeAgentBackendConfigurationRecoverActions,
 } from '@sciforge-ui/runtime-contract/agent-backend-policy';
 import type { ContractValidationFailure } from '@sciforge-ui/runtime-contract/validation-failure';
-import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
+import { repairDiagnosticViewSlotPolicy } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { sha1 } from '../workspace-task-runner.js';
 import { safeWorkspaceRel, uniqueStrings } from '../gateway-utils.js';
 import { diagnosticForFailure, type AgentServerBackendFailureDiagnostic } from './backend-failure-diagnostics.js';

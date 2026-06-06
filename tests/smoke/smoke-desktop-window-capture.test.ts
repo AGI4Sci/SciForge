@@ -69,6 +69,9 @@ test('Desktop Window Capture prefers injected ScreenCaptureKit window-region pro
   assert.equal(result.hash, hashFor(`${MACOS_SCREENCAPTUREKIT_PROVIDER_ID}:window`));
   assert.equal(result.captureRef, 'capture:macos-screencapturekit:window');
   assert.equal(result.imageRef, 'image:macos-screencapturekit:window');
+  assert.match(result.screenshotRef ?? '', /^desktop-window-capture:/);
+  assert.match(result.cropRef ?? '', /^desktop-window-capture:/);
+  assert.deepEqual(result.windowLocalBounds, { x: 0, y: 0, width: selectedWindow.bounds.width, height: selectedWindow.bounds.height });
   assert.equal(result.privacy.refsOnly, true);
   assert.equal(result.privacy.explicitSelection, true);
   assert.equal(result.privacy.unrelatedRegionsIncluded, false);
@@ -84,6 +87,8 @@ test('Desktop Window Capture prefers injected ScreenCaptureKit window-region pro
   assert.deepEqual(result.windowActionSession?.evidenceRefs, [
     { kind: 'capture', ref: result.captureRef },
     { kind: 'image', ref: result.imageRef },
+    { kind: 'screenshot', ref: result.screenshotRef },
+    { kind: 'crop', ref: result.cropRef },
   ]);
 });
 
@@ -335,6 +340,8 @@ test('Desktop Window Capture blocks display fallback as unselected ambient captu
   assert.equal(result.status, 'blocked');
   assert.equal(result.captureRef, null);
   assert.equal(result.privacy.includedRefScope, 'none');
+  assert.equal((result as Record<string, unknown>).fallbackReason, 'user-selected-screen-region');
+  assert.equal(result.diagnostics[0]?.code, 'desktop.window-capture.full-screen-fallback-recorded');
   assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === 'desktop.window-capture.selection-kind-invalid'));
 });
 
@@ -380,6 +387,175 @@ test('Desktop Window Capture returns refs and metadata without raw screenshot pa
   assert.equal(Object.hasOwn(result, 'dataUrl'), false);
   assert.doesNotMatch(serialized, /SHOULD_NOT_LEAK/);
   assert.doesNotMatch(serialized, /desktop-region:ambient:full-screen/);
+});
+
+test('Desktop Window Capture exposes native adapter window geometry and fresh crop refs', async () => {
+  const provider: DesktopWindowCaptureProvider = {
+    providerId: MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
+    priority: 100,
+    supportedPlatforms: ['darwin'],
+    async isAvailable() {
+      return true;
+    },
+    async captureSelectedTarget() {
+      return {
+        captureRef: 'capture:macos-screencapturekit-window-region:window',
+        imageRef: 'image:macos-screencapturekit-window-region:window',
+        screenshotRef: 'desktop-window-capture:workspace-alpha/session-native/screenshot/fresh-window-frame',
+        cropRef: 'desktop-window-capture:workspace-alpha/session-native/crop/window-local-crop',
+        windowRef: selectedWindow.windowRef,
+        screenId: 'screen:native-retina',
+        bounds: { x: 40, y: 76, width: 904, height: 646 },
+        scale: 2,
+        windowLocalBounds: { x: 0, y: 0, width: 904, height: 646 },
+        hash: 'sha256:' + 'b'.repeat(64),
+        capturedAt: '2026-06-03T00:05:00.000Z',
+      } as Awaited<ReturnType<DesktopWindowCaptureProvider['captureSelectedTarget']>>;
+    },
+  };
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-native',
+    selection: {
+      ...selectedWindow,
+      screenId: 'screen:stale',
+      bounds: { x: 44, y: 80, width: 900, height: 640 },
+      scale: 1,
+    },
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+
+  assert.equal(result.status, 'captured');
+  assert.equal((result as Record<string, unknown>).screenshotRef, 'desktop-window-capture:workspace-alpha/session-native/screenshot/fresh-window-frame');
+  assert.equal((result as Record<string, unknown>).cropRef, 'desktop-window-capture:workspace-alpha/session-native/crop/window-local-crop');
+  assert.equal(result.windowRef, selectedWindow.windowRef);
+  assert.equal(result.screenId, 'screen:native-retina');
+  assert.deepEqual(result.bounds, { x: 40, y: 76, width: 904, height: 646 });
+  assert.equal(result.scale, 2);
+  assert.deepEqual((result as Record<string, unknown>).windowLocalBounds, { x: 0, y: 0, width: 904, height: 646 });
+  assert.deepEqual(result.windowActionSession?.bounds, { x: 40, y: 76, width: 904, height: 646 });
+  assert.equal(result.windowActionSession?.screenId, 'screen:native-retina');
+  assert.deepEqual(result.windowActionSession?.evidenceRefs, [
+    { kind: 'capture', ref: result.captureRef },
+    { kind: 'image', ref: result.imageRef },
+    { kind: 'screenshot', ref: (result as Record<string, unknown>).screenshotRef },
+    { kind: 'crop', ref: (result as Record<string, unknown>).cropRef },
+  ]);
+});
+
+test('Desktop Window Capture records a generic reason before accepting full-screen fallback', async () => {
+  const provider: DesktopWindowCaptureProvider = {
+    providerId: MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
+    priority: 100,
+    supportedPlatforms: ['darwin'],
+    async isAvailable() {
+      return true;
+    },
+    async captureSelectedTarget() {
+      return {
+        captureKind: 'full-screen',
+        fullScreenFallbackReason: 'occlusion',
+        screenshotRef: 'desktop-window-capture:workspace-alpha/session-fallback/screenshot/full-screen',
+        cropRef: 'desktop-window-capture:workspace-alpha/session-fallback/crop/window-local',
+        hash: 'sha256:' + 'c'.repeat(64),
+      } as Awaited<ReturnType<DesktopWindowCaptureProvider['captureSelectedTarget']>>;
+    },
+  };
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-fallback',
+    selection: selectedWindow,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+  const diagnosticCodes = result.diagnostics.map((diagnostic) => diagnostic.code);
+
+  assert.equal(result.status, 'captured');
+  assert.equal((result as Record<string, unknown>).fallbackReason, 'occlusion');
+  assert.ok(diagnosticCodes.includes('desktop.window-capture.full-screen-fallback-recorded'));
+  assert.ok(
+    diagnosticCodes.indexOf('desktop.window-capture.full-screen-fallback-recorded')
+      < diagnosticCodes.indexOf('desktop.window-capture.captured'),
+  );
+});
+
+test('Desktop Window Capture blocks full-screen fallback without a generic reason', async () => {
+  const provider: DesktopWindowCaptureProvider = {
+    providerId: MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
+    priority: 100,
+    supportedPlatforms: ['darwin'],
+    async isAvailable() {
+      return true;
+    },
+    async captureSelectedTarget() {
+      return {
+        captureKind: 'full-screen',
+        screenshotRef: 'desktop-window-capture:workspace-alpha/session-fallback/screenshot/full-screen',
+        cropRef: 'desktop-window-capture:workspace-alpha/session-fallback/crop/window-local',
+        hash: 'sha256:' + 'd'.repeat(64),
+      } as Awaited<ReturnType<DesktopWindowCaptureProvider['captureSelectedTarget']>>;
+    },
+  };
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-fallback-missing-reason',
+    selection: selectedWindow,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(result.captureRef, null);
+  assert.equal((result as Record<string, unknown>).screenshotRef, null);
+  assert.ok(result.diagnostics.some((diagnostic) => diagnostic.code === 'desktop.window-capture.full-screen-fallback-reason-required'));
+});
+
+test('Desktop Window Capture replaces unsafe screenshot refs and redacts raw diagnostic payloads', async () => {
+  const provider: DesktopWindowCaptureProvider = {
+    providerId: MACOS_SCREENCAPTUREKIT_PROVIDER_ID,
+    priority: 100,
+    supportedPlatforms: ['darwin'],
+    async isAvailable() {
+      return true;
+    },
+    async captureSelectedTarget() {
+      return {
+        screenshotRef: 'data:image/png;base64,SHOULD_NOT_LEAK_SCREENSHOT_REF',
+        cropRef: 'https://provider.example.invalid/private-crop.png?token=SHOULD_NOT_LEAK_CROP_REF',
+        hash: 'sha256:' + 'e'.repeat(64),
+        diagnostics: [{
+          code: 'desktop.window-capture.provider-raw-diagnostic',
+          level: 'warning',
+          message: 'provider emitted data:image/png;base64,SHOULD_NOT_LEAK_DIAGNOSTIC_MESSAGE',
+          refs: ['data:image/png;base64,SHOULD_NOT_LEAK_DIAGNOSTIC_REF'],
+        }],
+      } as Awaited<ReturnType<DesktopWindowCaptureProvider['captureSelectedTarget']>>;
+    },
+  };
+
+  const result = await captureSelectedDesktopWindowTarget({
+    workspaceId: 'workspace-alpha',
+    sessionId: 'session-raw-screenshot-guard',
+    selection: selectedWindow,
+  }, {
+    platform: 'darwin',
+    providers: [provider],
+  });
+  const serialized = JSON.stringify(result);
+
+  assert.equal(result.status, 'captured');
+  assert.match(String((result as Record<string, unknown>).screenshotRef), /^desktop-window-capture:/);
+  assert.match(String((result as Record<string, unknown>).cropRef), /^desktop-window-capture:/);
+  assert.doesNotMatch(serialized, /SHOULD_NOT_LEAK/);
+  assert.doesNotMatch(serialized, /data:image\/png;base64/);
+  assert.doesNotMatch(serialized, /provider\.example\.invalid/);
 });
 
 function fakeCaptureProvider(options: {

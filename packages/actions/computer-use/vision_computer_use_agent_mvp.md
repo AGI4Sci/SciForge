@@ -62,7 +62,7 @@ Model Router vision translator 可以描述截图、比较变化、解释图表/
 
 Vision translator 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。视觉结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
 
-Computer Use 的所有模型参与点统一使用 Model Router `/v1/responses` capability surface，并通过 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。这包括局部 next-action selector、screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧、需要模型参与的 grounding translator 和 verifier explanation。插件不得接触 provider URL、API key、raw model slug 或未注册 provider/model/profile。旧的 KV-Ground 或其它 grounding 服务名只能作为显式 opt-in 兼容 provider 壳或调用路径，不代表默认模型；进入 evidence 的具体 provider/model 只能作为 router 决议结果或 legacy adapter metadata。
+Computer Use 的所有模型参与点统一使用 Model Router `/v1/responses` capability surface，并通过 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。这包括局部 next-action selector、screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧、需要模型参与的 grounding translator 和 verifier explanation。插件不得接触 provider URL、API key、raw model slug、direct grounding endpoint 或未注册 provider/model/profile；进入 evidence 的具体 provider/model 只能作为 router 决议结果。
 
 ### 4. 改变界面的动作必须可追溯
 

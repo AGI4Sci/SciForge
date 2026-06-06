@@ -265,6 +265,10 @@ const BLOCKING_RUNTIME_STATUSES = new Set(['repair-needed', 'failed-with-reason'
 const SUCCESSFUL_RUNTIME_STATUSES = new Set(['done', 'record-only', 'self-healed', 'completed', 'success']);
 const RUNTIME_WORK_EVENT_FAILED_STATUSES = new Set(['failed', 'blocked', 'repair-needed', 'failed-with-reason']);
 
+// Presentation classification only: these lexical detectors group runtime
+// activity for the UI timeline. They must not become routing, permission,
+// write, or completion truth; those decisions require structured semantic
+// signals and refs-first runtime evidence.
 const runtimeWorkEventKeywordRules: Array<{ kind: RuntimeWorkEventKind; pattern: RegExp }> = [
   { kind: 'plan', pattern: /current-plan|run-plan|stage-start|plan:|计划|规划/ },
   { kind: 'recover', pattern: /acceptance-repair|repair|recover|retry|fallback|恢复|重试|修复/ },

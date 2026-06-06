@@ -104,9 +104,16 @@ export function createDefaultCodexAgentHostRuntimeTruthResolver(options: {
       observation,
       permissions: {
         refs: actTimeTruth.permissionRefs,
+        permissionRefs: actTimeTruth.permissionRefs,
+        ...(actTimeTruth.appAllowlistRefs.length ? { appAllowlistRefs: actTimeTruth.appAllowlistRefs } : {}),
+        ...(actTimeTruth.windowAllowlistRefs.length ? { windowAllowlistRefs: actTimeTruth.windowAllowlistRefs } : {}),
+        ...(actTimeTruth.riskPreviewRefs.length ? { riskPreviewRefs: actTimeTruth.riskPreviewRefs } : {}),
         stopCancelPath: actTimeTruth.stopCancelPath,
         ...(actTimeTruth.controlPath ? { controlPath: actTimeTruth.controlPath } : {}),
       },
+      ...(actTimeTruth.sessions ? { sessions: actTimeTruth.sessions } : {}),
+      ...(actTimeTruth.adapter ? { adapter: actTimeTruth.adapter } : {}),
+      ...(actTimeTruth.controlPath ? { controlPath: actTimeTruth.controlPath } : {}),
       refs: uniqueStrings([
         'runtime-truth:workspace-writer-health',
         ...nativeAdapter.refs,
@@ -149,14 +156,20 @@ export interface CodexAgentHostActTimeTruth {
     summary?: string;
     refs?: string[];
   };
+  sessions?: RuntimeSessionTruth;
   computerUseAdapter?: {
     status?: 'ready' | 'blocked';
     ready?: boolean;
     providerId?: string;
     refs?: string[];
   };
+  adapter?: RuntimeAdapterTruth;
   permissions?: {
     refs?: string[];
+    permissionRefs?: string[];
+    appAllowlistRefs?: string[];
+    windowAllowlistRefs?: string[];
+    riskPreviewRefs?: string[];
     stopCancelPath?: boolean;
     stopCancelRefs?: string[];
     cancelRefs?: string[];
@@ -165,6 +178,7 @@ export interface CodexAgentHostActTimeTruth {
     resumeRefs?: string[];
     stopRefs?: string[];
   };
+  controlPath?: RuntimeControlPath;
   refs?: string[];
 }
 
@@ -241,6 +255,7 @@ export interface CodexAgentHostBrowserActTimeStores {
   };
   computerUseAdapterRegistry?: {
     materializeBrowserHostAdapter(input: CodexAgentHostBrowserActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
+    materializeWindowActionSessionAdapter?(input: CodexAgentHostWindowActionActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
     materializeVirtualAppScreenNativeHostAdapter?(input: CodexAgentHostVirtualAppScreenActTimeStoreInput): MaybePromise<CodexAgentHostBrowserActTimeStoreResult | undefined>;
   };
   permissionLedger?: {
@@ -270,6 +285,9 @@ export function createDefaultCodexAgentHostBrowserActTimeStores(options: {
     computerUseAdapterRegistry: {
       materializeBrowserHostAdapter(input) {
         return computerUseAdapterRegistry.materializeBrowserHostAdapter(input);
+      },
+      materializeWindowActionSessionAdapter(input) {
+        return computerUseAdapterRegistry.materializeWindowActionSessionAdapter(input);
       },
       materializeVirtualAppScreenNativeHostAdapter(input) {
         const providerId = 'sciforge.virtual-app-screen.native-host-window-action';
@@ -693,6 +711,19 @@ export function createDefaultBrowserHostSessionActTimeTruthSource(options: {
           ? uniqueStrings([...observationRefs, ...recordLikeStringList(storedWindowAction.observationRefs)])
           : observationRefs,
       },
+      sessions: {
+        sessionReadyRefs: uniqueStrings([
+          sessionRef,
+          ...windowActionRefs.filter((ref) => /^window-action-session:/i.test(ref)),
+        ]),
+        targetRefs,
+        inputLeaseRefs: leaseRefs(windowActionRefs),
+        observationRefs: browserSessionObservationFresh(session, now())
+          ? (storedWindowAction?.observationRefs?.length
+            ? uniqueStrings([...observationRefs, ...recordLikeStringList(storedWindowAction.observationRefs)])
+            : observationRefs)
+          : [],
+      },
       windowActionSession: {
         status: storedWindowAction ? storeResultStatus(storedWindowAction) : 'ready',
         summary: safeSummary(storedWindowAction?.summary) ?? `WindowActionSession derived from BrowserHostSession ${sessionId}`,
@@ -703,8 +734,26 @@ export function createDefaultBrowserHostSessionActTimeTruthSource(options: {
         providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.browser-host-session.computer-use-adapter',
         refs: adapterRefs,
       },
+      adapter: {
+        providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.browser-host-session.computer-use-adapter',
+        refs: adapterRefs,
+        capabilityRefs: [`runtime-truth:computer-use-capability/browser-host-session/${sessionId}`],
+        inputIsolation: {
+          mode: 'browser-host-native-surface',
+          refsOnly: true,
+          sharedSystemInput: false,
+          requiresFocusLease: false,
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          refs: [session.liveSurfaceRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
+        },
+      },
       permissions: {
         refs: permissionRefs,
+        permissionRefs,
+        appAllowlistRefs: [`runtime-truth:app-allowlist/browser-host-session/${sessionId}`],
+        windowAllowlistRefs: [`runtime-truth:window-allowlist/browser-host-session/${sessionId}`],
+        riskPreviewRefs: [`action-ledger:browser-host-session/${sessionId}/risk/${riskCategory}`],
         stopCancelPath: storedStopCancel ? storeResultStatus(storedStopCancel) === 'ready' : true,
         stopCancelRefs,
       },
@@ -755,16 +804,26 @@ export function createDefaultWindowActionSessionActTimeTruthSource(options: {
       };
       const storedPermission = await options.stores?.permissionLedger?.materializeWindowActionTurnPermission?.(storeInput);
       const storedStopCancel = await options.stores?.stopCancelTakeoverStore?.materializeForWindowActionSession?.(storeInput);
+      const storedAdapter = await options.stores?.computerUseAdapterRegistry?.materializeWindowActionSessionAdapter?.(storeInput);
       const windowActionRefs = uniqueStrings([
         sessionRef,
         ...entry.refs,
       ]);
+      const adapterRefs = storedAdapter
+        ? recordLikeStringList(storedAdapter.refs)
+        : [];
       const permissionRefs = storedPermission
         ? uniqueStrings([...recordLikeStringList(storedPermission.refs), ...recordLikeStringList(storedPermission.permissionRefs)])
         : [];
       const stopCancelRefs = storedStopCancel
         ? uniqueStrings([...recordLikeStringList(storedStopCancel.refs), ...recordLikeStringList(storedStopCancel.stopCancelRefs)])
         : [];
+      const actorCursorRefs = windowActionActorCursorRefs(entry);
+      const scopedInputRefs = windowActionScopedInputRefs(entry);
+      const focusLeaseRefs = windowActionFocusLeaseRefs(entry);
+      const inputLeaseRefs = leaseRefs(windowActionRefs).filter((ref) => !focusLeaseRefs.includes(ref));
+      const inputIsolationRefs = uniqueStrings([...scopedInputRefs, ...focusLeaseRefs]);
+      const focusModes = uniqueStrings(entry.session.scopedInputAdapters.map((adapter) => adapter.focusMode));
       return {
         schemaVersion: 'sciforge.agent-host.act-time-truth.v1',
         source: 'window-action-session-act-time-source',
@@ -777,18 +836,53 @@ export function createDefaultWindowActionSessionActTimeTruthSource(options: {
           fresh: windowActionSessionObservationFresh(entry, now()),
           refs: observationRefs,
         },
+        sessions: {
+          sessionReadyRefs: uniqueStrings([
+            ...windowActionRefs,
+            ...actorCursorRefs,
+            ...scopedInputRefs,
+            ...focusLeaseRefs,
+          ]),
+          targetRefs,
+          actorCursorRefs,
+          inputLeaseRefs,
+          focusLeaseRefs,
+          observationRefs: windowActionSessionObservationFresh(entry, now()) ? observationRefs : [],
+        },
         windowActionSession: {
           status: 'ready',
           summary: windowActionSessionTargetSummary(entry),
           refs: windowActionRefs,
         },
+        computerUseAdapter: {
+          status: storedAdapter ? storeResultStatus(storedAdapter) : 'blocked',
+          providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.window-action-session.computer-use-adapter',
+          refs: adapterRefs,
+        },
+        adapter: {
+          providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.window-action-session.computer-use-adapter',
+          refs: adapterRefs,
+          capabilityRefs: [`runtime-truth:computer-use-capability/window-action-session/${sessionId}`],
+          inputIsolation: {
+            mode: focusModes[0] ?? (focusLeaseRefs.length ? 'requires-focus' : 'focus-free'),
+            refsOnly: true,
+            sharedSystemInput: false,
+            requiresFocusLease: focusLeaseRefs.length > 0 || focusModes.includes('requires-focus'),
+            refs: inputIsolationRefs,
+          },
+        },
         permissions: {
           refs: permissionRefs,
+          permissionRefs,
+          appAllowlistRefs: [`runtime-truth:app-allowlist/window-action-session/${sessionId}/${safeRefPart(entry.session.app.id ?? entry.session.app.name ?? 'app')}`],
+          windowAllowlistRefs: [`runtime-truth:window-allowlist/window-action-session/${sessionId}`],
+          riskPreviewRefs: [`action-ledger:window-action-session/${sessionId}/risk/${riskCategory}`],
           stopCancelPath: stopCancelRefs.length > 0,
           stopCancelRefs,
         },
         refs: uniqueStrings([
           ...windowActionRefs,
+          ...adapterRefs,
           ...permissionRefs,
           ...stopCancelRefs,
           ...targetRefs,
@@ -890,6 +984,12 @@ export function createDefaultVirtualAppScreenNativeHostActTimeTruthSource(option
         fresh: virtualAppScreenObservationFresh(record, now()),
         refs: observationRefs,
       },
+      sessions: {
+        sessionReadyRefs: uniqueStrings(windowActionRefs),
+        targetRefs,
+        inputLeaseRefs: [record.inputLeaseRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
+        observationRefs: virtualAppScreenObservationFresh(record, now()) ? observationRefs : [],
+      },
       windowActionSession: {
         status: 'ready',
         summary: virtualAppScreenTargetSummary(record),
@@ -900,8 +1000,29 @@ export function createDefaultVirtualAppScreenNativeHostActTimeTruthSource(option
         providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.virtual-app-screen.native-host-window-action',
         refs: adapterRefs,
       },
+      adapter: {
+        providerId: safeSummary(storedAdapter?.providerId) ?? 'sciforge.virtual-app-screen.native-host-window-action',
+        refs: adapterRefs,
+        capabilityRefs: [
+          record.adapterReadinessRef,
+          `runtime-truth:computer-use-capability/virtual-app-screen/${sessionId}`,
+        ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
+        inputIsolation: {
+          mode: 'virtual-app-screen-lease',
+          refsOnly: true,
+          sharedSystemInput: false,
+          requiresFocusLease: false,
+          singleInteractiveTruth: true,
+          secondTruthSource: false,
+          refs: [record.inputLeaseRef, record.liveSurfaceRef].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0),
+        },
+      },
       permissions: {
         refs: permissionRefs,
+        permissionRefs,
+        appAllowlistRefs: [`runtime-truth:app-allowlist/virtual-app-screen/${sessionId}`],
+        windowAllowlistRefs: [`runtime-truth:window-allowlist/virtual-app-screen/${sessionId}`],
+        riskPreviewRefs: [`action-ledger:computer-use/native-host/${sessionId}/risk/${riskCategory}`],
         stopCancelPath: stopCancelRefs.length > 0,
         stopCancelRefs,
       },
@@ -1040,16 +1161,59 @@ function storeResultStatus(value: CodexAgentHostBrowserActTimeStoreResult): 'rea
   return value.ready === true || value.status === 'ready' ? 'ready' : 'blocked';
 }
 
+function leaseRefs(refs: string[]): string[] {
+  return uniqueStrings(refs.filter((ref) => /^lease:/i.test(ref) && safeRuntimeOwnerRef(ref)));
+}
+
+function windowActionActorCursorRefs(entry: WindowActionSessionStoreEntry): string[] {
+  return ownerRefsForPurpose(uniqueStrings([
+    ...(entry.session.actorCursor?.evidenceRefs ?? []),
+    ...entry.session.scopedInputAdapters.flatMap((adapter) => [
+      adapter.actorCursorRef,
+    ]),
+    ...entry.session.events.flatMap((event) => [
+      event.actorCursorRef,
+      ...(event.actorCursor?.evidenceRefs ?? []),
+    ]),
+  ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)), 'general')
+    .filter((ref) => /(?:actor-cursor|actor-cursors|cursor)/i.test(ref));
+}
+
+function windowActionScopedInputRefs(entry: WindowActionSessionStoreEntry): string[] {
+  return ownerRefsForPurpose(uniqueStrings(entry.session.scopedInputAdapters.flatMap((adapter) => [
+    adapter.ref,
+    ...adapter.evidenceRefs.map((item) => item.ref),
+  ])), 'general')
+    .filter((ref) => /(?:scoped-input|input-adapter)/i.test(ref));
+}
+
+function windowActionFocusLeaseRefs(entry: WindowActionSessionStoreEntry): string[] {
+  return leaseRefs(entry.session.scopedInputAdapters.flatMap((adapter) => [
+    adapter.focusLeaseRef,
+    ...adapter.evidenceRefs.map((item) => item.ref),
+  ].filter((ref): ref is string => typeof ref === 'string' && ref.trim().length > 0)))
+    .filter((ref) => /focus/i.test(ref));
+}
+
 interface SanitizedActTimeTruth {
   target?: NonNullable<CodexAgentHostRuntimeTruth['target']>;
   observation?: NonNullable<CodexAgentHostRuntimeTruth['observation']>;
+  sessions?: RuntimeSessionTruth;
+  adapter?: RuntimeAdapterTruth;
   windowActionSessionReady: boolean;
   computerUseAdapterReady: boolean;
   permissionRefs: string[];
+  appAllowlistRefs: string[];
+  windowAllowlistRefs: string[];
+  riskPreviewRefs: string[];
   stopCancelPath: boolean;
   controlPath?: RuntimeControlPath;
   refs: string[];
 }
+
+type RuntimeSessionTruth = NonNullable<CodexAgentHostRuntimeTruth['sessions']>;
+type RuntimeAdapterTruth = NonNullable<CodexAgentHostRuntimeTruth['adapter']>;
+type RuntimeAdapterInputIsolation = NonNullable<RuntimeAdapterTruth['inputIsolation']>;
 
 interface RuntimeControlPath {
   ready: boolean;
@@ -1065,6 +1229,9 @@ function sanitizeActTimeTruth(value: unknown): SanitizedActTimeTruth {
     windowActionSessionReady: false,
     computerUseAdapterReady: false,
     permissionRefs: [],
+    appAllowlistRefs: [],
+    windowAllowlistRefs: [],
+    riskPreviewRefs: [],
     stopCancelPath: false,
     refs: [],
   };
@@ -1078,6 +1245,9 @@ function sanitizeActTimeTruth(value: unknown): SanitizedActTimeTruth {
     ...recordStringList(permissions, 'refs'),
     ...recordStringList(permissions, 'permissionRefs'),
   ], 'permission');
+  const appAllowlistRefs = ownerRefsForPurpose(recordStringList(permissions, 'appAllowlistRefs'), 'general');
+  const windowAllowlistRefs = ownerRefsForPurpose(recordStringList(permissions, 'windowAllowlistRefs'), 'general');
+  const riskPreviewRefs = ownerRefsForPurpose(recordStringList(permissions, 'riskPreviewRefs'), 'general');
   const stopCancelRefs = ownerRefsForPurpose([
     ...recordStringList(permissions, 'stopCancelRefs'),
     ...recordStringList(permissions, 'cancelRefs'),
@@ -1090,13 +1260,20 @@ function sanitizeActTimeTruth(value: unknown): SanitizedActTimeTruth {
   const controlPath = runtimeControlPath(permissions, directControlRefs);
   const target = sanitizedActTarget(value.target);
   const observation = sanitizedActObservation(value.observation);
+  const sessions = sanitizedActSessions(value.sessions);
+  const adapter = sanitizedActAdapter(value.adapter, computerUseAdapter);
   const generalRefs = ownerRefsForPurpose(recordStringList(value, 'refs'), 'general');
   return {
     target,
     observation,
+    sessions,
+    adapter,
     windowActionSessionReady: actReady(windowActionSession) && windowActionRefs.length > 0,
     computerUseAdapterReady: actReady(computerUseAdapter) && adapterRefs.length > 0,
     permissionRefs,
+    appAllowlistRefs,
+    windowAllowlistRefs,
+    riskPreviewRefs,
     stopCancelPath: permissions.stopCancelPath === true && (directControlRefs.length > 0 || controlPath?.ready === true),
     controlPath,
     refs: uniqueStrings([
@@ -1108,6 +1285,60 @@ function sanitizeActTimeTruth(value: unknown): SanitizedActTimeTruth {
       ...(observation?.refs ?? []),
       ...generalRefs,
     ]),
+  };
+}
+
+function sanitizedActSessions(value: unknown): RuntimeSessionTruth | undefined {
+  if (!isRecord(value)) return undefined;
+  const sessionReadyRefs = ownerRefsForPurpose(recordStringList(value, 'sessionReadyRefs'), 'general');
+  const targetRefs = ownerRefsForPurpose(recordStringList(value, 'targetRefs'), 'target');
+  const actorCursorRefs = ownerRefsForPurpose(recordStringList(value, 'actorCursorRefs'), 'general')
+    .filter((ref) => /(?:actor-cursor|actor-cursors|cursor)/i.test(ref));
+  const inputLeaseRefs = ownerRefsForPurpose(recordStringList(value, 'inputLeaseRefs'), 'stop-cancel')
+    .filter((ref) => /(?:^lease:|\/leases?\/|input-lease|agent-host)/i.test(ref));
+  const focusLeaseRefs = ownerRefsForPurpose(recordStringList(value, 'focusLeaseRefs'), 'stop-cancel')
+    .filter((ref) => /(?:^lease:|focus)/i.test(ref));
+  const observationRefs = ownerRefsForPurpose(recordStringList(value, 'observationRefs'), 'observation');
+  if (!sessionReadyRefs.length && !targetRefs.length && !actorCursorRefs.length && !inputLeaseRefs.length && !focusLeaseRefs.length && !observationRefs.length) return undefined;
+  return {
+    ...(sessionReadyRefs.length ? { sessionReadyRefs } : {}),
+    ...(targetRefs.length ? { targetRefs } : {}),
+    ...(actorCursorRefs.length ? { actorCursorRefs } : {}),
+    ...(inputLeaseRefs.length ? { inputLeaseRefs } : {}),
+    ...(focusLeaseRefs.length ? { focusLeaseRefs } : {}),
+    ...(observationRefs.length ? { observationRefs } : {}),
+  };
+}
+
+function sanitizedActAdapter(value: unknown, fallback: Record<string, unknown>): RuntimeAdapterTruth | undefined {
+  const adapter = isRecord(value) ? value : {};
+  const refs = ownerRefsForPurpose([
+    ...recordStringList(fallback, 'refs'),
+    ...recordStringList(adapter, 'refs'),
+  ], 'adapter');
+  const capabilityRefs = ownerRefsForPurpose(recordStringList(adapter, 'capabilityRefs'), 'general');
+  const inputIsolation = sanitizedInputIsolation(adapter.inputIsolation);
+  const providerId = safeSummary(adapter.providerId) ?? safeSummary(fallback.providerId);
+  if (!providerId && !refs.length && !capabilityRefs.length && !inputIsolation) return undefined;
+  return {
+    ...(providerId ? { providerId } : {}),
+    ...(refs.length ? { refs } : {}),
+    ...(capabilityRefs.length ? { capabilityRefs } : {}),
+    ...(inputIsolation ? { inputIsolation } : {}),
+  };
+}
+
+function sanitizedInputIsolation(value: unknown): RuntimeAdapterInputIsolation | undefined {
+  if (!isRecord(value)) return undefined;
+  const refs = ownerRefsForPurpose(recordStringList(value, 'refs'), 'general');
+  return {
+    ...(safeSummary(value.mode) ? { mode: safeSummary(value.mode) } : {}),
+    refsOnly: value.refsOnly !== false,
+    ...(typeof value.sharedSystemInput === 'boolean' ? { sharedSystemInput: value.sharedSystemInput } : {}),
+    ...(typeof value.requiresFocusLease === 'boolean' ? { requiresFocusLease: value.requiresFocusLease } : {}),
+    ...(typeof value.singleInteractiveTruth === 'boolean' ? { singleInteractiveTruth: value.singleInteractiveTruth } : {}),
+    ...(typeof value.secondTruthSource === 'boolean' ? { secondTruthSource: value.secondTruthSource } : {}),
+    ...(refs.length ? { refs } : {}),
   };
 }
 

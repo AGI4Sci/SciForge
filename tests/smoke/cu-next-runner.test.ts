@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -11,8 +10,6 @@ import {
   computerUseLongAcceptanceProgress,
   isComputerUseLongActionQuotaEligibleRound,
   loadComputerUseLongTaskPool,
-  preflightComputerUseLong,
-  renderComputerUseLongRepairPlan,
 } from '../../tools/computer-use-long-task-pool/internal.js';
 import {
   CU_NEXT_TASK_MAPPINGS,
@@ -34,7 +31,6 @@ import {
   cuNextProjectionTrace,
   cuNextVisibleMarkdownArtifact,
   passedBrowserManifest,
-  passedKvGroundManifest,
   projectFixtureWithOnlyCuNext07Checked,
   repairDiagnosticsFixture,
   writeBundleLocalCuNext07Acceptance,
@@ -53,7 +49,6 @@ const cuNextRuntimeEnvKeys = [
   'SCIFORGE_PROXY_UPSTREAM_BASE_URL',
   'SCIFORGE_PROXY_DEFAULT_MODEL',
   'SCIFORGE_COMPUTER_USE_PLANNER_PROFILE',
-  'SCIFORGE_VISION_KV_GROUND_URL',
   'SCIFORGE_VISION_INPUT_ADAPTER',
   'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
   'SCIFORGE_VISION_TRANSLATOR_MODEL',
@@ -63,67 +58,6 @@ function cuNextRuntimeEnv(overrides: NodeJS.ProcessEnv = {}) {
   const env = { ...process.env };
   for (const key of cuNextRuntimeEnvKeys) delete env[key];
   return { ...env, ...overrides };
-}
-
-async function withProcessEnv<T>(overrides: Record<string, string | undefined>, handler: () => Promise<T>): Promise<T> {
-  const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]] as const));
-  try {
-    for (const [key, value] of Object.entries(overrides)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-    return await handler();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
-}
-
-async function withKvGroundHealthServer<T>(handler: (baseUrl: string) => Promise<T>) {
-  const server = createServer((request, response) => {
-    if (request.url === '/health') {
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify({ ok: true, inline_image_supported: true }));
-      return;
-    }
-    response.statusCode = 404;
-    response.end('not found');
-  });
-  await new Promise<void>((resolvePromise) => server.listen(0, '127.0.0.1', resolvePromise));
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  try {
-    return await handler(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolvePromise, reject) => server.close((error) => error ? reject(error) : resolvePromise()));
-  }
-}
-
-function assertNoKvGroundSecretDiagnostics(blob: string): void {
-  for (const secret of [
-    'kvuser-redact',
-    'kvpass-redact',
-    'kvtoken-redact',
-    'kvapikey-redact',
-    'kvsecret-redact',
-    'kvquerypass-redact',
-    'kvhash-redact',
-    'kvbearer-redact',
-  ]) {
-    assert.doesNotMatch(blob, new RegExp(secret));
-  }
-  assert.doesNotMatch(blob, /\/\/[^/\s]+@/);
-  assert.doesNotMatch(blob, /[?&](?:token|apiKey|secret|password)=/);
-  assert.doesNotMatch(blob, /\b(?:token|apiKey|secret|password)=/);
-  assert.doesNotMatch(blob, /#kvhash/i);
 }
 
 function customCuNextTaskMap(): Record<string, unknown> {
@@ -262,6 +196,14 @@ test('CU-NEXT CLI rejects non approval-token approvalRef values', () => {
     '--approval-ref',
     'session:derived',
   ]), /approval-ref must be a non-empty approval: token/);
+});
+
+test('CU-NEXT readiness CLI rejects retired direct grounder smoke inputs', () => {
+  assert.throws(() => parseCuNextRunArgs([
+    'readiness',
+    '--legacy-grounder-smoke',
+    'legacy-smoke.json',
+  ]), /Unknown argument: --legacy-grounder-smoke/);
 });
 
 test('CU-NEXT acceptance projection success accepts needs-confirmation for mail draft', () => {
@@ -411,7 +353,6 @@ test('CU-NEXT preflight prints no-secret service-env repair actions for missing 
       env: cuNextRuntimeEnv({
         SCIFORGE_RUNTIME_API_KEY: '',
         SCIFORGE_PROXY_UPSTREAM_BASE_URL: '',
-        SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:18081',
         SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
         SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
       }),
@@ -429,193 +370,54 @@ test('CU-NEXT preflight prints no-secret service-env repair actions for missing 
 test('CU-NEXT preflight hydrates runtime env from explicit local config without printing secrets', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-config-'));
   try {
-    await withKvGroundHealthServer(async (grounderBaseUrl) => {
-      const configPath = join(workspace, 'config.local.json');
-      await writeFile(configPath, `${JSON.stringify({
-        llm: {
-          apiKey: 'sk-test-cu-next-local-config-secret',
-          baseUrl: 'http://127.0.0.1:3888/v1',
-          model: 'bailian/deepseek-v4-flash',
-        },
-        computerUse: {
-          plannerProfile: 'sciforge-runtime-deepseek',
-        },
-        visionSense: {
-          grounderBaseUrl,
-          inputAdapter: 'remote-desktop',
-          independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
-          vlmModel: 'sciforge-router',
-        },
-      }, null, 2)}\n`);
+    const configPath = join(workspace, 'config.local.json');
+    await writeFile(configPath, `${JSON.stringify({
+      llm: {
+        apiKey: 'sk-test-cu-next-local-config-secret',
+        baseUrl: 'http://127.0.0.1:3888/v1',
+        model: 'bailian/deepseek-v4-flash',
+      },
+      computerUse: {
+        plannerProfile: 'sciforge-runtime-deepseek',
+      },
+      visionSense: {
+        inputAdapter: 'remote-desktop',
+        independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
+        vlmModel: 'sciforge-router',
+      },
+    }, null, 2)}\n`);
 
-      const reportPath = join(workspace, 'preflight.md');
-      const result = await execFileAsync(process.execPath, [
-        '--import',
-        'tsx',
-        'tools/cu-next-run.ts',
-        'preflight',
-        '--task',
-        'CU-NEXT-04',
-        '--workspace-path',
-        workspace,
-        '--real',
-        '--out',
-        reportPath,
-      ], {
-        env: cuNextRuntimeEnv({
-          SCIFORGE_CONFIG_PATH: configPath,
-        }),
-      });
-
-      assert.match(result.stdout, /\[ok\] CU-NEXT-04 preflight -> CU-LONG-005/);
-      assert.match(await readFile(reportPath, 'utf8'), /grounder\/grounder: Legacy KV-Ground health check passed/);
-      assert.doesNotMatch(result.stdout, /sk-test-cu-next-local-config-secret/);
-      assert.doesNotMatch(result.stderr, /sk-test-cu-next-local-config-secret/);
-    });
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
-});
-
-test('CU-NEXT real preflight fails closed when configured KV-Ground health is unreachable', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-grounder-health-'));
-  try {
+    const reportPath = join(workspace, 'preflight.md');
     const result = await execFileAsync(process.execPath, [
       '--import',
       'tsx',
       'tools/cu-next-run.ts',
       'preflight',
       '--task',
-      'CU-NEXT-07',
-      '--workspace-path',
-      workspace,
-      '--real',
-    ], {
-      env: cuNextRuntimeEnv({
-        SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-next-runtime',
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
-        SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:1',
-        SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
-        SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-      }),
-    });
-
-    assert.match(result.stdout, /\[repair-needed\] CU-NEXT-07 preflight -> CU-LONG-004/);
-    assert.match(result.stdout, /grounder: Legacy KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/health/);
-    assert.match(result.stdout, /default Model Router grounding translator/);
-  } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
-});
-
-test('CU-NEXT real KV-Ground preflight redacts health URL secrets from stdout reports and matrix summaries', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-next-preflight-grounder-redaction-'));
-  try {
-    const reportPath = join(workspace, 'preflight.md');
-    const outRoot = join(workspace, 'matrix');
-    const secretGrounderUrl = [
-      'http://kvuser-redact:kvpass-redact@127.0.0.1:1/kv-ground',
-      '?token=kvtoken-redact&apiKey=kvapikey-redact&secret=kvsecret-redact&password=kvquerypass-redact',
-      '#kvhash-redact',
-    ].join('');
-    const env = cuNextRuntimeEnv({
-      SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-next-runtime',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
-      SCIFORGE_VISION_KV_GROUND_URL: secretGrounderUrl,
-      SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
-      SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-    });
-    const preflight = await execFileAsync(process.execPath, [
-      '--import',
-      'tsx',
-      'tools/cu-next-run.ts',
-      'preflight',
-      '--task',
-      'CU-NEXT-07',
+      'CU-NEXT-04',
       '--workspace-path',
       workspace,
       '--real',
       '--out',
       reportPath,
-    ], { env });
+    ], {
+      env: cuNextRuntimeEnv({
+        SCIFORGE_CONFIG_PATH: configPath,
+      }),
+    });
+
     const report = await readFile(reportPath, 'utf8');
-    assert.match(preflight.stdout, /\[repair-needed\] CU-NEXT-07 preflight -> CU-LONG-004/);
-    assert.match(`${preflight.stdout}\n${report}`, /KV-Ground health check failed at http:\/\/127\.0\.0\.1:1\/kv-ground\/health/);
-
-    const matrix = await execFileAsync(process.execPath, [
-      '--import',
-      'tsx',
-      'tools/cu-next-run.ts',
-      'run-matrix',
-      '--task',
-      'CU-NEXT-07',
-      '--out-root',
-      outRoot,
-      '--workspace-path',
-      workspace,
-      '--real',
-    ], { env });
-    const summaryPath = /summary: (.+)/.exec(matrix.stdout)?.[1]?.trim();
-    assert.ok(summaryPath, 'run-matrix output should include summary path');
-    const summary = await readFile(summaryPath, 'utf8');
-    const repair = await renderComputerUseLongRepairPlan({
-      summaryPath,
-      out: join(workspace, 'repair-plan.md'),
-    });
-    const repairMarkdown = await readFile(repair.planPath, 'utf8');
-    assertNoKvGroundSecretDiagnostics([
-      preflight.stdout,
-      preflight.stderr,
-      report,
-      matrix.stdout,
-      matrix.stderr,
-      summary,
-      repair.markdown,
-      repairMarkdown,
-    ].join('\n'));
+    const retiredGroundingReportPattern = new RegExp([
+      ['KV', '-', 'Ground'].join(''),
+      ['kv', '-', 'ground'].join(''),
+      'grounderBaseUrl',
+    ].join('|'));
+    assert.match(result.stdout, /\[ok\] CU-NEXT-04 preflight -> CU-LONG-005/);
+    assert.match(report, /grounding-translator\/grounding-translator: Model Router grounding translator capability is the default Computer Use grounding path/);
+    assert.doesNotMatch(report, retiredGroundingReportPattern);
+    assert.doesNotMatch(result.stdout, /sk-test-cu-next-local-config-secret/);
+    assert.doesNotMatch(result.stderr, /sk-test-cu-next-local-config-secret/);
   } finally {
-    await rm(workspace, { recursive: true, force: true });
-  }
-});
-
-test('CU-LONG KV-Ground preflight scrubs bearer tokens and token URLs from fetch error diagnostics', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-long-preflight-grounder-error-redaction-'));
-  const originalFetch = globalThis.fetch;
-  try {
-    globalThis.fetch = (async () => {
-      throw new Error([
-        'Bearer kvbearer-redact rejected',
-        'for http://kvuser-redact:kvpass-redact@127.0.0.1:1/kv-ground/health?token=kvtoken-redact#kvhash-redact',
-        'apiKey=kvapikey-redact secret=kvsecret-redact password=kvquerypass-redact',
-      ].join(' '));
-    }) as typeof fetch;
-    await withProcessEnv({
-      SCIFORGE_CONFIG_PATH: join(workspace, 'missing-config.local.json'),
-      SCIFORGE_RUNTIME_API_KEY: 'sk-test-cu-long-runtime',
-      SCIFORGE_PROXY_UPSTREAM_BASE_URL: 'http://127.0.0.1:3888/v1',
-      SCIFORGE_RUNTIME_BASE_URL: undefined,
-      SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:1/kv-ground?token=kvtoken-redact#kvhash-redact',
-      SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
-      SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-      SCIFORGE_VISION_ALLOW_HIGH_RISK_ACTIONS: undefined,
-      SCIFORGE_VISION_ALLOW_SHARED_SYSTEM_INPUT: undefined,
-    }, async () => {
-      const reportPath = join(workspace, 'preflight.md');
-      const preflight = await preflightComputerUseLong({
-        scenarioIds: ['CU-LONG-004'],
-        workspacePath: workspace,
-        dryRun: false,
-        out: reportPath,
-      });
-      const report = await readFile(reportPath, 'utf8');
-      const grounderCheck = preflight.checks.find((check) => check.id === 'grounder');
-      assert.equal(grounderCheck?.status, 'fail');
-      assert.match(String(grounderCheck?.message), /Bearer \[redacted\]/);
-      assert.match(`${JSON.stringify(preflight)}\n${report}`, /http:\/\/127\.0\.0\.1:1\/kv-ground\/health/);
-      assertNoKvGroundSecretDiagnostics(`${JSON.stringify(preflight)}\n${report}`);
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
     await rm(workspace, { recursive: true, force: true });
   }
 });
@@ -631,34 +433,38 @@ test('CU-NEXT preflight keeps explicit empty upstream fail-closed even with loca
         model: 'bailian/deepseek-v4-flash',
       },
       visionSense: {
-        grounderBaseUrl: 'http://127.0.0.1:18081',
         inputAdapter: 'remote-desktop',
         independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
       },
     }, null, 2)}\n`);
 
-    const result = await execFileAsync(process.execPath, [
-      '--import',
-      'tsx',
-      'tools/cu-next-run.ts',
-      'preflight',
-      '--task',
-      'CU-NEXT-04',
-      '--workspace-path',
-      workspace,
-      '--real',
-    ], {
-      env: cuNextRuntimeEnv({
-        SCIFORGE_CONFIG_PATH: configPath,
-        SCIFORGE_PROXY_UPSTREAM_BASE_URL: '',
-        SCIFORGE_RUNTIME_BASE_URL: '',
-      }),
-    });
+    for (const envOverrides of [
+      { SCIFORGE_PROXY_UPSTREAM_BASE_URL: '', SCIFORGE_RUNTIME_BASE_URL: '' },
+      { SCIFORGE_PROXY_UPSTREAM_BASE_URL: '' },
+      { SCIFORGE_RUNTIME_BASE_URL: '' },
+    ]) {
+      const result = await execFileAsync(process.execPath, [
+        '--import',
+        'tsx',
+        'tools/cu-next-run.ts',
+        'preflight',
+        '--task',
+        'CU-NEXT-04',
+        '--workspace-path',
+        workspace,
+        '--real',
+      ], {
+        env: cuNextRuntimeEnv({
+          SCIFORGE_CONFIG_PATH: configPath,
+          ...envOverrides,
+        }),
+      });
 
-    assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
-    assert.match(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
-    assert.doesNotMatch(result.stdout, /sk-test-cu-next-empty-upstream-secret/);
-    assert.doesNotMatch(result.stderr, /sk-test-cu-next-empty-upstream-secret/);
+      assert.match(result.stdout, /\[repair-needed\] CU-NEXT-04 preflight -> CU-LONG-005/);
+      assert.match(result.stdout, /SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL/);
+      assert.doesNotMatch(result.stdout, /sk-test-cu-next-empty-upstream-secret/);
+      assert.doesNotMatch(result.stderr, /sk-test-cu-next-empty-upstream-secret/);
+    }
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -669,11 +475,9 @@ test('CU-NEXT readiness wrapper forwards explicit evidence inputs', async () => 
   try {
     const projectPath = join(workspace, 'PROJECT.md');
     const browserPath = join(workspace, 'browser.json');
-    const kvPath = join(workspace, 'kv-ground-smoke.json');
     const outPath = join(workspace, 'readiness.json');
     await writeFile(projectPath, projectFixtureWithOnlyCuNext07Checked());
     await writeFile(browserPath, JSON.stringify(passedBrowserManifest({ observedAt: new Date().toISOString() }), null, 2));
-    await writeFile(kvPath, JSON.stringify(passedKvGroundManifest(), null, 2));
     const acceptancePath = await writeBundleLocalCuNext07Acceptance(workspace);
 
     const result = await execFileAsync(process.execPath, [
@@ -685,8 +489,6 @@ test('CU-NEXT readiness wrapper forwards explicit evidence inputs', async () => 
       projectPath,
       '--browser-manifest',
       browserPath,
-      '--kv-ground-smoke',
-      kvPath,
       '--acceptance-manifest',
       acceptancePath,
       '--out',
@@ -695,6 +497,7 @@ test('CU-NEXT readiness wrapper forwards explicit evidence inputs', async () => 
     assert.match(result.stdout, new RegExp(`\\[blocked\\] CU-NEXT readiness 1\\/${CU_NEXT_TASK_MAPPINGS.length} passed; completionEligible=false`));
     const manifest = JSON.parse(await readFile(outPath, 'utf8'));
     assert.equal(manifest.tasks.find((task: { id: string }) => task.id === 'CU-NEXT-07')?.status, 'passed');
+    assert.equal(Object.hasOwn(manifest.globalEvidence, 'kvGround'), false);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

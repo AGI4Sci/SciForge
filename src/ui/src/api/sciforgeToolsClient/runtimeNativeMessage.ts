@@ -48,9 +48,9 @@ function looksDiagnosticOnlyNativeMessage(text: string) {
 function looksInternalToolProtocolNativeMessage(text: string) {
   const compact = text.replace(/\s+/g, ' ').trim();
   if (!compact) return true;
-  return /<\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_call\b/i.test(compact)
-    || /<\/\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_call\s*>/i.test(compact)
-    || /<\s*(?:tool_call|function_call|assistant_tool_call)\b/i.test(compact)
+  return /<\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_calls?\b/i.test(compact)
+    || /<\/\s*[｜|]?\s*DSML\s*[｜|]?\s*tool_calls?\s*>/i.test(compact)
+    || /<\s*(?:tool_calls?|function_call|assistant_tool_call)\b/i.test(compact)
     || /\btool_calls?\s*[:=]\s*\[\s*\{/i.test(compact)
     || /\b(?:recipient_name|tool_call_id)\s*[:=]\s*["'][\w.-]+["']/i.test(compact);
 }

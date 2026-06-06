@@ -44,7 +44,7 @@ import { isToolPayload } from './gateway/tool-payload-contract.js';
 import { evaluateToolPayloadEvidence } from './gateway/work-evidence-guard.js';
 import { collectWorkEvidence, parseWorkEvidence, type WorkEvidence } from './gateway/work-evidence-types.js';
 import { taskProjectSkillDomain } from '@sciforge-ui/runtime-contract/handoff';
-import { taskProjectStageAdapterSkillAvailability } from '../../packages/skills/runtime-policy';
+import { taskProjectStageAdapterSkillAvailability } from '../../packages/skills/runtime-policy.js';
 import { maybeWriteSkillPromotionProposal } from './skill-promotion.js';
 import { buildTaskProjectHandoffSummary } from './task-project-handoff.js';
 import {

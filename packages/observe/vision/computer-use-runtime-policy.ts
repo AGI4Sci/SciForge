@@ -31,7 +31,6 @@ export const visionSenseGroundingIds = {
   coarseToFine: 'coarse-to-fine',
   coarseToFineFocusRegion: 'coarse-to-fine-focus-region',
   modelRouterGrounding: visionSenseModelRouterCapabilities.groundingTranslator,
-  legacyKvGroundCompatibleAdapter: 'legacy-kv-ground-compatible-adapter',
 } as const;
 
 export function visionSenseFocusRegionGroundingId(base: unknown) {
@@ -266,10 +265,63 @@ export function visionSenseCrossDisplayWindowDragPolicy(params: {
   };
 }
 
+export type VisionSenseSemanticSignalDecision = {
+  schemaVersion: 'sciforge.vision-sense.semantic-signal-decision.v1';
+  signal: 'high-risk-gui-request' | 'low-risk-or-observation-request';
+  riskLevel: 'high' | 'low';
+  final: boolean;
+  confidence: number;
+  reason: string;
+  detectors: Record<string, boolean>;
+};
+
 const highRiskVisionSenseGuiRequestPattern = /delete|send|pay|authorize|publish|submit|删除|发送|支付|授权|发布|提交|登录授权|外部表单/i;
+const highRiskVisionSenseSemanticActionPattern = /\bconfirm\b|\bapprove\b|\bfinali[sz]e\b|complete\s+(?:the\s+)?(?:payment|purchase|order|checkout|transaction)|\bpurchas(?:e|ing)\b|\bcheckout\b|wire transfer|external authorization|grant access|share externally|\bupload\b|\boverwrite\b|permanently remove|确认|批准|完成支付|完成购买|下单|结账|转账|外发|上传|覆盖|永久删除/i;
+const observationalVisionSenseSafetyBoundaryPattern = /inspect|describe|summari[sz]e|identify|locate|find|look at|read|explain|mention|label|context|without\s+(?:clicking|pressing|submitting|sending|deleting|authorizing|paying|confirming|approving|purchasing|checking\s*out|uploading|overwriting)|do not\s+(?:click|press|submit|send|delete|authorize|pay|confirm|approve|purchase|check\s*out|upload|overwrite)|检查|描述|总结|识别|定位|查看|阅读|不要|不点击|不按|不提交|不发送|不删除|不授权|不支付|不确认|不批准|不购买|不结账|不上传|不覆盖/i;
+const negatedHighRiskVisionSenseBoundaryPattern = /do not\s+(?:click\s+|press\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload|confirm|approve|purchase|check\s*out)|don't\s+(?:click\s+|press\s+)?(?:submit|save|send|delete|remove|overwrite|authorize|pay|publish|upload|confirm|approve|purchase|check\s*out)|without\s+(?:clicking|pressing|submitting|saving|sending|deleting|removing|overwriting|authorizing|paying|publishing|uploading|confirming|approving|purchasing|checking\s*out)|不要[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)|不能[^。；;,.，]*?(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)|不(?:提交|保存|发送|删除|覆盖|授权|支付|发布|上传|外发|确认|批准|购买|结账)/i;
+const directHighRiskVisionSenseActionStartPattern = /^\s*(?:submit|send|delete|authorize|pay|publish|click|press|confirm|approve|finali[sz]e|complete|purchase|checkout|upload|overwrite|提交|发送|删除|授权|支付|发布|点击|按|确认|批准|完成支付|完成购买|下单|结账|上传|覆盖)/i;
 
 export function isHighRiskVisionSenseGuiRequest(prompt: string) {
-  return highRiskVisionSenseGuiRequestPattern.test(primaryVisionSenseTaskLine(prompt));
+  return assessHighRiskVisionSenseGuiRequest(prompt).riskLevel === 'high';
+}
+
+export function assessHighRiskVisionSenseGuiRequest(prompt: string): VisionSenseSemanticSignalDecision {
+  const primary = primaryVisionSenseTaskLine(prompt);
+  const lexicalHighRisk = highRiskVisionSenseGuiRequestPattern.test(primary);
+  const semanticHighRiskAction = highRiskVisionSenseSemanticActionPattern.test(primary);
+  const observationalBoundary = observationalVisionSenseSafetyBoundaryPattern.test(primary);
+  const negatedHighRiskBoundary = negatedHighRiskVisionSenseBoundaryPattern.test(primary);
+  const highRiskSignal = lexicalHighRisk || semanticHighRiskAction;
+  const collision = highRiskSignal
+    && observationalBoundary
+    && !directHighRiskVisionSenseActionStartPattern.test(primary)
+    && (!semanticHighRiskAction || negatedHighRiskBoundary);
+
+  // Final safety routing must use this structured semantic signal; lexical detectors above are bounded evidence only.
+  if (!highRiskSignal || collision) {
+    return {
+      schemaVersion: 'sciforge.vision-sense.semantic-signal-decision.v1',
+      signal: 'low-risk-or-observation-request',
+      riskLevel: 'low',
+      final: true,
+      confidence: collision ? 0.78 : 0.72,
+      reason: collision
+        ? 'High-risk control words appear in an observation or negated boundary, not as the requested GUI action.'
+        : 'No high-risk GUI action semantic signal was detected in the primary task line.',
+      detectors: { lexicalHighRisk, semanticHighRiskAction, observationalBoundary, negatedHighRiskBoundary, collision },
+    };
+  }
+  return {
+    schemaVersion: 'sciforge.vision-sense.semantic-signal-decision.v1',
+    signal: 'high-risk-gui-request',
+    riskLevel: 'high',
+    final: true,
+    confidence: semanticHighRiskAction ? 0.9 : 0.82,
+    reason: semanticHighRiskAction
+      ? 'Primary task line asks for a high-consequence GUI action.'
+      : 'Primary task line directly asks for a high-risk GUI control action.',
+    detectors: { lexicalHighRisk, semanticHighRiskAction, observationalBoundary, negatedHighRiskBoundary, collision: false },
+  };
 }
 
 export function looksLikeVisionSenseComputerUseRequest(prompt: string) {

@@ -468,14 +468,7 @@ async function probeCurrentPortStatus(): Promise<Record<string, PortStatus>> {
     workspaceWriter: await probeTcpPort(host, requestedWorkspaceWriterPort),
     runtimeCodex: await probeTcpPort(host, requestedRuntimeCodexPort),
     providerProxy: await probeTcpPort(host, requestedProviderProxyPort),
-    kvGround: await probeTcpPort(host, portFromEnv(process.env.SCIFORGE_VISION_KV_GROUND_PORT, undefined, 18081)),
   };
-  const kvGroundHealthUrl = `http://${host}:${statuses.kvGround.port}/health`;
-  statuses.kvGround.healthUrlEvidence = boundedTextEvidence(kvGroundHealthUrl);
-  statuses.kvGround.healthOk = await probeHttpHealth(kvGroundHealthUrl);
-  statuses.kvGround.note = statuses.kvGround.healthOk
-    ? 'KV-Ground health is reachable; this proves the Grounder service is alive, not browser/release acceptance.'
-    : 'KV-Ground health is not currently reachable from this process; this is diagnostic-only and not browser/release acceptance.';
   return statuses;
 }
 
@@ -497,20 +490,6 @@ async function probeTcpPort(host: string, port: number): Promise<PortStatus> {
     });
   });
   return { host, port, listening };
-}
-
-async function probeHttpHealth(url: string): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
-    const response = await fetch(url, { signal: controller.signal });
-    clearTimeout(timeout);
-    if (!response.ok) return false;
-    const data = await response.json().catch(() => undefined) as { ok?: unknown } | undefined;
-    return data?.ok === true;
-  } catch {
-    return false;
-  }
 }
 
 function exactServiceEnvCommands(): {
@@ -832,7 +811,6 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
     ['workspaceWriter', manifest.actualWorkspaceWriterPort],
     ['runtimeCodex', manifest.actualRuntimeCodexPort],
     ['providerProxy', requestedProviderProxyPort],
-    ['kvGround', portFromEnv(process.env.SCIFORGE_VISION_KV_GROUND_PORT, undefined, 18081)],
   ] as const) {
     const status = currentPortStatus[label];
     assert.ok(status, `blocked/failed/partial manifest must record currentPortStatus.${label}`);
@@ -840,11 +818,6 @@ function assertBlockedRuntimeConfigArtifactFields(manifest: BrowserAcceptanceMan
     assert.equal(status.port, expectedPort, `currentPortStatus.${label}.port must match configured port`);
     assert.equal(typeof status.listening, 'boolean', `currentPortStatus.${label}.listening must be boolean`);
   }
-  assert.equal(currentPortStatus.kvGround?.healthUrl, undefined, 'currentPortStatus.kvGround must not record raw healthUrl');
-  assertBoundedTextEvidence(currentPortStatus.kvGround?.healthUrlEvidence, 'currentPortStatus.kvGround.healthUrlEvidence');
-  assert.equal(typeof currentPortStatus.kvGround?.healthOk, 'boolean', 'currentPortStatus.kvGround must record healthOk');
-  assert.match(currentPortStatus.kvGround?.note ?? '', /not browser\/release acceptance/i, 'currentPortStatus.kvGround note must stay diagnostic-only');
-
   const serviceEnv = manifest.serviceEnvRequired;
   assert.ok(serviceEnv, 'blocked/failed/partial manifest must record serviceEnvRequired');
   assert.ok(serviceEnv.required.includes('SCIFORGE_RUNTIME_API_KEY'), 'serviceEnvRequired must require SCIFORGE_RUNTIME_API_KEY');

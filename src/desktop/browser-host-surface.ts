@@ -7,12 +7,41 @@ import {
   BROWSER_HOST_NATIVE_OS_UI_PROOF_SCHEMA,
   type BrowserHostSessionNativeOsUiProof,
 } from '../runtime/browser-host-session-types.js';
+import { browserHostSearchResultExtractionScript } from '../runtime/browser-host-session-search.js';
 
 export type DesktopBrowserHostSurfaceBounds = {
   x: number;
   y: number;
   width: number;
   height: number;
+};
+
+export type DesktopBrowserHostSurfaceClaimScope = 'visible-product-surface' | 'hidden-or-diagnostic';
+
+export type DesktopBrowserHostSurfaceEvidence = {
+  refsFirst: true;
+  boundedEvidenceOnly: true;
+  evidenceMode: 'bounded-refs-and-summaries';
+  sessionRef: string;
+  liveSurfaceRef: string;
+  surfaceRef: string;
+  visibleEvidenceRef: string;
+  readinessEvidenceRef: string;
+  passClaimRef: string;
+  diagnosticRef?: string;
+  visible: boolean;
+  embedded: boolean;
+  productSurface: boolean;
+  missingNativeSurface: boolean;
+  diagnosticOnly: boolean;
+  passClaim: boolean;
+  evidenceRefs: string[];
+  diagnostics: string[];
+  payloadPolicy: {
+    rawScreenshot: false;
+    dataUrl: false;
+    inlineBinaryPayload: false;
+  };
 };
 
 export type DesktopBrowserHostSurfaceState = {
@@ -35,6 +64,14 @@ export type DesktopBrowserHostSurfaceState = {
   embedded: boolean;
   secondTruthSource: false;
   passClaim: boolean;
+  claimScope: DesktopBrowserHostSurfaceClaimScope;
+  diagnosticOnly: boolean;
+  surfaceRef: string;
+  visibleEvidenceRef: string;
+  readinessEvidenceRef: string;
+  passClaimRef: string;
+  diagnosticRef?: string;
+  surfaceEvidence: DesktopBrowserHostSurfaceEvidence;
   url?: string;
   title?: string;
   loading?: boolean;
@@ -196,6 +233,10 @@ export type DesktopBrowserHostSurfaceElectron = {
 };
 
 export type DesktopBrowserHostSurfaceController = ReturnType<typeof createDesktopBrowserHostSurfaceController>;
+export type DesktopBrowserHostSurfaceStartOptions = {
+  url?: string;
+  port?: number;
+};
 
 type DesktopBrowserHostSurfaceSession = {
   id: string;
@@ -233,8 +274,9 @@ export function createDesktopBrowserHostSurfaceController(
     mainWindowProvider = () => window;
   }
 
-  async function startServer(): Promise<{ ok: true; url: string }> {
+  async function startServer(options: DesktopBrowserHostSurfaceStartOptions = {}): Promise<{ ok: true; url: string }> {
     if (serverUrl) return { ok: true, url: serverUrl };
+    const requestedPort = requestedLoopbackPort(options);
     server = createServer((req, res) => {
       void handleRequest(req, res).catch((error) => {
         writeJson(res, 500, { ok: false, error: surfaceErrorMessage(error) });
@@ -242,7 +284,7 @@ export function createDesktopBrowserHostSurfaceController(
     });
     await new Promise<void>((resolve, reject) => {
       server?.once('error', reject);
-      server?.listen(0, '127.0.0.1', () => resolve());
+      server?.listen(requestedPort ?? 0, '127.0.0.1', () => resolve());
     });
     const address = server.address() as AddressInfo;
     serverUrl = `http://127.0.0.1:${address.port}`;
@@ -259,6 +301,9 @@ export function createDesktopBrowserHostSurfaceController(
   }
 
   function startSession(input: { sessionId: string; width?: number; height?: number; workspaceProfileDir?: string }): DesktopBrowserHostSurfaceState {
+    if (!electron.WebContentsView) {
+      return nativeSurfaceUnavailableState(requiredSessionId(input.sessionId));
+    }
     const session = ensureSession(input.sessionId, {
       width: numberOr(input.width, 1365),
       height: numberOr(input.height, 900),
@@ -267,6 +312,7 @@ export function createDesktopBrowserHostSurfaceController(
   }
 
   async function navigate(sessionId: string, input: { url: string; timeoutMs?: number }): Promise<DesktopBrowserHostSurfaceState> {
+    if (!sessions.has(sessionId) && !electron.WebContentsView) return nativeSurfaceUnavailableState(requiredSessionId(sessionId));
     const session = ensureSession(sessionId);
     const targetUrl = normalizeDesktopBrowserHostSurfaceUrl(input.url);
     if (!session.webContents.loadURL) return stateForSession(session, 'native-embedded-load-url-unavailable');
@@ -274,7 +320,7 @@ export function createDesktopBrowserHostSurfaceController(
       session.webContents.stop?.();
     }).catch((error) => {
       if (!session.webContents.getURL?.()) throw error;
-      session.diagnostics.push(`native embedded navigation settled after timeout: ${surfaceErrorMessage(error)}`);
+      pushDiagnostic(session, `native embedded navigation settled after timeout: ${surfaceErrorMessage(error)}`);
     });
     session.updatedAt = new Date().toISOString();
     return stateForSession(session);
@@ -286,6 +332,7 @@ export function createDesktopBrowserHostSurfaceController(
     visible?: boolean;
     focus?: boolean;
   }): DesktopBrowserHostSurfaceState {
+    if (!sessions.has(input.sessionId) && !electron.WebContentsView) return nativeSurfaceUnavailableState(requiredSessionId(input.sessionId));
     const session = ensureSession(input.sessionId);
     const window = mainWindowProvider?.();
     if (!window || window.isDestroyed?.() === true || !window.contentView?.addChildView) {
@@ -339,6 +386,7 @@ export function createDesktopBrowserHostSurfaceController(
   }
 
   async function action(sessionId: string, input: Record<string, unknown>): Promise<DesktopBrowserHostSurfaceState> {
+    if (!sessions.has(sessionId) && !electron.WebContentsView) return nativeSurfaceUnavailableState(requiredSessionId(sessionId));
     const session = ensureSession(sessionId);
     const action = typeof input.action === 'string' ? input.action : '';
     if (action === 'back') {
@@ -472,15 +520,7 @@ export function createDesktopBrowserHostSurfaceController(
     const session = sessions.get(sessionId);
     if (!session) return { ok: false, results: [], reason: 'native-embedded-session-not-found' };
     const results = await executeJavaScript<Array<{ title: string; url: string; snippet: string }>>(session, `(() => {
-      return Array.from(document.querySelectorAll('a[href]')).map((node) => {
-        const anchor = node;
-        const container = anchor.closest('li, article, div');
-        return {
-          title: (anchor.textContent || '').replace(/\\s+/g, ' ').trim(),
-          url: anchor.href,
-          snippet: ((container && container.innerText) || '').replace(/\\s+/g, ' ').trim()
-        };
-      }).filter((row) => row.title && row.url).slice(0, ${JSON.stringify(clamp(limit, 5, 1, 10))});
+      return ${browserHostSearchResultExtractionScript(limit)};
     })()`, []);
     return { ok: true, results };
   }
@@ -777,6 +817,15 @@ function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: str
   const loading = session.webContents.isLoadingMainFrame?.() ?? session.webContents.isLoading?.() ?? session.loading;
   const canGoBack = session.webContents.canGoBack?.() ?? session.canGoBack;
   const canGoForward = session.webContents.canGoForward?.() ?? session.canGoForward;
+  const productSurface = ok && embedded && session.visible === true;
+  const diagnosticReasons = surfaceDiagnosticReasons({
+    reason,
+    embedded,
+    visible: session.visible,
+    missingNativeSurface: false,
+  });
+  const diagnostics = boundedSurfaceDiagnostics(session.diagnostics, diagnosticReasons);
+  const refs = surfaceEvidenceRefs(session.id);
   return {
     ok,
     sessionId: session.id,
@@ -785,18 +834,33 @@ function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: str
     surface: 'electron-web-contents-view',
     liveSurfaceTransport: 'native-embedded',
     singleInteractiveTruth: true,
-    ready: ok,
+    ready: productSurface,
     nativeBridge: true,
     rightPaneBridge: true,
     attachAvailable: true,
     detachAvailable: true,
     resizeAvailable: true,
     stateAvailable: true,
-    liveSurfaceRef: `browser-host-session:${session.id}/live-surface`,
+    liveSurfaceRef: refs.liveSurfaceRef,
     status: embedded ? 'attached' : 'detached',
     embedded,
     secondTruthSource: false,
-    passClaim: ok && embedded,
+    passClaim: productSurface,
+    claimScope: productSurface ? 'visible-product-surface' : 'hidden-or-diagnostic',
+    diagnosticOnly: !productSurface,
+    surfaceRef: refs.surfaceRef,
+    visibleEvidenceRef: refs.visibleEvidenceRef,
+    readinessEvidenceRef: refs.readinessEvidenceRef,
+    passClaimRef: refs.passClaimRef,
+    diagnosticRef: productSurface ? undefined : refs.diagnosticRef,
+    surfaceEvidence: surfaceEvidenceFor({
+      refs,
+      visible: session.visible === true,
+      embedded,
+      productSurface,
+      missingNativeSurface: false,
+      diagnostics,
+    }),
     url: session.webContents.getURL?.() || session.url || undefined,
     title: session.webContents.getTitle?.() || session.title || undefined,
     loading,
@@ -805,7 +869,7 @@ function stateForSession(session: DesktopBrowserHostSurfaceSession, reason?: str
     bounds: session.bounds,
     visible: session.visible,
     reason,
-    diagnostics: session.diagnostics.slice(-20),
+    diagnostics,
   };
 }
 
@@ -972,6 +1036,8 @@ function firstStringAfterNumber(args: unknown[]): string | undefined {
 }
 
 function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
+  const refs = surfaceEvidenceRefs(sessionId);
+  const diagnostics = boundedSurfaceDiagnostics([], ['native-embedded-session-not-found']);
   return {
     ok: false,
     sessionId,
@@ -987,13 +1053,171 @@ function missingState(sessionId: string): DesktopBrowserHostSurfaceState {
     detachAvailable: true,
     resizeAvailable: true,
     stateAvailable: true,
-    liveSurfaceRef: `browser-host-session:${sessionId}/live-surface`,
+    liveSurfaceRef: refs.liveSurfaceRef,
     status: 'detached',
     embedded: false,
     secondTruthSource: false,
     passClaim: false,
+    claimScope: 'hidden-or-diagnostic',
+    diagnosticOnly: true,
+    surfaceRef: refs.surfaceRef,
+    visibleEvidenceRef: refs.visibleEvidenceRef,
+    readinessEvidenceRef: refs.readinessEvidenceRef,
+    passClaimRef: refs.passClaimRef,
+    diagnosticRef: refs.diagnosticRef,
+    surfaceEvidence: surfaceEvidenceFor({
+      refs,
+      visible: false,
+      embedded: false,
+      productSurface: false,
+      missingNativeSurface: false,
+      diagnostics,
+    }),
     reason: 'native-embedded-session-not-found',
+    diagnostics,
   };
+}
+
+function nativeSurfaceUnavailableState(sessionId: string): DesktopBrowserHostSurfaceState {
+  const refs = surfaceEvidenceRefs(sessionId);
+  const reason = 'native-embedded-web-contents-view-unavailable';
+  const diagnostics = boundedSurfaceDiagnostics([], [reason]);
+  return {
+    ok: false,
+    sessionId,
+    owner: 'BrowserHostSession',
+    adapterRole: 'display-input-adapter',
+    surface: 'electron-web-contents-view',
+    liveSurfaceTransport: 'native-embedded',
+    singleInteractiveTruth: true,
+    ready: false,
+    nativeBridge: true,
+    rightPaneBridge: true,
+    attachAvailable: true,
+    detachAvailable: true,
+    resizeAvailable: true,
+    stateAvailable: true,
+    liveSurfaceRef: refs.liveSurfaceRef,
+    status: 'detached',
+    embedded: false,
+    secondTruthSource: false,
+    passClaim: false,
+    claimScope: 'hidden-or-diagnostic',
+    diagnosticOnly: true,
+    surfaceRef: refs.surfaceRef,
+    visibleEvidenceRef: refs.visibleEvidenceRef,
+    readinessEvidenceRef: refs.readinessEvidenceRef,
+    passClaimRef: refs.passClaimRef,
+    diagnosticRef: refs.diagnosticRef,
+    surfaceEvidence: surfaceEvidenceFor({
+      refs,
+      visible: false,
+      embedded: false,
+      productSurface: false,
+      missingNativeSurface: true,
+      diagnostics,
+    }),
+    reason,
+    diagnostics,
+  };
+}
+
+function surfaceEvidenceRefs(sessionId: string): {
+  sessionRef: string;
+  liveSurfaceRef: string;
+  surfaceRef: string;
+  visibleEvidenceRef: string;
+  readinessEvidenceRef: string;
+  passClaimRef: string;
+  diagnosticRef: string;
+} {
+  const root = `browser-host-session:${sessionId}`;
+  return {
+    sessionRef: `${root}/session.json`,
+    liveSurfaceRef: `${root}/live-surface`,
+    surfaceRef: `${root}/surface/electron-web-contents-view`,
+    visibleEvidenceRef: `${root}/surface/visibility`,
+    readinessEvidenceRef: `${root}/surface/readiness`,
+    passClaimRef: `${root}/surface/pass-claim`,
+    diagnosticRef: `${root}/surface/diagnostics`,
+  };
+}
+
+function surfaceEvidenceFor(input: {
+  refs: ReturnType<typeof surfaceEvidenceRefs>;
+  visible: boolean;
+  embedded: boolean;
+  productSurface: boolean;
+  missingNativeSurface: boolean;
+  diagnostics: string[];
+}): DesktopBrowserHostSurfaceEvidence {
+  const diagnosticOnly = !input.productSurface;
+  const evidenceRefs = [
+    input.refs.surfaceRef,
+    input.refs.liveSurfaceRef,
+    input.refs.visibleEvidenceRef,
+    input.refs.readinessEvidenceRef,
+    input.refs.passClaimRef,
+    diagnosticOnly ? input.refs.diagnosticRef : undefined,
+  ].filter((ref): ref is string => Boolean(ref));
+  return {
+    refsFirst: true,
+    boundedEvidenceOnly: true,
+    evidenceMode: 'bounded-refs-and-summaries',
+    sessionRef: input.refs.sessionRef,
+    liveSurfaceRef: input.refs.liveSurfaceRef,
+    surfaceRef: input.refs.surfaceRef,
+    visibleEvidenceRef: input.refs.visibleEvidenceRef,
+    readinessEvidenceRef: input.refs.readinessEvidenceRef,
+    passClaimRef: input.refs.passClaimRef,
+    diagnosticRef: diagnosticOnly ? input.refs.diagnosticRef : undefined,
+    visible: input.visible,
+    embedded: input.embedded,
+    productSurface: input.productSurface,
+    missingNativeSurface: input.missingNativeSurface,
+    diagnosticOnly,
+    passClaim: input.productSurface,
+    evidenceRefs,
+    diagnostics: input.diagnostics,
+    payloadPolicy: {
+      rawScreenshot: false,
+      dataUrl: false,
+      inlineBinaryPayload: false,
+    },
+  };
+}
+
+function surfaceDiagnosticReasons(input: {
+  reason?: string;
+  embedded: boolean;
+  visible: boolean;
+  missingNativeSurface: boolean;
+}): string[] {
+  return [
+    input.reason,
+    input.missingNativeSurface ? 'native-embedded-web-contents-view-unavailable' : undefined,
+    input.embedded ? undefined : 'native-embedded-surface-detached',
+    input.embedded && !input.visible ? 'native-embedded-surface-hidden' : undefined,
+  ].filter((entry): entry is string => Boolean(entry));
+}
+
+function boundedSurfaceDiagnostics(diagnostics: string[], reasons: string[] = []): string[] {
+  const entries: string[] = [];
+  for (const raw of [...diagnostics, ...reasons]) {
+    const diagnostic = boundedSurfaceDiagnostic(raw);
+    if (diagnostic && !entries.includes(diagnostic)) entries.push(diagnostic);
+  }
+  return entries.slice(-20);
+}
+
+function boundedSurfaceDiagnostic(value: string): string {
+  const sanitized = value
+    .replace(/data:[^\s"'<>]+/gi, '[redacted-data-url]')
+    .replace(/\bbase64\b\s*[:,=]?\s*[a-z0-9+/=._-]*/gi, 'base64:[redacted]')
+    .replace(/[a-z0-9+/]{96,}={0,2}/gi, '[redacted-long-token]')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return sanitized.length > 180 ? `${sanitized.slice(0, 177)}...` : sanitized;
 }
 
 function closeSession(session: DesktopBrowserHostSurfaceSession): void {
@@ -1139,6 +1363,29 @@ function browserHostSurfaceProfilePartition(sessionId: string, workspaceProfileD
   const source = profileDir || `session:${sessionId}`;
   const digest = createHash('sha256').update(source).digest('hex').slice(0, 16);
   return profileDir ? `persist:sciforge-browser-host-${digest}` : `sciforge-browser-host-${digest}`;
+}
+
+function requestedLoopbackPort(options: DesktopBrowserHostSurfaceStartOptions): number | undefined {
+  const explicitPort = validTcpPort(options.port);
+  if (explicitPort) return explicitPort;
+  const value = options.url?.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' || !isLoopbackHost(url.hostname)) return undefined;
+    return validTcpPort(Number(url.port));
+  } catch {
+    return undefined;
+  }
+}
+
+function validTcpPort(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 && value <= 65535 ? value : undefined;
+}
+
+function isLoopbackHost(value: string): boolean {
+  const host = value.toLowerCase().replace(/^\[|\]$/g, '');
+  return host === '127.0.0.1' || host === 'localhost' || host === '::1';
 }
 
 function numberOr(value: unknown, fallback: number): number {

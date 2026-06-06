@@ -49,7 +49,7 @@ export function materializePackageBridgeRuntimeSelectionDetail(
   return {
     actionProviderRequest: invocation.request,
     hostPorts: invocation.hostPorts,
-    bridge: 'python-package-stdio-host-ports',
+    bridge: 'ts-package-host-port-loop',
     boundary: invocation.boundary,
     completionProducerOptIn: invocation.completionProducerOptIn,
     runId: detail.runId,

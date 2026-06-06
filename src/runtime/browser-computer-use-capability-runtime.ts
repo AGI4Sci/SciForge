@@ -15,6 +15,7 @@ const TOOL_ID = 'browser-computer-use-capability-truth' as const;
 export function tryRunBrowserComputerUseCapabilityRuntime(request: GatewayRequest): ToolPayload | undefined {
   const capability = defaultCapabilityQuestion(request.prompt);
   if (capability) return capabilityAnswerPayload(request, capability);
+  if (explicitVisionSenseRuntimeSelected(request)) return undefined;
   if (!defaultGuiOperationIntent({
     prompt: request.prompt,
     selectedToolIds: request.selectedToolIds,
@@ -22,6 +23,22 @@ export function tryRunBrowserComputerUseCapabilityRuntime(request: GatewayReques
     availableSkills: request.availableSkills,
   })) return undefined;
   return computerUsePreflightPayload(request);
+}
+
+function explicitVisionSenseRuntimeSelected(request: GatewayRequest): boolean {
+  const uiState = typeof request.uiState === 'object' && request.uiState !== null
+    ? request.uiState as Record<string, unknown>
+    : {};
+  const selected = [
+    ...(request.selectedToolIds ?? []),
+    ...stringArray(uiState.selectedToolIds),
+    ...stringArray(uiState.selectedSenseIds),
+  ];
+  return selected.some((id) => id === 'local.vision-sense' || id === 'observe.vision');
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function capabilityAnswerPayload(request: GatewayRequest, capability: 'browser' | 'computer-use'): ToolPayload {

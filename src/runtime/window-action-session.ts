@@ -10,8 +10,8 @@ export type ActorCursorStatus =
   | 'stopped';
 
 export type WindowActionSessionStatus = 'active' | 'paused' | 'stopped' | 'removed';
-export type WindowActionAppKind = 'browser' | 'editor' | 'ordinary-app' | 'unknown';
-export type WindowActionKind = 'observe' | 'click' | 'type' | 'scroll' | 'wait';
+export type WindowActionAppKind = 'browser' | 'editor' | 'terminal' | 'file-manager' | 'ordinary-app' | 'unknown';
+export type WindowActionKind = 'observe' | 'click' | 'type' | 'scroll' | 'save' | 'rename' | 'move' | 'delete' | 'wait';
 export type WindowActionEventType = WindowActionKind | 'actor-enter' | 'actor-leave' | 'pause' | 'stop' | 'remove-window';
 export type WindowActionEventStatus = 'running' | 'completed' | 'failed' | 'blocked' | 'cancelled';
 export type WindowActionAdapter =
@@ -19,11 +19,33 @@ export type WindowActionAdapter =
   | 'browser-cdp-playwright'
   | 'app-native-command'
   | 'terminal'
+  | 'file-manager'
   | 'accessibility-ui-automation'
   | 'system-input'
   | 'blocked';
 export type ScopedInputAdapterFocusMode = 'focus-free' | 'requires-focus' | 'blocked';
 export type WindowActionFocusLeaseStatus = 'active' | 'released';
+export type WindowActionObservationStatus = 'unknown' | 'current' | 'stale' | 'blocked';
+export type WindowActionObservationStaleReason =
+  | 'focus-loss'
+  | 'window-migration'
+  | 'resize'
+  | 'occlusion'
+  | 'close'
+  | 'navigation'
+  | 'scroll'
+  | 'input';
+
+export const WINDOW_ACTION_OBSERVATION_STALE_REASONS: readonly WindowActionObservationStaleReason[] = [
+  'focus-loss',
+  'window-migration',
+  'resize',
+  'occlusion',
+  'close',
+  'navigation',
+  'scroll',
+  'input',
+] as const;
 
 export interface WindowActionTarget {
   type: 'browser-pane' | 'window-action-session';
@@ -135,10 +157,48 @@ export interface WindowActionSessionInput {
   timestamp?: string;
 }
 
+export interface WindowActionTargetSummary {
+  label?: string;
+  appKind: WindowActionAppKind;
+  windowRef: string;
+  screenId?: string;
+  bounds?: WindowActionBounds;
+}
+
+export interface WindowActionInputLease {
+  ref: string;
+  status: 'available' | 'leased' | 'blocked';
+  holderRef?: string;
+  updatedAt: string;
+}
+
+export interface WindowActionAuthorizationProfile {
+  status: 'authorized' | 'requires-confirmation' | 'blocked';
+  profileRef: string;
+  permissionRefs: string[];
+}
+
+export interface WindowActionControlRefs {
+  cancelRef: string;
+  stopRef: string;
+}
+
+export interface WindowActionObservationLifecycle {
+  status: WindowActionObservationStatus;
+  observedAt?: string;
+  stale: {
+    reasons: WindowActionObservationStaleReason[];
+    refreshRequired: boolean;
+    evidenceRefs: WindowActionEvidenceRef[];
+  };
+  updatedAt: string;
+}
+
 export interface WindowActionSession {
   schemaVersion: 'sciforge.window-action-session.v1';
   id: string;
   windowRef: string;
+  targetSummary: WindowActionTargetSummary;
   process: WindowActionProcessInfo;
   app: Required<Pick<WindowActionAppInfo, 'kind'>> & WindowActionAppInfo;
   bounds?: WindowActionBounds;
@@ -146,6 +206,14 @@ export interface WindowActionSession {
   screenId?: string;
   status: WindowActionSessionStatus;
   actorCursor?: ActorCursor;
+  adapterRefs: string[];
+  inputLease: WindowActionInputLease;
+  focusLeaseRef?: string;
+  authorizationProfile: WindowActionAuthorizationProfile;
+  permissionRefs: string[];
+  controlRefs: WindowActionControlRefs;
+  evidenceLedgerRefs: string[];
+  observation: WindowActionObservationLifecycle;
   scopedInputAdapters: ScopedInputAdapter[];
   events: WindowActionEvent[];
   evidenceRefs: WindowActionEvidenceRef[];
@@ -154,6 +222,7 @@ export interface WindowActionSession {
 }
 
 export interface WindowActionRecordInput {
+  actionId?: string;
   action: WindowActionKind;
   status: WindowActionEventStatus;
   timestamp?: string;
@@ -163,6 +232,9 @@ export interface WindowActionRecordInput {
   point?: { x: number; y: number };
   delta?: { x?: number; y?: number };
   durationMs?: number;
+  targetDescription?: string;
+  targetRegionDescription?: string;
+  text?: string;
   textLength?: number;
   sourceAnnotationRefs?: unknown[];
   beforeEvidenceRefs?: unknown[];
@@ -173,6 +245,7 @@ export interface WindowActionRecordInput {
 
 export interface WindowActionEvent {
   id: string;
+  actionId?: string;
   type: WindowActionEventType;
   status: WindowActionEventStatus;
   timestamp: string;
@@ -200,10 +273,16 @@ export interface WindowActionRouteInput {
       webContentsView?: boolean;
       appNativeCommand?: boolean;
       terminal?: boolean;
+      terminalWorkflow?: boolean;
+      fileManager?: boolean;
+      remote?: boolean;
       accessibility?: boolean;
       uiAutomation?: boolean;
       atSpi?: boolean;
       systemInput?: boolean;
+      diagnostic?: boolean;
+      explicitHandoff?: boolean;
+      hardConfirmed?: boolean;
     };
   };
   action: WindowActionKind;
@@ -220,6 +299,18 @@ export interface WindowActionRoute {
     sharedSystemInput?: true;
     bounded?: true;
     requiresFocusLease?: true;
+    diagnosticOnly?: true;
+    explicitHandoff?: true;
+    accessibilityTargetHintsOnly?: true;
+    nonPrivateActionBindingOnly?: true;
+    terminalWorkflowRequired?: true;
+    terminalWorkflowSelected?: true;
+    shellArtifactsAreGuiArtifacts?: false;
+    editorSaveRequiresInputEvent?: true;
+    editorSaveRequiresArtifactValidator?: true;
+    fileManagerRequiresVisibleSelection?: true;
+    fileManagerRequiresDirectoryEvidence?: true;
+    hardConfirmRequired?: true;
   };
 }
 
@@ -237,10 +328,21 @@ export interface WindowActionAdapterContext {
 
 export interface WindowActionAdapterResult {
   status?: WindowActionEventStatus;
+  blockedReason?: string;
   sourceAnnotationRefs?: unknown[];
   beforeEvidenceRefs?: unknown[];
   afterEvidenceRefs?: unknown[];
   evidenceRefs?: unknown[];
+  commandIntentRefs?: unknown[];
+  visibleTerminalSessionRefs?: unknown[];
+  transcriptRefs?: unknown[];
+  exitCode?: number;
+  exitCodeRefs?: unknown[];
+  artifactRefs?: unknown[];
+  inputEventRefs?: unknown[];
+  artifactValidatorRefs?: unknown[];
+  visibleFileSelectionRefs?: unknown[];
+  directoryEvidenceRefs?: unknown[];
 }
 
 export type WindowActionAdapterHandlers = Partial<Record<WindowActionAdapter, (
@@ -253,6 +355,25 @@ export interface WindowActionDispatchResult {
   scopedInputAdapter: ScopedInputAdapter;
   focusLease?: WindowActionFocusLease | WindowActionFocusLeasePlan;
   session: WindowActionSession;
+}
+
+export interface WindowActionGuiProjection {
+  schemaVersion: 'sciforge.window-action-session.gui-projection.v1';
+  sessionRef: string;
+  status: WindowActionSessionStatus;
+  actorCursor?: {
+    ref?: string;
+    agentId: string;
+    color: string;
+    label: string;
+    status: ActorCursorStatus;
+    target?: WindowActionTarget;
+  };
+  confirmation: {
+    required: boolean;
+    confirmationRef?: string;
+  };
+  controls: WindowActionControlRefs;
 }
 
 export interface WindowActionDispatchOptions {
@@ -358,19 +479,65 @@ export function createActorCursor(input: {
 
 export function createWindowActionSession(input: WindowActionSessionInput): WindowActionSession {
   const now = input.timestamp ?? new Date().toISOString();
+  const id = input.id ? safeIdentifier(input.id, 'window-action-session') : sessionIdForWindowRef(input.windowRef);
+  const windowRef = boundedRef(input.windowRef) ?? sessionIdForWindowRef(input.windowRef);
+  const normalizedApp = appInfo(input.app);
+  const normalizedBounds = input.bounds ? bounds(input.bounds) : undefined;
+  const screenId = input.screenId ? safeIdentifier(input.screenId, 'screen') : undefined;
+  const evidenceRefs = boundedEvidenceRefs(input.evidenceRefs);
+  const productRefs = productRefsForSession(id);
+  const evidenceLedgerRefs = uniqueStrings([
+    ...evidenceRefs
+      .filter((item) => item.kind === 'evidence-ledger' || item.ref.startsWith('evidence:'))
+      .map((item) => item.ref),
+    productRefs.evidenceLedgerRef,
+  ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS);
   return {
     schemaVersion: 'sciforge.window-action-session.v1',
-    id: input.id ? safeIdentifier(input.id, 'window-action-session') : sessionIdForWindowRef(input.windowRef),
-    windowRef: boundedRef(input.windowRef) ?? sessionIdForWindowRef(input.windowRef),
+    id,
+    windowRef,
+    targetSummary: {
+      ...(normalizedApp.name ? { label: normalizedApp.name } : {}),
+      appKind: normalizedApp.kind,
+      windowRef,
+      ...(screenId ? { screenId } : {}),
+      ...(normalizedBounds ? { bounds: normalizedBounds } : {}),
+    },
     process: processInfo(input.process),
-    app: appInfo(input.app),
-    ...(input.bounds ? { bounds: bounds(input.bounds) } : {}),
+    app: normalizedApp,
+    ...(normalizedBounds ? { bounds: normalizedBounds } : {}),
     ...(Number.isFinite(input.scale) ? { scale: Number(input.scale) } : {}),
-    ...(input.screenId ? { screenId: safeIdentifier(input.screenId, 'screen') } : {}),
+    ...(screenId ? { screenId } : {}),
     status: 'active',
+    adapterRefs: [],
+    inputLease: {
+      ref: productRefs.inputLeaseRef,
+      status: 'available',
+      updatedAt: now,
+    },
+    authorizationProfile: {
+      status: 'authorized',
+      profileRef: productRefs.authorizationProfileRef,
+      permissionRefs: [productRefs.permissionRef],
+    },
+    permissionRefs: [productRefs.permissionRef],
+    controlRefs: {
+      cancelRef: productRefs.cancelRef,
+      stopRef: productRefs.stopRef,
+    },
+    evidenceLedgerRefs,
+    observation: {
+      status: 'unknown',
+      stale: {
+        reasons: [],
+        refreshRequired: true,
+        evidenceRefs: [],
+      },
+      updatedAt: now,
+    },
     scopedInputAdapters: [],
     events: [],
-    evidenceRefs: boundedEvidenceRefs(input.evidenceRefs),
+    evidenceRefs,
     createdAt: now,
     updatedAt: now,
   };
@@ -437,9 +604,16 @@ export function recordWindowAction(
   const sourceAnnotationRefs = boundedEvidenceRefs(input.sourceAnnotationRefs);
   const beforeEvidenceRefs = boundedEvidenceRefs(input.beforeEvidenceRefs);
   const afterEvidenceRefs = boundedEvidenceRefs(input.afterEvidenceRefs);
+  const actionId = typeof input.actionId === 'string' && input.actionId.trim()
+    ? safeIdentifier(input.actionId, 'action')
+    : undefined;
   const scopedInputAdapterRef = boundedRef(input.scopedInputAdapterRef);
   const actorCursorRef = boundedRef(input.actorCursorRef);
   const focusLeaseRef = boundedRef(input.focusLeaseRef);
+  const eventEvidenceRefs = uniqueEvidenceRefs([
+    ...evidenceRefs,
+    ...(actorCursorRef ? [{ kind: 'actor-cursor', ref: actorCursorRef }] : []),
+  ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS);
   const cursor = session.actorCursor
     ? createActorCursor({
         ...session.actorCursor,
@@ -453,11 +627,13 @@ export function recordWindowAction(
         },
       })
     : undefined;
-  return appendEvent({
+  const sessionWithCursor = {
     ...session,
     ...(cursor ? { actorCursor: cursor } : {}),
-  }, {
+  };
+  return appendEvent(staleAfterCompletedAction(sessionWithCursor, input.action, input.status, timestamp), {
     id: eventId(session, input.action, timestamp),
+    ...(actionId ? { actionId } : {}),
     type: input.action,
     status: input.status,
     timestamp,
@@ -472,7 +648,7 @@ export function recordWindowAction(
     ...(sourceAnnotationRefs.length ? { sourceAnnotationRefs } : {}),
     ...(beforeEvidenceRefs.length ? { beforeEvidenceRefs } : {}),
     ...(afterEvidenceRefs.length ? { afterEvidenceRefs } : {}),
-    evidenceRefs,
+    evidenceRefs: eventEvidenceRefs,
   });
 }
 
@@ -500,6 +676,7 @@ export function removeWindowActionSession(
 export function routeWindowAction(input: WindowActionRouteInput): WindowActionRoute {
   const capabilities = input.target.capabilities ?? {};
   const appKind = input.target.app?.kind ?? 'unknown';
+  const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
   if (capabilities.browserHostSession || capabilities.webContentsView) {
     return route(1, 'browser-host-session');
   }
@@ -507,29 +684,68 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
     return route(1, 'browser-cdp-playwright');
   }
   if (capabilities.appNativeCommand || appKind === 'editor') {
-    return route(2, 'app-native-command');
+    return input.action === 'save'
+      ? {
+          ...route(2, 'app-native-command'),
+          evidenceRefs: [
+            { kind: 'editor-save-validation', ref: `editor-save-validation:${appId}:input-event-and-artifact-validator-required` },
+          ],
+          evidence: {
+            editorSaveRequiresInputEvent: true,
+            editorSaveRequiresArtifactValidator: true,
+          },
+        }
+      : route(2, 'app-native-command');
   }
-  if (capabilities.terminal) {
-    return route(2, 'terminal');
+  if (capabilities.terminal || appKind === 'terminal') {
+    return {
+      ...route(2, 'terminal'),
+      evidenceRefs: boundedEvidenceRefs(input.evidenceRefs),
+      evidence: {
+        terminalWorkflowRequired: true,
+        ...(capabilities.terminalWorkflow ? { terminalWorkflowSelected: true } : {}),
+        shellArtifactsAreGuiArtifacts: false,
+      },
+    };
+  }
+  if (capabilities.fileManager || appKind === 'file-manager') {
+    const hardConfirmRequired = fileManagerActionRequiresHardConfirm(input.action, capabilities.remote === true);
+    return {
+      ...route(2, 'file-manager'),
+      evidenceRefs: [
+        { kind: 'file-manager-selection', ref: `file-manager:${appId}:visible-file-selection` },
+        { kind: 'directory-evidence', ref: `file-manager:${appId}:directory-evidence` },
+        ...(hardConfirmRequired ? [{ kind: 'hard-confirm', ref: `hard-confirm:file-manager:${appId}:${input.action}` }] : []),
+        ...boundedEvidenceRefs(input.evidenceRefs),
+      ].slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+      evidence: {
+        bounded: true,
+        fileManagerRequiresVisibleSelection: true,
+        fileManagerRequiresDirectoryEvidence: true,
+        ...(hardConfirmRequired ? { hardConfirmRequired: true } : {}),
+      },
+    };
   }
   if (capabilities.accessibility || capabilities.uiAutomation || capabilities.atSpi) {
-    const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
     return {
       priority: 3,
       adapter: 'accessibility-ui-automation',
       owner: 'agent-host-adapter',
       guiExecutable: false,
       evidenceRefs: [
-        { kind: 'accessibility-ui-automation', ref: `accessibility-ui-automation:${appId}:${input.action}` },
+        { kind: 'target-hint', ref: `accessibility-ui-automation:${appId}:target-hints` },
+        { kind: 'state-snapshot', ref: `accessibility-ui-automation:${appId}:state-snapshot` },
+        { kind: 'non-private-action-binding', ref: `accessibility-ui-automation:${appId}:${input.action}:action-binding` },
         ...boundedEvidenceRefs(input.evidenceRefs),
       ].slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
       evidence: {
         bounded: true,
+        accessibilityTargetHintsOnly: true,
+        nonPrivateActionBindingOnly: true,
       },
     };
   }
   if (capabilities.systemInput) {
-    const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window');
     return {
       priority: 4,
       adapter: 'system-input',
@@ -543,6 +759,8 @@ export function routeWindowAction(input: WindowActionRouteInput): WindowActionRo
         sharedSystemInput: true,
         bounded: true,
         requiresFocusLease: true,
+        ...(capabilities.diagnostic ? { diagnosticOnly: true } : {}),
+        ...(capabilities.explicitHandoff ? { explicitHandoff: true } : {}),
       },
     };
   }
@@ -671,6 +889,63 @@ export function releaseWindowActionFocusLease(
   };
 }
 
+export function markWindowActionObservationStale(
+  session: WindowActionSession,
+  reason: WindowActionObservationStaleReason,
+  options: { timestamp?: string; evidenceRefs?: unknown[] } = {},
+): WindowActionSession {
+  const timestamp = options.timestamp ?? new Date().toISOString();
+  const evidenceRefs = boundedEvidenceRefs(options.evidenceRefs);
+  const reasons = uniqueObservationStaleReasons([
+    ...session.observation.stale.reasons,
+    reason,
+  ]);
+  return {
+    ...session,
+    observation: {
+      ...session.observation,
+      status: reason === 'close' ? 'blocked' : 'stale',
+      stale: {
+        reasons,
+        refreshRequired: reason !== 'close',
+        evidenceRefs: uniqueEvidenceRefs([
+          ...session.observation.stale.evidenceRefs,
+          ...evidenceRefs,
+        ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+      },
+      updatedAt: timestamp,
+    },
+    updatedAt: timestamp,
+  };
+}
+
+export function projectWindowActionSessionForGui(
+  session: WindowActionSession,
+  options: { confirmationRef?: string } = {},
+): WindowActionGuiProjection {
+  const actorCursorRef = lastActorCursorRef(session);
+  return {
+    schemaVersion: 'sciforge.window-action-session.gui-projection.v1',
+    sessionRef: `window-action-session:${safeRefPart(session.id)}`,
+    status: session.status,
+    ...(session.actorCursor ? {
+      actorCursor: {
+        ...(actorCursorRef ? { ref: actorCursorRef } : {}),
+        agentId: session.actorCursor.agentId,
+        color: session.actorCursor.color,
+        label: session.actorCursor.label,
+        status: session.actorCursor.status,
+        ...(session.actorCursor.target ? { target: session.actorCursor.target } : {}),
+      },
+    } : {}),
+    confirmation: {
+      required: Boolean(boundedRef(options.confirmationRef)),
+      ...(boundedRef(options.confirmationRef) ? { confirmationRef: boundedRef(options.confirmationRef) } : {}),
+    },
+    controls: session.controlRefs,
+  };
+}
+
 export async function dispatchWindowAction(
   session: WindowActionSession,
   input: WindowActionDispatchInput,
@@ -748,8 +1023,33 @@ export async function dispatchWindowAction(
       }),
     };
   }
+  const routePolicyBlock = routePolicyBlockReason(route, input);
+  if (routePolicyBlock) {
+    const blockedEvidenceRefs = [
+      ...route.evidenceRefs,
+      { kind: routePolicyBlock.kind, ref: routePolicyBlock.ref },
+    ];
+    return {
+      route,
+      adapterResult: {
+        status: 'blocked',
+        blockedReason: routePolicyBlock.reason,
+        evidenceRefs: blockedEvidenceRefs,
+      },
+      scopedInputAdapter,
+      focusLease,
+      session: recordWindowAction(addScopedInputAdapter(session, scopedInputAdapter), {
+        ...input,
+        status: 'blocked',
+        scopedInputAdapterRef: scopedInputAdapter.ref,
+        actorCursorRef: scopedInputAdapter.actorCursorRef,
+        focusLeaseRef: focusLease.status === 'acquired' ? focusLease.ref : undefined,
+        evidenceRefs: blockedEvidenceRefs,
+      }),
+    };
+  }
   const handler = handlers[route.adapter];
-  const adapterResult = handler
+  const rawAdapterResult = handler
     ? await handler({
         session,
         route,
@@ -761,6 +1061,7 @@ export async function dispatchWindowAction(
         input,
       })
     : { status: 'blocked' as const, evidenceRefs: route.evidenceRefs };
+  const adapterResult = normalizeAdapterResult(session, route, input, rawAdapterResult);
   const evidenceRefs = [
     ...route.evidenceRefs,
     ...(focusLease.status === 'acquired' ? [{ kind: 'focus-lease', ref: focusLease.ref }] : []),
@@ -929,6 +1230,140 @@ export function createWindowActionSessionFromAnnotationMetadata(
   };
 }
 
+function routePolicyBlockReason(
+  route: WindowActionRoute,
+  input: WindowActionDispatchInput,
+): { kind: string; ref: string; reason: string } | undefined {
+  const appId = safeRefPart(input.target.app?.id ?? input.target.app?.name ?? 'window') || 'window';
+  if (route.adapter === 'system-input' && route.evidence?.diagnosticOnly !== true && route.evidence?.explicitHandoff !== true) {
+    return {
+      kind: 'shared-system-input-default-blocked',
+      ref: `shared-system-input-default-blocked:${appId}:${safeRefPart(input.action)}`,
+      reason: 'Shared system input is diagnostic or explicit handoff only; it cannot run as the default product action path.',
+    };
+  }
+  if (route.adapter === 'file-manager' && route.evidence?.hardConfirmRequired === true && input.target.capabilities?.hardConfirmed !== true) {
+    return {
+      kind: 'hard-confirm',
+      ref: `hard-confirm:file-manager:${appId}:${safeRefPart(input.action)}:required`,
+      reason: 'File manager destructive remote/delete action requires hard-confirm before adapter execution.',
+    };
+  }
+  return undefined;
+}
+
+function normalizeAdapterResult(
+  session: WindowActionSession,
+  route: WindowActionRoute,
+  input: WindowActionDispatchInput,
+  result: WindowActionAdapterResult,
+): WindowActionAdapterResult {
+  const evidenceRefs = uniqueEvidenceRefs([
+    ...boundedEvidenceRefs(result.evidenceRefs),
+    ...adapterSpecificEvidenceRefs(result),
+  ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS);
+  const block = adapterResultBlockReason(session, route, input, result, evidenceRefs);
+  if (!block) {
+    return {
+      ...result,
+      evidenceRefs,
+    };
+  }
+  return {
+    ...result,
+    status: 'blocked',
+    blockedReason: block.reason,
+    evidenceRefs: uniqueEvidenceRefs([
+      ...evidenceRefs,
+      { kind: block.kind, ref: block.ref },
+    ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS),
+  };
+}
+
+function adapterSpecificEvidenceRefs(result: WindowActionAdapterResult): WindowActionEvidenceRef[] {
+  return uniqueEvidenceRefs([
+    ...boundedEvidenceRefs(result.commandIntentRefs),
+    ...boundedEvidenceRefs(result.visibleTerminalSessionRefs),
+    ...boundedEvidenceRefs(result.transcriptRefs),
+    ...terminalExitCodeEvidenceRefs(result),
+    ...boundedEvidenceRefs(result.artifactRefs),
+    ...boundedEvidenceRefs(result.inputEventRefs),
+    ...boundedEvidenceRefs(result.artifactValidatorRefs),
+    ...boundedEvidenceRefs(result.visibleFileSelectionRefs),
+    ...boundedEvidenceRefs(result.directoryEvidenceRefs),
+  ]);
+}
+
+function terminalExitCodeEvidenceRefs(result: WindowActionAdapterResult): WindowActionEvidenceRef[] {
+  const explicitRefs = boundedEvidenceRefs(result.exitCodeRefs);
+  if (explicitRefs.length) return explicitRefs;
+  if (!Number.isFinite(result.exitCode)) return [];
+  const visibleSessionRef = boundedEvidenceRefs(result.visibleTerminalSessionRefs)[0]?.ref;
+  const baseRef = visibleSessionRef?.replace(/\/visible$/i, '') ?? 'terminal-pty:session';
+  const exitCodeRef = boundedRef(`${baseRef}/exit-code/${Math.round(result.exitCode as number)}`);
+  return exitCodeRef ? [{ kind: 'exit-code', ref: exitCodeRef }] : [];
+}
+
+function adapterResultBlockReason(
+  session: WindowActionSession,
+  route: WindowActionRoute,
+  input: WindowActionDispatchInput,
+  result: WindowActionAdapterResult,
+  evidenceRefs: WindowActionEvidenceRef[],
+): { kind: string; ref: string; reason: string } | undefined {
+  if (result.status !== 'completed') return undefined;
+  const sessionPart = safeRefPart(session.id) || 'session';
+  if (route.adapter === 'terminal') {
+    const missing = [
+      hasEvidence(evidenceRefs, /command[-_/]?intent/i) ? '' : 'command intent refs',
+      hasEvidence(evidenceRefs, /visible[-_/]?terminal[-_/]?session/i) ? '' : 'visible terminal session refs',
+      hasEvidence(evidenceRefs, /transcript/i) ? '' : 'transcript refs',
+      hasEvidence(evidenceRefs, /exit[-_/]?code/i) ? '' : 'exit code refs',
+    ].filter(Boolean);
+    if (missing.length) {
+      return {
+        kind: 'terminal-evidence-missing',
+        ref: `terminal-evidence-missing:${sessionPart}:${safeRefPart(missing.join('-'))}`,
+        reason: `Terminal/PTY adapter completed without required ${missing.join(', ')}.`,
+      };
+    }
+    if (hasEvidence(evidenceRefs, /artifact/i) && route.evidence?.terminalWorkflowSelected !== true) {
+      return {
+        kind: 'terminal-workflow-required',
+        ref: `terminal-workflow-required-shell-artifact-not-gui:${sessionPart}`,
+        reason: 'Terminal workflow is not explicit, so shell artifact refs cannot masquerade as GUI artifact evidence.',
+      };
+    }
+  }
+  if (input.action === 'save' && route.evidence?.editorSaveRequiresInputEvent === true) {
+    const hasInputEvent = hasEvidence(evidenceRefs, /input[-_/]?event|keyboard[-_/]?input/i);
+    const hasArtifactValidator = hasEvidence(evidenceRefs, /artifact[-_/]?(?:validator|validation)|validator/i);
+    if (!hasInputEvent || !hasArtifactValidator) {
+      return {
+        kind: 'editor-save-validation',
+        ref: `editor-save-validation:${sessionPart}:input-event-and-artifact-validator-required`,
+        reason: 'Editor save action requires both visible input event refs and artifact validator refs.',
+      };
+    }
+  }
+  if (route.adapter === 'file-manager' && windowActionRequiresObserveBeforeMutate(input.action)) {
+    const hasVisibleSelection = hasEvidence(evidenceRefs, /visible[-_/]?file[-_/]?selection|file[-_/]?selection/i);
+    const hasDirectoryEvidence = hasEvidence(evidenceRefs, /directory[-_/]?evidence|directory[-_/]?listing|file[-_/]?list/i);
+    if (!hasVisibleSelection || !hasDirectoryEvidence) {
+      return {
+        kind: 'file-manager-evidence-missing',
+        ref: `file-manager-evidence-missing:${sessionPart}:selection-and-directory-evidence-required`,
+        reason: 'File manager action requires visible file selection refs and directory evidence refs.',
+      };
+    }
+  }
+  return undefined;
+}
+
+function hasEvidence(evidenceRefs: WindowActionEvidenceRef[], pattern: RegExp): boolean {
+  return evidenceRefs.some((item) => pattern.test(item.kind) || pattern.test(item.ref));
+}
+
 function controlWindowActionSession(
   session: WindowActionSession,
   type: Extract<WindowActionEventType, 'pause' | 'stop' | 'remove-window'>,
@@ -975,8 +1410,21 @@ function addScopedInputAdapter(
   adapter: ScopedInputAdapter,
 ): WindowActionSession {
   const existing = session.scopedInputAdapters.filter((item) => item.ref !== adapter.ref);
+  const adapterRefs = uniqueStrings([
+    ...session.adapterRefs,
+    adapter.ref,
+    ...adapter.evidenceRefs.map((item) => item.ref),
+  ]).slice(0, MAX_WINDOW_ACTION_EVIDENCE_REFS);
   return {
     ...session,
+    adapterRefs,
+    inputLease: {
+      ...session.inputLease,
+      status: adapter.focusMode === 'blocked' ? 'blocked' : 'leased',
+      holderRef: adapter.ref,
+      updatedAt: adapter.updatedAt,
+    },
+    ...(adapter.focusLeaseRef ? { focusLeaseRef: adapter.focusLeaseRef } : {}),
     scopedInputAdapters: [...existing, adapter],
   };
 }
@@ -1002,16 +1450,84 @@ function targetForSession(session: WindowActionSession): WindowActionTarget {
   };
 }
 
+function staleAfterCompletedAction(
+  session: WindowActionSession,
+  action: WindowActionKind,
+  status: WindowActionEventStatus,
+  timestamp: string,
+): WindowActionSession {
+  if (status !== 'completed') return session;
+  if (action === 'scroll') return markWindowActionObservationStale(session, 'scroll', { timestamp });
+  if (action === 'click' || action === 'type') return markWindowActionObservationStale(session, 'input', { timestamp });
+  if (action === 'observe') {
+    return {
+      ...session,
+      observation: {
+        status: 'current',
+        observedAt: timestamp,
+        stale: {
+          reasons: [],
+          refreshRequired: false,
+          evidenceRefs: [],
+        },
+        updatedAt: timestamp,
+      },
+      updatedAt: timestamp,
+    };
+  }
+  return session;
+}
+
+function productRefsForSession(sessionId: string) {
+  const safeSessionId = safeRefPart(sessionId);
+  return {
+    inputLeaseRef: `input-lease:window-action-session/${safeSessionId}`,
+    authorizationProfileRef: `permission:window-action-session/${safeSessionId}/authorization-profile`,
+    permissionRef: `permission:window-action-session/${safeSessionId}/act`,
+    cancelRef: `cancel:window-action-session/${safeSessionId}`,
+    stopRef: `stop:window-action-session/${safeSessionId}`,
+    evidenceLedgerRef: `evidence:window-action-session/${safeSessionId}/ledger`,
+  };
+}
+
+function uniqueObservationStaleReasons(values: WindowActionObservationStaleReason[]): WindowActionObservationStaleReason[] {
+  const allowed = new Set<WindowActionObservationStaleReason>(WINDOW_ACTION_OBSERVATION_STALE_REASONS);
+  const output: WindowActionObservationStaleReason[] = [];
+  for (const value of values) {
+    if (!allowed.has(value) || output.includes(value)) continue;
+    output.push(value);
+  }
+  return output;
+}
+
+function lastActorCursorRef(session: WindowActionSession): string | undefined {
+  for (let index = session.events.length - 1; index >= 0; index -= 1) {
+    const ref = boundedRef(session.events[index]?.actorCursorRef);
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
 function cursorStatusForAction(action: WindowActionKind): ActorCursorStatus {
   if (action === 'observe') return 'observing';
   if (action === 'click') return 'clicking';
-  if (action === 'type') return 'typing';
+  if (action === 'type' || action === 'rename') return 'typing';
   if (action === 'scroll') return 'scrolling';
   return 'waiting';
 }
 
 function windowActionRequiresObserveBeforeMutate(action: WindowActionKind) {
-  return action === 'click' || action === 'type' || action === 'scroll';
+  return action === 'click'
+    || action === 'type'
+    || action === 'scroll'
+    || action === 'save'
+    || action === 'rename'
+    || action === 'move'
+    || action === 'delete';
+}
+
+function fileManagerActionRequiresHardConfirm(action: WindowActionKind, remote: boolean) {
+  return action === 'delete' || (remote && action === 'move');
 }
 
 function windowActionObserveBeforeMutateReason(
@@ -1082,7 +1598,7 @@ function appInfo(value: WindowActionAppInfo | undefined): Required<Pick<WindowAc
 }
 
 function appKind(value: string | undefined): WindowActionAppKind {
-  if (value === 'browser' || value === 'editor' || value === 'ordinary-app') return value;
+  if (value === 'browser' || value === 'editor' || value === 'terminal' || value === 'file-manager' || value === 'ordinary-app') return value;
   return 'unknown';
 }
 

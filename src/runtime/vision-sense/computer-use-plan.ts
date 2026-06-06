@@ -341,7 +341,21 @@ async function guardPlannerRepeatedAppSwitch(params: {
 }
 
 export async function actionLedgerCompletion(task: string, steps: LoopStep[]): Promise<ActionLedgerCompletionPolicy> {
-  return await actionLedgerCompletionPolicy(task, steps) ?? { complete: false };
+  const detectorEvidence = await actionLedgerCompletionPolicy(task, steps) ?? { complete: false };
+  const semanticSignal = detectorEvidence.semanticSignal ?? {
+    schemaVersion: 'sciforge.vision-sense.completion-semantic-signal.v1',
+    signal: 'action-ledger-incomplete',
+    final: true,
+    finalComplete: false,
+    evidenceStepCount: 0,
+  } satisfies NonNullable<ActionLedgerCompletionPolicy['semanticSignal']>;
+  // Final completion truth is consumed from this structured ledger signal;
+  // lexical detectors in the policy bridge are bounded evidence only.
+  return {
+    ...detectorEvidence,
+    complete: semanticSignal.finalComplete,
+    semanticSignal,
+  };
 }
 
 function plannerRunHistory(steps: LoopStep[]) {
@@ -559,6 +573,7 @@ async function requestGenericPlannerActions(params: {
   }, {
     workspace: params.workspace,
     adapter: params.codexPlannerAdapter,
+    env: params.config.planner.env,
     commandId: `codex-computer-use-plan-${sanitizeId(params.config.runId || 'run')}`,
     profile: params.config.planner.profile,
     abortSignal: params.abortSignal,
@@ -623,6 +638,7 @@ function textPlannerActionResultFromResponse(
     };
   }
   if (done) {
+    // Planner done=true is a final completion boundary; lexical marker checks below are evidence, not completion truth by themselves.
     const doneEvidenceIssue = plannerDoneEvidenceIssue(params.task, params.observation);
     if (doneEvidenceIssue) {
       return {
@@ -920,6 +936,7 @@ function plannerRetryInstruction(issue: PlannerContractIssue | undefined, config
       'Your previous JSON set done=true before the task produced a current visible final artifact/report ref.',
       'For final artifact, evidence summary, action mapping, field/control evidence, report, index, or refs-first report tasks, done=true requires a visible artifact ref in the compact observation.',
       'Return exactly one safe generic action that creates or displays the report artifact, such as type_text with the visible summary/report content when an editable field is visible, or open_app/click to a safe editor or file manager target.',
+      'When typing visible report content into an editor body, do not type raw JSON, filesystem paths, filenames, or evidence ref strings; summarize refs with short human-readable labels.',
       'Return the structured failure JSON shape only if no safe visible artifact-producing action remains.',
     ].join(' ');
   }

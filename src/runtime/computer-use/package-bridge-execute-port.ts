@@ -13,7 +13,7 @@ import {
   independentInputAdapterExecutionBoundary,
 } from './independent-input-adapter.js';
 import type { HostPortCall } from './package-bridge-stdio.js';
-import type { ComputerUseConfig, ComputerUseObserveBeforeMutateEvidence, GenericVisionAction, WindowTargetResolution } from './types.js';
+import type { ComputerUseConfig, ComputerUseObservationFreshnessCheck, ComputerUseObserveBeforeMutateEvidence, GenericVisionAction, WindowTargetResolution } from './types.js';
 import { scheduleComputerUseActionProposals, validateComputerUseScopedAction } from './scheduler.js';
 import {
   type VirtualRemoteVisibleArtifact,
@@ -54,13 +54,16 @@ export async function executePackageBridgePort(
   },
 ) {
   const { workspace, config, state } = context;
+  const requestArg = recordArg(call, 2);
   const action = await actionWithBridgeObservationEvidence(
-    context.packagePlanToGenericAction(recordArg(call, 0), state.activeAction, recordArg(call, 1)),
+    actionWithRequestApprovalState(
+      context.packagePlanToGenericAction(recordArg(call, 0), state.activeAction, recordArg(call, 1)),
+      requestArg,
+    ),
     state,
     recordArg(call, 1),
-    { workspace },
+    { workspace, config },
   );
-  const requestArg = recordArg(call, 2);
   state.activeAction = action;
   const now = new Date().toISOString();
   const stopSignal = schedulerStopSignalFromAbort(context.callbacks?.signal, now);
@@ -121,7 +124,7 @@ export async function executePackageBridgePort(
   }
   const packageOwnedVirtualSessionIntent = hasExecutableIndependentInputAdapter(config)
     && Boolean(computerUseArtifactIntentText(requestArg));
-  if (!config.dryRun && !packageOwnedVirtualSessionIntent) {
+  if (shouldRunSchedulerValidation(config, action) && !packageOwnedVirtualSessionIntent) {
     const schedulerDecision = validateComputerUseScopedAction({
       action,
       targetResolution: state.targetResolution,
@@ -201,6 +204,118 @@ export function computerUseArtifactIntentText(request: Record<string, unknown>) 
   ].filter((value) => value && value.trim()).join('\n');
 }
 
+function shouldRunSchedulerValidation(config: ComputerUseConfig, action: GenericVisionAction) {
+  return !config.dryRun || action.riskLevel === 'high' || action.requiresConfirmation === true;
+}
+
+function actionWithRequestApprovalState(
+  action: GenericVisionAction,
+  request: Record<string, unknown>,
+): GenericVisionAction {
+  if (!requestHasConfirmedApproval(request)) return action;
+  return {
+    ...action,
+    approvalState: 'approved',
+  };
+}
+
+function requestHasConfirmedApproval(request: Record<string, unknown>) {
+  const riskPolicy = stringAt(request, 'riskPolicy') ?? stringAt(request, 'risk_policy');
+  const approvalRef = approvalRefFromRequest(request);
+  if (riskPolicy !== 'allow-confirmed' || !approvalRef) return false;
+  return approvalProvenanceMatchesRequest(request, approvalRef);
+}
+
+function approvalRefFromRequest(request: Record<string, unknown>) {
+  const metadata = recordAt(request, 'metadata');
+  return stringAt(request, 'approvalRef')
+    ?? stringAt(request, 'approval_ref')
+    ?? stringAt(metadata, 'approvalRef')
+    ?? stringAt(metadata, 'approval_ref');
+}
+
+function approvalProvenanceMatchesRequest(request: Record<string, unknown>, approvalRef: string) {
+  const metadata = recordAt(request, 'metadata');
+  const provenance = recordAt(request, 'approvalProvenance')
+    ?? recordAt(request, 'approval_provenance')
+    ?? recordAt(metadata, 'approvalProvenance')
+    ?? recordAt(metadata, 'approval_provenance');
+  if (!provenance) return false;
+  if (!approvalProvenanceRefs(provenance).includes(approvalRef)) return false;
+  if (approvalProvenanceRiskActionHashes(provenance).length === 0) return false;
+  return approvalProvenanceHasPriorBoundary(provenance);
+}
+
+function approvalProvenanceRefs(provenance: Record<string, unknown>) {
+  const approvalRequest = recordAt(provenance, 'approvalRequest') ?? recordAt(provenance, 'approval_request');
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const guiAskUserPayload = recordAt(guiAskUserSidecar, 'payload');
+  const guiAskUserApprovalRequest = recordAt(guiAskUserPayload, 'approvalRequest') ?? recordAt(guiAskUserPayload, 'approval_request');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  const approvalDecisionSidecar = recordAt(provenance, 'approvalDecisionSidecar') ?? recordAt(provenance, 'approval_decision_sidecar');
+  const confirmedRequestSidecar = recordAt(provenance, 'confirmedRequestSidecar') ?? recordAt(provenance, 'confirmed_request_sidecar');
+  return uniqueStrings([
+    stringAt(provenance, 'approvalRef'),
+    stringAt(provenance, 'approval_ref'),
+    stringAt(approvalRequest, 'approvalRef'),
+    stringAt(approvalRequest, 'approval_ref'),
+    stringAt(approvalRequestSidecar, 'approvalRef'),
+    stringAt(approvalRequestSidecar, 'approval_ref'),
+    stringAt(guiAskUserSidecar, 'approvalRef'),
+    stringAt(guiAskUserSidecar, 'approval_ref'),
+    stringAt(guiAskUserApprovalRequest, 'approvalRef'),
+    stringAt(guiAskUserApprovalRequest, 'approval_ref'),
+    stringAt(riskAuditSidecar, 'approvalRef'),
+    stringAt(riskAuditSidecar, 'approval_ref'),
+    stringAt(approvalDecisionSidecar, 'approvalRef'),
+    stringAt(approvalDecisionSidecar, 'approval_ref'),
+    stringAt(confirmedRequestSidecar, 'approvalRef'),
+    stringAt(confirmedRequestSidecar, 'approval_ref'),
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function approvalProvenanceRiskActionHashes(provenance: Record<string, unknown>) {
+  const approvalRequest = recordAt(provenance, 'approvalRequest') ?? recordAt(provenance, 'approval_request');
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const guiAskUserPayload = recordAt(guiAskUserSidecar, 'payload');
+  const guiAskUserApprovalRequest = recordAt(guiAskUserPayload, 'approvalRequest') ?? recordAt(guiAskUserPayload, 'approval_request');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  const approvalDecisionSidecar = recordAt(provenance, 'approvalDecisionSidecar') ?? recordAt(provenance, 'approval_decision_sidecar');
+  const confirmedRequestSidecar = recordAt(provenance, 'confirmedRequestSidecar') ?? recordAt(provenance, 'confirmed_request_sidecar');
+  return uniqueStrings([
+    stringAt(provenance, 'riskActionHash'),
+    stringAt(provenance, 'risk_action_hash'),
+    stringAt(approvalRequest, 'riskActionHash'),
+    stringAt(approvalRequest, 'risk_action_hash'),
+    stringAt(approvalRequestSidecar, 'riskActionHash'),
+    stringAt(approvalRequestSidecar, 'risk_action_hash'),
+    stringAt(guiAskUserSidecar, 'riskActionHash'),
+    stringAt(guiAskUserSidecar, 'risk_action_hash'),
+    stringAt(guiAskUserApprovalRequest, 'riskActionHash'),
+    stringAt(guiAskUserApprovalRequest, 'risk_action_hash'),
+    stringAt(riskAuditSidecar, 'riskActionHash'),
+    stringAt(riskAuditSidecar, 'risk_action_hash'),
+    stringAt(approvalDecisionSidecar, 'riskActionHash'),
+    stringAt(approvalDecisionSidecar, 'risk_action_hash'),
+    stringAt(confirmedRequestSidecar, 'riskActionHash'),
+    stringAt(confirmedRequestSidecar, 'risk_action_hash'),
+  ].filter((value): value is string => Boolean(value)));
+}
+
+function approvalProvenanceHasPriorBoundary(provenance: Record<string, unknown>) {
+  const sourceApprovalRequestRef = stringAt(provenance, 'sourceApprovalRequestRef') ?? stringAt(provenance, 'source_approval_request_ref');
+  const sourceGuiAskUserRecordRef = stringAt(provenance, 'sourceGuiAskUserRecordRef') ?? stringAt(provenance, 'source_gui_ask_user_record_ref');
+  const sourceRiskAuditRef = stringAt(provenance, 'sourceRiskAuditRef') ?? stringAt(provenance, 'source_risk_audit_ref');
+  if (sourceApprovalRequestRef && sourceGuiAskUserRecordRef && sourceRiskAuditRef) return true;
+  const approvalRequestSidecar = recordAt(provenance, 'approvalRequestSidecar') ?? recordAt(provenance, 'approval_request_sidecar');
+  const guiAskUserSidecar = recordAt(provenance, 'guiAskUserSidecar') ?? recordAt(provenance, 'gui_ask_user_sidecar');
+  const riskAuditSidecar = recordAt(provenance, 'riskAuditSidecar') ?? recordAt(provenance, 'risk_audit_sidecar');
+  if (approvalRequestSidecar && guiAskUserSidecar && riskAuditSidecar) return true;
+  return false;
+}
+
 function mergeVisibleArtifacts(
   existing: VirtualRemoteVisibleArtifact[],
   next: VirtualRemoteVisibleArtifact[],
@@ -226,7 +341,7 @@ function actionWithBridgeObservationEvidence(
   action: GenericVisionAction,
   state: PackageBridgeExecuteState,
   grounding: Record<string, unknown>,
-  context: { workspace: string },
+  context: { workspace: string; config: ComputerUseConfig },
 ): Promise<GenericVisionAction> {
   return actionWithBridgeObservationEvidenceAsync(action, state, grounding, context);
 }
@@ -235,17 +350,19 @@ async function actionWithBridgeObservationEvidenceAsync(
   action: GenericVisionAction,
   state: PackageBridgeExecuteState,
   grounding: Record<string, unknown>,
-  context: { workspace: string },
+  context: { workspace: string; config: ComputerUseConfig },
 ): Promise<GenericVisionAction> {
   const activeAction = state.activeAction;
   const groundingRef = stringAt(grounding, 'groundingRef')
     ?? stringAt(recordAt(grounding, 'metadata'), 'groundingRef')
     ?? activeAction?.groundingRefs?.[0]
     ?? await writeExecuteGroundingRef({ workspace: context.workspace, state, action, grounding });
-  const observeBeforeMutate = bridgeObserveBeforeMutateEvidence(state, grounding, groundingRef);
+  const observeBeforeMutate = bridgeObserveBeforeMutateEvidence(state, grounding, groundingRef, context.config);
+  const observationScreenScope = bridgeObservationScreenScopeForAction(action, state.targetResolution, observeBeforeMutate);
   const activeGrounding = activeAction?.grounding && isRecord(activeAction.grounding) ? activeAction.grounding : {};
   return {
     ...action,
+    ...observationScreenScope,
     grounding: {
       ...activeGrounding,
       ...grounding,
@@ -280,10 +397,34 @@ async function actionWithBridgeObservationEvidenceAsync(
   } as GenericVisionAction;
 }
 
+function bridgeObservationScreenScopeForAction(
+  action: GenericVisionAction,
+  targetResolution: WindowTargetResolution,
+  observeBeforeMutate?: ComputerUseObserveBeforeMutateEvidence,
+): { displayGroupId?: string; screenId?: string } {
+  if (!observeBeforeMutate || !bridgeActionMayUseObservationScreenScope(action, targetResolution)) return {};
+  return {
+    ...(action.displayGroupId === undefined && observeBeforeMutate.displayGroupId ? { displayGroupId: observeBeforeMutate.displayGroupId } : {}),
+    ...(action.screenId === undefined && observeBeforeMutate.screenId ? { screenId: observeBeforeMutate.screenId } : {}),
+  };
+}
+
+function bridgeActionMayUseObservationScreenScope(
+  action: GenericVisionAction,
+  targetResolution: WindowTargetResolution,
+) {
+  if (!targetResolution.ok || targetResolution.captureKind !== 'display') return false;
+  return action.type === 'open_app'
+    || action.type === 'hotkey'
+    || action.type === 'save'
+    || action.type === 'open_menu';
+}
+
 function bridgeObserveBeforeMutateEvidence(
   state: PackageBridgeExecuteState,
   grounding: Record<string, unknown>,
   groundingRef: string | undefined,
+  config: ComputerUseConfig,
 ): ComputerUseObserveBeforeMutateEvidence | undefined {
   const observation = state.latestObservation;
   if (!observation) return undefined;
@@ -319,6 +460,7 @@ function bridgeObserveBeforeMutateEvidence(
   ]);
   const browserRuntimeAccessibilitySnapshotRef = browserRuntimeHintOnly ? stringAt(metadata, 'browserRuntimeAccessibilitySnapshotRef') : undefined;
   const browserRuntimeStateSnapshotRef = browserRuntimeHintOnly ? stringAt(metadata, 'browserRuntimeStateSnapshotRef') : undefined;
+  const freshnessCheck = freshnessCheckForBridge(metadata, observedAt, config);
   return {
     appStateRef: stringAt(metadata, 'appStateRef') ?? stringAt(metadata, 'stateSnapshotRef'),
     screenshotRef,
@@ -349,8 +491,16 @@ function bridgeObserveBeforeMutateEvidence(
     observedAt,
     capturedAt: observedAt,
     freshnessCheckedAt: new Date().toISOString(),
-    freshnessCheck: freshnessCheckFromMetadata(metadata, observedAt),
+    freshnessCheck,
   };
+}
+
+function freshnessCheckForBridge(
+  metadata: Record<string, unknown>,
+  observedAt: string,
+  _config: ComputerUseConfig,
+): ComputerUseObservationFreshnessCheck {
+  return freshnessCheckFromMetadata(metadata, observedAt);
 }
 
 function browserRuntimeMetadataIsHintOnly(metadata: Record<string, unknown>) {
@@ -414,7 +564,7 @@ async function writeExecuteGroundingRef(params: {
   return ref;
 }
 
-function freshnessCheckFromMetadata(metadata: Record<string, unknown>, observedAt: string): ComputerUseObserveBeforeMutateEvidence['freshnessCheck'] {
+function freshnessCheckFromMetadata(metadata: Record<string, unknown>, observedAt: string): ComputerUseObservationFreshnessCheck {
   const freshness = recordAt(metadata, 'freshnessCheck');
   if (freshness) {
     return {

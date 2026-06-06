@@ -26,7 +26,7 @@ import {
 import { hydrateGeneratedTaskResponseFromText } from './generated-task-response-text.js';
 import { repairNeededPayload } from './payload-validation.js';
 import { requestContextRefs } from './request-context-refs.js';
-import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../../packages/skills/runtime-policy';
+import { AGENTSERVER_GENERATED_TASK_RETRY_EVENT_TYPE } from '../../../packages/skills/runtime-policy.js';
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import { agentServerConvergenceGuardEvent, agentServerDispatchEvent, agentServerSilentStreamGuardEvent } from '@sciforge-ui/runtime-contract/events';
 import { backendHandoffDriftEvent, classifyBackendHandoffDrift } from '@sciforge-ui/runtime-contract/backend-handoff-drift';

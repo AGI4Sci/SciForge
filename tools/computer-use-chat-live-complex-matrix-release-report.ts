@@ -7,6 +7,7 @@ import {
   aggregateComputerUseChatLiveComplexMatrixManifests,
   type ComputerUseChatLiveComplexMatrixAggregateCase,
   type ComputerUseChatLiveComplexMatrixAggregateManifest,
+  type ComputerUseChatLiveComplexMatrixDiagnosticBlocker,
 } from './computer-use-chat-live-complex-matrix.js';
 import {
   runComputerUseChatLiveResourceDiagnostics,
@@ -36,6 +37,7 @@ export interface ComputerUseChatLiveComplexMatrixReleaseReport {
   monolithicStatus: DiagnosticManifestStatus;
   aggregateStatus: AggregateManifestStatus;
   caseCoverage: ReleaseCaseCoverage;
+  productBlockerSummary: ReleaseProductBlockerSummary;
   resourceDiagnostics: ComputerUseChatLiveResourceDiagnostics;
   resourceSourceComparison: ReleaseResourceSourceComparison;
   residualStabilityNotes: string[];
@@ -86,7 +88,24 @@ export interface ReleaseCaseCoverageItem {
   liveAcceptanceCandidate: boolean;
   acceptanceRefs: ComputerUseChatLiveComplexMatrixAggregateCase['acceptanceRefs'];
   residualStabilityNotes: string[];
+  diagnosticBlockers: ComputerUseChatLiveComplexMatrixDiagnosticBlocker[];
   issues: string[];
+}
+
+export interface ReleaseProductBlockerSummary {
+  diagnosticOnly: true;
+  totalBlockerCount: number;
+  categories: Array<{
+    category: ComputerUseChatLiveComplexMatrixDiagnosticBlocker['category'];
+    count: number;
+    caseIds: string[];
+  }>;
+  cases: Array<{
+    id: string;
+    status: ReleaseCaseCoverageItem['status'];
+    blockerCount: number;
+    categories: Array<ComputerUseChatLiveComplexMatrixDiagnosticBlocker['category']>;
+  }>;
 }
 
 export interface ReleaseResourceSourceComparison {
@@ -136,6 +155,7 @@ export async function buildComputerUseChatLiveComplexMatrixReleaseReport(
   const monolithicStatus = await readDiagnosticManifestStatus(options.monolithicManifestPath);
   const aggregateResult = await readAggregateManifest(options, checkedAt);
   const caseCoverage = buildCaseCoverage(aggregateResult.manifest);
+  const productBlockerSummary = buildProductBlockerSummary(caseCoverage);
   const aggregateStatus = buildAggregateStatus(aggregateResult, caseCoverage);
   const resourceInput = await collectReleaseResourceInput({
     options,
@@ -160,6 +180,7 @@ export async function buildComputerUseChatLiveComplexMatrixReleaseReport(
     monolithicStatus,
     aggregateStatus,
     caseCoverage,
+    productBlockerSummary,
     resourceDiagnostics,
     resourceSourceComparison,
     residualStabilityNotes,
@@ -204,6 +225,9 @@ export async function runComputerUseChatLiveComplexMatrixReleaseReportCli(argv =
     if (outputPath) process.stdout.write(`  report: ${outputPath}\n`);
     for (const item of report.caseCoverage.cases) {
       process.stdout.write(`  - ${item.id}: ${item.status} evidence=${item.evidenceKind ?? 'missing'} source=${item.sourceManifestRef ?? 'missing'}\n`);
+      if (item.diagnosticBlockers.length) {
+        process.stdout.write(`    diagnostic-blockers: ${uniqueStrings(item.diagnosticBlockers.map((blocker) => blocker.category)).join(',')}\n`);
+      }
       for (const note of item.residualStabilityNotes) process.stdout.write(`    note: ${note}\n`);
       for (const issue of item.issues) process.stdout.write(`    issue: ${issue}\n`);
     }
@@ -475,6 +499,7 @@ function buildCaseCoverage(
         liveAcceptanceCandidate: false,
         acceptanceRefs: { finalArtifactRefs: [], guiPresentRefs: [] },
         residualStabilityNotes: ['No aggregate case entry was present for this required case.'],
+        diagnosticBlockers: [],
         issues: ['missing-from-aggregate'],
       };
     }
@@ -491,6 +516,7 @@ function buildCaseCoverage(
       liveAcceptanceCandidate: item.liveAcceptanceCandidate,
       acceptanceRefs: item.acceptanceRefs,
       residualStabilityNotes: item.residualStabilityNotes,
+      diagnosticBlockers: item.diagnosticBlockers ?? [],
       issues: item.issues,
     };
   });
@@ -504,6 +530,49 @@ function buildCaseCoverage(
     failedCaseIds,
     cases,
   };
+}
+
+function buildProductBlockerSummary(caseCoverage: ReleaseCaseCoverage): ReleaseProductBlockerSummary {
+  const byCategory = new Map<ComputerUseChatLiveComplexMatrixDiagnosticBlocker['category'], {
+    count: number;
+    caseIds: Set<string>;
+  }>();
+  const cases = caseCoverage.cases
+    .filter((item) => item.diagnosticBlockers.length > 0)
+    .map((item) => {
+      const categories = uniqueBlockerCategories(item.diagnosticBlockers.map((blocker) => blocker.category));
+      for (const blocker of item.diagnosticBlockers) {
+        const entry = byCategory.get(blocker.category) ?? { count: 0, caseIds: new Set<string>() };
+        entry.count += 1;
+        entry.caseIds.add(item.id);
+        byCategory.set(blocker.category, entry);
+      }
+      return {
+        id: item.id,
+        status: item.status,
+        blockerCount: item.diagnosticBlockers.length,
+        categories,
+      };
+    });
+  const categories = [...byCategory.entries()]
+    .map(([category, entry]) => ({
+      category,
+      count: entry.count,
+      caseIds: [...entry.caseIds],
+    }))
+    .sort((left, right) => left.category.localeCompare(right.category));
+  return {
+    diagnosticOnly: true,
+    totalBlockerCount: categories.reduce((total, item) => total + item.count, 0),
+    categories,
+    cases,
+  };
+}
+
+function uniqueBlockerCategories(
+  values: Array<ComputerUseChatLiveComplexMatrixDiagnosticBlocker['category']>,
+): Array<ComputerUseChatLiveComplexMatrixDiagnosticBlocker['category']> {
+  return [...new Set(values)];
 }
 
 function buildResidualStabilityNotes(

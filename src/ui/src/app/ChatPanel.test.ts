@@ -1066,8 +1066,10 @@ test('default chat shell uses universal workspace copy instead of scenario-first
 
   assert.match(chatHtml, /Ask/);
   assert.match(chatHtml, /Context/);
+  assert.match(chatHtml, /Workspace/);
+  assert.match(chatHtml, /Local environment/);
   assert.match(chatHtml, /Assistant connected|Connection not configured/);
-  assert.match(chatHtml, /Permission set/);
+  assert.doesNotMatch(chatHtml, /Permission not set|Permission set|Writable|Read-only/i);
   assert.match(topbarHtml, /Annotate/);
   assert.match(topbarHtml, /aria-pressed="false"/);
   assert.doesNotMatch(chatHtml, /workspace-write/);

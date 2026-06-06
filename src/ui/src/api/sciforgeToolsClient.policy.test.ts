@@ -11,6 +11,7 @@ import {
   PROJECT_TOOL_DONE_EVENT_TYPE,
   PROJECT_TOOL_STARTED_EVENT_TYPE,
 } from '@sciforge-ui/runtime-contract';
+import { recursiveForbiddenKeys } from './sciforgeToolsClient/runtimeEvents.testHelpers';
 
 const originalFetch = globalThis.fetch;
 const originalSetInterval = globalThis.setInterval;
@@ -369,6 +370,113 @@ test('normal composer requests carry explicit Autonomy scope and single-turn ove
   assert.doesNotMatch(JSON.stringify(body), /malicious-user-should-not-travel|other-workspace-should-not-travel|malicious-category-should-not-travel/i);
 });
 
+test('normal composer submit exposes only intent text refs and Autonomy profile to Agent Host input', async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  globalThis.fetch = (async (_url, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return streamResponse([{
+      result: {
+        message: 'Codex Runtime result ready.',
+        executionUnits: [{ id: 'unit-agent-host-composer-invariant', status: 'done' }],
+        artifacts: [],
+      },
+    }]);
+  }) as typeof fetch;
+
+  await sendSciForgeToolMessage(messageInput(undefined, {
+    prompt: 'Describe the visible spreadsheet evidence.',
+    references: [{
+      id: 'ref-image-1',
+      ref: 'artifact:image-evidence-1',
+      title: 'Image evidence',
+      kind: 'file-region',
+      path: 'artifact:image-evidence-1/preview.png',
+      payload: {
+        rawScreenshot: 'data:image/png;base64,DO_NOT_SEND',
+        providerPayload: { token: 'sk-provider-secret' },
+      },
+    } as NonNullable<SendAgentMessageInput['references']>[number] & Record<string, unknown>],
+    selectedActionIds: ['native-click-action-should-not-travel'],
+    selectedToolIds: ['computer-use-action-executor-should-not-travel'],
+    runtimeHealth: [{
+      id: 'native-action-executor',
+      status: 'ready',
+      source: 'provider-secret-preflight',
+      capabilities: ['click', 'type', 'executor-params'],
+      providerPayload: { token: 'sk-provider-secret' },
+    } as unknown as NonNullable<SendAgentMessageInput['runtimeHealth']>[number] & Record<string, unknown>],
+    composerDeclaredIntents: {
+      schemaVersion: 'sciforge.composer-declared-intents.v1',
+      source: 'ui-action-audit-log',
+      authorization: {
+        profileId: 'assisted-autonomy',
+        publicLabel: 'Assisted Autonomy',
+        source: 'composer-autonomy-menu',
+        singleTurnOverride: false,
+        scope: {
+          user: 'current-user',
+          workspace: 'current-workspace',
+        },
+        hardConfirmCategories: [],
+        nativeActionCommand: '/computer-use click --x 10 --y 20',
+        executorParams: { x: 10, y: 20 },
+      } as NonNullable<SendAgentMessageInput['composerDeclaredIntents']>['authorization'] & Record<string, unknown>,
+      actionCommand: '/computer-use click --x 10 --y 20',
+      executorParams: { x: 10, y: 20 },
+      readiness: { status: 'ready', spoof: true },
+      providerPayload: { modelName: 'private/model', token: 'sk-provider-secret' },
+    } as SendAgentMessageInput['composerDeclaredIntents'] & Record<string, unknown>,
+    windowActionHandoff: {
+      schemaVersion: 'sciforge.window-action-handoff.v1',
+      source: 'run-orchestrator',
+      mode: 'enter-or-reuse-window-action-session',
+      intent: 'explicit-modification',
+      actionFlowRef: 'computer-use:action-flow/private-click.json',
+      highConfidenceThreshold: 0.8,
+      promotedRefs: [{
+        referenceId: 'target-1',
+        ref: 'computer-use:target/private-button.json',
+        title: 'Private button',
+        windowBinding: { status: 'manual-bound', windowRef: 'window:private/main' },
+      }],
+    } as SendAgentMessageInput['windowActionHandoff'] & Record<string, unknown>,
+  } as Partial<SendAgentMessageInput> & Record<string, unknown>));
+
+  const body = bodies[0]!;
+  const agentHostInput = body.agentHostInput as Record<string, unknown>;
+  assert.deepEqual(Object.keys(agentHostInput).sort(), [
+    'authorizationProfileId',
+    'authorizationProfileSource',
+    'authorizationScope',
+    'intentText',
+    'policyOwner',
+    'refs',
+    'schemaVersion',
+    'singleTurnOverride',
+    'source',
+  ]);
+  assert.equal(agentHostInput.intentText, 'Describe the visible spreadsheet evidence.');
+  assert.equal(agentHostInput.authorizationProfileId, 'assisted-autonomy');
+  assert.equal(agentHostInput.authorizationProfileSource, 'composer-autonomy-menu');
+  assert.deepEqual(agentHostInput.authorizationScope, {
+    user: 'current-user',
+    workspace: 'current-workspace',
+  });
+  assert.deepEqual(agentHostInput.refs, ['artifact:image-evidence-1', 'artifact:image-evidence-1/preview.png', 'ref-image-1']);
+  assert.equal('readiness' in agentHostInput, false);
+  assert.equal('windowActionHandoff' in ((body.auditMetadata as Record<string, unknown>).guiLocalProjection as Record<string, unknown>), false);
+  assert.deepEqual(recursiveForbiddenKeys(body, [
+    'actionCommand',
+    'nativeActionCommand',
+    'executorParams',
+    'providerPayload',
+    'selectedActionIds',
+    'selectedToolIds',
+    'windowActionHandoff',
+  ]), []);
+  assert.doesNotMatch(JSON.stringify(body), /computer-use click|native-click-action|executor-params|private-click|private-button|window:private|sk-provider-secret|DO_NOT_SEND|data:image|base64|private\/model/i);
+});
+
 test('normal composer transport does not rewrite historical messages while adding new capability truth', async () => {
   globalThis.fetch = (async () => streamResponse([{
     result: {
@@ -652,6 +760,7 @@ test('/computer-use 默认聊天请求只生成 terminal-equivalent text 给 Cod
   assert.equal(body.schemaVersion, 'sciforge.codex-runtime-stream-request.v1');
   assert.equal(body.commandText, '/computer-use click the guarded Submit button');
   assert.match(String(body.commandId), /^codex-command-/);
+  assert.equal('runtimeIntent' in body, false);
   assert.equal('prompt' in body, false);
   assert.equal('selectedActionIds' in body, false);
   assert.equal('selectedToolIds' in body, false);
@@ -787,6 +896,7 @@ test('/computer-use approve carries bounded approval metadata without executor r
   assert.match(String(body.commandText), /^\/computer-use approve/);
   assert.match(String(body.commandText), /Runtime resume context:/);
   assert.doesNotMatch(String(body.commandText), /^ask\s/);
+  assert.equal('runtimeIntent' in body, false);
   assert.equal((body.humanApproval as Record<string, unknown>).approvalRef, approvalRef);
   assert.equal((body.uiState as Record<string, unknown>).approvalRef, approvalRef);
   const provenance = ((body.humanApproval as Record<string, unknown>).approvalProvenance as Record<string, unknown>);

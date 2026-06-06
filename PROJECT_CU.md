@@ -8,6 +8,15 @@
 
 本文只列计划，不包含实现代码。
 
+并行实现入口：
+
+- [`PROJECT_CU_00_PARALLEL.md`](PROJECT_CU_00_PARALLEL.md)：并行协调、打勾规则、冲突边界。
+- [`PROJECT_CU_01_ROUTER_MODEL.md`](PROJECT_CU_01_ROUTER_MODEL.md)：Model Router 统一模型面、TS-only package 边界。
+- [`PROJECT_CU_02_ACT_TRUTH.md`](PROJECT_CU_02_ACT_TRUTH.md)：Act-time truth、default materializer、WindowActionSession owner。
+- [`PROJECT_CU_03_NATIVE_GUI.md`](PROJECT_CU_03_NATIVE_GUI.md)：Desktop native adapters、BrowserHostSession live action、GUI control plane。
+- [`PROJECT_CU_04_EVIDENCE_COMPLETION.md`](PROJECT_CU_04_EVIDENCE_COMPLETION.md)：evidence ledger、freshness/stale、artifact completion guard。
+- [`PROJECT_CU_05_ACCEPTANCE_RELEASE.md`](PROJECT_CU_05_ACCEPTANCE_RELEASE.md)：Desktop product acceptance、complex matrix、release gates。
+
 ## 对齐本线程 Codex Agent 的定位
 
 这里的 Codex 指本线程里正在工作的 Codex agent 形态，而不是另一个独立产品层或第二套 Computer Use agent。本文采用同样的能力组织方式：一个主 reasoning loop 负责理解任务、选择工具、审批、修复和判断完成；skills / plugins / MCP / native tools 只是它可调用的能力面。
@@ -38,6 +47,16 @@ Computer Use 内部可以保留“局部动作 planner”，但它的范围必�
 - **shared system input 不是默认产品通过证据。** 没有 window-scoped、BrowserHostSession-scoped、app-native、PTY/editor 或 accessibility-scoped adapter 时，shared system input 只能作为 blocked、explicit handoff、diagnostic 或用户明确确认后的临时路径。它不能声明隔离、可靠或产品级 Computer Use pass。
 - **完成证据必须来自当前 run 的因果链。** Completion 必须依赖当前 observation 或 artifact evidence、action causality、validator/verifier 支持和无 blocking uncertainty。文件存在、GUI 展示、模型自信、旧截图、旧 action history、fixture 或 shell-written artifact 都不能单独证明完成。
 - **Skill 只负责能力说明和调用边界。** Computer Use skill 文档只说明何时使用 CU、如何传 refs/intent、风险边界、证据标准和禁止事项。复杂流程代码、provider route、executor 参数、scheduler policy、completion policy 不写进 skill；它们分别属于 Agent Host、Model Router、action provider、host ports 和 validators。
+
+## 不可变原则
+
+- 旧逻辑代码和最终目标冲突的时候，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
+- 所有修改必须通用，不能为当前页面、截图、URL、文件名、agent id 或历史 run 写硬编码补丁。
+- 大对象必须 refs-first；截图、图片、provider payload、trace、日志和 artifact 不得作为 raw/base64 长期进入聊天正文或主上下文。
+- 业务代码单文件超过约 2000 行时必须拆分或登记拆分任务。
+- 不使用 `git reset --hard` 或 `git checkout --` 擦除用户改动。
+- LLM API 配置使用 `/Applications/workspace/ailab/research/app/SciForge/config.local.json`。
+- 在能提高时间效率的前提下，你尽可能多地用sub agent并行加速完成工作，同时尽可能避免、协调不同worker间多冲突
 
 ## 最终定位：GUI I/O 增强层
 
@@ -159,6 +178,13 @@ SciForge Desktop 的 Computer Use 不是一个单独按钮、slash command、截
 - [x] `/computer-use` native route 仍可作为 debug/expert/smoke/diagnostic 入口，但不能是普通用户产品入口。
 - [x] Desktop hard-confirm product smoke、Computer Use live matrix、CU-NEXT 和 package target-bound harness 已存在若干验证面，但它们还没有合成“默认聊天 -> Guard -> 真实 Act -> artifact/completion”的产品闭环。
 
+## 2026-06-06 global board / focused-test audit
+
+- [x] Cheap global gates are fresh and green: `git diff --check`, `npm run typecheck --silent`, `npm run smoke:no-legacy-paths --silent`, and `npm run smoke:no-hardcoded-success --silent` all exited `0`.
+- [x] Focused non-live request-clarification, release gate/report, and CU-LONG contract smoke checks exited `0`.
+- [ ] Focused preflight sweep is not clean: `node --import tsx --test tools/computer-use-chat-live-preflight.test.ts tests/smoke/computer-use-chat-live-preflight.test.ts tests/smoke/model-router-computer-use-live-acceptance-preflight.test.ts` exited `1` because `Model Router Computer Use live acceptance preflight CLI strict writes sanitized manifests and hides local paths` failed.
+- [ ] This audit did not prove chat live E2E, strict Desktop product smoke, complex matrix release acceptance, or real CU-LONG matrix acceptance.
+
 ## 不可变原则
 
 - GUI 不是 Agent Host，也不是 Computer Use executor。GUI 只能展示、收集授权、提交 refs / Autonomy / confirmation result。
@@ -221,84 +247,84 @@ SciForge Desktop 的 Computer Use 不是一个单独按钮、slash command、截
 
 ### 0.0 Model Router 统一模型面
 
-- [ ] 明确 Computer Use 模型调用清单：local action planner、screenshot describe、crop inspect、OCR/vision observation summarize、candidate disambiguation、grounding translator、before/after compare、verifier explanation。
-- [ ] 所有调用统一走 Model Router `/v1/responses`，使用 workspace/profile 解析出的 `textReasoner` 和 `translators.vision` role。
-- [ ] Computer Use request / trace 只记录 router profile、role、trace refs、latency、status、modality refs、hash/尺寸和错误摘要。
-- [ ] 禁止 Computer Use 直接读取或配置 provider URL、API key、raw model slug、未注册 provider/model/profile。
-- [ ] 视觉失败时返回 observation unavailable / blocked 或让 Host 选择 text-only fallback；不得假装看过图。
-- [ ] 验收：断言 CU 代码中没有绕过 Model Router 的模型 provider 调用；Model Router trace 能覆盖一次 describe + verifier 或 crop + disambiguation。
+- [x] 明确 Computer Use 模型调用清单：local action planner、screenshot describe、crop inspect、OCR/vision observation summarize、candidate disambiguation、grounding translator、before/after compare、verifier explanation。
+- [x] 所有调用统一走 Model Router `/v1/responses`，使用 workspace/profile 解析出的 `textReasoner` 和 `translators.vision` role。
+- [x] Computer Use request / trace 只记录 router profile、role、trace refs、latency、status、modality refs、hash/尺寸和错误摘要。
+- [x] 禁止 Computer Use 直接读取或配置 provider URL、API key、raw model slug、未注册 provider/model/profile。
+- [x] 视觉失败时返回 observation unavailable / blocked 或让 Host 选择 text-only fallback；不得假装看过图。
+- [x] 验收：断言 CU 代码中没有绕过 Model Router 的模型 provider 调用；Model Router trace 能覆盖一次 describe + verifier 或 crop + disambiguation。
 
 ### 0.1 Runtime-owned Act-time Truth
 
-- [ ] 定义 `CodexAgentHostActTimeTruthSource` 的默认产品实现，作为 runtime truth resolver 的唯一默认来源。
-- [ ] 接入 WindowActionSession store：返回 session ready、target refs、actor cursor refs、lease refs、fresh observation refs。
-- [ ] 接入 Computer Use adapter registry：返回 adapter provider id、adapter refs、capability refs、input isolation metadata。
-- [ ] 接入 permission ledger：返回 session permission refs、app/window allowlist refs、risk preview refs。
-- [ ] 接入 stop/cancel/takeover path：返回 cancel/stop/lease refs，并证明 GUI 可以发送确认/取消/停止结果到 Agent Host。
-- [ ] 拒绝 GUI projection、Image pane、replay、fixture、raw URL/base64/secret refs 参与 ready 判定。
-- [ ] 验收：普通聊天 GUI 操作意图在缺任一 runtime-owned ref 时 blocked，在 refs 完整时进入 `ready-for-act` 或 Act。
+- [x] 定义 `CodexAgentHostActTimeTruthSource` 的默认产品实现，作为 runtime truth resolver 的唯一默认来源。
+- [x] 接入 WindowActionSession store：返回 session ready、target refs、actor cursor refs、lease refs、fresh observation refs。
+- [x] 接入 Computer Use adapter registry：返回 adapter provider id、adapter refs、capability refs、input isolation metadata。
+- [x] 接入 permission ledger：返回 session permission refs、app/window allowlist refs、risk preview refs。
+- [x] 接入 stop/cancel/takeover path：返回 cancel/stop/lease refs，并证明 GUI 可以发送确认/取消/停止结果到 Agent Host。
+- [x] 拒绝 GUI projection、Image pane、replay、fixture、raw URL/base64/secret refs 参与 ready 判定。
+- [x] 验收：普通聊天 GUI 操作意图在缺任一 runtime-owned ref 时 blocked，在 refs 完整时进入 `ready-for-act` 或 Act。
 
 ### 0.2 Runtime-owned Computer Use Act Materializer
 
-- [ ] 实现默认 `computerUseActMaterializer` 产品源，接收 ready preflight，创建或复用 WindowActionSession。
-- [ ] 将 Agent Host 已归一化的局部 GUI objective / generic intent、target refs、authorization profile、permission refs、fresh observation refs 转成 `packages/actions/computer-use` 的 request；不要让 materializer 重新解释完整用户任务。
-- [ ] 注入 host ports：capture、crop、plan、locate、execute、verify、writeTrace、emitEvent。
-- [ ] `plan` / `locate` / `verify` host ports 中涉及模型的部分统一调用 Model Router，不直接调用 provider。
-- [ ] 所有 mutating action 写入 action ledger：before evidence、grounding evidence、executor event、after evidence、verification、freshness invalidation。
-- [ ] materializer 只返回 runtime-owned evidence refs；没有 action evidence 时必须 blocked。
-- [ ] 将 `needs-confirmation` 映射成 Agent Host approval request / GUI hard-confirm projection；确认后以新受控调用继续。
-- [ ] 将 blocked / repair-needed 映射成可恢复 diagnostics，而不是自由文本道歉。
-- [ ] 验收：ready Guard 不再停在 `ready-for-act`；至少一个低风险 BrowserHostSession action 能从普通聊天自动完成，并产生 action evidence refs。
+- [x] 实现默认 `computerUseActMaterializer` 产品源，接收 ready preflight，创建或复用 WindowActionSession。
+- [x] 将 Agent Host 已归一化的局部 GUI objective / generic intent、target refs、authorization profile、permission refs、fresh observation refs 转成 `packages/actions/computer-use` 的 request；不要让 materializer 重新解释完整用户任务。
+- [x] 注入 host ports：capture、crop、plan、locate、execute、verify、writeTrace、emitEvent。
+- [x] `plan` / `locate` / `verify` host ports 中涉及模型的部分统一调用 Model Router，不直接调用 provider。
+- [x] 所有 mutating action 写入 action ledger：before evidence、grounding evidence、executor event、after evidence、verification、freshness invalidation。
+- [x] materializer 只返回 runtime-owned evidence refs；没有 action evidence 时必须 blocked。
+- [x] 将 `needs-confirmation` 映射成 Agent Host approval request / GUI hard-confirm projection；确认后以新受控调用继续。
+- [x] 将 blocked / repair-needed 映射成可恢复 diagnostics，而不是自由文本道歉。
+- [x] 验收：ready Guard 不再停在 `ready-for-act`；至少一个低风险 BrowserHostSession action 能从普通聊天自动完成，并产生 action evidence refs。
 
 ### 0.3 WindowActionSession 产品 owner
 
-- [ ] 明确 WindowActionSession schema：windowRef、target summary、bounds/scale/screen id、actorCursor、adapter refs、input lease、focus lease、authorization profile、permission refs、cancel refs、evidence ledger refs。
-- [ ] 支持从三类来源创建/复用 session：BrowserHostSession、App window annotation/manual binding、high-confidence Screen region auto binding。
-- [ ] Actor cursor 必须可见，并与 action evidence 指向同一个 session owner。
-- [ ] FocusLease 只在必须使用 focused system input 时进入；默认优先非抢焦点 adapter。
-- [ ] Session 失焦、窗口迁移、尺寸变化、遮挡、关闭、导航、滚动、输入后必须刷新 observation 或返回 stale/blocked。
-- [ ] GUI 只能展示 session 状态、actor cursor、确认和 stop/cancel 控件；不得传 executor 参数。
+- [x] 明确 WindowActionSession schema：windowRef、target summary、bounds/scale/screen id、actorCursor、adapter refs、input lease、focus lease、authorization profile、permission refs、cancel refs、evidence ledger refs。
+- [x] 支持从三类来源创建/复用 session：BrowserHostSession、App window annotation/manual binding、high-confidence Screen region auto binding。
+- [x] Actor cursor 必须可见，并与 action evidence 指向同一个 session owner。
+- [x] FocusLease 只在必须使用 focused system input 时进入；默认优先非抢焦点 adapter。
+- [x] Session 失焦、窗口迁移、尺寸变化、遮挡、关闭、导航、滚动、输入后必须刷新 observation 或返回 stale/blocked。
+- [x] GUI 只能展示 session 状态、actor cursor、确认和 stop/cancel 控件；不得传 executor 参数。
 
 ### 0.4 Desktop native host adapters
 
-- [ ] BrowserHostSession adapter：使用现有 `browser-host-computer-use` 作为网页动作 L0 handler，补齐 before/after verifier 和 completion evidence。
-- [ ] App window capture adapter：读取 windowRef、bounds、scale、window-local crop、fresh screenshot refs。
-- [ ] Accessibility/UI Automation/AT-SPI adapter：只作为 target hints、state snapshot、non-private action binding；不能绕过 action loop。
-- [ ] Terminal / PTY adapter：用于 terminal session 内命令、输出 transcript、exit code 和 artifact refs；不把 shell 写文件伪装成 GUI artifact，除非任务明确选择 terminal workflow。
-- [ ] Editor / local document adapter：优先 app-native/editor extension 或 Accessibility；保存动作必须有 input event 和 artifact validator。
-- [ ] File manager adapter：支持可见文件选择、重命名、移动、目录 evidence； destructive remote/delete 操作 hard-confirm。
-- [ ] Shared system input fallback：只允许 explicit handoff 或诊断，不作为默认产品 pass。
+- [x] BrowserHostSession adapter：使用现有 `browser-host-computer-use` 作为网页动作 L0 handler，补齐 before/after verifier 和 completion evidence。
+- [x] App window capture adapter：读取 windowRef、bounds、scale、window-local crop、fresh screenshot refs。
+- [x] Accessibility/UI Automation/AT-SPI adapter：只作为 target hints、state snapshot、non-private action binding；不能绕过 action loop。
+- [x] Terminal / PTY adapter：用于 terminal session 内命令、输出 transcript、exit code 和 artifact refs；不把 shell 写文件伪装成 GUI artifact，除非任务明确选择 terminal workflow。
+- [x] Editor / local document adapter：优先 app-native/editor extension 或 Accessibility；保存动作必须有 input event 和 artifact validator。
+- [x] File manager adapter：支持可见文件选择、重命名、移动、目录 evidence； destructive remote/delete 操作 hard-confirm。
+- [x] Shared system input fallback：只允许 explicit handoff 或诊断，不作为默认产品 pass。
 
 ### 0.5 GUI projection 和用户控制面
 
-- [ ] Composer 继续只提交自然语言、refs、Autonomy profile。
-- [ ] Hard-confirm surface 展示 action、target、impact、evidence refs、authorization profile、Confirm / Cancel。
-- [ ] Computer Use control plane 只产生 terminal-equivalent debug text 或 confirmation result，不执行动作。
-- [ ] Image/Evidence pane 展示 annotation crop、before/after screenshot、artifact preview、action timeline、provenance。
-- [ ] Browser pane / WindowActionSession surface 显示 actor cursor、focus/lease 状态、stop/takeover。
-- [ ] GUI presentation 的 `gui.present` refs 不得进入 action-ready 或 completion 判定。
+- [x] Composer 继续只提交自然语言、refs、Autonomy profile。
+- [x] Hard-confirm surface 展示 action、target、impact、evidence refs、authorization profile、Confirm / Cancel。
+- [x] Computer Use control plane 只产生 terminal-equivalent debug text 或 confirmation result，不执行动作。
+- [x] Image/Evidence pane 展示 annotation crop、before/after screenshot、artifact preview、action timeline、provenance。
+- [x] Browser pane / WindowActionSession surface 显示 actor cursor、focus/lease 状态、stop/takeover。
+- [x] GUI presentation 的 `gui.present` refs 不得进入 action-ready 或 completion 判定。
 
 ### 0.6 输入增强与效率基线
 
-- [ ] 定义 evidence ledger -> observation snapshot -> local controller brief 的 compact contract，明确每条 evidence 的 owner/session/target、freshness、cost tier、scope、confidence 和 invalidation rule。
-- [ ] 按用途实现证据选择策略：target scope、visible state/clickability、text/label、role/state、executable target、after-action verification 和 completion handoff。
-- [ ] 引入 T0-T5 观察成本登记，并在 trace 记录每轮使用的 evidence tier、升级原因、latency 和模型调用次数。
-- [ ] 默认局部观察：已有 windowRef/targetRef 时先 crop/window-local capture；全屏 capture 必须写明 target missing、occlusion、multi-window conflict 或 user-selected screen-region reason。
-- [ ] 结构化能力优先：BrowserHostSession/CDP/DOM/AX、app-native command、PTY/editor/file/validator 能完成或验证时，不升级到视觉模型或裸 GUI 点击。
-- [ ] 支持同一 target/lease 内低风险 action batch，但导航、保存、提交、上传、删除、window switch、modal、target moved、focus takeover 和 verifier failure 后强制 checkpoint。
-- [ ] 每个 mutating action 都显式 stale 相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate。
+- [x] 定义 evidence ledger -> observation snapshot -> local controller brief 的 compact contract，明确每条 evidence 的 owner/session/target、freshness、cost tier、scope、confidence 和 invalidation rule。
+- [x] 按用途实现证据选择策略：target scope、visible state/clickability、text/label、role/state、executable target、after-action verification 和 completion handoff。
+- [x] 引入 T0-T5 观察成本登记，并在 trace 记录每轮使用的 evidence tier、升级原因、latency 和模型调用次数。
+- [x] 默认局部观察：已有 windowRef/targetRef 时先 crop/window-local capture；全屏 capture 必须写明 target missing、occlusion、multi-window conflict 或 user-selected screen-region reason。
+- [x] 结构化能力优先：BrowserHostSession/CDP/DOM/AX、app-native command、PTY/editor/file/validator 能完成或验证时，不升级到视觉模型或裸 GUI 点击。
+- [x] 支持同一 target/lease 内低风险 action batch，但导航、保存、提交、上传、删除、window switch、modal、target moved、focus takeover 和 verifier failure 后强制 checkpoint。
+- [x] 每个 mutating action 都显式 stale 相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate。
 - [ ] 验收：复杂 matrix report 输出 observation tier histogram、vision call count、action retry count、checkpoint count、false-completion guard count 和 blocked escalation reason。
 
 ### 0.7 P0 验收
 
-- [ ] Model Router：Computer Use 所有模型调用走 `/v1/responses`，trace 中只出现公开 profile/role 和 refs-first modality evidence。
-- [ ] Unit / contract：runtime truth resolver 只接受 runtime-owned refs；GUI/UI/fixture/replay/raw refs 被拒绝。
-- [ ] Runtime：普通聊天“帮我打开页面并点击...”进入 Guard；缺 host/target/observation/permission/cancel 时返回具体 blocker。
-- [ ] Runtime：ready preflight 调用默认 Act materializer；缺 action evidence 时 blocked，不声称 completed。
+- [x] Model Router：Computer Use 所有模型调用走 `/v1/responses`，trace 中只出现公开 profile/role 和 refs-first modality evidence。
+- [x] Unit / contract：runtime truth resolver 只接受 runtime-owned refs；GUI/UI/fixture/replay/raw refs 被拒绝。
+- [x] Runtime：普通聊天“帮我打开页面并点击...”进入 Guard；缺 host/target/observation/permission/cancel 时返回具体 blocker。
+- [x] Runtime：ready preflight 调用默认 Act materializer；缺 action evidence 时 blocked，不声称 completed。
 - [ ] Desktop smoke：Electron product shell + native host + runtime-codex transport + hard-confirm surface 全链路通过。
-- [ ] Browser live action：普通聊天触发 BrowserHostSession 可见 action，产生 before/after evidence 和 action ledger refs。
-- [ ] High-risk：发送/提交/上传/删除/支付/账号安全/法律合规/外部执行全部 hard-confirm。
-- [ ] Docs：`PROJECT.md` 只在实际验证后更新勾选；本文记录专项进度。
+- [x] Browser live action：普通聊天触发 BrowserHostSession 可见 action，产生 before/after evidence 和 action ledger refs。
+- [x] High-risk：发送/提交/上传/删除/支付/账号安全/法律合规/外部执行全部 hard-confirm。
+- [x] Docs：`PROJECT.md` 只在实际验证后更新勾选；本文记录专项进度。
 
 建议验证命令：
 
@@ -309,6 +335,17 @@ npm run smoke:desktop-computer-use-hard-confirm-product
 npm run smoke:desktop-browser-native-live-acceptance:strict
 npm run smoke:computer-use-chat-live-preflight:strict
 ```
+
+### 0.8 本轮已验证完成
+
+- [x] TS package bridge 默认路径不再 spawn Python；`plan/locate/execute/verify/writeTrace/emitEvent` 走 TypeScript host-port loop，planner-only done、verifier-only done、executor 未显式 `ok=true`、artifact completion 缺 verified final refs 均 fail closed。
+- [x] Embedded isolated-L3 completion evidence producer 已改为 TS 实现；request opt-in 时可生成 current-run canonical `isolated-desktop-l3-workflow-evidence.json`、`cu-user-acceptance-manifest.json`，并忽略 legacy Python env gates。
+- [x] Runtime Codex host-owned `/computer-use` native route 只透传 sanitized `completionEvidencePolicy` 与 `computerUseNext/computerUseLong` task binding；secret/raw scenario 字段不会进入 GatewayRequest。
+- [x] BrowserHost / WindowActionSession materializer 不再合成 `verifier-placeholder` / `stale-invalidation` 成功证据；mutating action 缺当前 action verifier refs 或 freshness invalidation refs 时 blocked。
+- [x] computer-use-chat live completion guard 不再依赖 CLI task/producer 选项才校验；completed/request-submitted manifest 必须有 current-run live acceptance bundle，否则 fail closed。
+- [x] Provider proxy 会把公开 `sciforge-router` / `sciforge-router-*` alias 映射到配置的 upstream default model，避免公共 alias 泄漏到 provider。
+- [x] scoped runtime truth / materializer contracts 已阻断 GUI projection、fixture、replay、stale-invalidation placeholder、planner-only/verifier-only done 冒充完成；0.1 / 0.2 / 0.4 的 scoped contract 项已同步勾选。Desktop hard-confirm product smoke 的 strict 当前证据记录在 `PROJECT_CU_03_NATIVE_GUI.md`；chat live/complex matrix product acceptance 仍未通过。
+- [x] 当前 focused validators 对 opt-in/package-diagnostic evidence 仍 fail closed：task/scenario/marker 可绑定，但 evidence 被真实分类为 `package-diagnostic` 时，缺 Desktop/native product path 的 display group、multi-actor cursor、user-control refs、native sidecar isolation、action ledger/replay bundle，不能当作 product-smoke；当前 `smoke:computer-use-chat-live-e2e:opt-in` 已越过 preflight 但实际结果为 `repair-needed`，不能声明 completed。
 
 ## P1：复杂 Computer Use 工作流
 
@@ -329,8 +366,10 @@ P1 的目标是从“能执行动作”推进到“能完成真实、多步、�
 
 ### 1.2 Vision-first multi-signal grounding
 
-- [ ] 默认从当前 screenshot/window crop/OCR/Model Router `translators.vision` observation 构造 planner brief。
-- [ ] DOM/AX/terminal/file evidence 只能作为 hints 或 verifier context，必须进入 evidence ledger。
+- [ ] 默认从当前 target-bound evidence 构造 local controller brief；可见状态关键时使用 screenshot/window crop/OCR/Model Router `translators.vision` observation，但不要把“视觉优先”实现成每步先调视觉模型。
+- [ ] DOM/AX/UIA/terminal/file evidence 可作为 structured exact evidence、target hint 或 verifier context，必须进入 evidence ledger。
+- [ ] structured exactness 用于文本、role/state、文件 metadata 和 artifact validator；visible pixels 用于用户可见状态、遮挡、焦点、目标可点击性和最终展示证据。
+- [ ] 两类证据冲突时不得用 confidence 覆盖 freshness；必须重新 observe、crop/OCR/vision 消歧或 blocked。
 - [ ] Model Router `translators.vision` 统一处理 describe、compare、crop inspection、candidate disambiguation 和 verifier explanation。
 - [ ] Planner 输出 generic intent；grounder/Host adapter 输出 binding 和 coordinates。
 - [ ] 每次 mutating action 后旧 screenshot、OCR、object location、grounding 自动 stale。
@@ -346,6 +385,8 @@ P1 的目标是从“能执行动作”推进到“能完成真实、多步、�
 ### 1.4 Long-run reliability
 
 - [ ] Run budget：maxSteps、time budget、model budget、action retry budget 清晰进入 trace。
+- [ ] 完成可靠性是硬约束，效率只是优化目标；允许局部观察、compact controller brief、cache/read-through refs 和低风险短 batch。
+- [ ] Cache 必须有 stale 规则；任何 mutating action 后相关 observation、OCR、object location、grounding、role/state 和 completion candidate 默认失效。
 - [ ] Stop condition：重复同一 blocker、目标不确定、窗口失效、权限缺失、artifact validator 失败时 blocked。
 - [ ] Continuation：repair-needed 后下一轮保留 refs-first context，并重新 observe，不靠 prompt memory。
 - [ ] Isolation：每个 case workspace/run bundle 隔离；跨 case 不复用旧 refs。
@@ -389,19 +430,19 @@ npm run computer-use-long:validate-matrix
 
 ### 2.3 Desktop release gates
 
-- [ ] Release gate 必须包含 Desktop Electron native host，不接受 Web dev pass。
-- [ ] Browser live acceptance 与 Computer Use live acceptance 分开验证，再组合验证。
-- [ ] Hard-confirm product smoke 要求真实 in-process Electron runner，不接受伪造 manifest。
+- [x] Release gate 必须包含 Desktop Electron native host，不接受 Web dev pass。
+- [x] Browser live acceptance 与 Computer Use live acceptance 分开验证，再组合验证。
+- [x] Hard-confirm product smoke 要求真实 in-process Electron runner，不接受伪造 manifest。
 - [ ] Long task / complex matrix 默认不进 fast verify，但进入 opt-in release acceptance。
-- [ ] `verify:fast` 保留 contract/security/no-hardcoded-success/no-legacy-path checks。
+- [x] `verify:fast` 保留 contract/security/no-hardcoded-success/no-legacy-path checks。
 
 ### 2.4 Documentation / operations
 
-- [ ] `docs/Usage.md` 更新 Desktop CU 启动、权限、blocked recovery、smoke 说明。
-- [ ] `docs/Architecture.md` 只补架构事实，不把 GUI 写成 executor。
-- [ ] `docs/VirtualAppScreenArchitecture.md` 保持 legacy VirtualAppScreen 非目标。
-- [ ] `packages/actions/computer-use/README.md` 标明 package diagnostic 与 product acceptance 的差异。
-- [ ] `PROJECT.md` 只同步已验证总状态；本文保留专项细分。
+- [x] `docs/Usage.md` 更新 Desktop CU 启动、权限、blocked recovery、smoke 说明。
+- [x] `docs/Architecture.md` 只补架构事实，不把 GUI 写成 executor。
+- [x] `docs/VirtualAppScreenArchitecture.md` 保持 legacy VirtualAppScreen 非目标。
+- [x] `packages/actions/computer-use/README.md` 标明 package diagnostic 与 product acceptance 的差异。
+- [x] `PROJECT.md` 只同步已验证总状态；本文保留专项细分。
 
 ## 优先实现顺序
 
@@ -446,6 +487,7 @@ npm run computer-use-long:validate-matrix
 - [`docs/BrowserRuntimeArchitecture.md`](docs/BrowserRuntimeArchitecture.md)
 - [`docs/VirtualAppScreenArchitecture.md`](docs/VirtualAppScreenArchitecture.md)
 - [`docs/NativeExtensionOwnershipMap.md`](docs/NativeExtensionOwnershipMap.md)
+- [`docs/native-extension-ownership-map.json`](docs/native-extension-ownership-map.json)
 - [`docs/Usage.md`](docs/Usage.md)
 - [`src/runtime/codex/agent-host-turn-loop.ts`](src/runtime/codex/agent-host-turn-loop.ts)
 - [`src/runtime/codex/agent-host-runtime-truth-resolver.ts`](src/runtime/codex/agent-host-runtime-truth-resolver.ts)

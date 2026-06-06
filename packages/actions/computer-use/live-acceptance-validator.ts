@@ -125,11 +125,12 @@ export function validateCuNextLiveAcceptanceTaskEvidence(
   issues.push(...validateLiveDisqualifiers(evidence));
   issues.push(...validateComputerUseProvenanceAndReplay(evidence));
   issues.push(...validateUserControlRefs(evidence));
-  issues.push(...validateObserveBeforeMutateRefs(evidence));
+  issues.push(...validateObserveBeforeMutateRefs(evidence, input.refRecords));
   issues.push(...validateBrowserRuntimeObservationHints(evidence));
   issues.push(...validatePlatformSidecarIsolationReport(evidence));
   issues.push(...validateProductPathClassification(evidence));
   issues.push(...validateEvidenceLedgerTraceability(evidence));
+  issues.push(...validateFinalArtifactValidationEvidence(evidence, input.refRecords));
 
   const markerValidation = rule
     ? validateTaskMarker(evidence, rule, input.refRecords)
@@ -178,11 +179,17 @@ function validationResult(
     || issue.id === 'invalid-browser-runtime-observation-hint'
     || issue.id === 'missing-user-control-ref'
     || issue.id === 'missing-observe-before-mutate-ref'
+    || issue.id === 'invalid-observe-before-mutate-freshness'
     || issue.id === 'missing-evidence-ledger-trace'
     || issue.id === 'missing-gui-present-current-session'
     || issue.id === 'missing-platform-sidecar-isolation'
     || issue.id === 'invalid-platform-sidecar-isolation'
     || issue.id === 'invalid-product-path-classification'
+    || issue.id === 'missing-artifact-validation-ref'
+    || issue.id === 'invalid-artifact-validation-ref'
+    || issue.id === 'missing-artifact-action-causality'
+    || issue.id === 'invalid-artifact-verifier-support'
+    || issue.id === 'blocking-artifact-uncertainty'
     || issue.id === 'invalid-live-acceptance-status'
   ));
   const disqualifiersClean = !issues.some((issue) => issue.id.startsWith('forbidden-'));
@@ -756,6 +763,13 @@ function validateEvidenceLedgerTraceability(
   const bundleRoot = currentBundleRef ? currentBundleRootFromRef(currentBundleRef) : undefined;
   const sessionRefs = collectSessionRefs(evidence);
   const declaredRefs = new Set(collectAllEvidenceFileRefs(evidence));
+  const completionEvidence = asRecord(evidence.completionEvidence) ?? {};
+  const actionLedgerRef = firstString(evidence, ['actionLedgerRef', 'mutatingActionLedgerRef', 'evidenceActionLedgerRef'])
+    ?? firstString(asRecord(evidence.evidenceLedger) ?? {}, ['ref', 'actionLedgerRef'])
+    ?? firstString(completionEvidence, ['actionLedgerRef', 'executorCommandEventLogRef', 'inputEventLogRef', 'evidenceLogRef']);
+  const evidenceIndexRef = firstString(evidence, ['evidenceIndexRef', 'evidenceRefsIndexRef', 'currentRunEvidenceIndexRef'])
+    ?? firstString(asRecord(evidence.evidenceIndex) ?? {}, ['ref', 'indexRef'])
+    ?? firstString(completionEvidence, ['evidenceIndexRef', 'evidenceSnapshotRef']);
   const guiPresent = asRecord(evidence.guiPresent) ?? {};
   const guiPresentDisplayedRefs = stringArray(guiPresent.displayedRefs);
   const guiPresentSessionRefs = stringArray(guiPresent.sessionRefs);
@@ -804,6 +818,24 @@ function validateEvidenceLedgerTraceability(
       id: 'missing-gui-present-current-session',
       path: 'guiPresent.displayedRefs',
       reason: 'gui.present evidence must prove the current session is presentable by displaying a live/replay frame ref.',
+    });
+  }
+
+  if (!actionLedgerRef || !evidenceIndexRef) {
+    issues.push({
+      id: 'missing-evidence-ledger-trace',
+      path: !actionLedgerRef ? 'actionLedgerRef' : 'evidenceIndexRef',
+      reason: 'Product-smoke Computer Use evidence must include independent action ledger and evidence index refs.',
+    });
+  }
+
+  const productPathTier = stringValue(asRecord(evidence.productPathClassification)?.tier)
+    ?? stringValue(asRecord(evidence.productPath)?.tier);
+  if (productPathTier === 'product-smoke' && !hasIndependentEvidenceLedgerRecords(evidence, actionLedgerRef)) {
+    issues.push({
+      id: 'missing-evidence-ledger-trace',
+      path: 'evidenceLedger',
+      reason: 'Product-smoke Computer Use evidence ledger must include independent action ledger records; top-level action summaries are not enough.',
     });
   }
 
@@ -916,6 +948,307 @@ function validateEvidenceLedgerTraceability(
   return issues;
 }
 
+function validateFinalArtifactValidationEvidence(
+  evidence: Record<string, unknown>,
+  refRecords?: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const finalArtifactRef = stringValue(evidence.finalArtifactRef);
+  if (!finalArtifactRef) return issues;
+
+  const completionEvidence = asRecord(evidence.completionEvidence) ?? {};
+  const verifierVerdict = asRecord(evidence.verifierVerdict) ?? {};
+  const artifactValidation = asRecord(evidence.artifactValidation) ?? {};
+  const artifactCausality = asRecord(evidence.artifactCausality)
+    ?? asRecord(completionEvidence.artifactCausality)
+    ?? {};
+  const completionArtifactCausality = asRecord(completionEvidence.artifactCausality) ?? {};
+  const completionSourceEvidence = asRecord(completionEvidence.sourceEvidence) ?? {};
+  const completionDerivedContent = asRecord(completionEvidence.derivedContentEvidence) ?? {};
+  const completionTaskBinding = asRecord(completionEvidence.taskArtifactBinding) ?? {};
+  const completionPresentation = asRecord(completionEvidence.presentationEvidence) ?? {};
+  const artifactValidationRef = firstString(evidence, ['artifactValidationRef', 'validationRef', 'formatValidationRef'])
+    ?? firstString(artifactValidation, ['artifactValidationRef', 'validationRef', 'ref'])
+    ?? firstString(artifactCausality, ['artifactValidationRef', 'validationRef'])
+    ?? firstString(verifierVerdict, ['artifactValidationRef', 'validationRef'])
+    ?? firstString(completionEvidence, ['artifactValidationRef', 'validationRef'])
+    ?? firstString(completionArtifactCausality, ['artifactValidationRef', 'validationRef']);
+  const artifactValidationRecord = asRecord(recordForRef(refRecords, artifactValidationRef));
+  const artifactValidationContentRefs = artifactValidationRecord
+    ? refsFromKeys(artifactValidationRecord, [
+      'contentRef',
+      'contentRefs',
+      'checkedRefs',
+      'checkedArtifactRefs',
+      'checkedContentRefs',
+      'validatedContentRefs',
+    ])
+    : [];
+  const contentRefs = uniqueStrings([
+    ...artifactValidationContentRefs,
+    ...stringArray(verifierVerdict.contentRefs),
+    ...stringArray(verifierVerdict.checkedRefs),
+    ...stringArray(verifierVerdict.checkedArtifactRefs),
+    ...stringArray(verifierVerdict.artifactRefs),
+    ...stringArray(evidence.taskFinalArtifactRefs),
+    ...stringArray(completionEvidence.taskFinalArtifactRefs),
+    ...stringArray(completionTaskBinding.finalArtifactRefs),
+    ...stringArray(completionPresentation.artifactRefs),
+    stringValue(completionTaskBinding.finalArtifactRef),
+    stringValue(completionArtifactCausality.finalArtifactRef),
+  ].filter(isNonEmptyString));
+  const sourceRefs = uniqueStrings([
+    ...stringArray(verifierVerdict.sourceRefs),
+    ...stringArray(verifierVerdict.contentSourceRefs),
+    ...stringArray(evidence.sourceRefs),
+    ...stringArray(completionSourceEvidence.sourceFactRefs),
+    ...stringArray(completionSourceEvidence.sourceObservationRefs),
+    ...stringArray(completionDerivedContent.supportedFactRefs),
+    ...(artifactValidationRecord
+      ? refsFromKeys(artifactValidationRecord, [
+        'sourceRef',
+        'sourceRefs',
+        'contentSourceRefs',
+        'sourceFactRefs',
+        'sourceObservationRefs',
+      ])
+      : []),
+  ]);
+  const verifierSaveRefs = uniqueStrings([
+    stringValue(verifierVerdict.savedByActionRef),
+    stringValue(verifierVerdict.saveActionRef),
+    stringValue(verifierVerdict.savedByCommandEventRef),
+    stringValue(artifactCausality.savedByActionRef),
+    stringValue(artifactCausality.savedByCommandEventRef),
+    stringValue(completionArtifactCausality.savedByActionRef),
+    stringValue(completionArtifactCausality.savedByCommandEventRef),
+  ].filter(isNonEmptyString));
+  const hasArtifactValidationRef = typeof artifactValidationRef === 'string'
+    && artifactValidationRef.trim().length > 0;
+  const hasSaveActionIndex = Number.isInteger(verifierVerdict.savedByActionIndex)
+    || Number.isInteger(verifierVerdict.saveActionIndex)
+    || Number.isInteger(artifactCausality.savedByActionIndex)
+    || Number.isInteger(completionArtifactCausality.savedByActionIndex);
+  const hasMutatingActionCausality = computerUseMutatingActionRecords(evidence).some((action) => {
+    const artifactRefs = uniqueStrings([
+      ...stringArray(action.artifactRefs),
+      ...stringArray(action.outputArtifactRefs),
+      stringValue(action.artifactRef),
+      stringValue(action.finalArtifactRef),
+    ].filter(isNonEmptyString));
+    return artifactRefs.includes(finalArtifactRef)
+      && Boolean(firstString(action, ['executorEventRef', 'executeEventRef']))
+      && stringArray(action.beforeEvidenceRefs).length > 0
+      && stringArray(action.afterEvidenceRefs).length > 0
+      && stringArray(action.verificationRefs).length > 0;
+  });
+  const hasSaveActionCausality = hasSaveActionIndex || verifierSaveRefs.length > 0 || hasMutatingActionCausality;
+  const completionEvidenceSupportsVerifier = Boolean(
+    hasArtifactValidationRef
+    && sourceRefs.length > 0
+    && contentRefs.includes(finalArtifactRef)
+    && hasSaveActionCausality
+    && Object.keys(completionSourceEvidence).length > 0
+    && Object.keys(completionDerivedContent).length > 0
+    && Object.keys(completionArtifactCausality).length > 0,
+  );
+  const verifierSupportsContentSourceAndSave = Boolean(
+    stringValue(verifierVerdict.ref)
+    && contentRefs.includes(finalArtifactRef)
+    && sourceRefs.length > 0
+    && hasSaveActionCausality
+  );
+  const currentBundleOnly = asRecord(evidence.productPathClassification)?.currentBundleOnly === true
+    || asRecord(evidence.productPath)?.currentBundleOnly === true
+    || evidence.currentBundleOnly === true;
+  const currentRunCausality = currentBundleOnly
+    && isEvidenceBundleLocalFileRef(finalArtifactRef)
+    && (hasMutatingActionCausality || completionEvidenceSupportsVerifier);
+
+  if (fileArtifactRequiresValidation(finalArtifactRef) && !hasArtifactValidationRef) {
+    issues.push({
+      id: 'missing-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: 'Final file artifacts must carry artifactValidationRef from a generic format validator; file existence alone is not sufficient.',
+    });
+  }
+  if (hasArtifactValidationRef && !isEvidenceBundleLocalFileRef(artifactValidationRef)) {
+    issues.push({
+      id: 'invalid-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: `artifactValidationRef must be a bundle-local file ref; got ${describeMarkerRef(artifactValidationRef)}.`,
+    });
+  }
+  if (hasArtifactValidationRef && !artifactValidationRecord) {
+    issues.push({
+      id: 'invalid-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: 'artifactValidationRef must resolve to a readable validation record in refRecords.',
+    });
+  }
+  if (artifactValidationRecord) {
+    const recordIssues = validateArtifactValidationRecord(
+      artifactValidationRecord,
+      finalArtifactRef,
+      completionTaskBinding,
+    );
+    issues.push(...recordIssues);
+  }
+  if (!hasSaveActionCausality || !currentRunCausality) {
+    issues.push({
+      id: 'missing-artifact-action-causality',
+      path: 'artifactCausality',
+      reason: 'Final artifact evidence must bind content to a current-run save action and current-run causality.',
+    });
+  }
+  if (!verifierSupportsContentSourceAndSave && !completionEvidenceSupportsVerifier) {
+    issues.push({
+      id: 'invalid-artifact-verifier-support',
+      path: 'verifierVerdict',
+      reason: 'Verifier support must check artifact content refs, source refs, save action causality, and current-run causality; existence-only checks cannot pass.',
+    });
+  }
+  if (hasBlockingArtifactUncertainty(verifierVerdict, artifactValidationRecord, completionEvidence, evidence)) {
+    issues.push({
+      id: 'blocking-artifact-uncertainty',
+      path: 'verifierVerdict',
+      reason: 'Blocking uncertainty must be resolved before final artifact completion can be accepted.',
+    });
+  }
+  return issues;
+}
+
+function fileArtifactRequiresValidation(ref: string) {
+  const normalized = ref.toLowerCase().split(/[?#]/, 1)[0];
+  const name = normalized.split('/').pop() ?? normalized;
+  return /\.(pptx|docx?|csv|tsv|md|markdown|pdf|html?|txt|png|jpe?g|webp|gif|bmp|tiff?)$/i.test(normalized)
+    || /report|summary|brief|briefing/.test(name);
+}
+
+function validateArtifactValidationRecord(
+  record: Record<string, unknown>,
+  finalArtifactRef: string,
+  completionTaskBinding: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  const status = normalizeToken(stringValue(record.status) ?? '');
+  const artifactRefs = uniqueStrings([
+    stringValue(record.finalArtifactRef),
+    stringValue(record.artifactRef),
+    stringValue(record.outputArtifactRef),
+    ...stringArray(record.finalArtifactRefs),
+    ...stringArray(record.artifactRefs),
+    ...stringArray(record.outputArtifactRefs),
+  ].filter(isNonEmptyString));
+  const contentRefs = refsFromKeys(record, [
+    'contentRef',
+    'contentRefs',
+    'checkedRefs',
+    'checkedArtifactRefs',
+    'checkedContentRefs',
+    'validatedContentRefs',
+  ]);
+  const sourceRefs = refsFromKeys(record, [
+    'sourceRef',
+    'sourceRefs',
+    'contentSourceRefs',
+    'sourceFactRefs',
+    'sourceObservationRefs',
+  ]);
+  const hasMatchingArtifactRef = artifactRefs.includes(finalArtifactRef)
+    || stringArray(completionTaskBinding.finalArtifactRefs).includes(finalArtifactRef);
+  const hasHash = Boolean(firstString(record, ['sha256', 'hash', 'digest', 'contentHash']));
+  const bytes = record.bytes;
+  const hasBytes = typeof bytes === 'number'
+    && Number.isFinite(bytes)
+    && bytes > 0;
+  const hasMetadata = Boolean(
+    asRecord(record.metadata)
+    || asRecord(record.fileMetadata)
+    || stringValue(record.metadataRef)
+    || stringValue(record.fileMetadataRef),
+  );
+  const hasFormat = Boolean(firstString(record, ['format', 'fileFormat', 'mimeType', 'mediaType']));
+  const hasValidator = Boolean(firstString(record, [
+    'validator',
+    'validatorRef',
+    'formatValidator',
+    'formatValidatorRef',
+    'validatorName',
+  ]));
+  const metadata = asRecord(record.metadata);
+  const diagnosticValidationRecord = record.diagnosticOnly === true
+    || record.packageDiagnosticOnly === true
+    || record.productAcceptanceEvidence === false
+    || metadata?.diagnosticOnly === true
+    || metadata?.packageDiagnosticOnly === true
+    || metadata?.productAcceptanceEvidence === false;
+  const fixtureValidationRecord = artifactValidationRecordIsFixture(record, metadata);
+
+  if (diagnosticValidationRecord) {
+    issues.push({
+      id: 'invalid-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: 'artifact validation record is diagnostic-only and cannot satisfy product-smoke artifact completion.',
+    });
+  }
+  if (fixtureValidationRecord) {
+    issues.push({
+      id: 'invalid-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: 'artifact validation record is fixture, demo, or synthetic evidence and cannot satisfy product-smoke artifact completion.',
+    });
+  }
+
+  if (
+    status !== 'passed'
+    || record.ok === false
+    || !hasMatchingArtifactRef
+    || !hasHash
+    || !hasBytes
+    || !hasMetadata
+    || !hasFormat
+    || !hasValidator
+    || sourceRefs.length === 0
+    || contentRefs.length === 0
+    || !contentRefs.includes(finalArtifactRef)
+  ) {
+    issues.push({
+      id: 'invalid-artifact-validation-ref',
+      path: 'artifactValidationRef',
+      reason: 'artifact validation record must have passed status, match finalArtifactRef, and include hash, bytes, metadata, format validator, source refs, and content refs for the final artifact.',
+    });
+  }
+  return issues;
+}
+
+function artifactValidationRecordIsFixture(
+  record: Record<string, unknown>,
+  metadata: Record<string, unknown> | undefined,
+) {
+  return [
+    stringValue(record.schemaVersion),
+    stringValue(record.generatedBy),
+    stringValue(record.validationScope),
+    stringValue(record.source),
+    stringValue(metadata?.schemaVersion),
+    stringValue(metadata?.generatedBy),
+    stringValue(metadata?.validationScope),
+    stringValue(metadata?.source),
+  ].some((value) => typeof value === 'string' && /fixture|demo|synthetic|\bcu-next-runner\b/i.test(value));
+}
+
+function hasBlockingArtifactUncertainty(...values: unknown[]) {
+  return values.some((value) => findRecordValue(value, (key, child) => {
+    if (!/^(?:blockingUncertainty|artifactUncertainty|verifierUncertainty|uncertainty|uncertain|cannotVerify|notVerified)$/i.test(key)) {
+      return false;
+    }
+    if (child === true) return true;
+    if (typeof child !== 'string') return false;
+    return !/^(?:false|no|none|resolved|not-applicable|n\/a)$/i.test(child.trim());
+  }));
+}
+
 function validateUserControlRefs(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
   const control = asRecord(evidence.userControlPlane)
     ?? asRecord(evidence.userControl)
@@ -958,7 +1291,10 @@ function validateUserControlRefs(evidence: Record<string, unknown>): CuNextLiveA
   return issues;
 }
 
-function validateObserveBeforeMutateRefs(evidence: Record<string, unknown>): CuNextLiveAcceptanceIssue[] {
+function validateObserveBeforeMutateRefs(
+  evidence: Record<string, unknown>,
+  refRecords?: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
   const issues: CuNextLiveAcceptanceIssue[] = [];
   const policy = asRecord(evidence.observeBeforeMutate)
     ?? asRecord(evidence.observationFreshness)
@@ -985,6 +1321,100 @@ function validateObserveBeforeMutateRefs(evidence: Record<string, unknown>): CuN
       stringArray(action.groundingRefs),
     );
     requireCustomRef(issues, 'missing-observe-before-mutate-ref', `${path}.freshnessCheckRef`, freshnessCheckRef);
+    if (freshnessCheckRef) {
+      issues.push(...validateFreshnessCheckRef(`${path}.freshnessCheckRef`, freshnessCheckRef, refRecords));
+    }
+  }
+  return issues;
+}
+
+function validateFreshnessCheckRef(
+  path: string,
+  freshnessCheckRef: string,
+  refRecords?: Record<string, unknown>,
+): CuNextLiveAcceptanceIssue[] {
+  const issues: CuNextLiveAcceptanceIssue[] = [];
+  if (!isEvidenceBundleLocalFileRef(freshnessCheckRef)) {
+    return [{
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: `freshnessCheckRef must be an evidence-bundle-local file ref; got ${describeMarkerRef(freshnessCheckRef)}.`,
+    }];
+  }
+  const record = asRecord(recordForRef(refRecords, freshnessCheckRef));
+  if (!record) {
+    return [{
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: 'freshnessCheckRef must resolve to a readable freshness record in refRecords.',
+    }];
+  }
+
+  const recordRefs = freshnessRecordRefs(record);
+  const crossBundleRef = recordRefs.find((ref) => !isEvidenceBundleLocalFileRef(ref));
+  if (crossBundleRef) {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: `freshness record refs must be evidence-bundle-local file refs; got ${describeMarkerRef(crossBundleRef)}.`,
+    });
+  }
+
+  const status = normalizeToken(stringValue(record.status) ?? '');
+  if (status !== 'current') {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: stringValue(record.reason)
+        ?? stringValue(record.staleBy)
+        ?? `freshness status is ${status || 'missing'}; expected current.`,
+    });
+  }
+
+  const observedAt = timestampMs(stringValue(record.observedAt) ?? stringValue(record.capturedAt));
+  const checkedAt = timestampMs(stringValue(record.checkedAt) ?? stringValue(record.freshnessCheckedAt));
+  const expiresAtRaw = stringValue(record.expiresAt);
+  const expiresAt = timestampMs(expiresAtRaw);
+  if (observedAt === undefined) {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: 'freshness record must include a valid observedAt timestamp.',
+    });
+  }
+  if (checkedAt === undefined) {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: 'freshness record must include a valid checkedAt timestamp.',
+    });
+  }
+  if (expiresAtRaw && expiresAt === undefined) {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: 'freshness record expiresAt timestamp is invalid.',
+    });
+  }
+  if (checkedAt !== undefined && expiresAt !== undefined && checkedAt > expiresAt) {
+    issues.push({
+      id: 'invalid-observe-before-mutate-freshness',
+      path,
+      reason: `freshness record expired at ${expiresAtRaw}.`,
+    });
+  }
+
+  if (observedAt !== undefined && checkedAt !== undefined) {
+    const defaultMaxAgeMs = 30_000;
+    const declaredMaxAgeMs = finiteNumber(record.maxAgeMs) ?? defaultMaxAgeMs;
+    const maxAgeMs = Math.min(Math.max(1, declaredMaxAgeMs), defaultMaxAgeMs);
+    if (checkedAt - observedAt > maxAgeMs) {
+      issues.push({
+        id: 'invalid-observe-before-mutate-freshness',
+        path,
+        reason: `freshness record observation is older than ${maxAgeMs}ms.`,
+      });
+    }
   }
   return issues;
 }
@@ -2045,6 +2475,37 @@ function refsFromKeys(record: Record<string, unknown>, keys: readonly string[]):
   }));
 }
 
+function freshnessRecordRefs(record: Record<string, unknown>): string[] {
+  const refs: string[] = [];
+  const collect = (value: unknown, seen = new Set<unknown>()) => {
+    if (!value || typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) collect(item, seen);
+      return;
+    }
+    for (const [childKey, childValue] of Object.entries(value)) {
+      if (/ref$/i.test(childKey) && isNonEmptyString(childValue)) refs.push(childValue);
+      if (/refs$/i.test(childKey) && Array.isArray(childValue)) refs.push(...childValue.filter(isNonEmptyString));
+      collect(childValue, seen);
+    }
+  };
+  collect(record);
+  return uniqueStrings(refs);
+}
+
+function timestampMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
 function firstString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -2325,6 +2786,39 @@ function computerUseActionRecords(evidence: Record<string, unknown>): Array<Reco
     ...records(asRecord(evidence.evidenceLedger)?.actions),
     ...records(asRecord(evidence.evidenceLedger)?.actionRecords),
   ];
+}
+
+function hasIndependentEvidenceLedgerRecords(
+  evidence: Record<string, unknown>,
+  actionLedgerRef: string | undefined,
+): boolean {
+  const ledger = asRecord(evidence.evidenceLedger) ?? asRecord(evidence.actionLedger);
+  const ledgerActions = [
+    ...records(ledger?.actions),
+    ...records(ledger?.actionRecords),
+    ...records(ledger?.mutatingActions),
+    ...records(ledger?.entries),
+    ...records(ledger?.records),
+    ...records(evidence.evidenceLedgerActions),
+  ];
+  const ledgerRefs = uniqueStrings([
+    stringValue(ledger?.ref),
+    stringValue(ledger?.actionLedgerRef),
+    ...stringArray(ledger?.refs),
+    ...stringArray(ledger?.evidenceRefs),
+    ...stringArray(ledger?.actionCausalityRefs),
+  ].filter(isNonEmptyString));
+  const hasLedgerAction = ledgerActions.some((action) => (
+    Boolean(firstString(action, ['executorEventRef', 'executeEventRef', 'eventRef', 'ref']))
+    && (
+      stringArray(action.beforeEvidenceRefs).length > 0
+      || stringArray(action.afterEvidenceRefs).length > 0
+      || stringArray(action.verificationRefs).length > 0
+      || stringArray(action.artifactRefs).length > 0
+    )
+  ));
+  return hasLedgerAction
+    && (!actionLedgerRef || ledgerRefs.includes(actionLedgerRef) || stringValue(ledger?.ref) === actionLedgerRef);
 }
 
 function computerUseQueueRecords(evidence: Record<string, unknown>): Array<Record<string, unknown>> {

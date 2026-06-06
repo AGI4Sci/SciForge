@@ -18,12 +18,12 @@ test('macOS Vision OCR parser returns compact visible text lines', () => {
       '  TUI 主机调用 computer_use.runTask  ',
       '',
       42,
-      'KV-Ground 定位可见的浏览器和滑动控件',
+      'Model Router grounding translator 定位可见的浏览器和滑动控件',
     ])),
     [
       'SciForge L3 计算机使用源',
       'TUI 主机调用 computer_use.runTask',
-      'KV-Ground 定位可见的浏览器和滑动控件',
+      'Model Router grounding translator 定位可见的浏览器和滑动控件',
     ],
   );
 });

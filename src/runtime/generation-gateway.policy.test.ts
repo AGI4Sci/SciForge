@@ -25,6 +25,7 @@ import {
   STAGE_LOCAL_REPRODUCIBLE_METHOD_RUNTIME,
   STAGE_LOCAL_TABULAR_ANALYSIS_RUNTIME,
   STAGE_PLAYWRIGHT_EDGE_BROWSER_RUNTIME,
+  STAGE_REQUEST_CLARIFICATION_RUNTIME,
   STAGE_REQUEST_ENRICHMENT,
   STAGE_RUNTIME_EXECUTION_CONSTRAINTS,
   STAGE_VISION_SENSE_RUNTIME,
@@ -477,6 +478,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
       [
         STAGE_CONVERSATION_POLICY,
         STAGE_REQUEST_ENRICHMENT,
+        STAGE_REQUEST_CLARIFICATION_RUNTIME,
         STAGE_BROWSER_COMPUTER_USE_CAPABILITY_TRUTH,
         STAGE_BROWSER_HOST_SEARCH_RUNTIME,
         STAGE_CAPABILITY_PROVIDER_PREFLIGHT,
@@ -496,7 +498,7 @@ test('gateway pipeline audit records stage sequence and replayable registry orde
     );
     assert.deepEqual(
       stageAudits.map((event) => event.raw.shortCircuit),
-      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+      [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, true],
     );
     const dispatchAudit = stageAudits.at(-1);
     assert.equal(dispatchAudit.raw.stage, STAGE_AGENTSERVER_DISPATCH_CONSTRAINTS);

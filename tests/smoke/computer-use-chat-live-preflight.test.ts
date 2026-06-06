@@ -27,6 +27,7 @@ test('Computer Use chat live preflight reports ready without printing secret env
   assert.equal(text.includes('sk-live-secret'), false);
   assert.equal(text.includes('https://provider.example/v1'), false);
   assert.ok(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_RUNTIME_API_KEY' && entry.present && entry.valuePrinted === false));
+  assert.equal(manifest.requiredEnv.some((entry) => entry.name === 'SCIFORGE_VISION_KV_GROUND_URL'), false);
 });
 
 test('Computer Use chat live preflight writes blocked diagnostics for missing env and unhealthy services', async () => {
@@ -57,7 +58,6 @@ test('Computer Use chat live preflight writes blocked diagnostics for missing en
     'SCIFORGE_PROXY_UPSTREAM_BASE_URL or SCIFORGE_RUNTIME_BASE_URL',
     'SCIFORGE_VISION_INPUT_ADAPTER',
     'SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER',
-    'SCIFORGE_VISION_KV_GROUND_URL',
   ]);
   assert.ok(manifest.requiredEnv.some((entry) => (
     entry.name === 'SCIFORGE_VISION_DESKTOP_BRIDGE'
@@ -95,7 +95,6 @@ test('Computer Use chat live preflight accepts ignored local config presence wit
         },
         visionSense: {
           desktopBridgeEnabled: true,
-          grounderBaseUrl: 'http://127.0.0.1:18081',
           inputAdapter: 'remote-desktop',
           independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
         },
@@ -140,7 +139,6 @@ test('Computer Use chat live preflight blocks when local config has key but work
         },
         visionSense: {
           desktopBridgeEnabled: true,
-          grounderBaseUrl: 'http://127.0.0.1:18081',
           inputAdapter: 'remote-desktop',
           independentInputAdapterProvider: 'sciforge-simulated-remote-desktop',
         },
@@ -236,7 +234,6 @@ function readyEnv(options: { withoutRuntimeProvider?: boolean; withoutDesktopBri
     SCIFORGE_VISION_DESKTOP_BRIDGE: '1',
     SCIFORGE_VISION_INPUT_ADAPTER: 'remote-desktop',
     SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER: 'sciforge-simulated-remote-desktop',
-    SCIFORGE_VISION_KV_GROUND_URL: 'http://127.0.0.1:18081',
     SCIFORGE_UI_URL: 'http://127.0.0.1:5173/',
     SCIFORGE_WORKSPACE_WRITER_URL: 'http://127.0.0.1:6173/health',
     SCIFORGE_RUNTIME_CODEX_URL: 'http://127.0.0.1:18080/health',

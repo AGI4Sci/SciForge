@@ -6,6 +6,7 @@ import {
 } from '../../packages/observe/web/browser-runtime.js';
 import { browserSearchEngineFromPrompt, browserSearchLimitFromPrompt, evaluateBrowserEvidenceNeed } from '../../packages/contracts/runtime/default-browser-computer-use-policy.js';
 import { BROWSER_HOST_SEARCH_SCHEMA, browserHostSearchSummary, defaultBrowserHostSessionManager, type BrowserHostSearchInput, type BrowserHostSearchOutput, type BrowserHostSessionManager } from './browser-host-session.js';
+import { browserHostSearchAnswerFromOutput } from './browser-host-search-answer.js';
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeCallbacks } from './runtime-types.js';
 import { sha1 } from './workspace-task-runner.js';
 import { emitWorkspaceRuntimeEvent } from './workspace-runtime-events.js';
@@ -30,15 +31,17 @@ export async function tryRunBrowserHostSearchRuntime(
   });
   try {
     const output = await manager.search(request.workspacePath || process.cwd(), input);
+    const answer = browserHostSearchAnswerFromOutput({ prompt: request.prompt, output });
+    const status = browserHostSearchPresentationStatus(answer.evidenceState);
     emitWorkspaceRuntimeEvent(callbacks, {
       type: 'browser-host-search-runtime',
       source: 'workspace-runtime-gateway',
       toolName: TOOL_ID,
-      status: 'satisfied',
-      message: `BrowserHostSession search returned ${output.results.length} bounded results.`,
+      status: status.eventStatus,
+      message: browserHostSearchRuntimeEventMessage(answer.evidenceState, output.results.length),
       detail: `finalUrl=${output.finalUrl}; searchResultRef=${output.searchResultRef}`,
     });
-    return browserHostSearchPayload(request, output, id);
+    return browserHostSearchPayload(request, output, id, answer);
   } catch (error) {
     const message = `BrowserHostSession browser_search failed: ${error instanceof Error ? error.message : String(error)}`;
     emitWorkspaceRuntimeEvent(callbacks, {
@@ -66,17 +69,82 @@ export function browserHostSearchInputFromRequest(request: GatewayRequest): Brow
     limit: browserSearchLimitFromPrompt(request.prompt),
     engine: browserSearchEngineFromPrompt(request.prompt),
     timeoutMs: 45_000,
+    ...preferredBrowserHostSearchInput(request.prompt, decision.query),
     ...(sessionId ? { sessionId } : {}),
   };
 }
 
-function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSearchOutput, id: string): ToolPayload {
+function preferredBrowserHostSearchInput(prompt: string, query: string): Pick<BrowserHostSearchInput, 'preferredResults'> {
+  const text = `${prompt}\n${query}`;
+  if (/(?:hugging\s*face|huggingface|\bhf\b)/i.test(text) && /(?:daily\s*papers?|论文|paper)/i.test(text)) {
+    const requestedDate = dailyPapersRequestedDate(text);
+    if (requestedDate) {
+      const fallbackDate = localIsoDate(new Date(localDateValue(requestedDate) - 24 * 60 * 60 * 1000));
+      return {
+        preferredResults: [{
+          title: `Hugging Face Daily Papers API (${requestedDate})`,
+          url: `https://huggingface.co/api/daily_papers?date=${requestedDate}`,
+          snippet: `Official Hugging Face Daily Papers API for ${requestedDate}.`,
+        }, {
+          title: `Hugging Face Daily Papers API (${fallbackDate})`,
+          url: `https://huggingface.co/api/daily_papers?date=${fallbackDate}`,
+          snippet: `Official Hugging Face Daily Papers API fallback for the previous Daily Papers date.`,
+        }, {
+          title: 'Hugging Face Daily Papers',
+          url: 'https://huggingface.co/papers',
+          snippet: 'Official Hugging Face Daily Papers page.',
+        }],
+      };
+    }
+    return {
+      preferredResults: [{
+        title: 'Hugging Face Daily Papers API',
+        url: 'https://huggingface.co/api/daily_papers?sort=trending',
+        snippet: 'Official Hugging Face Daily Papers API for current trending papers.',
+      }, {
+        title: 'Hugging Face Daily Papers',
+        url: 'https://huggingface.co/papers',
+        snippet: 'Official Hugging Face Daily Papers page.',
+      }],
+    };
+  }
+  return {};
+}
+
+function dailyPapersRequestedDate(text: string): string | undefined {
+  const explicitIso = /\b(20\d{2})[-/](\d{1,2})[-/](\d{1,2})\b/.exec(text);
+  if (explicitIso) return normalizedIsoDate(explicitIso[1], explicitIso[2], explicitIso[3]);
+  const explicitChinese = /(20\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/.exec(text);
+  if (explicitChinese) return normalizedIsoDate(explicitChinese[1], explicitChinese[2], explicitChinese[3]);
+  if (/(?:今天|今日|\btoday\b)/i.test(text)) return localIsoDate(new Date());
+  if (/(?:昨天|昨日|\byesterday\b)/i.test(text)) return localIsoDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+  return undefined;
+}
+
+function normalizedIsoDate(year: string, month: string, day: string): string {
+  return `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+function localIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function localDateValue(isoDate: string): number {
+  const [year = '1970', month = '01', day = '01'] = isoDate.split('-');
+  return new Date(Number(year), Number(month) - 1, Number(day)).getTime();
+}
+
+function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSearchOutput, id: string, answer = browserHostSearchAnswerFromOutput({ prompt: request.prompt, output })): ToolPayload {
   const projectionRef = `artifact:browser-host-projection-${id}`;
   const browserSessionRef = `browser-host-session:${output.session.id}`;
+  const sourcePageTextPreview = browserHostSearchSourcePageTextPreview(output);
   const snapshot = browserRuntimeSnapshotFromRefs({
     url: output.finalUrl,
     title: output.session.title,
-    textPreview: output.results.map((result) => `${result.title} ${result.snippet}`).join('\n').slice(0, 1200),
+    textPreview: sourcePageTextPreview || output.results.map((result) => `${result.title} ${result.snippet}`).join('\n').slice(0, 1200),
     screenshotRef: output.screenshotRef,
     domSnapshotRef: output.domSnapshotRef,
     axSnapshotRef: output.axSnapshotRef,
@@ -89,6 +157,7 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
     sessionId: output.session.id,
     refs: [
       ...(output.searchResultRef ? [{ kind: 'search-result' as const, ref: output.searchResultRef }] : []),
+      ...browserHostSearchSourcePageRefs(output).map((ref) => ({ kind: 'source-page' as const, ref })),
       ...(output.session.frameRef ? [{ kind: 'browser-frame' as const, ref: output.session.frameRef }] : []),
       ...(output.screenshotRef ? [{ kind: 'screenshot' as const, ref: output.screenshotRef }] : []),
       ...(output.domSnapshotRef ? [{ kind: 'dom-snapshot' as const, ref: output.domSnapshotRef }] : []),
@@ -118,22 +187,25 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
     automationSummary: output.automationSummary,
   });
   const summary = browserHostSearchSummary(output, Math.min(5, output.results.length || 5));
+  const status = browserHostSearchPresentationStatus(answer.evidenceState);
+  const executionGuidance = browserHostSearchExecutionGuidance(answer, output);
   return {
-    message: summary,
-    confidence: output.results.length ? 0.82 : 0.45,
-    claimType: 'observation',
+    message: answer.message,
+    confidence: status.confidence,
+    claimType: answer.evidenceState === 'browser-unavailable' ? 'diagnostic' : 'observation',
     evidenceLevel: 'runtime',
-    reasoningTrace: 'SciForge opened a host-owned BrowserHostSession, executed browser_search, and returned refs-first browser evidence.',
+    reasoningTrace: browserHostSearchReasoningTrace(answer.evidenceState),
     displayIntent: {
-      protocolStatus: output.results.length ? 'protocol-success' : 'protocol-partial',
-      taskOutcome: output.results.length ? 'satisfied' : 'needs-work',
-      status: output.results.length ? 'completed' : 'repair-needed',
+      protocolStatus: status.protocolStatus,
+      taskOutcome: status.taskOutcome,
+      status: status.displayStatus,
+      reason: status.reason,
     },
     claims: [{
       id: `claim-browser-host-search-${id}`,
-      type: 'fact',
-      text: `BrowserHostSession search returned ${output.results.length} bounded results for ${output.query}.`,
-      confidence: output.results.length ? 0.82 : 0.45,
+      type: answer.evidenceState === 'browser-unavailable' ? 'diagnostic' : 'fact',
+      text: browserHostSearchClaimText(answer.evidenceState, output),
+      confidence: status.confidence,
       evidenceLevel: 'runtime',
       supportingRefs: browserHostSearchSupportingRefs(output),
       opposingRefs: [],
@@ -147,13 +219,16 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
     executionUnits: [{
       id: `EU-browser-host-search-${id}`,
       tool: TOOL_ID,
-      status: output.results.length ? 'done' : 'repair-needed',
+      status: status.unitStatus,
       params: JSON.stringify({ query: output.query, engine: output.engine, limit: output.results.length }),
       hash: sha1(JSON.stringify({ finalUrl: output.finalUrl, searchResultRef: output.searchResultRef })).slice(0, 16),
       environment: BROWSER_HOST_SESSION_PROVIDER_ID,
       runtimeProfileId: 'browser-host-session',
       selectedRuntime: 'browser-host-search-runtime',
       outputRef: output.searchResultRef,
+      failureReason: executionGuidance.failureReason,
+      recoverActions: executionGuidance.recoverActions,
+      nextStep: executionGuidance.nextStep,
     }],
     artifacts: [{
       id: `browser-search-results-${id}`,
@@ -177,6 +252,10 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
         browserSessionRef,
         projectionRef,
         results: output.results,
+        sourcePages: output.sourcePages,
+        answerEvidenceState: answer.evidenceState,
+        browserHostSessionDiagnostics: answer.diagnostics,
+        browserHostSearchSummary: summary,
         searchResultRef: output.searchResultRef,
         screenshotRef: output.screenshotRef,
         domSnapshotRef: output.domSnapshotRef,
@@ -196,6 +275,34 @@ function browserHostSearchPayload(request: GatewayRequest, output: BrowserHostSe
         finalUrl: output.finalUrl,
       },
       data: projection,
+    }, {
+      id: `browser-search-diagnostic-${id}`,
+      type: 'runtime-diagnostic',
+      producerScenario: request.skillDomain,
+      schemaVersion: 'sciforge.runtime-diagnostic.v1',
+      delivery: {
+        contractId: 'sciforge.artifact-delivery.v1',
+        ref: `artifact:browser-search-diagnostic-${id}`,
+        role: 'diagnostic',
+        declaredMediaType: 'application/json',
+        declaredExtension: '.json',
+        contentShape: 'json-envelope',
+        readableRef: `artifact:browser-search-diagnostic-${id}`,
+        previewPolicy: 'audit-only',
+      },
+      metadata: {
+        source: TOOL_ID,
+        providerId: BROWSER_HOST_SESSION_PROVIDER_ID,
+        browserSessionRef,
+        searchResultRef: output.searchResultRef,
+      },
+      data: {
+        query: output.query,
+        searchedAt: output.searchedAt,
+        answerEvidenceState: answer.evidenceState,
+        browserHostSessionDiagnostics: answer.diagnostics,
+        browserHostSearchSummary: summary,
+      },
     }],
     objectReferences: [{
       id: `obj-browser-host-final-url-${id}`,
@@ -272,16 +379,156 @@ function browserHostSearchFailurePayload(request: GatewayRequest, input: Browser
   };
 }
 
+function browserHostSearchRuntimeEventMessage(evidenceState: ReturnType<typeof browserHostSearchAnswerFromOutput>['evidenceState'], resultCount: number) {
+  if (evidenceState === 'browser-unavailable') {
+    return 'BrowserHostSession search could not open the embedded browser; host diagnostics require recovery before search evidence can be read.';
+  }
+  if (evidenceState === 'candidate-only') {
+    return `BrowserHostSession search returned ${resultCount} candidate result${resultCount === 1 ? '' : 's'}; source pages still need to be opened and read.`;
+  }
+  if (evidenceState === 'source-pages-read') {
+    return `BrowserHostSession search opened and read source pages for ${resultCount} candidate result${resultCount === 1 ? '' : 's'}.`;
+  }
+  return `BrowserHostSession search returned ${resultCount} bounded results.`;
+}
+
+function browserHostSearchReasoningTrace(evidenceState: ReturnType<typeof browserHostSearchAnswerFromOutput>['evidenceState']) {
+  if (evidenceState === 'browser-unavailable') {
+    return 'SciForge attempted a host-owned BrowserHostSession browser_search, but the embedded browser session was unavailable. No search-page or source-page content was read, so the runtime surfaces the browser diagnostic instead of synthesizing an answer.';
+  }
+  if (evidenceState === 'candidate-only') {
+    return 'SciForge opened a host-owned BrowserHostSession, executed browser_search, and returned candidate search-result refs. Source pages have not yet been opened/read, so the runtime asks for confirmation before summarizing.';
+  }
+  if (evidenceState === 'source-pages-read') {
+    return 'SciForge opened a host-owned BrowserHostSession, executed browser_search, opened candidate source pages, and summarized only from opened source-page text refs.';
+  }
+  return 'SciForge opened a host-owned BrowserHostSession, executed browser_search, and returned refs-first browser evidence.';
+}
+
+function browserHostSearchClaimText(
+  evidenceState: ReturnType<typeof browserHostSearchAnswerFromOutput>['evidenceState'],
+  output: BrowserHostSearchOutput,
+) {
+  if (evidenceState === 'browser-unavailable') {
+    return `BrowserHostSession search could not read search results for ${output.query} because the embedded browser session is unavailable.`;
+  }
+  if (evidenceState === 'candidate-only') {
+    return `BrowserHostSession search returned ${output.results.length} candidate source snippets for ${output.query}; source pages still need to be read before final summarization.`;
+  }
+  if (evidenceState === 'source-pages-read') {
+    return `BrowserHostSession search opened and read ${readSourcePageCount(output)} source page${readSourcePageCount(output) === 1 ? '' : 's'} for ${output.query}.`;
+  }
+  return `BrowserHostSession search returned ${output.results.length} bounded results for ${output.query}.`;
+}
+
+function browserHostSearchExecutionGuidance(
+  answer: ReturnType<typeof browserHostSearchAnswerFromOutput>,
+  output: BrowserHostSearchOutput,
+) {
+  if (answer.evidenceState === 'browser-unavailable') {
+    const diagnostic = answer.diagnostics?.[0] ?? `BrowserHostSession ${output.session.status}`;
+    return {
+      failureReason: `BrowserHostSession unavailable: ${diagnostic}`,
+      recoverActions: ['Connect or restart the SciForge native BrowserHostSession adapter, then retry the browser search.'],
+      nextStep: 'Retry the search after the embedded browser adapter is available, then open and read source pages before summarizing.',
+    };
+  }
+  if (answer.evidenceState === 'candidate-only') {
+    return {
+      failureReason: 'Search results are candidate snippets only; source pages have not been opened/read.',
+      recoverActions: ['Confirm the target scope and continue by opening and reading the candidate source pages.'],
+      nextStep: 'Open and read selected source pages, then summarize from source-page content.',
+    };
+  }
+  if (answer.evidenceState === 'source-pages-read') {
+    return {
+      failureReason: undefined,
+      recoverActions: undefined,
+      nextStep: undefined,
+    };
+  }
+  return {
+    failureReason: undefined,
+    recoverActions: undefined,
+    nextStep: undefined,
+  };
+}
+
+function browserHostSearchPresentationStatus(evidenceState: ReturnType<typeof browserHostSearchAnswerFromOutput>['evidenceState']) {
+  if (evidenceState === 'source-pages-read') {
+    return {
+      confidence: 0.82,
+      protocolStatus: 'protocol-success',
+      taskOutcome: 'satisfied',
+      displayStatus: 'done',
+      unitStatus: 'done',
+      eventStatus: 'satisfied',
+      reason: 'source-pages-read',
+    } as const;
+  }
+  if (evidenceState === 'browser-unavailable') {
+    return {
+      confidence: 0.3,
+      protocolStatus: 'protocol-partial',
+      taskOutcome: 'needs-human',
+      displayStatus: 'needs-human',
+      unitStatus: 'needs-human',
+      eventStatus: 'needs-human',
+      reason: 'browser-host-session-unavailable',
+    } as const;
+  }
+  if (evidenceState === 'candidate-only') {
+    return {
+      confidence: 0.64,
+      protocolStatus: 'protocol-partial',
+      taskOutcome: 'needs-human',
+      displayStatus: 'needs-human',
+      unitStatus: 'needs-human',
+      eventStatus: 'needs-human',
+      reason: 'source-pages-not-read',
+    } as const;
+  }
+  return {
+    confidence: 0.45,
+    protocolStatus: 'protocol-partial',
+    taskOutcome: 'needs-work',
+    displayStatus: 'repair-needed',
+    unitStatus: 'repair-needed',
+    eventStatus: 'needs-work',
+    reason: 'no-usable-search-results',
+  } as const;
+}
+
 function browserHostSearchSupportingRefs(output: BrowserHostSearchOutput) {
   return [
     output.finalUrl,
     output.searchResultRef,
+    ...browserHostSearchSourcePageRefs(output),
     output.screenshotRef,
     output.domSnapshotRef,
     output.axSnapshotRef,
     output.consoleLogRef,
     output.networkLogRef,
   ].filter((value): value is string => Boolean(value));
+}
+
+function browserHostSearchSourcePageRefs(output: BrowserHostSearchOutput) {
+  return (output.sourcePages ?? [])
+    .filter((page) => page.status === 'read')
+    .map((page) => page.textRef)
+    .filter((value): value is string => Boolean(value));
+}
+
+function browserHostSearchSourcePageTextPreview(output: BrowserHostSearchOutput) {
+  return (output.sourcePages ?? [])
+    .filter((page) => page.status === 'read' && (page.textSummary || page.textPreview))
+    .map((page) => `${page.title || page.finalUrl || page.url}\n${page.textSummary || page.textPreview}`)
+    .join('\n\n')
+    .slice(0, 1600);
+}
+
+function readSourcePageCount(output: BrowserHostSearchOutput) {
+  return (output.sourcePages ?? []).filter((page) => page.status === 'read').length;
 }
 
 function browserHostSessionIdFromRequest(request: GatewayRequest) {

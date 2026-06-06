@@ -142,7 +142,7 @@ test('package bridge materializes runTask invocation request and host ports toge
   assert.deepEqual(runtimeDetail.actionProviderRequest, invocation.request);
   assert.deepEqual(runtimeDetail.hostPorts, invocation.hostPorts);
   assert.equal(runtimeDetail.boundary, PACKAGE_BRIDGE_RUN_TASK_BOUNDARY);
-  assert.equal(runtimeDetail.bridge, 'python-package-stdio-host-ports');
+  assert.equal(runtimeDetail.bridge, 'ts-package-host-port-loop');
   assert.equal(runtimeDetail.completionProducerOptIn, true);
   assert.doesNotMatch(
     JSON.stringify({ invocation, runtimeDetail }),

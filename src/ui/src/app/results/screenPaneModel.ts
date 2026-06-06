@@ -343,6 +343,48 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     refsFromList(metadata.leaseOwnerRefs, ['ref', 'leaseOwnerRef', 'inputLeaseRef']),
     frameRecords.flatMap((frame) => frame.leaseOwnerRefs ?? []),
   );
+  const inputLeaseRef = controlPlaneRefField(
+    data.inputLeaseRef,
+    metadata.inputLeaseRef,
+    data.schedulerLeaseRef,
+    metadata.schedulerLeaseRef,
+    leaseOwnerRefs[0],
+  );
+  const userLeaseRef = controlPlaneRefField(
+    data.userLeaseRef,
+    metadata.userLeaseRef,
+    refFromValue(data.userLease, ['ref', 'userLeaseRef', 'leaseRef']),
+    refFromValue(metadata.userLease, ['ref', 'userLeaseRef', 'leaseRef']),
+  );
+  const agentLeaseRef = controlPlaneRefField(
+    data.agentLeaseRef,
+    metadata.agentLeaseRef,
+    refFromValue(data.agentLease, ['ref', 'agentLeaseRef', 'leaseRef']),
+    refFromValue(metadata.agentLease, ['ref', 'agentLeaseRef', 'leaseRef']),
+  );
+  const activeLeaseOwnerRef = controlPlaneRefField(
+    data.activeLeaseOwnerRef,
+    metadata.activeLeaseOwnerRef,
+    refFromValue(data.activeLeaseOwner, ['ref', 'activeLeaseOwnerRef', 'leaseOwnerRef']),
+    refFromValue(metadata.activeLeaseOwner, ['ref', 'activeLeaseOwnerRef', 'leaseOwnerRef']),
+  );
+  const activeLeaseOwnerRole = safeLeaseStatus(firstNonEmptyString(
+    stringField(data.activeLeaseOwnerRole),
+    stringField(metadata.activeLeaseOwnerRole),
+    refFromValue(data.activeLeaseOwner, ['role', 'ownerRole', 'activeLeaseOwnerRole']),
+    refFromValue(metadata.activeLeaseOwner, ['role', 'ownerRole', 'activeLeaseOwnerRole']),
+  ));
+  const leaseStatus = safeLeaseStatus(firstNonEmptyString(
+    stringField(data.leaseStatus),
+    stringField(metadata.leaseStatus),
+    refFromValue(data.inputLease, ['status', 'leaseStatus']),
+    refFromValue(metadata.inputLease, ['status', 'leaseStatus']),
+  ));
+  const takeoverRef = controlPlaneRefField(data.takeoverRef, metadata.takeoverRef);
+  const pauseRef = controlPlaneRefField(data.pauseRef, metadata.pauseRef);
+  const resumeRef = controlPlaneRefField(data.resumeRef, metadata.resumeRef);
+  const stopRef = controlPlaneRefField(data.stopRef, metadata.stopRef);
+  const cancelLeaseRef = controlPlaneRefField(data.cancelLeaseRef, metadata.cancelLeaseRef);
   const actionAdapterRef = firstNonEmptyString(
     stringField(data.actionAdapterRef),
     stringField(metadata.actionAdapterRef),
@@ -670,6 +712,15 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     && !adapterReadinessRef
     && !frameTransport
     && !frameTelemetry
+    && !inputLeaseRef
+    && !userLeaseRef
+    && !agentLeaseRef
+    && !activeLeaseOwnerRef
+    && !takeoverRef
+    && !pauseRef
+    && !resumeRef
+    && !stopRef
+    && !cancelLeaseRef
     && !actorCursorRefs.length
     && !annotationOverlayRefs.length
     && !proposalRefs.length
@@ -801,7 +852,12 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     annotationProposalRefs: proposalRefs,
     inputIntentRefs,
     executorEventRefs,
-    inputLeaseRef: leaseOwnerRefs[0],
+    inputLeaseRef,
+    activeLeaseOwnerRef,
+    activeLeaseOwnerRole,
+    userLeaseRef,
+    agentLeaseRef,
+    leaseStatus,
     actionAdapterRef,
     adapterReadinessRef,
     replayRef,
@@ -817,7 +873,11 @@ export function virtualScreenPayloadFromArtifact(artifact: RuntimeArtifact, conf
     permissionStatus,
     permissionRequired,
     permissionGranted,
-    stopRef: firstNonEmptyString(stringField(data.stopRef), stringField(metadata.stopRef)),
+    takeoverRef,
+    pauseRef,
+    resumeRef,
+    stopRef,
+    cancelLeaseRef,
     handoffRef: firstNonEmptyString(stringField(data.handoffRef), stringField(metadata.handoffRef)),
     permissionHandoffRef,
     permissionHandoffRefs,
@@ -1648,6 +1708,30 @@ function stringField(value: unknown) {
 
 function stringListField(value: unknown) {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim()) : [];
+}
+
+function controlPlaneRefField(...values: unknown[]) {
+  for (const value of values) {
+    const ref = safeControlPlaneRef(stringField(value));
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
+function safeControlPlaneRef(value: string | undefined) {
+  const ref = value?.trim();
+  if (!ref) return undefined;
+  if (/^(?:data|blob|file|javascript):/i.test(ref)) return undefined;
+  if (/^https?:\/\//i.test(ref)) return undefined;
+  if (/^\/api\/.*(?:preview|provider|executor|route)/i.test(ref)) return undefined;
+  if (/base64/i.test(ref)) return undefined;
+  return ref;
+}
+
+function safeLeaseStatus(value: string | undefined) {
+  const status = value?.trim();
+  if (!status) return undefined;
+  return /^[a-z0-9][a-z0-9._:-]{0,63}$/i.test(status) ? status : undefined;
 }
 
 function booleanField(value: unknown) {

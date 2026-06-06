@@ -75,7 +75,6 @@ interface CuNextRunCliArgs {
   runtimeBrowserManifestPath?: string;
   searchDirs?: string[];
   userAcceptanceManifestPaths?: string[];
-  kvGroundSmokePaths?: string[];
   taskMapPath?: string;
   json?: boolean;
 }
@@ -109,7 +108,6 @@ export async function runCuNextCli(argv = process.argv): Promise<void> {
       runtimeBrowserManifestPath: args.runtimeBrowserManifestPath,
       searchDirs: args.searchDirs,
       userAcceptanceManifestPaths: args.userAcceptanceManifestPaths,
-      kvGroundSmokePaths: args.kvGroundSmokePaths,
       taskMapPath: args.taskMapPath,
     });
     if (args.out) await writeCuNextReadinessManifest(args.out, manifest);
@@ -556,15 +554,33 @@ async function readApprovalChainRefRecords(
 ): Promise<Record<string, unknown>> {
   const refs = approvalChainSidecarRefsFromEvidence(manifest);
   const markerRefs = records(manifest.evidenceMarkers).flatMap(markerFileRefs);
+  const freshnessRefs = liveAcceptanceFreshnessCheckRefs(manifest);
   const recordsByRef: Record<string, unknown> = {};
   await Promise.all(uniqueStrings([
     ...Object.values(refs).filter((ref): ref is string => Boolean(ref)),
     ...markerRefs,
+    ...freshnessRefs,
   ]).map(async (ref) => {
     const record = await readLiveAcceptanceLocalJsonRef(acceptancePath, ref);
     if (record !== undefined) recordsByRef[ref] = record;
   }));
   return recordsByRef;
+}
+
+function liveAcceptanceFreshnessCheckRefs(manifest: Record<string, unknown>): string[] {
+  const observeBeforeMutate = recordValue(manifest.observeBeforeMutate);
+  const observationFreshness = recordValue(manifest.observationFreshness);
+  const refs = [
+    stringValue(observeBeforeMutate.freshnessCheckRef),
+    stringValue(observeBeforeMutate.evidenceFreshnessRef),
+    stringValue(observationFreshness.freshnessCheckRef),
+    stringValue(observationFreshness.evidenceFreshnessRef),
+    ...records(manifest.mutatingActions).flatMap((action) => [
+      stringValue(action.freshnessCheckRef),
+      stringValue(action.evidenceFreshnessRef),
+    ]),
+  ];
+  return uniqueStrings(refs.filter((ref): ref is string => typeof ref === 'string' && isLocalFileEvidenceRef(ref)));
 }
 
 async function readLiveAcceptanceLocalJsonRef(acceptancePath: string, ref: string | undefined) {
@@ -874,9 +890,6 @@ export function parseCuNextRunArgs(args: string[]): CuNextRunCliArgs {
     } else if (arg === '--acceptance-manifest') {
       parsed.userAcceptanceManifestPaths = [...(parsed.userAcceptanceManifestPaths ?? []), readArg(args, index, arg)];
       index += 1;
-    } else if (arg === '--kv-ground-smoke') {
-      parsed.kvGroundSmokePaths = [...(parsed.kvGroundSmokePaths ?? []), readArg(args, index, arg)];
-      index += 1;
     } else if (arg === '--task-map') {
       parsed.taskMapPath = readArg(args, index, arg);
       index += 1;
@@ -934,9 +947,6 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
     ['computerUse', 'plannerProfile'],
     ['visionSense', 'plannerProfile'],
   ]);
-  const grounderBaseUrl = stripTrailingSlash(firstConfigString(configs, [
-    ['visionSense', 'grounderBaseUrl'],
-  ]));
   const inputAdapter = firstConfigString(configs, [
     ['visionSense', 'inputAdapter'],
     ['visionSense', 'independentInputAdapter'],
@@ -958,13 +968,11 @@ async function hydrateCuNextRuntimeEnvFromLocalConfig(workspacePath?: string): P
 
   setEnvIfMissing('SCIFORGE_RUNTIME_API_KEY', apiKey);
   setEnvIfMissing('SCIFORGE_RUNTIME_PROVIDER', provider);
-  setEnvIfMissing('SCIFORGE_RUNTIME_BASE_URL', upstreamBaseUrl);
-  setEnvIfMissing('SCIFORGE_PROXY_UPSTREAM_BASE_URL', upstreamBaseUrl);
+  setRuntimeUpstreamBaseUrlEnvIfMissing(upstreamBaseUrl);
   setEnvIfMissing('SCIFORGE_RUNTIME_MODEL', model);
   setEnvIfMissing('SCIFORGE_PROXY_DEFAULT_MODEL', model);
   setEnvIfMissing('SCIFORGE_COMPUTER_USE_PLANNER_PROFILE', plannerProfile);
-  setEnvIfMissing('SCIFORGE_VISION_KV_GROUND_URL', grounderBaseUrl);
-  setEnvIfMissing('SCIFORGE_VISION_KV_GROUND_UPLOAD_STRATEGY', grounderUploadStrategy);
+  setEnvIfMissing('SCIFORGE_VISION_GROUNDING_TRANSLATOR_UPLOAD_STRATEGY', grounderUploadStrategy);
   setEnvIfMissing('SCIFORGE_VISION_INPUT_ADAPTER', inputAdapter);
   setEnvIfMissing('SCIFORGE_VISION_INDEPENDENT_INPUT_ADAPTER_PROVIDER', inputAdapterProvider);
   setEnvIfMissing('SCIFORGE_VISION_TRANSLATOR_MODEL', visionVlmModel);
@@ -1003,6 +1011,17 @@ function getConfigString(config: Record<string, unknown>, path: string[]): strin
 function setEnvIfMissing(key: string, value: string | undefined): void {
   if (process.env[key] !== undefined) return;
   if (value) process.env[key] = value;
+}
+
+function setRuntimeUpstreamBaseUrlEnvIfMissing(value: string | undefined): void {
+  if (
+    process.env.SCIFORGE_RUNTIME_BASE_URL !== undefined
+    || process.env.SCIFORGE_PROXY_UPSTREAM_BASE_URL !== undefined
+  ) {
+    return;
+  }
+  setEnvIfMissing('SCIFORGE_RUNTIME_BASE_URL', value);
+  setEnvIfMissing('SCIFORGE_PROXY_UPSTREAM_BASE_URL', value);
 }
 
 function stripTrailingSlash(value: string | undefined): string | undefined {

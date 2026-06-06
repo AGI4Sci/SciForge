@@ -155,6 +155,45 @@ test('Codex realtime session client does not treat completed item lifecycle even
   assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['item_completed', 'message_delta', 'done']);
 });
 
+test('Codex realtime session client keeps diagnostic error events nonterminal until final done', async () => {
+  let socket: MockSocket | undefined;
+  const client = createCodexRealtimeSessionClient({
+    workspaceWriterBaseUrl: 'http://127.0.0.1:5174',
+    webSocketFactory(url) {
+      socket = new MockSocket(url);
+      return socket as unknown as WebSocket;
+    },
+  });
+  const request = {
+    realtimeSession: createCodexRealtimeSessionEnvelope({
+      commandId: 'codex-command-ws-diagnostic-error',
+      attemptId: 'codex-command-ws-diagnostic-error-attempt-1',
+    }),
+    commandText: 'recover after retry diagnostic',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-ws-diagnostic-error',
+    attemptId: 'codex-command-ws-diagnostic-error-attempt-1',
+  };
+  const events: unknown[] = [];
+  const pending = client.stream(JSON.stringify(request), (event) => events.push(event));
+
+  socket?.open();
+  socket?.message({
+    type: 'event',
+    event: 'error',
+    data: { type: 'process-progress', status: 'warning', message: 'Provider retry failed once; continuing.' },
+  });
+  assert.equal(socket?.readyState, 1);
+  socket?.message({ type: 'event', event: 'message', data: { type: 'message', text: 'recovered' } });
+  socket?.message({ type: 'event', event: 'done', data: { type: 'done', status: 'done' } });
+
+  const stream = await pending;
+
+  assert.equal(stream.error, undefined);
+  assert.equal((stream.result as Record<string, unknown>).message, 'recovered');
+  assert.deepEqual(events.map((event) => (event as Record<string, unknown>).type), ['process-progress', 'message', 'done']);
+});
+
 test('Codex realtime session client resolves terminal done events without waiting for server socket close', async () => {
   let socket: MockSocket | undefined;
   const client = createCodexRealtimeSessionClient({

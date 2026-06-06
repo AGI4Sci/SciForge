@@ -5,6 +5,7 @@ import {
   buildComputerUseWorkspaceGatewayRequest,
   computerUseTerminalEquivalentTextRequested,
   computerUseWorkspaceGatewayDiagnosticRequested,
+  sanitizedComputerUseTaskBindings,
 } from './computerUseWorkspaceGatewayRequest';
 import { runtimeRequestInput } from './runtimeEvents.testHelpers';
 
@@ -55,6 +56,28 @@ test('buildComputerUseWorkspaceGatewayRequest creates only a legacy diagnostic s
           enabled: true,
           trigger: 'on-completed-current-run',
         }],
+      },
+      computerUseNext: {
+        taskId: 'CU-NEXT-01',
+        scenarioId: 'CU-LONG-001',
+        title: 'Briefing deck',
+        requirements: ['refs-first-evidence-bundle', ''],
+        safetyBoundary: {
+          noDomAccessibility: true,
+          secretFlag: 'SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK',
+        },
+        secret: 'SECRET_NEXT_SHOULD_NOT_LEAK',
+      },
+      computerUseLong: {
+        taskId: 'CU-NEXT-01',
+        cuNextTaskId: 'CU-NEXT-01',
+        scenarioId: 'CU-LONG-001',
+        title: 'Briefing deck',
+        requiredEvidence: ['cu-user-acceptance-manifest.json'],
+        safetyBoundary: {
+          noDomAccessibility: true,
+          secretFlag: 'SECRET_LONG_SHOULD_NOT_LEAK',
+        },
       },
     },
     runs: [{
@@ -126,5 +149,69 @@ test('buildComputerUseWorkspaceGatewayRequest creates only a legacy diagnostic s
       enabled: true,
       trigger: 'on-completed-current-run',
     }],
+  });
+  assert.deepEqual(uiState.computerUseNext, {
+    taskId: 'CU-NEXT-01',
+    scenarioId: 'CU-LONG-001',
+    title: 'Briefing deck',
+    requirements: ['refs-first-evidence-bundle'],
+    safetyBoundary: {
+      noDomAccessibility: true,
+    },
+  });
+  assert.deepEqual(uiState.computerUseLong, {
+    taskId: 'CU-NEXT-01',
+    scenarioId: 'CU-LONG-001',
+    title: 'Briefing deck',
+    safetyBoundary: {
+      noDomAccessibility: true,
+    },
+  });
+  assert.doesNotMatch(JSON.stringify(request), /SECRET_NEXT_SHOULD_NOT_LEAK|SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK|SECRET_LONG_SHOULD_NOT_LEAK|cuNextTaskId|requiredEvidence/);
+});
+
+test('sanitizedComputerUseTaskBindings keeps only refs-first task binding fields', () => {
+  assert.deepEqual(sanitizedComputerUseTaskBindings({
+    computerUseNext: {
+      taskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      requirements: ['refs-first-evidence-bundle', ''],
+      safetyBoundary: {
+        noDomAccessibility: true,
+        secretFlag: 'SECRET_NEXT_BOUNDARY_SHOULD_NOT_LEAK',
+      },
+      secret: 'SECRET_NEXT_SHOULD_NOT_LEAK',
+    },
+    computerUseLong: {
+      taskId: 'CU-NEXT-01',
+      cuNextTaskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      requiredEvidence: ['cu-user-acceptance-manifest.json'],
+      safetyBoundary: {
+        noDomAccessibility: true,
+        secretFlag: 'SECRET_LONG_SHOULD_NOT_LEAK',
+      },
+      rawScenarioMarkdown: 'SECRET_MARKDOWN_SHOULD_NOT_LEAK',
+    },
+  }), {
+    computerUseNext: {
+      taskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      requirements: ['refs-first-evidence-bundle'],
+      safetyBoundary: {
+        noDomAccessibility: true,
+      },
+    },
+    computerUseLong: {
+      taskId: 'CU-NEXT-01',
+      scenarioId: 'CU-LONG-001',
+      title: 'Briefing deck',
+      safetyBoundary: {
+        noDomAccessibility: true,
+      },
+    },
   });
 });

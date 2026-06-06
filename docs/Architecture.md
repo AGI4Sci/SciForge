@@ -1,6 +1,6 @@
 # SciForge 架构
 
-最后更新：2026-06-05
+最后更新：2026-06-06
 
 ## 北极星
 
@@ -200,7 +200,9 @@ External message / webhook / chat command
 
 高风险副作用必须走同一条受控 Host 路径。Computer Use 的发送、删除、支付、授权、发布、外部提交，或飞书连接器的真实发送/同步/删除，不直接弹 GUI，也不直接执行；extension 返回 `needs-confirmation`、`approvalRequest`、`draftRef` 或 `auditRef`，TUI Host 决定是否调用 `gui.ask_user` 或外部通道的显式确认机制收集确认，确认后再发起下一次受控调用。
 
-Computer Use / Window Action 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Grounder、Executor 和 Verifier 链路可用；用户级 success 必须包含真实用户产物、当前 WindowActionSession evidence、action causality、artifact/verifier refs、`gui.present` refs 和 bounded before/after evidence。目标打通需要覆盖多 app/window/session 工作流，例如 Browser/资料页、notebook/terminal 实验、editor/report artifact 和 SciForge Image/Evidence 展示。GUI 在这些验收中仍只提交自然语言/ref intent、Autonomy profile、确认/取消或展示 refs，不直接执行桌面操作；`gui.present` 只能证明用户可见展示，不能替代 executor、validator 或 action/evidence 证据。
+Computer Use / Window Action 的验收也按这个边界组织。基础真实输入 smoke 只能证明 action provider、Model Router grounding translator、Executor 和 Verifier 链路可用；用户级 success 必须包含真实用户产物、当前 WindowActionSession evidence、action causality、artifact/verifier refs、`gui.present` refs 和 bounded before/after evidence。目标打通需要覆盖多 app/window/session 工作流，例如 Browser/资料页、notebook/terminal 实验、editor/report artifact 和 SciForge Image/Evidence 展示。GUI 在这些验收中仍只提交自然语言/ref intent、Autonomy profile、确认/取消或展示 refs，不直接执行桌面操作；`gui.present` 只能证明用户可见展示，不能替代 executor、validator 或 action/evidence 证据。
+
+Desktop product acceptance 是同一边界的更强实例：入口必须是 SciForge Desktop Electron shell 的普通聊天 turn，执行链路必须经过 Codex/TUI Agent Host、Desktop native host、`BrowserHostSession` 或 `WindowActionSession`、platform sidecar / scoped adapter、permission refs、hard-confirm refs、current-run evidence bundle 和 artifact/verifier refs。Web/Vite、terminal probe、slash/debug route、package diagnostic、legacy isolated desktop/noVNC/Docker/RDP/M6 evidence 和 shape-only validator 可以进入诊断矩阵，但不能升级为产品完成。GUI 在这里仍是 presentation/control surface：显示 native surface、permission、confirmation、stop/cancel、actor cursor、Image/Evidence 和 `gui.present` 投影；它不持有 executor lease，不扩大 authorization，也不决定 completion truth。
 
 Generated-task 的 `completionCandidate`、ArtifactDelivery 和普通 artifact/workEvidence refs 只是可恢复或可展示证据，不能提升为 Agent Host 的 `completionTruth`。用户级 workflow completion 必须由 runtime owner 产出同一 current-run 的 verifier manifest/evidence refs，并通过 package-owned validator 或受控 truth adapter；未验证候选产物只能投影为 repair-needed/unverified。
 
@@ -223,6 +225,8 @@ Computer Use 的生产形态应吸收 Codex bundled Computer Use 的七条产品
 第六，真实平台能力必须进入 Desktop / platform Window Action adapter，而不是塞进 GUI 或 downstream runtime adapter。macOS Accessibility、Windows UI Automation、native window capture、WebContents/WebView binding、focused-window detection、click/type/scroll/hotkey 和 permission/preflight 都属于 Host/backend adapter 能力。Host 只暴露 typed MCP/native tool/host-port calls，返回 window/action refs、capture refs、accessibility/state refs、input accepted refs、automation barrier refs、executor event refs、risk refs 和 permission/preflight refs；它禁止 planning、capability ranking、跨模块调用、GUI renderer dependency、用户级 completion 和直接写 artifact 成功结论。SciForge runtime 只能注入 workspace/session context 和 host process lifecycle，不能把平台实现升级成 public Computer Use policy。Docker、noVNC、RDP、DeskPad、BetterDisplay、Mirage 和 Sunshine/Moonlight 只描述 backend packaging、历史诊断证据、reference adapter 或 benchmark，不再作为当前 active gate、产品验收 owner 或第二交互真相源。
 
 第七，产品化 smoke 必须从 package diagnostic 前进到 Desktop native / real window path。默认 release gate 仍不运行长耗时 live tests，但 active backlog 至少要覆盖：Codex app-server/native plugin 调用 SciForge Computer Use、WindowActionSession active gate、adapter readiness、BrowserRuntime DOM/AX observation refs 作为只读 hint、research workflow user-acceptance manifest、高风险 confirmation stop、blocked recovery 和 Image/Evidence 可见证据。package-owned target-bound harness 只能证明 contract 和 diagnostic；Docker/noVNC/RDP/M6 multi-screen run 只能作为 legacy diagnostic、historical evidence、backend packaging 或 sidecar/ref historical regression 复验，不能替代 native app-server/native plugin + app/window/session adapter contract + current bundle evidence，也不能阻塞当前路线。
+
+Strict smoke 的产品含义也必须按 owner 读：Desktop hard-confirm 和 Desktop native Browser live acceptance 可以证明对应 Desktop product surface；chat live preflight、package bridge、embedded isolated L3 completion producer 和 complex matrix report 只能证明 readiness、迁移兼容或诊断覆盖，除非其 evidence 明确来自 Desktop Electron native host、当前 `BrowserHostSession` / `WindowActionSession`、permission refs、executor lease、artifact/verifier refs 和 bounded replay bundle。
 
 Computer Use 的 L0/L1/L2 边界必须比一般 action provider 更严格。L2 是 `Codex Agent Host Turn Loop`；生产形态由 Codex app-server 承载，Codex CLI/native plugin host 只作为 expert/debug/smoke/diagnostic host。L2 负责任务规划、跨模块 pipeline、approval、repair 和用户级 completion；Computer Use package 不能成为第二个任务大脑。L1 只能是 Computer Use / Window Action 资源适配层，管理 target app/window/session、actor cursor、input intent、executor lease、evidence 和 replay refs，以及 backend/provider lifecycle；它不做跨模块 planning、capability ranking、prompt route 或 completion 判断。L0 是单动作 handler，例如 capture、crop、ground、execute、verify、writeTrace、emitEvent。多鼠标在产品语义上先是 actor cursor / intent / overlay；真实 OS multi-pointer 或 multi-seat 只是未来可替换 executor backend，不进入 planner、GUI 或 schema 的核心假设。历史 AgentServer、runtime gateway、`codex exec --json` 和 `/computer-use` debug/expert/smoke/diagnostic route 只能作为 legacy/test-only/diagnostic adapter；新增生产路径应收敛到默认聊天 turn -> Codex app-server + native tool/plugin/MCP。
 

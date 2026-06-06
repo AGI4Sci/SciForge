@@ -8,7 +8,6 @@ import type { FeedbackCommentRecord, PeerInstance, RuntimeCodexBrowserAcceptance
 const feedbackInboxSource = readFileSync(new URL('./FeedbackInboxPage.tsx', import.meta.url), 'utf8');
 const feedbackActionConfirmationSource = readFileSync(new URL('./FeedbackActionConfirmation.tsx', import.meta.url), 'utf8');
 const feedbackInboxToolbarSource = readFileSync(new URL('./FeedbackInboxToolbar.tsx', import.meta.url), 'utf8');
-const feedbackInboxDiagnosticsSource = readFileSync(new URL('./FeedbackInboxDiagnostics.tsx', import.meta.url), 'utf8');
 const feedbackEvidenceReviewSource = readFileSync(new URL('./FeedbackEvidenceReview.tsx', import.meta.url), 'utf8');
 const projectSource = readFileSync(new URL('../../../../../PROJECT.md', import.meta.url), 'utf8');
 const feedbackInboxCss = readFileSync(new URL('../../styles/app-feedback.css', import.meta.url), 'utf8');
@@ -249,7 +248,6 @@ test('feedback inbox defaults repair to system Terminal with optional Web Viewer
   assert.match(feedbackInboxSource, /providerReady=\{repairReadiness\.providerReady === true\}/);
   assert.match(feedbackInboxSource, /providerBlocker=\{repairReadiness\.providerBlocker\}/);
   assert.match(feedbackInboxSource, /gitMode=\{gitOperationMode\}/);
-  assert.match(feedbackInboxDiagnosticsSource, /Provider 设置/);
   assert.doesNotMatch(feedbackInboxSource, /repairReadiness\.providerReady !== true/);
   assert.match(feedbackInboxSource, /onRepairRunWritten=\{onRepairRunWritten\}/);
   assert.doesNotMatch(feedbackInboxSource, /高级 repair 交接与 audit/);
@@ -386,41 +384,18 @@ test('feedback inbox keeps visible selection scope hints and GitHub sync trace v
   assert.match(feedbackInboxSource, /evidence <code>\{githubTrace\.publicEvidenceRef\}<\/code>/);
 });
 
-test('feedback inbox surfaces page state diagnostics for incomplete states', () => {
-  assert.match(feedbackInboxSource, /function feedbackPageStateNotices/);
-  assert.match(feedbackInboxSource, /<FeedbackInboxDiagnostics/);
-  assert.match(feedbackInboxDiagnosticsSource, /aria-label="页面状态诊断"/);
-  assert.match(feedbackInboxSource, /const \[diagnosticProbeKey, setDiagnosticProbeKey\] = useState\(0\)/);
-  assert.match(feedbackInboxSource, /function refreshPageDiagnostics\(\) \{[\s\S]*?setDiagnosticProbeKey\(\(key\) => key \+ 1\);[\s\S]*?\}/);
-  assert.match(feedbackInboxSource, /onRefreshPageDiagnostics=\{refreshPageDiagnostics\}/);
-  assert.match(feedbackInboxDiagnosticsSource, /aria-label="重新检查页面状态诊断"/);
-  assert.match(feedbackInboxDiagnosticsSource, /<RefreshCcw size=\{14\} aria-hidden \/>/);
-  assert.match(feedbackInboxSource, /workspace writer/);
-  assert.match(feedbackInboxSource, /workspaceLoading = false/);
-  assert.match(feedbackInboxSource, /workspaceLoadingDetail/);
-  assert.match(feedbackInboxSource, /workspace data/);
-  assert.match(feedbackInboxSource, /value: input\.workspaceLoading \? '加载中' : 'loaded'/);
-  assert.match(feedbackInboxSource, /正在加载 config\.local\.json 和 \.sciforge\/workspace-state\.json/);
-  assert.match(sciForgeAppSource, /MIN_WORKSPACE_LOADING_VISIBLE_MS = 600/);
-  assert.match(sciForgeAppSource, /const \[workspaceLoadingVisible, setWorkspaceLoadingVisible\] = useState\(true\)/);
-  assert.match(sciForgeAppSource, /const workspaceLoadingActive = !configFileHydrated \|\| !workspaceHydrated/);
-  assert.match(sciForgeAppSource, /setTimeout\(\(\) => setWorkspaceLoadingVisible\(false\), MIN_WORKSPACE_LOADING_VISIBLE_MS\)/);
-  assert.match(sciForgeAppSource, /workspaceLoading=\{workspaceLoadingVisible\}/);
-  assert.match(sciForgeAppSource, /正在恢复 \.sciforge\/workspace-state\.json/);
-  assert.match(sciForgeAppSource, /正在完成 workspace 状态刷新；反馈计数、筛选和操作范围已经恢复，将在片刻后切换为 loaded。/);
-  assert.match(feedbackInboxSource, /provider\/env/);
-  assert.match(feedbackInboxSource, /repair peer sync/);
-  assert.match(feedbackInboxSource, /GitHub token/);
-  assert.match(feedbackInboxSource, /user confirmation/);
-  assert.match(feedbackInboxSource, /GitHub submit\/sync require in-app confirmation; repair guidance is sent only from human terminal input/);
-  assert.match(feedbackInboxSource, /screenshot evidence/);
-  assert.match(feedbackInboxSource, /missing PAT for \$\{input\.effectiveGithubRepo \|\| 'configured repo'\}; submit\/sync opens settings and keeps local state/);
-  assert.match(feedbackInboxSource, /missing and \$\{partialEvidenceCount\} partial active feedback item\(s\); affected cards show fallback refs and diagnostics/);
-  assert.match(feedbackInboxCss, /\.feedback-page-state-grid\s*\{[\s\S]*?grid-template-columns: repeat\(7, minmax\(0, 1fr\)\);/);
-  assert.match(feedbackInboxCss, /\.feedback-page-state-actions\s*\{[\s\S]*?flex-wrap: wrap;[\s\S]*?min-width: 0;/);
-  assert.match(feedbackInboxCss, /\.feedback-page-state-refresh\s*\{[\s\S]*?padding: 5px 8px;/);
-  assert.match(feedbackInboxCss, /@media \(max-width: 560px\)\s*\{[\s\S]*?\.feedback-page-state-grid\s*\{[\s\S]*?grid-template-columns: 1fr;/);
-  assert.match(feedbackInboxCss, /@media \(max-width: 560px\)\s*\{[\s\S]*?\.feedback-page-state-actions\s*\{[\s\S]*?justify-content: flex-start;/);
+test('feedback inbox keeps hero stats concise without diagnostics panel', () => {
+  assert.doesNotMatch(feedbackInboxSource, /<FeedbackInboxDiagnostics/);
+  assert.doesNotMatch(feedbackInboxSource, /feedback-repair-readiness/);
+  assert.match(feedbackInboxSource, /className="feedback-stats"/);
+  assert.match(feedbackInboxSource, /<strong>\{activeComments\.length\}<\/strong> active/);
+  assert.match(feedbackInboxSource, /item\.status === 'open'/);
+  assert.match(feedbackInboxSource, /<strong>\{githubSyncedOpenIssues\.length\}<\/strong> GitHub open/);
+  assert.match(feedbackInboxSource, /<strong>\{statusCounts\.blocked \?\? 0\}<\/strong> blocked/);
+  assert.doesNotMatch(feedbackInboxSource, /statusCounts\.comment/);
+  assert.doesNotMatch(feedbackInboxSource, /statusCounts\.request/);
+  assert.doesNotMatch(feedbackInboxSource, /\{requests\.length\}/);
+  assert.doesNotMatch(feedbackInboxSource, /statusCounts\.deleted/);
 });
 
 test('feedback screenshot preview explains missing images instead of disappearing', () => {

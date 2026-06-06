@@ -5,12 +5,44 @@ import { allowedActionTypes, requiredPipeline, requiredTraceMetadata } from './c
 import type { ComputerUseLongTaskPool, PreparedComputerUseLongRun } from './contracts.js';
 import { escapeRegExp, renderPreparedRunChecklist, sanitizeRunId } from './support.js';
 
+const releaseReadinessEvidenceByScenarioId: Record<string, string[]> = {
+  'CU-LONG-001': ['browser research report artifact refs'],
+  'CU-LONG-002': ['cross-app document source reader -> editor -> file preview evidence'],
+  'CU-LONG-003': ['viewport recovery scroll and viewport state refs'],
+  'CU-LONG-004': ['form hard-confirm refs for Cancel/Confirm scoped confirmation'],
+  'CU-LONG-005': ['file manager evidence refs'],
+  'CU-LONG-006': ['terminal/notebook workflow refs and artifact validation'],
+  'CU-LONG-007': ['visual disambiguation crop/OCR/vision translator refs and blocked ambiguous target evidence'],
+  'CU-LONG-008': ['repair fresh re-observation refs'],
+  'CU-LONG-009': ['high-risk confirmation Cancel/Confirm current action/type/turn evidence'],
+  'CU-LONG-010': ['CSV/table validator refs'],
+};
+
+const releaseReadinessCoverage = [
+  { label: 'browser report refs', pattern: /browser research report|browser report|research report artifact/i },
+  { label: 'form hard-confirm refs', pattern: /form hard-confirm|hard-confirm.*form|确认.*表单|表单.*确认/i },
+  { label: 'CSV/table validator refs', pattern: /CSV\/table validator refs|CSV|table validator|表格.*validator/i },
+  { label: 'file manager evidence', pattern: /file manager evidence|file manager screenshots|文件管理器.*evidence/i },
+  { label: 'terminal/notebook workflow', pattern: /terminal\/notebook|terminal workflow|notebook workflow|终端|notebook/i },
+  { label: 'cross-app document evidence', pattern: /cross-app document|source reader.*editor.*file preview|源.*编辑.*文件预览/i },
+  { label: 'visual disambiguation evidence', pattern: /visual disambiguation|crop\/OCR\/vision translator|OCR|语义歧义/i },
+  { label: 'viewport recovery evidence', pattern: /viewport recovery|viewport state refs|滚动恢复|viewport/i },
+  { label: 'repair fresh re-observation', pattern: /fresh re-observation|repair fresh re-observation|重新观察|re-observation/i },
+  { label: 'high-risk confirmation evidence', pattern: /high-risk confirmation|Cancel.*Confirm|Confirm.*Cancel|当前 action\/type\/turn|高风险.*确认/i },
+];
+
 export function validateComputerUseLongTaskPool(pool: ComputerUseLongTaskPool): string[] {
   const issues: string[] = [];
   if (pool.schemaVersion !== '1.0') issues.push('schemaVersion must be "1.0"');
   if (pool.taskId !== 'T084') issues.push('taskId must be T084');
   if (!Array.isArray(pool.scenarios) || pool.scenarios.length !== 10) {
     issues.push('T084 Computer Use task pool must define exactly 10 CU-LONG scenarios');
+  }
+  const releaseReadinessHaystack = taskPoolReleaseReadinessHaystack(pool);
+  for (const coverage of releaseReadinessCoverage) {
+    if (!coverage.pattern.test(releaseReadinessHaystack)) {
+      issues.push(`T084 Computer Use task pool must cover ${coverage.label} for release readiness`);
+    }
   }
 
   const scenarioIds = new Set<string>();
@@ -66,7 +98,37 @@ function hasUndefinedGuiSubtaskPlaceholder(prompt: string) {
 }
 
 export async function loadComputerUseLongTaskPool(path = resolve('tests', 'computer-use-long', 'task-pool.json')) {
-  return JSON.parse(await readFile(path, 'utf8')) as ComputerUseLongTaskPool;
+  return withReleaseReadinessEvidence(JSON.parse(await readFile(path, 'utf8')) as ComputerUseLongTaskPool);
+}
+
+function withReleaseReadinessEvidence(pool: ComputerUseLongTaskPool): ComputerUseLongTaskPool {
+  return {
+    ...pool,
+    scenarios: (pool.scenarios ?? []).map((scenario) => ({
+      ...scenario,
+      requiredPipeline,
+      requiredEvidence: dedupeStrings([
+        ...scenario.requiredEvidence,
+        ...(releaseReadinessEvidenceByScenarioId[scenario.id] ?? []),
+      ]),
+    })),
+  };
+}
+
+function taskPoolReleaseReadinessHaystack(pool: ComputerUseLongTaskPool) {
+  return (pool.scenarios ?? []).map((scenario) => [
+    scenario.id,
+    scenario.title,
+    scenario.goal,
+    ...scenario.acceptance,
+    ...scenario.requiredEvidence,
+    ...scenario.failureRecord,
+    ...scenario.rounds.flatMap((round) => [round.prompt, ...round.expectedTrace]),
+  ].join(' ')).join('\n');
+}
+
+function dedupeStrings(values: string[]) {
+  return Array.from(new Set(values.filter((value) => value.trim())));
 }
 
 export async function prepareComputerUseLongRun(options: {
@@ -142,7 +204,7 @@ export async function prepareComputerUseLongRun(options: {
     notes: [
       'This run must validate generic Computer Use behavior only.',
       'Do not add app-specific patches, DOM reads, accessibility reads, repository scans, or synthetic success artifacts.',
-      'If any WindowTarget, RuntimeCodexPlanner, Grounder, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real window screenshot refs.',
+      'If any WindowTarget, RuntimeCodexPlanner, GroundingTranslator, GuiExecutor, or Verifier dependency is missing, record failed-with-reason with real window screenshot refs.',
     ].join(' '),
   };
   await mkdir(evidenceDir, { recursive: true });

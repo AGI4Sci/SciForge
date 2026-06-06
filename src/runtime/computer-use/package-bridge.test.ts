@@ -8,13 +8,13 @@ import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from '../c
 import type { NormalizedAgentEvent } from '../codex/codex-event-normalizer.js';
 import type { WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { SCIFORGE_SIMULATED_REMOTE_DESKTOP_PROVIDER } from './independent-input-adapter.js';
-import { runComputerUsePackageBridge } from './package-bridge.js';
 import {
-  defaultL3ProducerArgs,
-  defaultL3ProducerBackend,
-  defaultL3ProducerDockerBuildArgs,
-  defaultL3ProducerDockerRunArgs,
-} from './package-bridge-l3.js';
+  materializePackageBridgeCompletionGradeEvidence,
+} from './package-bridge-evidence.js';
+import {
+  runComputerUsePackageBridge,
+  setComputerUsePackageBridgeProcessRunnerForTests,
+} from './package-bridge.js';
 import type { ComputerUseConfig } from './types.js';
 import {
   cuNext07DenseGroundingMarker,
@@ -61,25 +61,15 @@ async function writeWorkspaceRef(workspace: string, ref: string, text = 'final a
   await writeFile(path, text, 'utf8');
 }
 
-async function withFakeComputerUsePackage<T>(
-  workspace: string,
+async function withInjectedComputerUsePackageResult<T>(
   packageResult: Record<string, unknown>,
   run: () => Promise<T>,
 ): Promise<T> {
-  const fakePackagePath = join(workspace, 'fake-computer-use-package.js');
-  await writeFile(fakePackagePath, [
-    '#!/usr/bin/env node',
-    `console.log(${JSON.stringify(JSON.stringify({ type: 'finalResult', result: packageResult }))});`,
-    '',
-  ].join('\n'), 'utf8');
-  await chmod(fakePackagePath, 0o755);
-  const previous = process.env.SCIFORGE_COMPUTER_USE_PACKAGE_PYTHON;
-  process.env.SCIFORGE_COMPUTER_USE_PACKAGE_PYTHON = fakePackagePath;
+  setComputerUsePackageBridgeProcessRunnerForTests(async () => packageResult);
   try {
     return await run();
   } finally {
-    if (previous === undefined) delete process.env.SCIFORGE_COMPUTER_USE_PACKAGE_PYTHON;
-    else process.env.SCIFORGE_COMPUTER_USE_PACKAGE_PYTHON = previous;
+    setComputerUsePackageBridgeProcessRunnerForTests(undefined);
   }
 }
 
@@ -192,7 +182,10 @@ function completedPackageResult(runId: string, finalRef: string): Record<string,
         ok: true,
         done: true,
         reason: 'final artifact is visible',
-        metadata: { finalArtifactRefs: [finalRef] },
+        metadata: {
+          finalArtifactRefs: [finalRef],
+          evidenceRefs: [`.sciforge/vision-runs/${runId}/after.png`],
+        },
       },
     }],
   };
@@ -323,7 +316,7 @@ function stripEvidenceL3Prefix(value: unknown): unknown {
   return value;
 }
 
-test('package bridge calls Python run_task through stdio host ports and writes refs-first trace', async () => {
+test('package bridge calls TypeScript host-port loop and writes refs-first trace', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-bridge-'));
   const events: WorkspaceRuntimeEvent[] = [];
   try {
@@ -380,6 +373,38 @@ test('package bridge fails closed without legacy fallbackActions when no planner
     assert.doesNotMatch(traceText, /fallbackActions|computer-use-action-loop|runComputerUseActionLoop/);
     const trace = JSON.parse(traceText) as Record<string, unknown>;
     assert.equal((trace.packageResult as Record<string, unknown>).status, 'failed-with-reason');
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('package bridge blocks legacy direct grounder URLs on the product path', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-legacy-grounder-'));
+  try {
+    const config = baseConfig('cu-package-bridge-legacy-grounder-blocked', [
+      {
+        type: 'click',
+        targetDescription: 'visible private provider target',
+      },
+    ]);
+    config.grounder.baseUrl = 'https://private-provider.example/v1?token=secret';
+
+    const payload = await runComputerUsePackageBridge({
+      skillDomain: 'knowledge',
+      prompt: '/computer-use run click the visible private provider target through router grounding only',
+      workspacePath: workspace,
+      selectedToolIds: ['local.vision-sense'],
+      artifacts: [],
+    }, workspace, config, {});
+
+    assert.equal(payload.executionUnits[0]?.status, 'failed-with-reason');
+    assert.match(
+      String(payload.executionUnits[0]?.failureReason || payload.message),
+      /legacy direct grounding adapter is disabled/i,
+    );
+    const traceText = await readFile(join(workspace, '.sciforge/vision-runs/cu-package-bridge-legacy-grounder-blocked/vision-trace.json'), 'utf8');
+    assert.match(traceText, /model-router\.capability\.computer-use\.grounding-translator/);
+    assert.doesNotMatch(traceText, /https:\/\/private-provider\.example|token=secret|grounderUrl|healthUrl|legacy grounding adapter health preflight/i);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -573,9 +598,9 @@ test('package bridge keeps report artifact intent open until a visible final art
       actions: [{ type: 'type_text', text: '# Evidence summary\n- screenshot refs\n- action mapping\n- field/control evidence' }],
     }),
     JSON.stringify({
-      done: true,
-      reason: 'visible report artifact exists',
-      actions: [],
+      done: false,
+      reason: 'show the report artifact in the visible file manager',
+      actions: [{ type: 'open_app', appName: 'Finder' }],
     }),
   ]);
   try {
@@ -609,6 +634,10 @@ test('package bridge keeps report artifact intent open until a visible final art
     assert.equal(trace.finalArtifactRef, '.sciforge/vision-runs/cu-package-bridge-report-artifact/report.md');
     assert.equal(trace.packageResult.status, 'completed');
     assert.ok(JSON.stringify(trace.steps).includes('# Evidence summary'));
+    assert.equal(trace.packageResult.failureDiagnostics, undefined);
+    const packageSteps = trace.packageResult.steps as Array<Record<string, any>>;
+    assert.equal(packageSteps.at(-1)?.verification?.done, true);
+    assert.match(String(packageSteps.at(-1)?.verification?.reason ?? ''), /visible final artifact accepted by current-run verifier/);
     const guiPresent = JSON.parse(await readFile(join(runDir, 'gui-present.json'), 'utf8')) as Record<string, any>;
     assert.ok(guiPresent.payload.artifactRefs.includes('.sciforge/vision-runs/cu-package-bridge-report-artifact/report.md'));
   } finally {
@@ -640,16 +669,14 @@ test('package bridge promotes current-run package final artifact refs into trace
           done: true,
           reason: 'report is visible and saved',
           metadata: {
-            semanticVerifier: {
-              finalArtifactRefs: [finalRef],
-              evidenceRefs: [`.sciforge/vision-runs/${runId}/step-001-after.png`],
-            },
+            finalArtifactRefs: [finalRef],
+            evidenceRefs: [`.sciforge/vision-runs/${runId}/step-001-after.png`],
           },
         },
       }],
     };
 
-    const payload = await withFakeComputerUsePackage(workspace, packageResult, () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(packageResult, () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run create a visible markdown report artifact',
       workspacePath: workspace,
@@ -760,7 +787,7 @@ test('package bridge attaches current-run user acceptance manifest only when can
       }],
     };
 
-    const payload = await withFakeComputerUsePackage(workspace, packageResult, () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(packageResult, () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
       handoffSource: 'ui-chat',
@@ -789,6 +816,42 @@ test('package bridge attaches current-run user acceptance manifest only when can
     assert.equal(acceptance.scenarioId, 'CU-LONG-004');
     assert.equal(acceptance.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
     assert.equal(acceptance.finalArtifactRef, finalRef);
+    assert.equal(acceptance.productPathClassification.tier, 'package-diagnostic');
+    assert.equal(acceptance.productPathClassification.diagnosticOnly, true);
+    assert.equal(acceptance.productPathClassification.packageDiagnosticOnly, true);
+    assert.notEqual(acceptance.productPathClassification.tier, 'product-smoke');
+    assert.equal(acceptance.productPathClassification.nativePluginInvocationRef, undefined);
+    assert.equal(acceptance.virtualDisplayGroup.diagnosticOnly, true);
+    assert.equal(acceptance.virtualDisplayGroup.packageDiagnosticOnly, true);
+    assert.equal(acceptance.virtualDisplayGroup.screens.length, 1);
+    assert.equal(acceptance.virtualDisplayGroup.screens[0].screenId, `${runId}-diagnostic-screen`);
+    assert.equal(acceptance.virtualDisplayGroup.screens[0].windowId, `${runId}-diagnostic-window`);
+    assert.equal(acceptance.actorCursorProvenance.length, 1);
+    assert.equal(acceptance.actorCursorProvenance[0].diagnosticOnly, true);
+    assert.equal(acceptance.actorCursorProvenance[0].actorId, `${runId}-diagnostic-actor`);
+    assert.equal(acceptance.executorLease.screenId, `${runId}-diagnostic-screen`);
+    assert.equal(acceptance.executorLease.windowId, `${runId}-diagnostic-window`);
+    assert.equal(acceptance.executorLease.leaseScope.kind, 'window-local');
+    assert.equal(acceptance.executorLease.leaseScope.diagnosticOnly, true);
+    assert.equal(acceptance.executorLease.leaseScope.packageDiagnosticOnly, true);
+    assert.equal(acceptance.executorLeases.length, 1);
+    assert.equal(acceptance.executorLeases[0].diagnosticOnly, true);
+    assert.equal(acceptance.executorLeases[0].packageDiagnosticOnly, true);
+    assert.equal(acceptance.actionCausality.length, 1);
+    assert.equal(acceptance.actionCausality[0].diagnosticOnly, true);
+    assert.equal(acceptance.actionCausality[0].packageDiagnosticOnly, true);
+    assert.ok(acceptance.actionCausality[0].beforeEvidenceRefs.length > 0);
+    assert.ok(acceptance.actionCausality[0].beforeEvidenceRefs.every((ref: string) => ref.startsWith(`.sciforge/vision-runs/${runId}/`)));
+    assert.ok(acceptance.actionCausality[0].afterEvidenceRefs.includes(`.sciforge/vision-runs/${runId}/final-visible.png`));
+    assert.ok(acceptance.actionCausality[0].afterEvidenceRefs.every((ref: string) => ref.startsWith(`.sciforge/vision-runs/${runId}/`)));
+    assert.equal(acceptance.replayBundle.diagnosticOnly, true);
+    assert.equal(acceptance.replayBundle.packageDiagnosticOnly, true);
+    assert.equal(acceptance.replayBundle.frames.length, 1);
+    assert.ok(acceptance.guiPresent.displayedRefs.includes(`.sciforge/vision-runs/${runId}/final-visible.png`));
+    assert.equal(acceptance.evidenceLedger.diagnosticOnly, true);
+    assert.equal(acceptance.evidenceLedger.packageDiagnosticOnly, true);
+    assert.equal(acceptance.evidenceLedger.productSmokeEligible, false);
+    assert.ok(acceptance.evidenceLedger.evidenceIndexRefs.includes(`.sciforge/vision-runs/${runId}/directory-listing.json`));
     assert.ok(acceptance.tuiHostChain.some((link: Record<string, unknown>) => link.kind === 'sciForge-chat-origin' && link.status === 'present'));
     assert.ok(acceptance.focusCropRefs.length > 0);
     assert.ok(acceptance.groundingDiagnosticsRefs.length > 0);
@@ -839,6 +902,105 @@ test('package bridge attaches current-run user acceptance manifest only when can
   }
 });
 
+test('package bridge completion grade projects only diagnostic current-run product path refs', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-diagnostic-product-path-'));
+  try {
+    const runId = 'cu-package-bridge-diagnostic-product-path';
+    const runDir = join(workspace, `.sciforge/vision-runs/${runId}`);
+    await mkdir(runDir, { recursive: true });
+    const finalRef = `.sciforge/vision-runs/${runId}/dense-grounding-export.csv`;
+    const completionEvidence = {
+      ...isolatedL3CompletionEvidence(finalRef),
+      focusCropRefs: ['focus-crop.png'],
+      groundingDiagnosticsRefs: ['coarse-fine-rejected-targets.json'],
+      evidenceMarkers: [cuNext07DenseGroundingMarker()],
+    };
+    await materializeCuNextAcceptanceRefs(runDir, {
+      completionEvidence,
+      completionEvidenceRef: 'isolated-desktop-l3-workflow-evidence.json',
+      screenshotRefs: { before: ['before.png'], after: ['after.png'] },
+      focusCropRefs: ['focus-crop.png'],
+      groundingDiagnosticsRefs: ['coarse-fine-rejected-targets.json'],
+      finalArtifactRef: finalRef,
+      finalVisibleScreenshotRef: 'final-visible.png',
+      guiPresent: {
+        displayedRefs: [finalRef],
+        artifactRefs: [finalRef],
+        recordRef: 'gui-present.json',
+        payloadRef: 'tool-payload.json',
+      },
+      evidenceMarkers: [cuNext07DenseGroundingMarker()],
+    });
+
+    const attachment = await materializePackageBridgeCompletionGradeEvidence({
+      actionProviderRequest: {
+        task: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
+        metadata: {
+          chatOrigin: {
+            schemaVersion: 'sciforge.computer-use.chat-origin.v1',
+            handoffSource: 'ui-chat',
+            entrypoint: 'sciforge-chat',
+            terminalEquivalentText: true,
+          },
+          plannerAcceptanceContract: {
+            taskId: 'CU-NEXT-07',
+            scenarioId: 'CU-LONG-004',
+          },
+        },
+      },
+      config: baseConfig(runId, []),
+      packageResult: completedPackageResult(runId, finalRef),
+      payload: {
+        artifacts: [],
+        executionUnits: [{ id: 'unit-1', tool: 'local.vision-sense', status: 'done' }],
+        objectReferences: [],
+      } as any,
+      state: {
+        runId,
+        runDir,
+        screenshotLedger: [
+          { id: 'before', path: 'before.png' },
+          { id: 'after', path: 'after.png' },
+          { id: 'final-visible', path: 'final-visible.png' },
+        ],
+        visibleArtifacts: [{ artifactRef: finalRef }],
+      },
+      workspace,
+    });
+
+    assert.equal(attachment.status, 'attached');
+    const acceptance = JSON.parse(await readFile(join(runDir, 'cu-user-acceptance-manifest.json'), 'utf8')) as Record<string, any>;
+    assert.equal(acceptance.productPathClassification.tier, 'package-diagnostic');
+    assert.equal(acceptance.productPathClassification.diagnosticOnly, true);
+    assert.equal(acceptance.productPathClassification.packageDiagnosticOnly, true);
+    assert.equal(acceptance.productPathClassification.nativePluginInvocationRef, undefined);
+    assert.equal(acceptance.virtualDisplayGroup.diagnosticOnly, true);
+    assert.equal(acceptance.virtualDisplayGroup.packageDiagnosticOnly, true);
+    assert.equal(acceptance.virtualDisplayGroup.screens.length, 1);
+    assert.equal(acceptance.virtualDisplayGroup.screens[0].screenId, `${runId}-diagnostic-screen`);
+    assert.equal(acceptance.virtualDisplayGroup.screens[0].windowId, `${runId}-diagnostic-window`);
+    assert.equal(acceptance.actorCursorProvenance.length, 1);
+    assert.equal(acceptance.actorCursorProvenance[0].diagnosticOnly, true);
+    assert.equal(acceptance.executorLease.leaseScope.diagnosticOnly, true);
+    assert.equal(acceptance.executorLease.leaseScope.packageDiagnosticOnly, true);
+    assert.equal(acceptance.executorLeases.length, 1);
+    assert.equal(acceptance.executorLeases[0].diagnosticOnly, true);
+    assert.equal(acceptance.executorLeases[0].packageDiagnosticOnly, true);
+    assert.equal(acceptance.actionCausality.length, 1);
+    assert.equal(acceptance.actionCausality[0].diagnosticOnly, true);
+    assert.equal(acceptance.actionCausality[0].packageDiagnosticOnly, true);
+    assert.equal(acceptance.replayBundle.diagnosticOnly, true);
+    assert.equal(acceptance.replayBundle.packageDiagnosticOnly, true);
+    assert.ok(acceptance.guiPresent.displayedRefs.includes(`.sciforge/vision-runs/${runId}/final-visible.png`));
+    assert.equal(acceptance.evidenceLedger.diagnosticOnly, true);
+    assert.equal(acceptance.evidenceLedger.packageDiagnosticOnly, true);
+    assert.equal(acceptance.evidenceLedger.productSmokeEligible, false);
+    assert.ok(acceptance.evidenceLedger.evidenceIndexRefs.includes(`.sciforge/vision-runs/${runId}/directory-listing.json`));
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
 test('package bridge blocks completion-grade when canonical L3 evidence is present but not validator accepted', async () => {
   const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-completion-invalid-'));
   try {
@@ -865,7 +1027,7 @@ test('package bridge blocks completion-grade when canonical L3 evidence is prese
       },
     }, null, 2)}\n`, 'utf8');
 
-    const payload = await withFakeComputerUsePackage(workspace, completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
       handoffSource: 'ui-chat',
@@ -924,7 +1086,7 @@ test('package bridge L3 producer materializes validator-accepted canonical evide
     const finalRef = `.sciforge/vision-runs/${runId}/producer-report.md`;
     await writeWorkspaceRef(workspace, finalRef, 'producer report fixture\n');
 
-    const payload = await withFakeComputerUsePackage(workspace, completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
       handoffSource: 'ui-chat',
@@ -962,6 +1124,9 @@ test('package bridge L3 producer materializes validator-accepted canonical evide
     assert.equal(acceptance.status, 'multi-app-workflow-passed');
     assert.equal(acceptance.finalArtifactRef, finalRef);
     assert.equal(acceptance.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
+    assert.equal(acceptance.productPathClassification.tier, 'package-diagnostic');
+    assert.equal(acceptance.productPathClassification.packageDiagnosticOnly, true);
+    assert.notEqual(acceptance.productPathClassification.tier, 'product-smoke');
     assert.ok(acceptance.evidenceClaims.some((claim: Record<string, any>) => (
       claim.kind === 'sciForge-chat-origin'
       && claim.sessionRefs?.includes(`.sciforge/vision-runs/${runId}/computer-use-request.json`)
@@ -1001,7 +1166,7 @@ test('package bridge skips default L3 producer without env gate or request compl
       SCIFORGE_COMPUTER_USE_L3_PYTHON: fakeDefaultProducer,
       SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND: 'host',
       SCIFORGE_RUN_REAL_L3_WORKFLOW: undefined,
-    }, () => withFakeComputerUsePackage(workspace, completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
+    }, () => withInjectedComputerUsePackageResult(completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run completed task without explicit completion evidence policy',
       handoffSource: 'ui-chat',
@@ -1022,15 +1187,16 @@ test('package bridge skips default L3 producer without env gate or request compl
     const completionDiagnostic = JSON.parse(await readFile(join(runDir, 'completion-grade-diagnostics.json'), 'utf8')) as Record<string, any>;
     assert.equal(completionDiagnostic.status, 'blocked');
     assert.match(String(completionDiagnostic.reason), /fail-closed/);
+    await assert.rejects(() => stat(join(runDir, 'embedded-l3-completion-producer-diagnostics.json')), { code: 'ENOENT' });
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
 });
 
-test('package bridge request completion evidence policy opt-in enables default L3 producer', async () => {
-  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-l3-request-opt-in-'));
+test('package bridge request completion evidence policy materializes TS default L3 evidence and ignores legacy Python env gates', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'sciforge-cu-package-l3-python-retired-'));
   try {
-    const runId = 'cu-package-bridge-l3-request-opt-in';
+    const runId = 'cu-package-bridge-l3-python-retired';
     const runDir = join(workspace, `.sciforge/vision-runs/${runId}`);
     const finalRef = `.sciforge/vision-runs/${runId}/request-opt-in-report.md`;
     await writeWorkspaceRef(workspace, finalRef, 'request opt-in report fixture\n');
@@ -1039,10 +1205,10 @@ test('package bridge request completion evidence policy opt-in enables default L
     const payload = await withEnv({
       SCIFORGE_COMPUTER_USE_L3_PYTHON: fakeDefaultProducer,
       SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND: 'host',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW: undefined,
-    }, () => withFakeComputerUsePackage(workspace, completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
+      SCIFORGE_RUN_REAL_L3_WORKFLOW: '1',
+    }, () => withInjectedComputerUsePackageResult(completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
-      prompt: '/computer-use run completed task with explicit completion evidence policy',
+      prompt: '/computer-use run completed task with retired Python completion evidence policy',
       handoffSource: 'ui-chat',
       workspacePath: workspace,
       selectedToolIds: ['local.vision-sense'],
@@ -1064,15 +1230,29 @@ test('package bridge request completion evidence policy opt-in enables default L
 
     assert.equal(payload.executionUnits[0]?.status, 'done');
     const sourceEvidence = JSON.parse(await readFile(join(runDir, 'evidence/l3/isolated-desktop-l3-workflow-evidence.json'), 'utf8')) as Record<string, any>;
+    assert.equal(sourceEvidence.producerRuntime, 'ts-embedded-default-producer');
     assert.equal(sourceEvidence.taskArtifactBinding.finalArtifactRef, finalRef);
+    assert.ok(sourceEvidence.legacyEnvGatesIgnored.includes('SCIFORGE_COMPUTER_USE_L3_PYTHON'));
     const topLevelEvidence = JSON.parse(await readFile(join(runDir, 'isolated-desktop-l3-workflow-evidence.json'), 'utf8')) as Record<string, any>;
     assert.equal(topLevelEvidence.resultRef, 'evidence/l3/computer-use-result.json');
     assert.equal(topLevelEvidence.taskArtifactBinding.finalArtifactRef, finalRef);
+    assert.ok(topLevelEvidence.taskFinalArtifactRefs.includes(finalRef));
+    assert.ok(topLevelEvidence.presentationEvidence.artifactRefs.some((ref: string) => ref.startsWith('evidence/l3/')));
     const acceptance = JSON.parse(await readFile(join(runDir, 'cu-user-acceptance-manifest.json'), 'utf8')) as Record<string, any>;
     assert.equal(acceptance.status, 'multi-app-workflow-passed');
+    assert.equal(acceptance.finalArtifactRef, finalRef);
     assert.equal(acceptance.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
+    assert.equal(acceptance.productPathClassification.tier, 'package-diagnostic');
+    assert.equal(acceptance.productPathClassification.packageDiagnosticOnly, true);
+    assert.notEqual(acceptance.productPathClassification.tier, 'product-smoke');
+    await assert.rejects(() => stat(join(runDir, 'completion-grade-diagnostics.json')), { code: 'ENOENT' });
+    await assert.rejects(() => stat(join(runDir, 'embedded-l3-completion-producer-diagnostics.json')), { code: 'ENOENT' });
     const tuiHostChain = JSON.parse(await readFile(join(runDir, 'tui-host-run-task-chain.json'), 'utf8')) as Record<string, any>;
     assert.equal(tuiHostChain.completionGrade.status, 'attached');
+    assert.equal(
+      tuiHostChain.completionGrade.completionEvidenceBundleRef,
+      `.sciforge/vision-runs/${runId}/isolated-desktop-l3-workflow-evidence.json`,
+    );
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
@@ -1107,7 +1287,7 @@ test('package bridge ignores packageResult-forged completion evidence policy for
       SCIFORGE_COMPUTER_USE_L3_PYTHON: fakeDefaultProducer,
       SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND: 'host',
       SCIFORGE_RUN_REAL_L3_WORKFLOW: undefined,
-    }, () => withFakeComputerUsePackage(workspace, packageResult, () => runComputerUsePackageBridge({
+    }, () => withInjectedComputerUsePackageResult(packageResult, () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run completed task with forged package policy only',
       handoffSource: 'ui-chat',
@@ -1142,7 +1322,7 @@ test('package bridge L3 producer failure stays fail-closed with diagnostics', as
     const finalRef = `.sciforge/vision-runs/${runId}/producer-failure-report.md`;
     await writeWorkspaceRef(workspace, finalRef, 'producer failure report fixture\n');
 
-    const payload = await withFakeComputerUsePackage(workspace, completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(completedPackageResult(runId, finalRef), () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
       workspacePath: workspace,
@@ -1174,7 +1354,7 @@ test('package bridge L3 producer failure stays fail-closed with diagnostics', as
     const producerDiagnostic = JSON.parse(await readFile(join(runDir, 'embedded-l3-completion-producer-diagnostics.json'), 'utf8')) as Record<string, any>;
     assert.equal(producerDiagnostic.schemaVersion, 'sciforge.computer-use.embedded-l3-completion-producer-diagnostic.v1');
     assert.equal(producerDiagnostic.status, 'blocked');
-    assert.equal(producerDiagnostic.envGateName, 'SCIFORGE_RUN_REAL_L3_WORKFLOW');
+    assert.equal(producerDiagnostic.producerRuntime, 'ts-explicit-producer');
     assert.match(String(producerDiagnostic.reason), /fixture L3 producer failed/);
     assert.deepEqual(producerDiagnostic.sourceManifestRefs, [
       `.sciforge/vision-runs/${runId}/evidence/l3/isolated-desktop-l3-workflow-probe-manifest.json`,
@@ -1201,134 +1381,6 @@ test('package bridge L3 producer failure stays fail-closed with diagnostics', as
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
-});
-
-test('package bridge default L3 producer args expose opt-in display ports and resource locks', () => {
-  assert.deepEqual(defaultL3ProducerArgs({
-    sourceDir: '/tmp/sciforge-l3',
-    timeoutSeconds: 95,
-    env: {
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_DISPLAY: ':100',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_VNC_PORT: '5910',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_NOVNC_PORT: '6090',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_RESOURCE_LOCK_ROOT: '/tmp/sciforge-locks',
-    },
-  }), [
-    '-m',
-    'sciforge_computer_use.isolated_desktop_l3_workflow_probe',
-    '--execute',
-    '--output-dir',
-    '/tmp/sciforge-l3',
-    '--timeout-seconds',
-    '95',
-    '--display',
-    ':100',
-    '--vnc-port',
-    '5910',
-    '--novnc-port',
-    '6090',
-    '--resource-lock-root',
-    '/tmp/sciforge-locks',
-  ]);
-});
-
-test('package bridge default L3 producer backend uses Docker off Linux unless explicitly forced', () => {
-  assert.equal(defaultL3ProducerBackend({}, 'darwin'), 'docker');
-  assert.equal(defaultL3ProducerBackend({}, 'linux'), 'host');
-  assert.equal(defaultL3ProducerBackend({ SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND: 'host' }, 'darwin'), 'host');
-  assert.equal(defaultL3ProducerBackend({ SCIFORGE_RUN_REAL_L3_WORKFLOW_BACKEND: 'docker' }, 'linux'), 'docker');
-});
-
-test('package bridge default L3 Docker producer args mount current run evidence dir', () => {
-  assert.deepEqual(defaultL3ProducerDockerBuildArgs({
-    env: {
-      SCIFORGE_DOCKER_BASE_IMAGE: 'python:3.12-bookworm',
-      SCIFORGE_DOCKER_DEBIAN_APT_MIRROR: 'https://mirror.invalid/debian',
-      SCIFORGE_DOCKER_DEBIAN_SECURITY_APT_MIRROR: 'https://mirror.invalid/security',
-      SCIFORGE_DOCKER_APT_ACQUIRE_RETRIES: '5',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_DOCKER_IMAGE: 'sciforge-cu-l3:test',
-    },
-  }), [
-    'build',
-    '--build-arg',
-    'PYTHON_BASE_IMAGE=python:3.12-bookworm',
-    '--build-arg',
-    'DEBIAN_APT_MIRROR=https://mirror.invalid/debian',
-    '--build-arg',
-    'DEBIAN_SECURITY_APT_MIRROR=https://mirror.invalid/security',
-    '--build-arg',
-    'APT_ACQUIRE_RETRIES=5',
-    '-f',
-    'sciforge_computer_use/isolated_desktop_backend.Dockerfile',
-    '-t',
-    'sciforge-cu-l3:test',
-    '.',
-  ]);
-  assert.deepEqual(defaultL3ProducerDockerRunArgs({
-    sourceDir: '/tmp/sciforge-l3-current-run',
-    timeoutSeconds: 95,
-    env: {
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_DOCKER_IMAGE: 'sciforge-cu-l3:test',
-    },
-  }), [
-    'run',
-    '--rm',
-    '--shm-size',
-    '1g',
-    '-v',
-    '/tmp/sciforge-l3-current-run:/evidence/l3',
-    '--entrypoint',
-    'python',
-    'sciforge-cu-l3:test',
-    '-m',
-    'sciforge_computer_use.isolated_desktop_l3_workflow_probe',
-    '--execute',
-    '--output-dir',
-    '/evidence/l3',
-    '--timeout-seconds',
-    '95',
-    '--resource-lock-root',
-    '/tmp/sciforge-computer-use-l3-locks',
-  ]);
-  const runArgs = defaultL3ProducerDockerRunArgs({
-    sourceDir: '/tmp/sciforge-l3-current-run',
-    timeoutSeconds: 95,
-    env: {
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_DOCKER_IMAGE: 'sciforge-cu-l3:test',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_DISPLAY: ':121',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_VNC_PORT: '5921',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_NOVNC_PORT: '6121',
-      SCIFORGE_RUN_REAL_L3_WORKFLOW_RESOURCE_LOCK_ROOT: '/tmp/sciforge-l3-locks',
-    },
-  });
-  assert.deepEqual(runArgs, [
-    'run',
-    '--rm',
-    '--shm-size',
-    '1g',
-    '-p',
-    '127.0.0.1:6121:6121',
-    '-v',
-    '/tmp/sciforge-l3-current-run:/evidence/l3',
-    '--entrypoint',
-    'python',
-    'sciforge-cu-l3:test',
-    '-m',
-    'sciforge_computer_use.isolated_desktop_l3_workflow_probe',
-    '--execute',
-    '--output-dir',
-    '/evidence/l3',
-    '--timeout-seconds',
-    '95',
-    '--display',
-    ':121',
-    '--vnc-port',
-    '5921',
-    '--novnc-port',
-    '6121',
-    '--resource-lock-root',
-    '/tmp/sciforge-l3-locks',
-  ]);
 });
 
 test('package bridge blocks completion-grade when canonical L3 evidence is not bound to current final artifact', async () => {
@@ -1379,7 +1431,7 @@ test('package bridge blocks completion-grade when canonical L3 evidence is not b
       }],
     };
 
-    const payload = await withFakeComputerUsePackage(workspace, packageResult, () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(packageResult, () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run CU-NEXT-07 dense grounding visible artifact',
       handoffSource: 'ui-chat',
@@ -1433,7 +1485,9 @@ test('package bridge rejects control old outside and pseudo final artifact refs 
   try {
     const runId = 'cu-package-bridge-filter-final-ref';
     const validRef = `.sciforge/vision-runs/${runId}/briefing-deck.pptx`;
+    const nestedBogusRef = `.sciforge/vision-runs/${runId}/nested-but-not-explicit.md`;
     await writeWorkspaceRef(workspace, validRef, 'briefing deck fixture\n');
+    await writeWorkspaceRef(workspace, nestedBogusRef, 'nested ref should not promote\n');
     const rejectedRefs = [
       `.sciforge/vision-runs/${runId}/vision-trace.json`,
       `.sciforge/vision-runs/${runId}/tool-payload.json`,
@@ -1449,22 +1503,29 @@ test('package bridge rejects control old outside and pseudo final artifact refs 
       reason: 'package returned mixed final refs',
       finalArtifactRef: rejectedRefs[0],
       finalArtifactRefs: [...rejectedRefs, validRef],
+      finalObservationRef: `.sciforge/vision-runs/${runId}/after.png`,
       metrics: { actionCount: 1, stepCount: 1, observationCount: 1 },
       steps: [{
         status: 'done',
+        beforeRef: `.sciforge/vision-runs/${runId}/before.png`,
+        afterRef: `.sciforge/vision-runs/${runId}/after.png`,
         action: { kind: 'click', target: { description: 'save deck button' } },
         verification: {
           ok: true,
           done: true,
           reason: 'mixed verifier refs',
           metadata: {
-            finalArtifactRefs: rejectedRefs,
+            finalArtifactRefs: [...rejectedRefs, validRef],
+            evidenceRefs: [`.sciforge/vision-runs/${runId}/after.png`],
+            semanticVerifier: {
+              finalArtifactRefs: [nestedBogusRef],
+            },
           },
         },
       }],
     };
 
-    const payload = await withFakeComputerUsePackage(workspace, packageResult, () => runComputerUsePackageBridge({
+    const payload = await withInjectedComputerUsePackageResult(packageResult, () => runComputerUsePackageBridge({
       skillDomain: 'knowledge',
       prompt: '/computer-use run create a visible briefing deck artifact',
       workspacePath: workspace,
@@ -1482,6 +1543,8 @@ test('package bridge rejects control old outside and pseudo final artifact refs 
       assert.ok(!trace.artifactRefs.includes(ref), `rejected ref was promoted: ${ref}`);
       assert.ok(!trace.finalArtifactRefs.includes(ref), `rejected final ref was promoted: ${ref}`);
     }
+    assert.ok(!trace.artifactRefs.includes(nestedBogusRef), `nested final ref was promoted: ${nestedBogusRef}`);
+    assert.ok(!trace.finalArtifactRefs.includes(nestedBogusRef), `nested final ref was promoted: ${nestedBogusRef}`);
 
     const directoryListing = JSON.parse(await readFile(join(runDir, 'directory-listing.json'), 'utf8')) as Record<string, any>;
     assert.deepEqual(directoryListing.finalArtifactRefs, [validRef]);
@@ -1523,6 +1586,14 @@ test('package bridge defaults to Runtime Codex text planner when no test fixture
           expectedTrace: ['Runtime Codex planner command receives acceptance contract'],
           acceptance: ['one generic action then done'],
           requiredEvidence: ['vision-trace.json'],
+          acceptanceProgress: {
+            schemaVersion: 'sciforge.computer-use-long.acceptance-progress.v1',
+            round: 1,
+            roundCount: 1,
+            remainingRounds: 0,
+            suggestedCurrentRoundActionTarget: 1,
+            suggestedCurrentRoundNonWaitActionTarget: 1,
+          },
         },
       },
       artifacts: [],

@@ -3,6 +3,7 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { RuntimeGuiPanel } from './RuntimeGuiPanel';
+import { isTerminalEquivalentRuntimeCommand, runtimeGuiChoicesFromEventPayload } from './runtimeGuiCommands';
 
 test('runtime gui hard-confirm renders required public fields and controls without raw commands', () => {
   const html = renderToStaticMarkup(createElement(RuntimeGuiPanel, {
@@ -115,6 +116,30 @@ test('runtime gui confirmation renders safe refs as focus buttons without comman
   assert.match(html, />Confirm<\/span>/);
   assert.match(html, />Cancel<\/span>/);
   assert.doesNotMatch(html, /\.sciforge|stdout|deleteFile|Unsafe legacy|approval-1|\/computer-use approve|\/computer-use reject|Computer Use|Approve/);
+});
+
+test('runtime gui choices keep Computer Use controls but reject executable native actions', () => {
+  const choices = runtimeGuiChoicesFromEventPayload({
+    guiAskUser: {
+      choices: [
+        { label: 'Click', commandText: '/computer-use click --x 20 --y 40 --target-ref computer-use:target/private.json' },
+        { label: 'Type', commandText: '/computer-use type --text "secret"' },
+        { label: 'Browser click', commandText: '/browser click --selector "#submit"' },
+        { label: 'Stop', commandText: '/computer-use stop --stop-ref computer-use:stop/current.json' },
+        { label: 'Takeover', commandText: '/computer-use takeover --takeover-ref computer-use:leases/takeover.json' },
+        { label: 'Cancel', commandText: '/computer-use reject --approval-ref approval-1' },
+      ],
+    },
+  });
+
+  assert.equal(isTerminalEquivalentRuntimeCommand('/computer-use click --x 20 --y 40'), false);
+  assert.equal(isTerminalEquivalentRuntimeCommand('/browser click --selector "#submit"'), false);
+  assert.deepEqual(choices.map((choice) => choice.label), ['Stop', 'Takeover', 'Cancel']);
+  assert.deepEqual(choices.map((choice) => choice.commandText), [
+    '/computer-use stop --stop-ref computer-use:stop/current.json',
+    '/computer-use takeover --takeover-ref computer-use:leases/takeover.json',
+    '/computer-use reject --approval-ref approval-1',
+  ]);
 });
 
 test('runtime gui presentation sanitizes provider diagnostics and raw payload text', () => {

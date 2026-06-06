@@ -1,8 +1,8 @@
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types.js';
 import { extractAgentServerCurrentUserRequest } from '@sciforge-ui/runtime-contract/agentserver-prompt-policy';
 import { agentServerToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
-import { agentServerExternalIoReliabilityContractLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerWorkspaceTaskRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy';
-import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy';
+import { agentServerExternalIoReliabilityContractLines, agentServerRepairPromptPolicyLines, agentServerToolPayloadShapeContract, agentServerWorkspaceTaskRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy.js';
+import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { summarizeArtifactRefs, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
 import { clipForAgentServerPrompt, extractLikelyErrorLine, isRecord, toRecordList, toStringList } from '../gateway-utils.js';

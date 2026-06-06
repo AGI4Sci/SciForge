@@ -1,5 +1,6 @@
 import type { GatewayRequest, ToolPayload, WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { COMPUTER_USE_ACTION_PROVIDER_ID } from '../computer-use/host-adapter.js';
+import { sanitizeCompletionEvidencePolicy } from '../computer-use/completion-evidence-policy.js';
 import { VISION_TOOL_ID } from '../vision-sense/trace-policy.js';
 import type {
   CodexAppServerStartTurnRequest,
@@ -16,6 +17,8 @@ export interface ComputerUseNativeRouteInput {
 }
 
 const NORMALIZED_SCHEMA_VERSION = 'sciforge.codex.normalized-event.v1' as const;
+const UNSAFE_APPROVAL_REF_STRING_PATTERN = /(?:\bBearer\s+|\b(?:sk|rk|pk|ghp|github_pat)[_-]|api[_-]?key|access[_-]?token|auth[_-]?token|secret|password|authorization|credential|providerPayload|data:[^,\s]+;base64,|https?:\/\/)/i;
+const BASE64ISH_APPROVAL_REF_PATTERN = /^[A-Za-z0-9+/_=-]{160,}$/;
 
 export function isComputerUseNativeRouteCommand(commandText: string): boolean {
   const text = computerUseNativeRouteCommandText(commandText);
@@ -31,7 +34,9 @@ export function computerUseNativeRouteCommandText(commandText: string): string |
 }
 
 export function createComputerUseNativeRouteStream(input: ComputerUseNativeRouteInput): CodexAppServerTurnStream | undefined {
-  if (!isComputerUseNativeRouteCommand(input.request.commandText)) return undefined;
+  if (!isComputerUseNativeRouteCommand(input.request.commandText) && !hasExplicitHostOwnedComputerUseNativeRouteIntent(input.request.runtimeIntent)) {
+    return undefined;
+  }
   return {
     turnId: input.request.commandId,
     provider: input.provider,
@@ -40,6 +45,13 @@ export function createComputerUseNativeRouteStream(input: ComputerUseNativeRoute
     workspacePath: input.workspace,
     events: computerUseNativeRouteEvents(input),
   };
+}
+
+function hasExplicitHostOwnedComputerUseNativeRouteIntent(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value.schemaVersion === 'sciforge.runtime-codex.host-intent.v1'
+    && value.kind === 'computer-use-native-route'
+    && value.source === 'host-owned';
 }
 
 async function* computerUseNativeRouteEvents(input: ComputerUseNativeRouteInput): AsyncIterable<Record<string, unknown>> {
@@ -86,14 +98,17 @@ async function runComputerUseNativeRoute(
   }
 }
 
-function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): GatewayRequest {
+export function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): GatewayRequest {
   const commandText = computerUseNativeRouteCommandText(input.request.commandText) ?? input.request.commandText;
-  const approvalRef = approvalRefFromCommandText(commandText)
-    ?? stringField(input.request.humanApproval, 'approvalRef')
-    ?? stringField(input.request.uiState, 'approvalRef')
-    ?? stringField(input.request.uiState, 'computerUseApprovalRef');
-  const requestUiState = isRecord(input.request.uiState) ? input.request.uiState : {};
-  const requestHumanApproval = isRecord(input.request.humanApproval) ? input.request.humanApproval : {};
+  const approvalRef = firstSafeApprovalRef([
+    approvalRefFromCommandText(commandText),
+    stringField(input.request.humanApproval, 'approvalRef'),
+    stringField(input.request.uiState, 'approvalRef'),
+    stringField(input.request.uiState, 'computerUseApprovalRef'),
+  ]);
+  const completionEvidencePolicy = sanitizeCompletionEvidencePolicy(input.request.runtimeIntent?.completionEvidencePolicy);
+  const computerUseNext = sanitizeComputerUseNextBinding(input.request.runtimeIntent?.computerUseNext);
+  const computerUseLong = sanitizeComputerUseLongBinding(input.request.runtimeIntent?.computerUseLong);
   return {
     skillDomain: 'knowledge',
     prompt: commandText,
@@ -111,7 +126,6 @@ function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): GatewayR
     ],
     uiState: {
       schemaVersion: 'sciforge.runtime-codex.computer-use-native-route.v1',
-      ...requestUiState,
       selectedToolIds: [VISION_TOOL_ID],
       selectedSenseIds: [VISION_TOOL_ID],
       selectedActionIds: [COMPUTER_USE_ACTION_PROVIDER_ID],
@@ -119,14 +133,62 @@ function computerUseGatewayRequest(input: ComputerUseNativeRouteInput): GatewayR
       entrypoint: 'runtime-codex-commandText',
       terminalEquivalentText: true,
       computerUseApprovalRef: approvalRef,
+      ...(completionEvidencePolicy ? { completionEvidencePolicy } : {}),
+      ...(computerUseNext ? { computerUseNext } : {}),
+      ...(computerUseLong ? { computerUseLong } : {}),
     },
     humanApproval: approvalRef ? {
-      ...requestHumanApproval,
       approvalRef,
       decision: 'approved',
       source: 'runtime-codex-commandText',
     } : undefined,
   };
+}
+
+function sanitizeComputerUseNextBinding(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    taskId: stringField(value, 'taskId'),
+    scenarioId: stringField(value, 'scenarioId'),
+    title: stringField(value, 'title'),
+    requirements: stringListField(value.requirements),
+    safetyBoundary: booleanRecord(value.safetyBoundary),
+  });
+}
+
+function sanitizeComputerUseLongBinding(value: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(value)) return undefined;
+  return nonEmptyRecord({
+    taskId: stringField(value, 'taskId'),
+    scenarioId: stringField(value, 'scenarioId'),
+    title: stringField(value, 'title'),
+    requirements: stringListField(value.requirements),
+    safetyBoundary: booleanRecord(value.safetyBoundary),
+  });
+}
+
+function stringListField(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = [...new Set(value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0))];
+  return out.length ? out : undefined;
+}
+
+function booleanRecord(value: unknown): Record<string, boolean> | undefined {
+  if (!isRecord(value)) return undefined;
+  const out = Object.fromEntries(Object.entries(value).filter((entry): entry is [string, boolean] => (
+    /^[a-zA-Z][a-zA-Z0-9_]*$/.test(entry[0])
+    && typeof entry[1] === 'boolean'
+  )));
+  return Object.keys(out).length ? out : undefined;
+}
+
+function nonEmptyRecord(value: Record<string, unknown>): Record<string, unknown> | undefined {
+  const out = Object.fromEntries(Object.entries(value).filter(([, item]) => {
+    if (item === undefined || item === null) return false;
+    if (Array.isArray(item) && item.length === 0) return false;
+    return true;
+  }));
+  return Object.keys(out).length ? out : undefined;
 }
 
 function workspaceRuntimeEvent(metadata: RouteMetadata, event: WorkspaceRuntimeEvent): Record<string, unknown> {
@@ -230,6 +292,23 @@ function approvalRefFromCommandText(commandText: string): string | undefined {
   const match = /(?:^|\s)--approval-ref(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(commandText);
   const value = match?.[1] ?? match?.[2] ?? match?.[3];
   return value?.trim() || undefined;
+}
+
+function firstSafeApprovalRef(values: Array<string | undefined>): string | undefined {
+  for (const value of values) {
+    const ref = safeApprovalRef(value);
+    if (ref) return ref;
+  }
+  return undefined;
+}
+
+function safeApprovalRef(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const text = value.trim();
+  if (!text || text.length > 500) return undefined;
+  if (UNSAFE_APPROVAL_REF_STRING_PATTERN.test(text)) return undefined;
+  if (BASE64ISH_APPROVAL_REF_PATTERN.test(text)) return undefined;
+  return text;
 }
 
 function compactRecord<T extends Record<string, unknown>>(value: T): T {

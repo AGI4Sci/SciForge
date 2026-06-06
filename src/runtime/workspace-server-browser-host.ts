@@ -116,12 +116,15 @@ export async function handleBrowserHostSessionRoutes(
     if (action === 'computer-use-actions' && req.method === 'POST') {
       const body = await readJson(req);
       const root = await options.workspaceRootFromBodyOrRequest(body, url);
-      const result = await executeBrowserHostComputerUseAction(manager, root, sessionId, browserHostComputerUseAction(body), {
+      const computerUseAction = browserHostComputerUseAction(body);
+      const result = await executeBrowserHostComputerUseAction(manager, root, sessionId, computerUseAction, {
         capture: browserHostSessionCaptureMode(body.capture),
         timeoutMs: numberField(body.timeoutMs),
-        actionId: stringField(body.actionId),
-        uiEventReceivedAt: stringField(body.uiEventReceivedAt),
-        adapterSentAt: stringField(body.adapterSentAt),
+        actionId: browserHostComputerUseOptionString(body, 'actionId'),
+        uiEventReceivedAt: browserHostComputerUseOptionString(body, 'uiEventReceivedAt'),
+        adapterSentAt: browserHostComputerUseOptionString(body, 'adapterSentAt'),
+        permissionRef: browserHostComputerUseOptionString(body, 'permissionRef', 'permission'),
+        cancelRef: browserHostComputerUseOptionString(body, 'cancelRef', 'stopRef', 'controlRef'),
       });
       writeJson(res, 200, { ok: true, workspacePath: root, result, session: result.session });
       return true;
@@ -644,6 +647,18 @@ function browserHostComputerUseAction(body: Record<string, unknown>): BrowserHos
   return action as unknown as BrowserHostComputerUseAction;
 }
 
+function browserHostComputerUseOptionString(body: Record<string, unknown>, ...keys: string[]): string | undefined {
+  const action = body.computerUseAction ?? body.computer_use_action ?? body.action;
+  const actionRecord = isRecord(action) ? action : undefined;
+  for (const key of keys) {
+    const bodyValue = stringField(body[key]);
+    if (bodyValue) return bodyValue;
+    const actionValue = actionRecord ? stringField(actionRecord[key]) : undefined;
+    if (actionValue) return actionValue;
+  }
+  return undefined;
+}
+
 async function connectBrowserHostFrameStream(
   ws: WebSocket,
   manager: BrowserHostSessionManager,
@@ -807,6 +822,7 @@ function browserHostSearchInput(body: Record<string, unknown>): BrowserHostSearc
     query: stringField(body.query) || '',
     sessionId: stringField(body.sessionId),
     limit: numberField(body.limit),
+    sourcePageLimit: numberField(body.sourcePageLimit),
     region: stringField(body.region),
     engine: stringField(body.engine) === 'duckduckgo' ? 'duckduckgo' : 'bing',
     timeoutMs: numberField(body.timeoutMs),

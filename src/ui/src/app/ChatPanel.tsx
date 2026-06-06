@@ -47,7 +47,7 @@ import { imageObjectReferenceForReferenceFocus } from './chat/referenceFocusRout
 import { highlightSciForgeReference } from './chat/referenceFocus';
 import { runPromptOrchestrator } from './chat/runOrchestrator';
 import type { CodexRealtimeControlSender } from '../api/sciforgeToolsClient';
-import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
+import { appendRunningGuidanceRecord, appendUploadMessageToSession, applyHistoricalUserMessageEdit, attachGuidanceQueueToSessionRun, createGuidanceQueueRecord, mergeAgentResponseIntoSession, rebaseAcceptedSessionForLocalFollowup, resolveGuidanceQueueAfterRun, updateGuidanceQueueRecords } from './chat/sessionTransforms';
 import { attachStreamProcessToFailedSession, attachStreamProcessToResponse, compactFailureNotice, guidanceBadgeVariant, guidanceStatusLabel, latestTokenUsage } from './chat/runPresentation';
 import { RunVerificationTag, runIdForMessage } from './chat/messageRunPresentation';
 import { runReadiness, runtimeReadinessIssue } from './chat/runStatusPresentation';
@@ -604,14 +604,18 @@ export function ChatPanel({
   }
 
   async function submitTurn(prompt: string, references: SciForgeReference[] = []) {
+    const baseSession = activeSessionRef.current.sessionId === session.sessionId
+      ? activeSessionRef.current
+      : session;
+    activeSessionRef.current = baseSession;
     recordUIAction(createSubmitTurnUIAction({
       id: makeId('ui-action'),
-      session: activeSessionRef.current,
+      session: baseSession,
       createdAt: nowIso(),
       prompt,
       references,
     }));
-    await runPrompt(prompt, activeSessionRef.current, references);
+    await runPrompt(prompt, baseSession, references);
   }
 
   async function runPrompt(prompt: string, baseSession: SciForgeSession, references: SciForgeReference[] = [], sourceGuidance?: GuidanceQueueRecord) {
@@ -685,7 +689,7 @@ export function ChatPanel({
         onOptimisticSession: (optimisticSession) => {
           if (!isCurrentTurn()) return;
           onSessionChange(optimisticSession);
-          activeSessionRef.current = optimisticSession;
+          activeSessionRef.current = rebaseAcceptedSessionForLocalFollowup(optimisticSession);
         },
         onRealtimeControlReady: (sender) => {
           if (!isCurrentTurn()) return;
@@ -729,7 +733,7 @@ export function ChatPanel({
       });
       const mergedSessionWithHandledGuidance = markGuidanceHandledByRun(mergedSession, sourceGuidance, finalResponseWithProcess.run.id);
       onSessionChange(mergedSessionWithHandledGuidance);
-      activeSessionRef.current = mergedSessionWithHandledGuidance;
+      activeSessionRef.current = rebaseAcceptedSessionForLocalFollowup(mergedSessionWithHandledGuidance);
       onActiveRunChange(finalResponseWithProcess.run.id);
     } catch (error) {
       if (!isCurrentTurn()) return;
@@ -1188,7 +1192,13 @@ export function ChatPanel({
   }
 
   return (
-    <div className="chat-panel" data-chat-split-layout={chatSplitLayout}>
+    <div
+      className="chat-panel"
+      data-chat-split-layout={chatSplitLayout}
+      data-session-id={session.sessionId}
+      data-message-count={messages.length}
+      data-is-sending={isSending ? 'true' : 'false'}
+    >
       <ChatPanelHeader
         scenario={scenario}
         config={config}

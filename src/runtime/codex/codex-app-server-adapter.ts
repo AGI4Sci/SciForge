@@ -37,6 +37,9 @@ export interface CodexRuntimeHostIntent {
   schemaVersion: 'sciforge.runtime-codex.host-intent.v1';
   kind: 'computer-use-native-route';
   source: 'host-owned';
+  completionEvidencePolicy?: Record<string, unknown>;
+  computerUseNext?: Record<string, unknown>;
+  computerUseLong?: Record<string, unknown>;
 }
 
 export interface CodexAppServerTurnStream {

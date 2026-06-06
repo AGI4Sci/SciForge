@@ -11,10 +11,7 @@ export {
   type InteractiveViewPackageRendererEntry,
 } from './renderer-mapping';
 export {
-  interactiveViewCompatibilityAliases,
   interactiveViewManifests,
-  normalizeUIComponentId,
-  uiComponentCompatibilityAliases,
   uiComponentManifests,
 } from '../components';
 export {

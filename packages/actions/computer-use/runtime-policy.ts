@@ -403,6 +403,12 @@ export function computerUseRequiresVisibleArtifact(task: string) {
     || /(?:trace summary|evidence summary|action mapping|field evidence|control evidence|visual evidence (?:summary|refs?|report)|refs-first report|字段证据|控件证据|视觉证据(?:总结|汇总|引用|报告)|动作映射|证据总结|证据汇总|引用报告)/i.test(text);
 }
 
+export function computerUseRequiresSavedVisibleArtifact(task: string) {
+  const text = String(task || '');
+  if (!computerUseRequiresVisibleArtifact(text)) return false;
+  return /(?:save|saved|persist|export|write.{0,30}(?:file|disk)|in Finder|file manager|directory|folder|保存|导出|持久化|文件管理器|目录|文件夹)/i.test(text);
+}
+
 function explicitFinalArtifactIntent(text: string) {
   return /(?:final[-\s]?artifact|l2-artifact-refs|l3-workflow-refs|visible[-\s]?artifact|gui\.present.{0,40}artifact|report artifact|final report|artifact evidence|最终文件|最终产物|可见产物|报告产物)/i.test(text);
 }

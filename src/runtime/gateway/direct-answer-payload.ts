@@ -13,7 +13,7 @@ import {
   normalizeDirectAnswerUiManifest,
   standaloneWorkspaceArtifactPayloadPolicy,
   stripDirectAnswerJsonFence,
-} from '../../../packages/presentation/interactive-views';
+} from '../../../packages/presentation/interactive-views/direct-answer-result-policy.js';
 
 type ArtifactReferenceContextCollector = (request: GatewayRequest) => Promise<{ combinedArtifacts: Array<Record<string, unknown>> } | undefined>;
 let artifactReferenceContextCollector: ArtifactReferenceContextCollector | undefined;
@@ -200,20 +200,30 @@ function directPlainAnswerMissingRequiredExecutionEvidence(
   const answer = text.toLowerCase();
   const claimsRuntimeCompletion = /\b(i\s+(?:ran|executed|tested|verified|fixed|implemented|patched|updated|modified|changed|refactored)|ran|executed|self[-\s]?checked|succeeded|successfully|reproduced|recovered|fixed|implemented|patched|updated|modified|changed|refactored|tests?\s+(?:pass|passed)|typecheck\s+(?:pass|passed)|pr\s+ready|ready\s+for\s+pr|fit(?:ted)?|rmse|parameter\s+error)\b/.test(answer);
   if (!claimsRuntimeCompletion) return undefined;
-  const hasStructuredEvidenceRef = /\b(script path|run command|exit code|stdout|stderr|output(?:\s+artifact|\s+ref)?|code(?:\s+artifact|\s+ref)?|codeRef|diffRef|patchRefs?|workEvidence|executionUnits|artifact:|task-results|verification(?:\s+ref)?)\b/i.test(text);
-  const hasFilePathEvidence = /(?:^|[`'"\s])(?:\.{0,2}\/)?(?:src|packages|tests?|server|client|app|tools|docs|workspace|\.sciforge)\/[A-Za-z0-9._/@+-]+(?:\/[A-Za-z0-9._/@+-]+)*\.(?:ts|tsx|js|mjs|cjs|py|rs|go|java|md|json|ya?ml|toml|css|scss|html)\b/i.test(text);
-  const hasVerificationCommand = /\b(?:npm|pnpm|yarn|npx|node|tsx|tsc|python3?|pytest|cargo|go)\b[^\n.;]{0,160}\b(?:test|typecheck|check|build|run|--test|passed|pass)\b/i.test(text)
-    || /\b(?:verification|verified|tests?|typecheck|build)\b[^\n.;]{0,80}\b(?:passed|pass|ok|green|exit code\s+0)\b/i.test(text);
-  const hasDurableExecutionEvidence = asksForCodingDelivery
-    ? hasStructuredEvidenceRef || (hasFilePathEvidence && hasVerificationCommand)
-    : hasStructuredEvidenceRef || hasFilePathEvidence || hasVerificationCommand;
-  if (hasDurableExecutionEvidence) return undefined;
+  if (directPlainAnswerHasFailedVerificationDiagnostic(text)) {
+    return {
+      kind: 'process-narration',
+      reason: 'direct text mixes completion claims with failed verification diagnostics and cannot be promoted without structured passing evidence',
+    };
+  }
+  // Final execution/completion truth requires structured ToolPayload refs,
+  // execution units, artifacts, or verification results. Plain text mentions of
+  // file paths, commands, and pass/fail words are lexical evidence only.
   return {
     kind: 'process-narration',
     reason: asksForCodingDelivery
-      ? 'direct text claims coding or repair completion but does not cite structured patch/test refs or both modified file paths and verification commands'
-      : 'direct text claims code/reproduction execution success but does not cite durable workspace execution evidence',
+      ? 'direct text claims coding or repair completion but lacks structured patch, execution, artifact, or verification refs'
+      : 'direct text claims code/reproduction execution success but lacks structured workspace execution evidence',
   };
+}
+
+function directPlainAnswerHasFailedVerificationDiagnostic(text: string) {
+  if (text.split(/\r?\n/).some((line) => {
+    return /\b(?:verification|verified|tests?|typecheck|build|check|self[-\s]?check)\b/i.test(line)
+      && /\b(?:failed|fail|failing|error|assertion error|not ready|did not pass|does not pass)\b/i.test(line);
+  })) return true;
+  return /\b(?:verification|verified|tests?|typecheck|build|check|self[-\s]?check)\b[^\n.;]{0,120}\b(?:failed|fail|failing|error|assertion error|not ready|did not pass|does not pass)\b/i.test(text)
+    || /\b(?:failed|fail|failing|error|assertion error|not ready|did not pass|does not pass)\b[^\n.;]{0,120}\b(?:verification|verified|tests?|typecheck|build|check|self[-\s]?check)\b/i.test(text);
 }
 
 function directPlainAnswerMissingRequiredReproduciblePackageEvidence(
@@ -782,6 +792,8 @@ function defaultDirectAnswerDisplayIntent(
   if (!message?.trim()) return undefined;
   const hasBlockingUnit = executionUnits.some((unit) => /failed|error|repair|needs-human/i.test(String(unit.status || '')));
   if (hasBlockingUnit) return undefined;
+  // Final direct-answer completion truth must be structured runtime status plus evidence,
+  // never lexical completion words in the answer text alone.
   return {
     protocolStatus: 'protocol-success',
     taskOutcome: 'satisfied',

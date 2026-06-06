@@ -53,7 +53,7 @@ function publicWorkspaceLabel(label: string, locale?: SupportedLocale) {
 
 function sidebarFooterHealth(workspacePath: string, diagnostic: string): SidebarFooterHealth {
   if (!workspacePath) return 'unavailable';
-  if (/sync|loading|hydrate|连接中|加载中|同步/i.test(diagnostic)) return 'syncing';
+  if (/syncing|synchroni[sz]ing|loading|hydrating|连接中|加载中|同步中|正在同步/i.test(diagnostic)) return 'syncing';
   if (/error|failed|missing|not found|not find|unavailable|denied|不可用|失败|错误|未找到|未连接|未选择/i.test(diagnostic)) return 'warning';
   return 'connected';
 }
@@ -91,6 +91,8 @@ export function SidebarFooterActions({
     >
       <div
         className={cx('sidebar-footer-status', footerStatus.health)}
+        data-testid="sidebar-footer-status"
+        data-sidebar-footer-health={footerStatus.health}
         role="status"
         aria-label={`${footerStatus.workspaceLabel}: ${footerStatus.statusLabel}; ${footerStatus.contextLabel}`}
       >
