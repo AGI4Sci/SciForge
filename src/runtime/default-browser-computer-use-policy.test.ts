@@ -52,9 +52,9 @@ test('browser evidence decision defaults external current citation requests to s
   assert.deepEqual(evaluateBrowserEvidenceNeed({
     prompt: 'Open https://example.com/docs and summarize it with references.',
   }), {
-    decision: 'search',
+    decision: 'open',
     reason: 'url-or-browser-ref-request',
-    query: 'https://example.com/docs',
+    url: 'https://example.com/docs',
   });
 
   assert.equal(evaluateBrowserEvidenceNeed({
@@ -100,6 +100,14 @@ test('browser evidence decision recognizes Chinese browser search requests and e
     decision: 'search',
     reason: 'current-external-or-citation-request',
     query: '伊朗局势最新信息',
+  });
+
+  assert.deepEqual(evaluateBrowserEvidenceNeed({
+    prompt: '搜索并总结本周前沿 AI 大模型进展',
+  }), {
+    decision: 'search',
+    reason: 'current-external-or-citation-request',
+    query: '本周前沿 AI 大模型进展',
   });
 
   assert.equal(evaluateBrowserEvidenceNeed({
@@ -217,7 +225,11 @@ test('computer use preflight fails closed for missing readiness and returns hard
       computerUseAdapter: 'ready',
     },
     observation: { fresh: true, refs: ['browser-host-session:ready/frame.png'] },
-    permissions: { refs: ['permission:turn/low-risk'], stopCancelPath: true },
+    permissions: {
+      refs: ['permission:turn/low-risk'],
+      scopedExecutorRefs: ['computer-use:executor-scope:browser-tab'],
+      stopCancelPath: true,
+    },
     authorizationProfile: defaultAuthorizationProfile(),
   });
   assert.equal(ready.status, 'ready');
@@ -234,7 +246,11 @@ test('computer use preflight fails closed for missing readiness and returns hard
       computerUseAdapter: 'ready',
     },
     observation: { fresh: true, refs: ['browser-host-session:blocked/frame.png'] },
-    permissions: { refs: ['permission:turn/low-risk'], stopCancelPath: true },
+    permissions: {
+      refs: ['permission:turn/low-risk'],
+      scopedExecutorRefs: ['computer-use:executor-scope:browser-tab'],
+      stopCancelPath: true,
+    },
     authorizationProfile: defaultAuthorizationProfile(),
   });
   assert.equal(blocked.status, 'blocked');
@@ -252,14 +268,22 @@ test('computer use preflight fails closed for missing readiness and returns hard
       computerUseAdapter: 'ready',
     },
     observation: { fresh: true, refs: ['browser-host-session:form/frame.png'] },
-    permissions: { refs: ['permission:turn/form-draft'], stopCancelPath: true },
+    permissions: {
+      refs: ['permission:turn/form-draft'],
+      scopedExecutorRefs: ['computer-use:executor-scope:form'],
+      stopCancelPath: true,
+    },
     authorizationProfile: defaultAuthorizationProfile(),
   });
   assert.equal(confirm.status, 'needs-confirmation');
   assert.equal(confirm.confirmation?.action, 'submit the registration form');
   assert.equal(confirm.confirmation?.target, 'Registration form');
   assert.equal(confirm.confirmation?.authorizationProfile.id, 'high-autonomy');
-  assert.deepEqual(confirm.confirmation?.evidenceRefs, ['browser-host-session:form/frame.png', 'permission:turn/form-draft']);
+  assert.deepEqual(confirm.confirmation?.evidenceRefs, [
+    'browser-host-session:form/frame.png',
+    'permission:turn/form-draft',
+    'computer-use:executor-scope:form',
+  ]);
 });
 
 test('computer use preflight reports every required fail-closed blocker', () => {
@@ -288,6 +312,7 @@ test('computer use preflight reports every required fail-closed blocker', () => 
     'target-unbound',
     'needs-observation',
     'permission-missing',
+    'scoped-executor-missing',
     'cancel-path-missing',
   ]);
 });

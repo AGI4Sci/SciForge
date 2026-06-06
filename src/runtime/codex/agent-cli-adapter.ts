@@ -1,5 +1,5 @@
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
-import type { CodexAgentHostRuntimeTruth } from './agent-host-turn-loop.js';
+import type { CodexAgentHostRuntimeTruth } from './agent-host-grounding.js';
 
 export type AgentCliApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 export type AgentCliSandbox = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -37,7 +37,7 @@ export interface RuntimeDeclaredIntentSnapshot {
 
 export interface AgentHostGroundingSnapshot {
   schemaVersion: 'sciforge.agent-host.grounding-snapshot.v1';
-  source: 'codex-agent-host-turn-loop';
+  source: 'runtime-codex-grounding' | 'codex-agent-host-turn-loop';
   productCapabilities: {
     browser: 'supported';
     computerUse: 'supported';

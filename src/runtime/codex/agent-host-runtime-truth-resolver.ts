@@ -24,7 +24,7 @@ import type {
   CodexAgentHostRuntimeTruth,
   CodexAgentHostRuntimeTruthResolver,
   NormalizedCodexAgentHostInput,
-} from './agent-host-turn-loop.js';
+} from './agent-host-grounding.js';
 
 const SOURCE = 'codex-agent-host-runtime-truth-resolver';
 const OBSERVATION_MAX_AGE_MS = 60_000;

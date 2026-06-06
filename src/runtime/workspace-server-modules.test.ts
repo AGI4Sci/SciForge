@@ -4,7 +4,11 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import type { ModuleResultEnvelope } from '@sciforge-ui/runtime-contract/modules';
+import {
+  EXECUTE_BOUNDED_OPERATION_INTENT,
+  type BoundedOperationResultValue,
+  type ModuleResultEnvelope,
+} from '@sciforge-ui/runtime-contract/modules';
 import { handleWorkspaceModuleRoutes } from './workspace-server-modules.js';
 
 test('workspace module routes dispatch files query/read/invoke through Agent Host module contract', async () => {
@@ -74,6 +78,62 @@ test('workspace module routes dispatch automations through Agent Host module con
     assert.equal((query.result.value as { total?: number }).total, 1);
     assert.ok(query.result.refs?.includes('automation:workspace-health'));
     assert.doesNotMatch(JSON.stringify(query), /\/tmp|Authorization|secret|token/i);
+  } finally {
+    await closeServer(server);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('workspace module routes expose bounded Browser and Computer Use operation intents through module.invoke', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sciforge-workspace-modules-'));
+  const server = await startModuleRouteServer(root);
+  try {
+    const browser = await postModule(server, 'invoke', {
+      moduleId: 'browser',
+      intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+      input: {
+        operationKind: 'browser.search_read',
+        ownerModuleId: 'browser',
+        targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
+        config: {
+          allowedActions: ['search', 'open', 'read'],
+          maxSteps: 4,
+          maxTimeMs: 10_000,
+          maxModelCalls: 1,
+          riskPolicy: 'low',
+          requiredEvidence: ['source-page-ref', 'page-text-ref'],
+        },
+      },
+    });
+    assert.equal(browser.result.moduleId, 'browser');
+    assert.equal(browser.result.ok, false);
+    assert.equal((browser.result.value as BoundedOperationResultValue).status, 'blocked');
+    assert.match((browser.result.value as BoundedOperationResultValue).blockedReason ?? '', /unsupported_operation_kind|missing_required_evidence/);
+    assert.equal(JSON.stringify(browser.result).includes('base64'), false);
+
+    const computerUse = await postModule(server, 'invoke', {
+      moduleId: 'computer_use',
+      intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+      input: {
+        operationKind: 'computer_use.perform_local_action',
+        ownerModuleId: 'computer_use',
+        targetScope: { kind: 'window' },
+        config: {
+          allowedActions: ['click'],
+          maxSteps: 1,
+          maxModelCalls: 1,
+          riskPolicy: 'low',
+          requiredEvidence: ['before-evidence-ref', 'grounding-ref', 'executor-event-ref', 'after-evidence-ref'],
+        },
+        action: { kind: 'click', target: 'Save' },
+      },
+    });
+    assert.equal(computerUse.result.moduleId, 'computer_use');
+    assert.equal(computerUse.result.ok, false);
+    const value = computerUse.result.value as BoundedOperationResultValue;
+    assert.equal(value.status, 'blocked');
+    assert.equal(value.blockedReason, 'missing_target_binding');
+    assert.deepEqual(value.evidenceRefs, []);
   } finally {
     await closeServer(server);
     await rm(root, { recursive: true, force: true });

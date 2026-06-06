@@ -4,7 +4,7 @@ import {
   type ModuleFunctionName,
   type ModuleSideEffect,
 } from '../../../packages/contracts/runtime/modules.js';
-import type { CodexAgentHostRuntimeTruth } from './agent-host-turn-loop.js';
+import type { CodexAgentHostRuntimeTruth } from './agent-host-grounding.js';
 
 export type AgentHostLocalToolActStatus = 'auto' | 'needs-confirmation' | 'blocked';
 

@@ -17,6 +17,8 @@ import type {
   BrowserHostFrameCaptureResult,
   BrowserHostMouseButton,
   BrowserHostMousePoint,
+  BrowserHostOpenReadInput,
+  BrowserHostOpenReadOutput,
   BrowserHostSearchInput,
   BrowserHostSearchOutput,
   BrowserHostSearchResult,
@@ -78,6 +80,8 @@ export type {
   BrowserHostFrameCaptureResult,
   BrowserHostMouseButton,
   BrowserHostMousePoint,
+  BrowserHostOpenReadInput,
+  BrowserHostOpenReadOutput,
   BrowserHostSearchEngine,
   BrowserHostSearchInput,
   BrowserHostSearchOutput,
@@ -638,6 +642,68 @@ export class BrowserHostSessionManager {
       consoleLogRef: state.consoleLogRef,
       networkLogRef: state.networkLogRef,
     };
+  }
+
+  async openRead(workspacePath: string, input: BrowserHostOpenReadInput): Promise<BrowserHostOpenReadOutput> {
+    const requestedUrl = normalizeBrowserHostUrl(requiredString(input.url, 'url'));
+    const openedAt = new Date().toISOString();
+    const session = input.sessionId && this.sessions.has(input.sessionId)
+      ? await this.act(workspacePath, input.sessionId, { action: 'navigate', url: requestedUrl, capture: 'frame', timeoutMs: input.timeoutMs })
+      : await this.openSession(workspacePath, {
+          url: requestedUrl,
+          sessionId: input.sessionId,
+          timeoutMs: input.timeoutMs,
+        });
+    const active = this.sessions.get(session.id);
+    const result: BrowserHostSearchResult = {
+      title: input.title || active?.title || session.title || requestedUrl,
+      url: requestedUrl,
+      snippet: '',
+    };
+    if (!active?.driver) {
+      return {
+        sourcePage: failedBrowserHostSearchSourcePage({
+          result,
+          resultIndex: 0,
+          openedAt,
+          error: `BrowserHostSession has no active browser driver: ${session.id}`,
+        }),
+        session,
+      };
+    }
+    try {
+      const text = await active.driver.text();
+      const sourcePage = await persistBrowserHostSearchSourcePage({
+        sessionId: active.id,
+        sessionDir: browserHostSessionDir(active.workspacePath, active.id),
+        result,
+        resultIndex: 0,
+        finalUrl: active.url,
+        openedAt,
+        text,
+      });
+      await this.capture(active, {
+        includeScreenshot: true,
+        includeDom: true,
+        includeAx: true,
+        includeLogs: true,
+      });
+      return { sourcePage, session: publicBrowserHostSessionState(active) };
+    } catch (error) {
+      const message = browserHostErrorMessage(error);
+      active.diagnostics.push(`BrowserHostSession open_read failed: ${message}`);
+      active.updatedAt = new Date().toISOString();
+      await persistBrowserHostSession(active);
+      return {
+        sourcePage: failedBrowserHostSearchSourcePage({
+          result,
+          resultIndex: 0,
+          openedAt,
+          error: message,
+        }),
+        session: publicBrowserHostSessionState(active),
+      };
+    }
   }
 
   async framePath(workspacePath: string, sessionId: string): Promise<string | undefined> {

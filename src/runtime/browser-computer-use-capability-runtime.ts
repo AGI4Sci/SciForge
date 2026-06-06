@@ -223,6 +223,7 @@ function permissionsFromRequest(request: GatewayRequest) {
       ...stringList(permissions?.permissionRefs),
       ...stringList(permissions?.evidenceRefs),
     ],
+    scopedExecutorRefs: stringList(permissions?.scopedExecutorRefs),
     stopCancelPath: permissions?.stopCancelPath === true || permissions?.cancelPath === true || permissions?.takeOverPath === true,
   };
 }

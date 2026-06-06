@@ -8,6 +8,10 @@ import { isRecord, readJson, writeJson } from './server/http.js';
 import { createRuntimeModuleDispatcher, createRuntimeModuleRegistry, scrubTraceText } from './modules/dispatcher.js';
 import { createFilesModuleHandler } from './modules/files-module-handler.js';
 import { createAutomationsModuleHandler } from './modules/automations-module-handler.js';
+import {
+  createBrowserBoundedOperationModuleHandler,
+  createComputerUseBoundedOperationModuleHandler,
+} from './modules/bounded-operation-module-handlers.js';
 
 export interface RuntimeModuleRouteOptions {
   workspaceRootFromBodyOrRequest(body: Record<string, unknown>, url: URL): Promise<string>;
@@ -33,6 +37,8 @@ export async function handleWorkspaceModuleRoutes(
     const dispatcher = createRuntimeModuleDispatcher(createRuntimeModuleRegistry({
       files: createFilesModuleHandler({ workspacePath: root }),
       automations: createAutomationsModuleHandler({ workspacePath: root }),
+      browser: createBrowserBoundedOperationModuleHandler({ workspacePath: root }),
+      computer_use: createComputerUseBoundedOperationModuleHandler(),
     }));
     const functionName = match[1];
     const result = functionName === 'describe'

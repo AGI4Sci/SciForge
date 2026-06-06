@@ -1035,11 +1035,14 @@ test('BrowserHostSession search persists bounded search refs and excludes search
       [1, 'read', 'https://developer.mozilla.org/docs/Web/API'],
     ]);
     assert.match(output.sourcePages?.[0]?.textPreview ?? '', /Browser Host/);
+    assert.match(output.sourcePages?.[0]?.sourcePageRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-1-[a-f0-9]+\.source\.json$/);
     assert.match(output.sourcePages?.[0]?.textRef ?? '', /^browser-host-session:[^/]+\/source-pages\/source-1-[a-f0-9]+\.txt$/);
     assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://example.org/browser-host'));
     assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://developer.mozilla.org/docs/Web/API'));
     const firstSourceText = await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePages?.[0]?.textRef ?? '')), 'utf8');
     assert.match(firstSourceText, /Browser Host/);
+    const firstSourceMetadata = JSON.parse(await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePages?.[0]?.sourcePageRef ?? '')), 'utf8')) as { textRef?: string };
+    assert.equal(firstSourceMetadata.textRef, output.sourcePages?.[0]?.textRef);
     assert.match(output.searchResultRef, /^browser-host-session:/);
     assert.match(browserHostSearchSummary(output), /BrowserHostSession search: browser host session/);
     assert.match(browserHostSearchSummary(output), /Opened source pages: 2/);
@@ -1062,6 +1065,39 @@ test('BrowserHostSession search persists bounded search refs and excludes search
     assert.equal(reused.session.automationSummary?.refs.some((ref) => ref.kind === 'search-result' && ref.ref === reused.searchResultRef), true);
     assert.equal(drivers.length, 2);
     assert.ok(drivers[1]?.actions.some((action) => action.startsWith('goto:https://www.bing.com/search?')));
+  } finally {
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
+test('BrowserHostSession openRead persists source page metadata and page text refs for a Host URL', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-browser-host-open-read-'));
+  const { factory, drivers } = fakeDriverFactory({
+    textByUrl: {
+      'https://example.org/open-read': 'Open Read\nCurrent page text evidence',
+    },
+  });
+  try {
+    const manager = new BrowserHostSessionManager({ driverFactory: factory });
+    const output = await manager.openRead(workspacePath, {
+      url: 'https://example.org/open-read',
+      sessionId: 'open-read-session',
+      title: 'Host provided source',
+    });
+
+    assert.equal(output.session.id, 'open-read-session');
+    assert.equal(output.sourcePage.status, 'read');
+    assert.equal(output.sourcePage.title, 'Host provided source');
+    assert.equal(output.sourcePage.url, 'https://example.org/open-read');
+    assert.equal(output.sourcePage.finalUrl, 'https://example.org/open-read');
+    assert.match(output.sourcePage.sourcePageRef ?? '', /^browser-host-session:open-read-session\/source-pages\/source-1-[a-f0-9]+\.source\.json$/);
+    assert.match(output.sourcePage.textRef ?? '', /^browser-host-session:open-read-session\/source-pages\/source-1-[a-f0-9]+\.txt$/);
+    assert.ok(drivers[0]?.actions.some((action) => action === 'goto:https://example.org/open-read'));
+    const sourceText = await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePage.textRef ?? '')), 'utf8');
+    assert.match(sourceText, /Current page text evidence/);
+    const sourceMetadata = JSON.parse(await readFile(join(browserHostSessionDir(workspacePath, output.session.id), 'source-pages', basename(output.sourcePage.sourcePageRef ?? '')), 'utf8')) as { textRef?: string; finalUrl?: string };
+    assert.equal(sourceMetadata.textRef, output.sourcePage.textRef);
+    assert.equal(sourceMetadata.finalUrl, 'https://example.org/open-read');
   } finally {
     await rm(workspacePath, { recursive: true, force: true });
   }

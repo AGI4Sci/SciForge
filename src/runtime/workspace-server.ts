@@ -115,7 +115,6 @@ import {
 import { CODEX_RUNTIME_STREAM_PATH as CODEX_RUNTIME_SERVER_STREAM_PATH, CODEX_RUNTIME_WEBSOCKET_PATH, handleCodexRuntimeRoutes, handleCodexRuntimeUpgrade } from './codex/codex-runtime-server.js';
 import { createCodexAppServerRuntimeAdapter } from './codex/codex-runtime-adapter.js';
 import { createDefaultCodexAgentHostRuntimeTruthResolver } from './codex/agent-host-runtime-truth-resolver.js';
-import { createDefaultComputerUseActMaterializer } from './codex/agent-host-computer-use-act-materializer.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex/codex-runtime-config.js';
 import { normalizeInstanceName, parallelProfile } from './parallel-instance-profile.js';
 import { assertCodexNoForkGate } from '../../packages/backend/src/codex-compatibility-gate.js';
@@ -279,7 +278,6 @@ const workspaceServer = createServer(async (req, res) => {
       const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
       if (await handleCodexRuntimeRoutes(req, res, url, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
         agentHostRuntimeTruthResolver,
-        computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
       })) return;
       writeJson(res, 404, { ok: false, error: 'Runtime Codex route not found.' });
     } catch (err) {
@@ -670,7 +668,6 @@ function handleWorkspaceUpgrade(req: IncomingMessage, socket: Duplex, head: Buff
       const runtimeEnv = await prepareRuntimeCodexEnvFromLocalConfig();
       if (!handleCodexRuntimeUpgrade(req, socket, head, createCodexAppServerRuntimeAdapter({ env: runtimeEnv }), {
         agentHostRuntimeTruthResolver,
-        computerUseActMaterializer: createDefaultComputerUseActMaterializer({ env: runtimeEnv }),
       })) socket.destroy();
     })().catch(() => socket.destroy());
     return;

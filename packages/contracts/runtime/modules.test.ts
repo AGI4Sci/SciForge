@@ -1,6 +1,9 @@
 import { strict as assert } from 'node:assert';
 import test from 'node:test';
 import {
+  boundedOperationResult,
+  sanitizeBoundedOperationResult,
+  validateBoundedOperationRequest,
   createModuleDescription,
   moduleIntent,
   moduleIntentRequiresApproval,
@@ -69,4 +72,182 @@ test('module result envelopes carry the contract schema version', () => {
   assert.equal(result.schemaVersion, 'sciforge.module-contract.v1');
   assert.equal(result.ok, true);
   assert.deepEqual(result.refs, ['memory:project:1']);
+});
+
+test('bounded operation request is a typed module.invoke intent with boundary-only config', () => {
+  const validation = validateBoundedOperationRequest({
+    moduleId: 'browser',
+    intent: 'executeBoundedOperation',
+    input: {
+      operationKind: 'browser.search_read',
+      ownerModuleId: 'browser',
+      targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
+      config: {
+        allowedActions: ['search', 'open', 'read'],
+        maxSteps: 4,
+        maxTimeMs: 10_000,
+        maxModelCalls: 1,
+        riskPolicy: 'low',
+        requiredEvidence: ['source-page-ref', 'page-text-ref'],
+        stopConditions: ['enough-source-pages'],
+      },
+    },
+  });
+
+  assert.equal(validation.ok, true);
+  assert.deepEqual(validation.errors, []);
+});
+
+test('bounded operation request rejects missing required budgets and stop conditions', () => {
+  const validConfig = {
+    allowedActions: ['search', 'open', 'read'],
+    maxSteps: 4,
+    maxTimeMs: 10_000,
+    maxModelCalls: 1,
+    riskPolicy: 'low',
+    requiredEvidence: ['source-page-ref', 'page-text-ref'],
+    stopConditions: ['enough-source-pages'],
+  };
+  const cases: Array<{ name: string; omit?: keyof typeof validConfig; override?: Record<string, unknown>; error: RegExp }> = [
+    { name: 'maxSteps', omit: 'maxSteps', error: /missing_budget:config\.maxSteps/ },
+    { name: 'maxTimeMs', omit: 'maxTimeMs', error: /missing_budget:config\.maxTimeMs/ },
+    { name: 'maxModelCalls', omit: 'maxModelCalls', error: /missing_budget:config\.maxModelCalls/ },
+    { name: 'stopConditions', omit: 'stopConditions', error: /invalid_string_list:config\.stopConditions/ },
+    { name: 'empty stopConditions', override: { stopConditions: [] }, error: /invalid_string_list:config\.stopConditions/ },
+  ];
+
+  for (const entry of cases) {
+    const config: Record<string, unknown> = { ...validConfig, ...entry.override };
+    if (entry.omit) delete config[entry.omit];
+    const validation = validateBoundedOperationRequest({
+      moduleId: 'browser',
+      intent: 'executeBoundedOperation',
+      input: {
+        operationKind: 'browser.search_read',
+        ownerModuleId: 'browser',
+        targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
+        config,
+      },
+    });
+
+    assert.equal(validation.ok, false, entry.name);
+    assert.match(validation.errors.join('\n'), entry.error, entry.name);
+  }
+});
+
+test('bounded operation request rejects config fields outside the boundary contract', () => {
+  const validation = validateBoundedOperationRequest({
+    moduleId: 'browser',
+    intent: 'executeBoundedOperation',
+    input: {
+      operationKind: 'browser.search_read',
+      ownerModuleId: 'browser',
+      targetScope: { kind: 'web-search', query: 'frontier AI model progress this week' },
+      config: {
+        allowedActions: ['search', 'open', 'read'],
+        maxSteps: 4,
+        maxTimeMs: 10_000,
+        maxModelCalls: 1,
+        stopConditions: ['enough-source-pages'],
+        requiredEvidence: ['source-page-ref', 'page-text-ref'],
+        promptRewrite: 'search for a broader topic',
+      },
+    },
+  });
+
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join('\n'), /unknown_boundary_config_field:config\.promptRewrite/);
+});
+
+test('bounded operation request rejects nested operations and workflow DSL fields', () => {
+  const validation = validateBoundedOperationRequest({
+    moduleId: 'browser',
+    intent: 'executeBoundedOperation',
+    input: {
+      operationKind: 'browser.search_read',
+      ownerModuleId: 'browser',
+      targetScope: { kind: 'web-search', query: 'x' },
+      config: {
+        allowedActions: ['search'],
+        maxSteps: 1,
+        maxTimeMs: 10_000,
+        maxModelCalls: 0,
+        requiredEvidence: ['source-page-ref'],
+        stopConditions: ['nested-operation-detected'],
+        if: 'result.count === 0',
+        loop: { until: 'done' },
+      },
+      steps: [{ intent: 'executeBoundedOperation' }],
+    },
+  });
+
+  assert.equal(validation.ok, false);
+  assert.match(validation.errors.join('\n'), /forbidden_dsl_field:config\.if/);
+  assert.match(validation.errors.join('\n'), /forbidden_dsl_field:config\.loop/);
+  assert.match(validation.errors.join('\n'), /nested_executeBoundedOperation_forbidden/);
+});
+
+test('bounded operation result covers canonical statuses and keeps evidence refs-first', () => {
+  const statuses = ['completed', 'partial', 'blocked', 'needs-confirmation', 'failed'] as const;
+
+  for (const status of statuses) {
+    const result = boundedOperationResult({
+      moduleId: 'browser',
+      operationKind: 'browser.open_read',
+      status,
+      evidenceRefs: [`browser:evidence:${status}`],
+      value: {
+        status,
+        screenshotBase64: 'raw-data-must-not-stay-inline',
+        nested: {
+          providerPayload: { token: 'secret', body: 'large raw provider response' },
+          useful: 'kept',
+        },
+      },
+    });
+
+    const sanitized = sanitizeBoundedOperationResult(result);
+    assert.equal(sanitized.value?.status, status);
+    assert.deepEqual(sanitized.refs, [`browser:evidence:${status}`]);
+    assert.equal(JSON.stringify(sanitized).includes('raw-data-must-not-stay-inline'), false);
+    assert.equal(JSON.stringify(sanitized).includes('large raw provider response'), false);
+    assert.equal((sanitized.value?.payload as { nested?: { useful?: string } }).nested?.useful, 'kept');
+  }
+});
+
+test('bounded operation result reports budget exhaustion without automatic repair', () => {
+  const result = boundedOperationResult({
+    moduleId: 'computer_use',
+    operationKind: 'computer_use.perform_local_action',
+    status: 'blocked',
+    blockedReason: 'budget_exhausted:maxSteps',
+    repairHint: 'Ask the Host for a narrower target scope or a larger explicit budget.',
+    evidenceRefs: ['computer-use:evidence:before-1'],
+    budgets: { maxSteps: 1, stepsUsed: 1, exhausted: ['maxSteps'] },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.value?.status, 'blocked');
+  assert.equal(result.value?.blockedReason, 'budget_exhausted:maxSteps');
+  assert.equal(result.value?.repairHint?.includes('Ask the Host'), true);
+  assert.equal(JSON.stringify(result).includes('autoRepair'), false);
+});
+
+test('bounded operation result filters inline, fixture, replay, and historical refs from evidence', () => {
+  const result = boundedOperationResult({
+    moduleId: 'browser',
+    operationKind: 'browser.search_read',
+    status: 'completed',
+    evidenceRefs: [
+      'browser-host-session:current/source-pages/source-1.txt',
+      'data:image/png;base64,abc',
+      'fixture:browser/source-page',
+      'history:run-123/evidence',
+      'replay:old-gui-projection',
+      'raw:provider-payload',
+    ],
+  });
+
+  assert.deepEqual(result.refs, ['browser-host-session:current/source-pages/source-1.txt']);
+  assert.deepEqual(result.value?.evidenceRefs, ['browser-host-session:current/source-pages/source-1.txt']);
 });

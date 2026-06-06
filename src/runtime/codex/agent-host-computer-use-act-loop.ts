@@ -408,6 +408,7 @@ function permissionsFromInput(input: NormalizedCodexAgentHostInput, runtimeTruth
   if (runtimeTruth?.permissions) {
     return {
       refs: stringList(runtimeTruth.permissions.refs),
+      scopedExecutorRefs: stringList(runtimeTruth.permissions.scopedExecutorRefs),
       stopCancelPath: runtimeTruth.permissions.stopCancelPath === true,
     };
   }
@@ -417,6 +418,7 @@ function permissionsFromInput(input: NormalizedCodexAgentHostInput, runtimeTruth
       ...stringList(input.permissions.permissionRefs),
       ...stringList(input.permissions.evidenceRefs),
     ],
+    scopedExecutorRefs: stringList(input.permissions.scopedExecutorRefs),
     stopCancelPath: input.permissions.stopCancelPath === true || input.permissions.cancelPath === true || input.permissions.takeOverPath === true,
   };
 }

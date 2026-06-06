@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { moduleResult, type ModuleDescription } from '@sciforge-ui/runtime-contract/modules';
+import {
+  EXECUTE_BOUNDED_OPERATION_INTENT,
+  moduleResult,
+  type ModuleDescription,
+} from '@sciforge-ui/runtime-contract/modules';
 import { createGuiProtocolController } from '../../ui/src/app/guiProtocol.js';
 import { createGuiModuleHandler, guiResourceRef } from './gui-module-handler.js';
 import {
@@ -105,6 +109,32 @@ test('actions module invoke fail-closes undeclared Computer Use intents', async 
   assert.equal(execute.approvalRequest?.moduleId, 'actions');
   assert.equal(execute.approvalRequest?.intent, 'execute');
   assert.equal(execute.approvalRequest?.sideEffect, 'workspace');
+});
+
+test('bounded Computer Use confirmation is handled by module operation result, not dispatcher approval gate', async () => {
+  const dispatcher = createRuntimeModuleDispatcher();
+
+  const result = await dispatcher.invoke({
+    moduleId: 'computer_use',
+    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+    input: {
+      operationKind: 'computer_use.perform_local_action',
+      ownerModuleId: 'computer_use',
+      targetScope: { kind: 'window', targetBindingRef: 'computer-use:target:window-1' },
+      config: {
+        allowedActions: ['submit'],
+        riskPolicy: 'confirmation-required',
+        requiredEvidence: ['before-evidence-ref'],
+      },
+      action: { kind: 'submit', risk: 'high' },
+    },
+  });
+
+  assert.equal(result.moduleId, 'computer_use');
+  assert.equal(result.ok, false);
+  assert.equal((result.value as { status?: string }).status, 'needs-confirmation');
+  assert.equal(result.approvalRequest?.intent, EXECUTE_BOUNDED_OPERATION_INTENT);
+  assert.doesNotMatch(result.error ?? '', /^approval_required:/);
 });
 
 test('runtime module dispatcher records scrubbed trace summaries and timing', async () => {

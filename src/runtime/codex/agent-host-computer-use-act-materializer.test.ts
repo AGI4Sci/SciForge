@@ -667,6 +667,7 @@ function windowActionRuntimeTruth(): CodexAgentHostRuntimeTruth {
     ...runtimeTruth({
       observationRefs: ['window-action-session:vscode-main/evidence/before-frame'],
       permissionRefs: ['permission:turn/codex-command-default-window-action/ordinary-navigation'],
+      scopedExecutorRefs: ['window-action-session:vscode-main/executor-scope'],
     }),
     target: {
       bound: true,
@@ -720,9 +721,11 @@ function readyPreflight(): ComputerUsePreflightResult {
 function runtimeTruth(options: {
   observationRefs?: string[];
   permissionRefs?: string[];
+  scopedExecutorRefs?: string[];
 } = {}): CodexAgentHostRuntimeTruth {
   const observationRefs = options.observationRefs ?? ['browser-host-session:verified/frame.png'];
   const permissionRefs = options.permissionRefs ?? ['permission:turn/codex-command-default-browser-act/ordinary-navigation'];
+  const scopedExecutorRefs = options.scopedExecutorRefs ?? ['computer-use:executor-scope:browser-host-session/verified'];
   const observedAt = '2026-06-03T00:00:00.000Z';
   const observation = {
     fresh: true,
@@ -755,6 +758,7 @@ function runtimeTruth(options: {
     observation,
     permissions: {
       refs: permissionRefs,
+      scopedExecutorRefs,
       stopCancelPath: true,
     },
     refs: [
@@ -765,6 +769,7 @@ function runtimeTruth(options: {
       'cancel:runtime-turn/codex-command-default-browser-act',
       ...observationRefs,
       ...permissionRefs,
+      ...scopedExecutorRefs,
     ],
   };
 }

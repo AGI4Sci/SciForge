@@ -1,5 +1,11 @@
 import { sha1 } from '../workspace-task-runner.js';
 import { tryRunBrowserHostSearchRuntime } from '../browser-host-search-runtime.js';
+import {
+  EXECUTE_BOUNDED_OPERATION_INTENT,
+  type BoundedOperationResultValue,
+  type ModuleInvokeRequest,
+  type ModuleInvokeResult,
+} from '../../../packages/contracts/runtime/modules.js';
 import { tryRunRequestClarificationRuntime } from '../request-clarification-runtime.js';
 import { taskProjectSkillDomain } from '../../../packages/contracts/runtime/handoff.js';
 import {
@@ -10,6 +16,7 @@ import {
   evaluateComputerUsePreflight,
   evaluateBrowserEvidenceNeed,
   requiresComputerUseProductCompletionEvidence,
+  type BrowserEvidenceDecision,
   type ComputerUsePreflightResult,
   type RuntimeReadinessValue,
 } from '../../../packages/contracts/runtime/default-browser-computer-use-policy.js';
@@ -21,6 +28,10 @@ import type { WorkEvidence } from '../gateway/work-evidence-types.js';
 import type { NormalizedAgentEvent } from './codex-event-normalizer.js';
 import type { AgentHostGroundingSnapshot } from './agent-cli-adapter.js';
 import { completionTruthFromPackageBridgeWorkEvidence } from './agent-host-package-bridge-completion-truth.js';
+import {
+  generateOnePagePresentationArtifact,
+  isOnePagePresentationArtifactRequest,
+} from './agent-host-artifact-generator.js';
 
 const TOOL_ID = 'codex-agent-host-turn-loop';
 const RUNTIME_GUI_COMPONENT_ID = 'runtime-gui';
@@ -76,6 +87,12 @@ export type CodexAgentHostComputerUseActMaterializer =
   (input: CodexAgentHostComputerUseActMaterializerInput) =>
     Promise<CodexAgentHostComputerUseActMaterializerResult | undefined> | CodexAgentHostComputerUseActMaterializerResult | undefined;
 
+export type CodexAgentHostBrowserBoundedOperationInvoker =
+  (request: ModuleInvokeRequest) => Promise<ModuleInvokeResult<BoundedOperationResultValue>> | ModuleInvokeResult<BoundedOperationResultValue>;
+
+export type CodexAgentHostComputerUseBoundedOperationInvoker =
+  (request: ModuleInvokeRequest) => Promise<ModuleInvokeResult<BoundedOperationResultValue>> | ModuleInvokeResult<BoundedOperationResultValue>;
+
 export type CodexAgentHostRuntimeTruthRefresh =
   (input: {
     step: number;
@@ -121,6 +138,7 @@ export interface CodexAgentHostRuntimeTruth {
     appAllowlistRefs?: string[];
     windowAllowlistRefs?: string[];
     riskPreviewRefs?: string[];
+    scopedExecutorRefs?: string[];
     stopCancelPath?: boolean;
     controlPath?: CodexAgentHostRuntimeControlPath;
   };
@@ -210,9 +228,13 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
   commandId?: string;
   attemptId?: string;
   auditMetadata?: unknown;
+  humanApproval?: Record<string, unknown>;
+  uiState?: Record<string, unknown>;
   runtimeTruth?: CodexAgentHostRuntimeTruth;
   runtimeTruthRefresh?: CodexAgentHostRuntimeTruthRefresh;
   computerUseActMaterializer?: CodexAgentHostComputerUseActMaterializer;
+  browserBoundedOperationInvoker?: CodexAgentHostBrowserBoundedOperationInvoker;
+  computerUseBoundedOperationInvoker?: CodexAgentHostComputerUseBoundedOperationInvoker;
   abortSignal?: AbortSignal;
 }): Promise<CodexAgentHostTurnLoopResult | undefined> {
   const agentHostInput = normalizeAgentHostInput(input.input);
@@ -338,6 +360,15 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
     };
   }
 
+  if (ground.intent === 'browser-evidence-skipped') {
+    return browserEvidenceSkippedTurnLoopResult({
+      metadata,
+      commandId,
+      ground,
+      refs: agentHostInput.refs,
+    });
+  }
+
   if (ground.intent === 'capability-question' && (ground.capability === 'computer-use' || ground.capability === 'browser')) {
     const readiness = readinessFromInput(agentHostInput, input.runtimeTruth);
     const projection = capabilityAnswerProjection({
@@ -409,36 +440,166 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
     };
   }
 
+  if (isOnePagePresentationArtifactRequest(semanticPrompt)) {
+    const generated = await generateOnePagePresentationArtifact({
+      workspacePath: input.workspacePath,
+      commandId,
+      attemptId,
+      prompt: semanticPrompt,
+    });
+    const id = sha1(JSON.stringify({
+      commandId,
+      artifactRef: generated.artifactRef,
+      validatorRef: generated.validatorRef,
+    })).slice(0, 12);
+    const message = `Created a one-page PPT artifact at ${generated.artifactRef}. Validator result: ${generated.validatorRef}.`;
+    return {
+      event: {
+        ...metadata,
+        type: 'audit',
+        status: 'agent-host-turn-loop',
+        message,
+        raw: {
+          schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+          stage: 'Act / Answer',
+          ground,
+          selectedRuntime: 'agent-host-artifact-generator',
+          artifactRef: generated.artifactRef,
+          validatorRef: generated.validatorRef,
+        },
+      },
+      result: structuredResult({
+        commandId,
+        message,
+        confidence: 0.86,
+        claimType: 'artifact-generation',
+        evidenceLevel: 'runtime',
+        reasoningTrace: 'Codex Agent Host selected the artifact path for a presentation request and completed user-level acceptance with final artifact and validator refs; Computer Use did not assert completion.',
+        status: 'completed',
+        artifacts: [generated.artifact, generated.validatorArtifact],
+        uiManifest: [{
+          componentId: RUNTIME_GUI_COMPONENT_ID,
+          artifactRef: generated.artifactRef,
+          title: generated.title,
+          priority: 1,
+        }],
+        executionUnits: [{
+          id: `EU-agent-host-presentation-artifact-${id}`,
+          tool: 'agent-host-artifact-generator',
+          status: 'done',
+          params: JSON.stringify({ format: 'pptx', slideCount: 1 }),
+          outputRef: generated.artifactRef,
+          hash: id,
+        }, {
+          id: `EU-agent-host-presentation-validator-${id}`,
+          tool: 'agent-host-artifact-validator',
+          status: 'done',
+          params: JSON.stringify({ validatorRef: generated.validatorRef }),
+          outputRef: generated.validatorRef,
+          hash: sha1(`${id}:validator`).slice(0, 12),
+        }],
+        claims: [{
+          id: `claim-agent-host-presentation-artifact-${id}`,
+          type: 'artifact',
+          text: message,
+          confidence: 0.86,
+          evidenceLevel: 'runtime',
+          supportingRefs: generated.evidenceRefs,
+          opposingRefs: [],
+        }],
+        evidenceRefs: generated.evidenceRefs,
+        completionTruth: {
+          schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+          scope: 'user-task',
+          status: 'satisfied',
+          validator: 'sciforge-agent-host-one-page-pptx-validator',
+          evidenceRefs: generated.evidenceRefs,
+          currentRun: {
+            runDirRef: generated.artifactRef.replace(/\/[^/]+$/, ''),
+            completionEvidenceRef: generated.validatorRef,
+          },
+        },
+      }),
+    };
+  }
+
   if (ground.intent === 'gui-operation') {
     const readiness = readinessFromInput(agentHostInput, input.runtimeTruth);
-    const preflight = evaluateComputerUsePreflight({
-      intent: input.commandText,
+    const guiActionIntent = semanticPrompt;
+    const permissions = permissionsFromInput(agentHostInput, input.runtimeTruth);
+    const preflight = withAgentHostComputerUseRuntimeGuards(evaluateComputerUsePreflight({
+      intent: guiActionIntent,
       target: targetFromInput(agentHostInput, input.runtimeTruth),
       readiness,
       observation: observationFromInput(agentHostInput, input.runtimeTruth),
-      permissions: permissionsFromInput(agentHostInput, input.runtimeTruth),
+      permissions,
       authorizationProfile,
+    }), { permissions });
+    const approval = computerUseGuiApprovalForPreflight({
+      preflight,
+      humanApproval: input.humanApproval,
+      uiState: input.uiState,
     });
-    if (preflight.status === 'ready' && input.computerUseActMaterializer) {
+    const executablePreflight = approval.approved && preflight.status === 'needs-confirmation'
+      ? confirmedComputerUsePreflight(preflight, approval)
+      : preflight;
+    if (executablePreflight.status === 'ready' && input.computerUseBoundedOperationInvoker) {
+      const operationRequest = computerUseBoundedOperationRequest({
+        commandText: guiActionIntent,
+        preflight: executablePreflight,
+      });
+      const operationResult = await input.computerUseBoundedOperationInvoker(operationRequest);
+      return computerUseBoundedOperationTurnLoopResult({
+        metadata,
+        commandId,
+        commandText: guiActionIntent,
+        ground,
+        operationRequest,
+        operationResult,
+      });
+    }
+    if (executablePreflight.status === 'ready' && input.computerUseActMaterializer) {
       const materialized = await gateComputerUseProductCompletionClaim(sanitizeComputerUseActMaterializerResult(await input.computerUseActMaterializer({
         agentHostInput,
-        preflight,
-        commandText: input.commandText,
+        preflight: executablePreflight,
+        commandText: guiActionIntent,
         workspacePath: input.workspacePath,
         commandId,
         attemptId,
         runtimeTruth: input.runtimeTruth,
         refreshRuntimeTruth: input.runtimeTruthRefresh,
         abortSignal: input.abortSignal,
-      })), {
-        commandText: input.commandText,
+      }), { commandText: guiActionIntent }), {
+        commandText: guiActionIntent,
         commandId,
         attemptId,
         workspacePath: input.workspacePath,
       });
-      const actBlocked = !materialized;
-      const message = materialized?.message
-        ?? 'Computer Use Act materializer blocked: result did not include runtime-owned action evidence refs.';
+      const completionTruthSatisfied = materialized?.completionTruth?.status === 'satisfied';
+      const productCompletionValidated = materialized?.status === 'completed' && requiresComputerUseProductCompletionEvidence({
+        commandText: guiActionIntent,
+        message: materialized.message,
+        claimType: materialized.claimType,
+        claimTexts: (materialized.claims ?? []).map((claim) => stringField(claim.text)).filter((text): text is string => Boolean(text)),
+        executionUnitTexts: (materialized.executionUnits ?? []).map((unit) => stringField(unit.status) ?? stringField(unit.tool)).filter((text): text is string => Boolean(text)),
+      });
+      const evidenceCheck = completionTruthSatisfied || productCompletionValidated
+        ? { ok: true, reason: 'validated completion truth is satisfied' }
+        : computerUseActMaterializerEvidenceCheck(materialized);
+      const completed = materialized?.status === 'completed' && evidenceCheck.ok;
+      const status = completed
+        ? 'completed'
+        : materialized?.status === 'needs-confirmation'
+          ? 'needs-confirmation'
+          : 'blocked';
+      const actBlocked = status === 'blocked';
+      const message = completed
+        ? completionTruthSatisfied
+          ? materialized.message
+          : `Computer Use Act materializer completed the local GUI action with current target-bound action evidence refs: ${materialized.evidenceRefs.slice(0, 6).join(', ')}.`
+        : materialized
+          ? `Computer Use Act materializer is ${materialized.status}: ${materialized.status === 'completed' ? evidenceCheck.reason : materialized.message}.`
+          : 'Computer Use Act materializer blocked: result did not include runtime-owned action evidence refs.';
       return {
         event: {
           ...metadata,
@@ -449,7 +610,7 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
             schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
             stage: 'Act / Answer',
             ground,
-            status: materialized?.status ?? 'blocked',
+            status,
             preflightStatus: preflight.status,
           },
         },
@@ -463,7 +624,7 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
             ?? (actBlocked
               ? 'SciForge rejected a Computer Use Act materializer result that lacked runtime-owned action evidence.'
               : 'SciForge routed ready Computer Use Guard output into an injected runtime-owned Act materializer.'),
-          status: materialized?.status ?? 'blocked',
+          status,
           artifacts: materialized?.artifacts ?? [],
           uiManifest: materialized?.uiManifest ?? [],
           executionUnits: materialized?.executionUnits ?? [],
@@ -473,7 +634,8 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
         }),
       };
     }
-    const id = sha1(JSON.stringify({ commandText: input.commandText, preflight, commandId })).slice(0, 12);
+    const id = sha1(JSON.stringify({ commandText: guiActionIntent, preflight, commandId })).slice(0, 12);
+    const approvalRef = computerUseApprovalRefForPreflight(preflight, id);
     const blockers = preflight.blockers.map((item) => item.reason).join(', ');
     const resultStatus = preflight.status === 'ready' ? 'ready-for-act' : preflight.status;
     const message = preflight.status === 'ready'
@@ -489,9 +651,15 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
         source: TOOL_ID,
         status: resultStatus,
         authorizationProfile: preflight.authorizationProfile.id,
+        ...(preflight.status === 'needs-confirmation' ? { approvalRef } : {}),
       },
-      data: preflight,
+      data: preflight.status === 'needs-confirmation'
+        ? preflightWithApprovalRef(preflight, approvalRef)
+        : preflight,
     };
+    const askUser = preflight.status === 'needs-confirmation'
+      ? computerUseConfirmationAskUser({ preflight, approvalRef, artifactId: artifact.id, commandId, attemptId })
+      : undefined;
     return {
       event: {
         ...metadata,
@@ -505,6 +673,7 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
           status: resultStatus,
           preflightStatus: preflight.status,
           blockers: preflight.blockers.map((item) => item.reason),
+          ...(askUser ? { askUser } : {}),
         },
       },
       result: structuredResult({
@@ -521,6 +690,7 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
           artifactRef: artifact.id,
           title: preflight.confirmation ? 'Computer Use confirmation' : 'Computer Use Guard',
           priority: 1,
+          ...(approvalRef && preflight.status === 'needs-confirmation' ? { approvalRef } : {}),
         }],
         executionUnits: [{
           id: `EU-computer-use-preflight-${id}`,
@@ -546,6 +716,18 @@ export async function evaluateCodexAgentHostTurnLoop(input: {
   }
 
   if (ground.intent === 'browser-evidence') {
+    if (input.browserBoundedOperationInvoker) {
+      const browserEvidence = 'browserEvidence' in ground ? ground.browserEvidence : undefined;
+      const operationRequest = browserBoundedOperationRequest(semanticPrompt, browserEvidence);
+      const operationResult = await input.browserBoundedOperationInvoker(operationRequest);
+      return browserBoundedOperationTurnLoopResult({
+        metadata,
+        commandId,
+        ground,
+        operationRequest,
+        operationResult,
+      });
+    }
     const payload = await tryRunBrowserHostSearchRuntime(runtimeRequest);
     if (!payload) return undefined;
     const message = payload.message;
@@ -607,6 +789,7 @@ export function createCodexAgentHostGroundingSnapshot(
     target.bound ? undefined : 'target-unbound',
     observation.fresh ? undefined : 'needs-observation',
     permissions.refs.length ? undefined : 'permission-missing',
+    permissions.scopedExecutorRefs?.length ? undefined : 'scoped-executor-missing',
     permissions.stopCancelPath ? undefined : 'cancel-path-missing',
   ].filter((value): value is string => Boolean(value));
   return {
@@ -644,6 +827,610 @@ function browserPayloadStatus(displayIntent: unknown) {
   return status ?? 'completed';
 }
 
+function computerUseBoundedOperationRequest(input: {
+  commandText: string;
+  preflight: ComputerUsePreflightResult;
+}): ModuleInvokeRequest {
+  const actionKind = computerUseLocalActionKind(input.commandText);
+  const operationKind = computerUseOperationKind(input.commandText);
+  return {
+    moduleId: 'computer_use',
+    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+    input: {
+      operationKind,
+      ownerModuleId: 'computer_use',
+      targetScope: {
+        kind: 'window',
+        targetBindingRef: input.preflight.target.refs[0],
+        targetRefs: input.preflight.target.refs,
+        scopedExecutorRefs: input.preflight.guardRefs?.scopedExecutorRefs ?? [],
+        summary: input.preflight.target.summary,
+      },
+      config: {
+        allowedActions: [actionKind],
+        maxSteps: operationKind === 'computer_use.fill_fields' ? 3 : 1,
+        maxTimeMs: 30_000,
+        maxModelCalls: 1,
+        riskPolicy: input.preflight.risk.hardConfirm ? 'confirmation-required' : 'low',
+        requiredEvidence: ['before-evidence-ref', 'grounding-ref', 'executor-event-ref', 'after-evidence-ref', 'stale-invalidation-ref'],
+        stopConditions: ['local-action-evidence-collected'],
+      },
+      action: {
+        kind: actionKind,
+        target: input.preflight.target.summary,
+        instruction: input.commandText,
+        risk: input.preflight.risk.hardConfirm ? 'high' : 'low',
+      },
+    },
+  };
+}
+
+function computerUseOperationKind(commandText: string) {
+  return /(?:fill|type|enter|填写|输入|填入)/i.test(commandText)
+    ? 'computer_use.fill_fields'
+    : 'computer_use.perform_local_action';
+}
+
+function computerUseLocalActionKind(commandText: string) {
+  if (/(?:scroll|滚动|滑动)/i.test(commandText)) return 'scroll';
+  if (/(?:fill|type|enter|填写|输入|填入)/i.test(commandText)) return 'type_text';
+  if (/(?:press|key|按键|按下)/i.test(commandText)) return 'press_key';
+  return 'click';
+}
+
+function withAgentHostComputerUseRuntimeGuards(
+  preflight: ComputerUsePreflightResult,
+  input: { permissions: ReturnType<typeof permissionsFromInput> },
+): ComputerUsePreflightResult {
+  const scopedExecutorRefs = input.permissions.scopedExecutorRefs;
+  if (!Array.isArray(scopedExecutorRefs) || scopedExecutorRefs.length > 0) return preflight;
+  const scopedExecutorBlocker = {
+    reason: 'scoped-executor-missing',
+    recovery: 'Provide a scoped executor ref for the current target before executing Computer Use.',
+  };
+  return {
+    ...preflight,
+    status: 'blocked',
+    blockers: [...preflight.blockers, scopedExecutorBlocker] as ComputerUsePreflightResult['blockers'],
+  };
+}
+
+function computerUseGuiApprovalForPreflight(input: {
+  preflight: ComputerUsePreflightResult;
+  humanApproval?: Record<string, unknown>;
+  uiState?: Record<string, unknown>;
+}): { approved: true; approvalRef: string; evidenceRefs: string[] } | { approved: false } {
+  if (input.preflight.status !== 'needs-confirmation') return { approved: false };
+  const humanRef = safeComputerUseApprovalRef(stringField(input.humanApproval?.approvalRef));
+  if (!humanRef) return { approved: false };
+  if (stringField(input.humanApproval?.decision)?.toLowerCase() !== 'approved') return { approved: false };
+  if (stringField(input.humanApproval?.source) !== RUNTIME_GUI_COMPONENT_ID) return { approved: false };
+  const uiRef = safeComputerUseApprovalRef(
+    stringField(input.uiState?.computerUseApprovalRef) ?? stringField(input.uiState?.approvalRef),
+  );
+  if (input.uiState && uiRef !== humanRef) return { approved: false };
+  const provenance = isRecord(input.humanApproval?.approvalProvenance) ? input.humanApproval.approvalProvenance : {};
+  const sourceStatus = stringField(provenance.sourceStatus) ?? stringField(provenance.status);
+  if (sourceStatus && sourceStatus !== 'needs-confirmation') return { approved: false };
+  return {
+    approved: true,
+    approvalRef: humanRef,
+    evidenceRefs: uniqueStrings([
+      humanRef,
+      ...stringList(provenance.refs),
+      ...input.preflight.evidenceRefs,
+    ]),
+  };
+}
+
+function confirmedComputerUsePreflight(
+  preflight: ComputerUsePreflightResult,
+  approval: { approved: true; approvalRef: string; evidenceRefs: string[] },
+): ComputerUsePreflightResult {
+  return {
+    ...preflight,
+    status: 'ready',
+    evidenceRefs: uniqueStrings([...preflight.evidenceRefs, approval.approvalRef, ...approval.evidenceRefs]),
+    confirmation: undefined,
+  };
+}
+
+function preflightWithApprovalRef(preflight: ComputerUsePreflightResult, approvalRef: string): Record<string, unknown> {
+  return {
+    ...preflight,
+    approvalRef,
+    approvalRequestId: approvalRef,
+    confirmation: preflight.confirmation
+      ? {
+        ...preflight.confirmation,
+        id: approvalRef,
+        approvalRef,
+        approvalRequestId: approvalRef,
+      }
+      : undefined,
+  };
+}
+
+function computerUseConfirmationAskUser(input: {
+  preflight: ComputerUsePreflightResult;
+  approvalRef: string;
+  artifactId: string;
+  commandId: string;
+  attemptId: string;
+}) {
+  const approvalCommand = `/computer-use approve --approval-ref "${input.approvalRef}"`;
+  const rejectCommand = `/computer-use reject --approval-ref "${input.approvalRef}"`;
+  return {
+    source: TOOL_ID,
+    kind: 'confirmation',
+    title: 'Computer Use confirmation required',
+    message: `Confirm before Computer Use acts on ${input.preflight.target.summary}: ${input.preflight.risk.reason}.`,
+    approvalRequest: {
+      id: input.approvalRef,
+      approvalRef: input.approvalRef,
+      status: 'needs-confirmation',
+      action: input.preflight.confirmation?.action,
+      target: input.preflight.target.summary,
+      reason: input.preflight.risk.reason,
+      category: input.preflight.risk.category,
+      evidenceRefs: input.preflight.evidenceRefs,
+      artifactRef: input.artifactId,
+      commandId: input.commandId,
+      attemptId: input.attemptId,
+    },
+    choices: [
+      { label: 'Confirm', commandText: approvalCommand, style: 'primary' },
+      { label: 'Cancel', commandText: rejectCommand, style: 'secondary' },
+    ],
+    displayedRefs: input.preflight.evidenceRefs,
+    relatedRefs: [input.artifactId, ...input.preflight.evidenceRefs],
+  };
+}
+
+function computerUseApprovalRefForPreflight(preflight: ComputerUsePreflightResult, id: string) {
+  const category = preflight.risk.category.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase();
+  return `approval:computer-use:${category || 'action'}-${id}`;
+}
+
+function safeComputerUseApprovalRef(value: string | undefined): string | undefined {
+  if (!value || value.length > 180) return undefined;
+  if (!/^approval:computer-use:[A-Za-z0-9._:-]+$/u.test(value)) return undefined;
+  if (/(?:secret|password|credential|token|bearer|api[_-]?key|https?:\/\/|\/)/i.test(value)) return undefined;
+  return value;
+}
+
+function computerUseBoundedOperationTurnLoopResult(input: {
+  metadata: ReturnType<typeof baseEventMetadata>;
+  commandId: string;
+  commandText: string;
+  ground: ReturnType<typeof groundAgentHostInput>;
+  operationRequest: ModuleInvokeRequest;
+  operationResult: ModuleInvokeResult<BoundedOperationResultValue>;
+}): CodexAgentHostTurnLoopResult {
+  const operationValue = input.operationResult.value;
+  const evidenceRefs = browserOperationEvidenceRefs(operationValue, input.operationResult.refs);
+  const artifactRefs = uniqueStrings(operationValue?.artifactRefs ?? []);
+  const validatorRefs = uniqueStrings(operationValue?.validatorRefs ?? []);
+  const requiresArtifactCompletion = requiresComputerUseArtifactCompletionRefs(input.commandText);
+  const hasArtifactCompletionRefs = artifactRefs.length > 0 && validatorRefs.length > 0;
+  const evidenceCheck = computerUseLocalActionEvidenceCheck(evidenceRefs, operationValue);
+  const localActionCompleted = input.operationResult.ok
+    && operationValue?.status === 'completed'
+    && evidenceRefs.length > 0
+    && evidenceCheck.ok;
+  const completed = localActionCompleted && (!requiresArtifactCompletion || hasArtifactCompletionRefs);
+  const status = completed
+    ? 'completed'
+    : operationValue?.status === 'needs-confirmation'
+      ? 'needs-confirmation'
+      : 'blocked';
+  const message = completed
+    ? requiresArtifactCompletion
+      ? `Computer Use bounded operation completed with final artifact refs ${artifactRefs.join(', ')} and validator refs ${validatorRefs.join(', ')}.`
+      : `Computer Use bounded operation completed the local GUI action with current target-bound evidence refs: ${evidenceRefs.slice(0, 6).join(', ')}.`
+    : localActionCompleted && requiresArtifactCompletion
+      ? 'Computer Use completed a local GUI action, but user-level PPT completion still requires final artifact refs and validator refs.'
+    : `Computer Use bounded operation is ${operationValue?.status ?? 'failed'}: ${operationValue?.blockedReason ?? input.operationResult.error ?? evidenceCheck.reason}.`;
+  const id = sha1(JSON.stringify({
+    commandId: input.commandId,
+    status,
+    evidenceRefs,
+  })).slice(0, 12);
+  return {
+    event: {
+      ...input.metadata,
+      type: 'audit',
+      status: 'agent-host-turn-loop',
+      message,
+      raw: {
+        schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+        stage: 'Act / Answer',
+        ground: input.ground,
+        selectedRuntime: 'module.invoke',
+        operation: {
+          moduleId: input.operationRequest.moduleId,
+          intent: input.operationRequest.intent,
+          operationKind: stringField(input.operationRequest.input?.operationKind),
+          status: operationValue?.status,
+          evidenceRefs,
+          artifactRefs,
+          validatorRefs,
+        },
+      },
+    },
+    result: structuredResult({
+      commandId: input.commandId,
+      message,
+      confidence: completed ? 0.78 : 0.66,
+      claimType: completed ? 'runtime-action' : 'runtime-diagnostic',
+      evidenceLevel: 'runtime',
+      reasoningTrace: completed
+        ? 'Codex Agent Host routed ready Computer Use Guard output into a bounded module operation and reported only local action evidence.'
+        : 'Codex Agent Host routed ready Computer Use Guard output into a bounded module operation and failed closed before claiming user-level task completion.',
+      status,
+      artifacts: [],
+      uiManifest: [],
+      executionUnits: [{
+        id: `EU-computer-use-bounded-operation-${id}`,
+        tool: 'module.invoke',
+        status: completed ? 'done' : status === 'needs-confirmation' ? 'needs-human' : 'failed-with-reason',
+        params: JSON.stringify({
+          moduleId: input.operationRequest.moduleId,
+          intent: input.operationRequest.intent,
+          operationKind: stringField(input.operationRequest.input?.operationKind),
+        }),
+        outputRef: artifactRefs[0] ?? evidenceRefs[0],
+        failureReason: completed ? undefined : message,
+        hash: id,
+      }],
+      claims: [{
+        id: `claim-computer-use-bounded-operation-${id}`,
+        type: completed && requiresArtifactCompletion ? 'artifact' : completed ? 'action' : 'diagnostic',
+        text: message,
+        confidence: completed ? 0.78 : 0.66,
+        evidenceLevel: 'runtime',
+        supportingRefs: uniqueStrings([...evidenceRefs, ...artifactRefs, ...validatorRefs]),
+        opposingRefs: [],
+      }],
+      evidenceRefs: uniqueStrings([...evidenceRefs, ...artifactRefs, ...validatorRefs]),
+      completionTruth: completed && requiresArtifactCompletion ? {
+        schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+        scope: 'user-task',
+        status: 'satisfied',
+        validator: 'computer-use-bounded-artifact-validator-refs',
+        evidenceRefs: uniqueStrings([...artifactRefs, ...validatorRefs]),
+        currentRun: {
+          runDirRef: runDirRefFromArtifactRef(artifactRefs[0]),
+          completionEvidenceRef: validatorRefs[0],
+        },
+      } : undefined,
+    }),
+  };
+}
+
+function computerUseLocalActionEvidenceCheck(
+  evidenceRefs: string[],
+  operationValue: BoundedOperationResultValue | undefined,
+) {
+  if (operationValue?.status !== 'completed') {
+    return { ok: false, reason: operationValue?.blockedReason ?? 'missing current target-bound action evidence' };
+  }
+  const refs = uniqueStrings([
+    ...evidenceRefs,
+    ...(operationValue.actionRefs ?? []),
+  ]).filter(runtimeOwnedRuntimeTruthRef);
+  const hasBefore = refs.some((ref) => /(?:before|pre[-_]?action|pre[-_]?observation)/i.test(ref));
+  const hasGrounding = refs.some((ref) => /(?:grounding|target[-_]?binding|binding)/i.test(ref));
+  const hasExecutor = refs.some((ref) => /(?:executor|action[-_]?event|action[-_]?state|event)/i.test(ref));
+  const hasAfter = refs.some((ref) => /(?:after|post[-_]?action|post[-_]?observation)/i.test(ref));
+  const hasStaleInvalidation = refs.some((ref) => /(?:stale|freshness[-_]?invalidation|invalidat)/i.test(ref));
+  const missing = [
+    hasBefore ? undefined : 'before-evidence-ref',
+    hasGrounding ? undefined : 'grounding-ref',
+    hasExecutor ? undefined : 'executor-event-ref',
+    hasAfter ? undefined : 'after-evidence-ref',
+    hasStaleInvalidation ? undefined : 'stale-invalidation-ref',
+  ].filter((item): item is string => Boolean(item));
+  return {
+    ok: missing.length === 0,
+    reason: missing.length
+      ? `missing current target-bound action evidence (${missing.join(', ')})`
+      : 'missing current target-bound action evidence',
+  };
+}
+
+function computerUseActMaterializerEvidenceCheck(
+  materialized: CodexAgentHostComputerUseActMaterializerResult | undefined,
+) {
+  return computerUseLocalActionEvidenceCheck(materialized?.evidenceRefs ?? [], {
+    status: materialized?.status,
+    actionRefs: materialized?.evidenceRefs,
+  } as BoundedOperationResultValue);
+}
+
+function requiresComputerUseArtifactCompletionRefs(commandText: string) {
+  const compact = commandText.replace(/\s+/g, ' ').trim();
+  return /(?:pptx?|power\s*point|presentation|slide\s*deck|slides?|deck|演示文稿|幻灯片|幻灯|PPT)/i.test(compact)
+    && /(?:create|make|generate|draft|build|save|export|做|生成|制作|创建|写|保存|导出|产出)/i.test(compact);
+}
+
+function runDirRefFromArtifactRef(ref: string | undefined) {
+  if (!ref) return undefined;
+  const match = ref.match(/^(\.sciforge\/vision-runs\/[^/]+)/u);
+  return match?.[1];
+}
+
+function browserSearchReadOperationRequest(prompt: string, query: string): ModuleInvokeRequest {
+  return {
+    moduleId: 'browser',
+    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+    input: {
+      operationKind: 'browser.search_read',
+      ownerModuleId: 'browser',
+      targetScope: {
+        kind: 'web-search',
+        query,
+        prompt,
+      },
+      config: {
+        allowedActions: ['search', 'open', 'read'],
+        maxSteps: 4,
+        maxTimeMs: 45_000,
+        maxModelCalls: 1,
+        riskPolicy: 'low',
+        requiredEvidence: ['source-page-ref', 'page-text-ref'],
+        stopConditions: ['enough-source-pages'],
+      },
+    },
+  };
+}
+
+function browserOpenReadOperationRequest(prompt: string, url: string): ModuleInvokeRequest {
+  return {
+    moduleId: 'browser',
+    intent: EXECUTE_BOUNDED_OPERATION_INTENT,
+    input: {
+      operationKind: 'browser.open_read',
+      ownerModuleId: 'browser',
+      targetScope: {
+        kind: 'url',
+        url,
+        prompt,
+      },
+      config: {
+        allowedActions: ['open', 'read'],
+        maxSteps: 2,
+        maxTimeMs: 45_000,
+        maxModelCalls: 1,
+        riskPolicy: 'low',
+        requiredEvidence: ['source-page-ref', 'page-text-ref'],
+        stopConditions: ['page-read'],
+      },
+    },
+  };
+}
+
+function browserBoundedOperationRequest(prompt: string, decision: BrowserEvidenceDecision | undefined): ModuleInvokeRequest {
+  if (decision?.decision === 'open') {
+    return browserOpenReadOperationRequest(prompt, decision.url);
+  }
+  return browserSearchReadOperationRequest(prompt, decision?.decision === 'search' ? decision.query : prompt);
+}
+
+function browserEvidenceSkippedTurnLoopResult(input: {
+  metadata: ReturnType<typeof baseEventMetadata>;
+  commandId: string;
+  ground: ReturnType<typeof groundAgentHostInput>;
+  refs: string[];
+}): CodexAgentHostTurnLoopResult {
+  const id = sha1(JSON.stringify({
+    commandId: input.commandId,
+    ground: input.ground,
+    refs: input.refs,
+  })).slice(0, 12);
+  const evidenceRefs = uniqueStrings([...input.refs, ...input.metadata.evidenceRefs]).filter(runtimeOwnedRuntimeTruthRef);
+  const message = [
+    'I did not call Browser because this turn explicitly requested local-only/no-network handling.',
+    'I cannot verify or summarize current external information without local notes or source refs in the current turn.',
+    '请提供本地上下文、文件或 refs 后我可以继续基于本地证据回答。',
+  ].join(' ');
+  return {
+    event: {
+      ...input.metadata,
+      type: 'audit',
+      status: 'agent-host-turn-loop',
+      message,
+      raw: {
+        schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+        stage: 'Guard',
+        ground: input.ground,
+        selectedRuntime: 'agent-host-browser-skip',
+        browserSkippedReason: 'local-only-or-no-network',
+      },
+    },
+    result: structuredResult({
+      commandId: input.commandId,
+      message,
+      confidence: 0.82,
+      claimType: 'runtime-diagnostic',
+      evidenceLevel: 'runtime',
+      reasoningTrace: 'Codex Agent Host honored an explicit local-only/no-network constraint and failed closed instead of invoking Browser for current external evidence.',
+      status: 'blocked',
+      artifacts: [],
+      uiManifest: [],
+      executionUnits: [{
+        id: `EU-browser-skip-${id}`,
+        tool: TOOL_ID,
+        status: 'failed-with-reason',
+        params: JSON.stringify({ reason: 'local-only-or-no-network' }),
+        failureReason: message,
+        outputRef: evidenceRefs[0],
+        hash: id,
+      }],
+      claims: [{
+        id: `claim-browser-skip-${id}`,
+        type: 'diagnostic',
+        text: message,
+        confidence: 0.82,
+        evidenceLevel: 'runtime',
+        supportingRefs: evidenceRefs,
+        opposingRefs: [],
+      }],
+      evidenceRefs,
+    }),
+  };
+}
+
+function browserBoundedOperationTurnLoopResult(input: {
+  metadata: ReturnType<typeof baseEventMetadata>;
+  commandId: string;
+  ground: ReturnType<typeof groundAgentHostInput>;
+  operationRequest: ModuleInvokeRequest;
+  operationResult: ModuleInvokeResult<BoundedOperationResultValue>;
+}): CodexAgentHostTurnLoopResult {
+  const operationValue = input.operationResult.value;
+  const evidenceRefs = browserOperationEvidenceRefs(operationValue, input.operationResult.refs);
+  const id = sha1(JSON.stringify({
+    commandId: input.commandId,
+    evidenceRefs,
+    status: operationValue?.status,
+  })).slice(0, 12);
+  const sourceSummaries = browserOperationSourceSummaries(operationValue);
+  const evidenceCheck = browserOperationRequiredEvidenceCheck(operationValue, evidenceRefs);
+  const completed = input.operationResult.ok
+    && operationValue?.status === 'completed'
+    && evidenceRefs.length > 0
+    && evidenceCheck.ok;
+  const operationKind = stringField(input.operationRequest.input?.operationKind) ?? 'browser.operation';
+  const operationSlug = operationKind.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'browser-operation';
+  const message = completed
+    ? browserOperationFinalAnswer(sourceSummaries, evidenceRefs)
+    : `Browser ${operationKind} is ${operationValue?.status ?? 'failed'}: ${operationValue?.blockedReason ?? input.operationResult.error ?? evidenceCheck.reason}.`;
+  const status = completed ? 'completed' : operationValue?.status === 'needs-confirmation' ? 'needs-confirmation' : 'blocked';
+  const executionUnit = {
+    id: `EU-${operationSlug}-${id}`,
+    tool: 'module.invoke',
+    status: completed ? 'done' : 'failed-with-reason',
+    params: JSON.stringify({
+      moduleId: input.operationRequest.moduleId,
+      intent: input.operationRequest.intent,
+      operationKind,
+    }),
+    outputRef: evidenceRefs[0],
+    failureReason: completed ? undefined : message,
+    hash: id,
+  };
+  const claims = [{
+    id: `claim-${operationSlug}-${id}`,
+    type: completed ? 'fact' : 'diagnostic',
+    text: message,
+    confidence: completed ? 0.74 : 0.64,
+    evidenceLevel: 'runtime',
+    supportingRefs: evidenceRefs,
+    opposingRefs: [],
+  }];
+  return {
+    event: {
+      ...input.metadata,
+      type: 'audit',
+      status: 'agent-host-turn-loop',
+      message,
+      raw: {
+        schemaVersion: 'sciforge.codex-agent-host-turn-loop.audit.v1',
+        stage: 'Act / Answer',
+        ground: input.ground,
+        selectedRuntime: 'module.invoke',
+        operation: {
+          moduleId: input.operationRequest.moduleId,
+          intent: input.operationRequest.intent,
+          operationKind,
+          status: operationValue?.status,
+          evidenceRefs,
+        },
+      },
+    },
+    result: structuredResult({
+      commandId: input.commandId,
+      message,
+      confidence: completed ? 0.74 : 0.64,
+      claimType: completed ? 'runtime-answer' : 'runtime-diagnostic',
+      evidenceLevel: 'runtime',
+      reasoningTrace: completed
+        ? 'Codex Agent Host invoked Browser as a bounded module operation, then synthesized the visible answer from current-run source/page text refs.'
+        : 'Codex Agent Host invoked Browser as a bounded module operation and failed closed because current-run source/page text evidence was insufficient.',
+      status,
+      artifacts: [],
+      uiManifest: [],
+      executionUnits: [executionUnit],
+      claims,
+      evidenceRefs,
+    }),
+  };
+}
+
+function browserOperationRequiredEvidenceCheck(
+  value: BoundedOperationResultValue | undefined,
+  evidenceRefs: string[],
+) {
+  const payload = isRecord(value?.payload) ? value.payload : {};
+  const pages = Array.isArray(payload.sourcePages) ? payload.sourcePages.filter(isRecord) : [];
+  const pageTextRefs = pages.map((page) => stringField(page.textRef)).filter((ref): ref is string => Boolean(ref));
+  const sourcePageRefs = uniqueStrings([
+    ...(value?.sourceRefs ?? []),
+    ...evidenceRefs.filter((ref) => /source-pages\/.+\.source\.json$/i.test(ref)),
+  ]).filter(runtimeOwnedRuntimeTruthRef);
+  const evidenceRefSet = new Set(evidenceRefs);
+  const hasSourcePageRef = sourcePageRefs.some((ref) => evidenceRefSet.has(ref) || (value?.sourceRefs ?? []).includes(ref));
+  const hasPageTextRef = pageTextRefs.some((ref) => evidenceRefSet.has(ref) && runtimeOwnedRuntimeTruthRef(ref))
+    || evidenceRefs.some((ref) => /source-pages\/.+\.txt$/i.test(ref));
+  const missing = [
+    hasSourcePageRef ? undefined : 'source-page-ref',
+    hasPageTextRef ? undefined : 'page-text-ref',
+  ].filter((item): item is string => Boolean(item));
+  return {
+    ok: missing.length === 0,
+    reason: missing.length
+      ? `missing current-run source/page text evidence (${missing.join(', ')})`
+      : 'missing current-run source evidence',
+  };
+}
+
+function browserOperationEvidenceRefs(value: BoundedOperationResultValue | undefined, envelopeRefs: string[] | undefined) {
+  return uniqueStrings([
+    ...(value?.sourceRefs ?? []),
+    ...(value?.evidenceRefs ?? []),
+    ...(envelopeRefs ?? []),
+  ]).filter(runtimeOwnedRuntimeTruthRef);
+}
+
+function browserOperationSourceSummaries(value: BoundedOperationResultValue | undefined) {
+  const payload = isRecord(value?.payload) ? value.payload : {};
+  const pages = Array.isArray(payload.sourcePages) ? payload.sourcePages.filter(isRecord) : [];
+  return pages.map((page) => ({
+    title: stringField(page.title) ?? 'Source page',
+    url: stringField(page.finalUrl) ?? stringField(page.url),
+    summary: stringField(page.textSummary) ?? stringField(page.textPreview),
+    textRef: stringField(page.textRef),
+  })).filter((page) => page.summary || page.textRef).slice(0, 4);
+}
+
+function browserOperationFinalAnswer(
+  sourceSummaries: Array<{ title: string; url?: string; summary?: string; textRef?: string }>,
+  evidenceRefs: string[],
+) {
+  const lines = sourceSummaries.length
+    ? sourceSummaries.map((source, index) => {
+        const sourceLabel = source.url ? `${source.title} (${source.url})` : source.title;
+        return `${index + 1}. ${source.summary ? `${source.summary} 来源：${sourceLabel}` : sourceLabel}`;
+      })
+    : ['Opened and read source pages, but only refs were returned for the answer body.'];
+  return [
+    '基于本轮 Browser bounded operation 打开的来源页，我能给出以下摘要：',
+    ...lines,
+    `证据 refs: ${evidenceRefs.slice(0, 6).join(', ')}`,
+  ].join('\n');
+}
+
 function evidenceRefsFromToolPayload(payload: {
   claims?: Array<Record<string, unknown>>;
   artifacts?: Array<Record<string, unknown>>;
@@ -673,18 +1460,38 @@ function evidenceRefsFromToolPayload(payload: {
 
 function sanitizeComputerUseActMaterializerResult(
   value: CodexAgentHostComputerUseActMaterializerResult | undefined,
+  context: { commandText?: string } = {},
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!value) return undefined;
   const evidenceRefs = stringList(value.evidenceRefs).filter(runtimeOwnedActEvidenceRef);
   if (!evidenceRefs.length) return undefined;
+  const requestedStatus = value.status === 'completed' || value.status === 'needs-confirmation' ? value.status : 'blocked';
   const completionTruth = sanitizeComputerUseCompletionTruth(value.completionTruth)
     ?? completionTruthFromPackageBridgeWorkEvidence({
       evidenceRefs,
       workEvidence: value.workEvidence,
     });
+  const productCompletionClaim = requiresComputerUseProductCompletionEvidence({
+    commandText: context.commandText ?? '',
+    message: stringField(value.message),
+    claimType: stringField(value.claimType),
+    claimTexts: safeActMaterializerRecords(value.claims).map((claim) => stringField(claim.text)).filter((text): text is string => Boolean(text)),
+    executionUnitTexts: safeActMaterializerRecords(value.executionUnits).map((unit) => stringField(unit.failureReason) ?? stringField(unit.outputRef)).filter((text): text is string => Boolean(text)),
+  });
+  const requireLocalActionEvidence = requestedStatus === 'completed' && !completionTruth && !productCompletionClaim;
+  const actionEvidenceCheck = requireLocalActionEvidence
+    ? computerUseRuntimeActionEvidenceCheck(evidenceRefs)
+    : { ok: true, reason: 'missing current target-bound action evidence' };
+  const status = requireLocalActionEvidence && !actionEvidenceCheck.ok ? 'blocked' : requestedStatus;
   return {
-    status: value.status === 'completed' || value.status === 'needs-confirmation' ? value.status : 'blocked',
-    message: stringField(value.message) ?? 'Computer Use Act materializer returned runtime-owned evidence.',
+    status,
+    message: status === 'completed'
+      ? productCompletionClaim || completionTruth
+        ? stringField(value.message) ?? 'Computer Use Act materializer returned validated completion evidence.'
+        : `Computer Use Act materializer completed the local GUI action with current target-bound action evidence refs: ${evidenceRefs.slice(0, 6).join(', ')}.`
+      : status === 'blocked' && requestedStatus === 'completed'
+        ? `Computer Use Act materializer is blocked: ${actionEvidenceCheck.reason}.`
+        : stringField(value.message) ?? 'Computer Use Act materializer returned runtime-owned evidence.',
     evidenceRefs,
     ...(typeof value.confidence === 'number' && Number.isFinite(value.confidence) ? { confidence: Math.min(Math.max(value.confidence, 0), 1) } : {}),
     ...(stringField(value.claimType) ? { claimType: stringField(value.claimType) } : {}),
@@ -694,6 +1501,28 @@ function sanitizeComputerUseActMaterializerResult(
     executionUnits: safeActMaterializerRecords(value.executionUnits),
     claims: safeActMaterializerRecords(value.claims),
     ...(completionTruth ? { completionTruth } : {}),
+  };
+}
+
+function computerUseRuntimeActionEvidenceCheck(evidenceRefs: string[]) {
+  const refs = uniqueStrings(evidenceRefs).filter(runtimeOwnedActEvidenceRef);
+  const hasBefore = refs.some((ref) => /(?:^|[:/._-])(?:before|before[-_/]frame|before[-_/]screenshot|pre[-_/]action|pre[-_/]observation)(?:[:/._-]|$)/i.test(ref));
+  const hasGrounding = refs.some((ref) => /(?:^|[:/._-])(?:grounding|planner|target[-_/]binding|visible[-_/]action|actor[-_/]cursor|binding)(?:[:/._-]|$)/i.test(ref));
+  const hasExecutor = refs.some((ref) => /(?:^|[:/._-])(?:executor|executor[-_/]event|action[-_/]state|action[-_/]event|adapter[-_/]registry)(?:[:/._-]|$)/i.test(ref));
+  const hasAfter = refs.some((ref) => /(?:^|[:/._-])(?:after|after[-_/]frame|after[-_/]screenshot|post[-_/]action|post[-_/]observation)(?:[:/._-]|$)/i.test(ref));
+  const hasStaleInvalidation = refs.some((ref) => /(?:^|[:/._-])(?:freshness(?:[-_/](?:check|invalidation|invalidated))?|stale(?:[-_/]invalidation)?|invalidat(?:e|ed|ion))(?:[:/._-]|$)/i.test(ref));
+  const missing = [
+    hasBefore ? undefined : 'before-evidence-ref',
+    hasGrounding ? undefined : 'grounding-ref',
+    hasExecutor ? undefined : 'executor-event-ref',
+    hasAfter ? undefined : 'after-evidence-ref',
+    hasStaleInvalidation ? undefined : 'stale-invalidation-ref',
+  ].filter((item): item is string => Boolean(item));
+  return {
+    ok: missing.length === 0,
+    reason: missing.length
+      ? `missing current target-bound action evidence (${missing.join(', ')})`
+      : 'missing current target-bound action evidence',
   };
 }
 
@@ -744,7 +1573,15 @@ async function gateComputerUseProductCompletionClaim(
   if (validation.status === 'valid') {
     return requiresCompletionTruthValidation
       ? attachValidatedComputerUseCompletionTruth(value, validation)
-      : value;
+      : attachValidatedComputerUseCompletionTruth({
+        ...value,
+        completionTruth: {
+          schemaVersion: 'sciforge.computer-use.completion-truth.v1',
+          scope: 'workflow',
+          status: 'satisfied',
+          evidenceRefs: validationEvidenceRefs(validation, refs),
+        },
+      }, validation);
   }
 
   return blockedComputerUseCompletionResult(value, { input, validation, refs });
@@ -1010,8 +1847,21 @@ function groundAgentHostInput(input: NormalizedCodexAgentHostInput) {
   if (capability) return { intent: 'capability-question', capability };
   if (defaultGuiOperationIntent({ prompt })) return { intent: 'gui-operation' };
   const browserEvidence = evaluateBrowserEvidenceNeed({ prompt });
-  if (browserEvidence.decision === 'search') return { intent: 'browser-evidence', browserEvidence };
+  if (browserEvidence.decision === 'search' || browserEvidence.decision === 'open') return { intent: 'browser-evidence', browserEvidence };
+  if (browserEvidence.decision === 'skip'
+    && browserEvidence.reason === 'local-only-or-no-network'
+    && shouldExplainBrowserEvidenceSkip(prompt)) {
+    return { intent: 'browser-evidence-skipped', browserEvidence };
+  }
   return { intent: 'answer' };
+}
+
+function shouldExplainBrowserEvidenceSkip(prompt: string) {
+  const text = prompt.replace(/\s+/g, ' ').trim();
+  if (!text) return false;
+  return /\b(?:latest|today|recent|current|real[-\s]?time|up[-\s]?to[-\s]?date|cite|citation|sources?|url|links?|references?|verify|confirm|look\s*up|search|web|internet|online|external|release|version|docs?|paper|pricing|price|schedule|law|regulation)\b/i.test(text)
+    || /(?:最新|实时|今天|当前|现在|近期|本周|网页|互联网|联网|浏览器|搜索|检索|查询|查找|来源|引用|链接|验证|确认|核实|查证|外部|官方文档|在线文档|论文|版本|发布|价格|法规)/u.test(text)
+    || /https?:\/\//i.test(text);
 }
 
 function baseEventMetadata(input: {
@@ -1122,15 +1972,22 @@ function permissionsFromInput(input: NormalizedCodexAgentHostInput, runtimeTruth
   if (runtimeTruth?.permissions) {
     return {
       refs: stringList(runtimeTruth.permissions.refs),
+      scopedExecutorRefs: Array.isArray(runtimeTruth.permissions.scopedExecutorRefs)
+        ? stringList(runtimeTruth.permissions.scopedExecutorRefs)
+        : undefined,
       stopCancelPath: runtimeTruth.permissions.stopCancelPath === true,
     };
   }
+  const scopedExecutorRefs = Array.isArray(input.permissions.scopedExecutorRefs)
+    ? stringList(input.permissions.scopedExecutorRefs)
+    : undefined;
   return {
     refs: [
       ...stringList(input.permissions.refs),
       ...stringList(input.permissions.permissionRefs),
       ...stringList(input.permissions.evidenceRefs),
     ],
+    scopedExecutorRefs,
     stopCancelPath: input.permissions.stopCancelPath === true || input.permissions.cancelPath === true || input.permissions.takeOverPath === true,
   };
 }
@@ -1166,6 +2023,7 @@ function sanitizeRuntimeTruth(value: unknown): CodexAgentHostRuntimeTruth | unde
       ...stringList(value.permissions.evidenceRefs),
     ].filter(runtimeOwnedRuntimeTruthRef),
     permissionRefs: stringList(value.permissions.permissionRefs).filter(runtimeOwnedRuntimeTruthRef),
+    scopedExecutorRefs: stringList(value.permissions.scopedExecutorRefs).filter(runtimeOwnedRuntimeTruthRef),
     appAllowlistRefs: stringList(value.permissions.appAllowlistRefs).filter(runtimeOwnedRuntimeTruthRef),
     windowAllowlistRefs: stringList(value.permissions.windowAllowlistRefs).filter(runtimeOwnedRuntimeTruthRef),
     riskPreviewRefs: stringList(value.permissions.riskPreviewRefs).filter(runtimeOwnedRuntimeTruthRef),

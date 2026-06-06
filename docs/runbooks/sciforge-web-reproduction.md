@@ -1,33 +1,32 @@
-# SciForge Web Reproduction Runbook
+# 运行手册：网页科研复现
 
-This runbook defines the browser-facing scientific reproduction loop used by the `scientific-reproduction-loop` skill and its replayable trajectory export.
+最后更新：2026-06-06
 
-## Scope
+本文是未来科研复现工作流的运行边界，不属于当前 Browser / Computer Use 基本模块 P0。
 
-Use this workflow when a user asks SciForge to reproduce, audit, or partially verify a scientific result through the web UI. The run must start from the user-visible SciForge workspace, preserve refs instead of raw local paths, and export a replayable `sciforge.scientific-reproduction-trajectory.v1` record.
+## 适用范围
 
-## Loop
+当用户要求 SciForge 复现、审计或部分验证科研结果时，可以使用这个工作流。它必须从用户可见的普通聊天任务开始，由 Codex backend Agent Host 负责 task plan、模块选择、repair、completion truth 和 final answer。
 
-Each replayable step records:
+Browser、Computer Use、workspace、artifact 和 verifier 都只是模块能力面。
 
-- `state/action/observation`: the visible workspace state, the user or agent action, and the resulting observation.
-- `Computer Use`: screen refs and GUI perception evidence when a browser or desktop action is part of the proof.
-- Artifact lineage: selected paper refs, dataset refs, analysis-plan refs, execution-unit refs, and verifier refs.
-- `repairHistory`: bounded repair attempts for product failures, with failure reasons and changed refs.
-- `selfPromptRecommendations`: next prompts that remain human-reviewed unless schema, verifier, refs, budget, stop condition, and human confirmation all allow auto-submit.
+## 记录内容
 
-## Pass Boundaries
+每个可复验步骤只记录 refs-first 证据：
 
-Scientific negative results are not product failures. Missing raw data, license limits, compute limits, unavailable provider responses, or verifier rejection should produce partial or blocked artifacts with evidence refs. They must not be converted into a successful reproduction claim.
+- 用户目标和约束 refs。
+- Browser source / page evidence refs。
+- Computer Use observation / action refs。
+- paper / dataset / analysis-plan refs。
+- execution-unit refs。
+- artifact refs。
+- verifier refs。
+- repair history refs。
 
-Product failures can enter repair only when the run has a bounded target, a failing artifact or execution-unit ref, and a rerunnable validation command. Repeated failures, missing evidence, unresolved refs, raw download requirements, or exceeded compute budget must stop automatic continuation.
+不要把 raw screenshot、raw provider output、完整日志、私有 PDF 正文、数据集原文或本机绝对路径塞进主回答。
 
-## Export Requirements
+## 通过边界
 
-The exported trajectory must:
+科研负结果不是产品失败。缺原始数据、许可证限制、算力不足、provider 不可用或 verifier 拒绝，都应该产出 partial / blocked，并给出证据和下一步选项。
 
-- Use refs such as `artifact:`, `workspace-file:`, `trace:`, `screen:`, `execution-unit:`, `audit:`, or `ledger:`.
-- Redact secrets and machine-local absolute paths.
-- Keep raw screenshots, raw provider output, and raw logs folded into audit refs rather than primary prose.
-- Preserve human confirmation points for any self-prompt continuation.
-- Include enough state/action/observation evidence to replay the decision path without embedding full raw datasets or PDFs.
+只有当 final answer 同时包含可检查产物、来源 / 执行 / 验证 refs 和未完成事项说明时，才能视为用户级可验收。

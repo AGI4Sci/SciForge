@@ -41,6 +41,7 @@ export interface BrowserEvidenceDecisionInput {
 
 export type BrowserEvidenceDecision =
   | { decision: 'search'; reason: 'explicit-browser-search' | 'url-or-browser-ref-request' | 'current-external-or-citation-request'; query: string }
+  | { decision: 'open'; reason: 'url-or-browser-ref-request'; url: string }
   | { decision: 'skip'; reason: 'local-only-or-no-network' | 'no-browser-evidence-needed' | 'empty-query' };
 
 export type ComputerUseRiskDecision = 'auto' | 'needs-confirmation' | 'blocked';
@@ -74,6 +75,7 @@ export interface ComputerUsePreflightInput {
   };
   permissions?: {
     refs?: string[];
+    scopedExecutorRefs?: string[];
     stopCancelPath?: boolean;
   };
   authorizationProfile?: AuthorizationProfile;
@@ -89,6 +91,7 @@ export interface ComputerUsePreflightBlocker {
     | 'target-unbound'
     | 'needs-observation'
     | 'permission-missing'
+    | 'scoped-executor-missing'
     | 'cancel-path-missing'
     | 'policy-blocked';
   recovery: string;
@@ -103,6 +106,11 @@ export interface ComputerUsePreflightResult {
     refs: string[];
   };
   readiness: ComputerUsePreflightInput['readiness'];
+  guardRefs?: {
+    observationRefs: string[];
+    permissionRefs: string[];
+    scopedExecutorRefs: string[];
+  };
   evidenceRefs: string[];
   risk: ComputerUseRiskClassification;
   blockers: ComputerUsePreflightBlocker[];
@@ -207,8 +215,12 @@ export function evaluateBrowserEvidenceNeed(input: BrowserEvidenceDecisionInput)
   }
 
   const url = firstPublicHttpUrl(prompt);
-  if (url || signals.browserReferenceRequest) {
-    return { decision: 'search', reason: 'url-or-browser-ref-request', query: url ?? prompt };
+  if (url) {
+    return { decision: 'open', reason: 'url-or-browser-ref-request', url };
+  }
+
+  if (signals.browserReferenceRequest) {
+    return { decision: 'search', reason: 'url-or-browser-ref-request', query: prompt };
   }
 
   if (signals.currentExternalEvidenceNeeded) {
@@ -290,13 +302,15 @@ export function evaluateComputerUsePreflight(input: ComputerUsePreflightInput): 
   const targetRefs = boundedRefs(input.target?.refs ?? []);
   const observationRefs = boundedRefs(input.observation?.refs ?? []);
   const permissionRefs = boundedRefs(input.permissions?.refs ?? []);
-  const evidenceRefs = boundedRefs([...observationRefs, ...permissionRefs]);
+  const scopedExecutorRefs = boundedRefs(input.permissions?.scopedExecutorRefs ?? []);
+  const evidenceRefs = boundedRefs([...observationRefs, ...permissionRefs, ...scopedExecutorRefs]);
   const targetSummary = compactText(input.target?.summary ?? 'Unbound target', 120);
   const blockers = [
     ...readinessBlockers(input.readiness),
     ...(input.target?.bound === true ? [] : [blocker('target-unbound')]),
     ...(input.observation?.fresh === true && observationRefs.length ? [] : [blocker('needs-observation')]),
     ...(permissionRefs.length ? [] : [blocker('permission-missing')]),
+    ...(scopedExecutorRefs.length ? [] : [blocker('scoped-executor-missing')]),
     ...(input.permissions?.stopCancelPath === true ? [] : [blocker('cancel-path-missing')]),
   ];
   const risk = classifyComputerUseRisk({ action: input.intent, authorizationProfile: authorization });
@@ -315,6 +329,11 @@ export function evaluateComputerUsePreflight(input: ComputerUsePreflightInput): 
       refs: targetRefs,
     },
     readiness: input.readiness,
+    guardRefs: {
+      observationRefs,
+      permissionRefs,
+      scopedExecutorRefs,
+    },
     evidenceRefs,
     risk,
     blockers,
@@ -354,7 +373,7 @@ export function defaultGuiOperationIntent(input: BrowserEvidenceDecisionInput): 
   const prompt = compactText(input.prompt, 600);
   if (/^\s*\/(?:computer-use|browser)\b/i.test(prompt)) return false;
   if (hardConfirmCategoryForText(normalizeRiskText(prompt))) return true;
-  if (evaluateBrowserEvidenceNeed(input).decision === 'search') return false;
+  if (evaluateBrowserEvidenceNeed(input).decision !== 'skip') return false;
   return /\b(?:click|double[-\s]?click|type|fill|scroll|select|open\s+(?:the\s+)?(?:app|window|menu)|press|drag|operate|control|gui|screen|window|button|field|page|点击|输入|填写|滚动|选择|打开窗口|操作|按钮|页面)\b/i.test(prompt);
 }
 
@@ -460,6 +479,7 @@ function blocker(reason: ComputerUsePreflightBlocker['reason']): ComputerUsePref
     'target-unbound': 'Select or bind a Browser session, app window, screen region, file, terminal, or workspace object.',
     'needs-observation': 'Capture a fresh observation ref before any mutating action.',
     'permission-missing': 'Collect a scoped permission ref for the current target and action.',
+    'scoped-executor-missing': 'Provide a scoped executor ref that binds the native input adapter to the current target before execution.',
     'cancel-path-missing': 'Provide a stop, cancel, or take-over path before execution.',
     'policy-blocked': 'Explain the policy block and choose a safe alternative; do not provide bypass steps.',
   };
@@ -572,13 +592,13 @@ function currentExternalOrCitationRequest(text: string) {
   const asksForEvidence = hasAsciiToken(text, 'cite|citation|sources?|url|link|reference|verify')
     || hasCjkTerm(text, ['引用', '来源', '链接', '验证', '确认', '核实', '查证']);
   const asksForCurrent = hasAsciiToken(text, 'latest|today|recent|real[-\\s]?time|up[-\\s]?to[-\\s]?date|pricing|price|schedule|law|regulation|docs?|paper|product|web|website|external|release|version|changelog')
-    || hasCjkTerm(text, ['最新', '实时', '今天', '当前', '现在', '近期', '现状', '网页', '外部', '价格', '法规', '官方文档', '在线文档', '论文', '版本', '发布']);
+    || hasCjkTerm(text, ['最新', '实时', '今天', '当前', '现在', '近期', '本周', '现状', '网页', '外部', '价格', '法规', '官方文档', '在线文档', '论文', '版本', '发布']);
   return asksForEvidence || asksForCurrent;
 }
 
 function externalLookupIntent(text: string) {
   return hasAsciiToken(text, 'look\\s*up|check|verify|confirm|find\\s+out|what\\s+is|who\\s+is|when\\s+is')
-    || /(?:查一下|查询一下|帮我查|帮我确认|确认一下|核实一下|了解一下|看看).{0,80}/.test(text);
+    || /(?:查一下|查询一下|帮我查|帮我确认|确认一下|核实一下|了解一下|看看|搜索|检索|查询|查找).{0,80}/.test(text);
 }
 
 function publicExternalTopicSignal(text: string) {
@@ -602,6 +622,10 @@ function publicExternalTopicSignal(text: string) {
       '政府',
       '选举',
       '市场',
+      '进展',
+      '大模型',
+      '前沿',
+      'AI',
     ]);
 }
 
@@ -689,6 +713,7 @@ function browserSearchVerbMention(text: string) {
 function cleanBrowserSearchQueryCandidate(value: string | undefined): string | undefined {
   if (!value) return undefined;
   let query = compactText(value.replace(/[“”"']/g, ' '), 240);
+  query = query.replace(/^(?:并|同时|然后|顺便)?\s*(?:总结|概括|梳理|汇总)\s*/i, '');
   query = query.replace(/^(?:网页|网络|互联网|浏览器)\s*(?:上|里|中)?\s*(?:查看|看看|搜索|检索|查询|查找)?\s*/i, '');
   query = query.replace(/^(?:查看|看看|了解|查询|搜索|检索|查找|一下)\s*/i, '');
   query = query.replace(/[。；;，,]+$/g, '').trim();

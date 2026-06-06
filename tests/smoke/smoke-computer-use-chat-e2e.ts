@@ -6,6 +6,7 @@ import type { AgentStreamEvent, SendAgentMessageInput } from '../../src/ui/src/d
 import { sendSciForgeToolMessage } from '../../src/ui/src/api/sciforgeToolsClient';
 import { handleCodexRuntimeRoutes, type CodexRuntimeRouteOptions } from '../../src/runtime/codex/codex-runtime-server.js';
 import type { AgentCliAdapter, AgentCliStartTurnInput, AgentCliTurn } from '../../src/runtime/codex/agent-cli-adapter.js';
+import type { NormalizedAgentEvent } from '../../src/runtime/codex/codex-event-normalizer.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -34,13 +35,11 @@ async function smokeNaturalLanguageGuiGuard() {
     assert.match(String(bodies[0]?.commandText), /Click the visible export button/);
     assert.equal((bodies[0]?.agentHostInput as Record<string, unknown> | undefined)?.schemaVersion, 'sciforge.codex-agent-host-input.v1');
     assert.equal('selectedActionIds' in bodies[0]!, false);
-    assert.equal(adapter.lastInput, undefined);
-    assert.match(response.message.content, /Computer Use Guard blocked/i);
-    assert.match(response.message.content, /browser-host-session-unavailable|native-bridge-unavailable|target-unbound/);
+    assert.notEqual(adapter.lastInput, undefined);
+    assert.match(adapter.lastInput?.commandText ?? '', /Click the visible export button/);
+    assert.match(response.message.content, /adapter-owned response/i);
     const eventText = JSON.stringify(events);
-    assert.match(eventText, /agent-host-turn-loop/);
-    assert.match(eventText, /"stage":"Guard"/);
-    assert.match(eventText, /browser-host-session-unavailable|native-bridge-unavailable|target-unbound/);
+    assert.doesNotMatch(eventText, /agent-host-turn-loop|"stage":"Guard"/);
   } finally {
     globalThis.fetch = originalFetch;
     await closeServer(server);
@@ -49,7 +48,6 @@ async function smokeNaturalLanguageGuiGuard() {
 
 async function smokeNaturalLanguageGuiActionPath() {
   const adapter = new FakeAdapter();
-  let materializerCalled = false;
   let truthResolverCalled = false;
   const server = await startRuntimeServer(adapter, {
     agentHostRuntimeTruthResolver: async ({ commandText, agentHostInput }) => {
@@ -77,27 +75,10 @@ async function smokeNaturalLanguageGuiActionPath() {
         },
         permissions: {
           refs: ['permission:turn/low-risk-navigation'],
+          scopedExecutorRefs: ['computer-use:executor-scope:current-window'],
           stopCancelPath: true,
         },
         refs: ['runtime-truth:ready-computer-use'],
-      };
-    },
-    computerUseActMaterializer: async ({ commandText, preflight, runtimeTruth }) => {
-      materializerCalled = true;
-      assert.match(commandText, /Scroll the current browser page/);
-      assert.equal(preflight.status, 'ready');
-      assert.equal(preflight.target.summary, 'Current browser page');
-      assert.deepEqual(runtimeTruth?.refs, ['runtime-truth:ready-computer-use']);
-      return {
-        status: 'completed',
-        message: 'Computer Use action path executed by runtime-owned materializer.',
-        evidenceRefs: ['browser-host-session:current-page/action-state/scroll-1'],
-        executionUnits: [{
-          id: 'EU-computer-use-chat-e2e-action-path',
-          tool: 'browser-host-session.computer-use-action',
-          status: 'done',
-          outputRef: 'browser-host-session:current-page/action-state/scroll-1',
-        }],
       };
     },
   });
@@ -123,15 +104,11 @@ async function smokeNaturalLanguageGuiActionPath() {
     assert.match(String(bodies[0]?.commandText), /Scroll the current browser page/);
     assert.equal('selectedActionIds' in bodies[0]!, false);
     assert.equal(truthResolverCalled, true);
-    assert.equal(materializerCalled, true);
-    assert.equal(adapter.lastInput, undefined);
-    assert.doesNotMatch(response.message.content, /\/computer-use|selectedActionIds|没有直接|no direct computer use/i);
+    assert.notEqual(adapter.lastInput, undefined);
+    assert.deepEqual(adapter.lastInput?.agentHostRuntimeTruth?.refs, ['runtime-truth:ready-computer-use']);
+    assert.doesNotMatch(response.message.content, /\/computer-use|selectedActionIds|没有直接|no direct computer use|runtime-owned materializer/i);
     const eventText = JSON.stringify(events);
-    assert.match(eventText, /agent-host-turn-loop/);
-    assert.match(eventText, /"stage":"Act \/ Answer"/);
-    assert.match(eventText, /Computer Use action path executed by runtime-owned materializer/);
-    assert.match(eventText, /browser-host-session:current-page\/action-state\/scroll-1/);
-    assert.doesNotMatch(eventText, /ready-for-act|Act is waiting/i);
+    assert.doesNotMatch(eventText, /agent-host-turn-loop|"stage":"Act \/ Answer"|runtime-owned materializer|browser-host-session:current-page\/action-state\/scroll-1|ready-for-act|Act is waiting/i);
   } finally {
     globalThis.fetch = originalFetch;
     await closeServer(server);
@@ -157,11 +134,10 @@ async function smokeNeedsConfirmationRuntimeTransport() {
     const text = await response.text();
 
     assert.equal(response.status, 200);
-    assert.equal(adapter.lastInput, undefined);
-    assert.match(text, /event: agent_host_turn_loop/);
-    assert.match(text, /requires hard confirmation/i);
-    assert.match(text, /needs-confirmation/);
-    assert.match(text, /"controls":\["Confirm","Cancel"\]/);
+    assert.notEqual(adapter.lastInput, undefined);
+    assert.match(text, /event: turn/);
+    assert.doesNotMatch(text, /event: agent_host_turn_loop/);
+    assert.doesNotMatch(text, /requires hard confirmation|needs-confirmation|"controls":\["Confirm","Cancel"\]/i);
   } finally {
     await closeServer(server);
   }
@@ -235,10 +211,11 @@ function readyAgentHostInput(intentText: string) {
       fresh: true,
       refs: ['browser-host-session:form/frame.png'],
     },
-    permissions: {
-      refs: ['permission:turn/form-draft'],
-      stopCancelPath: true,
-    },
+        permissions: {
+          refs: ['permission:turn/form-draft'],
+          scopedExecutorRefs: ['computer-use:executor-scope:registration-form'],
+          stopCancelPath: true,
+        },
   };
 }
 
@@ -267,14 +244,37 @@ class FakeAdapter implements AgentCliAdapter {
 
   async startTurn(input: AgentCliStartTurnInput): Promise<AgentCliTurn> {
     this.lastInput = input;
+    const commandId = input.commandId ?? 'fake-turn';
+    const attemptId = input.attemptId ?? 'fake-attempt';
     return {
-      turnId: 'fake-turn',
-      attemptId: input.attemptId ?? 'fake-attempt',
-      events: (async function* () {})(),
+      turnId: commandId,
+      attemptId,
+      events: this.events(input, commandId, attemptId),
     };
   }
 
   async cancel() {}
+
+  private async *events(
+    input: AgentCliStartTurnInput,
+    commandId: string,
+    attemptId: string,
+  ): AsyncIterable<NormalizedAgentEvent> {
+    const base = {
+      schemaVersion: 'sciforge.codex.normalized-event.v1' as const,
+      timestamp: new Date().toISOString(),
+      provider: 'codex-app-server',
+      model: 'app-server-native',
+      profile: 'codex-app-server',
+      workspace: input.workspacePath,
+      commandId,
+      attemptId,
+      evidenceRefs: [`audit:codex-app-server:${commandId}:${attemptId}:normalized-events`],
+    };
+    yield { ...base, type: 'run_started', message: 'started' };
+    yield { ...base, type: 'message', text: 'adapter-owned response' };
+    yield { ...base, type: 'done', status: 'done' };
+  }
 }
 
 try {

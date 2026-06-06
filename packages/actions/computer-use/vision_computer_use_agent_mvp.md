@@ -1,235 +1,122 @@
-# Computer Use 插件算法设计
+# Computer Use 模块设计
 
-版本：v0.9-principles
-日期：2026-06-04
+最后更新：2026-06-06
 
-## 文档边界
+## 定位
 
-本文只描述 `packages/actions/computer-use` 插件本身的算法原则和需求边界。它不描述 Annotation、Image / Evidence Pane、WindowActionSession、Desktop shell 或具体 UI。
+Computer Use 是 Codex backend 可调用的 GUI 信息输入与局部操作执行模块，不是 Computer Use agent，也不是跨应用 workflow engine。
 
-Computer Use 插件是 Agent Host 的 GUI I/O augmentation layer：增强 Host 对 GUI 的观察输入和操作输出。它接收 Host 给定的局部 GUI 目标 / generic intent、当前 evidence 和 host ports，输出可审计的局部 GUI 行动、局部目标达成信号、blocked signal 或 approval request。外层 Agent Host 负责理解用户意图、选择产品会话、管理窗口、跨模块规划、approval 决策、repair 和用户级任务完成判断。
+Computer Use 只负责：
 
-因此，Computer Use 不重新解释完整用户任务，不选择 Browser/file/verifier/connector 等跨模块下一步，也不把局部完成信号升级成用户级 completion。
+- 观察 Host 绑定的窗口 / target。
+- 读取 screenshot、crop、OCR、AX / DOM / UIA、focus state、action history 和 freshness evidence。
+- 将 Host 给定的局部 GUI objective 绑定到可执行目标。
+- 执行低风险局部 GUI action。
+- 写入 before evidence、grounding refs、executor event、after evidence 和 stale invalidation。
+- 返回 refs-first operation result、approval request 或 blocked reason。
 
-## 核心原则
+Computer Use 不负责：
 
-### 1. 可见状态关键，但证据获取 cheap-first
+- 理解完整用户任务。
+- 选择跨模块下一步。
+- 设计 PPT / 报告内容。
+- 自动 repair。
+- 提交、发送、上传、删除、支付。
+- 用户级 completion truth。
+- final answer。
 
-可见像素、当前截图、crop、OCR、Model Router vision translator observations、屏幕变化和 before/after 对比，是判断 GUI 当前可见状态、遮挡、布局、点击命中、人类可见结果和视觉内容的重要证据，因为这些信号最通用，能跨 Browser、Office、文件管理器、Jupyter、仪器 GUI 和自研应用复用。
+## 产品入口
 
-但这不表示每一步都先调视觉模型。Computer Use 应先使用已有 fresh observation、window/app metadata、session/target refs 和结构化精确信号；当目标不唯一、画面过期、结构化信号与可见像素冲突、或动作风险/验证要求升高时，再升级到 crop、OCR、Model Router vision translator 或 verifier explanation。
-
-只要 Host 提供 refs-first、可审计、当前有效的证据，Computer Use 可以使用：
-
-- window / app metadata
-- accessibility tree 或 UI Automation hints
-- DOM / browser runtime hints
-- terminal / PTY transcript
-- file / artifact evidence
-- validator result
-- adapter readiness
-- prior action timeline
-
-这些信号必须进入统一 evidence ledger。它们可以帮助定位、验证和补全视觉理解，但不能绕过 action loop、before/after evidence 和 Host completion guard。prior action timeline 只解释因果链，不能单独证明当前完成。
-
-证据组合不是固定链路，而是按用途选择：
-
-- 文本、label、value、role、selected/disabled 状态优先使用 DOM/AX/UIA/PTY/file 等结构化精确证据。
-- 可见存在、遮挡、焦点、布局、点击可达性和人类可见结果优先使用 fresh screenshot / target crop。
-- 可执行坐标和 binding 必须来自 Host adapter / grounder；模型输出只能作为候选描述或消歧 evidence。
-- 保存、导出和产物内容必须由 artifact refs、hash/metadata 和 validator 支持。
-- 证据冲突时遵循 freshness > confidence，并重新 observe、裁剪检查或 blocked。
-
-### 2. Planner 不直接控制坐标
-
-Computer Use 内部的 planner 只是局部 next-action selector：基于当前 observation snapshot 和 Host 给定的局部目标，决定下一步通用 GUI 意图，不手写裸坐标。坐标、命中目标和可执行 binding 属于 grounder / Host adapter。
-
-Planner 应输出类似：
-
-- 再观察一下。
-- 检查这个区域。
-- 区分几个相似按钮。
-- 点击保存按钮。
-- 在当前输入框输入文本。
-- 等待界面稳定。
-- 证据不足，返回 blocked。
-
-这样算法不会把偶然像素当稳定接口，也便于替换不同 Host adapter。
-
-### 3. Vision Translator 是感知工具，不是执行者
-
-Model Router vision translator 可以描述截图、比较变化、解释图表/表格/公式、识别视觉对象和说明不确定性。
-
-Vision translator 不直接执行动作，不输出最终执行坐标，不单独宣布完成，不用旧截图或记忆替代当前证据。视觉结论必须写成 evidence record，并接受 freshness、confidence 和 completion guard 约束。
-
-Computer Use 的所有模型参与点统一使用 Model Router `/v1/responses` capability surface，并通过 workspace/profile role 选择 `textReasoner` 或 `translators.vision`。这包括局部 next-action selector、screenshot/crop 描述、before/after 比较、复杂视觉解释、候选目标消歧、需要模型参与的 grounding translator 和 verifier explanation。插件不得接触 provider URL、API key、raw model slug、direct grounding endpoint 或未注册 provider/model/profile；进入 evidence 的具体 provider/model 只能作为 router 决议结果。
-
-### 4. 改变界面的动作必须可追溯
-
-只读探索和改变状态的动作必须分开。
-
-只读探索包括：
-
-- recapture
-- wait until stable
-- crop
-- OCR
-- Model Router vision describe / compare
-- region / table / image inspection
-
-会改变可见状态的操作必须进入 action loop：
-
-- click / double click
-- drag
-- type text
-- press key / hotkey
-- scroll
-- focus
-- open menu / dropdown
-- switch tab / window / panel
-- save
-
-每个 action 都要有 before evidence、grounding evidence、executor event、after evidence 和 verification。失败动作也要记录，因为底层输入可能已经部分改变界面。
-
-### 5. Evidence 是唯一算法记忆
-
-Computer Use 不靠临时 prompt 记忆判断当前状态。所有关键事实都写入 refs-first evidence ledger：
-
-- 当前观察到了什么。
-- 目标候选是什么。
-- 哪些证据支持或反驳某个动作。
-- 哪些动作让旧证据 stale。
-- 哪些 artifact 或 validator 支持完成。
-- 哪些 uncertainty 阻止完成。
-
-大对象永远只写 refs。禁止把 raw screenshot、base64、provider raw payload、secret、Authorization、token、password、raw clipboard/IME text 写入主 payload、trace 或长期 evidence。
-
-### 6. Freshness 优先于模型自信
-
-任何改变界面的动作都可能让旧截图、旧 OCR、旧对象位置和旧 grounding 失效。保存、导航、切窗口、滚动、输入、点击之后，completion guard 必须重新检查当前证据。
-
-旧 action history 可以解释“曾经做过什么”，但不能证明“现在已经完成”。完成判断必须依赖当前 evidence、artifact evidence、validator result 和 action causality。
-
-### 7. 完成判断必须 fail closed
-
-完成不是一句 LLM 断言。若证据不足，Computer Use 应继续探索或返回 blocked。
-
-Computer Use 只产出局部目标达成信号或 candidate completion refs；用户级 completion 仍由 Agent Host 判定。局部达成至少需要：
-
-- 当前 observation 或 artifact evidence。
-- 结果来自本轮 action 的因果链。
-- verifier 或 validator 支持。
-- 没有 blocking uncertainty。
-- 文件产物任务要有文件 refs、hash/metadata 和格式 validator。
-
-### 8. 效率与证据预算
-
-可靠完成、安全和证据可信度是硬约束，效率是约束内优化。Computer Use 应减少不必要 GUI 操作、全屏观察、视觉模型调用和重复验证。
-
-建议证据成本分层：
+用户仍然只从普通聊天进入：
 
 ```text
-T0 session/window/action metadata
-T1 DOM/AX/UIA/PTY/file structured state
-T2 target crop / OCR
-T3 fresh window screenshot
-T4 Model Router vision translator
-T5 before/after vision compare or verifier explanation
+用户表达 GUI 操作意图
+  -> Codex backend 判断是否需要 Computer Use
+  -> Codex backend 设置 target、风险、证据和 stop 条件
+  -> module.invoke(executeBoundedOperation)
+  -> Computer Use 执行局部动作串
+  -> Codex backend 基于 action evidence 生成 completion truth 和 final answer
 ```
 
-默认使用 target-bound 的最小足够证据：已有 windowRef/targetRef 时优先 window-local capture 或 crop；只有 target 丢失、遮挡、多窗口冲突、用户选择 screen region 或 verifier 需要时才升级到全屏或更重模型。
+`/computer-use` 只能是 debug / diagnostic，不是产品入口。
 
-同一 target、同一 lease、同一低风险局部目标内，可以批量执行短序列动作，例如连续输入字段、Tab 导航、轻量滚动或普通导航；每个 mutating action 仍必须写 action ledger。导航、提交、保存/导出、上传/删除、窗口切换、modal、target moved、focus takeover、高风险动作和 verifier failure 后必须 checkpoint，并 stale 相关 screenshot、OCR、object location、grounding、role/state 和 completion candidate。
+## 首批 Bounded Operation
 
-## 标准循环
+| operationKind | 目标 | 允许动作 | 返回 |
+| --- | --- | --- | --- |
+| `computer_use.perform_local_action` | 执行 Host 指定的一个低风险局部 GUI action，例如点击、滚动、按键、等待、保存。 | observe、crop、locate、click、type_text、press_key、scroll、wait、save、verify。 | before / after evidence refs、grounding refs、executor event refs、local goal status、blocked reason 或 approval request。 |
+| `computer_use.fill_fields` | 在同一窗口、表单或编辑区域内填写 Host 给定字段，但不提交。 | observe、locate fields、click、type_text、press_key、scroll、verify field values。 | field evidence refs、action refs、after evidence refs、local goal status、blocked reason。 |
 
-```text
-observe/enrich current target-bound state
--> write evidence ledger
--> build observation snapshot
--> build compact local controller brief
--> select generic next-action intent or blocked
--> ground target through Host adapter
--> execute action through Host adapter
--> verify after state with tiered evidence
--> update evidence freshness
--> local-goal-reached or continue or blocked
-```
+## 边界规则
 
-这个循环可以多轮运行。算法应该先补足证据，再行动；行动后再补证据，而不是每次观察后立刻点击。
+- 每次 operation 只能有一个 target scope 和一个 executor lease。
+- 配置只声明 `allowedActions`、`maxSteps`、`maxTimeMs`、`maxModelCalls`、`riskPolicy`、`requiredEvidence` 和 `stopConditions`。
+- 配置不能表达 `if/else/loop` 工作流。
+- operation 内部不得调用另一个 operation。
+- operation 内部不得调用 Browser、workspace、artifact、connector 或其它模块。
+- 自动 repair 禁止；目标找不到、证据冲突、验证失败或预算耗尽时，只返回 blocked reason / repair hint。
+- 提交、发送、上传、删除、支付、账号 / 安全、登录、验证码、跨窗口切换、跨 app workflow 和外部系统副作用必须停止并返回 Host。
 
-## Host 边界
+## Evidence 规则
 
-Computer Use 通过窄 Host ports 接触外部环境：
+改变界面的动作必须记录：
 
-- capture：获取当前观察证据。
-- crop：补充局部证据。
-- plan：基于 Host 给定局部目标和 observation snapshot 生成通用下一步意图。
-- locate：把目标描述绑定到可执行目标。
-- execute：执行通用 GUI 动作。
-- verify：验证动作后的状态。
-- writeTrace / emitEvent：写 refs-first trace 和事件。
+- current target-bound before evidence。
+- grounding refs。
+- executor event。
+- after evidence。
+- verification evidence。
+- stale invalidation。
 
-Host adapter 可以是 browser session、window-session host、terminal、app-native command、Accessibility/UIA/AT-SPI、focused system input 或未来 isolated backend。Computer Use 不关心具体执行机制，只要求 Host 返回可审计 refs、side-effect flags 和 before/after evidence。
+证据选择原则：
 
-## 动作空间
+- fresh evidence 优先于旧的高置信描述。
+- 同 target / session evidence 优先于全局 evidence。
+- 文本、role、value 优先用 AX / DOM / UIA / PTY / file structured evidence。
+- 可见性、遮挡、布局和点击可达性优先用 fresh screenshot / crop。
+- 保存、导出和用户级产物必须由 artifact refs / validator refs 支撑。
 
-Computer Use 的核心动作保持通用：
+## Model Router 使用
 
-- observe
-- wait
-- click
-- double click
-- drag
-- type_text
-- press_key
-- hotkey
-- scroll
-- focus
-- save
+Computer Use 可以调用 Model Router 做局部辅助：
 
-PPTX、DOCX、CSV、PDF、图片等格式能力不进入鼠标键盘算法。它们作为 artifact renderer、validator 或 previewer 提供证据。比如“做 PPT”仍然是通用 GUI 动作 + 保存动作 + PPTX validator + evidence refs。
+- screenshot / crop 描述。
+- 候选目标消歧。
+- 候选 next intent。
+- before / after 比较。
+- 不确定性解释。
 
-## 不确定性
+Model Router 不能输出最终执行坐标，不能改变 risk policy，不能绕过 confirmation，不能自动 repair，不能产出 completion truth 或 final answer。
 
-Uncertainty 是一等证据。常见阻塞包括：
+可执行 binding、坐标、input lease 和真实动作必须来自 Host adapter。
 
-- 找不到目标。
-- 同名目标太多。
-- OCR 或视觉 verifier 置信度低。
-- 证据已过期。
-- 目标被遮挡或离屏。
-- action 执行失败。
-- artifact 或 validator 证据缺失。
+## 用户级验收
 
-blocking uncertainty 必须阻止 completion。只有新观察、新 crop、新 OCR/vision translator observation、Host adapter evidence、文件证据或验证结果解决它后，completion guard 才能放行。
+Computer Use 用户级验收必须满足：
 
-## 验收边界
+- 普通聊天请求低风险 GUI 局部操作时，Codex backend 能调用 `computer_use.perform_local_action` 或 `computer_use.fill_fields`，不要求 `/computer-use`。
+- 每个改变界面的 action 都有 before evidence、grounding refs、executor event、after evidence 和 stale invalidation。
+- Codex backend 基于 action evidence 生成 final answer，说明局部目标是否完成。
+- 高风险动作返回 `needs-confirmation`，由 GUI 收集确认；未确认不得执行。
+- 缺 native host、target binding、fresh evidence、permission refs、scoped executor 或 stop / cancel path 时，必须 blocked，并说明恢复路径。
 
-Package-local 验收只证明插件算法和 contract：
+PPT / artifact 用户级完成不能由 Computer Use 自己声明；必须由 Codex backend 使用 final artifact refs + validator refs 判断。
 
-- host-port 调用闭环。
-- evidence ledger 和 planner brief。
-- freshness / stale invalidation。
-- sanitizer 和 refs-first policy。
-- generic action loop。
-- artifact validator 接入。
-- fail-closed diagnostics。
+## 禁止作为产品 truth 的对象
 
-真实 GUI、真实窗口、真实 Browser、Desktop native bridge 或未来 isolated backend 的验收属于上层 Host 项目。Computer Use 只要求真实 Host 提供当前 observation、target/session refs、executor event、before/after evidence、verification/artifact refs 和 side-effect flags。
+- GUI projection。
+- Image / Evidence pane。
+- screenshot replay。
+- frame stream。
+- fixture。
+- package probe。
+- legacy VirtualAppScreen / Docker / noVNC / RDP / M6。
+- 历史 run。
+- 单步 action ref。
 
-## 最终判断
+这些对象只能作为 diagnostic、evidence 或 historical regression，不能证明用户级 Computer Use 完成。
 
-Computer Use 插件的核心是：
+## 相关文档
 
-```text
-refs-first evidence
--> cheap-first, multi-signal input enhancement
--> local generic intent selection
--> grounded action through Host adapter
--> after-action verification
--> stale evidence invalidation
--> fail-closed local result / blocked handoff
-```
-
-Agent 读完本文应理解：实现时不要把产品 UI、窗口生命周期、跨模块规划、provider route 或用户级 completion 写进插件；要围绕证据、通用动作、Host adapter、验证、stale 规则和 fail-closed handoff 来写代码。
+- [`../../../PROJECT.md`](../../../PROJECT.md)：当前需求和验收标准。
+- [`../../../docs/Architecture.md`](../../../docs/Architecture.md)：总架构和 Bounded Operation。

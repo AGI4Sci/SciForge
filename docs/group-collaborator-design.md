@@ -1,183 +1,35 @@
-# 飞书群协作者设计
+# 群协作者设计边界
 
-## 目的
+最后更新：2026-06-06
 
-SciForge 应该可以被邀请进任意飞书群，作为一个 AI 协作者参与工作。它不应只服务于已经存在的 SciForge 项目。只要进入群聊，SciForge 就应该能在这个群的上下文中像一个可靠的人类队友一样协作：聊天、阅读共享文档、撰写和修改文档、留下评论、总结讨论、跟踪行动项，并在有需要时连接 SciForge workspace 执行项目工作。
+## 定位
 
-本文只记录产品意图和行为边界，帮助后续 agent 快速理解用户需求，不展开实现细节。
+群协作者是未来 Channel Plugin 场景，例如飞书群里的 SciForge 协作者。它不是当前 P0，也不能成为第二个 Agent Host。
 
-## 核心模型
+## 用户体验目标
 
-飞书群是第一协作边界。
+SciForge 可以被邀请进群聊，读取群内明确给它的消息和文档，协助总结、草拟、评论、跟踪行动项，并在需要时把任务交给 SciForge workspace / Codex backend 处理。
 
-当 SciForge 被邀请进一个飞书群时，这个群就形成一个群原生协作空间。该空间以飞书群引用作为主键，例如 `feishu:chat:<id>`。它可以独立存在，不要求提前绑定 SciForge project。
+## 边界
 
-SciForge project 或 workspace 是可选增强。如果群里的工作需要本地代码执行、数据分析、报告生成、仓库修改或长期研究任务，SciForge 可以把群连接到一个 SciForge workspace。这个能力是默认能力，不是单独模式。用户体验应该像是在群里请一位人类协作者去自己的工作环境里完成任务，然后回群同步结果。
+- 群消息进入后必须转换为 Codex backend input envelope。
+- Codex backend 仍拥有 task plan、tool selection、approval、repair、completion truth 和 final answer。
+- 群渠道只提供 input intake、resource read 和 delivery action。
+- 写文档、发消息、上传、删除、权限修改等副作用必须 approval。
+- 群协作结果必须进入同一 thread ledger，GUI / Web 只展示 projection。
 
-## 期望体验
+## 与当前 P0 的关系
 
-SciForge 应该像一个正常被邀请入群的协作者，而不是一个需要大量配置的机器人。
+当前先实现基本模块和用户级验收：
 
-入群时，SciForge 应发送简短介绍，而不是让用户选择很多模式：
+- Browser evidence。
+- Computer Use 局部动作。
+- Artifact / validator。
+- Bounded Operation 契约。
 
-```text
-大家好，我是 SciForge。我可以和大家一起阅读、修改和评论飞书文档，也可以把群里的任务带到 SciForge workspace 中执行，并把结果同步回来。
+群协作者未来复用这些模块，但不改变当前 P0。
 
-我会优先处理群里 @ 我的请求、群内共享的文档和明确分配给我的任务。涉及文档写入或外部提交时，我会保留 diff、快照和 audit，方便追踪与回滚。
-```
+## 相关文档
 
-这条初始化消息可以提供少量自然设置：
-
-- 绑定或选择一个 SciForge workspace
-- 指定 SciForge 在本群长期维护的文档
-- 设置可以授予广泛权限的群成员
-
-这些设置不应阻塞普通协作。SciForge 被邀请进群后，默认就应该可以开始工作。
-
-## 默认能力
-
-在任何已经邀请 SciForge 的飞书群里，agent 应该能够：
-
-- 回复 @SciForge 的请求和相关追问
-- 理解群上下文和近期讨论
-- 阅读群里共享、提到或分配给 SciForge 的飞书文档
-- 总结文档和讨论
-- 提炼开放问题、风险、决策和行动项
-- 在请求和授权清晰时撰写、修改、评论飞书文档
-- 保存本群专属记忆和审计历史
-- 连接 SciForge workspace 执行代码、分析、实验、报告或其他项目任务
-- 将进度和结果同步回原飞书群
-
-飞书群不需要先挂到某个已有 SciForge project，这些能力也应该成立。
-
-## 授权边界
-
-授权以当前飞书群上下文为核心。
-
-SciForge 可以处理：
-
-- 群里共享的文档
-- 群消息中明确引用的文档
-- 群成员明确分配给 SciForge 的文档
-- 被标记为由 SciForge 在本群维护的文档
-- 群里交给 SciForge 的任务
-- 从群请求创建出来的 workspace 任务
-
-SciForge 不应该静默跨群使用上下文。某个群的文档、任务、记忆或决策，不应自动带到另一个群中使用，除非用户明确要求跨群协作并具备相应权限。
-
-能够通过飞书凭证访问某个文档，并不等于 SciForge 已被授权处理该文档。文档还必须属于当前群的协作上下文，或者被明确分配给 SciForge。
-
-## 文档协作行为
-
-SciForge 应该可以在授权范围内直接修改飞书文档。目标不是“每次编辑都先问”，而是“像一个负责的协作者一样行动”。
-
-低风险修改可以自动写入：
-
-- 修正表达、语法、格式和结构
-- 添加摘要、行动项、会议记录或状态章节
-- 写入群里已经达成一致的结论
-- 在完成任务后更新项目文档
-- 对仍有不确定性的位置添加评论
-
-高风险修改应该先询问，或以评论形式提出建议，而不是直接覆盖：
-
-- 删除大量内容
-- 大幅重写并改变文档原意
-- 代表人类或组织作出承诺
-- 对外发布、提交或共享
-- 涉及法律、财务、医疗、安全或敏感决策
-- 群共识不明确时的实质性编辑
-- 访问或编辑未清晰出现在当前群上下文中的文档
-
-每次文档写入都必须保留可追责信息：
-
-- 写入前保存快照或可恢复引用
-- 生成 diff 或 patch 摘要
-- 写入审计记录，包含操作者、群、文档、原因和操作
-- 写入后回群报告修改摘要和回滚引用
-
-群成员应该能看懂 SciForge 改了什么，以及为什么改。
-
-## Workspace 执行行为
-
-Workspace 执行是协作的一部分，不是独立模式。
-
-当群里的请求需要代码、数据、仓库文件、实验或 artifact 生成时，SciForge 可以使用或请求连接 SciForge workspace。连接后，SciForge 在 workspace 中完成工作，但飞书群仍是对话和协作源头。
-
-典型流程：
-
-1. 群成员让 SciForge 调研、实现、分析或撰写内容。
-2. SciForge 判断是否需要 workspace。
-3. 如果没有可用 workspace，SciForge 按产品策略询问、创建或选择 workspace。
-4. SciForge 在 workspace 中执行任务。
-5. SciForge 将进度和结果同步回飞书群。
-6. 如果结果需要写回飞书文档，SciForge 带着快照、diff 和 audit 完成写入。
-
-用户应该感受到一段连续协作，而不是一个割裂的工具流程。
-
-## 记忆和上下文
-
-每个飞书群都应该有自己的协作记忆：
-
-- 群身份和 chat ref
-- 近期讨论摘要
-- 重要决策
-- 未完成任务
-- 由 SciForge 维护的文档
-- 已连接 workspace，如有
-- 审计和回滚引用
-- 成员授权线索
-
-记忆默认按群隔离。它应该帮助 SciForge 长期变得有用，但不能让无关群之间泄漏上下文。
-
-## 安全原则
-
-SciForge 应该主动，但不能鲁莽。
-
-期望行为是：
-
-- 请求清晰时默认推进有用工作
-- 对授权文档的低风险修改可以自动写入
-- 意图、权限或风险不清楚时先问
-- 不确定时用评论替代破坏性编辑
-- 每次写入都保留 diff、快照和 audit
-- 外部副作用尽可能可追踪、可解释、可回滚
-- 永远不把工具可访问性当成充分授权
-
-## 实现方向
-
-现有 Feishu connector 应从底层 channel adapter 演进为群协作者入口。
-
-connector 继续把飞书消息、文档、附件和发送动作归一化为 refs-first 的 SciForge 概念，例如：
-
-- `feishu:chat:*`
-- `feishu:message:*`
-- `feishu:doc:*`
-- `feishu:file:*`
-- `artifact:*`
-- `audit:*`
-
-GUI 不直接调用飞书 SDK 或 CLI。飞书能力仍属于 TUI / Agent Host 侧 connector。Web UI 可以展示来自飞书群的消息、refs、任务、审计记录和文档修改摘要，但协作权限和动作编排属于飞书群上下文与 Agent Host workflow。
-
-## 非目标
-
-本设计不要求：
-
-- 每个飞书群开始工作前必须绑定 SciForge project
-- 给用户暴露观察者、协作者、维护者、执行者等复杂模式
-- 每次文档编辑都人工确认
-- GUI 直接拥有飞书 API 或 CLI 调用
-- 默认建立跨群全局记忆
-
-## 成功标准
-
-第一版完整闭环应证明：
-
-1. SciForge 被邀请进一个飞书群。
-2. 群成员要求 SciForge 处理共享文档或任务。
-3. SciForge 读取相关群上下文和文档。
-4. SciForge 完成有用工作，必要时使用 SciForge workspace。
-5. SciForge 直接更新授权飞书文档或留下评论。
-6. SciForge 带着 diff、快照、audit 和回滚引用把结果同步回群。
-
-如果这个闭环让人感觉像一位能推进项目的人类队友加入了群聊并开始协作，设计就是正确的。
+- [`../PROJECT.md`](../PROJECT.md)：当前需求和验收标准。
+- [`ChannelPluginArchitecture.md`](ChannelPluginArchitecture.md)：外部渠道边界。

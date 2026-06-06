@@ -13,7 +13,7 @@ import type {
   CodexAppServerStartTurnRequest,
   CodexAppServerTurnStream,
 } from './codex-app-server-adapter.js';
-import type { CodexAgentHostRuntimeTruth } from './agent-host-turn-loop.js';
+import type { CodexAgentHostRuntimeTruth } from './agent-host-grounding.js';
 import {
   evaluateAgentHostLocalToolAct,
   type AgentHostLocalToolActDecision,

@@ -4,12 +4,10 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws';
 import type { AgentCliAdapter, AgentCliStartTurnInput } from './agent-cli-adapter.js';
 import {
   createCodexAgentHostGroundingSnapshot,
-  evaluateCodexAgentHostTurnLoop,
   resolveCodexAgentHostRuntimeTruth,
-  type CodexAgentHostComputerUseActMaterializer,
   type CodexAgentHostRuntimeTruth,
   type CodexAgentHostRuntimeTruthResolver,
-} from './agent-host-turn-loop.js';
+} from './agent-host-grounding.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
 import { sanitizeCompletionEvidencePolicy } from '../computer-use/completion-evidence-policy.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
@@ -31,7 +29,6 @@ const codexRuntimeWss = new WebSocketServer({ noServer: true });
 
 export interface CodexRuntimeRouteOptions {
   agentHostRuntimeTruthResolver?: CodexAgentHostRuntimeTruthResolver;
-  computerUseActMaterializer?: CodexAgentHostComputerUseActMaterializer;
 }
 
 export async function handleCodexRuntimeRoutes(
@@ -210,7 +207,7 @@ async function runCodexRuntimeTurn(
   try {
     const explicitRuntimeIntent = runtimeHostIntent(body.runtimeIntent);
     const runtimeIntent = explicitRuntimeIntent ?? runtimeHostIntentFromCommandText(commandText);
-    const explicitComputerUseNativeRouteIntent = explicitRuntimeIntent?.kind === 'computer-use-native-route';
+    const approvalMetadata = sanitizeCodexRuntimeApprovalMetadata(body);
     const agentHostRuntimeTruth = await resolveAgentHostRuntimeTruthForTurn(body, {
       agentHostInput,
       commandText,
@@ -221,43 +218,7 @@ async function runCodexRuntimeTurn(
       abortSignal,
       resolver: options.agentHostRuntimeTruthResolver,
     });
-    const agentHostTurnLoopResult = explicitComputerUseNativeRouteIntent
-      ? undefined
-      : await evaluateCodexAgentHostTurnLoop({
-        input: agentHostInput,
-        commandText,
-        workspacePath,
-        commandId,
-        attemptId,
-        auditMetadata: body.auditMetadata,
-        runtimeTruth: agentHostRuntimeTruth,
-        runtimeTruthRefresh: options.agentHostRuntimeTruthResolver
-          ? ({ step, previousResult }) => resolveAgentHostRuntimeTruthForTurn(body, {
-            agentHostInput,
-            commandText,
-            workspacePath,
-            commandId,
-            attemptId,
-            auditMetadata: {
-              source: 'computer-use-act-loop-refresh',
-              step,
-              previousEvidenceRefs: previousResult?.evidenceRefs?.slice(0, 12),
-            },
-            abortSignal,
-            resolver: options.agentHostRuntimeTruthResolver,
-          })
-          : undefined,
-        computerUseActMaterializer: options.computerUseActMaterializer,
-        abortSignal,
-      });
-    if (agentHostTurnLoopResult) {
-      lastRuntimeEventAt = Date.now();
-      output.emit('agent_host_turn_loop', agentHostTurnLoopResult.event);
-      output.emit('done', agentHostTurnLoopResult.result);
-      return;
-    }
     const agentHostGrounding = createCodexAgentHostGroundingSnapshot(agentHostInput, { runtimeTruth: agentHostRuntimeTruth });
-    const approvalMetadata = sanitizeCodexRuntimeApprovalMetadata(body);
     const turn = await adapter.startTurn({
       commandText,
       workspacePath,

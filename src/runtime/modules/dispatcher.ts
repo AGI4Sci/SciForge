@@ -1,9 +1,11 @@
 import {
+  EXECUTE_BOUNDED_OPERATION_INTENT,
   createModuleDescription,
   moduleIntent,
   moduleIntentRequiresApproval,
   moduleResult,
   moduleSupportsFunction,
+  validateBoundedOperationRequest,
   type ModuleDescription,
   type ModuleFunctionName,
   type ModuleInvokeRequest,
@@ -15,6 +17,10 @@ import {
 import { createResourceModuleHandlers } from './resource-modules.js';
 import { createFilesModuleHandler } from './files-module-handler.js';
 import { createAutomationsModuleHandler } from './automations-module-handler.js';
+import {
+  createBrowserBoundedOperationModuleHandler,
+  createComputerUseBoundedOperationModuleHandler,
+} from './bounded-operation-module-handlers.js';
 
 export interface RuntimeModuleHandler {
   describe(): ModuleDescription | Promise<ModuleDescription>;
@@ -48,6 +54,7 @@ export const RUNTIME_MODULE_IDS = [
   'automations',
   'capabilities',
   'browser',
+  'computer_use',
   'verifier',
   'actions',
   'artifacts',
@@ -65,6 +72,8 @@ export function createRuntimeModuleRegistry(
     files: createFilesModuleHandler(),
     automations: createAutomationsModuleHandler(),
     capabilities: resourceHandlers.capabilities,
+    browser: createBrowserBoundedOperationModuleHandler(),
+    computer_use: createComputerUseBoundedOperationModuleHandler(),
   };
   const merged = new Map<string, RuntimeModuleHandler>();
   for (const moduleId of RUNTIME_MODULE_IDS) {
@@ -189,6 +198,10 @@ export function createRuntimeModuleDispatcher(registry = createRuntimeModuleRegi
       return dispatch(request.moduleId, 'invoke', request, async (handler, description) => {
         const intent = moduleIntent(description, request.intent);
         if (!intent) return fail(request.moduleId, `unsupported_intent:${request.intent}`);
+        if (request.intent === EXECUTE_BOUNDED_OPERATION_INTENT) {
+          const validation = validateBoundedOperationRequest(request);
+          if (!validation.ok) return fail(request.moduleId, validation.errors.join(';'));
+        }
         if (moduleIntentRequiresApproval(description, request.intent) && !request.approvalToken) {
           return moduleResult({
             moduleId: request.moduleId,

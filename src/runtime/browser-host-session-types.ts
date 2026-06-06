@@ -320,6 +320,13 @@ export interface BrowserHostSearchInput {
   timeoutMs?: number;
 }
 
+export interface BrowserHostOpenReadInput {
+  url: string;
+  sessionId?: string;
+  title?: string;
+  timeoutMs?: number;
+}
+
 export interface BrowserHostSearchResult {
   title: string;
   url: string;
@@ -333,6 +340,7 @@ export interface BrowserHostSearchSourcePage {
   finalUrl: string;
   openedAt: string;
   status: 'read' | 'failed';
+  sourcePageRef?: string;
   textRef?: string;
   textPreview?: string;
   textSummary?: string;
@@ -360,6 +368,11 @@ export interface BrowserHostSearchOutput {
   consoleLogRef?: string;
   networkLogRef?: string;
   automationSummary?: BrowserRuntimeAutomationSummary;
+}
+
+export interface BrowserHostOpenReadOutput {
+  sourcePage: BrowserHostSearchSourcePage;
+  session: BrowserHostSessionState;
 }
 
 export interface BrowserHostSessionDriver {

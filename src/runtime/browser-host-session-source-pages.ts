@@ -32,9 +32,22 @@ export async function persistBrowserHostSearchSourcePage(input: {
   const artifact = sourcePageArtifactText(input.result, sourceText, textSummary);
   const sha = sha1(artifact.text);
   const fileName = join('source-pages', `source-${input.resultIndex + 1}-${sha.slice(0, 10)}.txt`);
+  const sourcePageFileName = join('source-pages', `source-${input.resultIndex + 1}-${sha.slice(0, 10)}.source.json`);
   const filePath = join(input.sessionDir, fileName);
+  const sourcePageFilePath = join(input.sessionDir, sourcePageFileName);
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, artifact.text, 'utf8');
+  await writeFile(sourcePageFilePath, JSON.stringify({
+    schemaVersion: 'sciforge.browser-host-session.source-page.v1',
+    resultIndex: input.resultIndex,
+    title: cleanSourcePageText(input.result.title),
+    url: input.result.url,
+    finalUrl: input.finalUrl,
+    openedAt: input.openedAt,
+    status: 'read',
+    textRef: `browser-host-session:${input.sessionId}/${fileName}`,
+    textSha1: sha,
+  }, null, 2), 'utf8');
   return {
     resultIndex: input.resultIndex,
     title: cleanSourcePageText(input.result.title),
@@ -42,6 +55,7 @@ export async function persistBrowserHostSearchSourcePage(input: {
     finalUrl: input.finalUrl,
     openedAt: input.openedAt,
     status: 'read',
+    sourcePageRef: `browser-host-session:${input.sessionId}/${sourcePageFileName}`,
     textRef: `browser-host-session:${input.sessionId}/${fileName}`,
     textPreview: sourcePagePreview(artifact.text),
     ...(textSummary ? { textSummary } : {}),
