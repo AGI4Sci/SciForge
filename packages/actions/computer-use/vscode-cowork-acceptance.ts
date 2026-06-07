@@ -209,6 +209,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const targetFileBlock = targetFileRefsBlock(input, targetWindow, observation);
   if (targetFileBlock) return targetFileBlock;
 
+  const riskEnvelopeBlock = realFileChangeRiskEnvelopeBlock(input, targetWindow, observation);
+  if (riskEnvelopeBlock) return riskEnvelopeBlock;
+
   if (realFileChangeNeedsConfirmation(input, observation)) {
     return {
       ...decisionBase('needs-confirmation', refsForTargetAndObservation(input, targetWindow, observation)),
@@ -398,6 +401,30 @@ function targetFileRefsBlock(
   };
 }
 
+function realFileChangeRiskEnvelopeBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (!realFileChangeOperation(input.operation)) return undefined;
+  if (observation.userFile === false) return undefined;
+  if (nonEmptyString(input.riskActionHash)) return undefined;
+  return {
+    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_real_file_change_risk_hash_required',
+    confirmation: {
+      reason: 'Saving, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
+      approvalScope: input.operation,
+    },
+    repairHints: [{
+      code: 'provide-real-file-risk-action-hash',
+      message: 'Compute a refs-first riskActionHash for the exact user-file mutation, collect confirmation bound to that hash, then retry the Host-chosen primitive.',
+      suggestedPrimitive: 'act',
+    }],
+  };
+}
+
 function actionForOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
@@ -441,7 +468,7 @@ function realFileChangeNeedsConfirmation(
   if (!realFileChangeOperation(input.operation)) return false;
   if (observation.userFile === false) return false;
   if (!nonEmptyString(input.confirmationRef)) return true;
-  if (!nonEmptyString(input.riskActionHash)) return false;
+  if (!nonEmptyString(input.riskActionHash)) return true;
   return !input.confirmationRef.includes(input.riskActionHash);
 }
 

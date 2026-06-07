@@ -186,6 +186,21 @@ test('Host-side VSCode co-work requires confirmation before real-file save, bulk
     assert.ok(decision.refs.includes(`risk:${operation}:paper`), operation);
   }
 
+  const approvalWithoutRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-approval-without-risk',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    confirmationRef: 'approval:save-current-file:paper:confirmed',
+  });
+
+  assert.equal(approvalWithoutRiskHash.status, 'blocked');
+  assert.equal(approvalWithoutRiskHash.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
+  assert.equal(approvalWithoutRiskHash.primitive, undefined);
+  assert.equal(approvalWithoutRiskHash.action, undefined);
+  assert.ok(approvalWithoutRiskHash.refs.includes('approval:save-current-file:paper:confirmed'));
+
   const confirmedSave = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-confirmed',
     operation: 'save-current-file',
