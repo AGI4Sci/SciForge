@@ -168,6 +168,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 Host-side controller / native route 的真实文件 `confirmationRef` 也必须绑定目标文件 ref。保存、撤销、替换选区、批量替换或跨文件修改只有在 approval token 同时绑定 `riskActionHash` 和当前 selected/唯一 visible `file-ref:` 时才会继续；只绑定 risk 的 approval 会保持 `needs-confirmation`，Computer Use core 仍不收集确认、不选择文件、不做 task planning。
 
+补充：P9 Host-side controller / native route 的 `non-user-file-scope:` 豁免 evidence 也必须绑定同一个目标 `file-ref:`。`userFile=false` 仍只是 Host/observe 给出的分类结果；只有目标文件绑定的 scope ref 才能豁免用户真实文件确认，泛泛 scope ref 会 blocked，Computer Use core 不自行判断文件归属。
+
 ## 职责边界
 
 ```text

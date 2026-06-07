@@ -1197,6 +1197,42 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.ok((bareNonUserFileDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
   assert.doesNotMatch(JSON.stringify(bareNonUserFileEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 
+  const unboundNonUserFileScopeEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 临时草稿文件。',
+      commandId: 'native-route-vscode-cowork-save-non-user-unbound-scope',
+      attemptId: 'native-route-vscode-cowork-save-non-user-unbound-scope-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-non-user-unbound-scope',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          userFile: false,
+          nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch',
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unboundNonUserFileScopeDone = unboundNonUserFileScopeEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unboundNonUserFileScopeUnit = (unboundNonUserFileScopeDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unboundNonUserFileScopeDone?.status, 'blocked');
+  assert.equal(unboundNonUserFileScopeUnit?.primitive, undefined);
+  assert.equal(unboundNonUserFileScopeUnit?.action, undefined);
+  assert.equal(unboundNonUserFileScopeUnit?.blockedReason, 'vscode_cowork_non_user_file_scope_target_ref_required');
+  assert.ok((unboundNonUserFileScopeDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.ok((unboundNonUserFileScopeDone?.evidenceRefs as string[]).includes('non-user-file-scope:vscode:scratch'));
+  assert.doesNotMatch(JSON.stringify(unboundNonUserFileScopeEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
   const scopedNonUserFileEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '保存我当前打开的 VSCode 临时草稿文件。',
@@ -1213,7 +1249,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
         latestObservation: {
           ...vscodeNativeRouteObservation(),
           userFile: false,
-          nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch',
+          nonUserFileScopeRef: 'non-user-file-scope:file-ref:vscode:paper:scratch',
         },
       },
     }),
@@ -1234,7 +1270,7 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   });
   assert.equal(scopedNonUserFileUnit?.risk, undefined);
   assert.equal(scopedNonUserFileUnit?.approvalRef, undefined);
-  assert.ok((scopedNonUserFileDone?.evidenceRefs as string[]).includes('non-user-file-scope:vscode:scratch'));
+  assert.ok((scopedNonUserFileDone?.evidenceRefs as string[]).includes('non-user-file-scope:file-ref:vscode:paper:scratch'));
   assert.doesNotMatch(JSON.stringify(scopedNonUserFileEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 
   const unconfirmedUndoEvents = await collectStreamEvents(createComputerUseNativeRouteStream({

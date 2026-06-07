@@ -710,8 +710,8 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.equal(bareNonUserFileFlag.action, undefined);
   assert.ok(bareNonUserFileFlag.refs.includes('file-ref:vscode:paper'));
 
-  const scopedNonUserFile = decideVSCodeCoWorkNextPrimitive({
-    requestRef: 'chat-request:vscode-cowork:save-non-user-scoped',
+  const unboundNonUserFileScope = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-non-user-unbound-scope',
     operation: 'save-current-file',
     selectedWindowRef: 'window:vscode:paper',
     selectedFileRef: 'file-ref:vscode:paper',
@@ -723,11 +723,31 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
     },
   });
 
+  assert.equal(unboundNonUserFileScope.status, 'blocked');
+  assert.equal(unboundNonUserFileScope.blockedReason, 'vscode_cowork_non_user_file_scope_target_ref_required');
+  assert.equal(unboundNonUserFileScope.primitive, undefined);
+  assert.equal(unboundNonUserFileScope.action, undefined);
+  assert.ok(unboundNonUserFileScope.refs.includes('file-ref:vscode:paper'));
+  assert.ok(unboundNonUserFileScope.refs.includes('non-user-file-scope:vscode:scratch'));
+
+  const scopedNonUserFile = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-non-user-scoped',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      userFile: false,
+      nonUserFileScopeRef: 'non-user-file-scope:file-ref:vscode:paper:scratch',
+    },
+  });
+
   assert.equal(scopedNonUserFile.status, 'ready');
   assert.equal(scopedNonUserFile.primitive, 'act');
   assert.equal(scopedNonUserFile.risk, undefined);
   assert.equal(scopedNonUserFile.approvalRef, undefined);
-  assert.ok(scopedNonUserFile.refs.includes('non-user-file-scope:vscode:scratch'));
+  assert.ok(scopedNonUserFile.refs.includes('non-user-file-scope:file-ref:vscode:paper:scratch'));
 
   const approvalWithoutRiskHash = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-approval-without-risk',

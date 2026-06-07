@@ -790,14 +790,27 @@ function nonUserFileScopeRefRequiredBlock(
 ): VSCodeCoWorkDecision | undefined {
   if (!realFileChangeOperation(input.operation)) return undefined;
   if (observation.userFile !== false) return undefined;
-  if (nonUserFileScopeRef(observation.nonUserFileScopeRef)) return undefined;
+  if (!nonUserFileScopeRef(observation.nonUserFileScopeRef)) {
+    return {
+      ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+      targetWindowRef: targetWindow.windowRef,
+      blockedReason: 'vscode_cowork_non_user_file_scope_ref_required',
+      repairHints: [{
+        code: 'provide-non-user-file-scope-ref',
+        message: 'Host must provide a refs-first non-user file scope ref before treating a VSCode file mutation as exempt from user-file confirmation.',
+        suggestedPrimitive: 'observe',
+      }],
+    };
+  }
+  const targetFileRef = resolvedTargetFileRef(input, targetWindow, observation);
+  if (nonUserFileScopeRefMatchesTargetFile(observation.nonUserFileScopeRef, targetFileRef)) return undefined;
   return {
     ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
     targetWindowRef: targetWindow.windowRef,
-    blockedReason: 'vscode_cowork_non_user_file_scope_ref_required',
+    blockedReason: 'vscode_cowork_non_user_file_scope_target_ref_required',
     repairHints: [{
-      code: 'provide-non-user-file-scope-ref',
-      message: 'Host must provide a refs-first non-user file scope ref before treating a VSCode file mutation as exempt from user-file confirmation.',
+      code: 'bind-non-user-file-scope-to-target-file',
+      message: 'Host must bind the non-user file scope ref to the same selected fileRef before treating a VSCode mutation as exempt from user-file confirmation.',
       suggestedPrimitive: 'observe',
     }],
   };
@@ -1087,6 +1100,11 @@ function resolvedTargetFileRef(
 function approvalRefMatchesRiskActionHashAndTargetFile(approvalRef: string, riskActionHash: string, targetFileRef: string | undefined): boolean {
   if (!fileRef(targetFileRef)) return false;
   return approvalRef.startsWith(`approval:${riskActionHash}:${targetFileRef}:`);
+}
+
+function nonUserFileScopeRefMatchesTargetFile(scopeRef: string, targetFileRef: string | undefined): boolean {
+  if (!fileRef(targetFileRef)) return false;
+  return scopeRef.startsWith(`non-user-file-scope:${targetFileRef}:`);
 }
 
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
