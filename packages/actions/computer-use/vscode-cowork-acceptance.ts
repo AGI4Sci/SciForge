@@ -60,6 +60,7 @@ export interface VSCodeCoWorkWindowCandidate {
 
 export interface VSCodeCoWorkObservationRefs {
   windowRef: string;
+  sessionRef?: string;
   observationRef: string;
   screenshotRef: string;
   accessibilityRef: string;
@@ -518,6 +519,13 @@ function observationRefsBlock(
       code: 'observe-selected-window',
       message: 'Host must call observe on the selected VSCode window and use current screenshot, AX, text, element, and freshness refs before choosing an action.',
       suggestedPrimitive: 'observe',
+    }]);
+  }
+  if (!sessionRef(observation.sessionRef)) {
+    return blocked(input, 'vscode_cowork_observe_session_ref_required', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'bind-observe-session-ref',
+      message: 'Host must bind current VSCode observe refs to a window-action-session ref before choosing the next atomic primitive.',
+      suggestedPrimitive: 'bind',
     }]);
   }
   if (invalidObservationRefCount(observation) > 0) {
@@ -1020,6 +1028,7 @@ function refsForTargetAndObservation(
     approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
     windowRef(observation.windowRef) ? observation.windowRef : undefined,
+    sessionRef(observation.sessionRef) ? observation.sessionRef : undefined,
     observationRef(observation.observationRef) ? observation.observationRef : undefined,
     imageRef(observation.screenshotRef) ? observation.screenshotRef : undefined,
     accessibilityRef(observation.accessibilityRef) ? observation.accessibilityRef : undefined,

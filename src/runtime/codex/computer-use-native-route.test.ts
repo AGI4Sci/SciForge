@@ -813,6 +813,7 @@ test('Computer Use native route returns refs-only observe decision for VSCode vi
   assert.equal(unit?.primitive, 'observe');
   assert.equal(unit?.action, undefined);
   assert.ok((done?.evidenceRefs as string[]).includes('observation:vscode:current'));
+  assert.ok((done?.evidenceRefs as string[]).includes('window-action-session:vscode-cowork:1'));
   assert.ok((done?.evidenceRefs as string[]).includes('text:vscode:visible'));
   assert.doesNotMatch(JSON.stringify(events), /visible text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
@@ -1525,6 +1526,7 @@ function vscodeNativeRouteObservation(input: {
 } = {}) {
   return {
     windowRef: 'window:vscode:paper',
+    sessionRef: 'window-action-session:vscode-cowork:1',
     observationRef: 'observation:vscode:current',
     screenshotRef: 'image:vscode:current',
     accessibilityRef: 'accessibility:vscode:current',

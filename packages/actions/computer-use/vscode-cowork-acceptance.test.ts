@@ -171,6 +171,7 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
     windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
     latestObservation: {
       windowRef: 'window:vscode:paper',
+      sessionRef: 'window-action-session:vscode-cowork:1',
       observationRef: 'observation:vscode:old',
       screenshotRef: 'image:vscode:old',
       accessibilityRef: 'accessibility:vscode:old',
@@ -226,6 +227,22 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
   assert.equal(editorHidden.blockedReason, 'vscode_cowork_editor_not_visible');
   assert.equal(editorHidden.primitive, undefined);
   assert.equal(editorHidden.action, undefined);
+
+  const missingSession = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:missing-session',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      sessionRef: undefined,
+    },
+  });
+
+  assert.equal(missingSession.status, 'blocked');
+  assert.equal(missingSession.blockedReason, 'vscode_cowork_observe_session_ref_required');
+  assert.equal(missingSession.primitive, undefined);
+  assert.equal(missingSession.action, undefined);
 });
 
 test('Host-side VSCode co-work blocks mixed raw and refs-first observe refs', () => {
@@ -398,6 +415,7 @@ test('Host-side VSCode co-work chooses the next primitive only from fresh observ
   });
   assert.equal(decision.targetWindowRef, 'window:vscode:paper');
   assert.ok(decision.refs.includes('observation:vscode:current'));
+  assert.ok(decision.refs.includes('window-action-session:vscode-cowork:1'));
   assert.ok(decision.refs.includes('image:vscode:current'));
   assert.ok(decision.refs.includes('accessibility:vscode:current'));
   assert.ok(decision.refs.includes('text:vscode:visible'));
@@ -1391,6 +1409,7 @@ function vscodeWindow(input: {
 function freshObservation() {
   return {
     windowRef: 'window:vscode:paper',
+    sessionRef: 'window-action-session:vscode-cowork:1',
     observationRef: 'observation:vscode:current',
     screenshotRef: 'image:vscode:current',
     accessibilityRef: 'accessibility:vscode:current',

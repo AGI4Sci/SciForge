@@ -187,6 +187,7 @@ function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | unde
   const visibleFileRefs = sanitizeRuntimeRefList(value.visibleFileRefs, ['file-ref:']);
   return {
     windowRef,
+    sessionRef: safeRuntimeRef(value.sessionRef, ['window-action-session:', 'computer-use-session:']),
     observationRef: safeRuntimeRef(value.observationRef, ['observation:']) ?? '',
     screenshotRef: safeRuntimeRef(value.screenshotRef, ['image:']) ?? '',
     accessibilityRef: safeRuntimeRef(value.accessibilityRef, ['accessibility:']) ?? '',
