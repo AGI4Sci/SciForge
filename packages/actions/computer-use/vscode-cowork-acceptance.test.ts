@@ -1,0 +1,279 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  VSCODE_COWORK_ACCEPTANCE_CAPABILITY,
+  decideVSCodeCoWorkNextPrimitive,
+  validateVSCodeCoWorkRunCleanup,
+} from './vscode-cowork-acceptance.js';
+import { CU_NEXT_TASK_MAPPINGS } from './task-map.js';
+
+test('VSCode co-work capability stays live-diagnostic and never product-ready', () => {
+  assert.equal(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.maturity, 'live-diagnostic');
+  assert.equal(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.productReady, false);
+  assert.equal(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.userProfileUsed, true);
+  assert.ok(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.cleanup.asserts.includes('input-lease-cursor-adapter-released'));
+  assert.ok(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.cleanup.asserts.includes('front-app-restored'));
+  assert.ok(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.cleanup.asserts.includes('mouse-position-restored'));
+  assert.ok(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.cleanup.asserts.includes('user-vscode-process-not-killed'));
+  assert.ok(VSCODE_COWORK_ACCEPTANCE_CAPABILITY.cleanup.asserts.includes('user-profile-not-cleared'));
+});
+
+test('CU-NEXT task map registers P9 current VSCode co-work without product-ready claims', () => {
+  const mapping = CU_NEXT_TASK_MAPPINGS.find((task) => task.taskId === 'CU-NEXT-09');
+
+  assert.ok(mapping);
+  assert.equal(mapping.slug, 'current-vscode-cowork');
+  assert.equal(mapping.recommendedTargetMode, 'active-window');
+  assert.equal(mapping.recommendedTargetApp, 'Visual Studio Code');
+  assert.ok(mapping.requirements.includes('observe-before-mutate-refs'));
+  assert.ok(mapping.requirements.includes('approval-chain'));
+  assert.ok(mapping.requirements.includes('user-control-refs'));
+  assert.doesNotMatch(JSON.stringify(mapping), /product-ready/i);
+});
+
+test('Host-side VSCode co-work asks for confirmation when multiple user windows match', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:multi-window',
+    operation: 'focus-editor',
+    windowCandidates: [
+      vscodeWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+      vscodeWindow({ windowRef: 'window:vscode:notes', titleRef: 'text:title:notes' }),
+    ],
+  });
+
+  assert.equal(decision.status, 'needs-confirmation');
+  assert.equal(decision.blockedReason, 'vscode_cowork_target_window_needs_confirmation');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.deepEqual(decision.confirmation?.candidateWindowRefs, ['window:vscode:paper', 'window:vscode:notes']);
+  assert.equal(decision.productReady, false);
+  assert.equal(decision.maturity, 'live-diagnostic');
+});
+
+test('Host-side VSCode co-work blocks stale or incomplete observe refs before selecting an action', () => {
+  const stale = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:stale',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      windowRef: 'window:vscode:paper',
+      observationRef: 'observation:vscode:old',
+      screenshotRef: 'image:vscode:old',
+      accessibilityRef: 'accessibility:vscode:old',
+      textRefs: ['text:vscode:old'],
+      elementRefs: ['element:vscode:editor'],
+      freshnessRef: 'freshness:vscode:old',
+      stale: true,
+      editorVisible: true,
+      userFile: true,
+    },
+  });
+
+  assert.equal(stale.status, 'blocked');
+  assert.equal(stale.blockedReason, 'vscode_cowork_observation_stale');
+  assert.equal(stale.primitive, undefined);
+  assert.equal(stale.action, undefined);
+
+  const missingRefs = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:missing-refs',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      windowRef: 'window:vscode:paper',
+      observationRef: 'observation:vscode:missing',
+      screenshotRef: '',
+      accessibilityRef: 'accessibility:vscode:missing',
+      textRefs: [],
+      elementRefs: ['element:vscode:editor'],
+      freshnessRef: 'freshness:vscode:missing',
+      editorVisible: true,
+      userFile: true,
+    },
+  });
+
+  assert.equal(missingRefs.status, 'blocked');
+  assert.equal(missingRefs.blockedReason, 'vscode_cowork_observe_refs_required');
+  assert.equal(missingRefs.primitive, undefined);
+  assert.equal(missingRefs.action, undefined);
+
+  const editorHidden = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:editor-hidden',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      editorVisible: false,
+    },
+  });
+
+  assert.equal(editorHidden.status, 'blocked');
+  assert.equal(editorHidden.blockedReason, 'vscode_cowork_editor_not_visible');
+  assert.equal(editorHidden.primitive, undefined);
+  assert.equal(editorHidden.action, undefined);
+});
+
+test('Host-side VSCode co-work chooses the next primitive only from fresh observe refs', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:focus',
+    operation: 'focus-editor',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'ready');
+  assert.equal(decision.primitive, 'act');
+  assert.deepEqual(decision.action, {
+    type: 'key',
+    key: 'Command+1',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.equal(decision.targetWindowRef, 'window:vscode:paper');
+  assert.ok(decision.refs.includes('observation:vscode:current'));
+  assert.ok(decision.refs.includes('image:vscode:current'));
+  assert.ok(decision.refs.includes('accessibility:vscode:current'));
+  assert.ok(decision.refs.includes('text:vscode:visible'));
+  assert.ok(decision.refs.includes('freshness:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(decision), /visibleText|rawScreenshot|base64|task|goal|planner/i);
+});
+
+test('Host-side VSCode co-work requires confirmation before real-file save, bulk replace, or cross-file modification', () => {
+  for (const operation of ['save-current-file', 'bulk-replace', 'cross-file-modify'] as const) {
+    const decision = decideVSCodeCoWorkNextPrimitive({
+      requestRef: `chat-request:vscode-cowork:${operation}`,
+      operation,
+      selectedWindowRef: 'window:vscode:paper',
+      windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+      latestObservation: freshObservation(),
+      riskActionHash: `risk:${operation}:paper`,
+    });
+
+    assert.equal(decision.status, 'needs-confirmation', operation);
+    assert.equal(decision.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation', operation);
+    assert.equal(decision.primitive, undefined, operation);
+    assert.equal(decision.action, undefined, operation);
+    assert.equal(decision.confirmation?.riskActionHash, `risk:${operation}:paper`, operation);
+  }
+
+  const confirmedSave = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-confirmed',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:save-current-file:paper',
+    confirmationRef: 'approval:risk:save-current-file:paper:confirmed',
+  });
+
+  assert.equal(confirmedSave.status, 'ready');
+  assert.equal(confirmedSave.primitive, 'act');
+  assert.deepEqual(confirmedSave.action, {
+    type: 'app_command',
+    command: 'save',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.deepEqual(confirmedSave.risk, {
+    level: 'high',
+    categories: ['user-real-file-change'],
+    actionHash: 'risk:save-current-file:paper',
+  });
+  assert.equal(confirmedSave.approvalRef, 'approval:risk:save-current-file:paper:confirmed');
+});
+
+test('VSCode co-work cleanup validation requires release refs and focus/mouse restoration without killing user state', () => {
+  const passed = validateVSCodeCoWorkRunCleanup({
+    maturity: 'live-diagnostic',
+    productReady: false,
+    userProfileUsed: true,
+    sharedSystemInputUsed: true,
+    evidence: {
+      releaseRefs: [
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
+      ],
+      restorationRefs: [
+        'front-app-restore:vscode-cowork:1',
+        'mouse-position-restore:vscode-cowork:1',
+      ],
+    },
+    cleanup: {
+      inputLeaseReleased: true,
+      cursorReleased: true,
+      adapterReleased: true,
+      frontAppRestored: true,
+      mousePositionRestored: true,
+      userVSCodeProcessKilled: false,
+      userProfileCleared: false,
+    },
+  });
+
+  assert.equal(passed.ok, true);
+  assert.deepEqual(passed.issues, []);
+
+  const failed = validateVSCodeCoWorkRunCleanup({
+    maturity: 'product-ready',
+    productReady: true,
+    userProfileUsed: true,
+    sharedSystemInputUsed: true,
+    evidence: {
+      releaseRefs: ['input-adapter:vscode-cowork:1'],
+      restorationRefs: ['front-app-restore:vscode-cowork:1'],
+    },
+    cleanup: {
+      inputLeaseReleased: false,
+      cursorReleased: false,
+      adapterReleased: true,
+      frontAppRestored: true,
+      mousePositionRestored: false,
+      userVSCodeProcessKilled: true,
+      userProfileCleared: true,
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.issues, [
+    'vscode-cowork-capability-must-remain-live-diagnostic',
+    'vscode-cowork-must-not-claim-product-ready',
+    'missing-release-ref:scoped-input-lease',
+    'missing-release-ref:cursor-marker',
+    'missing-restoration-ref:mouse-position',
+    'cleanup-input-lease-not-released',
+    'cleanup-cursor-not-released',
+    'cleanup-mouse-position-not-restored',
+    'cleanup-must-not-kill-user-vscode',
+    'cleanup-must-not-clear-user-profile',
+  ]);
+});
+
+function vscodeWindow(input: {
+  windowRef: string;
+  titleRef?: string;
+}) {
+  return {
+    appRef: 'macos-app:com.microsoft.VSCode',
+    processRef: input.windowRef.replace('window:', 'process:'),
+    windowRef: input.windowRef,
+    titleRef: input.titleRef ?? `${input.windowRef}:title`,
+    frontmostRef: `${input.windowRef}:frontmost`,
+  };
+}
+
+function freshObservation() {
+  return {
+    windowRef: 'window:vscode:paper',
+    observationRef: 'observation:vscode:current',
+    screenshotRef: 'image:vscode:current',
+    accessibilityRef: 'accessibility:vscode:current',
+    textRefs: ['text:vscode:visible'],
+    elementRefs: ['element:vscode:editor', 'element:vscode:file-tabs'],
+    freshnessRef: 'freshness:vscode:current',
+    editorVisible: true,
+    visibleFileRefs: ['file-ref:vscode:paper'],
+    userFile: true,
+  };
+}

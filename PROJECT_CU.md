@@ -293,7 +293,9 @@ Acceptance Gates：
 - [ ] 对用户真实文件的改动必须先给预览或确认；未确认时 executor 不得执行保存、批量替换或跨文件修改。
 - [ ] shared-system-input 路径只能标为 `live-diagnostic`；只有 session-local / focus-free adapter 通过真实 co-work 验收且无副作用时，才允许升级为 `product-ready`。
 
-当前状态：P9 已登记为下一阶段任务，尚未实现，不能打勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 需要证明用户已打开 VSCode 的真实 co-work 入口和确认边界。
+本轮推进：新增 `packages/actions/computer-use/vscode-cowork-acceptance.ts` 和 focused tests，登记 `CU-NEXT-09 current-vscode-cowork`。该 Host-side acceptance controller 只把 current VSCode co-work 的下一步选择规则固化为 refs-first 契约：多 VSCode 窗口或目标不明确返回 `needs-confirmation`，缺少 fresh observe refs / editor 不可见 / refs 陈旧返回 `blocked`，fresh observe refs 可产出一个低风险 `focus-editor` 原子 `act`，用户真实文件的保存、批量替换和跨文件修改在缺少 matching confirmationRef 时返回 `needs-confirmation` 且不返回可执行 action；确认后的真实文件保存会把 `riskActionHash` 绑定到后续 `act` 的 risk envelope 和 approvalRef。cleanup validator 要求 release input lease / cursor / adapter，并要求 front app / mouse position restoration refs，且禁止杀用户 VSCode 或清用户 profile。该契约为 `unit-proven`，仍不是真实桌面 co-work live 完成。
+
+当前状态：P9 policy / acceptance-controller contract 已达到 `unit-proven`；P9 普通聊天入口和用户已打开 VSCode 的真实 co-work live acceptance 仍未完成，不能打 P9 阶段完成勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 还需要证明普通聊天 Host 入口、真实当前用户窗口绑定、final answer refs-first 证据和确认边界。
 
 ## P10：论文修改 / 润色 GUI 协作
 

@@ -133,6 +133,18 @@ export const DEFAULT_CU_NEXT_TASK_MAP = {
       recommendedTargetApp: 'TextEdit',
       recommendedMaxSteps: 8,
     },
+    {
+      taskId: 'CU-NEXT-09',
+      title: 'Current VSCode co-work',
+      slug: 'current-vscode-cowork',
+      priority: 9,
+      primaryScenarioId: 'CU-LONG-006',
+      longScenarioIds: ['CU-LONG-006', 'CU-LONG-008'],
+      requirements: ['l3-workflow-refs', 'approval-chain', 'repair-continuity', 'user-control-refs', 'observe-before-mutate-refs', 'product-path-classification', 'current-bundle-evidence', 'dom-ax-observation-hints', 'no-dom-playwright-accessibility'],
+      recommendedTargetMode: 'active-window',
+      recommendedTargetApp: 'Visual Studio Code',
+      recommendedMaxSteps: 6,
+    },
   ],
 } satisfies CuNextTaskMap;
 export const CU_NEXT_TASK_MAPPINGS = DEFAULT_CU_NEXT_TASK_MAP.tasks;

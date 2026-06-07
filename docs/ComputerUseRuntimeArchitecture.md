@@ -130,12 +130,13 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 ## 当前推进顺序
 
-近期实现按 P3 / P4 / P6 收敛，并把 P8 作为下一轮复杂真实软件验收：
+近期实现按 P3 / P4 / P6 收敛，并把 P8 / P9 作为复杂真实软件验收与 co-work 边界：
 
 - P3 先把真实桌面验收做扎实：live test 默认 skip，显式 env 才运行；运行前后清理测试窗口、文稿、进程和 artifacts；多 session 要证明 adapter / cursor 独立。
 - P4 再接 Host / MCP：MCP schema 必须与 TS validator 一致；Host port adapter 提供真实 `bind` / `observe` / `act` / `control`；Agent Host 继续拥有用户任务理解和 final answer。
 - P6 持续清理迁移路径：旧 `runTask`、`perform_local_action`、`fill_fields`、`executeBoundedOperation` 和 VirtualAppScreen / noVNC product claim 不能回流到新 public surface。
 - P8 用 VSCode / IDE 复杂桌面窗口补齐视觉验收：真实 `observe` 必须看到文件树、编辑区、窗口标题或等价 AX/text 证据；Host-side acceptance controller 可以基于 observation refs 选择下一步原子动作，但 Computer Use core 仍不做规划；真实 `act` 必须改变当前测试窗口；after observe 必须用视觉/AX/text refs 验证变化，文件内容只能作为补充 validator；验收后必须清理测试文件 tab、临时 workspace、input lease、cursor 和 artifacts。
+- P9 面向用户已打开的 VSCode / IDE co-work：Host 可以根据当前 run 的 observe refs、用户选择的 window refs 和风险 envelope 决定下一步原子 primitive；多窗口、目标文件不明确、编辑区不可见或 observation stale 必须 `needs-confirmation` / `blocked`；保存用户真实文件、批量替换和跨文件修改必须有 Host-collected confirmationRef。Computer Use core 仍只接受 Host 指定的 primitive，不接受 task plan。
 
 完成顺序以验收成熟度为准：`contracted` 和 `unit-proven` 只能说明 contract 正确；只有 session-local adapter 通过真实桌面验收且无副作用残留，才能升为 `product-ready`。
 
@@ -150,6 +151,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 当前 P7 状态是 `unit-proven`：普通聊天入口已能触发 Host 选择 target，并走 `bind -> observe -> act -> control(release)`；final answer 只基于 action evidence 和 release evidence 表达局部动作结果。TextEdit chat bridge 和 live acceptance runner 已证明 save 目标、artifact validator refs、release refs 和 product completion gate 能保留到 blocked answer；真实桌面 TextEdit primitive live 仍是 `live-diagnostic`，普通聊天到真实 TextEdit/Appium 的完整 live 验收还不能声明 `product-ready`。
 
 当前 P8 状态是 `live-diagnostic`：VSCode live acceptance runner 默认 skip，显式 `SCIFORGE_COMPUTER_USE_VSCODE_PRIMITIVE_ACCEPTANCE=1` 才运行；用户要求它复用用户 VSCode profile / 当前权限以贴近真实 co-work，所以 manifest 明确标记 `userProfileUsed=true`。该 runner 在临时 workspace / test file 上走 `bind -> observe -> act -> observe -> control(release)`，记录 screenshotRef、accessibilityRef、visible text refs、target window/session refs、input adapter / cursor / lease release refs，并用补充文件 validator 交叉确认保存结果。不带 keep-artifacts 运行后会删除临时 workspace 和 evidence artifacts，但不会杀用户 VSCode 进程，也不会清理用户 profile。该能力仍使用共享系统输入和用户 profile，因此不能声明 `product-ready` 或 profile-isolated cleanup。
+
+当前 P9 状态是 `unit-proven`：`packages/actions/computer-use/vscode-cowork-acceptance.ts` 记录了 Host-side current VSCode co-work 的 acceptance controller contract，并登记 `CU-NEXT-09 current-vscode-cowork`。该 contract 只根据 Host 提供的窗口候选、选定 windowRef、fresh observe refs、riskActionHash 和 confirmationRef 返回一个下一步原子 primitive，或返回 `needs-confirmation` / `blocked`；它不新增 MCP public surface，不进入 Computer Use primitive core，也不产生用户级 completion truth。cleanup validation 要求 release input lease / cursor / adapter，并要求 front app 与 mouse position restoration refs；因为复用用户 profile，验收禁止杀用户 VSCode 或清理用户 profile。该状态不代表普通聊天真实 co-work live gate 已完成，也不能声明 `product-ready`。
 
 ## 职责边界
 
