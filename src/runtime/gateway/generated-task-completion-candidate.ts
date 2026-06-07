@@ -4,9 +4,9 @@ import type { ToolPayload } from '../runtime-types.js';
 import { isRecord, uniqueStrings } from '../gateway-utils.js';
 import type { WorkEvidence } from './work-evidence-types.js';
 
-export interface AgentServerCompletionCandidate {
+export interface BackendCompletionCandidate {
   schemaVersion: 'sciforge.completion-candidate.v1';
-  source: 'agentserver-side-effect-work-evidence';
+  source: 'backend-side-effect-work-evidence';
   status: 'unverified';
   summary: string;
   artifactRefs: string[];
@@ -15,21 +15,24 @@ export interface AgentServerCompletionCandidate {
   createdAt: string;
 }
 
-export function completionCandidateFromAgentServerWorkEvidence(params: {
+/** @deprecated Use BackendCompletionCandidate. */
+export type AgentServerCompletionCandidate = BackendCompletionCandidate;
+
+export function completionCandidateFromBackendWorkEvidence(params: {
   workspace: string;
   workEvidence?: WorkEvidence[];
   failureKind?: string;
   now?: Date;
-}): AgentServerCompletionCandidate | undefined {
+}): BackendCompletionCandidate | undefined {
   const refs = uniqueStrings((params.workEvidence ?? [])
     .flatMap((entry) => candidateRefsFromWorkEvidence(params.workspace, entry)))
     .slice(0, 8);
   if (!refs.length) return undefined;
   return {
     schemaVersion: 'sciforge.completion-candidate.v1',
-    source: 'agentserver-side-effect-work-evidence',
+    source: 'backend-side-effect-work-evidence',
     status: 'unverified',
-    summary: `AgentServer failed before a terminal result, but wrote ${refs.length} workspace file(s) that may contain useful partial work. Treat them as unverified candidates until rerun or inspected.`,
+    summary: `Backend generation failed before a terminal result, but wrote ${refs.length} workspace file(s) that may contain useful partial work. Treat them as unverified candidates until rerun or inspected.`,
     artifactRefs: refs.map((ref) => `artifact:${artifactIdForWorkspaceRef(ref)}`),
     auditRefs: refs,
     recoverActions: [
@@ -41,14 +44,17 @@ export function completionCandidateFromAgentServerWorkEvidence(params: {
   };
 }
 
-export function attachAgentServerCompletionCandidateArtifacts(params: {
+/** @deprecated Use completionCandidateFromBackendWorkEvidence. */
+export const completionCandidateFromAgentServerWorkEvidence = completionCandidateFromBackendWorkEvidence;
+
+export function attachBackendCompletionCandidateArtifacts(params: {
   payload: ToolPayload;
   workspace: string;
   workEvidence?: WorkEvidence[];
   failureKind?: string;
   now?: Date;
 }): ToolPayload {
-  const candidate = completionCandidateFromAgentServerWorkEvidence(params);
+  const candidate = completionCandidateFromBackendWorkEvidence(params);
   if (!candidate) return params.payload;
   const artifacts = candidate.auditRefs.map((ref) => candidateArtifactForWorkspaceRef(ref));
   return {
@@ -73,6 +79,9 @@ export function attachAgentServerCompletionCandidateArtifacts(params: {
     ],
   };
 }
+
+/** @deprecated Use attachBackendCompletionCandidateArtifacts. */
+export const attachAgentServerCompletionCandidateArtifacts = attachBackendCompletionCandidateArtifacts;
 
 function candidateRefsFromWorkEvidence(workspace: string, entry: WorkEvidence) {
   if (entry.kind !== 'write') return [];
