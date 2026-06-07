@@ -67,8 +67,14 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
 }
 
 function isVSCodeCoWorkTask(runtimeIntent: Record<string, unknown> | undefined): boolean {
+  if (runtimeIntent?.schemaVersion !== 'sciforge.runtime-codex.host-intent.v1') return false;
+  if (runtimeIntent.kind !== 'computer-use-native-route') return false;
+  if (runtimeIntent.source !== 'host-owned') return false;
   const computerUseNext = isRecord(runtimeIntent?.computerUseNext) ? runtimeIntent.computerUseNext : undefined;
-  return computerUseNext?.taskId === 'CU-NEXT-09';
+  const semanticMarkers = safeRuntimeStringList(computerUseNext?.semanticMarkers) ?? [];
+  return computerUseNext?.taskId === 'CU-NEXT-09'
+    && semanticMarkers.includes('current-vscode-cowork')
+    && semanticMarkers.includes('refs-first');
 }
 
 interface SanitizedVSCodeCoWorkBinding {

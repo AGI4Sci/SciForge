@@ -6,6 +6,7 @@ import {
   createComputerUseNativeRouteStream,
   isComputerUseNativeRouteCommand,
 } from './computer-use-native-route.js';
+import { createVSCodeCoWorkChatBridge } from './vscode-cowork-chat-bridge.js';
 
 test('Computer Use slash route is diagnostic-only unless Host supplies explicit runtime intent', () => {
   assert.equal(isComputerUseNativeRouteCommand('/computer-use write a visible report'), false);
@@ -286,6 +287,61 @@ test('Computer Use native route selects VSCode co-work bridge and fails closed o
   assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:paper'));
   assert.ok((done?.evidenceRefs as string[]).includes('window:vscode:notes'));
   assert.doesNotMatch(JSON.stringify(events), /SECRET|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
+});
+
+test('VSCode co-work bridge requires host-owned refs-first runtime intent markers', () => {
+  const baseIntent = {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    computerUseNext: {
+      taskId: 'CU-NEXT-09',
+      recommendedTargetMode: 'active-window',
+      recommendedTargetApp: 'Visual Studio Code',
+      semanticMarkers: ['current-vscode-cowork', 'refs-first'],
+    },
+    vscodeCoWork: {
+      requestRef: 'chat-request:vscode-cowork:bridge-marker-gate',
+      operation: 'read-visible-text',
+      selectedWindowRef: 'window:vscode:paper',
+      windowCandidates: [
+        vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+      ],
+      latestObservation: vscodeNativeRouteObservation(),
+    },
+  };
+
+  assert.equal(createVSCodeCoWorkChatBridge({
+    runtimeIntent: {
+      ...baseIntent,
+      source: 'runtime-owned',
+    },
+    commandId: 'native-route-vscode-cowork-non-host-owned',
+    attemptId: 'native-route-vscode-cowork-non-host-owned-attempt-1',
+  }), undefined);
+
+  assert.equal(createVSCodeCoWorkChatBridge({
+    runtimeIntent: {
+      ...baseIntent,
+      computerUseNext: {
+        ...baseIntent.computerUseNext,
+        semanticMarkers: ['current-vscode-cowork'],
+      },
+    },
+    commandId: 'native-route-vscode-cowork-missing-refs-first-marker',
+    attemptId: 'native-route-vscode-cowork-missing-refs-first-marker-attempt-1',
+  }), undefined);
+
+  const accepted = createVSCodeCoWorkChatBridge({
+    runtimeIntent: baseIntent,
+    commandId: 'native-route-vscode-cowork-host-owned',
+    attemptId: 'native-route-vscode-cowork-host-owned-attempt-1',
+  });
+
+  assert.equal(accepted?.decision.status, 'ready');
+  assert.equal(accepted?.decision.primitive, 'observe');
+  assert.ok(accepted?.payload.evidenceRefs.includes('observation:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(accepted), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
 test('Computer Use native route requires confirmation when VSCode target file is ambiguous', async () => {
