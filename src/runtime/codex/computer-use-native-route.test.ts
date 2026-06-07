@@ -550,6 +550,72 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(approvalWithoutRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_risk_hash_required');
   assert.ok((approvalWithoutRiskDone?.evidenceRefs as string[]).includes('approval:save-current-file:paper:confirmed'));
 
+  const embeddedRiskEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-approval-embedded-risk',
+      attemptId: 'native-route-vscode-cowork-save-approval-embedded-risk-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-approval-embedded-risk',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:save-current-file:paper',
+        confirmationRef: 'approval:risk:save-current-file:paper-old:confirmed',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const embeddedRiskDone = embeddedRiskEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const embeddedRiskUnit = (embeddedRiskDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(embeddedRiskDone?.status, 'needs-confirmation');
+  assert.equal(embeddedRiskUnit?.primitive, undefined);
+  assert.equal(embeddedRiskUnit?.action, undefined);
+  assert.equal(embeddedRiskUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+  assert.ok((embeddedRiskDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper-old:confirmed'));
+
+  const unsuffixedApprovalEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 文件。',
+      commandId: 'native-route-vscode-cowork-save-approval-without-confirmation-suffix',
+      attemptId: 'native-route-vscode-cowork-save-approval-without-confirmation-suffix-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-approval-without-confirmation-suffix',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        riskActionHash: 'risk:save-current-file:paper',
+        confirmationRef: 'approval:risk:save-current-file:paper',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unsuffixedApprovalDone = unsuffixedApprovalEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unsuffixedApprovalUnit = (unsuffixedApprovalDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unsuffixedApprovalDone?.status, 'needs-confirmation');
+  assert.equal(unsuffixedApprovalUnit?.primitive, undefined);
+  assert.equal(unsuffixedApprovalUnit?.action, undefined);
+  assert.equal(unsuffixedApprovalUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
+  assert.ok((unsuffixedApprovalDone?.evidenceRefs as string[]).includes('approval:risk:save-current-file:paper'));
+
   const confirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '保存我当前打开的 VSCode 文件。',

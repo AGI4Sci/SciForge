@@ -266,6 +266,40 @@ test('Host-side VSCode co-work requires confirmation before real-file save, undo
   assert.equal(approvalWithoutRiskHash.action, undefined);
   assert.ok(approvalWithoutRiskHash.refs.includes('approval:save-current-file:paper:confirmed'));
 
+  const approvalWithEmbeddedRiskHash = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-approval-embedded-risk',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:save-current-file:paper',
+    confirmationRef: 'approval:risk:save-current-file:paper-old:confirmed',
+  });
+
+  assert.equal(approvalWithEmbeddedRiskHash.status, 'needs-confirmation');
+  assert.equal(approvalWithEmbeddedRiskHash.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.equal(approvalWithEmbeddedRiskHash.primitive, undefined);
+  assert.equal(approvalWithEmbeddedRiskHash.action, undefined);
+  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('risk:save-current-file:paper'));
+  assert.ok(approvalWithEmbeddedRiskHash.refs.includes('approval:risk:save-current-file:paper-old:confirmed'));
+
+  const approvalWithoutConfirmationSuffix = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:save-approval-without-confirmation-suffix',
+    operation: 'save-current-file',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    riskActionHash: 'risk:save-current-file:paper',
+    confirmationRef: 'approval:risk:save-current-file:paper',
+  });
+
+  assert.equal(approvalWithoutConfirmationSuffix.status, 'needs-confirmation');
+  assert.equal(approvalWithoutConfirmationSuffix.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.equal(approvalWithoutConfirmationSuffix.primitive, undefined);
+  assert.equal(approvalWithoutConfirmationSuffix.action, undefined);
+  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('risk:save-current-file:paper'));
+  assert.ok(approvalWithoutConfirmationSuffix.refs.includes('approval:risk:save-current-file:paper'));
+
   const confirmedSave = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:save-confirmed',
     operation: 'save-current-file',

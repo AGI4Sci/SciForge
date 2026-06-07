@@ -504,7 +504,11 @@ function realFileChangeNeedsConfirmation(
   if (observation.userFile === false) return false;
   if (!nonEmptyString(input.confirmationRef)) return true;
   if (!nonEmptyString(input.riskActionHash)) return true;
-  return !input.confirmationRef.includes(input.riskActionHash);
+  return !approvalRefMatchesRiskActionHash(input.confirmationRef, input.riskActionHash);
+}
+
+function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: string): boolean {
+  return approvalRef.startsWith(`approval:${riskActionHash}:`);
 }
 
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
