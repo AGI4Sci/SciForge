@@ -636,6 +636,25 @@ test('VSCode co-work live manifest rejects unsafe refs across all evidence group
   }
 });
 
+test('VSCode co-work live manifest rejects raw path risk and approval evidence refs', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      approvalRefs: [
+        'risk:/Users/example/paper.md',
+        'approval:/Users/example/paper.md:confirmed',
+      ],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-approval-ref:risk-action-hash'));
+  assert.ok(failed.issues.includes('missing-approval-ref:approval'));
+  assert.ok(failed.issues.includes('unsafe-evidence-ref:approval'));
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;

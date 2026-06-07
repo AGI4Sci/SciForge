@@ -332,8 +332,8 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
   if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
-  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('risk:'))) issues.push('missing-approval-ref:risk-action-hash');
-  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('approval:'))) issues.push('missing-approval-ref:approval');
+  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(riskActionHashRef)) issues.push('missing-approval-ref:risk-action-hash');
+  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some(approvalRef)) issues.push('missing-approval-ref:approval');
   issues.push(...unsafeEvidenceRefIssues(manifest.evidence));
 
   return {
@@ -660,5 +660,5 @@ function unsafeEvidenceRefIssues(evidence: VSCodeCoWorkLiveAcceptanceManifest['e
 }
 
 function unsafeEvidenceRef(value: string): boolean {
-  return /(?:rawScreenshot|providerPayload|data:[^,\s]+;base64,|base64|secret|token|password|https?:\/\/)/i.test(value);
+  return /(?:rawScreenshot|providerPayload|data:[^,\s]+;base64,|base64|secret|token|password|https?:\/\/|(?:^|[:\s])(?:~\/|\/(?:Users|Applications|tmp|var|private|Volumes)\/|[A-Za-z]:[\\/]))/i.test(value);
 }
