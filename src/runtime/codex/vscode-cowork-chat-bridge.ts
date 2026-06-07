@@ -200,6 +200,7 @@ function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | unde
     invalidObservationRefCount: textRefs.invalidCount + elementRefs.invalidCount,
     invalidVisibleFileRefCount: visibleFileRefs.invalidCount,
     userFile: booleanField(value.userFile),
+    nonUserFileScopeRef: safeRuntimeRef(value.nonUserFileScopeRef, ['non-user-file-scope:']),
   };
 }
 

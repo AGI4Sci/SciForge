@@ -85,6 +85,7 @@ export interface VSCodeCoWorkObservationRefs {
   invalidObservationRefCount?: number;
   invalidVisibleFileRefCount?: number;
   userFile?: boolean;
+  nonUserFileScopeRef?: string;
 }
 
 export interface VSCodeCoWorkDecisionInput {
@@ -269,6 +270,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const draftTextRefBlock = draftTextRefRequiredBlock(input, targetWindow, observation);
   if (draftTextRefBlock) return draftTextRefBlock;
 
+  const nonUserFileScopeRefBlock = nonUserFileScopeRefRequiredBlock(input, targetWindow, observation);
+  if (nonUserFileScopeRefBlock) return nonUserFileScopeRefBlock;
+
   const riskEnvelopeBlock = realFileChangeRiskEnvelopeBlock(input, targetWindow, observation);
   if (riskEnvelopeBlock) return riskEnvelopeBlock;
 
@@ -316,7 +320,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     targetWindowRef,
     primitive: 'act',
     action,
-    ...(realFileChangeOperation(input.operation) ? {
+    ...(userRealFileChangeOperation(input, observation) ? {
       risk: {
         level: 'high' as const,
         categories: ['user-real-file-change'],
@@ -724,6 +728,26 @@ function realFileChangeRiskEnvelopeBlock(
   };
 }
 
+function nonUserFileScopeRefRequiredBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (!realFileChangeOperation(input.operation)) return undefined;
+  if (observation.userFile !== false) return undefined;
+  if (nonUserFileScopeRef(observation.nonUserFileScopeRef)) return undefined;
+  return {
+    ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_non_user_file_scope_ref_required',
+    repairHints: [{
+      code: 'provide-non-user-file-scope-ref',
+      message: 'Host must provide a refs-first non-user file scope ref before treating a VSCode file mutation as exempt from user-file confirmation.',
+      suggestedPrimitive: 'observe',
+    }],
+  };
+}
+
 function nonAtomicFileChangeOperationBlock(
   input: VSCodeCoWorkDecisionInput,
   targetWindow: VSCodeCoWorkWindowCandidate,
@@ -800,11 +824,17 @@ function realFileChangeNeedsConfirmation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
 ): boolean {
-  if (!realFileChangeOperation(input.operation)) return false;
-  if (observation.userFile === false) return false;
+  if (!userRealFileChangeOperation(input, observation)) return false;
   if (!approvalRef(input.confirmationRef)) return true;
   if (!riskActionHashRef(input.riskActionHash)) return true;
   return !approvalRefMatchesRiskActionHash(input.confirmationRef, input.riskActionHash);
+}
+
+function userRealFileChangeOperation(
+  input: VSCodeCoWorkDecisionInput,
+  observation: VSCodeCoWorkObservationRefs,
+): boolean {
+  return realFileChangeOperation(input.operation) && observation.userFile !== false;
 }
 
 function draftTextRef(value: unknown): value is string {
@@ -822,6 +852,10 @@ function selectionRef(value: unknown): value is string {
 
 function replacementTextRef(value: unknown): value is string {
   return structuredRef(value, ['text-ref:']);
+}
+
+function nonUserFileScopeRef(value: unknown): value is string {
+  return structuredRef(value, ['non-user-file-scope:']);
 }
 
 function cursorMoveKeyForRef(value: string): string | undefined {
@@ -1046,6 +1080,7 @@ function refsForTargetAndObservation(
     replacementTextRef(input.replacementTextRef) ? input.replacementTextRef : undefined,
     riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
     approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
+    nonUserFileScopeRef(observation.nonUserFileScopeRef) ? observation.nonUserFileScopeRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),
     windowRef(observation.windowRef) ? observation.windowRef : undefined,
     sessionRef(observation.sessionRef) ? observation.sessionRef : undefined,

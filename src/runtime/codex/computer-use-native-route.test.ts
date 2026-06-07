@@ -1093,6 +1093,80 @@ test('Computer Use native route keeps VSCode real-file save and undo blocked unt
   assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
   assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:save-current-file:paper'));
 
+  const bareNonUserFileEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 临时草稿文件。',
+      commandId: 'native-route-vscode-cowork-save-non-user-without-scope-ref',
+      attemptId: 'native-route-vscode-cowork-save-non-user-without-scope-ref-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-non-user-without-scope-ref',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          userFile: false,
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const bareNonUserFileDone = bareNonUserFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const bareNonUserFileUnit = (bareNonUserFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(bareNonUserFileDone?.status, 'blocked');
+  assert.equal(bareNonUserFileUnit?.primitive, undefined);
+  assert.equal(bareNonUserFileUnit?.action, undefined);
+  assert.equal(bareNonUserFileUnit?.blockedReason, 'vscode_cowork_non_user_file_scope_ref_required');
+  assert.ok((bareNonUserFileDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(bareNonUserFileEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
+  const scopedNonUserFileEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '保存我当前打开的 VSCode 临时草稿文件。',
+      commandId: 'native-route-vscode-cowork-save-non-user-scoped',
+      attemptId: 'native-route-vscode-cowork-save-non-user-scoped-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:save-non-user-scoped',
+        operation: 'save-current-file',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: {
+          ...vscodeNativeRouteObservation(),
+          userFile: false,
+          nonUserFileScopeRef: 'non-user-file-scope:vscode:scratch',
+        },
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const scopedNonUserFileDone = scopedNonUserFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const scopedNonUserFileUnit = (scopedNonUserFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(scopedNonUserFileDone?.status, 'ready');
+  assert.equal(scopedNonUserFileUnit?.primitive, 'act');
+  assert.deepEqual(scopedNonUserFileUnit?.action, {
+    type: 'app_command',
+    command: 'save',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.equal(scopedNonUserFileUnit?.risk, undefined);
+  assert.equal(scopedNonUserFileUnit?.approvalRef, undefined);
+  assert.ok((scopedNonUserFileDone?.evidenceRefs as string[]).includes('non-user-file-scope:vscode:scratch'));
+  assert.doesNotMatch(JSON.stringify(scopedNonUserFileEvents), /rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
   const unconfirmedUndoEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
       commandText: '撤销我当前打开的 VSCode 文件里的上一步编辑。',
