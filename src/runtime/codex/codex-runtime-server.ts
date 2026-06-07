@@ -9,6 +9,9 @@ import {
   type CodexAgentHostRuntimeTruthResolver,
 } from './agent-host-grounding.js';
 import { isRecord, readJson, writeJson } from '../server/http.js';
+import { createRuntimeEventRecorder, type RuntimeEventRecorder } from '../runtime-event-recorder.js';
+import { ensureSessionBundle, sessionBundleRel } from '../session-bundle.js';
+import type { WorkspaceRuntimeEvent } from '../runtime-types.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import {
   CODEX_RUNTIME_STREAM_PATH,
@@ -190,14 +193,26 @@ async function runCodexRuntimeTurn(
   if (realtimeSession.eventTransport !== output.expectedTransport) {
     throw new Error(`Runtime Codex realtime session eventTransport must be ${output.expectedTransport} for this endpoint.`);
   }
+  const eventRecorder = await createCodexRuntimeTurnEventRecorder({
+    body,
+    workspacePath,
+    commandText,
+    commandId,
+    attemptId,
+    realtimeSession,
+  });
+  const emit = (event: string, data: unknown) => {
+    output.emit(event, data);
+    eventRecorder.callbacks.onEvent?.(codexRuntimeRecordableEvent(event, data));
+  };
   const agentHostInput = agentHostInputForRuntimeTurn(body, commandText);
   const streamStartedAt = Date.now();
   let lastRuntimeEventAt = streamStartedAt;
-  output.emit('realtime_session', realtimeSession);
-  output.emit('process-progress', codexRuntimeAcceptedProgressEvent({ commandId, attemptId }));
+  emit('realtime_session', realtimeSession);
+  emit('process-progress', codexRuntimeAcceptedProgressEvent({ commandId, attemptId }));
   const heartbeat = setInterval(() => {
     if (abortSignal.aborted || !output.shouldContinue()) return;
-    output.emit('heartbeat', codexRuntimeHeartbeatEvent({
+    emit('heartbeat', codexRuntimeHeartbeatEvent({
       commandId,
       attemptId,
       streamStartedAt,
@@ -248,15 +263,64 @@ async function runCodexRuntimeTurn(
       codexSessionId: turn.codexSessionId,
     });
     lastRuntimeEventAt = Date.now();
-    output.emit('turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
+    emit('turn', { turnId: turn.turnId, attemptId: turn.attemptId, codexSessionId: turn.codexSessionId });
     for await (const event of turn.events) {
       lastRuntimeEventAt = Date.now();
       if (!output.shouldContinue()) break;
-      output.emit(event.type, event);
+      emit(event.type, event);
     }
   } finally {
     clearInterval(heartbeat);
+    await eventRecorder.flush();
   }
+}
+
+async function createCodexRuntimeTurnEventRecorder(input: {
+  body: Record<string, unknown>;
+  workspacePath: string;
+  commandText: string;
+  commandId?: string;
+  attemptId?: string;
+  realtimeSession: ReturnType<typeof normalizeRealtimeSessionEnvelope>;
+}): Promise<RuntimeEventRecorder> {
+  const createdAt = new Date().toISOString();
+  const sessionId = codexRuntimeRecorderSessionId(input.body, input.realtimeSession, input.commandId);
+  const sessionBundleRef = sessionBundleRel({
+    sessionId,
+    scenarioId: 'runtime-codex',
+    createdAt,
+  });
+  await ensureSessionBundle(input.workspacePath, sessionBundleRef, {
+    sessionId,
+    scenarioId: 'runtime-codex',
+    title: input.commandText.replace(/\s+/g, ' ').trim().slice(0, 160),
+    createdAt,
+  });
+  return createRuntimeEventRecorder({}, {
+    workspacePath: input.workspacePath,
+    sessionBundleRef,
+    sessionId,
+    runId: input.commandId,
+  });
+}
+
+function codexRuntimeRecorderSessionId(
+  body: Record<string, unknown>,
+  realtimeSession: ReturnType<typeof normalizeRealtimeSessionEnvelope>,
+  commandId?: string,
+) {
+  const auditMetadata = isRecord(body.auditMetadata) ? body.auditMetadata : {};
+  return stringField(auditMetadata.silentStreamRunId)
+    ?? stringField(realtimeSession.codexSessionId)
+    ?? stringField(body.codexSessionId)
+    ?? stringField(body.nativeSessionId)
+    ?? commandId
+    ?? 'runtime-codex';
+}
+
+function codexRuntimeRecordableEvent(event: string, data: unknown): WorkspaceRuntimeEvent {
+  if (isRecord(data) && typeof data.type === 'string') return data as unknown as WorkspaceRuntimeEvent;
+  return { type: event, raw: data };
 }
 
 async function resolveAgentHostRuntimeTruthForTurn(
@@ -543,19 +607,63 @@ function runtimeInputObjectsFromBody(value: unknown): RuntimeInputObject[] {
     }
     const mimeType = safeRuntimeInputObjectOptionalString(item.mimeType, 120);
     const title = safeRuntimeInputObjectOptionalString(item.title, 160);
+    const visionDescriptor = runtimeInputObjectVisionDescriptorFromBody(item.visionDescriptor, index);
     return {
       schemaVersion: 'sciforge.runtime.input-object.v1',
       ref,
       source,
       ...(mimeType ? { mimeType } : {}),
       ...(title ? { title } : {}),
+      ...(visionDescriptor ? { visionDescriptor } : {}),
     };
   }).slice(0, 16);
+}
+
+function runtimeInputObjectVisionDescriptorFromBody(value: unknown, index: number): RuntimeInputObject['visionDescriptor'] | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`Runtime Codex inputObjects[${index}].visionDescriptor must be an object.`);
+  if (value.schemaVersion !== 'sciforge.runtime.input-object.vision-descriptor.v1') {
+    throw new Error(`Runtime Codex inputObjects[${index}].visionDescriptor has an unsupported schemaVersion.`);
+  }
+  const status = knownRuntimeInputObjectVisionDescriptorStatus(value.status);
+  const source = knownRuntimeInputObjectVisionDescriptorSource(value.source);
+  if (!status || !source) throw new Error(`Runtime Codex inputObjects[${index}].visionDescriptor is not safe.`);
+  const summary = safeRuntimeInputObjectOptionalString(value.summary, 4_000);
+  const descriptorRef = safeRuntimeInputObjectDescriptorRef(value.descriptorRef);
+  const sha256 = safeRuntimeInputObjectOptionalString(value.sha256, 120);
+  const traceRef = safeRuntimeInputObjectDescriptorRef(value.traceRef);
+  const createdAt = safeRuntimeInputObjectOptionalString(value.createdAt, 80);
+  return {
+    schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+    status,
+    source,
+    ...(summary ? { summary } : {}),
+    ...(descriptorRef ? { descriptorRef } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    ...(traceRef ? { traceRef } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
 }
 
 function knownRuntimeInputObjectSource(value: unknown): RuntimeInputObject['source'] | undefined {
   return typeof value === 'string' && ['explicit-reference', 'recent-visible-message', 'recent-artifact'].includes(value)
     ? value as RuntimeInputObject['source']
+    : undefined;
+}
+
+function knownRuntimeInputObjectVisionDescriptorStatus(
+  value: unknown,
+): NonNullable<RuntimeInputObject['visionDescriptor']>['status'] | undefined {
+  return typeof value === 'string' && ['pending', 'ready', 'failed'].includes(value)
+    ? value as NonNullable<RuntimeInputObject['visionDescriptor']>['status']
+    : undefined;
+}
+
+function knownRuntimeInputObjectVisionDescriptorSource(
+  value: unknown,
+): NonNullable<RuntimeInputObject['visionDescriptor']>['source'] | undefined {
+  return typeof value === 'string' && ['upload-preextract', 'first-reference-preextract', 'agent-host-cache', 'model-router-trace', 'manual'].includes(value)
+    ? value as NonNullable<RuntimeInputObject['visionDescriptor']>['source']
     : undefined;
 }
 
@@ -565,6 +673,11 @@ function safeRuntimeInputObjectOptionalString(value: unknown, maxLength: number)
   if (!text || text.length > maxLength) return undefined;
   if (/[\u0000-\u001f<>]|(?:data:|javascript:|file:|blob:|authorization|bearer|api[_-]?key|password|secret|token|<html)/i.test(text)) return undefined;
   return text;
+}
+
+function safeRuntimeInputObjectDescriptorRef(value: unknown): string | undefined {
+  const ref = safeRuntimeInputObjectOptionalString(value, 600);
+  return ref && safeRuntimeInputObjectRef(ref) ? ref : undefined;
 }
 
 function safeRuntimeInputObjectRef(ref: string) {

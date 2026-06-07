@@ -316,6 +316,63 @@ test('default Computer Use Act materializer routes WindowActionSession through t
   assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:/i);
 });
 
+test('default Computer Use Act materializer preserves first-step WindowAction evidence when workflow loop needs runtime truth refresh', async () => {
+  const materializer = createDefaultComputerUseActMaterializer({
+    maxActLoopSteps: 2,
+    windowAction: {
+      windowActionSessionStore: readyWindowActionStore(),
+      actionPlanner: async () => ({
+        status: 'planned',
+        message: 'Scroll the active desktop window as the first workflow step.',
+        nextAction: { type: 'scroll', direction: 'down', amount: 180 },
+        evidenceRefs: ['action-ledger:planner/default-window-workflow-scroll'],
+      }),
+      adapterHandlers: {
+        'app-native-command': async ({ input }) => {
+          const actionId = String(input.actionId ?? 'missing-action-id');
+          return {
+            status: 'completed',
+            evidenceRefs: [
+              { kind: 'executor-event', ref: `app-native-command:vscode/scroll/${actionId}/executor-event` },
+              { kind: 'verification', ref: `window-action-session:vscode-main/actions/${actionId}/verification/verifier.json` },
+              { kind: 'freshness-invalidation', ref: `window-action-session:vscode-main/actions/${actionId}/freshness-invalidation.json` },
+            ],
+            inputEventRefs: [{ kind: 'input-event', ref: `app-native-command:vscode/actions/${actionId}/scroll/input-event` }],
+            afterEvidenceRefs: [{ kind: 'screenshot', ref: `window-action-session:vscode-main/evidence/${actionId}/after-frame` }],
+          };
+        },
+      },
+      now: () => new Date('2026-06-03T00:00:00.000Z'),
+    },
+  });
+
+  const result = await materializer({
+    agentHostInput: {
+      ...windowActionAgentHostInput(),
+      intentText: 'Scroll the active desktop window, then finish the multi-step desktop workflow and mark the workflow complete.',
+    },
+    preflight: windowActionPreflight(),
+    commandText: 'Scroll the active desktop window.',
+    workspacePath: '/tmp/workspace',
+    commandId: 'codex-command-default-window-workflow-loop',
+    attemptId: 'codex-command-default-window-workflow-loop-attempt-1',
+    runtimeTruth: windowActionRuntimeTruth(),
+  });
+
+  const actionId = 'codex-command-default-window-workflow-loop-attempt-1-act-loop-step-1';
+  assert.equal(result?.status, 'blocked');
+  assert.match(result?.message ?? '', /refreshRuntimeTruth/i);
+  assert.ok(result?.evidenceRefs.includes(`window-action-session:vscode-main/action-state/${actionId}`), 'includes action-state ref');
+  assert.ok(result?.evidenceRefs.includes(`app-native-command:vscode/actions/${actionId}/scroll/input-event`), 'includes input event ref');
+  assert.ok(result?.evidenceRefs.includes(`window-action-session:vscode-main/evidence/${actionId}/after-frame`), 'includes after evidence ref');
+  assert.ok(result?.evidenceRefs.includes(`window-action-session:vscode-main/actions/${actionId}/verification/verifier.json`), 'includes verifier ref');
+  assert.ok(result?.evidenceRefs.includes(`window-action-session:vscode-main/actions/${actionId}/freshness-invalidation.json`), 'includes freshness invalidation ref');
+  assert.ok(result?.evidenceRefs.includes('input-lease:window-action-session/vscode-main'), 'includes released input lease ref');
+  assert.ok(result?.evidenceRefs.includes('scoped-input-adapter:vscode-main/computer-use/app-native-command'), 'includes released input adapter ref');
+  assert.ok(result?.evidenceRefs.includes('actor-cursor:computer-use/vscode-main'), 'includes released cursor ref');
+  assert.doesNotMatch(JSON.stringify(result), /VirtualAppScreen|virtual-app-screen|python|gui\.present|ui:|fixture:|replay:|base64|raw-|\/raw|secret|token|password/i);
+});
+
 test('default Computer Use Act materializer fails closed instead of falling back to legacy non-TS targets', async () => {
   let plannerCalls = 0;
   const materializer = createDefaultComputerUseActMaterializer({

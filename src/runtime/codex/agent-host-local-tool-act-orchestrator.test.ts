@@ -77,6 +77,38 @@ test('Agent Host local tool Act policy blocks legacy Computer Use bounded operat
   assert.match(decision.reason, /Computer Use primitive runtime|legacy bounded/i);
 });
 
+test('Agent Host local tool Act policy auto-allows Browser primitive module intents', () => {
+  const decision = evaluateAgentHostLocalToolAct({
+    toolName: 'module.invoke',
+    args: {
+      moduleId: 'browser',
+      intent: 'browser.search',
+      input: { query: '伊朗局势' },
+    },
+    moduleDescription: createModuleDescription({
+      moduleId: 'browser',
+      title: 'Browser Runtime',
+      summary: 'Browser primitive module.',
+      intents: [
+        { name: 'browser.search', sideEffect: 'external' },
+        { name: 'browser.navigate', sideEffect: 'external' },
+        { name: 'browser.observe', sideEffect: 'none' },
+        { name: 'browser.read', sideEffect: 'external' },
+        { name: 'browser.extract', sideEffect: 'none' },
+        { name: 'browser.download', sideEffect: 'workspace' },
+      ],
+      facets: { refs: true },
+    }),
+    commandId: 'codex-command-browser-primitive',
+    attemptId: 'attempt-1',
+  });
+
+  assert.equal(decision.status, 'auto');
+  assert.equal(decision.moduleId, 'browser');
+  assert.equal(decision.intent, 'browser.search');
+  assert.match(decision.reason, /Browser primitive/i);
+});
+
 test('Agent Host local tool Act policy allows approved workspace mutations only with runtime control path', () => {
   const decision = evaluateAgentHostLocalToolAct({
     toolName: 'module.invoke',

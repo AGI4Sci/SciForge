@@ -48,7 +48,12 @@ export function createTextEditWindowActionChatBridge(
 
   const now = input.now ?? (() => new Date());
   const timestamp = now().toISOString();
-  const beforeRef = `${SESSION_REF}/evidence/before-observation`;
+  const beforeRefs = [
+    `${SESSION_REF}/evidence/before-frame`,
+    `accessibility-ui-automation:${SESSION_ID}/state-snapshot-before`,
+    `accessibility-ui-automation:${SESSION_ID}/text-before`,
+    `desktop-window:${SESSION_ID}`,
+  ];
   const observationExpiresAt = new Date(Date.parse(timestamp) + 30_000).toISOString();
   const permissionRef = 'permission:turn/textedit-window-action/local-save';
   const scopedExecutorRef = 'computer-use:executor-scope/textedit-window-action/appium-mac2';
@@ -88,7 +93,7 @@ export function createTextEditWindowActionChatBridge(
       SESSION_REF,
       'window-action-session:textedit-local-save/target-binding',
     ],
-    observationRefs: [beforeRef],
+    observationRefs: beforeRefs,
     timestamp,
   });
 
@@ -112,7 +117,7 @@ export function createTextEditWindowActionChatBridge(
     },
     observation: {
       fresh: true,
-      refs: [beforeRef],
+      refs: beforeRefs,
       observedAt: timestamp,
       capturedAt: timestamp,
       freshnessCheckedAt: timestamp,
@@ -154,7 +159,7 @@ export function createTextEditWindowActionChatBridge(
     refs: [
       SESSION_REF,
       appiumReadinessRef,
-      beforeRef,
+      ...beforeRefs,
       permissionRef,
       scopedExecutorRef,
       cancelRef,

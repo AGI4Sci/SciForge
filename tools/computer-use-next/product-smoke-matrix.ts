@@ -81,7 +81,7 @@ export interface CuNextProductSmokePath {
   hops?: string[];
   appServerRunRef?: string;
   nativePluginInvocationRef?: string;
-  sciforgeComputerUseRunTaskRef?: string;
+  sciforgeComputerUsePrimitiveTraceRef?: string;
   platformSidecarIsolationReportRef?: string;
   backendKind?: string;
 }
@@ -687,7 +687,7 @@ function validateProductPath(value: unknown, path: string): CuNextProductSmokeMa
   }
   requireRef(issues, `${path}.appServerRunRef`, stringValue(productPath.appServerRunRef));
   requireRef(issues, `${path}.nativePluginInvocationRef`, stringValue(productPath.nativePluginInvocationRef));
-  requireRef(issues, `${path}.sciforgeComputerUseRunTaskRef`, stringValue(productPath.sciforgeComputerUseRunTaskRef));
+  requireRef(issues, `${path}.sciforgeComputerUsePrimitiveTraceRef`, stringValue(productPath.sciforgeComputerUsePrimitiveTraceRef));
   requireRef(issues, `${path}.platformSidecarIsolationReportRef`, stringValue(productPath.platformSidecarIsolationReportRef));
   return issues;
 }

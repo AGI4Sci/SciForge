@@ -72,6 +72,66 @@ describe('browser primitive contracts', () => {
 });
 
 describe('browser primitive service composition', () => {
+  it('makes search results directly actionable as browser.read inputs', async () => {
+    const service = createBrowserPrimitiveService({
+      ports: {
+        search: async (input) => ({
+          status: 'completed',
+          output: {
+            query: input.query,
+            results: [{
+              title: 'Latest source',
+              url: 'https://example.com/latest',
+              snippet: 'Current source candidate.',
+            }],
+            searchResultRef: 'browser:search-result:latest',
+          },
+          refs: ['browser:search-result:latest'],
+        }),
+      },
+    });
+
+    const result = await service.invoke(request(BROWSER_PRIMITIVE_INTENTS.search, {
+      schemaVersion: 'sciforge.browser-runtime.search-input.v1',
+      query: 'latest source',
+      limit: 1,
+    }));
+
+    assert.equal(result.ok, true);
+    const value = result.value as unknown as {
+      output?: {
+        results?: Array<{
+          readInput?: Record<string, unknown>;
+        }>;
+      };
+      repairHints?: Array<{
+        suggestedPrimitive?: string;
+        machineReadable?: {
+          candidateReadInputs?: Array<Record<string, unknown>>;
+        };
+      }>;
+    };
+    assert.deepEqual(value.output?.results?.[0]?.readInput, {
+      schemaVersion: 'sciforge.browser-runtime.read-input.v1',
+      url: 'https://example.com/latest',
+      navigationMode: 'ephemeral',
+      includeText: true,
+    });
+    assert.deepEqual(value.repairHints?.[0], {
+      code: 'search-results-require-read',
+      message: 'Search results are candidates only. Use browser.read with one or more candidateReadInputs before citing or summarizing page content.',
+      suggestedPrimitive: 'read',
+      machineReadable: {
+        candidateReadInputs: [{
+          schemaVersion: 'sciforge.browser-runtime.read-input.v1',
+          url: 'https://example.com/latest',
+          navigationMode: 'ephemeral',
+          includeText: true,
+        }],
+      },
+    });
+  });
+
   it('chains search, navigate, observe, read, extract, and download through structured refs', async () => {
     const calls: string[] = [];
     const ports: BrowserPrimitivePorts = {

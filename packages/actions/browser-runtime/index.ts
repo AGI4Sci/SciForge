@@ -98,6 +98,14 @@ export interface BrowserSearchResultItem {
   url: string;
   snippet?: string;
   displayedUrl?: string;
+  readInput?: BrowserSearchResultReadInput;
+}
+
+export interface BrowserSearchResultReadInput {
+  schemaVersion: typeof BROWSER_PRIMITIVE_INPUT_SCHEMAS.read;
+  url: string;
+  navigationMode: 'ephemeral';
+  includeText: true;
 }
 
 export interface BrowserSearchOutput {
@@ -390,17 +398,21 @@ function primitiveModuleResult(
   input: BrowserPrimitivePortResult,
 ): ModuleInvokeResult<BrowserPrimitiveEnvelope> {
   const refs = uniqueStrings(input.refs ?? []);
+  const output = primitive === 'search' ? actionableBrowserSearchOutput(input.output) : input.output;
+  const repairHints = primitive === 'search'
+    ? searchRepairHints(input.repairHints, output)
+    : input.repairHints;
   const value: BrowserPrimitiveEnvelope = {
     schemaVersion: BROWSER_PRIMITIVE_RESULT_SCHEMA,
     moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
     primitive,
     status: input.status,
-    output: input.output,
+    output,
     refs,
     diagnostics: input.diagnostics ?? [],
     budget: input.budget ?? {},
     blockedReason: input.blockedReason,
-    repairHints: input.repairHints,
+    repairHints,
   };
   return moduleResult({
     moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
@@ -411,6 +423,68 @@ function primitiveModuleResult(
       ? undefined
       : input.blockedReason ?? input.status,
   });
+}
+
+function actionableBrowserSearchOutput(output: unknown): unknown {
+  const searchOutput = record(output);
+  if (!searchOutput || !Array.isArray(searchOutput.results)) return output;
+  return {
+    ...searchOutput,
+    results: searchOutput.results.map((item) => actionableBrowserSearchResultItem(item)),
+  };
+}
+
+function actionableBrowserSearchResultItem(item: unknown): unknown {
+  const result = record(item);
+  if (!result) return item;
+  const url = typeof result.url === 'string' ? result.url : '';
+  const readInput = browserSearchResultReadInput(url);
+  if (!readInput) return result;
+  return {
+    ...result,
+    readInput: record(result.readInput) ?? readInput,
+  };
+}
+
+function searchRepairHints(
+  existing: BrowserRepairHint[] | undefined,
+  output: unknown,
+): BrowserRepairHint[] | undefined {
+  if (existing?.length) return existing;
+  const candidateReadInputs = candidateReadInputsFromSearchOutput(output);
+  if (!candidateReadInputs.length) return existing;
+  return [{
+    code: 'search-results-require-read',
+    message: 'Search results are candidates only. Use browser.read with one or more candidateReadInputs before citing or summarizing page content.',
+    suggestedPrimitive: 'read',
+    machineReadable: { candidateReadInputs },
+  }];
+}
+
+function candidateReadInputsFromSearchOutput(output: unknown): BrowserSearchResultReadInput[] {
+  const searchOutput = record(output);
+  if (!searchOutput || !Array.isArray(searchOutput.results)) return [];
+  return searchOutput.results
+    .map((item) => {
+      const result = record(item);
+      const existing = record(result?.readInput);
+      if (existing && typeof existing.url === 'string' && existing.navigationMode === 'ephemeral') {
+        return existing as unknown as BrowserSearchResultReadInput;
+      }
+      const url = typeof result?.url === 'string' ? result.url : '';
+      return browserSearchResultReadInput(url);
+    })
+    .filter((input): input is BrowserSearchResultReadInput => Boolean(input));
+}
+
+function browserSearchResultReadInput(url: string): BrowserSearchResultReadInput | undefined {
+  if (!isHttpUrl(url)) return undefined;
+  return {
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+    url,
+    navigationMode: 'ephemeral',
+    includeText: true,
+  };
 }
 
 function validateSearchInput(input: Record<string, unknown>, errors: string[]) {
@@ -581,6 +655,15 @@ function validateHttpUrl(value: unknown, field: string, errors: string[]) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') errors.push(`invalid_url:${field}`);
   } catch {
     errors.push(`invalid_url:${field}`);
+  }
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 

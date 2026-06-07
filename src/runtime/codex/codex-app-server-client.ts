@@ -9,12 +9,20 @@ import {
   resolveRuntimeCodexSandbox,
   type RuntimeCodexSandbox,
 } from '../../../packages/backend/src/runtime-home.js';
+import {
+  BROWSER_PRIMITIVE_INPUT_SCHEMAS,
+  BROWSER_PRIMITIVE_INTENTS,
+  BROWSER_PRIMITIVE_NAMES,
+  BROWSER_PRIMITIVE_RESULT_SCHEMA,
+  type BrowserPrimitiveName,
+} from '../../../packages/actions/browser-runtime/index.js';
 import { assertCodexRuntimeConfig, codexRuntimeEnv } from './codex-runtime-config.js';
 import type {
   CodexAppServerClient,
   CodexAppServerStartTurnRequest,
   CodexAppServerTurnStream,
 } from './codex-app-server-adapter.js';
+import type { RuntimeInputObject, RuntimeInputObjectVisionDescriptor } from './agent-cli-adapter.js';
 import type { CodexAgentHostRuntimeTruth } from './agent-host-grounding.js';
 import {
   evaluateAgentHostLocalToolAct,
@@ -77,6 +85,7 @@ export interface CodexAppServerJsonRpcClientOptions {
 
 type CodexAppServerApprovalPolicy = 'never' | 'on-request' | 'on-failure' | 'untrusted';
 type RequestId = number | string;
+const BROWSER_SEARCH_ONLY_CALL_BUDGET = 3;
 
 interface JsonRpcRequest {
   id: RequestId;
@@ -95,6 +104,20 @@ interface JsonRpcResponse {
   error?: { message?: string; code?: number; data?: unknown };
 }
 
+interface BrowserToolProgress {
+  searchOnlyCalls: number;
+  candidateReadInputs: Array<Record<string, unknown>>;
+  refs: string[];
+}
+
+function freshBrowserToolProgress(): BrowserToolProgress {
+  return {
+    searchOnlyCalls: 0,
+    candidateReadInputs: [],
+    refs: [],
+  };
+}
+
 export function createCodexAppServerClient(options: CodexAppServerJsonRpcClientOptions = {}): CodexAppServerClient {
   return new CodexAppServerJsonRpcClient(options);
 }
@@ -102,6 +125,7 @@ export function createCodexAppServerClient(options: CodexAppServerJsonRpcClientO
 export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
   private readonly activeSessions = new Map<string, CodexAppServerJsonRpcSession>();
   private readonly activeNativeTurns = new Map<string, AbortController>();
+  private readonly visionDescriptorCache = new Map<string, RuntimeInputObjectVisionDescriptor>();
 
   constructor(private readonly options: CodexAppServerJsonRpcClientOptions = {}) {}
 
@@ -168,6 +192,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
       approvalPolicy,
       profile: config.profile,
       codexHome: config.codexHome,
+      visionDescriptorCache: this.visionDescriptorCache,
     });
 
     await session.initialize(request.abortSignal);
@@ -191,9 +216,11 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
         developerInstructions: runtimeDeveloperInstructions(request.declaredIntents, request.agentHostGrounding),
       });
 
+    const inputObjects = inputObjectsWithCachedVisionDescriptors(request.inputObjects, this.visionDescriptorCache);
+    session.setLastInputObjects(inputObjects);
     const turnId = await session.startTurn({
       threadId,
-      input: codexAppServerTurnInputItems(request.commandText, request.inputObjects, config.workspace),
+      input: codexAppServerTurnInputItems(request.commandText, inputObjects, config.workspace),
       cwd: config.workspace,
       model: config.model,
       approvalPolicy,
@@ -313,8 +340,24 @@ function codexAppServerInputObjectMetadataText(inputObjects: NonNullable<CodexAp
       `   ref=${object.ref}`,
       object.mimeType ? `   mimeType=${object.mimeType}` : undefined,
       `   source=${object.source}`,
+      ...codexAppServerVisionDescriptorMetadataLines(object),
     ].filter(Boolean).join('\n')),
   ].join('\n');
+}
+
+function codexAppServerVisionDescriptorMetadataLines(
+  object: NonNullable<CodexAppServerStartTurnRequest['inputObjects']>[number],
+) {
+  const descriptor = object.visionDescriptor;
+  if (!descriptor) return [];
+  return [
+    `   visionDescriptor.status=${descriptor.status}`,
+    `   visionDescriptor.source=${descriptor.source}`,
+    descriptor.descriptorRef ? `   visionDescriptor.descriptorRef=${descriptor.descriptorRef}` : undefined,
+    descriptor.sha256 ? `   visionDescriptor.sha256=${descriptor.sha256}` : undefined,
+    descriptor.traceRef ? `   visionDescriptor.traceRef=${descriptor.traceRef}` : undefined,
+    descriptor.summary ? `   visionDescriptor.summary=${boundedVisionDescriptorSummary(descriptor.summary)}` : undefined,
+  ].filter(Boolean);
 }
 
 function codexAppServerInputObjectMediaItems(
@@ -322,6 +365,7 @@ function codexAppServerInputObjectMediaItems(
   workspacePath: string,
 ) {
   if (!isImageInputObject(object)) return [];
+  if (hasReadyVisionDescriptor(object)) return [];
   const path = localImagePathForInputObject(object.ref, workspacePath);
   return path ? [{ type: 'localImage', path }] : [];
 }
@@ -337,6 +381,54 @@ function localImagePathForInputObject(ref: string, workspacePath: string) {
   const absolutePath = resolve(workspace, ref);
   if (absolutePath !== workspace && !absolutePath.startsWith(`${workspace}${sep}`)) return undefined;
   return absolutePath;
+}
+
+function hasReadyVisionDescriptor(object: Pick<RuntimeInputObject, 'visionDescriptor'>) {
+  const descriptor = object.visionDescriptor;
+  return descriptor?.status === 'ready' && Boolean(descriptor.summary?.trim());
+}
+
+function inputObjectsWithCachedVisionDescriptors(
+  inputObjects: CodexAppServerStartTurnRequest['inputObjects'] | undefined,
+  visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
+): RuntimeInputObject[] {
+  return (inputObjects ?? []).map((object) => {
+    if (hasReadyVisionDescriptor(object)) return object;
+    const cached = visionDescriptorCache.get(visionDescriptorCacheKey(object));
+    return cached ? { ...object, visionDescriptor: cached } : object;
+  });
+}
+
+function visionDescriptorCacheKey(object: Pick<RuntimeInputObject, 'ref'>) {
+  return object.ref;
+}
+
+function cacheVisionDescriptorFromGuiCompletion(
+  completion: GuiCompletionEventDetails,
+  inputObjects: RuntimeInputObject[],
+  visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>,
+) {
+  if (completion.name !== 'gui.present') return;
+  const summary = boundedVisionDescriptorSummary(completion.contentText ?? '');
+  if (visibleAnswerCharacterCount(summary) < 24) return;
+  for (const object of inputObjects) {
+    if (!isImageInputObject(object)) continue;
+    visionDescriptorCache.set(visionDescriptorCacheKey(object), {
+      schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+      status: 'ready',
+      source: 'agent-host-cache',
+      summary,
+      createdAt: new Date().toISOString(),
+    });
+  }
+}
+
+function boundedVisionDescriptorSummary(value: string) {
+  return value
+    .replace(/\bdata:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=_-]+/gi, '[redacted-image]')
+    .replace(/\s+\n/g, '\n')
+    .trim()
+    .slice(0, 4_000);
 }
 
 function isConservativeWorkspaceRef(value: string) {
@@ -366,6 +458,7 @@ interface CodexAppServerJsonRpcSessionOptions {
   approvalPolicy: CodexAppServerApprovalPolicy;
   profile: string;
   codexHome: string;
+  visionDescriptorCache: Map<string, RuntimeInputObjectVisionDescriptor>;
 }
 
 class CodexAppServerJsonRpcSession {
@@ -379,6 +472,8 @@ class CodexAppServerJsonRpcSession {
   private closed = false;
   private stderrTail = '';
   private lastTurnStartInput: Record<string, unknown> = {};
+  private lastInputObjects: RuntimeInputObject[] = [];
+  private browserToolProgress = freshBrowserToolProgress();
 
   constructor(private readonly options: CodexAppServerJsonRpcSessionOptions) {
     this.process = options.spawnProcess(options.command, options.args, {
@@ -466,11 +561,16 @@ class CodexAppServerJsonRpcSession {
 
   async startTurn(input: Record<string, unknown>): Promise<string> {
     this.lastTurnStartInput = input;
+    this.browserToolProgress = freshBrowserToolProgress();
     const result = await this.request('turn/start', input);
     const resultRecord = isRecord(result) ? result : undefined;
     const turnId = stringAt(recordAt(resultRecord, 'turn'), 'id');
     if (!turnId) throw new Error('Codex app-server turn/start response did not include turn.id.');
     return turnId;
+  }
+
+  setLastInputObjects(inputObjects: RuntimeInputObject[]) {
+    this.lastInputObjects = inputObjects;
   }
 
   async interruptTurn(threadId: string, turnId: string): Promise<void> {
@@ -515,7 +615,10 @@ class CodexAppServerJsonRpcSession {
           sawGuiCompletion = true;
           const reason = insufficientGuiCompletionReason(guiCompletion, this.lastTurnStartInput);
           if (reason) insufficientGuiPresentationReason = reason;
-          else sawSufficientGuiCompletion = true;
+          else {
+            sawSufficientGuiCompletion = true;
+            cacheVisionDescriptorFromGuiCompletion(guiCompletion, this.lastInputObjects, this.options.visionDescriptorCache);
+          }
         }
         yield event;
         if (!isTerminalTurnEvent(event, threadId, currentTurnId)) continue;
@@ -643,6 +746,14 @@ class CodexAppServerJsonRpcSession {
           result = callGuiMcpTool(controller, canonicalGuiDynamicToolName(toolName), args);
           await flush();
         }
+      } else if (isBrowserDynamicToolName(toolName)) {
+        const moduleRequest = browserModuleInvokeRequestFromDirectTool(toolName, args);
+        if (!moduleRequest) {
+          success = false;
+          result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
+          return { contentItems: [{ type: 'inputText', text: JSON.stringify(result) }], success };
+        }
+        result = await this.invokeModuleWithBrowserProgressGuard(moduleRequest);
       } else if (isModuleToolName(toolName)) {
         const moduleToolName = canonicalModuleToolName(toolName);
         if (!moduleToolName) {
@@ -660,7 +771,7 @@ class CodexAppServerJsonRpcSession {
         } else if (moduleToolName === 'module.read') {
           result = await this.options.dispatcher.read(args as unknown as ModuleReadRequest);
         } else if (moduleToolName === 'module.invoke') {
-          result = await this.options.dispatcher.invoke(args as unknown as ModuleInvokeRequest);
+          result = await this.invokeModuleWithBrowserProgressGuard(args as unknown as ModuleInvokeRequest);
         } else {
           success = false;
           result = { ok: false, error: `unsupported_dynamic_tool:${toolName}` };
@@ -678,6 +789,68 @@ class CodexAppServerJsonRpcSession {
       contentItems: [{ type: 'inputText', text: JSON.stringify(result) }],
       success,
     };
+  }
+
+  private async invokeModuleWithBrowserProgressGuard(moduleRequest: ModuleInvokeRequest): Promise<unknown> {
+    const blocked = this.browserSearchOnlyBudgetResult(moduleRequest);
+    if (blocked) return blocked;
+    const localToolDecision = await this.evaluateLocalToolAct('module.invoke', moduleRequest as unknown as Record<string, unknown>);
+    let result: unknown;
+    if (localToolDecision.status !== 'auto') {
+      result = localToolActPolicyResult(localToolDecision);
+    } else {
+      result = await this.options.dispatcher.invoke(moduleRequest);
+    }
+    this.recordBrowserToolProgress(moduleRequest, result);
+    return result;
+  }
+
+  private browserSearchOnlyBudgetResult(moduleRequest: ModuleInvokeRequest): Record<string, unknown> | undefined {
+    const primitive = browserPrimitiveFromModuleRequest(moduleRequest);
+    if (primitive !== 'search') return undefined;
+    if (this.browserToolProgress.searchOnlyCalls < BROWSER_SEARCH_ONLY_CALL_BUDGET) return undefined;
+    const candidateReadInputs = this.browserToolProgress.candidateReadInputs;
+    return {
+      moduleId: 'browser',
+      ok: false,
+      error: 'browser_search_only_budget_exhausted',
+      refs: this.browserToolProgress.refs,
+      value: {
+        schemaVersion: BROWSER_PRIMITIVE_RESULT_SCHEMA,
+        moduleId: 'browser',
+        primitive: 'search',
+        status: 'blocked',
+        refs: this.browserToolProgress.refs,
+        diagnostics: [{
+          code: 'browser-search-only-budget-exhausted',
+          message: 'The Host has already discovered candidate search results in this turn. Read one or more candidates before searching again, or present a blocker if the candidates are unusable.',
+          severity: 'warning',
+          retryable: true,
+        }],
+        budget: {},
+        blockedReason: 'browser_search_only_budget_exhausted',
+        repairHints: [{
+          code: 'search-results-require-read',
+          message: 'Call browser.read with a candidateReadInputs entry before citing or summarizing page content.',
+          suggestedPrimitive: 'read',
+          machineReadable: { candidateReadInputs },
+        }],
+      },
+    };
+  }
+
+  private recordBrowserToolProgress(moduleRequest: ModuleInvokeRequest, result: unknown): void {
+    const primitive = browserPrimitiveFromModuleRequest(moduleRequest);
+    if (!primitive) return;
+    if (primitive !== 'search') {
+      this.browserToolProgress = freshBrowserToolProgress();
+      return;
+    }
+    this.browserToolProgress.searchOnlyCalls += 1;
+    const candidateReadInputs = candidateReadInputsFromBrowserSearchResult(result);
+    if (candidateReadInputs.length) this.browserToolProgress.candidateReadInputs = candidateReadInputs;
+    const refs = refsFromBrowserToolResult(result);
+    if (refs.length) this.browserToolProgress.refs = refs;
   }
 
   private async evaluateLocalToolAct(
@@ -734,6 +907,99 @@ function canonicalGuiDynamicToolName(value: string): GuiDynamicToolName {
     candidate === value || providerSafeDynamicToolAlias(candidate) === value);
   if (!name) throw new Error(`unsupported_gui_dynamic_tool:${value}`);
   return name;
+}
+
+const BROWSER_DIRECT_TOOL_NAMES = new Map<string, BrowserPrimitiveName>(
+  BROWSER_PRIMITIVE_NAMES.map((primitive) => [providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]), primitive]),
+);
+
+function isBrowserDynamicToolName(value: string): boolean {
+  return BROWSER_DIRECT_TOOL_NAMES.has(value);
+}
+
+function browserModuleInvokeRequestFromDirectTool(
+  toolName: string,
+  args: Record<string, unknown>,
+): ModuleInvokeRequest | undefined {
+  const primitive = BROWSER_DIRECT_TOOL_NAMES.get(toolName);
+  if (!primitive) return undefined;
+  return {
+    moduleId: 'browser',
+    intent: BROWSER_PRIMITIVE_INTENTS[primitive],
+    input: browserDirectToolInput(primitive, args),
+  };
+}
+
+function browserDirectToolInput(
+  primitive: BrowserPrimitiveName,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    ...args,
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS[primitive],
+  };
+  if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.navigationMode) {
+    input.navigationMode = 'ephemeral';
+  }
+  if (primitive === 'download' && !input.saveScope) {
+    input.saveScope = 'session-artifacts';
+  }
+  return input;
+}
+
+function browserPrimitiveFromModuleRequest(moduleRequest: ModuleInvokeRequest): BrowserPrimitiveName | undefined {
+  if (moduleRequest.moduleId !== 'browser') return undefined;
+  return BROWSER_PRIMITIVE_NAMES.find((primitive) => BROWSER_PRIMITIVE_INTENTS[primitive] === moduleRequest.intent);
+}
+
+function candidateReadInputsFromBrowserSearchResult(result: unknown): Array<Record<string, unknown>> {
+  const value = recordAt(isRecord(result) ? result : undefined, 'value');
+  const output = recordAt(value, 'output');
+  const hintInputs = toRecordList(value?.repairHints)
+    .flatMap((hint) => toRecordList(recordAt(hint, 'machineReadable')?.candidateReadInputs));
+  if (hintInputs.length) return hintInputs;
+  return toRecordList(output?.results)
+    .flatMap((item) => {
+      const existing = recordAt(item, 'readInput');
+      if (existing) return [existing];
+      const url = stringAt(item, 'url');
+      if (!url || !isHttpUrl(url)) return [];
+      return [{
+        schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read,
+        url,
+        navigationMode: 'ephemeral',
+        includeText: true,
+      }];
+    });
+}
+
+function refsFromBrowserToolResult(result: unknown): string[] {
+  if (!isRecord(result)) return [];
+  return uniqueStrings([
+    ...toStringList(result.refs),
+    ...toStringList(recordAt(result, 'value')?.refs),
+  ]);
+}
+
+function toRecordList(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter(isRecord) : [];
+}
+
+function toStringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function uniqueStrings(values: string[]) {
+  return [...new Set(values.filter((value) => value.trim().length > 0))];
 }
 
 class AsyncEventQueue<T> implements AsyncIterable<T> {
@@ -903,17 +1169,21 @@ function runtimeDeveloperInstructions(
   const moduleInvokeAlias = providerSafeDynamicToolAlias('module.invoke');
   const guiPresentAlias = providerSafeDynamicToolAlias('gui.present');
   const guiAskUserAlias = providerSafeDynamicToolAlias('gui.ask_user');
+  const browserToolAliases = BROWSER_PRIMITIVE_NAMES
+    .map((primitive) => providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]))
+    .join(', ');
   const lines = [
     'SciForge Agent Host delegation protocol:',
     '- User-visible completion protocol: every final answer, blocker, repair-needed summary, and needs-human transition must be emitted through gui.present or gui.ask_user. Native assistant prose is progress only and is not a valid final answer.',
     `- Prefer GUI presentation through ${moduleInvokeAlias} with moduleId "gui" and intent "present"/"ask_user"; provider-safe direct aliases ${guiPresentAlias} and ${guiAskUserAlias} are equivalent when exposed. Do not finish the turn until the GUI tool call succeeds or reports a blocker.`,
     '- For gui.present, include the complete user-facing answer in content.value as markdown, plus stable refs already returned by tools when available. The title field is optional display metadata and cannot substitute for the answer body. Do not ask the UI to synthesize or complete the answer.',
+    '- If an input_object includes visionDescriptor.status=ready, treat visionDescriptor.summary as the current visual observation for that object and do not re-inspect the same image unless the descriptor is insufficient for the user request.',
     '- Use SciForge module tools for Host-owned capabilities; do not replace Browser, Computer Use, files, artifacts, or verifier modules with model-memory guesses.',
     `- Dynamic module call names: prefer the provider-safe functions ${moduleDescribeAlias} and ${moduleInvokeAlias}. Canonical names module.describe and module.invoke are equivalent only when the runtime exposes namespaced dynamic tools.`,
     '- Never print or simulate tool-call protocol as prose or markup: no XML/HTML tags, DSML snippets, fenced pseudo-calls, or JSON objects whose function/moduleId/intent fields describe a tool call.',
     '- If a module is needed, make an actual dynamic tool/function call and wait for the tool result. If no dynamic call is possible, say the module call is unavailable; do not output the call payload as text.',
     `- For current, latest, today, external-web, citation, source-verification, or time-sensitive facts, first use ${moduleDescribeAlias} for the relevant module when needed, then collect bounded evidence before synthesizing the answer.`,
-    `- Browser primitive path: call ${moduleInvokeAlias} with moduleId "browser" and primitive intents browser.search, browser.navigate, browser.observe, browser.read, browser.extract, and browser.download. Compose these primitives yourself: search discovers candidates only; navigate opens or reuses a session; observe returns session state; read materializes page text/source refs; extract parses refs; download writes session-scoped artifacts.`,
+    `- Browser primitive path: prefer the direct dynamic tools ${browserToolAliases}. They are provider-safe aliases for browser.search, browser.navigate, browser.observe, browser.read, browser.extract, and browser.download, and still route through the Host-owned Browser module dispatcher. Compose these primitives yourself: search discovers candidates only; navigate opens or reuses a session; observe returns session state; read materializes page text/source refs; extract parses refs; download writes session-scoped artifacts.`,
     '- Browser calls must use nonzero budgets when a budget field is present, low-risk actions only, and refs-first evidence; if the module returns blocked, partial, failed, or needs-confirmation, use the blocker/repair hint for the next Host decision instead of fabricating current facts.',
     `- Computer Use primitive path: call ${moduleInvokeAlias} with moduleId "computer_use" and primitive intents computer_use.bind, computer_use.observe, computer_use.act, computer_use.run_procedure, and computer_use.control. Host owns task understanding, target choice, semantic locate, approval, artifact validation, completion truth, and final answer; run_procedure only executes Host-specified local primitive steps and does not prove the user task is complete.`,
     '- After a module returns refs or source pages, answer from that evidence and cite stable refs or source URLs present in the returned payload; runtime audit streams, provider payloads, local paths, and credentials stay out of the user-visible answer.',
@@ -1035,6 +1305,7 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
         inputSchema: tool.inputSchema,
       };
     }),
+    ...browserDirectToolSpecs(),
     {
       name: providerSafeDynamicToolAlias('gui.present'),
       description: 'Provider-safe alias for gui.present; present the complete final user-facing answer or artifact intent in SciForge GUI. Final answers must put the full answer body in content.value; title is display metadata only.',
@@ -1088,6 +1359,133 @@ function runtimeDynamicToolSpecs(): Array<Record<string, unknown>> {
       inputSchema: spawnAgentInputSchema,
     },
   ];
+}
+
+function browserDirectToolSpecs(): Array<Record<string, unknown>> {
+  return BROWSER_PRIMITIVE_NAMES.map((primitive) => ({
+    name: providerSafeDynamicToolAlias(BROWSER_PRIMITIVE_INTENTS[primitive]),
+    description: browserDirectToolDescription(primitive),
+    inputSchema: browserDirectToolInputSchema(primitive),
+  }));
+}
+
+function browserDirectToolDescription(primitive: BrowserPrimitiveName): string {
+  const intent = BROWSER_PRIMITIVE_INTENTS[primitive];
+  if (primitive === 'search') return `Direct Browser Runtime primitive for ${intent}; discover candidate URLs for a query without reading result pages. Search output items include readInput and repairHints.candidateReadInputs; call browser_read with those inputs before citing or summarizing page content.`;
+  if (primitive === 'navigate') return `Direct Browser Runtime primitive for ${intent}; open or reuse a browser session for a Host-selected URL.`;
+  if (primitive === 'observe') return `Direct Browser Runtime primitive for ${intent}; return state and visual/DOM refs for an existing browser session.`;
+  if (primitive === 'read') return `Direct Browser Runtime primitive for ${intent}; materialize URL or session page text/source refs.`;
+  if (primitive === 'extract') return `Direct Browser Runtime primitive for ${intent}; parse links, forms, dates, metadata, or result items from a Browser ref.`;
+  return `Direct Browser Runtime primitive for ${intent}; download a Host-selected resource into session-scoped artifacts.`;
+}
+
+function browserDirectToolInputSchema(primitive: BrowserPrimitiveName): Record<string, unknown> {
+  const budgetSchema = {
+    type: 'object',
+    properties: {
+      maxTimeMs: { type: 'number', exclusiveMinimum: 0 },
+      elapsedMs: { type: 'number', minimum: 0 },
+      maxBytes: { type: 'number', exclusiveMinimum: 0 },
+      bytesRead: { type: 'number', minimum: 0 },
+    },
+    additionalProperties: false,
+  };
+  const constraintsSchema = {
+    type: 'object',
+    properties: {
+      allowedDomains: { type: 'array', items: { type: 'string' } },
+      blockedDomains: { type: 'array', items: { type: 'string' } },
+      safeSearch: { type: 'string', enum: ['off', 'moderate', 'strict'] },
+      requireUserConfirmationForCrossOrigin: { type: 'boolean' },
+    },
+    additionalProperties: false,
+  };
+  if (primitive === 'search') {
+    return {
+      type: 'object',
+      properties: {
+        query: { type: 'string' },
+        engine: { type: 'string', enum: ['bing', 'duckduckgo'] },
+        locale: { type: 'string' },
+        region: { type: 'string' },
+        limit: { type: 'integer', minimum: 1, maximum: 20 },
+        budget: budgetSchema,
+        constraints: constraintsSchema,
+      },
+      required: ['query'],
+      additionalProperties: false,
+    };
+  }
+  if (primitive === 'navigate') {
+    return {
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        sessionId: { type: 'string' },
+        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
+        capture: { type: 'string', enum: ['none', 'frame', 'screenshot'] },
+        constraints: constraintsSchema,
+      },
+      required: ['url'],
+      additionalProperties: false,
+    };
+  }
+  if (primitive === 'observe') {
+    return {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string' },
+        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
+        capture: { type: 'string', enum: ['none', 'frame', 'screenshot'] },
+      },
+      required: ['sessionId'],
+      additionalProperties: false,
+    };
+  }
+  if (primitive === 'read') {
+    return {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string' },
+        url: { type: 'string' },
+        navigationMode: { type: 'string', enum: ['none', 'ephemeral'] },
+        includeText: { type: 'boolean' },
+        includeHtml: { type: 'boolean' },
+        maxTextChars: { type: 'integer', minimum: 1, maximum: 1_000_000 },
+        timeoutMs: { type: 'number', exclusiveMinimum: 0 },
+      },
+      additionalProperties: false,
+    };
+  }
+  if (primitive === 'extract') {
+    return {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        extract: {
+          type: 'array',
+          items: { type: 'string', enum: ['links', 'forms', 'dates', 'metadata', 'resultItems'] },
+          minItems: 1,
+        },
+        maxItems: { type: 'integer', minimum: 1, maximum: 10_000 },
+      },
+      required: ['ref', 'extract'],
+      additionalProperties: false,
+    };
+  }
+  return {
+    type: 'object',
+    properties: {
+      url: { type: 'string' },
+      sessionId: { type: 'string' },
+      linkSelector: { type: 'string' },
+      saveScope: { type: 'string', enum: ['session-artifacts'] },
+      maxBytes: { type: 'number', exclusiveMinimum: 0 },
+      timeoutMs: { type: 'number', exclusiveMinimum: 0 },
+      filenameHint: { type: 'string' },
+    },
+    additionalProperties: false,
+  };
 }
 
 function approvalPolicyFromEnv(env: NodeJS.ProcessEnv): CodexAppServerApprovalPolicy | undefined {

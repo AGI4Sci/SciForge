@@ -177,7 +177,7 @@ test('CU-NEXT product smoke matrix keeps M6 as historical native multi-screen re
       backendKind: 'native-multi-screen-sidecar',
       appServerRunRef: ref('CU-NEXT-07', 'app-server-run.json'),
       nativePluginInvocationRef: ref('CU-NEXT-07', 'native-plugin-invocation.json'),
-      sciforgeComputerUseRunTaskRef: ref('CU-NEXT-07', 'run-task.json'),
+      sciforgeComputerUsePrimitiveTraceRef: ref('CU-NEXT-07', 'primitive-trace.json'),
       platformSidecarIsolationReportRef: ref('CU-NEXT-07', 'sidecar-isolation.json'),
     },
     evidenceRefs: {
@@ -1710,7 +1710,7 @@ function liveAcceptanceEvidence(
       hops: ['codex-app-server', 'codex-native-plugin', 'sciforge-computer-use', 'native-multi-screen-sidecar'],
       appServerRunRef: ref(taskId, 'codex-app-server-run.json'),
       nativePluginInvocationRef: ref(taskId, 'native-plugin-invocation.json'),
-      sciforgeComputerUseRunTaskRef: ref(taskId, 'tui-host-run-task-chain.json'),
+      sciforgeComputerUsePrimitiveTraceRef: ref(taskId, 'primitive-trace.json'),
       platformSidecarIsolationReportRef: ref(taskId, 'platform-sidecar-isolation-report.json'),
       currentBundleRef: `.sciforge/vision-runs/${runId(taskId)}`,
       currentBundleOnly: true,
@@ -1829,11 +1829,11 @@ function liveAcceptanceEvidence(
         origin: sciForgeChatOrigin(),
       },
       {
-        id: 'tui-host-runTask',
-        kind: 'tui-host-runTask',
+        id: 'computer-use-primitive-session',
+        kind: 'computer-use-primitive-session',
         status: 'present',
-        requestRef: ref(taskId, 'computer-use-request.json'),
-        hostPortsRef: ref(taskId, 'host-ports.json'),
+        sessionRef: sessionRef(taskId),
+        primitiveTraceRef: ref(taskId, 'primitive-trace.json'),
       },
       {
         id: 'computer-use-action-provider',

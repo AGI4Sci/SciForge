@@ -21,6 +21,7 @@ export async function fileToUploadedArtifact(file: File, scenarioId: ScenarioIns
   const safeSessionId = safeWorkspaceSegment(sessionId || 'sessionless');
   const safeFileName = safeWorkspaceSegment(file.name) || `${id}.bin`;
   const relativePath = `.sciforge/uploads/${safeSessionId}/${id}-${safeFileName}`;
+  const visionDescriptor = uploadedVisionDescriptorForFile(file, safeSessionId, id);
   const workspaceRoot = config.workspacePath.replace(/\/+$/, '');
   if (!workspaceRoot) throw new Error('上传文件需要先配置 workspacePath。');
   const absolutePath = `${workspaceRoot}/${relativePath}`;
@@ -43,6 +44,7 @@ export async function fileToUploadedArtifact(file: File, scenarioId: ScenarioIns
       source: 'user-upload',
       storage: 'workspace-file',
       workspacePath: relativePath,
+      ...(visionDescriptor ? { visionDescriptor } : {}),
     },
     dataRef: relativePath,
     path: relativePath,
@@ -66,7 +68,19 @@ export async function fileToUploadedArtifact(file: File, scenarioId: ScenarioIns
       path: relativePath,
       previewKind: previewKindForUploadedFile(file),
       storage: 'workspace-file',
+      ...(visionDescriptor ? { visionDescriptor } : {}),
     },
+  };
+}
+
+function uploadedVisionDescriptorForFile(file: File, safeSessionId: string, uploadId: string) {
+  const mimeType = file.type || 'application/octet-stream';
+  if (!/^image\//i.test(mimeType)) return undefined;
+  return {
+    schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+    status: 'pending',
+    source: 'upload-preextract',
+    descriptorRef: `.sciforge/vision-descriptors/${safeSessionId}/${uploadId}.json`,
   };
 }
 

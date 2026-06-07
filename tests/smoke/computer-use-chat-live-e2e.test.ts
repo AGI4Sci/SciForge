@@ -276,7 +276,7 @@ test('Computer Use chat live E2E submits through chat client and validates curre
     assert.equal(manifest.liveAcceptanceCandidate, false);
     assert.equal(manifest.liveAcceptanceBundle?.status, 'invalid');
     assert.equal(manifest.liveAcceptanceBundle?.acceptanceManifestRef, '.sciforge/vision-runs/cu-next-07-wrapper/cu-user-acceptance-manifest.json');
-    assert.ok(manifest.issues.some((issue) => /fixture, demo, or synthetic evidence/.test(issue)));
+    assert.ok(manifest.issues.some((issue) => /isolated-L3 evidence is retained for historical diagnostics only/.test(issue)));
     assert.ok(manifest.displayedRefs.includes(traceRef));
     assert.ok(manifest.artifactRefs.includes(finalArtifactRef));
     assert.ok(manifest.auditRefs.includes(runTaskChainRef));
@@ -656,8 +656,10 @@ test('Computer Use legacy diagnostic workspace request injects sanitized complet
   assert.equal(bodies[0]?.diagnosticOnly, true);
   assert.match(String(bodies[0]?.terminalEquivalentText), /^\/computer-use diagnostic --legacy-workspace-gateway run complete the visible task/);
   const uiState = bodies[0]?.uiState as Record<string, unknown> | undefined ?? {};
+  const runtimeIntent = bodies[0]?.runtimeIntent as Record<string, unknown> | undefined ?? {};
+  assert.equal('completionEvidencePolicy' in uiState, false);
   assert.deepEqual(
-    uiState.completionEvidencePolicy,
+    runtimeIntent.completionEvidencePolicy,
     {
       schemaVersion: 'sciforge.completion-evidence-policy.v1',
       producers: [{
@@ -2918,7 +2920,7 @@ test('Computer Use chat live acceptance bundle normalizes current-run-prefixed r
     assert.equal(result.runDirRef, '.sciforge/vision-runs/cu-next-07-wrapper');
     assert.equal(result.completionEvidenceRef, 'isolated-desktop-l3-workflow-evidence.json');
     assert.deepEqual(result.missingRefs, []);
-    assert.ok(result.issues.some((issue) => /fixture, demo, or synthetic evidence/.test(issue)));
+    assert.ok(result.issues.some((issue) => /isolated-L3 evidence is retained for historical diagnostics only/.test(issue)));
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }

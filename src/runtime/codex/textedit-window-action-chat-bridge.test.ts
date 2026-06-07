@@ -57,6 +57,10 @@ test('TextEdit WindowAction chat bridge injects runtimeTruth refs for ordinary c
   assert.ok((result?.result.evidenceRefs as string[]).includes('window-action-session:textedit-local-save/action-state/codex-textedit-save-attempt-1'));
   assert.ok((result?.result.evidenceRefs as string[]).includes('window-action-session:textedit-local-save/evidence/codex-textedit-save-attempt-1/after-ax.json'));
   assert.ok((result?.result.evidenceRefs as string[]).includes('window-action-session:textedit-local-save/actions/codex-textedit-save-attempt-1/freshness-invalidation.json'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('action-ledger:window-action-session/textedit-local-save/control/remove/2026-06-07t00-00-00.000z'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('input-lease:window-action-session/textedit-local-save'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('scoped-input-adapter:textedit-local-save/computer-use/appium-mac2'));
+  assert.ok((result?.result.evidenceRefs as string[]).includes('actor-cursor:computer-use/textedit-local-save'));
   assert.doesNotMatch(JSON.stringify(result), /workspace-file-writer|shell-writer|shared-system-input|osascript|CGEvent|secret|token/i);
 });
 

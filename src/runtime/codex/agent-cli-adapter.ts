@@ -74,12 +74,26 @@ export interface AgentHostGroundingSnapshot {
 
 export type RuntimeInputObjectSource = 'explicit-reference' | 'recent-visible-message' | 'recent-artifact';
 
+export type RuntimeInputObjectVisionDescriptorStatus = 'pending' | 'ready' | 'failed';
+
+export interface RuntimeInputObjectVisionDescriptor {
+  schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1';
+  status: RuntimeInputObjectVisionDescriptorStatus;
+  source: 'upload-preextract' | 'first-reference-preextract' | 'agent-host-cache' | 'model-router-trace' | 'manual';
+  summary?: string;
+  descriptorRef?: string;
+  sha256?: string;
+  traceRef?: string;
+  createdAt?: string;
+}
+
 export interface RuntimeInputObject {
   schemaVersion: 'sciforge.runtime.input-object.v1';
   ref: string;
   source: RuntimeInputObjectSource;
   mimeType?: string;
   title?: string;
+  visionDescriptor?: RuntimeInputObjectVisionDescriptor;
 }
 
 export interface AgentCliStartTurnInput {

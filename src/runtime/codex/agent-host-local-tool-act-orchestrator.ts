@@ -4,6 +4,7 @@ import {
   type ModuleFunctionName,
   type ModuleSideEffect,
 } from '../../../packages/contracts/runtime/modules.js';
+import { BROWSER_PRIMITIVE_INTENTS } from '../../../packages/actions/browser-runtime/index.js';
 import type { CodexAgentHostRuntimeTruth } from './agent-host-grounding.js';
 
 export type AgentHostLocalToolActStatus = 'auto' | 'needs-confirmation' | 'blocked';
@@ -110,6 +111,18 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
   }
   const approvalToken = safeApprovalToken(args.approvalToken);
   const sideEffect = intent.sideEffect;
+  if (moduleId === 'browser' && isBrowserPrimitiveIntent(intentName) && intent.requiresApproval !== true) {
+    return {
+      status: 'auto',
+      reason: `module.invoke ${moduleId}.${intentName} is a Browser primitive; the Browser Runtime owns bounded execution, blockers, and confirmation.`,
+      toolName,
+      moduleId,
+      functionName,
+      intent: intentName,
+      sideEffect,
+      evidenceRefs,
+    };
+  }
   if (intent.returnsOperation === true && sideEffect === 'local' && intent.requiresApproval !== true) {
     return {
       status: 'auto',
@@ -172,6 +185,12 @@ export function evaluateAgentHostLocalToolAct(input: AgentHostLocalToolActInput)
     sideEffect,
     evidenceRefs: uniqueStrings([...evidenceRefs, ...runtimeControlEvidenceRefs(input.runtimeTruth)]),
   };
+}
+
+const BROWSER_PRIMITIVE_INTENT_SET = new Set<string>(Object.values(BROWSER_PRIMITIVE_INTENTS));
+
+function isBrowserPrimitiveIntent(value: string): boolean {
+  return BROWSER_PRIMITIVE_INTENT_SET.has(value);
 }
 
 function blocked(

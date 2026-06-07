@@ -1,6 +1,6 @@
 # SciForge Computer Use 当前任务
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 用户真正要什么
 
@@ -57,7 +57,7 @@ Computer Use 不是独立 agent。它只提供可迁移、可验收、可清理�
 
 ## 拆分登记
 
-- [ ] `packages/actions/computer-use/live-acceptance-validator.ts` 约 3000 行，后续拆成 required refs、product path、artifact completion、replay/marker、shared helpers 等小模块。
+- [x] `packages/actions/computer-use/live-acceptance-validator.ts` 已拆分：主入口保留 live acceptance 主流程，task/rule 常量进入 `live-acceptance-rules.ts`，task marker/ref helper 进入 `live-acceptance-marker-validator.ts`。拆分后单文件均低于约 2000 行，package focused suite 已覆盖 public validator 入口。
 
 ## 近期聚焦：P3 / P4 / P6
 
@@ -175,7 +175,7 @@ Acceptance Gates：
 - [x] final answer 基于 action evidence，而不是 Computer Use 自报成功。
 - [x] blocked / needs-confirmation 能给出用户可理解的恢复路径。
 
-当前状态：P4 已达到 unit-proven。证据来自 WindowAction primitive port 测试、default Computer Use materializer 测试和 Agent Host turn-loop 普通聊天测试。它证明单步低风险 GUI action 能通过 primitive chain 完成；不代表完整用户级 workflow 或真实桌面 product-ready。
+当前状态：P4 已达到 unit-proven。证据来自 WindowAction primitive port 测试、default Computer Use materializer 测试和 Agent Host turn-loop 普通聊天测试。它证明单步低风险 GUI action 能通过 `bind -> observe -> act -> control(release)` primitive chain 完成，并在 final result 保留 action evidence、artifact validator refs 和 release evidence；workflow loop blocked 时也会保留已完成原子步骤 refs。该状态不代表完整用户级 workflow 或真实桌面 product-ready。
 
 ## P5：安全与确认
 
@@ -221,17 +221,102 @@ Acceptance Gates：
 
 Build Tasks：
 
-- [ ] 从普通聊天入口触发一个低风险 GUI 局部操作。
-- [ ] Agent Host 选择 target、调用 bind/observe/act/control。
-- [ ] Computer Use 返回 action evidence。
-- [ ] Agent Host 基于 evidence 生成 final answer。
-- [ ] 如果任务要求产物，还必须有 artifact refs / validator refs。
+- [x] 从普通聊天入口触发一个低风险 GUI 局部操作。
+- [x] Agent Host 选择 target、调用 bind/observe/act/control。
+- [x] Computer Use 返回 action evidence。
+- [x] Agent Host 基于 evidence 生成 final answer。
+- [x] 如果任务要求产物，还必须有 artifact refs / validator refs。
 
 Acceptance Gates：
 
-- [ ] 用户能从 final answer 理解操作是否完成、证据是什么、还有什么没做。
-- [ ] Completion truth 不来自 `act.status=completed` 或 `run_procedure.status=completed` 本身。
-- [ ] 证据不足时 final answer 必须 partial / blocked。
+- [x] 用户能从 final answer 理解操作是否完成、证据是什么、还有什么没做。
+- [x] Completion truth 不来自 `act.status=completed` 或 `run_procedure.status=completed` 本身。
+- [x] 证据不足时 final answer 必须 partial / blocked。
+
+当前状态：P7 已达到 `unit-proven`。Agent Host turn-loop 测试证明普通聊天可触发默认 WindowAction Computer Use materializer，并在 final answer 保留 action evidence、release control ref、input lease / adapter / cursor refs；blocked / product-completion-gate 场景仍保留 refs 和恢复语义。TextEdit chat bridge 和 live acceptance runner 证明普通聊天 save 目标能进入 scoped Appium adapter，产出 sanitized manifest，并在缺少 current-run product completion bundle 时 blocked，而不是把 `act.status=completed` 当成用户任务完成。
+
+补充验收：2026-06-07 focused regression 通过 116/119，3 个真实桌面子项默认 skip；随后显式运行
+`SCIFORGE_COMPUTER_USE_TEXTEDIT_PRIMITIVE_ACCEPTANCE=1 node --import tsx --test packages/actions/computer-use/textedit-live-acceptance.test.ts`
+通过 8/8。运行后检查 TextEdit 进程不存在、live artifact 目录为空、drag Swift 临时源文件不存在、前台应用恢复到 Codex。普通聊天到真实 TextEdit/Appium 的完整 live 验收仍依赖 loopback Appium 环境，不能声明 `product-ready`。
+
+本轮验收：2026-06-07 重新跑通 `npm run typecheck`、Computer Use package focused suite、Model Router refs-first multimodal routing suite、UI Computer Use policy suite 和 `git diff --check`。真实桌面 TextEdit 子项仍默认 skip，必须显式 env 才运行；因此当前结论仍是 `unit-proven` / `live-diagnostic`，不是 `product-ready`。
+
+## P8：VSCode / IDE 视觉验收
+
+目标：用 VSCode 这类复杂真实桌面软件验证 Computer Use 的观察、操作、视觉确认和清理能力，补齐 TextEdit 只能覆盖简单编辑器窗口的缺口。
+
+Build Tasks：
+
+- [x] 新增默认 skip、显式 env 才运行的 VSCode live acceptance runner。
+- [x] runner 优先使用 VSCode；如果实现支持其它 IDE，必须通过通用 app discovery / env 配置接入，不能把产品逻辑写死到单一安装路径。
+- [x] 为验收创建临时 workspace 和测试文件；按用户最新 co-work 要求复用用户 VSCode profile / 当前权限，不创建临时 user data dir。该路径必须显式标记 `userProfileUsed`，不能宣称 profile-isolated。
+- [x] 通过 Host-side acceptance controller 选择下一步原子动作，并经 Computer Use primitive 链路完成 `bind -> observe -> act -> observe -> control(release)`；不能把 task planning 放进 Computer Use core，不能绕过 primitive 直接写文件冒充 GUI 操作。
+- [x] `observe` 必须产出当前 VSCode 窗口的 screenshotRef、accessibilityRef / AX tree ref、visible text refs 和目标 window/session refs。
+- [x] `act` 至少覆盖一次真实 IDE 低风险编辑动作：聚焦编辑区、输入 sentinel 文本、保存当前文件。
+- [x] after observe 必须用视觉/AX/text evidence 证明 sentinel 文本出现在编辑器中，并证明目标仍是当前 VSCode 测试窗口。
+- [x] 文件内容校验只能作为补充 artifact validator，不能替代 GUI before/after evidence。
+- [x] 验收后必须关闭测试文件 tab / 测试窗口视图、删除临时 workspace、释放 input lease / cursor / adapter，并恢复前台焦点和鼠标位置；不得杀用户 VSCode 进程或清用户 profile。
+
+Acceptance Gates：
+
+- [x] 无显式 env 时返回 blocked/skip manifest，不启动 VSCode、不改变桌面。
+- [x] 有显式 env 时，agent 自动观察真实 VSCode 窗口并判断 before/after 视觉状态，不依赖用户肉眼确认。
+- [x] 证据链能回答：哪个 VSCode 窗口、哪个临时 workspace、哪个 session、哪个 adapter、哪个 cursor、哪个编辑动作、动作前后看到了什么。
+- [x] 验收不能留下 VSCode 测试文件 tab、临时 workspace、临时 artifacts 或共享系统输入 lease；因为复用用户 profile，不能把用户 VSCode 进程和 profile 状态当作可清理测试残留。
+- [x] 如果执行仍依赖共享系统鼠标 / 键盘，只能标为 `live-diagnostic`，不能声明 `product-ready`。
+- [x] 如果 VSCode 当前平台 adapter 不足以完成真实 GUI 操作，必须 fail closed，并记录缺失 adapter / observation / visual verification refs。
+
+当前状态：P8 已达到 `live-diagnostic`，不是 `product-ready`。2026-06-08 显式运行
+`SCIFORGE_COMPUTER_USE_VSCODE_PRIMITIVE_ACCEPTANCE=1 node --import tsx --test packages/actions/computer-use/vscode-live-acceptance.test.ts`
+通过 4/4。runner 默认 skip；显式 env 时复用用户 VSCode profile，用临时 workspace/test file 走 `bind -> observe -> act -> act -> act -> observe -> control(release)`，完成聚焦编辑器、GUI clipboard paste sentinel、保存、after observe 和补充文件内容校验。manifest 保留 screenshotRef、accessibilityRef、visible text refs、target window/session refs、input adapter / cursor / lease release refs，并标记 `userProfileUsed=true`、`sharedSystemInputUsed=true`、`productReady=false`。不带 keep-artifacts 的 live run 结束后 `docs/test-artifacts/computer-use-vscode-live` 无残留文件；测试 workspace 被删除，用户 VSCode 进程不被杀，用户 profile 不被清理。
+
+P8 当前口径已按用户 co-work 要求从“临时 user data dir 隔离验收”改为“复用用户 profile 的真实协作诊断验收”。因此它证明真实 VSCode co-work 路径可被 primitive evidence 追踪，但不能证明 profile-isolated cleanup，也不能声明 product-ready。若后续需要恢复 profile-isolated IDE 验收，应作为单独 gate 追加。
+
+## P9：已打开 VSCode / IDE co-work
+
+目标：用户已经打开 VSCode 时，Codex 能绑定当前用户窗口并进行低风险局部协作，而不是另起一个假测试窗口或要求用户切到专门 profile。
+
+Build Tasks：
+
+- [ ] 从普通聊天入口触发“操作我已经打开的 VSCode / IDE”这类请求，Agent Host 负责识别用户意图、风险边界和目标窗口候选。
+- [ ] 支持绑定用户当前前台 VSCode 窗口或用户明确选择的 VSCode 窗口；绑定证据必须包含 window/session refs、process/app refs、frontmost/focus refs 和可见文件/编辑区 refs。
+- [ ] Agent Host 可以根据最新 observe refs 决定下一步原子能力，例如聚焦编辑区、读取当前可见文本、移动光标、替换选区、插入草稿、保存或撤销；Computer Use core 仍只执行 primitive，不做 task planning。
+- [ ] 复用用户 VSCode profile、扩展、账号和当前权限来支持真实 co-work；manifest / evidence 必须显式标记 `userProfileUsed=true` 和共享系统输入影响，不能宣称 profile-isolated。
+- [ ] 对用户已有文件的修改默认只做草稿或 diff preview；保存、批量替换、跨文件修改、提交、发布、删除或不可逆动作必须 `needs-confirmation`。
+- [ ] 每个 GUI action 都必须有 current-run before/after screenshot refs、AX/text refs、action refs、input adapter / cursor / lease refs 和 stale invalidation refs；文件内容读取只能作为补充 validator。
+- [ ] 会话释放时必须释放 input lease / cursor / adapter、恢复焦点和鼠标位置；不得杀用户 VSCode 进程、关闭用户原有窗口、清理用户 profile 或擅自保存无关文件。
+
+Acceptance Gates：
+
+- [ ] 用户在普通聊天中说“操作我已经打开的 VSCode”时，Host 能通过 `bind -> observe -> act -> observe -> control(release)` 完成一个低风险局部动作，并在 final answer 中给出 refs-first 证据。
+- [ ] 如果当前有多个 VSCode 窗口、目标文件不明确、编辑区不可见或 observation refs 不新鲜，必须返回 `needs-confirmation` / `blocked`，不能猜窗口或猜文件。
+- [ ] 对用户真实文件的改动必须先给预览或确认；未确认时 executor 不得执行保存、批量替换或跨文件修改。
+- [ ] shared-system-input 路径只能标为 `live-diagnostic`；只有 session-local / focus-free adapter 通过真实 co-work 验收且无副作用时，才允许升级为 `product-ready`。
+
+当前状态：P9 已登记为下一阶段任务，尚未实现，不能打勾。P8 只证明临时 workspace/test file 的 VSCode 诊断验收；P9 需要证明用户已打开 VSCode 的真实 co-work 入口和确认边界。
+
+## P10：论文修改 / 润色 GUI 协作
+
+目标：用户在 VSCode / IDE 中打开论文草稿时，Codex 能基于当前文件或选区生成可审阅修改，并在确认后通过 GUI primitive 把修改落到编辑器。
+
+Build Tasks：
+
+- [ ] Agent Host 识别论文编辑范围：当前选区、当前文件可见段落、用户指定章节，或全文 artifact；范围不明确时先 `needs-confirmation`。
+- [ ] 支持 LaTeX、Markdown、纯文本论文草稿和可导出文本的文档内容；Host 负责解析上下文、保留引用标记、公式、代码块、表格、术语和学术含义。
+- [ ] 默认生成 draft / diff artifact refs，不直接覆盖用户文件；用户确认前，Computer Use 只能执行观察、选区读取、草稿插入到临时位置或打开预览等低风险动作。
+- [ ] 用户确认后，Host 将已确认的局部 patch 拆成 Computer Use primitive：绑定目标窗口、观察当前文本、选择范围、替换文本、after observe、可选保存、release。
+- [ ] 修改结果必须有 source text refs、draft/diff refs、GUI before/after refs、action refs、保存后的 file validator refs 和 final answer 变更摘要。
+- [ ] 对事实性改写、引用补全、实验结果解释、作者贡献、结论增强等高影响论文内容必须降级为建议或 `needs-confirmation`，不得静默生成新事实。
+- [ ] 文件太长、格式不可解析、引用上下文不足、当前窗口不是论文文件或用户未确认应用修改时，final answer 必须是 `partial` / `needs-confirmation` / `blocked`。
+
+Acceptance Gates：
+
+- [ ] 用户说“帮我润色当前选区”时，Host 能读取选区/可见文本 refs，生成 diff preview，并在 final answer 中说明未应用到文件。
+- [ ] 用户确认应用后，Computer Use 通过 `bind -> observe -> act -> observe -> control(release)` 在当前 VSCode 编辑区替换选区，并用 GUI refs 和补充文件 validator 证明变化。
+- [ ] LaTeX 引用、公式和命令不会被普通润色破坏；不能验证时必须保留原文或返回 blocked reason。
+- [ ] 保存文件、跨章节批量修改或全文替换必须有明确 confirmation refs；没有确认时不能执行。
+
+当前状态：P10 已登记为下一阶段任务，尚未实现，不能打勾。它是 P9 co-work 入口之上的用户级场景，最终完成判断仍由 Agent Host 基于 evidence 和用户确认生成，Computer Use 不能自报论文润色完成。
 
 ## 非目标
 

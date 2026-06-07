@@ -73,6 +73,18 @@ interface RuntimeInputObject {
   source: RuntimeInputObjectSource;
   mimeType?: string;
   title?: string;
+  visionDescriptor?: RuntimeInputObjectVisionDescriptor;
+}
+
+interface RuntimeInputObjectVisionDescriptor {
+  schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1';
+  status: 'pending' | 'ready' | 'failed';
+  source: 'upload-preextract' | 'first-reference-preextract' | 'agent-host-cache' | 'model-router-trace' | 'manual';
+  summary?: string;
+  descriptorRef?: string;
+  sha256?: string;
+  traceRef?: string;
+  createdAt?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1212,13 +1224,82 @@ function runtimeInputObjectCandidate(
     ?? asString(record.title)
     ?? asString(auxiliary.name)
     ?? asString(record.name);
+  const visionDescriptor = runtimeInputObjectVisionDescriptor(record, auxiliary);
   return {
     schemaVersion: 'sciforge.runtime.input-object.v1',
     ref,
     source,
     ...(mimeType ? { mimeType } : {}),
     ...(title ? { title: title.slice(0, 160) } : {}),
+    ...(visionDescriptor ? { visionDescriptor } : {}),
   };
+}
+
+function runtimeInputObjectVisionDescriptor(
+  record: Record<string, unknown>,
+  auxiliary: Record<string, unknown>,
+): RuntimeInputObjectVisionDescriptor | undefined {
+  const candidates = [
+    auxiliary.visionDescriptor,
+    record.visionDescriptor,
+    isRecord(auxiliary.metadata) ? auxiliary.metadata.visionDescriptor : undefined,
+    isRecord(record.metadata) ? record.metadata.visionDescriptor : undefined,
+    isRecord(auxiliary.previewDescriptor) ? auxiliary.previewDescriptor.visionDescriptor : undefined,
+    isRecord(record.previewDescriptor) ? record.previewDescriptor.visionDescriptor : undefined,
+  ];
+  for (const candidate of candidates) {
+    const descriptor = runtimeInputObjectVisionDescriptorCandidate(candidate);
+    if (descriptor) return descriptor;
+  }
+  return undefined;
+}
+
+function runtimeInputObjectVisionDescriptorCandidate(value: unknown): RuntimeInputObjectVisionDescriptor | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.schemaVersion !== 'sciforge.runtime.input-object.vision-descriptor.v1') return undefined;
+  const status = asString(value.status);
+  const source = asString(value.source);
+  if (!isRuntimeInputObjectVisionDescriptorStatus(status) || !isRuntimeInputObjectVisionDescriptorSource(source)) return undefined;
+  const summary = safeRuntimeInputObjectDescriptorText(value.summary, 4_000);
+  const descriptorRef = safeRuntimeInputObjectDescriptorRef(value.descriptorRef);
+  const sha256 = safeRuntimeInputObjectDescriptorText(value.sha256, 120);
+  const traceRef = safeRuntimeInputObjectDescriptorRef(value.traceRef);
+  const createdAt = safeRuntimeInputObjectDescriptorText(value.createdAt, 80);
+  return {
+    schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+    status,
+    source,
+    ...(summary ? { summary } : {}),
+    ...(descriptorRef ? { descriptorRef } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    ...(traceRef ? { traceRef } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  };
+}
+
+function isRuntimeInputObjectVisionDescriptorStatus(value: string | undefined): value is RuntimeInputObjectVisionDescriptor['status'] {
+  return value === 'pending' || value === 'ready' || value === 'failed';
+}
+
+function isRuntimeInputObjectVisionDescriptorSource(value: string | undefined): value is RuntimeInputObjectVisionDescriptor['source'] {
+  return value === 'upload-preextract'
+    || value === 'first-reference-preextract'
+    || value === 'agent-host-cache'
+    || value === 'model-router-trace'
+    || value === 'manual';
+}
+
+function safeRuntimeInputObjectDescriptorText(value: unknown, maxLength: number) {
+  if (typeof value !== 'string') return undefined;
+  const text = value.replace(/\s+/g, ' ').trim();
+  if (!text || text.length > maxLength) return undefined;
+  if (/[\u0000-\u001f<>]|(?:data:|javascript:|file:|blob:|authorization|bearer|api[_-]?key|password|secret|token|<html)/i.test(text)) return undefined;
+  return text;
+}
+
+function safeRuntimeInputObjectDescriptorRef(value: unknown) {
+  const ref = safeRuntimeInputObjectDescriptorText(value, 600);
+  return ref && safeRuntimeInputObjectRef(ref) ? ref : undefined;
 }
 
 function runtimeInputObjectMimeType(ref: string, record: Record<string, unknown>, auxiliary: Record<string, unknown>) {
@@ -1278,7 +1359,12 @@ function uniqueRuntimeInputObjects(values: Array<RuntimeInputObject | undefined>
   const seen = new Set<string>();
   const out: RuntimeInputObject[] = [];
   for (const value of values) {
-    if (!value || seen.has(value.ref)) continue;
+    if (!value) continue;
+    if (seen.has(value.ref)) {
+      const existingIndex = out.findIndex((item) => item.ref === value.ref);
+      if (existingIndex >= 0 && !out[existingIndex]?.visionDescriptor && value.visionDescriptor) out[existingIndex] = value;
+      continue;
+    }
     seen.add(value.ref);
     out.push(value);
   }

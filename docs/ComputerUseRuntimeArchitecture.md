@@ -1,6 +1,6 @@
 # Computer Use Runtime 设计
 
-最后更新：2026-06-07
+最后更新：2026-06-08
 
 ## 文档目的与约束
 
@@ -130,21 +130,26 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 ## 当前推进顺序
 
-近期实现按 P3 / P4 / P6 收敛，避免同时扩大 surface：
+近期实现按 P3 / P4 / P6 收敛，并把 P8 作为下一轮复杂真实软件验收：
 
 - P3 先把真实桌面验收做扎实：live test 默认 skip，显式 env 才运行；运行前后清理测试窗口、文稿、进程和 artifacts；多 session 要证明 adapter / cursor 独立。
 - P4 再接 Host / MCP：MCP schema 必须与 TS validator 一致；Host port adapter 提供真实 `bind` / `observe` / `act` / `control`；Agent Host 继续拥有用户任务理解和 final answer。
 - P6 持续清理迁移路径：旧 `runTask`、`perform_local_action`、`fill_fields`、`executeBoundedOperation` 和 VirtualAppScreen / noVNC product claim 不能回流到新 public surface。
+- P8 用 VSCode / IDE 复杂桌面窗口补齐视觉验收：真实 `observe` 必须看到文件树、编辑区、窗口标题或等价 AX/text 证据；Host-side acceptance controller 可以基于 observation refs 选择下一步原子动作，但 Computer Use core 仍不做规划；真实 `act` 必须改变当前测试窗口；after observe 必须用视觉/AX/text refs 验证变化，文件内容只能作为补充 validator；验收后必须清理测试文件 tab、临时 workspace、input lease、cursor 和 artifacts。
 
 完成顺序以验收成熟度为准：`contracted` 和 `unit-proven` 只能说明 contract 正确；只有 session-local adapter 通过真实桌面验收且无副作用残留，才能升为 `product-ready`。
 
 当前 P3 状态是 `live-diagnostic`：TextEdit live acceptance 已在真实桌面跑通原子动作链、双 session adapter / cursor 隔离，以及 shared-system-input 并发冲突 blocked；并验证运行后没有测试窗口、进程、临时文稿或默认 artifact 残留。该路径仍使用 System Events / CGEvent 共享系统输入，所以不能声明 `product-ready`。
 
-当前 P4 状态是 `unit-proven`：Agent Host 默认 WindowAction materializer 已通过 `computer_use.bind -> computer_use.observe -> computer_use.act` 执行单步低风险 GUI action，turn-loop 普通聊天路径基于 action evidence 生成答复。这个状态不等于完整用户 workflow 完成，也不等于真实桌面 `product-ready`。
+当前 P4 状态是 `unit-proven`：Agent Host 默认 WindowAction materializer 已通过 `computer_use.bind -> computer_use.observe -> computer_use.act -> computer_use.control(release)` 执行单步低风险 GUI action，turn-loop 普通聊天路径基于 action evidence 生成答复，并把 action / artifact validator / release evidence 保留到 final result；workflow loop blocked 时也保留已完成原子步骤 refs。这个状态不等于完整用户 workflow 完成，也不等于真实桌面 `product-ready`。
 
 当前 P1 状态是 `live-diagnostic`：8 个 action type 的 validator、MCP schema、service delegation 和 evidence refs 已有 package test 覆盖，TextEdit live acceptance 覆盖低风险原子动作子集。该状态不代表每个 `app_command` 值、快捷键组合或平台 adapter 都已 product-ready。
 
 当前 P5 状态是 `unit-proven`：内置高风险 `app_command` 列表默认 needs-confirmation；Host 标记的 cross-app、cross-window、cross-account、irreversible risk categories 默认 needs-confirmation；approvalRef 必须绑定当前 risk envelope；单步 `act` 和 `run_procedure` blocked 时不会调用 executor。Computer Use core 只执行 risk envelope 规则，不做跨 app / 跨账号语义推断。
+
+当前 P7 状态是 `unit-proven`：普通聊天入口已能触发 Host 选择 target，并走 `bind -> observe -> act -> control(release)`；final answer 只基于 action evidence 和 release evidence 表达局部动作结果。TextEdit chat bridge 和 live acceptance runner 已证明 save 目标、artifact validator refs、release refs 和 product completion gate 能保留到 blocked answer；真实桌面 TextEdit primitive live 仍是 `live-diagnostic`，普通聊天到真实 TextEdit/Appium 的完整 live 验收还不能声明 `product-ready`。
+
+当前 P8 状态是 `live-diagnostic`：VSCode live acceptance runner 默认 skip，显式 `SCIFORGE_COMPUTER_USE_VSCODE_PRIMITIVE_ACCEPTANCE=1` 才运行；用户要求它复用用户 VSCode profile / 当前权限以贴近真实 co-work，所以 manifest 明确标记 `userProfileUsed=true`。该 runner 在临时 workspace / test file 上走 `bind -> observe -> act -> observe -> control(release)`，记录 screenshotRef、accessibilityRef、visible text refs、target window/session refs、input adapter / cursor / lease release refs，并用补充文件 validator 交叉确认保存结果。不带 keep-artifacts 运行后会删除临时 workspace 和 evidence artifacts，但不会杀用户 VSCode 进程，也不会清理用户 profile。该能力仍使用共享系统输入和用户 profile，因此不能声明 `product-ready` 或 profile-isolated cleanup。
 
 ## 职责边界
 

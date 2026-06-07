@@ -23,6 +23,7 @@ export interface ModelRouterProviderConfig {
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  maxSupplementRounds?: number;
 }
 
 export interface ModelRouterProfile {
@@ -97,7 +98,9 @@ type RoutedResponse = {
   traceRef: string;
 };
 
-type TextControl = { type: 'final_answer'; content: string };
+type TextControl =
+  | { type: 'final_answer'; content: string }
+  | { type: 'need_more_visual_info'; target?: string; question: string; reason?: string };
 
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
 
@@ -315,7 +318,7 @@ async function routeResponsesRequest(
   let outputItems: JsonObject[] = [];
   let controlError: string | undefined;
   try {
-    const textResult = await callTextReasoner({
+    let textResult = await callTextReasoner({
       profile,
       secret: textSecret,
       fetchImpl: context.fetchImpl,
@@ -328,13 +331,77 @@ async function routeResponsesRequest(
       requestOptions: textReasonerRequestOptions,
       toolNameAliases,
     });
+    for (let round = 0; round < visionSupplementRoundLimit(profile.translators.vision); round += 1) {
+      if (textResult.outputItems.some((item) => item.type === 'function_call')) break;
+      const control = parseTextControl(textResult.outputText);
+      if (control?.type !== 'need_more_visual_info') break;
+      const modality = modalityForSupplementControl(control, visionModalities);
+      if (!modality) {
+        controlError = `Rejected visual supplement request: unknown target "${control.target ?? ''}".`;
+        break;
+      }
+      if (!visionSecret) {
+        controlError = 'Rejected visual supplement request: vision translator secret is unavailable.';
+        break;
+      }
+      let observationStatus: 'ok' | 'failed' = 'ok';
+      let observation: string;
+      try {
+        observation = await callVisionTranslator({
+          profile,
+          secret: visionSecret,
+          fetchImpl: context.fetchImpl,
+          instruction: visionSupplementInstruction(extracted.userText, control, modality),
+          modality,
+          phase: `vision-supplement-${round + 1}`,
+          calls,
+        });
+      } catch (error) {
+        degraded = true;
+        observationStatus = 'failed';
+        const summary = traceErrorSummary(error);
+        observation = [
+          `modality_input=${modality.id}`,
+          'kind=vision.image',
+          'status=unavailable',
+          `reason=${summary}`,
+          'instruction=Answer from available context and explicitly state that the requested visual supplement could not be inspected.',
+        ].join('\n');
+      }
+      observations.push(formatVisionObservation(modality, observation, observationStatus));
+      await writeTraceJson(trace, `vision-supplement-${round + 1}-${modality.id}.json`, {
+        schemaVersion: 'sciforge.model-router.vision-observation.v1',
+        phase: `supplement-${round + 1}`,
+        status: observationStatus,
+        targetIds: [modality.id],
+        observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
+      });
+      textResult = await callTextReasoner({
+        profile,
+        secret: textSecret,
+        fetchImpl: context.fetchImpl,
+        userText: extracted.userText,
+        observations,
+        controlError,
+        visualFailure: degraded,
+        calls,
+        request,
+        requestOptions: textReasonerRequestOptions,
+        toolNameAliases,
+      });
+    }
     const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
     if (hasToolCall) {
       outputText = textResult.outputText;
       outputItems = textResult.outputItems;
     } else {
       const control = parseTextControl(textResult.outputText);
-      outputText = publicProviderOutputText(control?.content ?? textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
+      outputText = publicProviderOutputText(
+        control?.type === 'final_answer' ? control.content : textResult.outputText,
+        profile,
+        publicModelAlias,
+        traceRedactionSecrets,
+      );
     }
   } catch (error) {
     await writeRoutingTrace({
@@ -641,6 +708,14 @@ function visionTranslatorInstruction(userInstruction: string, modality: Modality
   ].filter(Boolean).join('\n');
 }
 
+function visionSupplementInstruction(userInstruction: string, control: Extract<TextControl, { type: 'need_more_visual_info' }>, modality: ModalityRef) {
+  return [
+    visionTranslatorInstruction(userInstruction || 'Inspect the provided visual input.', modality),
+    `Supplemental visual question: ${boundedText(control.question, 1_000)}`,
+    control.reason ? `Reason for supplement: ${boundedText(control.reason, 1_000)}` : '',
+  ].filter(Boolean).join('\n\n');
+}
+
 function formatVisionObservation(modality: ModalityRef, observation: string, status: 'ok' | 'failed') {
   return [
     `Target modality_input: ${modality.id}`,
@@ -650,6 +725,22 @@ function formatVisionObservation(modality: ModalityRef, observation: string, sta
     modality.safeRef ? `Object ref: ${modality.safeRef}` : '',
     observation,
   ].filter(Boolean).join('\n');
+}
+
+function visionSupplementRoundLimit(config: ModelRouterProviderConfig | undefined) {
+  const value = config?.maxSupplementRounds;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(3, Math.floor(value)));
+}
+
+function modalityForSupplementControl(
+  control: Extract<TextControl, { type: 'need_more_visual_info' }>,
+  modalities: ModalityRef[],
+) {
+  if (control.target) {
+    return modalities.find((modality) => modality.id === control.target);
+  }
+  return modalities.length === 1 ? modalities[0] : undefined;
 }
 
 function extractTextualModalityRefs(userText: string, startOrdinal: number): { userText: string; modalities: ModalityRef[] } {
@@ -992,6 +1083,14 @@ function parseTextControl(content: string): TextControl | undefined {
     if (!isRecord(parsed)) return undefined;
     if (parsed.type === 'final_answer' && typeof parsed.content === 'string') {
       return { type: 'final_answer', content: parsed.content };
+    }
+    if (parsed.type === 'need_more_visual_info' && typeof parsed.question === 'string') {
+      return {
+        type: 'need_more_visual_info',
+        target: stringField(parsed.target),
+        question: boundedText(parsed.question, 1_000),
+        reason: stringField(parsed.reason),
+      };
     }
   } catch {
     return undefined;

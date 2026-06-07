@@ -632,6 +632,7 @@ export {
 export type {
   ObjectAction,
   ObjectReference,
+  ObjectReferenceVisionDescriptor,
   ObjectReferenceKind,
   ObjectReferencePresentationRole,
   ObjectReferenceStatus,

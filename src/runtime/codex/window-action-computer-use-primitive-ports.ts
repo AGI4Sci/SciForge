@@ -510,6 +510,7 @@ async function dispatchInputFromPrimitiveAction(
     return {
       ...base,
       action: 'save' as const,
+      targetDescription: action.elementRef,
     };
   }
   return undefined;

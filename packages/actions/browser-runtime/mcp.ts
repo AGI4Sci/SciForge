@@ -3,7 +3,9 @@ import {
   BROWSER_EXTRACT_TARGETS,
   BROWSER_PRIMITIVE_INPUT_SCHEMAS,
   BROWSER_PRIMITIVE_INTENTS,
+  BROWSER_PRIMITIVE_NAMES,
   BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
+  type BrowserPrimitiveName,
   type BrowserPrimitiveService,
 } from './index.js';
 
@@ -24,10 +26,9 @@ export interface BrowserRuntimeMcpCallToolRequest {
 export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
   return [
     {
-      name: BROWSER_PRIMITIVE_INTENTS.search,
-      description: 'Discover candidate web pages for a Host-provided query. Does not read result pages.',
-      inputSchema: objectSchema(['schemaVersion', 'query'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.search },
+      name: browserRuntimeMcpToolName('search'),
+      description: 'Discover candidate web pages for a Host-provided query. Does not read result pages. Use returned readInput/candidateReadInputs with browser_read before citing or summarizing page content.',
+      inputSchema: objectSchema(['query'], {
         query: { type: 'string', minLength: 1 },
         engine: { enum: ['bing', 'duckduckgo'] },
         locale: { type: 'string' },
@@ -38,10 +39,9 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
       }),
     },
     {
-      name: BROWSER_PRIMITIVE_INTENTS.navigate,
+      name: browserRuntimeMcpToolName('navigate'),
       description: 'Navigate to a Host-provided HTTP(S) URL and return browser session refs.',
-      inputSchema: objectSchema(['schemaVersion', 'url'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.navigate },
+      inputSchema: objectSchema(['url'], {
         url: { type: 'string', format: 'uri' },
         sessionId: { type: 'string' },
         timeoutMs: { type: 'number', exclusiveMinimum: 0 },
@@ -50,20 +50,18 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
       }),
     },
     {
-      name: BROWSER_PRIMITIVE_INTENTS.observe,
+      name: browserRuntimeMcpToolName('observe'),
       description: 'Observe an existing browser session and return current state refs.',
-      inputSchema: objectSchema(['schemaVersion', 'sessionId'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.observe },
+      inputSchema: objectSchema(['sessionId'], {
         sessionId: { type: 'string', minLength: 1 },
         timeoutMs: { type: 'number', exclusiveMinimum: 0 },
         capture: { enum: ['none', 'frame', 'screenshot'] },
       }),
     },
     {
-      name: BROWSER_PRIMITIVE_INTENTS.read,
+      name: browserRuntimeMcpToolName('read'),
       description: 'Materialize page content from a session or explicitly ephemeral URL into refs-first source evidence.',
-      inputSchema: objectSchema(['schemaVersion'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.read },
+      inputSchema: objectSchema([], {
         sessionId: { type: 'string' },
         url: { type: 'string', format: 'uri' },
         navigationMode: { enum: ['none', 'ephemeral'] },
@@ -74,10 +72,9 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
       }),
     },
     {
-      name: BROWSER_PRIMITIVE_INTENTS.extract,
+      name: browserRuntimeMcpToolName('extract'),
       description: 'Parse already materialized refs for links, forms, dates, metadata, or repeated result items.',
-      inputSchema: objectSchema(['schemaVersion', 'ref', 'extract'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.extract },
+      inputSchema: objectSchema(['ref', 'extract'], {
         ref: { type: 'string', minLength: 1 },
         extract: {
           type: 'array',
@@ -88,10 +85,9 @@ export function browserRuntimeMcpTools(): BrowserRuntimeMcpToolDefinition[] {
       }),
     },
     {
-      name: BROWSER_PRIMITIVE_INTENTS.download,
+      name: browserRuntimeMcpToolName('download'),
       description: 'Download a Host-selected remote resource into session-scoped artifacts.',
-      inputSchema: objectSchema(['schemaVersion', 'saveScope'], {
-        schemaVersion: { const: BROWSER_PRIMITIVE_INPUT_SCHEMAS.download },
+      inputSchema: objectSchema([], {
         url: { type: 'string', format: 'uri' },
         sessionId: { type: 'string' },
         linkSelector: { type: 'string' },
@@ -108,14 +104,44 @@ export function createBrowserRuntimeMcpAdapter(service: BrowserPrimitiveService)
   return {
     tools: browserRuntimeMcpTools,
     callTool: async (request: BrowserRuntimeMcpCallToolRequest) => {
+      const primitive = browserRuntimeMcpPrimitiveFromToolName(request.name);
       const moduleRequest: ModuleInvokeRequest = {
         moduleId: BROWSER_PRIMITIVE_SERVICE_MODULE_ID,
-        intent: request.name,
-        input: request.arguments ?? {},
+        intent: primitive ? BROWSER_PRIMITIVE_INTENTS[primitive] : request.name,
+        input: primitive ? browserRuntimeMcpToolInput(primitive, request.arguments ?? {}) : request.arguments ?? {},
       };
       return service.invoke(moduleRequest);
     },
   };
+}
+
+const BROWSER_RUNTIME_MCP_TOOL_TO_PRIMITIVE = new Map<string, BrowserPrimitiveName>(
+  BROWSER_PRIMITIVE_NAMES.map((primitive) => [browserRuntimeMcpToolName(primitive), primitive]),
+);
+
+export function browserRuntimeMcpToolName(primitive: BrowserPrimitiveName) {
+  return BROWSER_PRIMITIVE_INTENTS[primitive].replace(/[^a-zA-Z0-9_-]+/g, '_');
+}
+
+function browserRuntimeMcpPrimitiveFromToolName(name: string): BrowserPrimitiveName | undefined {
+  return BROWSER_RUNTIME_MCP_TOOL_TO_PRIMITIVE.get(name);
+}
+
+function browserRuntimeMcpToolInput(
+  primitive: BrowserPrimitiveName,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    ...args,
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS[primitive],
+  };
+  if (primitive === 'read' && typeof input.url === 'string' && input.url.trim() && !input.sessionId && !input.navigationMode) {
+    input.navigationMode = 'ephemeral';
+  }
+  if (primitive === 'download' && !input.saveScope) {
+    input.saveScope = 'session-artifacts';
+  }
+  return input;
 }
 
 function objectSchema(required: string[], properties: Record<string, unknown>) {

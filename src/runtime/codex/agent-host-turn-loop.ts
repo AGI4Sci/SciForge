@@ -958,7 +958,7 @@ function sanitizeComputerUseActMaterializerResult(
   context: { commandText?: string } = {},
 ): CodexAgentHostComputerUseActMaterializerResult | undefined {
   if (!value) return undefined;
-  const evidenceRefs = stringList(value.evidenceRefs).filter(runtimeOwnedActEvidenceRef);
+  const evidenceRefs = evidenceRefList(value.evidenceRefs).filter(runtimeOwnedActEvidenceRef);
   if (!evidenceRefs.length) return undefined;
   const requestedStatus = value.status === 'completed' || value.status === 'needs-confirmation' ? value.status : 'blocked';
   const completionTruth = sanitizeComputerUseCompletionTruth(value.completionTruth)
@@ -1278,7 +1278,7 @@ function runtimeOwnedActEvidenceRef(ref: string): boolean {
   if (/^(?:gui(?:\.|:)|ui:|fixture:|replay:)/i.test(trimmed)) return false;
   if (/https?:\/\/|data:image|base64|<html|secret|token|password|api[-_]?key|bearer/i.test(trimmed)) return false;
   if (/^\.sciforge\/vision-runs\/[A-Za-z0-9._/-]+$/u.test(trimmed) && !trimmed.includes('..')) return true;
-  return /^(?:browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|runtime-truth:|permission:|cancel:|adapter-registry:|desktop-native:|desktop-window:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|input-lease:|lease:|native-host:|action-ledger:|evidence:|workEvidence:|runtime-truth:|permission:|cancel:|adapter-registry:|desktop-native:|desktop-window:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function structuredResult(input: {
@@ -1631,4 +1631,12 @@ function stringField(value: unknown): string | undefined {
 function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, 16);
+}
+
+function evidenceRefList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    .map((item) => item.trim())
+    .slice(0, 64);
 }

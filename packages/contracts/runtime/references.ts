@@ -5,6 +5,17 @@ export type ObjectReferenceStatus = 'available' | 'missing' | 'expired' | 'block
 export type ObjectReferencePresentationRole = 'primary-deliverable' | 'supporting-evidence' | 'audit' | 'diagnostic' | 'internal';
 export type ObjectAction = 'focus-right-pane' | 'inspect' | 'open-external' | 'reveal-in-folder' | 'copy-path' | 'pin' | 'compare';
 
+export interface ObjectReferenceVisionDescriptor {
+  schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1';
+  status: 'pending' | 'ready' | 'failed';
+  source: 'upload-preextract' | 'first-reference-preextract' | 'agent-host-cache' | 'model-router-trace' | 'manual';
+  summary?: string;
+  descriptorRef?: string;
+  sha256?: string;
+  traceRef?: string;
+  createdAt?: string;
+}
+
 export const objectReferenceKinds = [
   'artifact',
   'file',
@@ -76,6 +87,7 @@ export interface ObjectReference {
     hash?: string;
     size?: number;
     screenshotRef?: string;
+    visionDescriptor?: ObjectReferenceVisionDescriptor;
   };
 }
 

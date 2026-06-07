@@ -51,7 +51,7 @@ Browser 新 public surface 只暴露这些 primitive：
 
 | primitive | 作用 | 边界 |
 | --- | --- | --- |
-| `browser.search` | 用调用方给定 query 做候选发现。 | 不打开结果页、不总结答案、不改写 query。 |
+| `browser.search` | 用调用方给定 query 做候选发现，并为每个可用候选返回可直接传给 `browser.read` 的 `readInput`。 | 不读取结果页正文、不总结答案、不改写 query。 |
 | `browser.navigate` | 将调用方给定 URL 绑定到一个 BrowserHostSession，并执行一次导航。 | 不读取长正文、不判断来源是否满足任务、不代表用户级完成。 |
 | `browser.observe` | 观察现有 session 当前状态。 | 不导航、不读取长正文、不完成任务级判断。 |
 | `browser.read` | 读取当前页面或给定 URL 的网页内容并物化 refs。 | 不下载文件、不抽象成最终结论、不跨页面继续搜索。 |
@@ -60,12 +60,14 @@ Browser 新 public surface 只暴露这些 primitive：
 
 所有 primitive 都必须使用 refs-first envelope。未知字段默认拒绝或进入 diagnostics，不能静默改变语义。
 
+面向模型或 MCP provider 的直接工具名使用安全 alias：`browser_search`、`browser_navigate`、`browser_observe`、`browser_read`、`browser_extract`、`browser_download`。这些 alias 只是调用入口名，内部必须注入对应 input schemaVersion，并路由回同一个 Browser module dispatcher intent（例如 `browser_search` -> `moduleId=browser, intent=browser.search`）。它们不能形成第二条搜索、读取或总结链路。
+
 旧的 `browser.search_read`、`browser.open_read`、`browser.open` 和 `executeBoundedOperation` 浏览器组合入口已经退出 public surface。新实现必须拒绝这些 intent，不能把它们作为兼容 alias、内部兜底或产品 truth。
 
 ## Session 与 Artifact 原则
 
 - 每个 primitive 只绑定一个 BrowserHostSession / tab scope，除非输入明确要求新建 session。
-- `search` 只产出候选结果和 search refs；搜索结果页不是用户级完成证据。
+- `search` 只产出候选结果、search refs、`readInput` 和 repair hints；搜索结果页不是用户级完成证据。调用方要回答网页内容、新闻、论文、来源或引用问题时，必须继续调用 `read` 或说明候选不可用。
 - `navigate` 只证明导航尝试和当前 session 状态。
 - `read` 只证明页面内容已被物化为 source page / page text refs。
 - `extract` 只解析已有 refs，不访问网络。
@@ -96,6 +98,8 @@ Browser evidence 必须 refs-first。可作为局部证据的对象包括：
 - source page / page text / HTML refs。
 - download artifact refs。
 - console / network diagnostics refs。
+
+`search` 返回的 URL 只能作为候选和下一步输入，不能作为已读取来源。`search` 成功时应提供结构化 `repairHints[].machineReadable.candidateReadInputs`，让调用方不需要从说明文字中猜测如何进入 `read`。如果一个 Host turn 连续执行 search 而没有 read / navigate / extract 进展，Host adapter 可以触发通用预算保护并返回 `browser_search_only_budget_exhausted`，要求调用方读取已有候选或报告 blocker。
 
 raw HTML 大 payload、cookies、credentials、downloaded bytes、raw screenshot、data URL、base64、API key 和 secret 不得进入 primitive body 或 public diagnostics。
 

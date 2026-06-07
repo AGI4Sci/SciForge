@@ -33,6 +33,14 @@
     "path": "packages/actions/browser-runtime",
     "notes": "Host supplies browser ports; the package owns primitive contracts and MCP-compatible dispatch only."
   },
+  "mcpTools": [
+    "browser_search",
+    "browser_navigate",
+    "browser_observe",
+    "browser_read",
+    "browser_extract",
+    "browser_download"
+  ],
   "actionSchema": {
     "schemaRef": "sciforge.browser-runtime.primitive-result.v1",
     "inputShape": {

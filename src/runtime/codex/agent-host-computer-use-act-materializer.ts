@@ -19,6 +19,8 @@ import type {
   CodexAgentHostComputerUseActMaterializerResult,
 } from './agent-host-turn-loop.js';
 
+const MAX_RUNTIME_OWNED_EVIDENCE_REFS = 64;
+
 export function createDefaultComputerUseActMaterializer(options: {
   browser?: Parameters<typeof createDefaultBrowserHostComputerUseActMaterializer>[0];
   windowAction?: Parameters<typeof createDefaultWindowActionSessionComputerUseActMaterializer>[0];
@@ -424,7 +426,7 @@ function runtimeTargetKinds(input: CodexAgentHostComputerUseActMaterializerInput
 }
 
 function runtimeOwnedRefs(refs: Array<string | undefined>): string[] {
-  return [...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && runtimeOwnedRef(ref)))].slice(0, 24);
+  return [...new Set(refs.filter((ref): ref is string => typeof ref === 'string' && runtimeOwnedRef(ref)))].slice(0, MAX_RUNTIME_OWNED_EVIDENCE_REFS);
 }
 
 function runtimeOwnedRef(ref: string): boolean {

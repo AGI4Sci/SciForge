@@ -174,7 +174,14 @@ test('selected Computer Use action provider remains terminal-equivalent text thr
   assert.equal('selectedToolIds' in bodies[0]!, false);
   assert.equal('selectedSenseIds' in bodies[0]!, false);
   assert.equal('uiState' in bodies[0]!, false);
-  assert.doesNotMatch(JSON.stringify(bodies[0]), /computerUseNext|computerUseLong|local\.vision-sense|action\.sciforge\.computer-use/);
+  assert.deepEqual(bodies[0]?.runtimeIntent, {
+    schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+    kind: 'computer-use-native-route',
+    source: 'host-owned',
+    computerUseNext: { taskId: 'CU-NEXT-01', requirements: ['chat-origin-current-run'] },
+    computerUseLong: { scenarioId: 'CU-LONG-LIVE-01' },
+  });
+  assert.doesNotMatch(String(bodies[0]?.commandText), /computerUseNext|computerUseLong|local\.vision-sense|action\.sciforge\.computer-use/);
 });
 
 test('聊天流式请求连接到 Codex Runtime bridge，但 public run event 不暴露运行私有元数据', async () => {
@@ -508,6 +515,13 @@ test('normal composer submit registers recent uploaded multimodal objects for Ag
         provenance: {
           path: '.sciforge/uploads/session-test/upload-voucher.jpg',
           dataRef: '.sciforge/uploads/session-test/upload-voucher.jpg',
+          visionDescriptor: {
+            schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+            status: 'ready',
+            source: 'upload-preextract',
+            summary: '酒店凭证图片包含丽柏酒店、入住人、入住/离店时间、金额、订单号和服务商。',
+            descriptorRef: '.sciforge/vision-descriptors/session-test/upload-voucher.json',
+          },
         },
       }],
     }],
@@ -522,6 +536,13 @@ test('normal composer submit registers recent uploaded multimodal objects for Ag
     source: 'recent-visible-message',
     mimeType: 'image/jpeg',
     title: '酒店凭证.jpg',
+    visionDescriptor: {
+      schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+      status: 'ready',
+      source: 'upload-preextract',
+      summary: '酒店凭证图片包含丽柏酒店、入住人、入住/离店时间、金额、订单号和服务商。',
+      descriptorRef: '.sciforge/vision-descriptors/session-test/upload-voucher.json',
+    },
   });
   assert.equal(String(body.commandText), '请读取这张酒店凭证，回答酒店名称。');
   assert.doesNotMatch(JSON.stringify(body), /input_object/);

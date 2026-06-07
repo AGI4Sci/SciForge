@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -70,6 +70,61 @@ test('HTTP/SSE endpoint streams normalized runtime events without raw JSONL as m
   }
 });
 
+test('HTTP/SSE endpoint records emitted runtime events incrementally in a session bundle', async () => {
+  const workspacePath = await mkdtemp(join(tmpdir(), 'sciforge-codex-runtime-events-'));
+  const adapter = new FakeAdapter();
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    void handleCodexRuntimeRoutes(req, res, url, adapter);
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.notEqual(address, null);
+  if (typeof address !== 'object') throw new Error(`expected TCP address, got ${address}`);
+  const port = (address as AddressInfo).port;
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/sciforge/runtime/codex/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        commandText: 'say hello and record events',
+        workspacePath,
+        commandId: 'codex-command-record-events',
+        attemptId: 'codex-command-record-events-attempt-1',
+        auditMetadata: {
+          schemaVersion: 'sciforge.codex-runtime-stream-audit.v1',
+          silentStreamRunId: 'silent-run-record-events',
+        },
+      }),
+    });
+    const text = await response.text();
+    assert.match(text, /event: done/);
+
+    const files = await findRuntimeEventsFiles(join(workspacePath, '.sciforge'));
+    assert.equal(files.length, 1);
+    const lines = (await readFile(files[0] ?? '', 'utf8')).trim().split('\n');
+    const records = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(records.map((record) => record.type), [
+      'realtime_session',
+      'process-progress',
+      'turn',
+      'run_started',
+      'message',
+      'done',
+    ]);
+    for (const record of records) {
+      assert.equal((record.raw as Record<string, unknown>).recorderSchemaVersion, 'sciforge.runtime-event-recorder.v1');
+      assert.equal((record.raw as Record<string, unknown>).runId, 'codex-command-record-events');
+      assert.equal((record.raw as Record<string, unknown>).sessionId, 'silent-run-record-events');
+    }
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(workspacePath, { recursive: true, force: true });
+  }
+});
+
 test('runtime bridge request detection does not treat legacy exec JSON as a product backend', () => {
   assert.equal(codexRuntimeBridgeRequested({ runtimeBridge: 'codex-app-server' }), true);
   assert.equal(codexRuntimeBridgeRequested({ runtimeBridge: 'codex-exec-json' }), false);
@@ -106,6 +161,13 @@ test('HTTP/SSE endpoint forwards inputObjects to Codex app-server instead of cal
           mimeType: 'image/jpeg',
           title: '酒店凭证.jpg',
           source: 'recent-artifact',
+          visionDescriptor: {
+            schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+            status: 'ready',
+            source: 'upload-preextract',
+            summary: '酒店凭证图片的结构化视觉描述。',
+            descriptorRef: '.sciforge/vision-descriptors/session-test/upload-image-hotel.json',
+          },
         }],
       }),
     });
@@ -117,11 +179,19 @@ test('HTTP/SSE endpoint forwards inputObjects to Codex app-server instead of cal
       mimeType: object.mimeType,
       title: object.title,
       source: object.source,
+      visionDescriptor: object.visionDescriptor,
     })), [{
       ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
       mimeType: 'image/jpeg',
       title: '酒店凭证.jpg',
       source: 'recent-artifact',
+      visionDescriptor: {
+        schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+        status: 'ready',
+        source: 'upload-preextract',
+        summary: '酒店凭证图片的结构化视觉描述。',
+        descriptorRef: '.sciforge/vision-descriptors/session-test/upload-image-hotel.json',
+      },
     }]);
     assert.match(text, /event: done/);
     assert.doesNotMatch(text, /丽柏酒店\(天津空港滨海国际机场店\)|model-router\.responses|resp_input_object/);
@@ -2375,6 +2445,28 @@ test('HTTP/SSE endpoint rejects legacy handoff fields nested in audit metadata',
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+async function findRuntimeEventsFiles(root: string): Promise<string[]> {
+  const matches: string[] = [];
+  async function walk(dir: string) {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true, encoding: 'utf8' });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (path.endsWith('/records/runtime-events.ndjson')) {
+        matches.push(path);
+      }
+    }
+  }
+  await walk(root);
+  return matches.sort();
+}
 
 class FakeAdapter implements AgentCliAdapter {
   lastInput?: AgentCliStartTurnInput;

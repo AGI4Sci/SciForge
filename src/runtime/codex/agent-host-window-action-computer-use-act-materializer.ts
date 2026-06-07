@@ -352,9 +352,9 @@ export function createDefaultWindowActionSessionComputerUseActMaterializer(optio
       `adapter-registry:window-action-session/${adapter}/computer-use`,
       actOutput.executorEventRef,
       actOutput.inputEventRef,
+      ...releaseRefs,
       ...currentAdapterEvidenceRefs,
       ...afterRefs,
-      ...releaseRefs,
       sessionRef,
     ]);
     return {
@@ -533,10 +533,12 @@ function primitiveActionFromPlannerAction(
     };
   }
   if (action.type === 'save') {
+    const targetPath = stringField(action.targetPath);
     return {
       action: {
         type: 'app_command',
         command: 'save',
+        ...(targetPath ? { elementRef: targetPath } : {}),
       },
     };
   }
@@ -1068,7 +1070,7 @@ function runtimeOwnedRef(ref: string): boolean {
   ) {
     return false;
   }
-  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
+  return /^(?:runtime-truth:|browser-host-session:|window-action-session:|computer-use:|observation:|executor-event:|input-event:|input-lease:|native-host:|action-ledger:|evidence:|workEvidence:|permission:|cancel:|stop:|lease:|adapter-registry:|desktop-native:|desktop-window:|audit:|window:|appium-mac2:|app-native-command:|accessibility-ui-automation:|terminal-pty:|file-manager:|actor-cursor:|scoped-input-adapter:|focus-lease:)/i.test(trimmed);
 }
 
 function scrollDelta(direction: 'up' | 'down' | 'left' | 'right', amount: number): { x?: number; y?: number } {

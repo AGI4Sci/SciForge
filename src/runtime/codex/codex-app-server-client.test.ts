@@ -16,6 +16,7 @@ import {
   type CodexAppServerProcess,
   type SpawnCodexAppServerProcess,
 } from './codex-app-server-client.js';
+import { BROWSER_PRIMITIVE_INPUT_SCHEMAS } from '../../../packages/actions/browser-runtime/index.js';
 import { isComputerUseNativeRouteCommand } from './computer-use-native-route.js';
 import { SUBAGENT_MCP_ENV, SUBAGENT_MCP_SERVER_NAME } from './subagent-extension-manifest.js';
 
@@ -146,6 +147,168 @@ test('Codex app-server client serves provider-safe module dynamic tool aliases',
   assert.equal(appServer.toolCallResponse?.success, true);
   const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
   assert.match(text, /"routed":true/);
+});
+
+test('Codex app-server client exposes browser primitives as direct dynamic tools backed by module dispatcher', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  let invoked: ModuleInvokeRequest | undefined;
+  const appServer = fakeAppServer({
+    toolCall: {
+      tool: 'browser_search',
+      arguments: {
+        query: '伊朗局势',
+        limit: 2,
+      },
+    },
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.navigate', sideEffect: 'external' },
+            { name: 'browser.observe', sideEffect: 'none' },
+            { name: 'browser.read', sideEffect: 'external' },
+            { name: 'browser.extract', sideEffect: 'none' },
+            { name: 'browser.download', sideEffect: 'workspace' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked = request;
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            routed: true,
+            input: request.input,
+          },
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: 'Use browser_search once.',
+    workspacePath: workspace,
+    commandId: 'direct-browser-search-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  const dynamicTools = appServer.threadStartParams.dynamicTools as Array<Record<string, unknown>>;
+  for (const name of ['browser_search', 'browser_navigate', 'browser_observe', 'browser_read', 'browser_extract', 'browser_download']) {
+    assert.ok(dynamicTools.some((tool) => tool.name === name), `${name} should be registered`);
+  }
+  assert.equal(invoked?.moduleId, 'browser');
+  assert.equal(invoked?.intent, 'browser.search');
+  assert.deepEqual(invoked?.input, {
+    schemaVersion: BROWSER_PRIMITIVE_INPUT_SCHEMAS.search,
+    query: '伊朗局势',
+    limit: 2,
+  });
+  assert.equal(appServer.toolCallResponse?.success, true);
+  const text = (appServer.toolCallResponse?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /"routed":true/);
+});
+
+test('Codex app-server client returns a browser.read repair hint for search-only loops', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const invoked: ModuleInvokeRequest[] = [];
+  const appServer = fakeAppServer({
+    turnToolCalls: [
+      { tool: 'browser_search', arguments: { query: '伊朗局势 最新', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: '伊朗局势 2026 最新', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: 'Iran situation latest', limit: 2 } },
+      { tool: 'browser_search', arguments: { query: '伊朗局势 最新消息', limit: 2 } },
+    ],
+  });
+  const client = createCodexAppServerClient({
+    env,
+    dispatcher: {
+      describe: async ({ moduleId } = {}) => moduleResult({
+        moduleId: moduleId ?? 'browser',
+        ok: true,
+        value: createModuleDescription({
+          moduleId: 'browser',
+          title: 'Browser Runtime',
+          summary: 'Browser primitive module.',
+          intents: [
+            { name: 'browser.search', sideEffect: 'external' },
+            { name: 'browser.read', sideEffect: 'external' },
+          ],
+          facets: { refs: true },
+        }),
+      }),
+      query: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      read: async () => moduleResult({ moduleId: 'browser', ok: true, value: {} }),
+      invoke: async (request) => {
+        invoked.push(request);
+        return moduleResult({
+          moduleId: request.moduleId,
+          ok: true,
+          value: {
+            schemaVersion: 'sciforge.browser-runtime.primitive-result.v1',
+            moduleId: 'browser',
+            primitive: 'search',
+            status: 'completed',
+            output: {
+              query: (request.input as { query?: string }).query,
+              results: [{
+                rank: 1,
+                title: 'Source',
+                url: 'https://example.com/source',
+                snippet: 'Candidate source.',
+              }],
+              searchResultRef: 'browser-host-session:search/search-results.json',
+            },
+            refs: ['browser-host-session:search/search-results.json'],
+            diagnostics: [],
+            budget: {},
+          },
+          refs: ['browser-host-session:search/search-results.json'],
+        });
+      },
+      trace: () => [],
+      clearTrace: () => undefined,
+    },
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '搜索一下伊朗局势，用中文总结当前最新情况，并列出你实际读取过的来源链接',
+    workspacePath: workspace,
+    commandId: 'browser-search-loop-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+  });
+  await collect(stream.events);
+
+  assert.equal(invoked.filter((request) => request.intent === 'browser.search').length, 3);
+  const text = (appServer.toolCallResponses.at(-1)?.contentItems as Array<{ text?: string }> | undefined)?.[0]?.text ?? '';
+  assert.match(text, /browser_search_only_budget_exhausted/);
+  assert.match(text, /candidateReadInputs/);
+  assert.match(text, /browser\.read/);
 });
 
 test('Codex app-server client projects provider-safe GUI dynamic tool aliases as completion events', async () => {
@@ -826,6 +989,104 @@ test('Codex app-server client encodes image inputObjects as app-server compatibl
   }]);
 });
 
+test('Codex app-server client uses ready vision descriptors instead of resending local images', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const appServer = fakeAppServer({ autoToolCall: false });
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      return appServer.process;
+    },
+  });
+
+  const stream = await client.startTurn({
+    commandText: '请基于缓存描述介绍这张图片',
+    workspacePath: workspace,
+    commandId: 'descriptor-input-object-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+    inputObjects: [{
+      schemaVersion: 'sciforge.runtime.input-object.v1',
+      ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+      source: 'recent-artifact',
+      mimeType: 'image/jpeg',
+      title: '酒店凭证.jpg',
+      visionDescriptor: {
+        schemaVersion: 'sciforge.runtime.input-object.vision-descriptor.v1',
+        status: 'ready',
+        source: 'agent-host-cache',
+        summary: '这是一张高德地图酒店预订凭证，包含酒店、入住人、时间、金额、订单号和服务商。',
+      },
+    } as never],
+  });
+  await collect(stream.events);
+
+  const input = appServer.turnStartParams.input as Array<Record<string, unknown>>;
+  assert.equal(input.some((item) => item.type === 'localImage'), false);
+  assert.match(String(input[1]?.text ?? ''), /visionDescriptor\.status=ready/);
+  assert.match(String(input[1]?.text ?? ''), /高德地图酒店预订凭证/);
+});
+
+test('Codex app-server client caches sufficient gui.present content as a follow-up vision descriptor', async () => {
+  const workspace = await tempWorkspace();
+  const env = await tempRuntimeEnv();
+  const firstServer = fakeAppServer({
+    toolCall: {
+      tool: 'gui_present',
+      arguments: {
+        intent: 'show-result',
+        content: {
+          kind: 'markdown',
+          value: '这是一张高德地图酒店预订凭证，包含丽柏酒店、入住人高张阳、入住/离店时间、金额 ¥421.15、订单号和服务商飞猪。',
+        },
+      },
+    },
+  });
+  const secondServer = fakeAppServer({ autoToolCall: false });
+  const servers = [firstServer.process, secondServer.process];
+  const client = createCodexAppServerClient({
+    env,
+    spawnProcess() {
+      const process = servers.shift();
+      if (!process) throw new Error('unexpected extra app-server process');
+      return process;
+    },
+  });
+  const inputObject = {
+    schemaVersion: 'sciforge.runtime.input-object.v1',
+    ref: '.sciforge/uploads/session-test/upload-image-hotel.jpg',
+    source: 'recent-artifact',
+    mimeType: 'image/jpeg',
+    title: '酒店凭证.jpg',
+  } as const;
+
+  const first = await client.startTurn({
+    commandText: '介绍这张图',
+    workspacePath: workspace,
+    commandId: 'cache-descriptor-first-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: true },
+    inputObjects: [inputObject],
+  });
+  await collect(first.events);
+
+  const second = await client.startTurn({
+    commandText: '继续说明这张图中的订单信息',
+    workspacePath: workspace,
+    commandId: 'cache-descriptor-second-command',
+    attemptId: 'attempt-1',
+    guiExtension: { enabled: false },
+    inputObjects: [inputObject],
+  });
+  await collect(second.events);
+
+  const secondInput = secondServer.turnStartParams.input as Array<Record<string, unknown>>;
+  assert.equal(secondInput.some((item) => item.type === 'localImage'), false);
+  assert.match(String(secondInput[1]?.text ?? ''), /visionDescriptor\.source=agent-host-cache/);
+  assert.match(String(secondInput[1]?.text ?? ''), /丽柏酒店/);
+});
+
 test('Codex app-server client treats GUI /computer-use text as ordinary app-server input', async () => {
   const workspace = await tempWorkspace();
   const env = await tempRuntimeEnv();
@@ -1278,6 +1539,7 @@ function fakeAppServer(options: {
   autoToolCall?: boolean;
   toolCall?: { namespace?: string; tool: string; arguments?: Record<string, unknown> };
   toolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
+  turnToolCalls?: Array<{ namespace?: string; tool: string; arguments?: Record<string, unknown> }>;
   turnEvents?: Array<Record<string, unknown>>;
 } = {}) {
   const emitter = new EventEmitter();
@@ -1290,13 +1552,16 @@ function fakeAppServer(options: {
     turnStartParams: Record<string, unknown>;
     turnStartParamsHistory: Array<Record<string, unknown>>;
     toolCallResponse?: Record<string, unknown>;
+    toolCallResponses: Array<Record<string, unknown>>;
     mcpToolCallParams?: Record<string, unknown>;
   } = {
     threadStartParams: {},
     threadResumeParams: {},
     turnStartParams: {},
     turnStartParamsHistory: [],
+    toolCallResponses: [],
   };
+  let turnToolCallIndex = 0;
   let killed = false;
   let buffer = '';
   stdin.on('data', (chunk) => {
@@ -1354,24 +1619,12 @@ function fakeAppServer(options: {
       write({ id: message.id, result: { turn: { id: 'turn-1' } } });
       if (options.autoToolCall !== false) {
         const toolCallIndex = state.turnStartParamsHistory.length - 1;
-        const toolCall = options.toolCalls?.[toolCallIndex]
+        turnToolCallIndex = 0;
+        const toolCall = options.turnToolCalls?.[0]
+          ?? options.toolCalls?.[toolCallIndex]
           ?? options.toolCall
           ?? { namespace: 'multi_agent_v1', tool: 'spawn_agent' };
-        setTimeout(() => write({
-          id: 'server-tool-call-1',
-          method: 'item/tool/call',
-          params: {
-            threadId,
-            turnId: 'turn-1',
-            callId: 'subagent-call-1',
-            ...(toolCall.namespace ? { namespace: toolCall.namespace } : {}),
-            tool: toolCall.tool,
-            arguments: toolCall.arguments ?? {
-              message: 'Inspect PROJECT.md for open sub-agent tasks.',
-              items: [{ path: 'PROJECT.md' }],
-            },
-          },
-        }), 0);
+        setTimeout(() => writeToolCall(toolCall, threadId, turnToolCallIndex), 0);
       } else {
         const turnEvents = options.turnEvents ?? [{
           method: options.terminalEvent ?? 'turn/completed',
@@ -1422,6 +1675,12 @@ function fakeAppServer(options: {
     }
     if (message.id === 'server-tool-call-1') {
       state.toolCallResponse = message.result as Record<string, unknown>;
+      state.toolCallResponses.push(state.toolCallResponse);
+      if (options.turnToolCalls && turnToolCallIndex + 1 < options.turnToolCalls.length) {
+        turnToolCallIndex += 1;
+        setTimeout(() => writeToolCall(options.turnToolCalls?.[turnToolCallIndex], String(state.threadResumeParams.threadId ?? 'thread-1'), turnToolCallIndex), 0);
+        return;
+      }
       write({
         method: options.terminalEvent ?? 'turn/completed',
         params: {
@@ -1436,6 +1695,29 @@ function fakeAppServer(options: {
 
   function write(message: Record<string, unknown>) {
     stdout.write(`${JSON.stringify(message)}\n`);
+  }
+
+  function writeToolCall(
+    toolCall: { namespace?: string; tool: string; arguments?: Record<string, unknown> } | undefined,
+    threadId: string,
+    index: number,
+  ) {
+    if (!toolCall) return;
+    write({
+      id: 'server-tool-call-1',
+      method: 'item/tool/call',
+      params: {
+        threadId,
+        turnId: 'turn-1',
+        callId: `tool-call-${index + 1}`,
+        ...(toolCall.namespace ? { namespace: toolCall.namespace } : {}),
+        tool: toolCall.tool,
+        arguments: toolCall.arguments ?? {
+          message: 'Inspect PROJECT.md for open sub-agent tasks.',
+          items: [{ path: 'PROJECT.md' }],
+        },
+      },
+    });
   }
 
   return {
@@ -1454,6 +1736,9 @@ function fakeAppServer(options: {
     },
     get toolCallResponse() {
       return state.toolCallResponse;
+    },
+    get toolCallResponses() {
+      return state.toolCallResponses;
     },
     get mcpToolCallParams() {
       return state.mcpToolCallParams;
