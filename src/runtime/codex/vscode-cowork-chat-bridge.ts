@@ -50,6 +50,8 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     operation: binding.operation ?? 'read-visible-text',
     windowCandidates: binding.windowCandidates,
     invalidWindowCandidateCount: binding.invalidWindowCandidateCount,
+    invalidSelectedWindowRef: binding.invalidSelectedWindowRef,
+    invalidSelectedFileRef: binding.invalidSelectedFileRef,
     selectedWindowRef: binding.selectedWindowRef,
     selectedFileRef: binding.selectedFileRef,
     latestObservation: binding.latestObservation,
@@ -83,6 +85,8 @@ interface SanitizedVSCodeCoWorkBinding {
   operation?: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
   invalidWindowCandidateCount: number;
+  invalidSelectedWindowRef: boolean;
+  invalidSelectedFileRef: boolean;
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
@@ -92,15 +96,26 @@ interface SanitizedVSCodeCoWorkBinding {
 }
 
 function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBinding {
-  if (!isRecord(value)) return { windowCandidates: [], invalidWindowCandidateCount: 0 };
+  if (!isRecord(value)) {
+    return {
+      windowCandidates: [],
+      invalidWindowCandidateCount: 0,
+      invalidSelectedWindowRef: false,
+      invalidSelectedFileRef: false,
+    };
+  }
   const windowCandidates = sanitizeWindowCandidates(value.windowCandidates);
+  const selectedWindowRef = safeRuntimeRef(value.selectedWindowRef, ['window:']);
+  const selectedFileRef = safeRuntimeRef(value.selectedFileRef, ['file-ref:']);
   return {
     requestRef: safeRuntimeRef(value.requestRef, ['chat-request:']),
     operation: operationField(value.operation),
     windowCandidates: windowCandidates.candidates,
     invalidWindowCandidateCount: windowCandidates.invalidCount,
-    selectedWindowRef: safeRuntimeRef(value.selectedWindowRef, ['window:']),
-    selectedFileRef: safeRuntimeRef(value.selectedFileRef, ['file-ref:']),
+    invalidSelectedWindowRef: value.selectedWindowRef !== undefined && !selectedWindowRef,
+    invalidSelectedFileRef: value.selectedFileRef !== undefined && !selectedFileRef,
+    selectedWindowRef,
+    selectedFileRef,
     latestObservation: sanitizeObservation(value.latestObservation),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeRef(value.riskActionHash, ['risk:']),

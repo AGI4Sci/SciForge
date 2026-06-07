@@ -429,6 +429,74 @@ test('Computer Use native route blocks mixed raw and refs-first VSCode window ca
   assert.doesNotMatch(JSON.stringify(events), /Notes\.md|Visual Studio Code|Applications|frontmost VSCode|product-ready/i);
 });
 
+test('Computer Use native route blocks raw selected VSCode target refs instead of ignoring them', async () => {
+  const rawSelectedWindowEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '操作我已经打开的 VSCode，聚焦编辑器。',
+      commandId: 'native-route-vscode-cowork-raw-selected-window',
+      attemptId: 'native-route-vscode-cowork-raw-selected-window-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-selected-window',
+        operation: 'focus-editor',
+        selectedWindowRef: 'Paper.md - Visual Studio Code',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawSelectedWindowDone = rawSelectedWindowEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectedWindowUnit = (rawSelectedWindowDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawSelectedWindowDone?.status, 'blocked');
+  assert.equal(rawSelectedWindowUnit?.status, 'blocked');
+  assert.equal(rawSelectedWindowUnit?.blockedReason, 'vscode_cowork_selected_window_ref_invalid');
+  assert.equal(rawSelectedWindowUnit?.primitive, undefined);
+  assert.equal(rawSelectedWindowUnit?.action, undefined);
+  assert.ok((rawSelectedWindowDone?.evidenceRefs as string[]).includes('window:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(rawSelectedWindowEvents), /Paper\.md|Visual Studio Code|product-ready/i);
+
+  const rawSelectedFileEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      commandId: 'native-route-vscode-cowork-raw-selected-file',
+      attemptId: 'native-route-vscode-cowork-raw-selected-file-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:raw-selected-file',
+        operation: 'insert-draft',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: '/Users/example/paper.md',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation({
+          visibleFileRefs: ['file-ref:vscode:paper'],
+        }),
+        draftTextRef: 'text-ref:vscode:draft',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawSelectedFileDone = rawSelectedFileEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectedFileUnit = (rawSelectedFileDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawSelectedFileDone?.status, 'blocked');
+  assert.equal(rawSelectedFileUnit?.status, 'blocked');
+  assert.equal(rawSelectedFileUnit?.blockedReason, 'vscode_cowork_selected_file_ref_invalid');
+  assert.equal(rawSelectedFileUnit?.primitive, undefined);
+  assert.equal(rawSelectedFileUnit?.action, undefined);
+  assert.ok((rawSelectedFileDone?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(rawSelectedFileEvents), /\/Users\/example\/paper\.md|paper\.md|product-ready/i);
+});
+
 test('Computer Use native route requires confirmation when VSCode target file is ambiguous', async () => {
   const stream = createComputerUseNativeRouteStream({
     request: {
@@ -559,7 +627,7 @@ test('Computer Use native route blocks VSCode file targets that are raw paths in
   assert.equal(done?.status, 'blocked');
   assert.equal(unit?.primitive, undefined);
   assert.equal(unit?.action, undefined);
-  assert.equal(unit?.blockedReason, 'vscode_cowork_target_file_refs_required');
+  assert.equal(unit?.blockedReason, 'vscode_cowork_selected_file_ref_invalid');
   assert.doesNotMatch(JSON.stringify(events), /\/Users\/example\/paper\.md|paper\.md|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 

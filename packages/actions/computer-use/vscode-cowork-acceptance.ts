@@ -74,6 +74,8 @@ export interface VSCodeCoWorkDecisionInput {
   operation: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
   invalidWindowCandidateCount?: number;
+  invalidSelectedWindowRef?: boolean;
+  invalidSelectedFileRef?: boolean;
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
@@ -183,6 +185,14 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
     return blocked(input, 'vscode_cowork_window_candidate_refs_invalid', uniqueStrings([...requestRefs, ...candidateRefs]), [{
       code: 'refresh-window-candidate-refs',
       message: 'Host must provide refs-first window/app/process/title/frontmost refs for every VSCode window candidate before selecting a target.',
+      suggestedPrimitive: 'bind',
+    }]);
+  }
+
+  if (input.invalidSelectedWindowRef || (nonEmptyString(input.selectedWindowRef) && !windowRef(input.selectedWindowRef))) {
+    return blocked(input, 'vscode_cowork_selected_window_ref_invalid', uniqueStrings([...requestRefs, ...candidateRefs]), [{
+      code: 'provide-selected-window-ref',
+      message: 'The selected VSCode target must be a refs-first windowRef from the current candidate set; raw window titles must not be ignored or guessed.',
       suggestedPrimitive: 'bind',
     }]);
   }
@@ -408,7 +418,7 @@ function targetFileRefsBlock(
     ...(observation.visibleFileRefs ?? []),
   ].filter(fileRef));
   if (fileRef(input.selectedFileRef) && candidateFileRefs.includes(input.selectedFileRef.trim())) return undefined;
-  if (nonEmptyString(input.selectedFileRef) && !fileRef(input.selectedFileRef)) {
+  if (input.invalidSelectedFileRef || (nonEmptyString(input.selectedFileRef) && !fileRef(input.selectedFileRef))) {
     return blocked(input, 'vscode_cowork_selected_file_ref_invalid', refsForTargetAndObservation(input, targetWindow, observation), [{
       code: 'provide-selected-file-ref',
       message: 'The selected file target must be a refs-first file-ref from the current VSCode observation.',

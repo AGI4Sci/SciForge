@@ -299,6 +299,8 @@ Acceptance Gates：
 
 本轮补充：Host-side controller 和 native-route bridge 现在也把目标文件不明确作为 fail-closed 条件。对于 `insert-draft`、`save-current-file`、`bulk-replace`、`cross-file-modify` 和 `undo-last-action`，如果 current observe refs / window refs 中出现多个 `file-ref:` 形态 visible file refs 且 Host 没有提供 selectedFileRef，则返回 `needs-confirmation`，不返回 primitive/action，并保留 candidate file refs。Host 提供的 selectedFileRef 必须来自当前 `file-ref:` refs；即使当前只看到一个 visible file ref，selectedFileRef 不匹配也会 blocked；raw path / 裸文件名不算 refs-first file ref，不能作为目标继续执行。
 
+本轮补充：native-route bridge 现在不会把 raw selected target refs 静默丢成“未选择”。如果 Host 提供 raw VSCode window title 作为 selectedWindowRef，或 raw path / 裸文件名作为 selectedFileRef，即使当前只有一个合法 window/file 候选，也会返回 `blocked` / `vscode_cowork_selected_window_ref_invalid` 或 `vscode_cowork_selected_file_ref_invalid`，并只保留 requestRef 与当前合法候选 refs；不能自动选择唯一候选继续执行。
+
 本轮补充：`insert-draft` 的文本输入也被收紧为 refs-first。Host 必须提供当前 run 生成的 `text-ref:` 形态 `draftTextRef`，controller/native route 才会返回 `type` 原子 `act`；缺少 `draftTextRef` 或把 raw draft body 塞进该字段时返回 `blocked` / `vscode_cowork_draft_text_ref_required`，不返回可执行 action，也不允许把 raw draft text、clipboard payload 或 provider payload 嵌入 Computer Use decision。
 
 本轮补充：`read-visible-text` 已作为 refs-only co-work 能力接入。Host 提供 fresh observe refs 后，controller/native route 返回 `ready` + `primitive=observe`，只保留 observation/text/AX refs，不返回 `act` action、不嵌入 visible text 原文，也不触发用户 VSCode 输入或文件修改。

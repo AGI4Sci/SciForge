@@ -102,6 +102,41 @@ test('Host-side VSCode co-work blocks raw window and observation refs before cho
   assert.doesNotMatch(JSON.stringify(rawObservation), /paper\.md|visible editor|raw AX|tmp\/paper-window|fresh observation/);
 });
 
+test('Host-side VSCode co-work blocks raw selected target refs instead of ignoring them', () => {
+  const rawSelectedWindow = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:raw-selected-window',
+    operation: 'focus-editor',
+    selectedWindowRef: 'Paper.md - Visual Studio Code',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(rawSelectedWindow.status, 'blocked');
+  assert.equal(rawSelectedWindow.blockedReason, 'vscode_cowork_selected_window_ref_invalid');
+  assert.equal(rawSelectedWindow.primitive, undefined);
+  assert.equal(rawSelectedWindow.action, undefined);
+  assert.ok(rawSelectedWindow.refs.includes('chat-request:vscode-cowork:raw-selected-window'));
+  assert.ok(rawSelectedWindow.refs.includes('window:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(rawSelectedWindow), /Paper\.md|Visual Studio Code/);
+
+  const rawSelectedFile = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:raw-selected-file',
+    operation: 'insert-draft',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: '/Users/example/paper.md',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    draftTextRef: 'text-ref:vscode:draft',
+  });
+
+  assert.equal(rawSelectedFile.status, 'blocked');
+  assert.equal(rawSelectedFile.blockedReason, 'vscode_cowork_selected_file_ref_invalid');
+  assert.equal(rawSelectedFile.primitive, undefined);
+  assert.equal(rawSelectedFile.action, undefined);
+  assert.ok(rawSelectedFile.refs.includes('file-ref:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(rawSelectedFile), /\/Users\/example\/paper\.md|paper\.md/);
+});
+
 test('Host-side VSCode co-work blocks mixed raw and refs-first window candidates', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:mixed-window-candidates',
