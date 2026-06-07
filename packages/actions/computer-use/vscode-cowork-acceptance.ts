@@ -380,6 +380,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const accessibilityRefs = manifest.evidence.accessibilityRefs.filter(accessibilityRef);
   const textRefs = manifest.evidence.textRefs.filter(textRef);
   const hostDecisionRefs = manifest.evidence.hostDecisionRefs;
+  const actionRefs = manifest.evidence.actionRefs;
   const controlRefs = manifest.evidence.controlRefs;
   const beforeObservationRefs = manifest.evidence.beforeObservationRefs;
   const afterObservationRefs = manifest.evidence.afterObservationRefs;
@@ -416,6 +417,15 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.actionRefs.some(cursorMarkerRef)) issues.push('missing-action-ref:cursor-marker');
   if (!manifest.evidence.actionRefs.some(scopedInputLeaseRef)) issues.push('missing-action-ref:scoped-input-lease');
   if (!manifest.evidence.actionRefs.some(staleInvalidationRef)) issues.push('missing-action-ref:stale-invalidation');
+  if (releaseRefs.some(scopedInputLeaseRef) && !refsContainBoundRef(actionRefs, releaseRefs, scopedInputLeaseRef)) {
+    issues.push('missing-action-release-ref:scoped-input-lease');
+  }
+  if (releaseRefs.some(inputAdapterRef) && !refsContainBoundRef(actionRefs, releaseRefs, inputAdapterRef)) {
+    issues.push('missing-action-release-ref:input-adapter');
+  }
+  if (releaseRefs.some(cursorMarkerRef) && !refsContainBoundRef(actionRefs, releaseRefs, cursorMarkerRef)) {
+    issues.push('missing-action-release-ref:cursor-marker');
+  }
   if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
   if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
   if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');

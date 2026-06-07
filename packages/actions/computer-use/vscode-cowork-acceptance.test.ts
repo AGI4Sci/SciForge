@@ -1245,6 +1245,34 @@ test('VSCode co-work live manifest requires control refs to bind release and res
   }
 });
 
+test('VSCode co-work live manifest requires action refs to bind released input resources', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      actionRefs: [
+        'action:vscode-cowork:save',
+        'executor-event:vscode-cowork:save',
+        'input-event:vscode-cowork:save',
+        'input-adapter:vscode-cowork:other',
+        'cursor-marker:vscode-cowork:other',
+        'scoped-input-lease:vscode-cowork:other',
+        'stale-invalidation:vscode-cowork:before-observation',
+      ],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-action-release-ref:scoped-input-lease',
+    'missing-action-release-ref:input-adapter',
+    'missing-action-release-ref:cursor-marker',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
