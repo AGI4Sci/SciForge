@@ -463,6 +463,11 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!hostDecisionRefs.some((ref) => manifest.evidence.beforeObservationRefs.some((beforeRef) => freshnessRef(ref) && sameRef(ref, beforeRef)))) {
     issues.push('missing-host-decision-ref:freshness');
   }
+  if (!hostDecisionRefs.some(actionRef)) {
+    issues.push('missing-host-decision-ref:action');
+  } else if (!refsContainBoundRef(hostDecisionRefs, actionRefs, actionRef)) {
+    issues.push('missing-host-decision-ref:action');
+  }
   if (!hostDecisionRefs.some(editorElementEvidenceRef)) {
     issues.push('missing-host-decision-ref:editor-element');
   } else if (beforeEditorElementRefs.length > 0 && !refsContainBoundRef(hostDecisionRefs, beforeEditorElementRefs, editorElementEvidenceRef)) {

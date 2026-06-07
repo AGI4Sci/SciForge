@@ -1380,6 +1380,7 @@ test('VSCode co-work live manifest requires Host decision refs to bind request, 
     'missing-host-decision-ref:target-window',
     'missing-host-decision-ref:before-observe',
     'missing-host-decision-ref:freshness',
+    'missing-host-decision-ref:action',
     'missing-host-decision-ref:target-file',
     'missing-host-decision-ref:risk-action-hash',
     'missing-host-decision-ref:approval',
@@ -1404,6 +1405,34 @@ test('VSCode co-work live manifest requires Host decision refs to bind the activ
 
   assert.equal(failed.ok, false);
   assert.ok(failed.issues.includes('missing-host-decision-ref:active-session'));
+});
+
+test('VSCode co-work live manifest requires Host decision refs to bind the executed action', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      hostDecisionRefs: base.evidence.hostDecisionRefs.filter((ref) => !ref.startsWith('action:') && !ref.startsWith('window-action:')),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-host-decision-ref:action'));
+
+  const mismatched = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      hostDecisionRefs: [
+        ...base.evidence.hostDecisionRefs.filter((ref) => !ref.startsWith('action:') && !ref.startsWith('window-action:')),
+        'action:vscode-cowork:other',
+      ],
+    },
+  });
+
+  assert.equal(mismatched.ok, false);
+  assert.ok(mismatched.issues.includes('missing-host-decision-ref:action'));
 });
 
 test('VSCode co-work live manifest requires Host decision and action refs to bind the editor element target', () => {
@@ -1604,6 +1633,7 @@ function vscodeCoWorkLiveManifest() {
         'decision:vscode-cowork:save-confirmed',
         'window-action-session:vscode-cowork:1',
         'chat-request:vscode-cowork:save-confirmed',
+        'action:vscode-cowork:save',
         'window:vscode:paper',
         'file-ref:vscode:paper',
         'observation:vscode:before',
