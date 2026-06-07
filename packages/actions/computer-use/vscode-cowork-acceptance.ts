@@ -381,6 +381,8 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   const textRefs = manifest.evidence.textRefs.filter(textRef);
   const hostDecisionRefs = manifest.evidence.hostDecisionRefs;
   const controlRefs = manifest.evidence.controlRefs;
+  const beforeObservationRefs = manifest.evidence.beforeObservationRefs;
+  const afterObservationRefs = manifest.evidence.afterObservationRefs;
   if (screenshotRefs.length === 0) issues.push('invalid-evidence-ref:screenshot');
   if (screenshotRefs.length < 2) issues.push('missing-evidence-ref:before-after-screenshot');
   if (accessibilityRefs.length === 0) issues.push('invalid-evidence-ref:accessibility');
@@ -389,6 +391,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (textRefs.length < 2) issues.push('missing-evidence-ref:before-after-text');
   if (!manifest.evidence.beforeObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:before-observe');
   if (!manifest.evidence.beforeObservationRefs.some(freshnessRef)) issues.push('missing-evidence-ref:before-freshness');
+  if (!refsContainBoundRef(beforeObservationRefs, screenshotRefs, imageRef)) issues.push('missing-before-observe-ref:screenshot');
+  if (!refsContainBoundRef(beforeObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-before-observe-ref:accessibility');
+  if (!refsContainBoundRef(beforeObservationRefs, textRefs, textRef)) issues.push('missing-before-observe-ref:text');
   if (!manifest.evidence.hostDecisionRefs.some(hostDecisionRef)) issues.push('invalid-evidence-ref:host-decision');
   if (!hostDecisionRefs.some(requestRef)) issues.push('missing-host-decision-ref:request');
   if (!hostDecisionRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-host-decision-ref:target-window');
@@ -413,6 +418,9 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (!manifest.evidence.afterObservationRefs.some(observationRef)) issues.push('invalid-evidence-ref:after-observe');
   if (!manifest.evidence.afterObservationRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-after-observe-ref:target-window');
   if (!manifest.evidence.afterObservationRefs.some(freshnessRef)) issues.push('missing-after-observe-ref:freshness');
+  if (!refsContainBoundRef(afterObservationRefs, screenshotRefs, imageRef)) issues.push('missing-after-observe-ref:screenshot');
+  if (!refsContainBoundRef(afterObservationRefs, accessibilityRefs, accessibilityRef)) issues.push('missing-after-observe-ref:accessibility');
+  if (!refsContainBoundRef(afterObservationRefs, textRefs, textRef)) issues.push('missing-after-observe-ref:text');
   if (!manifest.evidence.controlRefs.some(controlRef)) issues.push('invalid-evidence-ref:control');
   if (!controlRefs.some(sessionRef)) issues.push('missing-control-ref:session');
   if (!controlRefs.some((ref) => releaseRefs.some((releaseRef) => scopedInputLeaseRef(ref) && sameRef(ref, releaseRef)))) {
@@ -1017,6 +1025,14 @@ function sameRef(left: unknown, right: unknown): boolean {
   return typeof left === 'string'
     && typeof right === 'string'
     && left.trim() === right.trim();
+}
+
+function refsContainBoundRef(
+  refs: readonly string[],
+  allowedRefs: readonly string[],
+  predicate: (value: unknown) => value is string,
+): boolean {
+  return refs.some((ref) => predicate(ref) && allowedRefs.some((allowedRef) => sameRef(ref, allowedRef)));
 }
 
 function uniqueStrings(values: Array<string | undefined>): string[] {

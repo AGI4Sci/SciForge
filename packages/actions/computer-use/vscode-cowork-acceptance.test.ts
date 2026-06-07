@@ -1118,6 +1118,30 @@ test('VSCode co-work live manifest requires before and after visual refs', () =>
   }
 });
 
+test('VSCode co-work live manifest binds visual refs to before and after observe evidence', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      beforeObservationRefs: ['observation:vscode:before', 'freshness:vscode:before'],
+      afterObservationRefs: ['observation:vscode:after', 'window:vscode:paper', 'freshness:vscode:after'],
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  for (const issue of [
+    'missing-before-observe-ref:screenshot',
+    'missing-before-observe-ref:accessibility',
+    'missing-before-observe-ref:text',
+    'missing-after-observe-ref:screenshot',
+    'missing-after-observe-ref:accessibility',
+    'missing-after-observe-ref:text',
+  ]) {
+    assert.ok(failed.issues.includes(issue), issue);
+  }
+});
+
 test('VSCode co-work live manifest requires refs-first bind target evidence', () => {
   const base = vscodeCoWorkLiveManifest();
   const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
@@ -1251,7 +1275,13 @@ function vscodeCoWorkLiveManifest() {
         'process:vscode:paper',
         'frontmost:vscode:paper',
       ],
-      beforeObservationRefs: ['observation:vscode:before', 'freshness:vscode:before'],
+      beforeObservationRefs: [
+        'observation:vscode:before',
+        'freshness:vscode:before',
+        'image:vscode:before',
+        'accessibility:vscode:before',
+        'text:vscode:visible-before',
+      ],
       hostDecisionRefs: [
         'decision:vscode-cowork:save-confirmed',
         'chat-request:vscode-cowork:save-confirmed',
@@ -1271,7 +1301,14 @@ function vscodeCoWorkLiveManifest() {
         'scoped-input-lease:vscode-cowork:1',
         'stale-invalidation:vscode-cowork:before-observation',
       ],
-      afterObservationRefs: ['observation:vscode:after', 'window:vscode:paper', 'freshness:vscode:after'],
+      afterObservationRefs: [
+        'observation:vscode:after',
+        'window:vscode:paper',
+        'freshness:vscode:after',
+        'image:vscode:after',
+        'accessibility:vscode:after',
+        'text:vscode:visible-after',
+      ],
       controlRefs: [
         'control:vscode-cowork:release',
         'window-action-session:vscode-cowork:1',
