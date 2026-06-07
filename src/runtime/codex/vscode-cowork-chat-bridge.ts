@@ -50,6 +50,7 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     operation: binding.operation ?? 'read-visible-text',
     windowCandidates: binding.windowCandidates,
     selectedWindowRef: binding.selectedWindowRef,
+    selectedFileRef: binding.selectedFileRef,
     latestObservation: binding.latestObservation,
     draftTextRef: binding.draftTextRef,
     riskActionHash: binding.riskActionHash,
@@ -75,6 +76,7 @@ interface SanitizedVSCodeCoWorkBinding {
   operation?: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
   selectedWindowRef?: string;
+  selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
   draftTextRef?: string;
   riskActionHash?: string;
@@ -88,6 +90,7 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     operation: operationField(value.operation),
     windowCandidates: sanitizeWindowCandidates(value.windowCandidates),
     selectedWindowRef: safeRuntimeString(value.selectedWindowRef),
+    selectedFileRef: safeRuntimeString(value.selectedFileRef),
     latestObservation: sanitizeObservation(value.latestObservation),
     draftTextRef: safeRuntimeString(value.draftTextRef),
     riskActionHash: safeRuntimeString(value.riskActionHash),

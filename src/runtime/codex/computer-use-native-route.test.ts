@@ -288,6 +288,59 @@ test('Computer Use native route selects VSCode co-work bridge and fails closed o
   assert.doesNotMatch(JSON.stringify(events), /SECRET|rawScreenshot|providerPayload|data:image|base64|product-ready|kill-vscode|clear-profile/i);
 });
 
+test('Computer Use native route requires confirmation when VSCode target file is ambiguous', async () => {
+  const stream = createComputerUseNativeRouteStream({
+    request: {
+      commandText: '在我已经打开的 VSCode 里插入这段草稿。',
+      workspacePath: '/tmp/workspace',
+      commandId: 'native-route-vscode-cowork-file-confirmation',
+      attemptId: 'native-route-vscode-cowork-file-confirmation-attempt-1',
+      runtimeIntent: {
+        schemaVersion: 'sciforge.runtime-codex.host-intent.v1',
+        kind: 'computer-use-native-route',
+        source: 'host-owned',
+        computerUseNext: {
+          taskId: 'CU-NEXT-09',
+          recommendedTargetMode: 'active-window',
+          recommendedTargetApp: 'Visual Studio Code',
+          semanticMarkers: ['current-vscode-cowork', 'refs-first'],
+        },
+        vscodeCoWork: {
+          requestRef: 'chat-request:vscode-cowork:ambiguous-file',
+          operation: 'insert-draft',
+          selectedWindowRef: 'window:vscode:paper',
+          windowCandidates: [
+            vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+          ],
+          latestObservation: vscodeNativeRouteObservation({
+            visibleFileRefs: ['file-ref:vscode:paper', 'file-ref:vscode:notes'],
+          }),
+          draftTextRef: 'text-ref:vscode:draft',
+        },
+      } as any,
+    },
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  });
+
+  assert.notEqual(stream, undefined);
+  const events = await collectStreamEvents(stream!);
+  const done = events.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const executionUnits = done?.executionUnits as Record<string, unknown>[] | undefined;
+  const unit = executionUnits?.[0];
+
+  assert.equal(done?.status, 'needs-confirmation');
+  assert.equal(unit?.status, 'needs-confirmation');
+  assert.equal(unit?.primitive, undefined);
+  assert.equal(unit?.action, undefined);
+  assert.equal(unit?.blockedReason, 'vscode_cowork_target_file_needs_confirmation');
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:paper'));
+  assert.ok((done?.evidenceRefs as string[]).includes('file-ref:vscode:notes'));
+  assert.doesNotMatch(JSON.stringify(events), /draft text|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps only safe task and scenario bindings', () => {
   const request = computerUseGatewayRequest({
     request: {
@@ -481,5 +534,22 @@ function vscodeNativeRouteWindow(input: {
     windowRef: input.windowRef,
     titleRef: input.titleRef ?? `${input.windowRef}:title`,
     frontmostRef: `${input.windowRef}:frontmost`,
+  };
+}
+
+function vscodeNativeRouteObservation(input: {
+  visibleFileRefs?: string[];
+} = {}) {
+  return {
+    windowRef: 'window:vscode:paper',
+    observationRef: 'observation:vscode:current',
+    screenshotRef: 'image:vscode:current',
+    accessibilityRef: 'accessibility:vscode:current',
+    textRefs: ['text:vscode:visible'],
+    elementRefs: ['element:vscode:editor', 'element:vscode:file-tabs'],
+    freshnessRef: 'freshness:vscode:current',
+    editorVisible: true,
+    visibleFileRefs: input.visibleFileRefs ?? ['file-ref:vscode:paper'],
+    userFile: true,
   };
 }

@@ -119,6 +119,28 @@ test('Host-side VSCode co-work blocks stale or incomplete observe refs before se
   assert.equal(editorHidden.action, undefined);
 });
 
+test('Host-side VSCode co-work asks for confirmation when the target file is ambiguous', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:ambiguous-file',
+    operation: 'insert-draft',
+    selectedWindowRef: 'window:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: {
+      ...freshObservation(),
+      visibleFileRefs: ['file-ref:vscode:paper', 'file-ref:vscode:notes'],
+    },
+    draftTextRef: 'text-ref:vscode:draft',
+  });
+
+  assert.equal(decision.status, 'needs-confirmation');
+  assert.equal(decision.blockedReason, 'vscode_cowork_target_file_needs_confirmation');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.deepEqual(decision.confirmation?.candidateFileRefs, ['file-ref:vscode:paper', 'file-ref:vscode:notes']);
+  assert.ok(decision.refs.includes('file-ref:vscode:paper'));
+  assert.ok(decision.refs.includes('file-ref:vscode:notes'));
+});
+
 test('Host-side VSCode co-work chooses the next primitive only from fresh observe refs', () => {
   const decision = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:focus',

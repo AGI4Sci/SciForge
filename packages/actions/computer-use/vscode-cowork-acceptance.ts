@@ -72,6 +72,7 @@ export interface VSCodeCoWorkDecisionInput {
   operation: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
   selectedWindowRef?: string;
+  selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
   draftTextRef?: string;
   riskActionHash?: string;
@@ -94,6 +95,7 @@ export interface VSCodeCoWorkDecision {
   confirmation?: {
     reason: string;
     candidateWindowRefs?: string[];
+    candidateFileRefs?: string[];
     riskActionHash?: string;
     approvalScope?: string;
   };
@@ -171,6 +173,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const observationBlock = observationRefsBlock(input, targetWindowRef, targetWindow);
   if (observationBlock) return observationBlock;
   const observation = input.latestObservation as VSCodeCoWorkObservationRefs;
+
+  const targetFileBlock = targetFileRefsBlock(input, targetWindow, observation);
+  if (targetFileBlock) return targetFileBlock;
 
   if (realFileChangeNeedsConfirmation(input, observation)) {
     return {
@@ -281,6 +286,42 @@ function observationRefsBlock(
   return undefined;
 }
 
+function targetFileRefsBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (!fileTargetOperation(input.operation)) return undefined;
+  const candidateFileRefs = uniqueStrings([
+    ...(targetWindow.visibleFileRefs ?? []),
+    ...(observation.visibleFileRefs ?? []),
+  ]);
+  if (candidateFileRefs.length <= 1) return undefined;
+  if (nonEmptyString(input.selectedFileRef) && candidateFileRefs.includes(input.selectedFileRef.trim())) return undefined;
+  if (nonEmptyString(input.selectedFileRef)) {
+    return blocked(input, 'vscode_cowork_selected_file_not_found', refsForTargetAndObservation(input, targetWindow, observation), [{
+      code: 'refresh-visible-file-refs',
+      message: 'The selected fileRef is not visible in the current VSCode observation. Refresh observe refs and ask again if needed.',
+      suggestedPrimitive: 'observe',
+    }]);
+  }
+  return {
+    ...decisionBase('needs-confirmation', refsForTargetAndObservation(input, targetWindow, observation)),
+    targetWindowRef: targetWindow.windowRef,
+    blockedReason: 'vscode_cowork_target_file_needs_confirmation',
+    confirmation: {
+      reason: 'Multiple visible file refs match this VSCode co-work request; Host must ask the user which file to modify.',
+      candidateFileRefs,
+      approvalScope: 'target-file',
+    },
+    repairHints: [{
+      code: 'confirm-target-file',
+      message: 'Collect a user-selected fileRef from the current observation, then retry the same Host-chosen primitive.',
+      suggestedPrimitive: 'act',
+    }],
+  };
+}
+
 function actionForOperation(
   input: VSCodeCoWorkDecisionInput,
   observation: VSCodeCoWorkObservationRefs,
@@ -334,6 +375,14 @@ function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
     || operation === 'cross-file-modify';
 }
 
+function fileTargetOperation(operation: VSCodeCoWorkOperation): boolean {
+  return operation === 'insert-draft'
+    || operation === 'save-current-file'
+    || operation === 'bulk-replace'
+    || operation === 'cross-file-modify'
+    || operation === 'undo-last-action';
+}
+
 function hasCompleteObservationRefs(observation: VSCodeCoWorkObservationRefs): boolean {
   return nonEmptyString(observation.observationRef)
     && nonEmptyString(observation.screenshotRef)
@@ -359,6 +408,7 @@ function refsForTargetAndObservation(
     targetWindow.processRef,
     targetWindow.titleRef,
     targetWindow.frontmostRef,
+    input.selectedFileRef,
     ...(targetWindow.visibleFileRefs ?? []),
     observation.windowRef,
     observation.observationRef,
