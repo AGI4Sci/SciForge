@@ -42,6 +42,7 @@ export type VSCodeCoWorkOperation =
   | 'read-visible-text'
   | 'move-cursor'
   | 'insert-draft'
+  | 'replace-selection'
   | 'save-current-file'
   | 'bulk-replace'
   | 'cross-file-modify'
@@ -84,6 +85,8 @@ export interface VSCodeCoWorkDecisionInput {
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
   cursorMoveRef?: string;
+  selectionRef?: string;
+  replacementTextRef?: string;
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
@@ -239,6 +242,9 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const cursorMoveRefBlock = cursorMoveRefRequiredBlock(input, targetWindow, observation);
   if (cursorMoveRefBlock) return cursorMoveRefBlock;
 
+  const selectionReplacementRefBlock = selectionReplacementRefsRequiredBlock(input, targetWindow, observation);
+  if (selectionReplacementRefBlock) return selectionReplacementRefBlock;
+
   const draftTextRefBlock = draftTextRefRequiredBlock(input, targetWindow, observation);
   if (draftTextRefBlock) return draftTextRefBlock;
 
@@ -251,7 +257,7 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
       targetWindowRef,
       blockedReason: 'vscode_cowork_real_file_change_needs_confirmation',
       confirmation: {
-        reason: 'Saving, undoing, bulk replacement, or cross-file modification against a user file requires Host-collected confirmation.',
+        reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires Host-collected confirmation.',
         riskActionHash: input.riskActionHash,
         approvalScope: input.operation,
       },
@@ -517,6 +523,39 @@ function cursorMoveRefRequiredBlock(
   };
 }
 
+function selectionReplacementRefsRequiredBlock(
+  input: VSCodeCoWorkDecisionInput,
+  targetWindow: VSCodeCoWorkWindowCandidate,
+  observation: VSCodeCoWorkObservationRefs,
+): VSCodeCoWorkDecision | undefined {
+  if (input.operation !== 'replace-selection') return undefined;
+  if (!selectionRef(input.selectionRef)) {
+    return {
+      ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+      targetWindowRef: targetWindow.windowRef,
+      blockedReason: 'vscode_cowork_selection_ref_required',
+      repairHints: [{
+        code: 'provide-selection-ref',
+        message: 'Host must provide a refs-first selectionRef from the latest observation before replacing selected text.',
+        suggestedPrimitive: 'observe',
+      }],
+    };
+  }
+  if (!replacementTextRef(input.replacementTextRef)) {
+    return {
+      ...decisionBase('blocked', refsForTargetAndObservation(input, targetWindow, observation)),
+      targetWindowRef: targetWindow.windowRef,
+      blockedReason: 'vscode_cowork_replacement_text_ref_required',
+      repairHints: [{
+        code: 'provide-replacement-text-ref',
+        message: 'Host must provide a refs-first replacementTextRef; raw replacement text must not be embedded in the Computer Use decision.',
+        suggestedPrimitive: 'act',
+      }],
+    };
+  }
+  return undefined;
+}
+
 function realFileChangeRiskEnvelopeBlock(
   input: VSCodeCoWorkDecisionInput,
   targetWindow: VSCodeCoWorkWindowCandidate,
@@ -530,7 +569,7 @@ function realFileChangeRiskEnvelopeBlock(
     targetWindowRef: targetWindow.windowRef,
     blockedReason: 'vscode_cowork_real_file_change_risk_hash_required',
     confirmation: {
-      reason: 'Saving, undoing, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
+      reason: 'Replacing selected text, saving, undoing, bulk replacement, or cross-file modification against a user file requires a Host-computed riskActionHash before confirmation can authorize the action.',
       approvalScope: input.operation,
     },
     repairHints: [{
@@ -596,6 +635,13 @@ function actionForOperation(
       elementRef: editorElementRef,
     };
   }
+  if (input.operation === 'replace-selection' && replacementTextRef(input.replacementTextRef)) {
+    return {
+      type: 'type',
+      textRef: input.replacementTextRef.trim(),
+      elementRef: editorElementRef,
+    };
+  }
   if (input.operation === 'undo-last-action') {
     return {
       type: 'key',
@@ -624,6 +670,14 @@ function draftTextRef(value: unknown): value is string {
 function cursorMoveRef(value: unknown): value is string {
   return structuredRef(value, ['cursor-move:'])
     && cursorMoveKeyForRef(value) !== undefined;
+}
+
+function selectionRef(value: unknown): value is string {
+  return structuredRef(value, ['selection-ref:']);
+}
+
+function replacementTextRef(value: unknown): value is string {
+  return structuredRef(value, ['text-ref:']);
 }
 
 function cursorMoveKeyForRef(value: string): string | undefined {
@@ -717,6 +771,7 @@ function approvalRefMatchesRiskActionHash(approvalRef: string, riskActionHash: s
 function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
   return operation === 'save-current-file'
     || operation === 'undo-last-action'
+    || operation === 'replace-selection'
     || operation === 'bulk-replace'
     || operation === 'cross-file-modify';
 }
@@ -733,6 +788,7 @@ function primitiveChainMatches(chain: string[]): boolean {
 
 function fileTargetOperation(operation: VSCodeCoWorkOperation): boolean {
   return operation === 'insert-draft'
+    || operation === 'replace-selection'
     || operation === 'save-current-file'
     || operation === 'bulk-replace'
     || operation === 'cross-file-modify'
@@ -794,6 +850,8 @@ function refsForTargetAndObservation(
     frontmostRef(targetWindow.frontmostRef) ? targetWindow.frontmostRef : undefined,
     fileRef(input.selectedFileRef) ? input.selectedFileRef : undefined,
     cursorMoveRef(input.cursorMoveRef) ? input.cursorMoveRef : undefined,
+    selectionRef(input.selectionRef) ? input.selectionRef : undefined,
+    replacementTextRef(input.replacementTextRef) ? input.replacementTextRef : undefined,
     riskActionHashRef(input.riskActionHash) ? input.riskActionHash : undefined,
     approvalRef(input.confirmationRef) ? input.confirmationRef : undefined,
     ...(targetWindow.visibleFileRefs ?? []).filter(fileRef),

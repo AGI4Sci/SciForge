@@ -475,6 +475,112 @@ test('Host-side VSCode co-work moves the cursor only as one Host-selected atomic
   assert.doesNotMatch(JSON.stringify(decision), /planner|task|goal|move to/);
 });
 
+test('Host-side VSCode co-work requires refs-first selection and replacement refs before replacing selected text', () => {
+  const missingSelection = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-missing-selection',
+    operation: 'replace-selection',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    replacementTextRef: 'text-ref:vscode:replacement',
+    riskActionHash: 'risk:replace-selection:paper',
+  });
+
+  assert.equal(missingSelection.status, 'blocked');
+  assert.equal(missingSelection.blockedReason, 'vscode_cowork_selection_ref_required');
+  assert.equal(missingSelection.primitive, undefined);
+  assert.equal(missingSelection.action, undefined);
+
+  const rawSelection = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-raw-selection',
+    operation: 'replace-selection',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    selectionRef: 'currently highlighted paragraph',
+    replacementTextRef: 'text-ref:vscode:replacement',
+    riskActionHash: 'risk:replace-selection:paper',
+  });
+
+  assert.equal(rawSelection.status, 'blocked');
+  assert.equal(rawSelection.blockedReason, 'vscode_cowork_selection_ref_required');
+  assert.equal(rawSelection.primitive, undefined);
+  assert.equal(rawSelection.action, undefined);
+  assert.doesNotMatch(JSON.stringify(rawSelection), /currently highlighted paragraph|planner|task|goal/);
+
+  const rawReplacement = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-raw-replacement',
+    operation: 'replace-selection',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    selectionRef: 'selection-ref:vscode:current',
+    replacementTextRef: 'replace with this raw body',
+    riskActionHash: 'risk:replace-selection:paper',
+  });
+
+  assert.equal(rawReplacement.status, 'blocked');
+  assert.equal(rawReplacement.blockedReason, 'vscode_cowork_replacement_text_ref_required');
+  assert.equal(rawReplacement.primitive, undefined);
+  assert.equal(rawReplacement.action, undefined);
+  assert.ok(rawReplacement.refs.includes('selection-ref:vscode:current'));
+  assert.doesNotMatch(JSON.stringify(rawReplacement), /replace with this raw body|planner|task|goal/);
+});
+
+test('Host-side VSCode co-work requires confirmation before replacing selected user-file text', () => {
+  const unconfirmed = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-unconfirmed',
+    operation: 'replace-selection',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    selectionRef: 'selection-ref:vscode:current',
+    replacementTextRef: 'text-ref:vscode:replacement',
+    riskActionHash: 'risk:replace-selection:paper',
+  });
+
+  assert.equal(unconfirmed.status, 'needs-confirmation');
+  assert.equal(unconfirmed.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.equal(unconfirmed.primitive, undefined);
+  assert.equal(unconfirmed.action, undefined);
+  assert.equal(unconfirmed.confirmation?.riskActionHash, 'risk:replace-selection:paper');
+  assert.ok(unconfirmed.refs.includes('selection-ref:vscode:current'));
+  assert.ok(unconfirmed.refs.includes('text-ref:vscode:replacement'));
+  assert.ok(unconfirmed.refs.includes('risk:replace-selection:paper'));
+});
+
+test('Host-side VSCode co-work replaces selected user-file text only after matching confirmation', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:replace-selection-confirmed',
+    operation: 'replace-selection',
+    selectedWindowRef: 'window:vscode:paper',
+    selectedFileRef: 'file-ref:vscode:paper',
+    windowCandidates: [vscodeWindow({ windowRef: 'window:vscode:paper' })],
+    latestObservation: freshObservation(),
+    selectionRef: 'selection-ref:vscode:current',
+    replacementTextRef: 'text-ref:vscode:replacement',
+    riskActionHash: 'risk:replace-selection:paper',
+    confirmationRef: 'approval:risk:replace-selection:paper:confirmed',
+  });
+
+  assert.equal(decision.status, 'ready');
+  assert.equal(decision.primitive, 'act');
+  assert.deepEqual(decision.action, {
+    type: 'type',
+    textRef: 'text-ref:vscode:replacement',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.equal(decision.risk?.actionHash, 'risk:replace-selection:paper');
+  assert.equal(decision.approvalRef, 'approval:risk:replace-selection:paper:confirmed');
+  assert.ok(decision.refs.includes('selection-ref:vscode:current'));
+  assert.ok(decision.refs.includes('text-ref:vscode:replacement'));
+  assert.doesNotMatch(JSON.stringify(decision), /raw body|planner|task|goal/);
+});
+
 test('Host-side VSCode co-work requires confirmation before real-file save, undo, bulk replace, or cross-file modification', () => {
   for (const operation of ['save-current-file', 'undo-last-action', 'bulk-replace', 'cross-file-modify'] as const) {
     const decision = decideVSCodeCoWorkNextPrimitive({

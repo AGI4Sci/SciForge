@@ -34,6 +34,7 @@ const SUPPORTED_OPERATIONS = new Set<VSCodeCoWorkOperation>([
   'read-visible-text',
   'move-cursor',
   'insert-draft',
+  'replace-selection',
   'save-current-file',
   'bulk-replace',
   'cross-file-modify',
@@ -62,6 +63,8 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     selectedFileRef: binding.selectedFileRef,
     latestObservation: binding.latestObservation,
     cursorMoveRef: binding.cursorMoveRef,
+    selectionRef: binding.selectionRef,
+    replacementTextRef: binding.replacementTextRef,
     draftTextRef: binding.draftTextRef,
     riskActionHash: binding.riskActionHash,
     confirmationRef: binding.confirmationRef,
@@ -98,6 +101,8 @@ interface SanitizedVSCodeCoWorkBinding {
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
   cursorMoveRef?: string;
+  selectionRef?: string;
+  replacementTextRef?: string;
   draftTextRef?: string;
   riskActionHash?: string;
   confirmationRef?: string;
@@ -126,6 +131,8 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
     selectedFileRef,
     latestObservation: sanitizeObservation(value.latestObservation),
     cursorMoveRef: safeRuntimeRef(value.cursorMoveRef, ['cursor-move:']),
+    selectionRef: safeRuntimeRef(value.selectionRef, ['selection-ref:']),
+    replacementTextRef: safeRuntimeRef(value.replacementTextRef, ['text-ref:']),
     draftTextRef: safeRuntimeRef(value.draftTextRef, ['text-ref:']),
     riskActionHash: safeRuntimeRef(value.riskActionHash, ['risk:']),
     confirmationRef: safeRuntimeRef(value.confirmationRef, ['approval:']),

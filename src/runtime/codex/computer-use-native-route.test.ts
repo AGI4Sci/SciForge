@@ -883,6 +883,116 @@ test('Computer Use native route requires refs-first VSCode cursor movement refs'
   assert.doesNotMatch(JSON.stringify(readyEvents), /move to next paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
 });
 
+test('Computer Use native route gates VSCode replace-selection on refs-first selection and approval', async () => {
+  const rawSelectionEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '替换我已经打开的 VSCode 当前选区。',
+      commandId: 'native-route-vscode-cowork-replace-selection-raw-selection',
+      attemptId: 'native-route-vscode-cowork-replace-selection-raw-selection-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:replace-selection-raw-selection',
+        operation: 'replace-selection',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        selectionRef: 'currently highlighted paragraph',
+        replacementTextRef: 'text-ref:vscode:replacement',
+        riskActionHash: 'risk:replace-selection:paper',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const rawSelectionDone = rawSelectionEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const rawSelectionUnit = (rawSelectionDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(rawSelectionDone?.status, 'blocked');
+  assert.equal(rawSelectionUnit?.primitive, undefined);
+  assert.equal(rawSelectionUnit?.action, undefined);
+  assert.equal(rawSelectionUnit?.blockedReason, 'vscode_cowork_selection_ref_required');
+  assert.doesNotMatch(JSON.stringify(rawSelectionEvents), /currently highlighted paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+
+  const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '替换我已经打开的 VSCode 当前选区。',
+      commandId: 'native-route-vscode-cowork-replace-selection-unconfirmed',
+      attemptId: 'native-route-vscode-cowork-replace-selection-unconfirmed-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:replace-selection-unconfirmed',
+        operation: 'replace-selection',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        selectionRef: 'selection-ref:vscode:current',
+        replacementTextRef: 'text-ref:vscode:replacement',
+        riskActionHash: 'risk:replace-selection:paper',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const unconfirmedDone = unconfirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const unconfirmedUnit = (unconfirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(unconfirmedDone?.status, 'needs-confirmation');
+  assert.equal(unconfirmedUnit?.primitive, undefined);
+  assert.equal(unconfirmedUnit?.action, undefined);
+  assert.equal(unconfirmedUnit?.blockedReason, 'vscode_cowork_real_file_change_needs_confirmation');
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('selection-ref:vscode:current'));
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('text-ref:vscode:replacement'));
+  assert.ok((unconfirmedDone?.evidenceRefs as string[]).includes('risk:replace-selection:paper'));
+
+  const confirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
+    request: vscodeCoWorkRouteRequest({
+      commandText: '替换我已经打开的 VSCode 当前选区。',
+      commandId: 'native-route-vscode-cowork-replace-selection-confirmed',
+      attemptId: 'native-route-vscode-cowork-replace-selection-confirmed-attempt-1',
+      vscodeCoWork: {
+        requestRef: 'chat-request:vscode-cowork:replace-selection-confirmed',
+        operation: 'replace-selection',
+        selectedWindowRef: 'window:vscode:paper',
+        selectedFileRef: 'file-ref:vscode:paper',
+        windowCandidates: [
+          vscodeNativeRouteWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+        ],
+        latestObservation: vscodeNativeRouteObservation(),
+        selectionRef: 'selection-ref:vscode:current',
+        replacementTextRef: 'text-ref:vscode:replacement',
+        riskActionHash: 'risk:replace-selection:paper',
+        confirmationRef: 'approval:risk:replace-selection:paper:confirmed',
+      },
+    }),
+    workspace: '/tmp/workspace',
+    provider: 'sciforge-provider',
+    model: 'sciforge-model',
+    profile: 'host-owned',
+  })!);
+  const confirmedDone = confirmedEvents.find((event) => event.type === 'done') as Record<string, unknown> | undefined;
+  const confirmedUnit = (confirmedDone?.executionUnits as Record<string, unknown>[] | undefined)?.[0];
+
+  assert.equal(confirmedDone?.status, 'ready');
+  assert.equal(confirmedUnit?.primitive, 'act');
+  assert.deepEqual(confirmedUnit?.action, {
+    type: 'type',
+    textRef: 'text-ref:vscode:replacement',
+    elementRef: 'element:vscode:editor',
+  });
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('selection-ref:vscode:current'));
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('text-ref:vscode:replacement'));
+  assert.ok((confirmedDone?.evidenceRefs as string[]).includes('approval:risk:replace-selection:paper:confirmed'));
+  assert.doesNotMatch(JSON.stringify(confirmedEvents), /currently highlighted paragraph|rawScreenshot|providerPayload|data:image|base64|product-ready/i);
+});
+
 test('Computer Use native route keeps VSCode real-file save and undo blocked until matching approval refs are present', async () => {
   const unconfirmedEvents = await collectStreamEvents(createComputerUseNativeRouteStream({
     request: vscodeCoWorkRouteRequest({
