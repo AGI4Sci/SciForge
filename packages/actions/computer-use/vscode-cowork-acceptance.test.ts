@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   VSCODE_COWORK_ACCEPTANCE_CAPABILITY,
   decideVSCodeCoWorkNextPrimitive,
+  validateVSCodeCoWorkLiveAcceptanceManifest,
   validateVSCodeCoWorkRunCleanup,
 } from './vscode-cowork-acceptance.js';
 import { CU_NEXT_TASK_MAPPINGS } from './task-map.js';
@@ -278,6 +279,50 @@ test('VSCode co-work cleanup validation requires release refs and focus/mouse re
   ]);
 });
 
+test('VSCode co-work live manifest requires primitive chain, cleanup, restoration, and approval refs', () => {
+  const passed = validateVSCodeCoWorkLiveAcceptanceManifest(vscodeCoWorkLiveManifest());
+
+  assert.equal(passed.ok, true);
+  assert.deepEqual(passed.issues, []);
+
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...vscodeCoWorkLiveManifest(),
+    status: 'passed',
+    productReady: true,
+    primitiveChainObserved: ['bind', 'observe', 'act'],
+    evidence: {
+      ...vscodeCoWorkLiveManifest().evidence,
+      approvalRefs: [],
+      releaseRefs: ['input-adapter:vscode-cowork:1'],
+      restorationRefs: ['front-app-restore:vscode-cowork:1'],
+    },
+    cleanup: {
+      ...vscodeCoWorkLiveManifest().cleanup,
+      inputLeaseReleased: false,
+      cursorReleased: false,
+      mousePositionRestored: false,
+      userVSCodeProcessKilled: true,
+      userProfileCleared: true,
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.deepEqual(failed.issues, [
+    'vscode-cowork-must-not-claim-product-ready',
+    'vscode-cowork-live-primitive-chain-incomplete',
+    'missing-release-ref:scoped-input-lease',
+    'missing-release-ref:cursor-marker',
+    'missing-restoration-ref:mouse-position',
+    'cleanup-input-lease-not-released',
+    'cleanup-cursor-not-released',
+    'cleanup-mouse-position-not-restored',
+    'cleanup-must-not-kill-user-vscode',
+    'cleanup-must-not-clear-user-profile',
+    'missing-approval-ref:risk-action-hash',
+    'missing-approval-ref:approval',
+  ]);
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -303,5 +348,55 @@ function freshObservation() {
     editorVisible: true,
     visibleFileRefs: ['file-ref:vscode:paper'],
     userFile: true,
+  };
+}
+
+function vscodeCoWorkLiveManifest() {
+  return {
+    schemaVersion: 'sciforge.computer-use.vscode-cowork-live-acceptance.v1' as const,
+    status: 'passed' as const,
+    maturity: 'live-diagnostic',
+    productReady: false,
+    userProfileUsed: true,
+    sharedSystemInputUsed: true,
+    primitiveChainObserved: ['bind', 'observe', 'act', 'observe', 'control(release)'],
+    operation: 'save-current-file' as const,
+    target: {
+      windowRef: 'window:vscode:paper',
+      selectedFileRef: 'file-ref:vscode:paper',
+    },
+    evidence: {
+      bindRefs: ['window-action-session:vscode-cowork:1'],
+      beforeObservationRefs: ['observation:vscode:before'],
+      hostDecisionRefs: ['decision:vscode-cowork:save-confirmed'],
+      actionRefs: ['action:vscode-cowork:save'],
+      afterObservationRefs: ['observation:vscode:after'],
+      controlRefs: ['control:vscode-cowork:release'],
+      screenshotRefs: ['image:vscode:before', 'image:vscode:after'],
+      accessibilityRefs: ['accessibility:vscode:before', 'accessibility:vscode:after'],
+      textRefs: ['text:vscode:visible'],
+      approvalRefs: [
+        'risk:save-current-file:paper',
+        'approval:risk:save-current-file:paper:confirmed',
+      ],
+      releaseRefs: [
+        'scoped-input-lease:vscode-cowork:1',
+        'input-adapter:vscode-cowork:1',
+        'cursor-marker:vscode-cowork:1',
+      ],
+      restorationRefs: [
+        'front-app-restore:vscode-cowork:1',
+        'mouse-position-restore:vscode-cowork:1',
+      ],
+    },
+    cleanup: {
+      inputLeaseReleased: true,
+      cursorReleased: true,
+      adapterReleased: true,
+      frontAppRestored: true,
+      mousePositionRestored: true,
+      userVSCodeProcessKilled: false,
+      userProfileCleared: false,
+    },
   };
 }

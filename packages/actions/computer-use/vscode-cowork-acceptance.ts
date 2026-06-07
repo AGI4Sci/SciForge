@@ -1,6 +1,8 @@
 import type { ComputerUseActionRisk, ComputerUseAtomicAction } from './index.js';
 
 export const VSCODE_COWORK_ACCEPTANCE_SCHEMA_VERSION = 'sciforge.computer-use.vscode-cowork-acceptance.v1' as const;
+export const VSCODE_COWORK_LIVE_ACCEPTANCE_SCHEMA_VERSION = 'sciforge.computer-use.vscode-cowork-live-acceptance.v1' as const;
+const VSCODE_COWORK_REQUIRED_PRIMITIVE_CHAIN = ['bind', 'observe', 'act', 'observe', 'control(release)'] as const;
 
 export const VSCODE_COWORK_ACCEPTANCE_CAPABILITY = {
   schemaVersion: VSCODE_COWORK_ACCEPTANCE_SCHEMA_VERSION,
@@ -131,6 +133,36 @@ export interface VSCodeCoWorkCleanupValidation {
   issues: string[];
 }
 
+export interface VSCodeCoWorkLiveAcceptanceManifest {
+  schemaVersion: typeof VSCODE_COWORK_LIVE_ACCEPTANCE_SCHEMA_VERSION;
+  status: 'passed' | 'blocked' | 'needs-confirmation';
+  maturity: string;
+  productReady: boolean;
+  userProfileUsed: boolean;
+  sharedSystemInputUsed: boolean;
+  primitiveChainObserved: string[];
+  operation: VSCodeCoWorkOperation;
+  target: {
+    windowRef: string;
+    selectedFileRef?: string;
+  };
+  evidence: {
+    bindRefs: string[];
+    beforeObservationRefs: string[];
+    hostDecisionRefs: string[];
+    actionRefs: string[];
+    afterObservationRefs: string[];
+    controlRefs: string[];
+    screenshotRefs: string[];
+    accessibilityRefs: string[];
+    textRefs: string[];
+    approvalRefs: string[];
+    releaseRefs: string[];
+    restorationRefs: string[];
+  };
+  cleanup: VSCodeCoWorkCleanupManifest['cleanup'];
+}
+
 export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput): VSCodeCoWorkDecision {
   const requestRefs = uniqueStrings([input.requestRef]);
   const candidateRefs = input.windowCandidates.map((candidate) => candidate.windowRef).filter(nonEmptyString);
@@ -240,6 +272,50 @@ export function validateVSCodeCoWorkRunCleanup(manifest: VSCodeCoWorkCleanupMani
   if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
   if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
   if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
+
+  return {
+    ok: issues.length === 0,
+    issues,
+  };
+}
+
+export function validateVSCodeCoWorkLiveAcceptanceManifest(
+  manifest: VSCodeCoWorkLiveAcceptanceManifest,
+): VSCodeCoWorkCleanupValidation {
+  const issues: string[] = [];
+  const releaseRefs = manifest.evidence.releaseRefs;
+  const restorationRefs = manifest.evidence.restorationRefs;
+
+  if (manifest.schemaVersion !== VSCODE_COWORK_LIVE_ACCEPTANCE_SCHEMA_VERSION) issues.push('vscode-cowork-live-schema-version-mismatch');
+  if (manifest.status !== 'passed') issues.push('vscode-cowork-live-acceptance-not-passed');
+  if (manifest.maturity !== 'live-diagnostic') issues.push('vscode-cowork-capability-must-remain-live-diagnostic');
+  if (manifest.productReady !== false) issues.push('vscode-cowork-must-not-claim-product-ready');
+  if (!primitiveChainMatches(manifest.primitiveChainObserved)) issues.push('vscode-cowork-live-primitive-chain-incomplete');
+  if (!nonEmptyString(manifest.target.windowRef)) issues.push('missing-target-ref:window');
+  if (!manifest.evidence.bindRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:bind');
+  if (!manifest.evidence.beforeObservationRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:before-observe');
+  if (!manifest.evidence.hostDecisionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:host-decision');
+  if (!manifest.evidence.actionRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:act');
+  if (!manifest.evidence.afterObservationRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:after-observe');
+  if (!manifest.evidence.controlRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:control');
+  if (!manifest.evidence.screenshotRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:screenshot');
+  if (!manifest.evidence.accessibilityRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:accessibility');
+  if (!manifest.evidence.textRefs.some(nonEmptyString)) issues.push('missing-evidence-ref:text');
+  if (!hasRefPrefix(releaseRefs, 'scoped-input-lease:')) issues.push('missing-release-ref:scoped-input-lease');
+  if (!hasRefPrefix(releaseRefs, 'input-adapter:')) issues.push('missing-release-ref:input-adapter');
+  if (!releaseRefs.some((ref) => ref.startsWith('cursor-marker:') || ref.startsWith('cursor:'))) issues.push('missing-release-ref:cursor-marker');
+  if (!restorationRefs.some((ref) => /^front-app-restore:|^focus-restore:/i.test(ref))) issues.push('missing-restoration-ref:front-app');
+  if (!restorationRefs.some((ref) => /^mouse-position-restore:|^cursor-position-restore:/i.test(ref))) issues.push('missing-restoration-ref:mouse-position');
+  if (!manifest.cleanup.inputLeaseReleased) issues.push('cleanup-input-lease-not-released');
+  if (!manifest.cleanup.cursorReleased) issues.push('cleanup-cursor-not-released');
+  if (!manifest.cleanup.adapterReleased) issues.push('cleanup-adapter-not-released');
+  if (!manifest.cleanup.frontAppRestored) issues.push('cleanup-front-app-not-restored');
+  if (!manifest.cleanup.mousePositionRestored) issues.push('cleanup-mouse-position-not-restored');
+  if (manifest.cleanup.userVSCodeProcessKilled) issues.push('cleanup-must-not-kill-user-vscode');
+  if (manifest.cleanup.userProfileCleared) issues.push('cleanup-must-not-clear-user-profile');
+  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('risk:'))) issues.push('missing-approval-ref:risk-action-hash');
+  if (realFileChangeOperation(manifest.operation) && !manifest.evidence.approvalRefs.some((ref) => ref.startsWith('approval:'))) issues.push('missing-approval-ref:approval');
+  if (manifest.evidence.approvalRefs.some(unsafeEvidenceRef)) issues.push('unsafe-evidence-ref:approval');
 
   return {
     ok: issues.length === 0,
@@ -375,6 +451,11 @@ function realFileChangeOperation(operation: VSCodeCoWorkOperation): boolean {
     || operation === 'cross-file-modify';
 }
 
+function primitiveChainMatches(chain: string[]): boolean {
+  return chain.length === VSCODE_COWORK_REQUIRED_PRIMITIVE_CHAIN.length
+    && VSCODE_COWORK_REQUIRED_PRIMITIVE_CHAIN.every((item, index) => chain[index] === item);
+}
+
 function fileTargetOperation(operation: VSCodeCoWorkOperation): boolean {
   return operation === 'insert-draft'
     || operation === 'save-current-file'
@@ -458,4 +539,8 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function unsafeEvidenceRef(value: string): boolean {
+  return /(?:rawScreenshot|providerPayload|data:[^,\s]+;base64,|base64|secret|token|password|https?:\/\/)/i.test(value);
 }
