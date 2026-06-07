@@ -482,6 +482,7 @@ export function validateVSCodeCoWorkLiveAcceptanceManifest(
   if (manifest.evidence.bindRefs.some(sessionRef) && !refsContainBoundRef(actionRefs, manifest.evidence.bindRefs, sessionRef)) {
     issues.push('missing-action-ref:session');
   }
+  if (!actionRefs.some((ref) => sameRef(ref, manifest.target.windowRef))) issues.push('missing-action-ref:target-window');
   if (!manifest.evidence.actionRefs.some(executorEventRef)) issues.push('missing-action-ref:executor-event');
   if (!manifest.evidence.actionRefs.some(inputEventRef)) issues.push('missing-action-ref:input-event');
   if (!manifest.evidence.actionRefs.some(inputAdapterRef)) issues.push('missing-action-ref:input-adapter');

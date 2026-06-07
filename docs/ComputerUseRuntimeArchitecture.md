@@ -156,6 +156,8 @@ Computer Use 尽量用 contract 和状态约束替代复杂算法：
 
 补充：P9 live manifest 的 Host decision evidence 还必须绑定 action evidence 中的同一个 `action:` / `window-action:` ref；只有 `decision:` ref 或绑定到另一条合法 action ref 不足以证明实际执行的 act 就是 Host 基于 before observe refs 选择的下一步原子能力。该补充仍属于 acceptance harness / manifest validator，不进入 Computer Use primitive core，也不改变 P9 的 `unit-proven` / `live-diagnostic` 状态。
 
+补充：P9 live manifest 的 act evidence 还必须直接绑定同一个 target `window:` ref。active session 和 editor element ref 仍会保留，但 manifest 不能只靠间接关系证明实际 act 没有漂移到其它 VSCode 窗口；该检查继续属于 refs-first acceptance evidence，不给 Computer Use core 增加窗口选择或 task planning 权限。
+
 ## 职责边界
 
 ```text

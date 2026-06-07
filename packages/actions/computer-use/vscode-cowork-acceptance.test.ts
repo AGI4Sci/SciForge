@@ -1565,6 +1565,20 @@ test('VSCode co-work live manifest requires action refs to bind the active sessi
   assert.ok(failed.issues.includes('missing-action-ref:session'));
 });
 
+test('VSCode co-work live manifest requires action refs to bind the target window', () => {
+  const base = vscodeCoWorkLiveManifest();
+  const failed = validateVSCodeCoWorkLiveAcceptanceManifest({
+    ...base,
+    evidence: {
+      ...base.evidence,
+      actionRefs: base.evidence.actionRefs.filter((ref) => ref !== base.target.windowRef),
+    },
+  });
+
+  assert.equal(failed.ok, false);
+  assert.ok(failed.issues.includes('missing-action-ref:target-window'));
+});
+
 function vscodeWindow(input: {
   windowRef: string;
   titleRef?: string;
@@ -1645,6 +1659,7 @@ function vscodeCoWorkLiveManifest() {
       actionRefs: [
         'action:vscode-cowork:save',
         'window-action-session:vscode-cowork:1',
+        'window:vscode:paper',
         'element:vscode:editor',
         'executor-event:vscode-cowork:save',
         'input-event:vscode-cowork:save',
