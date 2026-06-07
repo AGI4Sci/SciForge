@@ -49,6 +49,7 @@ export function createVSCodeCoWorkChatBridge(input: VSCodeCoWorkChatBridgeInput)
     requestRef,
     operation: binding.operation ?? 'read-visible-text',
     windowCandidates: binding.windowCandidates,
+    invalidWindowCandidateCount: binding.invalidWindowCandidateCount,
     selectedWindowRef: binding.selectedWindowRef,
     selectedFileRef: binding.selectedFileRef,
     latestObservation: binding.latestObservation,
@@ -81,6 +82,7 @@ interface SanitizedVSCodeCoWorkBinding {
   requestRef?: string;
   operation?: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
+  invalidWindowCandidateCount: number;
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
@@ -90,11 +92,13 @@ interface SanitizedVSCodeCoWorkBinding {
 }
 
 function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBinding {
-  if (!isRecord(value)) return { windowCandidates: [] };
+  if (!isRecord(value)) return { windowCandidates: [], invalidWindowCandidateCount: 0 };
+  const windowCandidates = sanitizeWindowCandidates(value.windowCandidates);
   return {
     requestRef: safeRuntimeRef(value.requestRef, ['chat-request:']),
     operation: operationField(value.operation),
-    windowCandidates: sanitizeWindowCandidates(value.windowCandidates),
+    windowCandidates: windowCandidates.candidates,
+    invalidWindowCandidateCount: windowCandidates.invalidCount,
     selectedWindowRef: safeRuntimeRef(value.selectedWindowRef, ['window:']),
     selectedFileRef: safeRuntimeRef(value.selectedFileRef, ['file-ref:']),
     latestObservation: sanitizeObservation(value.latestObservation),
@@ -104,24 +108,41 @@ function sanitizeVSCodeCoWorkBinding(value: unknown): SanitizedVSCodeCoWorkBindi
   };
 }
 
-function sanitizeWindowCandidates(value: unknown): VSCodeCoWorkWindowCandidate[] {
-  if (!Array.isArray(value)) return [];
+function sanitizeWindowCandidates(value: unknown): {
+  candidates: VSCodeCoWorkWindowCandidate[];
+  invalidCount: number;
+} {
+  if (!Array.isArray(value)) return { candidates: [], invalidCount: 0 };
   const candidates: VSCodeCoWorkWindowCandidate[] = [];
+  let invalidCount = 0;
   for (const item of value) {
-    if (!isRecord(item)) continue;
+    if (!isRecord(item)) {
+      invalidCount += 1;
+      continue;
+    }
     const appRef = safeRuntimeRef(item.appRef, ['macos-app:']);
     const windowRef = safeRuntimeRef(item.windowRef, ['window:']);
-    if (!appRef || !windowRef) continue;
+    const processRef = safeRuntimeRef(item.processRef, ['process:']);
+    const titleRef = safeRuntimeRef(item.titleRef, ['text:', 'window:']);
+    const frontmostRef = safeRuntimeRef(item.frontmostRef, ['frontmost:', 'window:']);
+    const optionalRefInvalid =
+      (item.processRef !== undefined && !processRef)
+      || (item.titleRef !== undefined && !titleRef)
+      || (item.frontmostRef !== undefined && !frontmostRef);
+    if (!appRef || !windowRef || optionalRefInvalid) {
+      invalidCount += 1;
+      continue;
+    }
     candidates.push({
       appRef,
       windowRef,
-      processRef: safeRuntimeRef(item.processRef, ['process:']),
-      titleRef: safeRuntimeRef(item.titleRef, ['text:', 'window:']),
-      frontmostRef: safeRuntimeRef(item.frontmostRef, ['frontmost:', 'window:']),
+      processRef,
+      titleRef,
+      frontmostRef,
       visibleFileRefs: safeRuntimeRefList(item.visibleFileRefs, ['file-ref:']),
     });
   }
-  return candidates;
+  return { candidates, invalidCount };
 }
 
 function sanitizeObservation(value: unknown): VSCodeCoWorkObservationRefs | undefined {

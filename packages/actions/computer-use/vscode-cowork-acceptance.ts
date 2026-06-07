@@ -73,6 +73,7 @@ export interface VSCodeCoWorkDecisionInput {
   requestRef: string;
   operation: VSCodeCoWorkOperation;
   windowCandidates: VSCodeCoWorkWindowCandidate[];
+  invalidWindowCandidateCount?: number;
   selectedWindowRef?: string;
   selectedFileRef?: string;
   latestObservation?: VSCodeCoWorkObservationRefs;
@@ -167,11 +168,21 @@ export function decideVSCodeCoWorkNextPrimitive(input: VSCodeCoWorkDecisionInput
   const requestRefs = uniqueStrings([requestRef(input.requestRef) ? input.requestRef : undefined]);
   const validWindowCandidates = input.windowCandidates.filter(windowCandidateRefSafe);
   const candidateRefs = validWindowCandidates.map((candidate) => candidate.windowRef).filter(windowRef);
+  const invalidWindowCandidateCount = input.invalidWindowCandidateCount
+    ?? input.windowCandidates.length - validWindowCandidates.length;
 
   if (candidateRefs.length === 0) {
     return blocked(input, 'vscode_cowork_no_window_candidates', requestRefs, [{
       code: 'ask-user-to-open-or-select-vscode-window',
       message: 'No current VSCode window refs were available. Ask the user to open or select the target window before binding.',
+      suggestedPrimitive: 'bind',
+    }]);
+  }
+
+  if (invalidWindowCandidateCount > 0) {
+    return blocked(input, 'vscode_cowork_window_candidate_refs_invalid', uniqueStrings([...requestRefs, ...candidateRefs]), [{
+      code: 'refresh-window-candidate-refs',
+      message: 'Host must provide refs-first window/app/process/title/frontmost refs for every VSCode window candidate before selecting a target.',
       suggestedPrimitive: 'bind',
     }]);
   }

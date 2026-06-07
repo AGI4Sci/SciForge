@@ -102,6 +102,32 @@ test('Host-side VSCode co-work blocks raw window and observation refs before cho
   assert.doesNotMatch(JSON.stringify(rawObservation), /paper\.md|visible editor|raw AX|tmp\/paper-window|fresh observation/);
 });
 
+test('Host-side VSCode co-work blocks mixed raw and refs-first window candidates', () => {
+  const decision = decideVSCodeCoWorkNextPrimitive({
+    requestRef: 'chat-request:vscode-cowork:mixed-window-candidates',
+    operation: 'focus-editor',
+    windowCandidates: [
+      vscodeWindow({ windowRef: 'window:vscode:paper', titleRef: 'text:title:paper' }),
+      {
+        appRef: 'Visual Studio Code',
+        processRef: '/Applications/Visual Studio Code.app',
+        windowRef: 'Notes.md - Visual Studio Code',
+        titleRef: 'Notes.md - Visual Studio Code',
+        frontmostRef: 'frontmost VSCode window',
+      },
+    ],
+    latestObservation: freshObservation(),
+  });
+
+  assert.equal(decision.status, 'blocked');
+  assert.equal(decision.blockedReason, 'vscode_cowork_window_candidate_refs_invalid');
+  assert.equal(decision.primitive, undefined);
+  assert.equal(decision.action, undefined);
+  assert.ok(decision.refs.includes('chat-request:vscode-cowork:mixed-window-candidates'));
+  assert.ok(decision.refs.includes('window:vscode:paper'));
+  assert.doesNotMatch(JSON.stringify(decision), /Notes\.md|Visual Studio Code|Applications|frontmost VSCode/);
+});
+
 test('Host-side VSCode co-work blocks stale or incomplete observe refs before selecting an action', () => {
   const stale = decideVSCodeCoWorkNextPrimitive({
     requestRef: 'chat-request:vscode-cowork:stale',
