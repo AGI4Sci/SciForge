@@ -8,11 +8,11 @@ import { VERIFICATION_RESULT_ARTIFACT_TYPE } from '@sciforge-ui/runtime-contract
 import type { GatewayRequest, SkillAvailability, WorkspaceTaskRunResult } from '../runtime-types';
 import { requestWithoutInlineAgentHarness } from './agent-harness-shadow';
 import { buildBackendGenerationPrompt, buildCompactRepairContext } from './backend-prompt-policy';
-import { buildContextEnvelope, summarizeTaskAttemptsForAgentServer } from './context-envelope';
+import { buildContextEnvelope, summarizeTaskAttemptsForBackend } from './context-envelope';
 import { summarizeWorkEvidenceForHandoff } from './work-evidence-types';
 
 test('attempt summaries carry bounded WorkEvidence facts without raw payloads', () => {
-  const summary = summarizeTaskAttemptsForAgentServer([{
+  const summary = summarizeTaskAttemptsForBackend([{
     id: 'attempt-1',
     attempt: 1,
     status: 'repair-needed',

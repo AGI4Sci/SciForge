@@ -4,7 +4,7 @@ import { backendToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-co
 import { backendExternalIoReliabilityContractLines, backendRepairPromptPolicyLines, backendToolPayloadShapeContract, backendWorkspaceTaskRepairPromptPolicyLines } from '../../../packages/skills/runtime-policy.js';
 import { minimalValidInteractiveToolPayloadExample } from '../../../packages/presentation/interactive-views/runtime-ui-manifest-policy.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
-import { summarizeArtifactRefs, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
+import { summarizeArtifactRefs, summarizeExecutionRefs, summarizeTaskAttemptsForBackend } from './context-envelope.js';
 import { clipForBackendPrompt, extractLikelyErrorLine, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
 import {
   applyRepairContextPolicyForBackend,
@@ -12,7 +12,7 @@ import {
   repairContextPolicySummaryForBackend,
 } from './generated-task-repair-context-policy.js';
 import { sanitizePromptHandoffValue } from './generated-task-prompt-policy.js';
-import { summarizeUiStateForAgentServer } from './backend-context-summary.js';
+import { summarizeUiStateForBackend } from './backend-context-summary.js';
 
 function stringField(value: unknown) {
   return typeof value === 'string' && value.trim() ? value : undefined;
@@ -67,10 +67,10 @@ export async function buildCompactRepairContext(params: {
       workEvidenceSummary: undefined,
     },
     repairMaterials: repairMaterialRefs(params.run, inputRel),
-    sessionSummary: summarizeUiStateForAgentServer(params.request.uiState, 'delta'),
+    sessionSummary: summarizeUiStateForBackend(params.request.uiState, 'delta'),
     artifacts: summarizeArtifactRefs(params.request.artifacts),
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(params.request.uiState?.recentExecutionRefs)),
-    priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, 4),
+    priorAttempts: summarizeTaskAttemptsForBackend(params.priorAttempts).slice(0, 4),
   };
   const repairContextPolicySummary = repairContextPolicySummaryForBackend(params.request, rawContext);
   const compactRepairContext = applyRepairContextPolicyForBackend(rawContext, repairContextPolicySummary) ?? rawContext;

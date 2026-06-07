@@ -29,7 +29,7 @@ SciForge 的下一阶段演进只围绕两个产品生死问题，但判断标�
 
 | 能力 | 命令 | 当前状态 | 结论 |
 | --- | --- | --- | --- |
-| Computer Use 操纵真实软件 | `npm run smoke:desktop-computer-use-hard-confirm-product:strict --silent` | `product hard-confirm passed / real T1 blocked` | Electron Desktop 产品 shell、native host、Runtime Codex SSE、host-owned Computer Use package bridge、guard / hard-confirm surface 已有产品证据；真实 T1 仍缺 ordinary Desktop chat 当前运行的 scoped GUI 创建 / 保存 / 验证证据。 |
+| Computer Use 操纵真实软件 | `npm run smoke:desktop-computer-use-hard-confirm-product:strict --silent` + `npm run smoke:computer-use-chat-live-e2e:product-strict --silent` | `product hard-confirm passed / preflight ready / real T1 failed` | Electron Desktop 产品 shell、native host、Runtime Codex SSE、host-owned Computer Use package bridge、guard / hard-confirm surface 已有产品证据；ordinary Desktop chat product-strict 已能提交当前运行，但仍缺 live acceptance bundle 和 scoped GUI 创建 / 保存 / 验证证据。本机 Appium Mac2 服务未运行，opt-in TextEdit WindowActionSession bridge 只能作为单测通过的实现切片，不能作为 release 证据。 |
 | Runtime Codex 内置浏览器检索 | `npm run smoke:runtime-codex-browser-local-dogfood --silent` + `npm run smoke:runtime-codex-browser-acceptance --silent` + `npm run smoke:runtime-codex-browser-acceptance:strict --silent` | `ordinary chat release passed` | Runtime Codex ordinary chat 已通过 `browser.open_read` 打开并读取 OpenAI 官方 API changelog，产出 BrowserHostSession source-page / page-text refs、`module.invoke` evidence 和 final-answer artifact；release/strict smoke 当前通过。 |
 | Desktop native Browser live | `npm run smoke:desktop-browser-native-live-acceptance --silent` | `passed` | Desktop native Browser live 已不再是 T2 的主要代码 blocker；下一步是 ordinary chat / Runtime Codex acceptance 在 service-env 策略下产生当前运行证据。 |
 

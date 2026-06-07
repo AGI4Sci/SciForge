@@ -7,7 +7,7 @@ import { normalizeBackendHandoff } from '../workspace-task-input.js';
 import { sessionBundleRelForRequest } from '../session-bundle.js';
 import { expectedArtifactTypesForRequest, selectedComponentIdsForRequest } from './gateway-request.js';
 import { agentHarnessMetadata, requestWithoutInlineAgentHarness } from './agent-harness-shadow.js';
-import { buildContextEnvelope, expectedArtifactSchema, summarizeTaskAttemptsForAgentServer, workspaceTreeSummary } from './context-envelope.js';
+import { buildContextEnvelope, expectedArtifactSchema, summarizeTaskAttemptsForBackend, workspaceTreeSummary } from './context-envelope.js';
 import { normalizeBackendWorkspaceEvent as normalizeBackendWorkspaceEventFromModule, withRequestContextWindowLimit as withRequestContextWindowLimitFromModule } from './workspace-event-normalizer.js';
 import { backendAgentId, backendContextPolicy, contextCompactionMetadata, contextWindowMetadata, estimateWorkspaceContextWindowState, fetchBackendContextSnapshot, currentTurnReferences, handoffBudgetDecisionRecords, handoffContextWindowState, preflightBackendContextWindow, requestNeedsBackendContinuity } from './backend-context-window.js';
 import { backendSelectionDecisionForRequest } from './agent-backend-config.js';
@@ -296,7 +296,7 @@ async function dispatchBackendGeneration(params: BackendGenerationParams, genera
     const attachPriorAttempts = needsContinuity || repairContinuation;
     const priorAttempts = currentTurnReferences(promptRequest).length || !attachPriorAttempts
       ? []
-      : summarizeTaskAttemptsForAgentServer(recentAttempts);
+      : summarizeTaskAttemptsForBackend(recentAttempts);
     const agentServerSnapshot = preflight.state?.snapshot ?? await fetchBackendContextSnapshot(params.baseUrl, agentId);
     const contextMode = contextEnvelopeMode(promptRequest, {
       agentServerCoreAvailable: Boolean(agentServerSnapshot),

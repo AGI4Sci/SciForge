@@ -49,6 +49,8 @@ test('adapter spawns codex exec --json with isolated CODEX_HOME and plain text c
   assert.ok(argv.includes('--skip-git-repo-check'));
   assert.ok(argv.includes('--ignore-rules'));
   assert.ok(argv.includes('--sandbox'));
+  assertDisablePair(argv, 'plugins');
+  assertDisablePair(argv, 'remote_plugin');
   assert.equal(argv[(argv.indexOf('--sandbox') ?? -2) + 1], 'workspace-write');
   assertConfigPair(argv, RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS);
   assert.ok(argv.includes('--ask-for-approval'));
@@ -846,6 +848,10 @@ function booleanField(record: Record<string, unknown>, key: string): boolean {
 
 function assertConfigPair(argv: string[], pair: readonly [string, string]): void {
   assert.ok(argv.some((arg, index) => arg === pair[0] && argv[index + 1] === pair[1]));
+}
+
+function assertDisablePair(argv: string[], feature: string): void {
+  assert.ok(argv.some((arg, index) => arg === '--disable' && argv[index + 1] === feature));
 }
 
 function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointName: string): void {

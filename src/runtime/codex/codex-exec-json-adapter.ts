@@ -5,6 +5,7 @@ import { attemptIdForCommand, codexSessionIdFromRaw, commandIdForText, exitEvent
 import { type AgentCliAdapter, type AgentCliApprovalPolicy, type AgentCliStartTurnInput, type AgentCliTurn } from './agent-cli-adapter.js';
 import { assertCodexNoForkGate } from '../../../packages/backend/src/codex-compatibility-gate.js';
 import {
+  RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
   resolveRuntimeCodexSandbox,
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
 } from '../../../packages/backend/src/runtime-home.js';
@@ -405,6 +406,7 @@ function codexExecArgs(input: {
   const globalArgs = [
     ...(input.configArgs ?? []),
     ...RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
+    ...RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
     '--profile',
     input.profile,
     '--cd',

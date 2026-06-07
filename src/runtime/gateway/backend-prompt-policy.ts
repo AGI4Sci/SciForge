@@ -4,7 +4,7 @@ import type { GatewayRequest, LlmEndpointConfig, SciForgeSkillDomain, SkillAvail
 import { agentHandoffSourceMetadata } from '@sciforge-ui/runtime-contract/handoff';
 import { extractBackendCurrentUserRequest, normalizeConfiguredBackendLlmEndpoint } from '@sciforge-ui/runtime-contract/backend-prompt-policy';
 import { expectedArtifactTypesForRequest, normalizeLlmEndpoint, selectedComponentIdsForRequest } from './gateway-request.js';
-import { buildCapabilityBrokerBriefForAgentServer, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords, workspaceTreeSummary, type AgentServerContextMode } from './context-envelope.js';
+import { buildCapabilityBrokerBriefForBackend, buildContextEnvelope, expectedArtifactSchema, summarizeArtifactRefs, summarizeConversationLedger, summarizeConversationPolicyForBackend, summarizeExecutionRefs, summarizeTaskAttemptsForBackend, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords, workspaceTreeSummary, type BackendContextMode } from './context-envelope.js';
 import { backendAgentId, backendContextPolicy, contextWindowMetadata, fetchBackendContextSnapshot } from './backend-context-window.js';
 import { cleanUrl, clipForBackendJson, clipForBackendPrompt, errorMessage, extractLikelyErrorLine, hashJson, isRecord, readTextIfExists, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { normalizeBackendHandoff } from '../workspace-task-input.js';
@@ -29,7 +29,7 @@ import {
   validateBackendHandoffPacket,
   type BackendHandoffPacket,
 } from './backend-context-contract.js';
-import { summarizeUiStateForAgentServer } from './backend-context-summary.js';
+import { summarizeUiStateForBackend } from './backend-context-summary.js';
 import { sanitizePromptHandoffValue } from './generated-task-prompt-policy.js';
 import { buildGeneratedTaskRepairPrompt, buildCompactRepairContext } from './generated-task-repair-prompts.js';
 
@@ -362,7 +362,7 @@ export async function readConfiguredLlmEndpoint(path: string, source: string): P
 export { buildBackendGenerationPrompt } from './generated-task-prompt-policy.js';
 export { buildGeneratedTaskRepairPrompt, buildCompactRepairContext } from './generated-task-repair-prompts.js';
 export function summarizeToolsForBackend(request: GatewayRequest) {
-  const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const capabilityBrokerBrief = buildCapabilityBrokerBriefForBackend(request);
   const briefs = Array.isArray(capabilityBrokerBrief.briefs)
     ? capabilityBrokerBrief.briefs.filter(isRecord)
     : [];
@@ -390,7 +390,7 @@ export function summarizeToolsForBackend(request: GatewayRequest) {
 }
 
 export function summarizeRuntimeCapabilitiesForBackend(request: GatewayRequest) {
-  return buildCapabilityBrokerBriefForAgentServer(request);
+  return buildCapabilityBrokerBriefForBackend(request);
 }
 
 export function buildBackendCompactContext(
@@ -399,24 +399,24 @@ export function buildBackendCompactContext(
     contextEnvelope: Record<string, unknown>;
     workspaceTree: Array<{ path: string; kind: 'file' | 'folder'; sizeBytes?: number }>;
     priorAttempts: unknown[];
-    mode: AgentServerContextMode;
+    mode: BackendContextMode;
   },
 ) {
   const mode = params.mode;
   return {
     mode,
     workspaceTreeSummary: mode === 'full' ? params.workspaceTree : [],
-    uiStateSummary: summarizeUiStateForAgentServer(request.uiState, mode),
+    uiStateSummary: summarizeUiStateForBackend(request.uiState, mode),
     artifacts: summarizeArtifactRefs(request.artifacts),
     recentExecutionRefs: summarizeExecutionRefs(toRecordList(request.uiState?.recentExecutionRefs)),
-    priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts).slice(0, mode === 'full' ? 4 : 2),
+    priorAttempts: summarizeTaskAttemptsForBackend(params.priorAttempts).slice(0, mode === 'full' ? 4 : 2),
   };
 }
 
 export function contextEnvelopeMode(
   request: GatewayRequest,
   options: { agentServerCoreAvailable?: boolean; forceSlimHandoff?: boolean } = {},
-): AgentServerContextMode {
+): BackendContextMode {
   const uiState = isRecord(request.uiState) ? request.uiState : {};
   const hasSession = typeof uiState.sessionId === 'string' && uiState.sessionId.trim().length > 0;
   const hasPriorRefs = request.artifacts.length > 0
@@ -429,4 +429,4 @@ export function contextEnvelopeMode(
   return hasSession && hasPriorRefs && options.agentServerCoreAvailable === true ? 'delta' : 'full';
 }
 
-export { summarizeUiStateForAgentServer } from './backend-context-summary.js';
+export { summarizeUiStateForBackend, summarizeUiStateForAgentServer } from './backend-context-summary.js';

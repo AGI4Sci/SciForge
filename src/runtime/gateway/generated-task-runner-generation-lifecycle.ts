@@ -49,7 +49,7 @@ export { literatureDirectPayloadRecoveryReason } from './generated-task-runner-l
 export type { BackendGenerationFailure, GeneratedTaskGenerationFailureLifecycleDeps } from './generated-task-runner-generation-failure.js';
 export { backendPayloadRefs, stableGeneratedTaskPayloadTaskId, writeBackendPayloadLogs } from './generated-task-runner-payload-materialization.js';
 
-export const BACKEND_DIRECT_PAYLOAD_TASK_REF = 'agentserver://direct-payload' as const;
+export const BACKEND_DIRECT_PAYLOAD_TASK_REF = 'backend://direct-payload' as const;
 const BACKEND_GENERATION_RETRY_REPAIR_TASK_REF = 'backend-generation://generation-retry-repair' as const;
 
 const execFileAsync = promisify(execFile);

@@ -12,7 +12,7 @@ import { appendTaskAttempt, readRecentTaskAttempts } from '../task-attempt-histo
 import { sha1 } from '../workspace-task-runner.js';
 import type { RuntimeRefBundle } from './artifact-materializer.js';
 import { currentTurnReferences } from './backend-context-window.js';
-import { summarizeTaskAttemptsForAgentServer } from './context-envelope.js';
+import { summarizeTaskAttemptsForBackend } from './context-envelope.js';
 import {
   attachGeneratedTaskGuardBudgetDebit,
   evaluateGeneratedTaskGuardFinding,
@@ -517,7 +517,7 @@ export async function buildGeneratedTaskRunInputLifecycle(
   const providerRoutes = capabilityProviderRoutesForHandoff(providerRouteRequest);
   const priorAttempts = currentRefs.length
     ? []
-    : summarizeTaskAttemptsForAgentServer(await readRecentTaskAttempts(input.workspacePath, input.request.skillDomain, 8, {
+    : summarizeTaskAttemptsForBackend(await readRecentTaskAttempts(input.workspacePath, input.request.skillDomain, 8, {
       scenarioPackageId: input.request.scenarioPackageRef?.id,
       skillPlanRef: input.request.skillPlanRef,
       prompt: input.request.prompt,

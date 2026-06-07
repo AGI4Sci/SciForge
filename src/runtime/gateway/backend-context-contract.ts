@@ -129,7 +129,7 @@ export interface DegradedReason {
   recoverability: Recoverability;
 }
 
-export interface AgentServerContextResponse {
+export interface BackendContextResponse {
   _contractVersion: typeof AGENTSERVER_CONTEXT_RESPONSE_VERSION;
   agentId: string;
   backend: string;
@@ -150,6 +150,9 @@ export interface AgentServerContextResponse {
   };
   cacheBlocks?: ContextProjectionBlock[];
 }
+
+/** @deprecated Use BackendContextResponse. */
+export type AgentServerContextResponse = BackendContextResponse;
 
 export interface BackendHandoffPacket {
   _contractVersion: typeof AGENTSERVER_BACKEND_HANDOFF_VERSION;

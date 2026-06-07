@@ -146,7 +146,7 @@ test('capability provider preflight can route unattended browser automation to h
   assert.equal(preflight.routes.find((route) => route.capabilityId === 'playwright_browser_automation')?.providers[0]?.transport, 'mcp');
 });
 
-test('AgentServer discovery maps worker tool routes into provider availability', async () => {
+test('backend discovery maps worker tool routes into provider availability when explicitly configured', async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {
@@ -173,7 +173,9 @@ test('AgentServer discovery maps worker tool routes into provider availability',
       skillDomain: 'literature',
       prompt: 'search latest papers',
       selectedToolIds: ['web_search'],
-      agentServerBaseUrl: 'http://agentserver.example.test',
+      uiState: {
+        backendCapabilityDiscoveryBaseUrl: 'http://backend.example.test',
+      },
       artifacts: [],
     });
 
@@ -183,6 +185,29 @@ test('AgentServer discovery maps worker tool routes into provider availability',
     assert.equal(preflight.ok, true);
     assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
     assert.equal(preflight.routes[0]?.providers[0]?.endpoint, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('backend discovery does not use legacy agentServerBaseUrl as an implicit provider source', async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (async () => {
+    calls += 1;
+    return { ok: true, json: async () => ({ providers: [] }) } as Response;
+  }) as typeof fetch;
+  try {
+    const request = await requestWithDiscoveredCapabilityProviders({
+      skillDomain: 'literature',
+      prompt: 'search latest papers',
+      selectedToolIds: ['web_search'],
+      agentServerBaseUrl: 'http://agentserver.example.test',
+      artifacts: [],
+    });
+
+    assert.equal(calls, 0);
+    assert.equal(request.uiState, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -305,7 +330,7 @@ test('capability provider preflight accepts scenario tool provider routes', () =
   assert.equal(preflight.routes[0]?.primaryProviderId, 'sciforge.web-worker.web_search');
 });
 
-test('AgentServer discovery overrides stale scenario route health', () => {
+test('backend provider availability overrides stale scenario route health', () => {
   const request: GatewayRequest = {
     skillDomain: 'literature',
     prompt: 'Search today arxiv papers about agentic harness evolution.',

@@ -4,6 +4,7 @@ import type { Readable, Writable } from 'node:stream';
 import type { ModuleDescription, ModuleInvokeRequest, ModuleQueryRequest, ModuleReadRequest } from '@sciforge-ui/runtime-contract/modules';
 import { agentHostGroundingDeveloperInstructionLines } from '../../../packages/contracts/runtime/agent-host-grounding-instructions.js';
 import {
+  RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
   resolveRuntimeCodexSandbox,
   type RuntimeCodexSandbox,
 } from '../../../packages/backend/src/runtime-home.js';
@@ -134,6 +135,7 @@ export class CodexAppServerJsonRpcClient implements CodexAppServerClient {
     });
     const args = this.options.args ?? [
       'app-server',
+      ...RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
       ...appServerConfigArgs([
         ...(guiInjection?.configArgs ?? []),
         ...subagentInjection.configArgs,

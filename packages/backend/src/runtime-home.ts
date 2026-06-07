@@ -15,6 +15,12 @@ export const RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS = [
   '--config',
   'sandbox_workspace_write.network_access=true',
 ] as const;
+export const RUNTIME_CODEX_DISABLE_PLUGIN_ARGS = [
+  '--disable',
+  'plugins',
+  '--disable',
+  'remote_plugin',
+] as const;
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const devRuntimeRoot = join(backendRoot, '.codex-runtime');
@@ -131,6 +137,8 @@ wire_api = "responses"
 [features]
 memories = true
 prevent_idle_sleep = true
+plugins = false
+remote_plugin = false
 
 [sandbox_workspace_write]
 network_access = true

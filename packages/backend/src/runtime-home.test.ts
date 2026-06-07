@@ -15,6 +15,7 @@ import {
   RUNTIME_PROFILE,
   RUNTIME_PROVIDER,
   resolveRuntimeCodexSandbox,
+  RUNTIME_CODEX_DISABLE_PLUGIN_ARGS,
   RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS,
   runtimeProviderForEnv,
   runtimeConfigToml,
@@ -32,7 +33,14 @@ test('runtime config writes the selected router alias/profile to the local Model
   assert.match(config, /\[model_providers\.sciforge-model-router\]/);
   assert.match(config, new RegExp(`env_key = "${RUNTIME_KEY_ENV}"`));
   assert.match(config, /wire_api = "responses"/);
+  assert.match(config, /\[features\]\s+memories = true\s+prevent_idle_sleep = true\s+plugins = false\s+remote_plugin = false/);
   assert.match(config, /\[sandbox_workspace_write\]\s+network_access = true/);
+  assert.deepEqual(RUNTIME_CODEX_DISABLE_PLUGIN_ARGS, [
+    '--disable',
+    'plugins',
+    '--disable',
+    'remote_plugin',
+  ]);
   assert.deepEqual(RUNTIME_WORKSPACE_WRITE_NETWORK_CONFIG_ARGS, [
     '--config',
     'sandbox_workspace_write.network_access=true',

@@ -31,7 +31,9 @@ import { contextProjectionForEnvelope } from './context-envelope-projection.js';
 import { capabilityDiscoveryTinyBrief } from '../capability-discovery.js';
 export { workspaceTreeSummary } from './context-envelope-workspace-tree.js';
 
-export type AgentServerContextMode = 'full' | 'delta';
+export type BackendContextMode = 'full' | 'delta';
+/** @deprecated Use BackendContextMode. */
+export type AgentServerContextMode = BackendContextMode;
 
 export function buildContextEnvelope(
   request: GatewayRequest,
@@ -41,7 +43,7 @@ export function buildContextEnvelope(
     priorAttempts?: unknown[];
     selectedSkill?: SkillAvailability;
     repairRefs?: Record<string, unknown>;
-    mode?: AgentServerContextMode;
+    mode?: BackendContextMode;
     agentId?: string;
     agentServerCoreSnapshotAvailable?: boolean;
   },
@@ -75,8 +77,8 @@ export function buildContextEnvelope(
   const expectedArtifactTypes = expectedArtifactTypesForRequest(request);
   const selectedComponentIds = selectedComponentIdsForRequest(request);
   const executionModeDecision = executionModeDecisionForEnvelope(uiState);
-  const conversationPolicySummary = summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState);
-  const capabilityBrokerBrief = buildCapabilityBrokerBriefForAgentServer(request);
+  const conversationPolicySummary = summarizeConversationPolicyForBackend(uiState.conversationPolicy ?? uiState);
+  const capabilityBrokerBrief = buildCapabilityBrokerBriefForBackend(request);
   const capabilityDiscovery = capabilityDiscoveryTinyBrief();
   const capabilityProviderRoutes = capabilityProviderRoutesForHandoff(request);
   const sessionBundleRef = sessionBundleRelForRequest(request);
@@ -228,7 +230,7 @@ export function buildContextEnvelope(
       verificationResults: summarizeVerificationResults(request),
       stateDigestRefs: stateDigestRefs.length ? stateDigestRefs : undefined,
       failureEvidenceRefs: failureEvidenceRefs(failureRecoveryPolicy),
-      priorAttempts: summarizeTaskAttemptsForAgentServer(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
+      priorAttempts: summarizeTaskAttemptsForBackend(params.priorAttempts ?? []).slice(0, mode === 'full' ? 4 : 2),
       repairRefs: params.repairRefs,
     },
   };
@@ -266,7 +268,7 @@ function rawLogExpansionAuthorizedByPolicy(policy: unknown) {
 }
 
 function continuityPolicySummaryForEnvelope(
-  mode: AgentServerContextMode,
+  mode: BackendContextMode,
   facts: { hasRecentFailures: boolean; hasFailureEvidenceRefs: boolean },
 ) {
   return {
@@ -304,11 +306,14 @@ function continuityPolicySummaryForEnvelope(
   };
 }
 
-export function buildCapabilityBrokerBriefForAgentServer(request: GatewayRequest) {
-  return buildCapabilityBrokerBriefForAgentServerFromRegistry(request, loadCoreCapabilityManifestRegistry());
+export function buildCapabilityBrokerBriefForBackend(request: GatewayRequest) {
+  return buildCapabilityBrokerBriefForBackendFromRegistry(request, loadCoreCapabilityManifestRegistry());
 }
 
-export async function buildCapabilityBrokerBriefForAgentServerWithFileDiscovery(
+/** @deprecated Use buildCapabilityBrokerBriefForBackend. */
+export const buildCapabilityBrokerBriefForAgentServer = buildCapabilityBrokerBriefForBackend;
+
+export async function buildCapabilityBrokerBriefForBackendWithFileDiscovery(
   request: GatewayRequest,
   options: { fileDiscovery?: CapabilityManifestRegistryFileDiscoveryInput } = {},
 ) {
@@ -317,10 +322,13 @@ export async function buildCapabilityBrokerBriefForAgentServerWithFileDiscovery(
   const capabilityPolicy = harnessInput.enabled ? {} : brokerCapabilityPolicyForRequest(request);
   const fileDiscovery = options.fileDiscovery ?? brokerManifestFileDiscoveryForRequest(request, uiState, capabilityPolicy);
   const registry = await loadCapabilityManifestRegistryWithFileDiscovery({ fileDiscovery });
-  return buildCapabilityBrokerBriefForAgentServerFromRegistry(request, registry, { includeRegistryAudit: fileDiscovery?.enabled === true });
+  return buildCapabilityBrokerBriefForBackendFromRegistry(request, registry, { includeRegistryAudit: fileDiscovery?.enabled === true });
 }
 
-function buildCapabilityBrokerBriefForAgentServerFromRegistry(
+/** @deprecated Use buildCapabilityBrokerBriefForBackendWithFileDiscovery. */
+export const buildCapabilityBrokerBriefForAgentServerWithFileDiscovery = buildCapabilityBrokerBriefForBackendWithFileDiscovery;
+
+function buildCapabilityBrokerBriefForBackendFromRegistry(
   request: GatewayRequest,
   loadedRegistry: LoadedCapabilityManifestRegistry,
   options: { includeRegistryAudit?: boolean } = {},
@@ -398,7 +406,7 @@ function buildCapabilityBrokerBriefForAgentServerFromRegistry(
       harnessInput.availableProviders,
     ),
   }, registry);
-  return compactBrokerOutputForAgentServer(
+  return compactBrokerOutputForBackend(
     brokered,
     options.includeRegistryAudit ? loadedRegistry.compactAudit : undefined,
     harnessInput.audit,
@@ -416,7 +424,7 @@ function brokerCapabilityEvolutionSummaryForRequest(request: GatewayRequest) {
     : undefined);
 }
 
-function compactBrokerOutputForAgentServer(
+function compactBrokerOutputForBackend(
   brokered: CapabilityBrokerOutput,
   registryAudit?: CompactCapabilityManifestRegistryAudit,
   harnessInputAudit?: Record<string, unknown>,
@@ -498,7 +506,7 @@ function capabilityBriefProjectionFromBrokerBrief(capabilityBrokerBrief: Record<
     excluded,
     needsMoreDiscovery: false,
     auditTrace: [
-      { event: 'capabilityBrief.projected_from_broker', source: 'buildCapabilityBrokerBriefForAgentServer', selected: selected.length, excluded: excluded.length },
+      { event: 'capabilityBrief.projected_from_broker', source: 'buildCapabilityBrokerBriefForBackend', selected: selected.length, excluded: excluded.length },
       ...(legacyAudit ? [legacyAudit] : []),
     ].filter(isRecord),
   };
@@ -933,7 +941,7 @@ function refKindForStateDigestRef(ref: string) {
   return 'state-ref';
 }
 
-function summarizeRecentRunsForEnvelope(value: unknown[], mode: AgentServerContextMode) {
+function summarizeRecentRunsForEnvelope(value: unknown[], mode: BackendContextMode) {
   const runs = mode === 'full' ? value.slice(-8) : value.slice(-4);
   return runs.map((entry) => {
     if (!isRecord(entry)) return clipForBackendJson(entry, 1);
@@ -1046,7 +1054,7 @@ export function expectedArtifactSchema(request: GatewayRequest | SciForgeSkillDo
   return defaultArtifactSchemaForSkillDomain(skillDomain);
 }
 
-function contextEnvelopeMode(request: GatewayRequest): AgentServerContextMode {
+function contextEnvelopeMode(request: GatewayRequest): BackendContextMode {
   const recentConversation = toStringList(request.uiState?.recentConversation);
   const recentExecutionRefs = toRecordList(request.uiState?.recentExecutionRefs);
   return recentConversation.length > 1 || recentExecutionRefs.length > 0 || request.artifacts.length > 0 ? 'delta' : 'full';
@@ -1294,7 +1302,7 @@ function recordsInValue(value: unknown, depth = 0): Record<string, unknown>[] {
   return [value, ...Object.values(value).flatMap((entry) => recordsInValue(entry, depth + 1))];
 }
 
-export function summarizeConversationPolicyForAgentServer(value: unknown) {
+export function summarizeConversationPolicyForBackend(value: unknown) {
   const source = isRecord(value) ? value : {};
   const latency = isRecord(source.latencyPolicy) ? source.latencyPolicy : source;
   const response = isRecord(source.responsePlan) ? source.responsePlan : source;
@@ -1337,6 +1345,9 @@ export function summarizeConversationPolicyForAgentServer(value: unknown) {
   });
 }
 
+/** @deprecated Use summarizeConversationPolicyForBackend. */
+export const summarizeConversationPolicyForAgentServer = summarizeConversationPolicyForBackend;
+
 function summarizeVerificationResults(request: GatewayRequest) {
   const fromArtifacts = runtimeVerificationResultArtifacts(request.artifacts)
     .map((artifact, index) => summarizeVerificationRecordForEnvelope({
@@ -1359,7 +1370,7 @@ function summarizeVerificationResults(request: GatewayRequest) {
   return combined.length ? combined : undefined;
 }
 
-export function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: AgentServerContextMode) {
+export function summarizeConversationLedger(ledger: Array<Record<string, unknown>>, mode: BackendContextMode) {
   if (!ledger.length) return undefined;
   const budget = mode === 'full' ? 24 : 18;
   const tail = ledger.slice(-budget).map((entry) => clipForBackendJson(entry, 3));
@@ -1372,7 +1383,7 @@ export function summarizeConversationLedger(ledger: Array<Record<string, unknown
   };
 }
 
-export function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
+export function summarizeTaskAttemptsForBackend(attempts: unknown[]) {
   return attempts
     .filter(isRecord)
     .slice(0, 4)
@@ -1400,3 +1411,6 @@ export function summarizeTaskAttemptsForAgentServer(attempts: unknown[]) {
       createdAt: typeof attempt.createdAt === 'string' ? attempt.createdAt : undefined,
     }));
 }
+
+/** @deprecated Use summarizeTaskAttemptsForBackend. */
+export const summarizeTaskAttemptsForAgentServer = summarizeTaskAttemptsForBackend;

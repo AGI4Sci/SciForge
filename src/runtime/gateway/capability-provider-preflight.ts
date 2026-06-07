@@ -143,11 +143,12 @@ function publicCapabilityProvider(provider: CapabilityProviderRoute['providers']
 }
 
 export async function requestWithDiscoveredCapabilityProviders(request: GatewayRequest): Promise<GatewayRequest> {
-  const baseUrl = stringField(request.agentServerBaseUrl);
-  if (!baseUrl) return request;
-  const discovered = await discoverAgentServerProviderAvailability(baseUrl);
-  if (!discovered.length) return request;
   const uiState = isRecord(request.uiState) ? request.uiState : {};
+  const baseUrl = stringField(uiState.backendCapabilityDiscoveryBaseUrl)
+    ?? stringField(uiState.capabilityProviderDiscoveryBaseUrl);
+  if (!baseUrl) return request;
+  const discovered = await discoverBackendProviderAvailability(baseUrl);
+  if (!discovered.length) return request;
   return {
     ...request,
     uiState: {
@@ -160,7 +161,7 @@ export async function requestWithDiscoveredCapabilityProviders(request: GatewayR
   };
 }
 
-async function discoverAgentServerProviderAvailability(baseUrl: string): Promise<DiscoveredProviderManifestProjection[]> {
+async function discoverBackendProviderAvailability(baseUrl: string): Promise<DiscoveredProviderManifestProjection[]> {
   const rows: DiscoveredProviderManifestProjection[] = [];
   await Promise.all(CAPABILITY_PROVIDER_DISCOVERY_ENDPOINTS.map(async (endpoint) => {
     try {

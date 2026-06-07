@@ -1,8 +1,8 @@
 import { clipForBackendJson, clipForBackendPrompt, isRecord, toRecordList, toStringList } from '../gateway-utils.js';
-import type { AgentServerContextMode } from './context-envelope.js';
-import { summarizeConversationLedger, summarizeConversationPolicyForAgentServer } from './context-envelope.js';
+import type { BackendContextMode } from './context-envelope.js';
+import { summarizeConversationLedger, summarizeConversationPolicyForBackend } from './context-envelope.js';
 
-export function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServerContextMode) {
+export function summarizeUiStateForBackend(uiState: unknown, mode: BackendContextMode) {
   if (!isRecord(uiState)) return undefined;
   const ledger = toRecordList(uiState.conversationLedger);
   const contextReusePolicy = isRecord(uiState.contextReusePolicy) ? uiState.contextReusePolicy : undefined;
@@ -29,7 +29,7 @@ export function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServ
     selectedVerifierIds: toStringList(uiState.selectedVerifierIds),
     verificationPolicy: isRecord(uiState.verificationPolicy) ? clipForBackendJson(uiState.verificationPolicy, 2) : undefined,
     verificationResult: isRecord(uiState.verificationResult) ? clipForBackendJson(uiState.verificationResult, 2) : undefined,
-    conversationPolicySummary: summarizeConversationPolicyForAgentServer(uiState.conversationPolicy ?? uiState),
+    conversationPolicySummary: summarizeConversationPolicyForBackend(uiState.conversationPolicy ?? uiState),
     recentRuns: Array.isArray(uiState.recentRuns)
       ? uiState.recentRuns.slice(-4).map((entry) => clipForBackendJson(entry, 2))
       : undefined,
@@ -38,3 +38,6 @@ export function summarizeUiStateForAgentServer(uiState: unknown, mode: AgentServ
     contextMode: mode,
   };
 }
+
+/** @deprecated Use summarizeUiStateForBackend. */
+export const summarizeUiStateForAgentServer = summarizeUiStateForBackend;

@@ -1283,7 +1283,7 @@ function redactForAgent(value: unknown): unknown {
 }
 
 function repairExecutorMode(contract: RepairHandoffRunnerContract): 'agent-server' | 'runtime-codex' {
-  return contract.executorBackend === 'runtime-codex' ? 'runtime-codex' : 'agent-server';
+  return contract.executorBackend === 'agent-server' ? 'agent-server' : 'runtime-codex';
 }
 
 function normalizeConfirmationPolicy(value?: RepairConfirmationPolicy): RepairConfirmationPolicy {

@@ -25,8 +25,9 @@ test('explicit reference filters stale messages and runs', () => {
   assert.equal(plan.workspaceKernel.schemaVersion, 'sciforge.workspace-ledger-projection.v1');
   assert.ok(plan.contextProjectionBlocks.some((block) => block.kind === 'index'));
   assert.ok(plan.contextRefs.some((ref) => ref.ref.startsWith('ledger-event:')));
-  assert.equal(plan.agentServerContextRequest.capabilityBriefRef.ref, plan.capabilityBriefRef.ref);
-  assert.deepEqual(plan.agentServerContextRequest.cachePlan, plan.cachePlan);
+  assert.equal(plan.backendContextRequest.capabilityBriefRef.ref, plan.capabilityBriefRef.ref);
+  assert.deepEqual(plan.backendContextRequest.cachePlan, plan.cachePlan);
+  assert.equal(plan.agentServerContextRequest, plan.backendContextRequest);
   assert.deepEqual(
     plan.pollutionGuard.excludedHistory,
     [

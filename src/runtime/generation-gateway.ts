@@ -17,9 +17,9 @@ import {
   summarizeArtifactRefs,
   summarizeConversationLedger,
   summarizeExecutionRefs,
-  summarizeTaskAttemptsForAgentServer,
+  summarizeTaskAttemptsForBackend,
   workspaceTreeSummary,
-  type AgentServerContextMode,
+  type BackendContextMode,
 } from './gateway/context-envelope.js';
 import { applyRuntimeVerificationPolicy } from './gateway/verification-policy.js';
 import {

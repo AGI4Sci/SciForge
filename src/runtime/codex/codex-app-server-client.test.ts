@@ -46,7 +46,10 @@ test('Codex app-server client registers runtime tools and serves sub-agent dynam
 
   assert.equal(spawnCall?.[0], 'codex');
   const argv = spawnCall?.[1] ?? [];
-  assert.deepEqual(argv.slice(0, 2), ['app-server', '-c']);
+  assert.equal(argv[0], 'app-server');
+  assert.ok(argv.includes('-c'));
+  assertDisablePair(argv, 'plugins');
+  assertDisablePair(argv, 'remote_plugin');
   assert.ok(argv.includes('--listen'));
   assert.equal(argv[argv.indexOf('--listen') + 1], 'stdio://');
   assert.equal(argv.includes('exec'), false);
@@ -1102,6 +1105,10 @@ function assertMcpEntrypointArg(argv: string[], serverName: string, entrypointNa
   const argsConfig = argv.find((arg) => arg.startsWith(`mcp_servers.${serverName}.args=`));
   assert.ok(argsConfig);
   assert.match(argsConfig, new RegExp(`${entrypointName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.(ts|js)`));
+}
+
+function assertDisablePair(argv: string[], feature: string): void {
+  assert.ok(argv.some((arg, index) => arg === '--disable' && argv[index + 1] === feature));
 }
 
 function fakeAppServer(options: {

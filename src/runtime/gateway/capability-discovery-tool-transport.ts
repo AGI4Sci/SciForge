@@ -12,7 +12,9 @@ import type {
 import { createCapabilityDiscoveryService } from '../capability-discovery.js';
 import { errorMessage, isRecord, safeWorkspaceRel } from '../gateway-utils.js';
 
-export const CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION = 'sciforge.capability-discovery.agentserver-tool-transport.v1' as const;
+export const CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION = 'sciforge.capability-discovery.agentserver-tool-transport.v1' as const;
+/** @deprecated Use CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION. */
+export const CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION = CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION;
 export const CAPABILITY_DISCOVERY_AUDIT_RECORD_SCHEMA_VERSION = 'sciforge.capability-discovery.audit-record.v1' as const;
 export const CAPABILITY_DISCOVERY_LEDGER_EVENT_SCHEMA_VERSION = 'sciforge.workspace-ledger-event.v1' as const;
 
@@ -48,7 +50,7 @@ export interface CapabilityDiscoveryToolResultEvent {
 
 export function capabilityDiscoveryBackendToolTransportBrief() {
   return {
-    schemaVersion: CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION,
+    schemaVersion: CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION,
     tools: [
       'capability_discovery.search',
       'capability_discovery.expand',
@@ -81,7 +83,7 @@ export async function maybeHandleCapabilityDiscoveryToolCall(
   const toolName = `capability_discovery.${call.method}` as const;
   try {
     const service = createCapabilityDiscoveryService({
-      auditSeed: options.auditSeed ?? call.callId ?? 'agentserver-tool-call',
+      auditSeed: options.auditSeed ?? call.callId ?? 'backend-tool-call',
       availableProviderIds: options.availableProviderIds,
       unavailableProviderReasons: options.unavailableProviderReasons,
     });
@@ -121,7 +123,7 @@ export async function maybeHandleCapabilityDiscoveryToolCall(
       discoveryRef: refs.discoveryRef,
       completionEvidence: 'not-evidence',
       raw: sanitizeForDiscoveryAudit({
-        schemaVersion: CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION,
+        schemaVersion: CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION,
         method: call.method,
         callId: call.callId,
         auditRefs,
@@ -161,7 +163,7 @@ export async function maybeHandleCapabilityDiscoveryToolCall(
       auditRefs,
       completionEvidence: 'not-evidence',
       raw: sanitizeForDiscoveryAudit({
-        schemaVersion: CAPABILITY_DISCOVERY_AGENTSERVER_TOOL_TRANSPORT_SCHEMA_VERSION,
+        schemaVersion: CAPABILITY_DISCOVERY_BACKEND_TOOL_TRANSPORT_SCHEMA_VERSION,
         method: call.method,
         callId: call.callId,
         persistedAuditRef,
@@ -270,7 +272,7 @@ async function persistDiscoveryAuditRecord(
 ): Promise<string | undefined> {
   if (!options.workspace) return undefined;
   const digest = createHash('sha256')
-    .update(options.auditSeed ?? 'agentserver-tool-call')
+    .update(options.auditSeed ?? 'backend-tool-call')
     .update(input.method)
     .update(JSON.stringify(input.query))
     .digest('hex')
@@ -283,7 +285,7 @@ async function persistDiscoveryAuditRecord(
   const record = sanitizeForDiscoveryAudit({
     schemaVersion: CAPABILITY_DISCOVERY_AUDIT_RECORD_SCHEMA_VERSION,
     createdAt: new Date().toISOString(),
-    source: 'agentserver-tool-call-transport',
+    source: 'backend-tool-call-transport',
     method: input.method,
     callId: input.callId,
     query: input.query,
@@ -315,7 +317,7 @@ async function appendDiscoveryLedgerEvent(
   const bundleRel = safeWorkspaceRel(options.sessionBundleRel.replace(/\/+$/, ''));
   const ledgerRef = safeWorkspaceRel(`${bundleRel}/ledger/events.jsonl`);
   const eventId = `capability-discovery:${input.method}:${createHash('sha256')
-    .update(options.auditSeed ?? 'agentserver-tool-call')
+    .update(options.auditSeed ?? 'backend-tool-call')
     .update(input.callId ?? '')
     .update(input.persistedAuditRef ?? '')
     .digest('hex')
@@ -341,7 +343,7 @@ async function appendDiscoveryLedgerEvent(
       error: input.error,
       completionEvidence: 'not-evidence',
       executionRequiresInvokeCapability: true,
-      source: 'agentserver-tool-call-transport',
+      source: 'backend-tool-call-transport',
     },
   });
   await mkdir(dirname(join(options.workspace, ledgerRef)), { recursive: true });

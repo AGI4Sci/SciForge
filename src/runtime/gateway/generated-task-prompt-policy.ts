@@ -3,7 +3,7 @@ import { extractBackendCurrentUserRequest } from '@sciforge-ui/runtime-contract/
 import { backendArtifactSelectionPromptPolicyLines, backendBibliographicVerificationPromptPolicyLines, backendCurrentReferencePromptPolicyLines, backendShouldIncludeBibliographicVerificationPromptPolicy, backendToolPayloadProtocolContractLines } from '@sciforge-ui/runtime-contract/artifact-policy';
 import { collectRuntimeRefsFromValue, runtimePayloadKeyLooksLikeBodyCarrier } from '@sciforge-ui/runtime-contract/references';
 import { CAPABILITY_ROUTE_SUMMARY_SCHEMA_VERSION, backendDecisionPromptPolicyLines, backendCapabilityRoutingPromptPolicyLines, backendContinuationPromptPolicyLines, backendCurrentTurnSnapshotPromptPolicyLines, backendExecutionModePromptPolicyLines, backendExternalIoReliabilityContractLines, backendFreshRetrievalPromptPolicyLines, backendGeneratedTaskPromptPolicyLines, backendGenerationOutputContract, backendGenerationOutputContractLines, backendLargeFilePromptContractLines, backendPriorAttemptsPromptPolicyLines, backendRepairPromptPolicyLines, backendToolPayloadShapeContract, backendViewSelectionPromptPolicyLines, backendWorkspaceTaskRoutingPromptPolicyLines } from '../../../packages/skills/runtime-policy.js';
-import { summarizeArtifactRefs, summarizeConversationPolicyForAgentServer, summarizeExecutionRefs, summarizeTaskAttemptsForAgentServer, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords } from './context-envelope.js';
+import { summarizeArtifactRefs, summarizeConversationPolicyForBackend, summarizeExecutionRefs, summarizeTaskAttemptsForBackend, summarizeVerificationRecordForEnvelope, summarizeVerificationResultRecords } from './context-envelope.js';
 import { AGENTSERVER_BACKEND_HANDOFF_VERSION, validateBackendHandoffPacket, type BackendHandoffPacket } from './backend-context-contract.js';
 import { clipForBackendJson, clipForBackendPrompt, hashJson, isRecord, toRecordList, toStringList, uniqueStrings } from '../gateway-utils.js';
 import { capabilityDiscoveryTinyBrief } from '../capability-discovery.js';
@@ -67,7 +67,7 @@ export function buildBackendGenerationPrompt(request: {
     ? sessionFacts.conversationPolicySummary
     : isRecord(scenarioFacts.conversationPolicySummary)
       ? scenarioFacts.conversationPolicySummary
-      : summarizeConversationPolicyForAgentServer(request.uiStateSummary);
+      : summarizeConversationPolicyForBackend(request.uiStateSummary);
   const conversationPolicySummary = isRecord(rawConversationPolicySummary) ? rawConversationPolicySummary : undefined;
   const capabilityBrokerBrief = isRecord(scenarioFacts.capabilityBrokerBrief)
     ? scenarioFacts.capabilityBrokerBrief
@@ -132,7 +132,7 @@ export function buildBackendGenerationPrompt(request: {
     ...backendGenerationOutputContractLines('missing-input'),
     request.priorAttempts?.length ? [
       ...backendPriorAttemptsPromptPolicyLines(),
-      JSON.stringify(summarizeTaskAttemptsForAgentServer(request.priorAttempts).slice(0, 4), null, 2),
+      JSON.stringify(summarizeTaskAttemptsForBackend(request.priorAttempts).slice(0, 4), null, 2),
     ].join('\n') : '',
     ...backendExternalIoReliabilityContractLines(),
     '',
